@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\nQ2: C\n\nRATIONALE:\nQ1: The review leg ran for 33m49s on a 20-minute `timeout-minutes` (run 43771105041, cancelled). The time went to the single step \"Sandbox-image Python tests\" (`.github/workflows/ci.yml` lines 4283-4372). That step runs `scripts/sandbox_image.sh build --family review`, then `docker build` of the image that adds python3-pytest, then the `docker run` pytest invocation. Only the GHCR pull has a time limit (`SANDBOX_IMAGE_PULL_TIMEOUT_SECS`, 60s, `scripts/sandbox_image.sh` line 146); the local-build fallback (line 161), the derived-image `docker build` and the `docker run` have none. A step that already needs 20 minutes or more cannot be moved unchanged into another 20-minute job without that job timing out too. Running past the timeout also points to a hang, not to a slow step that a move would fix. So, following \u00a715's preference for root-cause fixes, keep the matrix, the job name, the step names and `timeout-minutes: 20`, and put limits inside that step so it fails with a clear message before the job is cancelled. Option A would also delete the `tests-sandbox-python (review)` check and still not fix the slow part, and C carries the same risk to whichever job receives the step.\nQ2: The step timings for run 43771105041 are not in the repository or in GITHUB FACTS. I am not allowed to query the runs API, so I cannot tell whether image resolution or pytest used the time. Option C settles it: the plan bounds both phases and adds timing output per phase.\n\nConstraints the planner treats as binding for Q1=B and Q2=C:\n- Change only the \"Sandbox-image Python tests\" step body in `.github/workflows/ci.yml`. Keep the job name `tests-sandbox-python`, the matrix `[clarify, review, codex-isolated-codex]`, every step `name:`, the `env:` block and the job's `timeout-minutes: 20`. Add no new jobs and no new job names.\n- Time each phase separately and print one log line per phase with its elapsed seconds. The phases are image resolution (`sandbox_image.sh build` or `codex_isolated_exec.sh image`), the derived python3-pytest `docker build`, and the pytest `docker run`.\n- Give each phase its own limit. All the limits plus the earlier steps (checkout, setup-python, pip install, coverage guard) must add up to clearly less than 20 minutes. Each limit should be configurable through a new env var with a default (\u00a78), named so it clashes with no existing identifier (\u00a710). When a limit is hit, print a `::error::` line that names the family and the phase. The pytest container must actually stop on timeout (for example a named container that gets killed), not just the docker CLI process.\n- Make pytest report hangs the way `tests-system-python` already does (line 4232: `-o faulthandler_timeout=300 --durations=15`), so a hanging test is named in the log. Keep the existing `--deselect` flag and the container security options (`--network none`, uid 65534, `--read-only`, `--cap-drop ALL`, `no-new-privileges`) unchanged.\n- Pair the change with a contract test that pins the per-phase limits, the timing output and the unchanged job/step names, and add a `changelog.d` entry with `Refs #<issue>`.\n- If a later budget-watch run on `main` shows the review leg is simply slow and not hanging, it reopens the deduplicated issue. The timing output then shows which phase to speed up.\n\nEXECUTION PLAN (required for any non-letter decision):\n\nESCALATION (required for any ESCALATE decision):",
+  "fingerprint": "c009a35a88fe530a0d200a0d5eb15f49d23965448b1b29b79afb3e389aaa3a9a",
+  "lineage": {
+    "issue_number": 9560,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43829149671",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43829149671",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9560"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261116120426_d59e42bc15",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9560,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43829149671"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9560",
+  "timestamps": {
+    "created_at": "2026-11-16T12:04:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
