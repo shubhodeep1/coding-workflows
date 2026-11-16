@@ -77,6 +77,11 @@ on:
         required: false
         default: ""
         type: string
+      final_ci_workflow:
+        description: "Workflow file (under .github/workflows) to dispatch once per reviewed head as the PR's one full CI run (cut-ci-runner-time Phase 4); empty = off"
+        required: false
+        default: ""
+        type: string
     secrets:
       GH_PAT:
         required: true
@@ -126,6 +131,11 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   UNATTENDED_PHASE: review_autofix
   REVIEW_HEAD_GATE_STATUS_ENABLED: ${{ vars.REVIEW_HEAD_GATE_STATUS_ENABLED || 'true' }}
+  # Final CI at the end of review (cut-ci-runner-time Phase 4): read by
+  # _pr_ensure_final_ci (scripts/pr_checks_lib.sh) in the required-checks
+  # wait and by scripts/review_enable_auto_merge.sh. Empty (the default, and
+  # every workflow_dispatch run of this file) keeps today's behaviour.
+  REVIEW_FINAL_CI_WORKFLOW: ${{ inputs.final_ci_workflow || '' }}
   # Resolve base-branch conflicts BEFORE the reviewer/editor spend when the
   # pre-review merge-topology gate sees a content conflict (default on).
   PRE_REVIEW_CONFLICT_RESOLVE_ENABLED: ${{ vars.PRE_REVIEW_CONFLICT_RESOLVE_ENABLED || 'true' }}
