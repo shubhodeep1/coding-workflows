@@ -156,6 +156,25 @@ def test_existing_run_is_left_alone(fake_gh, run: dict, reason: str) -> None:
 	assert _dispatches(calls) == []
 
 
+def test_a_failed_sync_quick_run_is_answered_with_the_full_suite(fake_gh) -> None:
+	# A failed sync-quick run skipped the full suite, so it is not the head's
+	# final result: the full run is dispatched, and never another quick one.
+	runs = _runs({"status": "completed", "conclusion": "failure", "display_title": "CI [pr:7] [sync-quick]"})
+	result, calls = _ensure(fake_gh, {RUNS_KEY: {"body": runs}}, env={"PR_FINAL_CI_SYNC_QUICK": "true"})
+	assert "outcome=dispatched reason=sync_quick_failed" in result.stdout, result.stdout + result.stderr
+	assert _dispatches(calls) == [["workflow", "run", "ci.yml", "--repo", REPO, "--ref", "ai/issue-1", "-f", "pr_number=7", "-f", f"head_sha={SHA}"]]
+
+
+def test_a_failed_full_run_still_counts_next_to_a_failed_sync_quick_run(fake_gh) -> None:
+	runs = _runs(
+		{"status": "completed", "conclusion": "failure", "display_title": "CI [pr:7] [sync-quick]"},
+		{"status": "completed", "conclusion": "failure", "display_title": "CI [pr:7]"},
+	)
+	result, calls = _ensure(fake_gh, {RUNS_KEY: {"body": runs}})
+	assert "outcome=exists reason=failure" in result.stdout
+	assert _dispatches(calls) == []
+
+
 def test_push_run_on_the_head_counts(fake_gh) -> None:
 	# An orchestrator/project-* head already has its push run (plan D4).
 	result, calls = _ensure(fake_gh, {RUNS_KEY: {"body": _runs({"status": "completed", "conclusion": "success", "event": "push"})}})
@@ -334,6 +353,40 @@ def test_hand_back_disabled_and_invalid_input(fake_gh) -> None:
 	assert "outcome=disabled" in result.stdout and calls == []
 	result, calls = _failed(fake_gh, {}, {"PR_HEAD_SHA": "nothex"})
 	assert "outcome=invalid_input" in result.stdout and calls == []
+
+
+def _failed_sync_quick(fake_gh, head: dict, env: dict | None = None):
+	fixtures = {f"repos/{REPO}/pulls/7": {"body": {"state": "open", "head": head}}, _comments_key(): {"body": []}}
+	full_env = {"REPOSITORY": REPO, "PR_NUMBER": "7", "PR_HEAD_SHA": SHA, "FINAL_CI_FAILED_SYNC_QUICK": "true"}
+	full_env.update(env or {})
+	return fake_gh(f'bash "{SCRIPTS}/review_final_ci_failed.sh"', fixtures, full_env)
+
+
+def test_failed_sync_quick_run_dispatches_the_full_suite_not_review(fake_gh) -> None:
+	result, calls = _failed_sync_quick(fake_gh, {"sha": SHA, "ref": "ai/issue-7", "repo": {"full_name": REPO}})
+	assert f"REVIEW_FINAL_CI_FAILED pr=7 head={SHA} outcome=full_suite_dispatched workflow=ci.yml" in result.stdout, result.stdout + result.stderr
+	assert _dispatches(calls) == [["workflow", "run", "ci.yml", "--repo", REPO, "--ref", "ai/issue-7", "-f", "pr_number=7", "-f", f"head_sha={SHA}"]]
+	assert not any(call[:3] == ["api", "-X", "POST"] for call in calls)
+	assert not any("comments" in arg for call in calls for arg in call)
+
+
+@pytest.mark.parametrize("head, env", [
+	({"sha": SHA, "ref": "ai/issue-7", "repo": {"full_name": "fork/r"}}, {}),
+	({"sha": SHA, "ref": "-x", "repo": {"full_name": REPO}}, {}),
+	({"sha": SHA, "repo": {"full_name": REPO}}, {}),
+	({"sha": SHA, "ref": "ai/issue-7", "repo": {"full_name": REPO}}, {"FAKE_GH_DISPATCH_RC": "1"}),
+])
+def test_failed_sync_quick_run_never_falls_back_to_review(fake_gh, head: dict, env: dict) -> None:
+	result, calls = _failed_sync_quick(fake_gh, head, env)
+	assert "outcome=full_suite_dispatch_failed" in result.stdout, result.stdout + result.stderr
+	assert not any(call[:3] == ["api", "-X", "POST"] for call in calls)
+	assert all(call[2] == "ci.yml" for call in _dispatches(calls))
+
+
+def test_failed_sync_quick_run_on_a_superseded_head_does_nothing(fake_gh) -> None:
+	result, calls = _failed_sync_quick(fake_gh, {"sha": OTHER_SHA, "ref": "ai/issue-7", "repo": {"full_name": REPO}})
+	assert "outcome=superseded" in result.stdout
+	assert _dispatches(calls) == []
 
 
 def test_comment_read_failure_does_not_dispatch(fake_gh) -> None:
