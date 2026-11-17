@@ -392,17 +392,23 @@ esac
 		workflow = _workflow()
 		posting_secret = "secrets.CHECK_TRIAGE_ISSUES_TOKEN"
 		post_step_name = "Post check-failure triage issue"
-		post_steps_seen = 0
+		# The note step comments on the heal issue that tracks a base-branch
+		# failure the collect stage skipped; it holds the Issues token and nothing else.
+		note_step_name = "Note PR failure on its base-branch heal issue"
+		posting_steps_seen: list[str] = []
 		for job_name, job in workflow["jobs"].items():
 			self.assertNotIn(posting_secret, json.dumps(job.get("env", {})), job_name)
 			for step in job.get("steps", []):
 				step_text = json.dumps({key: step.get(key) for key in ("env", "with", "run")})
-				if job_name == "triage" and step.get("name") == post_step_name:
-					post_steps_seen += 1
+				if job_name == "triage" and step.get("name") in (post_step_name, note_step_name):
+					posting_steps_seen.append(step.get("name"))
 					self.assertEqual(step_text.count(posting_secret), 1)
 				else:
 					self.assertNotIn(posting_secret, step_text, f"{job_name}: {step.get('name')}")
-		self.assertEqual(post_steps_seen, 1)
+		self.assertEqual(sorted(posting_steps_seen), sorted([post_step_name, note_step_name]))
+		note = _step(workflow["jobs"]["triage"], name=note_step_name)
+		note_secret_names = set(re.findall(r"secrets\.([A-Za-z0-9_]+)", json.dumps(note)))
+		self.assertEqual(note_secret_names, {"CHECK_TRIAGE_ISSUES_TOKEN"})
 		post = _step(workflow["jobs"]["triage"], name=post_step_name)
 		post_secret_names = {
 			match
@@ -1277,7 +1283,10 @@ def _run_collect_stage(
 			"html_url": "https://github.com/owner/repo/pull/17",
 			"body": "",
 			"head": {"ref": head_ref, "sha": pr_head_sha, **({"repo": {"full_name": head_repo}} if head_repo is not None else {})},
-			"base": {"repo": {"full_name": "owner/repo"}, **({"ref": base["ref"]} if base else {})},
+			"base": {
+				"repo": {"full_name": "owner/repo", **({"default_branch": base["default_branch"]} if base and "default_branch" in base else {})},
+				**({"ref": base["ref"]} if base else {}),
+			},
 		}
 	if pr_payload_overrides:
 		pr_payload = {**pr_payload, **pr_payload_overrides}
@@ -1299,12 +1308,21 @@ case "$*" in
     esac ;;
   "api repos/owner/repo/pulls/17") if [ -n "${MOCK_PR_FAIL:-}" ]; then exit 1; fi; printf '%s\\n' "${MOCK_PR_PAYLOAD}" ;;
   "api --paginate --slurp repos/owner/repo/commits/"*"/check-runs?per_page=100") printf '[{"check_runs": []}]\\n' ;;
-  "api repos/owner/repo/actions/runs/1 --jq .workflow_id "*)
+  "api repos/owner/repo/actions/runs/1 --jq [(.workflow_id "*)
     [ -n "${MOCK_BASE_WORKFLOW_ID:-}" ] || exit 1
-    printf '%s\\n' "${MOCK_BASE_WORKFLOW_ID}" ;;
+    printf '%s %s\\n' "${MOCK_BASE_WORKFLOW_ID}" "${MOCK_BASE_WORKFLOW_PATH:-}" ;;
+  "api -X GET repos/owner/repo/issues -f state=open -f labels=ai:workflow-heal -f sort=created -f direction=asc -F per_page=100")
+    if [ -n "${MOCK_HEAL_LIST_FAIL:-}" ]; then echo 'gh: Server Error (HTTP 502)' >&2; exit 1; fi
+    printf '%s\\n' "${MOCK_HEAL_ISSUES:-[]}" ;;
+  "api repos/owner/repo/actions/runs/1/jobs?filter=latest&per_page=100")
+    if [ -n "${MOCK_PR_JOBS_FAIL:-}" ]; then echo 'gh: Server Error (HTTP 502)' >&2; exit 1; fi
+    printf '%s\\n' "${MOCK_PR_JOBS:-}" ;;
+  "api repos/owner/repo/actions/runs/"*"/jobs?filter=latest&per_page=100")
+    if [ -n "${MOCK_BASE_JOBS_FAIL:-}" ]; then echo 'gh: Server Error (HTTP 502)' >&2; exit 1; fi
+    printf '%s\\n' "${MOCK_BASE_JOBS:-}" ;;
   "api repos/owner/repo/actions/workflows/"*"/runs?branch="*"&event=push&per_page=1 --jq "*)
     [ -n "${MOCK_BASE_CONCLUSION+set}" ] || exit 1
-    printf '%s\\n' "${MOCK_BASE_CONCLUSION}" ;;
+    printf '%s\\n' "${MOCK_BASE_CONCLUSION}${MOCK_BASE_RUN_ID:+ ${MOCK_BASE_RUN_ID}}" ;;
   "api -X GET repos/owner/repo/commits/"*"/check-runs -f check_name="*)
     [ -n "${MOCK_BASE_CHECK_CONCLUSION+set}" ] || exit 1
     printf '%s\\n' "${MOCK_BASE_CHECK_CONCLUSION}" ;;
@@ -1390,8 +1408,12 @@ esac
 	if base:
 		if "workflow_id" in base:
 			env["MOCK_BASE_WORKFLOW_ID"] = base["workflow_id"]
+		if "workflow_path" in base:
+			env["MOCK_BASE_WORKFLOW_PATH"] = base["workflow_path"]
 		if "conclusion" in base:
 			env["MOCK_BASE_CONCLUSION"] = base["conclusion"]
+		if "base_run_id" in base:
+			env["MOCK_BASE_RUN_ID"] = base["base_run_id"]
 		if "check_conclusion" in base:
 			env["MOCK_BASE_CHECK_CONCLUSION"] = base["check_conclusion"]
 	env.update(extra_env or {})
@@ -1887,7 +1909,7 @@ class CheckFailureTriageBaseGateTests(unittest.TestCase):
 		self.assertNotIn("ready", outputs)
 		self.assertEqual(metadata, {})
 		self.assertIn(
-			"api repos/owner/repo/actions/workflows/9/runs?branch=main&event=push&per_page=1 --jq .workflow_runs[0] | if . == null then \"\" elif .status == \"completed\" then (.conclusion // \"\") else \"pending\" end",
+			"api repos/owner/repo/actions/workflows/9/runs?branch=main&event=push&per_page=1 --jq .workflow_runs[0] | if . == null then \"\" elif .status == \"completed\" then ((.conclusion // \"\") + \" \" + (.id // \"\" | tostring)) else \"pending\" end",
 			calls,
 		)
 
@@ -1992,7 +2014,7 @@ class CheckFailureTriageBaseGateTests(unittest.TestCase):
 		# pending newest run reads as "pending", which defers (#7140).
 		source = (REPO_ROOT / "scripts" / "check_failure_triage.sh").read_text(encoding="utf-8")
 		self.assertNotIn("&status=completed", source)
-		jq_filter = '.workflow_runs[0] | if . == null then "" elif .status == "completed" then (.conclusion // "") else "pending" end'
+		jq_filter = '.workflow_runs[0] | if . == null then "" elif .status == "completed" then ((.conclusion // "") + " " + (.id // "" | tostring)) else "pending" end'
 		self.assertIn(jq_filter, source)
 		for payload, expected in (
 			({"workflow_runs": [{"status": "in_progress", "conclusion": None}, {"status": "completed", "conclusion": "success"}]}, "pending"),
@@ -2115,6 +2137,365 @@ def _write_repro_group(root: Path, group: int, *, shard_logs: dict[int, str] | N
 		(group_dir / "out" / f"poll_shard_{shard}.log").write_text(log_text, encoding="utf-8")
 		(group_dir / "out" / f"poll_shard_{shard}.rc").write_text("1\n" if "  FAIL  " in log_text else "0\n", encoding="utf-8")
 	return group_dir
+
+
+def _heal_issue(number: int, *, workflow: str = ".github/workflows/ci.yml", branch: str = "main",
+		source: str = "owner/repo#run", association: str = "OWNER", is_pr: bool = False) -> dict:
+	"""An open ai:workflow-heal issue as scripts/workflow_failure_heal.py writes it."""
+	body = "\n".join([
+		"<!-- workflow-failure-heal:fp=" + "1" * 64 + " -->",
+		"<!-- workflow-failure-heal:gen=1 -->",
+		"<!-- workflow-failure-heal:root=" + "1" * 64 + " -->",
+		f"<!-- workflow-failure-heal:source={source} -->",
+		"<!-- workflow-failure-heal:classification=workflow-defect -->",
+		f"<!-- workflow-failure-heal:workflow={workflow} -->",
+		"",
+		f"- **Target branch:** `{branch}`",
+		"",
+		"## Automated workflow failure heal (generation 1 of max 3)",
+	])
+	issue = {"number": number, "body": body, "author_association": association}
+	if is_pr:
+		issue["pull_request"] = {"url": "https://api.github.com/repos/owner/repo/pulls/1"}
+	return issue
+
+
+TRACKED_BASE = {
+	"ref": "main", "default_branch": "main", "workflow_id": "9", "workflow_path": ".github/workflows/ci.yml",
+	"conclusion": "failure", "base_run_id": "2",
+}
+
+
+def _jobs(*jobs: tuple[str, str | None], total: int | None = None) -> str:
+	"""A GET actions/runs/<id>/jobs page holding (name, conclusion) pairs."""
+	return json.dumps({
+		"total_count": len(jobs) if total is None else total,
+		"jobs": [{"name": name, "conclusion": conclusion} for name, conclusion in jobs],
+	})
+
+
+PR_JOBS = _jobs(("lint", "success"), ("tests (ubuntu)", "failure"))
+BASE_JOBS = _jobs(("lint", "success"), ("tests (ubuntu)", "failure"), ("docs", "failure"))
+
+
+class CheckFailureTriageBaseTrackedTests(unittest.TestCase):
+	"""A failure the default branch already has, tracked by an open heal issue,
+	gets no per-PR triage issue (#9215 and the five issues filed beside it)."""
+
+	def _collect(self, base: dict, heal_issues: list[dict] | None, **env: str):
+		extra = {
+			"MOCK_HEAL_ISSUES": json.dumps(heal_issues if heal_issues is not None else []),
+			"MOCK_PR_JOBS": PR_JOBS,
+			"MOCK_BASE_JOBS": BASE_JOBS,
+		}
+		extra.update(env)
+		calls: list[str] = []
+		tracked: dict = {}
+
+		def inspect(runtime_dir: Path, _env: dict) -> None:
+			path = runtime_dir / "triage_base_tracked.json"
+			if path.exists():
+				tracked.update(json.loads(path.read_text(encoding="utf-8")))
+
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body=PLAIN_SOURCE, base=base, extra_env=extra, calls_path=calls, inspect=inspect,
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		return proc, outputs, metadata, calls, tracked
+
+	def test_tracked_default_branch_failure_files_no_issue(self) -> None:
+		proc, outputs, metadata, calls, tracked = self._collect(TRACKED_BASE, [_heal_issue(9215)])
+		self.assertIn(
+			"CHECK_TRIAGE skip reason=base_failure_tracked heal_issue=9215 workflow=.github/workflows/ci.yml base=main pr=17 check=CI",
+			proc.stdout,
+		)
+		self.assertNotIn("ready", outputs)
+		self.assertEqual(outputs.get("base_failure_tracked"), "9215")
+		self.assertEqual(metadata, {})
+		self.assertEqual(tracked, {
+			"heal_issue": "9215", "pr_number": "17", "head_sha": "a" * 40, "run_id": "1",
+			"base_ref": "main", "workflow_path": ".github/workflows/ci.yml",
+		})
+		# One run read (workflow id and path together) and one heal listing.
+		self.assertEqual(sum(call.startswith("api repos/owner/repo/actions/runs/1 ") for call in calls), 1)
+		self.assertEqual(sum("labels=ai:workflow-heal" in call for call in calls), 1)
+		# One jobs read for the PR run and one for main's newest run (id 2).
+		self.assertIn("api repos/owner/repo/actions/runs/1/jobs?filter=latest&per_page=100", calls)
+		self.assertIn("api repos/owner/repo/actions/runs/2/jobs?filter=latest&per_page=100", calls)
+		self.assertEqual(sum("/jobs?" in call for call in calls), 2)
+
+	def test_pr_job_that_main_runs_green_still_files(self) -> None:
+		# The workflow fails on main, but this PR's failing job passes there: a
+		# PR-specific failure the heal issue does not cover.
+		for pr_jobs in (
+			_jobs(("lint", "failure"), ("tests (ubuntu)", "failure")),
+			_jobs(("lint", "failure")),
+			# No failed job on the PR side: nothing proves the failure is main's.
+			_jobs(("lint", "success")),
+		):
+			with self.subTest(pr_jobs=pr_jobs):
+				proc, outputs, metadata, _calls, tracked = self._collect(TRACKED_BASE, [_heal_issue(9215)], MOCK_PR_JOBS=pr_jobs)
+				self.assertIn(
+					"CHECK_TRIAGE base_tracked outcome=file reason=failed_jobs_differ heal_issue=9215 workflow=.github/workflows/ci.yml base=main pr=17",
+					proc.stdout,
+				)
+				self.assertNotIn("skip reason=base_failure_tracked", proc.stdout)
+				self.assertNotIn("metadata_write_failed", proc.stdout)
+				self.assertIn("CHECK_TRIAGE base_gate outcome=file base=main base_conclusion=failure", proc.stdout)
+				self.assertNotIn("base_failure_tracked", outputs)
+				self.assertEqual(outputs.get("ready"), "true")
+				self.assertEqual(metadata.get("generation"), "1")
+				self.assertEqual(tracked, {})
+
+	def test_unreadable_jobs_file_as_before(self) -> None:
+		for env in (
+			{"MOCK_PR_JOBS_FAIL": "1"},
+			{"MOCK_BASE_JOBS_FAIL": "1"},
+			# A page that does not hold every PR job could hide a distinct failure.
+			{"MOCK_PR_JOBS": _jobs(("tests (ubuntu)", "failure"), total=101)},
+			{"MOCK_PR_JOBS": "not json"},
+		):
+			with self.subTest(env=env):
+				proc, outputs, _metadata, _calls, tracked = self._collect(TRACKED_BASE, [_heal_issue(9215)], **env)
+				self.assertIn("CHECK_TRIAGE base_tracked outcome=fail_open reason=jobs_lookup_failed heal_issue=9215 base=main pr=17", proc.stdout)
+				self.assertNotIn("skip reason=base_failure_tracked", proc.stdout)
+				self.assertEqual(outputs.get("ready"), "true")
+				self.assertEqual(tracked, {})
+		# Without main's run id (an older read shape) the jobs cannot be compared.
+		base = {k: v for k, v in TRACKED_BASE.items() if k != "base_run_id"}
+		proc, outputs, _metadata, _calls, _tracked = self._collect(base, [_heal_issue(9215)])
+		self.assertIn("reason=jobs_lookup_failed", proc.stdout)
+		self.assertEqual(outputs.get("ready"), "true")
+
+	def test_run_path_ref_suffix_is_stripped(self) -> None:
+		# A run's `.path` can end in "@<ref>"; the suffix must not disable the skip.
+		for suffix in ("@refs/heads/main", "@refs/pull/17/merge"):
+			with self.subTest(suffix=suffix):
+				base = {**TRACKED_BASE, "workflow_path": ".github/workflows/ci.yml" + suffix}
+				proc, outputs, _metadata, _calls, tracked = self._collect(base, [_heal_issue(9215)])
+				self.assertIn("skip reason=base_failure_tracked heal_issue=9215 workflow=.github/workflows/ci.yml base=main", proc.stdout)
+				self.assertEqual(outputs.get("base_failure_tracked"), "9215")
+				self.assertEqual(tracked.get("workflow_path"), ".github/workflows/ci.yml")
+
+	def test_at_sign_inside_the_file_name_is_not_truncated(self) -> None:
+		# Only a trailing "@refs/..." is stripped; "ci.yml@legacy.yml" must not
+		# become ".github/workflows/ci.yml" and match ci.yml's heal issue.
+		for path in (".github/workflows/ci.yml@legacy.yml", ".github/workflows/ci.yml@legacy.yml@refs/heads/main"):
+			with self.subTest(path=path):
+				proc, outputs, _metadata, calls, tracked = self._collect({**TRACKED_BASE, "workflow_path": path}, [_heal_issue(9215)])
+				self.assertNotIn("base_failure_tracked", proc.stdout)
+				self.assertNotIn("base_failure_tracked", outputs)
+				self.assertEqual(outputs.get("ready"), "true")
+				self.assertFalse(any("labels=ai:workflow-heal" in call for call in calls))
+				self.assertEqual(tracked, {})
+
+	def test_oldest_matching_heal_issue_wins(self) -> None:
+		proc, outputs, _metadata, _calls, _tracked = self._collect(TRACKED_BASE, [_heal_issue(9100), _heal_issue(9215)])
+		self.assertEqual(outputs.get("base_failure_tracked"), "9100")
+		self.assertIn("heal_issue=9100", proc.stdout)
+
+	def test_non_matching_heal_issues_still_file(self) -> None:
+		for issue in (
+			_heal_issue(9215, workflow=".github/workflows/plan.yml"),
+			_heal_issue(9215, branch="stable"),
+			_heal_issue(9215, source="owner/repo#42"),
+			_heal_issue(9215, source="other/repo#run"),
+			_heal_issue(9215, association="NONE"),
+			_heal_issue(9215, is_pr=True),
+		):
+			with self.subTest(issue=issue):
+				proc, outputs, metadata, _calls, tracked = self._collect(TRACKED_BASE, [issue])
+				self.assertIn("CHECK_TRIAGE base_tracked outcome=file reason=no_open_heal_issue workflow=.github/workflows/ci.yml base=main pr=17", proc.stdout)
+				self.assertIn("CHECK_TRIAGE base_gate outcome=file base=main base_conclusion=failure", proc.stdout)
+				self.assertEqual(outputs.get("ready"), "true")
+				self.assertNotIn("base_failure_tracked", outputs)
+				self.assertEqual(metadata.get("generation"), "1")
+				self.assertEqual(tracked, {})
+
+	def test_heal_lookup_failure_files_as_before(self) -> None:
+		proc, outputs, _metadata, _calls, tracked = self._collect(TRACKED_BASE, [_heal_issue(9215)], MOCK_HEAL_LIST_FAIL="1")
+		self.assertIn("CHECK_TRIAGE base_tracked outcome=fail_open reason=heal_lookup_failed base=main pr=17", proc.stdout)
+		self.assertNotIn("no_open_heal_issue", proc.stdout)
+		self.assertEqual(outputs.get("ready"), "true")
+		self.assertEqual(tracked, {})
+
+	def test_missing_note_metadata_files_as_before(self) -> None:
+		# An empty head SHA leaves the note step nothing to post, so the
+		# failure must be filed per PR rather than silently dropped.
+		proc, outputs, _metadata, _calls, tracked = self._collect(
+			TRACKED_BASE, [_heal_issue(9215)], CHECK_TRIAGE_HEAD_SHA="",
+		)
+		self.assertIn(
+			"CHECK_TRIAGE base_tracked outcome=fail_open reason=metadata_write_failed heal_issue=9215 base=main pr=17",
+			proc.stdout,
+		)
+		self.assertNotIn("skip reason=base_failure_tracked", proc.stdout)
+		self.assertNotIn("no_open_heal_issue", proc.stdout)
+		self.assertIn("CHECK_TRIAGE base_gate outcome=file base=main base_conclusion=failure", proc.stdout)
+		self.assertNotIn("base_failure_tracked", outputs)
+		self.assertEqual(outputs.get("ready"), "true")
+		self.assertEqual(tracked, {})
+
+	def test_gate_does_not_apply_outside_its_scope(self) -> None:
+		cases = (
+			# Not the default branch (an integration branch inherits main's failure).
+			({**TRACKED_BASE, "ref": "orchestrator/project-8969"}, {}),
+			# Default branch unknown.
+			({k: v for k, v in TRACKED_BASE.items() if k != "default_branch"}, {}),
+			# Base run cancelled, not failed.
+			({**TRACKED_BASE, "conclusion": "cancelled"}, {}),
+			# Run path missing or not a workflow file.
+			({k: v for k, v in TRACKED_BASE.items() if k != "workflow_path"}, {}),
+			({**TRACKED_BASE, "workflow_path": "dynamic/pages/pages-build-deployment"}, {}),
+			({**TRACKED_BASE, "workflow_path": ".github/workflows/../ci.yml"}, {}),
+			# Switched off.
+			(TRACKED_BASE, {"CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED": "false"}),
+			(TRACKED_BASE, {"CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED": "maybe"}),
+		)
+		for base, env in cases:
+			with self.subTest(base=base, env=env):
+				proc, outputs, _metadata, calls, _tracked = self._collect(base, [_heal_issue(9215)], **env)
+				self.assertNotIn("base_failure_tracked", proc.stdout)
+				self.assertNotIn("base_failure_tracked", outputs)
+				self.assertEqual(outputs.get("ready"), "true")
+				self.assertFalse(any("labels=ai:workflow-heal" in call for call in calls))
+		proc, _outputs, _metadata, _calls, _tracked = self._collect(
+			TRACKED_BASE, [_heal_issue(9215)], CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED="maybe",
+		)
+		self.assertIn("::warning::CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED is not true or false", proc.stdout + proc.stderr)
+
+	def test_green_base_still_skips_as_pr_specific(self) -> None:
+		proc, outputs, _metadata, calls, _tracked = self._collect({**TRACKED_BASE, "conclusion": "success"}, [_heal_issue(9215)])
+		self.assertIn("skip reason=pr_specific_failure base=main base_conclusion=success", proc.stdout)
+		self.assertFalse(any("labels=ai:workflow-heal" in call for call in calls))
+
+
+def _run_base_tracked_note(
+	tracked: dict | None, *, post_rc: int = 0, existing_first_lines: str = "", list_rc: int = 0,
+) -> tuple[subprocess.CompletedProcess[str], list[str], str]:
+	with tempfile.TemporaryDirectory(prefix="check-triage-note-") as temp:
+		temp_path = Path(temp)
+		bin_dir = temp_path / "bin"
+		bin_dir.mkdir()
+		runtime_dir = temp_path / "runtime"
+		runtime_dir.mkdir()
+		trusted = temp_path / "trusted"
+		(trusted / "prompts").mkdir(parents=True)
+		(trusted / "unattended_system_instructions.md").write_text("instructions\n", encoding="utf-8")
+		(trusted / "prompts" / "mode-check-failure-triage.txt").write_text("prompt\n", encoding="utf-8")
+		if tracked is not None:
+			(runtime_dir / "triage_base_tracked.json").write_text(json.dumps(tracked), encoding="utf-8")
+		calls_file = temp_path / "calls.txt"
+		body_file = temp_path / "body.txt"
+		_write_executable(
+			bin_dir / "gh",
+			"#!/usr/bin/env bash\n"
+			'printf \'%s\\n\' "$*" >> "${MOCK_GH_CALLS}"\n'
+			# The marker read (--paginate ... --jq first lines) prints the
+			# comments' first lines; the stub ignores --jq and prints them as given.
+			'if [ "$2" = "--paginate" ]; then printf \'%s\' "${MOCK_EXISTING}"; exit "${MOCK_LIST_RC}"; fi\n'
+			'for arg in "$@"; do case "${arg}" in body=*) printf \'%s\' "${arg#body=}" > "${MOCK_BODY}" ;; esac; done\n'
+			'exit "${MOCK_POST_RC}"\n',
+		)
+		_write_executable(bin_dir / "sleep", "#!/usr/bin/env bash\nexit 0\n")
+		env = os.environ.copy()
+		for name in ("GH_TOKEN", "GITHUB_TOKEN", "TG_BOT_SECRET", "BASH_ENV", "ENV"):
+			env.pop(name, None)
+		env.update({
+			"CHECK_TRIAGE_STAGE": "base-tracked-note",
+			"CHECK_TRIAGE_TRUSTED_SUPPORT_DIR": str(trusted),
+			"GH_RETRY_MAX_ATTEMPTS": "1",
+			"GITHUB_REPOSITORY": "owner/repo",
+			"GITHUB_SERVER_URL": "https://github.com",
+			"RUNTIME_DIR": str(runtime_dir),
+			"MOCK_GH_CALLS": str(calls_file),
+			"MOCK_BODY": str(body_file),
+			"MOCK_POST_RC": str(post_rc),
+			"MOCK_EXISTING": existing_first_lines,
+			"MOCK_LIST_RC": str(list_rc),
+			"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+		})
+		proc = subprocess.run(
+			["bash", "--noprofile", "--norc", str(TRIAGE_SCRIPT_PATH)],
+			cwd=REPO_ROOT, env=env, capture_output=True, text=True, encoding="utf-8",
+		)
+		calls = calls_file.read_text(encoding="utf-8").splitlines() if calls_file.exists() else []
+		body = body_file.read_text(encoding="utf-8") if body_file.exists() else ""
+		return proc, calls, body
+
+
+class CheckFailureTriageBaseTrackedNoteTests(unittest.TestCase):
+	TRACKED = {
+		"heal_issue": "9215", "pr_number": "9180", "head_sha": "b" * 40, "run_id": "42941636319",
+		"base_ref": "main", "workflow_path": ".github/workflows/ci.yml",
+	}
+
+	def test_posts_one_bookkeeping_comment_on_the_heal_issue(self) -> None:
+		proc, calls, body = _run_base_tracked_note(self.TRACKED)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE op=base_tracked_note outcome=posted heal_issue=9215 pr=9180", proc.stdout)
+		# The marker read, then one post; the stub logs the two-line body as two lines.
+		self.assertEqual(sum(call.startswith("api ") for call in calls), 2)
+		self.assertTrue(calls[0].startswith("api --paginate repos/owner/repo/issues/9215/comments?per_page=100 --jq "))
+		self.assertTrue(calls[1].startswith("api repos/owner/repo/issues/9215/comments -f body="))
+		lines = body.splitlines()
+		self.assertEqual(lines[0], f"<!-- check-failure-triage:base-tracked pr=9180 head={'b' * 40} run=42941636319 -->")
+		self.assertIn("`.github/workflows/ci.yml` also failed on PR #9180 (head `bbbbbbbbbbbb`", body)
+		self.assertIn("https://github.com/owner/repo/actions/runs/42941636319", body)
+		self.assertIn("on `main` fails too", body)
+		# The poller's unrouted-reply check treats check-failure-triage markers as
+		# pipeline bookkeeping, so the owner-account comment is not a human reply.
+		lib = (REPO_ROOT / "scripts" / "orchestrate_lib.py").read_text(encoding="utf-8")
+		self.assertIn("|workflow-failure-heal:|check-failure-triage:|", lib)
+
+	def test_existing_note_for_the_same_head_and_run_is_not_posted_again(self) -> None:
+		marker = f"<!-- check-failure-triage:base-tracked pr=9180 head={'b' * 40} run=42941636319 -->"
+		proc, calls, body = _run_base_tracked_note(self.TRACKED, existing_first_lines=f"Some reply\n{marker}\n")
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE op=base_tracked_note outcome=skip reason=already_noted heal_issue=9215 pr=9180", proc.stdout)
+		self.assertEqual(len(calls), 1)
+		self.assertEqual(body, "")
+		# A note for another run of the same PR does not count.
+		other = marker.replace("run=42941636319", "run=42941636320")
+		proc, calls, _body = _run_base_tracked_note(self.TRACKED, existing_first_lines=other + "\n")
+		self.assertIn("outcome=posted", proc.stdout)
+
+	def test_failed_marker_read_posts_as_before(self) -> None:
+		proc, calls, _body = _run_base_tracked_note(self.TRACKED, list_rc=1)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE op=base_tracked_note outcome=posted heal_issue=9215 pr=9180", proc.stdout)
+
+	def test_post_failure_is_logged_and_not_fatal(self) -> None:
+		proc, _calls, _body = _run_base_tracked_note(self.TRACKED, post_rc=1)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE op=base_tracked_note outcome=failed heal_issue=9215 pr=9180", proc.stdout)
+
+	def test_missing_or_invalid_metadata_posts_nothing(self) -> None:
+		proc, calls, _body = _run_base_tracked_note(None)
+		self.assertIn("op=base_tracked_note outcome=skip reason=metadata_missing", proc.stdout)
+		self.assertEqual(calls, [])
+		for key, value in (
+			("heal_issue", "0"), ("heal_issue", "9215 x"), ("pr_number", ""), ("head_sha", "B" * 40),
+			("run_id", "abc"), ("base_ref", "main..x"), ("base_ref", "main`"),
+			("workflow_path", "ci.yml"), ("workflow_path", ".github/workflows/../x.yml"),
+		):
+			with self.subTest(key=key, value=value):
+				proc, calls, _body = _run_base_tracked_note({**self.TRACKED, key: value})
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertIn("op=base_tracked_note outcome=skip reason=metadata_invalid", proc.stdout)
+				self.assertEqual(calls, [])
+
+	def test_workflow_runs_the_note_with_the_issues_token_only_after_a_tracked_skip(self) -> None:
+		text = (REPO_ROOT / ".github" / "workflows" / "check_failure_triage.yml").read_text(encoding="utf-8")
+		step = text.split("- name: Note PR failure on its base-branch heal issue", 1)[1].split("- name: ", 1)[0]
+		self.assertIn("if: ${{ steps.collect_triage.outputs.base_failure_tracked != '' }}", step)
+		self.assertIn("continue-on-error: true", step)
+		self.assertIn("GH_TOKEN: ${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}", step)
+		self.assertIn("CHECK_TRIAGE_STAGE: base-tracked-note", step)
+		self.assertNotIn("GH_PAT", step)
+		self.assertIn(
+			"CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED: ${{ vars.CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED || 'true' }}", text,
+		)
 
 
 class CheckFailureTriageHistoricalModeTests(unittest.TestCase):
@@ -2621,10 +3002,10 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 		self.assertIn("triage_report_routing_unverified\n\t\texit 0", gate)
 		dedup = script_text.split("skip reason=duplicate_open_issue issue=${EXISTING}", 1)[1].split("exit 0", 1)[0]
 		self.assertIn("triage_report_routing_unverified", dedup)
-		# Base-gate skips (success, pending and the #7283 routed-head base) also
-		# report an unverified route.
+		# Base-gate skips (success, pending, the #7283 routed-head base and a
+		# base failure an open heal issue tracks) also report an unverified route.
 		base_gate = script_text.split("--- Base-branch gate (#7020)", 1)[1].split("--- Lineage cap / escalation", 1)[0]
-		self.assertEqual(base_gate.count("triage_report_routing_unverified"), 3)
+		self.assertEqual(base_gate.count("triage_report_routing_unverified"), 4)
 		lineage_cap = script_text.split("--- Lineage cap / escalation", 1)[1].split("--- PR-head routing gate", 1)[0]
 		self.assertEqual(lineage_cap.count("triage_report_routing_unverified"), 1)
 		self.assertIn('"${PR_NUMBER}" "${ROUTING_LINE}" "${ROUTING_TARGET_BRANCH}" <<\'PY\'', script_text)

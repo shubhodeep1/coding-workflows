@@ -67,6 +67,23 @@ if ! type _pr_wait_for_required_checks >/dev/null 2>&1; then
 	}
 fi
 
+# Final CI at the end of review (cut-ci-runner-time Phase 4): once this step
+# has posted ai-review/head-gate success for the reviewed head, make sure that
+# head gets its one full CI run, also for PRs that are never auto-merged.
+# No-op unless REVIEW_FINAL_CI_WORKFLOW is set (review_autofix.yml's
+# final_ci_workflow input). $1: the PR head ref when already known (saves
+# the helper's PR read). Never fails the step.
+review_enable_auto_merge_ensure_final_ci()
+{
+	[ -n "${REVIEW_FINAL_CI_WORKFLOW:-}" ] || return 0
+	if ! type _pr_ensure_final_ci >/dev/null 2>&1; then
+		echo "::warning::REVIEW_FINAL_CI pr=${PR_NUMBER:-?} head=${INITIAL_HEAD_SHA:-?} outcome=dispatch_failed reason=library_unavailable"
+		return 0
+	fi
+	_pr_ensure_final_ci "${GITHUB_REPOSITORY}" "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${1:-}" || true
+	return 0
+}
+
 # Deferral reason for the freshness gate: `base_moved_overlap` when the base
 # moved under this PR's files (a branch update was requested), otherwise
 # `base_freshness_unknown` (freshness could not be verified; no update).
@@ -74,6 +91,8 @@ base_freshness_defer_reason()
 {
 	if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
 		echo "base_moved_overlap"
+	elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+		echo "merge_lease_wait"
 	else
 		echo "base_freshness_unknown"
 	fi
@@ -112,6 +131,7 @@ if [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
 	if reviewed_head_is_current_for_labels; then
 		review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success "review and security gate passed"
 		record_auto_merge_ready_labels_allowed "true"
+		review_enable_auto_merge_ensure_final_ci
 	fi
 	echo "Auto-merge disabled (set ENABLE_AUTO_MERGE=true to enable)."
 	exit 0
@@ -158,6 +178,7 @@ if PR_LABELS_RAW="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issue
 		if reviewed_head_is_current_for_labels; then
 			review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success "review and security gate passed"
 			record_auto_merge_ready_labels_allowed "true"
+			review_enable_auto_merge_ensure_final_ci
 		fi
 		echo "PR #${PR_NUMBER} carries 'e2e-smoke-test' label — auto-merge suppressed for the e2e gate's lifecycle."
 		exit 0
@@ -255,6 +276,11 @@ fi
 # This step runs only after a clean review tail and a non-holding security
 # pass; post for the verified head before any merge or manual-merge path.
 review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success "review and security gate passed"
+# Final CI (Phase 4) for this path starts in the required-checks wait below,
+# after the freshness gate, so a head the gate is about to update never gets
+# a run; a head that leaves this step early is picked up by the review
+# sweep's safety net. The wait reuses the head ref (no PR read).
+PR_CHECKS_HEAD_REF="${_orch_pr_head_ref}"
 
 # Base moved under this PR's files since its checks ran: request the branch
 # update and stop here. The synchronize run re-validates the combined tree
@@ -267,6 +293,8 @@ if ! printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRAN
 	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=defer reason=$(base_freshness_defer_reason)"
 	if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
 		echo "Auto-merge not enabled for PR #${PR_NUMBER}: the base moved under files this PR touches since its checks ran. The branch update's synchronize run re-validates and re-enables auto-merge."
+	elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+		echo "Auto-merge not enabled for PR #${PR_NUMBER}: waiting for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}. The merge-train release re-dispatches this PR when the lease is granted to it."
 	else
 		echo "Auto-merge not enabled for PR #${PR_NUMBER}: base freshness could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); no branch update was requested. The review sweep or the next review round retries."
 	fi
@@ -294,6 +322,8 @@ if [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
 	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=defer reason=$(base_freshness_defer_reason)"
 	if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
 		echo "Auto-merge not enabled for PR #${PR_NUMBER}: the base moved under files this PR touches while its checks ran. The branch update's synchronize run re-validates and re-enables auto-merge."
+	elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+		echo "Auto-merge not enabled for PR #${PR_NUMBER}: waiting for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?} after the checks wait. The merge-train release re-dispatches this PR when the lease is granted to it."
 	else
 		echo "Auto-merge not enabled for PR #${PR_NUMBER}: base freshness could not be verified after the checks wait (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); no branch update was requested. The review sweep or the next review round retries."
 	fi

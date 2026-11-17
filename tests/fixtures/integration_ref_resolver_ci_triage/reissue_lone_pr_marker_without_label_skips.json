@@ -13,6 +13,27 @@
       }
     }
   },
+  "pulls": {
+    "6786": {
+      "number": 6786,
+      "state": "closed",
+      "merged": false,
+      "head": {
+        "ref": "ai/issue-6700",
+        "repo": {
+          "full_name": "owner/repo"
+        }
+      },
+      "base": {
+        "ref": "orchestrator/project-768",
+        "repo": {
+          "full_name": "owner/repo",
+          "default_branch": "main"
+        }
+      }
+    }
+  },
+  "branch_exists": {},
   "expected_stdout": "",
   "expected_exit_code": 0
 }
