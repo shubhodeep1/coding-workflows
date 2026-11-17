@@ -1165,6 +1165,7 @@ jobs:
           sparse-checkout: |
             scripts/pr_checks_lib.sh
             scripts/ci_docs_only_paths.sh
+            scripts/ci_sync_quick.sh
             scripts/gh_helpers.sh
             scripts/review_freshness_ci_failed.sh
             scripts/review_single_issue_security_pass.sh
