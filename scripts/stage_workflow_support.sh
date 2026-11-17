@@ -96,6 +96,9 @@ OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_hel
 # ci_docs_only_paths.sh: the docs-only path classifier (from the default
 # branch). Appended on its own line so the list above stays verbatim.
 OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} ci_docs_only_paths.sh"
+# ci_sync_quick.sh: the sync-quick CI helper (from the default branch),
+# appended the same way.
+OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} ci_sync_quick.sh"
 for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
   src=".codex-workflow-src/scripts/${f}"
   if [ ! -f "${src}" ]; then
