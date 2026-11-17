@@ -355,6 +355,10 @@ jobs:
       # Base commit SHA from the gate's PR read; the editor summary binds the
       # clean same-head marker to it (#8952).
       base_sha: ${{ steps.evaluate.outputs.base_sha }}
+      # Final-CI repair (final-ci-failure-ci-fix plan, Phase 2): run the
+      # test-repair step instead of the reviewer panel on this head.
+      final_ci_repair: ${{ steps.evaluate.outputs.final_ci_repair }}
+      final_ci_repair_attempt: ${{ steps.evaluate.outputs.final_ci_repair_attempt }}
       review_checkout_sha: ${{ steps.evaluate.outputs.review_checkout_sha }}
       post_merge_pr_text_json: ${{ steps.evaluate.outputs.post_merge_pr_text_json }}
       post_merge_linked_issues_json: ${{ steps.evaluate.outputs.post_merge_linked_issues_json }}
@@ -691,6 +695,8 @@ jobs:
           # Clean same-head skip (#8952): the script defaults it to true; set
           # vars.AUTOFIX_SKIP_CLEAN_SAME_HEAD=false to re-review clean heads.
           AUTOFIX_SKIP_CLEAN_SAME_HEAD: ${{ vars.AUTOFIX_SKIP_CLEAN_SAME_HEAD }}
+          # Final-CI repair instead of the panel (final-ci-failure-ci-fix plan, Phase 2).
+          FINAL_CI_REPAIR_ENABLED: ${{ vars.FINAL_CI_REPAIR_ENABLED || 'true' }}
           POST_SYNC_TEST_REPAIR: ${{ inputs.post_sync_test_repair && 'true' || 'false' }}
           # Same expression as the retrigger_guard step: a stall-poller
           # force_rb_judge dispatch must never be swallowed by the terminal
@@ -3521,7 +3527,7 @@ jobs:
       # #8210: sets INTEGRATION_TEST_REPAIR_ACTIVE (reviewers/editor skip),
       # gates the integration head and repairs PR-caused test failures.
       - name: Integration post-sync test repair
-        if: inputs.post_sync_test_repair && startsWith(env.TARGET_BRANCH, 'orchestrator/project-') && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        if: ((inputs.post_sync_test_repair && startsWith(env.TARGET_BRANCH, 'orchestrator/project-')) || needs.gate.outputs.final_ci_repair == 'true') && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         continue-on-error: true
         timeout-minutes: 120
         env:
@@ -3529,6 +3535,11 @@ jobs:
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           POST_SYNC_TEST_REPAIR: ${{ inputs.post_sync_test_repair }}
+          # Final-CI repair of an approved head (final-ci-failure-ci-fix plan,
+          # Phase 2; gate output). Never set on orchestrator/project-* heads.
+          FINAL_CI_REPAIR: ${{ needs.gate.outputs.final_ci_repair == 'true' && 'true' || 'false' }}
+          FINAL_CI_REPAIR_ATTEMPT: ${{ needs.gate.outputs.final_ci_repair_attempt }}
+          FINAL_CI_REPAIR_FROM_SHA: ${{ needs.gate.outputs.head_sha }}
           DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}
           PREPUSH_TEST_GATE_STEP_MODE: integration
           PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}
