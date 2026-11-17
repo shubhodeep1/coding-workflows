@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9577,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9577\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9655\",\"pr_number\":9655,\"branch\":\"ai/issue-9577\",\"run_id\":\"44072710301\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/44072710301\",\"changed_files\":[\"changelog.d/9577-inventory-parity-heal.md\"]}",
+  "fingerprint": "d942fd464aef5d6aa80c2100789d86fca9205625ae97faa9feffab07db2f6d6e",
+  "lineage": {
+    "issue_number": 9577,
+    "parent_ids": [],
+    "pr_number": 9655,
+    "run_id": "44072710301",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44072710301",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9655"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261117122117_658dcb90c4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9577,
+    "level": "run",
+    "pr_number": 9655,
+    "run_id": "44072710301"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9577: https://github.com/shubhodeep1/coding-workflows/pull/9655",
+  "timestamps": {
+    "created_at": "2026-11-17T12:21:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
