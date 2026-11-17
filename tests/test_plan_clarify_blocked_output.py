@@ -968,6 +968,13 @@ def test_failed_comment_post_removes_only_the_scope_label_this_run_added() -> No
 		result, _, _, gh_calls = _run_blocked_planning_step_with_gh(labels, routed)
 		assert result.returncode != 0
 		assert not any("--remove-label ai:scope-blocked" in call for call in gh_calls), (labels, gh_calls)
+	# An /answer release earlier in the same job removed the latch the job-start
+	# metadata still lists, so the re-added label is this run's and is rolled back.
+	result, _, _, gh_calls = _run_blocked_planning_step_with_gh(
+		["ai:planning", "ai:scope-blocked"], {**routed, "PLAN_SCOPE_LATCH_RELEASED": "true"}
+	)
+	assert result.returncode != 0
+	assert any(call == "issue edit 746 --repo owner/repo --remove-label ai:scope-blocked" for call in gh_calls), gh_calls
 
 
 def test_failed_label_edit_never_removes_a_pre_existing_scope_latch() -> None:
@@ -989,6 +996,7 @@ def test_answer_on_blocked_issue_releases_a_planning_scope_latch() -> None:
 	branch = branch[: branch.index("else\n")]
 	assert "bash scripts/plan_scope_block_route.sh answer-release" in branch
 	assert "PLAN_SCOPE_RELEASE_ARGS=(--remove-label 'ai:scope-blocked')" in branch
+	assert 'echo "PLAN_SCOPE_LATCH_RELEASED=true" >> "$GITHUB_ENV"' in branch
 	assert "--add-label 'ai:planning' --remove-label 'ai:blocked'" in branch
 
 

@@ -1060,6 +1060,9 @@ jobs:
               PLAN_SCOPE_PIPELINE_LOGIN="$(gh_retry gh api user --jq .login 2>/dev/null || true)"
               if [ "$(PLAN_SCOPE_PIPELINE_LOGIN="${PLAN_SCOPE_PIPELINE_LOGIN}" bash scripts/plan_scope_block_route.sh answer-release || true)" = "release=true" ]; then
                 PLAN_SCOPE_RELEASE_ARGS=(--remove-label 'ai:scope-blocked')
+                # The handler's rollback reads the job-start metadata, which
+                # still lists this latch: tell it a later re-add is this job's.
+                echo "PLAN_SCOPE_LATCH_RELEASED=true" >> "$GITHUB_ENV"
               fi
             fi
             gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
@@ -2412,6 +2415,11 @@ jobs:
           SCOPE_LABEL_PREEXISTING=true
           if [ -s "${ISSUE_META_FILE:-}" ] &&
             jq -e 'any((.labels // [])[]?.name; . == "ai:scope-blocked") | not' "${ISSUE_META_FILE}" >/dev/null 2>&1; then
+            SCOPE_LABEL_PREEXISTING=false
+          fi
+          # An /answer release earlier in this job removed the latch the
+          # metadata still lists, so any ai:scope-blocked now is this run's add.
+          if [ "${PLAN_SCOPE_LATCH_RELEASED:-false}" = "true" ]; then
             SCOPE_LABEL_PREEXISTING=false
           fi
           ensure_label_exists "ai:blocked" "${{ github.repository }}"
