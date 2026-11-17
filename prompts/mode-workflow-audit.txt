@@ -104,6 +104,7 @@ Additionally, note the overall workflow file size limit of 1 MB (1,048,576 chara
 - TODO/FIXME/HACK markers — existing technical debt markers left in code.
 - Inconsistent patterns — same operation done differently in different files (e.g. one script uses `gh_retry` while another uses raw `gh api` for the same endpoint).
 - Missing `shellcheck` compliance — obvious shellcheck violations (SC2086, SC2046, SC2006, SC2015, etc.).
+- Runner concurrency (CLAUDE.md §33) — jobs that could run as steps of an existing job on the same trigger without breaking its time limits, runs a trigger filter (`paths:`, `types:`, `branches:`) could avoid creating, workflows that re-run on every push or schedule without a `concurrency:` group, unbounded matrix or per-item dispatch fan-out, and new always-on jobs with no stated reason. For each finding, give the jobs per triggering event before and after the fix, and confirm the merged job stays within its `timeout-minutes` and does not delay a result someone waits on.
 
 ### Section 6: Summary & Severity Matrix
 
