@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_files_touched_scope_guard.py:Infrastructure/Integration tests | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push gate reported failures in tests/test_files_touched_scope_guard.py, tests/test_gh_api_write_guard.py, tests/test_orchestrate_lib.py and tests/test_session_start_extract_repo_slug.py, which gemini attributes to the PR's workflow changes.\n  WHY: Severity disagreement: gemini rated it BLOCKER (confidence 5) and glm rated it NIT (confidence 2). The highest severity is used. glm found no mappable failure path from the changed files and suspects a degraded sandbox. Sonnet, minimax and luna did not file it, because the last run touched only documentation.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_files_touched_scope_guard.py:Infrastructure/Integration tests | severity=BLOCKER | confidence=5\n  PROBLEM: The PR introduces failures in multiple CI infrastructure tests (`tests/test_files_touched_scope_guard.py`, `tests/test_gh_api_write_guard.py`, `tests/test_orchestrate_lib.py`, `tests/test_session_start_extract_repo_slug.py`).\n  WHY: These failures prevent the PR from passing CI. They indicate that the extensive modifications to `.github/workflows/test-and-mark-stable.yml` violate project-specific contract tests for workflow integrity, file-scope guarding, or environment variable mappings.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- (no diff site \u2014 unmapped pre-push gate failures) | severity=NIT | confidence=2\n  PROBLEM: The last run changed only README.md:290 and changelog.d/9532-release-gate-cancel-timed-out-dispatch.md. None of the four test files flagged by the pre-push gate reads either file or any other PR-changed file, so the \"caused by this change\" classification has no mappable failure path.\n  WHY: The editor summary documents a degraded sandbox (noexec /tmp, PyYAML absent), which suggests environment-caused misclassification. The risk is a false gate failure blocking a correct forward-merge. The suggested action is to re-run the four suites in a healthy sandbox.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d6aacca173aabb9fa773c5acda6ec0199089e359bdc1422ea9f3fd0f88ded133",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9633,
+    "run_id": "44073854585",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44073854585",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117142236_53841679a0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9633,
+    "run_id": "44073854585"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-17T14:22:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
