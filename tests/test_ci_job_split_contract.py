@@ -167,7 +167,9 @@ class FinalCiFailedJobTest(unittest.TestCase):
 				if job_id == "static-checks":
 					self.assertNotIn("if", jobs[job_id])
 				else:
-					self.assertEqual(jobs[job_id]["if"], "inputs.mode != 'quick'")
+					# Docs-only final CI (run-volume plan item 4) also skips them;
+					# tests/test_ci_docs_only_final_ci.py pins that gate.
+					self.assertEqual(jobs[job_id]["if"], "inputs.mode != 'quick' && inputs.docs_only != 'true'")
 
 
 class SystemPythonJobTest(unittest.TestCase):
