@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import {
+	ALLOWED_WORKFLOW_FILES,
 	AUDIENCE,
 	GITHUB_API,
 	ISSUER,
@@ -186,6 +187,16 @@ describe("granted", () => {
 		const token = await sign(claims({ repository: "shubhodeep1/coding-workflows", job_workflow_ref: "shubhodeep1/coding-workflows/.github/workflows/claude-engine-smoke.yml@refs/heads/main" }));
 		expect((await call(s, request(token))).status).toBe(200);
 		expect(s.calls).not.toContain(REGISTRY_URL);
+	});
+
+	it("returns the pool to a consumer job of the CS investigation workflow (#9440)", async () => {
+		const s = stub();
+		const token = await sign(claims({ job_workflow_ref: "shubhodeep1/coding-workflows/.github/workflows/cs_investigate.yml@refs/heads/main" }));
+		expect((await call(s, request(token))).status).toBe(200);
+	});
+
+	it("lists the CS investigation workflow in the allowlist", () => {
+		expect(ALLOWED_WORKFLOW_FILES).toContain("cs_investigate.yml");
 	});
 
 	it("accepts an audience list that contains the audience", async () => {

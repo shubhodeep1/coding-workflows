@@ -642,7 +642,7 @@ def test_unmet_done_check_target_drives_a_repair(tmp_path):
 	assert "STEP_RETURNED" in proc.stdout, proc.stderr
 	first_run = next(line for line in (_work(tmp_path) / "docker.log").read_text(encoding="utf-8").splitlines() if line.startswith("run "))
 	assert "dst=/inputs,readonly" in first_run
-	assert "--tests-file /gate/tests.txt" in first_run and "--expect-baseline-fail-file /inputs/baseline_fail.txt" in first_run
+	assert "--tests-file /inputs/tests.txt" in first_run and "--expect-baseline-fail-file /inputs/baseline_fail.txt" in first_run
 	assert _editor_calls(tmp_path) == 1 and _docker_runs(tmp_path) == 2
 	prompt = (_work(tmp_path) / "editor_prompt.txt").read_text(encoding="utf-8")
 	block = prompt.split("=== BEGIN UNTRUSTED DONE-CHECK STATUS (host-computed; targets are plan text) ===", 1)[1]

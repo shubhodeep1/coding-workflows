@@ -305,6 +305,47 @@ class PropagateConsumerSecretsScriptTests(unittest.TestCase):
 		self.assertEqual(proc.returncode, 1)
 		self.assertIn("is not a JSON array of owner/repo strings", proc.stdout)
 
+	def test_glob_token_target_is_not_expanded_to_file_names(self) -> None:
+		"""SHELL-001: `*` and `*/*` must reach validation as literal tokens,
+		not be replaced by file names from the repo root (the script's cwd)."""
+		self.assertTrue(any(p.name[0] != "." for p in REPO_ROOT.iterdir()))
+		proc, calls = _run(registry=["o/a"], targets="*", values={"GH_PAT": "x"}, names="GH_PAT")
+		self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+		self.assertIn("CONSUMER_SECRETS_PROPAGATE repo=* status=skipped_invalid_slug", proc.stdout)
+		self.assertEqual(proc.stdout.count("status=skipped_invalid_slug"), 1, proc.stdout)
+		self.assertNotIn("repo=README.md", proc.stdout)
+		self.assertEqual([], calls)
+		self.assertIn("summary targets=0 set=0 skipped=0 failed=1", proc.stdout)
+		with self.subTest(targets="*/*"):
+			proc, calls = _run(registry=["o/a"], targets="*/*", values={"GH_PAT": "x"}, names="GH_PAT")
+			self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+			self.assertIn("CONSUMER_SECRETS_PROPAGATE repo=*/* status=skipped_invalid_slug", proc.stdout)
+			self.assertEqual(proc.stdout.count("status=skipped_invalid_slug"), 1, proc.stdout)
+			self.assertNotIn("status=skipped_unregistered", proc.stdout)
+			self.assertEqual([], calls)
+
+	def test_mixed_whitespace_targets_split_in_order(self) -> None:
+		proc, calls = _run(
+			registry=["o/d", "o/c", "o/b", "o/a"], targets="o/a  o/b\to/c\no/d",
+			values={"GH_PAT": "x"}, names="GH_PAT",
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertEqual(
+			[f"set|{repo}|GH_PAT|" + _sha("x") for repo in ("o/a", "o/b", "o/c", "o/d")],
+			[c for c in calls if c.startswith("set|")],
+		)
+		self.assertIn("summary targets=4 set=4 skipped=0 failed=0", proc.stdout)
+
+	def test_whitespace_only_targets_fall_back_to_registry(self) -> None:
+		for targets in ("", "   "):
+			with self.subTest(targets=targets):
+				proc, calls = _run(registry=["o/c", "o/a"], targets=targets, values={"GH_PAT": "x"}, names="GH_PAT")
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertEqual(
+					["set|o/c|GH_PAT|" + _sha("x"), "set|o/a|GH_PAT|" + _sha("x")],
+					[c for c in calls if c.startswith("set|")],
+				)
+
 
 class PropagateConsumerSecretsWorkflowContractTests(unittest.TestCase):
 	def setUp(self) -> None:

@@ -3328,6 +3328,91 @@ def test_root_failure_class_ignores_echoed_summary_and_untrusted_rows():
 	assert collector._root_failure_class_from_value("editor_changes_lost") == "editor_changes_lost"
 
 
+def _success_reserve_runs(failed_count: int, success_count: int) -> list[dict]:
+	# Failures are slower than every success, so the slow bucket holds only
+	# failures and every success sits outside the notable buckets.
+	failed = [
+		{
+			"repository": "owner/repo",
+			"run_id": 1000 + i,
+			"conclusion": "failure",
+			"retries": 0,
+			"duration_seconds": 600,
+			"created_at": f"2026-04-10T12:{i:02d}:00Z",
+		}
+		for i in range(failed_count)
+	]
+	successes = [
+		{
+			"repository": "owner/repo",
+			"run_id": 2000 + i,
+			"conclusion": "success",
+			"retries": 0,
+			"duration_seconds": 10,
+			"created_at": f"2026-04-10T10:{i:02d}:00Z",
+		}
+		for i in range(success_count)
+	]
+	return failed + successes
+
+
+def test_select_notable_runs_reserves_success_slot_when_failures_fill_cap():
+	runs = _success_reserve_runs(15, 25)
+	selected = collector.select_notable_runs_for_logs(runs, max_log_runs=15, success_sample_rate=0.07)
+	sampled = [item for item in selected if item.get("_success_sampled")]
+	# reserve = min(ceil(25 * 0.07) = 2, max(1, floor(15 * 0.1) = 1)) = 1
+	assert len(selected) == 15
+	assert len(sampled) == 1
+	assert all(item["conclusion"] == "success" for item in sampled)
+	assert all(item["conclusion"] == "failure" for item in selected[:14])
+	assert not any(item.get("_success_sampled") for item in selected[:14])
+	# Failures still lead, newest first.
+	assert [item["run_id"] for item in selected[:14]] == [1000 + i for i in range(14, 0, -1)]
+
+
+def test_select_notable_runs_reserve_disabled_when_rate_zero():
+	runs = _success_reserve_runs(15, 25)
+	selected = collector.select_notable_runs_for_logs(runs, max_log_runs=15, success_sample_rate=0.0)
+	assert len(selected) == 15
+	assert not any(item.get("_success_sampled") for item in selected)
+	assert all(item["conclusion"] == "failure" for item in selected)
+
+
+def test_select_notable_runs_reserve_skipped_for_single_slot():
+	runs = _success_reserve_runs(5, 25)
+	selected = collector.select_notable_runs_for_logs(runs, max_log_runs=1, success_sample_rate=0.07)
+	assert [item["run_id"] for item in selected] == [1004]
+	assert not selected[0].get("_success_sampled")
+
+
+def test_select_notable_runs_unused_reserve_returns_to_notable():
+	runs = _success_reserve_runs(25, 1)
+	# reserve = min(ceil(1 * 3.0) = 3, max(1, floor(20 * 0.1) = 2)) = 2, but the
+	# pool holds 1 success, so the unused reserve slot goes back to a failure.
+	selected = collector.select_notable_runs_for_logs(runs, max_log_runs=20, success_sample_rate=3.0)
+	sampled = [item for item in selected if item.get("_success_sampled")]
+	notable = [item for item in selected if not item.get("_success_sampled")]
+	assert len(selected) == 20
+	assert [item["run_id"] for item in sampled] == [2000]
+	assert len(notable) == 19
+	assert all(item["conclusion"] == "failure" for item in notable)
+	assert [item["run_id"] for item in notable] == [1000 + i for i in range(24, 5, -1)]
+	assert selected[-1]["run_id"] == 2000
+
+
+def test_select_notable_runs_reserve_is_deterministic():
+	import copy
+
+	runs = _success_reserve_runs(15, 25)
+	first = collector.select_notable_runs_for_logs(copy.deepcopy(runs), max_log_runs=15, success_sample_rate=0.07)
+	second = collector.select_notable_runs_for_logs(copy.deepcopy(runs), max_log_runs=15, success_sample_rate=0.07)
+	assert [item["run_id"] for item in first] == [item["run_id"] for item in second]
+	assert any(item.get("_success_sampled") for item in first)
+	assert [item["run_id"] for item in first if item.get("_success_sampled")] == [
+		item["run_id"] for item in second if item.get("_success_sampled")
+	]
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------

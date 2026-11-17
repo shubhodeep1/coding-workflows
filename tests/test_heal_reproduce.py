@@ -193,6 +193,9 @@ def test_caused_failure_is_reproduced(h: Env) -> None:
 	assert "run " in h.read("docker.log")
 	assert "--venv" not in h.read("docker.log")  # the wrapper mounts it; the flag never reaches docker
 	assert "dst=/opt/codex-venv" in h.read("docker.log")
+	# The heal list replaces the selection (--tests-only), never adds to it.
+	assert "--tests-only /gate/tests.txt" in h.read("docker.log")
+	assert "--tests-file" not in h.read("docker.log")
 	h.assert_clean(err)
 
 

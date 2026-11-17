@@ -115,8 +115,14 @@ set_consumer_secret()
 }
 
 if [ -n "${PROPAGATE_TARGETS// /}" ]; then
-	# shellcheck disable=SC2086
-	TARGETS="$(printf '%s\n' ${PROPAGATE_TARGETS})"
+	# Split on whitespace without pathname expansion (SHELL-001,
+	# workflow-optimization-2026-10-08): an unquoted expansion would turn a
+	# token such as `*` or `*/*` into file names from the repo root before the
+	# slug/registry validation below ever sees the operator's literal list.
+	# `read -d ''` returns 1 at end of input, hence `|| true` under `set -e`.
+	propagate_target_tokens=()
+	IFS=$' \t\n' read -r -d '' -a propagate_target_tokens <<< "${PROPAGATE_TARGETS}" || true
+	TARGETS="$(printf '%s\n' ${propagate_target_tokens[@]+"${propagate_target_tokens[@]}"})"
 else
 	TARGETS="${REGISTRY}"
 fi
