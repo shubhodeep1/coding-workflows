@@ -33,7 +33,10 @@ COMMIT_STEPS = (
 	"Commit and push deep audit section",
 	"Commit and push API redundancy section",
 )
-DELIVER_IF = "if: ${{ always() && github.event_name != 'schedule' && needs.analyze-commit-notify.outputs.committed == 'true' }}"
+DELIVER_IF = (
+	"if: ${{ always() && github.event_name != 'schedule' && (needs.analyze-commit-notify.outputs.committed == 'true' "
+	"|| needs.deep-audit.outputs.section_branch != '' || needs.api-redundancy.outputs.section_branch != '') }}"
+)
 
 
 def _wf() -> str:
@@ -581,7 +584,7 @@ def test_commit_step_skips_purge_without_processing_report() -> None:
 
 # --- section step -------------------------------------------------------------
 
-def _run_section_step(tmp: Path, report_branch: str) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
+def _run_section_step(tmp: Path, report_branch: str, **extra: str) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
 	env = _env(tmp)
 	url, seed = _origin(tmp, env, {})
 	_push_branch(seed, env, RUN_BRANCH, {REPORT: "# report\n"})
@@ -593,6 +596,7 @@ def _run_section_step(tmp: Path, report_branch: str) -> tuple[subprocess.Complet
 		"GITHUB_REF_TYPE": "branch", "GITHUB_REF_NAME": "main",
 		"REPORT_FILE": REPORT, "REPORT_BRANCH": report_branch,
 	})
+	env.update(extra)
 	body = _step_run("Commit and push deep audit section")
 	assert "${{" not in body
 	proc = subprocess.run(["bash", "-c", body], cwd=work, env=env, capture_output=True, text=True, timeout=120)
@@ -610,9 +614,10 @@ def test_section_step_pushes_to_run_branch() -> None:
 
 
 def test_section_step_without_report_branch_pushes_nothing() -> None:
+	# Issue #9503: with the kill switch off, the P1 skip is unchanged.
 	with tempfile.TemporaryDirectory() as raw:
 		tmp = Path(raw)
-		proc, env = _run_section_step(tmp, "")
+		proc, env = _run_section_step(tmp, "", WORKFLOW_LOG_ANALYSIS_REPORT_SECTIONS_VIA_PR="false")
 		out = _out(proc)
 		assert proc.returncode == 0, out
 		assert "WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=skipped reason=no_report_branch job=deep-audit" in out
@@ -713,6 +718,151 @@ def test_delivery_body_does_not_claim_sections_of_failed_jobs() -> None:
 		body = (tmp / "body.md").read_text(encoding="utf-8")
 		assert "Deep audit section: not confirmed (job failure)" in body
 		assert "API redundancy section: completed" in body
+
+
+# --- sections-only mode (issue #9503, project #9116 P1b) -------------------
+
+def _sections_sandbox(tmp: Path) -> tuple[dict[str, str], str]:
+	# The report is already on main (pushed or pr_merged); the run branch was
+	# re-created from main's tip and appends a section to the report.
+	env = _delivery_sandbox(tmp, {REPORT: "# report\n"})
+	base = _git(tmp / "origin.git", env, "rev-parse", "main")
+	env.update({
+		"REPORT_BRANCH": "",
+		"WLA_DELIVER_SECTIONS_ONLY": "true",
+		"WLA_DELIVER_SECTIONS_BRANCH": RUN_BRANCH,
+		"WLA_DELIVER_SECTIONS_BASE_SHA": base,
+		"PURGED_DOCS": "",
+	})
+	return env, base
+
+
+def _change_run_branch(tmp: Path, env: dict[str, str], mutate) -> None:
+	seed = tmp / "seed"
+	_git(seed, env, "checkout", "-q", RUN_BRANCH)
+	mutate(seed)
+	_git(seed, env, "add", "-A")
+	_git(seed, env, "commit", "-q", "-m", "change run branch")
+	_git(seed, env, "push", "-q", "origin", f"HEAD:refs/heads/{RUN_BRANCH}")
+	_git(seed, env, "checkout", "-q", "main")
+
+
+def test_delivery_sections_only_opens_pr_without_rename() -> None:
+	with tempfile.TemporaryDirectory() as raw:
+		tmp = Path(raw)
+		env, _base = _sections_sandbox(tmp)
+		proc = _deliver(tmp, env)
+		out = _out(proc)
+		assert proc.returncode == 0, out
+		assert f"WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=pr_opened branch={RUN_BRANCH} pr=123 file={REPORT}" in out
+		# The report on main is expected: no -2 copy, nothing pushed.
+		assert _ls_remote_file(tmp, env, RUN_BRANCH, REPORT)
+		assert not _ls_remote_file(tmp, env, RUN_BRANCH, REPORT.replace(".md", "-2.md"))
+		calls = (tmp / "gh.log").read_text(encoding="utf-8")
+		assert "pulls?state=open" not in calls
+		assert calls.count("pr create") == 1
+		assert "--title chore: add workflow log analysis report sections (workflow-optimization-2026-11-07.md)" in calls
+		assert "pr merge" not in calls and "--admin" not in calls
+		body = (tmp / "body.md").read_text(encoding="utf-8")
+		assert body.startswith("Workflow log analysis report sections from run https://github.com/owner/repo/actions/runs/100.")
+		assert f"- Report: `{REPORT}` (already on `main`)" in body
+		assert "Deep audit section: completed" in body
+		assert "retention purge" not in body
+		output = (tmp / "github_output").read_text(encoding="utf-8")
+		assert "pr_number=123" in output and f"report_file={REPORT}" in output
+		assert SENTINEL_TOKEN not in out
+
+
+def test_delivery_sections_only_diffs_against_recorded_base() -> None:
+	with tempfile.TemporaryDirectory() as raw:
+		tmp = Path(raw)
+		env, base = _sections_sandbox(tmp)
+		# main moves on with a non-doc file after the run branch forked, and
+		# the delivery job checks out that newer tip.
+		seed = tmp / "seed"
+		_write(seed, "scripts/later.sh", "echo later\n")
+		_git(seed, env, "add", "-A")
+		_git(seed, env, "commit", "-q", "-m", "later main commit")
+		_git(seed, env, "push", "-q", "origin", "main")
+		shutil.rmtree(tmp / "checkout")
+		_git(tmp, env, "clone", "-q", "--depth", "1", "--branch", "main", f"file://{tmp / 'origin.git'}", str(tmp / "checkout"))
+		assert _git(tmp / "checkout", env, "rev-parse", "HEAD") != base
+		proc = _deliver(tmp, env)
+		out = _out(proc)
+		assert proc.returncode == 0, out
+		assert "outcome=pr_opened" in out
+
+
+def test_delivery_sections_only_rejects_unexpected_paths() -> None:
+	def add_script(root: Path) -> None:
+		_write(root, "scripts/evil.sh", "echo pwned\n")
+
+	def add_other_doc(root: Path) -> None:
+		_write(root, "analysis/workflow-optimization-2026-11-01.md", "other\n")
+
+	def delete_report(root: Path) -> None:
+		(root / REPORT).unlink()
+
+	def symlink_report(root: Path) -> None:
+		(root / REPORT).unlink()
+		(root / REPORT).symlink_to("../README.md")
+
+	for mutate in (add_script, add_other_doc, delete_report, symlink_report):
+		with tempfile.TemporaryDirectory() as raw:
+			tmp = Path(raw)
+			env, _base = _sections_sandbox(tmp)
+			_change_run_branch(tmp, env, mutate)
+			proc = _deliver(tmp, env)
+			out = _out(proc)
+			assert proc.returncode == 1, (mutate.__name__, out)
+			assert f"WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=failed reason=unexpected_paths branch={RUN_BRANCH}" in out, mutate.__name__
+			assert "pr create" not in (tmp / "gh.log").read_text(encoding="utf-8")
+	# A run branch with nothing on top of the base has no section to deliver.
+	with tempfile.TemporaryDirectory() as raw:
+		tmp = Path(raw)
+		env, _base = _sections_sandbox(tmp)
+		_git(tmp / "seed", env, "push", "-q", "origin", f"+main:refs/heads/{RUN_BRANCH}")
+		proc = _deliver(tmp, env)
+		out = _out(proc)
+		assert proc.returncode == 1, out
+		assert f"WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=failed reason=no_section_changes branch={RUN_BRANCH}" in out
+		assert "pr create" not in (tmp / "gh.log").read_text(encoding="utf-8")
+
+
+def test_delivery_sections_only_rejects_invalid_base() -> None:
+	with tempfile.TemporaryDirectory() as raw:
+		tmp = Path(raw)
+		env, _base = _sections_sandbox(tmp)
+		run_tip = _git(tmp / "origin.git", env, "rev-parse", RUN_BRANCH)
+		for bad in ("abc123", "main", "0" * 40, run_tip):
+			proc = _deliver(tmp, dict(env, WLA_DELIVER_SECTIONS_BASE_SHA=bad))
+			out = _out(proc)
+			assert proc.returncode == 1, (bad, out)
+			assert f"WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=failed reason=section_base_invalid branch={RUN_BRANCH}" in out, bad
+		assert "pr create" not in (tmp / "gh.log").read_text(encoding="utf-8")
+
+
+def test_delivery_sections_only_conflicts_with_report_branch() -> None:
+	with tempfile.TemporaryDirectory() as raw:
+		tmp = Path(raw)
+		env, _base = _sections_sandbox(tmp)
+		proc = _deliver(tmp, dict(env, REPORT_BRANCH=RUN_BRANCH))
+		out = _out(proc)
+		assert proc.returncode == 1
+		assert "WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=failed reason=report_branch_invalid" in out
+		assert (tmp / "gh.log").read_text(encoding="utf-8") == ""
+
+
+def test_deliver_report_job_passes_sections_inputs() -> None:
+	job = _job_block("deliver-report")
+	assert (
+		"WLA_DELIVER_SECTIONS_ONLY: ${{ needs.analyze-commit-notify.outputs.committed != 'true' && "
+		"(needs.api-redundancy.outputs.section_branch || needs.deep-audit.outputs.section_branch) && 'true' || 'false' }}"
+	) in job
+	assert "WLA_DELIVER_SECTIONS_BRANCH: ${{ needs.api-redundancy.outputs.section_branch || needs.deep-audit.outputs.section_branch || '' }}" in job
+	assert "WLA_DELIVER_SECTIONS_BASE_SHA: ${{ needs.api-redundancy.outputs.section_base_sha || needs.deep-audit.outputs.section_base_sha || '' }}" in job
+	text = SCRIPT_PATH.read_text(encoding="utf-8")
+	assert 'WLA_DELIVER_SECTIONS_ONLY="${WLA_DELIVER_SECTIONS_ONLY:-false}"' in text
 
 
 def main() -> int:
