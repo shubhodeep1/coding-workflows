@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_test_and_mark_stable_review_timeout_reason.py:178-207 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The `reset` string literal is claimed to lack the script's leading indentation (script line 790), so `loop.count(reset)` would return 0 and the test would fail. Both anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash, and openai_gpt-6-luna, dispute this claim.\n  WHY: Reported as MAJOR by both flaggers, which cite line 178 and line 207 respectively. Three other reviewers say `str.count` matches substrings, so the missing indent does not matter and the claim does not hold.\n- tests/test_test_and_mark_stable_review_blocked_budget.py:931-954 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: `_collect_review_timeout_reason_cases()` copies the `test_*` callables from the timeout-reason test module into this module, so pytest runs them twice.\n  WHY: This adds CI runtime, since several cases spawn bash and jq. Severity disagreement: anthropic_claude-sonnet-5_5 rated it NIT and google_gemini-3_1-flash-lite rated it MAJOR; the highest is used.\n- tests/test_changelog_fragment_contract.py:N/A | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: A CI contract test suite failure is reported.\n  WHY: Reported as BLOCKER because it blocks stable release assembly in CI. Other reviewers could not reproduce it: the scaffolding the test checks exists, and the PR-head check-runs show `failed_count: 0`.\n- Global CI check:N/A | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: A Ruff linting failure is reported in the PR head.\n  WHY: Reported as MAJOR because Ruff is a required CI gate.\n- scripts/stable_e2e_step_wait_review.sh:170,801 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The jobs check in `e2e_review_note_run_started` counts any `completed` job as started, whatever its conclusion, and classifies on at most 10 jobs (`per_page=10`).\n  WHY: At worst the diagnostic label reads `inactivity` instead of `review_run_never_started`; `status=timeout` and the exit code are unaffected. z-ai_glm-5_3-flash mentioned this only in its verification notes as a known low-severity prior-run item.\n- tests/test_test_and_mark_stable_review_timeout_reason.py:185-198 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The name of `test_completed_run_without_started_job_does_not_set_flag` does not describe its second case, which asserts `inactivity` for a completed job.\n  WHY: Nothing fails, but a reader taking the name as the spec would miss that a completed job does count as started.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/stable_e2e_step_wait_review.sh:~170,801 | severity=NIT | confidence=2\n  PROBLEM: The jobs check counts any `completed` job as started, whatever its conclusion, and classifies on at most 10 jobs (`per_page=10` at line 801).\n  WHY: At worst the diagnostic label reads `inactivity` instead of `review_run_never_started`; `status=timeout` and the exit code are unaffected.\n- tests/test_test_and_mark_stable_review_blocked_budget.py:931-954 | severity=NIT | confidence=4\n  PROBLEM: `_collect_review_timeout_reason_cases()` copies the `test_*` callables from the timeout-reason test module, so pytest runs them twice.\n  WHY: It adds some CI runtime. The collision assert fails closed, and the comment documents why the cases are collected here.\n- tests/test_test_and_mark_stable_review_timeout_reason.py:185-198 | severity=NIT | confidence=5\n  PROBLEM: The second case asserts `inactivity` for a completed job, so the test name does not describe the full test.\n  WHY: Nothing fails, but a reader taking the name as the spec would miss that a completed job does count as started.\n- Rejected claim: the minimax `reset` indentation finding at line 207 does not hold, because `str.count` matches substrings and the continuation lines match script lines 790-792 byte for byte.\n- HARDENING_SUGGESTIONS: scripts/stable_e2e_step_wait_review.sh, the `all(.jobs[]; ...)` jobs check in `e2e_review_timeout_reason`. The 10-job page limit is never compared with `total_count`. Suggested fix: add `and ((.total_count // 0) <= (.jobs | length))` to the jq predicate (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_test_and_mark_stable_review_timeout_reason.py:178 | severity=MAJOR | confidence=5\n  PROBLEM: The `reset` variable's string literal is missing the 2-space indentation present in the script at line 790.\n  WHY: `loop.count(reset)` returns 0 in CI, leading to assertion failure and test suite failure.\n- tests/test_test_and_mark_stable_review_blocked_budget.py:944 | severity=MAJOR | confidence=4\n  PROBLEM: `_collect_review_timeout_reason_cases` injects test cases from another module into the global namespace.\n  WHY: pytest collects and executes these tests twice, causing test collection inconsistencies and a performance regression in the pre-push gate.\n- tests/test_changelog_fragment_contract.py:N/A | severity=BLOCKER | confidence=4\n  PROBLEM: CI contract test suite failure.\n  WHY: This blocks stable release assembly in CI.\n- Global CI check:N/A | severity=MAJOR | confidence=5\n  PROBLEM: Ruff linting failure in PR head.\n  WHY: Ruff is a required CI gate.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_test_and_mark_stable_review_timeout_reason.py:207 | severity=MAJOR | confidence=5\n  PROBLEM: The `reset` string literal in `test_cached_jobs_json_dropped_on_run_change()` starts with `if` with no leading whitespace, while the script's `if` at scripts/stable_e2e_step_wait_review.sh:790 has two spaces of indentation, so `loop.count(reset)` would return 0 and `loop.index(reset)` would raise `ValueError`.\n  WHY: `assert loop.count(reset) == 1` would fail with `AssertionError: assert 0 == 1`, so the test never verifies the cache-drop behaviour it claims to verify.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "be9a521695fea107c1a02837b238097e58d5eaec4dd89dbc7ff0bdae6224ec4f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9637,
+    "run_id": "44048214924",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44048214924",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117111327_8c28f1e441",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9637,
+    "run_id": "44048214924"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 6 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-17T11:13:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
