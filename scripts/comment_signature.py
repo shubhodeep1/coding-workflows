@@ -18,20 +18,24 @@ verifying. Deleting the secret instead makes every signed comment read as an
 untrusted `github-actions[bot]` comment. With the secret set:
 
 * **Post.** A new issue/PR comment that cannot start a wrapper is signed
-  (HMAC-SHA256 over repository, issue number, PAT login, PAT account type and
-  the body) and posted with `AI_COMMENT_JOB_TOKEN`. The signature is one
-  hidden line appended to the body:
-  `<!-- ai-comment-sig:v1 as=<login> type=<User|Bot> sig=<64 hex> -->`.
+  (HMAC-SHA256 over repository, issue number, PAT login, PAT account type,
+  PAT user id and the body) and posted with `AI_COMMENT_JOB_TOKEN`. The
+  signature is one hidden line appended to the body:
+  `<!-- ai-comment-sig:v1 repo=<owner/repo> issue=<n> as=<login> type=<User|Bot> uid=<id> sig=<64 hex> -->`.
   A body that could start a wrapper (`/approved`, `/answer`, `/reclarify`,
   `Clarification required`) or that the hardened plan-approval readers match
   (`Implementation Plan`) is posted unchanged with the caller's token.
 * **Edit.** A body edit of a comment that `github-actions[bot]` wrote is
   re-signed, so an in-place refresh keeps the comment trusted.
-* **Read.** Every `issues/.../comments` read is normalized: a comment by
-  `github-actions[bot]` whose signature verifies is returned exactly as the
-  PAT would have written it (`user.login` = the signed login, `user.type` =
-  the signed type, `author_association` = `OWNER` for the repository owner,
-  else `COLLABORATOR`), with the signature line removed from `body`. An
+* **Read.** Every `issues/.../comments` read and every `gh api graphql`
+  response is normalized: a comment by `github-actions[bot]` whose signature
+  verifies is returned as the PAT would have written it (`user.login` = the
+  signed login, `user.type` = the signed type, `user.id` = the signed id,
+  `author_association` = `OWNER` for the repository owner, else
+  `COLLABORATOR`), with the signature line removed from `body`. The signed
+  repository and issue must match the comment's own `issue_url` / `url`
+  when it carries one; a GraphQL node that selects neither is not
+  location-checked. An
   unsigned or badly signed bot comment is returned unchanged, so it stays
   untrusted. Readers need no change.
 
@@ -50,7 +54,7 @@ normalize
 
 API calls (§15)
 ---------------
-* One `GET /user` per job for the PAT identity, cached in
+* One `GET /user` per job for the PAT identity (login, type, id), cached in
   `${RUNNER_TEMP:-${TMPDIR:-/tmp}}/ai_comment_sig_identity_<token hash>.json`.
 * Create: the one POST, with the job token. When GitHub refuses the job
   token (401/403, `Resource not accessible by integration`), the original
@@ -97,7 +101,7 @@ _REPO = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
 # has no issue context of its own (a GraphQL node) can still verify it.
 SIG_LINE_RE = re.compile(
 	r"\n<!-- ai-comment-sig:v1 repo=(?P<repo>" + _REPO + r") issue=(?P<issue>[0-9]+) as=(?P<login>" + _LOGIN
-	+ r") type=(?P<type>User|Bot) sig=(?P<sig>[0-9a-f]{64}) -->\Z"
+	+ r") type=(?P<type>User|Bot)(?: uid=(?P<uid>[0-9]+))? sig=(?P<sig>[0-9a-f]{64}) -->\Z"
 )
 _ISSUE_URL_RE = re.compile(r"/repos/(?P<repo>[^/]+/[^/]+)/issues/(?P<num>[0-9]+)/?$")
 _HTML_URL_RE = re.compile(r"^https://github\.com/(?P<repo>[^/]+/[^/]+)/(?:issues|pull)/(?P<num>[0-9]+)(?:[#/?].*)?$")
@@ -120,6 +124,7 @@ _REFUSED_RE = re.compile(
 	r"HTTP 40[13]|Resource not accessible by integration|Bad credentials|Requires authentication",
 	re.IGNORECASE,
 )
+_RATE_LIMITED_RE = re.compile(r"rate limit", re.IGNORECASE)
 
 # `gh api` flags that take a value (short and long forms).
 _API_VALUE_FLAGS = {
@@ -144,16 +149,16 @@ def log(outcome: str, **fields: object) -> None:
 # Signing and verification
 # ---------------------------------------------------------------------------
 
-def canonical(repo: str, issue: int, login: str, account_type: str, body: str) -> bytes:
+def canonical(repo: str, issue: int, login: str, account_type: str, body: str, uid: int | None = None) -> bytes:
 	digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
 	return (
 		f"ai-comment-sig:{SIG_VERSION}\nrepo={repo.lower()}\nissue={int(issue)}"
-		f"\nas={login}\ntype={account_type}\nbody_sha256={digest}"
+		f"\nas={login}\ntype={account_type}\nuid={'' if uid is None else int(uid)}\nbody_sha256={digest}"
 	).encode("utf-8")
 
 
-def signature(secret: str, repo: str, issue: int, login: str, account_type: str, body: str) -> str:
-	return hmac.new(secret.encode("utf-8"), canonical(repo, issue, login, account_type, body), hashlib.sha256).hexdigest()
+def signature(secret: str, repo: str, issue: int, login: str, account_type: str, body: str, uid: int | None = None) -> str:
+	return hmac.new(secret.encode("utf-8"), canonical(repo, issue, login, account_type, body, uid), hashlib.sha256).hexdigest()
 
 
 def strip_signature(body: str) -> str:
@@ -162,12 +167,13 @@ def strip_signature(body: str) -> str:
 	return body[: match.start()] if match else body
 
 
-def sign_body(secret: str, repo: str, issue: int, login: str, account_type: str, body: str) -> str:
+def sign_body(secret: str, repo: str, issue: int, login: str, account_type: str, body: str, uid: int | None = None) -> str:
 	body = strip_signature(body)
-	sig = signature(secret, repo, issue, login, account_type, body)
+	sig = signature(secret, repo, issue, login, account_type, body, uid)
+	uid_field = "" if uid is None else f" uid={int(uid)}"
 	return (
 		f"{body}\n<!-- ai-comment-sig:{SIG_VERSION} repo={repo.lower()} issue={int(issue)} "
-		f"as={login} type={account_type} sig={sig} -->"
+		f"as={login} type={account_type}{uid_field} sig={sig} -->"
 	)
 
 
@@ -190,7 +196,7 @@ def _comment_location(comment: dict) -> tuple[str, int] | None:
 
 
 def verify_body(body: str, secret: str, location: tuple[str, int] | None, comment_id: object = None):
-	"""Return (original_body, login, account_type) when the signature holds.
+	"""Return (original_body, login, account_type, repo, uid) when the signature holds.
 
 	The signed repository and issue must match the comment's own location
 	when the object carries one (REST `issue_url`, GraphQL `url`).
@@ -203,11 +209,12 @@ def verify_body(body: str, secret: str, location: tuple[str, int] | None, commen
 		log("invalid", comment_id=comment_id, reason="location_mismatch")
 		return None
 	original = body[: match.start()]
-	expected = signature(secret, repo, issue, match.group("login"), match.group("type"), original)
+	uid = int(match.group("uid")) if match.group("uid") else None
+	expected = signature(secret, repo, issue, match.group("login"), match.group("type"), original, uid)
 	if not hmac.compare_digest(expected, match.group("sig")):
 		log("invalid", comment_id=comment_id)
 		return None
-	return original, match.group("login"), match.group("type"), repo
+	return original, match.group("login"), match.group("type"), repo, uid
 
 
 def _association(login: str, repo: str) -> str:
@@ -224,10 +231,13 @@ def normalize_comment(comment: Any, secret: str) -> Any:
 		verified = verify_body(comment["body"], secret, _comment_location(comment), comment.get("id"))
 		if verified is None:
 			return comment
-		original, login, account_type, repo = verified
+		original, login, account_type, repo, uid = verified
 		normalized = dict(comment)
 		normalized["body"] = original
 		normalized["user"] = dict(user, login=login, type=account_type)
+		if uid is not None:
+			# Readers that trust the PAT by numeric id (`.user.id == $actor`).
+			normalized["user"]["id"] = uid
 		normalized["author_association"] = _association(login, repo)
 		normalized["ai_comment_sig"] = {"poster": BOT_LOGIN}
 		return normalized
@@ -235,12 +245,14 @@ def normalize_comment(comment: Any, secret: str) -> Any:
 		verified = verify_body(comment["body"], secret, _comment_location(comment), comment.get("id") or comment.get("databaseId"))
 		if verified is None:
 			return comment
-		original, login, account_type, repo = verified
+		original, login, account_type, repo, uid = verified
 		normalized = dict(comment)
 		normalized["body"] = original
 		normalized_author = dict(author, login=login)
 		if "__typename" in normalized_author:
 			normalized_author["__typename"] = account_type
+		if uid is not None and "databaseId" in normalized_author:
+			normalized_author["databaseId"] = uid
 		normalized["author"] = normalized_author
 		if "authorAssociation" in normalized:
 			normalized["authorAssociation"] = _association(login, repo)
@@ -470,8 +482,8 @@ def _token_key(token: str) -> str:
 	return hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
 
 
-def caller_identity() -> tuple[str, str] | None:
-	"""(login, type) of the caller's token, cached per job (one GET /user)."""
+def caller_identity() -> tuple[str, str, int] | None:
+	"""(login, type, id) of the caller's token, cached per job (one GET /user)."""
 	token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
 	if not token:
 		return None
@@ -479,26 +491,31 @@ def caller_identity() -> tuple[str, str] | None:
 	try:
 		with open(cache, encoding="utf-8") as handle:
 			cached = json.load(handle)
-		if re.fullmatch(_LOGIN, cached.get("login", "")) and cached.get("type") in ("User", "Bot"):
-			return cached["login"], cached["type"]
+		if (re.fullmatch(_LOGIN, cached.get("login", "")) and cached.get("type") in ("User", "Bot")
+				and isinstance(cached.get("id"), int) and not isinstance(cached.get("id"), bool)):
+			return cached["login"], cached["type"], cached["id"]
 	except (OSError, ValueError, AttributeError):
 		pass
-	proc = run_gh(["api", "user", "--jq", "{login: .login, type: .type}"])
+	proc = run_gh(["api", "user", "--jq", "{login: .login, type: .type, id: .id}"])
 	if proc.returncode != 0:
 		return None
 	try:
 		identity = json.loads(proc.stdout)
 	except ValueError:
 		return None
-	login, account_type = identity.get("login", ""), identity.get("type", "")
-	if login == BOT_LOGIN or not re.fullmatch(_LOGIN, login) or account_type not in ("User", "Bot"):
+	if not isinstance(identity, dict):
+		return None
+	login, account_type, uid = identity.get("login", ""), identity.get("type", ""), identity.get("id")
+	if login == BOT_LOGIN or not re.fullmatch(_LOGIN, str(login)) or account_type not in ("User", "Bot"):
+		return None
+	if not isinstance(uid, int) or isinstance(uid, bool):
 		return None
 	try:
 		with open(cache, "w", encoding="utf-8") as handle:
-			json.dump({"login": login, "type": account_type}, handle)
+			json.dump({"login": login, "type": account_type, "id": uid}, handle)
 	except OSError:
 		pass
-	return login, account_type
+	return login, account_type, uid
 
 
 def _refusal_flag() -> str:
@@ -550,7 +567,7 @@ def post_signed(original: list[str], repo: str, issue: int, payload: dict, outpu
 	if identity is None:
 		log("skip", reason="identity_unknown", issue=issue)
 		return plain()
-	signed = sign_body(secret, repo, issue, identity[0], identity[1], body)
+	signed = sign_body(secret, repo, issue, identity[0], identity[1], body, identity[2])
 	if len(signed) > MAX_BODY_CHARS:
 		log("skip", reason="body_too_long", issue=issue)
 		return plain()
@@ -577,6 +594,11 @@ def post_signed(original: list[str], repo: str, issue: int, payload: dict, outpu
 				head, text = parts
 		return write_normalized(text, head, jq_filter, secret)
 	if _REFUSED_RE.search(proc.stderr or ""):
+		if _RATE_LIMITED_RE.search(proc.stderr or ""):
+			# A rate-limit 403 created nothing and says nothing about the
+			# token's permissions: fall back for this comment only.
+			log("fallback", reason="job_token_rate_limited", issue=issue)
+			return plain()
 		log("fallback", reason="job_token_refused", issue=issue)
 		try:
 			open(_refusal_flag(), "w").close()
@@ -613,8 +635,8 @@ def edit_signed(original: list[str], parsed: dict, repo: str, comment_id: str, s
 		return plain()
 	# Re-sign for the same issue and account as the original, so an edit
 	# cannot change where or whose comment it is.
-	_, login, account_type, _ = verified
-	signed = sign_body(secret, location[0], location[1], login, account_type, body)
+	_, login, account_type, _, uid = verified
+	signed = sign_body(secret, location[0], location[1], login, account_type, body, uid)
 	if len(signed) > MAX_BODY_CHARS:
 		return plain()
 	with tempfile.NamedTemporaryFile("w", suffix=".json", dir=_state_dir(), delete=False, encoding="utf-8") as handle:

@@ -69,7 +69,7 @@ def env(tmp_path):
 	state = tmp_path / "state"
 	state.mkdir()
 	(state / "responses.json").write_text(json.dumps([
-		{"match": "api user", "stdout": '{"login":"owner-login","type":"User"}'},
+		{"match": "api user", "stdout": '{"login":"owner-login","type":"User","id":4242}'},
 	]))
 	runner_temp = tmp_path / "runner"
 	runner_temp.mkdir()
@@ -87,7 +87,7 @@ def env(tmp_path):
 
 
 def set_responses(env, rules):
-	rules = rules + [{"match": "api user", "stdout": '{"login":"owner-login","type":"User"}'}]
+	rules = rules + [{"match": "api user", "stdout": '{"login":"owner-login","type":"User","id":4242}'}]
 	(env["state"] / "responses.json").write_text(json.dumps(rules))
 
 
@@ -318,6 +318,25 @@ def test_refused_job_token_with_stdin_body_resends_rebuilt_payload(env):
 	assert posts[1]["payload"] == {"body": "piped"}
 
 
+def test_rate_limited_job_token_falls_back_without_caching(env):
+	set_responses(env, [{"match": "--method POST", "token": JOB, "rc": 1, "stderr": "HTTP 403: You have exceeded a secondary rate limit"}])
+	result = run(env, f'gh api repos/{REPO}/issues/5/comments -f body=one; gh api repos/{REPO}/issues/5/comments -f body=two')
+	assert result.returncode == 0, result.stderr
+	# The second comment tries the job token again: the refusal was not cached.
+	assert [p["token"] for p in comment_calls(env)] == [JOB, PAT, JOB, PAT]
+	assert "reason=job_token_rate_limited" in result.stderr
+
+
+def test_posted_comment_carries_the_pat_user_id(env):
+	run(env, f'gh api repos/{REPO}/issues/5/comments -f body="escalation marker"')
+	body = comment_calls(env)[0]["payload"]["body"]
+	assert " uid=4242 sig=" in body
+	normalized = cs.normalize_comment(bot_comment(body), SECRET)
+	assert normalized["user"]["id"] == 4242 and normalized["user"]["login"] == "owner-login"
+	# The id is signed: changing it breaks the signature.
+	assert cs.normalize_comment(bot_comment(body.replace("uid=4242", "uid=4243")), SECRET)["user"]["login"] == cs.BOT_LOGIN
+
+
 def test_ambiguous_failure_is_never_resent(env):
 	set_responses(env, [{"match": "--method POST", "rc": 1, "stderr": "HTTP 502: Bad Gateway"}])
 	result = run(env, f'gh api repos/{REPO}/issues/5/comments -f body=x')
@@ -464,6 +483,24 @@ def _later_step(env, shim_dir, script, secret=True):
 	if not secret:
 		full.pop("AI_COMMENT_SIGNING_SECRET", None)
 	return subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=full, check=False)
+
+
+def test_later_step_reuses_the_persisted_shim(env):
+	gh_path = env["tmp"] / "github_path"
+	gh_path.write_text("")
+	run(env, "true", extra={"GITHUB_PATH": str(gh_path)})
+	shim_dir = gh_path.read_text().strip()
+	full = {k: v for k, v in env["env"].items() if not k.startswith("AI_COMMENT_SIG_")}
+	full["PATH"] = f"{shim_dir}:{full['PATH']}"
+	full["GITHUB_PATH"] = str(gh_path)
+	later = subprocess.run(
+		["bash", "-c", f'source "{SCRIPTS}/gh_helpers.sh"; printf "%s" "$AI_COMMENT_SIG_SHIM_DIR"'],
+		capture_output=True, text=True, env=full, check=False,
+	)
+	assert later.returncode == 0, later.stderr
+	assert later.stdout == shim_dir
+	# No second shim dir is written or appended for the later step.
+	assert gh_path.read_text().strip() == shim_dir
 
 
 def test_later_step_without_shim_variables_still_verifies(env):
