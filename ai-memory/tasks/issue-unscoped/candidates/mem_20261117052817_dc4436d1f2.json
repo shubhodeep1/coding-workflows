@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/INVENTORY.md:48-111 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The inventory omits paths reported by the supplied CI run: `.github/workflows/ci_pr_quick.yml`, `scripts/ci_docs_only_paths.sh`, `scripts/review_final_ci_failed.sh`, and `scripts/review_final_ci_sweep.sh` (failing check runs from `.github/workflows/ci.yml:2672-2675`).\n  WHY: `tests/inventory_parity.py` reports missing inventory entries, which fails `tests-release-and-log-analysis` and the `lint` aggregator; the reviewer rated it SEVERITY: MAJOR (shown here as high) and called it unrelated to the PR's changed files; anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash also called this base-branch drift outside the PR's files but did not raise it as a finding.\n- scripts/review_autofix_step_prepush_test_gate.sh:799-804 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The guard requires `[ -n \"${rpg_pre_repair_changed}\" ]`, so if the editor made no changes before the repair, a repair turn that wrongly removes existing code is not reverted.\n  WHY: The reviewer gave no severity (low is a placeholder) and said this \"might be acceptable if the goal is strictly to protect editor changes\" but is a potential logic gap.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_autofix_step_prepush_test_gate.sh:lines 799-804 | confidence=2\n  PROBLEM: The logic `[ -n \"${rpg_pre_repair_changed}\" ]` checks if the editor made changes before the repair. If the editor made no changes, the guard does not trigger, even if a repair turn removes something (e.g., changes from the PR base that are unwanted).\n  WHY: If the editor made no changes but a repair turn wrongly removes existing code, the logic will not revert the repair. This might be acceptable if the goal is strictly to protect editor changes, but it is a potential logic gap.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- docs/INVENTORY.md:Workflows and Scripts roster sections (lines 48-111); the failing check runs from `.github/workflows/ci.yml:2672-2675`. | severity=MAJOR | confidence=5\n  PROBLEM: The inventory omits paths reported by the supplied CI run: `.github/workflows/ci_pr_quick.yml`, `scripts/ci_docs_only_paths.sh`, `scripts/review_final_ci_failed.sh`, and `scripts/review_final_ci_sweep.sh`.\n  WHY: `tests/inventory_parity.py` reports missing inventory entries and undocumented references; this fails `tests-release-and-log-analysis` and the `lint` aggregator. This CI failure is unrelated to the PR's changed files.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f4c502ac67f703a18d02575fbcd7c1d7235c8c7e5fe44353748948a2d071c7a3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9562,
+    "run_id": "44007314494",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44007314494",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117052817_dc4436d1f2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9562,
+    "run_id": "44007314494"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-17T05:28:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
