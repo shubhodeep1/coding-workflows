@@ -8,6 +8,9 @@
 # the SHA-verified .codex-head-gate-src sparse checkout (pinned to
 # review_support_sha), never from a PR-head copy or SUPPORT_SCRIPTS_DIR.
 set -euo pipefail
+# Signed job-token comments (run-volume plan item 15): route this script's
+# gh comment calls through the shim even when no earlier step loaded it.
+[ -z "${BASH_SOURCE[0]:-}" ] || AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" >/dev/null 2>&1 || true
 
 SHOULD_RUN="true"
 POST_MERGE_DISPATCH="false"
