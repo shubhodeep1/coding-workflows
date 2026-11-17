@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: `.github/workflows/ci.yml`, selection and placement of steps moved from `tests-heal-plan-and-validation`\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: ci.yml comment (lines 1043-1060, 1045-1052) says run 43314513853 had no step durations and the pick is an estimate from planning-sandbox timings, changelog fragment and test-registry comment repeat the disclosure, per-step timings are not in the repo, the PR does not establish these were the slowest steps or that `tests-hooks-and-orchestrator` had the most headroom. Severity disagreement: MAJOR (gemini, minimax, openai) vs NIT (sonnet).\n- requirement: The acceptance target `tests/test_ci_poll_test_sharding.py::MovedHeal9420StepsContractTest` must be demonstrated as red on the base.\n  expected_change_site: validation evidence for `MovedHeal9420StepsContractTest` in `tests/test_ci_poll_test_sharding.py`\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: the PR acceptance table marks the target `unmet`, the check-run context reports head results only with no base-run result, by reading the code `test_each_step_is_owned_only_by_its_target_job` and `test_moved_steps_left_the_source_job` would fail on base. Severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, the choice of steps moved out of `tests-heal-plan-and-validation` and the destination job.\n  Evidence of absence: Run 43314513853 has no per-step durations in the repo and the container has no network. The ci.yml comment (lines 1043-1060), the changelog fragment and the test-registry comment all say the pick is an estimate. The four steps moved unchanged and both jobs keep `timeout-minutes: 20`. This is a documented limitation, not an implementation defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- Requirement: The acceptance target `tests/test_ci_poll_test_sharding.py::MovedHeal9420StepsContractTest` should be red on the base.\n  Expected change site: validation evidence for `MovedHeal9420StepsContractTest`.\n  Evidence of absence: On base the four steps are owned by `tests-heal-plan-and-validation`, so two tests would fail. The \"unmet\" status is gate bookkeeping. Head CI shows 48 check-runs with 0 failures.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml, selection and placement of steps moved from tests-heal-plan-and-validation\n  Evidence of absence: The comment at lines 1045-1050 says run 43314513853 had no step durations and the steps were chosen from planning-sandbox estimates. The PR does not show they were the slowest or that the destination had the most headroom. The requirement is deferred until timing data is available.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, selection and placement of steps moved from `tests-heal-plan-and-validation`.\n  Evidence of absence: `.github/workflows/ci.yml` lines 1043-1060 say the step list returned without durations and the pick is an estimate. The changelog fragment and test-registry comment repeat this. Per-step durations are not in the repo. The next `budget-watch` run on `main` opens a follow-up issue if any job nears its timeout. The gap is documented and deferred.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- Requirement: The acceptance row for `tests/test_ci_poll_test_sharding.py::MovedHeal9420StepsContractTest` must be demonstrated as red on the base.\n  Expected change site: validation evidence for `MovedHeal9420StepsContractTest` in `tests/test_ci_poll_test_sharding.py`.\n  Evidence of absence: The acceptance table marks the target `unmet` and the check-run context has no base-run result. By reasoning the new test would fail on base. The proof cannot be produced in this sandbox.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, the selection and placement of steps moved from `tests-heal-plan-and-validation`.\n  Evidence of absence: The comment at lines 1045\u20131052 says the source run's step list had no durations and the steps were chosen from planning-sandbox estimates. The PR does not establish these were the slowest steps or that `tests-hooks-and-orchestrator` had the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- Requirement: The acceptance target `tests/test_ci_poll_test_sharding.py::MovedHeal9420StepsContractTest` must be demonstrated as red on the base.\n  Expected change site: Validation evidence for `MovedHeal9420StepsContractTest` in `tests/test_ci_poll_test_sharding.py`.\n  Evidence of absence: The PR description marks this target \"unmet.\" The check-run context reports PR head results only, with no base-run evidence.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "845c377f77b73b54111b2c45099a19deb28c59eec8b0aece7e86ede8dd7709ea",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9430,
+    "run_id": "44106504543",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44106504543",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117173839_0e5f2957d4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9430,
+    "run_id": "44106504543"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-17T17:38:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
