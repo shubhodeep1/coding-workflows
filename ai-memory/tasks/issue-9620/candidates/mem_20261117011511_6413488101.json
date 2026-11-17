@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9620,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9620\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9628\",\"pr_number\":9628,\"branch\":\"ai/issue-9620\",\"run_id\":\"43988947083\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/43988947083\",\"changed_files\":[\"README.md\",\"changelog.d/9620-readme-stall-terminalization-linked-pr.md\"]}",
+  "fingerprint": "05e0e3ee60c19f9cc91bed20e6ce99ef9597efd8a139898e0e5dad7b5f0f32dc",
+  "lineage": {
+    "issue_number": 9620,
+    "parent_ids": [],
+    "pr_number": 9628,
+    "run_id": "43988947083",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43988947083",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9628"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261117011511_6413488101",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9620,
+    "level": "run",
+    "pr_number": 9628,
+    "run_id": "43988947083"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9620: https://github.com/shubhodeep1/coding-workflows/pull/9628",
+  "timestamps": {
+    "created_at": "2026-11-17T01:15:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
