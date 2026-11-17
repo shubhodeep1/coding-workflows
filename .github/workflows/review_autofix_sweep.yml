@@ -220,7 +220,11 @@ jobs:
           MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
           # Zombie run reaper (P11b): cancel review runs queued longer than
           # ZOMBIE_RUN_MAX_QUEUED_HOURS, with the job's actions: write token.
-          ZOMBIE_RUN_REAPER_ENABLED: ${{ vars.ZOMBIE_RUN_REAPER_ENABLED || 'true' }}
+          # Off by default (opt in with the repo variable): GitHub refuses both
+          # cancel and force-cancel (409) for runs wedged in `queued` with no
+          # jobs (run 43095142301), so a default-on reaper would retry the same
+          # runs every tick.
+          ZOMBIE_RUN_REAPER_ENABLED: ${{ vars.ZOMBIE_RUN_REAPER_ENABLED || 'false' }}
           ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
           ZOMBIE_RUN_REAPER_TOKEN: ${{ github.token }}
           # Smoke-PR backstop age limit in hours (issue #8953); 0 disables
@@ -262,7 +266,7 @@ jobs:
           # instead of skipping silently (silent while the reaper is off).
           zombie_reaper_skip_note()
           {
-            case "$(printf '%s' "${ZOMBIE_RUN_REAPER_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+            case "$(printf '%s' "${ZOMBIE_RUN_REAPER_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
               false|0|no|off) ;;
               *) echo "ZOMBIE_RUN_REAPER_END outcome=skipped reason=$1" ;;
             esac
@@ -530,7 +534,7 @@ jobs:
           # Actions write must never run PR-head code) and can never fail the
           # sweep. An incomplete snapshot skips it: a run whose in_progress
           # copy was not listed must not be cancelled.
-          case "$(printf '%s' "${ZOMBIE_RUN_REAPER_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+          case "$(printf '%s' "${ZOMBIE_RUN_REAPER_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
             false|0|no|off) ;;
             *)
               if [ "${active_snapshot_incomplete}" = "true" ]; then

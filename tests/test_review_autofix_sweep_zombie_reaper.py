@@ -173,6 +173,9 @@ class SweepZombieReaperTest(unittest.TestCase):
 			"GH_TOKEN": "pat-token",
 			"READ_TOKEN": "read-token",
 			"ZOMBIE_RUN_REAPER_TOKEN": "reaper-token",
+			# The reaper is opt-in (default off); the behaviour tests opt in.
+			# Pass ZOMBIE_RUN_REAPER_ENABLED=None to leave it unset.
+			"ZOMBIE_RUN_REAPER_ENABLED": "true",
 			"HEAD_REF_FILTER": "",
 			"DRY_RUN": "false",
 			"ALLOW_WORKFLOW_EDITS": "true",
@@ -180,6 +183,7 @@ class SweepZombieReaperTest(unittest.TestCase):
 			"GH_RETRY_MAX_ATTEMPTS": "1",
 		}
 		full_env.update(env)
+		full_env = {k: v for k, v in full_env.items() if v is not None}
 		return subprocess.run(
 			["bash", "-c", extract_step_script()],
 			env=full_env, capture_output=True, text=True, cwd=self.tmp, timeout=120,
@@ -295,6 +299,16 @@ class SweepZombieReaperTest(unittest.TestCase):
 				self.assertEqual(normalise(off.stdout.splitlines()), normalise(on_lines))
 				self.assertEqual(off_calls, [c for c in self.read_log("gh_calls.log") if "/cancel" not in c])
 
+	def test_reaper_is_off_by_default(self) -> None:
+		listings = {("internal-review.yml", "queued"): [run(751, 30)]}
+		result = self.run_sweep(listings, ZOMBIE_RUN_REAPER_ENABLED=None)
+		self.assert_sweep_finished(result)
+		self.assertEqual(self.posts(), [])
+		self.assertNotIn("ZOMBIE_RUN_", result.stdout + result.stderr)
+		self.reset()
+		early = self.run_sweep(PROVIDER_OUTAGE_PAUSED="true", ZOMBIE_RUN_REAPER_ENABLED=None)
+		self.assertNotIn("ZOMBIE_RUN_", early.stdout)
+
 	def test_helper_missing_does_not_fail_the_sweep(self) -> None:
 		result = self.run_sweep({("internal-review.yml", "queued"): [run(801, 30)]}, stage_helper=False)
 		self.assert_sweep_finished(result)
@@ -378,7 +392,7 @@ class SweepZombieReaperTest(unittest.TestCase):
 		text = SWEEP_WF.read_text(encoding="utf-8")
 		step = text[text.find(STEP_MARKER):]
 		step_env = step[:step.find("        run: |")]
-		self.assertIn("ZOMBIE_RUN_REAPER_ENABLED: ${{ vars.ZOMBIE_RUN_REAPER_ENABLED || 'true' }}", step_env)
+		self.assertIn("ZOMBIE_RUN_REAPER_ENABLED: ${{ vars.ZOMBIE_RUN_REAPER_ENABLED || 'false' }}", step_env)
 		self.assertIn("ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}", step_env)
 		self.assertIn("ZOMBIE_RUN_REAPER_TOKEN: ${{ github.token }}", step_env)
 		job = text[text.find("  sweep:"):text.find("    steps:")]

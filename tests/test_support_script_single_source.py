@@ -231,6 +231,19 @@ def _helper_phase_list(phase: str, variable: str) -> list[str]:
 	return match.group(1).split()
 
 
+def _assert_host_python_names(host_python: Path, phase: str) -> None:
+	"""Every required host-Python helper, plus only the phase's optional ones
+	(stage_support_optional_host_python_scripts, copied when the bundle holds them)."""
+	names = {p.name for p in host_python.iterdir()}
+	required = set(_helper_phase_list(phase, "stage_support_host_python_scripts"))
+	text = HELPER.read_text(encoding="utf-8")
+	block = re.search(r"^\t" + re.escape(phase) + r"\)\n(.*?)^\t\t;;", text, re.M | re.S)
+	optional_match = re.search(r"stage_support_optional_host_python_scripts=\((.*?)\)", block.group(1), re.S) if block else None
+	optional = set(optional_match.group(1).split()) if optional_match else set()
+	assert required <= names, required - names
+	assert names <= required | optional, names - required - optional
+
+
 # --- static contract ------------------------------------------------------------
 
 
@@ -442,9 +455,7 @@ def test_support_copy_of_stall_guard_wins(tmp_path: Path, workflow: str, step_na
 	for name in _helper_phase_list(phase, "stage_support_data_files"):
 		assert (bundle / name).is_file(), name
 	if expect["host_python"] or expect.get("runtime_host_python"):
-		assert sorted(p.name for p in host_python.iterdir()) == sorted(
-			_helper_phase_list(phase, "stage_support_host_python_scripts")
-		)
+		_assert_host_python_names(host_python, phase)
 	else:
 		assert not host_python.exists()
 	# Read-only with respect to the issue checkout: no executables, and the
@@ -560,9 +571,7 @@ def test_staging_step_runs_both_modes(tmp_path: Path, workflow: str, step_name: 
 	assert sandbox_in_checkout == (expect["checkout_sandbox"] or (unified == "false" and expect.get("legacy_sandbox", True)))
 	if expect["host_python"]:
 		host_python = Path(exported["CLARIFY_HOST_PYTHON_DIR"])
-		assert sorted(p.name for p in host_python.iterdir()) == sorted(
-			_helper_phase_list(phase, "stage_support_host_python_scripts")
-		)
+		_assert_host_python_names(host_python, phase)
 	else:
 		assert "CLARIFY_HOST_PYTHON_DIR" not in exported
 	if expect.get("runtime_host_python"):
