@@ -64,6 +64,12 @@ env:
   # stay aligned with the literal cron above. The job gate uses it to fail
   # closed if a future schedule is added without updating the retro path.
   WORKFLOW_RETRO_CRON: ${{ vars.WORKFLOW_RETRO_CRON || '0 9 * * 1' }}
+  # Signed job-token comments (run-volume plan item 15, D16; see
+  # scripts/comment_signature.py). The opt-in secret and the job token sit
+  # next to each step's GH_PAT, never here, so a step without the PAT never
+  # sees them. Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false
+  # posts with GH_PAT again while signed comments already posted still verify.
+  AI_COMMENT_SIGNING_POST: ${{ vars.AI_COMMENT_SIGNING_POST || 'true' }}
 
 permissions:
   contents: write
@@ -170,6 +176,8 @@ jobs:
         id: collect
         env:
           GH_TOKEN: ${{ (github.event_name == 'schedule' && github.event.schedule == '0 6 * * *') && github.token || secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: "1"
           SINCE_INPUT: ${{ github.event.inputs.since || '' }}
           LOOKBACK_DAYS_INPUT: ${{ github.event.inputs.lookback_days || '7' }}
@@ -568,6 +576,8 @@ jobs:
         id: retro_context
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
@@ -605,6 +615,8 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           MAX_CODEX_ATTEMPTS: ${{ vars.MAX_CODEX_ATTEMPTS || '3' }}
           CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -753,6 +765,8 @@ jobs:
         if: steps.retro.outputs.retro_status == 'completed'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           RETRO_BODY_FILE: ${{ steps.retro.outputs.retro_body_file }}
           RETRO_WEEK_LABEL: ${{ steps.retro_context.outputs.week_label }}
           RETRO_WINDOW_SINCE: ${{ steps.retro_context.outputs.window_since }}
@@ -933,6 +947,8 @@ jobs:
         if: ${{ !cancelled() && steps.retro_context.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           PYTHONDONTWRITEBYTECODE: "1"
           WORKFLOW_RETRO_CONSUMER_FANOUT_ENABLED: ${{ vars.WORKFLOW_RETRO_CONSUMER_FANOUT_ENABLED || 'true' }}
@@ -1256,6 +1272,8 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           WORKFLOW_LOG_SUMMARY_MODEL: ${{ vars.WORKFLOW_LOG_SUMMARY_MODEL || 'openai/gpt-6-luna' }}
           WORKFLOW_LOG_SUMMARY_MAX_RUNS: ${{ vars.WORKFLOW_LOG_SUMMARY_MAX_RUNS || '100' }}
           WORKFLOW_LOG_SUMMARY_TOKEN_BUDGET: ${{ vars.WORKFLOW_LOG_SUMMARY_TOKEN_BUDGET || '1500000' }}
@@ -1301,6 +1319,8 @@ jobs:
           TRACKING_ISSUE: ${{ inputs.tracking_issue || '0' }}
           RUN_LOGS_DIR: ${{ steps.download_log_output.outputs.download-path }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: "1"
           WORKFLOW_LOG_ANALYSIS_REPORT_CHECK_ENABLED: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_CHECK_ENABLED || 'true' }}
           WLA_WINDOW_START: ${{ needs.collect-logs.outputs.window_start }}
@@ -1768,6 +1788,8 @@ jobs:
         env:
           REPORT_RETENTION_DAYS: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS || '30' }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           # One-shot credential helper (§23.E): the checkout does not persist
           # credentials, so git reads GH_TOKEN from this step's env only.
           GIT_CONFIG_COUNT: '1'
@@ -2510,6 +2532,8 @@ jobs:
       - name: Sync latest report from target branch
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           # One-shot credential helper (§23.E): the checkout does not persist
           # credentials, so git reads GH_TOKEN from this step's env only.
           GIT_CONFIG_COUNT: '1'
@@ -2596,6 +2620,8 @@ jobs:
           CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}
           TRACKING_ISSUE: ${{ inputs.tracking_issue || '0' }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           REPORT_FILE: ${{ needs.analyze-commit-notify.outputs.report_file }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -2858,6 +2884,8 @@ jobs:
         if: steps.audit.outputs.audit_status == 'completed'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           # One-shot credential helper (§23.E): the checkout does not persist
           # credentials, so git reads GH_TOKEN from this step's env only.
           GIT_CONFIG_COUNT: '1'
@@ -3129,6 +3157,8 @@ jobs:
       - name: Sync latest report from target branch
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           # One-shot credential helper (§23.E): the checkout does not persist
           # credentials, so git reads GH_TOKEN from this step's env only.
           GIT_CONFIG_COUNT: '1'
@@ -3216,6 +3246,8 @@ jobs:
           CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}
           TRACKING_ISSUE: ${{ inputs.tracking_issue || '0' }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           REPORT_FILE: ${{ needs.analyze-commit-notify.outputs.report_file }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -3476,6 +3508,8 @@ jobs:
         if: steps.api_redundancy.outputs.api_redundancy_status == 'completed'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           # One-shot credential helper (§23.E): the checkout does not persist
           # credentials, so git reads GH_TOKEN from this step's env only.
           GIT_CONFIG_COUNT: '1'
@@ -3624,6 +3658,8 @@ jobs:
           # GH_PAT only: a PR opened with github.token starts no CI, so the
           # script fails closed (reason=token_missing) when it is unset.
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           REPORT_PUSH_TOKEN: ${{ secrets.GH_PAT }}
           REPORT_BRANCH: ${{ needs.analyze-commit-notify.outputs.report_branch }}
           REPORT_FILE: ${{ needs.analyze-commit-notify.outputs.report_file }}
