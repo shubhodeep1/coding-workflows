@@ -102,7 +102,8 @@ def _job_run_start(job: dict[str, Any]) -> str | None:
 	steps = job.get("steps")
 	if not isinstance(steps, list):
 		return job.get("started_at")
-	# Only non-empty strings count; a non-string value would make `_seconds` raise.
+	# Only non-empty string times count as a started step, so a malformed
+	# (for example numeric) start is not mistaken for one.
 	starts = [step.get("started_at") for step in steps if isinstance(step, dict) and isinstance(step.get("started_at"), str) and step.get("started_at")]
 	if not starts:
 		return None
