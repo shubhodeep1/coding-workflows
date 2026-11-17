@@ -9,7 +9,7 @@ Now:
 
 | The numbers that matter | Value |
 | --- | --- |
-| Extra REST calls per stall judge call (open linked PR) | 1 (`gh run list --branch`) |
+| Extra REST calls per stall judge call (open linked PR) | 1 (`gh run list --branch`); a transient error on it is retried up to `GH_RETRY_MAX_ATTEMPTS` times |
 | Extra REST calls per unblock judge run on an issue | 1, or 3 when an open PR is found (lookup, PR read, diff); a transient error on one of these reads is retried up to `GH_RETRY_MAX_ATTEMPTS` times |
 | Review runs shown to the stall judge | up to 5, from a branch-scoped listing (was 3, from the repo-wide cached windows) |
 

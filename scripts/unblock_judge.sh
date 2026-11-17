@@ -2760,16 +2760,17 @@ unblock_ask_model()
 			local linked_diff_pr
 			linked_diff_pr="$(jq -r '.number' "${RUNTIME_DIR}/linked_pr.json")"
 			# Not a pipe: a failed read must be seen. gh_retry (CONSIST-001) retries
-			# a transient 5xx like the lookup reads do. On final failure the linked
-			# PR is dropped (linked_pr.json becomes null), so the context and
-			# validation are as without a PR; the fingerprint keeps the number it
-			# already has.
+			# a transient 5xx like the lookup reads do. On final failure (including
+			# GitHub's HTTP 406 for a diff too large to render) only the diff is
+			# missing: the PR itself was already verified by unblock_linked_open_pr,
+			# so linked_pr.json is kept and the context and validation still name
+			# the PR. Dropping it here re-opened the blind re-implementation path
+			# (tele-funtoken-msg-scoring#5258) for exactly the largest PRs.
 			if [[ "${linked_diff_pr}" =~ ^[1-9][0-9]*$ ]] \
 				&& gh_retry gh api "repos/${REPOSITORY}/pulls/${linked_diff_pr}" -H "Accept: application/vnd.github.diff" > "${RUNTIME_DIR}/linked_pr_diff.raw" 2>/dev/null; then
 				head -c 120000 "${RUNTIME_DIR}/linked_pr_diff.raw" > "${RUNTIME_DIR}/pr_diff.txt" || true
 			else
 				: > "${RUNTIME_DIR}/pr_diff.txt"
-				echo 'null' > "${RUNTIME_DIR}/linked_pr.json"
 				echo "UNBLOCK_JUDGE_LINKED_PR outcome=failed item=${ITEM} pr=${linked_diff_pr:-none} reason=diff_failed"
 			fi
 			rm -f "${RUNTIME_DIR}/linked_pr_diff.raw"

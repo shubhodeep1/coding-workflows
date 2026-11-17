@@ -5936,18 +5936,22 @@ def test_linked_pr_evidence_changes_the_fingerprint_only_by_number() -> None:
 	assert linked == ledger.fingerprint("blocked", {"reason": "x", "linked_pr": 31})
 
 
-def test_linked_pr_diff_failure_drops_the_linked_pr_from_context_and_validation(tmp_path: Path) -> None:
+def test_linked_pr_diff_failure_keeps_the_linked_pr_in_context_and_validation(tmp_path: Path) -> None:
 	if not shutil.which("jq"):
 		pytest.skip("jq is required for the unblock judge fixture")
-	# A blind retry_budget is accepted: the judge never saw the PR, so the
-	# linked-PR rule is not applied (issue #9546 fail-open).
-	verdict = {"verdict": "retry_budget", "reason": "r", "instructions": "retry with a narrower change"}
-	result, state = _judge(tmp_path, ISSUE, verdict=verdict, **_linked_pr_env(FAKE_GH_FAIL_PR_DIFF="1"))
+	# Only the diff is missing (for example GitHub's 406 for a diff too large
+	# to render): the verified PR stays in the context and the linked-PR rule
+	# still applies, so a blind re-implementation is refused (issue #9546).
+	blind = {"verdict": "retry_budget", "reason": "r", "instructions": "retry with a narrower change"}
+	result, state = _judge(tmp_path, ISSUE, verdict=blind, **_linked_pr_env(
+		FAKE_GH_FAIL_PR_DIFF="1",
+		MOCK_UNBLOCK_JUDGE_JSON_REASK=json.dumps({"verdict": "retry_budget", "reason": "r", "instructions": "Build on #31."})))
 	assert result.returncode == 0, result.stderr
 	assert "UNBLOCK_JUDGE_LINKED_PR outcome=found item=7 pr=31" in result.stdout
 	assert "UNBLOCK_JUDGE_LINKED_PR outcome=failed item=7 pr=31 reason=diff_failed" in result.stdout
 	assert state["diff_reads"] == ["repos/o/r/pulls/31"]
-	assert _rt_json(tmp_path, "linked_pr.json") is None
-	assert "linked_open_pr" not in _rt_json(tmp_path, "judge_context.json")
-	assert "linked_pr_check" not in result.stdout
+	assert _rt_json(tmp_path, "linked_pr.json")["number"] == 31
+	assert _rt_json(tmp_path, "judge_context.json")["linked_open_pr"]["number"] == 31
+	assert (tmp_path / "rt" / "pr_diff.txt").read_text(encoding="utf-8") == ""
+	assert result.stdout.count("op=linked_pr_check outcome=reasked pr=31") == 1
 	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout
