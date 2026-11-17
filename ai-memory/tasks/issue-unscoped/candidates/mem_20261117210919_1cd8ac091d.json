@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  expected_change_site: .github/workflows/ci.yml (selection of moved steps from tests-hooks-and-orchestrator and their destination groups, based on measured timings of run 43544291165)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: .github/workflows/ci.yml:3811-3818, .github/workflows/ci.yml:3920-3925, changelog.d/9496-ci-hooks-merge-train-semble-preseed-to-poll.md:2, tests/test_ci_poll_test_sharding.py:4020-4024 state that the run's step timings could not be read and the picks are estimates; group 0 headroom is unmeasured; no measured timings appear in the diff. Structural requirements (steps unchanged, names kept, no timeout-minutes change, no new jobs) are met and the post-merge budget-watch job is the designed verification. Severity disagreement: MAJOR (gemini, openai) vs NIT (sonnet, minimax, glm).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\nExpected change site: `.github/workflows/ci.yml`, the choice of steps and destination groups, based on measured timings from run 43544291165.\nEvidence of absence: Structural requirements are met; the step and group choices are estimates because per-step timings are GitHub runtime data not in the repository. The PR documents this and the post-merge `budget-watch` job checks the result. Advisory only.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\nExpected change site: .github/workflows/ci.yml\nEvidence of absence: Workflow comments and PR description state run timings were unreadable, so the selection was based on estimates rather than measured run-time data. No diff hunk provides evidence based on actual run timings.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\nExpected change site: data sourcing for step selection; verification of \"slowest steps\" and \"most headroom\" claims in .github/workflows/ci.yml\nEvidence of absence: Workflow comments (lines 3811-3818 area of .github/workflows/ci.yml), changelog.d/9496-ci-hooks-merge-train-semble-preseed-to-poll.md line 2, and tests/test_ci_poll_test_sharding.py (lines ~4020-4024) state the timings could not be read and picks are estimates. Structural requirements are met and pinned by MovedHooks9496StepsContractTest. No measured timings or headroom verification in the diff; post-merge budget-watch is the designed verification.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\nExpected change site: `.github/workflows/ci.yml`, the selection of steps moved from `tests-hooks-and-orchestrator` and their destination groups.\nEvidence of absence: The workflow states run 43544291165's step timings could not be read and the choices are estimates; group 0's headroom is unmeasured (`.github/workflows/ci.yml:3811-3818`). Semble and pre-seed placement is likewise an estimate (`.github/workflows/ci.yml:3920-3925`). The PR does not establish the moved steps are the slowest or that the destination groups have the most headroom.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: selection basis for the moved steps in `.github/workflows/ci.yml` (per-step timings of run 43544291165), not an additional file edit.\nEvidence of absence: The PR states the pick is an estimate and group 0's headroom is unmeasured \u2014 `.github/workflows/ci.yml:3811-3818`, `changelog.d/9496-ci-hooks-merge-train-semble-preseed-to-poll.md:2`, `tests/test_ci_poll_test_sharding.py:4020-4024`. Structural deliverables are met and post-merge `budget-watch` is the designed verification; a data-sourcing limitation, not missing code.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "93c6af3571955fa258a02e33dc1e8c5c6a4c9066aaa7f47a18d09d16e3f85748",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9515,
+    "run_id": "44153580267",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44153580267",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117210919_1cd8ac091d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9515,
+    "run_id": "44153580267"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-17T21:09:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
