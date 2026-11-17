@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ci_budget_watch.py:105 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The comment on the `starts` list comprehension in `_job_run_start` says a non-string value would make `_seconds` raise, but the new `_seconds` guard returns None for non-string inputs.\n  WHY: The stale rationale could lead a future editor to remove the filter or change `_seconds` back; there is no runtime failure (source severity NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged\"\n  expected_change_site: .github/workflows/ci.yml\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: No hunk touches .github/workflows/ci.yml, and the diff only modifies scripts/ci_budget_watch.py, tests/test_ci_budget_watch.py and documentation files. Gemini rated this MAJOR and called it a gap against the issue intent. Sonnet rated it NIT and minimax skipped it, and both called it a deliberate deferral under the plan grant. Highest severity is MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged\"\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: No hunk touches ci.yml. The reviewer called this a deliberate deferral, not a defect, because the plan grant lists only the script, tests, changelog and agents fragments as files_touched, and the 33m49s report is treated as a false positive.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged\"\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: No diff hunk in .github/workflows/ci.yml to move steps. The PR diff only modifies scripts/ci_budget_watch.py, tests/test_ci_budget_watch.py, and adds documentation files. The reviewer noted the requirement appears to be intentionally excluded by the plan grant but remains a gap against the original issue intent.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP (skipped as a documented deferral, not a gap): Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: No diff hunk in .github/workflows/ci.yml. The AI issue summary limits edits to the script, its tests and a changelog entry, and the plan grant's files_touched excludes ci.yml.\n- No new gaps introduced by the last run diff. The `_seconds` hardening (scripts/ci_budget_watch.py:80) and the new test (tests/test_ci_budget_watch.py:132-141) stay inside the approved plan.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/ci_budget_watch.py:105 | severity=low | confidence=4\n  PROBLEM: The comment on the `starts` list comprehension in `_job_run_start` says a non-string value would make `_seconds` raise, but the new `_seconds` guard returns None for non-string inputs.\n  WHY: No runtime failure. The stale documentation could mislead a future editor into removing the filter or changing `_seconds` back (source severity NIT).\n- Deferral note (not a finding): the \"Move its slowest steps ...\" sentence is auto-generated remediation text. It is explicitly scoped out by the plan grant, with ci.yml left unchanged.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fabe58007d9871062806d1f0c97ada8236c13904de06db92e5e8981ad02fec75",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9576,
+    "run_id": "44006491200",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44006491200",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117052244_57be213611",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9576,
+    "run_id": "44006491200"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-17T05:22:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
