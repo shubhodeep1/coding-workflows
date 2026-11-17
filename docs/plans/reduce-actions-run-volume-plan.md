@@ -27,12 +27,14 @@ Runner time is what jams the account. Skipped runs take no runner, but they floo
 ## Goals
 
 - Item 3: an integration branch is synced from `main` only when it must be (its PR cannot merge, a wave is about to be dispatched, the final merge is next), or at most once every 24 hours.
-- Item 4: `ci.yml` skips its test jobs when every changed file is on a list of paths no test reads, and `lint` still reports a real result.
+- Item 4: a PR's final CI run (`ci.yml` `workflow_dispatch`) skips its test jobs when every changed file is on a list of paths no test reads, and `lint` still reports a real result.
 - Item 6: three kinds of purely informational bot comments no longer start the four `issue_comment` wrappers.
 - Item 7: a consumer's `AI Check Failure Triage` is no longer created for runs on the default branch.
 - Item 8: the poller cron runs every 15 minutes and the closed-PR sweep runs hourly, here and in consumers.
 - Item 9: the review sweep no longer treats a review run that is merely waiting for a runner as wedged.
 - Item 12: the one-off `check-failure-triage-historical.yml` and its references are removed.
+- Item 10: `Integration PR readiness check` takes a runner on a label change only when the label is `ai:override-incomplete-merge`.
+- Item 14: push CI keeps at most one running and one waiting run per branch; a newer push replaces the waiting run.
 
 ## Non-goals
 
@@ -119,6 +121,30 @@ User answers, 2026-11-16. Q9 to Q11 were taken as clear-winner assumptions and n
 - **Alternatives considered:** each repository's CI workflow names, rendered at sync time.
 - **Why:** it keeps one attested, byte-identical file in every consumer; per-repository rendering would need release-manifest changes.
 
+### D12 — How a final run learns it is docs-only (item 4)
+
+- **Chosen:** the dispatcher passes `docs_only=true`, and `lint` re-checks the merged tree (Q1 A, 2026-11-16).
+- **Alternatives considered:** a `changes` job that every test job waits on; dropping item 4.
+- **Why:** a `changes` job puts one more runner wait in front of every final run's test jobs and breaks the "worker jobs start together" contract in `tests/test_ci_job_split_contract.py`. The dispatcher already runs just before the dispatch, and `lint` runs last anyway, so the check adds no wait.
+
+### D13 — Push runs are not gated (item 4)
+
+- **Chosen:** only final-CI `workflow_dispatch` runs (Q2 A, assumed 2026-11-16).
+- **Alternatives considered:** also gate pushes and teach triage and heal to ignore runs with skipped tests.
+- **Why:** `scripts/check_failure_triage.sh`'s base gate and heal's `HEAL_STALE_GREEN_RUNS` both read push-run conclusions; a green docs-only push would hide a broken base.
+
+### D14 — Push CI coalesces per branch (item 14)
+
+- **Chosen:** push runs share the concurrency group `ci-push-<ref>` with `cancel-in-progress: false` (Q3 A, 2026-11-16).
+- **Alternatives considered:** keep one group per run (every pushed commit gets its own 37-job run); cancel the running push run too.
+- **Why:** on 2026-11-16 four `main` push runs (148 jobs) sat queued at once, and every commit had already passed its PR's own CI. The running run is never cancelled, so check-failure triage's base gate (`workflow_runs[0]` of the base's push runs) always reads a run that finishes. A replaced run ends `cancelled`, which `internal-check-failure-triage.yml` and `workflow-failure-heal-intake.yml` ignore, and `scripts/ci_cancelled_rerun.py` never re-runs, because the replaced commit is never a PR's current head. Heal's stale auto-close (`heal_stale_decision` in `scripts/workflow_failure_heal.py`) used to keep a heal issue open for any post-anchor push run that was not `success`; it now skips `cancelled` runs, which count neither as green nor as red (Q5 A, 2026-11-16). Without that, one replaced run would keep a CI heal issue open until the next occurrence.
+
+### D15 — Readiness check filters label events (item 10)
+
+- **Chosen:** a job-level `if` that skips `labeled` / `unlabeled` events for every label except `ai:override-incomplete-merge` (Q4 A, 2026-11-16).
+- **Alternatives considered:** drop the `labeled` / `unlabeled` triggers; keep running on every label.
+- **Why:** `scripts/check_integration_pr_readiness.py` reads no other PR label, a label change never moves the head SHA, so the status already posted for it stands, and the poller refreshes the status itself when the tracking issue changes (`TRACKING_BODY_READINESS_REFRESH`).
+
 ## Phases & Merge Strategy
 
 1. **PR (a): items 7 and 8.** Files:
@@ -134,7 +160,8 @@ User answers, 2026-11-16. Q9 to Q11 were taken as clear-winner assumptions and n
    - removal of `.github/workflows/check-failure-triage-historical.yml` and `tests/test_check_failure_triage_historical.py`
    - registry, inventory and docs
 3. **PR (c): item 6.** The posting sites of the three comment kinds that passed the reader audit, changed per call.
-4. **PR (d): item 4.** `ci.yml`, built on top of #9528's merged `ci.yml`.
+4. **PR (d): item 4.** `ci.yml`, `scripts/pr_checks_lib.sh` (`_pr_ensure_final_ci`) and the new `scripts/ci_docs_only_paths.sh`, built on top of #9528's `ci.yml` (#9563).
+5. **PR (e): items 10 and 14.** `ci.yml`'s concurrency block, `integration-pr-readiness.yml`, heal's stale auto-close window (`scripts/workflow_failure_heal.py`), and their tests.
 
 Each PR is independently revertable.
 
@@ -176,7 +203,7 @@ The workflow, its test, its `ci.yml` test-list line, its registry entry, its inv
 
 A kind is moved only after its readers are confirmed not to filter by author. Security-pass results were the fourth candidate, and they failed that audit: the next pass trusts its own earlier markers only when the PAT login wrote them (`SECURITY_PASS_AUTHOR_LOGIN`), so they stay on the PAT. The fallback to the PAT happens only when GitHub refuses the job token (401/403). A POST is sent once, and any other failure is not resent, because a timeout may already have created the comment.
 
-**Item 4.** A `changes` job computes the changed files (the PR's base...head, or a push's before...after). An empty, unreadable or all-zero base means "code changed". The safe list is the set of paths no test or CI step reads:
+**Item 4.** The final-CI dispatcher (`_pr_ensure_final_ci`) reads the PR's changed files once, just before it dispatches, and passes `docs_only=true` when every file (and every renamed-from path) is on the list in `scripts/ci_docs_only_paths.sh`. An unreadable listing, an empty one, a full first page (100 files) or a missing classifier means "code changed". The safe list is the set of paths no test or CI step reads:
 
 - `analysis/**`
 - `docs/plans/**`
@@ -189,7 +216,13 @@ A kind is moved only after its readers are confirmed not to filter by author. Se
 - `docs/changelog-style.md`
 - `docs/*-future-improvements.md`
 
-The test jobs run unless `changes` says code did not change. `lint` requires `success` from every job as today, except that the gated test jobs may be `skipped` when `changes.outputs.code == 'false'`. `static-checks` always runs.
+The seven test jobs skip when `inputs.docs_only == 'true'`; `static-checks` always runs. The test jobs keep no `needs`, so they still start together. In a docs-only run `lint` checks out `refs/pull/<n>/merge` (depth 2) and runs `scripts/ci_docs_only_paths.sh verify`: the merge's second parent must be the run's head and every file it changes against the base must be on the list. Only after that check passes may the seven named jobs be `skipped`; every other job, and every other result, still needs `success`. A wrong input therefore fails `lint`. A branch whose `ci.yml` predates the input refuses the dispatch, and the dispatcher retries once without it.
+
+Push runs (`main`, `stable`, `orchestrator/project-*`) are never gated: check-failure triage reads the newest push run on a PR's base as the base result, and heal's stale auto-close counts green push runs, so a docs-only push that skipped the tests would make a broken branch look green to both.
+
+**Item 14.** `ci.yml`'s concurrency group gains a `push` arm, `format('ci-push-{0}', github.ref)`, ahead of the per-run fallback; `cancel-in-progress` is unchanged and stays `false` for pushes. GitHub keeps one running and one pending run per group, so pushes to the same branch now run one after another instead of side by side, and only the newest waiting commit is tested. Each branch has its own group, so `main`, `stable` and every `orchestrator/project-*` branch are independent.
+
+**Item 10.** The `readiness` job runs on `opened`, `synchronize`, `reopened` and `ready_for_review` as before, and on `labeled` / `unlabeled` only for `ai:override-incomplete-merge`. A skipped job takes no runner, and its check run reports `skipped`.
 
 ## Tests
 
@@ -198,13 +231,19 @@ The test jobs run unless `changes` says code did not change. `lint` requires `su
 - Items 3 and 9: fake-`gh` tests for every throttle reason and fail-open path, and for the sweep's zero-jobs rule.
 - Item 12: the full test set that references the file, run before and after the removal.
 - Item 6: per-kind tests that the call uses the job token, and that readers still find the comment.
-- Item 4: workflow-structure tests for the gate, plus a matrix over `lint`'s decision logic.
+- Item 4: `tests/test_ci_docs_only_final_ci.py`: the path list, `verify` against real merge commits, the workflow structure, a matrix over `lint`'s decision logic, and the dispatcher against a fake `gh`.
+- Item 14: `tests/test_ci_concurrency.py` evaluates the group for push runs on `main`, `stable` and an integration branch, and pins that the running push run is never cancelled; `tests/test_workflow_failure_heal.py` pins that heal's stale auto-close skips `cancelled` runs without counting them as green.
+- Item 10: `tests/test_check_integration_pr_readiness.py` pins the job condition and checks its label matches the script's `OVERRIDE_LABEL`.
 
 ## Risks & Mitigations
 
 - Later conflict detection on integration branches (item 3): the PR-mergeable trigger and the 24-hour cap still surface conflicts, and `INTEGRATION_SYNC_MIN_INTERVAL_SECS=0` restores the old behaviour.
-- A skipped test job satisfying a required check (item 4): `lint` runs with `always()` and its own explicit rules, and unknown diffs run everything.
+- A skipped test job satisfying a required check (item 4): `lint` runs with `always()`, verifies the merged tree itself before it accepts `skipped`, and anything the dispatcher cannot read runs everything.
 - Slower recovery of orphaned runs on conflicted closed PRs (item 8): bounded at one hour.
+- Intermediate commits on a branch get no push CI of their own (item 14): each passed its PR's CI before it merged, and the newest commit is always tested. A breakage introduced by one of them surfaces in the next run that does start. Heal's `HEAL_STALE_GREEN_RUNS` counts fewer green push runs, so its stale auto-close can take longer.
+- Pushes to one branch now wait for that branch's running CI (item 14): the newest waiting commit starts as soon as the running run finishes.
+- A run cancelled mid-failure is skipped by heal's stale auto-close (item 14, Q5 A): a failure that comes back posts an occurrence comment, which moves the anchor and keeps the issue open.
+- The release CI gate (`test-and-mark-stable.yml` `ci_lint_gate`, `scripts/release_ci_gate.sh`) needs `lint` on the exact `stable` SHA. If two pushes reach `stable` while its CI runs, the middle commit gets no run, and a release dispatched for it waits out the gate and fails closed; the `RELEASE_STALE_TIP` guard rejects that commit anyway, and the next dispatch targets the newer tip.
 
 ## Rollout
 
@@ -213,7 +252,7 @@ Each PR is effective on merge in this repository. Consumers pick up the template
 ## §18.E Automation
 
 - No new script, supervisor or scheduled workflow; every change edits an existing workflow, template or the poller.
-- Entry points: `.github/workflows/internal-orchestrate-poll.yml` (cron) via `orchestrate_poll.yml`; `.github/workflows/internal-cancel-on-pr-close.yml` (cron and `pull_request: closed`); `.github/workflows/review_autofix_sweep.yml` (cron); `.github/workflows/ci.yml` (`push` / PR); consumer wrappers via `update_workflows.yml`.
+- Entry points: `.github/workflows/internal-orchestrate-poll.yml` (cron) via `orchestrate_poll.yml`; `.github/workflows/internal-cancel-on-pr-close.yml` (cron and `pull_request: closed`); `.github/workflows/review_autofix_sweep.yml` (cron); `.github/workflows/ci.yml` (`push` / PR); `.github/workflows/integration-pr-readiness.yml` (`pull_request`); consumer wrappers via `update_workflows.yml`.
 - No long-running supervisor is needed.
 - No DB work.
 - `docs/scripts-pending-removal.md`: no new entry; item 12 deletes one.
