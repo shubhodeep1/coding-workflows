@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\" (slowest-steps selection not based on measured step timings)\n  expected_change_site: .github/workflows/ci.yml (moved-step selection and rationale, around lines 1043-1063)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: .github/workflows/ci.yml:1045-1052 comment, changelog fragment changelog.d/9420-ci-heal-job-steps-to-hooks-job.md, test-registry comment in tests/test_ci_poll_test_sharding.py (around line 3884) state that the run's step list had no durations and the pick is an estimate from planning-sandbox timings and aggregate job totals; per-step durations for run 43314513853 are not in the repository. Severity disagreement: sonnet rated NIT/confidence 2, others MAJOR/confidence 5.\n- requirement: Move the steps \"into the CI job with the most headroom.\"\n  expected_change_site: .github/workflows/ci.yml (destination-job selection rationale, around lines 1050-1055)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The rationale cites tests-hooks-and-orchestrator's last recorded total and that no steps moved into it since #7690, but does not compare headroom across candidate 20-minute non-matrix test jobs to show it has the most headroom.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: `.github/workflows/ci.yml` (step selection and destination-job rationale, around lines 1043-1060)\n  EVIDENCE: The PR says in the workflow comment, changelog fragment and test-registry comment that the run's step list had no durations. The steps and destination job were chosen from planning-sandbox weights and recorded job totals. Per-step durations for run 43314513853 are not in the repository and review runs have no network access, so no code change can close it. The PR discloses the estimate, and budget-watch will open an issue if any job nears its timeout.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\nOther categories: NONE. The last autofix run's comment and changelog figure change to \"15m32s, run 43220859648, #9391\" is consistent. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: .github/workflows/ci.yml, selection of steps and destination job rationale.\n  EVIDENCE: .github/workflows/ci.yml:1045-1052, changelog and test-registry comment state that step-level timing data for the failing run was unavailable, and the choices are estimates from planning-sandbox timings and aggregate job totals.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\nTASK_GAP:\n- requirement: Move steps \"into the CI job with the most headroom.\"\n  expected_change_site: .github/workflows/ci.yml, destination-job selection rationale.\n  EVIDENCE: The rationale cites the destination job's last recorded total and that no steps had moved into it since #7690, but presents no headroom comparison across other candidate CI jobs.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: .github/workflows/ci.yml moved-step selection and destination-job rationale (comment block above \"Implement leftover issue-branch replacement tests\", currently lines 1043-1063)\n  EVIDENCE: The comment at lines 1043-1063 states \"The evidence round returned that run's step list without durations, so the pick is an estimate, not a measurement.\" Step weights come from planning-sandbox runs rather than run-43314513853 step durations. The destination-job rationale inspects a single candidate rather than comparing headroom across the four 20-minute non-matrix test jobs. Both clauses are unmet. The PR acknowledges this in three places (the workflow comment, the changelog fragment, the test-registry comment in tests/test_ci_poll_test_sharding.py around line 3884); six prior autofix passes deferred it.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\nNote: the last autofix commit 601d6e83 is a comment-only correction of \"(15m33s, run 42513195209, #9078)\" to \"(15m32s, run 43220859648, #9391)\" in .github/workflows/ci.yml:1051-1052 and changelog.d/9420-ci-heal-job-steps-to-hooks-job.md, consistent with changelog.d/9391-ci-hooks-prepush-step-to-poll-group-3.md and tests/test_ci_poll_test_sharding.py:3983-3984. It introduces no new defects.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- requirement: \u201cMove its slowest steps (see the run's step timings)\u201d\n  expected_change_site: `.github/workflows/ci.yml`, moved-step selection and rationale.\n  EVIDENCE: `.github/workflows/ci.yml:1045-1050` says the source run's step list had no durations and the selection is an estimate from planning-sandbox timings, so the PR does not establish that the four moved steps were the slowest in the affected run.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\nTASK_GAP:\n- requirement: Move the steps \u201cinto the CI job with the most headroom.\u201d\n  expected_change_site: `.github/workflows/ci.yml`, destination-job selection rationale around lines 1050-1055.\n  EVIDENCE: The rationale cites `tests-hooks-and-orchestrator`'s last recorded total and its lack of incoming steps, but does not compare headroom across candidate jobs.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\nNote: the reviewer verified the last run's edits (`.github/workflows/ci.yml:1051-1052`, `changelog.d/9420-ci-heal-job-steps-to-hooks-job.md`) against `tests/test_ci_poll_test_sharding.py:3983-3984` and `changelog.d/9391-ci-hooks-prepush-step-to-poll-group-3.md`; they are consistent and comment-only. The previously deferred task gap on \"slowest steps / most headroom\" was noted as an accepted residual and not re-flagged.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "94184143493e36c553db344167035e06db3efc0f15f93713136ddc7faa93eeec",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9430,
+    "run_id": "43990885939",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43990885939",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117032435_33ddd84a81",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9430,
+    "run_id": "43990885939"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-17T03:24:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
