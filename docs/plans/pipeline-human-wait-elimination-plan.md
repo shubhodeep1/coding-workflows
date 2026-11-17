@@ -112,6 +112,7 @@ The decisions were clarified in the authoring session (Q1–Q8 all `A`):
 - **§19:** PRs reference tracking issues with `Refs #N` only.
 - **§20 and §30:** each phase ships one `changelog.d/` fragment and, where behaviour changes, one `agents.d/` fragment. Neither `CHANGELOG.md` nor `agents.md` is edited directly.
 - **§27:** `ci.yml` and `review_autofix.yml` are large. Each phase that touches a workflow checks the file stays under 480,000 bytes with `tests/test_workflow_file_size_limit.py`. New step bodies go into `scripts/`.
+- **§33:** no phase adds a job, a workflow or a matrix leg. Phase 1 adds a step to the existing `static-checks` job, Phase 8a a step in `plan.yml`'s existing job, and Phase 9 a daily step in the existing `collect-logs` job. Jobs per triggering event are unchanged before and after.
 - **§14:**
   - Phases 3, 4 and 6 change reusable workflows and scripts that consumers receive at the next `@stable` sync. Consumers in `.github/ai/consumer_repos.json` get them automatically, with no wrapper changes.
   - Phase 1's `ci.yml` change applies only to this repo's own CI.
