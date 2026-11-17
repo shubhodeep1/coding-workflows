@@ -28,7 +28,9 @@
 #               branch, which merges unaudited whenever it touches no PR
 #               file. Chains of updates are walked back at most
 #               SINGLE_PASS_INHERIT_MAX_HOPS (10) verified updates; any
-#               failed check audits the head as before.
+#               failed check audits the head as before. The stricter
+#               base-sync carry (issue #9533, see single_pass_base_sync_carry)
+#               runs first; a merge it proves impure is audited, not inherited.
 #             - `status=pending` for the current head, younger than
 #               SECURITY_PASS_PENDING_STALE_HOURS: hold=true, nothing else,
 #               unless the marker is at least
@@ -492,10 +494,14 @@ single_pass_marker_age_hours()
 #     --verbatim yields no id and fails closed), so the merge changed none of the
 #     PR's own lines and added nothing the base side did not already contain.
 # Sets single_pass_carry_from on success. Logs outcome=carry_skipped
-# reason=<token> otherwise. API budget: the helper's one commits/<head> and
-# one compare read, only when a trusted marker is bound to this head.
+# reason=<token> otherwise and leaves the token in
+# single_pass_carry_skip_reason, so single_pass_gate can tell a merge proven
+# impure (no freshness-sync inheritance either) from one it could not check.
+# API budget: the helper's one commits/<head> and one compare read, only when
+# a trusted marker is bound to this head.
 single_pass_carry_skip()
 {
+	single_pass_carry_skip_reason="$2"
 	single_pass_log "mode=gate pr=${PR_NUMBER:-} head=$1 outcome=carry_skipped reason=$2"
 	return 1
 }
@@ -507,11 +513,18 @@ single_pass_base_sync_carry()
 	local carry_pr_files carry_audited_files carry_patch_audited carry_patch_head
 	local -a carry_paths=()
 	single_pass_carry_from=""
+	single_pass_carry_skip_reason=""
 	if [ "${SECURITY_PASS_BASE_SYNC_CARRY_ENABLED:-true}" = "false" ]; then
 		single_pass_carry_skip "${head_sha}" disabled
 		return 1
 	fi
-	carry_dir="$(cd "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || carry_dir=""
+	# Same trusted support copy as single_pass_inherited_clean when staged;
+	# otherwise the helpers next to this script.
+	if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/review_head_gate.sh" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" ]; then
+		carry_dir="${SUPPORT_SCRIPTS_DIR}"
+	else
+		carry_dir="$(cd "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || carry_dir=""
+	fi
 	if [ -z "${carry_dir}" ] || [ ! -f "${carry_dir}/review_head_gate.sh" ]; then
 		single_pass_carry_skip "${head_sha}" helper_missing
 		return 1
@@ -755,14 +768,31 @@ single_pass_gate()
 	# A verified freshness update of a clean head needs no audit of its own
 	# (see the header). Only a head with no marker at all is considered, so
 	# an audit already pending, found or failed on this head still decides.
+	# Issue #9533: the base-sync carry (one verified update of a clean head
+	# whose merge is pure over the PR's files) decides first; the multi-hop
+	# inheritance walk is the fallback. A carry that proved the merge impure
+	# (parents, changed files or patch-id differ) audits the head, and one
+	# whose shared verifier already refused this head skips the walk, which
+	# would repeat that same check and its reads.
 	if [ -z "${latest}" ]; then
 		local inherited=""
-		if inherited="$(single_pass_inherited_clean "${comments}" "${markers}" "${head_sha}" "${default_branch}")"; then
-			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=clean reason=freshness_sync_inherited from=${inherited%% *} hops=${inherited##* }"
+		if single_pass_base_sync_carry "${comments}" "${head_sha}" "${default_branch}" "${head_ref}" "${markers}"; then
+			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=clean reason=base_sync_carry from=${single_pass_carry_from}"
 			single_pass_state clean
 			single_pass_output false
 			return 0
 		fi
+		case "${single_pass_carry_skip_reason:-}" in
+			freshness_unverified|parents_mismatch|changed_files_differ|patch_mismatch) ;;
+			*)
+				if inherited="$(single_pass_inherited_clean "${comments}" "${markers}" "${head_sha}" "${default_branch}")"; then
+					single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=clean reason=freshness_sync_inherited from=${inherited%% *} hops=${inherited##* }"
+					single_pass_state clean
+					single_pass_output false
+					return 0
+				fi
+				;;
+		esac
 	fi
 	if [ "${latest_status}" = "pending" ] && [ "${latest_head}" = "${head_sha}" ]; then
 		age_hours=0
@@ -785,13 +815,12 @@ single_pass_gate()
 			return 0
 		fi
 	fi
-	# Issue #9533: the pipeline's own base sync of a clean head carries the
-	# clean audit. A findings or failed result for this head is never
-	# overridden; any unverifiable check falls through to today's logic.
-	# Merge resolution: evaluated after the fresh-pending hold above, so an
-	# audit still pending on this head decides (freshness-sync inheritance
-	# rule); a stale pending marker can still be carried.
-	if { [ -z "${latest_status}" ] || [ "${latest_status}" = "pending" ]; } \
+	# Issue #9533: a stale pending marker on the pipeline's own base sync of a
+	# clean head can still be carried (a head with no marker was decided
+	# above). It is evaluated after the fresh-pending hold, so an audit still
+	# pending on this head decides. A findings or failed result for this head
+	# is never overridden; any unverifiable check falls through.
+	if [ "${latest_status}" = "pending" ] \
 		&& single_pass_base_sync_carry "${comments}" "${head_sha}" "${default_branch}" "${head_ref}" "${markers}"; then
 		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=clean reason=base_sync_carry from=${single_pass_carry_from}"
 		single_pass_state clean

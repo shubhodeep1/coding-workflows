@@ -1311,14 +1311,25 @@ def _sync_comment(from_sha: str, base_parent: str, merge_sha: str, login: str = 
 	return _comment(body, login=login, comment_id=comment_id)
 
 
-def _carry_run(tmp_path: Path, comments_for, *, evil_merge: bool = False, whitespace_merge: bool = False):
+def _carry_stage_support(tmp_path: Path) -> None:
+	# Production stages review_head_gate.sh and gh_helpers.sh in
+	# SUPPORT_SCRIPTS_DIR, which also enables the freshness-sync inheritance
+	# walk; the carry tests run with both so they cover the real order.
+	support = tmp_path / "support"
+	support.mkdir(exist_ok=True)
+	(support / "review_head_gate.sh").write_text((ROOT / "scripts" / "review_head_gate.sh").read_text(encoding="utf-8"), encoding="utf-8")
+	(support / "gh_helpers.sh").write_text('gh_retry() { "$@"; }\n', encoding="utf-8")
+
+
+def _carry_run(tmp_path: Path, comments_for, *, evil_merge: bool = False, whitespace_merge: bool = False, env: dict | None = None):
 	repo, from_sha, base_parent, merge_sha = _carry_repo(tmp_path, evil_merge=evil_merge, whitespace_merge=whitespace_merge)
+	_carry_stage_support(tmp_path)
 	pr = _pr()
 	pr["head"]["sha"] = merge_sha
 	commit = json.dumps({"parents": [from_sha, base_parent], "verified": True, "committer": "web-flow"})
 	result, calls, output = _run(
 		tmp_path, "gate", pr=pr, comments=comments_for(from_sha, base_parent, merge_sha), cwd=repo, real_git=True,
-		env={"FAKE_GH_COMMIT": commit, "FAKE_GH_COMPARE": "ahead", "GH_RETRY_MAX_ATTEMPTS": "1"},
+		env={"FAKE_GH_COMMIT": commit, "FAKE_GH_COMPARE": "ahead", "GH_RETRY_MAX_ATTEMPTS": "1", **(env or {})},
 	)
 	return result, calls, output, from_sha, merge_sha
 
@@ -1330,6 +1341,8 @@ def test_base_sync_carries_the_clean_audit_of_a_pure_merge(tmp_path: Path) -> No
 	assert result.returncode == 0, result.stdout + result.stderr
 	assert output == "hold=false\n", result.stdout + result.stderr
 	assert f"SINGLE_ISSUE_SECURITY_PASS mode=gate pr=42 head={merge_sha} outcome=clean reason=base_sync_carry from={from_sha}" in result.stdout
+	# The carry decides before the inheritance walk, which never runs here.
+	assert "reason=freshness_sync_inherited" not in result.stdout
 	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 	assert any(len(call) > 1 and call[1] == f"repos/o/r/commits/{merge_sha}" for call in calls)
 
@@ -1340,6 +1353,8 @@ def test_base_sync_that_changes_a_pr_file_is_audited(tmp_path: Path) -> None:
 	)
 	assert f"head={merge_sha} outcome=carry_skipped reason=patch_mismatch" in result.stdout, result.stdout + result.stderr
 	assert "reason=base_sync_carry" not in result.stdout
+	# A merge proven impure is not cleared by the inheritance walk either.
+	assert "reason=freshness_sync_inherited" not in result.stdout
 	assert output == "hold=true\nhold_reason=audit_dispatched\n"
 	assert any(call[:2] == ["workflow", "run"] for call in calls)
 
@@ -1350,6 +1365,7 @@ def test_base_sync_with_a_whitespace_only_change_to_a_pr_line_is_audited(tmp_pat
 		tmp_path, lambda f, b, m: [_comment(_marker("clean", f, 1)), _sync_comment(f, b, m)], whitespace_merge=True,
 	)
 	assert f"head={merge_sha} outcome=carry_skipped reason=patch_mismatch" in result.stdout, result.stdout + result.stderr
+	assert "reason=freshness_sync_inherited" not in result.stdout
 	assert output == "hold=true\nhold_reason=audit_dispatched\n"
 	assert any(call[:2] == ["workflow", "run"] for call in calls)
 
@@ -1385,6 +1401,19 @@ def test_base_sync_carry_never_overrides_findings_for_the_head(tmp_path: Path) -
 
 
 def test_base_sync_carry_kill_switch(tmp_path: Path) -> None:
+	# The switch turns off the carry only; the existing freshness-sync
+	# inheritance walk still decides a marker-less verified update.
+	result, calls, output, from_sha, merge_sha = _carry_run(
+		tmp_path, lambda f, b, m: [_comment(_marker("clean", f, 1)), _sync_comment(f, b, m)],
+		env={"SECURITY_PASS_BASE_SYNC_CARRY_ENABLED": "false"},
+	)
+	assert f"head={merge_sha} outcome=carry_skipped reason=disabled" in result.stdout, result.stdout + result.stderr
+	assert "reason=base_sync_carry" not in result.stdout
+	assert f"head={merge_sha} outcome=clean reason=freshness_sync_inherited from={from_sha} hops=1" in result.stdout
+	assert output == "hold=false\n"
+
+
+def test_base_sync_carry_kill_switch_without_inheritance_helpers_audits(tmp_path: Path) -> None:
 	repo, from_sha, base_parent, merge_sha = _carry_repo(tmp_path)
 	pr = _pr()
 	pr["head"]["sha"] = merge_sha
