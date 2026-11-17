@@ -14383,9 +14383,116 @@ Integration conflicts are cleared; final merge into \`${default_branch}\` will p
   fi
 }
 
+# _integration_sync_throttle_reason — decide whether this tick merges the
+# default branch into the integration branch (run-volume plan item 3,
+# docs/plans/reduce-actions-run-volume-plan.md).
+#
+# Every tick used to merge main into every open integration branch. Each such
+# push started two full CI runs (push + integration PR), and with main moving
+# 10-15 times a day a single project synced 13 times on 2026-11-12. The sync
+# now runs only when it is needed or overdue. Prints one reason token and
+# returns 0 to sync, 1 to skip:
+#   sync: forced | interval_disabled | not_clean | never_synced | clock_unreadable
+#         | interval_elapsed | final_pr_unmergeable | final_pr_unreadable
+#   skip: within_interval
+# The wave boundaries force a sync where they are decided: right before the
+# next wave's issues are dispatched and right before the completed project
+# enters its security pass (both pass "force"). A sync left unclean (conflict, failure, healing) is retried every tick as
+# before. INTEGRATION_SYNC_MIN_INTERVAL_SECS (default 86400) caps the gap
+# between syncs; 0 restores the sync on every tick, and an invalid value falls
+# back to the default with a warning.
+#
+# API budget (CLAUDE.md §15): no call unless the decision would otherwise be
+# a skip and the state records a final PR; then one REST read of that PR
+# (_fetch_pr_json). The same tick reads that PR again later (ensure_eager_final_pr,
+# the eager-PR validation section, the force-merge bypass), but those reads run
+# after this decision and are not cached for it; on a skipped tick this GET
+# replaces the merges POST the tick used to make, so the call count is
+# unchanged. A failed read fails open to a sync.
+_integration_sync_throttle_reason() {
+  local force="${1:-}"
+  local interval="${INTEGRATION_SYNC_MIN_INTERVAL_SECS:-86400}"
+  local last_sync_at last_epoch now_epoch final_pr pr_json pr_state pr_mergeable
+  if [ "${force}" = "force" ]; then
+    echo "forced"; return 0
+  fi
+  if ! [[ "${interval}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::INTEGRATION_SYNC_MIN_INTERVAL_SECS='${interval}' is not a non-negative integer; using 86400." >&2
+    interval=86400
+  fi
+  if [ "${interval}" -eq 0 ]; then
+    echo "interval_disabled"; return 0
+  fi
+  if [ "$(jq -r '.integration_sync_status // "clean"' "${STATE_FILE}" 2>/dev/null || echo unreadable)" != "clean" ] \
+    || [ -n "$(jq -r '.sync.last_conflict_fingerprint // ""' "${STATE_FILE}" 2>/dev/null || echo unreadable)" ]; then
+    echo "not_clean"; return 0
+  fi
+  last_sync_at="$(jq -r '.sync.last_default_sync_at // ""' "${STATE_FILE}" 2>/dev/null || true)"
+  if [ -z "${last_sync_at}" ]; then
+    echo "never_synced"; return 0
+  fi
+  last_epoch="$(date -u -d "${last_sync_at}" +%s 2>/dev/null || true)"
+  now_epoch="$(date -u +%s 2>/dev/null || true)"
+  if ! [[ "${last_epoch}" =~ ^[0-9]+$ ]] || ! [[ "${now_epoch}" =~ ^[0-9]+$ ]]; then
+    echo "clock_unreadable"; return 0
+  fi
+  if [ $((now_epoch - last_epoch)) -ge "${interval}" ]; then
+    echo "interval_elapsed"; return 0
+  fi
+  final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+  if [[ "${final_pr}" =~ ^[1-9][0-9]*$ ]]; then
+    pr_json="$(_fetch_pr_json "${final_pr}" 2>/dev/null || true)"
+    pr_state="$(_jq_field "${pr_json}" '.state' 'open|closed' 2>/dev/null || true)"
+    pr_mergeable="$(_jq_field "${pr_json}" '.mergeable' 'true|false' 2>/dev/null || true)"
+    if [ -z "${pr_state}" ]; then
+      echo "final_pr_unreadable"; return 0
+    fi
+    if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" = "false" ]; then
+      echo "final_pr_unmergeable"; return 0
+    fi
+  fi
+  echo "within_interval"
+  return 1
+}
+
+# _integration_sync_at_boundary <integration_branch> <default_branch> <boundary>
+# — force one main -> integration sync at a wave boundary (run-volume plan
+# item 3): <boundary> is `wave-<n>` right before wave n's issues are
+# dispatched, or `complete` right before the security pass. It forces at most
+# once per boundary (.sync.boundary_forced records the last one, persisted
+# with the state) and not at all when this tick's per-tick sync already ran
+# the merges call (INTEGRATION_SYNC_ATTEMPTED_TRACKING), so a boundary that
+# stays blocked for days does not merge main on every retry and a conflict is
+# never healed twice in one tick. Returns what the sync returns (non-zero
+# only on a terminal failure, which already marked the project failed).
+_integration_sync_at_boundary() {
+  local boundary_branch="$1" boundary_default="$2" boundary_key="$3" boundary_rc=0
+  if [ "$(jq -r '.sync.boundary_forced // ""' "${STATE_FILE}" 2>/dev/null || true)" = "${boundary_key}" ]; then
+    echo "INTEGRATION_SYNC_THROTTLE tracking_issue=${TRACKING_NUM:-?} branch=${boundary_branch} outcome=skip reason=boundary_already_forced boundary=${boundary_key}"
+    return 0
+  fi
+  if [ -n "${TRACKING_NUM:-}" ] && [ "${INTEGRATION_SYNC_ATTEMPTED_TRACKING:-}" = "${TRACKING_NUM}" ]; then
+    echo "INTEGRATION_SYNC_THROTTLE tracking_issue=${TRACKING_NUM:-?} branch=${boundary_branch} outcome=skip reason=synced_this_tick boundary=${boundary_key}"
+  else
+    sync_default_into_integration_branch "${boundary_branch}" "${boundary_default}" force || boundary_rc=$?
+    [ "${boundary_rc}" -eq 0 ] || return "${boundary_rc}"
+  fi
+  if jq --arg b "${boundary_key}" '.sync = ((.sync // {}) + {"boundary_forced": $b})' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    post_state_comment || true
+  else
+    rm -f "${STATE_FILE}.tmp"
+  fi
+  return 0
+}
+
 sync_default_into_integration_branch() {
   local integration_branch="$1"
   local default_branch="$2"
+  # Optional third argument "force": skip the throttle (a caller that already
+  # established the sync is needed, e.g. an unmergeable final PR).
+  local sync_force="${3:-}"
+  local sync_throttle_reason
   local sync_status
   local prev_conflict_fingerprint
   local runbook_url
@@ -14475,11 +14582,37 @@ Runbook (if you need to rebuild the integration branch): [Rebuild integration br
 
   ensure_integration_conflict_state_fields
 
+  if sync_throttle_reason="$(_integration_sync_throttle_reason "${sync_force}")"; then
+    echo "INTEGRATION_SYNC_THROTTLE tracking_issue=${TRACKING_NUM:-?} branch=${integration_branch} outcome=sync reason=${sync_throttle_reason}"
+  else
+    echo "INTEGRATION_SYNC_THROTTLE tracking_issue=${TRACKING_NUM:-?} branch=${integration_branch} outcome=skip reason=${sync_throttle_reason:-within_interval}"
+    return 0
+  fi
+
   local merge_error
+  local sync_merge_out_file
+  # Read by _integration_sync_at_boundary: this tick already merged main in.
+  INTEGRATION_SYNC_ATTEMPTED_TRACKING="${TRACKING_NUM:-}"
+  sync_merge_out_file="$(mktemp "${TMPDIR:-/tmp}/integration_sync_merge.XXXXXX")"
   if merge_error="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/merges" \
     -f base="${integration_branch}" \
     -f head="${default_branch}" \
-    -f commit_message="chore: sync ${default_branch} into ${integration_branch}" 2>&1 >/dev/null)"; then
+    -f commit_message="chore: sync ${default_branch} into ${integration_branch}" 2>&1 >"${sync_merge_out_file}")"; then
+    # Throttle clock (_integration_sync_throttle_reason): recorded on every
+    # successful merges call. A 201 (merge commit created) prints the commit
+    # and is persisted at once; a 204 (already current) prints nothing and
+    # rides the next state write, so a no-op sync costs no comment edit.
+    if jq --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '.sync = ((.sync // {}) + {"last_default_sync_at": $now})' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+      # The status block below posts the state itself when it changes it.
+      if [ -s "${sync_merge_out_file}" ] && [ "${sync_status}" = "active" ] && [ -z "${prev_conflict_fingerprint}" ]; then
+        post_state_comment || true
+      fi
+    else
+      rm -f "${STATE_FILE}.tmp"
+    fi
+    rm -f "${sync_merge_out_file}"
     if [ "${sync_status}" != "active" ] || [ -n "${prev_conflict_fingerprint}" ]; then
       jq '.sync = ((.sync // {}) + {
         "status": "active",
@@ -14493,6 +14626,7 @@ Runbook (if you need to rebuild the integration branch): [Rebuild integration br
     _dispatch_integration_test_repair "${TRACKING_NUM:-}" "${integration_branch}" "" "${default_branch}" || true
     return 0
   fi
+  rm -f "${sync_merge_out_file}"
 
   if ! printf '%s' "${merge_error}" | grep -Eqi '(HTTP 409|status code 409|merge conflict|conflict)'; then
     echo "::warning::Unable to sync '${default_branch}' into '${integration_branch}' due to transient GitHub API error; will retry next poll." >&2
@@ -14590,7 +14724,7 @@ security_pass_sync_final_pr_if_unmergeable() {
     return 0
   fi
   echo "SECURITY_PASS_FINAL_PR_SYNC tracking_issue=${TRACKING_NUM:-?} pr=${final_pr} outcome=sync reason=final_pr_unmergeable"
-  sync_default_into_integration_branch "${integration_branch}" "${default_branch}" || return $?
+  sync_default_into_integration_branch "${integration_branch}" "${default_branch}" force || return $?
   return 0
 }
 
@@ -19286,6 +19420,137 @@ _staged_support_comments_for_guard()
   ' 2>/dev/null
 }
 
+# Issue #9486: decide whether a standalone `ai:clarification` issue ever got
+# clarification output. shubhodeep1/digital_pa#146 sat labelled for 34 days
+# with no clarify comment while stall recovery kept answering questions that
+# were never asked. Args: <issue_num> <comments_json>; the comments MUST be the
+# complete history (callers never infer absence from a partial window).
+# Only trusted comments count: a login ending in `[bot]`, or an
+# author_association of OWNER, MEMBER or COLLABORATOR (the same list as
+# stall_recovery_clarify_answer). Output is a trusted comment carrying the
+# clarification-questions marker or starting `Clarification required`, or a
+# trusted comment with a line starting `/answer`. The rerun marker is a trusted
+# comment starting "/reclarify\n<!-- ai:clarify-no-output-rerun:<issue> -->".
+# Prints exactly one of: `has_output`, `no_output_unmarked`,
+# `no_output_marked <epoch>` (newest marker; an unparseable timestamp is 0, so
+# it counts as old and escalation is never blocked forever). Any jq failure
+# prints `has_output`, which keeps the legacy recovery path (fail open).
+# No GitHub API call.
+_standalone_clarify_no_output_state()
+{
+  local issue_num="$1"
+  local comments_json="$2"
+  local clarify_no_output_out=""
+
+  if ! clarify_no_output_out="$(printf '%s' "${comments_json}" | jq -r \
+    --arg marker "/reclarify
+<!-- ai:clarify-no-output-rerun:${issue_num} -->" '
+    def trusted:
+      ((.user.login // "") | tostring | test("\\[bot\\]$"))
+      or ((.author_association // "") | tostring | IN("OWNER", "MEMBER", "COLLABORATOR"));
+    if type != "array" then error("comments are not an array") else . end
+    | [ .[] | select(type == "object") | select(trusted) | .body = ((.body // "") | tostring) ] as $trusted
+    | if any($trusted[]; (.body | test("<!-- ai:clarification-questions -->|^Clarification required"))
+        or (.body | test("(^|\\n)/answer\\b"))) then "has_output"
+      else
+        [ $trusted[] | select(.body | startswith($marker))
+          | ((.created_at // "") | tostring
+            | (try (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 | floor) catch 0)) ] as $marker_epochs
+        | if ($marker_epochs | length) == 0 then "no_output_unmarked"
+          else "no_output_marked " + ($marker_epochs | max | tostring)
+          end
+      end
+  ' 2>/dev/null)"; then
+    printf 'has_output'
+    return 0
+  fi
+  if [[ "${clarify_no_output_out}" =~ ^(has_output|no_output_unmarked|no_output_marked\ [0-9]+)$ ]]; then
+    printf '%s' "${clarify_no_output_out}"
+  else
+    printf 'has_output'
+  fi
+  return 0
+}
+
+# Issue #9486 (AD-2): a security follow-up held by the same-file ordering gate
+# (security_dependency.py verdict `held`) stays held, but the poller posts one
+# advisory per (issue, dependency) pair so the hold is visible instead of
+# silent. Args: <issue_num> <verdict_json> <detail> <comments_json>
+# <cache_available>. detail is one of open | closed_without_ai_merged |
+# unverified (anything else is treated as unverified). depends_on must match
+# ^[1-9][0-9]{0,9}$ before it reaches a marker or the body. Posts only when the
+# comment history already in hand is complete (cache `true` with fewer than
+# 100 comments, or `complete`); there is no extra read (§14: held issues are
+# visited every tick). Dedup marker
+# `<!-- ai:security-dependency-held:<issue>:<depends_on> -->` counts only from
+# trusted authors (same list as _standalone_clarify_no_output_state). The body
+# never has a line starting `/reclarify` or `/answer` and never carries the
+# clarification-questions marker. API calls: zero, or one POST. Always
+# returns 0 so a failure never stops the standalone loop.
+_post_security_dependency_held_advisory()
+{
+  local issue_num="$1"
+  local held_verdict_json="$2"
+  local held_detail="$3"
+  local comments_json="$4"
+  local cache_available="$5"
+  local held_depends_on=""
+  local held_comment_count=""
+  local held_marker=""
+  local held_body=""
+
+  case "${held_detail}" in
+    open|closed_without_ai_merged|unverified) ;;
+    *) held_detail="unverified" ;;
+  esac
+  held_depends_on="$(printf '%s' "${held_verdict_json}" | jq -r '.depends_on // empty | tostring' 2>/dev/null || true)"
+  if ! [[ "${held_depends_on}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held_advisory depends_on=none detail=${held_detail} action=advisory_no_dependency"
+    return 0
+  fi
+  if [ "${cache_available}" = "true" ]; then
+    held_comment_count="$(printf '%s' "${comments_json}" | jq -er 'if type == "array" then length else error("not an array") end' 2>/dev/null || echo 100)"
+    [[ "${held_comment_count}" =~ ^[0-9]+$ ]] || held_comment_count=100
+  elif [ "${cache_available}" = "complete" ]; then
+    held_comment_count=0
+  else
+    held_comment_count=100
+  fi
+  if [ "${held_comment_count}" -ge 100 ]; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held_advisory depends_on=${held_depends_on} detail=${held_detail} action=advisory_comments_incomplete"
+    return 0
+  fi
+  held_marker="<!-- ai:security-dependency-held:${issue_num}:${held_depends_on} -->"
+  if printf '%s' "${comments_json}" | jq -e --arg marker "${held_marker}" '
+    any(.[]?; type == "object"
+      and (((.user.login // "") | tostring | test("\\[bot\\]$"))
+        or ((.author_association // "") | tostring | IN("OWNER", "MEMBER", "COLLABORATOR")))
+      and ((.body // "") | tostring | contains($marker)))' >/dev/null 2>&1; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held_advisory depends_on=${held_depends_on} detail=${held_detail} action=advisory_present"
+    return 0
+  fi
+  case "${held_detail}" in
+    open)
+      held_body="Security-dependency hold: this issue waits for #${held_depends_on} (the earlier fix to the same file) to be closed with \`ai:merged\`. Clarification then starts automatically. No action is needed."
+      ;;
+    closed_without_ai_merged)
+      held_body="Security-dependency hold: #${held_depends_on} (the earlier fix to the same file) was closed without \`ai:merged\`, so this hold will not release on its own. A maintainer must act: land the prerequisite fix, or edit this issue's \`- Depends on: #${held_depends_on}\` line."
+      ;;
+    *)
+      held_body="Security-dependency hold: the dependency on #${held_depends_on} (the earlier fix to the same file) could not be verified, so this hold will not release on its own. A maintainer must act: land the prerequisite fix, or edit this issue's \`- Depends on: #${held_depends_on}\` line."
+      ;;
+  esac
+  held_body="${held_body}
+
+${held_marker}"
+  if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${held_body}" >/dev/null 2>&1; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held_advisory depends_on=${held_depends_on} detail=${held_detail} action=advisory_posted"
+  else
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held_advisory depends_on=${held_depends_on} detail=${held_detail} action=advisory_failed"
+  fi
+  return 0
+}
+
 # Issue #6769: comments for the plan auto-approval gate. Reuses the batched
 # GraphQL cache entry when it conclusively holds the whole history, otherwise
 # the paginated REST read in _staged_support_comments_for_guard. Prints `[]`
@@ -20422,6 +20687,10 @@ STALL_EOF
           # already-dispatched/active (rc=2) as success.
           local _rtr_failed_conclusion=""
           local _rtr_failed_wf=""
+          # Set once a review dispatch has been tried in this call, so the
+          # dispatch-first step before the empty commit (cut-ci-runner-time
+          # Phase 3) never dispatches twice.
+          local _rtr_dispatch_attempted="false"
           # Newest createdAt among the completed head-branch runs seen, so a
           # PR-named failure (below) that a later head-branch run already
           # superseded is not acted on.
@@ -20509,6 +20778,7 @@ STALL_EOF
           if [ -n "${_rtr_failed_conclusion}" ]; then
             echo "  Issue #${issue_num} PR #${pr_num} last ${_rtr_failed_wf} run concluded '${_rtr_failed_conclusion}' — dispatching review workflow directly instead of pushing an empty commit."
             local _rtr_dispatch_rc=0
+            _rtr_dispatch_attempted="true"
             _dispatch_review_for_conflicts "${pr_num}" "${head_ref}" || _rtr_dispatch_rc=$?
             if [ "${_rtr_dispatch_rc}" -eq 0 ]; then
               tg_notify "Stall recovery: re-dispatched review workflow for PR #${pr_num} (issue #${issue_num}, last run='${_rtr_failed_conclusion}', stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
@@ -20643,6 +20913,35 @@ STALL_EOF
             STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
             return 1
           fi
+          # Dispatch first (cut-ci-runner-time Phase 3, plan D3): with no
+          # failed last run, re-trigger review by dispatching the review
+          # workflow, behind the same merge-train, capacity, conflict and
+          # in-flight guards the empty commit uses. An empty commit started a
+          # full CI run on identical code; it is now only the fallback when
+          # the dispatch itself fails (rc other than 0 and 2).
+          # §15 audit: the in-flight checks above read the cached runs blob and
+          # one branch-scoped listing; neither can be passed to the helper, whose
+          # _has_active_autofix_run guard reads up to three branch listings (plus
+          # the PR-named dispatch lookup) before one workflow_dispatch. That
+          # replaces the empty commit, which cost a full CI run.
+          if [ "${_rtr_dispatch_attempted}" != "true" ]; then
+            local _rtr_first_dispatch_rc=0
+            _rtr_dispatch_attempted="true"
+            _dispatch_review_for_conflicts "${pr_num}" "${head_ref}" || _rtr_first_dispatch_rc=$?
+            if [ "${_rtr_first_dispatch_rc}" -eq 0 ]; then
+              echo "  Issue #${issue_num} PR #${pr_num} dispatched the review workflow instead of pushing an empty commit."
+              tg_notify "Stall recovery: re-dispatched review workflow for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
+              STALL_RECOVERY_SHOULD_INCREMENT="true"
+              STALL_RECOVERY_EFFECTIVE_ACTION="redispatch_review_autofix"
+              return 0
+            fi
+            if [ "${_rtr_first_dispatch_rc}" -eq 2 ]; then
+              echo "  Issue #${issue_num} PR #${pr_num} dispatch helper skipped (already active or already dispatched this cycle); not incrementing stall recovery."
+              STALL_RECOVERY_EFFECTIVE_ACTION="redispatch_review_autofix"
+              return 0
+            fi
+            echo "  Issue #${issue_num} PR #${pr_num} dispatch helper returned rc=${_rtr_first_dispatch_rc}; falling back to empty-commit push."
+          fi
           if git fetch origin "+refs/heads/${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
             _rtr_origin_head_sha="$(git rev-parse --verify "refs/remotes/origin/${head_ref}" 2>/dev/null || echo "")"
             if [[ "${_rtr_head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${_rtr_origin_head_sha}" =~ ^[0-9a-f]{40}$ ]] && \
@@ -20655,6 +20954,8 @@ STALL_EOF
               git config user.email "codex-bot@users.noreply.invalid"
               git commit --allow-empty -m "[orchestrator] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
               if git push origin "HEAD:${head_ref}" 2>/dev/null; then
+                STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_empty_commit_fallback"
+                echo "  Issue #${issue_num} PR #${pr_num} pushed the empty-commit fallback (action=retrigger_review_empty_commit_fallback)."
                 tg_notify "Stall recovery: re-triggered review for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
                 _rtr_push_succeeded="true"
               fi
@@ -25222,6 +25523,7 @@ run_standalone_stall_recovery() {
   local _standalone_staged_support_latch_rc
   local _standalone_staged_support_cache_available
   local _standalone_staged_support_comments_unavailable
+  local _std_clarify_no_output_rerun="false"
   local _security_dependency_issue_file="${RUNTIME_DIR}/standalone_security_dependency_issue.json"
   local _security_dependency_verdict
   local _security_dependency_status
@@ -25293,6 +25595,9 @@ run_standalone_stall_recovery() {
         *) _security_dependency_status="unverified" ;;
       esac
       echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held detail=${_security_dependency_status} action=none"
+      # Issue #9486 (AD-2): the hold stays, but make it visible once.
+      _post_security_dependency_held_advisory "${issue_num}" "${_security_dependency_verdict}" \
+        "${_security_dependency_status}" "${comments_json}" "${_standalone_staged_support_cache_available}" || true
       continue
     fi
     if [ "${_security_dependency_status}" = "ready" ]; then
@@ -25556,6 +25861,56 @@ PY
       action="run_stall_judge"
     else
       action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
+    fi
+
+    # Issue #9486: an ai:clarification issue with no clarification output
+    # gets one marked /reclarify (retrigger_pipeline arm below) instead of an
+    # answer to questions that were never asked; a second miss, at least one
+    # stall threshold after the trusted marker, escalates to a human directly
+    # (D2: even with ENABLE_STALL_HUMAN_TERMINALIZATION=false). The override
+    # sits before the active-workflow, merged-PR, fresh-push and phase-cap
+    # guards so they still gate the overridden action, and never replaces
+    # `skip`, so the recovery caps still apply. Absence of output is only
+    # inferred from a complete comment history.
+    _std_clarify_no_output_rerun="false"
+    if [ "${phase}" = "ai:clarification" ] && [ "${action}" != "skip" ]; then
+      local _std_clarify_comments=""
+      local _std_clarify_comments_ok="false"
+      local _std_clarify_state=""
+      local _std_clarify_marker_epoch=""
+      if [ "${_standalone_staged_support_cache_available}" = "complete" ]; then
+        _std_clarify_comments="${comments_json}"
+        _std_clarify_comments_ok="true"
+      elif [ "${_standalone_staged_support_cache_available}" = "true" ] \
+        && _std_clarify_comments="$(_staged_support_comments_for_guard "${issue_num}" "${comments_json}" "true")"; then
+        _std_clarify_comments_ok="true"
+      fi
+      if [ "${_std_clarify_comments_ok}" != "true" ]; then
+        echo "::warning::[standalone-stall] clarify-output check skipped for issue #${issue_num}: comment history incomplete" >&2
+      else
+        _std_clarify_state="$(_standalone_clarify_no_output_state "${issue_num}" "${_std_clarify_comments}")"
+        case "${_std_clarify_state}" in
+          no_output_unmarked)
+            echo "STALL_RECOVERY issue=${issue_num} reason=clarify_no_output phase=${phase} action=retrigger_pipeline override_from=${action}"
+            action="retrigger_pipeline"
+            _std_clarify_no_output_rerun="true"
+            ;;
+          no_output_marked\ *)
+            _std_clarify_marker_epoch="${_std_clarify_state#no_output_marked }"
+            [[ "${_std_clarify_marker_epoch}" =~ ^[0-9]+$ ]] || _std_clarify_marker_epoch=0
+            if [ "$(( $(date +%s) - _std_clarify_marker_epoch ))" -lt "$(( threshold_minutes * 60 ))" ]; then
+              echo "STALL_SKIP issue=${issue_num} reason=clarify_no_output_rerun_pending phase=${phase} action=none"
+              if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+                write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+              fi
+              continue
+            fi
+            echo "STALL_RECOVERY issue=${issue_num} reason=clarify_no_output_second_miss phase=${phase} action=escalate_human override_from=${action}"
+            action="escalate_human"
+            ;;
+          *) ;;
+        esac
+      fi
     fi
     echo "  [standalone-stall] Issue #${issue_num} stuck in '${phase}' for ${elapsed_minutes}m (attempt $((recovery_count + 1))). Action: ${action}"
 
@@ -25938,6 +26293,14 @@ PY
         ;;
       retrigger_pipeline)
         local _std_retrigger_pipeline_rc=0
+        if [ "${_std_clarify_no_output_rerun}" = "true" ]; then
+          # Issue #9486: the marker must stay on the second line exactly so
+          # _standalone_clarify_no_output_state's startswith check matches.
+          gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="/reclarify
+<!-- ai:clarify-no-output-rerun:${issue_num} -->
+
+_Standalone stall recovery: this issue has been in \`ai:clarification\` for ${elapsed_minutes}m with no clarification output. Re-running clarification once; if it still produces nothing, the issue is escalated to a human._" >/dev/null 2>&1 || _std_retrigger_pipeline_rc=$?
+        else
         gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
 /reclarify
 
@@ -25945,6 +26308,7 @@ _Standalone stall recovery: this issue did not enter the AI pipeline.
 Re-triggering clarification._
 STALL_EOF
 )" >/dev/null 2>&1 || _std_retrigger_pipeline_rc=$?
+        fi
         if [ "${_std_retrigger_pipeline_rc}" -eq 0 ]; then
           phase_cap_note_dispatch "ai:clarification"
         fi
@@ -26070,6 +26434,9 @@ STALL_EOF
         local pr_json
         local _std_rtr_inflight_blob _std_rtr_inflight_id _std_rtr_direct_inflight_id _std_rtr_now_epoch _std_rtr_stall_secs _std_rtr_origin_head_sha _std_rtr_push_succeeded
         _std_rtr_push_succeeded="false"
+        # Return code of the dispatch-first review dispatch (cut-ci-runner-time
+        # Phase 3); -1 means it was not tried.
+        local _std_rtr_dispatch_rc=-1
         if [[ "${_STD_ITER_PR_NUM_CACHED:-}" =~ ^[0-9]+$ ]]; then
           pr_num="${_STD_ITER_PR_NUM_CACHED}"
           pr_lookup_ok="true"
@@ -26205,25 +26572,57 @@ STALL_EOF
 			elif [ -n "${_std_rtr_direct_inflight_id}" ]; then
               echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} has in-flight review run #${_std_rtr_direct_inflight_id} on ${head_ref} (direct check — cached scan missed it); skipping empty-commit push to avoid invalidating its stale-base gate."
               STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
-            elif git fetch origin "+refs/heads/${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
-              _std_rtr_origin_head_sha="$(git rev-parse --verify "refs/remotes/origin/${head_ref}" 2>/dev/null || echo "")"
-              if [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${_std_rtr_origin_head_sha}" =~ ^[0-9a-f]{40}$ ]] && \
-                 [ "${_std_rtr_origin_head_sha}" != "${head_sha}" ]; then
-                echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} head advanced from ${head_sha} to ${_std_rtr_origin_head_sha} after the PR-state snapshot; skipping empty-commit push to avoid racing newer review work."
-              elif git checkout "origin/${head_ref}" 2>/dev/null; then
-                git config user.name "codex-bot"
-                git config user.email "codex-bot@users.noreply.invalid"
-                git commit --allow-empty -m "[standalone] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
-                if git push origin "HEAD:${head_ref}" 2>/dev/null; then
-                  _std_rtr_push_succeeded="true"
-                fi
-                git checkout --detach HEAD 2>/dev/null || true
+            else
+              # Dispatch first (cut-ci-runner-time Phase 3, plan D3): re-trigger
+              # review by dispatching the review workflow, behind the same
+              # wrong-PR and in-flight guards as the empty commit. The empty
+              # commit, which started a full CI run on identical code, is only
+              # the fallback when the dispatch itself fails (rc other than 0/2).
+              # §15 audit: see the managed arm; the helper's active-run guard
+              # (up to three branch listings plus the PR-named lookup) and one
+              # workflow_dispatch replace the empty commit's full CI run.
+              _std_rtr_dispatch_rc=0
+              _dispatch_review_for_conflicts "${pr_num}" "${head_ref}" || _std_rtr_dispatch_rc=$?
+              if [ "${_std_rtr_dispatch_rc}" -eq 0 ]; then
+                echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} dispatched the review workflow instead of pushing an empty commit."
+                STALL_RECOVERY_EFFECTIVE_ACTION="redispatch_review_autofix"
+              elif [ "${_std_rtr_dispatch_rc}" -eq 2 ]; then
+                echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} dispatch helper skipped (already active or already dispatched this cycle); not incrementing stall recovery."
+                STALL_RECOVERY_EFFECTIVE_ACTION="redispatch_review_autofix"
               else
-                echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} checkout origin/${head_ref} failed after fetch; skipping empty-commit push."
+                echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} dispatch helper returned rc=${_std_rtr_dispatch_rc}; falling back to empty-commit push."
+              fi
+              if [ "${_std_rtr_dispatch_rc}" -ne 0 ] && [ "${_std_rtr_dispatch_rc}" -ne 2 ] \
+                && git fetch origin "+refs/heads/${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
+                _std_rtr_origin_head_sha="$(git rev-parse --verify "refs/remotes/origin/${head_ref}" 2>/dev/null || echo "")"
+                if [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${_std_rtr_origin_head_sha}" =~ ^[0-9a-f]{40}$ ]] && \
+                   [ "${_std_rtr_origin_head_sha}" != "${head_sha}" ]; then
+                  echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} head advanced from ${head_sha} to ${_std_rtr_origin_head_sha} after the PR-state snapshot; skipping empty-commit push to avoid racing newer review work."
+                elif git checkout "origin/${head_ref}" 2>/dev/null; then
+                  git config user.name "codex-bot"
+                  git config user.email "codex-bot@users.noreply.invalid"
+                  git commit --allow-empty -m "[standalone] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
+                  if git push origin "HEAD:${head_ref}" 2>/dev/null; then
+                    _std_rtr_push_succeeded="true"
+                    STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_empty_commit_fallback"
+                    echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} pushed the empty-commit fallback (action=retrigger_review_empty_commit_fallback)."
+                  fi
+                  git checkout --detach HEAD 2>/dev/null || true
+                else
+                  echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} checkout origin/${head_ref} failed after fetch; skipping empty-commit push."
+                fi
               fi
             fi
           fi
-          if [ "${_std_rtr_push_succeeded}" = "true" ]; then
+          if [ "${_std_rtr_dispatch_rc}" -eq 0 ]; then
+            tg_notify_issue "${issue_num}" "Standalone stall recovery: re-dispatched the review workflow (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "DEBUG"
+            STALL_RECOVERY_SHOULD_INCREMENT="true"
+            took_action="true"
+          elif [ "${_std_rtr_dispatch_rc}" -eq 2 ]; then
+            # A live or already-dispatched review run: reset the stall clock
+            # without spending recovery budget, like the managed arm's rc 2.
+            took_action="true"
+          elif [ "${_std_rtr_push_succeeded}" = "true" ]; then
             tg_notify_issue "${issue_num}" "Standalone stall recovery: re-triggered review flow (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "DEBUG"
             STALL_RECOVERY_SHOULD_INCREMENT="true"
             took_action="true"
@@ -34347,6 +34746,21 @@ PRs to revert: ${REVERT_COUNT}"
     complete)
       FINAL_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
       FINAL_DEFAULT_BRANCH="${DEFAULT_BRANCH_TRACKING:-$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")}"
+      # Run-volume plan item 3: the per-tick sync is throttled, so bring the
+      # integration branch up to main once here, before the security pass
+      # binds to its head and validation / the final merge test it. Like the
+      # per-tick sync, only a terminal failure (project marked failed) stops
+      # the tick; a conflict is handed to the integration heal and the tick
+      # goes on.
+      if [ -n "${FINAL_INTEGRATION_BRANCH}" ]; then
+        if ! _integration_sync_at_boundary "${FINAL_INTEGRATION_BRANCH}" "${FINAL_DEFAULT_BRANCH}" complete; then
+          continue
+        fi
+        PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
+        if [ "${PROJECT_STATUS}" = "failed" ]; then
+          continue
+        fi
+      fi
       if ! ensure_security_pass_before_completion "${FINAL_INTEGRATION_BRANCH}" "${FINAL_DEFAULT_BRANCH}"; then
         continue
       fi
@@ -34698,6 +35112,20 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
       # Advance to next wave
       NEXT_WAVE=$(( CURRENT_WAVE + 1 ))
       if [ "${NEXT_WAVE}" -le "${TOTAL_WAVES}" ]; then
+        # Run-volume plan item 3: the next wave's issues branch from the
+        # integration branch, so bring it up to main once before dispatching
+        # them (the per-tick sync is throttled). Like the per-tick sync, only
+        # a terminal failure (project marked failed) defers the dispatch; a
+        # conflict is handed to the integration heal and the tick goes on.
+        if [ -n "${INTEGRATION_BRANCH_TRACKING:-}" ]; then
+          if ! _integration_sync_at_boundary "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" "wave-${NEXT_WAVE}"; then
+            continue
+          fi
+          PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
+          if [ "${PROJECT_STATUS}" = "failed" ]; then
+            continue
+          fi
+        fi
         echo "Advancing to wave ${NEXT_WAVE}..."
         NEXT_WAVE_IDX=$(( NEXT_WAVE - 1 ))
 
@@ -35644,7 +36072,7 @@ NOOP_PRODUCTIVE_COMMIT_IDENTITIES_JSON='[{"name":"codex-bot","email":"codex@user
 NOOP_FORCE_MERGE_SKIP_LABELS=$'e2e-smoke-test\nforce-review'
 
 # _noop_gate_failure_alert <gate> <message>: the force-merge gates and the
-# merge --auto step fail every sweep (about every 5 minutes) for as long as
+# merge --auto step fail every poll tick (cron every 15 minutes) for as long as
 # the PR stays in the same state, and each failure used to page again. Page
 # once per PR head and gate instead: the first failure posts a PR comment
 # carrying a marker and sends the ERROR alert; later sweeps find the marker
