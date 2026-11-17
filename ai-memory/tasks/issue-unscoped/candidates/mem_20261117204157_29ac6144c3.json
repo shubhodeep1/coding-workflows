@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Move the slowest steps into a CI job with more headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not add new required job names.\n  expected_change_site: `.github/workflows/ci.yml`, step `Pre-push affected-test gate tests`\n  confidence=[1]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: The issue asks for \"slowest steps\" (plural) and the PR moves one step. The run gave no step durations, so the pick is an estimate. The reviewer did not count this as a gap (SEVERITY: NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- TASK_GAP (SEVERITY: NIT, ISSUE_CONFIDENCE: 1)\n  Requirement: Move the slowest steps into a CI job with more headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not add new required job names.\n  Expected change site: `.github/workflows/ci.yml`, step `Pre-push affected-test gate tests`.\n  Evidence of delivery: The step keeps its name and body and now runs in group 0. No job was added and no `timeout-minutes` changed. Contract tests pin the new placement.\n  Residual: The issue asks for \"slowest steps\" (plural) and the PR moves one step. The run gave no step durations, so the pick is an estimate. The `ci.yml` comment, the changelog fragment and the tests all say so. The reviewer did not count either point as a gap.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "607b77437fdfce0ea7244ad84b6ef7ad229ecaa46e153c66ce885be21d7979a0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9641,
+    "run_id": "44148280732",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44148280732",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117204157_29ac6144c3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9641,
+    "run_id": "44148280732"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-17T20:41:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
