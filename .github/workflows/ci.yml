@@ -47,6 +47,17 @@ name: CI
         required: false
         default: "false"
         type: string
+      # Sync-quick final CI (merge-base sync churn, 2026-11-17).
+      # `_pr_base_fresh_for_merge` passes "true" for a freshness-update head
+      # whose base commits overlap the PR only in CI-wiring files
+      # (scripts/ci_sync_quick.sh) and whose approved head passed a full final
+      # CI run. The test jobs then skip; `tests-sync-quick` re-checks that
+      # claim and runs the PR's own test files. Any other value runs every job.
+      sync_quick:
+        description: "true runs only static-checks and the PR's own tests; tests-sync-quick fails unless the claim checks out"
+        required: false
+        default: "false"
+        type: string
   # Per-push quick checks (Phase 4): a caller workflow runs only
   # `static-checks` with mode `quick`; every other job is skipped by `if:`.
   # The caller's check-runs are named `<caller job> / <job>`, so a quick run
@@ -61,14 +72,19 @@ name: CI
 
 # Dispatch runs carry their PR in the run name, like the review wrappers'
 # `[pr:N]` runs; every other event keeps GitHub's default name.
-run-name: "${{ github.event_name == 'workflow_dispatch' && format('CI [pr:{0}]', inputs.pr_number) || '' }}"
+# A sync-quick run gets a suffix, so `CI [pr:<n>]` exactly names a full (or
+# docs-only) final run (scripts/ci_sync_quick.sh full-ci-green reads it).
+run-name: "${{ github.event_name == 'workflow_dispatch' && format('CI [pr:{0}]{1}', inputs.pr_number, inputs.sync_quick == 'true' && ' [sync-quick]' || '') || '' }}"
 
 # Cancel replaced PR CI (cut-ci-runner-time Phase 2). A pull_request run
 # (none since Phase 4 removed the trigger; the arm stays for a workflow_call
 # caller with mode full) shares one group per PR, so a newer push cancels
-# the older run while it is queued or running. Every other run (pushes to main, stable and orchestrator/project-*)
-# gets a group of its own and is never cancelled, because check-failure
-# triage compares a failing PR against the base branch's newest push run.
+# the older run while it is queued or running. A push run (main, stable and
+# orchestrator/project-*) shares `ci-push-<ref>` without cancel-in-progress
+# (run-volume plan, D14): the running run always finishes, so check-failure
+# triage still reads a real result from the branch's newest push run, and a
+# newer push replaces only the run still waiting in the group. Every other
+# run gets a group of its own and is never cancelled.
 # The cancelled-CI rerun sweep (scripts/ci_cancelled_rerun.py) skips a
 # cancelled run whose head is no longer the PR's head (superseded_head).
 # Phase 4: a final-CI dispatch run shares `ci-final-pr-<PR number>` and
@@ -76,7 +92,7 @@ run-name: "${{ github.event_name == 'workflow_dispatch' && format('CI [pr:{0}]',
 # (its event is the caller's pull_request) gets a group of its own here,
 # because its caller workflow cancels replaced quick runs itself.
 concurrency:
-  group: ${{ inputs.mode == 'quick' && format('ci-quick-{0}', github.run_id) || github.event_name == 'workflow_dispatch' && format('ci-final-pr-{0}', inputs.pr_number) || github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-{0}', github.run_id) }}
+  group: ${{ inputs.mode == 'quick' && format('ci-quick-{0}', github.run_id) || github.event_name == 'workflow_dispatch' && format('ci-final-pr-{0}', inputs.pr_number) || github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && format('ci-push-{0}', github.ref) || format('ci-{0}', github.run_id) }}
   cancel-in-progress: ${{ inputs.mode != 'quick' && (github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request') }}
 
 env:
@@ -135,6 +151,18 @@ jobs:
           # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
           # other event keeps the default ref.
           ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+
+      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # it lazily, and #9602's final run tested a base that had fixed the
+      # failure two hours earlier. Refreshes a stale ref or fails the job;
+      # contract in scripts/ci_final_merge_ref_fresh.sh.
+      - name: Verify the final-CI merge ref is current
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
+          GH_TOKEN: ${{ github.token }}
+          CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+        run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
 
       - name: Shared shell-block anti-regression checks
         run: |
@@ -682,7 +710,7 @@ jobs:
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
     # Skipped in quick mode (Phase 4): only static-checks runs there.
-    if: inputs.mode != 'quick' && inputs.docs_only != 'true'
+    if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -696,6 +724,18 @@ jobs:
           # window that the parity/drift `base...HEAD` diff and the Prepare
           # step's sync need, and fails the job if it cannot.
           fetch-depth: 1
+
+      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # it lazily, and #9602's final run tested a base that had fixed the
+      # failure two hours earlier. Refreshes a stale ref or fails the job;
+      # contract in scripts/ci_final_merge_ref_fresh.sh.
+      - name: Verify the final-CI merge ref is current
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
+          GH_TOKEN: ${{ github.token }}
+          CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+        run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
 
       - name: Fetch base commits for the shallow checkout (hooks and orchestrator)
         env:
@@ -1156,6 +1196,7 @@ jobs:
               tests/test_gh_retry_final_stderr_redaction.py \
               tests/test_gh_api_retry.py \
               tests/test_gh_api_retry_py.py \
+              tests/test_comment_signature.py \
               tests/test_gh_pr_comments_argv_limit.py > /tmp/merge_train_rest.log 2>&1
             echo "$?" > /tmp/merge_train_rest.rc
           ) &
@@ -1291,7 +1332,7 @@ jobs:
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
     # Skipped in quick mode (Phase 4): only static-checks runs there.
-    if: inputs.mode != 'quick' && inputs.docs_only != 'true'
+    if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -1301,6 +1342,18 @@ jobs:
           # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
           # other event keeps the default ref.
           ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+
+      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # it lazily, and #9602's final run tested a base that had fixed the
+      # failure two hours earlier. Refreshes a stale ref or fails the job;
+      # contract in scripts/ci_final_merge_ref_fresh.sh.
+      - name: Verify the final-CI merge ref is current
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
+          GH_TOKEN: ${{ github.token }}
+          CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+        run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -1777,7 +1830,7 @@ jobs:
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
     # Skipped in quick mode (Phase 4): only static-checks runs there.
-    if: inputs.mode != 'quick' && inputs.docs_only != 'true'
+    if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -1787,6 +1840,18 @@ jobs:
           # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
           # other event keeps the default ref.
           ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+
+      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # it lazily, and #9602's final run tested a base that had fixed the
+      # failure two hours earlier. Refreshes a stale ref or fails the job;
+      # contract in scripts/ci_final_merge_ref_fresh.sh.
+      - name: Verify the final-CI merge ref is current
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
+          GH_TOKEN: ${{ github.token }}
+          CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+        run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -2078,6 +2143,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_template_mode.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_semble_workflow_parity_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_smoke_alert_silencing_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_smoke_fixture_project_cleanup.py
 
       - name: Standalone clarify auto-decide tests (port P3)
         run: |
@@ -2382,7 +2448,7 @@ jobs:
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
     # Skipped in quick mode (Phase 4): only static-checks runs there.
-    if: inputs.mode != 'quick' && inputs.docs_only != 'true'
+    if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -2396,6 +2462,18 @@ jobs:
           # SHA, so the next step fetches that commit and the history window
           # its `base...HEAD` diff needs, and fails the job if it cannot.
           fetch-depth: 1
+
+      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # it lazily, and #9602's final run tested a base that had fixed the
+      # failure two hours earlier. Refreshes a stale ref or fails the job;
+      # contract in scripts/ci_final_merge_ref_fresh.sh.
+      - name: Verify the final-CI merge ref is current
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
+          GH_TOKEN: ${{ github.token }}
+          CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+        run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
 
       - name: Fetch base commits for the shallow checkout (release and log analysis)
         env:
@@ -3160,7 +3238,7 @@ jobs:
     # Since #9391, group 3 also pins the pre-push affected-test gate step
     # (moved from tests-hooks-and-orchestrator).
     # Skipped in quick mode (Phase 4): only static-checks runs there.
-    if: inputs.mode != 'quick' && inputs.docs_only != 'true'
+    if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
     runs-on: ubuntu-latest
     strategy:
       # Every group reports on its own; `lint` fails if any of them fails.
@@ -3175,6 +3253,18 @@ jobs:
           # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
           # other event keeps the default ref.
           ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+
+      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # it lazily, and #9602's final run tested a base that had fixed the
+      # failure two hours earlier. Refreshes a stale ref or fails the job;
+      # contract in scripts/ci_final_merge_ref_fresh.sh.
+      - name: Verify the final-CI merge ref is current
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
+          GH_TOKEN: ${{ github.token }}
+          CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+        run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -3948,7 +4038,7 @@ jobs:
     # runs the functions with NR % total == index; raise the shard count by
     # editing the matrix list alone (job-index / job-total feed the step).
     # Skipped in quick mode (Phase 4): only static-checks runs there.
-    if: inputs.mode != 'quick' && inputs.docs_only != 'true'
+    if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -3974,6 +4064,18 @@ jobs:
           # window that the parity/drift `base...HEAD` diff and the Prepare
           # step's sync need, and fails the job if it cannot.
           fetch-depth: 1
+
+      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # it lazily, and #9602's final run tested a base that had fixed the
+      # failure two hours earlier. Refreshes a stale ref or fails the job;
+      # contract in scripts/ci_final_merge_ref_fresh.sh.
+      - name: Verify the final-CI merge ref is current
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
+          GH_TOKEN: ${{ github.token }}
+          CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+        run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
 
       - name: Fetch base commits for the shallow checkout (system Python)
         env:
@@ -4250,7 +4352,7 @@ jobs:
     # gains an entry point it does not list. The test container gets no
     # network, no credential and no root.
     # Skipped in quick mode (Phase 4): only static-checks runs there.
-    if: inputs.mode != 'quick' && inputs.docs_only != 'true'
+    if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -4268,6 +4370,19 @@ jobs:
           ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
           fetch-depth: 1
           persist-credentials: false
+
+      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # it lazily, and #9602's final run tested a base that had fixed the
+      # failure two hours earlier. Refreshes a stale ref or fails the job;
+      # contract in scripts/ci_final_merge_ref_fresh.sh.
+      - name: Verify the final-CI merge ref is current
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
+          # No token: this job passes none (tests/test_sandbox_python_coverage.py),
+          # so the script reads the PR from the public REST API instead.
+          CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+        run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -4375,6 +4490,68 @@ jobs:
                 --deselect tests/test_gh_api_write_guard.py::test_template_parity "$@"
             ' _ "${family_tests[@]}"
 
+  tests-sync-quick:
+    # Sync-quick final CI (merge-base sync churn, 2026-11-17): runs only in a
+    # final-CI dispatch with sync_quick=true, in place of the seven gated test
+    # jobs. It first verifies the claim on the merged tree
+    # (scripts/ci_sync_quick.sh verify: an update merge of an approved head
+    # whose overlap with the base is CI-wiring files only, and whose approved
+    # head passed a full final CI run), then runs the PR's own test files and
+    # the CI-structure tests. Skipped in every other run; `lint` accepts that
+    # skip only when sync_quick is not "true".
+    if: inputs.mode != 'quick' && github.event_name == 'workflow_dispatch' && inputs.sync_quick == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # full-ci-green reads the approved head's ci.yml runs.
+      actions: read
+    steps:
+      # The merged tree, depth 3 (the merge, the update head and its two
+      # parents), for the sync-quick check.
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+          fetch-depth: 3
+          persist-credentials: false
+
+      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # it lazily, and #9602's final run tested a base that had fixed the
+      # failure two hours earlier. Refreshes a stale ref or fails the job;
+      # contract in scripts/ci_final_merge_ref_fresh.sh.
+      - name: Verify the final-CI merge ref is current
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
+          GH_TOKEN: ${{ github.token }}
+          CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+        run: bash scripts/ci_final_merge_ref_fresh.sh --depth 3
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Python CI dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 pytest ruff
+
+      - name: Verify the sync-quick claim
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_SYNC_QUICK_HEAD_SHA: ${{ github.sha }}
+          CI_SYNC_QUICK_REPOSITORY: ${{ github.repository }}
+          CI_SYNC_QUICK_PR_NUMBER: ${{ inputs.pr_number }}
+          CI_SYNC_QUICK_DOCS_ONLY: ${{ inputs.docs_only }}
+        run: bash scripts/ci_sync_quick.sh verify
+
+      - name: Run the PR's own tests and the CI-structure tests
+        env:
+          CI_SYNC_QUICK_HEAD_SHA: ${{ github.sha }}
+        run: bash scripts/ci_sync_quick.sh run-tests
+
   budget-watch:
     # Early warning for the two budgets CI has hit without notice (workflow
     # file size near the §27 guard, a CI job near its timeout-minutes). Runs
@@ -4391,6 +4568,7 @@ jobs:
       - orchestrate-poll
       - tests-system-python
       - tests-sandbox-python
+      - tests-sync-quick
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -4430,6 +4608,7 @@ jobs:
       - orchestrate-poll
       - tests-system-python
       - tests-sandbox-python
+      - tests-sync-quick
     # Skipped in quick mode (Phase 4): its needed test jobs are skipped there,
     # and the quick caller's checks are named `<caller job> / ...`, never
     # `lint`.
@@ -4449,6 +4628,18 @@ jobs:
           fetch-depth: 2
           persist-credentials: false
 
+      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # it lazily, and #9602's final run tested a base that had fixed the
+      # failure two hours earlier. Refreshes a stale ref or fails the job;
+      # contract in scripts/ci_final_merge_ref_fresh.sh.
+      - name: Verify the final-CI merge ref is current
+        if: inputs.docs_only == 'true'
+        env:
+          FINAL_CI_PR_NUMBER: ${{ inputs.pr_number }}
+          GH_TOKEN: ${{ github.token }}
+          CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+        run: bash scripts/ci_final_merge_ref_fresh.sh --depth 2
+
       - name: Verify every changed file is docs-only
         id: docs_only_verify
         if: inputs.docs_only == 'true'
@@ -4463,6 +4654,12 @@ jobs:
           # only for these jobs, `skipped` counts like `success`.
           CI_DOCS_ONLY_VERIFIED: ${{ steps.docs_only_verify.outcome == 'success' }}
           CI_DOCS_ONLY_GATED_JOBS: "tests-hooks-and-orchestrator tests-heal-plan-and-validation tests-promote-stall-and-review tests-release-and-log-analysis orchestrate-poll tests-system-python tests-sandbox-python"
+          # "true" only in a sync-quick run. Then the gated jobs' `skipped`
+          # counts like `success` only when tests-sync-quick (which verifies the
+          # claim) succeeded; in every other run tests-sync-quick's `skipped`
+          # is accepted instead.
+          CI_SYNC_QUICK_REQUESTED: ${{ inputs.sync_quick == 'true' }}
+          CI_SYNC_QUICK_JOB: tests-sync-quick
         run: |
           set -euo pipefail
           ci_needs_count="$(printf '%s' "${CI_NEEDS_JSON}" | jq -r 'length')"
@@ -4475,6 +4672,16 @@ jobs:
           if [ "${CI_DOCS_ONLY_VERIFIED:-false}" = "true" ]; then
             ci_skip_allowed_jobs="$(jq -cn --arg names "${CI_DOCS_ONLY_GATED_JOBS:-}" '$names | split(" ") | map(select(length > 0))')"
             echo "Docs-only run: skipped is accepted for ${CI_DOCS_ONLY_GATED_JOBS:-}."
+          fi
+          ci_sync_quick_job="${CI_SYNC_QUICK_JOB:-tests-sync-quick}"
+          if [ "${CI_SYNC_QUICK_REQUESTED:-false}" = "true" ]; then
+            ci_sync_quick_result="$(printf '%s' "${CI_NEEDS_JSON}" | jq -r --arg job "${ci_sync_quick_job}" '.[$job].result // "missing"')"
+            if [ "${ci_sync_quick_result}" = "success" ]; then
+              ci_skip_allowed_jobs="$(jq -cn --argjson have "${ci_skip_allowed_jobs}" --arg names "${CI_DOCS_ONLY_GATED_JOBS:-}" '$have + ($names | split(" ") | map(select(length > 0))) | unique')"
+              echo "Sync-quick run: ${ci_sync_quick_job} verified the claim; skipped is accepted for ${CI_DOCS_ONLY_GATED_JOBS:-}."
+            fi
+          else
+            ci_skip_allowed_jobs="$(jq -cn --argjson have "${ci_skip_allowed_jobs}" --arg job "${ci_sync_quick_job}" '$have + [$job] | unique')"
           fi
           ci_unsuccessful_jobs="$(printf '%s' "${CI_NEEDS_JSON}" | jq -r --argjson skip_ok "${ci_skip_allowed_jobs}" '[to_entries[] | select(.value.result != "success") | select((.value.result == "skipped" and (.key as $k | $skip_ok | index($k))) | not) | .key] | join(", ")')"
           if [ -n "${ci_unsuccessful_jobs}" ]; then
@@ -4519,4 +4726,6 @@ jobs:
           PR_HEAD_SHA: ${{ github.sha }}
           ALLOW_WORKFLOW_EDITS: ${{ contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true')) }}
           FINAL_CI_FAILED_REDISPATCH_ENABLED: ${{ vars.FINAL_CI_FAILED_REDISPATCH_ENABLED || 'true' }}
+          # A failed sync-quick run gets the full suite instead of a hand-back.
+          FINAL_CI_FAILED_SYNC_QUICK: ${{ inputs.sync_quick == 'true' }}
         run: bash scripts/review_final_ci_failed.sh
