@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/INVENTORY.md:310-317 | severity=critical | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: Both final-CI scripts are listed twice in the Scripts section (lines 310-311 duplicate the entries at lines 316-317).\n  WHY: `tests/inventory_parity.py` rejects duplicate inventory entries, so the CI run fails `tests-release-and-log-analysis` and the aggregate `lint` job (reviewer severity: BLOCKER, mapped to critical).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Assert the total count of these settings (currently 7: 1 plain + 6 with the fallback).\"\n  expected_change_site: tests/test_prepush_affected_tests.py::test_ci_runs_this_suite_and_sets_the_parity_base_only_from_the_pr_event\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: Lines 691-694 check that assignments use an allowed value and that six use the fallback, but do not assert exactly seven assignments or exactly one plain assignment (reviewer severity: NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- docs/INVENTORY.md:310-317 | severity=BLOCKER | confidence=5\n  PROBLEM: Both final-CI scripts are listed twice in the Scripts section (lines 310-311 duplicate the entries at lines 316-317).\n  WHY: `tests/inventory_parity.py` rejects duplicate inventory entries, so the CI run fails `tests-release-and-log-analysis` and the aggregate `lint` job.\n- TASK_GAP:\n  Requirement: \"Assert the total count of these settings (currently 7: 1 plain + 6 with the fallback).\"\n  Expected change site: tests/test_prepush_affected_tests.py::test_ci_runs_this_suite_and_sets_the_parity_base_only_from_the_pr_event\n  Evidence of absence: Lines 691-694 validate that assignments use an allowed value and that six use the fallback, but do not assert that there are exactly seven assignments or exactly one plain assignment.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "caafe799a7a43c13edb1ac95a02f5155766ae634dd8db4fc8b8d8021e701d960",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9597,
+    "run_id": "44145189218",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "github-actions[bot]",
+    "run_attempt": 1,
+    "run_id": "44145189218",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117205104_a1c43ef51e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9597,
+    "run_id": "44145189218"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-17T20:51:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
