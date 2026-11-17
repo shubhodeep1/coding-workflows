@@ -17,3 +17,4 @@ jobs:
     # declares, never inherit them all (consumer repos hold other secrets).
     secrets:
       GH_PAT: ${{ secrets.GH_PAT }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
