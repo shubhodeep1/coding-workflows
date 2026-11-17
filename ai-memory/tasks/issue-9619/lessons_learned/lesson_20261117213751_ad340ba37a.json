@@ -1,0 +1,20 @@
+{
+  "discovered_at": "2026-11-17T21:37:51Z",
+  "issue_number": 9619,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=docs/INVENTORY.md:111-111; cited_path=docs/INVENTORY.md; files_touched=agents.d/9619-phase4-review-timeout-reason.md, changelog.d/9619-phase4-review-timeout-reason.md, scripts/stable_e2e_step_wait_review.sh, tests/test_ci_sync_quick.py, tests/test_ci_wires_every_test_file.py, tests/test_test_and_mark_stable_review_blocked_budget.py, tests/test_test_and_mark_stable_review_timeout_reason.py.",
+  "phase": "review_autofix",
+  "pr_number": 9637,
+  "record_id": "lesson_20261117213751_ad340ba37a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "docs/INVENTORY.md",
+    "agents.d/9619-phase4-review-timeout-reason.md",
+    "changelog.d/9619-phase4-review-timeout-reason.md",
+    "scripts/stable_e2e_step_wait_review.sh",
+    "tests/test_ci_sync_quick.py",
+    "tests/test_ci_wires_every_test_file.py",
+    "tests/test_test_and_mark_stable_review_blocked_budget.py",
+    "tests/test_test_and_mark_stable_review_timeout_reason.py"
+  ]
+}
