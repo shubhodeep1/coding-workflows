@@ -573,6 +573,26 @@ class RequiredCiCheckWait(unittest.TestCase):
 		self.assertIn("outcome=timeout", out)
 		self.assertIn("ci_check=__invalid__ ci_state=unknown", out)
 
+	def test_final_ci_run_name_binds_the_ci_check(self) -> None:
+		"""ci.yml names its dispatched final-CI runs `CI [pr:<n>]` (run-name);
+		the runs API reports that as `.name`, so `lint` from such a run must
+		bind to the `CI` wait workflow (PR #9603 timed out with ci_state=absent)."""
+		for name in ("CI [pr:7]", "CI [pr:7] [sync-quick]"):
+			with self.subTest(name=name):
+				rc, out = _wait([GREEN], env=THIS_REPO, ci_runs_sequence=[_ci_runs((name, "completed", 999, "success"))])
+				self.assertEqual(rc, 0, out)
+				self.assertIn("ci_check=lint ci_state=success", out)
+				rc, out = _wait([GREEN], max_minutes="0", env=THIS_REPO, ci_runs_sequence=[_ci_runs((name, "in_progress", 999))])
+				self.assertEqual(rc, 1, out)
+				self.assertIn("reason=ci_run_pending", out)
+
+	def test_other_run_name_suffixes_do_not_bind(self) -> None:
+		for name in ("CI quick", "CI [pr:x]", "CI [pr:7] extra", "Lint PR body [pr:7]"):
+			with self.subTest(name=name):
+				rc, out = _wait([GREEN], max_minutes="0", env=THIS_REPO, ci_runs_sequence=[_ci_runs((name, "completed", 999, "success"))])
+				self.assertEqual(rc, 1, out)
+				self.assertIn("ci_state=absent", out)
+
 	def test_wait_workflows_none_matches_by_name_only(self) -> None:
 		rc, out = _wait([GREEN], env={**THIS_REPO, "AUTO_MERGE_WAIT_WORKFLOWS": "none"})
 		self.assertEqual(rc, 0, out)

@@ -287,6 +287,25 @@ def test_wait_dispatches_the_final_run_when_lint_is_absent(fake_gh) -> None:
 	assert "rc=1" in result.stdout  # max_minutes=0: no green lint yet, so no merge
 
 
+def test_wait_stops_at_once_when_the_final_run_cannot_be_dispatched(fake_gh) -> None:
+	"""A head whose final CI dispatch is refused (its ci.yml predates the
+	workflow_dispatch trigger) never gets `lint`: no 45-minute wait (PR #9579)."""
+	script = LIB_PRELUDE + f'_pr_wait_for_required_checks 7 "{SHA}" main 5; echo "rc=$? outcome=${{PR_CHECKS_WAIT_OUTCOME}} final=${{PR_FINAL_CI_OUTCOME:-unset}}"'
+	env = {
+		"AUTO_MERGE_CHECKS_POLL_SECONDS": "30",
+		"AUTO_MERGE_REQUIRED_CI_CHECK": "lint",
+		"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "",
+		"PR_CHECKS_HEAD_REF": "ai/issue-1",
+		"REVIEW_FINAL_CI_WORKFLOW": "ci.yml",
+		"FAKE_GH_DISPATCH_RC": "1",
+	}
+	result, calls = fake_gh(script, WAIT_FIXTURES, env)
+	assert "outcome=dispatch_failed reason=dispatch_refused" in result.stdout, result.stdout + result.stderr
+	assert "outcome=timeout waited_s=0 pending=0 reason=final_ci_dispatch_failed ci_check=lint ci_state=absent" in result.stdout
+	assert "rc=1 outcome=timeout final=dispatch_failed" in result.stdout
+	assert len(_dispatches(calls)) == 1
+
+
 def test_wait_hook_is_off_without_the_workflow(fake_gh) -> None:
 	result, calls = _wait(fake_gh, WAIT_FIXTURES, {})
 	assert "REVIEW_FINAL_CI" not in result.stdout
@@ -470,3 +489,104 @@ def test_review_autofix_exports_the_input_and_the_sweep_runs_the_helper() -> Non
 	step = next(s for s in sweep["jobs"]["sweep"]["steps"] if s.get("name") == "Ensure the final CI run on reviewed PR heads")
 	assert step["run"] == "bash .ci-rerun-support/scripts/review_final_ci_sweep.sh"
 	assert "REVIEW_FINAL_CI_WORKFLOW" in step["env"]
+
+
+# ---------------------------------------------------------------------------
+# Head-gate state in the sweep snapshot (scripts/review_sweep_head_gate.sh)
+# and the final-CI sweep's use of it.
+
+
+def test_sweep_checks_known_success_heads_first_and_reads_no_known_state(fake_gh, tmp_path: Path) -> None:
+	"""2026-11-17 08:30: the cap of 10 went to gate-pending heads listed first
+	(checked=10 gate_not_success=10 ensured=0). Known-success heads go first,
+	known non-success heads cost neither a read nor a cap slot."""
+	shas = {n: f"{n:040x}" for n in range(1, 7)}
+	snapshot = [
+		{"number": 1, "head_ref": "ai/issue-1", "head_sha": shas[1], "head_gate_state": "pending"},
+		{"number": 2, "head_ref": "ai/issue-2", "head_sha": shas[2], "head_gate_state": "pending"},
+		{"number": 3, "head_ref": "ai/issue-3", "head_sha": shas[3]},  # unknown: read
+		{"number": 4, "head_ref": "ai/issue-4", "head_sha": shas[4], "head_gate_state": "failure"},
+		{"number": 5, "head_ref": "ai/issue-5", "head_sha": shas[5], "head_gate_state": "success"},
+		{"number": 6, "head_ref": "ai/issue-6", "head_sha": shas[6], "head_gate_state": "success"},
+	]
+	fixtures = {
+		f"repos/{REPO}/actions/workflows/ci.yml/runs?per_page=100": {"body": {"workflow_runs": []}},
+		"/status": {"body": {"statuses": [{"context": "ai-review/head-gate", "state": "pending"}]}},
+		"/actions/workflows/ci.yml/runs?head_sha=": {"body": {"workflow_runs": []}},
+	}
+	result, calls = _sweep(fake_gh, tmp_path, snapshot, fixtures, {"FINAL_CI_SWEEP_MAX_PER_TICK": "2"})
+	assert "candidates=6 checked=2 gate_not_success=3 ensured=2 cap=2" in result.stdout, result.stdout + result.stderr
+	assert sorted(d[d.index("-f") + 1] for d in _dispatches(calls)) == ["pr_number=5", "pr_number=6"]
+	assert not any(call[1].endswith("/status") for call in calls if len(call) > 1 and call[0] == "api")
+
+
+def _gate_page(*nodes: tuple) -> dict:
+	"""GraphQL page: (number, head oid, commit oid, state or None)."""
+	return {"data": {"repository": {"pullRequests": {
+		"pageInfo": {"hasNextPage": False, "endCursor": None},
+		"nodes": [{"number": n, "headRefOid": head, "commits": {"nodes": [{"commit": {
+			"oid": oid, "status": None if state is None else {"context": {"state": state} if state != "-" else None}}}]}}
+			for n, head, oid, state in nodes],
+	}}}}
+
+
+HELPER_PRELUDE = f"""
+set -uo pipefail
+source "{SCRIPTS}/review_sweep_head_gate.sh"
+"""
+
+
+def test_annotate_adds_the_gate_state_only_for_the_snapshot_head(fake_gh) -> None:
+	c_sha = "c" * 40
+	snapshot = [
+		{"number": 1, "head_sha": SHA}, {"number": 2, "head_sha": OTHER_SHA},
+		{"number": 3, "head_sha": c_sha}, {"number": 4, "head_sha": "d" * 40}, {"number": 5, "head_sha": "e" * 40},
+	]
+	page = _gate_page(
+		(1, SHA, SHA, "SUCCESS"),
+		(2, c_sha, c_sha, "SUCCESS"),  # head moved since the snapshot: unknown
+		(3, c_sha, c_sha, "-"),  # no head-gate status: absent
+		(4, "d" * 40, "d" * 40, "PENDING"),
+	)  # PR 5 missing from the read: unknown
+	script = HELPER_PRELUDE + f"printf '%s' {json.dumps(json.dumps(snapshot))} | review_sweep_annotate_head_gate {REPO}"
+	result, calls = fake_gh(script, {"graphql": {"body": page}})
+	rows = {row["number"]: row for row in json.loads(result.stdout)}
+	assert rows[1]["head_gate_state"] == "success"
+	assert "head_gate_state" not in rows[2]
+	assert rows[3]["head_gate_state"] == "absent"
+	assert rows[4]["head_gate_state"] == "pending"
+	assert "head_gate_state" not in rows[5]
+	assert "REVIEW_SWEEP_HEAD_GATE outcome=annotated prs=5 annotated=3 success=1" in result.stderr
+	assert len(calls) == 1 and calls[0][:2] == ["api", "graphql"] and "--paginate" in calls[0]
+
+
+@pytest.mark.parametrize("fixture", [{"graphql": {"rc": 1}}, {"graphql": {"body": {"errors": [{"message": "x"}]}}}])
+def test_annotate_fails_open_with_the_snapshot_unchanged(fake_gh, fixture: dict) -> None:
+	snapshot = [{"number": 1, "head_sha": SHA, "title": "t"}]
+	script = HELPER_PRELUDE + f"printf '%s' {json.dumps(json.dumps(snapshot))} | review_sweep_annotate_head_gate {REPO}"
+	result, _ = fake_gh(script, fixture)
+	assert json.loads(result.stdout) == snapshot
+	assert "REVIEW_SWEEP_HEAD_GATE outcome=read_failed reason=graphql prs=1" in result.stderr
+
+
+@pytest.mark.parametrize("runs, expected", [
+	([], "none"),
+	([{"status": "in_progress", "conclusion": None}], "in_flight"),
+	([{"status": "completed", "conclusion": "failure"}, {"status": "completed", "conclusion": "success"}], "success"),
+	([{"status": "completed", "conclusion": "failure", "display_title": "CI [pr:7]"}], "failure"),
+	([{"status": "completed", "conclusion": "failure", "display_title": "CI [pr:7] [sync-quick]"}], "none"),
+	([{"status": "completed", "conclusion": "cancelled"}], "none"),
+	([{"status": "completed", "conclusion": "failure", "path": ".github/workflows/other.yml"}], "none"),
+])
+def test_final_ci_state_matches_the_ensure_decision(fake_gh, runs: list, expected: str) -> None:
+	script = HELPER_PRELUDE + f'review_sweep_final_ci_state {REPO} {SHA} ci.yml'
+	result, calls = fake_gh(script, {RUNS_KEY: {"body": _runs(*runs)}})
+	assert result.stdout.strip() == expected, result.stdout + result.stderr
+	assert len(calls) == 1
+
+
+def test_final_ci_state_read_failure_and_bad_input(fake_gh) -> None:
+	result, _ = fake_gh(HELPER_PRELUDE + f'review_sweep_final_ci_state {REPO} {SHA}', {RUNS_KEY: {"rc": 1}})
+	assert result.stdout.strip() == "read_failed"
+	result, calls = fake_gh(HELPER_PRELUDE + f'review_sweep_final_ci_state {REPO} nothex', {})
+	assert result.stdout.strip() == "read_failed" and calls == []

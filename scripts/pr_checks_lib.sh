@@ -846,6 +846,14 @@ _pr_auto_merge_required_ci_check_name()
 # API calls: one REST `actions/runs?head_sha=` read (per_page=100); none
 # when disabled or the SHA/repository is unusable. Fail-open: a failed or
 # malformed read counts as 0 pending (the check-run gate still applies).
+# A run's `.name` in the runs API is its run-name. ci.yml names its
+# workflow_dispatch (final CI) runs `CI [pr:<n>]` or `CI [pr:<n>] [sync-quick]`,
+# so an exact match on the workflow name `CI` never bound them: the required
+# `lint` read as absent on every final-CI head and the merge wait timed out
+# after AUTO_MERGE_CHECKS_WAIT_MINUTES (PR #9603, 2026-11-17). Strip that
+# suffix (lowercased) before comparing against AUTO_MERGE_WAIT_WORKFLOWS.
+PR_CHECKS_JQ_CI_RUN_NAME_DEF='def _pr_ci_run_name: (.name // "" | if type == "string" then . else "" end | ascii_downcase | sub(" \\[pr:[1-9][0-9]*\\]( \\[sync-quick\\])?$"; ""));'
+
 _pr_head_ci_runs_pending()
 {
 	local head_sha="$1" repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" names_csv runs_json self_run
@@ -866,13 +874,13 @@ _pr_head_ci_runs_pending()
 	# instead of reading the runs again (§15).
 	PR_CHECKS_RUNS_RAW_JSON="${runs_json}"
 	local counts
-	counts="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" '
+	counts="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" "${PR_CHECKS_JQ_CI_RUN_NAME_DEF}"'
 		($names | split(",") | map(gsub("^\\s+|\\s+$"; "") | ascii_downcase) | map(select(length > 0))) as $wanted
 		| [(.workflow_runs // [])[]
 			| select((.id | tostring) != $self_run)
-			| select((.name // "" | ascii_downcase) as $n | $wanted | index($n))] as $runs
+			| select(_pr_ci_run_name as $n | $wanted | index($n))] as $runs
 		| ($runs | map(select(.status != "completed")) | length) as $pending
-		| ($runs | group_by(.name // "" | ascii_downcase)
+		| ($runs | group_by(_pr_ci_run_name)
 			| map(select(all(.[]; .status == "completed" and (.conclusion == "cancelled" or .conclusion == "startup_failure"))))
 			| length) as $unrun
 		| "\($pending) \($unrun)"' 2>/dev/null | tail -n1)"
@@ -883,11 +891,11 @@ _pr_head_ci_runs_pending()
 	# Run ids of the listed workflows on this head (self excluded), for the
 	# named CI check binding (issue #6963). Same listing, no extra call.
 	local run_ids
-	run_ids="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" '
+	run_ids="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" "${PR_CHECKS_JQ_CI_RUN_NAME_DEF}"'
 		($names | split(",") | map(gsub("^\\s+|\\s+$"; "") | ascii_downcase) | map(select(length > 0))) as $wanted
 		| if (type == "object" and (.workflow_runs | type) == "array") then
 			[.workflow_runs[] | select((.id | tostring) != $self_run)
-				| select((.name // "" | ascii_downcase) as $n | $wanted | index($n)) | (.id | tostring)] | "ids:" + join(",")
+				| select(_pr_ci_run_name as $n | $wanted | index($n)) | (.id | tostring)] | "ids:" + join(",")
 		else "invalid" end' 2>/dev/null | tail -n1)"
 	if [[ "${run_ids}" =~ ^ids:[0-9,]*$ ]]; then
 		PR_CHECKS_RUNS_READ="true"
@@ -1107,6 +1115,18 @@ _pr_wait_for_required_checks()
 				waited=$((waited + poll_seconds))
 				PR_CHECKS_WAIT_WAITED_S="${waited}"
 				continue
+			fi
+			# The head has no CI run and none could be started (a branch
+			# whose ci.yml predates the workflow_dispatch trigger, a fork
+			# head, an unreadable head ref): the required check cannot
+			# appear on this head, so stop now with the same timeout outcome
+			# instead of holding the runner for the whole budget (PR #9579,
+			# 2026-11-17: 45 minutes per review run, every sweep tick).
+			if [ "${PR_FINAL_CI_OUTCOME:-}" = "dispatch_failed" ] && [ "${PR_CHECKS_LAST_CI_STATE:-}" = "absent" ] \
+				&& [ "${PR_CHECKS_RUNS_PENDING:-0}" -eq 0 ]; then
+				PR_CHECKS_WAIT_OUTCOME="timeout"
+				echo "AUTOFIX_AUTO_MERGE_CHECKS pr=${pr_number} head_sha=${head_sha:-unknown} outcome=timeout waited_s=${waited} pending=0 reason=final_ci_dispatch_failed ci_check=${PR_CHECKS_LAST_CI_NAME:-none} ci_state=${PR_CHECKS_LAST_CI_STATE:-unknown}"
+				return 1
 			fi
 		fi
 		case "${PR_CHECKS_LAST_REASON}" in
