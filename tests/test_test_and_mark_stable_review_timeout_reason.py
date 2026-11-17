@@ -137,6 +137,9 @@ def test_helper_cases() -> None:
 		# Jobs payload unavailable (not fetched this poll).
 		(f"RUN_ID=101 RUN_STATUS=queued E2E_REVIEW_JOBS_STEP_FRESH=0 JOBS_STEP_JSON='{QUEUED_JOBS}'",
 			"inactivity", "unavailable"),
+		# Partial jobs page (total_count above the listed jobs): not classified.
+		("RUN_ID=101 RUN_STATUS=queued E2E_REVIEW_JOBS_STEP_FRESH=1 JOBS_STEP_JSON='{\"total_count\":12,\"jobs\":[{\"id\":5,\"status\":\"queued\"}]}'",
+			"inactivity", "5=queued"),
 		# Jobs payload invalid.
 		("RUN_ID=101 RUN_STATUS=queued E2E_REVIEW_JOBS_STEP_FRESH=1 JOBS_STEP_JSON='not json'",
 			"inactivity", "unavailable"),

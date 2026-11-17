@@ -178,7 +178,9 @@ e2e_review_timeout_reason() {
       && [[ "${RUN_ID:-}" =~ ^[0-9]+$ ]] \
       && [[ "${RUN_STATUS:-}" =~ ^(queued|pending|waiting|requested)$ ]] \
       && [ -n "${E2E_REVIEW_LAST_JOBS_JSON:-}" ] \
-      && printf '%s' "$E2E_REVIEW_LAST_JOBS_JSON" | jq -e '(.jobs | type == "array") and all(.jobs[]; (.status | type == "string") and (.status | test("^(queued|pending|waiting|requested)$")))' >/dev/null 2>&1; then
+      && printf '%s' "$E2E_REVIEW_LAST_JOBS_JSON" | jq -e '(.jobs | type == "array") and ((.total_count // 0) <= (.jobs | length)) and all(.jobs[]; (.status | type == "string") and (.status | test("^(queued|pending|waiting|requested)$")))' >/dev/null 2>&1; then
+    # total_count guard: the jobs page holds at most 10 entries, so a
+    # longer run is never classified from a partial list (#9619).
     echo "review_run_never_started"
   else
     echo "inactivity"
