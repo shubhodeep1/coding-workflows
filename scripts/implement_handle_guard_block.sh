@@ -2,6 +2,9 @@
 # Handle destructive-commit, scope-guard, and staged-support rejections after support cleanup.
 # shellcheck disable=SC2153 # DCB_*, SVB_*, and SSB_* values are workflow environment inputs.
 set -euo pipefail
+# Signed job-token comments (run-volume plan item 15): route this script's
+# gh comment calls through the shim even when no earlier step loaded it.
+[ -z "${BASH_SOURCE[0]:-}" ] || AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" >/dev/null 2>&1 || true
 
 # Retry the idempotent safety-latch writes and their verification reads on
 # transient GitHub errors through gh_retry. implement.yml stages gh_helpers.sh

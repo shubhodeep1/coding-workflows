@@ -189,6 +189,14 @@
       "color": "c5def5",
       "description": "Review queued behind an older open PR that edits the same files (merge train)"
     },
+    "ai:merge-lease-wait": {
+      "color": "c5def5",
+      "description": "Approved; waits for the merge lease on its base before updating or merging (merge lease)"
+    },
+    "ai:final-ci-merge-pending": {
+      "color": "c5def5",
+      "description": "Approved; the poll tick enables auto-merge when this head's final CI run passes"
+    },
     "ai:security-audit": {
       "color": "5319e7",
       "description": "Stable tracker issue for periodic default-branch security audits"
@@ -224,6 +232,14 @@
     "ai:workflow-heal-escalated": {
       "color": "b60205",
       "description": "Workflow failure heal chain hit the lineage cap; needs human attention"
+    },
+    "ai:alert-triage": {
+      "color": "c5def5",
+      "description": "Issue filed by hourly alert triage for a captured workflow alert"
+    },
+    "ai:alert-self-fix": {
+      "color": "5319e7",
+      "description": "Pull request opened by alert self-fix for a pipeline-blocking alert"
     },
     "ai:operator-step": {
       "color": "fbca04",

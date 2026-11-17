@@ -355,6 +355,13 @@ jobs:
       # Base commit SHA from the gate's PR read; the editor summary binds the
       # clean same-head marker to it (#8952).
       base_sha: ${{ steps.evaluate.outputs.base_sha }}
+      # Final-CI repair (final-ci-failure-ci-fix plan, Phase 2): run the
+      # test-repair step instead of the reviewer panel on this head.
+      final_ci_repair: ${{ steps.evaluate.outputs.final_ci_repair }}
+      final_ci_repair_attempt: ${{ steps.evaluate.outputs.final_ci_repair_attempt }}
+      # Phase 3: the approved head a verified repair commit sits on; the
+      # reviewer diff is <this>..HEAD instead of the merge-base range.
+      review_diff_base_sha: ${{ steps.evaluate.outputs.review_diff_base_sha }}
       review_checkout_sha: ${{ steps.evaluate.outputs.review_checkout_sha }}
       post_merge_pr_text_json: ${{ steps.evaluate.outputs.post_merge_pr_text_json }}
       post_merge_linked_issues_json: ${{ steps.evaluate.outputs.post_merge_linked_issues_json }}
@@ -691,6 +698,10 @@ jobs:
           # Clean same-head skip (#8952): the script defaults it to true; set
           # vars.AUTOFIX_SKIP_CLEAN_SAME_HEAD=false to re-review clean heads.
           AUTOFIX_SKIP_CLEAN_SAME_HEAD: ${{ vars.AUTOFIX_SKIP_CLEAN_SAME_HEAD }}
+          # Final-CI repair instead of the panel (final-ci-failure-ci-fix plan, Phase 2).
+          FINAL_CI_REPAIR_ENABLED: ${{ vars.FINAL_CI_REPAIR_ENABLED || 'true' }}
+          # Review a verified repair commit on its own diff (Phase 3).
+          FINAL_CI_REPAIR_DELTA_REVIEW_ENABLED: ${{ vars.FINAL_CI_REPAIR_DELTA_REVIEW_ENABLED || 'true' }}
           POST_SYNC_TEST_REPAIR: ${{ inputs.post_sync_test_repair && 'true' || 'false' }}
           # Same expression as the retrigger_guard step: a stall-poller
           # force_rb_judge dispatch must never be swallowed by the terminal
@@ -1188,6 +1199,10 @@ jobs:
       AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
       AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
       AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
+      MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
+      MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '240' }}
+      MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
+      FINAL_CI_MERGE_RESUME_ENABLED: ${{ vars.FINAL_CI_MERGE_RESUME_ENABLED || 'true' }}
     steps:
       - name: Checkout merge-base freshness helper
         id: checkout_freshness_helper
@@ -1260,6 +1275,9 @@ jobs:
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS || '2' }}
           SECURITY_PASS_PENDING_STALE_HOURS: ${{ vars.SECURITY_PASS_PENDING_STALE_HOURS || '6' }}
+          SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES: ${{ vars.SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES || '20' }}
+          SECURITY_PASS_MAX_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_MAX_AUDIT_ATTEMPTS || '' }}
+          SECURITY_PASS_MAX_CONCURRENT_AUDITS: ${{ vars.SECURITY_PASS_MAX_CONCURRENT_AUDITS || '3' }}
           SECURITY_PASS_PENDING_MARKER_ATTEMPTS: ${{ vars.SECURITY_PASS_PENDING_MARKER_ATTEMPTS || '3' }}
           SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS: ${{ vars.SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS || '5' }}
           SECURITY_PASS_FOLLOWUP_STALE_HOURS: ${{ vars.SECURITY_PASS_FOLLOWUP_STALE_HOURS || '24' }}
@@ -1466,6 +1484,9 @@ jobs:
                 if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
                   auto_merge_summary="DEFERRED (base moved under this PR's files; branch update requested, the synchronize run re-validates)"
                   echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
+                elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+                  auto_merge_summary="DEFERRED (waiting for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; the merge-train release re-dispatches this PR when the lease is granted)"
+                  echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=merge_lease_wait"
                 else
                   auto_merge_summary="DEFERRED (base freshness could not be verified; no branch update requested, the review sweep retries)"
                   echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_freshness_unknown"
@@ -1477,6 +1498,9 @@ jobs:
                 if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
                   auto_merge_summary="DEFERRED (base moved during the checks wait; branch update requested)"
                   echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
+                elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+                  auto_merge_summary="DEFERRED (waiting for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; the merge-train release re-dispatches this PR when the lease is granted)"
+                  echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=merge_lease_wait"
                 else
                   auto_merge_summary="DEFERRED (base freshness could not be verified; no branch update requested, the review sweep retries)"
                   echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_freshness_unknown"
@@ -1503,6 +1527,9 @@ jobs:
               if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
                 auto_merge_summary="DEFERRED (base moved under this PR's files; branch update requested, the synchronize run re-validates)"
                 echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
+              elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+                auto_merge_summary="DEFERRED (waiting for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; the merge-train release re-dispatches this PR when the lease is granted)"
+                echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=merge_lease_wait"
               else
                 auto_merge_summary="DEFERRED (base freshness could not be verified; no branch update requested, the review sweep retries)"
                 echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_freshness_unknown"
@@ -1514,6 +1541,9 @@ jobs:
               if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
                 auto_merge_summary="DEFERRED (base moved during the checks wait; branch update requested)"
                 echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
+              elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+                auto_merge_summary="DEFERRED (waiting for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; the merge-train release re-dispatches this PR when the lease is granted)"
+                echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=merge_lease_wait"
               else
                 auto_merge_summary="DEFERRED (base freshness could not be verified; no branch update requested, the review sweep retries)"
                 echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_freshness_unknown"
@@ -3242,6 +3272,9 @@ jobs:
 
       - name: Generate diff context
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        env:
+          # Final-CI repair delta review (final-ci-failure-ci-fix plan, Phase 3).
+          REVIEW_DIFF_BASE_SHA: ${{ needs.gate.outputs.review_diff_base_sha }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_generate_diff_context.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_generate_diff_context.sh"
@@ -3502,7 +3535,7 @@ jobs:
       # #8210: sets INTEGRATION_TEST_REPAIR_ACTIVE (reviewers/editor skip),
       # gates the integration head and repairs PR-caused test failures.
       - name: Integration post-sync test repair
-        if: inputs.post_sync_test_repair && startsWith(env.TARGET_BRANCH, 'orchestrator/project-') && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        if: ((inputs.post_sync_test_repair && startsWith(env.TARGET_BRANCH, 'orchestrator/project-')) || needs.gate.outputs.final_ci_repair == 'true') && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         continue-on-error: true
         timeout-minutes: 120
         env:
@@ -3510,6 +3543,11 @@ jobs:
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           POST_SYNC_TEST_REPAIR: ${{ inputs.post_sync_test_repair }}
+          # Final-CI repair of an approved head (final-ci-failure-ci-fix plan,
+          # Phase 2; gate output). Never set on orchestrator/project-* heads.
+          FINAL_CI_REPAIR: ${{ needs.gate.outputs.final_ci_repair == 'true' && 'true' || 'false' }}
+          FINAL_CI_REPAIR_ATTEMPT: ${{ needs.gate.outputs.final_ci_repair_attempt }}
+          FINAL_CI_REPAIR_FROM_SHA: ${{ needs.gate.outputs.head_sha }}
           DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}
           PREPUSH_TEST_GATE_STEP_MODE: integration
           PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}
@@ -4525,6 +4563,9 @@ jobs:
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS || '2' }}
           SECURITY_PASS_PENDING_STALE_HOURS: ${{ vars.SECURITY_PASS_PENDING_STALE_HOURS || '6' }}
+          SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES: ${{ vars.SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES || '20' }}
+          SECURITY_PASS_MAX_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_MAX_AUDIT_ATTEMPTS || '' }}
+          SECURITY_PASS_MAX_CONCURRENT_AUDITS: ${{ vars.SECURITY_PASS_MAX_CONCURRENT_AUDITS || '3' }}
           SECURITY_PASS_PENDING_MARKER_ATTEMPTS: ${{ vars.SECURITY_PASS_PENDING_MARKER_ATTEMPTS || '3' }}
           SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS: ${{ vars.SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS || '5' }}
           SECURITY_PASS_FOLLOWUP_STALE_HOURS: ${{ vars.SECURITY_PASS_FOLLOWUP_STALE_HOURS || '24' }}
@@ -4569,6 +4610,10 @@ jobs:
           AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
           AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
           AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
+          MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
+          MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '240' }}
+          MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
+          FINAL_CI_MERGE_RESUME_ENABLED: ${{ vars.FINAL_CI_MERGE_RESUME_ENABLED || 'true' }}
         run: |
           bash "${SUPPORT_SCRIPTS_DIR}/review_enable_auto_merge.sh"
 
@@ -4686,6 +4731,10 @@ jobs:
           AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
           AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
           AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
+          MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
+          MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '240' }}
+          MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
+          FINAL_CI_MERGE_RESUME_ENABLED: ${{ vars.FINAL_CI_MERGE_RESUME_ENABLED || 'true' }}
           REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
           # Single-issue security pass settings, the same as the
@@ -4697,6 +4746,9 @@ jobs:
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS || '2' }}
           SECURITY_PASS_PENDING_STALE_HOURS: ${{ vars.SECURITY_PASS_PENDING_STALE_HOURS || '6' }}
+          SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES: ${{ vars.SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES || '20' }}
+          SECURITY_PASS_MAX_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_MAX_AUDIT_ATTEMPTS || '' }}
+          SECURITY_PASS_MAX_CONCURRENT_AUDITS: ${{ vars.SECURITY_PASS_MAX_CONCURRENT_AUDITS || '3' }}
           SECURITY_PASS_PENDING_MARKER_ATTEMPTS: ${{ vars.SECURITY_PASS_PENDING_MARKER_ATTEMPTS || '3' }}
           SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS: ${{ vars.SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS || '5' }}
           SECURITY_PASS_FOLLOWUP_STALE_HOURS: ${{ vars.SECURITY_PASS_FOLLOWUP_STALE_HOURS || '24' }}
@@ -5678,7 +5730,7 @@ jobs:
                 # pending audit, or open follow-ups, re-run the review and
                 # bring the judge back without a human: no alert.
                 case "${JUDGE_SKIP_REASON}" in
-                  security_hold_audit_dispatched|security_hold_audit_pending|security_hold_awaiting_followups)
+                  security_hold_audit_dispatched|security_hold_audit_pending|security_hold_audit_throttled|security_hold_awaiting_followups)
                     echo "Judge merge held while the single-issue security pass runs (${JUDGE_SKIP_REASON}); suppressing alert."
                     exit 0 ;;
                 esac
