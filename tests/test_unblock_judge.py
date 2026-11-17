@@ -5450,7 +5450,7 @@ def test_nothing_to_implement_closes_after_an_earlier_done_wait(tmp_path: Path) 
 	assert not any(endpoint == "repos/o/r/issues/comments/123" for endpoint, _ in state["patched"])
 
 
-@pytest.mark.parametrize("case", ["newer_plan", "project_item", "disabled", "untrusted_block", "other_reason", "block_before_done_wait", "block_during_timed_out_wait"])
+@pytest.mark.parametrize("case", ["newer_plan", "project_item", "disabled", "untrusted_block", "other_reason", "block_before_done_wait", "block_during_timed_out_wait", "block_after_timed_out_open_wait", "blank_block_at", "done_wait_without_times"])
 def test_nothing_to_implement_no_wait_keeps_the_judge_otherwise(tmp_path: Path, case: str) -> None:
 	item, env, comments, issues = ISSUE, {}, [_no_wait_block()], None
 	if case == "newer_plan":
@@ -5472,6 +5472,17 @@ def test_nothing_to_implement_no_wait_keeps_the_judge_otherwise(tmp_path: Path, 
 		wait["updated_at"] = "2026-10-04T09:00:00Z"
 		comments = [wait, _no_wait_block(at="2026-10-04T10:00:00Z")]
 		issues = {"50": {"state": "open", "state_reason": None, "labels": []}}
+	elif case == "block_after_timed_out_open_wait":
+		# An earlier run timed the wait out while fix-up #50 was still open; a
+		# block filed after that patch still has an unresolved fix-up.
+		wait = _done_wait("2026-09-30T00:00:00Z")
+		wait["body"] = "Fix-up #50 did not merge in time; the unblock judge decides again.\n\n<!-- ai:unblock-wait-unresolved:v1 -->\n<!-- ai:unblock-wait:v1 item=7 fixup=50 done -->"
+		wait["updated_at"] = "2026-10-04T09:00:00Z"
+		comments = [wait, _no_wait_block(at="2026-10-04T10:00:00Z")]
+	elif case == "blank_block_at":
+		comments = [_no_wait_block(at="")]
+	elif case == "done_wait_without_times":
+		comments = [_done_wait(""), _no_wait_block(at="2026-10-04T10:00:00Z")]
 	else:
 		# The block predates the wait: the judge already filed a fix-up for it.
 		comments = [_no_wait_block(at="2026-10-04T07:00:00Z"), _done_wait("2026-10-04T11:00:00Z")]
@@ -5480,6 +5491,9 @@ def test_nothing_to_implement_no_wait_keeps_the_judge_otherwise(tmp_path: Path, 
 	assert "op=nothing_to_implement outcome=closed" not in result.stdout, result.stdout
 	assert not _closed_completed(state)
 	assert not any(comment["body"].endswith(NOTHING_TO_IMPLEMENT_NONE_MARKER) for comment in state["comments"])
+	if case == "block_during_timed_out_wait":
+		wait_bodies = [fields["body"] for endpoint, fields in state["patched"] if endpoint == "repos/o/r/issues/comments/123"]
+		assert any("<!-- ai:unblock-wait-unresolved:v1 -->" in body and body.endswith("<!-- ai:unblock-wait:v1 item=7 fixup=50 done -->") for body in wait_bodies), wait_bodies
 
 
 def test_nothing_to_implement_closes_after_a_fixup_closed_without_merging(tmp_path: Path) -> None:

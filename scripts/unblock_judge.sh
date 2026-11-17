@@ -1859,7 +1859,10 @@ unblock_main()
 	# already done, or the fix-up close time that done wait recorded; this run,
 	# or the fix-up's closed_at, when it is patched done below). The no-wait
 	# nothing-to-implement close only takes a block newer than this.
-	local wait_ended_at=""
+	# wait_fixup_unresolved=true when that wait timed out while its fix-up was
+	# still open (or its end time is not a UTC timestamp): the fix-up was never
+	# resolved, so the no-wait close stays off and the judge decides.
+	local wait_ended_at="" wait_fixup_unresolved=""
 	wait=""
 	[ "${untrusted_project_pr}" = "true" ] || wait="$(unblock_latest_wait)"
 	if [ -n "${wait}" ]; then
@@ -1877,6 +1880,13 @@ unblock_main()
 				| first // ""' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null || true)"
 			if [[ "${wait_recorded_end}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] && [[ "${wait_recorded_end}" < "${wait_updated}" ]]; then
 				wait_ended_at="${wait_recorded_end}"
+			fi
+			if ! [[ "${wait_updated}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
+				|| jq -e --arg login "${UNBLOCK_LOGIN}" --arg id "${wait_id}" '
+					any(.[]; (.user.login // "") == $login and ((.id // "") | tostring) == $id
+						and ((.body // "") | split("\n") | map(rtrimstr("\r")) | index("<!-- ai:unblock-wait-unresolved:v1 -->") != null))' \
+					"${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; then
+				wait_fixup_unresolved="true"
 			fi
 		else
 			fixup_json="$(gh api "repos/${REPOSITORY}/issues/${wait_fixup}" --jq '{state, state_reason, closed_at, labels: [.labels[]?.name]}' 2>/dev/null || echo '{}')"
@@ -2112,6 +2122,13 @@ ${step_escalation_marker}" >/dev/null 2>&1; then
 					wait_ended_line="
 <!-- ai:unblock-wait-ended:v1 at=${fixup_closed_at} -->"
 				fi
+			else
+				# Timed out while the fix-up is still open: it has no resolution
+				# time, so later runs must not treat a newer block as having no
+				# fix-up pending. Recorded above the wait marker (parse unchanged).
+				wait_fixup_unresolved="true"
+				wait_ended_line="
+<!-- ai:unblock-wait-unresolved:v1 -->"
 			fi
 			unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} did not merge in time; the unblock judge decides again.
 ${wait_ended_line}
@@ -2253,8 +2270,9 @@ Still waiting for an operator; last checked ${now}.
 	# too. When a wait exists, the block must be newer than the time that wait
 	# ended (wait_ended_at): an older block is the one the judge already filed
 	# that fix-up for, or one filed while the fix-up was still unresolved.
-	# Fail closed: a wait with no derivable end time would turn the age guard off.
-	if [ "${ITEM_KIND}" = "issue" ] && { [ -z "${wait}" ] || [ -n "${wait_ended_at:-${wait_updated:-}}" ]; } \
+	# Fail closed: a wait with no derivable end time would turn the age guard off,
+	# and a wait whose fix-up timed out still open never ended with it resolved.
+	if [ "${ITEM_KIND}" = "issue" ] && { [ -z "${wait}" ] || { [ "${wait_fixup_unresolved}" != "true" ] && [ -n "${wait_ended_at:-${wait_updated:-}}" ]; }; } \
 		&& unblock_nothing_to_implement_close "" "" "${tracking}" "${wait:+${wait_ended_at:-${wait_updated:-}}}"; then
 		return 0
 	fi
