@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:(no line given) | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The movement of CI steps causes contract tests to fail in the pre-push gate: tests/test_agents_fragment_contract.py, tests/test_files_touched_scope_guard.py, tests/test_gh_api_write_guard.py, tests/test_pr_watch_guard.py, and tests/test_workflow_checkout_integration_ref_audit.py.\n  WHY: The reviewer says these tests enforce structural contracts for the CI workflow and that the PR violated them. The source labels it BLOCKER, which is mapped to critical. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash checked this claim and rejected it: the head-SHA check runs show failed_count: 0, and none of those tests depend on anything in the diff.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: .github/workflows/ci.yml, selection and placement of the three moved steps in orchestrate-poll (merge-train step at ci.yml:3790-3791, Semble step at ci.yml:3897-3898, pre-seed step at ci.yml:3909-3910)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: ci.yml:3787-3789 says the step timings could not be read, the picks are estimates, and group 0's headroom is unmeasured, ci.yml:3893-3894 repeats this for the group-1 picks, the diff has no measured timings showing these are the slowest steps or that the chosen groups have the most headroom, CHANGELOG.md:1765, 2028 and 2160 name the release job (tests-release-and-log-analysis) as the one with measured headroom and it was not used as the target\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:(Structural workflow changes for moved CI steps) | severity=BLOCKER | confidence=5\n  PROBLEM: The movement of CI steps causes contract tests to fail in the pre-push gate: tests/test_agents_fragment_contract.py, tests/test_files_touched_scope_guard.py, tests/test_gh_api_write_guard.py, tests/test_pr_watch_guard.py, and tests/test_workflow_checkout_integration_ref_audit.py.\n  WHY: These tests enforce structural integrity and integration contracts for the CI workflow, and the PR changes violated these invariants.\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml, selection of steps and target groups in orchestrate-poll\n  Evidence of absence: The workflow comments state that run step timings could not be read and placements are estimates, and line 3789 says group 0's headroom is unmeasured. The PR diff provides no measured timings showing these are the slowest steps or that the chosen groups have the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\" (issue #9496)\n  Expected change site: .github/workflows/ci.yml, the placement of the three moved steps in orchestrate-poll groups 0 and 1 (the merge-train step at ci.yml:3790-3791, the Semble step at ci.yml:3897-3898, the pre-seed step at ci.yml:3909-3910)\n  Evidence of absence: ci.yml:3787-3789 says the step timings could not be read, the pick is an estimate, and group 0's headroom is unmeasured, and ci.yml:3893-3894 repeats this for the group-1 picks. The repo's recorded headroom data, which the diff does not apply, names a different destination: CHANGELOG.md:1765 (\"The release job is the only one with measured headroom (535-604s)\"), CHANGELOG.md:2028 and CHANGELOG.md:2160. That job (tests-release-and-log-analysis) has only lost steps since (#8214, #8245, #8759, #8777, #8993, #9391, #9450). The moved steps' own comments (ci.yml:3774-3775, 3894-3896, 3905-3908) say they need no git history, Node, or prepared .claude/ live copies, which the release job also satisfies, so it was available as a target. Mitigation: changelog.d/9496-ci-hooks-merge-train-semble-preseed-to-poll.md:2 notes the post-merge `budget-watch` run on `main` will catch a destination near its timeout. This is actionable only if run 43544291165's step timings can be obtained, and estimate-based picks are the repo's established pattern for this issue family (CHANGELOG.md:1946, 2028, 2170, 2186).\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, the selection and placement of the three moved steps in `orchestrate-poll`.\n  Evidence of absence: The workflow says at lines 3787-3789 that the step timings could not be read, the selection is an estimate, and group 0's headroom is unmeasured. Lines 3893-3894 likewise identify the Semble and pre-seed placement as an estimate. The diff contains no measured timings establishing that these are the slowest steps or that the chosen groups have the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4c1a3096959ce0f8205bba18658635f6982d89b516ab9685c59bf1ab827e4e23",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9515,
+    "run_id": "43966174151",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43966174151",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117005937_b6d66bbca4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9515,
+    "run_id": "43966174151"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-17T00:59:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
