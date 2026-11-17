@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: test tests/test_review_apply_fixes_smoke_deterministic.py\nACCEPTANCE: post-merge none: this smoke canary is a data file with no post-merge workflow\n\n## Functions or modules to implement\nNone. The work is a data edit only. Replace line 2 of `tests/e2e_smoke_canary.txt`, which currently reads `decompose-run: 41445772297` from an earlier run, so the file ends up as exactly:\n```\nstatus: ok\ndecompose-run: 43987491813\n```\nThe file must end with one trailing newline (LF). Line 1 already reads `status: ok` and stays as it is.\n\n## Data structures affected\nNone.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Touch only the canary file and none of the advisory test files\n- Chosen: Edit only `tests/e2e_smoke_canary.txt`.\n- Alternatives considered: Also update the 11 test files in the advisory \"Expected files\" list.\n- Why: The issue says to touch only this one file. A search of `tests/*.py` finds neither the old run ID (`41445772297`) nor the string `decompose-run`, so no test checks the canary's contents. Those tests only refer to the file's path, which does not change.\n\n## Security considerations\nNo trust boundary, endpoint, input parsing, secret or money handling is involved. The only content is a static two-line text file.\n\n## Potential risks or edge cases\n- Conflict between the issue and the code: the advisory \"Expected files\" list names 11 test files. They mention the canary only by its path, so they need no edits, and editing them would break the scope rule.\n- The edit must not change `tests/e2e_smoke_canary_b.txt`, which a sibling issue edits in parallel.\n- The file must use LF line endings, end with a single trailing newline, and have no blank line after line 2.\n\n## Testing considerations\n- `head -n 1 tests/e2e_smoke_canary.txt` should print `status: ok`.\n- `sed -n '2p' tests/e2e_smoke_canary.txt` should print `decompose-run: 43987491813`.\n- `wc -l` should print 2.\n- `git diff --stat` should show only this one file changed.\n- The existing smoke tests that read the file by path should still pass.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue asks for exactly one two-line data edit and limits the change to one file. Earlier smoke runs (#8687, #8222) did the same in-place update to this file. Nothing beyond that edit is needed, so the scope holds as written.\n\n## Pre-execution self-check\n- Planning ref: orchestrator/project-9624 @ a848317a7a5b1a846bbcdccf693502a0d1841481, and there is no integration branch mismatch.\n- The plan covers every acceptance criterion in the issue and changes only one file.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- AI_ACCEPTANCE_V1 {\"checks\":[],\"errors\":[],\"post_merge\":null,\"post_merge_none\":\"this smoke canary is a data file with no post-merge workflow\",\"schema\":\"acceptance.v1\",\"source\":\"plan\",\"state\":\"valid\",\"tests\":[{\"name\":\"\",\"path\":\"tests/test_review_apply_fixes_smoke_deterministic.py\",\"red_on_base\":false}]} -->\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "11b68b798dbd2e2884e74ed55c3f63d2819c0481ec240be86903c405a2e068b0",
+  "lineage": {
+    "issue_number": 9625,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43995531465",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43995531465",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9625"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261117015157_a1d9cc75c2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9625,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43995531465"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9625",
+  "timestamps": {
+    "created_at": "2026-11-17T01:51:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
