@@ -396,6 +396,423 @@ def test_orchestrate_capacity_check_reads_emitted_log_line_only() -> None:
 		assert "Could not read 2 job log(s)" in stdout
 
 
+TIMEOUT_INV_STEP = "Phase 4d: Review-timeout run inventory"
+WAIT_REVIEW_STEP = "Phase 4: Wait for review & autofix to complete"
+
+
+def test_review_timeout_inventory_step_follows_wait_review() -> None:
+	"""Issue #9418: the timeout inventory runs right after Phase 4."""
+	names = [s["name"] for s in _e2e_steps(_raw())]
+	idx = names.index(WAIT_REVIEW_STEP)
+	assert names[idx + 1] == TIMEOUT_INV_STEP
+	assert names.index(TIMEOUT_INV_STEP) < names.index("Phase 4c: Soft-error analyser (review_autofix)")
+
+
+def test_review_timeout_inventory_step_is_gated_and_non_blocking() -> None:
+	steps = _e2e_steps(_raw())
+	text = _step(steps, TIMEOUT_INV_STEP)["text"]
+	assert "\n        id: review-timeout-inventory\n" in text
+	assert "\n        if: failure() && steps.wait-review.outputs.status == 'timeout'\n" in text
+	assert "\n        continue-on-error: true\n" in text
+	assert "\n        timeout-minutes: 3\n" in text
+	for key in ("PR_NUMBER", "ISSUE_NUMBER", "BAIT_SHA"):
+		assert f"\n          {key}: ${{{{ " in text, key
+	# The incident run ids live in the comment block directly above the Phase 4d
+	# step; read that block from the raw text so the check does not depend on
+	# which step `_e2e_steps` attaches trailing comments to.
+	raw = _raw()
+	lead = raw[: raw.index(f'\n      - name: "{TIMEOUT_INV_STEP}"\n')].split("\n")
+	comment_lines: list[str] = []
+	for line in reversed(lead):
+		if not line.startswith("      #"):
+			break
+		comment_lines.append(line)
+	comment = "\n".join(reversed(comment_lines))
+	assert "Phase 4d" in comment and "#9418" in comment
+	for run_id in ("43283656910", "43300092840", "43300108598"):
+		assert run_id in comment, run_id
+
+
+def test_review_timeout_inventory_body_lists_runs_and_jobs_fail_soft() -> None:
+	run = _step(_e2e_steps(_raw()), TIMEOUT_INV_STEP)["run"]
+	assert run.startswith("set -euo pipefail\n")
+	assert "${{" not in run
+	assert 'if ! TIMEOUT_INV_RUNS="$(_safe_gh_jq "repos/${TEST_REPO}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?branch=' in run
+	assert 'if ! TIMEOUT_INV_JOBS="$(_safe_gh_jq "repos/${TEST_REPO}/actions/runs/${TIMEOUT_INV_RUN_ID}/jobs' in run
+	assert '[[ "${ISSUE_NUMBER:-}" =~ ^[0-9]+$ ]]' in run
+	assert "^[A-Za-z0-9][A-Za-z0-9_.-]*\\.yml$" in run
+	assert "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" in run
+	assert '[[ "${TIMEOUT_INV_RUN_ID:-}" =~ ^[0-9]+$ ]] || continue' in run
+	assert " -X " not in run and "--method" not in run
+
+
+def _run_timeout_inventory(tmp: Path, runs: list, jobs: dict, env_extra: dict | None = None, fail: bool = False, raw_jobs: dict | None = None) -> tuple[int, str, list[str]]:
+	import json
+
+	bash = shutil.which("bash")
+	assert bash is not None
+	body = _step(_e2e_steps(_raw()), TIMEOUT_INV_STEP)["run"]
+	fixdir = tmp / "fix"
+	fixdir.mkdir()
+	(fixdir / "runs.json").write_text(json.dumps({"workflow_runs": runs}), encoding="utf-8")
+	for run_id, run_jobs in jobs.items():
+		(fixdir / f"jobs-{run_id}.json").write_text(json.dumps({"jobs": run_jobs}), encoding="utf-8")
+	for run_id, raw in (raw_jobs or {}).items():
+		(fixdir / f"jobs-{run_id}.json").write_text(raw, encoding="utf-8")
+	call_log = tmp / "calls.log"
+	stub = (
+		"_safe_gh_jq() {\n"
+		'  local path="$1"; shift\n'
+		'  local filter=""\n'
+		'  if [ "${1:-}" = "--jq" ]; then filter="$2"; fi\n'
+		'  printf "%s\\n" "$path" >> "${CALL_LOG}"\n'
+		'  if [ "${STUB_FAIL:-0}" = "1" ]; then return 1; fi\n'
+		'  local f="${FIXDIR}/runs.json"\n'
+		'  case "$path" in\n'
+		'    */jobs*) local id="${path#*/actions/runs/}"; id="${id%%/*}"; f="${FIXDIR}/jobs-${id}.json"\n'
+		'      [ -f "$f" ] || f="${FIXDIR}/empty-jobs.json" ;;\n'
+		"  esac\n"
+		'  jq -r "$filter" "$f"\n'
+		"}\n"
+	)
+	(fixdir / "empty-jobs.json").write_text('{"jobs": []}', encoding="utf-8")
+	env = {
+		"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+		"HOME": str(tmp),
+		"CALL_LOG": str(call_log),
+		"FIXDIR": str(fixdir),
+		"STUB_FAIL": "1" if fail else "0",
+		"TEST_REPO": "o/r",
+		"REVIEW_WORKFLOW_FILE": "internal-review.yml",
+		"ISSUE_NUMBER": "9410",
+		"PR_NUMBER": "9416",
+		"BAIT_SHA": "9a5e8e8" + "0" * 33,
+	}
+	env.update(env_extra or {})
+	result = subprocess.run(
+		[bash, "-c", stub + body], cwd=str(tmp), env=env, capture_output=True, text=True, check=False, timeout=60
+	)
+	calls = call_log.read_text(encoding="utf-8").splitlines() if call_log.exists() else []
+	return result.returncode, result.stdout, calls
+
+
+def _timeout_inv_run(run_id, event: str, status: str, conclusion=None) -> dict:
+	return {
+		"id": run_id,
+		"event": event,
+		"status": status,
+		"conclusion": conclusion,
+		"head_sha": "9a5e8e8" + "1" * 33,
+		"created_at": "2026-11-12T20:25:03Z",
+		"updated_at": "2026-11-12T22:13:52Z",
+	}
+
+
+def test_review_timeout_inventory_body_runs_with_stubbed_gh() -> None:
+	if shutil.which("bash") is None or shutil.which("jq") is None:
+		raise unittest.SkipTest("bash or jq is not installed")
+	import tempfile
+
+	runs = [
+		_timeout_inv_run(43300092840, "workflow_dispatch", "queued"),
+		_timeout_inv_run(43300108598, "pull_request", "pending"),
+		_timeout_inv_run(43300000001, "pull_request", "completed", "success"),
+		_timeout_inv_run("abc", "pull_request", "queued"),
+	]
+	jobs = {
+		43300092840: [
+			{
+				"name": "review / gate",
+				"status": "queued",
+				"conclusion": None,
+				"created_at": "2026-11-12T20:25:05Z",
+				"started_at": None,
+				"runner_name": None,
+			}
+		]
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, calls = _run_timeout_inventory(Path(tmp), runs, jobs)
+		assert rc == 0, out
+		assert len([c for c in calls if "/jobs" not in c]) == 1
+		assert sorted(c for c in calls if "/jobs" in c) == [
+			"repos/o/r/actions/runs/43300092840/jobs?per_page=30",
+			"repos/o/r/actions/runs/43300108598/jobs?per_page=30",
+		]
+		assert "run 43300092840 event=workflow_dispatch status=queued" in out
+		assert "job review___gate status=queued conclusion=null" in out
+		assert "runner=none" in out
+		assert "(no jobs yet" in out
+		assert "run 43300000001 event=pull_request status=completed conclusion=success" in out
+		assert "abc" not in out
+		assert "bait=9a5e8e8" in out
+		for line in out.splitlines():
+			assert not line.startswith("::"), line
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, calls = _run_timeout_inventory(Path(tmp), runs, jobs, fail=True)
+		assert rc == 0
+		assert "(review run inventory fetch failed)" in out
+		assert len(calls) == 1
+	for bad in ({"ISSUE_NUMBER": "1; rm"}, {"REVIEW_WORKFLOW_FILE": "../x.yml"}, {"TEST_REPO": "o/r/../x"}):
+		with tempfile.TemporaryDirectory() as tmp:
+			rc, out, calls = _run_timeout_inventory(Path(tmp), runs, jobs, env_extra=bad)
+			assert rc == 0
+			assert "Skipped review-timeout inventory" in out
+			assert calls == []
+	with tempfile.TemporaryDirectory() as tmp:
+		many = [_timeout_inv_run(500 + i, "pull_request", "in_progress") for i in range(7)]
+		rc, out, calls = _run_timeout_inventory(Path(tmp), many, {})
+		assert rc == 0
+		assert len([c for c in calls if "/jobs" in c]) == 5
+		assert out.count("(job lookup skipped: cap of 5 reached)") == 2
+
+
+def test_review_timeout_inventory_job_fetch_failure_is_soft() -> None:
+	if shutil.which("bash") is None or shutil.which("jq") is None:
+		raise unittest.SkipTest("bash or jq is not installed")
+	import tempfile
+
+	runs = [_timeout_inv_run(700, "pull_request", "queued"), _timeout_inv_run(701, "pull_request", "queued")]
+	with tempfile.TemporaryDirectory() as tmp:
+		# A jobs response that is not JSON makes the jq filter, and so the call, fail.
+		rc, out, calls = _run_timeout_inventory(Path(tmp), runs, {}, raw_jobs={700: "not json"})
+		assert rc == 0, out
+		assert "(job fetch failed for run 700)" in out
+		assert "(no jobs yet" in out
+		assert len([c for c in calls if "/jobs" in c]) == 2
+		assert "hint: job status=queued" in out
+
+
+def test_review_timeout_inventory_body_parses_as_bash() -> None:
+	bash = shutil.which("bash")
+	if bash is None:
+		raise unittest.SkipTest("bash is not installed")
+	run = _step(_e2e_steps(_raw()), TIMEOUT_INV_STEP)["run"]
+	result = subprocess.run([bash, "-n"], input=run, capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+
+
+# Issue #9223: Phase 1 fails fast on clarify's own failure comment when it
+# names the newest scoped Clarify run, and names that run (built from its
+# numeric ID) plus the issue URL on timeout. The fakes are
+# shell functions, not PATH executables: the pre-push gate container mounts
+# the temp dir noexec (see test_test_and_mark_stable_alt_model_cleanup_pr_selector.py).
+_CLARIFY_FAKES = r"""gh() {
+  local ep="${2:-}" jq_expr="" data=""
+  if [ "${3:-}" = "--jq" ]; then jq_expr="${4:-}"; fi
+  printf '%s\n' "${ep}" >> "${FAKE_DIR}/calls"
+  case "${ep}" in
+    *actions/runs*)
+      if [ "${FAKE_RUNS_FAIL:-0}" = "1" ]; then return 1; fi
+      data=$(cat "${FAKE_DIR}/runs.json") ;;
+    */comments*) data=$(cat "${FAKE_DIR}/comments.json") ;;
+    *) data='{"labels":[{"name":"ai:clarifying"}]}' ;;
+  esac
+  if [ -n "${jq_expr}" ]; then printf '%s' "${data}" | jq -r "${jq_expr}"; else printf '%s' "${data}"; fi
+}
+sleep() { :; }
+"""
+CLARIFY_TITLE = "[E2E Smoke Test] canary (run 1)"
+FAILED_PREFIX = "AI clarification workflow failed for https://github.com/o/r/issues/42. Run: https://github.com/o/r/actions/runs/5"
+
+
+def _comment(body: str, association: str = "OWNER", login: str = "pat-user") -> dict:
+	return {"body": body, "author_association": association, "user": {"login": login}}
+
+
+def _clarify_run(run_id: object, url: str, created_at: str, title: str = CLARIFY_TITLE) -> dict:
+	return {"id": run_id, "name": "AI Clarify", "conclusion": None, "display_title": title, "created_at": created_at, "html_url": url}
+
+
+def _run_clarify_wait(tmp: Path, comments: list, runs: list | None = None, runs_fail: bool = False, timeout_minutes: str = "30") -> tuple[int, str, str, list[str]]:
+	import json
+
+	bash = shutil.which("bash")
+	assert bash is not None
+	# capture_run_id reads the created_after bound through a workflow
+	# expression; bash cannot expand it, so substitute it as GitHub would.
+	run = _step(_all_steps(_raw()), CLARIFY_STEP)["run"].replace(
+		"${{ steps.create-issue.outputs.created_after }}", "2026-11-13T00:00:00Z"
+	)
+	(tmp / "comments.json").write_text(json.dumps(comments), encoding="utf-8")
+	(tmp / "runs.json").write_text(json.dumps({"workflow_runs": runs or []}), encoding="utf-8")
+	output = tmp / "github_output"
+	output.write_text("", encoding="utf-8")
+	env = dict(os.environ)
+	env.update(
+		{
+			"FAKE_DIR": str(tmp),
+			"FAKE_RUNS_FAIL": "1" if runs_fail else "0",
+			"PHASE_TIMEOUT": timeout_minutes,
+			"POLL_INTERVAL": "0",
+			"TEST_REPO": "o/r",
+			"ISSUE_NUMBER": "42",
+			"ISSUE_TITLE": CLARIFY_TITLE,
+			"GITHUB_OUTPUT": str(output),
+			"GITHUB_SERVER_URL": "https://github.com",
+		}
+	)
+	result = subprocess.run(
+		[bash, "-c", _CLARIFY_FAKES + run],
+		cwd=str(REPO_ROOT),
+		env=env,
+		capture_output=True,
+		text=True,
+		check=False,
+		timeout=60,
+	)
+	calls_path = tmp / "calls"
+	calls = calls_path.read_text(encoding="utf-8").splitlines() if calls_path.exists() else []
+	return result.returncode, output.read_text(encoding="utf-8"), result.stdout, calls
+
+
+def _skip_without_bash_and_jq() -> None:
+	if shutil.which("bash") is None or shutil.which("jq") is None:
+		raise unittest.SkipTest("bash or jq is not installed")
+
+
+def test_clarify_wait_fails_fast_on_clarify_failed_comment() -> None:
+	_skip_without_bash_and_jq()
+	import tempfile
+
+	runs = [_clarify_run(5, "https://github.com/o/r/actions/runs/5", "2026-11-13T00:01:00Z")]
+	for association in ("OWNER", "MEMBER", "COLLABORATOR"):
+		with tempfile.TemporaryDirectory() as tmp:
+			rc, output, stdout, calls = _run_clarify_wait(Path(tmp), [_comment(FAILED_PREFIX, association)], runs=runs)
+			assert rc == 1, (association, stdout)
+			assert "status=clarify_failed" in output, output
+			assert "status=timeout" not in output
+			# The error line names the newest Clarify run, built from its ID.
+			assert "(Clarify run: https://github.com/o/r/actions/runs/5)" in stdout, stdout
+			# No comment body is echoed.
+			assert "AI clarification workflow failed for" not in stdout, stdout
+			# One poll: the count read and the 100-comment read.
+			comment_calls = [c for c in calls if "/comments" in c]
+			assert comment_calls == [
+				"repos/o/r/issues/42/comments",
+				"repos/o/r/issues/42/comments?per_page=100",
+			], comment_calls
+			# One newest-run lookup, which matched on its first page.
+			assert len([c for c in calls if "actions/runs" in c]) == 1, calls
+
+
+def test_clarify_wait_ignores_untrusted_or_non_prefix_failure_comment() -> None:
+	_skip_without_bash_and_jq()
+	import tempfile
+
+	cases = [
+		[_comment(FAILED_PREFIX, "NONE")],
+		[_comment(FAILED_PREFIX, "CONTRIBUTOR")],
+		[_comment("Note: " + FAILED_PREFIX, "OWNER")],
+		[_comment("AI clarification workflow was cancelled/timed out for https://github.com/o/r/issues/42.", "OWNER")],
+		[{"body": None, "user": {"login": "pat-user"}}],
+	]
+	for comments in cases:
+		with tempfile.TemporaryDirectory() as tmp:
+			rc, output, _, _ = _run_clarify_wait(Path(tmp), comments, timeout_minutes="0")
+			assert rc == 1, comments
+			assert "status=timeout" in output, (comments, output)
+			assert "clarify_failed" not in output, comments
+
+
+def test_clarify_wait_timeout_prints_issue_and_run_url() -> None:
+	_skip_without_bash_and_jq()
+	import tempfile
+
+	runs = [
+		_clarify_run(7, "https://github.com/o/r/actions/runs/7", "2026-11-13T00:01:00Z"),
+		_clarify_run(9, "https://github.com/o/r/actions/runs/9", "2026-11-13T00:02:00Z"),
+		_clarify_run(11, "https://github.com/o/r/actions/runs/11", "2026-11-13T00:03:00Z", title="other issue"),
+	]
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, output, stdout, calls = _run_clarify_wait(Path(tmp), [], runs=runs, timeout_minutes="0")
+		assert rc == 1
+		assert "status=timeout" in output
+		assert "Issue: https://github.com/o/r/issues/42" in stdout
+		assert re.findall(r"https://\S+/actions/runs/\d+", stdout) == ["https://github.com/o/r/actions/runs/9"], stdout
+		assert "(Clarify run: https://github.com/o/r/actions/runs/9)" in stdout, stdout
+		assert len([c for c in calls if "actions/runs" in c]) == 1, calls
+	# The run URL is built only from a numeric run ID; html_url is never printed.
+	bad_runs = [
+		[_clarify_run("not-a-number", "https://github.com/o/r/actions/runs/9", "2026-11-13T00:02:00Z")],
+		[_clarify_run("::warning::injected", "https://github.com/o/r/actions/runs/9", "2026-11-13T00:02:00Z")],
+		[_clarify_run("9\n::warning::injected", "https://github.com/o/r/actions/runs/9", "2026-11-13T00:02:00Z")],
+	]
+	for case in bad_runs:
+		with tempfile.TemporaryDirectory() as tmp:
+			rc, output, stdout, _ = _run_clarify_wait(Path(tmp), [], runs=case, timeout_minutes="0")
+			assert rc == 1
+			assert "status=timeout" in output
+			assert "Issue: https://github.com/o/r/issues/42" in stdout
+			assert "/actions/runs/" not in stdout, stdout
+			assert "::warning::" not in stdout, stdout
+			assert "no non-skipped Clarify run titled" in stdout, stdout
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, output, stdout, _ = _run_clarify_wait(Path(tmp), [], runs=runs, runs_fail=True, timeout_minutes="0")
+		assert rc == 1
+		assert "status=timeout" in output
+		assert "Issue: https://github.com/o/r/issues/42" in stdout
+		assert "/actions/runs/" not in stdout, stdout
+		assert "no non-skipped Clarify run titled" in stdout, stdout
+
+
+def test_clarify_wait_timeout_with_cancelled_comment_prints_one_run_url() -> None:
+	_skip_without_bash_and_jq()
+	import tempfile
+
+	cancelled = "AI clarification workflow was cancelled/timed out for https://github.com/o/r/issues/42. Run: https://github.com/o/r/actions/runs/7"
+	runs = [
+		_clarify_run(7, "https://github.com/o/r/actions/runs/7", "2026-11-13T00:01:00Z"),
+		_clarify_run(9, "https://github.com/o/r/actions/runs/9", "2026-11-13T00:02:00Z"),
+	]
+	# A newer run exists: only the newest run is named, not the cancelled one.
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, output, stdout, _ = _run_clarify_wait(Path(tmp), [_comment(cancelled)], runs=runs, timeout_minutes="0")
+		assert rc == 1
+		assert "status=timeout" in output
+		assert "Issue: https://github.com/o/r/issues/42" in stdout
+		assert re.findall(r"https://\S+/actions/runs/\d+", stdout) == ["https://github.com/o/r/actions/runs/9"], stdout
+	# No newest run found: the cancelled run is the one URL printed.
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, output, stdout, _ = _run_clarify_wait(Path(tmp), [_comment(cancelled)], runs=[], timeout_minutes="0")
+		assert rc == 1
+		assert "status=timeout" in output
+		assert re.findall(r"https://\S+/actions/runs/\d+", stdout) == ["https://github.com/o/r/actions/runs/7"], stdout
+
+
+def test_clarify_and_alt_model_timeouts_print_issue_url() -> None:
+	steps = _all_steps(_raw())
+	clarify = _step(steps, CLARIFY_STEP)["run"]
+	_ordered(
+		clarify,
+		CAPACITY_STATUS,
+		"status=clarify_failed",
+		'CLARIFY_STALL_RUN_ID=$(capture_run_id "Clarif")',
+		"Clarify phase stalled",
+		'echo "  Issue: ${CLARIFY_ISSUE_URL}"',
+	)
+	# Trusted authors only, and only clarify's own failed/cancelled prefixes.
+	assert 'author_association == "OWNER"' in clarify
+	assert '"AI clarification workflow failed for "' in clarify
+	assert '"AI clarification workflow was cancelled/timed out for "' in clarify
+	assert clarify.count("comments?per_page=100") == 1
+	assert "per_page=5&direction=desc" not in clarify
+	assert "CLARIFY_CREATED_AFTER" not in _step(steps, CLARIFY_STEP)["text"]
+	alt_step = _step(steps, ALT_MODEL_STEP)
+	alt = alt_step["run"]
+	_ordered(
+		alt,
+		'find_latest_scoped_run_field "${TEST_REPO}" "${ALT_CREATED_AFTER}" "Clarif" "${ALT_ISSUE_TITLE}" id',
+		"Alt-model run timed out before reaching review stage",
+		"Issue: ${GITHUB_SERVER_URL:-https://github.com}/${TEST_REPO}/issues/${ISSUE_NUMBER}",
+	)
+	assert "ALT_PRE_CLARIFY_RUN_ID" not in alt_step["text"]
+	assert "ALT_CREATED_AFTER: ${{ steps.create.outputs.created_after }}" in alt_step["text"]
+	# The parallel e2e-smoke-test job's Clarify run must not be picked (#9223).
+	assert "ALT_ISSUE_TITLE: ${{ steps.create.outputs.title }}" in alt_step["text"]
+	assert "${{" not in alt
+
+
 def main() -> int:
 	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
 	skipped = 0

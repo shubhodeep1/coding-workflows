@@ -2382,6 +2382,9 @@ def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[s
 					"pull_requests": [{"number": payload.get("issue_number")}],
 				} for ref in payload.get("run_refs", [])
 			}
+		# extra_run_details adds runs (e.g. the intake's own run) on top of
+		# the default fixtures without replacing them.
+		state["run_details"].update(state.pop("extra_run_details", {}))
 		state_file.write_text(json.dumps(state), encoding="utf-8")
 		payload_file = tmp / "payload_raw.json"
 		payload_file.write_text(json.dumps(payload), encoding="utf-8")
@@ -6172,6 +6175,45 @@ def test_intake_verifies_report_identity_and_rejects_a_forged_repository() -> No
 
 	result, state, _ = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REPORT_IDENTITY_STATE": "malformed"})
 	assert "report_auth=rejected reason=identity_malformed" in result.stdout
+	assert _api_writes(state) == []
+
+
+def test_intake_credits_runner_queue_wait_against_a_stale_identity() -> None:
+	# 2026-11-14: six reports sat ~3h50m waiting for a runner and were all
+	# rejected identity_stale; the age limit applies at arrival (run_started_at).
+	payload = _consumer_payload(reporter_run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/{_ID_RUN_ID}")
+	own_run_path = f"repos/{SELF_REPO}/actions/runs/777"
+
+	def _iso(epoch: int) -> str:
+		return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+	def _stale_run(run_started_at: str | None) -> tuple[subprocess.CompletedProcess[str], dict]:
+		with tempfile.TemporaryDirectory(prefix="heal-identity-wait-") as tmp_name:
+			# Token minted two hours ago (iat = now - 7200 - 60).
+			token_file, jwks_file, token = _fresh_identity(Path(tmp_name), iat=int(time.time()) - 7260, nbf=int(time.time()) - 7260)
+			extra = {} if run_started_at is None else {own_run_path: {"id": 777, "run_attempt": 1, "run_started_at": run_started_at}}
+			result, state, _ = _run_intake(payload, _intake_state(extra_run_details=extra), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=_identity_env(token_file, jwks_file))
+			assert token not in result.stdout + result.stderr
+			return result, state
+
+	# The run started when the dispatch arrived, right after the token was minted.
+	result, state = _stale_run(_iso(int(time.time()) - 7230))
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL report_identity_age_credit arrival_waited_seconds=" in result.stdout
+	assert "report_auth=verified reason=bound" in result.stdout
+	assert len(_composed_issues(state)) == 1
+	# A recent start (e.g. a re-run of an old report) earns no credit.
+	result, state = _stale_run(_iso(int(time.time()) - 30))
+	assert "report_auth=rejected reason=identity_stale" in result.stdout
+	assert _api_writes(state) == []
+	# The own-run read failing keeps the rejection (fails closed).
+	result, state = _stale_run(None)
+	assert "report_identity_age_credit arrival_waited_seconds=0" in result.stdout
+	assert "report_auth=rejected reason=identity_stale" in result.stdout
+	assert _api_writes(state) == []
+	# A malformed timestamp earns no credit either.
+	result, state = _stale_run("yesterday")
+	assert "report_auth=rejected reason=identity_stale" in result.stdout
 	assert _api_writes(state) == []
 
 
@@ -10484,8 +10526,20 @@ def test_heal_stale_keeps_with_too_few_or_failed_runs() -> None:
 	runs = _stale_runs(6)
 	runs["workflow_runs"][2]["conclusion"] = "failure"
 	assert _stale_decide(runs=runs)["reason"] == "run_not_green"
+	# A cancelled run (a push replaced while it waited, run-volume plan D14)
+	# counts neither way: the other five green runs close the issue.
 	runs["workflow_runs"][2]["conclusion"] = "cancelled"
-	assert _stale_decide(runs=runs)["decision"] == "keep"
+	result = _stale_decide(runs=runs)
+	assert result["decision"] == "close" and result["green_runs"] == 5
+	assert result["first_green"]["id"] == 4000 and result["newest_green"]["id"] == 4005
+	# ...but it does not stand in for a green run either.
+	runs = _stale_runs(5)
+	runs["workflow_runs"][4]["conclusion"] = "cancelled"
+	result = _stale_decide(runs=runs)
+	assert result["reason"] == "too_few_green_runs" and result["green_runs"] == 4
+	# A failure beside a cancelled run still keeps the issue.
+	runs["workflow_runs"][1]["conclusion"] = "failure"
+	assert _stale_decide(runs=runs)["reason"] == "run_not_green"
 	# Runs at or before the anchor, other branches and other events do not count.
 	old = _stale_runs(5)
 	old["workflow_runs"][0]["created_at"] = "2025-12-31T00:00:00Z"

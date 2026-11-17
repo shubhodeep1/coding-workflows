@@ -74,6 +74,7 @@ export const ALLOWED_WORKFLOW_FILES: readonly string[] = Object.freeze([
 	"check_failure_triage.yml",
 	"clarify.yml",
 	"claude-engine-smoke.yml",
+	"cs_investigate.yml",
 	"implement.yml",
 	"issue_pr_status.yml",
 	"orchestrate.yml",
