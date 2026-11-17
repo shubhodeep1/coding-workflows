@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: `.github/workflows/ci.yml`, the moved-step selection and destination job (`tests-hooks-and-orchestrator`, comment block 1043-1060, moved steps 1061-1268)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: .github/workflows/ci.yml:1043-1060, changelog.d/9420-ci-heal-job-steps-to-hooks-job.md:2, tests/test_ci_poll_test_sharding.py comment (3884-3897) state the run's step durations were unavailable so the pick is an estimate; no measured per-job totals show the destination has the most headroom. Severity disagreement: NIT (sonnet, confidence 2) vs MAJOR (others).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\nExpected change site: `.github/workflows/ci.yml`, the choice of moved steps and the destination job, backed by measured step durations and per-job totals.\nEvidence of absence: The comment block above the moved steps in `ci.yml`, `changelog.d/9420-ci-heal-job-steps-to-hooks-job.md` and the registry comment in `tests/test_ci_poll_test_sharding.py` say step durations were unavailable, so the pick is an estimate. Constraints (names, bodies, no timeout raised, no job added) are met. Residual disclosure-level gap, not a code defect.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: .github/workflows/ci.yml (step selection and destination job selection)\nEvidence of absence: The PR documents in workflow comment lines 1045-1052, changelog fragment, and test-registry comment that step timing data was unavailable, and selection was based on estimates from the planning sandbox.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes`.\"\nExpected change site: `.github/workflows/ci.yml`, moved-step selection and destination in `tests-hooks-and-orchestrator` (comment block 1043-1060, moved steps 1061-1268).\nEvidence of absence: `.github/workflows/ci.yml:1043-1060`, `changelog.d/9420-ci-heal-job-steps-to-hooks-job.md:2`, and `tests/test_ci_poll_test_sharding.py:3884-3893` state step durations were absent so the pick is an estimate (about 35-40 s, under 5% of the heal job's 15m35s). Constraints are satisfied; the gap is missing empirical grounding. The LAST RUN DIFF only corrects a stale figure (15m33s/#9078 \u2192 15m32s/#9391).\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \u201cMove its slowest steps (see the run's step timings) into the CI job with the most headroom.\u201d\nExpected change site: `.github/workflows/ci.yml`, the moved-step selection and destination job.\nEvidence of absence: `.github/workflows/ci.yml:1043-1055` says step durations were unavailable and the selection is an estimate. The destination rationale cites a prior job total but does not establish it had the most headroom. `tests/test_ci_poll_test_sharding.py:3892-3897` likewise describes an estimate.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7971124e48c71c3925024b35922af6ee76a67707c02f299ffbd64fd6b830fd79",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9430,
+    "run_id": "44051510305",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44051510305",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117115148_862a408e59",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9430,
+    "run_id": "44051510305"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-17T11:51:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
