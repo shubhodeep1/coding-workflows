@@ -57,6 +57,9 @@
 # Logs: REVIEW_FINAL_CI_FAILED pr=<n> head=<sha> outcome=redispatched|already_reported|superseded|disabled|invalid_input|read_failed|marker_failed|dispatch_failed|full_suite_dispatched|full_suite_dispatch_failed|infra_rerun_deferred [workflow=<file>] [current=<sha>] [reason=<verdict>]
 
 set -uo pipefail
+# Signed job-token comments (run-volume plan item 15): route this script's
+# gh comment calls through the shim even when no earlier step loaded it.
+[ -z "${BASH_SOURCE[0]:-}" ] || AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" >/dev/null 2>&1 || true
 
 REVIEW_FINAL_CI_FAILED_MARKER_PREFIX="<!-- ai:final-ci-failed:v1"
 REVIEW_FINAL_CI_FAILED_SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
