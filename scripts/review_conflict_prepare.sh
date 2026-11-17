@@ -1171,7 +1171,12 @@ _det_commit_label="${_det_commit_label:-Manifest union-merge}"
 _det_commit_path="${_det_commit_path:-${MANIFEST_UNION_PATH}}"
 if [ "${_ghm_resolved:-false}" = "true" ] && [ "${_resolver_allowlist_count}" -eq 0 ] \
    && [ "${_mu_resolved}" != "true" ] && [ "${_ff_defer_commit}" != "true" ] \
+   && [ "${_gl_resolved:-false}" != "true" ] \
    && [ "${_ai_resolved:-false}" != "true" ]; then
+  # A .gitleaksignore union (issue #9659) that resolved the last path owns the
+  # commit: it committed already, or on integration sync its deferral below
+  # waits for the fingerprint check (a hook resolved earlier, while
+  # .gitleaksignore was still unmerged, left _ghm_defer_commit false).
   if [ "${_ghm_defer_commit:-false}" = "true" ]; then
     _mu_defer_commit=true
     _det_commit_label="Guard-hook template merge"
@@ -1208,7 +1213,7 @@ if [ "${_resolver_allowlist_count}" -eq 0 ] && [ "${_mu_defer_commit}" != "true"
   _mu_defer_commit=true
   _det_commit_label=".gitleaksignore union"
   _det_commit_scope="gitleaksignore-only"
-  _det_commit_path=".gitleaksignore"
+  _det_commit_path=".gitleaksignore${_ghm_resolved_paths:+ ${_ghm_resolved_paths}}"
   echo ".gitleaksignore union: deferring the merge commit until the integration fingerprint check has run on the merged tree."
 fi
 
@@ -1794,7 +1799,7 @@ if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ] \
     grep -Fxv -- ".gitleaksignore" "${_fp_violated_tmp}" > "${_gl_fp_tmp}" || true
     cat "${_gl_fp_tmp}" > "${_fp_violated_tmp}"
     rm -f -- "${_gl_fp_tmp}"
-    echo "::notice::.gitleaksignore union: exempt from fingerprint re-expansion; the union verified every fingerprint line from both sides."
+    echo "::warning::.gitleaksignore union: waived a merged sub-issue fingerprint violation on .gitleaksignore (exempt from fingerprint re-expansion); the union verified every fingerprint line from both sides and the base bytes."
   fi
   if [ "${_fp_list_exit}" -eq 0 ] && [ -s "${_fp_violated_tmp}" ]; then
     sort -u -o "${_fp_violated_tmp}" "${_fp_violated_tmp}"

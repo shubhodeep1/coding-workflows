@@ -296,7 +296,7 @@ def test_gitleaks_fingerprints_are_suggested_ahead_of_the_marker(tmp_path: Path)
 	])
 	result, body, _ = _run_step(tmp_path, GITLEAKS_SUMMARY, head=head, extra_env={"GITHUB_WORKSPACE": str(repo), "PR_CHECK_RUNS_CONTEXT_FILE": str(context)})
 	assert result.returncode == 0, result.stderr + result.stdout
-	assert _suggestion_lines(result.stdout) == ["REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=8250 outcome=suggested count=1"]
+	assert _suggestion_lines(result.stdout) == ["REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=8250 outcome=suggested count=1 missing=0"]
 	assert _fenced(body) == [fp]
 	assert "the autofix editor never writes" in body and "a human or the main-branch pipeline must decide" in body
 	# The #8321 marker stays the last line, and the fingerprint is never logged.
@@ -311,7 +311,7 @@ def test_gitleaks_suggestion_is_capped_at_ten(tmp_path: Path) -> None:
 	context = _context(tmp_path, [f"Fingerprint: {fp}" for fp in fps])
 	result, body, _ = _run_step(tmp_path, GITLEAKS_SUMMARY, head=head, extra_env={"GITHUB_WORKSPACE": str(repo), "PR_CHECK_RUNS_CONTEXT_FILE": str(context)})
 	assert result.returncode == 0, result.stderr + result.stdout
-	assert _suggestion_lines(result.stdout) == ["REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=8250 outcome=suggested count=10"]
+	assert _suggestion_lines(result.stdout) == ["REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=8250 outcome=suggested count=10 missing=0"]
 	assert _fenced(body) == fps[:10]
 
 
@@ -332,7 +332,7 @@ def test_untrusted_and_unreachable_gitleaks_lines_are_dropped(tmp_path: Path) ->
 	], summary_line=f"Fingerprint: {leak}:docs/summary.md:generic-api-key:1")
 	result, body, _ = _run_step(tmp_path, GITLEAKS_SUMMARY, head=head, extra_env={"GITHUB_WORKSPACE": str(repo), "PR_CHECK_RUNS_CONTEXT_FILE": str(context)})
 	assert result.returncode == 0, result.stderr + result.stdout
-	assert _suggestion_lines(result.stdout) == ["REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=8250 outcome=suggested count=1"]
+	assert _suggestion_lines(result.stdout) == ["REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=8250 outcome=suggested count=1 missing=1"]
 	assert _fenced(body) == [good]
 
 
@@ -341,7 +341,7 @@ def test_no_gitleaks_output_suggests_nothing(tmp_path: Path) -> None:
 	context = _context(tmp_path, ["5 passed, 1 failed", "Error: process completed with exit code 1."])
 	result, body, _ = _run_step(tmp_path, GITLEAKS_SUMMARY, head=head, extra_env={"GITHUB_WORKSPACE": str(repo), "PR_CHECK_RUNS_CONTEXT_FILE": str(context)})
 	assert result.returncode == 0, result.stderr + result.stdout
-	assert _suggestion_lines(result.stdout) == ["REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=8250 outcome=none count=0"]
+	assert _suggestion_lines(result.stdout) == ["REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=8250 outcome=none count=0 missing=0"]
 	assert "```text" not in body
 	# The escalation itself is unchanged.
 	assert _escalation_lines(result.stdout) == [f"AUTOFIX_SANDBOX_EXCLUDED_ESCALATION pr=8250 head={head} findings=1 outcome=marker"]
@@ -351,7 +351,7 @@ def test_no_gitleaks_output_suggests_nothing(tmp_path: Path) -> None:
 def test_missing_context_file_or_invalid_head_suggests_nothing(tmp_path: Path) -> None:
 	result, body, _ = _run_step(tmp_path, GITLEAKS_SUMMARY, head="not-a-sha", extra_env={"PR_CHECK_RUNS_CONTEXT_FILE": str(tmp_path / "absent.txt")})
 	assert result.returncode == 0, result.stderr + result.stdout
-	assert _suggestion_lines(result.stdout) == ["REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=8250 outcome=none count=0"]
+	assert _suggestion_lines(result.stdout) == ["REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=8250 outcome=none count=0 missing=0"]
 	assert "```text" not in body
 
 

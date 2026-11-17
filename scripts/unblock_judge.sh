@@ -663,6 +663,9 @@ unblock_triage_superseded_note()
 	fi
 	[ "${ITEM_KIND}" = "issue" ] && [ "${ITEM_STOP}" = "blocked" ] && [ -z "${tracking_issue}" ] || return 1
 	jq -e 'index("ai:check-triage") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1 || return 1
+	# An empty tracking reference alone does not prove standalone: a managed
+	# issue whose `Tracking issue:` line is missing or malformed keeps today's judging.
+	jq -e 'index("ai:orchestrator-managed") == null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1 || return 1
 	unblock_nothing_to_implement_blocked || return 1
 	if ! { [ -s "${RUNTIME_DIR}/triage_resolution.json" ] \
 		&& jq -e --argjson item "${ITEM}" '.issue == $item' "${RUNTIME_DIR}/triage_resolution.json" >/dev/null 2>&1; }; then

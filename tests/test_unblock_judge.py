@@ -5830,6 +5830,15 @@ def test_triage_superseded_note_skips_orchestrator_items(tmp_path: Path) -> None
 	assert not any(comment["body"].endswith(TRIAGE_SUPERSEDED_MARKER) for comment in state["comments"])
 
 
+def test_triage_superseded_note_skips_managed_items_without_a_tracking_line(tmp_path: Path) -> None:
+	# A managed check-triage issue whose `Tracking issue:` line is missing parses
+	# no tracking reference; it is still not treated as standalone.
+	item = dict(TRIAGE_ISSUE, labels=TRIAGE_ISSUE["labels"] + [{"name": "ai:orchestrator-managed"}])
+	result, state = _judge_triage_superseded(tmp_path, item=item, FAKE_TRIAGE_STATUS="unverified")
+	assert "op=triage_superseded" not in result.stdout, result.stdout + result.stderr
+	assert not any(comment["body"].endswith(TRIAGE_SUPERSEDED_MARKER) for comment in state["comments"])
+
+
 def test_unblock_workflow_forwards_triage_nothing_to_implement_gate_switch() -> None:
 	# #9659: the kill switch reaches scripts/unblock_judge.sh from a repository variable.
 	workflow = (ROOT / ".github/workflows/unblock_judge.yml").read_text(encoding="utf-8")

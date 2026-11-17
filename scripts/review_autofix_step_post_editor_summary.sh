@@ -275,7 +275,7 @@ if [ "${editor_summary_is_real}" = "1" ] && [ "${sandbox_excluded_nothing_commit
     # names a commit that exists and is an ancestor of the validated PR head.
     # At most 10 lines. Only the count is logged, never the lines. Fail-open:
     # any error logs outcome=none count=0 and leaves the step's status alone.
-    # Log key: REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=<n|unknown> outcome=suggested|none count=<k>
+    # Log key: REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=<n|unknown> outcome=suggested|none count=<k> missing=<m>
     gitleaks_suggest_named="$(tr -d '\r' < "${EDITOR_SUMMARY_FILE}" | awk '
       BEGIN { section = ""; found = 0; trail = "[] \t.\"\047`)*]+$" }
       /^(Changes made|Change status|Already satisfied \(suggested but already present\)|Ignored suggestions \(with short reason\)|Reviewer files processed|Review file issue audit|PR comment audit|Regression fingerprint|Runtime failure path):[ \t]*$/ {
@@ -294,6 +294,10 @@ if [ "${editor_summary_is_real}" = "1" ] && [ "${sandbox_excluded_nothing_commit
       _review_editor_gitleaks_suggestion()
       {
         local gitleaks_suggest_head gitleaks_suggest_repo gitleaks_suggest_candidate gitleaks_suggest_sha
+        # Candidates whose commit is absent from the shallow checkout
+        # (fetch-depth 100) are dropped, never fetched; missing=<k> tells that
+        # apart from "no gitleaks output" in the log line.
+        local gitleaks_suggest_missing=0
         local -a gitleaks_suggest_lines=()
         gitleaks_suggest_head="$(printf '%s' "${AUTOFIX_FAILURE_HEAD_SHA:-}" | tr 'A-F' 'a-f')"
         gitleaks_suggest_repo="${GITHUB_WORKSPACE:-$PWD}"
@@ -303,8 +307,9 @@ if [ "${editor_summary_is_real}" = "1" ] && [ "${sandbox_excluded_nothing_commit
             [ "${#gitleaks_suggest_lines[@]}" -lt 10 ] || break
             [[ "${gitleaks_suggest_candidate}" =~ ^[0-9a-f]{40}: ]] || continue
             gitleaks_suggest_sha="${gitleaks_suggest_candidate%%:*}"
-            if git -C "${gitleaks_suggest_repo}" cat-file -e "${gitleaks_suggest_sha}^{commit}" >/dev/null 2>&1 \
-              && git -C "${gitleaks_suggest_repo}" merge-base --is-ancestor "${gitleaks_suggest_sha}" "${gitleaks_suggest_head}" >/dev/null 2>&1; then
+            if ! git -C "${gitleaks_suggest_repo}" cat-file -e "${gitleaks_suggest_sha}^{commit}" >/dev/null 2>&1; then
+              gitleaks_suggest_missing=$((gitleaks_suggest_missing + 1))
+            elif git -C "${gitleaks_suggest_repo}" merge-base --is-ancestor "${gitleaks_suggest_sha}" "${gitleaks_suggest_head}" >/dev/null 2>&1; then
               gitleaks_suggest_lines+=("${gitleaks_suggest_candidate}")
             fi
           done < <(PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c '
@@ -351,13 +356,13 @@ for fp in seen:
           printf '%s\n' "${gitleaks_suggest_lines[@]}"
           printf '%s\n' '```'
         } >> "${PR_EDITOR_COMMENT_FILE}"; then
-          echo "REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=${sandbox_excluded_pr} outcome=suggested count=${#gitleaks_suggest_lines[@]}"
+          echo "REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=${sandbox_excluded_pr} outcome=suggested count=${#gitleaks_suggest_lines[@]} missing=${gitleaks_suggest_missing}"
         else
-          echo "REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=${sandbox_excluded_pr} outcome=none count=0"
+          echo "REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=${sandbox_excluded_pr} outcome=none count=0 missing=${gitleaks_suggest_missing}"
         fi
         return 0
       }
-      _review_editor_gitleaks_suggestion || echo "REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=${sandbox_excluded_pr} outcome=none count=0"
+      _review_editor_gitleaks_suggestion || echo "REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=${sandbox_excluded_pr} outcome=none count=0 missing=0"
     fi
   fi
 fi

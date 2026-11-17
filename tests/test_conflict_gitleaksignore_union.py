@@ -58,9 +58,8 @@ def _union_region(text: str) -> str:
 
 
 def _fallthrough_region(text: str) -> str:
-	start = text.index(
-		'if [ "${_resolver_allowlist_count}" -eq 0 ] && [ "${_mu_defer_commit}" != "true" ] && [ "${_ff_defer_commit}" != "true" ] \\\n'
-	)
+	# Starts at the guard-hook fallthrough so a hook resolved earlier is covered.
+	start = text.index('_det_commit_label="${_det_commit_label:-Manifest union-merge}"\n')
 	end = text.index("# The stderr file is no longer needed past this point", start)
 	return text[start:end]
 
@@ -142,6 +141,7 @@ def _run(
 	head: str = PR_BRANCH,
 	switch: str | None = None,
 	fingerprints: dict | None = None,
+	ghm_resolved: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
 	runtime_dir = tmp / "runtime"
 	runtime_dir.mkdir()
@@ -171,7 +171,10 @@ RESOLVER_FINGERPRINT_ONLY_PATHS_FILE={runtime_dir / "resolver_fingerprint_only_p
 git diff --name-only --diff-filter=U | sort -u > "${{RESOLVER_ALLOWLIST_FILE}}"
 _resolver_allowlist_count="$(wc -l < "${{RESOLVER_ALLOWLIST_FILE}}" | tr -d '[:space:]')"
 _ff_defer_commit=false
-_ghm_resolved=false
+_ghm_resolved={"true" if ghm_resolved else "false"}
+_ghm_resolved_paths={".claude/hooks/session-start.sh" if ghm_resolved else '""'}
+_ghm_defer_commit=false
+GUARD_HOOK_LIVE_PATH=.claude/hooks/session-start.sh
 _ai_resolved=false
 _ai_defer_commit=false
 {_union_region(text)}
@@ -389,6 +392,38 @@ def test_integration_branch_defers_commit_until_fingerprint_check() -> None:
 		assert _git(repo, "show", f"HEAD:{GL}").stdout == PR585_THEIRS
 
 
+def test_guard_hook_resolved_earlier_plus_gitleaksignore_on_integration_sync_waits_for_fingerprint_check() -> None:
+	# A paired guard hook resolved while .gitleaksignore was still unmerged
+	# leaves _ghm_defer_commit false; the guard-hook fallthrough must not
+	# commit before the integration fingerprint check (review of #9659).
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp = Path(tmp_name)
+		repo = tmp / "repo"
+		repo.mkdir()
+		_make_conflict(repo, ours=PR585_OURS, theirs=PR585_THEIRS, head=PROJECT_BRANCH)
+		result, _runtime_dir = _run(repo, tmp, head=PROJECT_BRANCH, ghm_resolved=True)
+		out = result.stdout + result.stderr
+		assert result.returncode == 0, out
+		assert "Guard-hook template merge: no other unmerged paths" not in out
+		assert ".gitleaksignore union: deferring the merge commit until the integration fingerprint check" in out
+		assert ".gitleaksignore union: integration fingerprints verified on the merged tree" in out
+		assert _git(repo, "log", "-1", "--format=%s").stdout.strip() == "[ai-merge-resolve] resolve merge conflicts"
+
+
+def test_guard_hook_resolved_earlier_plus_gitleaksignore_violation_still_refuses_commit() -> None:
+	fingerprints = {"1500": {"issue": 1500, "pr": 1501, "must_contain": [{"file": "other.txt", "regex": "^never$"}], "must_not_contain": []}}
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp = Path(tmp_name)
+		repo = tmp / "repo"
+		repo.mkdir()
+		_make_conflict(repo, ours=PR585_OURS, theirs=PR585_THEIRS, head=PROJECT_BRANCH)
+		result, _runtime_dir = _run(repo, tmp, head=PROJECT_BRANCH, fingerprints=fingerprints, ghm_resolved=True)
+		out = result.stdout + result.stderr
+		assert result.returncode == 1, out
+		assert ".gitleaksignore union: unhandled reason=integration_sync detail=fingerprint_violations" in out
+		assert _git(repo, "log", "-1", "--format=%s").stdout.strip() == "ours"
+
+
 def test_integration_fingerprint_flag_on_gitleaksignore_is_exempt_after_union() -> None:
 	# The PR-side comment text is dropped by the base-wins union, so a
 	# must_contain fingerprint on it fails; the union's own check stands in.
@@ -401,7 +436,7 @@ def test_integration_fingerprint_flag_on_gitleaksignore_is_exempt_after_union() 
 		result, runtime_dir = _run(repo, tmp, head=PROJECT_BRANCH, fingerprints=fingerprints)
 		out = result.stdout + result.stderr
 		assert result.returncode == 0, out
-		assert "::notice::.gitleaksignore union: exempt from fingerprint re-expansion" in out
+		assert "::warning::.gitleaksignore union: waived a merged sub-issue fingerprint violation on .gitleaksignore" in out
 		assert _git(repo, "log", "-1", "--format=%s").stdout.strip() == "[ai-merge-resolve] resolve merge conflicts"
 		assert not (runtime_dir / "resolver_fingerprint_only_paths.txt").exists()
 
