@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9639,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9639\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9641\",\"pr_number\":9641,\"branch\":\"ai/issue-9639\",\"run_id\":\"44013261544\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/44013261544\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/9639-ci-prepush-step-to-poll-group-1.md\",\"tests/test_ci_poll_test_sharding.py\"]}",
+  "fingerprint": "1c66d00d7062522e1446f06b8bb6f6e98dfb927243a84c0a82a6e0f3e963e9c4",
+  "lineage": {
+    "issue_number": 9639,
+    "parent_ids": [],
+    "pr_number": 9641,
+    "run_id": "44013261544",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44013261544",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9641"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261117044337_77ff5bd0c0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9639,
+    "level": "run",
+    "pr_number": 9641,
+    "run_id": "44013261544"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9639: https://github.com/shubhodeep1/coding-workflows/pull/9641",
+  "timestamps": {
+    "created_at": "2026-11-17T04:43:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
