@@ -131,504 +131,504 @@
       "last_seen_run_id": "33987631244"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_branch_missing_refuses.json",
         "\"CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED\":\\ \"true\""
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_branch_missing_refuses.json",
         "\"author_association\":\\ \"OWNER\","
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_branch_missing_refuses.json",
         "\"body\":\\ \"<!\\-\\-\\ check\\-failure\\-triage:pr=6786\\ \\-\\->\\\\nRe\\-issued\\ by\\ the\\ unblock\\ judge\\ from\\ \\#7\\.\\\\n\\\\nFix\\ the\\ failing\\ check\\.\\\\n\","
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_branch_missing_refuses.json",
         "\"full_name\":\\ \"owner/repo\""
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_branch_missing_refuses.json",
         "\"labels\":\\ \\[\\],"
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_branch_missing_refuses.json",
         "\"login\":\\ \"owner\""
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_branch_missing_refuses.json",
         "\"merged\":\\ true,"
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_branch_missing_refuses.json",
         "\"name\":\\ \"reissue_merged_pr_base_branch_missing_refuses\","
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_branch_missing_refuses.json",
         "\"number\":\\ 6786,"
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_branch_missing_refuses.json",
         "\"ref\":\\ \"ai/issue\\-6700\","
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_branch_missing_refuses.json",
         "\"ref\":\\ \"orchestrator/project\\-768\","
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_branch_missing_refuses.json",
         "\"state\":\\ \"closed\","
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_ref_invalid_refuses.json",
         "\"CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED\":\\ \"true\""
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_ref_invalid_refuses.json",
         "\"author_association\":\\ \"OWNER\","
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_ref_invalid_refuses.json",
         "\"body\":\\ \"<!\\-\\-\\ check\\-failure\\-triage:pr=6786\\ \\-\\->\\\\nRe\\-issued\\ by\\ the\\ unblock\\ judge\\ from\\ \\#7\\.\\\\n\\\\nFix\\ the\\ failing\\ check\\.\\\\n\","
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_ref_invalid_refuses.json",
         "\"full_name\":\\ \"owner/repo\""
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_ref_invalid_refuses.json",
         "\"labels\":\\ \\[\\],"
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_ref_invalid_refuses.json",
         "\"login\":\\ \"owner\""
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_ref_invalid_refuses.json",
         "\"merged\":\\ true,"
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_ref_invalid_refuses.json",
         "\"name\":\\ \"reissue_merged_pr_base_ref_invalid_refuses\","
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_ref_invalid_refuses.json",
         "\"number\":\\ 6786,"
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_ref_invalid_refuses.json",
         "\"ref\":\\ \"\\-bad\","
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_ref_invalid_refuses.json",
         "\"ref\":\\ \"ai/issue\\-6700\","
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_ref_invalid_refuses.json",
         "\"state\":\\ \"closed\","
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_cross_repository_refuses.json",
         "\"CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED\":\\ \"true\""
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_cross_repository_refuses.json",
         "\"author_association\":\\ \"OWNER\","
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_cross_repository_refuses.json",
         "\"body\":\\ \"<!\\-\\-\\ check\\-failure\\-triage:pr=6786\\ \\-\\->\\\\nRe\\-issued\\ by\\ the\\ unblock\\ judge\\ from\\ \\#7\\.\\\\n\\\\nFix\\ the\\ failing\\ check\\.\\\\n\","
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_cross_repository_refuses.json",
         "\"full_name\":\\ \"fork/repo\""
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_cross_repository_refuses.json",
         "\"labels\":\\ \\[\\],"
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_cross_repository_refuses.json",
         "\"login\":\\ \"owner\""
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_cross_repository_refuses.json",
         "\"merged\":\\ true,"
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_cross_repository_refuses.json",
         "\"name\":\\ \"reissue_merged_pr_cross_repository_refuses\","
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_cross_repository_refuses.json",
         "\"number\":\\ 6786,"
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_cross_repository_refuses.json",
         "\"ref\":\\ \"ai/issue\\-6700\","
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_cross_repository_refuses.json",
         "\"ref\":\\ \"orchestrator/project\\-768\","
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_cross_repository_refuses.json",
         "\"state\":\\ \"closed\","
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_pr_lookup_failed_refuses.json",
         "\"CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED\":\\ \"true\""
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_pr_lookup_failed_refuses.json",
         "\"author_association\":\\ \"OWNER\","
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_pr_lookup_failed_refuses.json",
         "\"body\":\\ \"<!\\-\\-\\ check\\-failure\\-triage:pr=6786\\ \\-\\->\\\\nRe\\-issued\\ by\\ the\\ unblock\\ judge\\ from\\ \\#7\\.\\\\n\\\\nFix\\ the\\ failing\\ check\\.\\\\n\","
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_pr_lookup_failed_refuses.json",
         "\"branch_exists\":\\ \\{\\},"
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_pr_lookup_failed_refuses.json",
         "\"expected_error_reason\":\\ \"pr_lookup_failed\""
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_pr_lookup_failed_refuses.json",
         "\"expected_exit_code\":\\ 3,"
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_pr_lookup_failed_refuses.json",
         "\"expected_stdout\":\\ \"\","
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_pr_lookup_failed_refuses.json",
         "\"labels\":\\ \\[\\],"
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_pr_lookup_failed_refuses.json",
         "\"login\":\\ \"owner\""
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/fixtures/integration_ref_resolver_ci_triage/reissue_pr_lookup_failed_refuses.json",
         "\"name\":\\ \"reissue_pr_lookup_failed_refuses\","
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/test_resolve_integration_ref_ci_triage.py",
         "\"reissue_merged_pr_base_branch_missing_refuses\":\\ \\(3,\\ \"branch_missing\",\\ \"\"\\),"
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/test_resolve_integration_ref_ci_triage.py",
         "\"reissue_merged_pr_cross_repository_refuses\":\\ \\(3,\\ \"pr_cross_repository\",\\ \"\"\\),"
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/test_resolve_integration_ref_ci_triage.py",
         "\\#\\ failure\\ on\\ the\\ merged\\ path\\ refuses\\ \\(exit\\ 3\\)\\ instead\\ of\\ falling\\ back\\."
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     },
     {
-      "consecutive_unchanged_runs": 1,
+      "consecutive_unchanged_runs": 2,
       "first_seen_run_id": "43982290260",
       "fp_key": [
         "tests/test_resolve_integration_ref_ci_triage.py",
         "\\#\\ that\\ base\\ branch\\.\\ A\\ PR\\ that\\ did\\ not\\ merge\\ keeps\\ the\\ default\\ branch;\\ any"
       ],
       "issue_key": "9170",
-      "last_seen_run_id": "43982290260"
+      "last_seen_run_id": "44068111979"
     }
   ],
   "schema_version": "v1"
