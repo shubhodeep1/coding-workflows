@@ -1,0 +1,702 @@
+#!/usr/bin/env python3
+"""Contract tests for review_autofix Semble + Serena wiring."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+STAGE_HELPER = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
+REVIEWERS = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
+APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
+COMMIT_CHANGES = REPO_ROOT / "scripts" / "review_commit_changes.sh"
+CONFLICT_PREPARE = REPO_ROOT / "scripts" / "review_conflict_prepare.sh"
+CONFLICT_RESOLVE = REPO_ROOT / "scripts" / "review_conflict_resolve.sh"
+CONFLICT_PROMPT = REPO_ROOT / "prompts" / "conflict-resolver.txt"
+INTEGRATION_CONFLICT_PROMPT = REPO_ROOT / "prompts" / "integration-sync-conflict-resolver.txt"
+INTEGRATION_RETRY_PRELUDE = REPO_ROOT / "prompts" / "integration-sync-conflict-resolver-retry-prelude.txt"
+REVIEWER_CHECKLIST_PROMPT = REPO_ROOT / "prompts" / "review-reviewer-checklist.txt"
+OPENCODE_REVIEWER_EVENTS_FIXTURE = (
+	REPO_ROOT / "tests" / "fixtures" / "review_pipeline" / "opencode-reviewer-events.jsonl"
+)
+
+
+def _read(path: Path) -> str:
+	# Moved review_autofix.yml step bodies (scripts/review_autofix_step_*.sh) inlined again.
+	return expanded_review_autofix_text() if path == WORKFLOW else path.read_text(encoding="utf-8")
+
+
+def _stage_helper_text() -> str:
+	return _read(STAGE_HELPER)
+
+
+def _step_block(text: str, step_name: str) -> str:
+	marker = f"- name: {step_name}"
+	start = text.find(marker)
+	assert start != -1, f"Missing workflow step: {step_name}"
+	next_step = text.find("\n      - name:", start + len(marker))
+	if next_step == -1:
+		return text[start:]
+	return text[start:next_step]
+
+
+def _render_reviewer_prompt_with_checklist(*, checklist_enabled: str, prompt_available: bool) -> tuple[str, str]:
+	reviewers = _read(REVIEWERS)
+	start = reviewers.index('REVIEWER_CHECKLIST_PROMPT_TEMPLATE="${SUPPORT_PROMPTS_DIR:-prompts}/review-reviewer-checklist.txt"')
+	end = reviewers.index("# Assemble the default", start)
+	block = reviewers[start:end]
+
+	with tempfile.TemporaryDirectory(prefix="reviewer-checklist-") as tmp:
+		tmp_p = Path(tmp)
+		support_prompts_dir = tmp_p / "prompts"
+		support_prompts_dir.mkdir()
+		(tmp_p / "pre_assembled_static.txt").write_text("STATIC SENTINEL\n", encoding="utf-8")
+		prompt_body_file = tmp_p / "prompt_body.txt"
+		prompt_body_file.write_text("PROMPT BODY SENTINEL\n", encoding="utf-8")
+		memory_context_file = tmp_p / "memory_context.txt"
+		memory_context_file.write_text("MEMORY SENTINEL\n", encoding="utf-8")
+		if prompt_available:
+			(support_prompts_dir / "review-reviewer-checklist.txt").write_text(
+				_read(REVIEWER_CHECKLIST_PROMPT),
+				encoding="utf-8",
+			)
+		assembled_prompt_file = tmp_p / "assembled_prompt.txt"
+		env = os.environ.copy()
+		env.update({
+			"SUPPORT_PROMPTS_DIR": str(support_prompts_dir),
+			"SUPPORT_ROOT_DIR": str(tmp_p / "support-root"),
+			"REVIEW_REVIEWER_CHECKLIST_ENABLED": checklist_enabled,
+			"PROMPT_ARTIFACT_PATH_HINT": "ARTIFACT PATH HINT",
+			"PROMPT_RUNTIME_CONTEXT_HINT": "RUNTIME CONTEXT HINT",
+			"MEMORY_CONTEXT_FILE": str(memory_context_file),
+			"OUTPUT_FILE": str(assembled_prompt_file),
+			"PROMPT_BODY_FILE": str(prompt_body_file),
+		})
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{block}\n"
+				'assemble_reviewer_prompt "${OUTPUT_FILE}" "${PROMPT_BODY_FILE}"\n',
+			],
+			cwd=str(tmp_p),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		return assembled_prompt_file.read_text(encoding="utf-8"), result.stderr
+
+
+def _normalize_openrouter_usage(log_text: str, *, phase: str, call: str, model: str) -> str:
+	reviewers = _read(REVIEWERS)
+	start = reviewers.index("normalize_openrouter_usage() {")
+	end = reviewers.index("emit_reviewer_substate()", start)
+	block = reviewers[start:end]
+
+	with tempfile.TemporaryDirectory(prefix="normalize-openrouter-usage-") as tmp:
+		tmp_p = Path(tmp)
+		log_file = tmp_p / "reviewer.stderr"
+		log_file.write_text(log_text, encoding="utf-8")
+		env = os.environ.copy()
+		env["SUPPORT_SCRIPTS_DIR"] = str(REPO_ROOT / "scripts")
+		env["PYTHONDONTWRITEBYTECODE"] = "1"
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{block}\n"
+				'normalize_openrouter_usage "$1" "$2" "$3" "$4"\n',
+				"bash",
+				str(log_file),
+				phase,
+				call,
+				model,
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		return result.stdout.strip()
+
+
+def _materialize_opencode_reviewer_text(log_text: str) -> tuple[subprocess.CompletedProcess[str], str]:
+	reviewers = _read(REVIEWERS)
+	start = reviewers.index("reviewer_materialize_opencode_json_text() {")
+	end = reviewers.index("mkdir -p", start)
+	block = reviewers[start:end]
+
+	with tempfile.TemporaryDirectory(prefix="materialize-opencode-reviewer-") as tmp:
+		tmp_p = Path(tmp)
+		structured_file = tmp_p / "events.jsonl"
+		text_file = tmp_p / "review.txt"
+		structured_file.write_text(log_text, encoding="utf-8")
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{block}\n"
+				'reviewer_materialize_opencode_json_text "$1" "$2"\n',
+				"bash",
+				str(structured_file),
+				str(text_file),
+			],
+			cwd=str(REPO_ROOT),
+			capture_output=True,
+			text=True,
+		)
+		return result, text_file.read_text(encoding="utf-8") if text_file.exists() else ""
+
+
+def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> None:
+	workflow = expanded_review_autofix_text()
+	stage_step_block = _step_block(workflow, "Stage workflow support files")
+	stage_helper = _stage_helper_text()
+	init_block = _step_block(workflow, "Initialize runtime workspace")
+	preflight_block = _step_block(workflow, '"Preflight: Verify required files before reviewer invocation"')
+	reviewers = _read(REVIEWERS)
+	apply_fixes = _read(APPLY_FIXES)
+	main_primary_line = next(
+		(line for line in stage_helper.splitlines() if "MAIN_PRIMARY_BOOTSTRAP_SCRIPTS=" in line),
+		"",
+	)
+	required_bootstrap_line = next(
+		line for line in stage_helper.splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
+	)
+	optional_bootstrap_line = next(
+		(line for line in stage_helper.splitlines() if "OPTIONAL_BOOTSTRAP_SCRIPTS=" in line),
+		"",
+	)
+
+	assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}" in workflow
+	assert "SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}" in workflow
+	assert "UNATTENDED_NAG_REMINDER_ENABLED: ${{ vars.UNATTENDED_NAG_REMINDER_ENABLED || 'false' }}" in workflow
+	assert "UNATTENDED_NAG_SILENT_ROUNDS: ${{ vars.UNATTENDED_NAG_SILENT_ROUNDS || '3' }}" in workflow
+	assert "UNATTENDED_PHASE: review_autofix" in workflow
+	assert "EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}" in workflow
+	assert "UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}" in workflow
+	assert 'helper=".codex-workflow-src/scripts/stage_workflow_support.sh"' in stage_step_block
+	assert 'helper=".codex-workflow-src-main/scripts/stage_workflow_support.sh"' not in stage_step_block
+	assert 'WORKFLOW_SOURCE_REPO="shubhodeep1/coding-workflows" \\' in stage_step_block
+	assert 'bash "${helper}"' in stage_step_block
+	assert 'Backfilled transcript_archive.sh into the runtime support bundle from ${backfill_src}' in stage_step_block
+	assert "render_prompt.py" in main_primary_line
+	assert "nag_reminder.sh" in required_bootstrap_line
+	# build_semble_wrapper.sh stays in the optional-bootstrap loop once the BM25
+	# wrapper was extracted to a shared script (semble 0.1.3 ships no
+	# index/query CLI). render_prompt.py is main-primary so validator fixes from
+	# main reach wedged/in-flight branches immediately.
+	assert "assemble_prompt.sh" in required_bootstrap_line
+	assert "render_prompt.py" not in required_bootstrap_line
+	assert "render_prompt.py" not in optional_bootstrap_line
+	# The workflow-failure-heal reporter and its Python helper ride the same
+	# optional loop so the review workflow's failure path can report without a
+	# consumer wrapper change; a consumer whose stable ref predates them just
+	# skips the report step.
+	assert (
+		'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh '
+		'workflow_failure_heal.py workflow_failure_heal_autofix_report.sh '
+		'ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl provider_outage.py ai_engine_fallback_report.sh '
+		'implement_step_prepush_test_gate.sh prepush_test_gate_run.sh validate_changed_files_syntax.sh chatgpt_codex_relay.py"'
+	) in stage_helper
+	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} ci_docs_only_paths.sh"' in stage_helper
+	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} ci_sync_quick.sh"' in stage_helper
+	assert (
+		"REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS: >-\n"
+		"    codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh\n"
+		"    review_run_reviewers.sh render_prompt.sh assemble_prompt.sh\n"
+		"    nag_reminder.sh"
+	) in workflow
+	assert "REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS: >-\n    render_prompt.py" in workflow
+	assert "for f in ${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS} ${REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS}; do" in stage_step_block
+	assert 'if [ ! -f "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt" ]; then' in stage_step_block
+	assert 'Backfilled _nag_reminders.txt into the runtime support bundle from ${src} (verified stage_workflow_support.sh at ${SCRIPT_REF} did not stage it).' in stage_step_block
+	assert 'for f in ${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS}; do' in preflight_block
+	assert 'check_required_file "${SUPPORT_SCRIPTS_DIR}/${f}"' in preflight_block
+	assert 'for f in ${REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS}; do' in preflight_block
+	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/${f}"' in preflight_block
+	assert 'check_soft_file "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt"' in preflight_block
+	assert "for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do" in stage_helper
+	assert "for f in emit_event.sh emit_event.py; do" in stage_helper
+	assert "for f in transcript_archive.sh; do" in stage_helper
+	assert 'Optional events mirror helper ${f} is unavailable in checked-out support sources; stable text-prefix mirroring remains disabled.' in stage_helper
+	assert 'Optional transcript archive helper ${f} is unavailable in checked-out support sources; transcript archiving remains disabled.' in stage_helper
+	assert 'Optional Serena support asset ${f} is unavailable in checked-out support sources; Serena bootstrap remains disabled.' in stage_helper
+	assert 'mkdir -p "${SUPPORT_SCRIPTS_DIR}/templates"' in stage_helper
+	assert 'install -m 0644 "${serena_template_src}" "${SUPPORT_SCRIPTS_DIR}/templates/serena_project.yml.j2"' in stage_helper
+	assert 'Optional Serena template scripts/templates/serena_project.yml.j2 is unavailable in checked-out support sources; Serena bootstrap remains disabled.' in stage_helper
+	assert 'if [ ! -f "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt" ]; then' in stage_helper
+	assert 'install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt"' in stage_helper
+	assert 'nag reminders will fail open even when UNATTENDED_NAG_REMINDER_ENABLED=true.' in stage_helper
+	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/nag_reminder.sh" 2>/dev/null || true' in reviewers
+	assert 'nag_reminder_enabled() { return 1; }' in apply_fixes
+	assert 'nag_silent_round_threshold() { printf \'3\\n\'; }' in apply_fixes
+	assert 'source "${SUPPORT_SCRIPTS_DIR}/nag_reminder.sh" 2>/dev/null || true' in apply_fixes
+	assert 'nag_reminder_enabled() { return 1; }' in reviewers
+	assert 'nag_silent_round_threshold() { printf \'3\\n\'; }' in reviewers
+	assert 'editor_nag_attempt_limit="$(nag_silent_round_threshold)"' in apply_fixes
+	assert 'if [ "${editor_nag_attempt_limit}" -gt "${editor_max_attempts}" ]; then' in apply_fixes
+	assert 'if cp "${EDITOR_PROMPT_FILE}" "${attempt_prompt_file}" 2>/dev/null \\' in apply_fixes
+	assert '|| cat "${EDITOR_PROMPT_FILE}" > "${attempt_prompt_file}" 2>/dev/null; then' in apply_fixes
+	assert 'Could not create per-attempt editor prompt file for attempt ${attempt}; continuing with the base prompt.' in apply_fixes
+	assert 'editor_nag_counter_for_attempt=$((editor_silent_rounds + 1))' in apply_fixes
+	assert 'editor_nag_block="$(maybe_inject_nag "review-editor" "${editor_nag_counter_for_attempt}")"' in apply_fixes
+	assert 'reviewer_max_attempts=3' in reviewers
+	assert 'reviewer_nag_attempt_limit="$(nag_silent_round_threshold)"' in reviewers
+	assert 'while [ "${attempt}" -le "${reviewer_max_attempts}" ]; do' in reviewers
+	assert 'Reviewer ${model} failed after ${reviewer_max_attempts} attempts.' in reviewers
+	assert 'echo "REVIEWER_FAILBACK_UNMAPPED: ${model}" | tee -a "${log_file}"' in reviewers
+	assert 'reviewer_record_health_outcome "${model}" "retryable_failure" "" "${final_retryable_class}" "${log_file}"' in reviewers
+	assert 'Reviewer slot ${model} skipped after retryable failure (${final_retryable_class:-retryable_failure}); no same-family failback mapping is available.' in reviewers
+	assert 'echo "skipped_unmapped" > "${status_file}"' in reviewers
+	assert 'if [ "${slot_fallback_model_used}" = "true" ] && [ "${slot_retryable_failure_count}" -lt "${reviewer_slot_retry_limit}" ] && [ "${next_attempt_number}" -le "${reviewer_max_attempts}" ]; then' in reviewers
+	assert 'reviewer_nag_counter_for_attempt=$((reviewer_silent_rounds + 1))' in reviewers
+	assert 'reviewer_nag_block="$(maybe_inject_nag "review-reviewer" "${reviewer_nag_counter_for_attempt}")"' in reviewers
+	assert 'if [ "${REVIEWER_ATTEMPT_SILENT}" = "true" ] && nag_reminder_enabled; then' in reviewers
+	assert 'echo "LINKED_ISSUE_METADATA_FILE=${RUNTIME_DIR}/linked_issue_metadata.json"' in init_block
+	assert 'echo "REVIEWER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/reviewer_semble_query.txt"' in init_block
+	assert 'echo "EDITOR_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/editor_semble_query.txt"' in init_block
+	assert 'echo "CONFLICT_RESOLVER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/conflict_resolver_semble_query.txt"' in init_block
+	assert 'echo "SEMBLE_AVAILABLE=false"' in init_block
+	assert 'echo "SEMBLE_INDEX_AVAILABLE=false"' in init_block
+	assert 'echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"' in init_block
+	assert 'echo "SERENA_AVAILABLE=false"' in init_block
+	assert 'echo "SERENA_PROJECT_PREEXISTED=false"' in init_block
+	assert 'echo "SERENA_PROJECT_BOOTSTRAP_HASH="' in init_block
+
+
+def test_workflow_adds_gated_setup_install_index_and_editor_only_serena_steps() -> None:
+	workflow = expanded_review_autofix_text()
+	uv_block = _step_block(workflow, "Setup uv for Semble")
+	install_block = _step_block(workflow, "Install semble")
+	index_block = _step_block(workflow, "Build semble index")
+	setup_serena_block = _step_block(workflow, "Setup Serena for editor")
+	clear_serena_block = _step_block(workflow, "Clear Serena after editor")
+	detect_serena_block = _step_block(workflow, "Detect preexisting Serena project config")
+
+	assert "astral-sh/setup-uv@v7" in uv_block
+	assert "if: env.PR_CLOSED != 'true' && ((env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy') || env.SERENA_ENABLED == 'true')" in uv_block
+	assert "continue-on-error: true" in uv_block
+	assert "if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'" in install_block
+	assert "continue-on-error: true" in install_block
+	assert 'if [ "${SEMBLE_ENABLED:-false}" != "true" ]; then' in install_block
+	assert 'if ! bash "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"; then' in install_block
+	assert 'echo "SEMBLE_BIN=${SEMBLE_BIN_PATH}" >> "$GITHUB_ENV"' in install_block
+	assert "Optional Semble installer is unavailable" in install_block
+	assert "if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'" in index_block
+	# Inline `semble index . --out ...` was unreachable code on the pinned
+	# semble (0.1.3 lacks the CLI). The shared wrapper builder owns the
+	# index build now and writes SEMBLE_INDEX_AVAILABLE=true on success.
+	assert 'wrapper_script=""' in index_block
+	assert 'wrapper_script="${SUPPORT_SCRIPTS_DIR}/build_semble_wrapper.sh"' in index_block
+	assert 'wrapper_script="scripts/build_semble_wrapper.sh"' not in index_block
+	assert 'bash "${wrapper_script}" > "${RUNTIME_DIR}/semble_index.log" 2>&1 || true' in index_block
+	assert "build_semble_wrapper: Semble wrapper unavailable:" in index_block
+	assert '"${SEMBLE_BIN_PATH}" index . --out "${SEMBLE_INDEX_PATH}"' not in index_block
+	assert 'echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"' in index_block
+	assert "if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.SERENA_ENABLED == 'true'" in setup_serena_block
+	assert 'SERENA_FALLBACK_TARGET="review-autofix-editor" bash "${SUPPORT_SCRIPTS_DIR}/setup_serena.sh"' in setup_serena_block
+	assert 'source "${SUPPORT_SCRIPTS_DIR}/emit_event.sh" 2>/dev/null || true' in setup_serena_block
+	assert 'SERENA_FALLBACK target=review-autofix-editor reason=setup-failure' in setup_serena_block
+	assert 'echo "SERENA_PROJECT_BOOTSTRAP_HASH=${serena_project_hash}" >> "$GITHUB_ENV"' in setup_serena_block
+	assert "if: always() && env.SERENA_ENABLED == 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'" in clear_serena_block
+	assert 'SERENA_ENABLED=false bash "${SUPPORT_SCRIPTS_DIR}/setup_serena.sh"' in clear_serena_block
+	assert 'echo "SERENA_AVAILABLE=false" >> "$GITHUB_ENV"' in clear_serena_block
+	assert "if: env.PR_CLOSED != 'true'" in detect_serena_block
+	assert 'git ls-files --error-unmatch -- .serena/project.yml' in detect_serena_block
+	assert '[ -e .serena/project.yml ]' in detect_serena_block
+	assert 'echo "SERENA_PROJECT_PREEXISTED=true" >> "$GITHUB_ENV"' in detect_serena_block
+	assert 'echo "SERENA_PROJECT_PREEXISTED=false" >> "$GITHUB_ENV"' in detect_serena_block
+	assert workflow.find("- name: Run reviewer models") < workflow.find("- name: Setup Serena for editor") < workflow.find("- name: Apply fixes with editor model")
+	assert workflow.find("- name: Build semble index") < workflow.find("- name: Setup Serena for editor")
+	assert workflow.find("- name: Detect preexisting Serena project config") < workflow.find("- name: Setup Serena for editor")
+	assert workflow.find("- name: Apply fixes with editor model") < workflow.find("- name: Clear Serena after editor") < workflow.find("- name: Prepare merge-conflict resolver prompt and pre-snapshot")
+
+
+def test_reviewer_prompt_assembles_semble_context_in_dynamic_section_without_serena() -> None:
+	workflow = expanded_review_autofix_text()
+	reviewers = _read(REVIEWERS)
+	assemble_start = reviewers.index("assemble_reviewer_prompt()")
+	assemble_end = reviewers.index("# Assemble the default", assemble_start)
+	assemble_block = reviewers[assemble_start:assemble_end]
+
+	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh"' in reviewers
+	assert 'REVIEWER_SEMBLE_QUERY_FILE="${REVIEWER_SEMBLE_QUERY_FILE:-${RUNTIME_DIR}/reviewer_semble_query.txt}"' in reviewers
+	assert 'semble_query_block \\\n    "$(cat "${REVIEWER_SEMBLE_QUERY_FILE}")"' in reviewers
+	assert 'cat "${prompt_body_file}"' in assemble_block
+	assert 'cat "${REVIEWER_SEMBLE_CONTEXT_FILE}"' in assemble_block
+	assert 'cat "${extra_context_file}"' in assemble_block
+	assert assemble_block.index('cat "${prompt_body_file}"') < assemble_block.index('cat "${REVIEWER_SEMBLE_CONTEXT_FILE}"') < assemble_block.index('cat "${extra_context_file}"')
+	assert 'bash "${OPENCODE_CONFIG_WRITER_PATH}" \\' in reviewers
+	assert 'opencode_run_cmd "$@"' in reviewers
+	assert "SERENA_TOOL_HINTS" not in reviewers
+	assert "setup_serena.sh" not in reviewers
+	assert workflow.find("- name: Run reviewer models") < workflow.find("- name: Setup Serena for editor")
+
+
+def test_reviewer_checklist_prompt_contract_and_gate() -> None:
+	workflow = expanded_review_autofix_text()
+	checklist = _read(REVIEWER_CHECKLIST_PROMPT)
+	reviewers = _read(REVIEWERS)
+	stage_helper = _stage_helper_text()
+	helper_start = reviewers.index("append_reviewer_checklist_block()")
+	helper_end = reviewers.index("# Assemble the base reviewer prompt", helper_start)
+	helper_block = reviewers[helper_start:helper_end]
+	assemble_start = reviewers.index("assemble_reviewer_prompt()")
+	assemble_end = reviewers.index("# Assemble the default", assemble_start)
+	assemble_block = reviewers[assemble_start:assemble_end]
+	enabled_prompt, enabled_stderr = _render_reviewer_prompt_with_checklist(
+		checklist_enabled="1",
+		prompt_available=True,
+	)
+	disabled_prompt, disabled_stderr = _render_reviewer_prompt_with_checklist(
+		checklist_enabled="0",
+		prompt_available=True,
+	)
+	missing_prompt, missing_stderr = _render_reviewer_prompt_with_checklist(
+		checklist_enabled="1",
+		prompt_available=False,
+	)
+
+	expected_headings = [
+		"SECURITY & INPUT VALIDATION",
+		"CORRECTNESS & LOGIC",
+		"CONCURRENCY / RACES / IDEMPOTENCY",
+		"ERROR PATHS & EDGE CASES",
+		"PERFORMANCE & RESOURCE USE",
+		"INDEX-CONTRACT / DB RULES",
+		"NAMING / BACKWARD COMPATIBILITY",
+	]
+	last_index = -1
+	for heading in expected_headings:
+		idx = checklist.index(heading)
+		assert idx > last_index
+		last_index = idx
+
+	assert checklist.count("WHAT TO FLAG") == 7
+	assert checklist.count("WHAT NOT TO FLAG") == 7
+	assert "Theoretical exploit chains" in checklist
+	assert "Alternative implementations that are merely cleaner" in checklist
+	assert "Pure naming preferences" in checklist
+	assert "literal word NONE" in checklist
+	assert "File:" in checklist
+	assert "Line or code reference:" in checklist
+	assert "Problem:" in checklist
+	assert "Why it fails at runtime:" in checklist
+	assert "ISSUE_CONFIDENCE:" in checklist
+	assert "REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || 'false' }}" in workflow
+	assert 'if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ]; then' in stage_helper
+	assert 'src=".codex-workflow-src/prompts/review-reviewer-checklist.txt"' in stage_helper
+	assert 'src=".codex-workflow-src-main/prompts/review-reviewer-checklist.txt"' not in stage_helper
+	assert 'install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt"' in stage_helper
+	assert 'review-reviewer-checklist.txt not found in checked-out support sources' in stage_helper
+	assert 'REVIEWER_CHECKLIST_PROMPT_TEMPLATE="${SUPPORT_PROMPTS_DIR:-prompts}/review-reviewer-checklist.txt"' in reviewers
+	assert 'REVIEWER_CHECKLIST_PROMPT_TEMPLATE="${SUPPORT_ROOT_DIR:-.}/prompts/review-reviewer-checklist.txt"' in reviewers
+	assert 'REVIEWER_CHECKLIST_ENABLED=false' in reviewers
+	assert '"${REVIEW_REVIEWER_CHECKLIST_ENABLED:-0}"' in reviewers
+	assert '1|true|yes|on) REVIEWER_CHECKLIST_ENABLED=true ;;' in reviewers
+	assert 'REVIEWER_CHECKLIST_PROMPT_AVAILABLE=false' in reviewers
+	assert 'if [ "${REVIEWER_CHECKLIST_ENABLED}" = "true" ] && [ "${REVIEWER_CHECKLIST_PROMPT_AVAILABLE}" != "true" ]; then' in reviewers
+	assert 'if [ "${REVIEWER_CHECKLIST_ENABLED}" != "true" ] || [ "${REVIEWER_CHECKLIST_PROMPT_AVAILABLE}" != "true" ]; then' in helper_block
+	assert 'cat "${REVIEWER_CHECKLIST_PROMPT_TEMPLATE}"' in helper_block
+	assert 'append_reviewer_checklist_block' in assemble_block
+	assert assemble_block.index('cat "${extra_context_file}"') < assemble_block.index('append_reviewer_checklist_block')
+	assert "COMMON ANTI-RULES" in reviewers
+	assert "These anti-rules suppress suggestion / nit-level noise only." in reviewers
+	assert "accepted as residual or won't-fix" in reviewers
+	assert 'assemble_reviewer_prompt "${PASS1_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}"' in reviewers
+	assert 'assemble_reviewer_prompt "${PASS2_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}" "${CROSS_POLLINATION_FILE}"' in reviewers
+	assert enabled_prompt.index("PROMPT BODY SENTINEL") < enabled_prompt.index("REVIEWER CHECKLIST")
+	for heading in expected_headings:
+		assert heading in enabled_prompt
+	assert "WHAT NOT TO FLAG" in enabled_prompt
+	assert "REVIEWER CHECKLIST" not in disabled_prompt
+	assert disabled_stderr.strip() == ""
+	assert "REVIEWER CHECKLIST" not in missing_prompt
+	assert "Reviewer checklist prompt unavailable" in missing_stderr
+
+
+def test_normalize_openrouter_usage_keeps_first_valid_usage_payload() -> None:
+	line = _normalize_openrouter_usage(
+		'noise before JSON\n'
+		'{"response":{"usage":{"prompt_tokens":11,"completion_tokens":7,'
+		'"total_tokens":18,"cache_creation_input_tokens":5,'
+		'"cache_read_input_tokens":3}},"model":"first-model"}\n'
+		'{"usage":{"prompt_tokens":99,"completion_tokens":1,"total_tokens":100,'
+		'"cache_creation_input_tokens":0,"cache_read_input_tokens":0},'
+		'"model":"second-model"}\n',
+		phase="review",
+		call="pass1",
+		model="fallback-model",
+	)
+
+	assert "phase=review call=pass1 model=first-model" in line
+	assert "prompt_tokens=11" in line
+	assert "completion_tokens=7" in line
+	assert "total_tokens=18" in line
+	assert "cache_creation_input_tokens=5" in line
+	assert "cache_read_input_tokens=3" in line
+	assert "second-model" not in line
+	assert "prompt_tokens=99" not in line
+	assert "usage_available=true" in line
+
+
+def test_opencode_reviewer_jsonl_materializes_text_and_numeric_usage() -> None:
+	events = _read(OPENCODE_REVIEWER_EVENTS_FIXTURE) if OPENCODE_REVIEWER_EVENTS_FIXTURE.is_file() else (
+		'{"type":"text","part":{"text":"File: scripts/example.py\\nProblem: fixture finding"}}\n'
+		'{"type":"step_finish","part":{"tokens":{"input":150,"output":20,"reasoning":10,'
+		'"total":185,"cache":{"write":15,"read":65}}}}\n'
+	)
+	result, reviewer_text = _materialize_opencode_reviewer_text(events)
+	line = _normalize_openrouter_usage(
+		events,
+		phase="review",
+		call="pass1",
+		model="fixture/model",
+	)
+
+	assert result.returncode == 0
+	assert reviewer_text == "File: scripts/example.py\nProblem: fixture finding\n"
+	assert "prompt_tokens=150" in line
+	assert "completion_tokens=30" in line
+	assert "total_tokens=185" in line
+	assert "cache_creation_input_tokens=15" in line
+	assert "cache_read_input_tokens=65" in line
+	assert "usage_available=true" in line
+
+
+def test_opencode_reviewer_jsonl_marks_missing_usage_unavailable_and_rejects_malformed_events() -> None:
+	text_only_event = '{"type":"text","part":{"text":"NONE"}}\n'
+	no_text_result, _ = _materialize_opencode_reviewer_text(
+		'{"type":"session_start","sessionID":"ses_fixture"}\n'
+	)
+	line = _normalize_openrouter_usage(
+		text_only_event,
+		phase="review",
+		call="pass1",
+		model="fixture/model",
+	)
+	malformed_result, _ = _materialize_opencode_reviewer_text(
+		text_only_event + "not-json\n"
+	)
+
+	assert "cache_read_input_tokens=na" in line
+	assert "usage_available=false" in line
+	assert no_text_result.returncode == 2
+	assert malformed_result.returncode != 0
+
+
+def test_editor_targeted_file_context_and_prompt_render_path_passes_flags() -> None:
+	apply_fixes = _read(APPLY_FIXES)
+
+	assert 'EDITOR_SEMBLE_QUERY_FILE="${EDITOR_SEMBLE_QUERY_FILE:-${RUNTIME_DIR}/editor_semble_query.txt}"' in apply_fixes
+	assert '--semble-bin "${SEMBLE_BIN:-}"' in apply_fixes
+	assert '--semble-index "${SEMBLE_INDEX_PATH:-}"' in apply_fixes
+	assert '--semble-query-from "${EDITOR_SEMBLE_QUERY_FILE}"' in apply_fixes
+	assert '--semble-max-chunks "${SEMBLE_TARGETED_CONTEXT_MAX_CHUNKS:-6}"' in apply_fixes
+	assert "{{SERENA_TOOL_HINTS}}" in apply_fixes
+	assert 'source "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh" 2>/dev/null || true' in apply_fixes
+	assert '<compaction-rules>' in apply_fixes
+	assert 'EDITOR_SERENA_TOOL_HINTS=""' in apply_fixes
+	assert 'Serena hints:' in apply_fixes
+	assert 'SERENA_TOOL_HINTS="${EDITOR_SERENA_TOOL_HINTS}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${EDITOR_PROMPT_BODY_FILE}"' in apply_fixes
+	assert 'archive_transcript "${GITHUB_RUN_ID:-local-run}" "review-editor" "${EDITOR_SUMMARY_FILE}"' in apply_fixes
+	assert "serena_runtime_noise_should_be_ignored()" in apply_fixes
+	assert "SERENA_PROJECT_PREEXISTED" in apply_fixes
+	assert "SERENA_PROJECT_BOOTSTRAP_HASH" in apply_fixes
+	assert "pathspec=(-- . ':(exclude).serena' ':(exclude).serena/**')" in apply_fixes
+
+
+def test_commit_changes_drops_bootstrap_owned_serena_runtime_tree_before_staging() -> None:
+	commit_changes = _read(COMMIT_CHANGES)
+
+	assert 'if [ "${AUTOFIX_PARTIAL_FINALIZE_REQUESTED:-false}" = "true" ] && [ "${AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE:-true}" != "true" ]; then' in commit_changes
+	assert 'echo "- none (edits withheld for safety: ${withheld_reason})" > "${COMMITTED_FILES_FILE}"' in commit_changes
+	assert 'if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && [ -f .serena/project.yml ]; then' in commit_changes
+	assert "current_serena_project_hash=\"$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)\"" in commit_changes
+	assert 'if [ -n "${current_serena_project_hash}" ] && [ "${current_serena_project_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then' in commit_changes
+	assert 'if ! git ls-files --error-unmatch -- .serena >/dev/null 2>&1; then' in commit_changes
+	assert "rm -rf .serena" in commit_changes
+	assert ".serena|.serena/*) continue ;;" in commit_changes
+	assert "':!.serena'" in commit_changes
+	assert "':!.serena/**'" in commit_changes
+
+
+def test_commit_changes_withheld_partial_finalize_discards_local_edits_and_exits_cleanly() -> None:
+	with tempfile.TemporaryDirectory(prefix="review-commit-withheld-") as tmp:
+		tmp_p = Path(tmp)
+		repo = tmp_p / "repo"
+		repo.mkdir()
+		git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+		subprocess.run(["git", "init"], cwd=str(repo), env=git_env, check=True, capture_output=True, text=True)
+		subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(repo), env=git_env, check=True, capture_output=True, text=True)
+		subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(repo), env=git_env, check=True, capture_output=True, text=True)
+
+		tracked_file = repo / "tracked.txt"
+		tracked_file.write_text("before\n", encoding="utf-8")
+		subprocess.run(["git", "add", "tracked.txt"], cwd=str(repo), env=git_env, check=True, capture_output=True, text=True)
+		subprocess.run(["git", "commit", "-m", "initial"], cwd=str(repo), env=git_env, check=True, capture_output=True, text=True)
+		head_before = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo), env=git_env, check=True, capture_output=True, text=True).stdout.strip()
+
+		tracked_file.write_text("after\n", encoding="utf-8")
+		untracked_file = repo / "scratch.txt"
+		untracked_file.write_text("temp\n", encoding="utf-8")
+
+		runtime_dir = tmp_p / "runtime"
+		runtime_dir.mkdir()
+		github_env = tmp_p / "github_env.txt"
+		github_output = tmp_p / "github_output.txt"
+		committed_files = tmp_p / "committed_files.txt"
+		result = subprocess.run(
+			["bash", "-c", 'cd "$1" && source "$2"', "bash", str(repo), str(COMMIT_CHANGES)],
+			env={
+				**git_env,
+				"GITHUB_ENV": str(github_env),
+				"GITHUB_OUTPUT": str(github_output),
+				"COMMITTED_FILES_FILE": str(committed_files),
+				"CAN_PUSH": "true",
+				"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true",
+				"AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false",
+				"AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON": "insufficient_budget_for_validation_tail",
+				"WRITE_GUARDS_ENABLED": "false",
+				"RUNTIME_DIR": str(runtime_dir),
+				"PYTHONDONTWRITEBYTECODE": "1",
+			},
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+
+		head_after = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo), env=git_env, check=True, capture_output=True, text=True).stdout.strip()
+		status_after = subprocess.run(["git", "status", "--porcelain"], cwd=str(repo), env=git_env, check=True, capture_output=True, text=True).stdout.strip()
+
+		assert "Partial finalize findings-only fallback: discarding local edits before commit (insufficient_budget_for_validation_tail)." in result.stdout
+		assert head_after == head_before
+		assert tracked_file.read_text(encoding="utf-8") == "before\n"
+		assert not untracked_file.exists()
+		assert status_after == ""
+		assert committed_files.read_text(encoding="utf-8") == "- none (edits withheld for safety: insufficient_budget_for_validation_tail)\n"
+		assert "DID_COMMIT=false\n" in github_env.read_text(encoding="utf-8")
+		assert "LEDGER_ONLY_COMMIT=false\n" in github_env.read_text(encoding="utf-8")
+		assert "LEDGER_ONLY_COMMIT_STRICT=false\n" in github_env.read_text(encoding="utf-8")
+		assert "did_commit=false\n" in github_output.read_text(encoding="utf-8")
+		assert "ledger_only_commit=false\n" in github_output.read_text(encoding="utf-8")
+		assert "ledger_only_commit_strict=false\n" in github_output.read_text(encoding="utf-8")
+
+
+def test_conflict_prepare_and_resolve_wire_semble_query_and_prompt_append() -> None:
+	prepare = _read(CONFLICT_PREPARE)
+	resolve = _read(CONFLICT_RESOLVE)
+	conflict_prompt = _read(CONFLICT_PROMPT)
+	integration_prompt = _read(INTEGRATION_CONFLICT_PROMPT)
+	retry_prelude = _read(INTEGRATION_RETRY_PRELUDE)
+
+	assert 'CONFLICT_RESOLVER_SEMBLE_QUERY_FILE="${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-${RUNTIME_DIR}/conflict_resolver_semble_query.txt}"' in prepare
+	assert "append_semble_query_section 'Resolver allowlist:' \"${RESOLVER_ALLOWLIST_FILE}\" 3000" in prepare
+	assert 'echo "CONFLICT_RESOLVER_SEMBLE_QUERY_FILE=${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE}" >> "$GITHUB_ENV"' in prepare
+	assert "{{SERENA_TOOL_HINTS_RESOLVER}}" in conflict_prompt
+	assert "{{SERENA_TOOL_HINTS_RESOLVER}}" in integration_prompt
+	assert "{{SERENA_TOOL_HINTS_RESOLVER}}" in retry_prelude
+	assert 'RESOLVER_SERENA_TOOL_HINTS=""' in prepare
+	assert 'SERENA_TOOL_HINTS_RESOLVER="${RESOLVER_SERENA_TOOL_HINTS:-}"' in prepare
+	assert 'Resolver Serena hints:' not in prepare
+	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh"' in resolve
+	assert 'RESOLVER_SERENA_TOOL_HINTS=""' in resolve
+	assert 'resolver_opencode_serena="off"' in resolve
+	assert 'SERENA_TOOL_HINTS_RESOLVER="${RESOLVER_SERENA_TOOL_HINTS:-}"' in resolve
+	assert 'Resolver Serena hints:' not in resolve
+	assert 'TARGETED_FILE_CONTEXT_SCRIPT="${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py"' in resolve
+	assert '--semble-query-from "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE}"' in resolve
+	assert 'TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED:-false' in resolve
+	assert 'semble_query_block \\\n    "$(cat "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE}")"' in resolve
+	assert resolve.index('cat "${TARGETED_FILES_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"') < resolve.index('cat "${CONFLICT_RESOLVER_SEMBLE_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"')
+
+
+def test_targeted_semble_overflow_is_opt_in_in_all_reusable_workflows() -> None:
+	for filename in ("implement.yml", "review_autofix.yml", "orchestrate_poll.yml"):
+		assert "TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED: ${{ vars.TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED || 'false' }}" in _read(REPO_ROOT / ".github" / "workflows" / filename)
+	for script_path in (REPO_ROOT / "scripts" / "review_apply_fixes.sh", REPO_ROOT / "scripts" / "review_run_reviewers.sh", CONFLICT_RESOLVE):
+		assert "TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED:-false" in _read(script_path)
+
+
+def test_pipefail_truncation_sites_use_non_pipe_forms() -> None:
+	"""Capped output must not pipe into head (SIGPIPE aborts under pipefail)."""
+	plan = (REPO_ROOT / ".github" / "workflows" / "plan.yml").read_text(encoding="utf-8")
+	assert 'cat "${PLAN_COMMENT_FILE}" | head -c 10000' not in plan
+	assert plan.count('DETAILS="$(head -c 10000 "${PLAN_COMMENT_FILE}")"') == 2
+	prepare = CONFLICT_PREPARE.read_text(encoding="utf-8")
+	assert '"${FP_VIOLATED_FILES_LIST}" | head -n 100' not in prepare
+	assert 'head -n 100 <<<"${FP_VIOLATED_FILES_LIST}"' in prepare
+	assert '"${INTEGRATION_TRACKING_BODY}" | head -c 4000' not in prepare
+	assert "head -c 4000 < <(printf '%s' \"${INTEGRATION_TRACKING_BODY}\")" in prepare
+	apply_fixes = APPLY_FIXES.read_text(encoding="utf-8")
+	assert '"${_claimed_changes}" | head -10' not in apply_fixes
+	assert 'head -n 10 <<<"${_claimed_changes}"' in apply_fixes
+	intake = (REPO_ROOT / "scripts" / "workflow_failure_heal_intake.sh").read_text(encoding="utf-8")
+	assert '"${PIPELINE_OWNERSHIP_OUTPUT}" | head -n 1' not in intake
+	assert 'PIPELINE_OWNERSHIP="$(head -n 1 <<<"${PIPELINE_OWNERSHIP_OUTPUT}")"' in intake
+
+	def run(script: str, value: str) -> subprocess.CompletedProcess:
+		# The value goes in on stdin: one argv string is capped at 128 KiB.
+		prelude = "set -euo pipefail\nIFS= read -r -d '' v || true\nset -- \"$v\"\n"
+		return subprocess.run(
+			["bash", "-c", prelude + script],
+			input=value.encode(),
+			capture_output=True,
+			check=False,
+		)
+
+	old_lines = "printf '%s\\n' \"$1\" | head -n 100"
+	new_lines = 'head -n 100 <<<"$1"'
+	old_bytes = "printf '%s' \"$1\" | head -c 4000"
+	new_bytes = "head -c 4000 < <(printf '%s' \"$1\")"
+	short_inputs = ["", "a", "x" * 3999, "y" * 4000, "z" * 4001, "a\nb\nc", "l\n" * 99]
+	for value in short_inputs:
+		assert run(new_lines, value).stdout == run(old_lines, value).stdout
+		assert run(new_bytes, value).stdout == run(old_bytes, value).stdout
+	big_lines = "".join(f"line-{i}\n" for i in range(40000))
+	result = run(new_lines, big_lines)
+	assert result.returncode == 0
+	assert result.stdout.decode() == "".join(f"line-{i}\n" for i in range(100))
+	big_bytes = "q" * (256 * 1024)
+	result = run(new_bytes, big_bytes)
+	assert result.returncode == 0
+	assert result.stdout == b"q" * 4000
+	result = run('head -n 1 <<<"$1"', big_lines)
+	assert result.returncode == 0
+	assert result.stdout == b"line-0\n"
+
+
+def main() -> int:
+	test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena()
+	test_workflow_adds_gated_setup_install_index_and_editor_only_serena_steps()
+	test_reviewer_prompt_assembles_semble_context_in_dynamic_section_without_serena()
+	test_reviewer_checklist_prompt_contract_and_gate()
+	test_normalize_openrouter_usage_keeps_first_valid_usage_payload()
+	test_opencode_reviewer_jsonl_materializes_text_and_numeric_usage()
+	test_opencode_reviewer_jsonl_marks_missing_usage_unavailable_and_rejects_malformed_events()
+	test_editor_targeted_file_context_and_prompt_render_path_passes_flags()
+	test_commit_changes_drops_bootstrap_owned_serena_runtime_tree_before_staging()
+	test_commit_changes_withheld_partial_finalize_discards_local_edits_and_exits_cleanly()
+	test_conflict_prepare_and_resolve_wire_semble_query_and_prompt_append()
+	test_pipefail_truncation_sites_use_non_pipe_forms()
+	print("OK: review_autofix Semble contract assertions hold")
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

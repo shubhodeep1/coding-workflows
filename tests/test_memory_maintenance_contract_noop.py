@@ -1,0 +1,667 @@
+#!/usr/bin/env python3
+"""Contract checks for memory-maintenance extraction and Codex no-op semantics."""
+
+from __future__ import annotations
+
+import json
+import re
+import shutil
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+import pytest
+import yaml
+
+from scripts import memory_maintenance_extract_learnings as extractor
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+WF_PATH = REPO_ROOT / ".github" / "workflows" / "memory_maintenance.yml"
+RELEASE_WF_PATH = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
+
+
+def _workflow_text() -> str:
+	return WF_PATH.read_text(encoding="utf-8")
+
+
+def test_memory_maintenance_declares_codex_contract_noop() -> None:
+	wf = _workflow_text()
+	assert "batch_noop" in wf
+	assert "codex_contract_noop" in wf
+	assert "no_codex_execution_path" in wf
+
+
+def test_extraction_workflow_is_automatic_short_and_fail_open() -> None:
+	wf = _workflow_text()
+	yaml.safe_load(wf)
+	step_start = wf.index("      - name: Extract repository learnings (fail-open)")
+	step_end = wf.index("      - name: Run memory compaction", step_start)
+	extraction_step = wf[step_start:step_end]
+
+	assert "continue-on-error: true" in extraction_step
+	assert "python3 scripts/memory_maintenance_extract_learnings.py" in extraction_step
+	assert "python3 - <<" not in extraction_step
+	disabled_notice_index = extraction_step.index("Repository learnings extraction disabled")
+	helper_index = extraction_step.index("python3 scripts/memory_maintenance_extract_learnings.py")
+	assert disabled_notice_index < helper_index
+	assert "exit 0" in extraction_step[disabled_notice_index:helper_index]
+	assert f"{extractor.MODEL_EXTRACTION_FAILURE_EXIT})" in extraction_step
+	assert "Repository learnings model extraction failed; continuing without extraction" in extraction_step
+
+
+def test_extraction_step_has_step_timeout() -> None:
+	memory_workflow = yaml.safe_load(_workflow_text())
+	job = memory_workflow["jobs"]["memory_maintenance"]
+	extraction_steps = [
+		step
+		for step in job["steps"]
+		if step.get("name") == "Extract repository learnings (fail-open)"
+	]
+	assert len(extraction_steps) == 1
+	extraction_step = extraction_steps[0]
+	assert extraction_step["timeout-minutes"] == 10
+	assert extraction_step["continue-on-error"] is True
+	assert job["timeout-minutes"] == 20
+
+
+def test_memory_steps_forward_single_branch_clone_switch() -> None:
+	# The off switch is read from os.environ, so both memory-writing steps map
+	# the repository variable; an empty value keeps the fast path on (#8295).
+	job = yaml.safe_load(_workflow_text())["jobs"]["memory_maintenance"]
+	steps = {step.get("name"): step for step in job["steps"]}
+	for name in ("Extract repository learnings (fail-open)", "Run memory compaction"):
+		assert steps[name]["env"]["AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED"] == (
+			"${{ vars.AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED || '' }}"
+		)
+
+
+def test_extraction_step_timeout_leaves_room_for_compaction() -> None:
+	# Run 40752760153: the fail-open extraction step had no step cap, ran into
+	# the 20-minute job timeout, and the whole job was cancelled.
+	memory_workflow = yaml.safe_load(_workflow_text())
+	job = memory_workflow["jobs"]["memory_maintenance"]
+	step_names = [step.get("name") for step in job["steps"]]
+	extraction_index = step_names.index("Extract repository learnings (fail-open)")
+	compaction_index = step_names.index("Run memory compaction")
+	extraction_step = job["steps"][extraction_index]
+
+	assert extraction_index < compaction_index
+	assert extraction_step["continue-on-error"] is True
+	step_timeout_minutes = extraction_step["timeout-minutes"]
+	assert isinstance(step_timeout_minutes, int)
+	assert step_timeout_minutes < job["timeout-minutes"]
+	assert job["timeout-minutes"] - step_timeout_minutes >= 8
+
+
+def test_memory_maintenance_timeout_hierarchy() -> None:
+	memory_workflow = yaml.safe_load(_workflow_text())
+	release_workflow = yaml.safe_load(RELEASE_WF_PATH.read_text(encoding="utf-8"))
+	child_timeout_minutes = memory_workflow["jobs"]["memory_maintenance"]["timeout-minutes"]
+	orphan_job = release_workflow["jobs"]["orphan-workflows-test"]
+	dispatch_steps = [
+		step
+		for step in orphan_job["steps"]
+		if step.get("id") == "dispatch_memory_maintenance"
+	]
+	assert len(dispatch_steps) == 1
+	dispatch_step = dispatch_steps[0]
+	registration_timeout_match = re.search(
+		r"--registration-timeout-secs\s+(\d+)", dispatch_step["run"]
+	)
+	assert registration_timeout_match is not None
+	registration_timeout_seconds = int(registration_timeout_match.group(1))
+	watcher_timeout_match = re.search(
+		r"--completion-timeout-secs\s+(\d+)", dispatch_step["run"]
+	)
+	assert watcher_timeout_match is not None
+	watcher_timeout_seconds = int(watcher_timeout_match.group(1))
+	dispatch_timeout_minutes = dispatch_step["timeout-minutes"]
+	orphan_timeout_minutes = orphan_job["timeout-minutes"]
+
+	assert child_timeout_minutes >= 20
+	assert registration_timeout_seconds + child_timeout_minutes * 60 < watcher_timeout_seconds
+	assert watcher_timeout_seconds < dispatch_timeout_minutes * 60
+	assert dispatch_timeout_minutes < orphan_timeout_minutes
+
+
+def test_empty_source_writes_empty_artifacts_without_render_or_request(
+	tmp_path: Path,
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	source_output = tmp_path / "source.json"
+	learning_output = tmp_path / "learnings.json"
+	monkeypatch.setattr(
+		extractor,
+		"discover_merged_learnings",
+		lambda _repository_root: {"source_refs": [], "items": []},
+	)
+
+	def unexpected_call(*_args: Any, **_kwargs: Any) -> None:
+		raise AssertionError("empty source must not render a prompt or call OpenRouter")
+
+	monkeypatch.setattr(extractor, "render_extraction_prompt", unexpected_call)
+	monkeypatch.setattr(extractor, "request_extracted_learnings", unexpected_call)
+
+	extractor.run_extraction(tmp_path, source_output, learning_output)
+
+	assert json.loads(source_output.read_text(encoding="utf-8")) == {
+		"source_refs": [],
+		"items": [],
+	}
+	assert json.loads(learning_output.read_text(encoding="utf-8")) == []
+
+
+class _FakeResponse:
+	def __init__(self, payload: dict[str, Any]) -> None:
+		self.payload = payload
+
+	def __enter__(self) -> _FakeResponse:
+		return self
+
+	def __exit__(self, *_args: Any) -> None:
+		return None
+
+	def read(self) -> bytes:
+		return json.dumps(self.payload).encode("utf-8")
+
+
+def _write_json(path: Path, payload: Any) -> None:
+	path.parent.mkdir(parents=True, exist_ok=True)
+	path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _build_memory_checkout(tmp_path: Path) -> Path:
+	branch_dir = tmp_path / "memory-checkout"
+	memory_root = branch_dir / "ai-memory"
+	for issue_number in range(1, 14):
+		_write_json(
+			memory_root / "global" / "canonical" / f"active-{issue_number}.json",
+			{
+				"category": "task_summaries",
+				"status": "active",
+				"lineage": {"issue_number": issue_number},
+				"summary": f"Active summary {issue_number}",
+				"details": f"details-{issue_number}-" + ("x" * 1600),
+				"confidence": 0.8,
+				"record_id": f"active-{issue_number}",
+				"timestamps": {"created_at": f"2026-08-{issue_number:02d}T00:00:00Z"},
+			},
+		)
+		_write_json(
+			memory_root / "tasks" / f"issue-{issue_number}" / "lineage" / "task_lineage.v1.json",
+			{
+				"state": "merged",
+				"issue_number": issue_number,
+				"issue_url": f"https://example.test/issues/{issue_number}",
+				"prs": [
+					{
+						"pr_number": 100 + issue_number,
+						"url": f"https://example.test/pulls/{100 + issue_number}",
+					}
+				],
+				"runs": [{"run_id": f"run-{issue_number}-{index}"} for index in range(1, 5)],
+				"updated_at": f"2026-08-{issue_number:02d}T12:00:00Z",
+			},
+		)
+
+	_write_json(
+		memory_root / "tasks" / "issue-13" / "candidates" / "newer.json",
+		{
+			"category": "task_summaries",
+			"status": "candidate",
+			"scope": {"issue_number": 13},
+			"summary": "Candidate must not replace active",
+			"details": "candidate details",
+			"confidence": 0.99,
+			"record_id": "candidate-13",
+			"timestamps": {"created_at": "2099-01-01T00:00:00Z"},
+		},
+	)
+	return branch_dir
+
+
+def test_success_preserves_discovery_request_normalization_and_telemetry(
+	tmp_path: Path,
+	monkeypatch: pytest.MonkeyPatch,
+	capsys: pytest.CaptureFixture[str],
+) -> None:
+	branch_dir = _build_memory_checkout(tmp_path)
+	monkeypatch.setattr(
+		extractor.ai_memory_lib,
+		"read_memory_root_from_branch",
+		lambda *_args, **_kwargs: branch_dir,
+	)
+	monkeypatch.setattr(
+		extractor.ai_memory_lib,
+		"resolve_memory_root_dir",
+		lambda checkout_path, root_relative: checkout_path / root_relative,
+	)
+
+	render_calls: list[dict[str, Any]] = []
+
+	def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+		render_calls.append({"command": command, **kwargs})
+		return subprocess.CompletedProcess(command, 0, stdout="rendered prompt", stderr="")
+
+	monkeypatch.setattr(extractor.subprocess, "run", fake_run)
+	model_items = [
+		{
+			"summary": "  alpha\n beta  " if index == 0 else f"summary-{index}" + ("s" * 600),
+			"details": f"details-{index}" + ("d" * 12050),
+			"confidence": [0.2, 0.999, 0.876, 0.7, 0.8, 0.9][index],
+		}
+		for index in range(6)
+	]
+	response_payload = {
+		"model": "provider/response-model",
+		"usage": {"prompt_tokens": 123, "completion_tokens": 45, "total_tokens": 168},
+		"choices": [{"message": {"content": json.dumps(model_items)}}],
+	}
+	request_calls: list[dict[str, Any]] = []
+
+	def fake_urlopen(request: urllib.request.Request, *, timeout: int) -> _FakeResponse:
+		request_calls.append({"request": request, "timeout": timeout})
+		return _FakeResponse(response_payload)
+
+	monkeypatch.setattr(extractor.urllib.request, "urlopen", fake_urlopen)
+	usage_calls: list[dict[str, Any]] = []
+	assert callable(extractor.openrouter_prompt_cache.format_openrouter_usage_line)
+
+	def fake_usage_formatter(usage: dict[str, Any], **kwargs: Any) -> str:
+		usage_calls.append({"usage": usage, **kwargs})
+		return (
+			"INFO: openrouter usage phase=memory-maintenance "
+			"call=extract-repository-learnings model=provider/response-model"
+		)
+
+	monkeypatch.setattr(
+		extractor.openrouter_prompt_cache,
+		"format_openrouter_usage_line",
+		fake_usage_formatter,
+		raising=False,
+	)
+	monkeypatch.setattr(extractor.openrouter_prompt_cache, "is_cache_disabled", lambda: False)
+	monkeypatch.setenv("OPENROUTER_API_KEY", "super-secret-api-key")
+
+	source_output = tmp_path / "source.json"
+	learning_output = tmp_path / "learnings.json"
+	extractor.run_extraction(tmp_path, source_output, learning_output)
+
+	source_payload = json.loads(source_output.read_text(encoding="utf-8"))
+	assert [item["issue_number"] for item in source_payload["items"]] == list(range(13, 1, -1))
+	assert source_payload["items"][0]["task_summary"] == "Active summary 13"
+	assert len(source_payload["items"][0]["task_details"]) == 1500
+	assert source_payload["items"][0]["source_run_ids"] == ["run-13-2", "run-13-3", "run-13-4"]
+	assert source_payload["source_refs"] == [
+		ref
+		for issue_number in range(13, 8, -1)
+		for ref in (
+			f"https://example.test/issues/{issue_number}",
+			f"https://example.test/pulls/{100 + issue_number}",
+		)
+	]
+	assert not branch_dir.exists()
+
+	assert len(render_calls) == 1
+	assert render_calls[0]["command"] == [
+		"bash",
+		"scripts/render_prompt.sh",
+		"prompts/mode-extract-learnings.txt",
+	]
+	assert json.loads(render_calls[0]["env"]["LEARNINGS_SOURCE_JSON"]) == source_payload["items"]
+	assert len(request_calls) == 1
+	request_call = request_calls[0]
+	request_body = json.loads(request_call["request"].data.decode("utf-8"))
+	assert request_call["timeout"] == 120
+	assert request_call["request"].full_url == extractor.OPENROUTER_URL
+	assert request_call["request"].method == "POST"
+	assert request_call["request"].get_header("Authorization") == "Bearer super-secret-api-key"
+	assert request_call["request"].get_header("Content-type") == "application/json"
+	assert request_body == {
+		"model": "openai/gpt-6-luna",
+		"messages": [{"role": "user", "content": "rendered prompt"}],
+		"temperature": 0.0,
+		"max_tokens": 1200,
+	}
+
+	learnings = json.loads(learning_output.read_text(encoding="utf-8"))
+	assert len(learnings) == 5
+	assert learnings[0] == {
+		"summary": "alpha beta",
+		"details": ("details-0" + ("d" * 12050))[:12000],
+		"confidence": 0.6,
+	}
+	assert len(learnings[1]["summary"]) == 500
+	assert learnings[1]["confidence"] == 0.95
+	assert learnings[2]["confidence"] == 0.88
+	assert usage_calls == [
+		{
+			"usage": response_payload["usage"],
+			"model": "provider/response-model",
+			"phase": "memory-maintenance",
+			"call_label": "extract-repository-learnings",
+			"cache_enabled": True,
+			"cache_breakpoint_enabled": None,
+			"cache_breakpoint_fallback_retry": None,
+		}
+	]
+	stderr = capsys.readouterr().err
+	assert stderr.count("INFO: openrouter usage") == 1
+	assert "super-secret-api-key" not in stderr
+	assert "rendered prompt" not in stderr
+
+
+def _configure_nonempty_extraction(
+	monkeypatch: pytest.MonkeyPatch,
+	response_payload: dict[str, Any] | None,
+) -> None:
+	monkeypatch.setattr(
+		extractor,
+		"discover_merged_learnings",
+		lambda _repository_root: {"source_refs": ["https://example.test/issues/1"], "items": [{"id": 1}]},
+	)
+	monkeypatch.setattr(extractor, "render_extraction_prompt", lambda *_args: "sensitive prompt")
+	monkeypatch.setattr(
+		extractor.openrouter_prompt_cache,
+		"format_openrouter_usage_line",
+		lambda *_args, **_kwargs: "INFO: openrouter usage safe-line",
+		raising=False,
+	)
+	monkeypatch.setattr(extractor.openrouter_prompt_cache, "is_cache_disabled", lambda: False)
+	monkeypatch.setenv("OPENROUTER_API_KEY", "sensitive-key")
+	if response_payload is not None:
+		monkeypatch.setattr(
+			extractor.urllib.request,
+			"urlopen",
+			lambda *_args, **_kwargs: _FakeResponse(response_payload),
+		)
+
+
+def test_malformed_model_output_is_classified_without_leaking_content(
+	tmp_path: Path,
+	monkeypatch: pytest.MonkeyPatch,
+	capsys: pytest.CaptureFixture[str],
+) -> None:
+	_configure_nonempty_extraction(
+		monkeypatch,
+		{
+			"usage": {"total_tokens": 3},
+			"choices": [{"message": {"content": "malformed-sensitive-model-output"}}],
+		},
+	)
+	learning_output = tmp_path / "learnings.json"
+	monkeypatch.setattr(extractor, "resolve_repo_root", lambda: tmp_path)
+	monkeypatch.setattr(
+		sys,
+		"argv",
+		[
+			"memory_maintenance_extract_learnings.py",
+			"--source-output",
+			str(tmp_path / "source.json"),
+			"--learning-output",
+			str(learning_output),
+		],
+	)
+
+	assert extractor.main() == extractor.MODEL_EXTRACTION_FAILURE_EXIT
+
+	assert json.loads(learning_output.read_text(encoding="utf-8")) == []
+	stderr = capsys.readouterr().err
+	assert stderr.count("INFO: openrouter usage") == 1
+	assert "model_extraction_failed" in stderr
+	assert "malformed-sensitive-model-output" not in stderr
+	assert "sensitive-key" not in stderr
+
+
+@pytest.mark.parametrize(
+	"malformed_choice",
+	[None, "unexpected", {"message": None}],
+)
+def test_malformed_choice_shape_has_specific_error(
+	malformed_choice: Any,
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	_configure_nonempty_extraction(
+		monkeypatch,
+		{"choices": [malformed_choice]},
+	)
+	with pytest.raises(ValueError, match="must be an object"):
+		extractor.request_extracted_learnings("sensitive prompt")
+
+
+def test_request_failure_is_classified_without_promotion_ready_output(
+	tmp_path: Path,
+	monkeypatch: pytest.MonkeyPatch,
+	capsys: pytest.CaptureFixture[str],
+) -> None:
+	_configure_nonempty_extraction(monkeypatch, None)
+
+	def fail_request(*_args: Any, **_kwargs: Any) -> None:
+		raise urllib.error.URLError("sensitive-request-failure")
+
+	monkeypatch.setattr(extractor.urllib.request, "urlopen", fail_request)
+	learning_output = tmp_path / "learnings.json"
+	monkeypatch.setattr(extractor, "resolve_repo_root", lambda: tmp_path)
+	monkeypatch.setattr(
+		sys,
+		"argv",
+		[
+			"memory_maintenance_extract_learnings.py",
+			"--source-output",
+			str(tmp_path / "source.json"),
+			"--learning-output",
+			str(learning_output),
+		],
+	)
+
+	assert extractor.main() == extractor.MODEL_EXTRACTION_FAILURE_EXIT
+
+	assert json.loads(learning_output.read_text(encoding="utf-8")) == []
+	stderr = capsys.readouterr().err
+	assert "model_extraction_failed" in stderr
+	assert "sensitive-request-failure" not in stderr
+	assert "sensitive-key" not in stderr
+
+
+
+# --- Single-branch memory clone (#8287 / #8295) ---------------------------
+# These live here (not in a new test file) because this file is already run by
+# .github/workflows/ci.yml and the fix-up scope does not include ci.yml, which
+# tests/test_ci_wires_every_test_file.py would require for a new file.
+
+_FAKE_ORIGIN_URL = "https://x-access-token:sekrit-token@example.test/owner/repo"
+_MEMORY_BRANCH = "ai-memory"
+_FETCH_ARGS = [
+	"fetch",
+	"--no-tags",
+	"origin",
+	f"refs/heads/{_MEMORY_BRANCH}:refs/remotes/origin/{_MEMORY_BRANCH}",
+]
+_CHECKOUT_TRACKING_ARGS = ["checkout", "-B", _MEMORY_BRANCH, f"refs/remotes/origin/{_MEMORY_BRANCH}"]
+
+
+def _install_fake_git(
+	monkeypatch: pytest.MonkeyPatch,
+	*,
+	single_branch_returncode: int = 0,
+	single_branch_stderr: str = "",
+	ls_remote_stdout: str = "",
+) -> list[dict[str, Any]]:
+	memory_lib = extractor.ai_memory_lib
+	calls: list[dict[str, Any]] = []
+	monkeypatch.setattr(memory_lib, "_resolve_origin_url", lambda _repo_root: _FAKE_ORIGIN_URL)
+
+	def fake_run_git(
+		cwd: Path,
+		args: list[str],
+		check: bool = True,
+		**_kwargs: Any,
+	) -> subprocess.CompletedProcess[str]:
+		calls.append({"cwd": cwd, "args": list(args), "check": check})
+		if args[:1] == ["clone"] and "--depth" in args:
+			return subprocess.CompletedProcess(
+				["git", *args], single_branch_returncode, stdout="", stderr=single_branch_stderr
+			)
+		if args[:1] == ["ls-remote"]:
+			return subprocess.CompletedProcess(["git", *args], 0, stdout=ls_remote_stdout, stderr="")
+		return subprocess.CompletedProcess(["git", *args], 0, stdout="", stderr="")
+
+	monkeypatch.setattr(memory_lib, "_run_git", fake_run_git)
+	return calls
+
+
+def _legacy_call_args(clone_dir: str, *, branch_exists: bool) -> list[list[str]]:
+	sequence = [
+		["clone", "--no-tags", "--quiet", _FAKE_ORIGIN_URL, clone_dir],
+		["ls-remote", "--heads", "origin", _MEMORY_BRANCH],
+	]
+	if branch_exists:
+		sequence += [_FETCH_ARGS, _CHECKOUT_TRACKING_ARGS]
+	else:
+		sequence += [["checkout", "-B", _MEMORY_BRANCH]]
+	return sequence
+
+
+def _probe_args() -> list[str]:
+	return ["ls-remote", "--heads", _FAKE_ORIGIN_URL, _MEMORY_BRANCH]
+
+
+def _shallow_clone_args(clone_dir: str) -> list[str]:
+	return [
+		"clone",
+		"--no-tags",
+		"--quiet",
+		"--single-branch",
+		"--depth",
+		"1",
+		"--branch",
+		_MEMORY_BRANCH,
+		_FAKE_ORIGIN_URL,
+		clone_dir,
+	]
+
+
+@pytest.mark.parametrize("flag_value", [None, "", "  ", "true", "TRUE", "1", "on"])
+def test_single_branch_clone_used_when_flag_on(
+	flag_value: str | None,
+	tmp_path: Path,
+	monkeypatch: pytest.MonkeyPatch,
+	capsys: pytest.CaptureFixture[str],
+) -> None:
+	# With the switch on (the default) the write clone is the #8287 depth-1
+	# single-branch clone of the memory branch, unchanged from main.
+	if flag_value is None:
+		monkeypatch.delenv("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED", raising=False)
+	else:
+		monkeypatch.setenv("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED", flag_value)
+	calls = _install_fake_git(monkeypatch, ls_remote_stdout=f"deadbeef\trefs/heads/{_MEMORY_BRANCH}\n")
+
+	clone_dir = extractor.ai_memory_lib._clone_for_memory_branch(tmp_path, _MEMORY_BRANCH)
+	try:
+		assert [call["args"] for call in calls] == [
+			_probe_args(),
+			_shallow_clone_args(str(clone_dir)),
+			_CHECKOUT_TRACKING_ARGS,
+		]
+		assert calls[0]["check"] is False
+		assert calls[1]["check"] is False
+		assert calls[0]["cwd"] == clone_dir.parent
+		assert calls[1]["cwd"] == clone_dir.parent
+		assert calls[2]["cwd"] == clone_dir
+		assert clone_dir.is_dir()
+		assert capsys.readouterr().err == ""
+	finally:
+		shutil.rmtree(clone_dir, ignore_errors=True)
+
+
+@pytest.mark.parametrize("branch_on_remote", [True, False])
+def test_single_branch_clone_failure_falls_back_to_full_clone(
+	branch_on_remote: bool,
+	tmp_path: Path,
+	monkeypatch: pytest.MonkeyPatch,
+	capsys: pytest.CaptureFixture[str],
+) -> None:
+	# A memory branch that does not exist yet skips the shallow clone; a
+	# shallow clone that fails falls back to the full clone in a fresh dir.
+	monkeypatch.delenv("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED", raising=False)
+	monkeypatch.delenv("AI_MEMORY_CLONE_DIAGNOSTICS", raising=False)
+	ls_remote_stdout = f"deadbeef\trefs/heads/{_MEMORY_BRANCH}\n" if branch_on_remote else ""
+	calls = _install_fake_git(
+		monkeypatch,
+		single_branch_returncode=128,
+		single_branch_stderr=f"fatal: unable to access '{_FAKE_ORIGIN_URL}/': Could not resolve host\n",
+		ls_remote_stdout=ls_remote_stdout,
+	)
+
+	clone_dir = extractor.ai_memory_lib._clone_for_memory_branch(tmp_path, _MEMORY_BRANCH)
+	try:
+		call_args = [call["args"] for call in calls]
+		assert call_args[0] == _probe_args()
+		if branch_on_remote:
+			first_dir = Path(call_args[1][-1])
+			assert call_args[1] == _shallow_clone_args(str(first_dir))
+			assert first_dir != clone_dir
+			assert not first_dir.exists()
+			rest = call_args[2:]
+		else:
+			assert not any("--depth" in args for args in call_args)
+			rest = call_args[1:]
+		assert rest == _legacy_call_args(str(clone_dir), branch_exists=branch_on_remote)
+		assert clone_dir.is_dir()
+		# Fallback diagnostics stay off by default: fail-open embedders
+		# require an empty stderr.
+		assert capsys.readouterr().err == ""
+	finally:
+		shutil.rmtree(clone_dir, ignore_errors=True)
+
+
+@pytest.mark.parametrize("flag_value", ["false", "FALSE", "0", "off"])
+@pytest.mark.parametrize("branch_exists", [True, False])
+def test_flag_off_runs_legacy_full_clone_exactly(
+	flag_value: str,
+	branch_exists: bool,
+	tmp_path: Path,
+	monkeypatch: pytest.MonkeyPatch,
+	capsys: pytest.CaptureFixture[str],
+) -> None:
+	monkeypatch.setenv("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED", flag_value)
+	ls_remote_stdout = f"deadbeef\trefs/heads/{_MEMORY_BRANCH}\n" if branch_exists else ""
+	calls = _install_fake_git(monkeypatch, ls_remote_stdout=ls_remote_stdout)
+
+	clone_dir = extractor.ai_memory_lib._clone_for_memory_branch(tmp_path, _MEMORY_BRANCH)
+	try:
+		assert [call["args"] for call in calls] == _legacy_call_args(str(clone_dir), branch_exists=branch_exists)
+		assert not any("--single-branch" in call["args"] for call in calls)
+		assert "::warning::" not in capsys.readouterr().err
+	finally:
+		shutil.rmtree(clone_dir, ignore_errors=True)
+
+
+def test_invalid_flag_value_disables_single_branch_clone_with_warning(
+	tmp_path: Path,
+	monkeypatch: pytest.MonkeyPatch,
+	capsys: pytest.CaptureFixture[str],
+) -> None:
+	monkeypatch.setenv("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED", "bogus" + ("x" * 200))
+	calls = _install_fake_git(monkeypatch)
+
+	clone_dir = extractor.ai_memory_lib._clone_for_memory_branch(tmp_path, _MEMORY_BRANCH)
+	try:
+		assert [call["args"] for call in calls] == _legacy_call_args(str(clone_dir), branch_exists=False)
+		captured = capsys.readouterr()
+		warning_lines = [line for line in captured.err.splitlines() if line.startswith("::warning::")]
+		assert len(warning_lines) == 1
+		assert "AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED=bogus" in warning_lines[0]
+		assert "single-branch memory clone disabled" in warning_lines[0]
+		assert "x" * 65 not in warning_lines[0]
+		assert captured.out == ""
+	finally:
+		shutil.rmtree(clone_dir, ignore_errors=True)
+
+
+if __name__ == "__main__":
+	test_memory_maintenance_declares_codex_contract_noop()

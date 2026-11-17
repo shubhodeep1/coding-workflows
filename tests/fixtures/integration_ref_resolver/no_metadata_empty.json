@@ -1,0 +1,14 @@
+{
+  "name": "no_metadata_empty",
+  "issues": {
+    "101": {
+      "body": "Child task body without orchestrator metadata"
+    },
+    "1047": {
+      "body": "## Project: Tracking\n\nNo integration line present"
+    }
+  },
+  "branch_exists": {},
+  "expected_stdout": "",
+  "expected_exit_code": 0
+}

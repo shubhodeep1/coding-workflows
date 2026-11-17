@@ -1,0 +1,65 @@
+# IMPORTANT: This file is managed by coding-workflows and will be overwritten
+# by the update process. Do not add custom logic here.
+name: AI Validate
+# The [tracking:N] marker lets the orchestrator poller attribute a run to its
+# project (scripts/orchestrate_poll_process.sh get_last_validation_run_info).
+run-name: "${{ format('AI Validate [tracking:{0}]', inputs.tracking_issue || '0') }}"
+on:
+  workflow_dispatch:
+    inputs:
+      tracking_issue:
+        description: Tracking issue number
+        required: false
+        type: string
+        default: "0"
+      compose_file:
+        description: Compose file path fallback
+        required: false
+        type: string
+        default: "docker-compose.yml"
+      validation_timeout:
+        description: Validation idle timeout in minutes (killed after this long with no output)
+        required: false
+        type: string
+        default: "15"
+      alert_msg_level:
+        description: Minimum Telegram alert level for this run (empty honours vars.ALERT_MSG_LEVEL; SILENT suppresses all)
+        required: false
+        type: string
+        default: ""
+      target_ref:
+        description: Branch to validate instead of the default branch (empty = default branch or the tracking issue's integration branch)
+        required: false
+        type: string
+        default: ""
+  # Opt-in weekly validation of the default branch (issue #7553): Monday
+  # 04:17 UTC. The cron is fixed because on.schedule cannot read repository
+  # variables; the job below runs on it only when the repository variable
+  # AI_VALIDATE_SCHEDULE_ENABLED is 'true'. A scheduled run uses the input
+  # defaults (tracking_issue 0, empty target_ref), calls no model, and reports
+  # a failure in one ai:scheduled-validation-failed issue.
+  schedule:
+    - cron: "17 4 * * 1"
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
+jobs:
+  validate:
+    if: github.event_name != 'schedule' || vars.AI_VALIDATE_SCHEDULE_ENABLED == 'true'
+    uses: shubhodeep1/coding-workflows/.github/workflows/validate.yml@stable
+    with:
+      tracking_issue: ${{ inputs.tracking_issue || '0' }}
+      compose_file: ${{ inputs.compose_file || 'docker-compose.yml' }}
+      validation_timeout: ${{ inputs.validation_timeout || '15' }}
+      alert_msg_level: ${{ inputs.alert_msg_level || '' }}
+      target_ref: ${{ inputs.target_ref || '' }}
+    # Least privilege: forward only the secrets the reusable workflow
+    # declares, never inherit them all (consumer repos hold other secrets).
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}

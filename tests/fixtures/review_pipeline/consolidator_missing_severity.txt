@@ -1,0 +1,11 @@
+=== ISSUE 007 ===
+FILE: src/module.py
+LINES: 2-3
+LENS: CORRECTNESS & LOGIC
+FLAGGED_BY: reviewer_alpha
+CLASSIFICATION: must-fix
+EVIDENCE:
+  reviewer_alpha> "severity omitted"
+SUGGESTED_APPROACH:
+  Restore an explicit severity.
+=== END ISSUE 007 ===

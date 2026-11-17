@@ -1,0 +1,37 @@
+{
+  "1519": {
+    "issue": 1519,
+    "pr": 1526,
+    "must_contain": [
+      {
+        "file": "scripts/review_conflict_resolve.sh",
+        "regex": "resolver_missing_guard_alpha"
+      },
+      {
+        "file": "scripts/review_conflict_resolve.sh",
+        "regex": "resolver_missing_guard_beta"
+      },
+      {
+        "file": "scripts/review_conflict_prepare.sh",
+        "regex": "prepare_missing_guard_gamma"
+      }
+    ],
+    "must_not_contain": []
+  },
+  "1520": {
+    "issue": 1520,
+    "pr": 1527,
+    "must_contain": [
+      {
+        "file": "scripts/review_conflict_resolve.sh",
+        "regex": "preserved resolver line"
+      }
+    ],
+    "must_not_contain": [
+      {
+        "file": "scripts/review_conflict_prepare.sh",
+        "regex": "legacy forbidden line"
+      }
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "consecutive_green_runs": 183,
+  "latest_run": {
+    "generated_at": "2026-11-15T07:52:26Z",
+    "overall_status": "pass",
+    "summary_schema_version": "1",
+    "totals": {
+      "failed": 0,
+      "fixtures": 3,
+      "passed": 3
+    }
+  },
+  "schema_version": "1"
+}

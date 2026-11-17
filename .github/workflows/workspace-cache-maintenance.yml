@@ -1,0 +1,253 @@
+---
+name: Workspace Cache Maintenance
+
+"on":
+  schedule:
+    - cron: "43 3 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workspace-cache-maintenance-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  maintenance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Prune stale workspace caches
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::secrets.GH_PAT is required for workspace cache maintenance."
+            exit 1
+          fi
+
+          RUNTIME_DIR="${RUNNER_TEMP}/workspace-cache-maintenance-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "${RUNTIME_DIR}"
+          CACHE_JSON="${RUNTIME_DIR}/workspace-caches.json"
+
+          gh cache list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --limit 1000 \
+            --sort created_at \
+            --order desc \
+            --key workspace-v1- \
+            --json id,key,createdAt,lastAccessedAt,ref,sizeInBytes \
+            > "${CACHE_JSON}"
+
+          # No existing issue/PR-state prefetch exists in this standalone
+          # workflow. Batch numeric workspace-key lookups through GraphQL (50
+          # ids/call) so the nightly cleanup avoids one REST request per cache
+          # family while still keeping cache enumeration/deletion on the
+          # supported gh cache list/delete surface.
+          CACHE_JSON="${CACHE_JSON}" \
+          KEEP_LATEST_PER_FAMILY="3" \
+            python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import re
+          import subprocess
+          from collections import defaultdict
+          from pathlib import Path
+
+
+          CACHE_KEY_PREFIX = "workspace-v1-"
+          NUMERIC_WORKSPACE_KEY_RE = re.compile(r"^workspace-v1-(\d+)-")
+          GRAPHQL_BATCH_SIZE = 50
+
+
+          def run_gh(*args: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+              ["gh", *args],
+              check=False,
+              capture_output=True,
+              text=True,
+            )
+
+
+          def load_caches(path: Path) -> list[dict[str, object]]:
+            raw = path.read_text(encoding="utf-8")
+            parsed = json.loads(raw)
+            if not isinstance(parsed, list):
+              raise SystemExit(f"Expected gh cache list to return a JSON list, got: {type(parsed).__name__}")
+            return [entry for entry in parsed if isinstance(entry, dict)]
+
+
+          def fetch_issue_or_pr_states(owner: str, repo: str, numbers: list[str]) -> tuple[dict[str, str], list[str], list[str]]:
+            states: dict[str, str] = {}
+            lookup_warnings: list[str] = []
+            lookup_errors: list[str] = []
+            for start in range(0, len(numbers), GRAPHQL_BATCH_SIZE):
+              batch = numbers[start:start + GRAPHQL_BATCH_SIZE]
+              query_lines = [
+                "query($owner: String!, $repo: String!) {",
+                "  repository(owner: $owner, name: $repo) {",
+              ]
+              alias_to_number: dict[str, str] = {}
+              for idx, number in enumerate(batch):
+                alias = f"item{idx}"
+                alias_to_number[alias] = number
+                query_lines.append(
+                  f"    {alias}: issueOrPullRequest(number: {int(number)}) {{ __typename ... on Issue {{ state }} ... on PullRequest {{ state }} }}"
+                )
+              query_lines.append("  }")
+              query_lines.append("}")
+              result = run_gh(
+                "api",
+                "graphql",
+                "-F",
+                f"owner={owner}",
+                "-F",
+                f"repo={repo}",
+                "-f",
+                f"query={' '.join(query_lines)}",
+              )
+              if result.returncode != 0:
+                stderr = (result.stderr or result.stdout or "graphql lookup failed").strip()
+                lookup_warnings.append(f"batch {batch}: {stderr}")
+                print(f"::warning::workspace-cache-maintenance issue-state lookup failed for batch {batch}: {stderr}")
+                continue
+              try:
+                payload = json.loads(result.stdout)
+              except json.JSONDecodeError as exc:
+                lookup_errors.append(f"batch {batch}: invalid JSON payload ({exc})")
+                print(f"::warning::workspace-cache-maintenance could not parse issue-state lookup payload for batch {batch}: {exc}")
+                continue
+              repo_payload = payload.get("data", {}).get("repository", {})
+              if not isinstance(repo_payload, dict):
+                lookup_errors.append(f"batch {batch}: missing repository payload")
+                print(f"::warning::workspace-cache-maintenance missing repository payload for batch {batch}")
+                continue
+              for alias, number in alias_to_number.items():
+                node = repo_payload.get(alias)
+                if isinstance(node, dict):
+                  state = node.get("state")
+                  if isinstance(state, str) and state:
+                    states[number] = state
+            return states, lookup_warnings, lookup_errors
+
+
+          def write_summary(path: Path, lines: list[str]) -> None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+          cache_json_path = Path(os.environ["CACHE_JSON"])
+          summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          keep_latest_per_family = int(os.environ.get("KEEP_LATEST_PER_FAMILY", "3"))
+          repository = os.environ["GITHUB_REPOSITORY"]
+          owner, repo = repository.split("/", 1)
+
+          caches = [
+            entry
+            for entry in load_caches(cache_json_path)
+            if str(entry.get("key", "")).startswith(CACHE_KEY_PREFIX)
+          ]
+
+          families: dict[str, list[dict[str, object]]] = defaultdict(list)
+          family_numeric_keys: dict[str, str] = {}
+          for cache in caches:
+            key = str(cache.get("key", ""))
+            family = f"{key.rsplit('-', 1)[0]}-" if "-" in key else key
+            families[family].append(cache)
+            match = NUMERIC_WORKSPACE_KEY_RE.match(key)
+            if match:
+              family_numeric_keys.setdefault(family, match.group(1))
+
+          numeric_keys = sorted({value for value in family_numeric_keys.values()}, key=int)
+          issue_states, lookup_warnings, lookup_errors = fetch_issue_or_pr_states(owner, repo, numeric_keys)
+
+          deleted_count = 0
+          retained_count = 0
+          delete_failures: list[str] = []
+          closed_numeric_keys: set[str] = set()
+          unknown_numeric_keys: set[str] = set()
+          non_numeric_family_count = 0
+
+          for family, family_caches in families.items():
+            family_caches.sort(key=lambda item: str(item.get("createdAt", "")), reverse=True)
+            numeric_key = family_numeric_keys.get(family)
+            delete_all = False
+            if numeric_key is None:
+              non_numeric_family_count += 1
+            else:
+              state = issue_states.get(numeric_key, "")
+              if state and state != "OPEN":
+                delete_all = True
+                closed_numeric_keys.add(numeric_key)
+              elif not state:
+                unknown_numeric_keys.add(numeric_key)
+
+            keep_count = 0 if delete_all else keep_latest_per_family
+            retained_count += min(len(family_caches), keep_count)
+            for idx, cache in enumerate(family_caches):
+              if idx < keep_count:
+                continue
+              cache_id = str(cache.get("id", "")).strip()
+              cache_key = str(cache.get("key", "<unknown>"))
+              if not cache_id:
+                delete_failures.append(f"{cache_key}: missing cache id")
+                continue
+              result = run_gh("cache", "delete", cache_id, "--repo", repository)
+              if result.returncode == 0:
+                deleted_count += 1
+                continue
+              stderr = (result.stderr or result.stdout or f"gh cache delete rc={result.returncode}").strip()
+              delete_failures.append(f"{cache_key} (id={cache_id}): {stderr}")
+
+          summary_lines = [
+            "## Workspace Cache Maintenance Summary",
+            "",
+            f"- Scanned caches: {len(caches)}",
+            f"- Deleted caches: {deleted_count}",
+            f"- Retained caches: {retained_count}",
+            f"- Skipped/non-numeric keys: {non_numeric_family_count}",
+            f"- Numeric keys checked: {len(numeric_keys)}",
+            f"- Closed numeric keys: {len(closed_numeric_keys)}",
+            f"- Unknown numeric keys (retention-only fallback): {len(unknown_numeric_keys)}",
+            f"- Issue/PR lookup warnings (retention-only fallback): {len(lookup_warnings)}",
+            f"- Issue/PR lookup errors: {len(lookup_errors)}",
+            f"- Keep newest {keep_latest_per_family}: enabled per workspace family",
+            f"- Delete failures: {len(delete_failures)}",
+          ]
+          if lookup_warnings:
+            summary_lines.append("")
+            summary_lines.append("### Issue/PR lookup warnings (retention-only fallback)")
+            for failure in lookup_warnings[:20]:
+              summary_lines.append(f"- {failure}")
+            if len(lookup_warnings) > 20:
+              summary_lines.append(f"- ... {len(lookup_warnings) - 20} more")
+          if lookup_errors:
+            summary_lines.append("")
+            summary_lines.append("### Issue/PR lookup errors")
+            for failure in lookup_errors[:20]:
+              summary_lines.append(f"- {failure}")
+            if len(lookup_errors) > 20:
+              summary_lines.append(f"- ... {len(lookup_errors) - 20} more")
+          if delete_failures:
+            summary_lines.append("")
+            summary_lines.append("### Delete failures")
+            for failure in delete_failures[:20]:
+              summary_lines.append(f"- {failure}")
+            if len(delete_failures) > 20:
+              summary_lines.append(f"- ... {len(delete_failures) - 20} more")
+
+          write_summary(summary_path, summary_lines)
+          if delete_failures or lookup_errors:
+            raise SystemExit(1)
+          PY

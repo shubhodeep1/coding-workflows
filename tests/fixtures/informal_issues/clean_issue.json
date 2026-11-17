@@ -1,0 +1,6 @@
+{
+	"body": "Please implement an advisory-only informal issue detector for the clarify phase without changing workflow wiring.\n\nAcceptance criteria\n- the detector should score this example as clean\n- tests must verify the output format\n\nContext\nThis fixture represents a well-formed task description with a concrete ask and completion conditions.",
+	"expected_score": 0.0,
+	"expected_signals": [],
+	"description": "Well-formed issue body with a clear ask and acceptance criteria."
+}

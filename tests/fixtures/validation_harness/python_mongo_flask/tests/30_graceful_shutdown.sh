@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "${SCRIPT_DIR}/../_lib/tap_helpers.sh"
+
+_default_app_port=8000
+APP_PORT="${APP_PORT:-${_default_app_port}}"
+_default_health_path=/health
+HEALTH_PATH="${HEALTH_PATH:-${_default_health_path}}"
+_default_test_host_header=app.local.test
+TEST_HOST_HEADER="${TEST_HOST_HEADER:-${_default_test_host_header}}"
+APP_URL="${APP_URL:-http://127.0.0.1:${APP_PORT}${HEALTH_PATH}}"
+SHUTDOWN_TIMEOUT_SECONDS="${SHUTDOWN_TIMEOUT_SECONDS:-30}"
+SHUTDOWN_POLL_SECONDS="${SHUTDOWN_POLL_SECONDS:-1}"
+GRACEFUL_SHUTDOWN_LOG_TAIL_LINES="${GRACEFUL_SHUTDOWN_LOG_TAIL_LINES:-40}"
+_default_compose_file=validation/docker-compose.test.yml
+COMPOSE_FILE="${COMPOSE_FILE:-${_default_compose_file}}"
+
+echo "1..1"
+
+set +e
+app_pid="$(docker compose -f "${COMPOSE_FILE}" exec -T app /bin/sh -c 'cat /tmp/flask-app.pid 2>/dev/null' 2>/dev/null | tr -d '\r' | tail -n 1)"
+set -e
+
+if ! printf '%s' "${app_pid}" | grep -Eq '^[0-9]+$'; then
+	tap_not_ok 1 "graceful shutdown app pid discovery"
+	echo "# unable to determine app pid from container"
+	exit 1
+fi
+
+set +e
+python3 "${SCRIPT_DIR}/_lib/graceful_shutdown.py" \
+	--pid "${app_pid}" \
+	--url "${APP_URL}" \
+	--host-header "${TEST_HOST_HEADER}" \
+	--compose-file "${COMPOSE_FILE}" \
+	--timeout-seconds "${SHUTDOWN_TIMEOUT_SECONDS}" \
+	--poll-seconds "${SHUTDOWN_POLL_SECONDS}" \
+	--log-tail-lines "${GRACEFUL_SHUTDOWN_LOG_TAIL_LINES}"
+shutdown_rc=$?
+set -e
+
+if [ "${shutdown_rc}" -ne 0 ]; then
+	tap_not_ok 1 "graceful shutdown observes readiness transition after SIGTERM"
+	echo "# graceful shutdown probe failed url=${APP_URL} host=${TEST_HOST_HEADER}"
+	exit 1
+fi
+
+tap_ok 1 "graceful shutdown observes readiness transition after SIGTERM"
