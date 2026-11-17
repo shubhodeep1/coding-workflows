@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stable_e2e_step_wait_review.sh:143-158, 521-530, 584, 772-782 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The sticky E2E_REVIEW_RUN_EVER_STARTED flag and the cached JOBS_JSON are not reset when the watched RUN_ID changes, for example when the loop pivots from a cancelled run to a queued successor. As a result, the successor's jobs are never fetched.\n  WHY: A queued successor that times out is labelled timeout_reason=inactivity with jobs=unavailable instead of review_run_never_started. Severity disagreement: sonnet-5_5 rated it NIT, gemini and minimax and gpt-6-luna and glm rated it MAJOR. The highest rating, MAJOR, is used and mapped here to high.\n- scripts/stable_e2e_step_wait_review.sh:153-155 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: e2e_review_note_run_started sets the started flag for any RUN_STATUS=completed, including runs cancelled while still queued that never ran a job.\n  WHY: After a cancel-and-pivot to a successor that stays queued, the diagnostic reads inactivity instead of review_run_never_started. status=timeout is unaffected.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/stable_e2e_step_wait_review.sh:146-152, 774, 584 | severity=NIT | confidence=4\n  PROBLEM: JOBS_JSON is never reset per poll or on RUN_ID change, and the sticky ever-started flag is not scoped to RUN_ID. After a cancelled in_progress run pivots to a queued successor, the fresh jobs fetch at line 781 is skipped.\n  WHY: A queued successor that times out gets timeout_reason=inactivity with jobs=unavailable instead of review_run_never_started. The error is on the safe side and status=timeout is unaffected.\n- scripts/stable_e2e_step_wait_review.sh:154 | severity=NIT | confidence=3\n  PROBLEM: A run seen as completed with conclusion cancelled may never have run a job, yet it sets the sticky started flag.\n  WHY: This is a diagnostic mislabel only. It is to be treated together with the finding above.\n- HARDENING_SUGGESTIONS: reset JOBS_JSON when RUN_ID differs, at the top of the poll loop or just before line 773 (about 3 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/stable_e2e_step_wait_review.sh:143-158 | severity=MAJOR | confidence=5\n  PROBLEM: The E2E_REVIEW_RUN_EVER_STARTED flag is sticky and is not reset when the watched RUN_ID changes.\n  WHY: Once the flag is 1 it stays 1 for later polls, even when a new queued or pending run is being watched. This misclassifies a true environmental timeout as inactivity.\n- scripts/stable_e2e_step_wait_review.sh:153-155 | severity=NIT | confidence=3\n  PROBLEM: e2e_review_note_run_started unconditionally marks a run as started when its status is completed.\n  WHY: A run cancelled while queued is reported as completed even though it never ran a job. This stops review_run_never_started from being assigned and yields inactivity.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/stable_e2e_step_wait_review.sh:143-161, 163-173, 521-523, 584, 772-790 | severity=MAJOR | confidence=5\n  PROBLEM: The sticky E2E_REVIEW_RUN_EVER_STARTED flag is global and never cleared on a RUN_ID change, and JOBS_JSON is not reset at the top of the loop. After a pivot to a queued successor, the else branch at line 780 does not fire, E2E_REVIEW_JOBS_STEP_FRESH stays 0, and E2E_REVIEW_LAST_JOBS_JSON is empty.\n  WHY: The timeout helper returns inactivity and logs jobs=unavailable, so downstream consumers cannot classify the queued successor as environmental. The test test_flag_is_sticky_across_polls does not cover the RUN_ID-change path.\n- scripts/stable_e2e_step_wait_review.sh:153-155 | severity=NIT | confidence=3\n  PROBLEM: The case in_progress|completed branch sets the started flag for any completed run, including one cancelled while queued, and the early return 0 skips the jobs-based check at lines 156-159.\n  WHY: The next queued successor is misclassified as inactivity. The scenario is rare and status=timeout is unaffected.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/stable_e2e_step_wait_review.sh:143-158, 521-530, 584, 772-782 | severity=MAJOR | confidence=5\n  PROBLEM: Timeout tracking and cached job data are not reset when the watched run changes. The sticky flag stays set, and the stale non-empty JOBS_JSON suppresses fetching the successor's jobs.\n  WHY: The timeout helper emits inactivity and jobs=unavailable instead of review_run_never_started for a successor that stayed queued.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/stable_e2e_step_wait_review.sh:143-144, 548-575, 584, 774-782, 910-917 | severity=MAJOR | confidence=4\n  PROBLEM: E2E_REVIEW_RUN_EVER_STARTED is never reset, and the pivot branch (lines 566-574) resets neither the flag nor JOBS_JSON. JOBS_JSON is only assigned at line 584, so the successor's queued polls hit the non-empty branch at line 774.\n  WHY: A run that starts, is cancelled, and pivots to a successor that stays queued yields timeout_reason=inactivity and jobs=unavailable, not the review_run_never_started the issue (#9619, refs #9418) requires.\n- scripts/stable_e2e_step_wait_review.sh:153-156 | severity=NIT | confidence=4\n  PROBLEM: A run with status=completed unconditionally marks the review as started, but runs cancelled while queued also report completed with conclusion cancelled and never ran a job. This is a second path that poisons the flag even if the pivot branch is fixed.\n  WHY: After a cancellation pivot to an environmentally held successor, the timeout reports inactivity instead of review_run_never_started. Only the new diagnostic is mislabelled.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "248e507335c3e0184a7584dad0146175c721536ea40afa1b46f8930e1844b016",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9637,
+    "run_id": "44004620225",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44004620225",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117050808_b338325f35",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9637,
+    "run_id": "44004620225"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-17T05:08:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
