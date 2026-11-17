@@ -100,7 +100,8 @@ def _job_run_start(job: dict[str, Any]) -> str | None:
 	steps = job.get("steps")
 	if not isinstance(steps, list):
 		return job.get("started_at")
-	starts = [step.get("started_at") for step in steps if isinstance(step, dict) and step.get("started_at")]
+	# Only non-empty strings count; a non-string value would make `_seconds` raise.
+	starts = [step.get("started_at") for step in steps if isinstance(step, dict) and isinstance(step.get("started_at"), str) and step.get("started_at")]
 	if not starts:
 		return None
 	# Compare parsed times, not strings, so mixed offsets order correctly. Each
@@ -137,17 +138,21 @@ def job_duration_findings(jobs: list[dict[str, Any]], timeouts: dict[str, int], 
 			continue
 		run_start = _job_run_start(job)
 		if run_start is None and isinstance(job.get("steps"), list):
-			# Escape workflow-command data so a name cannot end the command line.
-			safe_name = name.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-			print(f"::notice::ci_budget_watch: job {safe_name} ran no step (conclusion={job.get('conclusion')}); duration not checked.")
+			# Only a finished job is logged: a job still queued (no
+			# completed_at) has not run yet rather than "ran no step".
+			if job.get("completed_at"):
+				# Escape workflow-command data so a name cannot end the command line.
+				safe_name = name.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+				print(f"::notice::ci_budget_watch: job {safe_name} ran no step (conclusion={job.get('conclusion')}); duration not checked.")
 			continue
 		took = _seconds(run_start, job.get("completed_at"))
 		if took is None:
-			# A finished job whose start time does not parse is logged rather
-			# than skipped silently; a job still running (no completed_at) is not.
-			if run_start and job.get("completed_at"):
+			# A finished job whose start or completion time is missing or does
+			# not parse is logged rather than skipped silently; a job still
+			# running (no completed_at) is not.
+			if job.get("completed_at"):
 				unmeasured_name = name.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-				print(f"::notice::ci_budget_watch: job {unmeasured_name} has no usable start time (conclusion={job.get('conclusion')}); duration not checked.")
+				print(f"::notice::ci_budget_watch: job {unmeasured_name} has no usable start or completion time (conclusion={job.get('conclusion')}); duration not checked.")
 			continue
 		if took >= ratio * minutes * 60:
 			findings.append({"kind": "job_duration", "subject": base, "value": took, "limit": minutes * 60, "job": name})

@@ -93,6 +93,10 @@ def test_job_duration_findings_drop_unparsable_step_starts(tmp_path: Path, capsy
 	queued = {**_job("tests-a\n::error::x", 60, conclusion="cancelled"), "steps": []}
 	assert cbw.job_duration_findings([queued], {"tests-a\n::error::x": 20}, 0.75) == []
 	assert "job tests-a%0A::error::x ran no step" in capsys.readouterr().out
+	# A job still queued (no completed_at) has not run yet and is not logged.
+	pending = {"name": "tests-a", "started_at": None, "completed_at": None, "conclusion": None, "steps": []}
+	assert cbw.job_duration_findings([pending], timeouts, 0.75) == []
+	assert "ci_budget_watch" not in capsys.readouterr().out
 
 
 def test_job_duration_findings_log_jobs_with_no_usable_start(tmp_path: Path, capsys) -> None:
@@ -101,7 +105,16 @@ def test_job_duration_findings_log_jobs_with_no_usable_start(tmp_path: Path, cap
 	timeouts = cbw.job_timeouts(root / ".github" / "workflows" / "ci.yml")
 	job = {**_job("tests-a", 19 * 60), "steps": [{"name": "Broken", "started_at": "not-a-time"}]}
 	assert cbw.job_duration_findings([job], timeouts, 0.75) == []
-	assert "::notice::ci_budget_watch: job tests-a has no usable start time (conclusion=success); duration not checked." in capsys.readouterr().out
+	assert "::notice::ci_budget_watch: job tests-a has no usable start or completion time (conclusion=success); duration not checked." in capsys.readouterr().out
+	# A malformed completed_at, or a null started_at with no steps list, is logged the same way.
+	bad_end = {**_job("tests-a", 60), "completed_at": "not-a-time"}
+	no_start = {**_job("tests-a", 60), "started_at": None}
+	assert cbw.job_duration_findings([bad_end, no_start], timeouts, 0.75) == []
+	assert capsys.readouterr().out.count("has no usable start or completion time") == 2
+	# A non-string step start is ignored rather than crashing `_seconds`.
+	numeric = {**_job("tests-a", 60), "steps": [{"name": "Odd", "started_at": 12345}]}
+	assert cbw.job_duration_findings([numeric], timeouts, 0.75) == []
+	assert "ran no step (conclusion=success)" in capsys.readouterr().out
 	# A job still running has no completed_at and is skipped without a notice.
 	running = {"name": "tests-a", "started_at": "2026-10-09T10:00:00Z", "completed_at": None, "conclusion": None}
 	assert cbw.job_duration_findings([running], timeouts, 0.75) == []
