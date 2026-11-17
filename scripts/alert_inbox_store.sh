@@ -241,6 +241,11 @@ while true; do
 			;;
 		404|422)
 			put_code="${HTTP_CODE}"
+			# Read the PUT message before the GET below overwrites resp_file.
+			put_branch_missing=0
+			if jq -e '(.message // "") | test("branch"; "i")' "${resp_file}" >/dev/null 2>&1; then
+				put_branch_missing=1
+			fi
 			_alert_inbox_api GET "${contents_url}?ref=${_ALERT_INBOX_STORE_BRANCH}"
 			if [ "${HTTP_CODE}" = "200" ]; then
 				_alert_inbox_store_log duplicate exists
@@ -252,9 +257,10 @@ while true; do
 				if ! _alert_inbox_ensure_branch; then
 					_alert_inbox_fail "branch_bootstrap_http_${HTTP_CODE}"
 				fi
-				# A 404 PUT with the branch present now means a concurrent intake
-				# created it in between (per-run concurrency groups): retry once.
-				if [ "${BRANCH_CREATED}" -eq 1 ] || [ "${put_code}" = "404" ]; then
+				# A 404 PUT, or a 422 PUT naming the branch, with the branch present
+				# now means a concurrent intake created it in between (per-run
+				# concurrency groups): retry once. An unexplained 422 still fails.
+				if [ "${BRANCH_CREATED}" -eq 1 ] || [ "${put_code}" = "404" ] || [ "${put_branch_missing}" -eq 1 ]; then
 					continue
 				fi
 			fi
