@@ -105,7 +105,7 @@ fi
 case "${1:-}" in
 	api)
 		case " $* " in
-			*comments*) ;;
+			*comments*|*" graphql "*) ;;
 			*) exec "${AI_COMMENT_SIG_REAL_GH}" "$@" ;;
 		esac
 		;;
@@ -242,20 +242,28 @@ REAL_GH_ENV = "AI_COMMENT_SIG_REAL_GH"
 LOG_PREFIX = "AI_COMMENT_SIG"
 
 _LOGIN = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?"
+_REPO = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
+# The line names the repository and issue it is bound to, so a reader that
+# has no issue context of its own (a GraphQL node) can still verify it.
 SIG_LINE_RE = re.compile(
-	r"\n<!-- ai-comment-sig:v1 as=(?P<login>" + _LOGIN + r") type=(?P<type>User|Bot) sig=(?P<sig>[0-9a-f]{64}) -->\Z"
+	r"\n<!-- ai-comment-sig:v1 repo=(?P<repo>" + _REPO + r") issue=(?P<issue>[0-9]+) as=(?P<login>" + _LOGIN
+	+ r") type=(?P<type>User|Bot) sig=(?P<sig>[0-9a-f]{64}) -->\Z"
 )
 _ISSUE_URL_RE = re.compile(r"/repos/(?P<repo>[^/]+/[^/]+)/issues/(?P<num>[0-9]+)/?$")
+_HTML_URL_RE = re.compile(r"^https://github\.com/(?P<repo>[^/]+/[^/]+)/(?:issues|pull)/(?P<num>[0-9]+)(?:[#/?].*)?$")
 _CREATE_RE = re.compile(r"^repos/(?P<repo>[^/{}]+/[^/{}]+)/issues/(?P<num>[0-9]+)/comments$")
 _EDIT_RE = re.compile(r"^repos/(?P<repo>[^/{}]+/[^/{}]+)/issues/comments/(?P<id>[0-9]+)$")
 _READ_RE = re.compile(r"^repos/[^/]+/[^/]+/issues/(?:[0-9]+/comments|comments(?:/[0-9]+)?)$")
+# GraphQL reports the Actions bot as `github-actions` (type Bot).
+_GRAPHQL_BOT_LOGINS = ("github-actions", BOT_LOGIN)
 
 # Bodies that must keep the caller's (PAT) author. The first four are what the
 # `issue_comment` wrappers start on; the plan heading is what the hardened
 # plan-approval jobs in workflow-templates/ai-implement.yml and ai-plan.yml
-# read by the approver login. Matched anywhere in the body, so a body that
-# could match a wrapper predicate is never moved.
-_KEEP_SUBSTRINGS = ("/approved", "/answer", "/reclarify", "Clarification required")
+# read by the approver login. Matched anywhere in the body and ignoring case
+# (the wrappers' contains/startsWith ignore case), so a body that could match
+# a wrapper predicate is never moved.
+_KEEP_SUBSTRINGS = ("/approved", "/answer", "/reclarify", "clarification required")
 _KEEP_PLAN_RE = re.compile(r"(?im)^\s*implementation\s+plan\b")
 
 _REFUSED_RE = re.compile(
@@ -307,55 +315,97 @@ def strip_signature(body: str) -> str:
 def sign_body(secret: str, repo: str, issue: int, login: str, account_type: str, body: str) -> str:
 	body = strip_signature(body)
 	sig = signature(secret, repo, issue, login, account_type, body)
-	return f"{body}\n<!-- ai-comment-sig:{SIG_VERSION} as={login} type={account_type} sig={sig} -->"
+	return (
+		f"{body}\n<!-- ai-comment-sig:{SIG_VERSION} repo={repo.lower()} issue={int(issue)} "
+		f"as={login} type={account_type} sig={sig} -->"
+	)
 
 
 def keep_caller_author(body: str) -> bool:
 	"""True when the body could start a wrapper or is a plan comment."""
-	return any(token in body for token in _KEEP_SUBSTRINGS) or bool(_KEEP_PLAN_RE.search(body))
+	lowered = body.lower()
+	return any(token in lowered for token in _KEEP_SUBSTRINGS) or bool(_KEEP_PLAN_RE.search(body))
 
 
 def _comment_location(comment: dict) -> tuple[str, int] | None:
+	"""Repository and issue a comment object itself says it belongs to."""
 	match = _ISSUE_URL_RE.search(str(comment.get("issue_url") or ""))
-	if not match:
-		return None
-	return match.group("repo"), int(match.group("num"))
+	if match:
+		return match.group("repo"), int(match.group("num"))
+	for key in ("url", "html_url"):
+		match = _HTML_URL_RE.match(str(comment.get(key) or ""))
+		if match:
+			return match.group("repo"), int(match.group("num"))
+	return None
 
 
-def normalize_comment(comment: Any, secret: str) -> Any:
-	if not isinstance(comment, dict):
-		return comment
-	user = comment.get("user")
-	body = comment.get("body")
-	if not isinstance(user, dict) or user.get("login") != BOT_LOGIN or not isinstance(body, str):
-		return comment
+def verify_body(body: str, secret: str, location: tuple[str, int] | None, comment_id: object = None):
+	"""Return (original_body, login, account_type) when the signature holds.
+
+	The signed repository and issue must match the comment's own location
+	when the object carries one (REST `issue_url`, GraphQL `url`).
+	"""
 	match = SIG_LINE_RE.search(body)
 	if not match:
-		return comment
-	location = _comment_location(comment)
-	if location is None:
-		log("unverifiable", comment_id=comment.get("id"), reason="no_issue_url")
-		return comment
-	repo, issue = location
+		return None
+	repo, issue = match.group("repo"), int(match.group("issue"))
+	if location is not None and (location[0].lower() != repo.lower() or location[1] != issue):
+		log("invalid", comment_id=comment_id, reason="location_mismatch")
+		return None
 	original = body[: match.start()]
 	expected = signature(secret, repo, issue, match.group("login"), match.group("type"), original)
 	if not hmac.compare_digest(expected, match.group("sig")):
-		log("invalid", comment_id=comment.get("id"))
+		log("invalid", comment_id=comment_id)
+		return None
+	return original, match.group("login"), match.group("type"), repo
+
+
+def _association(login: str, repo: str) -> str:
+	return "OWNER" if login.lower() == repo.split("/", 1)[0].lower() else "COLLABORATOR"
+
+
+def normalize_comment(comment: Any, secret: str) -> Any:
+	"""Rewrite a validly signed bot comment (REST or GraphQL shape)."""
+	if not isinstance(comment, dict) or not isinstance(comment.get("body"), str):
 		return comment
-	login = match.group("login")
-	owner = repo.split("/", 1)[0]
-	normalized = dict(comment)
-	normalized["body"] = original
-	normalized["user"] = dict(user, login=login, type=match.group("type"))
-	normalized["author_association"] = "OWNER" if login.lower() == owner.lower() else "COLLABORATOR"
-	normalized["ai_comment_sig"] = {"poster": BOT_LOGIN}
-	return normalized
+	user = comment.get("user")
+	author = comment.get("author")
+	if isinstance(user, dict) and user.get("login") == BOT_LOGIN:
+		verified = verify_body(comment["body"], secret, _comment_location(comment), comment.get("id"))
+		if verified is None:
+			return comment
+		original, login, account_type, repo = verified
+		normalized = dict(comment)
+		normalized["body"] = original
+		normalized["user"] = dict(user, login=login, type=account_type)
+		normalized["author_association"] = _association(login, repo)
+		normalized["ai_comment_sig"] = {"poster": BOT_LOGIN}
+		return normalized
+	if isinstance(author, dict) and author.get("login") in _GRAPHQL_BOT_LOGINS:
+		verified = verify_body(comment["body"], secret, _comment_location(comment), comment.get("id") or comment.get("databaseId"))
+		if verified is None:
+			return comment
+		original, login, account_type, repo = verified
+		normalized = dict(comment)
+		normalized["body"] = original
+		normalized_author = dict(author, login=login)
+		if "__typename" in normalized_author:
+			normalized_author["__typename"] = account_type
+		normalized["author"] = normalized_author
+		if "authorAssociation" in normalized:
+			normalized["authorAssociation"] = _association(login, repo)
+		return normalized
+	return comment
 
 
 def normalize_value(value: Any, secret: str) -> Any:
+	"""Normalize every comment object anywhere in a REST or GraphQL response."""
 	if isinstance(value, list):
 		return [normalize_value(item, secret) for item in value]
-	return normalize_comment(value, secret)
+	if isinstance(value, dict):
+		value = normalize_comment(value, secret)
+		return {key: normalize_value(item, secret) if isinstance(item, (dict, list)) else item for key, item in value.items()}
+	return value
 
 
 def iter_json_stream(text: str):
@@ -661,12 +711,21 @@ def post_signed(original: list[str], repo: str, issue: int, payload: dict, outpu
 	env["GH_TOKEN"] = job_token
 	env["GITHUB_TOKEN"] = job_token
 	try:
-		proc = run_gh(["api", endpoint, "--method", "POST", "--input", payload_path, *output_args], env=env)
+		proc = run_gh(["api", endpoint, "--method", "POST", "--input", payload_path, *_strip_jq(output_args)], env=env)
 	finally:
 		os.unlink(payload_path)
 	if proc.returncode == 0:
 		log("posted", issue=issue, token="job")
-		return emit(proc)
+		sys.stderr.write(proc.stderr)
+		jq_filter = None
+		if "--jq" in output_args:
+			jq_filter = output_args[output_args.index("--jq") + 1]
+		head, text = "", proc.stdout
+		if "-i" in output_args or "--include" in output_args:
+			parts = _split_include(text)
+			if parts is not None:
+				head, text = parts
+		return write_normalized(text, head, jq_filter, secret)
 	if _REFUSED_RE.search(proc.stderr or ""):
 		log("fallback", reason="job_token_refused", issue=issue)
 		try:
@@ -697,17 +756,15 @@ def edit_signed(original: list[str], parsed: dict, repo: str, comment_id: str, s
 	if not isinstance(current, dict) or (current.get("user") or {}).get("login") != BOT_LOGIN:
 		return plain()
 	location = _comment_location(current)
-	old = SIG_LINE_RE.search(str(current.get("body") or ""))
-	if location is None or old is None or not hmac.compare_digest(
-		signature(secret, location[0], location[1], old.group("login"), old.group("type"), str(current["body"])[: old.start()]),
-		old.group("sig"),
-	):
+	verified = verify_body(str(current.get("body") or ""), secret, location, comment_id) if location else None
+	if verified is None:
 		# Never sign an edit of a comment that was not validly signed: that
 		# would turn an untrusted bot comment into a trusted one.
 		return plain()
-	# Re-sign as the account that signed the original, so an edit cannot
-	# change whose comment it is.
-	signed = sign_body(secret, location[0], location[1], old.group("login"), old.group("type"), body)
+	# Re-sign for the same issue and account as the original, so an edit
+	# cannot change where or whose comment it is.
+	_, login, account_type, _ = verified
+	signed = sign_body(secret, location[0], location[1], login, account_type, body)
 	if len(signed) > MAX_BODY_CHARS:
 		return plain()
 	with tempfile.NamedTemporaryFile("w", suffix=".json", dir=_state_dir(), delete=False, encoding="utf-8") as handle:
@@ -721,33 +778,56 @@ def edit_signed(original: list[str], parsed: dict, repo: str, comment_id: str, s
 	return emit(proc)
 
 
+def _apply_jq(stream: str, jq_filter: str) -> int:
+	"""Run a --jq filter the way gh does: per input value, raw strings, exit 1 on error."""
+	filtered = subprocess.run(["jq", "-rcS", jq_filter], input=stream, capture_output=True, text=True, check=False)
+	sys.stdout.write(filtered.stdout)
+	sys.stderr.write(filtered.stderr)
+	return 0 if filtered.returncode == 0 else 1
+
+
+def write_normalized(text: str, head: str, jq_filter: str | None, secret: str) -> int:
+	"""Print a response body normalized, then filtered by --jq when given."""
+	try:
+		values = [normalize_value(value, secret) for value in iter_json_stream(text)]
+	except ValueError:
+		# Not JSON: nothing to normalize. gh would hand the same text to jq.
+		sys.stdout.write(head)
+		if jq_filter is None:
+			sys.stdout.write(text)
+			return 0
+		return _apply_jq(text, jq_filter)
+	sys.stdout.write(head)
+	if jq_filter is None:
+		sys.stdout.write("".join(json.dumps(value, ensure_ascii=False, separators=(",", ":")) for value in values))
+		return 0
+	return _apply_jq("\n".join(json.dumps(value, ensure_ascii=False) for value in values), jq_filter)
+
+
+def _split_include(text: str) -> tuple[str, str] | None:
+	split = re.search(r"\r?\n\r?\n", text)
+	if split is None:
+		return None
+	return text[: split.end()], text[split.end():]
+
+
 def read_normalized(args: list[str], parsed: dict, secret: str) -> int:
 	if parsed["template"] is not None:
 		return passthrough(args)
-	raw_args = ["api", *_strip_jq(args[1:])]
-	proc = run_gh(raw_args)
+	proc = run_gh(["api", *_strip_jq(args[1:])])
 	if proc.returncode != 0:
+		# gh prints the error body and exits non-zero without running --jq.
 		return emit(proc)
 	text = proc.stdout
 	head = ""
 	if parsed["include"]:
-		split = re.search(r"\r?\n\r?\n", text)
-		if split is None:
-			return emit(proc)
-		head, text = text[: split.end()], text[split.end():]
-	try:
-		values = [normalize_value(value, secret) for value in iter_json_stream(text)]
-	except ValueError:
-		return emit(proc)
+		parts = _split_include(text)
+		if parts is None:
+			# Unexpected shape: re-run the original command so --jq still applies.
+			return passthrough(args)
+		head, text = parts
 	sys.stderr.write(proc.stderr)
-	if parsed["jq"] is None:
-		sys.stdout.write(head + "".join(json.dumps(value, ensure_ascii=False, separators=(",", ":")) for value in values))
-		return 0
-	stream = "\n".join(json.dumps(value, ensure_ascii=False) for value in values)
-	filtered = subprocess.run(["jq", "-rcS", parsed["jq"]], input=stream, capture_output=True, text=True, check=False)
-	sys.stdout.write(head + filtered.stdout)
-	sys.stderr.write(filtered.stderr)
-	return filtered.returncode
+	return write_normalized(text, head, parsed["jq"], secret)
 
 
 def _strip_jq(args: list[str]) -> list[str]:
@@ -788,6 +868,8 @@ def gh_shim(args: list[str]) -> int:
 		if edit and parsed["method"] == "PATCH":
 			return edit_signed(args, parsed, edit.group("repo"), edit.group("id"), secret)
 		if _READ_RE.match(path) and parsed["method"] == "GET":
+			return read_normalized(args, parsed, secret)
+		if path == "graphql":
 			return read_normalized(args, parsed, secret)
 	except (Unsupported, OSError, ValueError, UnicodeDecodeError) as exc:
 		if _STDIN_CONSUMED:

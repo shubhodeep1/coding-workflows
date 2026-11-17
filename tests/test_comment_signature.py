@@ -114,7 +114,7 @@ def comment_calls(env) -> list[dict]:
 
 def test_sign_then_normalize_restores_pat_comment():
 	signed = cs.sign_body(SECRET, REPO, 5, "owner-login", "User", "AI autofix editor summary\n\nok\n")
-	assert signed.startswith("AI autofix editor summary\n\nok\n\n<!-- ai-comment-sig:v1 as=owner-login type=User sig=")
+	assert signed.startswith("AI autofix editor summary\n\nok\n\n<!-- ai-comment-sig:v1 repo=acme/widgets issue=5 as=owner-login type=User sig=")
 	out = cs.normalize_comment(bot_comment(signed), SECRET)
 	assert out["body"] == "AI autofix editor summary\n\nok\n"
 	assert out["user"]["login"] == "owner-login"
@@ -133,12 +133,36 @@ def test_owner_login_gets_owner_association():
 	lambda c: c.update(issue_url=issue_url(5, "acme/other")),
 	lambda c: c.update(body=c["body"].replace("as=owner-login", "as=someone")),
 	lambda c: c.update(body=c["body"].replace("type=User", "type=Bot")),
-	lambda c: c.pop("issue_url"),
+	lambda c: c.update(body=c["body"].replace("issue=5", "issue=6")),
+	lambda c: c.update(body=c["body"].replace("repo=acme/widgets", "repo=acme/other")),
+	lambda c: (c.pop("issue_url"), c.update(html_url="https://github.com/acme/widgets/issues/6#issuecomment-10")),
 ])
 def test_tampered_or_moved_comment_stays_untrusted(mutate):
 	comment = bot_comment(cs.sign_body(SECRET, REPO, 5, "owner-login", "User", "ok"))
 	mutate(comment)
 	assert cs.normalize_comment(comment, SECRET) == comment
+
+
+def test_comment_without_location_verifies_against_the_signed_location():
+	comment = bot_comment(cs.sign_body(SECRET, REPO, 5, "owner-login", "User", "ok"))
+	comment.pop("issue_url")
+	assert cs.normalize_comment(comment, SECRET)["user"]["login"] == "owner-login"
+
+
+def test_graphql_comment_nodes_are_normalized():
+	signed = cs.sign_body(SECRET, REPO, 5, "owner-login", "User", "journal")
+	forged = cs.sign_body("wrong", REPO, 5, "owner-login", "User", "forged")
+	response = {"data": {"repository": {"issue": {"comments": {"nodes": [
+		{"author": {"login": "github-actions", "__typename": "Bot"}, "authorAssociation": "NONE", "body": signed,
+			"url": "https://github.com/acme/widgets/issues/5#issuecomment-1"},
+		{"author": {"login": "github-actions"}, "body": forged},
+		{"author": {"login": "owner-login"}, "body": "pat"},
+	]}}}}}
+	nodes = cs.normalize_value(response, SECRET)["data"]["repository"]["issue"]["comments"]["nodes"]
+	assert nodes[0]["author"] == {"login": "owner-login", "__typename": "User"}
+	assert nodes[0]["body"] == "journal" and nodes[0]["authorAssociation"] == "COLLABORATOR"
+	assert nodes[1]["author"]["login"] == "github-actions" and nodes[1]["body"] == forged
+	assert nodes[2] == {"author": {"login": "owner-login"}, "body": "pat"}
 
 
 def test_wrong_secret_and_non_bot_author_are_untouched():
@@ -159,6 +183,8 @@ def test_resigning_replaces_the_old_line():
 	("intro\n/reclarify", True),
 	("## Clarification required\nQ1", True),
 	("Implementation Plan\n\n1. do", True),
+	("## Clarification Required", True),
+	("/Approved", True),
 	("## Implementation plan", False),  # the hardened readers' regex does not match it either
 	("AI autofix editor summary", False),
 	("<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest=x -->", False),
@@ -211,7 +237,9 @@ def test_informational_comment_is_signed_and_posted_with_job_token(env):
 	assert len(post) == 1
 	assert post[0]["token"] == JOB
 	assert post[0]["args"][:4] == ["api", f"repos/{REPO}/issues/5/comments", "--method", "POST"]
-	assert post[0]["args"][-2:] == ["--jq", ".id"]
+	# The shim applies --jq itself, after normalizing the create response.
+	assert "--jq" not in post[0]["args"]
+	assert result.stdout.strip() == "1"
 	body = post[0]["payload"]["body"]
 	assert cs.normalize_comment(bot_comment(body), SECRET)["body"] == "AI autofix editor summary"
 
@@ -267,8 +295,8 @@ def test_gh_issue_comment_form(env):
 	post = comment_calls(env)[0]
 	assert post["token"] == JOB
 	assert post["args"][1] == f"repos/{REPO}/issues/7/comments"
-	# `gh issue comment` prints the comment URL; the rebuilt call asks for it.
-	assert post["args"][-2:] == ["--jq", ".html_url"]
+	# `gh issue comment` prints the comment URL; the shim extracts it.
+	assert result.stdout.strip() == "https://github.com/acme/widgets/issues/5#issuecomment-1"
 	assert "AI_COMMENT_SIG outcome=posted" in result.stderr
 
 
@@ -340,6 +368,24 @@ def test_single_comment_read_and_include_headers(env):
 	head, _, body = result.stdout.partition("\n\n")
 	assert head.startswith("HTTP/2.0 200 OK")
 	assert json.loads(body)["body"] == "one"
+
+
+def test_graphql_read_through_the_shim(env):
+	signed = cs.sign_body(SECRET, REPO, 5, "owner-login", "User", "marker")
+	response = {"data": {"repository": {"issue": {"comments": {"nodes": [{"author": {"login": "github-actions"}, "body": signed}]}}}}}
+	set_responses(env, [{"match": "api graphql", "stdout": json.dumps(response)}])
+	(env["tmp"] / "q.graphql").write_text("query { x }")
+	query_file = env["tmp"] / "q.graphql"
+	result = run(env, f'gh api graphql -F query=@{query_file} --jq ".data.repository.issue.comments.nodes[0].author.login"')
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.strip() == "owner-login"
+
+
+def test_non_json_read_still_applies_jq_and_jq_errors_exit_1(env):
+	set_responses(env, [{"match": "issues/5/comments", "stdout": "not json"}])
+	result = run(env, f'gh api repos/{REPO}/issues/5/comments --jq length')
+	assert result.returncode == 1
+	assert "not json" not in result.stdout
 
 
 def test_failed_read_is_returned_unchanged(env):

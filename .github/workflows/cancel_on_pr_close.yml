@@ -11,13 +11,11 @@ name: AI Cancel Runs on PR Close
         required: false
 
 env:
-  # Signed job-token comments (run-volume plan item 15, D16): opt-in by the
-  # AI_COMMENT_SIGNING_SECRET repository secret; unset changes nothing. See
-  # scripts/comment_signature.py.
-  AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
-  AI_COMMENT_JOB_TOKEN: ${{ github.token }}
-  # Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false posts with
-  # GH_PAT again while signed comments already posted still verify.
+  # Signed job-token comments (run-volume plan item 15, D16; see
+  # scripts/comment_signature.py). The opt-in secret and the job token sit
+  # next to each step's GH_PAT, never here, so a step without the PAT never
+  # sees them. Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false
+  # posts with GH_PAT again while signed comments already posted still verify.
   AI_COMMENT_SIGNING_POST: ${{ vars.AI_COMMENT_SIGNING_POST || 'true' }}
 
 jobs:
@@ -36,6 +34,8 @@ jobs:
       cancel-in-progress: false
     env:
       GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+      AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       EVENT_NAME: ${{ github.event_name }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
       PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
@@ -47,6 +47,8 @@ jobs:
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"

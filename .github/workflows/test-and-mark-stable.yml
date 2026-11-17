@@ -133,13 +133,11 @@ run-name: ${{ inputs.gate_cycle_id != '' && format('Test & Mark Stable Release [
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  # Signed job-token comments (run-volume plan item 15, D16): opt-in by the
-  # AI_COMMENT_SIGNING_SECRET repository secret; unset changes nothing. See
-  # scripts/comment_signature.py.
-  AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
-  AI_COMMENT_JOB_TOKEN: ${{ github.token }}
-  # Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false posts with
-  # GH_PAT again while signed comments already posted still verify.
+  # Signed job-token comments (run-volume plan item 15, D16; see
+  # scripts/comment_signature.py). The opt-in secret and the job token sit
+  # next to each step's GH_PAT, never here, so a step without the PAT never
+  # sees them. Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false
+  # posts with GH_PAT again while signed comments already posted still verify.
   AI_COMMENT_SIGNING_POST: ${{ vars.AI_COMMENT_SIGNING_POST || 'true' }}
 
 permissions:
@@ -489,6 +487,8 @@ jobs:
         if: ${{ !inputs.dry_run && !inputs.gate_only }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           RELEASE_TAG_PREFLIGHT_ENABLED: ${{ vars.RELEASE_TAG_PREFLIGHT_ENABLED || 'true' }}
           STABLE_RELEASE_ENABLED: ${{ vars.STABLE_RELEASE_ENABLED || 'true' }}
           RELEASE_TAGGING_ENABLED: ${{ vars.RELEASE_TAGGING_ENABLED || 'true' }}
@@ -590,6 +590,8 @@ jobs:
       test_passed: ${{ steps.verify.outputs.passed }}
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+      AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
       PHASE_TIMEOUT: ${{ inputs.phase_timeout || 30 }}
       PLAN_PHASE_TIMEOUT: ${{ inputs.plan_timeout || inputs.phase_timeout || 60 }}
@@ -659,17 +661,21 @@ jobs:
         with:
           ref: main
 
-      # Phase 4 and Phase 4b run step bodies moved to scripts/ (#7991,
-      # workflow file size guard). They are read from this run's own commit,
-      # never from the main checkout above, and copied to RUNNER_TEMP so they
-      # live outside the workspace that the later Phase 5 re-checkout cleans.
       - name: Activate signed job-token comments
         # Run-volume plan item 15 (D16): with AI_COMMENT_SIGNING_SECRET set,
         # later steps' comment reads see signed job-token comments as the
         # PAT wrote them (scripts/comment_signature.py). No-op without it.
-        if: env.AI_COMMENT_SIGNING_SECRET != ''
+        env:
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
         shell: bash
-        run: source scripts/gh_helpers.sh
+        run: |
+          [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
+          source scripts/gh_helpers.sh
+
+      # Phase 4 and Phase 4b run step bodies moved to scripts/ (#7991,
+      # workflow file size guard). They are read from this run's own commit,
+      # never from the main checkout above, and copied to RUNNER_TEMP so they
+      # live outside the workspace that the later Phase 5 re-checkout cleans.
       - name: Checkout release-gate step scripts
         uses: actions/checkout@v5
         with:
@@ -4457,6 +4463,8 @@ jobs:
     timeout-minutes: 280
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+      AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
     steps:
       - name: Validate prerequisites
@@ -4482,9 +4490,13 @@ jobs:
         # Run-volume plan item 15 (D16): with AI_COMMENT_SIGNING_SECRET set,
         # later steps' comment reads see signed job-token comments as the
         # PAT wrote them (scripts/comment_signature.py). No-op without it.
-        if: env.AI_COMMENT_SIGNING_SECRET != ''
+        env:
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
         shell: bash
-        run: source scripts/gh_helpers.sh
+        run: |
+          [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
+          source scripts/gh_helpers.sh
+
       - name: Dispatch & snapshot — workflow-log-analysis
         id: dispatch_log_analysis
         # Rate-limit shaping: the script below opens with a brief 4s
@@ -4591,6 +4603,8 @@ jobs:
     timeout-minutes: 165
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+      AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
     steps:
       - name: Validate prerequisites
@@ -4612,6 +4626,17 @@ jobs:
           ref: main
           fetch-depth: 1
 
+      - name: Activate signed job-token comments
+        # Run-volume plan item 15 (D16): with AI_COMMENT_SIGNING_SECRET set,
+        # later steps' comment reads see signed job-token comments as the
+        # PAT wrote them (scripts/comment_signature.py). No-op without it.
+        env:
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+        shell: bash
+        run: |
+          [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
+          source scripts/gh_helpers.sh
+
       # Generic helper: dispatch a workflow_dispatch workflow by file name
       # and capture the resulting run id, then wait for completion. Each
       # invocation runs in its own step so failures attribute to the
@@ -4631,13 +4656,6 @@ jobs:
       # long tail can no longer block `validate` / `release` /
       # `sync-to-main`). The dispatches that remain here are the short,
       # deterministic ones whose failures still gate the release.
-      - name: Activate signed job-token comments
-        # Run-volume plan item 15 (D16): with AI_COMMENT_SIGNING_SECRET set,
-        # later steps' comment reads see signed job-token comments as the
-        # PAT wrote them (scripts/comment_signature.py). No-op without it.
-        if: env.AI_COMMENT_SIGNING_SECRET != ''
-        shell: bash
-        run: source scripts/gh_helpers.sh
       - name: Dispatch & watch — validation-refresh
         id: dispatch_validation_refresh
         timeout-minutes: 95
@@ -4787,6 +4805,8 @@ jobs:
     timeout-minutes: 60
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+      AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
     outputs:
       tracking_issue: ${{ steps.dispatch.outputs.tracking_issue }}
@@ -4814,9 +4834,13 @@ jobs:
         # Run-volume plan item 15 (D16): with AI_COMMENT_SIGNING_SECRET set,
         # later steps' comment reads see signed job-token comments as the
         # PAT wrote them (scripts/comment_signature.py). No-op without it.
-        if: env.AI_COMMENT_SIGNING_SECRET != ''
+        env:
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
         shell: bash
-        run: source scripts/gh_helpers.sh
+        run: |
+          [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
+          source scripts/gh_helpers.sh
+
       - name: Dispatch internal-orchestrate.yml with multi-issue project
         id: dispatch
         run: |
@@ -5135,6 +5159,8 @@ jobs:
     timeout-minutes: 45
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+      AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
     steps:
       - name: Validate prerequisites
@@ -5157,9 +5183,13 @@ jobs:
         # Run-volume plan item 15 (D16): with AI_COMMENT_SIGNING_SECRET set,
         # later steps' comment reads see signed job-token comments as the
         # PAT wrote them (scripts/comment_signature.py). No-op without it.
-        if: env.AI_COMMENT_SIGNING_SECRET != ''
+        env:
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
         shell: bash
-        run: source scripts/gh_helpers.sh
+        run: |
+          [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
+          source scripts/gh_helpers.sh
+
       - name: Dispatch internal-validate.yml standalone
         id: dispatch
         # 1800s watcher wait + one 20s poll + gh retry backoff headroom.
@@ -5215,6 +5245,8 @@ jobs:
     timeout-minutes: 30
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+      AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
     steps:
       - name: Validate prerequisites
@@ -5237,9 +5269,13 @@ jobs:
         # Run-volume plan item 15 (D16): with AI_COMMENT_SIGNING_SECRET set,
         # later steps' comment reads see signed job-token comments as the
         # PAT wrote them (scripts/comment_signature.py). No-op without it.
-        if: env.AI_COMMENT_SIGNING_SECRET != ''
+        env:
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
         shell: bash
-        run: source scripts/gh_helpers.sh
+        run: |
+          [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
+          source scripts/gh_helpers.sh
+
       - name: Create unsolvable issue
         id: create
         run: |
@@ -5444,6 +5480,8 @@ jobs:
     timeout-minutes: 90
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+      AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
       # Override propagated to the implement run via the issue body's
       # "Note: this run uses `<provider>/<model>` …" line, which the
@@ -5489,9 +5527,13 @@ jobs:
         # Run-volume plan item 15 (D16): with AI_COMMENT_SIGNING_SECRET set,
         # later steps' comment reads see signed job-token comments as the
         # PAT wrote them (scripts/comment_signature.py). No-op without it.
-        if: env.AI_COMMENT_SIGNING_SECRET != ''
+        env:
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
         shell: bash
-        run: source scripts/gh_helpers.sh
+        run: |
+          [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
+          source scripts/gh_helpers.sh
+
       - name: Validate prerequisites
         run: |
           set -euo pipefail
@@ -6182,6 +6224,8 @@ jobs:
       - name: Require CI / lint success on the tested commit
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           GATE_REPO: ${{ github.repository }}
           RELEASE_CI_GATE_WAIT_SECS: ${{ vars.RELEASE_CI_GATE_WAIT_SECS || '1800' }}
           RELEASE_CI_GATE_POLL_SECS: ${{ vars.RELEASE_CI_GATE_POLL_SECS || '30' }}
@@ -6528,6 +6572,8 @@ jobs:
         if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
         run: |
           set -euo pipefail
@@ -6593,6 +6639,8 @@ jobs:
         if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.resolve-version.outputs.version }}
           SYNC_MANIFEST_PATH: ${{ steps.sync_manifest.outputs.path }}
         run: |
@@ -6609,6 +6657,8 @@ jobs:
         if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
           RELEASE_MANIFEST_PATH: ${{ steps.release_manifest.outputs.manifest_path }}
           RELEASE_REPOSITORY: ${{ github.repository }}
@@ -6623,6 +6673,8 @@ jobs:
         if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -6736,6 +6788,8 @@ jobs:
       - name: Dispatch forward-merge-stable-to-main
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           # --repo "${GITHUB_REPOSITORY}" is required: this job has no
@@ -6985,6 +7039,8 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           CHAT_ID="${TG_CHAT_ID:-}"

@@ -51,13 +51,11 @@ env:
   # want the wrapper-update alert back can set vars.ALERT_MSG_LEVEL=DEBUG
   # (or any level ≤ DEBUG=0), or pass alert_msg_level=DEBUG on dispatch.
   ALERT_MSG_LEVEL: ${{ (github.event.inputs.alert_msg_level || '') != '' && github.event.inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'SILENT' }}
-  # Signed job-token comments (run-volume plan item 15, D16): opt-in by the
-  # AI_COMMENT_SIGNING_SECRET repository secret; unset changes nothing. See
-  # scripts/comment_signature.py.
-  AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
-  AI_COMMENT_JOB_TOKEN: ${{ github.token }}
-  # Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false posts with
-  # GH_PAT again while signed comments already posted still verify.
+  # Signed job-token comments (run-volume plan item 15, D16; see
+  # scripts/comment_signature.py). The opt-in secret and the job token sit
+  # next to each step's GH_PAT, never here, so a step without the PAT never
+  # sees them. Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false
+  # posts with GH_PAT again while signed comments already posted still verify.
   AI_COMMENT_SIGNING_POST: ${{ vars.AI_COMMENT_SIGNING_POST || 'true' }}
 
 jobs:
@@ -105,6 +103,8 @@ jobs:
         id: fetch
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           DISPATCH_SHA: ${{ github.event.client_payload.sha || '' }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
@@ -169,6 +169,8 @@ jobs:
         id: verify_manifest
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           UPSTREAM_DIR: ${{ steps.fetch.outputs.upstream_dir }}
           UPSTREAM_SHA: ${{ steps.fetch.outputs.upstream_sha }}
           SYNC_UPSTREAM_REPO: shubhodeep1/coding-workflows
@@ -373,6 +375,8 @@ jobs:
         id: verify_release_manifest
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           UPSTREAM_DIR: ${{ steps.fetch.outputs.upstream_dir }}
           UPSTREAM_SHA: ${{ steps.fetch.outputs.upstream_sha }}
           UPDATER_VERIFY_RELEASE_MANIFEST: ${{ vars.UPDATER_VERIFY_RELEASE_MANIFEST || 'true' }}
@@ -1082,6 +1086,8 @@ jobs:
         if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.retired_files.outputs.retired_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true' || steps.agents_assemble.outputs.agents_assembled == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           UPDATE_VIA_PR: ${{ inputs.update_via_pull_request != false }}
           SYNC_VERSION: ${{ steps.verify_manifest.outputs.version }}
           SYNC_UPSTREAM_SHA: ${{ steps.fetch.outputs.upstream_sha }}
@@ -1667,6 +1673,8 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           COMMIT_DELIVERY: ${{ steps.commit_push.outputs.delivery }}
           COMMIT_PR_URL: ${{ steps.commit_push.outputs.pr_url }}
           COMMIT_PR_ACTION: ${{ steps.commit_push.outputs.pr_action }}
@@ -2112,6 +2120,8 @@ jobs:
         id: verify_release
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           RELEASE_MANIFEST_ASSET_NAME: release-manifest.v1.json
         run: |
           set -euo pipefail

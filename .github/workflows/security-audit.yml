@@ -69,13 +69,11 @@ env:
   # `core` install profile, which has no orchestrate-poll wrapper to resume
   # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
   CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
-  # Signed job-token comments (run-volume plan item 15, D16): opt-in by the
-  # AI_COMMENT_SIGNING_SECRET repository secret; unset changes nothing. See
-  # scripts/comment_signature.py.
-  AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
-  AI_COMMENT_JOB_TOKEN: ${{ github.token }}
-  # Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false posts with
-  # GH_PAT again while signed comments already posted still verify.
+  # Signed job-token comments (run-volume plan item 15, D16; see
+  # scripts/comment_signature.py). The opt-in secret and the job token sit
+  # next to each step's GH_PAT, never here, so a step without the PAT never
+  # sees them. Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false
+  # posts with GH_PAT again while signed comments already posted still verify.
   AI_COMMENT_SIGNING_POST: ${{ vars.AI_COMMENT_SIGNING_POST || 'true' }}
 
 jobs:
@@ -89,6 +87,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
         run: |
           # Trusted pre-support copy of scripts/gh_helpers.sh for gh_api_retry
@@ -141,6 +141,8 @@ jobs:
           WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           CALLER_REPOSITORY: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
@@ -227,6 +229,8 @@ jobs:
           AUDIT_EVENT_REPO_PRIVATE: ${{ github.event.repository.private }}
           PROTECTED_MAIN_SHA: ${{ steps.resolve_support.outputs.protected_main_sha }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
@@ -414,6 +418,8 @@ jobs:
         env:
           SECURITY_AUDIT_SUPPORT_DIR: ${{ github.workspace }}
           GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           # The tracker report comment posts with the job token, so it starts no
           # issue_comment workflows (run-volume plan item 6).
           SECURITY_AUDIT_COMMENT_TOKEN: ${{ github.token }}
@@ -476,6 +482,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ env.AUDIT_DEFAULT_BRANCH }}
           SECURITY_PASS_PR_NUMBER: ${{ inputs.pr_number }}
@@ -510,6 +518,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
           SECURITY_AUDIT_UPSTREAM_REPORT_ENABLED: ${{ vars.SECURITY_AUDIT_UPSTREAM_REPORT_ENABLED || 'true' }}
           REPORT_WRAPPER_SHA: ${{ steps.resolve_support.outputs.support_sha }}
@@ -530,6 +540,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
           REPORT_WORKFLOW_NAME: ${{ github.workflow }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}

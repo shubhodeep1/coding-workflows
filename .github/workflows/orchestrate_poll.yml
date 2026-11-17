@@ -93,13 +93,11 @@ env:
   STATE_SNAPSHOT_BRANCH_ENABLED: ${{ vars.STATE_SNAPSHOT_BRANCH_ENABLED || 'true' }}
   STATE_SNAPSHOT_HISTORY_DEPTH: ${{ vars.STATE_SNAPSHOT_HISTORY_DEPTH || '100' }}
   STATE_SNAPSHOT_BRANCH_NAME: ${{ vars.STATE_SNAPSHOT_BRANCH_NAME || 'state-snapshot' }}
-  # Signed job-token comments (run-volume plan item 15, D16): opt-in by the
-  # AI_COMMENT_SIGNING_SECRET repository secret; unset changes nothing. See
-  # scripts/comment_signature.py.
-  AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
-  AI_COMMENT_JOB_TOKEN: ${{ github.token }}
-  # Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false posts with
-  # GH_PAT again while signed comments already posted still verify.
+  # Signed job-token comments (run-volume plan item 15, D16; see
+  # scripts/comment_signature.py). The opt-in secret and the job token sit
+  # next to each step's GH_PAT, never here, so a step without the PAT never
+  # sees them. Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false
+  # posts with GH_PAT again while signed comments already posted still verify.
   AI_COMMENT_SIGNING_POST: ${{ vars.AI_COMMENT_SIGNING_POST || 'true' }}
 
 jobs:
@@ -142,6 +140,8 @@ jobs:
       - name: Record GH_PAT budget at poll start
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_poll
         run: |
           # The support helper is not staged yet; snapshot before the first
@@ -159,6 +159,8 @@ jobs:
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
@@ -285,6 +287,8 @@ jobs:
         # backstop for missed events. Fail-open: never fails the poll.
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
           MERGE_TRAIN_MAX_OLDER_PRS: ${{ vars.MERGE_TRAIN_MAX_OLDER_PRS || '20' }}
@@ -319,6 +323,8 @@ jobs:
         id: find_tracking
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}
           ORCHESTRATE_TRACKING_ISSUE_LIST_LIMIT: ${{ vars.ORCHESTRATE_TRACKING_ISSUE_LIST_LIMIT || '100' }}
         run: |
@@ -495,6 +501,8 @@ jobs:
       - name: Configure git auth for memory helper clones
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
@@ -585,6 +593,8 @@ jobs:
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
@@ -983,6 +993,8 @@ jobs:
       - name: Replay failed trusted reclarify commands
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           RECLARIFY_REQUEUE_SWEEP_ONLY: "true"
@@ -1081,6 +1093,8 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [ ! -f scripts/memory_helpers.sh ]; then
@@ -1126,6 +1140,8 @@ jobs:
           CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
           AI_ENGINE_LABELS: ""
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}
           ENABLE_STALL_JUDGE: ${{ vars.ENABLE_STALL_JUDGE || 'true' }}
         run: |
@@ -1266,6 +1282,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           CLAUDE_POOL_AVAILABLE: ${{ steps.claude_pool.outputs.available || 'false' }}
           PROVIDER_OUTAGE_REVIEW_WORKFLOW: ${{ endsWith(github.repository, '/coding-workflows') && 'internal-review.yml' || 'ai-review.yml' }}
@@ -1342,6 +1360,8 @@ jobs:
         if: steps.find_tracking.outputs.has_work == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -1579,6 +1599,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -1734,6 +1756,8 @@ jobs:
         if: ${{ !cancelled() && steps.find_tracking.outcome == 'success' && steps.find_tracking.outputs.has_work != 'true' && github.repository == 'shubhodeep1/coding-workflows' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
@@ -1757,6 +1781,8 @@ jobs:
         if: ${{ !cancelled() && steps.find_tracking.outcome == 'success' && steps.find_tracking.outputs.has_work != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
@@ -1799,6 +1825,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
@@ -1876,6 +1904,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
@@ -1933,6 +1963,8 @@ jobs:
         continue-on-error: true
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           # Honour the memory kill switch inside the force-tick helper's cooldown ledger.
           AI_MEMORY_ENABLED: ${{ vars.AI_MEMORY_ENABLED || 'true' }}
@@ -2161,6 +2193,8 @@ jobs:
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           # Fire-and-forget Telegram alert on job-level failure. Inline
@@ -2210,6 +2244,8 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_poll
         run: |
           if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
@@ -2227,6 +2263,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
           REPORT_WORKFLOW_NAME: ${{ github.workflow }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
