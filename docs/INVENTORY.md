@@ -145,6 +145,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/ci_budget_watch.py` — CI early warning on pushes to main: opens one `ai:ci-budget` issue when a workflow file nears the 480,000-byte guard or a CI job nears its timeout.
 - `scripts/ci_cancelled_rerun.py` — Scheduled sweep helper: re-run failed jobs once for cancelled, startup-failed, or runner-shutdown-failed CI on a current PR head.
 - `scripts/ci_docs_only_paths.sh` — The list of paths no test job or CI step reads; a PR whose changed files are all on it gets a final CI run with `docs_only=true` (static checks and lint only, test jobs skipped; #9566).
+- `scripts/ci_final_merge_ref_fresh.sh` — Final-CI step after each `refs/pull/<n>/merge` checkout: refreshes a merge ref GitHub has not recomputed since the base moved, or fails the job, so a final run never tests an old base (final-CI self-heal).
+- `scripts/ci_sync_quick.sh` — Sync-quick final CI for merge-base freshness updates: `classify` says whether every overlap path is a CI-wiring file, `full-ci-green` whether the approved head passed a full final CI run; ci.yml's `tests-sync-quick` re-checks both (#9642).
 - `scripts/clarify_base_image_preseed.sh` — Seed the clarify sandbox's Docker Official Image base from a mirror before the build (CLARIFY_BASE_IMAGE_PRESEED log prefix).
 - `scripts/clarify_blocked_verify.sh` — Decide whether a clarify `BLOCKED:` answer cites a tracked path and build the one retry prompt (CLARIFY_BLOCKED_VERIFY log prefix).
 - `scripts/clarify_data_provision_guard.py` — Post-processing guard for orchestrate_clarify_respond.
@@ -152,6 +154,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/clarify_informal_detect.py` — Score clarify issue bodies for advisory informal-issue signals.
 - `scripts/clarify_isolated_run.sh` — Launch the read-only, credential-free clarification container.
 - `scripts/clarify_openrouter_broker.py` — Restrict clarification model traffic through a host Unix socket.
+- `scripts/comment_signature.py` — Signed job-token pipeline comments: signs comments posted with the job token so they start no `issue_comment` wrapper, and verifies the signature on read (run-volume plan item 15, #9643).
 - `scripts/dependency_registry_proxy.py` — Restrict network-isolated dependency installs to allowlisted HTTPS registries via a host Unix socket.
 - `scripts/clarify_sandbox/Dockerfile` — Pinned Codex container for isolated clarification.
 - `scripts/claude_anthropic_relay.py` — Host-side Anthropic relay and in-container bridge that keep the Claude OAuth token out of sandboxed runs.
@@ -313,6 +316,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_filter_uninteresting_files.sh` — Shell helper for review filter uninteresting files.
 - `scripts/review_final_ci_failed.sh` — Sends a PR whose final CI run (full suite, dispatched once per head after review) failed back to review/autofix: posts one `ai:final-ci-failed:v1` marker comment per head and dispatches the PR's review workflow; runs from ci.yml's `final-ci-failed` job (cut-ci-runner-time Phase 4, #9535).
 - `scripts/review_final_ci_sweep.sh` — Review sweep safety net: each tick hands open-PR heads whose `ai-review/head-gate` is success but which have no final CI run to `_pr_ensure_final_ci` (cut-ci-runner-time Phase 4, #9535).
+- `scripts/review_sweep_head_gate.sh` — Sourced by the review sweep's enumerate step: reads every open PR's `ai-review/head-gate` state in one GraphQL call per 100 PRs into the snapshot (`head_gate_state`, fail-open), and gives the final-CI state of a head so the sweep skips re-reviewing an approved head whose final CI failed (PR #9649).
 - `scripts/review_floor_rules.sh` — Shell helper for review floor rules.
 - `scripts/review_issue_ledger.sh` — Shell helper for review issue ledger.
 - `scripts/review_merge_train.sh` — merge train for review_autofix.yml: `gate` queues an ai/issue-* PR behind older open same-repository ai/issue-* PRs on the same base that edit the same files (fork heads never block; label ai:merge-queued); `release` (cancel_on_pr_close.yml, orchestrate_poll.yml) re-dispatches review once the blockers are gone.
