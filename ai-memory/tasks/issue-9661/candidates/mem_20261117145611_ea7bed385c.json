@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. The suggested fix changes `scripts/review_conflict_prepare.sh`, which is outside this heal issue's locked scope. How should we proceed?\nChoices:\nA) Keep the suggested fix as written. It goes in `scripts/review_conflict_prepare.sh`, between the `.ai/` take-base block and the host-only block: the ordered line union for root `.gitleaksignore`, the `CONFLICT_GITLEAKSIGNORE_UNION_ENABLED` switch (default `true`) and the `CONFLICT_RESOLVER_GITLEAKSIGNORE_UNION` log key, plus tests, a changelog entry and an `agents.d` fragment. An operator re-files this as a regular issue (or one whose scope includes `scripts/review_conflict_prepare.sh`) and closes this heal issue, because the scope here cannot be widened. (RECOMMENDED)\nB) Stay inside the current heal scope. Do the `.gitleaksignore` union as a new step in `.github/workflows/review_autofix.yml` before the resolver step. This repeats logic the prepare script owns, makes a large workflow file bigger (\u00a724 size guard), and has to run in the right order relative to the prepare script's merge.\nC) Make no code change. Treat the escalation as working as designed. The operator merges `main` into `orchestrator/project-576` by hand (keeping both sides' `.gitleaksignore` entries) and this heal issue is closed with no change.",
+  "fingerprint": "938bc7fe95446fc1266353dd6ddce4a695c8df4368bb3fa55d829e41885c35d9",
+  "lineage": {
+    "issue_number": 9661,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44100712842",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44100712842",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261117145611_ea7bed385c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9661,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44100712842"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9661 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-17T14:56:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
