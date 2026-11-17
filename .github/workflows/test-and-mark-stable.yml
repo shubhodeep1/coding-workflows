@@ -5013,7 +5013,25 @@ jobs:
           TRACKING_NUMBER: ${{ steps.dispatch.outputs.tracking_issue }}
           CHILDREN: ${{ steps.dispatch.outputs.child_issues }}
           RUN_ID: ${{ github.run_id }}
+          DISPATCHED_RUN_ID: ${{ steps.dispatch.outputs.dispatched_run_id }}
         run: |
+          # Phase 0: a bootstrap still queued when the watcher timed out would
+          # create the project after this cleanup (gates 43445515854,
+          # 43590943288, 43708007145). Cancel it, then pick up a tracking issue
+          # it already created. The poller's smoke-fixture backstop
+          # (scripts/orchestrate_poll_smoke_fixture_reap.sh) covers what this
+          # misses, including a job killed before this step runs.
+          if [ -f ./scripts/stable_orchestrate_cancel_dispatched_run.sh ]; then
+            SMOKE_CANCEL_OUT="$(bash ./scripts/stable_orchestrate_cancel_dispatched_run.sh || true)"
+            SMOKE_TRACKING_FOUND="$(printf '%s\n' "${SMOKE_CANCEL_OUT}" | sed -n 's/^tracking_issue=//p' | tail -n 1)"
+            if [ -z "${TRACKING_NUMBER}" ] && [[ "${SMOKE_TRACKING_FOUND}" =~ ^[1-9][0-9]*$ ]]; then
+              TRACKING_NUMBER="${SMOKE_TRACKING_FOUND}"
+              SMOKE_CHILDREN_FOUND="$(printf '%s\n' "${SMOKE_CANCEL_OUT}" | sed -n 's/^child_issues=//p' | tail -n 1)"
+              if [[ "${SMOKE_CHILDREN_FOUND}" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]]; then
+                CHILDREN="${CHILDREN:+${CHILDREN},}${SMOKE_CHILDREN_FOUND}"
+              fi
+            fi
+          fi
           # Defence in depth: never abort cleanup on a single failed close.
           # The orchestrator can leave behind issues even when the
           # decompose dispatch fails part-way (children created but
