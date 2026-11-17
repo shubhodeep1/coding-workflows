@@ -140,7 +140,10 @@ class GuardOrderingContractTest(unittest.TestCase):
 		step_names = [step.get("name") for step in _guard_job_steps()]
 		checkout_index = step_names.index("Checkout repository")
 		guard_index = step_names.index(GUARD_STEP_NAME)
-		self.assertEqual(guard_index, checkout_index + 1)
+		# Only the final-CI merge-ref check (scripts/ci_final_merge_ref_fresh.sh)
+		# may run between the checkout and the guard.
+		self.assertEqual(step_names[checkout_index + 1], "Verify the final-CI merge ref is current")
+		self.assertEqual(guard_index, checkout_index + 2)
 		for later_step in (
 			"Setup Python",
 			"Install Python CI dependencies",
@@ -149,7 +152,7 @@ class GuardOrderingContractTest(unittest.TestCase):
 			self.assertLess(guard_index, step_names.index(later_step))
 		self.assertEqual(
 			guard_index,
-			checkout_index + 1,
+			checkout_index + 2,
 			"every other step of the static-checks job must run after the guard",
 		)
 		self.assertEqual(checkout_index, 0)
