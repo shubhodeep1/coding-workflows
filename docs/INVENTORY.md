@@ -307,8 +307,6 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_conflict_resolve.sh` — create the [ai-merge-resolve] commit for review_autofix.yml.
 - `scripts/review_consolidate.sh` — Shell helper for review consolidate.
 - `scripts/review_enable_auto_merge.sh` — Shell helper for review enable auto merge.
-- `scripts/review_final_ci_failed.sh` — Run by the `final-ci-failed` job in ci.yml when a final CI dispatch run's `lint` fails: posts the `ai:final-ci-failed:v1` marker once per head and dispatches the PR's review workflow (`FINAL_CI_FAILED_REDISPATCH_ENABLED`, default `true`).
-- `scripts/review_final_ci_sweep.sh` — Body of the review_autofix_sweep.yml step "Ensure the final CI run on reviewed PR heads": a safety net that hands reviewed open PR heads with no final CI run to `_pr_ensure_final_ci` (`REVIEW_FINAL_CI_WORKFLOW`, `FINAL_CI_SWEEP_MAX_PER_TICK`).
 - `scripts/review_freshness_ci_failed.sh` — Marks a freshness-update head whose CI failed (`ai:freshness-ci-failed:v1`) and dispatches the PR's review workflow so it gets a normal review and autofix run.
 - `scripts/review_head_gate.sh` — Publishes SHA-bound review statuses and withdraws stale PR auto-merge on synchronize.
 - `scripts/review_workflow_sync_skip.sh` — review-gate check that skips the reviewer panel for an `ai-sync/stable` consumer sync PR whose changed paths are all in the signed sync allowlist.
