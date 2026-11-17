@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:2089-2101 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: When a fix-up wait expires and the fix-up is still open, the code sets `wait_ended_at=\"${now}\"` and patches the wait comment to done (2116-2118). The next run reads that time back (1867-1869) and uses it at 2257-2258, so an unresolved fix-up is treated as if it had resolved when the wait expired.\n  WHY: A trusted \"nothing to implement\" re-block posted after the expiry passes the age guard at 619. The item is then closed as completed with marker fixup=none and the comment \"no fix-up is pending\" while the judge's fix-up issue is still open. The source severity was MAJOR, mapped here to high, and no other reviewer flagged this.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING (not a finding): tests/test_unblock_judge.py | location: the parametrize list of test_nothing_to_implement_no_wait_keeps_the_judge_otherwise\n  PROBLEM: No test covers the new fail-closed check at scripts/unblock_judge.sh:623, where a block comment has an empty created_at. If that check were removed later, no test would fail.\n  WHY: Suggested fix: add a \"blank_block_at\" case that sets created_at to \"\" on the _no_wait_block() comment and asserts the issue is not closed and no fixup=none marker is posted. Estimated lines changed: 3. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/unblock_judge.sh:2089-2101 (open fix-up + expired wait branch, wait_ended_at=\"${now}\"), 2116-2118 (wait comment patched to done), read back at 1867-1869, consumed at 2257-2258; marker at 624 and comment text at 629 | severity=MAJOR | confidence=4\n  PROBLEM: The wait-end timestamp that gates the new no-wait close is set to the current run time when a fix-up wait expires with the fix-up still open, so an unresolved fix-up is treated as if it had resolved at expiry. The next run reads the done wait back and never re-reads the fix-up's state.\n  WHY: The fix-up has not merged after UNBLOCK_JUDGE_FIXUP_WAIT_HOURS (default 72). If the planner then re-blocks with the trusted nothing-to-implement reason (the #9215 pattern), the block is newer than wait_ended_at and passes the age guard at 619. The item is closed as completed with fixup=none and \"no fix-up is pending\" while fix-up #N is still open, and that fix-up may later open a pull request against a closed issue.\n- HARDENING (not a finding): scripts/unblock_judge.sh | location: 1867-1869, wait_ended_at=\"${wait_updated}\" in the done-wait branch\n  PROBLEM: wait_updated is used as the wait end without a format check, while block_at (623) and fixup_closed_at (2106) are validated. A non-standard timestamp would make the comparisons at 619 and 1878 compare mismatched formats instead of failing closed.\n  WHY: Suggested fix: validate wait_updated with the strict UTC regex right after the read at 1866, and leave wait_ended_at empty when it does not match, so the guard at 2257 fails closed. Estimated lines changed: 3. HARDENING_RISK_SCORE: 2.\n- HARDENING (not a finding): tests/test_unblock_judge.py | location: test_nothing_to_implement_no_wait_keeps_the_judge_otherwise, parametrize list\n  PROBLEM: Neither fail-closed check added in the last run has a test: the block_at timestamp regex at scripts/unblock_judge.sh:623 and the wait-without-end-time guard at 2257.\n  WHY: Suggested fix: add one case with an empty created_at on the block comment and one where the done wait has neither updated_at nor created_at, both asserting the issue is not closed. Estimated lines changed: 6. HARDENING_RISK_SCORE: 1.\n- Overall HARDENING_RISK_SCORE: 2.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING (not a finding): tests/test_unblock_judge.py | location: test_nothing_to_implement_no_wait_keeps_the_judge_otherwise parametrize list (~line 5440)\n  PROBLEM: The two fail-closed checks added by the last run have no regression test: a block comment with an empty created_at (the line 623 regex guard) and a done wait with no derivable end time (the line 2257 gate).\n  WHY: If either check were removed later, no test would fail and the age guard would silently fail open. Suggested fix: add two parametrize cases, one with `at: \"\"` on the block comment and one with `updated_at=\"\"` and `created_at=\"\"` on the done wait. Each asserts that `op=nothing_to_implement outcome=closed` is absent and the issue is not closed. Estimated lines changed: 8. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bd84106d5ee0e5d8d7053fe14b10cc6bd435abe948aad849858c9de26a7255cd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9538,
+    "run_id": "43955141931",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43955141931",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117001522_9386bc30fc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9538,
+    "run_id": "43955141931"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-17T00:15:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
