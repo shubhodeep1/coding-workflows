@@ -7,7 +7,7 @@ The unblock judge (`scripts/unblock_actions.py`) writes a re-issue for a CI fail
 | --- | --- |
 | New GitHub API calls per eligible re-issue | 2 (one PR read, one branch read), plus 2 when the base branch is gone (one closed-PR search, one ref read per followed hop); none on any other issue |
 | New refusal reasons | 0 (every unverifiable reissue keeps the default branch with an `outcome=skipped` warning) |
-| New environment variables | 1 (`CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED`, default `true`, forwarded from the repository variable by clarify, plan, implement, orchestrate_clarify_respond and validate) |
+| New environment variables | 1 (`CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED`, default `true`, forwarded from the repository variable by clarify, plan, implement, orchestrate_clarify_respond and validate; setting the repository variable to `false` turns the re-issue routing off, `reason=flag_off`) |
 
 What this means for operators: no re-issue is stopped by this routing. When a run logs `CI_TRIAGE_PR_BRANCH_ROUTING ... outcome=skipped reason=<token>` as a warning, the re-issue ran on the default branch. If it should have run on the merged PR's base branch (for example an abandoned integration branch, `reason=branch_missing`, or a failed API read, `reason=branch_lookup_failed`), add an `Integration branch:` line to the re-issue, or recreate the branch, and re-run. Setting the repository variable `CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED=false` turns the re-issue routing off (`outcome=skipped reason=flag_off`) and leaves the labelled `ai:check-triage` routing unchanged.
 
