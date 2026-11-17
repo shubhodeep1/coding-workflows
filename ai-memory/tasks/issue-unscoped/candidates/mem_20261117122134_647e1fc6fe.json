@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The fix must remove the cause and ship a regression test that reproduces the failing condition: it fails on the reported head and passes with the fix. Record in the PR that you ran it both ways.\"\n  expected_change_site: PR description Acceptance table rows for `tests/test_workflow_checkout_integration_ref_audit.py::test_plan_rate_limited_refusal_defers_without_failing` and `tests/test_workflow_checkout_integration_ref_audit.py::test_plan_setup_steps_skip_on_rate_limited_defer`\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: Both red-on-base rows in the PR description Acceptance table still read \"not run\", no record that the tests were run against the reported head `f28b6eb0097ff4381906d124cd6643e238d095ce` (expected to fail) and against the fix (expected to pass); the tests are present in `tests/test_workflow_checkout_integration_ref_audit.py` and the latest autofix change is comment-only at `.github/workflows/plan.yml:475-476`. Severity disagreement: sonnet rated NIT with confidence 2 and said the record belongs in the PR body, not a repo file; the others rated MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nTASK_GAP:\nRequirement: \"The fix must remove the cause and ship a regression test that reproduces the failing condition: it fails on the reported head and passes with the fix. Record in the PR that you ran it both ways.\"\nExpected change site: the PR description's Acceptance table, rows for `test_plan_rate_limited_refusal_defers_without_failing` and `test_plan_setup_steps_skip_on_rate_limited_defer`.\nEvidence of absence: both rows still read \"not run\". The regression tests are present in `tests/test_workflow_checkout_integration_ref_audit.py`. They assert outputs the pre-fix workflow never produced. The both-ways record belongs in the PR body, not a repository file. Earlier autofix rounds deferred it for the same reason, so it is not a code defect.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\nTASK_GAP:\nRequirement: \"The fix must remove the cause and ship a regression test that reproduces the failing condition: it fails on the reported head and passes with the fix. Record in the PR that you ran it both ways.\"\nExpected change site: The Acceptance table in the PR description.\nEvidence of absence: The Acceptance table still marks the two red-on-base regression tests as \"not run\". No documented record that they were executed against the reported head SHA `f28b6eb0097ff4381906d124cd6643e238d095ce` or against the fix.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\nTASK_GAP:\nRequirement: \"The fix must remove the cause and ship a regression test that reproduces the failing condition: it fails on the reported head and passes with the fix. Record in the PR that you ran it both ways.\"\nExpected change site: PR description body, Acceptance table rows for the two tests.\nEvidence of absence: The two rows still read \"not run\" on every review pass. The tests assert outputs (`rate_limited_defer`, `SKIP_PLAN`, exit 0) the pre-fix workflow never produced, so they would fail on the reported head and pass with the fix, but the record is missing. The latest autofix change is comment-only at `.github/workflows/plan.yml:475-476`.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\nTASK_GAP:\nRequirement: \"The fix must remove the cause and ship a regression test that reproduces the failing condition: it fails on the reported head and passes with the fix. Record in the PR that you ran it both ways.\"\nExpected change site: PR description Acceptance table for the two tests.\nEvidence of absence: Both rows remain marked \"not run.\" The PR discussion records runs against the fixed tree, but not against the reported head `f28b6eb0097ff4381906d124cd6643e238d095ce`.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "a2e6c5a95de985fe909a27d315f220ba56c30abc0d24a95de5760d9a606b4e58",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9604,
+    "run_id": "44055647021",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44055647021",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117122134_647e1fc6fe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9604,
+    "run_id": "44055647021"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-17T12:21:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
