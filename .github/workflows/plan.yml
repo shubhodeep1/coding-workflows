@@ -472,8 +472,8 @@ jobs:
             } >> "$GITHUB_OUTPUT"
             echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
             echo "::warning::INTEGRATION_REF_RESOLVE outcome=deferred reason=rate_limited rc=${resolver_rc} ci_triage_routing=on issue=${issue_number}; refusing to fall back to the default branch."
-            # "Write run summary" skips on SKIP_PLAN, so leave a trace here for
-            # installs without standalone stall recovery (core profile).
+            # "Write run summary" skips on SKIP_PLAN, so leave an operator-visible
+            # trace here on every install (it also covers the manual cases).
             echo "Planning for issue #${issue_number} was deferred: the integration-ref lookup was rate-limited (exit 75) with CI-triage routing on. No label was changed. If the issue is in ai:planning or ai:clarification, standalone stall recovery re-posts /answer after the limit resets; if it is in ai:blocked, or stall recovery is off, post /answer again by hand after the limit resets." >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
             exit 0
           elif [ "${resolver_rc}" -eq 2 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
