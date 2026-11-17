@@ -961,6 +961,26 @@ _pr_head_ci_runs_pending()
 # the full-suite dispatch is tried once more. Fail-open: a failed
 # read dispatches anyway, because a duplicate run is harmless and a missing
 # run blocks the merge (the required `lint` check never appears).
+# The final-CI decision over an `actions/.../runs` listing ($path, $sha):
+# "exists in_flight|success|failure", "dispatch sync_quick_failed|
+# only_unfinished|no_run" or "read_failed". Shared with the review sweep's
+# review_sweep_final_ci_state (scripts/review_sweep_head_gate.sh), so the two
+# cannot drift apart.
+PR_FINAL_CI_JQ_DECISION_DEF='def _pr_final_ci_decision:
+		if (type == "object" and (.workflow_runs | type) == "array") then
+			[.workflow_runs[]
+				| select(type == "object")
+				| select(((.path // "") | split("@") | .[0]) == $path)
+				| select((.head_sha // "") == $sha)] as $runs
+			| ($runs | map(select(((.display_title // "") | endswith(" [sync-quick]")) | not))) as $full_runs
+			| if any($runs[]; (.status // "") != "completed") then "exists in_flight"
+			elif any($runs[]; (.conclusion // "") == "success") then "exists success"
+			elif any($full_runs[]; (.conclusion // "") == "failure") then "exists failure"
+			elif any($runs[]; (.conclusion // "") == "failure") then "dispatch sync_quick_failed"
+			elif ($runs | length) > 0 then "dispatch only_unfinished"
+			else "dispatch no_run" end
+		else "read_failed" end;'
+
 _pr_ensure_final_ci()
 {
 	local repo="$1" pr="$2" sha="$3" ref="${4:-}"
@@ -986,20 +1006,7 @@ _pr_ensure_final_ci()
 	else
 		runs_json="$(gh_retry _safe_gh_jq "repos/${repo}/actions/workflows/${wf}/runs?head_sha=${sha}&per_page=20" 2>/dev/null || echo "")"
 	fi
-	decision="$(printf '%s' "${runs_json}" | jq -r --arg path ".github/workflows/${wf}" --arg sha "${sha}" '
-		if (type == "object" and (.workflow_runs | type) == "array") then
-			[.workflow_runs[]
-				| select(type == "object")
-				| select(((.path // "") | split("@") | .[0]) == $path)
-				| select((.head_sha // "") == $sha)] as $runs
-			| ($runs | map(select(((.display_title // "") | endswith(" [sync-quick]")) | not))) as $full_runs
-			| if any($runs[]; (.status // "") != "completed") then "exists in_flight"
-			elif any($runs[]; (.conclusion // "") == "success") then "exists success"
-			elif any($full_runs[]; (.conclusion // "") == "failure") then "exists failure"
-			elif any($runs[]; (.conclusion // "") == "failure") then "dispatch sync_quick_failed"
-			elif ($runs | length) > 0 then "dispatch only_unfinished"
-			else "dispatch no_run" end
-		else "read_failed" end' 2>/dev/null | tail -n1)"
+	decision="$(printf '%s' "${runs_json}" | jq -r --arg path ".github/workflows/${wf}" --arg sha "${sha}" "${PR_FINAL_CI_JQ_DECISION_DEF}"' _pr_final_ci_decision' 2>/dev/null | tail -n1)"
 	case "${decision}" in
 		"exists "*)
 			PR_FINAL_CI_OUTCOME="exists"
@@ -1089,6 +1096,7 @@ _pr_ensure_final_ci()
 	PR_FINAL_CI_OUTCOME="dispatch_failed"
 	# A branch created before ci.yml had its workflow_dispatch trigger
 	# cannot be dispatched; updating the branch from its base fixes that.
+	PR_FINAL_CI_REASON="dispatch_refused"
 	echo "::warning::REVIEW_FINAL_CI pr=${pr} head=${sha} outcome=dispatch_failed reason=dispatch_refused workflow=${wf} (if the branch predates the workflow's workflow_dispatch trigger, update it from its base branch)"
 	return 0
 }
@@ -1143,6 +1151,24 @@ _pr_wait_for_required_checks()
 				waited=$((waited + poll_seconds))
 				PR_CHECKS_WAIT_WAITED_S="${waited}"
 				continue
+			fi
+			# The head has no CI run and none could be started (a branch
+			# whose ci.yml predates the workflow_dispatch trigger, a fork
+			# head, an unreadable head ref): the required check cannot
+			# appear on this head, so stop now with the same timeout outcome
+			# instead of holding the runner for the whole budget (PR #9579,
+			# 2026-11-17: 45 minutes per review run, every sweep tick).
+			if [ "${PR_FINAL_CI_OUTCOME:-}" = "dispatch_failed" ] && [ "${PR_CHECKS_LAST_CI_STATE:-}" = "absent" ] \
+				&& [ "${PR_CHECKS_RUNS_PENDING:-0}" -eq 0 ]; then
+				# A refused dispatch on a branch whose CI workflow predates the
+				# workflow_dispatch trigger: update the approved branch from its
+				# base once, so the update head can get its final CI.
+				if [ "${PR_FINAL_CI_REASON:-}" = "dispatch_refused" ]; then
+					_pr_final_ci_refused_base_update "${pr_number}" "${head_sha}" "${base_ref}" || true
+				fi
+				PR_CHECKS_WAIT_OUTCOME="timeout"
+				echo "AUTOFIX_AUTO_MERGE_CHECKS pr=${pr_number} head_sha=${head_sha:-unknown} outcome=timeout waited_s=${waited} pending=0 reason=final_ci_dispatch_failed ci_check=${PR_CHECKS_LAST_CI_NAME:-none} ci_state=${PR_CHECKS_LAST_CI_STATE:-unknown}"
+				return 1
 			fi
 		fi
 		case "${PR_CHECKS_LAST_REASON}" in
@@ -1825,4 +1851,98 @@ _pr_base_fresh_for_merge()
 			return 0
 			;;
 	esac
+}
+
+# Base update for a refused final-CI dispatch (operator decision Q2: A,
+# 2026-11-17; PR #9579). `gh workflow run` refuses a branch whose copy of
+# REVIEW_FINAL_CI_WORKFLOW has no workflow_dispatch trigger (branches cut
+# before cut-ci-runner-time Phase 4b, #9563), so such an approved head can
+# never get the required `lint` and never merges.
+#
+#   _pr_final_ci_refused_base_update <pr> <approved head> [<base ref>]
+#
+# Called only from _pr_wait_for_required_checks after _pr_ensure_final_ci
+# ended `dispatch_failed reason=dispatch_refused`. Every caller of that wait
+# first ran _pr_base_fresh_for_merge on the same approved head, so it acts
+# only when PR_BASE_FRESHNESS_OUTCOME is `clean` for this head (the base is
+# ahead and shares no file with the PR; `fresh` means an update cannot help).
+# It then confirms the cause: the head's workflow file must exist and name no
+# `workflow_dispatch` (one contents read), while the base's copy must have it
+# (one contents read). After one update the head carries the base's file, so
+# this runs at most once per PR for this cause. Then, exactly like the
+# freshness overlap path: head-bound update-branch, verified update commit,
+# the ai:merge-base-sync:v1 marker (so the update head skips the reviewer
+# panel and only waits for CI) and the update head's final-CI dispatch.
+# Switch: FINAL_CI_REFUSED_BASE_UPDATE_ENABLED (default true; true/1/yes/on).
+# API budget (§15): two contents reads, then the freshness path's PUT,
+# observe reads, marker POST and final-CI dispatch; nothing on other paths.
+# Always returns 0 (the wait still ends `timeout`; the synchronize run merges).
+# Log: `REVIEW_FINAL_CI_BASE_UPDATE pr=<n> head=<sha> outcome=updated|requested|skipped|failed reason=<token>`.
+_pr_final_ci_refused_base_update()
+{
+	local refused_pr="$1" refused_head="$2" refused_base="${3:-}"
+	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" refused_wf="${REVIEW_FINAL_CI_WORKFLOW:-}"
+	local refused_head_has="" refused_base_has="" refused_base_ref refused_sync_number
+	refused_log()
+	{
+		echo "REVIEW_FINAL_CI_BASE_UPDATE pr=${refused_pr:-?} head=${refused_head:-?} outcome=$1 reason=$2"
+	}
+	case "$(printf '%s' "${FINAL_CI_REFUSED_BASE_UPDATE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		true|1|yes|on) ;;
+		*) refused_log skipped disabled; return 0 ;;
+	esac
+	if ! [[ "${refused_pr}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${refused_head}" =~ ^[0-9a-f]{40}$ ]] \
+		|| ! [[ "${refused_wf}" =~ ^[A-Za-z0-9._-]+\.ya?ml$ ]] || ! [[ "${repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+		refused_log skipped invalid_input
+		return 0
+	fi
+	if [ "${PR_BASE_FRESHNESS_HEAD_SHA:-}" != "${refused_head}" ] || [ "${PR_BASE_FRESHNESS_OUTCOME:-}" != "clean" ]; then
+		refused_log skipped "freshness_${PR_BASE_FRESHNESS_OUTCOME:-unchecked}"
+		return 0
+	fi
+	refused_base_ref="${refused_base:-${PR_BASE_FRESHNESS_BASE_REF:-}}"
+	if ! [[ "${refused_base_ref}" =~ ^[A-Za-z0-9._/-]+$ ]] || [[ "${refused_base_ref}" == *..* ]]; then
+		refused_log skipped base_ref_unknown
+		return 0
+	fi
+	# `yes` when the file at <ref> declares a workflow_dispatch trigger, `no`
+	# when it does not, empty when the read failed or the file is missing.
+	refused_has_dispatch()
+	{
+		gh_retry _safe_gh_jq "repos/${repo}/contents/.github/workflows/${refused_wf}?ref=$1" 2>/dev/null \
+			| jq -r 'if type == "object" and (.encoding // "") == "base64" and ((.content // "") | type) == "string"
+				then ((.content | gsub("\\s"; "") | @base64d) | if test("(^|\\n)\\s*\"?workflow_dispatch\"?\\s*:|[\\[,{]\\s*\"?workflow_dispatch\"?\\s*[\\],}:]") then "yes" else "no" end)
+				else "" end' 2>/dev/null | tail -n1
+	}
+	refused_head_has="$(refused_has_dispatch "${refused_head}")"
+	if [ "${refused_head_has}" != "no" ]; then
+		refused_log skipped "head_workflow_${refused_head_has:-unreadable}"
+		return 0
+	fi
+	refused_base_has="$(refused_has_dispatch "${refused_base_ref}")"
+	if [ "${refused_base_has}" != "yes" ]; then
+		refused_log skipped "base_workflow_${refused_base_has:-unreadable}"
+		return 0
+	fi
+	if ! _pr_base_sync_for_fresh_ci "${refused_pr}" "${refused_head}"; then
+		refused_log failed update_branch_refused
+		return 0
+	fi
+	if _pr_base_sync_observe_update_commit "${refused_pr}" "${refused_head}" "${refused_base_ref}"; then
+		# The update number counts earlier sync markers (freshness updates
+		# included); an unreadable count falls back to 1.
+		refused_sync_number=1
+		if _pr_base_sync_count "${refused_pr}"; then
+			refused_sync_number=$(( PR_BASE_SYNC_COUNT + 1 ))
+		fi
+		PR_BASE_SYNC_MARKER_LEAD="$(printf 'This branch'"'"'s `%s` predates its `workflow_dispatch` trigger, so the final CI run that the merge requires could not be started on it; `%s` (%s commit(s) ahead, none touching files this PR changes) has the trigger.' "${refused_wf}" "${refused_base_ref}" "${PR_BASE_FRESHNESS_BEHIND_BY:-?}")" \
+			_pr_base_sync_marker_post "${refused_pr}" "${refused_head}" "${refused_sync_number}" "${MERGE_BASE_FRESHNESS_MAX_SYNCS:-2}" \
+			"${PR_BASE_SYNC_BASE_SHA}" "${PR_BASE_SYNC_MERGE_SHA}"
+		_pr_base_sync_dispatch_final_ci "${refused_pr}" "${refused_head}" "${PR_BASE_SYNC_MERGE_SHA}"
+		refused_log updated workflow_predates_dispatch
+	else
+		echo "MERGE_BASE_SYNC_MARKER pr=${refused_pr} head_sha=${refused_head} outcome=skipped reason=${PR_BASE_SYNC_OBSERVE_REASON:-head_not_observed}"
+		refused_log requested "${PR_BASE_SYNC_OBSERVE_REASON:-head_not_observed}"
+	fi
+	return 0
 }
