@@ -143,7 +143,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/check_workflow_script_refs.py` — Verify every script referenced by a workflow file exists in scripts/.
 - `scripts/ci_budget_watch.py` — CI early warning on pushes to main: opens one `ai:ci-budget` issue when a workflow file nears the 480,000-byte guard or a CI job nears its timeout.
 - `scripts/ci_cancelled_rerun.py` — Scheduled sweep helper: re-run failed jobs once for cancelled, startup-failed, or runner-shutdown-failed CI on a current PR head.
-- `scripts/ci_docs_only_paths.sh` — The list of paths no test job or CI step reads; a PR whose changed files are all on it gets a final CI run with `docs_only=true` (static checks and lint only, test jobs skipped; #9566).
+- `scripts/ci_docs_only_paths.sh` — The list of paths no test job or CI step reads; a PR whose changed files are all on it gets a final CI run with `docs_only=true` (static checks and lint only, test jobs skipped; #9566). `classify` decides whether a PR's changed files are all docs-only and `verify` re-checks that in `ci.yml`'s `lint` job (log prefix `CI_DOCS_ONLY_GATE`, Refs #9528).
+- `scripts/ci_sync_quick.sh` — Sync-quick final CI for merge-base freshness updates: `classify` decides whether the base commits overlap the PR only in CI-wiring files, `full-ci-green` checks that the approved head passed a full final CI run, and `verify` / `run-tests` back `ci.yml`'s `tests-sync-quick` job.
 - `scripts/clarify_base_image_preseed.sh` — Seed the clarify sandbox's Docker Official Image base from a mirror before the build (CLARIFY_BASE_IMAGE_PRESEED log prefix).
 - `scripts/clarify_data_provision_guard.py` — Post-processing guard for orchestrate_clarify_respond.
 - `scripts/clarify_github_facts.py` — Read referenced GitHub issue, PR, branch and run state for the isolated clarify-respond worker.
@@ -169,6 +170,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/codex_thread_reuse.sh` — Shell helper for codex thread reuse.
 - `scripts/collect_pr_check_runs_context.py` — Collect PR check-run context for review_autofix.
 - `scripts/collect_workflow_logs.py` — Collect GitHub Actions run/job telemetry for core AI workflow families.
+- `scripts/comment_signature.py` — Signed job-token comments: with `AI_COMMENT_SIGNING_SECRET` set, signs pipeline comments that cannot start a wrapper, posts them with the job token and verifies signed comments on read (embedded in `scripts/gh_helpers.sh` as the `gh` shim; rollback via `AI_COMMENT_SIGNING_POST=false`).
 - `scripts/compare_issue_timeline_parity.sh` — Shell helper for compare issue timeline parity.
 - `scripts/comprehensive_test_and_release_gh_api.sh` — Shell helper for comprehensive test and release gh api.
 - `scripts/consolidate_soft_error_reports.py` — Consolidate per-phase soft-error reports into one deterministic markdown file.
@@ -249,7 +251,6 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/orphan_fixup_close.py` — Pick the open unblock fix-up issues whose source issue is already closed, for the poller to close.
 - `scripts/post_review_comment.sh` — a single pull-request review when `--review-state` is supplied.
 - `scripts/pr_checks_lib.sh` — Shared PR check-runs merge gate.
-- `scripts/ci_docs_only_paths.sh` — Docs-only final CI path list: `classify` decides whether a PR's changed files are all docs-only, `verify` re-checks that in `ci.yml`'s `lint` job (log prefix `CI_DOCS_ONLY_GATE`, Refs #9528).
 - `scripts/implement_step_prepush_test_gate.sh` — Implement's pre-push affected-test gate step: runs the gate before commit, gives PR-caused failures one repair turn and writes the PR-body summary (issue #8190).
 - `scripts/prepush_test_gate_run.sh` — Run the pre-push affected-test gate in a credential-free container and copy back only its result (issue #7137).
 - `scripts/promote_candidate_follow.sh` — Fast-forward the `promote-candidate` branch to the main tip unless the `promote-cycle-frozen` tag freezes it (log prefix `PROMOTE_CANDIDATE_FOLLOW`).
@@ -306,16 +307,12 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_conflict_resolve.sh` — create the [ai-merge-resolve] commit for review_autofix.yml.
 - `scripts/review_consolidate.sh` — Shell helper for review consolidate.
 - `scripts/review_enable_auto_merge.sh` — Shell helper for review enable auto merge.
-- `scripts/review_final_ci_failed.sh` — Sends a PR whose final CI dispatch run failed back to review/autofix: posts one `<!-- ai:final-ci-failed:v1 pr=<n> head=<sha> -->` marker per head and dispatches the PR's review workflow (run from the `final-ci-failed` job of `ci.yml`).
-- `scripts/review_final_ci_sweep.sh` — Review sweep safety net: finds open non-draft PR heads with `ai-review/head-gate` success whose review never started the final CI run, and hands each to `_pr_ensure_final_ci`.
 - `scripts/review_freshness_ci_failed.sh` — Marks a freshness-update head whose CI failed (`ai:freshness-ci-failed:v1`) and dispatches the PR's review workflow so it gets a normal review and autofix run.
 - `scripts/review_final_ci_failed.sh` — Marks a PR head whose final CI run failed (`ai:final-ci-failed:v1`) and dispatches the PR's review workflow so the autofix can fix it (run by the `final-ci-failed` job of `ci.yml`, Refs #9528).
 - `scripts/review_final_ci_sweep.sh` — Review-sweep safety net that hands review-passed heads without a final CI run to `_pr_ensure_final_ci` (run by `review_autofix_sweep.yml`, Refs #9528).
 - `scripts/review_head_gate.sh` — Publishes SHA-bound review statuses and withdraws stale PR auto-merge on synchronize.
 - `scripts/review_workflow_sync_skip.sh` — review-gate check that skips the reviewer panel for an `ai-sync/stable` consumer sync PR whose changed paths are all in the signed sync allowlist.
 - `scripts/review_filter_uninteresting_files.sh` — Shell helper for review filter uninteresting files.
-- `scripts/review_final_ci_failed.sh` — Sends a PR whose final CI run (full suite, dispatched once per head after review) failed back to review/autofix: posts one `ai:final-ci-failed:v1` marker comment per head and dispatches the PR's review workflow; runs from ci.yml's `final-ci-failed` job (cut-ci-runner-time Phase 4, #9535).
-- `scripts/review_final_ci_sweep.sh` — Review sweep safety net: each tick hands open-PR heads whose `ai-review/head-gate` is success but which have no final CI run to `_pr_ensure_final_ci` (cut-ci-runner-time Phase 4, #9535).
 - `scripts/review_floor_rules.sh` — Shell helper for review floor rules.
 - `scripts/review_issue_ledger.sh` — Shell helper for review issue ledger.
 - `scripts/review_merge_train.sh` — merge train for review_autofix.yml: `gate` queues an ai/issue-* PR behind older open same-repository ai/issue-* PRs on the same base that edit the same files (fork heads never block; label ai:merge-queued); `release` (cancel_on_pr_close.yml, orchestrate_poll.yml) re-dispatches review once the blockers are gone.
