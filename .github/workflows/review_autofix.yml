@@ -3857,8 +3857,6 @@ jobs:
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
-          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
         run: |

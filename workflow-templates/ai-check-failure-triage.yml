@@ -50,7 +50,6 @@ jobs:
       CHECK_TRIAGE_ISSUES_TOKEN: ${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
-      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
 
   # GitHub never sends check_run events for checks created by GitHub Actions
   # ("to prevent recursive workflows"), so the job above never fires for
@@ -81,4 +80,3 @@ jobs:
       CHECK_TRIAGE_ISSUES_TOKEN: ${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
-      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}

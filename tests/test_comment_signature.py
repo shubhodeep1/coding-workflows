@@ -447,7 +447,8 @@ def test_activation_is_job_wide_inside_actions(env):
 	run(env, "true", extra={"GITHUB_PATH": str(gh_path), "GITHUB_ENV": str(gh_env)})
 	shim_dir = gh_path.read_text().strip()
 	assert "ai_comment_sig_shim." in shim_dir
-	assert f"AI_COMMENT_SIG_SHIM_DIR={shim_dir}" in gh_env.read_text()
+	# Only the shim dir is persisted: no variables reach later steps.
+	assert gh_env.read_text() == ""
 	# A later step: PATH already carries the shim, so sourcing again adds nothing.
 	later = run(env, "true", extra={
 		"GITHUB_PATH": str(gh_path), "GITHUB_ENV": str(gh_env), "PATH": f"{shim_dir}:{env['env']['PATH']}",
@@ -455,6 +456,30 @@ def test_activation_is_job_wide_inside_actions(env):
 	})
 	assert later.returncode == 0
 	assert gh_path.read_text().strip() == shim_dir
+
+
+def _later_step(env, shim_dir, script, secret=True):
+	full = {k: v for k, v in env["env"].items() if not k.startswith("AI_COMMENT_SIG_")}
+	full["PATH"] = f"{shim_dir}:{full['PATH']}"
+	if not secret:
+		full.pop("AI_COMMENT_SIGNING_SECRET", None)
+	return subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=full, check=False)
+
+
+def test_later_step_without_shim_variables_still_verifies(env):
+	gh_path = env["tmp"] / "github_path"
+	gh_path.write_text("")
+	run(env, "true", extra={"GITHUB_PATH": str(gh_path)})
+	shim_dir = gh_path.read_text().strip()
+	signed = cs.sign_body(SECRET, REPO, 5, "owner-login", "User", "journal")
+	set_responses(env, [{"match": "issues/5/comments", "stdout": _page(bot_comment(signed))}])
+	read = f"gh api repos/{REPO}/issues/5/comments --jq '.[0].user.login'"
+	result = _later_step(env, shim_dir, read)
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.strip() == "owner-login"
+	# A later step that does not hold the secret gets the real gh, unchanged.
+	plain = _later_step(env, shim_dir, read, secret=False)
+	assert '"login": "github-actions[bot]"' in plain.stdout and "ai-comment-sig:v1" in plain.stdout
 
 
 def test_python_child_without_gh_helpers_goes_through_the_shim(env):

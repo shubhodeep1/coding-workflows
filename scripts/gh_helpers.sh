@@ -41,9 +41,10 @@ _GH_HELPERS_LOADED=1
 # RUNNER_TEMP, so they travel wherever gh_helpers.sh is staged (the embedded
 # signer is kept byte-identical to scripts/comment_signature.py by
 # tests/test_comment_signature.py). Inside Actions the first activation in a
-# job also appends the shim dir to GITHUB_PATH and the variables to
-# GITHUB_ENV, so every later step of the job (Python scripts run straight
-# from a workflow step included) goes through the shim.
+# job also appends the shim dir (and nothing else) to GITHUB_PATH, so every
+# later step of the job (Python scripts run straight from a workflow step
+# included) goes through the shim. The hardened check-failure triage job
+# never gets the secret, so it never activates there.
 # ---------------------------------------------------------------
 _ai_comment_sig_activate()
 {
@@ -114,7 +115,12 @@ case "${1:-}" in
 		;;
 	*) exec "${AI_COMMENT_SIG_REAL_GH}" "$@" ;;
 esac
-if [ -z "${AI_COMMENT_SIGNING_SECRET:-}" ] || [ ! -f "${AI_COMMENT_SIG_PY:-}" ]; then
+if [ ! -f "${AI_COMMENT_SIG_PY:-}" ]; then
+	# Later step of the job (reached through GITHUB_PATH): the signer sits next to the shim.
+	AI_COMMENT_SIG_PY="$(cd "$(dirname "$0")" && pwd)/comment_signature.py"
+	export AI_COMMENT_SIG_PY
+fi
+if [ -z "${AI_COMMENT_SIGNING_SECRET:-}" ] || [ ! -f "${AI_COMMENT_SIG_PY}" ]; then
 	exec "${AI_COMMENT_SIG_REAL_GH}" "$@"
 fi
 exec python3 -I -B "${AI_COMMENT_SIG_PY}" gh-shim -- "$@"
@@ -133,13 +139,11 @@ AI_COMMENT_SIG_SHIM
 	export AI_COMMENT_SIG_SHIM_DIR="${_acs_dir}"
 	export PATH="${_acs_dir}:${PATH}"
 	hash -r 2>/dev/null || true
-	if [ -n "${GITHUB_PATH:-}" ] && [ -w "${GITHUB_PATH}" ] && [ -n "${GITHUB_ENV:-}" ] && [ -w "${GITHUB_ENV}" ]; then
+	# Only the shim dir is persisted (no variables, no credentials): the shim
+	# finds the real gh and its signer itself, and passes every call through
+	# in a later step that does not hold AI_COMMENT_SIGNING_SECRET.
+	if [ -n "${GITHUB_PATH:-}" ] && [ -w "${GITHUB_PATH}" ]; then
 		printf '%s\n' "${_acs_dir}" >> "${GITHUB_PATH}" || true
-		{
-			printf 'AI_COMMENT_SIG_REAL_GH=%s\n' "${_acs_real}"
-			printf 'AI_COMMENT_SIG_PY=%s\n' "${_acs_dir}/comment_signature.py"
-			printf 'AI_COMMENT_SIG_SHIM_DIR=%s\n' "${_acs_dir}"
-		} >> "${GITHUB_ENV}" || true
 	fi
 	echo "AI_COMMENT_SIG outcome=active shim=${_acs_dir}" >&2
 }

@@ -1405,8 +1405,6 @@ jobs:
         if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
-          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
-          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
           RELEASE_MANIFEST_PATH: ${{ steps.release_manifest.outputs.manifest_path }}
           RELEASE_REPOSITORY: ${{ github.repository }}
@@ -1421,8 +1419,6 @@ jobs:
         if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
-          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
-          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
