@@ -52,7 +52,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/cancel_on_pr_close.yml` — GitHub Actions workflow: AI Cancel Runs on PR Close.
 - `.github/workflows/check_failure_triage.yml` — GitHub Actions workflow: AI Check Failure Triage (Reusable).
 - `.github/workflows/ci.yml` — GitHub Actions workflow: CI.
-- `.github/workflows/ci_pr_quick.yml` — GitHub Actions workflow: CI quick (runs `ci.yml`'s `static-checks` job on every PR push as `quick / ...` checks; never reports `lint`).
+- `.github/workflows/ci_pr_quick.yml` — GitHub Actions workflow: CI quick (runs `ci.yml`'s `static-checks` job in mode `quick` on every PR push as `quick / ...` checks; never reports `lint`), while the full `ci.yml` suite runs once per PR head after review (cut-ci-runner-time Phase 4, #9563).
 - `.github/workflows/clarify.yml` — GitHub Actions workflow: AI Clarify (Reusable).
 - `.github/workflows/claude-engine-smoke.yml` — GitHub Actions workflow: Claude engine smoke (dispatch-only self-test of the Claude engine plumbing).
 - `.github/workflows/comprehensive-test-and-release.yml` — GitHub Actions workflow: Workflow Log Analysis And Improvement.
@@ -143,13 +143,16 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/check_workflow_script_refs.py` — Verify every script referenced by a workflow file exists in scripts/.
 - `scripts/ci_budget_watch.py` — CI early warning on pushes to main: opens one `ai:ci-budget` issue when a workflow file nears the 480,000-byte guard or a CI job nears its timeout.
 - `scripts/ci_cancelled_rerun.py` — Scheduled sweep helper: re-run failed jobs once for cancelled, startup-failed, or runner-shutdown-failed CI on a current PR head.
-- `scripts/ci_docs_only_paths.sh` — `ci_docs_only_path_is_safe`: the list of paths whose changes let `_pr_ensure_final_ci` dispatch `ci.yml` with `docs_only=true` (test jobs skip; `lint` re-checks the merge ref).
+- `scripts/ci_docs_only_paths.sh` — `ci_docs_only_path_is_safe`: the list of paths no test job or CI step reads; a PR whose changed files are all on it gets a final CI run (`_pr_ensure_final_ci` dispatches `ci.yml`) with `docs_only=true` (static checks and lint only, test jobs skipped; `lint` re-checks the merge ref; #9566).
+- `scripts/ci_final_merge_ref_fresh.sh` — Final-CI step after each `refs/pull/<n>/merge` checkout: refreshes a merge ref GitHub has not recomputed since the base moved, or fails the job, so a final run never tests an old base (final-CI self-heal).
+- `scripts/ci_sync_quick.sh` — Sync-quick final CI for merge-base freshness updates: `classify` says whether every overlap path is a CI-wiring file, `full-ci-green` whether the approved head passed a full final CI run; ci.yml's `tests-sync-quick` re-checks both (#9642).
 - `scripts/clarify_base_image_preseed.sh` — Seed the clarify sandbox's Docker Official Image base from a mirror before the build (CLARIFY_BASE_IMAGE_PRESEED log prefix).
 - `scripts/clarify_data_provision_guard.py` — Post-processing guard for orchestrate_clarify_respond.
 - `scripts/clarify_github_facts.py` — Read referenced GitHub issue, PR, branch and run state for the isolated clarify-respond worker.
 - `scripts/clarify_informal_detect.py` — Score clarify issue bodies for advisory informal-issue signals.
 - `scripts/clarify_isolated_run.sh` — Launch the read-only, credential-free clarification container.
 - `scripts/clarify_openrouter_broker.py` — Restrict clarification model traffic through a host Unix socket.
+- `scripts/comment_signature.py` — Signed job-token pipeline comments: signs comments posted with the job token so they start no `issue_comment` wrapper, and verifies the signature on read (run-volume plan item 15, #9643).
 - `scripts/dependency_registry_proxy.py` — Restrict network-isolated dependency installs to allowlisted HTTPS registries via a host Unix socket.
 - `scripts/clarify_sandbox/Dockerfile` — Pinned Codex container for isolated clarification.
 - `scripts/claude_anthropic_relay.py` — Host-side Anthropic relay and in-container bridge that keep the Claude OAuth token out of sandboxed runs.
@@ -242,6 +245,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/orchestrate_lib.py` — Orchestrator library: DAG management, wave computation, issue tracking, and judge helpers.
 - `scripts/orchestrate_parse_and_post_answer.sh` — Shell helper for orchestrate parse and post answer.
 - `scripts/orchestrate_poll_process.sh` — orchestrate_poll_process.sh — Process active orchestrator tracking issues.
+- `scripts/orchestrate_poll_smoke_fixture_reap.sh` — Smoke-fixture project backstop sourced by the poller: closes a release-gate fixture project (its PRs, child issues, then the tracking issue) once the gate run named in its title or body has completed.
 - `scripts/orchestrate_stall_retired_conflict.sh` — Stall-recovery helpers sourced by the poller that detect a PR conflict only on retired host-only files (issue #6680).
 - `scripts/orchestrate_state_v2.py` — V2 chunked state persistence helper for orchestrator state comments.
 - `scripts/orphan_fixup_close.py` — Pick the open unblock fix-up issues whose source issue is already closed, for the poller to close.
@@ -303,8 +307,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_conflict_resolve.sh` — create the [ai-merge-resolve] commit for review_autofix.yml.
 - `scripts/review_consolidate.sh` — Shell helper for review consolidate.
 - `scripts/review_enable_auto_merge.sh` — Shell helper for review enable auto merge.
-- `scripts/review_final_ci_failed.sh` — `final-ci-failed` job in `ci.yml`: when a final-CI dispatch run's `lint` fails, posts one `ai:final-ci-failed:v1` marker per head and dispatches the PR's review workflow (`FINAL_CI_FAILED_REDISPATCH_ENABLED`).
-- `scripts/review_final_ci_sweep.sh` — review sweep step "Ensure the final CI run on reviewed PR heads": starts the missing final CI run for reviewed PR heads (`FINAL_CI_SWEEP_MAX_PER_TICK`).
+- `scripts/review_final_ci_failed.sh` — `final-ci-failed` job in `ci.yml`: sends a PR whose final CI run (full suite, dispatched once per head after review) failed back to review/autofix: posts one `ai:final-ci-failed:v1` marker comment per head and dispatches the PR's review workflow (`FINAL_CI_FAILED_REDISPATCH_ENABLED`; cut-ci-runner-time Phase 4, #9535).
+- `scripts/review_final_ci_sweep.sh` — review sweep step "Ensure the final CI run on reviewed PR heads": safety net that each tick hands open-PR heads whose `ai-review/head-gate` is success but which have no final CI run to `_pr_ensure_final_ci` (`FINAL_CI_SWEEP_MAX_PER_TICK`; cut-ci-runner-time Phase 4, #9535).
 - `scripts/review_freshness_ci_failed.sh` — Marks a freshness-update head whose CI failed (`ai:freshness-ci-failed:v1`) and dispatches the PR's review workflow so it gets a normal review and autofix run.
 - `scripts/review_head_gate.sh` — Publishes SHA-bound review statuses and withdraws stale PR auto-merge on synchronize.
 - `scripts/review_workflow_sync_skip.sh` — review-gate check that skips the reviewer panel for an `ai-sync/stable` consumer sync PR whose changed paths are all in the signed sync allowlist.
@@ -346,6 +350,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/slop_scan_local.py` — Local slop-scan heuristics for review_autofix changed scripts and Python heredocs.
 - `scripts/stable_e2e_step_verify_bait_removed.sh` — body of the test-and-mark-stable.yml "Phase 4b: Verify editor restored canary (pytest + retry)" step (`id: verify-bait-removed`; sourced by the step from a `github.sha`-pinned copy in `RUNNER_TEMP`; moved out to keep the workflow under the §27 size guard, issue #7991).
 - `scripts/stable_e2e_step_wait_review.sh` — body of the test-and-mark-stable.yml "Phase 4: Wait for review & autofix to complete" step (`id: wait-review`; sourced by the step from a `github.sha`-pinned copy in `RUNNER_TEMP`; moved out to keep the workflow under the §27 size guard, issue #7991).
+- `scripts/stable_orchestrate_cancel_dispatched_run.sh` — called by the test-and-mark-stable.yml "Cleanup orchestrate test issues" step: cancels the orchestrate bootstrap the job dispatched when it is still queued or running, and finds a tracking issue it already created.
 - `scripts/stage_workflow_log_bundle.py` — Bound workflow-log artifacts before mounting them into the isolated analyzer.
 - `scripts/stage_workflow_support.sh` — Shell helper for stage workflow support.
 - `scripts/summarize_reviewer_consensus.sh` — ledger via codex-cli (model: openai/gpt-6-luna, reasoning: medium).
