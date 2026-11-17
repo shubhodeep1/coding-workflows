@@ -304,12 +304,13 @@ if [ "${editor_summary_is_real}" = "1" ] && [ "${sandbox_excluded_nothing_commit
         if [[ "${gitleaks_suggest_head}" =~ ^[0-9a-f]{40}$ ]] && [ -n "${PR_CHECK_RUNS_CONTEXT_FILE:-}" ] \
           && [ -f "${PR_CHECK_RUNS_CONTEXT_FILE}" ] && [ ! -L "${PR_CHECK_RUNS_CONTEXT_FILE}" ]; then
           while IFS= read -r gitleaks_suggest_candidate; do
-            [ "${#gitleaks_suggest_lines[@]}" -lt 10 ] || break
             [[ "${gitleaks_suggest_candidate}" =~ ^[0-9a-f]{40}: ]] || continue
             gitleaks_suggest_sha="${gitleaks_suggest_candidate%%:*}"
+            # The 10-line cap bounds only the suggestion: later candidates are
+            # still counted toward missing= (the extractor emits at most 200).
             if ! git -C "${gitleaks_suggest_repo}" cat-file -e "${gitleaks_suggest_sha}^{commit}" >/dev/null 2>&1; then
               gitleaks_suggest_missing=$((gitleaks_suggest_missing + 1))
-            elif git -C "${gitleaks_suggest_repo}" merge-base --is-ancestor "${gitleaks_suggest_sha}" "${gitleaks_suggest_head}" >/dev/null 2>&1; then
+            elif [ "${#gitleaks_suggest_lines[@]}" -lt 10 ] && git -C "${gitleaks_suggest_repo}" merge-base --is-ancestor "${gitleaks_suggest_sha}" "${gitleaks_suggest_head}" >/dev/null 2>&1; then
               gitleaks_suggest_lines+=("${gitleaks_suggest_candidate}")
             fi
           done < <(PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c '

@@ -410,18 +410,21 @@ def test_guard_hook_resolved_earlier_plus_gitleaksignore_on_integration_sync_wai
 		assert _git(repo, "log", "-1", "--format=%s").stdout.strip() == "[ai-merge-resolve] resolve merge conflicts"
 
 
-def test_guard_hook_resolved_earlier_plus_gitleaksignore_violation_still_refuses_commit() -> None:
+def test_guard_hook_resolved_earlier_plus_gitleaksignore_violation_hands_off_to_resolver() -> None:
 	fingerprints = {"1500": {"issue": 1500, "pr": 1501, "must_contain": [{"file": "other.txt", "regex": "^never$"}], "must_not_contain": []}}
 	with tempfile.TemporaryDirectory() as tmp_name:
 		tmp = Path(tmp_name)
 		repo = tmp / "repo"
 		repo.mkdir()
 		_make_conflict(repo, ours=PR585_OURS, theirs=PR585_THEIRS, head=PROJECT_BRANCH)
-		result, _runtime_dir = _run(repo, tmp, head=PROJECT_BRANCH, fingerprints=fingerprints, ghm_resolved=True)
+		result, runtime_dir = _run(repo, tmp, head=PROJECT_BRANCH, fingerprints=fingerprints, ghm_resolved=True)
 		out = result.stdout + result.stderr
-		assert result.returncode == 1, out
-		assert ".gitleaksignore union: unhandled reason=integration_sync detail=fingerprint_violations" in out
+		assert result.returncode == 0, out
+		assert "Guard-hook template merge: no other unmerged paths" not in out
+		assert ".gitleaksignore union: the merged tree fails merged sub-issue fingerprints; handing the violating path(s) to the resolver" in out
+		assert "REGION_FELL_THROUGH" in out
 		assert _git(repo, "log", "-1", "--format=%s").stdout.strip() == "ours"
+		assert "other.txt" in (runtime_dir / "resolver_unmerged_allowlist.txt").read_text(encoding="utf-8").split()
 
 
 def test_integration_fingerprint_flag_on_gitleaksignore_is_exempt_after_union() -> None:
@@ -441,18 +444,26 @@ def test_integration_fingerprint_flag_on_gitleaksignore_is_exempt_after_union() 
 		assert not (runtime_dir / "resolver_fingerprint_only_paths.txt").exists()
 
 
-def test_integration_violation_on_other_file_still_refuses_commit() -> None:
+def test_integration_violation_on_other_file_hands_off_to_resolver_without_committing() -> None:
+	# Like the .ai take-base: the violating path goes to the resolver (which
+	# records retry state) instead of failing the prepare step; .gitleaksignore
+	# stays staged and out of the resolver set.
 	fingerprints = {"1500": {"issue": 1500, "pr": 1501, "must_contain": [{"file": "other.txt", "regex": "^never$"}], "must_not_contain": []}}
 	with tempfile.TemporaryDirectory() as tmp_name:
 		tmp = Path(tmp_name)
 		repo = tmp / "repo"
 		repo.mkdir()
 		_make_conflict(repo, ours=PR585_OURS, theirs=PR585_THEIRS, head=PROJECT_BRANCH)
-		result, _runtime_dir = _run(repo, tmp, head=PROJECT_BRANCH, fingerprints=fingerprints)
+		result, runtime_dir = _run(repo, tmp, head=PROJECT_BRANCH, fingerprints=fingerprints)
 		out = result.stdout + result.stderr
-		assert result.returncode == 1, out
-		assert ".gitleaksignore union: unhandled reason=integration_sync detail=fingerprint_violations" in out
+		assert result.returncode == 0, out
+		assert "unhandled reason=integration_sync detail=fingerprint_violations" not in out
+		assert ".gitleaksignore union: the merged tree fails merged sub-issue fingerprints; handing the violating path(s) to the resolver" in out
+		assert "REGION_FELL_THROUGH" in out
 		assert _git(repo, "log", "-1", "--format=%s").stdout.strip() == "ours"
+		_no_stages_left(repo)
+		allowlist = (runtime_dir / "resolver_unmerged_allowlist.txt").read_text(encoding="utf-8").split()
+		assert "other.txt" in allowlist and GL not in allowlist
 
 
 def test_manifest_and_gitleaksignore_on_integration_sync_resolve_together() -> None:

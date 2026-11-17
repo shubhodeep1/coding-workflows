@@ -646,18 +646,22 @@ ${marker}" >/dev/null 2>&1; then
 # shubhodeep1/binance-blessings). This run's Q129 check-triage resolution gate
 # verdict (triage_resolution.json, cached by unblock_check_triage_resolved)
 # decides: resolved or already_resolved means that gate has closed the issue;
-# any other verdict posts one trusted note (marker
+# an unverified verdict posts one trusted note (marker
 # `<!-- ai:unblock-triage-superseded:v1 item=<n> -->`, once per issue) saying
 # the issue waits for the pull request head's check to pass, and stops the
-# run without a resume command. No cached verdict (gate off, missing or
-# errored) judges as usual. Returns 0 when this run must stop, 1 to judge as
-# usual. UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED=false (default true)
+# run without a resume command. Any other verdict (not_triage, disabled:
+# the gate will never close the issue), no cached verdict (gate off, missing
+# or errored), or a note older than UNBLOCK_JUDGE_WAIT_MAX_DAYS judges as
+# usual, so the round budget and park still apply. A failed note write holds
+# the item (no resume) and is retried next run. Returns 0 when this run must
+# stop, 1 to judge as usual.
+# UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED=false (default true)
 # restores the previous behaviour.
 # API budget: no reads; at most one comment write per issue.
-# Log key: UNBLOCK_JUDGE ... op=triage_superseded outcome=closed|noted|skip reason=<token>
+# Log key: UNBLOCK_JUDGE ... op=triage_superseded outcome=closed|noted|held|skip reason=<token>
 unblock_triage_superseded_note()
 {
-	local tracking_issue="${1:-}" marker status
+	local tracking_issue="${1:-}" marker status noted_at
 	if [ "$(printf '%s' "${UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "false" ]; then
 		return 1
 	fi
@@ -679,16 +683,29 @@ unblock_triage_superseded_note()
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=closed reason=${status}"
 		return 0
 	fi
+	# Only an unverified verdict can later close through the gate; not_triage
+	# or disabled never will, so a note would hold the item forever.
+	if [ "${status}" != "unverified" ]; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=skip reason=gate_terminal"
+		return 1
+	fi
 	marker="<!-- ai:unblock-triage-superseded:v1 item=${ITEM} -->"
-	if jq -e --arg login "${UNBLOCK_LOGIN}" --arg marker "${marker}" \
-		'any(.[]; (.user.login // "") == $login and ((.body // "") | sub("\\s+$"; "") | endswith($marker)))' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; then
+	noted_at="$(jq -r --arg login "${UNBLOCK_LOGIN}" --arg marker "${marker}" \
+		'[.[] | select((.user.login // "") == $login and ((.body // "") | sub("\\s+$"; "") | endswith($marker))) | (.created_at // "")] | if length == 0 then "none" else (max // "") end' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null || echo none)"
+	if [ "${noted_at}" != "none" ]; then
+		# The hold ends with the wait lifetime: an unverified verdict that never
+		# resolves (a linked PR closed unmerged) is judged again, not held forever.
+		if [ -n "${noted_at}" ] && [ "$(unblock_hours_since "${noted_at}")" -ge "$(unblock_wait_max_hours)" ]; then
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=skip reason=note_expired"
+			return 1
+		fi
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=noted reason=already_noted"
 		return 0
 	fi
 	if ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="Planning found the fix for this check failure already on the planning ref (\`${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}\`), so the unblock judge is not resuming planning: it would only stop here again. This issue now waits for the pull request head's check to pass; the check-triage resolution gate closes it with evidence once the failure is verified fixed on the default branch. Reply with \`/reclarify\` if work is still missing.
 
 ${marker}" >/dev/null 2>&1; then
-		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=skip reason=comment_failed"
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=held reason=comment_failed"
 		return 0
 	fi
 	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=noted reason=posted"

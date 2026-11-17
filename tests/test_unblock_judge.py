@@ -5785,6 +5785,27 @@ def test_triage_superseded_note_is_not_posted_again_on_a_rerun(tmp_path: Path) -
 	assert "outcome=acted" not in result.stdout
 
 
+@pytest.mark.parametrize("status", ["not_triage", "disabled"])
+def test_terminal_gate_verdict_judges_as_usual_without_a_note(tmp_path: Path, status: str) -> None:
+	# The gate never closes a not_triage / disabled issue, so a note would hold it forever.
+	result, state = _judge_triage_superseded(tmp_path, FAKE_TRIAGE_STATUS=status)
+	assert "op=triage_superseded outcome=skip reason=gate_terminal" in result.stdout, result.stdout + result.stderr
+	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout
+	assert not any(comment["body"].endswith(TRIAGE_SUPERSEDED_MARKER) for comment in state["comments"])
+
+
+def test_expired_superseded_note_judges_as_usual(tmp_path: Path) -> None:
+	comments = [
+		_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z"),
+		_comment("Planning found the fix already on the planning ref.\n\n" + TRIAGE_SUPERSEDED_MARKER + "\n", BOT, "2026-10-04T10:00:00Z"),
+	]
+	result, state = _judge_triage_superseded(tmp_path, comments=comments, FAKE_TRIAGE_STATUS="unverified",
+		MOCK_UNBLOCK_JUDGE_NOW="2026-10-19T10:00:00Z")
+	assert "op=triage_superseded outcome=skip reason=note_expired" in result.stdout, result.stdout + result.stderr
+	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout
+	assert not any(comment["body"].endswith(TRIAGE_SUPERSEDED_MARKER) for comment in state["comments"])
+
+
 def test_an_untrusted_superseded_marker_does_not_suppress_the_note(tmp_path: Path) -> None:
 	comments = [
 		_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z"),

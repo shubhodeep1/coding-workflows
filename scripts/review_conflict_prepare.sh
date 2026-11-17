@@ -1869,6 +1869,17 @@ if [ "${_mu_defer_commit}" = "true" ] || [ "${_ff_defer_commit}" = "true" ]; the
     echo "::warning::.ai asset take-base: the merged tree fails merged sub-issue fingerprints; handing the violating path(s) to the resolver instead of committing."
     _mu_defer_commit=false
   fi
+  # Same hand-off for a deferred .gitleaksignore union (issue #9659): the
+  # verified .gitleaksignore stays staged and exempt, and the other violating
+  # path(s) go to the resolver, which records retry state. Before the union
+  # the resolver ran on this merge (and escalated), so exiting here would be
+  # a regression that leaves no retry state.
+  if [ "${_det_commit_scope:-}" = "gitleaksignore-only" ] && [ "${_mu_defer_commit}" = "true" ] \
+     && [ "${_ff_defer_commit}" != "true" ] \
+     && [ -n "${FP_VIOLATED_FILES_LIST}" ] && [ "${_mu_remaining_unmerged}" -eq 0 ]; then
+    echo "::warning::.gitleaksignore union: the merged tree fails merged sub-issue fingerprints; handing the violating path(s) to the resolver instead of committing."
+    _mu_defer_commit=false
+  fi
 fi
 if [ "${_mu_defer_commit}" = "true" ] || [ "${_ff_defer_commit}" = "true" ]; then
   if [ -n "${FP_VIOLATED_FILES_LIST}" ] || [ "${_mu_remaining_unmerged}" -ne 0 ]; then

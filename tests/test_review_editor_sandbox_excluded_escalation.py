@@ -315,6 +315,17 @@ def test_gitleaks_suggestion_is_capped_at_ten(tmp_path: Path) -> None:
 	assert _fenced(body) == fps[:10]
 
 
+def test_missing_commits_after_the_cap_are_still_counted(tmp_path: Path) -> None:
+	repo, leak, head, _unrelated = _gitleaks_repo(tmp_path)
+	fps = [f"{leak}:docs/plan.md:generic-api-key:{n}" for n in range(1, 13)]
+	absent = [f"{'f' * 40}:docs/a.md:generic-api-key:1", f"{'e' * 40}:docs/b.md:generic-api-key:2"]
+	context = _context(tmp_path, [f"Fingerprint: {fp}" for fp in fps + absent])
+	result, body, _ = _run_step(tmp_path, GITLEAKS_SUMMARY, head=head, extra_env={"GITHUB_WORKSPACE": str(repo), "PR_CHECK_RUNS_CONTEXT_FILE": str(context)})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert _suggestion_lines(result.stdout) == ["REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=8250 outcome=suggested count=10 missing=2"]
+	assert _fenced(body) == fps[:10]
+
+
 def test_untrusted_and_unreachable_gitleaks_lines_are_dropped(tmp_path: Path) -> None:
 	repo, leak, head, unrelated = _gitleaks_repo(tmp_path)
 	good = f"{leak}:docs/plan.md:generic-api-key:1"
