@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Updates `analysis/validation-selftest-status.json` only. The nightly self-test opens this pull request because the default branch requires status checks, so the status cannot be pushed directly.\"\n  expected_change_site: analysis/validation-selftest-status.json\n  confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The file on HEAD is well-formed JSON and matches the PR description verbatim. The diff updates exactly one field (`latest_run.generated_at`) inside that file. `consecutive_green_runs` remains 184. The producer-side state `scripts/validation_selftest_status.py:_resolve_previous_status` reads is outside the checkout, so the count cannot be verified. Three prior autofix passes already rejected the same NIT. All 21 check-runs on head 8c5fcd3d pass. Reviewer severity: NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Updates `analysis/validation-selftest-status.json` only. The nightly self-test opens this pull request because the default branch requires status checks, so the status cannot be pushed directly.\"\n  Expected change site: analysis/validation-selftest-status.json\n  Evidence of absence: The file on HEAD is well-formed JSON and matches the PR description verbatim. The diff updates exactly one field (`latest_run.generated_at`) inside that file. `consecutive_green_runs` remains 184 \u2014 the producer-side state `scripts/validation_selftest_status.py:_resolve_previous_status` reads to decide whether the streak should advance is outside the checkout (the newest open status PR's copy), so the count cannot be verified from here, and three prior autofix passes have already weighed and rejected the same NIT for that reason. All 21 check-runs on head 8c5fcd3d pass.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1506bc4c3f9a104b5e246b1de364a7af7b3df6af2aac3234447304e4e4f29097",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9640,
+    "run_id": "44159066877",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44159066877",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117214519_b4347a57e9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9640,
+    "run_id": "44159066877"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-17T21:45:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
