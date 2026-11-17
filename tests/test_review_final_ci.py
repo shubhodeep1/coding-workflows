@@ -416,6 +416,128 @@ def test_comment_read_failure_does_not_dispatch(fake_gh) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Infra failures are left to the sweep's re-run (final-ci-failure-ci-fix plan,
+# Phase 1).
+
+SHUTDOWN_TEXT = "The runner has received a shutdown signal. This can happen when the runner service is stopped."
+JOBS_KEY = "actions/runs/555/attempts/1/jobs"
+
+
+def _job(name: str, job_id: int, conclusion: str | None = "failure", status: str = "completed") -> dict:
+	return {"id": job_id, "name": name, "status": status, "conclusion": conclusion,
+		"check_run_url": f"https://api.github.com/repos/{REPO}/check-runs/{job_id + 1000}"}
+
+
+def _infra_fixtures(static_message: str = SHUTDOWN_TEXT) -> dict:
+	jobs = [_job("static-checks", 1), _job("lint", 2), _job("final-ci-failed", 3, None, "in_progress")]
+	return {
+		_comments_key(): {"body": []},
+		f"repos/{REPO}/{JOBS_KEY}": {"body": {"total_count": 3, "jobs": jobs}},
+		f"repos/{REPO}/check-runs/1001/annotations": {"body": [{"message": static_message, "annotation_level": "failure"}]},
+		f"repos/{REPO}/check-runs/1002/annotations": {"body": [{"message": "CI jobs that did not succeed: static-checks", "annotation_level": "failure"}]},
+	}
+
+
+INFRA_REPO = "shubhodeep1/coding-workflows"
+INFRA_ENV = {"FINAL_CI_FAILED_RUN_ID": "555", "FINAL_CI_FAILED_RUN_ATTEMPT": "1", "REPOSITORY": INFRA_REPO}
+
+
+def _infra_failed(fake_gh, fixtures: dict, env: dict):
+	# Serve the fixtures under the env's repository (the sweep's re-run
+	# exists only in shubhodeep1/coding-workflows).
+	repo = env.get("REPOSITORY", REPO)
+	renamed = {key.replace(f"repos/{REPO}/", f"repos/{repo}/"): value for key, value in fixtures.items()}
+	renamed.setdefault(f"repos/{repo}/pulls/7", {"body": {"state": "open", "head": {"sha": SHA}}})
+	return _failed(fake_gh, renamed, env)
+
+
+def test_infra_failure_posts_no_marker_and_dispatches_nothing(fake_gh) -> None:
+	result, calls = _infra_failed(fake_gh, _infra_fixtures(), INFRA_ENV)
+	assert f"REVIEW_FINAL_CI_FAILED pr=7 head={SHA} outcome=infra_rerun_deferred reason=shutdown" in result.stdout, result.stdout + result.stderr
+	assert not any(call[:3] == ["api", "-X", "POST"] for call in calls)
+	assert _dispatches(calls) == []
+	assert any(JOBS_KEY in arg for call in calls for arg in call)
+
+
+@pytest.mark.parametrize("fixtures, env", [
+	# A real test failure is handed back as before.
+	(_infra_fixtures("Process completed with exit code 1."), INFRA_ENV),
+	# A classifier read error keeps the hand-back.
+	({**_infra_fixtures(), f"repos/{REPO}/{JOBS_KEY}": {"rc": 1}}, INFRA_ENV),
+])
+def test_genuine_or_unreadable_failure_keeps_the_hand_back(fake_gh, fixtures: dict, env: dict) -> None:
+	result, calls = _infra_failed(fake_gh, fixtures, env)
+	assert "outcome=redispatched" in result.stdout, result.stdout + result.stderr
+	assert len([call for call in calls if call[:3] == ["api", "-X", "POST"]]) == 1
+
+
+@pytest.mark.parametrize("env", [
+	{**INFRA_ENV, "FINAL_CI_FAILED_RUN_ATTEMPT": "2"},
+	{**INFRA_ENV, "FINAL_CI_FAILED_INFRA_RERUN_ENABLED": "false"},
+	{**INFRA_ENV, "FINAL_CI_FAILED_INFRA_RERUN_ENABLED": "maybe"},
+	{**INFRA_ENV, "CI_CANCELLED_AUTO_RERUN_ENABLED": "false"},
+	{**INFRA_ENV, "CI_CANCELLED_AUTO_RERUN_ENABLED": ""},
+	{**INFRA_ENV, "FINAL_CI_FAILED_RUN_ID": "x"},
+	{"FINAL_CI_FAILED_RUN_ATTEMPT": "1", "REPOSITORY": INFRA_REPO},
+	# Another repository has no sweep re-run to defer to.
+	{"FINAL_CI_FAILED_RUN_ATTEMPT": "1", "FINAL_CI_FAILED_RUN_ID": "555", "REPOSITORY": "other/repo"},
+])
+def test_infra_deferral_needs_attempt_one_and_both_switches(fake_gh, env: dict) -> None:
+	result, calls = _infra_failed(fake_gh, _infra_fixtures(), env)
+	assert "outcome=redispatched" in result.stdout, result.stdout + result.stderr
+	assert not any(JOBS_KEY in arg for call in calls for arg in call)
+
+
+def test_already_reported_head_is_not_classified(fake_gh) -> None:
+	marker = f"x\n\n<!-- ai:final-ci-failed:v1 pr=7 head={SHA} -->"
+	fixtures = {**_infra_fixtures(), _comments_key(): {"body": [{"body": marker, "user": {"type": "Bot"}, "author_association": "NONE"}]}}
+	result, calls = _infra_failed(fake_gh, fixtures, INFRA_ENV)
+	assert "outcome=already_reported" in result.stdout
+	assert not any(JOBS_KEY in arg for call in calls for arg in call)
+
+
+def test_ci_workflow_passes_the_run_identity_and_switches() -> None:
+	text = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+	job = text[text.index("\n  final-ci-failed:\n"):]
+	for line in (
+		"FINAL_CI_FAILED_RUN_ID: ${{ github.run_id }}",
+		"FINAL_CI_FAILED_RUN_ATTEMPT: ${{ github.run_attempt }}",
+		"FINAL_CI_FAILED_INFRA_RERUN_ENABLED: ${{ vars.FINAL_CI_FAILED_INFRA_RERUN_ENABLED || 'true' }}",
+		"CI_CANCELLED_AUTO_RERUN_ENABLED: ${{ vars.CI_CANCELLED_AUTO_RERUN_ENABLED || 'true' }}",
+		"      checks: read\n",
+	):
+		assert line in job, line
+	script = (SCRIPTS / "review_final_ci_failed.sh").read_text(encoding="utf-8")
+	assert "classify-run" in script and "--ignore-job final-ci-failed" in script
+
+
+def _det_skip_final_ci_jq() -> str:
+	text = (SCRIPTS / "review_autofix_step_evaluate_gate.sh").read_text(encoding="utf-8")
+	block = text[text.index('FRESHNESS_CI_FAILED_SKIP_SUPPRESSED="false"'):]
+	block = block[:block.index("reason=final_ci_failed pr=${PR_NUMBER} candidate=${candidate_skip_reason}")]
+	start = block.rindex("jq -e --arg login")
+	program = block[start:].split("'", 2)[1]
+	return program
+
+
+@pytest.mark.parametrize("comment, expected", [
+	({"author_login": "github-actions[bot]", "author_type": "Bot"}, 0),
+	({"author_login": "Workflow-PAT-User", "author_type": "User"}, 0),
+	({"author_login": "github-actions[bot]", "author_type": "User"}, 1),
+	({"author_login": "mallory", "author_type": "Bot"}, 1),
+])
+def test_final_ci_marker_suppresses_the_deterministic_skip(tmp_path: Path, comment: dict, expected: int) -> None:
+	comments = tmp_path / "comments.json"
+	comments.write_text(json.dumps([{**comment, "body": f"x\n\n<!-- ai:final-ci-failed:v1 pr=7 head={SHA} -->"}]), encoding="utf-8")
+	result = subprocess.run(["jq", "-e", "--arg", "login", "workflow-pat-user", "--arg", "pr", "7", "--arg", "head", SHA,
+		_det_skip_final_ci_jq(), str(comments)], capture_output=True, text=True)
+	assert result.returncode == expected, result.stderr
+	result = subprocess.run(["jq", "-e", "--arg", "login", "workflow-pat-user", "--arg", "pr", "7", "--arg", "head", OTHER_SHA,
+		_det_skip_final_ci_jq(), str(comments)], capture_output=True, text=True)
+	assert result.returncode == 1
+
+
+# ---------------------------------------------------------------------------
 # scripts/review_final_ci_sweep.sh
 
 

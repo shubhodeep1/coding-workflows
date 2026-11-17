@@ -4707,6 +4707,8 @@ jobs:
       issues: write
       pull-requests: write
       actions: write
+      # classify-run reads the run's check-run annotations (infra failures).
+      checks: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -4728,4 +4730,14 @@ jobs:
           FINAL_CI_FAILED_REDISPATCH_ENABLED: ${{ vars.FINAL_CI_FAILED_REDISPATCH_ENABLED || 'true' }}
           # A failed sync-quick run gets the full suite instead of a hand-back.
           FINAL_CI_FAILED_SYNC_QUICK: ${{ inputs.sync_quick == 'true' }}
+          # Infra failures are left to the sweep's failed-jobs re-run
+          # (docs/plans/final-ci-failure-ci-fix-plan.md Phase 1); the
+          # classifier switches match the sweep's step.
+          FINAL_CI_FAILED_RUN_ID: ${{ github.run_id }}
+          FINAL_CI_FAILED_RUN_ATTEMPT: ${{ github.run_attempt }}
+          FINAL_CI_FAILED_INFRA_RERUN_ENABLED: ${{ vars.FINAL_CI_FAILED_INFRA_RERUN_ENABLED || 'true' }}
+          CI_CANCELLED_AUTO_RERUN_ENABLED: ${{ vars.CI_CANCELLED_AUTO_RERUN_ENABLED || 'true' }}
+          CI_ACTION_RESOLUTION_RERUN_ENABLED: ${{ vars.CI_ACTION_RESOLUTION_RERUN_ENABLED || 'true' }}
+          CI_CHECKOUT_FETCH_RERUN_ENABLED: ${{ vars.CI_CHECKOUT_FETCH_RERUN_ENABLED || 'true' }}
+          CI_ABANDONED_JOB_RERUN_ENABLED: ${{ vars.CI_ABANDONED_JOB_RERUN_ENABLED || 'true' }}
         run: bash scripts/review_final_ci_failed.sh
