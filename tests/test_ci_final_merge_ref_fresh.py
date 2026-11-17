@@ -100,6 +100,9 @@ def world(tmp_path: Path):
 			"FINAL_CI_PR_NUMBER": "7",
 			"GITHUB_SHA": head,
 			"GITHUB_REPOSITORY": "o/r",
+			"GH_TOKEN": "dummy",
+			# Never reach the real API: a token-less read goes to a missing file.
+			"CI_FINAL_MERGE_REF_API_URL": f"file://{tmp_path}/no-api",
 			"CI_FINAL_MERGE_REF_REFRESH_ATTEMPTS": "2",
 			"CI_FINAL_MERGE_REF_REFRESH_SECONDS": "1",
 		})
@@ -170,6 +173,24 @@ def test_unfetchable_merge_ref_fails_open(world, tmp_path: Path) -> None:
 	assert result.returncode == 0, result.stdout + result.stderr
 	assert "outcome=skipped reason=fetch_unavailable" in result.stdout
 	assert tested == world["old_merge"]
+
+
+def test_tokenless_job_reads_the_public_api(world, tmp_path: Path) -> None:
+	"""tests-sandbox-python passes no token; the PR comes from the public REST endpoint."""
+	api = tmp_path / "api" / "repos" / "o" / "r" / "pulls"
+	api.mkdir(parents=True)
+	(api / "7").write_text(json.dumps({"base": {"ref": "main"}, "mergeable": True}), encoding="utf-8")
+	_git(world["origin"], "update-ref", "refs/pull/7/merge", world["new_merge"])
+	result, tested, calls = world["run"](env={"GH_TOKEN": "", "CI_FINAL_MERGE_REF_API_URL": f"file://{tmp_path / 'api'}"})
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "outcome=fresh reason=base_tip base=main" in result.stdout
+	assert calls == []  # gh is never called without a token
+
+
+def test_sandbox_job_step_passes_no_token() -> None:
+	ci = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
+	step = next(s for s in ci["jobs"]["tests-sandbox-python"]["steps"] if s.get("name") == "Verify the final-CI merge ref is current")
+	assert "GH_TOKEN" not in step["env"] and "github.token" not in repr(step["env"])
 
 
 def test_deeper_checkout_keeps_its_depth(world) -> None:

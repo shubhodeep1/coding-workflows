@@ -34,8 +34,10 @@
 # Usage: ci_final_merge_ref_fresh.sh [--depth <n>]   (fetch depth of the
 # job's checkout, default 1, 1-50; the re-fetch keeps the same depth)
 # Env: FINAL_CI_PR_NUMBER (empty = not a final-CI run, no-op), GITHUB_SHA,
-# GITHUB_REPOSITORY, GH_TOKEN, CI_FINAL_MERGE_REF_FRESH_ENABLED (default
-# true; true/1/yes/on), the two refresh knobs above.
+# GITHUB_REPOSITORY, GH_TOKEN (optional: without it the PR is read from the
+# public REST API unauthenticated; CI_FINAL_MERGE_REF_API_URL overrides the
+# API base for tests), CI_FINAL_MERGE_REF_FRESH_ENABLED (default true;
+# true/1/yes/on), the two refresh knobs above.
 # API budget (§15): one `GET pulls/<n>` for the base branch name (the job's
 # shallow-checkout step reads the same PR later for its own exports; the
 # check must run before that step, so it cannot reuse that read), plus one
@@ -55,6 +57,21 @@ ci_final_merge_ref_log()
 ci_final_merge_ref_parents()
 {
 	git cat-file -p "$1" 2>/dev/null | awk '/^$/ { exit } /^parent / { p = p (p == "" ? "" : " ") $2 } END { print p }'
+}
+
+# `ci_final_merge_ref_pull <jq filter>`: one `GET pulls/<n>` through `gh api`.
+# A job that gets no token (tests-sandbox-python passes none, see
+# tests/test_sandbox_python_coverage.py) reads the public REST endpoint
+# without credentials instead. Prints nothing and returns 1 on failure.
+ci_final_merge_ref_pull()
+{
+	local filter="$1" pull_json=""
+	if [ -n "${GH_TOKEN:-}" ] && gh api "repos/${GITHUB_REPOSITORY}/pulls/${FINAL_CI_PR_NUMBER}" --jq "${filter}" 2>/dev/null; then
+		return 0
+	fi
+	pull_json="$(curl -fsS --max-time 20 -H "Accept: application/vnd.github+json" \
+		"${CI_FINAL_MERGE_REF_API_URL:-https://api.github.com}/repos/${GITHUB_REPOSITORY}/pulls/${FINAL_CI_PR_NUMBER}" 2>/dev/null)" || return 1
+	printf '%s' "${pull_json}" | jq -r "${filter}" 2>/dev/null
 }
 
 ci_final_merge_ref_tip()
@@ -104,7 +121,7 @@ ci_final_merge_ref_main()
 		ci_final_merge_ref_log skipped not_a_merge_of_the_head "tested_base=${first:-none}"
 		return 0
 	fi
-	base_ref="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${FINAL_CI_PR_NUMBER}" --jq '.base.ref // ""' 2>/dev/null || true)"
+	base_ref="$(ci_final_merge_ref_pull '.base.ref // ""' || true)"
 	if ! [[ "${base_ref}" =~ ^[A-Za-z0-9._/-]+$ ]] || [[ "${base_ref}" == *..* ]] || [[ "${base_ref}" == -* ]]; then
 		echo "::warning::CI_FINAL_MERGE_REF: could not read the base branch of PR #${FINAL_CI_PR_NUMBER}; testing the checked-out merge ref unverified."
 		ci_final_merge_ref_log skipped base_ref_unreadable "tested_base=${first}"
@@ -123,7 +140,8 @@ ci_final_merge_ref_main()
 	echo "CI_FINAL_MERGE_REF: refs/pull/${FINAL_CI_PR_NUMBER}/merge merges ${GITHUB_SHA} into ${first}, but ${base_ref} is at ${tip}; asking GitHub to recompute the merge ref."
 	seen_tips=" ${tip} "
 	for (( attempt = 1; attempt <= attempts; attempt++ )); do
-		mergeable="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${FINAL_CI_PR_NUMBER}" --jq '.mergeable | tostring' 2>/dev/null || echo "unknown")"
+		mergeable="$(ci_final_merge_ref_pull '.mergeable | tostring' || true)"
+		[ -n "${mergeable}" ] || mergeable="unknown"
 		if [ "${mergeable}" = "false" ]; then
 			echo "::error::CI_FINAL_MERGE_REF: PR #${FINAL_CI_PR_NUMBER} no longer merges cleanly into ${base_ref} (${tip}); GitHub cannot refresh refs/pull/${FINAL_CI_PR_NUMBER}/merge. Resolve the conflict with the base; this is not a test failure."
 			ci_final_merge_ref_log conflict not_mergeable "base=${base_ref} tested_base=${first} tip=${tip}"
