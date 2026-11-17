@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml \u2014 placement of steps moved from `tests-promote-stall-and-review` (move notes at ci.yml:1775-1779, ci.yml:2901-2906, ci.yml:2925-2930)\n  confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The move notes at ci.yml:1777-1779 and ci.yml:2902-2906 say the step timings were unreadable and the pick was estimated from test and subprocess counts, the moved steps are split between `tests-heal-plan-and-validation` and `tests-release-and-log-analysis` instead of the one job with the most headroom, the repository's recorded per-job totals (17m00s and 15m19s of 20 minutes, ci.yml:1335-1339, ci.yml:3920-3921) were not used for the choice, and the diff does not show that these were the slowest steps or that either target had the most headroom. Severity MAJOR in both reviews.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml \u2014 the three #9363 move notes that justify the pick: ci.yml:1775-1779 (heal-job steps), ci.yml:2901-2906 and ci.yml:2925-2930 (release-job steps).\n  Evidence of absence: The pick is documented only as an estimate (\"The run's step timings were not readable; the pick is an estimate from test and subprocess counts\", ci.yml:1777-1778 and ci.yml:2902-2904); no headroom comparison appears in the diff. Recorded per-job totals were not used: tests-heal-plan-and-validation measured 17m00s of 20 minutes (run 42445170048), and tests-release-and-log-analysis measured 15m19s of 20 minutes (run 43352637124, ci.yml:3920-3921). ci.yml:1339 records that every other test job has a recorded total over 15 minutes after its last move-in. The PR moves \"Regression tests wired by the CI wiring guard (part 1)\" (ci.yml:2933-2935) into tests-release-and-log-analysis and three more steps into tests-heal-plan-and-validation, so no target was chosen by the \"most headroom\" criterion.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, placement of the steps moved from `tests-promote-stall-and-review`.\n  Evidence of absence: The notes at lines 1777\u20131779 and 2903\u20132906 say the step timings were unreadable and the selection was estimated. The moved steps are split between `tests-heal-plan-and-validation` and `tests-release-and-log-analysis` instead of the one job with the most headroom. The diff does not establish that these were the slowest steps or that either target had the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c07d7e3168827b304962779372bb6552d7a1ddee7c820bbe5864a876154d1b97",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9367,
+    "run_id": "43978075512",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43978075512",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117015022_b457be3b6e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9367,
+    "run_id": "43978075512"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-17T01:50:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
