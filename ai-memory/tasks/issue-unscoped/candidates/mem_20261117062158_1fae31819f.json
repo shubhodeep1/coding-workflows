@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Plan P1 (docs/plans/analysis-findings-collection-hardening-plan.md) says the deep-audit and API-redundancy section steps push their commits to report_branch (\"when `report_branch` is set, fetch and check out that branch; push to it with `git push origin HEAD:refs/heads/<report_branch>`\"). It also says: \"Add a `publish-report` job (env `GH_TOKEN: ${{ secrets.GH_PAT }}` ..., `needs: [analyze-commit-notify, deep-audit, api-redundancy]`, `if: always() && needs.analyze-commit-notify.outputs.report_branch != ''` ... log `WORKFLOW_LOG_ANALYSIS_PUBLISH outcome=pr_opened|failed reason=`)\".\n  expected_change_site: .github/workflows/workflow-log-analysis.yml \u2014 the `analyze-commit-notify` job outputs, the \"Commit and push deep audit section\" step (line 2899) and \"Commit and push API redundancy section\" step (line 3517), and a new `publish-report` job\n  confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  EVIDENCE: The workflow has no publish-report job; the last job is `deliver-report`, line 3597. Line 1044 (`report_branch: ${{ steps.commit_report.outputs.delivery == '' && steps.commit_report.outputs.report_branch || '' }}`) and line 1043 (`committed: ...`) are blank on every committed run, because commit_report always sets `delivery` in PR mode (the default, `WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR=true`). Both section steps therefore exit at lines 2899 and 3517 with `outcome=skipped reason=no_report_branch`, and the LLM-generated sections are thrown away. `deliver-report`'s condition `needs.analyze-commit-notify.outputs.committed == 'true'` (line 3599) can never hold in PR mode. `deep-audit` still runs its full codex pass (timeout 75 minutes, line 2363) and `api-redundancy` runs after it (line 2973), and both results are discarded. The deferral is recorded only as \"Known gap (deferred)\" in agents.d/analysis-findings-p1-report-pr.md and changelog.d/analysis-findings-p1-report-pr.md, and no linked issue confirms it. It is an existing residual, not a regression in the last run. Both reviewers rated it SEVERITY: MAJOR. google_gemini-3_1-flash-lite and z-ai_glm-5_3-flash instead treated it as a documented deferral and did not report it.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: Plan P1 (docs/plans/analysis-findings-collection-hardening-plan.md) says the deep-audit and API-redundancy section steps push their commits to report_branch. A `publish-report` job (`needs: [analyze-commit-notify, deep-audit, api-redundancy]`, `always()`-gated) then delivers the combined report and logs `WORKFLOW_LOG_ANALYSIS_PUBLISH outcome=pr_opened|failed`.\n  Expected change site: .github/workflows/workflow-log-analysis.yml. That means the analyze-commit-notify job outputs, the steps \"Commit and push deep audit section\" and \"Commit and push API redundancy section\", and a new publish-report job.\n  Evidence of absence: The workflow has no publish-report job. The job output at line 1044 (`report_branch: ${{ steps.commit_report.outputs.delivery == '' && steps.commit_report.outputs.report_branch || '' }}`) is blank on every committed run, because commit_report always sets `delivery`. Both section steps exit at lines 2899 and 3517 with `outcome=skipped reason=no_report_branch`, and the LLM-generated sections are thrown away. The deferral is recorded only in this PR's own fragments (\"Known gap (deferred)\" in agents.d/analysis-findings-p1-report-pr.md and changelog.d/analysis-findings-p1-report-pr.md), and no linked issue confirms it. It is an existing residual, not a regression.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: Plan P1 of docs/plans/analysis-findings-collection-hardening-plan.md (project #9116, \"report delivery via PR\") requires the following. \"In 'Commit and push deep audit section' and 'Commit and push API redundancy section' ... when `report_branch` is set, fetch and check out that branch; push to it with `git push origin HEAD:refs/heads/<report_branch>`\". \"Add a `publish-report` job (env `GH_TOKEN: ${{ secrets.GH_PAT }}` ..., `needs: [analyze-commit-notify, deep-audit, api-redundancy]`, `if: always() && needs.analyze-commit-notify.outputs.report_branch != ''` ... log `WORKFLOW_LOG_ANALYSIS_PUBLISH outcome=pr_opened|failed reason=`)\".\n  Expected change site: .github/workflows/workflow-log-analysis.yml \u2014 the `analyze-commit-notify` job outputs, the \"Commit and push deep audit section\" step (line 2899) and \"Commit and push API redundancy section\" step (line 3517), and a `publish-report` job.\n  Evidence of absence: There is no `publish-report` job; the last job is `deliver-report`, line 3597. Line 1043 `committed: ${{ steps.commit_report.outputs.delivery == '' && steps.commit_report.outputs.committed || '' }}` and line 1044 (the same for `report_branch`) blank both outputs whenever `delivery` is set, and PR mode (the default, `WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR=true`) sets it on every committed run. As a result:\n  (a) Both section steps exit with `outcome=skipped reason=no_report_branch` (lines 2899 and 3517), so their output never reaches any branch.\n  (b) `deliver-report`'s condition `needs.analyze-commit-notify.outputs.committed == 'true'` (line 3599) can never hold in PR mode.\n  (c) `deep-audit` (timeout 75 minutes, line 2363) and `api-redundancy` (`needs: [analyze-commit-notify, deep-audit]`, line 2973) still run, and both results are discarded.\n  The gap is recorded as \"Known gap (deferred)\" in agents.d/analysis-findings-p1-report-pr.md, so it is a residual, not a new regression. Two options: skip the two section jobs when their output cannot be delivered, or add the plan's `publish-report` job.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8ad8e32c0d9ca05d93c41a7c3f97869a0fc81f22a3a5f750448159e9bca19281",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9124,
+    "run_id": "44013144566",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44013144566",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117062158_1fae31819f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9124,
+    "run_id": "44013144566"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-17T06:21:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
