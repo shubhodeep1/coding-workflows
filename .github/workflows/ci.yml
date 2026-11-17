@@ -87,8 +87,12 @@ run-name: "${{ github.event_name == 'workflow_dispatch' && format('CI [pr:{0}]',
 # cancels the PR's older final run; a quick run called with mode `quick`
 # (its event is the caller's pull_request) gets a group of its own here,
 # because its caller workflow cancels replaced quick runs itself.
+# The `inputs.pr_number &&` terms here and in the checkout refs keep the
+# nightly runner-image canary (a workflow_call with no pr_number) off the
+# final-CI arms when Nightly is dispatched by hand: it gets `ci-<run id>` and
+# the default ref instead of `ci-final-pr-` and `refs/pull//merge`.
 concurrency:
-  group: ${{ inputs.mode == 'quick' && format('ci-quick-{0}', github.run_id) || github.event_name == 'workflow_dispatch' && format('ci-final-pr-{0}', inputs.pr_number) || github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-{0}', github.run_id) }}
+  group: ${{ inputs.mode == 'quick' && format('ci-quick-{0}', github.run_id) || github.event_name == 'workflow_dispatch' && inputs.pr_number && format('ci-final-pr-{0}', inputs.pr_number) || github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-{0}', github.run_id) }}
   cancel-in-progress: ${{ inputs.mode != 'quick' && (github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request') }}
 
 env:
@@ -146,7 +150,7 @@ jobs:
         with:
           # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
           # other event keeps the default ref.
-          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+          ref: "${{ github.event_name == 'workflow_dispatch' && inputs.pr_number && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
 
       - name: Shared shell-block anti-regression checks
         run: |
@@ -396,11 +400,13 @@ jobs:
       # (auto/forward-merge-stable-*) is skipped too: it carries the release
       # fold's generated agents.md text. Both skips apply only to a
       # same-repository head targeting the default branch, so a branch name
-      # alone does not exempt an ordinary PR.
+      # alone does not exempt an ordinary PR. `!inputs.runner_image` keeps it
+      # out of the nightly runner-image canary, whose call sees
+      # workflow_dispatch (with no PR) when Nightly is run by hand.
       - name: agents.md direct-edit check (CLAUDE.md §30)
         if: >-
           (github.event_name == 'pull_request' && !(github.event.pull_request.head.repo.full_name == github.repository && github.base_ref == github.event.repository.default_branch && (startsWith(github.head_ref, 'orchestrator/project-') || startsWith(github.head_ref, 'auto/forward-merge-stable-')))) ||
-          github.event_name == 'workflow_dispatch'
+          (github.event_name == 'workflow_dispatch' && !inputs.runner_image)
         env:
           FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
           GH_TOKEN: ${{ github.token }}
@@ -715,7 +721,7 @@ jobs:
         with:
           # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
           # other event keeps the default ref.
-          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+          ref: "${{ github.event_name == 'workflow_dispatch' && inputs.pr_number && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
           # Shallow: the next step fetches the base commit and the history
           # window that the parity/drift `base...HEAD` diff and the Prepare
           # step's sync need, and fails the job if it cannot.
@@ -1324,7 +1330,7 @@ jobs:
         with:
           # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
           # other event keeps the default ref.
-          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+          ref: "${{ github.event_name == 'workflow_dispatch' && inputs.pr_number && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -1807,7 +1813,7 @@ jobs:
         with:
           # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
           # other event keeps the default ref.
-          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+          ref: "${{ github.event_name == 'workflow_dispatch' && inputs.pr_number && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -2413,7 +2419,7 @@ jobs:
         with:
           # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
           # other event keeps the default ref.
-          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+          ref: "${{ github.event_name == 'workflow_dispatch' && inputs.pr_number && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
           # Shallow: tests/claude_template_drift.py diffs against the PR base
           # SHA, so the next step fetches that commit and the history window
           # its `base...HEAD` diff needs, and fails the job if it cannot.
@@ -3195,7 +3201,7 @@ jobs:
         with:
           # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
           # other event keeps the default ref.
-          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+          ref: "${{ github.event_name == 'workflow_dispatch' && inputs.pr_number && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -3990,7 +3996,7 @@ jobs:
         with:
           # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
           # other event keeps the default ref.
-          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+          ref: "${{ github.event_name == 'workflow_dispatch' && inputs.pr_number && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
           # Shallow: the next step fetches the base commit and the history
           # window that the parity/drift `base...HEAD` diff and the Prepare
           # step's sync need, and fails the job if it cannot.
@@ -4286,7 +4292,7 @@ jobs:
         with:
           # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
           # other event keeps the default ref.
-          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+          ref: "${{ github.event_name == 'workflow_dispatch' && inputs.pr_number && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
           fetch-depth: 1
           persist-credentials: false
 

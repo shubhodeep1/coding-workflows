@@ -259,6 +259,15 @@ def test_ci_side_effects_stay_push_only() -> None:
 			)
 
 
+def test_final_ci_arms_need_a_pr_number() -> None:
+	"""A hand-run Nightly gives the canary call workflow_dispatch but no pr_number (no refs/pull//merge)."""
+	doc = _load(CI_WORKFLOW)
+	exprs = [str((doc.get("concurrency") or {}).get("group", ""))]
+	for job in _jobs(doc).values():
+		exprs += [str(s.get("with", {}).get("ref", "")) for s in job.get("steps", []) if isinstance(s, dict)]
+	unguarded = [e for e in exprs if "github.event_name == 'workflow_dispatch' && format(" in e]
+	assert not unguarded, f"guard the final-CI arm with `inputs.pr_number &&`: {unguarded}"
+
 def test_canary_failure_reaches_heal_intake() -> None:
 	nightly_name = _load(NIGHTLY_WORKFLOW).get("name")
 	assert nightly_name in _heal_constant("SCHEDULED_CHECK_WORKFLOW_NAMES")

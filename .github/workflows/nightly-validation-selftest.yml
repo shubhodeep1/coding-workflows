@@ -494,8 +494,12 @@ jobs:
       runner_image: ubuntu-latest
     # GitHub validates every nested ci.yml job's permissions before the run
     # starts, skipped jobs included, so this grant must cover them all. The
-    # write scopes are for ci.yml's final-ci-failed job, which skips itself
-    # under this call (`!inputs.runner_image`), so they are never used here.
+    # write scopes come from ci.yml's budget-watch (issues: write; push only,
+    # skipped here) and final-ci-failed (issues, pull-requests and actions:
+    # write; skipped here by `!inputs.runner_image`). ci.yml jobs that declare
+    # no permissions of their own (static-checks and the test jobs) do inherit
+    # this grant; they run trusted main code only (see the `if:` above) and no
+    # secrets are forwarded.
     permissions:
       contents: read
       pull-requests: write
