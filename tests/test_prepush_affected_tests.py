@@ -684,7 +684,14 @@ def test_module_makes_no_network_or_github_calls(tmp_path, monkeypatch):
 def test_ci_runs_this_suite_and_sets_the_parity_base_only_from_the_pr_event():
 	ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 	assert "tests/test_prepush_affected_tests.py" in ci
-	assert ci.count("CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}") == 6
+	# Final-CI dispatch runs (cut-ci-runner-time Phase 4) have no pull_request
+	# event, so the steps fall back to the base the fetch step exported.
+	pr_event_only = "CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}"
+	pr_event_or_final_ci = "CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha || env.CI_FINAL_PR_BASE_SHA }}"
+	parity_assignments = [line.strip() for line in ci.splitlines() if line.strip().startswith("CLAUDE_PARITY_PR_BASE_SHA:")]
+	assert parity_assignments
+	assert set(parity_assignments) <= {pr_event_only, pr_event_or_final_ci}
+	assert ci.count(pr_event_or_final_ci) == 6
 	for gate_workflow in ("mark-stable.yml", "test-and-mark-stable.yml"):
 		assert "CLAUDE_PARITY_PR_BASE_SHA" not in (REPO_ROOT / ".github" / "workflows" / gate_workflow).read_text(encoding="utf-8")
 

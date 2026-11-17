@@ -146,7 +146,9 @@ def test_only_the_canary_passes_the_floating_label() -> None:
 def test_ci_runs_on_defaults_to_the_pin() -> None:
 	doc = _load(CI_WORKFLOW)
 	on = _on(doc)
-	assert "push" in on and "pull_request" in on, "ci.yml must keep its push and pull_request triggers"
+	# Since cut-ci-runner-time Phase 4 (#9563), PRs run ci_pr_quick.yml per push and get this full
+	# suite through a final-CI workflow_dispatch, so ci.yml has no pull_request trigger.
+	assert "push" in on and "workflow_dispatch" in on, "ci.yml must keep its push and workflow_dispatch triggers"
 	workflow_call = on.get("workflow_call")
 	assert isinstance(workflow_call, dict), "ci.yml must be callable (workflow_call) for the runner-image canary"
 	runner_input = (workflow_call.get("inputs") or {}).get("runner_image")
@@ -225,15 +227,28 @@ def test_canary_grants_exactly_what_ci_jobs_request() -> None:
 
 def test_ci_side_effects_stay_push_only() -> None:
 	doc = _load(CI_WORKFLOW)
-	assert "concurrency" not in doc, (
-		"ci.yml gained a workflow-level concurrency group; include github.event_name in it so the "
-		"nightly runner-image canary call cannot cancel a push or pull_request CI run"
-	)
+	# The workflow-level group (cut-ci-runner-time Phases 2 and 4) cancels only pull_request and
+	# final-CI workflow_dispatch runs, and gives every other run its own run_id group, so the
+	# canary's schedule call never cancels a push run.
+	concurrency = doc.get("concurrency")
+	if concurrency is not None:
+		assert isinstance(concurrency, dict), "ci.yml concurrency must be a mapping"
+		assert "github.event_name" in str(concurrency.get("group", "")), (
+			"ci.yml's concurrency group must key on github.event_name so the nightly runner-image "
+			"canary call cannot cancel a push CI run"
+		)
+		assert "format('ci-{0}', github.run_id)" in str(concurrency.get("group", ""))
+		cancel = str(concurrency.get("cancel-in-progress", ""))
+		assert "github.event_name == 'workflow_dispatch'" in cancel and "'push'" not in cancel
 	for job_id, job in _jobs(doc).items():
 		assert "concurrency" not in job, (
 			f"ci.yml job {job_id} gained a concurrency group; include github.event_name in it so the "
 			"nightly runner-image canary call cannot cancel a push or pull_request CI run"
 		)
+		job_if = str(job.get("if", ""))
+		if "github.event_name == 'workflow_dispatch'" in job_if and "!inputs.runner_image" in job_if:
+			# Final-CI only (e.g. final-ci-failed): never runs under the canary call.
+			continue
 		permissions = job.get("permissions") if isinstance(job.get("permissions"), dict) else {}
 		writes = any(level == "write" for level in permissions.values())
 		reads_secret = bool(SECRET_EXPRESSION_RE.search(json.dumps(job)))
