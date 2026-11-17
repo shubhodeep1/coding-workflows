@@ -1,0 +1,1816 @@
+#!/usr/bin/env python3
+"""Behaviour and wiring contract for the `gh api` permission guard (CLAUDE.md §23.H).
+
+Covers the pieces that can silently detach the mechanism:
+  1. The classification — reads and §23.B routine writes are not prompted,
+     every other write (and any call the guard cannot read) is.
+  2. The whole-call decision — allow only vetted calls and literal-ID read
+     loops, leave unvetted commands undecided, ask as soon as any call is a write.
+  3. The fail-closed contract for malformed payloads and internal errors.
+  4. The settings.json wiring (and the removed `gh api` ask rules), template
+     parity, and the prose in CLAUDE.md / seed-repo / ci.yml.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+_DRIFT_SPEC = importlib.util.spec_from_file_location(
+	"claude_template_drift", Path(__file__).resolve().parent / "claude_template_drift.py"
+)
+assert _DRIFT_SPEC is not None and _DRIFT_SPEC.loader is not None
+claude_template_drift = importlib.util.module_from_spec(_DRIFT_SPEC)
+_DRIFT_SPEC.loader.exec_module(claude_template_drift)
+GUARD_PATH = REPO_ROOT / ".claude" / "hooks" / "gh_api_write_guard.py"
+TEMPLATE_GUARD_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "hooks" / "gh_api_write_guard.py"
+SETTINGS_PATH = REPO_ROOT / ".claude" / "settings.json"
+TEMPLATE_SETTINGS_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "settings.json"
+CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
+SEED_REPO_COMMAND = REPO_ROOT / ".claude" / "commands" / "seed-repo.md"
+CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+
+LOCAL_SLUG = "shubhodeep1/coding-workflows"
+
+
+def _load_guard():
+	spec = importlib.util.spec_from_file_location("gh_api_write_guard", GUARD_PATH)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
+
+
+guard = _load_guard()
+# The autouse fixture patches this; the remote-resolution unit tests call the real one.
+_REAL_PLACEHOLDER_REPO_SLUG = guard.placeholder_repo_slug
+_REAL_SETTINGS_FILES = guard._settings_files
+
+
+@pytest.fixture(autouse=True)
+def _fixed_local_slug(monkeypatch):
+	monkeypatch.setattr(guard, "local_repo_slug", lambda cwd: LOCAL_SLUG)
+	# Every remote names the local repository, and the session sets nothing
+	# that sends gh elsewhere (issue #7555).
+	monkeypatch.setattr(guard, "placeholder_repo_slug", lambda cwd: LOCAL_SLUG)
+	for name in ("GH_REPO", "GH_HOST", "CLAUDE_ENV_FILE"):
+		monkeypatch.delenv(name, raising=False)
+	# Auto mode reads the allow rules; use the shipped ones, not the runner's.
+	monkeypatch.setattr(guard, "_settings_files", lambda: [str(TEMPLATE_SETTINGS_PATH)])
+
+
+def _decide(command: str) -> str | None:
+	decision, _reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})
+	return decision
+
+
+def _run_hook(stdin_text: str) -> subprocess.CompletedProcess:
+	env = dict(os.environ)
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	return subprocess.run(
+		[sys.executable, str(GUARD_PATH)],
+		input=stdin_text,
+		capture_output=True,
+		text=True,
+		env=env,
+		check=False,
+		cwd=str(REPO_ROOT),
+	)
+
+
+# ──────────────────────────────────────────────────────────────────
+# Commands that prompted in /implement-plan-claude sessions
+# ──────────────────────────────────────────────────────────────────
+
+# Verbatim (the heredoc body shortened) from the permission prompts that
+# stopped unattended stage sessions. Reads or routine writes inside a
+# multi-part command usually get no decision. The historical unquoted $n
+# endpoint now prompts because Bash can split it into a new flag (#5558).
+# The observed prompts that sent a file-backed `-F body=@...` field now ask
+# on purpose and live in FILE_BACKED_CALLS (issue #4619).
+OBSERVED_PROMPTS = {
+	"security follow-up search": (
+		"gh api -X GET search/issues -f q='repo:shubhodeep1/coding-workflows is:issue label:ai:security "
+		"created:>=2026-09-24' -f per_page=50 --jq '.items[] | [.number, .state, ([.labels[].name]|join(\",\")), "
+		".title] | @tsv' | sort -n; echo ---; for n in 4303 4327 4365 4375 4516; do gh api "
+		"repos/shubhodeep1/coding-workflows/pulls/$n --jq '[.number,.state,.merged_at,.base.ref,"
+		".merge_commit_sha[0:7],.title]|@tsv'; done; echo ---; gh api repos/shubhodeep1/coding-workflows/issues/4546 "
+		"--jq '[.number,.state,(.pull_request!=null),([.labels[].name]|join(\",\")),.title]|@tsv'"
+	),
+	"issue list with query params": (
+		"gh api -X GET repos/shubhodeep1/coding-workflows/issues -f labels=ai:security -f state=all "
+		"-f since=2026-09-24T00:00:00Z -f per_page=100 --jq '.[] | select(.pull_request==null) | [.number, "
+		".state, .closed_at, ([.labels[].name]|join(\",\")), .title[0:90]] | @tsv' | sort -n"
+	),
+	"commit search": (
+		"gh api -X GET search/commits -f q='repo:shubhodeep1/coding-workflows \"[ai-autofix] apply PR fixes\" "
+		"committer-date:>2026-09-25' -f per_page=30 --jq '.total_count, (.items[] | [.sha[0:8], "
+		".commit.committer.date] | @tsv)' 2>&1 | head -30"
+	),
+}
+
+
+@pytest.mark.parametrize("name", sorted(OBSERVED_PROMPTS))
+def test_observed_prompts_are_no_longer_forced(name):
+	# The historical loop used an unquoted $n endpoint: Bash can split it
+	# into extra flags, so that one now needs a prompt (#5558).
+	if name == "security follow-up search":
+		assert _decide(OBSERVED_PROMPTS[name]) == guard.DECISION_ASK
+	else:
+		assert _decide(OBSERVED_PROMPTS[name]) != guard.DECISION_ASK
+
+
+# Later prompts from the same sessions whose whole command the guard now
+# approves: `gh api` reads / routine writes (a §23.C allowlisted dispatch)
+# beside `sleep`, `2>&1`, and safe pipe filters.
+OBSERVED_APPROVABLE_PROMPTS = {
+	"issue list piped to sort": OBSERVED_PROMPTS["issue list with query params"],
+	"commit search piped to head": OBSERVED_PROMPTS["commit search"],
+	"security-audit dispatch then run lookup": (
+		"gh api -X POST repos/shubhodeep1/coding-workflows/actions/workflows/security-audit.yml/dispatches -f ref=main "
+		"-f 'inputs[ref]=claude/implement-plan-issue-4550-readme-pickup-restart-command' 2>&1; sleep 10; gh api "
+		"\"repos/shubhodeep1/coding-workflows/actions/workflows/security-audit.yml/runs?per_page=2\" --jq "
+		"'.workflow_runs[] | [.id,.status,.event,.created_at,.display_title] | @tsv'"
+	),
+}
+
+
+@pytest.mark.parametrize("name", sorted(OBSERVED_APPROVABLE_PROMPTS))
+def test_observed_prompts_with_safe_helpers_are_allowed(name):
+	assert _decide(OBSERVED_APPROVABLE_PROMPTS[name]) == guard.DECISION_ALLOW
+
+
+# Prompts whose command also runs code the guard does not vet (a loop with
+# `python3 -c` and `$(...)`, a `python3` heredoc and a `$S` redirect). Their
+# `gh api` calls are reads or routine writes, so the guard forces nothing and
+# leaves the decision to the allow list / Auto-mode classifier.
+OBSERVED_UNVETTED_PROMPTS = {
+	"validate dispatch with polling loop": (
+		"gh api -X POST repos/shubhodeep1/coding-workflows/actions/workflows/internal-validate.yml/dispatches -f ref=main "
+		"-f 'inputs[tracking_issue]=0' -f 'inputs[pr_number]=0' "
+		"-f 'inputs[target_ref]=claude/implement-plan-issue-4550-readme-pickup-restart-command' && echo dispatched; "
+		"for i in 1 2 3 4 5 6; do python3 -c 'import time; time.sleep(5)'; r=$(gh api "
+		"\"repos/shubhodeep1/coding-workflows/actions/workflows/internal-validate.yml/runs?per_page=1&event=workflow_dispatch\" "
+		"--jq '.workflow_runs[0] | {id,created_at,status}'); echo \"$r\"; echo \"$r\" | grep -q "
+		"'\"created_at\":\"2026-09-27T0[2-9]:[0-5][0-9]' && break; done; date -u"
+	),
+}
+
+
+@pytest.mark.parametrize("name", sorted(OBSERVED_UNVETTED_PROMPTS))
+def test_observed_prompts_with_unvetted_code_get_no_decision(name):
+	assert _decide(OBSERVED_UNVETTED_PROMPTS[name]) is None
+
+
+# ──────────────────────────────────────────────────────────────────
+# Single simple calls: allow reads and routine writes
+# ──────────────────────────────────────────────────────────────────
+
+ALLOWED_SIMPLE_CALLS = [
+	"gh api repos/shubhodeep1/coding-workflows --jq .default_branch",
+	"gh api -X GET search/issues -f q='repo:a/b is:issue' -f per_page=50 --jq '.items[].number'",
+	"gh api --method=get repos/a/b/pulls -f state=open",
+	"gh api -XHEAD repos/a/b",
+	"gh api graphql -f query='query($o:String!){ repository(owner:$o, name:\"x\"){ id } }' -F o=a",
+	"gh api -X PATCH repos/shubhodeep1/coding-workflows/issues/12 -f title=New -f body=Text",
+	"gh api repos/shubhodeep1/coding-workflows/pulls -f title=T -f head=claude/x -f base=main -f body=B",
+	"gh api repos/shubhodeep1/coding-workflows/issues/5/comments -f body=hello",
+	"gh api -X PATCH repos/shubhodeep1/coding-workflows/issues/comments/99 -f body=edited",
+	"gh api repos/shubhodeep1/coding-workflows/pulls/5/comments/77/replies -f body=done",
+	"gh api -X PATCH repos/shubhodeep1/coding-workflows/pulls/comments/77 -f body=edited",
+	"gh api repos/shubhodeep1/coding-workflows/issues/5/labels -f 'labels[]=ai:review'",
+	"gh api -X DELETE repos/shubhodeep1/coding-workflows/issues/5/labels/ai:review-blocked",
+	"gh api repos/shubhodeep1/coding-workflows/pulls/5/requested_reviewers -f 'reviewers[]=someone'",
+	"gh api repos/{owner}/{repo}/issues/5/comments -f body=hi",
+	"gh api repos/SHUBHODEEP1/Coding-Workflows/issues/5/comments -f body=case-insensitive",
+	# `-f`/`--raw-field` values are sent literally: `@` there reads no file (issue #4619, AD-4).
+	"gh api repos/shubhodeep1/coding-workflows/issues/5/comments -f body=@octocat",
+	"gh api repos/shubhodeep1/coding-workflows/issues/5/comments --raw-field=body=@/etc/passwd",
+	"gh api -X GET search/issues -f q=@mention",
+]
+
+
+@pytest.mark.parametrize("command", ALLOWED_SIMPLE_CALLS)
+def test_simple_read_or_routine_call_is_allowed(command):
+	assert _decide(command) == guard.DECISION_ALLOW
+
+
+def test_append_assignment_before_gh_api_preserves_call_classification():
+	assert guard.gh_api_invocations(guard.shell_segments("COUNT+=1 gh api repos/a/b")) == [["repos/a/b"]]
+	assert _decide("COUNT+=1 gh api repos/a/b") is None  # Prefix assignments are not on the whole-call allow list.
+	assert _decide("COUNT+=1 gh api -X DELETE repos/a/b/git/refs/heads/x") == guard.DECISION_ASK
+
+
+# ──────────────────────────────────────────────────────────────────
+# Non-routine writes and unreadable calls: ask
+# ──────────────────────────────────────────────────────────────────
+
+ASK_CALLS = {
+	"close PR": "gh api -X PATCH repos/shubhodeep1/coding-workflows/pulls/4549 -f state=closed",
+	"close issue": "gh api -X PATCH repos/shubhodeep1/coding-workflows/issues/4 -f state=closed -f body=x",
+	"change base": "gh api -X PATCH repos/shubhodeep1/coding-workflows/pulls/1 -f base=other",
+	"delete branch": "gh api repos/shubhodeep1/coding-workflows/git/refs/heads/main -X DELETE",
+	"implicit POST": "gh api repos/shubhodeep1/coding-workflows/git/refs -f ref=refs/heads/x -f sha=abc",
+	"merge": "gh api -X PUT repos/shubhodeep1/coding-workflows/pulls/1/merge",
+	"dispatch": "gh api repos/shubhodeep1/coding-workflows/actions/workflows/x.yml/dispatches -f ref=main",
+	"repo settings": "gh api -X PATCH repos/shubhodeep1/coding-workflows -f visibility=public",
+	"replace labels": "gh api -X PUT repos/shubhodeep1/coding-workflows/issues/5/labels -f 'labels[]=x'",
+	"clear labels": "gh api -X DELETE repos/shubhodeep1/coding-workflows/issues/5/labels",
+	"other repo": "gh api repos/evil/repo/issues/1/comments -f body=hi",
+	"input body": "gh api -X PATCH repos/shubhodeep1/coding-workflows/pulls/1 --input body.json",
+	"dynamic write path": "gh api repos/shubhodeep1/coding-workflows/issues/$N/comments -f body=hi",
+	"method override header": "gh api repos/a/b -H 'X-HTTP-Method-Override: DELETE'",
+	"graphql mutation": "gh api graphql -f query='mutation { addStar(input:{starrableId:\"x\"}) { clientMutationId } }'",
+	"graphql from file": "gh api graphql -F query=@q.graphql",
+	"graphql expanded": "gh api graphql -f query=\"$Q\"",
+	"unknown flag": "gh api -R a/b repos/a/b",
+	"no endpoint": "gh api -X GET",
+	"two endpoints": "gh api repos/a/b repos/c/d",
+	"unknown method": "gh api -X PURGE repos/a/b",
+	"write inside compound": "echo start && gh api -X DELETE repos/shubhodeep1/coding-workflows/git/refs/heads/x",
+	"write in loop": "for n in 1 2; do gh api -X PATCH repos/shubhodeep1/coding-workflows/issues/$n -f state=closed; done",
+	"unquoted substitution": "echo $(gh api -X DELETE repos/shubhodeep1/coding-workflows/git/refs/heads/x)",
+	"quoted substitution": "echo \"$(gh api -X DELETE repos/a/b)\"",
+	"unquoted backtick": "echo `gh api -X DELETE repos/a/b`",
+	"backtick assignment": "x=`gh api -X DELETE repos/a/b`",
+	"double-quoted backtick": "echo \"`gh api -X DELETE repos/a/b`\"",
+	"backtick inside quoted substitution": "echo \"$(echo `gh api -X DELETE repos/a/b`)\"",
+	"unterminated backtick": "echo `gh api -X DELETE repos/a/b",
+	"quoted paren inside quoted substitution": "echo \"$(echo \")\"; gh api -X DELETE repos/a/b; echo \"(\")\"",
+	"single-quoted paren inside quoted substitution": "echo \"$(echo ')'; gh api -X DELETE repos/a/b)\"",
+	"backtick paren inside quoted substitution": "echo \"$(echo `echo )`; gh api -X DELETE repos/a/b)\"",
+	"substitution in field": "gh api repos/{owner}/{repo}/issues/1/comments -f body=\"$(gh api -X DELETE repos/a/b)\"",
+	"bash -c": "bash -c 'gh api -X DELETE repos/a/b'",
+	"sudo": "sudo gh api -X DELETE repos/a/b",
+	"xargs": "echo 1 | xargs -I{} gh api repos/a/b/pulls/{}",
+	"heredoc into bash": "bash <<'EOF'\ngh api -X DELETE repos/a/b\nEOF",
+	"heredoc into python": "python3 - <<'EOF'\nimport os; os.system('gh api -X DELETE repos/a/b')\nEOF",
+	"unbalanced quotes": "gh api repos/a/b -f body='oops",
+	"endpoint splits into file-backed field": (
+		"X=' -Fbody=@/etc/passwd'; gh api repos/shubhodeep1/coding-workflows/issues/1/comments$X"
+	),
+	"ref splits into delete flag": "gh api repos/shubhodeep1/coding-workflows/git/refs/heads/$B",
+	"unquoted attached variable": "gh api repos/a/b/pulls/${n} --jq .title",
+	"mixed quoted and unquoted word": "gh api 'repos/a/b/pulls/'$n --jq .title",
+	"unquoted raw field value": "gh api repos/a/b/issues/1/comments -f body=$X",
+	"unquoted backtick argument": "gh api repos/a/b/pulls/`printf 1` --jq .title",
+}
+
+
+@pytest.mark.parametrize("name", sorted(ASK_CALLS))
+def test_non_routine_or_unreadable_call_asks(name):
+	assert _decide(ASK_CALLS[name]) == guard.DECISION_ASK
+
+
+def test_routine_write_asks_when_local_repo_is_unknown(monkeypatch):
+	monkeypatch.setattr(guard, "local_repo_slug", lambda cwd: "")
+	assert _decide("gh api repos/shubhodeep1/coding-workflows/issues/5/comments -f body=x") == guard.DECISION_ASK
+	# The placeholders are routine only while every git remote names the
+	# repository origin names; with origin unknown that cannot be checked
+	# (issue #7555).
+	assert _decide("gh api repos/{owner}/{repo}/issues/5/comments -f body=x") == guard.DECISION_ASK
+
+
+# ──────────────────────────────────────────────────────────────────
+# File-backed values and --input: always ask (issue #4619)
+# ──────────────────────────────────────────────────────────────────
+
+# `gh` reads an `-F`/`--field` value that starts with `@` from that file
+# (`@-` reads stdin) and sends its contents; `--input` sends a file as the
+# body on any method. Either one forces the prompt, whatever the method,
+# endpoint, or repository, so a routine comment or a read cannot publish a
+# local credential. The first five are commands observed in stage sessions
+# that the guard used to allow or leave undecided (AD-5).
+FILE_BACKED_CALLS = {
+	"observed PR body update": (
+		"F=/tmp/x/scratchpad/body4549.md; python3 - \"$F\" <<'EOF'\n"
+		"import sys\n"
+		"p=sys.argv[1]; s=open(p).read()\n"
+		"reps=[(\"(candidates, fire/claim)\",\"(candidates, `queue-pending`)\")]\n"
+		"for a,b in reps:\n"
+		"    assert s.count(a)==1, a[:40]; s=s.replace(a,b)\n"
+		"open(p,'w').write(s)\n"
+		"EOF\n"
+		"gh api -X PATCH repos/shubhodeep1/coding-workflows/pulls/4549 -F body=@$F --jq .html_url"
+	),
+	"observed progress comment edit after cd": (
+		"cd /tmp/claude-0/-home-user-coding-workflows/8771d1c3-3ca6-520c-a7ca-c77ecd033a58/scratchpad && gh api "
+		"-X PATCH repos/shubhodeep1/coding-workflows/issues/comments/5846305455 -F body=@pc.md --jq .updated_at"
+	),
+	"observed progress comment rewrite through python heredoc": (
+		"S=/tmp/claude-0/x/scratchpad; gh api repos/shubhodeep1/coding-workflows/issues/comments/5846305455 --jq .body "
+		"> $S/body.md && python3 - \"$S/body.md\" <<'EOF'\n"
+		"import sys\n"
+		"p=sys.argv[1]; b=open(p).read()\n"
+		"old_stage=\"**Stage:** security-pass 1/5\"\n"
+		"new_stage=\"**Stage:** validation 1/3\"\n"
+		"assert old_stage in b\n"
+		"b=b.replace(old_stage,new_stage)\n"
+		"open(p,'w').write(b)\n"
+		"EOF\n"
+		"gh api -X PATCH repos/shubhodeep1/coding-workflows/issues/comments/5846305455 -F body=@$S/body.md --jq '.updated_at'"
+	),
+	"PR body from a file": "gh api -X PATCH repos/shubhodeep1/coding-workflows/pulls/4549 -F body=@/tmp/body.md --jq .html_url",
+	"PR body from a quoted variable path": "gh api -X PATCH repos/shubhodeep1/coding-workflows/pulls/1 -F body=@\"$F\"",
+	"issue exploit": "gh api repos/shubhodeep1/coding-workflows/issues/1/comments -F body=@/path/to/credential",
+	"placeholder repo": "gh api repos/{owner}/{repo}/issues/1/comments -F body=@/home/user/.config/gh/hosts.yml",
+	"stdin": "gh api repos/shubhodeep1/coding-workflows/issues/1/comments -F body=@-",
+	"long flag": "gh api repos/shubhodeep1/coding-workflows/issues/1/comments --field body=@secret.txt",
+	"long flag with equals": "gh api repos/shubhodeep1/coding-workflows/issues/1/comments --field=body=@secret.txt",
+	"attached short flag": "gh api repos/shubhodeep1/coding-workflows/issues/1/comments -Fbody=@secret.txt",
+	"quoted field": "gh api repos/shubhodeep1/coding-workflows/issues/1/comments -F 'body=@secret.txt'",
+	"array key": "gh api repos/shubhodeep1/coding-workflows/issues/5/labels -F 'labels[]=@secret.txt'",
+	"file beside a raw field": "gh api repos/shubhodeep1/coding-workflows/pulls -f title=T -f head=x -f base=main -F body=@secret.txt",
+	"GET query field": "gh api -X GET search/issues -F q=@/home/user/.netrc",
+	"HEAD query field": "gh api -X HEAD repos/a/b -F x=@secret.txt",
+	"GraphQL variable": "gh api graphql -f query='query($v:String!){ viewer { login } }' -F v=@secret.txt",
+	"input on GET": "gh api -X GET repos/a/b --input secret.json",
+	"input on HEAD": "gh api --method HEAD repos/a/b --input secret.json",
+	"input from stdin on GET": "gh api -X GET repos/a/b --input -",
+	"input on a routine comment": "gh api repos/shubhodeep1/coding-workflows/issues/1/comments --input body.json",
+	"input on GraphQL": "gh api graphql --input query.json",
+	# Bash rewrites these `-F` words into `@<file>` after the guard has looked
+	# (review round 1 of PR #4641): expansion, tilde, and globs.
+	"variable value": "gh api repos/shubhodeep1/coding-workflows/issues/1/comments -F body=$F",
+	"double-quoted variable value": "gh api repos/shubhodeep1/coding-workflows/issues/1/comments -F \"body=$F\"",
+	"default-value expansion": "gh api repos/shubhodeep1/coding-workflows/issues/1/comments -F body=${X:-@/etc/passwd}",
+	"tilde value": "gh api repos/shubhodeep1/coding-workflows/issues/1/comments -F body=~",
+	"glob value": "gh api repos/shubhodeep1/coding-workflows/issues/1/comments -F body=?etc",
+	"glob across the equals sign": "gh api repos/shubhodeep1/coding-workflows/issues/1/comments -F 'body'[=]@secret",
+	"variable GET query field": "gh api -X GET search/issues -F q=$Q",
+	"variable GraphQL variable": "gh api graphql -f query='query($v:String!){ viewer { login } }' -F v=$V",
+}
+
+
+@pytest.mark.parametrize("name", sorted(FILE_BACKED_CALLS))
+def test_file_backed_value_or_input_always_asks(name):
+	assert _decide(FILE_BACKED_CALLS[name]) == guard.DECISION_ASK
+
+
+@pytest.mark.parametrize(
+	("args", "expected"),
+	[
+		(["repos/a/b/issues/1/comments", "-F", "body=@f"], "with file-backed field `-F body=@...`"),
+		# `--field`, `--field=`, and the attached `-Fkey=` form are the same flag;
+		# the reason names it by its short spelling.
+		(["repos/a/b/issues/1/comments", "--field", "body=@f"], "with file-backed field `-F body=@...`"),
+		(["repos/a/b/issues/1/comments", "--field=body=@f"], "with file-backed field `-F body=@...`"),
+		(["repos/a/b/issues/1/comments", "-Fbody=@f"], "with file-backed field `-F body=@...`"),
+		(["-X", "GET", "search/issues", "-F", "q=@f"], "with file-backed field `-F q=@...`"),
+		(["graphql", "-F", "query=@q.graphql"], "with file-backed field `-F query=@...`"),
+		(["-X", "GET", "repos/a/b", "--input", "f.json"], "with --input"),
+		# Every file-backed field is named, not only the first.
+		(
+			["repos/a/b/issues/1/comments", "-F", "body=@f1", "-F", "attachment=@f2"],
+			"with file-backed fields `-F body=@...`, `-F attachment=@...` (gh reads local files)",
+		),
+		(
+			["repos/a/b/issues/1/comments", "-F", "body=$F"],
+			"with field `-F body=...` that the shell could expand into a file-backed `@<file>` value",
+		),
+	],
+)
+def test_file_backed_classification_names_the_flag(args, expected):
+	kind, description = guard.classify(guard.parse_gh_api_args(args), "gh api " + " ".join(args), lambda: LOCAL_SLUG)
+	assert kind == guard.KIND_WRITE
+	assert expected in description
+
+
+# Constructs Bash expands or parses unlike the guard's tokenizer, so a word
+# could become a hidden flag (a file-backed `-F`) or a whole hidden command
+# (review round 1 of PR #4641). Each asks, whatever the rest of the call is.
+SHELL_REWRITE_HAZARD_CALLS = {
+	"ANSI-C quoted value": (
+		"gh api repos/shubhodeep1/coding-workflows/issues/1/comments -F body=$'@/etc/passwd'",
+		"ANSI-C quoting",
+	),
+	"ANSI-C escape in the key": (
+		"gh api repos/shubhodeep1/coding-workflows/issues/1/comments -F $'body=\\x40/etc/passwd'",
+		"ANSI-C quoting",
+	),
+	"ANSI-C GET query field": ("gh api -X GET search/issues -F q=$'@/etc/passwd'", "ANSI-C quoting"),
+	# Bash reads `\'` inside `$'...'` as a quote character; the tokenizer ends
+	# the quote there and folds the `-F` flag into the raw field's value.
+	"ANSI-C quote hides a flag": (
+		"gh api repos/shubhodeep1/coding-workflows/issues/1/comments -f body=$'\\'' -Fbody=@/etc/passwd #'",
+		"ANSI-C quoting",
+	),
+	# Bash ignores the comment, so the quote in it swallows the next line
+	# into the `--jq` value for the tokenizer while Bash runs it.
+	"comment hides a command": ("gh api repos/a/b --jq #'\ngh api -X DELETE repos/a/b #'", "a shell comment"),
+	"comment after a call": ("gh api repos/a/b --jq .id # note", "a shell comment"),
+	"brace value": (
+		"gh api repos/shubhodeep1/coding-workflows/issues/1/comments -F body={@/etc/passwd,}",
+		"brace expansion",
+	),
+	"brace with a quoted space": (
+		"gh api repos/shubhodeep1/coding-workflows/issues/1/comments -F body={'@/tmp/a b',}",
+		"brace expansion",
+	),
+	"brace splits one flag into two": ("gh api -X GET search/issues -F{'q=1','x=@/tmp/a b'}", "brace expansion"),
+	"brace endpoint adds a flag": (
+		"gh api {'repos/shubhodeep1/coding-workflows/issues/1/comments','-Fbody=@/tmp/a b'}",
+		"brace expansion",
+	),
+	"brace sequence": ("gh api repos/a/b/pulls/{1..3} --jq .title", "brace expansion"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(SHELL_REWRITE_HAZARD_CALLS))
+def test_shell_rewrite_hazard_asks(name):
+	command, construct = SHELL_REWRITE_HAZARD_CALLS[name]
+	decision, reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})
+	assert decision == guard.DECISION_ASK
+	assert construct in reason
+
+
+def test_unvetted_literal_id_loop_with_shell_comment_asks():
+	command = "for r in 1; do gh api repos/o/r/issues/1; # comment\n done"
+	decision, reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})
+	assert decision == guard.DECISION_ASK
+	assert "a shell comment" in reason
+
+
+# Quoted, escaped, or mid-word forms Bash does not expand or treat as a comment.
+@pytest.mark.parametrize(
+	"command",
+	[
+		"gh api repos/a/b --jq '.id # not a comment'",
+		"gh api repos/shubhodeep1/coding-workflows/issues/5/comments -f body='see #12'",
+		"gh api repos/shubhodeep1/coding-workflows/issues/5/comments -f body=issue#12",
+		"gh api repos/shubhodeep1/coding-workflows/issues/5/comments -f body=\\#12",
+		"gh api repos/a/b/pulls --jq '.[] | {number, title}'",
+		"gh api repos/shubhodeep1/coding-workflows/issues/5/comments -f body=\"a {b,c} d\"",
+		"gh api graphql -f query='query($o:String!){ repository(owner:$o, name:\"x\"){ id } }' -F o='{owner}'",
+	],
+)
+def test_quoted_or_literal_constructs_are_not_hazards(command):
+	assert guard._shell_rewrite_hazard(command) == ""
+	assert _decide(command) == guard.DECISION_ALLOW
+
+
+def test_file_backed_ask_reason_names_the_field():
+	decision, reason = guard.evaluate(
+		{
+			"tool_name": "Bash",
+			"tool_input": {"command": "gh api repos/shubhodeep1/coding-workflows/issues/1/comments -F body=@/path/to/credential"},
+		}
+	)
+	assert decision == guard.DECISION_ASK
+	assert "POST repos/shubhodeep1/coding-workflows/issues/1/comments" in reason
+	assert "file-backed field `-F body=@...`" in reason
+	assert "§23.H" in reason
+
+
+def test_hook_process_asks_for_the_issue_exploit():
+	command = "gh api repos/shubhodeep1/coding-workflows/issues/1/comments -F body=@/path/to/credential"
+	result = _run_hook(json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}))
+	assert result.returncode == 0
+	output = json.loads(result.stdout)["hookSpecificOutput"]
+	assert output["permissionDecision"] == "ask"
+	assert "file-backed" in output["permissionDecisionReason"]
+
+
+# ──────────────────────────────────────────────────────────────────
+# No decision: no gh api call, gh api as data, or reads in compound commands
+# ──────────────────────────────────────────────────────────────────
+
+NO_DECISION_COMMANDS = [
+	"ls -la && git status",
+	"gh pr view 5 -R a/b",
+	"git commit -m \"Use gh api -X DELETE carefully\"",
+	"grep -rn \"gh api\" .claude/commands | head",
+	"git commit -F- <<'EOF'\nmention gh api -X DELETE here\nEOF",
+	"git commit -m \"$(cat <<'EOF'\nDocument gh api -X DELETE\nEOF\n)\"",
+	"echo $(gh api repos/a/b --jq .id)",
+	# Single-quoted text is data: Bash runs no substitution inside it.
+	"sed -i 's|^- Last note: .*|- Last note: `gh api user` = me|' docs/log.md && git add docs/log.md",
+	"f=docs/log.md && sed -i 's|a|`gh api user`|' $f && git commit -q -m \"docs\" && git push -q origin b 2>&1 | tail -2",
+	"git commit -m 'uses `gh api user` to check auth'",
+	"echo 'later: $(gh api -X DELETE repos/a/b)'",
+	"git commit -m \"see \\`gh api user\\` in the docs\"",
+	"gh api \"repos/a/b/pulls/$n\" --jq .title",
+	"gh api -X GET search/issues -f 'q=repo:a/b is:open' > /tmp/out.json",
+	"gh api repos/a/b > $OUT",
+]
+
+
+@pytest.mark.parametrize("command", NO_DECISION_COMMANDS)
+def test_commands_without_a_forced_outcome_get_no_decision(command):
+	assert _decide(command) is None
+
+
+@pytest.mark.parametrize("command", [
+	"gh api repos/a/b/pulls/\\$n --jq .title",
+	"gh api 'repos/a/b/pulls/$n' --jq .title",
+])
+def test_literal_endpoint_does_not_prompt(command):
+	assert _decide(command) == guard.DECISION_ALLOW
+
+
+# ──────────────────────────────────────────────────────────────────
+# Safe helpers beside gh api calls (CLAUDE.md §23.H)
+# ──────────────────────────────────────────────────────────────────
+
+APPROVABLE_WITH_HELPERS = [
+	"gh api repos/a/b/pulls --jq '.[].number' | sort -n",
+	"gh api repos/a/b/pulls --jq '.[].number' | sort -rn -u",
+	"gh api repos/a/b/pulls --jq '.[] | [.number,.title] | @tsv' | sort -t , -k2,2 -r",
+	"gh api repos/a/b/pulls --jq '.[].number' | sort -k 1 -t:",
+	"gh api repos/a/b/pulls --jq '.[].number' 2>&1 | head -30",
+	"gh api repos/a/b/pulls --jq '.[].number' | head -n 5",
+	"gh api repos/a/b/pulls --jq '.[].number' | tail -n5",
+	"gh api repos/a/b/pulls --jq '.[].number' | sort -n | head -3",
+	"gh api repos/a/b/pulls --jq '.[].number' | wc -l",
+	"cd /tmp/scratch && gh api repos/a/b --jq .id",
+	"cd /tmp/scratch; gh api repos/a/b --jq .id; echo ---; gh api repos/c/d --jq .id",
+	"gh api repos/a/b --jq .id; sleep 10; gh api repos/a/b --jq .id",
+	"gh api repos/a/b --jq .id && sleep 2.5 && true",
+	"echo \"step one\" && gh api repos/a/b --jq .id;",
+]
+
+
+@pytest.mark.parametrize("command", APPROVABLE_WITH_HELPERS)
+def test_gh_api_with_safe_helpers_is_allowed(command):
+	assert _decide(command) == guard.DECISION_ALLOW
+
+
+NOT_APPROVABLE_HELPERS = [
+	"gh api repos/a/b/pulls --jq '.[].number' | sort -o /tmp/x",
+	"gh api repos/a/b/pulls --jq '.[].number' | sort /etc/passwd",
+	"gh api repos/a/b/pulls --jq '.[].number' | head /etc/passwd",
+	"gh api repos/a/b/pulls --jq '.[].number' | tee /tmp/x",
+	"gh api repos/a/b/pulls --jq '.[].number' | sh",
+	"gh api repos/a/b --jq .id && rm -rf /tmp/x",
+	"gh api repos/a/b --jq .id > /tmp/x",
+	"gh api repos/a/b --jq .id 2>/tmp/err",
+	"gh api repos/a/b --jq .id &",
+	"gh api repos/a/b --jq .id || echo failed",
+	"echo hi | gh api repos/a/b --input -",
+	"sleep 1; sleep 2",
+	"cd /tmp a b && gh api repos/a/b",
+	"sleep forever; gh api repos/a/b",
+	"cd ~/x && gh api repos/a/b",
+	"echo $HOME && gh api repos/a/b",
+	"(gh api repos/a/b)",
+	"gh api repos/a/b ; ; gh api repos/c/d",
+	"true 1 && gh api repos/a/b",
+]
+
+
+@pytest.mark.parametrize("command", NOT_APPROVABLE_HELPERS)
+def test_gh_api_beside_anything_else_is_not_allowed(command):
+	assert _decide(command) != guard.DECISION_ALLOW
+
+
+# ──────────────────────────────────────────────────────────────────
+# Dispatches of the allowlisted workflows (Q7)
+# ──────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("workflow", sorted(guard.DISPATCHABLE_WORKFLOWS))
+def test_allowlisted_workflow_dispatch_is_routine(workflow):
+	command = (
+		f"gh api -X POST repos/shubhodeep1/coding-workflows/actions/workflows/{workflow}/dispatches "
+		"-f ref=main -f 'inputs[target_ref]=claude/x'"
+	)
+	assert _decide(command) == guard.DECISION_ALLOW
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"gh api repos/shubhodeep1/coding-workflows/actions/workflows/release.yml/dispatches -f ref=main",
+		"gh api repos/shubhodeep1/coding-workflows/actions/workflows/security-audit.yml/dispatches -f ref=main -f extra=1",
+		"gh api repos/other/repo/actions/workflows/security-audit.yml/dispatches -f ref=main",
+		"gh api repos/shubhodeep1/coding-workflows/dispatches -f event_type=x",
+		"gh api -X POST repos/shubhodeep1/coding-workflows/actions/runs/1/rerun",
+	],
+)
+def test_other_dispatches_ask(command):
+	assert _decide(command) == guard.DECISION_ASK
+
+
+@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
+def test_dispatchable_workflows_match_the_gh_workflow_run_allow_rules(path):
+	allow = json.loads(path.read_text(encoding="utf-8"))["permissions"]["allow"]
+	allowlisted = {
+		rule[len("Bash(gh workflow run ") : -len(" *)")]
+		for rule in allow
+		if rule.startswith("Bash(gh workflow run ") and rule.endswith(" *)")
+	}
+	assert allowlisted == set(guard.DISPATCHABLE_WORKFLOWS)
+
+
+def test_non_bash_tools_get_no_decision():
+	payload = {"tool_name": "Edit", "tool_input": {"command": "gh api -X DELETE repos/a/b"}}
+	assert guard.evaluate(payload) == (None, "")
+
+
+def test_ask_reason_names_the_offending_call():
+	decision, reason = guard.evaluate(
+		{"tool_name": "Bash", "tool_input": {"command": "gh api -X PATCH repos/shubhodeep1/coding-workflows/pulls/1 -f state=closed"}}
+	)
+	assert decision == guard.DECISION_ASK
+	assert "PATCH repos/shubhodeep1/coding-workflows/pulls/1" in reason
+	assert "state" in reason
+	assert "§23.H" in reason
+
+
+# ──────────────────────────────────────────────────────────────────
+# jq command-line options passed to --jq are denied (#4891)
+# ──────────────────────────────────────────────────────────────────
+
+# Verbatim from #4891 (permission-prompt sig a5be406f8c21): `--arg` became the
+# `--jq` value, so `gh` would reject the call before sending any request.
+ISSUE_4891_COMMAND = (
+	'for r in 36242690892 36224773465 36205375333 36078283644 35966436009; do gh api '
+	'"repos/shubhodeep1/coding-workflows/actions/runs/$r/jobs?per_page=50" --jq --arg r "$r" '
+	"'.jobs[] | select(.name|test(\"validate-scripts\")) | [$r, .name, .conclusion, .started_at, .completed_at] | @tsv'; done"
+)
+
+
+def test_issue_4891_command_is_denied():
+	decision, reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": ISSUE_4891_COMMAND}})
+	assert decision == guard.DECISION_DENY
+	assert '"--arg"' in reason
+	assert "§23.H" in reason
+	assert "Nothing ran" in reason
+
+
+def test_issue_4891_loop_written_correctly_is_allowed():
+	command = (
+		'for r in 1 2; do gh api "repos/shubhodeep1/coding-workflows/actions/runs/$r/jobs?per_page=50" '
+		"--jq '.jobs[].name'; done"
+	)
+	assert _decide(command) == guard.DECISION_ALLOW
+
+
+@pytest.mark.parametrize("command", [
+	'for r in 1 2; do gh run view $r --json status; done',
+	'for r in 1 2; do echo $r; gh api repos/o/r/actions/runs/${r}/jobs | head -5; done',
+])
+def test_upstream_literal_id_loop_frame_is_preserved(command):
+	assert _decide(command) == guard.DECISION_ALLOW
+
+
+@pytest.mark.parametrize("command", [
+	'for r in $X 2; do gh run view $r; done',
+	'for PATH in 1 2; do gh run view $PATH; done',
+	'for https_proxy in evil.example; do gh api repos/o/r/issues/1; done',
+	"for r in 1; do gh run view $r; gh 'api' -X DELETE repos/o/r/issues/$r; done",
+])
+def test_upstream_loop_frame_rejects_unsafe_shapes(command):
+	assert _decide(command) != guard.DECISION_ALLOW
+
+
+READ_LOOP_ALLOWED = [
+	"for r in 36242690892 36224773465 36205375333 36078283644 35966436009; do gh run view $r --json startedAt,completedAt; done",
+	"for r in 1 2; do gh api repos/o/r/actions/runs/$r/jobs; done",
+	"for ID in 1 2; do gh api repos/o/r/actions/runs/${ID}/jobs; done",
+	"for r in 1 2; do gh api repos/o/r/actions/runs/$r/jobs && gh pr view $r --json title; done",
+	"for r in 1 2; do gh run list --limit 2 | head -n 1; echo $r; done",
+	"for r in 1 2; do gh api repos/o/r/actions/runs/$r/jobs 2>&1 | head -n 5; done",
+	"for r in 1 2; do gh run view \"$r\" --log-failed | tail -n 20; done",
+	"for r in 1 2; do gh api search/issues -X GET -f q=issues --jq '.items[] | .title'; done",
+]
+
+
+@pytest.mark.parametrize("command", READ_LOOP_ALLOWED)
+def test_literal_id_read_loop_is_allowed(command):
+	assert _decide(command) == guard.DECISION_ALLOW
+
+
+READ_LOOP_UNVETTED = [
+	"for r in $IDS; do gh run view $r; done",
+	"for r in 1 *; do gh run view $r; done",
+	"for r in '1' 2; do gh run view $r; done",
+	"for r in 1; do gh run view $r --json $FIELDS; done",
+	"for r in 1; do for x in 2; do gh run view $x; done; done",
+	"while true; do gh api repos/o/r/issues; done",
+	"echo start; for r in 1; do gh run view $r; done",
+	"for r in 1; do gh run view $r; done; echo end",
+	"for r in 1; do gh run view $r --web; done",
+	"for r in 1; do gh pr view $r --unknown; done",
+	"for r in 1; do gh run view $(echo $r); done",
+	"for r in 1; do gh run view prefix$r; done",
+	"for PATH in 1; do gh run view $PATH; done",
+	"for https_proxy in 1; do gh run view $https_proxy; done",
+	"for r in -1; do gh run view $r; done",
+	"for r in 1; do echo prefix$r; gh run view $r; done",
+]
+
+
+@pytest.mark.parametrize("command", READ_LOOP_UNVETTED)
+def test_unvetted_loop_keeps_no_decision(command):
+	assert _decide(command) is None
+
+
+@pytest.mark.parametrize("command", [
+	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs -X GET -f per_page=$r; done",
+	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs?per_page=$r; done",
+	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs > result.json; done",
+	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs; python3 -c 'print(1)'; done",
+	"for r in 1; do gh api $r/repos/o/r/issues; done",
+])
+def test_unvetted_loop_with_unquoted_api_expansion_asks(command):
+	assert _decide(command) == guard.DECISION_ASK
+
+
+def test_expanded_file_field_in_loop_still_asks():
+	assert _decide("for r in 1; do gh api repos/o/r/actions/runs/$r/jobs -X GET -F page=$r; done") == guard.DECISION_ASK
+
+
+@pytest.mark.parametrize("command", [
+	"for r in 1; do gh api -X DELETE repos/o/r/issues/$r; done",
+	"for r in 1; do gh run view $r; gh api -X DELETE repos/o/r/issues/1; done",
+	"for r in 1; do gh run view $r; gh 'api' -X DELETE repos/o/r/issues/1; done",
+	"for r in 1; do gh run view $r; \"gh\" api -X DELETE repos/o/r/issues/1; done",
+	"for r in 1; do gh run view $r; gh ap''i -X DELETE repos/o/r/issues/1; done",
+])
+def test_write_in_read_loop_still_asks(command):
+	assert _decide(command) == guard.DECISION_ASK
+
+
+def test_hook_process_allows_literal_id_read_loop():
+	command = "for r in 1 2; do gh run view $r --json startedAt,completedAt; done"
+	proc = _run_hook(json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}))
+	assert proc.returncode == 0
+	assert json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"] == guard.DECISION_ALLOW
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"gh api repos/a/b --jq -r .default_branch",
+		"gh api repos/a/b --jq=--raw-output",
+		"gh api repos/a/b -q -c",
+		"gh api repos/a/b -q-r",
+		"gh api repos/a/b --jq --arg x 1 .x",
+		"gh api -X DELETE repos/a/b/git/refs/heads/x --jq -r",
+		"gh api repos/shubhodeep1/coding-workflows/issues/1 --jq -r .title",
+	],
+)
+def test_jq_cli_option_as_jq_value_is_denied(command):
+	assert _decide(command) == guard.DECISION_DENY
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"gh api repos/shubhodeep1/coding-workflows --jq '-.size'",
+		"gh api repos/shubhodeep1/coding-workflows --jq '(-.size)'",
+		"gh api repos/shubhodeep1/coding-workflows --jq -1",
+		"gh api repos/shubhodeep1/coding-workflows --jq .a",
+		"gh api repos/shubhodeep1/coding-workflows -q .a",
+	],
+)
+def test_valid_jq_programs_are_not_denied(command):
+	assert _decide(command) == guard.DECISION_ALLOW
+
+
+def test_deny_wins_over_ask_for_another_call():
+	command = "gh api -X DELETE repos/a/b/git/refs/heads/x; gh api repos/a/b --jq -r .name"
+	assert _decide(command) == guard.DECISION_DENY
+
+
+def test_hidden_call_still_asks_before_the_deny():
+	command = 'echo "$(gh api repos/a/b --jq -r .name)"'
+	assert _decide(command) == guard.DECISION_ASK
+
+
+# The substitution is a single REST read in an echo argument. Its variable
+# follows the #4786 loop frame and cannot select a flag, field, or query.
+ISSUE_4909_COMMAND = (
+	'for n in 3576 3895 4638 4703 4811 4894; do echo "$n: $(gh api '
+	'repos/shubhodeep1/coding-workflows/issues/$n --jq \'[.labels[].name]|join(",")\' 2>&1)"; done'
+)
+
+
+@pytest.mark.parametrize("command", [
+	ISSUE_4909_COMMAND,
+	'echo "$(gh api repos/o/r/issues/1 --jq .title)"',
+	'for n in 1 2; do echo "$n: $(gh api "repos/o/r/issues/$n?state=open" --jq .title)"; done',
+	'echo "$(gh api repos/o/r/issues/1)"; echo "$(gh api repos/o/r/issues/2)"',
+	'echo before; echo "$(gh api -X HEAD repos/o/r/issues/1)"',
+])
+def test_echo_substitution_of_one_rest_read_is_allowed(command):
+	assert _decide(command) == guard.DECISION_ALLOW
+
+
+@pytest.mark.parametrize("command", [
+	'echo "$(gh api -X POST repos/o/r/issues/1)"',
+	'echo "$(gh api graphql -f query=\'{viewer{login}}\')"',
+	'echo "$(gh api repos/o/r/issues/1 -H X-HTTP-Method-Override:POST)"',
+	'echo "$(gh api repos/o/r/issues/1 | sh)"',
+	'echo "$(gh api repos/o/r/issues/1; rm x)"',
+	'echo "$(gh api repos/o/r/issues/1 && true)"',
+	'echo "$(gh api repos/o/r/issues/1 > out)"',
+	'echo "$(gh api repos/o/r/issues/1 2>&1 2>&1)"',
+	'echo "$(gh api 2>&1 repos/o/r/issues/1)"',
+	'echo "$(gh api repos/o/r/issues/1 --input f)"',
+	'echo "$(gh api repos/o/r/issues/1 -F data=@file)"',
+	'echo "$(gh api repos/o/r/issues/1 -F data=$FILE)"',
+	'echo "$(gh api repos/o/r/issues/1 --jq .title"',
+	'echo "$(gh api repos/o/r/issues/1 --jq .title)"; echo "$(gh api repos/o/r/issues/2 | sh)"',
+	'for n in 1 2; do echo "$(gh api "repos/o/r/issues/$n?state=$n")"; done',
+	'for n in 1 2; do echo "$(gh api repos/o/r/issues/1 --jq $n)"; done',
+	'for n in 1 2; do echo "$(gh api repos/o/r/issues/1 -f q=$n -X GET)"; done',
+	'for n in 1 2; do echo "$(gh api repos/o/r/issues/$n)"; rm x; done',
+	'printf "%s" "$(gh api repos/o/r/issues/1)"',
+])
+def test_unsafe_echo_substitution_is_not_allowed(command):
+	assert _decide(command) != guard.DECISION_ALLOW
+
+
+def test_nested_and_backtick_substitutions_still_ask():
+	for command in (
+		'echo "$(gh api repos/o/r/issues/$(echo 1))"',
+		'echo "$(gh api repos/o/r/issues/`echo 1`)"',
+	):
+		assert _decide(command) == guard.DECISION_ASK
+
+
+def test_hidden_read_and_loop_write_asks_name_a_safe_rewrite():
+	for command in (
+		'echo "$(gh api repos/o/r/issues/1 | sh)"',
+		'for n in 1 2; do gh api -X DELETE repos/o/r/issues/$n; done',
+	):
+		decision, reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})
+		assert decision == guard.DECISION_ASK
+		assert 'for n in 1 2; do echo $n; gh api repos/o/r/issues/$n --jq .title; done' in reason
+
+
+def test_hook_process_emits_deny_json_for_a_jq_option():
+	payload = {"tool_name": "Bash", "tool_input": {"command": "gh api repos/a/b --jq -r .name"}}
+	result = _run_hook(json.dumps(payload))
+	assert result.returncode == 0
+	output = json.loads(result.stdout)["hookSpecificOutput"]
+	assert output["hookEventName"] == "PreToolUse"
+	assert output["permissionDecision"] == "deny"
+	assert '"-r"' in output["permissionDecisionReason"]
+
+
+# ──────────────────────────────────────────────────────────────────
+# Parsing helpers
+# ──────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+	("args", "method"),
+	[
+		(["repos/a/b"], "GET"),
+		(["repos/a/b", "-f", "x=1"], "POST"),
+		(["repos/a/b", "--input", "f.json"], "POST"),
+		(["-X", "patch", "repos/a/b"], "PATCH"),
+		(["--method", "DELETE", "repos/a/b"], "DELETE"),
+		(["-XPUT", "repos/a/b"], "PUT"),
+		(["-X", "GET", "repos/a/b", "-f", "q=1"], "GET"),
+	],
+)
+def test_effective_method_matches_gh(args, method):
+	assert guard.parse_gh_api_args(args)["method"] == method
+
+
+def test_field_keys_drop_array_suffixes():
+	parsed = guard.parse_gh_api_args(["repos/a/b", "-f", "labels[]=x", "-F", "a[b][c]=1"])
+	assert [key for _role, key, _value in parsed["fields"]] == ["labels", "a"]
+
+
+@pytest.mark.parametrize(
+	("url", "slug"),
+	[
+		("https://github.com/shubhodeep1/coding-workflows.git", "shubhodeep1/coding-workflows"),
+		("git@github.com:shubhodeep1/coding-workflows.git", "shubhodeep1/coding-workflows"),
+		("http://local_proxy@127.0.0.1:1234/git/shubhodeep1/coding-workflows", "shubhodeep1/coding-workflows"),
+		("https://evilgithub.com/a/b", ""),
+		("http://127.0.0.1:1234/other/a/b", ""),
+		("not a url", ""),
+	],
+)
+def test_extract_repo_slug(url, slug):
+	assert guard.extract_repo_slug(url) == slug
+
+
+def test_heredoc_bodies_are_split_out():
+	stripped, heredocs = guard.strip_heredoc_bodies("cat <<'EOF'\nbody line\nEOF\necho after")
+	assert stripped == "cat <<'EOF'\necho after"
+	assert heredocs == [("cat ", True, "body line")]
+
+
+@pytest.mark.parametrize("command", [
+	"echo '<<EOF'\ngh api -X DELETE repos/a/b\nEOF",
+	"echo \\<<EOF\ngh api -X DELETE repos/a/b\nEOF",
+	"echo <<<EOF\ngh api -X DELETE repos/a/b\nEOF",
+	"echo ${x:-<<EOF}\ngh api -X DELETE repos/a/b\nEOF",
+	"echo $((1 <<EOF))\ngh api -X DELETE repos/a/b\nEOF",
+	"((1 <<EOF)); gh api -X DELETE repos/a/b\nEOF",
+	"echo 'quoted\n<<EOF'\ngh api -X DELETE repos/a/b\nEOF",
+	"echo # <<EOF\ngh api -X DELETE repos/a/b\nEOF",
+])
+def test_non_heredoc_markers_never_hide_a_write(command):
+	stripped, heredocs = guard.strip_heredoc_bodies(command)
+	assert stripped == command
+	assert heredocs == []
+	assert _decide(command) == guard.DECISION_ASK
+
+
+def test_real_heredocs_still_strip_bodies_and_detect_hidden_calls():
+	command = "cat <<-EOF <<'END'\n\tbody\nEOF\nquoted body\nEND\necho after"
+	stripped, heredocs = guard.strip_heredoc_bodies(command)
+	assert stripped == "cat <<-EOF <<'END'\necho after"
+	assert heredocs == [("cat ", False, "\tbody"), ("cat <<-EOF ", True, "quoted body")]
+	assert _decide("bash <<'EOF'\ngh api -X DELETE repos/a/b\nEOF") == guard.DECISION_ASK
+	assert _decide('echo "$(bash <<EOF\ngh api -X DELETE repos/a/b\nEOF\n)"') == guard.DECISION_ASK
+
+
+def test_unquoted_expansion_prompts_only_for_gh_api_arguments():
+	assert _decide('echo $X; gh api "repos/a/b/pulls/$n" --jq .title') is None
+	assert _decide('gh api "repos/a/b/pulls/$n" --jq .title') is None
+	assert _decide('gh api repos/a/b/pulls/$n --jq .title') == guard.DECISION_ASK
+	decision, reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": "gh api repos/a/b/pulls/$n --jq .title"}})
+	assert decision == guard.DECISION_ASK
+	assert "unquoted gh api argument" in reason
+
+
+def test_literal_loop_counter_is_not_an_unquoted_expansion():
+	# #6127's unquoted-expansion ask must not catch the §23.H literal-ID loop
+	# counter of a vetted read loop: it can only expand to one of the IDs.
+	assert _decide("for r in 1 2; do gh api repos/o/r/actions/runs/$r/jobs; done") == guard.DECISION_ALLOW
+	assert _decide("for ID in 1 2; do gh api repos/o/r/actions/runs/${ID}/jobs; done") == guard.DECISION_ALLOW
+	assert _decide("for r in 1 2; do gh api repos/o/r/issues/$r --jq .; done") == guard.DECISION_ALLOW
+
+
+@pytest.mark.parametrize("command", [
+	"for r in 1; do r=' -Fbody=@/etc/passwd'; gh api repos/o/r/issues/1/comments$r; done",
+	"for r in 1; do r+=' -Fbody=@/etc/passwd'; gh api repos/o/r/issues/1/comments$r; done",
+	"for r in 1; do read r; gh api repos/o/r/issues/1/comments$r; done",
+	"for r in 1; do declare r=x; gh api repos/o/r/issues/1/comments$r; done",
+	"for r in 1; do printf -v r '%s' x; gh api repos/o/r/issues/1/comments$r; done",
+	"for r in 1; do . ./rebind.sh; gh api repos/o/r/issues/1/comments$r; done",
+	"for r in 1; do r[0]=' -Fbody=@/etc/passwd'; gh api repos/o/r/issues/1/comments$r; done",
+	"for r in 1; do r['index']=' -Fbody=@/etc/passwd'; gh api repos/o/r/issues/1/comments$r; done",
+	"for r in 1; do select r in x; do break; done; gh api repos/o/r/issues/1/comments$r; done",
+	"for r in 1; do trap '. ./rebind.sh' DEBUG; gh api repos/o/r/issues/1/comments$r; done",
+	"for r in 1; do :; gh api repos/o/r/issues/1/comments$r; done",
+	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs$X; done",
+	"for r in 1; do gh api repos/o/r/actions/runs/${r:-x}/jobs; done",
+	"for r in 1; do gh api repos/o/r/actions/runs/$rx/jobs; done",
+	"for r in $IDS; do gh api repos/o/r/actions/runs/$r/jobs; done",
+	"for r in 1 2; do gh api repos/o/r/actions/runs/$r/jobs; done; gh api repos/o/r/$ENDPOINT",
+])
+def test_rebound_or_other_expansion_in_loop_still_asks(command):
+	assert _decide(command) == guard.DECISION_ASK
+
+
+@pytest.mark.parametrize("command", [
+	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs --jq $'.x'; done",
+	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs $'-XDELETE'; done",
+	"for r in 1; do gh api repos/o/r/actions/runs/$r/{jobs,-XDELETE}; done",
+	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs # x\ngh api -X DELETE repos/o/r; done",
+	"for r in {1..3}; do gh api repos/o/r/actions/runs/$r/jobs; done",
+	"for r in 1; do gh api repos/o/r/git/refs/heads/$r -f{x=1,-X=DELETE}; done",
+	"for r in 1; do gh api -X GET repos/o/r/issues/1 -F{'q=1','x=@/etc/passwd'}; done",
+])
+def test_shell_rewrite_hazard_inside_a_loop_still_asks(command):
+	# A loop need not expand its counter for shell rewriting to hide a file-backed field.
+	assert _decide(command) == guard.DECISION_ASK
+
+
+def test_redirects_are_not_arguments():
+	segments = guard.shell_segments("gh api repos/a/b 2>&1 > out.txt | head -3")
+	assert segments == [["gh", "api", "repos/a/b"], ["head", "-3"]]
+
+
+# ──────────────────────────────────────────────────────────────────
+# Hook process and the fail-closed contract
+# ──────────────────────────────────────────────────────────────────
+
+
+def test_hook_process_emits_ask_json_for_a_write():
+	payload = {"tool_name": "Bash", "tool_input": {"command": "gh api -X DELETE repos/a/b/git/refs/heads/x"}}
+	result = _run_hook(json.dumps(payload))
+	assert result.returncode == 0
+	output = json.loads(result.stdout)["hookSpecificOutput"]
+	assert output["hookEventName"] == "PreToolUse"
+	assert output["permissionDecision"] == "ask"
+
+
+def test_hook_process_is_silent_without_gh_api():
+	result = _run_hook(json.dumps({"tool_name": "Bash", "tool_input": {"command": "git status"}}))
+	assert result.returncode == 0
+	assert result.stdout == ""
+
+
+@pytest.mark.parametrize("stdin_text", ["", "   "])
+def test_empty_payload_is_allowed_silently(stdin_text):
+	result = _run_hook(stdin_text)
+	assert result.returncode == 0
+	assert result.stdout == ""
+
+
+@pytest.mark.parametrize("stdin_text", ["not json", "[1, 2, 3]", '"a string"'])
+def test_malformed_payload_asks(stdin_text):
+	result = _run_hook(stdin_text)
+	assert result.returncode == 0
+	assert json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_internal_exception_asks(monkeypatch, capsys):
+	def boom(payload):
+		raise RuntimeError("kaboom")
+
+	monkeypatch.setattr(guard, "evaluate", boom)
+	monkeypatch.setattr(sys, "stdin", type("S", (), {"read": staticmethod(lambda: "{}")})())
+	assert guard.main() == 0
+	output = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+	assert output["permissionDecision"] == "ask"
+	assert "kaboom" in output["permissionDecisionReason"]
+
+
+def test_hook_has_no_environment_escape_hatch():
+	# The guard reads only the variables that tell it where gh sends a call
+	# (issue #7555); each can only turn a routine write into a prompt.
+	# CLAUDE_PROJECT_DIR only adds settings files whose allow rules keep the
+	# Auto-mode asks, so it can only add prompts too.
+	import re as _re
+
+	source = GUARD_PATH.read_text(encoding="utf-8")
+	assert "getenv" not in source
+	reads = _re.findall(r"os\.environ\.get\(\"([A-Z_]+)\"", source)
+	assert set(reads) == {"GH_REPO", "GH_HOST", "CLAUDE_ENV_FILE", "CLAUDE_PROJECT_DIR", "CLAUDE_CONFIG_DIR"}
+	assert source.count("os.environ") == len(reads)
+
+
+def test_hook_issues_no_github_api_calls():
+	source = GUARD_PATH.read_text(encoding="utf-8")
+	assert '["gh"' not in source
+	assert "api.github.com" not in source
+
+
+# ──────────────────────────────────────────────────────────────────
+# Wiring
+# ──────────────────────────────────────────────────────────────────
+
+
+def _guard_entries(settings: dict) -> list[dict]:
+	return [
+		entry
+		for entry in settings["hooks"]["PreToolUse"]
+		if any("gh_api_write_guard.py" in hook.get("command", "") for hook in entry.get("hooks", []))
+	]
+
+
+@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
+def test_settings_wire_the_guard_once_under_bash(path):
+	settings = json.loads(path.read_text(encoding="utf-8"))
+	entries = _guard_entries(settings)
+	assert len(entries) == 1
+	entry = entries[0]
+	assert entry["matcher"] == guard.SETTINGS_MATCHER == "Bash"
+	assert len(entry["hooks"]) == 1
+	hook = entry["hooks"][0]
+	assert hook["type"] == "command"
+	assert hook["command"].startswith("python3 ")
+	assert hook["command"].endswith('/.claude/hooks/gh_api_write_guard.py')
+
+
+@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
+def test_settings_no_longer_carry_gh_api_ask_rules(path):
+	# A permissions.ask rule prompts even when a hook allows (and in Auto mode),
+	# so any `gh api` ask rule would bring the prompts back.
+	permissions = json.loads(path.read_text(encoding="utf-8"))["permissions"]
+	assert not any(rule.startswith("Bash(gh api") for rule in permissions.get("ask", []))
+
+
+@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
+def test_other_bash_guards_stay_wired(path):
+	settings = json.loads(path.read_text(encoding="utf-8"))
+	commands = [
+		hook["command"]
+		for entry in settings["hooks"]["PreToolUse"]
+		if entry.get("matcher") == "Bash"
+		for hook in entry["hooks"]
+	]
+	assert any("pr_merge_status_guard.py" in command for command in commands)
+
+
+def test_template_parity():
+	# On PR CI only, a template the PR changed (or whose drift its base already
+	# has) waits for the post-merge live-copy sync (tests/claude_template_drift.py).
+	pending = claude_template_drift.pending_template_paths(REPO_ROOT)
+	if {"hooks/gh_api_write_guard.py", "settings.json"} <= pending:
+		pytest.skip("template and settings changes wait for the live-copy sync PR")
+	if "hooks/gh_api_write_guard.py" not in pending:
+		assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
+	if "settings.json" not in pending:
+		assert claude_template_drift.settings_match_template(
+			TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8"), SETTINGS_PATH.read_text(encoding="utf-8")
+		)
+
+
+def test_claude_md_documents_the_guard():
+	text = CLAUDE_MD.read_text(encoding="utf-8")
+	assert "### H) Permission Guard for `gh api`" in text
+	assert ".claude/hooks/gh_api_write_guard.py" in text
+	assert "tests/test_gh_api_write_guard.py" in text
+
+
+def test_seed_repo_command_ships_the_hook():
+	assert "hooks/gh_api_write_guard.py" in SEED_REPO_COMMAND.read_text(encoding="utf-8")
+
+
+def test_ci_runs_this_file():
+	assert "tests/test_gh_api_write_guard.py" in CI_WORKFLOW.read_text(encoding="utf-8")
+
+
+# ──────────────────────────────────────────────────────────────────
+# Substitution scanning (quote-aware)
+# ──────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("command, bodies", [
+	("echo `a b`", ["a b"]),
+	("echo '`a b`'", []),
+	("echo \"`a b`\"", ["a b"]),
+	("echo \"$(a (b) c)\" d", ["a (b) c"]),
+	("echo $(a b)", []),
+	("echo '$(a b)' \"$(c)\"", ["c"]),
+	("echo \\`a\\` b", []),
+	("echo `a", ["a"]),
+	("echo \"$(a", ["a"]),
+	("echo \"$(echo \")\"; b)\"", ["echo \")\"; b"]),
+	("echo \"$(echo ')'; b)\"", ["echo ')'; b"]),
+	("echo \"$(echo \\) b)\"", ["echo \\) b"]),
+	("echo \"$(echo `echo )` b)\"", ["echo `echo )` b"]),
+	("echo \"$(echo `echo \"` b)\"", ["echo `echo \"` b"]),
+])
+def test_substitution_bodies_follow_bash_quoting(command, bodies):
+	assert guard.substitution_bodies(command) == bodies
+
+
+# ──────────────────────────────────────────────────────────────────
+# Bare usage text (issue #6668)
+# ──────────────────────────────────────────────────────────────────
+
+# `gh api --help` / `gh api -h` with nothing else only prints usage and sends
+# no API request (operator decision 2026-09-30, Q1: A). Any other argument
+# beside it keeps the call unreadable, so it still asks.
+
+@pytest.mark.parametrize("command", [
+	"gh api --help",
+	"gh api -h",
+	"gh api --help 2>&1",
+	"gh api -h | head -20",
+])
+def test_bare_help_is_a_read(command):
+	decision, reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})
+	assert decision == "allow"
+	assert "read call" in reason
+
+
+@pytest.mark.parametrize("command", [
+	"gh api --help repos/o/r",
+	"gh api repos/o/r --help",
+	"gh api -X DELETE repos/o/r --help",
+	"gh api -X POST --help",
+	"gh api -f a=b --help",
+	"gh api --input x.json --help",
+	"gh api -h -h",
+	"gh api --help -h",
+	"gh api --help --",
+	"gh api --help=x",
+	"gh api -h repos/o/r",
+])
+def test_help_with_other_arguments_still_asks(command):
+	decision, reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})
+	assert decision == "ask"
+	assert "unreadable call" in reason
+
+
+@pytest.mark.parametrize("command", [
+	"gh api --help | grep x",
+	(
+		"gh api --help | grep -n -i -A3 \"escape\"; grep -rn \"allow-escape-sequences\" --include=*.sh "
+		"--include=*.yml --include=*.py . | grep -v '^./.git/' | head -20"
+	),
+])
+def test_bare_help_piped_to_grep_gets_no_decision(command):
+	assert _decide(command) is None
+
+
+@pytest.mark.parametrize("command", [
+	"echo \"$(gh api --help)\"",
+	"echo `gh api --help`",
+	"bash -c 'gh api --help'",
+	"xargs gh api --help",
+])
+def test_hidden_bare_help_still_asks(command):
+	assert _decide(command) == "ask"
+
+
+def test_bare_help_beside_a_write_still_asks():
+	assert _decide("gh api --help; gh api -X DELETE repos/o/r") == "ask"
+
+
+def test_literal_loop_over_bare_help_gets_no_decision():
+	assert _decide("for i in a b; do gh api --help; done") is None
+
+
+# ──────────────────────────────────────────────────────────────────
+# Consumer security-audit claims (issue #7555)
+# ──────────────────────────────────────────────────────────────────
+
+LOCAL_COMMENTS = "repos/shubhodeep1/coding-workflows/issues/1/comments"
+PLACEHOLDER_WRITE = "gh api repos/{owner}/{repo}/issues/5/comments -f body=hi"
+
+
+# Claim 1: gh fills `{owner}/{repo}` from GH_REPO, a `gh-resolved` remote, or
+# the remote priority order, so the placeholders are routine only when the
+# guard can see that all of those name the local repository.
+@pytest.mark.parametrize("command", [
+	"cd /tmp && " + PLACEHOLDER_WRITE,
+	"cd ../other-clone; " + PLACEHOLDER_WRITE,
+	"pushd /tmp && " + PLACEHOLDER_WRITE,
+	"popd; " + PLACEHOLDER_WRITE,
+	"GH_REPO=evil/x " + PLACEHOLDER_WRITE,
+	"env GH_REPO=evil/x " + PLACEHOLDER_WRITE,
+	"export GH_REPO=evil/x; " + PLACEHOLDER_WRITE,
+	"GH_HOST=evil.example " + PLACEHOLDER_WRITE,
+	"GIT_DIR=/tmp/other/.git " + PLACEHOLDER_WRITE,
+	"gh api --hostname evil.example repos/{owner}/{repo}/issues/5/comments -f body=hi",
+])
+def test_placeholder_write_that_may_leave_the_local_repo_asks(command):
+	assert _decide(command) == guard.DECISION_ASK
+
+
+@pytest.mark.parametrize("resolved", ["", "someone-else/fork"])
+def test_placeholder_write_asks_when_remotes_do_not_resolve_to_origin(monkeypatch, resolved):
+	monkeypatch.setattr(guard, "placeholder_repo_slug", lambda cwd: resolved)
+	decision, reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": PLACEHOLDER_WRITE}})
+	assert decision == guard.DECISION_ASK
+	assert "may resolve to another repository" in reason
+
+
+def test_placeholder_write_asks_with_session_gh_repo(monkeypatch):
+	monkeypatch.setenv("GH_REPO", "evil/x")
+	assert _decide(PLACEHOLDER_WRITE) == guard.DECISION_ASK
+	monkeypatch.setenv("GH_REPO", LOCAL_SLUG.upper())
+	assert _decide(PLACEHOLDER_WRITE) == guard.DECISION_ALLOW
+
+
+def test_session_gh_host_turns_routine_writes_into_prompts(monkeypatch):
+	monkeypatch.setenv("GH_HOST", "ghe.example.com")
+	assert _decide(PLACEHOLDER_WRITE) == guard.DECISION_ASK
+	assert _decide(f"gh api {LOCAL_COMMENTS} -f body=hi") == guard.DECISION_ASK
+	assert _decide("gh api repos/a/b/pulls/1 --jq .title") == guard.DECISION_ALLOW
+	monkeypatch.setenv("GH_HOST", "github.com")
+	assert _decide(PLACEHOLDER_WRITE) == guard.DECISION_ALLOW
+
+
+@pytest.mark.parametrize("content,expected", [
+	("export GH_REPO=evil/x\n", "ask"),
+	("GH_HOST=ghe.example.com\n", "ask"),
+	("export PATH=/usr/bin:$PATH\n", "allow"),
+])
+def test_claude_env_file_redirect_is_checked(monkeypatch, tmp_path, content, expected):
+	env_file = tmp_path / "env.sh"
+	env_file.write_text(content, encoding="utf-8")
+	monkeypatch.setenv("CLAUDE_ENV_FILE", str(env_file))
+	assert _decide(PLACEHOLDER_WRITE) == expected
+
+
+def test_claude_env_file_that_cannot_be_checked_asks(monkeypatch, tmp_path):
+	monkeypatch.setenv("CLAUDE_ENV_FILE", str(tmp_path))
+	assert _decide(PLACEHOLDER_WRITE) == guard.DECISION_ASK
+	big = tmp_path / "big.sh"
+	big.write_text("#" * (guard._CLAUDE_ENV_FILE_READ_BYTES + 1), encoding="utf-8")
+	monkeypatch.setenv("CLAUDE_ENV_FILE", str(big))
+	assert _decide(PLACEHOLDER_WRITE) == guard.DECISION_ASK
+	monkeypatch.setenv("CLAUDE_ENV_FILE", str(tmp_path / "missing.sh"))
+	assert _decide(PLACEHOLDER_WRITE) == guard.DECISION_ALLOW
+
+
+@pytest.mark.parametrize("command", [
+	f"GH_HOST=evil.example gh api {LOCAL_COMMENTS} -f body=hi",
+	f"export GH_TOKEN=x; gh api {LOCAL_COMMENTS} -f body=hi",
+	f"gh api --hostname evil.example {LOCAL_COMMENTS} -f body=hi",
+])
+def test_explicit_slug_write_with_redirected_gh_asks(command):
+	assert _decide(command) == guard.DECISION_ASK
+
+
+def test_explicit_slug_write_on_github_com_stays_routine():
+	assert _decide(f"gh api --hostname github.com {LOCAL_COMMENTS} -f body=hi") == guard.DECISION_ALLOW
+
+
+def test_placeholder_reason_names_no_remote_url(monkeypatch):
+	monkeypatch.setattr(guard, "placeholder_repo_slug", lambda cwd: "")
+	_decision, reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": PLACEHOLDER_WRITE}})
+	assert "://" not in reason and "@github" not in reason
+
+
+def test_classify_without_placeholder_lookup_fails_closed():
+	args = ["repos/{owner}/{repo}/issues/5/comments", "-f", "body=hi"]
+	kind, _description = guard.classify(guard.parse_gh_api_args(args), "gh api " + " ".join(args), lambda: LOCAL_SLUG)
+	assert kind == guard.KIND_WRITE
+
+
+def _git(cwd, *args):
+	env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+	subprocess.run(["git", *args], cwd=str(cwd), env=env, check=True, capture_output=True)
+
+
+@pytest.fixture
+def remote_repo(tmp_path):
+	_git(tmp_path, "init", "-q")
+	return tmp_path
+
+
+def test_placeholder_repo_slug_with_origin_only(remote_repo):
+	_git(remote_repo, "remote", "add", "origin", "https://github.com/a/b.git")
+	assert _REAL_PLACEHOLDER_REPO_SLUG(str(remote_repo)) == "a/b"
+
+
+def test_placeholder_repo_slug_with_matching_upstream(remote_repo):
+	_git(remote_repo, "remote", "add", "origin", "https://github.com/a/b.git")
+	_git(remote_repo, "remote", "add", "upstream", "git@github.com:A/B.git")
+	assert _REAL_PLACEHOLDER_REPO_SLUG(str(remote_repo)).lower() == "a/b"
+
+
+@pytest.mark.parametrize("url", ["https://github.com/c/d.git", "https://gitlab.com/a/b.git", "/srv/mirror.git"])
+def test_placeholder_repo_slug_with_another_remote_is_empty(remote_repo, url):
+	_git(remote_repo, "remote", "add", "origin", "https://github.com/a/b.git")
+	_git(remote_repo, "remote", "add", "upstream", url)
+	assert _REAL_PLACEHOLDER_REPO_SLUG(str(remote_repo)) == ""
+
+
+def test_placeholder_repo_slug_honours_gh_resolved(remote_repo):
+	_git(remote_repo, "remote", "add", "origin", "https://github.com/a/b.git")
+	_git(remote_repo, "config", "remote.origin.gh-resolved", "base")
+	assert _REAL_PLACEHOLDER_REPO_SLUG(str(remote_repo)) == "a/b"
+	_git(remote_repo, "config", "remote.origin.gh-resolved", "other/x")
+	assert _REAL_PLACEHOLDER_REPO_SLUG(str(remote_repo)) == ""
+
+
+def test_placeholder_repo_slug_without_remotes_is_empty(remote_repo, tmp_path_factory):
+	assert _REAL_PLACEHOLDER_REPO_SLUG(str(remote_repo)) == ""
+	assert _REAL_PLACEHOLDER_REPO_SLUG(str(tmp_path_factory.mktemp("not-a-repo"))) == ""
+
+
+# Claim 2: every file-backed field form the audits cite already prompts.
+@pytest.mark.parametrize("command", [
+	f"gh api {LOCAL_COMMENTS} -F body=@/etc/passwd",
+	f"gh api {LOCAL_COMMENTS} --field=body=@-",
+	f"gh api {LOCAL_COMMENTS} --field body=@x",
+	f"gh api {LOCAL_COMMENTS} -Fbody=@x",
+	f"gh api {LOCAL_COMMENTS} -F'body=@x'",
+	f"gh api {LOCAL_COMMENTS} -F body='@x'",
+	"gh api repos/shubhodeep1/coding-workflows/issues/5/labels -F 'labels[]=@x'",
+	f"gh api {LOCAL_COMMENTS} -F body=\\@x",
+	f"gh api {LOCAL_COMMENTS} -F 'body'=@x",
+	f"gh api {LOCAL_COMMENTS} -iFbody=@x",
+	f"gh api {LOCAL_COMMENTS} --fie=body=@x",
+	f"gh api -F body=@x {LOCAL_COMMENTS}",
+	"gh api -X GET search/issues -F q=@x",
+	"gh api graphql -F query=@q.graphql",
+	"gh api graphql -f query='query { viewer { login } }' -F v=@x",
+	f"gh api {LOCAL_COMMENTS} --input x",
+	f"gh api {LOCAL_COMMENTS} --input=x",
+	f"echo \"$(gh api {LOCAL_COMMENTS} -F body=@x)\"",
+	"for n in 1 2; do gh api repos/shubhodeep1/coding-workflows/issues/$n/comments -F body=@x; done",
+	f"gh api {LOCAL_COMMENTS} -F body=@x | head -n 1",
+	f"gh api {LOCAL_COMMENTS} -F body=@x &",
+	f"'gh' api {LOCAL_COMMENTS} -F body=@x",
+	f"env -S 'gh api {LOCAL_COMMENTS} -F body=@x'",
+])
+def test_file_backed_field_forms_from_the_audits_ask(command):
+	assert _decide(command) == guard.DECISION_ASK
+
+
+# Claim 3: quoted, escaped and expanded spellings of `gh api` reach the parser.
+@pytest.mark.parametrize("command", [
+	f"'gh' api {LOCAL_COMMENTS} -F body=@x",
+	"\"gh\" \"api\" repos/evil/x/issues/1/comments -f body=x",
+	"g''h api repos/evil/x/issues/1/comments -f body=x",
+	"gh a''pi repos/evil/x/issues/1/comments -f body=x",
+	"gh \"a\"pi repos/evil/x/issues/1/comments -f body=x",
+	"gh a\"\"pi repos/evil/x/issues/1/comments -f body=x",
+	f"gh \\\napi {LOCAL_COMMENTS} -F body=@x",
+	"gh $'api' repos/a/b -X DELETE",
+	"gh $'\\x61pi' repos/a/b -X DELETE",
+	"gh $SUB repos/a/b -X DELETE",
+	"gh \"$SUB\" repos/a/b -X DELETE",
+	f"env -S 'gh api {LOCAL_COMMENTS} -F body=@x'",
+	"env --split-string='gh api -X DELETE repos/a/b'",
+	"echo \"$('gh' api -X DELETE repos/a/b)\"",
+	"bash -c \"'gh' api -X DELETE repos/a/b\"",
+	"python3 - <<'EOF'\nimport os; os.system(\"'gh' api -X DELETE repos/a/b\")\nEOF",
+])
+def test_quoted_or_expanded_gh_api_asks(command):
+	assert _decide(command) == guard.DECISION_ASK
+
+
+@pytest.mark.parametrize("command", [
+	"\"gh\" api repos/a/b/issues/1",
+	"'gh' 'api' repos/shubhodeep1/coding-workflows/issues/5/comments -f body=hi",
+	"g''h a''pi repos/a/b/pulls/1 --jq .title",
+])
+def test_quoted_read_or_routine_call_is_classified_like_the_plain_form(command):
+	assert _decide(command) == guard.DECISION_ALLOW
+
+
+@pytest.mark.parametrize("command", [
+	"G=gh; $G api repos/a/b/issues/1/comments -f body=x",
+	"G=gh; ${G} api -X DELETE repos/a/b",
+	"`printf gh` api -X DELETE repos/a/b",
+	"`printf g``printf h` api -X DELETE repos/a/b",
+	"$(printf gh) api -X DELETE repos/a/b",
+	"G=gh; $G \"api\" repos/a/b/issues/1/comments -f body=x",
+	"G=gh; $G 'api' -X DELETE repos/a/b",
+	"G=gh; $G a''pi -X DELETE repos/a/b",
+	"$(printf gh) \"api\" -X DELETE repos/a/b",
+	"`printf gh` 'api' -X DELETE repos/a/b",
+	"$(printf gh) 'api' -X DELETE repos/a/b",
+	"$(printf gh) a'p'i -X DELETE repos/a/b",
+	"$(printf $(printf gh)) 'api' -X DELETE repos/a/b",
+	"$(printf $(printf gh)) api -X DELETE repos/a/b",
+	"$(printf $(printf $(printf gh))) \"api\" -X DELETE repos/a/b",
+	"gh${IFS}api repos/a/b -X DELETE",
+	"gh$IFS'api' repos/a/b -X DELETE",
+	"gh\"$IFS\"api -X DELETE repos/a/b",
+	"{gh,api} repos/a/b -X DELETE",
+])
+def test_expanding_command_word_before_api_asks(command):
+	# The early filter must not drop these: Bash can expand the word into `gh`.
+	assert _decide(command) == guard.DECISION_ASK
+
+
+def test_indirect_gh_command_word_is_never_allowed():
+	# An alias cannot be resolved from the text alone; it must never be allowed.
+	assert _decide("alias q=gh; q api repos/a/b/issues/1/comments -f body=x") != guard.DECISION_ALLOW
+
+
+@pytest.mark.parametrize("command", [
+	"gh a\\\npi repos/evil/x/issues/1/comments -f body=x",
+	"g\\\nh api repos/evil/x/issues/1/comments -f body=x",
+	f"gh a\\\npi {LOCAL_COMMENTS} -F body=@x",
+	f"gh a\\\npi {LOCAL_COMMENTS} -f body=$FIELDS",
+])
+def test_mid_word_line_continuation_is_read_as_gh_api(command):
+	assert _decide(command) == guard.DECISION_ASK
+
+
+@pytest.mark.parametrize("command", [
+	"'cd' /tmp && " + PLACEHOLDER_WRITE,
+	"\"cd\" /tmp && " + PLACEHOLDER_WRITE,
+	"\\cd /tmp && " + PLACEHOLDER_WRITE,
+	"c''d /tmp && " + PLACEHOLDER_WRITE,
+	"'pushd' /tmp && " + PLACEHOLDER_WRITE,
+])
+def test_quoted_directory_change_before_placeholder_write_asks(command):
+	decision, reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})
+	assert decision == guard.DECISION_ASK
+	assert "changes directory" in reason or "may resolve to another repository" in reason
+
+
+@pytest.mark.parametrize("command", [
+	"git commit -m \"fix 'gh' api guard\"",
+	"grep -n \"g\"\"h api\" README.md",
+])
+def test_quoted_gh_api_text_handed_to_data_commands_gets_no_decision(command):
+	assert _decide(command) is None
+
+
+# Claim 1, `-R`: a flag between `gh` and `api` could change the target repository
+# or host, so the guard prompts instead of classifying the call (issue #7555).
+@pytest.mark.parametrize("command", [
+	"gh -R evil/repo api repos/{owner}/{repo}/issues/5/comments -f body=x",
+	"gh --repo evil/repo api repos/{owner}/{repo}/issues/5/comments -f body=x",
+	"gh --hostname evil.example api repos/shubhodeep1/coding-workflows/issues/5/comments -f body=x",
+	"gh -R evil/repo a''pi repos/{owner}/{repo}/issues/5/comments -f body=x",
+	"'gh' -R evil/repo 'api' repos/{owner}/{repo}/issues/5/comments -f body=x",
+	"sudo gh -R evil/repo api repos/a/b -X DELETE",
+])
+def test_flag_between_gh_and_api_asks(command):
+	decision, reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})
+	assert decision == guard.DECISION_ASK
+	assert reason
+
+
+def test_flag_before_other_gh_subcommand_gets_no_decision():
+	assert _decide("gh -R a/b issue comment 1 --body 'api change'") is None
+
+
+# ──────────────────────────────────────────────────────────────────
+# Auto mode: shell-shape doubts step aside, writes still ask
+# ──────────────────────────────────────────────────────────────────
+
+def _decide_in_mode(command: str, mode: str | None) -> tuple[str | None, str]:
+	payload: dict = {"tool_name": "Bash", "tool_input": {"command": command}}
+	if mode is not None:
+		payload["permission_mode"] = mode
+	return guard.evaluate(payload)
+
+
+# Each of these is a read whose shell shape the guard cannot trust, shaped like
+# the commands from the permission prompts that held up Auto-mode sessions. They
+# use endpoints that no shipped `Bash(gh api ...)` allow rule matches, so a
+# no-decision really reaches the Auto-mode classifier.
+_SHAPE_DOUBT_READS = [
+	# ANSI-C quoting in a later pipeline stage
+	"gh api 'orgs/o/teams?per_page=100' --paginate --jq '.[] | .id' 2>&1 | sort -t$'\\t' -k2",
+	# brace expansion
+	"gh api orgs/o/teams/{1,2}",
+	# gh api hidden inside a backtick substitution or handed to bash -c
+	"x=`gh api orgs/o`; echo $x",
+	"bash -c \"gh api orgs/o\"",
+	# a command the tokenizer cannot parse
+	"gh api orgs/o 'unterminated",
+]
+
+_ANSI_C_SHAPE_DOUBT = _SHAPE_DOUBT_READS[0]
+assert "$'" in _ANSI_C_SHAPE_DOUBT
+
+# Shape doubts on commands that the shipped `Bash(gh api repos/*)` or
+# `Bash(gh api user *)` allow rule could match. Auto mode resolves that allow
+# rule before its classifier, so a no-decision would approve these unprompted;
+# they must keep asking in Auto mode too.
+_ALLOW_RULE_SHAPE_DOUBTS = [
+	"for i in 6031951051 6084132710; do gh api repos/o/r/issues/comments/$i > got_$i.json; done; python3 -I -c \"print(1)\"",
+	"gh api 'repos/o/r/issues/4599/comments?per_page=100' --paginate --jq '.[] | .id' 2>&1 | sort -t$'\\t' -k2",
+	"gh api repos/o/r/pulls/{1,2}",
+	"gh api repos/o/r/git/refs/heads/x {-X,DELETE}",
+	"gh api repos/o/r/pulls/1 $(gh api -X DELETE repos/o/r/git/refs/heads/x)",
+	"x=`gh api repos/o/r/pulls/1`; echo $x",
+	"gh api repos/o/r/pulls/1 -X DELETE 'unterminated",
+	"gh api user $(gh api -X DELETE repos/o/r/git/refs/heads/x)",
+]
+
+
+def _assert_auto_shape_deny(decision, reason):
+	# Auto mode turns a shape ask that would reach a human into a deny with
+	# rewrite instructions: still never an allow, and nothing runs.
+	assert decision == guard.DECISION_DENY
+	assert "Auto mode: nothing ran" in reason
+
+
+@pytest.mark.parametrize("command", _ALLOW_RULE_SHAPE_DOUBTS)
+def test_allow_rule_covered_shape_doubts_still_ask_in_auto_mode(command):
+	_assert_auto_shape_deny(*_decide_in_mode(command, guard.AUTO_PERMISSION_MODE))
+	decision, reason = _decide_in_mode(command, None)
+	assert decision == guard.DECISION_ASK
+	assert reason and "Auto mode" not in reason
+
+
+@pytest.mark.parametrize("command", _SHAPE_DOUBT_READS)
+def test_shape_doubts_still_ask_outside_auto_mode(command):
+	for mode in (None, "default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "AUTO", ""):
+		assert _decide_in_mode(command, mode)[0] == guard.DECISION_ASK, mode
+
+
+@pytest.mark.parametrize("command", _SHAPE_DOUBT_READS)
+def test_shape_doubts_give_no_decision_in_auto_mode(command):
+	assert _decide_in_mode(command, guard.AUTO_PERMISSION_MODE) == (None, "")
+
+
+@pytest.mark.parametrize("command", [
+	"gh api -X PATCH repos/{owner}/{repo}/issues/1 -f state=closed",
+	"gh api -X DELETE repos/o/r/git/refs/heads/x",
+	"gh api repos/o/r/issues/1/comments -F body=@notes.md",
+	"gh api --bogus-flag repos/o/r/pulls/1",
+	"gh -R evil/repo api repos/o/r/pulls/1",
+])
+def test_writes_and_flag_before_api_still_ask_in_auto_mode(command):
+	decision, reason = _decide_in_mode(command, guard.AUTO_PERMISSION_MODE)
+	assert decision == guard.DECISION_ASK
+	assert reason
+
+
+def test_auto_mode_keeps_allows_and_the_malformed_jq_deny():
+	assert _decide_in_mode("gh api repos/o/r/pulls/1", guard.AUTO_PERMISSION_MODE)[0] == guard.DECISION_ALLOW
+	assert _decide_in_mode("gh api repos/o/r/pulls/1 --jq -r", guard.AUTO_PERMISSION_MODE)[0] == guard.DECISION_DENY
+	assert _decide_in_mode("for i in 1 2; do gh api repos/o/r/pulls/$i; done", guard.AUTO_PERMISSION_MODE)[0] == guard.DECISION_ALLOW
+
+
+def test_auto_mode_hook_subprocess_emits_nothing_for_a_shape_doubt(tmp_path, monkeypatch):
+	# The child reads real settings files; keep the operator's own allow rules out.
+	monkeypatch.setenv("HOME", str(tmp_path))
+	monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+	monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+	payload = {"tool_name": "Bash", "tool_input": {"command": _ANSI_C_SHAPE_DOUBT}, "permission_mode": "auto"}
+	proc = _run_hook(json.dumps(payload))
+	assert proc.returncode == 0 and proc.stdout.strip() == ""
+
+
+# An unquoted `$` or backtick in a direct `gh api` argument: Bash can split the
+# word into a method flag the guard read as a GET endpoint, so Auto mode denies
+# (issue #8198). None of these match a shipped allow rule.
+_AUTO_DENY_UNQUOTED_EXPANSIONS = [
+	'EP="-XDELETE repos/o/r/git/refs/heads/x"; gh api $EP',
+	"EP='-XDELETE repos/o/r/git/refs/heads/x'; gh api $EP",
+	"gh api $EP",
+	"gh api orgs/o/teams/$X",
+	"gh api orgs/o/teams/${n} --jq .name",
+	"gh api orgs/o/teams/`printf 1`",
+	# unvetted loops: a file redirect plus a python3 step, or a grep filter
+	"for i in 6031951051 6084132710; do gh api orgs/o/teams/$i > got_$i.json; done; python3 -I -c \"print(1)\"",
+	"for id in 6114886899 6193924757; do echo \"=== $id\"; gh api orgs/o/teams/$id --jq .name | grep -n '^- '; done",
+]
+
+
+@pytest.mark.parametrize("command", _AUTO_DENY_UNQUOTED_EXPANSIONS)
+def test_auto_mode_denies_unquoted_gh_api_expansion(tmp_path, monkeypatch, command):
+	_settings_file(tmp_path, monkeypatch, json.dumps({"permissions": {"allow": []}}))
+	decision, reason = _decide_in_mode(command, guard.AUTO_PERMISSION_MODE)
+	_assert_auto_shape_deny(decision, reason)
+	assert "unquoted gh api argument" in reason
+	for mode in (None, "default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "AUTO", ""):
+		decision, reason = _decide_in_mode(command, mode)
+		assert decision == guard.DECISION_ASK, mode
+		assert reason and "Auto mode" not in reason, mode
+
+
+@pytest.mark.parametrize("command", [
+	"for i in 1 2; do gh api orgs/o/teams/$i; done",
+	"for r in 1 2; do gh api repos/o/r/issues/$r --jq .; done",
+])
+def test_auto_mode_still_allows_the_validated_literal_loop(command):
+	assert _decide_in_mode(command, guard.AUTO_PERMISSION_MODE)[0] == guard.DECISION_ALLOW
+
+
+def test_auto_mode_denies_a_write_loop_with_an_unquoted_expansion():
+	# The unquoted-expansion check runs before the write ask, so Auto mode denies
+	# with rewrite steps (nothing runs); outside Auto mode it still asks.
+	command = "for i in 1 2; do gh api -X DELETE repos/o/r/git/refs/heads/x$i; done"
+	_assert_auto_shape_deny(*_decide_in_mode(command, guard.AUTO_PERMISSION_MODE))
+	assert _decide_in_mode(command, None)[0] == guard.DECISION_ASK
+
+
+def test_auto_mode_hook_subprocess_denies_an_unquoted_gh_api_expansion(tmp_path, monkeypatch):
+	monkeypatch.setenv("HOME", str(tmp_path))
+	monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+	monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+	payload = {
+		"tool_name": "Bash",
+		"tool_input": {"command": _AUTO_DENY_UNQUOTED_EXPANSIONS[0]},
+		"permission_mode": "auto",
+	}
+	proc = _run_hook(json.dumps(payload))
+	assert proc.returncode == 0
+	output = json.loads(proc.stdout)["hookSpecificOutput"]
+	assert output["permissionDecision"] == guard.DECISION_DENY
+
+
+def test_headless_pipelines_never_run_claude_in_auto_mode():
+	# The Auto-mode step-aside relies on headless pipeline runs using another
+	# mode, where a hook "ask" is a denial. A pipeline switched to Auto mode
+	# would turn those denials into classifier decisions.
+	import re
+	scripts = REPO_ROOT / "scripts"
+	literal = re.compile(r"""--permission-mode[ =]["']?auto\b""")
+	offenders = [
+		str(path.relative_to(REPO_ROOT))
+		for path in sorted(scripts.rglob("*"))
+		if path.is_file() and literal.search(path.read_text(encoding="utf-8", errors="replace"))
+	]
+	assert offenders == []
+	allowed = {"dontAsk", "bypassPermissions"}
+	engine = (scripts / "ai_engine.sh").read_text(encoding="utf-8")
+	assert '--permission-mode "${mode}"' in engine
+	engine_modes = set(re.findall(r'\bmode="([A-Za-z]+)"; isolation_mode=', engine))
+	assert engine_modes and engine_modes <= allowed, engine_modes
+	sandbox = (scripts / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert '--permission-mode "${CLAUDE_PERMISSIONS}"' in sandbox
+	sandbox_modes = set(re.findall(r"\bclaude_permissions=([A-Za-z]+)", sandbox))
+	assert sandbox_modes and sandbox_modes <= allowed, sandbox_modes
+
+
+
+# Hidden writes inside commands that another allow rule could match. Auto mode
+# would approve the outer command by that rule without its classifier.
+_OTHER_ALLOW_RULE_SHAPE_DOUBTS = [
+	'test "$(gh api -X DELETE orgs/o/teams/1)" = x',
+	'git commit -m "$(gh api -X DELETE orgs/o/teams/1)"',
+	'cd sub && git log "$(gh api -X DELETE orgs/o/teams/1)"',
+	"'gh' api repos/o/r/git/refs/heads/x {-X,DELETE}",
+	"g''h api repos/o/r/pulls/1 {-X,DELETE}",
+	# wrappers in front of a command an allow rule matches (`Bash(git diff *)`,
+	# `Bash(git log *)`, `Bash(git status *)`, `Bash(test *)`)
+	'timeout 60 git diff "$(gh api -X DELETE orgs/o/teams/1)"',
+	'nice -n 5 git log "$(gh api -X DELETE orgs/o/teams/1)"',
+	'env A=1 git status "$(gh api -X DELETE orgs/o/teams/1)"',
+	'nohup timeout 5 test "$(gh api -X DELETE orgs/o/teams/1)" = x',
+]
+
+
+@pytest.mark.parametrize("command", _OTHER_ALLOW_RULE_SHAPE_DOUBTS)
+def test_shape_doubts_under_any_allow_rule_still_ask_in_auto_mode(command):
+	_assert_auto_shape_deny(*_decide_in_mode(command, guard.AUTO_PERMISSION_MODE))
+
+
+@pytest.mark.parametrize("command", [
+	"gh api user; x=$(gh api -X DELETE orgs/o/teams/1)",
+	"gh api user|grep $(gh api -X DELETE orgs/o/teams/1)",
+])
+def test_auto_mode_still_asks_for_a_readable_write_in_an_unquoted_substitution(command):
+	# The guard reads the inner call and classifies it as a write: a person decides.
+	decision, reason = _decide_in_mode(command, guard.AUTO_PERMISSION_MODE)
+	assert decision == guard.DECISION_ASK
+	assert "DELETE orgs/o/teams/1" in reason
+
+
+def test_auto_mode_denies_a_write_hidden_behind_a_shell_hazard():
+	# The hazard is checked before the write, so the session first rewrites the
+	# shape; the plain write then asks as usual.
+	command = "gh api repos/o/r/issues/1/comments -f body=x | sort -t$'\\t' -k2"
+	_assert_auto_shape_deny(*_decide_in_mode(command, guard.AUTO_PERMISSION_MODE))
+	assert _decide_in_mode("gh api -X DELETE repos/o/r/git/refs/heads/x", guard.AUTO_PERMISSION_MODE)[0] == guard.DECISION_ASK
+
+
+@pytest.mark.parametrize("command", [
+	# The prompts from the 2026-10-26 activation sessions.
+	"D=/tmp/s; for id in 6113664576 6111267295; do gh api repos/o/r/issues/comments/$id > $D/fresh_$id.json; done",
+	(
+		"cd /tmp/s && for id in 6016877098 6035928540; do gh api repos/o/r/issues/comments/$id > live_$id.json; done; "
+		"python3 -I -c \"print(1)\""
+	),
+	"python3 - docs/log.md <<'EOF'\nimport sys\nprint('gh api repos/o/r --jq .permissions.admin')\nEOF",
+])
+def test_auto_mode_denies_the_activation_session_prompts_with_rewrite_steps(command):
+	decision, reason = _decide_in_mode(command, guard.AUTO_PERMISSION_MODE)
+	_assert_auto_shape_deny(decision, reason)
+	assert "own plain command" in reason and "Edit or Write tool" in reason
+	assert _decide_in_mode(command, None)[0] == guard.DECISION_ASK
+
+
+def _settings_file(tmp_path, monkeypatch, text: str) -> None:
+	path = tmp_path / "settings.json"
+	path.write_text(text, encoding="utf-8")
+	monkeypatch.setattr(guard, "_settings_files", lambda: [str(path)])
+
+
+@pytest.mark.parametrize("rule", ["Bash(echo:*)", "Bash(echo *)", "Bash", "Bash(*)"])
+def test_auto_mode_reads_user_allow_rules(tmp_path, monkeypatch, rule):
+	command = 'echo "$(gh api -X DELETE orgs/o/teams/1)"'
+	_settings_file(tmp_path, monkeypatch, json.dumps({"permissions": {"allow": [rule]}}))
+	_assert_auto_shape_deny(*_decide_in_mode(command, guard.AUTO_PERMISSION_MODE))
+	_settings_file(tmp_path, monkeypatch, json.dumps({"permissions": {"allow": ["Bash(ls *)"]}}))
+	assert _decide_in_mode(command, guard.AUTO_PERMISSION_MODE) == (None, "")
+
+
+@pytest.mark.parametrize("text", ["{not json", json.dumps({"permissions": {"allow": "Bash(*)"}})])
+def test_auto_mode_keeps_asks_when_settings_cannot_be_checked(tmp_path, monkeypatch, text):
+	_settings_file(tmp_path, monkeypatch, text)
+	_assert_auto_shape_deny(*_decide_in_mode(_ANSI_C_SHAPE_DOUBT, guard.AUTO_PERMISSION_MODE))
+
+
+def test_settings_files_cover_project_local_and_user(tmp_path, monkeypatch):
+	monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path / "proj"))
+	monkeypatch.setenv("HOME", str(tmp_path / "home"))
+	paths = _REAL_SETTINGS_FILES()
+	for directory in (tmp_path / "proj" / ".claude", tmp_path / "home" / ".claude"):
+		for name in ("settings.json", "settings.local.json"):
+			assert os.path.realpath(directory / name) in paths
+
+
+def test_settings_files_cover_config_dir_and_managed_settings(tmp_path, monkeypatch):
+	monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+	paths = _REAL_SETTINGS_FILES()
+	for name in ("settings.json", "settings.local.json"):
+		assert os.path.realpath(tmp_path / "cfg" / name) in paths
+	for managed in guard._MANAGED_SETTINGS_FILES:
+		assert os.path.realpath(managed) in paths
+
+
+@pytest.mark.parametrize("command", [
+	"gh api orgs/o/teams -F{'q=1','x=@/etc/passwd'}",
+	"gh api orgs/o/teams -F{'q=1','x=\\x40/etc/passwd'}",
+	"gh api orgs/o/teams $'-F\\100x=/etc/passwd'",
+	"gh api orgs/o/teams -F x=@/etc/passwd # trailing comment",
+])
+def test_auto_mode_hazard_that_could_hide_a_file_field_still_asks(command):
+	_assert_auto_shape_deny(*_decide_in_mode(command, guard.AUTO_PERMISSION_MODE))
+	assert _decide_in_mode(command, None)[0] == guard.DECISION_ASK
+
+
+def test_auto_mode_hazard_without_a_file_field_still_steps_aside():
+	command = "gh api 'orgs/o/teams?per_page=100' --paginate --jq '.[] | .id' 2>&1 | sort -t$'\\t' -k2"
+	assert _decide_in_mode(command, guard.AUTO_PERMISSION_MODE) == (None, "")
+
+
+def test_every_shipped_gh_api_allow_rule_is_recognised():
+	rules = json.loads(TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8"))["permissions"]["allow"]
+	gh_api_rules = [rule for rule in rules if rule.startswith("Bash(gh api ")]
+	assert gh_api_rules
+	for rule in gh_api_rules:
+		assert guard._GH_API_ALLOW_RULE_RE.search(rule[5:-1].replace("*", "x")), rule

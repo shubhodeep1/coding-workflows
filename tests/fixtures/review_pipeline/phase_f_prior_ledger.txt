@@ -1,0 +1,32 @@
+=== LEDGER v1 ===
+PR_NUMBER: 4242
+FIRST_SEEN_ITERATION: 1
+LAST_UPDATED_ITERATION: 3
+=== END HEADER ===
+
+=== ENTRY issue_residual ===
+FILE: src/module.py
+LINES: 2-3
+LENS: CORRECTNESS & LOGIC
+SEVERITY: high
+STATUS: accepted-residual
+FIRST_SEEN_ITERATION: 1
+LAST_SEEN_ITERATION: 3
+PERSIST_COUNT: 3
+EDITOR_OUTCOMES:
+  iter1> WILL_FIX
+  iter2> CONSOLIDATOR_OVERRIDDEN: issue_residual — accepted residual pending follow-up
+=== END ENTRY ===
+
+=== ENTRY issue_wontfix ===
+FILE: src/module.py
+LINES: 6
+LENS: PERFORMANCE & RESOURCE USE
+SEVERITY: low
+STATUS: PERSISTING
+FIRST_SEEN_ITERATION: 2
+LAST_SEEN_ITERATION: 3
+PERSIST_COUNT: 1
+EDITOR_OUTCOMES:
+  iter3> CONSOLIDATOR_OVERRIDDEN: issue_wontfix — won't fix; acceptable performance trade-off
+=== END ENTRY ===

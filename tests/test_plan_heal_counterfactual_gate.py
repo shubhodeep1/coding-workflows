@@ -1,0 +1,1169 @@
+#!/usr/bin/env python3
+"""Heal-route counterfactual check and plan auto-approval gate (issue #8249).
+
+Covers the shared parser (scripts/partial_delivery.py heal-counterfactual),
+the heal-only prompt block run_plan_codex.sh appends, the heal intake's
+"Would the suggested fix have passed?" subsection, plan.yml's
+"Auto-approve clear plan" step and the poller wiring.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRIPTS = REPO_ROOT / "scripts"
+PARTIAL_DELIVERY = SCRIPTS / "partial_delivery.py"
+RUN_PLAN = SCRIPTS / "run_plan_codex.sh"
+PLAN_WF = REPO_ROOT / ".github" / "workflows" / "plan.yml"
+POLL_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
+POLLER = SCRIPTS / "orchestrate_poll_process.sh"
+CF_PROMPT = REPO_ROOT / "prompts" / "mode-plan-heal-counterfactual.txt"
+CF_TEMPLATE = REPO_ROOT / "prompts" / "_templates" / "mode-plan-heal-counterfactual.txt"
+HEAL_PROMPTS = (REPO_ROOT / "prompts" / "mode-workflow-failure-heal.txt",
+	REPO_ROOT / "prompts" / "_templates" / "mode-workflow-failure-heal.txt")
+FIXTURE_8241 = REPO_ROOT / "tests" / "fixtures" / "heal_counterfactual" / "issue_8241_plan.md"
+FIXTURE_8327 = REPO_ROOT / "tests" / "fixtures" / "heal_counterfactual" / "issue_8327_plan.md"
+# The trailing note the #8327 planner wrote inside its "## Deferred scope" section.
+NOTE_8327 = "\nThese items are delivered through a separate issue that is not a heal issue,"
+DEFERRED_MISSING_HINT = "The section must appear once and hold only `- ` bullets: a prose line or note inside it makes it unreadable."
+
+
+def _load_partial_delivery():
+	spec = importlib.util.spec_from_file_location("partial_delivery_under_test", PARTIAL_DELIVERY)
+	module = importlib.util.module_from_spec(spec)
+	assert spec.loader is not None
+	spec.loader.exec_module(module)
+	return module
+
+
+PD = _load_partial_delivery()
+
+
+def _plan(line: str | None, *, deferred: list[str] | None = None, extra: str = "") -> str:
+	parts = ["Implementation Plan", "", "## Files likely to change", "- `scripts/a.sh`", ""]
+	if deferred is not None:
+		parts += ["## Deferred scope"] + [f"- {item}" for item in deferred] + [""]
+	parts += ["## Counterfactual check", "", "- job-a: walked the evidence.", ""]
+	if line is not None:
+		parts.append(line)
+	parts += [extra, "", "STATUS: CLEAR", "PLAN_SELF_CHECK: PASS", ""]
+	return "\n".join(parts)
+
+
+def _check(text: str, flag: str | None = "true") -> dict:
+	return PD.parse_heal_counterfactual(text, flag)
+
+
+# --- parser -----------------------------------------------------------------
+
+
+def test_pass_approves() -> None:
+	result = _check(_plan("HEAL_COUNTERFACTUAL: PASS"))
+	assert result["decision"] == "approve" and result["result"] == "PASS", result
+	assert result["gate"] == "on" and result["flag_invalid"] is False
+
+
+def test_pass_with_text_is_malformed() -> None:
+	result = _check(_plan("HEAL_COUNTERFACTUAL: PASS: probably"))
+	assert result["decision"] == "hold" and result["result"] == "missing" and result["reason"] == "malformed_line", result
+
+
+def test_fail_and_unverified_hold() -> None:
+	fail = _check(_plan("HEAL_COUNTERFACTUAL: FAIL: still times out"))
+	assert (fail["decision"], fail["result"], fail["reason"]) == ("hold", "FAIL", "fail"), fail
+	unverified = _check(_plan("HEAL_COUNTERFACTUAL: UNVERIFIED: missing step timeline"))
+	assert (unverified["decision"], unverified["result"], unverified["reason"]) == ("hold", "UNVERIFIED", "unverified")
+
+
+def test_fail_or_unverified_without_text_is_malformed() -> None:
+	for line in ("HEAL_COUNTERFACTUAL: FAIL:", "HEAL_COUNTERFACTUAL: UNVERIFIED", "HEAL_COUNTERFACTUAL: FAIL:   "):
+		result = _check(_plan(line))
+		assert (result["decision"], result["reason"]) == ("hold", "malformed_line"), (line, result)
+
+
+def test_unknown_verb_and_lowercase_value_are_malformed() -> None:
+	for line in ("HEAL_COUNTERFACTUAL: MAYBE", "HEAL_COUNTERFACTUAL: pass", "HEAL_COUNTERFACTUAL:"):
+		result = _check(_plan(line))
+		assert (result["decision"], result["reason"]) == ("hold", "malformed_line"), (line, result)
+
+
+def test_missing_line_holds() -> None:
+	result = _check(_plan(None))
+	assert (result["decision"], result["result"], result["reason"]) == ("hold", "missing", "no_line"), result
+
+
+def test_duplicate_lines_hold() -> None:
+	for second in ("HEAL_COUNTERFACTUAL: PASS", "HEAL_COUNTERFACTUAL: FAIL: no"):
+		result = _check(_plan("HEAL_COUNTERFACTUAL: PASS", extra=second))
+		assert (result["decision"], result["result"], result["reason"]) == ("hold", "missing", "duplicate_line"), result
+
+
+def test_fenced_and_mid_line_and_lowercase_token_are_ignored() -> None:
+	for extra in ("```\nHEAL_COUNTERFACTUAL: PASS\n```", "~~~text\nHEAL_COUNTERFACTUAL: PASS\n~~~",
+		"The line HEAL_COUNTERFACTUAL: PASS goes last.", "heal_counterfactual: PASS"):
+		result = _check(_plan(None, extra=extra))
+		assert (result["decision"], result["reason"]) == ("hold", "no_line"), (extra, result)
+	# A fenced copy beside the real line is not a duplicate.
+	result = _check(_plan("HEAL_COUNTERFACTUAL: PASS", extra="```\nHEAL_COUNTERFACTUAL: FAIL: x\n```"))
+	assert result["decision"] == "approve", result
+	# Only a bare marker closes a fence: "```text" inside an open fence stays fenced.
+	nested = "## Counterfactual check\n\n```\nexample:\n```text\nHEAL_COUNTERFACTUAL: PASS\n```\n\nHEAL_COUNTERFACTUAL: FAIL: x\n"
+	result = _check(nested)
+	assert (result["decision"], result["result"]) == ("hold", "FAIL"), result
+
+
+def test_indented_code_block_marker_is_ignored() -> None:
+	# Review finding: a marker indented by 4+ spaces or a tab is an indented
+	# code block, not the plan's line.
+	for extra in ("    HEAL_COUNTERFACTUAL: PASS", "\tHEAL_COUNTERFACTUAL: PASS"):
+		result = _check(_plan(None, extra=extra))
+		assert (result["decision"], result["reason"]) == ("hold", "no_line"), (extra, result)
+	result = _check(_plan("HEAL_COUNTERFACTUAL: FAIL: no", extra="    HEAL_COUNTERFACTUAL: PASS"))
+	assert (result["decision"], result["result"]) == ("hold", "FAIL"), result
+	assert _check(_plan("   HEAL_COUNTERFACTUAL: PASS"))["decision"] == "approve"
+
+
+def test_partial_approves_when_every_job_is_deferred() -> None:
+	text = _plan("HEAL_COUNTERFACTUAL: PARTIAL: E2E-Smoke-Test, lint",
+		deferred=["The e2e-smoke-test job still times out in the pre-push gate", "Fix the lint job separately"])
+	result = _check(text)
+	assert (result["decision"], result["result"], result["reason"]) == ("approve", "PARTIAL", "partial_jobs_deferred"), result
+	assert result["jobs"] == ["E2E-Smoke-Test", "lint"]
+
+
+def test_partial_holds_with_unmatched_jobs() -> None:
+	text = _plan("HEAL_COUNTERFACTUAL: PARTIAL: e2e-smoke-test, validate-scripts",
+		deferred=["The e2e-smoke-test job still times out"])
+	result = _check(text)
+	assert (result["decision"], result["result"], result["reason"]) == ("hold", "FAIL", "partial_jobs_not_deferred"), result
+	assert result["unmatched_jobs"] == ["validate-scripts"]
+
+
+def test_partial_holds_without_a_readable_deferred_scope() -> None:
+	assert _check(_plan("HEAL_COUNTERFACTUAL: PARTIAL: job-a"))["reason"] == "deferred_scope_missing"
+	malformed = _plan("HEAL_COUNTERFACTUAL: PARTIAL: job-a", deferred=[]).replace("## Deferred scope\n", "## Deferred scope\nprose\n")
+	assert _check(malformed)["reason"] == "deferred_scope_missing"
+
+
+def test_partial_holds_for_an_invalid_job_list() -> None:
+	deferred = ["job-a", "job-b"]
+	for line in ("HEAL_COUNTERFACTUAL: PARTIAL:", "HEAL_COUNTERFACTUAL: PARTIAL", "HEAL_COUNTERFACTUAL: PARTIAL: job-a,,job-b",
+		"HEAL_COUNTERFACTUAL: PARTIAL: " + ", ".join(f"job-{i}" for i in range(21)),
+		"HEAL_COUNTERFACTUAL: PARTIAL: " + "x" * 201):
+		result = _check(_plan(line, deferred=deferred))
+		assert (result["decision"], result["result"], result["reason"]) == ("hold", "FAIL", "partial_job_list_invalid"), (line, result)
+
+
+def test_line_outside_the_counterfactual_section_holds() -> None:
+	# Review finding: the marker counts only inside "## Counterfactual check".
+	for text in ("## Risks\n\nHEAL_COUNTERFACTUAL: PASS\n",
+		"## Counterfactual check\n\n- walked it.\n\n## Risks\n\nHEAL_COUNTERFACTUAL: PASS\n"):
+		result = _check(text)
+		assert (result["decision"], result["reason"]) == ("hold", "outside_counterfactual_section"), (text, result)
+	nested = "## Counterfactual check\n\n### job-a\n\nwalked.\n\nHEAL_COUNTERFACTUAL: PASS\n"
+	assert _check(nested)["decision"] == "approve"
+	# Only a level-2 heading opens the section.
+	for level in ("###", "######"):
+		deeper = f"{level} Counterfactual check\n\nHEAL_COUNTERFACTUAL: PASS\n"
+		result = _check(deeper)
+		assert (result["decision"], result["reason"]) == ("hold", "outside_counterfactual_section"), (level, result)
+
+
+def test_indented_heading_closes_the_counterfactual_section() -> None:
+	# Review finding: a heading indented by 1-3 spaces is still a heading and
+	# ends the "## Counterfactual check" section.
+	for indent in (" ", "  ", "   "):
+		text = f"## Counterfactual check\n\n- walked it.\n\n{indent}## Risks\n\nHEAL_COUNTERFACTUAL: PASS\n"
+		result = _check(text)
+		assert (result["decision"], result["reason"]) == ("hold", "outside_counterfactual_section"), (indent, result)
+	assert _check("  ## Counterfactual check\n\nHEAL_COUNTERFACTUAL: PASS\n")["decision"] == "approve"
+	# A 4-space indent is a code block, not a heading, and does not close it.
+	code = "## Counterfactual check\n\n    ## Risks\n\nHEAL_COUNTERFACTUAL: PASS\n"
+	assert _check(code)["decision"] == "approve"
+
+
+def test_partial_job_names_match_whole_tokens_only() -> None:
+	text = _plan("HEAL_COUNTERFACTUAL: PARTIAL: build", deferred=["The build-image job still times out"])
+	result = _check(text)
+	assert (result["decision"], result["reason"]) == ("hold", "partial_jobs_not_deferred"), result
+	assert result["unmatched_jobs"] == ["build"]
+	assert _check(_plan("HEAL_COUNTERFACTUAL: PARTIAL: build", deferred=["The build job still fails"]))["decision"] == "approve"
+
+
+def test_gate_flag_handling() -> None:
+	fail_plan = _plan("HEAL_COUNTERFACTUAL: FAIL: no")
+	off = _check(fail_plan, "false")
+	assert (off["gate"], off["decision"], off["reason"], off["result"]) == ("off", "approve", "gate_disabled", "FAIL"), off
+	for flag in (None, "", "true", " TRUE "):
+		assert _check(fail_plan, flag)["decision"] == "hold", flag
+	invalid = _check(fail_plan, "banana")
+	assert (invalid["gate"], invalid["flag_invalid"], invalid["decision"]) == ("on", True, "hold"), invalid
+
+
+def test_display_line_is_sanitized() -> None:
+	result = _check(_plan("HEAL_COUNTERFACTUAL: FAIL: see #123 @user `x` <!-- y -->"))
+	line = result["line"]
+	assert "<!--" not in line and "`" not in line, line
+	assert "#123" not in line and "@user" not in line, line
+	long_line = _check(_plan("HEAL_COUNTERFACTUAL: FAIL: " + "z" * 600))["line"]
+	assert len(long_line) <= PD.HEAL_CF_MAX_LINE_CHARS
+
+
+def test_issue_8241_fixture_is_held() -> None:
+	text = FIXTURE_8241.read_text(encoding="utf-8")
+	result = _check(text)
+	assert (result["decision"], result["result"]) == ("hold", "FAIL"), result
+	# The plan the fixture reconstructs still ends CLEAR / PASS: the gate, not the
+	# self-check, is what withholds approval.
+	assert "STATUS: CLEAR" in text and "PLAN_SELF_CHECK: PASS" in text
+
+
+def test_issue_8327_fixture_trailing_note_is_held() -> None:
+	"""Issue #8327: a prose note after the bullets made the section unreadable."""
+	text = FIXTURE_8327.read_text(encoding="utf-8")
+	result = _check(text)
+	assert (result["decision"], result["result"], result["reason"]) == ("hold", "FAIL", "deferred_scope_missing"), result
+	assert result["jobs"] == ["e2e-smoke-test"]
+	assert PD.parse_plan(text)["reason"] == "prose_in_block"
+	# The same plan without the note is a fully deferred PARTIAL: the note alone held it.
+	start = text.index(NOTE_8327)
+	end = text.index("\n\n", start + 1)
+	bullets_only = text[:start] + text[end:]
+	result = _check(bullets_only)
+	assert (result["decision"], result["result"], result["reason"]) == ("approve", "PARTIAL", "partial_jobs_deferred"), result
+	assert len(PD.parse_plan(bullets_only)["items"]) == 3
+
+
+_REPRO_LINE = "HEAL_COUNTERFACTUAL: REPRODUCIBLE: tests/test_a.py::test_b, tests/test_c.py"
+
+
+def test_reproducible_with_the_switch_on_is_approve_pending_repro() -> None:
+	# Issue #8512: REPRODUCIBLE approves only behind WORKFLOW_HEAL_REPRODUCE_ENABLED.
+	for flag in ("true", " TRUE ", "True"):
+		result = PD.parse_heal_counterfactual(_plan(_REPRO_LINE), "true", flag)
+		assert (result["decision"], result["result"], result["reason"]) == (
+			"approve_pending_repro", "REPRODUCIBLE", "reproducible"), (flag, result)
+		assert set(result) == {"gate", "flag_invalid", "result", "decision", "reason", "line", "jobs", "unmatched_jobs"}
+
+
+def test_reproducible_with_the_switch_off_holds() -> None:
+	for flag in (None, "", "false", "banana", "yes", "1"):
+		result = PD.parse_heal_counterfactual(_plan(_REPRO_LINE), "true", flag)
+		assert (result["decision"], result["result"], result["reason"]) == (
+			"hold", "REPRODUCIBLE", "reproduction_disabled"), (flag, result)
+	# The two-argument call (older callers) holds the same way.
+	assert _check(_plan(_REPRO_LINE))["reason"] == "reproduction_disabled"
+
+
+def test_reproducible_invalid_test_lists_hold() -> None:
+	bad = ("HEAL_COUNTERFACTUAL: REPRODUCIBLE", "HEAL_COUNTERFACTUAL: REPRODUCIBLE:",
+		"HEAL_COUNTERFACTUAL: REPRODUCIBLE: ,", "HEAL_COUNTERFACTUAL: REPRODUCIBLE: /abs.py",
+		"HEAL_COUNTERFACTUAL: REPRODUCIBLE: tests/../x.py", "HEAL_COUNTERFACTUAL: REPRODUCIBLE: tests/a.py::x<y",
+		"HEAL_COUNTERFACTUAL: REPRODUCIBLE: tests/a b.py;rm",
+		# Only tests/<path>.py ids, as the intake writes them, are accepted.
+		"HEAL_COUNTERFACTUAL: REPRODUCIBLE: README.md", "HEAL_COUNTERFACTUAL: REPRODUCIBLE: docs/foo.md",
+		"HEAL_COUNTERFACTUAL: REPRODUCIBLE: Makefile", "HEAL_COUNTERFACTUAL: REPRODUCIBLE: setup.py",
+		"HEAL_COUNTERFACTUAL: REPRODUCIBLE: tests/test_a.py, README.md",
+		"HEAL_COUNTERFACTUAL: REPRODUCIBLE: tests/conftest.txt",
+		"HEAL_COUNTERFACTUAL: REPRODUCIBLE: " + ", ".join(f"tests/test_{i}.py" for i in range(51)))
+	for line in bad:
+		for flag in ("true", "false"):
+			result = PD.parse_heal_counterfactual(_plan(line), "true", flag)
+			assert (result["decision"], result["result"], result["reason"]) == (
+				"hold", "FAIL", "reproducible_test_list_invalid"), (line, flag, result)
+
+
+def test_reproducible_valid_list_forms() -> None:
+	assert PD._heal_counterfactual_repro_tests("tests/a.py::t1 tests/b.py") == ["tests/a.py::t1", "tests/b.py"]
+	assert PD._heal_counterfactual_repro_tests("`tests/a.py::t1`, `tests/b.py`") == ["tests/a.py::t1", "tests/b.py"]
+	assert PD._heal_counterfactual_repro_tests("tests/a.py::test_x[a,b],tests/c.py") == ["tests/a.py::test_x[a,b]", "tests/c.py"]
+	assert len(PD._heal_counterfactual_repro_tests(" ".join(f"tests/t{i}.py" for i in range(50)))) == 50
+	for line in ("HEAL_COUNTERFACTUAL: REPRODUCIBLE: tests/a.py::t1 tests/b.py",
+		"HEAL_COUNTERFACTUAL: REPRODUCIBLE: `tests/a.py::test_x[a,b]`"):
+		assert PD.parse_heal_counterfactual(_plan(line), "true", "true")["decision"] == "approve_pending_repro", line
+
+
+def test_reproducible_duplicate_and_gate_off() -> None:
+	duplicate = PD.parse_heal_counterfactual(_plan(_REPRO_LINE, extra="HEAL_COUNTERFACTUAL: PASS"), "true", "true")
+	assert (duplicate["decision"], duplicate["reason"]) == ("hold", "duplicate_line"), duplicate
+	off = PD.parse_heal_counterfactual(_plan(_REPRO_LINE), "false", "true")
+	assert (off["gate"], off["decision"], off["reason"], off["result"]) == ("off", "approve", "gate_disabled", "REPRODUCIBLE"), off
+
+
+def test_existing_values_ignore_the_reproduce_switch() -> None:
+	plans = [_plan("HEAL_COUNTERFACTUAL: PASS"), _plan("HEAL_COUNTERFACTUAL: FAIL: no"),
+		_plan("HEAL_COUNTERFACTUAL: UNVERIFIED: missing timeline"), _plan(None),
+		_plan("HEAL_COUNTERFACTUAL: PARTIAL: job-a", deferred=["job-a still fails"]),
+		_plan("HEAL_COUNTERFACTUAL: PARTIAL: job-b", deferred=["job-a still fails"]),
+		FIXTURE_8241.read_text(encoding="utf-8"), FIXTURE_8327.read_text(encoding="utf-8")]
+	for text in plans:
+		for gate in ("true", "false"):
+			baseline = PD.parse_heal_counterfactual(text, gate)
+			for flag in ("true", "false", None):
+				assert PD.parse_heal_counterfactual(text, gate, flag) == baseline, (text, gate, flag)
+
+
+def test_cli_exit_codes() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		plan = Path(tmp) / "plan.md"
+		for line in ("HEAL_COUNTERFACTUAL: PASS", "HEAL_COUNTERFACTUAL: nonsense", None):
+			plan.write_text(_plan(line), encoding="utf-8")
+			proc = subprocess.run([sys.executable, "-I", "-B", str(PARTIAL_DELIVERY), "heal-counterfactual",
+				"--plan-file", str(plan), "--gate-flag", "banana"], capture_output=True, text=True, check=False)
+			assert proc.returncode == 0, proc.stderr
+			assert json.loads(proc.stdout)["flag_invalid"] is True
+		proc = subprocess.run([sys.executable, "-I", "-B", str(PARTIAL_DELIVERY), "heal-counterfactual",
+			"--plan-file", str(Path(tmp) / "missing.md")], capture_output=True, text=True, check=False)
+		assert proc.returncode == 2
+
+
+# --- prompts ----------------------------------------------------------------
+
+
+def test_counterfactual_prompt_contract() -> None:
+	text = CF_PROMPT.read_text(encoding="utf-8")
+	assert text.startswith("# tier: DEFAULT\n")
+	assert CF_TEMPLATE.read_bytes() == CF_PROMPT.read_bytes()
+	for needle in ("## Counterfactual check", "HEAL_COUNTERFACTUAL: PASS", "HEAL_COUNTERFACTUAL: PARTIAL:",
+		"HEAL_COUNTERFACTUAL: FAIL:", "HEAL_COUNTERFACTUAL: UNVERIFIED:", "## Deferred scope",
+		"## Would the suggested fix have passed?", "re-derive"):
+		assert needle in text, needle
+	assert "{{" not in text
+	# Issue #8327: the planner must know that a note inside the section holds the plan.
+	assert "section holds only `- ` bullets: a prose line or note inside it makes it" in text
+	# Issue #8512: REPRODUCIBLE only from a reproduced ## Reproduction section.
+	for needle in ("HEAL_COUNTERFACTUAL: REPRODUCIBLE:", "status: reproduced", "## Reproduction"):
+		assert needle in text, needle
+
+
+def test_heal_intake_prompt_has_the_would_it_pass_subsection() -> None:
+	bodies = [path.read_text(encoding="utf-8") for path in HEAL_PROMPTS]
+	assert bodies[0] == bodies[1]
+	text = bodies[0]
+	assert text.index("## Suggested fix") < text.index("## Would the suggested fix have passed?") < text.index("## Affected files")
+	assert "`<job>: unknown`" in text and "Not applicable: <classification>" in text
+
+
+def _heal_route_block() -> str:
+	text = RUN_PLAN.read_text(encoding="utf-8")
+	start = text.index('if [ "${HEAL_ROUTE:-false}" = true ]; then\n\t[ -s ')
+	end = text.index("\nfi\n", start) + len("\nfi\n")
+	return text[start:end]
+
+
+def test_run_plan_appends_the_block_only_on_the_heal_route() -> None:
+	block = _heal_route_block()
+	assert "prompts/mode-plan-heal-counterfactual.txt" in block
+	assert RUN_PLAN.read_text(encoding="utf-8").count("mode-plan-heal-counterfactual.txt") == 1
+	for heal_route, prompt_present in (("true", True), ("false", True), ("true", False)):
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			(root / "scripts").mkdir()
+			(root / "scripts" / "render_prompt.sh").write_text('cat "$1"\n', encoding="utf-8")
+			if prompt_present:
+				(root / "prompts").mkdir()
+				shutil.copy(CF_PROMPT, root / "prompts" / CF_PROMPT.name)
+			(root / "evidence.md").write_text("EVIDENCE\n", encoding="utf-8")
+			(root / "prompt.txt").write_text("BASE\n", encoding="utf-8")
+			# The runner resolves render_prompt.sh from its own directory
+			# (RUN_PLAN_CODEX_SUPPORT_DIR, set at the top of run_plan_codex.sh).
+			env = {"PATH": os.environ.get("PATH", ""), "HEAL_ROUTE": heal_route, "RUNTIME_DIR": str(root),
+				"RUN_PLAN_CODEX_SUPPORT_DIR": str(root / "scripts"),
+				"HEAL_EVIDENCE_FILE": str(root / "evidence.md"), "CODEX_PROMPT_FILE": str(root / "prompt.txt")}
+			proc = subprocess.run(["bash", "-c", "set -euo pipefail\n" + block], cwd=root, env=env,
+				capture_output=True, text=True, check=False)
+			assert proc.returncode == 0, proc.stderr
+			prompt = (root / "prompt.txt").read_text(encoding="utf-8")
+			if heal_route == "false":
+				assert prompt == "BASE\n"
+			elif prompt_present:
+				assert "EVIDENCE" in prompt and "HEAL COUNTERFACTUAL CHECK" in prompt
+				assert prompt.index("EVIDENCE") < prompt.index("HEAL COUNTERFACTUAL CHECK")
+			else:
+				assert "HEAL COUNTERFACTUAL CHECK" not in prompt
+				assert "::warning::HEAL_COUNTERFACTUAL prompt unavailable" in proc.stdout
+
+
+# --- plan.yml "Auto-approve clear plan" -------------------------------------
+
+
+def _step_run(step_name: str) -> str:
+	"""The step's run: body (no YAML parser needed)."""
+	lines = PLAN_WF.read_text(encoding="utf-8").split("\n")
+	start = next(i for i, line in enumerate(lines) if line.strip() == f"- name: {step_name}")
+	run_index = next(i for i in range(start + 1, len(lines)) if re.match(r"^\s+run: \|\s*$", lines[i]))
+	indent = None
+	body: list[str] = []
+	for line in lines[run_index + 1:]:
+		if not line.strip():
+			body.append("")
+			continue
+		current = len(line) - len(line.lstrip(" "))
+		if indent is None:
+			indent = current
+		if current < indent:
+			break
+		body.append(line[indent:])
+	return "\n".join(body)
+
+
+def _step_env(step_name: str) -> str:
+	text = PLAN_WF.read_text(encoding="utf-8")
+	start = text.index(f"- name: {step_name}")
+	return text[start:text.index("run: |", start)]
+
+
+_HEAL_ISSUE = {"state": "open", "number": 123, "user": {"type": "User", "login": "pipeline-bot"},
+	"author_association": "OWNER", "body": "Heal this failure.", "labels": [{"name": "ai:workflow-heal"}]}
+_ORDINARY_ISSUE = {"state": "open", "number": 123, "user": {"type": "User", "login": "maintainer"},
+	"author_association": "OWNER", "body": "Fix it.", "labels": []}
+_ORDINARY_PLAN = "Implementation Plan\n\n### 1. Files likely to change\n- `src/app.py`\n"
+_FAKE_GH = '''gh_retry() { "$@"; }
+_safe_gh_jq() { gh api "$@"; }
+gh() {
+  if [ "$2" = "repos/owner/repo/issues/123" ]; then
+    printf '%s' "${ISSUE_RESPONSE}"
+  elif [ "$2" = "user" ]; then
+    printf '%s\\n' pipeline-bot
+  elif [ "$2" = "graphql" ]; then
+    printf 'graphql\\n' >> "${POST_LOG}.reads"
+    [ -n "${GRAPHQL_RESPONSE:-}" ] || return 1
+    printf '%s' "${GRAPHQL_RESPONSE}"
+  elif [ "$2" = "--paginate" ]; then
+    printf '%s' "${COMMENTS_RESPONSE}"
+  else
+    if [ -n "${FAIL_MARKER_POST:-}" ] && [[ "$*" == *"ai:heal-test-only-approval:v1"* ]]; then
+      return 1
+    fi
+    printf '%s\\n<<END>>\\n' "$*" >> "${POST_LOG}"
+  fi
+}
+sleep() { :; }
+'''
+
+
+def _jq_available() -> bool:
+	return shutil.which("jq") is not None
+
+
+def _run_step(issue: dict, plan_text: str, *, flag: str | None = None, comments: list | None = None, extra_env: dict | None = None,
+	heal_route: str = "false", copy_parser: bool = True, reproduce: str | None = None, trend: str | None = None) -> dict:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "scripts").mkdir()
+		for name in ("files_touched_scope_guard.py", "workflow_failure_heal.py"):
+			shutil.copy(SCRIPTS / name, root / "scripts" / name)
+		if copy_parser:
+			shutil.copy(PARTIAL_DELIVERY, root / "scripts" / "partial_delivery.py")
+		(root / "scripts" / "gh_helpers.sh").write_text(_FAKE_GH, encoding="utf-8")
+		(root / "plan.txt").write_text(plan_text, encoding="utf-8")
+		env = {name: value for name, value in os.environ.items()
+			if name not in ("BASH_ENV", "ENV", "HEAL_COUNTERFACTUAL_GATE_ENABLED", "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED",
+				"HEAL_ROUTE", "PLAN_COMMENT_ID", "GITHUB_STEP_SUMMARY", "HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED",
+				"HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED", "GRAPHQL_RESPONSE", "FAIL_MARKER_POST",
+				"WORKFLOW_HEAL_REPRODUCE_ENABLED", "WORKFLOW_HEAL_TREND_ENABLED")}
+		env.update({"GITHUB_OUTPUT": str(root / "output"), "PLAN_STEP_REPO": "owner/repo", "ISSUE_NUMBER": "123",
+			"ISSUE_RESPONSE": json.dumps(issue), "COMMENTS_RESPONSE": json.dumps(comments or []),
+			"POST_LOG": str(root / "posts"), "AUTO_IMPLEMENT_ON_CLEAR_PLAN": "true", "CODEX_OUTPUT_FILE": str(root / "plan.txt"),
+			"RUNNER_TEMP": str(root), "PLAN_COMMENT_ID": "555", "HEAL_ROUTE": heal_route})
+		if flag is not None:
+			env["HEAL_COUNTERFACTUAL_GATE_ENABLED"] = flag
+		if reproduce is not None:
+			env["WORKFLOW_HEAL_REPRODUCE_ENABLED"] = reproduce
+		if trend is not None:
+			env["WORKFLOW_HEAL_TREND_ENABLED"] = trend
+		env.update(extra_env or {})
+		proc = subprocess.run(["bash", "-c", _step_run("Auto-approve clear plan")], cwd=root, env=env, text=True,
+			capture_output=True, check=False)
+		assert proc.returncode == 0, proc.stdout + proc.stderr
+		posts_text = (root / "posts").read_text(encoding="utf-8") if (root / "posts").exists() else ""
+		posts = [entry for entry in posts_text.split("\n<<END>>\n") if entry.strip()]
+		reads_file = root / "posts.reads"
+		return {"stdout": proc.stdout, "output": (root / "output").read_text(encoding="utf-8"),
+			"approvals": [p for p in posts if "/approved [auto-approved-by-plan]" in p],
+			"holds": [p for p in posts if "<!-- ai:heal-counterfactual-hold:v1 " in p],
+			"markers": [p for p in posts if "<!-- ai:heal-test-only-approval:v1 " in p], "posts": posts,
+			"graphql_reads": reads_file.read_text(encoding="utf-8").count("graphql") if reads_file.exists() else 0}
+
+
+def _skip_without_jq() -> bool:
+	"""The step needs jq; skip (pytest) or return early (direct run) without it."""
+	if _jq_available():
+		return False
+	pytest = sys.modules.get("pytest")
+	if pytest is not None:
+		pytest.skip("jq binary not available")
+	print("SKIP: jq not available")
+	return True
+
+
+def test_plan_step_holds_the_8241_fixture() -> None:
+	if _skip_without_jq():
+		return
+	run = _run_step(_HEAL_ISSUE, FIXTURE_8241.read_text(encoding="utf-8"))
+	assert run["approvals"] == [], run["stdout"]
+	assert "auto_approve_hold_reason=heal_counterfactual_hold" in run["output"]
+	assert ("AI_PHASE_GATE_V1 phase=plan gate=heal_counterfactual outcome=hold result=FAIL reason=fail issue=123") in run["stdout"]
+	assert len(run["holds"]) == 1
+	hold = run["holds"][0]
+	assert "<!-- ai:heal-counterfactual-hold:v1 issue=123 plan_comment=555 result=FAIL source=plan -->" in hold
+	assert "Counterfactual line: `HEAL_COUNTERFACTUAL: FAIL:" in hold
+	assert "`/approved`, or `/reclarify`" in hold
+
+
+def test_plan_step_hold_explains_an_unreadable_deferred_scope() -> None:
+	if _skip_without_jq():
+		return
+	run = _run_step(_HEAL_ISSUE, FIXTURE_8327.read_text(encoding="utf-8"))
+	assert run["approvals"] == [], run["stdout"]
+	assert ("AI_PHASE_GATE_V1 phase=plan gate=heal_counterfactual outcome=hold result=FAIL "
+		"reason=deferred_scope_missing issue=123") in run["stdout"]
+	assert len(run["holds"]) == 1
+	assert "Reason: `deferred_scope_missing`" in run["holds"][0]
+	assert DEFERRED_MISSING_HINT in run["holds"][0]
+
+
+def test_deferred_scope_missing_hint_matches_in_both_callers() -> None:
+	for path in (PLAN_WF, POLLER):
+		assert path.read_text(encoding="utf-8").count(DEFERRED_MISSING_HINT) == 1, path
+
+
+def test_plan_step_hold_comment_is_deduplicated() -> None:
+	if _skip_without_jq():
+		return
+	marker = {"user": {"login": "pipeline-bot"}, "author_association": "OWNER",
+		"body": "held\n<!-- ai:heal-counterfactual-hold:v1 issue=123 plan_comment=555 result=FAIL source=poller -->"}
+	run = _run_step(_HEAL_ISSUE, FIXTURE_8241.read_text(encoding="utf-8"), comments=[marker])
+	assert run["approvals"] == [] and run["holds"] == [], run["stdout"]
+	# A marker from an outsider does not suppress the comment.
+	outsider = dict(marker, user={"login": "stranger"}, author_association="NONE")
+	run = _run_step(_HEAL_ISSUE, FIXTURE_8241.read_text(encoding="utf-8"), comments=[outsider])
+	assert len(run["holds"]) == 1
+
+
+def test_plan_step_gate_off_and_invalid_flag() -> None:
+	if _skip_without_jq():
+		return
+	fail_plan = FIXTURE_8241.read_text(encoding="utf-8")
+	off = _run_step(_HEAL_ISSUE, fail_plan, flag="false")
+	assert "gate=heal_counterfactual outcome=approve result=FAIL reason=gate_disabled issue=123" in off["stdout"]
+	assert "auto_approve_hold_reason=heal_counterfactual_hold" not in off["output"]
+	assert off["holds"] == []
+	invalid = _run_step(_HEAL_ISSUE, fail_plan, flag="banana")
+	assert "::warning::HEAL_COUNTERFACTUAL_GATE_ENABLED has invalid value; treating as true" in invalid["stdout"]
+	assert "auto_approve_hold_reason=heal_counterfactual_hold" in invalid["output"]
+
+
+def test_plan_step_pass_reaches_the_heal_scope_gate() -> None:
+	if _skip_without_jq():
+		return
+	run = _run_step(_HEAL_ISSUE, _plan("HEAL_COUNTERFACTUAL: PASS"))
+	assert "gate=heal_counterfactual outcome=approve result=PASS reason=pass issue=123" in run["stdout"]
+	# The existing workflow-heal scope gate still decides (its read fails here).
+	assert "auto_approve_hold_reason=heal_scope_check_unavailable" in run["output"]
+	assert run["holds"] == []
+
+
+def test_plan_step_missing_parser_holds() -> None:
+	if _skip_without_jq():
+		return
+	run = _run_step(_HEAL_ISSUE, _plan("HEAL_COUNTERFACTUAL: PASS"), copy_parser=False)
+	assert "reason=heal_counterfactual_check_unavailable" in run["stdout"]
+	assert "auto_approve_hold_reason=heal_counterfactual_hold" in run["output"]
+	invalid = _run_step(_HEAL_ISSUE, _plan("HEAL_COUNTERFACTUAL: PASS"), copy_parser=False, flag="banana")
+	assert "::warning::HEAL_COUNTERFACTUAL_GATE_ENABLED has invalid value; treating as true" in invalid["stdout"]
+	assert "auto_approve_hold_reason=heal_counterfactual_hold" in invalid["output"]
+	off = _run_step(_HEAL_ISSUE, _plan("HEAL_COUNTERFACTUAL: PASS"), copy_parser=False, flag="false")
+	assert "reason=gate_disabled issue=123" in off["stdout"], off["stdout"]
+	assert "auto_approve_hold_reason=heal_counterfactual_hold" not in off["output"]
+
+
+def test_plan_step_heal_route_env_gates_an_unlabelled_issue() -> None:
+	if _skip_without_jq():
+		return
+	run = _run_step(_ORDINARY_ISSUE, _ORDINARY_PLAN, heal_route="true")
+	assert "gate=heal_counterfactual outcome=hold result=missing reason=no_line issue=123" in run["stdout"]
+	assert run["approvals"] == []
+
+
+def test_plan_step_gate_off_releases_an_unknown_route() -> None:
+	if _skip_without_jq():
+		return
+	# A non-string issue body makes heal-route fail, so the route is unknown.
+	broken = dict(_ORDINARY_ISSUE, body=123)
+	held = _run_step(broken, _ORDINARY_PLAN)
+	assert "reason=heal_route_unknown" in held["stdout"], held["stdout"]
+	assert "auto_approve_hold_reason=heal_counterfactual_hold" in held["output"]
+	# An invalid flag on an unknown route is held and logged as invalid.
+	invalid = _run_step(broken, _ORDINARY_PLAN, flag="banana")
+	assert "reason=heal_route_unknown" in invalid["stdout"], invalid["stdout"]
+	assert "::warning::HEAL_COUNTERFACTUAL_GATE_ENABLED has invalid value; treating as true" in invalid["stdout"]
+	# An unmatched quote in the flag does not abort the step.
+	quoted = _run_step(broken, _ORDINARY_PLAN, flag="fa'lse")
+	assert "auto_approve_hold_reason=heal_counterfactual_hold" in quoted["output"]
+	off = _run_step(broken, _ORDINARY_PLAN, flag="FALSE")
+	assert "reason=heal_route_unknown" not in off["stdout"]
+	assert "auto_approve_hold_reason=heal_counterfactual_hold" not in off["output"]
+
+
+def test_plan_step_leaves_non_heal_issues_alone() -> None:
+	if _skip_without_jq():
+		return
+	run = _run_step(_ORDINARY_ISSUE, _ORDINARY_PLAN)
+	assert "gate=heal_counterfactual" not in run["stdout"]
+	assert len(run["approvals"]) == 1, run["stdout"]
+	assert "[repro-required]" not in run["approvals"][0]
+	# The reproduce switch alone changes nothing for a non-heal plan.
+	run = _run_step(_ORDINARY_ISSUE, _ORDINARY_PLAN, reproduce="true")
+	assert len(run["approvals"]) == 1 and "[repro-required]" not in run["approvals"][0], run["stdout"]
+
+
+_REPRO_PLAN = _ORDINARY_PLAN + "\n## Counterfactual check\n\nHEAL_COUNTERFACTUAL: REPRODUCIBLE: tests/test_a.py::test_b\n"
+
+
+def test_plan_step_reproducible_posts_a_repro_required_approval() -> None:
+	if _skip_without_jq():
+		return
+	run = _run_step(_ORDINARY_ISSUE, _REPRO_PLAN, heal_route="true", reproduce="true")
+	assert "gate=heal_counterfactual outcome=approve result=REPRODUCIBLE reason=reproducible issue=123" in run["stdout"]
+	assert len(run["approvals"]) == 1, run["stdout"]
+	body = run["approvals"][0].split("body=", 1)[1]
+	assert body.split("\n", 1)[0] == "/approved [auto-approved-by-plan] [repro-required]", body
+	assert "Auto approval was posted because AUTO_IMPLEMENT_ON_CLEAR_PLAN is enabled." in body
+	assert run["holds"] == []
+
+
+def test_plan_step_reproducible_holds_with_the_switch_off() -> None:
+	if _skip_without_jq():
+		return
+	for reproduce in (None, "false", "yes"):
+		run = _run_step(_ORDINARY_ISSUE, _REPRO_PLAN, heal_route="true", reproduce=reproduce)
+		assert run["approvals"] == [], run["stdout"]
+		assert "auto_approve_hold_reason=heal_counterfactual_hold" in run["output"]
+		assert "outcome=hold result=REPRODUCIBLE reason=reproduction_disabled issue=123" in run["stdout"]
+		assert len(run["holds"]) == 1
+		assert "reproduction_disabled" in run["holds"][0] and "result=REPRODUCIBLE" in run["holds"][0]
+		assert "`WORKFLOW_HEAL_REPRODUCE_ENABLED` is not `true`" in run["holds"][0]
+
+
+# --- heal regression gate (Refs #8434, P3 steps 6-8) ------------------------
+
+
+def _trend_body(regression: str = "true", workflow: str = "ci.yml") -> str:
+	return ("Heal this failure.\n\n## Run-time trend\n\nUntrusted data.\n\n"
+		f"- regression={regression} first_slow_day={'2026-10-20' if regression == 'true' else 'none'} history=complete\n\n"
+		f"Workflow `{workflow}` on `main` (`push`), complete history, regressed\n\n| day (UTC) | n | median | p90 |\n"
+		"\n## Suggested fix\n\nx\n")
+
+
+def _rg_plan(line: str | None, *, files: list[str] | None = None, body: str = "Fix the slow loop in `scripts/a.sh`.") -> str:
+	parts = ["Implementation Plan", "", "## Files likely to change"]
+	parts += [f"- `{path}`" for path in (files or ["scripts/a.sh"])]
+	parts += ["", "## Functions or modules to implement", body, "", "## Counterfactual check", "",
+		"HEAL_COUNTERFACTUAL: PASS"]
+	if line is not None:
+		parts.append(line)
+	parts += ["", "STATUS: CLEAR", "PLAN_SELF_CHECK: PASS", ""]
+	return "\n".join(parts)
+
+
+_BUDGET_FILES = [".github/workflows/ci.yml"]
+_BUDGET_BODY = "Raise `PHASE_TIMEOUT` from 40 to 90 and `timeout-minutes` to 120 in the failing job."
+
+
+def _rg(plan: str, body: str | None = None, flag: str | None = "true") -> dict:
+	return PD.parse_heal_regression(plan, _trend_body() if body is None else body, flag)
+
+
+def test_regression_without_line_holds() -> None:
+	result = _rg(_rg_plan(None))
+	assert (result["decision"], result["result"], result["reason"], result["detail"]) == (
+		"hold", "REGRESSION", "regression_line_missing", "no_line"), result
+	assert set(result) == {"gate", "regression", "applies", "decision", "result", "reason", "detail", "line", "unmatched_jobs"}
+	assert result["unmatched_jobs"] == []
+
+
+def test_regression_named_file_or_commit_approves() -> None:
+	for line in ("HEAL_REGRESSION: scripts/a.sh", "HEAL_REGRESSION: `scripts/a.sh`",
+		"HEAL_REGRESSION: commit 1a2b3c4d5e6f", "HEAL_REGRESSION: the loop in scripts/a.sh, added by abc1234"):
+		result = _rg(_rg_plan(line))
+		assert (result["decision"], result["reason"], result["detail"]) == ("approve", "regression_named", "named"), (line, result)
+
+
+def test_regression_not_a_regression_line_approves_unless_budget_only() -> None:
+	result = _rg(_rg_plan("HEAL_REGRESSION: not a regression: the runner pool shrank"))
+	assert (result["decision"], result["reason"]) == ("approve", "not_a_regression"), result
+	held = _rg(_rg_plan("HEAL_REGRESSION: not a regression: load grew", files=_BUDGET_FILES, body=_BUDGET_BODY))
+	assert (held["decision"], held["reason"], held["detail"]) == ("hold", "budget_only_plan", "not_regression"), held
+
+
+def test_regression_budget_only_plan_holds() -> None:
+	# The incident shape: the plan only raises PHASE_TIMEOUT in the failing workflow.
+	for line in ("HEAL_REGRESSION: .github/workflows/ci.yml", "HEAL_REGRESSION: abc1234"):
+		result = _rg(_rg_plan(line, files=_BUDGET_FILES, body="Raise `PHASE_TIMEOUT` to 90 minutes."))
+		assert (result["decision"], result["reason"]) == ("hold", "budget_only_plan"), (line, result)
+	# A workflow-templates copy of the failing workflow is still the failing workflow.
+	both = _rg(_rg_plan("HEAL_REGRESSION: abc1234", files=_BUDGET_FILES + ["workflow-templates/ci.yml"], body=_BUDGET_BODY))
+	assert both["reason"] == "budget_only_plan", both
+
+
+def test_regression_not_budget_only_shapes() -> None:
+	line = "HEAL_REGRESSION: not a regression: x"
+	# Another file, another workflow, or a non-knob identifier is not budget-only.
+	for files, body in ((_BUDGET_FILES + ["scripts/a.sh"], _BUDGET_BODY),
+		([".github/workflows/other.yml"], _BUDGET_BODY),
+		(_BUDGET_FILES, _BUDGET_BODY + " Also set `CACHE_KEY_PREFIX` per job."),
+		(_BUDGET_FILES, "Cache the dependencies in the failing job.")):
+		result = _rg(_rg_plan(line, files=files, body=body))
+		assert (result["decision"], result["reason"]) == ("approve", "not_a_regression"), (files, body, result)
+
+
+def test_regression_numeric_workflow_caption_falls_back_to_one_basename() -> None:
+	body = _trend_body(workflow="12345")
+	result = _rg(_rg_plan("HEAL_REGRESSION: abc1234", files=_BUDGET_FILES, body=_BUDGET_BODY), body)
+	assert result["reason"] == "budget_only_plan", result
+	two = _rg(_rg_plan("HEAL_REGRESSION: abc1234", files=_BUDGET_FILES + [".github/workflows/b.yml"], body=_BUDGET_BODY), body)
+	assert two["reason"] == "regression_named", two
+
+
+def test_regression_switch_off_or_no_regression_is_unchanged() -> None:
+	for flag in (None, "", "false", "yes", "1"):
+		result = _rg(_rg_plan(None), flag=flag)
+		assert (result["gate"], result["decision"], result["reason"], result["result"]) == (
+			"off", "approve", "gate_disabled", "none"), (flag, result)
+	for body in (_trend_body("false"), "No trend here.\n", "```\n" + _trend_body() + "```\n"):
+		result = _rg(_rg_plan(None, files=_BUDGET_FILES, body=_BUDGET_BODY), body)
+		assert (result["gate"], result["decision"], result["reason"]) == ("on", "approve", "no_regression"), (body, result)
+	# The new gate does not touch the counterfactual decision.
+	plan = _rg_plan(None, files=_BUDGET_FILES, body=_BUDGET_BODY)
+	assert _check(plan)["decision"] == "approve"
+
+
+def test_regression_invalid_lines_are_missing() -> None:
+	cases = {
+		"HEAL_REGRESSION: a.sh\nHEAL_REGRESSION: b.sh": "duplicate_line",
+		"HEAL_REGRESSION:": "empty",
+		"HEAL_REGRESSION: not a regression:": "empty",
+		"HEAL_REGRESSION: unknown": "invalid_target",
+		"HEAL_REGRESSION: <file or commit> | not a regression: <reason>": "invalid_target",
+		"HEAL_REGRESSION: /etc/passwd": "invalid_target",
+		"HEAL_REGRESSION: ../x.sh": "invalid_target",
+		"```\nHEAL_REGRESSION: scripts/a.sh\n```": "no_line",
+		"    HEAL_REGRESSION: scripts/a.sh": "no_line",
+	}
+	for line, detail in cases.items():
+		result = _rg(_rg_plan(line))
+		assert (result["decision"], result["reason"], result["detail"]) == ("hold", "regression_line_missing", detail), (line, result)
+	shown = _rg(_rg_plan("HEAL_REGRESSION: see #12 @user <!-- x -->"))["line"]
+	assert "<!--" not in shown and "#12" not in shown and "@user" not in shown
+
+
+def test_regression_budget_only_ignores_companion_files_and_context_sections() -> None:
+	# Review findings: the always-granted tests/changelog/agents companions and a
+	# routine security note naming GITHUB_TOKEN must not lift the budget-only hold.
+	files = _BUDGET_FILES + ["changelog.d/x.md", "tests/test_ci_timeout.py", "agents.d/x.md"]
+	plan = _rg_plan("HEAL_REGRESSION: not a regression: load grew", files=files, body=_BUDGET_BODY)
+	plan = plan.replace("## Counterfactual check", "## Decisions\n\n### D1 — keep GH_PAT\n- Chosen: x\n\n"
+		"## Security considerations\n- `GITHUB_TOKEN` permissions unchanged.\n\n## Risks and edge cases\n- GITHUB_OUTPUT unchanged.\n\n"
+		"## Counterfactual check")
+	result = _rg(plan)
+	assert (result["decision"], result["reason"]) == ("hold", "budget_only_plan"), result
+	# Companions alone (no failing workflow) are not budget-only.
+	alone = _rg(_rg_plan("HEAL_REGRESSION: not a regression: x", files=["changelog.d/x.md"], body=_BUDGET_BODY))
+	assert alone["reason"] == "not_a_regression", alone
+	# An identifier in a change-describing section still counts as another change.
+	other = _rg(_rg_plan("HEAL_REGRESSION: not a regression: x", files=files, body=_BUDGET_BODY + " Set `CACHE_KEY_PREFIX`."))
+	assert other["reason"] == "not_a_regression", other
+	# A Files bullet without backticks is read by its path-like word.
+	prose = _rg_plan("HEAL_REGRESSION: abc1234", files=_BUDGET_FILES, body=_BUDGET_BODY).replace(
+		"- `.github/workflows/ci.yml`", "- edit .github/workflows/ci.yml for the timeout")
+	assert _rg(prose)["reason"] == "budget_only_plan"
+
+
+def test_regression_line_rejects_directories_prose_numbers_and_placeholders() -> None:
+	for line in ("HEAL_REGRESSION: scripts/", "HEAL_REGRESSION: runs are 2.5x slower since v1.2",
+		"HEAL_REGRESSION: 0.1"):
+		result = _rg(_rg_plan(line))
+		assert (result["reason"], result["detail"]) == ("regression_line_missing", "invalid_target"), (line, result)
+	placeholder = _rg(_rg_plan("HEAL_REGRESSION: not a regression: <reason>"))
+	assert (placeholder["reason"], placeholder["detail"]) == ("regression_line_missing", "empty"), placeholder
+	assert _rg(_rg_plan("HEAL_REGRESSION: scripts/a.sh"))["reason"] == "regression_named"
+
+
+def test_regression_budget_only_reads_paths_not_knobs_in_files_bullets() -> None:
+	# Review findings: a knob-first backticked bullet, an indented sub-bullet and a
+	# "leave X unchanged" mention must not lift the budget-only hold.
+	line = "HEAL_REGRESSION: not a regression: load grew"
+	knob_first = _rg_plan(line, files=_BUDGET_FILES, body=_BUDGET_BODY).replace(
+		"- `.github/workflows/ci.yml`", "- Raise `PHASE_TIMEOUT` in `.github/workflows/ci.yml`\n  - raise `timeout-minutes` to 120")
+	assert _rg(knob_first)["reason"] == "budget_only_plan"
+	unchanged = _rg(_rg_plan(line, files=_BUDGET_FILES, body=_BUDGET_BODY + "\nLeave `CACHE_KEY_PREFIX` unchanged."))
+	assert unchanged["reason"] == "budget_only_plan", unchanged
+	# A backticked placeholder is no reason.
+	placeholder = _rg(_rg_plan("HEAL_REGRESSION: not a regression: `<reason>`"))
+	assert (placeholder["reason"], placeholder["detail"]) == ("regression_line_missing", "empty"), placeholder
+
+
+def test_regression_named_test_file_does_not_lift_the_budget_hold() -> None:
+	# Review finding: naming a companion test file must not let a timeout-only plan escape.
+	files = _BUDGET_FILES + ["tests/test_slow.py"]
+	named = _rg(_rg_plan("HEAL_REGRESSION: tests/test_slow.py", files=files, body=_BUDGET_BODY))
+	assert (named["decision"], named["reason"]) == ("hold", "budget_only_plan"), named
+	unnamed = _rg(_rg_plan("HEAL_REGRESSION: abc1234", files=files, body=_BUDGET_BODY))
+	assert unnamed["reason"] == "budget_only_plan", unnamed
+	# A named test fix that names what it changes is not budget-only.
+	fixed = _rg(_rg_plan("HEAL_REGRESSION: tests/test_slow.py", files=files, body=_BUDGET_BODY + " Drop `SLOW_FIXTURE_ROUNDS`."))
+	assert fixed["reason"] == "regression_named", fixed
+
+
+def test_regression_budget_only_files_bullets_without_paths_are_plan_text() -> None:
+	line = "HEAL_REGRESSION: not a regression: load grew"
+	workflow_bullet = "- `.github/workflows/ci.yml`"
+	# A knob-only top-level bullet is not a file and its knob counts.
+	knob_only = _rg_plan(line, files=_BUDGET_FILES, body="Make the job slower-tolerant.").replace(
+		workflow_bullet, workflow_bullet + "\n- raise `timeout-minutes` to 120")
+	assert _rg(knob_only)["reason"] == "budget_only_plan"
+	# A sub-bullet naming another identifier is another change.
+	sub = _rg_plan(line, files=_BUDGET_FILES, body=_BUDGET_BODY).replace(
+		workflow_bullet, workflow_bullet + "\n  - set `CACHE_KEY_PREFIX` per job")
+	assert _rg(sub)["reason"] == "not_a_regression"
+
+
+def test_regression_unchanged_clause_is_a_mention_only() -> None:
+	line = "HEAL_REGRESSION: not a regression: load grew"
+	same_line = _rg(_rg_plan(line, files=_BUDGET_FILES, body="Set `CACHE_ENABLED` back to true; leave `PHASE_TIMEOUT` unchanged."))
+	assert same_line["reason"] == "not_a_regression", same_line
+	only_unchanged = _rg(_rg_plan(line, files=_BUDGET_FILES, body="Leave `timeout-minutes` unchanged. Cache the setup."))
+	assert only_unchanged["reason"] == "not_a_regression", only_unchanged
+
+
+
+def test_regression_budget_only_review_round_four_shapes() -> None:
+	# Review findings: a raised knob in an "unchanged" clause, a prose Files bullet
+	# without backticks, and a knob on the workflow's own Files bullet must hold.
+	line = "HEAL_REGRESSION: not a regression: load grew"
+	raised = _rg(_rg_plan(line, files=_BUDGET_FILES, body="Raise `PHASE_TIMEOUT` to 90 with no change to the job steps."))
+	assert (raised["decision"], raised["reason"]) == ("hold", "budget_only_plan"), raised
+	workflow_bullet = "- `.github/workflows/ci.yml`"
+	prose = _rg_plan(line, files=_BUDGET_FILES, body="Give the job more time.").replace(
+		workflow_bullet, workflow_bullet + "\n- Raise PHASE_TIMEOUT from 40 to 90")
+	assert _rg(prose)["reason"] == "budget_only_plan"
+	same_bullet = _rg_plan(line, files=_BUDGET_FILES, body="Give the job more time.").replace(
+		workflow_bullet, workflow_bullet + ": raise `timeout-minutes` from 30 to 60")
+	assert _rg(same_bullet)["reason"] == "budget_only_plan"
+	# Another identifier on the workflow's bullet is another change.
+	other = _rg_plan(line, files=_BUDGET_FILES, body=_BUDGET_BODY).replace(
+		workflow_bullet, workflow_bullet + ": set `CACHE_KEY_PREFIX` per job")
+	assert _rg(other)["reason"] == "not_a_regression"
+	# A single extensionless file is still a file, not plan text.
+	makefile = _rg(_rg_plan(line, files=_BUDGET_FILES + ["Makefile"], body=_BUDGET_BODY))
+	assert makefile["reason"] == "not_a_regression", makefile
+
+
+def test_regression_budget_only_review_round_five_shapes() -> None:
+	line = "HEAL_REGRESSION: not a regression: load grew"
+	workflow_bullet = "- `.github/workflows/ci.yml`"
+	# A change verb for another identifier in an "unchanged" clause is another change.
+	other = _rg(_rg_plan(line, files=_BUDGET_FILES, body="Set `CACHE_KEY_PREFIX` to v2 with no change to `PHASE_TIMEOUT`."))
+	assert other["reason"] == "not_a_regression", other
+	# An identifier after the "unchanged" phrase is still only a mention.
+	mention = _rg(_rg_plan(line, files=_BUDGET_FILES, body="Raise `PHASE_TIMEOUT` to 90 with no change to `CACHE_KEY_PREFIX`."))
+	assert mention["reason"] == "budget_only_plan", mention
+	# A prose Files bullet with one backticked span is plan text, not a file.
+	prose = _rg_plan(line, files=_BUDGET_FILES, body=_BUDGET_BODY).replace(
+		workflow_bullet, workflow_bullet + "\n- Give the `build` job more time")
+	assert _rg(prose)["reason"] == "budget_only_plan"
+	# A companion bullet's description is context: its identifiers do not lift the hold.
+	companion = _rg_plan(line, files=_BUDGET_FILES, body=_BUDGET_BODY).replace(
+		workflow_bullet, workflow_bullet + "\n- `tests/test_ci_workflow.py`: assert the job exports `PYTEST_ADDOPTS`")
+	assert _rg(companion)["reason"] == "budget_only_plan"
+
+
+# Step plans name src/app.py so the automation-path gate does not defer them.
+_STEP_FILES = ["src/app.py"]
+_STEP_BODY = "Fix the slow loop in `src/app.py`."
+
+
+def _heal_issue_with_trend(regression: str = "true") -> dict:
+	return dict(_ORDINARY_ISSUE, body=_trend_body(regression))
+
+
+def test_plan_step_regression_without_line_holds() -> None:
+	if _skip_without_jq():
+		return
+	run = _run_step(_heal_issue_with_trend(), _rg_plan(None, files=_STEP_FILES, body=_STEP_BODY), heal_route="true", trend="true")
+	assert run["approvals"] == [], run["stdout"]
+	assert "gate=heal_counterfactual outcome=approve result=PASS reason=pass issue=123" in run["stdout"]
+	assert ("AI_PHASE_GATE_V1 phase=plan gate=heal_regression outcome=hold result=REGRESSION "
+		"reason=regression_line_missing issue=123") in run["stdout"]
+	assert "auto_approve_hold_reason=heal_regression_hold" in run["output"]
+	assert len(run["holds"]) == 1
+	hold = run["holds"][0]
+	assert "<!-- ai:heal-counterfactual-hold:v1 issue=123 plan_comment=555 result=REGRESSION source=plan -->" in hold
+	assert "Regression line: _(none found)_" in hold and "Reason: `regression_line_missing`" in hold
+
+
+def test_plan_step_regression_named_line_approves() -> None:
+	if _skip_without_jq():
+		return
+	run = _run_step(_heal_issue_with_trend(), _rg_plan("HEAL_REGRESSION: src/app.py", files=_STEP_FILES, body=_STEP_BODY), heal_route="true", trend="true")
+	assert "gate=heal_regression outcome=approve result=REGRESSION reason=regression_named issue=123" in run["stdout"]
+	assert len(run["approvals"]) == 1 and run["holds"] == [], run["stdout"]
+
+
+def test_plan_step_regression_budget_only_holds() -> None:
+	if _skip_without_jq():
+		return
+	plan = _rg_plan("HEAL_REGRESSION: not a regression: x", files=_BUDGET_FILES, body=_BUDGET_BODY)
+	run = _run_step(_heal_issue_with_trend(), plan, heal_route="true", trend="true")
+	assert run["approvals"] == [] and len(run["holds"]) == 1, run["stdout"]
+	assert "reason=budget_only_plan issue=123" in run["stdout"]
+	assert "Regression line: `HEAL_REGRESSION: not a regression: x`" in run["holds"][0]
+
+
+def test_plan_step_regression_switch_off_is_unchanged() -> None:
+	if _skip_without_jq():
+		return
+	for trend in (None, "false"):
+		run = _run_step(_heal_issue_with_trend(), _rg_plan(None, files=_STEP_FILES, body=_STEP_BODY), heal_route="true", trend=trend)
+		assert "gate=heal_regression" not in run["stdout"]
+		assert len(run["approvals"]) == 1 and run["holds"] == [], run["stdout"]
+
+
+def test_plan_step_regression_missing_parser_holds() -> None:
+	if _skip_without_jq():
+		return
+	# Gate off for the counterfactual check so the run reaches the regression check.
+	run = _run_step(_heal_issue_with_trend("false"), _rg_plan(None, files=_STEP_FILES, body=_STEP_BODY), heal_route="true", trend="true",
+		copy_parser=False, flag="false")
+	assert "gate=heal_regression outcome=hold result=REGRESSION reason=heal_regression_check_unavailable" in run["stdout"]
+	assert "auto_approve_hold_reason=heal_regression_hold" in run["output"]
+	assert run["approvals"] == []
+
+
+def test_regression_prompt_contract() -> None:
+	for path in (CF_PROMPT, HEAL_PROMPTS[0]):
+		text = path.read_text(encoding="utf-8")
+		for needle in ("HEAL_REGRESSION:", "regression=true", "not a regression", "## Run-time trend", "PHASE_TIMEOUT"):
+			assert needle in text, (path, needle)
+	assert CF_TEMPLATE.read_bytes() == CF_PROMPT.read_bytes()
+	assert HEAL_PROMPTS[1].read_bytes() == HEAL_PROMPTS[0].read_bytes()
+
+
+def test_plan_workflow_regression_wiring() -> None:
+	assert ("WORKFLOW_HEAL_TREND_ENABLED: ${{ vars.WORKFLOW_HEAL_TREND_ENABLED || 'false' }}"
+		in _step_env("Auto-approve clear plan"))
+	approve = _step_run("Auto-approve clear plan")
+	assert (approve.index("partial_delivery.py heal-counterfactual") < approve.index("partial_delivery.py heal-regression")
+		< approve.index('plan_gate_file="${CODEX_OUTPUT_FILE:-}"'))
+	assert approve.count("auto_approve_hold_reason=heal_regression_hold") == 1
+	assert '"reason":"heal_regression_check_unavailable"' in approve
+
+
+# --- wiring -----------------------------------------------------------------
+
+
+def test_plan_workflow_wiring() -> None:
+	text = PLAN_WF.read_text(encoding="utf-8")
+	assert "HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}" in _step_env("Auto-approve clear plan")
+	assert " pr_dependency.py partial_delivery.py assemble_prompt.sh " in text
+	assert "prompts/mode-plan-heal-counterfactual.txt" in text
+	post = _step_run("Post implementation plan")
+	assert 'PLAN_COMMENT_ID="$(gh_retry gh api' in post and "--jq '.id'" in post
+	assert ("WORKFLOW_HEAL_REPRODUCE_ENABLED: ${{ vars.WORKFLOW_HEAL_REPRODUCE_ENABLED || 'false' }}"
+		in _step_env("Auto-approve clear plan"))
+	approve = _step_run("Auto-approve clear plan")
+	assert '"approve_pending_repro"' in approve and "tr -cd 'a-z_'" in approve
+	assert '" [repro-required]"' in approve
+	# The counterfactual gate runs before the automation-path gate.
+	assert approve.index("partial_delivery.py heal-counterfactual") < approve.index('plan_gate_file="${CODEX_OUTPUT_FILE:-}"')
+
+
+def test_poller_wiring() -> None:
+	poller = POLLER.read_text(encoding="utf-8")
+	assert 'HEAL_COUNTERFACTUAL_GATE_ENABLED="${HEAL_COUNTERFACTUAL_GATE_ENABLED:-true}"' in poller
+	gate = poller.split("\n_plan_auto_approval_gate()\n", 1)[1].split("\n}\n", 1)[0]
+	assert gate.index("_plan_heal_counterfactual_check") < gate.index("--plan-auto-approval-gate")
+	assert "reason=heal_counterfactual_hold phase=${phase} action=none" in gate
+	assert poller.count('_plan_auto_approval_gate "${issue_num}"') == 4
+	workflow = POLL_WF.read_text(encoding="utf-8")
+	assert " pr_dependency.py partial_delivery.py pr_checks_lib.sh " in workflow
+	assert workflow.count("HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}") == 5
+
+
+# --- test-only heal plans (issue #8809) -------------------------------------
+
+_HEAL_SCOPE_MARKER = "<!-- ai:workflow-heal-scope:v1 paths=scripts/fix.py,tests/**,changelog.d/*.md runs=owner/repo:500 -->"
+_HEAL_LIVE = json.dumps({"data": {"repository": {"issue": {"body": "Heal this.\n" + _HEAL_SCOPE_MARKER + "\n",
+	"lastEditedAt": None, "author": {"login": "pipeline-bot"}, "labels": {"nodes": [{"name": "ai:workflow-heal"}]}}}}})
+_UNVERIFIED_LINE = "HEAL_COUNTERFACTUAL: UNVERIFIED: the step timeline is missing"
+_TEST_ONLY_MARKER = ("<!-- ai:heal-test-only-approval:v1 issue=123 plan_comment=555 "
+	"paths=tests/test_flaky.py,changelog.d/123-flaky.md -->")
+
+
+def _files_plan(files: list[str], line: str | None = _UNVERIFIED_LINE) -> str:
+	parts = ["Implementation Plan", "", "## Files likely to change"] + [f"- `{path}`" for path in files]
+	parts += ["", "## Counterfactual check", "", "- job-a: walked the evidence.", ""]
+	if line is not None:
+		parts.append(line)
+	parts += ["", "STATUS: CLEAR", ""]
+	return "\n".join(parts)
+
+
+_TEST_ONLY_FILES = ["tests/test_flaky.py", "changelog.d/123-flaky.md"]
+
+
+def _run_test_only(plan_text: str, **kwargs) -> dict:
+	extra = {"GRAPHQL_RESPONSE": _HEAL_LIVE}
+	extra.update(kwargs.pop("extra_env", {}))
+	return _run_step(_HEAL_ISSUE, plan_text, extra_env=extra, **kwargs)
+
+
+def test_plan_step_approves_a_test_only_unverified_plan() -> None:
+	if _skip_without_jq():
+		return
+	run = _run_test_only(_files_plan(_TEST_ONLY_FILES))
+	assert "gate=heal_counterfactual outcome=hold result=UNVERIFIED reason=unverified issue=123" in run["stdout"]
+	assert "AI_PHASE_GATE_V1 phase=plan gate=heal_test_only outcome=approve reason=test_only_paths issue=123" in run["stdout"]
+	assert "auto_approve_hold_reason" not in run["output"], run["stdout"]
+	assert run["holds"] == []
+	assert len(run["markers"]) == 1 and _TEST_ONLY_MARKER in run["markers"][0]
+	assert len(run["approvals"]) == 1
+	# The marker lands before /approved, and the heal scope is read once.
+	assert run["posts"].index(run["markers"][0]) < run["posts"].index(run["approvals"][0])
+	assert run["graphql_reads"] == 1
+
+
+def test_plan_step_test_only_check_holds() -> None:
+	if _skip_without_jq():
+		return
+	cases = [
+		(_files_plan(["tests/test_flaky.py", "scripts/fix.py"]), {}, "path_not_test_only"),
+		(_files_plan(["tests/test_flaky.py", "docs/guide.md"]), {}, "path_out_of_heal_scope"),
+		(_files_plan(_TEST_ONLY_FILES), {"HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED": "false"}, "gate_disabled"),
+		(_files_plan(_TEST_ONLY_FILES), {"GRAPHQL_RESPONSE": ""}, "heal_scope_unverified"),
+	]
+	for plan_text, extra, reason in cases:
+		run = _run_test_only(plan_text, extra_env=extra)
+		assert f"gate=heal_test_only outcome=hold reason={reason} issue=123" in run["stdout"], (reason, run["stdout"])
+		assert "auto_approve_hold_reason=heal_counterfactual_hold" in run["output"]
+		assert run["approvals"] == [] and run["markers"] == []
+		assert len(run["holds"]) == 1
+
+
+def test_plan_step_test_only_check_never_runs_for_fail_or_missing() -> None:
+	if _skip_without_jq():
+		return
+	for line in ("HEAL_COUNTERFACTUAL: FAIL: still times out", None):
+		run = _run_test_only(_files_plan(_TEST_ONLY_FILES, line=line))
+		assert "gate=heal_test_only" not in run["stdout"], run["stdout"]
+		assert "auto_approve_hold_reason=heal_counterfactual_hold" in run["output"]
+		assert run["approvals"] == [] and run["markers"] == []
+
+
+def test_plan_step_invalid_test_only_flag_stays_on() -> None:
+	if _skip_without_jq():
+		return
+	run = _run_test_only(_files_plan(_TEST_ONLY_FILES), extra_env={"HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED": "banana"})
+	assert "::warning::HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED has invalid value; treating as true" in run["stdout"]
+	assert len(run["approvals"]) == 1
+
+
+def test_plan_step_marker_post_failure_holds() -> None:
+	if _skip_without_jq():
+		return
+	run = _run_test_only(_files_plan(_TEST_ONLY_FILES), extra_env={"FAIL_MARKER_POST": "1"})
+	assert "gate=heal_test_only outcome=hold reason=marker_post_failed issue=123" in run["stdout"]
+	assert "auto_approve_hold_reason=heal_test_only_marker_failed" in run["output"]
+	assert run["approvals"] == []
+
+
+def _poller_function(name: str) -> str:
+	text = POLLER.read_text(encoding="utf-8")
+	start = text.index(f"\n{name}()")
+	return text[start:text.index("\n}\n", start) + 3]
+
+
+def _run_poller_test_only(plan_text: str, details: dict, *, flag: str = "true", plan_comment: str = "555") -> tuple[str, str]:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "scripts").mkdir()
+		for name in ("files_touched_scope_guard.py", "workflow_failure_heal.py"):
+			shutil.copy(SCRIPTS / name, root / "scripts" / name)
+		(root / "scripts" / "fn.sh").write_text(_poller_function("_plan_heal_test_only_check"), encoding="utf-8")
+		(root / "plan.txt").write_text(plan_text, encoding="utf-8")
+		script = ('source scripts/fn.sh\nrc=0\n_plan_heal_test_only_check 123 "$DETAILS" plan.txt pipeline-bot || rc=$?\n'
+			'echo "rc=${rc} decision=${HEAL_TEST_ONLY_GATE_DECISION} marker=${HEAL_TEST_ONLY_GATE_MARKER}"\n')
+		env = dict(os.environ, DETAILS=json.dumps(details), HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED=flag,
+			HEAL_CF_GATE_PLAN_COMMENT=plan_comment, RUNTIME_DIR=str(root))
+		proc = subprocess.run(["bash", "-c", script], cwd=root, env=env, text=True, capture_output=True, check=False)
+		return proc.stdout, proc.stderr
+
+
+_POLLER_DETAILS = {"123": {"body": "Heal this.\n" + _HEAL_SCOPE_MARKER + "\n", "author_login": "pipeline-bot",
+	"labels": ["ai:workflow-heal"], "labels_complete": True, "last_edited_at": None}}
+
+
+def test_poller_test_only_check_behaviour() -> None:
+	if _skip_without_jq():
+		return
+	out, err = _run_poller_test_only(_files_plan(_TEST_ONLY_FILES), _POLLER_DETAILS)
+	assert "AI_PHASE_GATE_V1 phase=stall_recovery gate=heal_test_only outcome=approve reason=test_only_paths issue=123" in out, out + err
+	assert f"rc=0 decision=approve marker={_TEST_ONLY_MARKER}" in out
+	held = [
+		(_files_plan(["tests/test_flaky.py", "scripts/fix.py"]), _POLLER_DETAILS, {}, "path_not_test_only"),
+		(_files_plan(_TEST_ONLY_FILES), _POLLER_DETAILS, {"flag": "false"}, "gate_disabled"),
+		(_files_plan(_TEST_ONLY_FILES), _POLLER_DETAILS, {"plan_comment": "unknown"}, "plan_comment_unknown"),
+		# An old details map without last_edited_at, or an edited body, holds.
+		(_files_plan(_TEST_ONLY_FILES), {"123": {k: v for k, v in _POLLER_DETAILS["123"].items() if k != "last_edited_at"}},
+			{}, "heal_scope_unverified"),
+		(_files_plan(_TEST_ONLY_FILES), {"123": dict(_POLLER_DETAILS["123"], last_edited_at="2026-11-01T00:00:00Z")},
+			{}, "heal_scope_unverified"),
+		(_files_plan(_TEST_ONLY_FILES), {"123": dict(_POLLER_DETAILS["123"], labels_complete=False)}, {}, "heal_scope_unverified"),
+	]
+	for plan_text, details, kwargs, reason in held:
+		out, err = _run_poller_test_only(plan_text, details, **kwargs)
+		assert f"gate=heal_test_only outcome=hold reason={reason} issue=123" in out, (reason, out + err)
+		assert "rc=1 decision=hold marker=" in out and "ai:heal-test-only-approval" not in out
+
+
+def test_test_only_wiring() -> None:
+	assert ("HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED: ${{ vars.HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED || 'true' }}"
+		in _step_env("Auto-approve clear plan"))
+	approve = _step_run("Auto-approve clear plan")
+	assert approve.index("--heal-test-only-check") < approve.index('plan_gate_file="${CODEX_OUTPUT_FILE:-}"')
+	assert approve.index("${heal_to_marker}") < approve.index("/approved [auto-approved-by-plan]")
+	workflow = POLL_WF.read_text(encoding="utf-8")
+	assert workflow.count("HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED: ${{ vars.HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED || 'true' }}") == 5
+	poller = POLLER.read_text(encoding="utf-8")
+	assert 'HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED="${HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED:-true}"' in poller
+	details = _poller_function("_fetch_candidate_issue_details_graphql")
+	assert "\n          lastEditedAt\n" in details and "last_edited_at: (.value.lastEditedAt // null)," in details
+	cf = _poller_function("_plan_heal_counterfactual_check")
+	assert cf.index('HEAL_TEST_ONLY_GATE_MARKER=""') < cf.index('case "${route}" in')
+	assert cf.index('[ "${HEAL_CF_GATE_RESULT}" = "UNVERIFIED" ]') < cf.index("_plan_heal_test_only_check")
+	gate = _poller_function("_plan_auto_approval_gate")
+	marker_post = gate.index("${HEAL_TEST_ONLY_GATE_MARKER}\" >/dev/null")
+	assert marker_post < gate.index('if [ "${gate_decision}" = "approve" ]; then\n    return 0')
+	assert "reason=heal_test_only_marker_failed phase=${phase} action=none" in gate
+
+
+def main() -> int:
+	tests = [value for name, value in sorted(globals().items()) if name.startswith("test_")]
+	for test in tests:
+		test()
+	print(f"{len(tests)} passed")
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

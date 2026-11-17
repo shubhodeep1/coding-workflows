@@ -1,0 +1,324 @@
+{
+  "schema_version": "label_contract.v1",
+  "labels": {
+    "ai:clarification": {
+      "color": "f9d0c4",
+      "description": "AI clarification required before planning"
+    },
+    "ai:planning": {
+      "color": "d4c5f9",
+      "description": "AI planning in progress"
+    },
+    "ai:awaiting-approval": {
+      "color": "fbca04",
+      "description": "Awaiting human approval to implement"
+    },
+    "ai:implementing": {
+      "color": "0052cc",
+      "description": "AI implementation in progress"
+    },
+    "ai:validating": {
+      "color": "1d76db",
+      "description": "Runtime validation in progress (post-judge)"
+    },
+    "ai:validated": {
+      "color": "0e8a16",
+      "description": "Runtime validation passed - ready for release"
+    },
+    "ai:validation-failed": {
+      "color": "e11d48",
+      "description": "Runtime validation failed - manual review needed"
+    },
+    "ai:validation-fixing": {
+      "color": "d93f0b",
+      "description": "Validation fix-up issues in pipeline"
+    },
+    "ai:validation-recovery": {
+      "color": "e3a21a",
+      "description": "Validation failed — judge re-evaluating before retry"
+    },
+    "ai:security-pass": {
+      "color": "1d76db",
+      "description": "Project security pass in progress"
+    },
+    "ai:security-pass-fixing": {
+      "color": "d93f0b",
+      "description": "Security-pass fix-up issue in pipeline"
+    },
+    "ai:security-pass-failed": {
+      "color": "e11d48",
+      "description": "Project security pass exhausted its fix-cycle budget"
+    },
+    "ai:clarify-failed": {
+      "color": "e11d48",
+      "description": "Clarify workflow failed before producing a valid response"
+    },
+    "ai:reclarify-requeue": {
+      "color": "fbca04",
+      "description": "Trusted /reclarify failed before routing; poller will retry after PAT budget recovers"
+    },
+    "ai:clarify-respond-failed": {
+      "color": "e11d48",
+      "description": "Orchestrator clarify-respond workflow failed before posting an answer"
+    },
+    "ai:plan-failed": {
+      "color": "e11d48",
+      "description": "Plan workflow failed before producing an approved implementation plan"
+    },
+    "ai:implement-diagnose-failed": {
+      "color": "e11d48",
+      "description": "Implement diagnose workflow failed while generating fix-up guidance"
+    },
+    "ai:review-autofix-failed": {
+      "color": "e11d48",
+      "description": "Review/autofix workflow failed before completing the review pass"
+    },
+    "ai:validate-failed": {
+      "color": "e11d48",
+      "description": "Validate workflow failed before runtime validation could complete"
+    },
+    "ai:integration-judge-failed": {
+      "color": "e11d48",
+      "description": "Integration judge workflow failed before returning a verdict"
+    },
+    "ai:log-analysis-failed": {
+      "color": "e11d48",
+      "description": "Workflow log analysis failed before producing an analysis report"
+    },
+    "ai:memory-maintenance-failed": {
+      "color": "e11d48",
+      "description": "AI memory maintenance workflow failed before completing maintenance"
+    },
+    "ai:done": {
+      "color": "0e8a16",
+      "description": "Implementation PR created"
+    },
+    "ai:ready-to-merge": {
+      "color": "0e8a16",
+      "description": "PR review complete and ready to merge"
+    },
+    "ai:needs-human": {
+      "color": "e11d48",
+      "description": "Escalated for human intervention; autonomous stall recovery is paused"
+    },
+    "ai:claude-capacity-wait": {
+      "color": "fbca04",
+      "description": "Claude pool at capacity; work is waiting for the hourly resume pass"
+    },
+    "ai:blocked": {
+      "color": "b60205",
+      "description": "Orchestrator auto-answer loop blocked pending human intervention"
+    },
+    "ai:waiting-on-dependency": {
+      "color": "fbca04",
+      "description": "Waiting on a PR, issue or release dependency; the poller resumes it when the dependency lands"
+    },
+    "ai:merged": {
+      "color": "5319e7",
+      "description": "Linked PR merged"
+    },
+    "ai:review-blocked": {
+      "color": "e11d48",
+      "description": "PR review/autofix could not resolve all issues — needs human intervention"
+    },
+    "ai:resolver-escalated": {
+      "color": "b60205",
+      "description": "Integration conflict resolver hit the escape threshold; redispatch waits for a new PR head"
+    },
+    "ai:harness-broken": {
+      "color": "e11d48",
+      "description": "Validation harness is broken and requires manual repair before automated validation can continue"
+    },
+    "ai:force-merge": {
+      "color": "fbca04",
+      "description": "Operator override requested to merge despite normal automation gates"
+    },
+    "ai:integration-backpressure": {
+      "color": "e3a21a",
+      "description": "Integration automation is intentionally throttled due to downstream backpressure"
+    },
+    "ai:implementation-failed": {
+      "color": "e11d48",
+      "description": "Implementation produced no changes despite an approved plan — will be re-issued"
+    },
+    "ai:implement-fix-up": {
+      "color": "d4c5f9",
+      "description": "Implement-phase post-Codex fix-up issue"
+    },
+    "ai:destructive-blocked": {
+      "color": "b60205",
+      "description": "Implementation blocked for mass/destructive deletions; this issue ID now waits for human review"
+    },
+    "ai:scope-blocked": {
+      "color": "b60205",
+      "description": "Implementation blocked: staged files fell outside files_touched scope; human review required"
+    },
+    "ai:split-to-project": {
+      "color": "a2eeef",
+      "description": "Plan too large for one grant; handed to an orchestrator project, closed when the project completes"
+    },
+    "ai:closed": {
+      "color": "6a737d",
+      "description": "Linked PR closed without merge"
+    },
+    "ai:orchestrator-tracking": {
+      "color": "a2eeef",
+      "description": "Orchestrator project tracking issue"
+    },
+    "ai:orchestrator-managed": {
+      "color": "bfdadc",
+      "description": "Issue is managed by the AI orchestrator"
+    },
+    "ai:orchestrator-validate-required": {
+      "color": "c5def5",
+      "description": "Orchestrator issue requires validate phase before completion"
+    },
+    "ai:comprehensive-test-pending": {
+      "color": "1d76db",
+      "description": "Pending comprehensive release callback dispatch."
+    },
+    "ai:needs-prompt-review": {
+      "color": "fbca04",
+      "description": "Validation prompt self-heal PR awaiting manual review"
+    },
+    "ai:review-skipped": {
+      "color": "c2e0c6",
+      "description": "Reviewer panel + editor cycle skipped by deterministic gate (doc-only or under size threshold)"
+    },
+    "ai:skip-activation-verify": {
+      "color": "c2e0c6",
+      "description": "Activation verification skips this merged PR (no verdict, no fix issue)"
+    },
+    "ai:merge-queued": {
+      "color": "c5def5",
+      "description": "Review queued behind an older open PR that edits the same files (merge train)"
+    },
+    "ai:merge-lease-wait": {
+      "color": "c5def5",
+      "description": "Approved; waits for the merge lease on its base before updating or merging (merge lease)"
+    },
+    "ai:final-ci-merge-pending": {
+      "color": "c5def5",
+      "description": "Approved; the poll tick enables auto-merge when this head's final CI run passes"
+    },
+    "ai:security-audit": {
+      "color": "5319e7",
+      "description": "Stable tracker issue for periodic default-branch security audits"
+    },
+    "ai:retro": {
+      "color": "5319e7",
+      "description": "Stable tracker issue for weekly workflow retrospectives"
+    },
+    "ai:security": {
+      "color": "0e8a16",
+      "description": "Follow-up issue opened by the periodic security audit workflow"
+    },
+    "force-review": {
+      "color": "fbca04",
+      "description": "Force a full review_autofix cycle, bypassing the deterministic pre-review skip"
+    },
+    "e2e-smoke-test": {
+      "color": "5319e7",
+      "description": "E2E smoke test PR — review_autofix skips auto-merge"
+    },
+    "ai:check-triage": {
+      "color": "d876e3",
+      "description": "Issue auto-filed from a failing PR check by check-failure triage"
+    },
+    "ai:check-triage-escalated": {
+      "color": "b60205",
+      "description": "Check-failure auto-fix chain hit the lineage cap; needs human attention"
+    },
+    "ai:workflow-heal": {
+      "color": "d876e3",
+      "description": "Issue auto-filed from an escalated workflow failure by workflow failure heal"
+    },
+    "ai:workflow-heal-escalated": {
+      "color": "b60205",
+      "description": "Workflow failure heal chain hit the lineage cap; needs human attention"
+    },
+    "ai:operator-step": {
+      "color": "fbca04",
+      "description": "Steps only a person can take; the pipeline continues and gated work stays off until they are done"
+    },
+    "ai:provider-outage": {
+      "color": "b60205",
+      "description": "Model provider outage tracker (automation); the review sweep resumes and closes it on recovery"
+    },
+    "ai:scheduled-validation-failed": {
+      "color": "b60205",
+      "description": "Weekly scheduled validation of the default branch is failing; closes when a later run passes"
+    },
+    "ai:unblock-closed": {
+      "color": "5c5c5c",
+      "description": "Closed by the unblock judge after every verdict was spent; a closed project is marked abandoned"
+    },
+    "ai:codex": {
+      "color": "0e8a16",
+      "description": "Per-issue switch: implement this standalone issue with the Codex pipeline instead of Claude"
+    },
+    "ai:engine-claude": {
+      "color": "d4c5f9",
+      "description": "Run every model role of this work on Claude (Opus 5.5, high effort); ai:codex wins when both are set"
+    },
+    "ai:acceptance-unmet": {
+      "color": "fbca04",
+      "description": "The PR does not yet meet its plan's done-check"
+    },
+    "ai:verify-pending": {
+      "color": "c5def5",
+      "description": "Merged; waiting for the check after merge"
+    }
+  },
+  "phase_groups": [
+    {
+      "name": "issue_phase",
+      "fallback": "ai:clarification",
+      "members": [
+        "ai:clarification",
+        "ai:planning",
+        "ai:awaiting-approval",
+        "ai:implementing",
+        "ai:validating",
+        "ai:validated",
+        "ai:validation-failed",
+        "ai:validation-fixing",
+        "ai:validation-recovery",
+        "ai:security-pass",
+        "ai:security-pass-fixing",
+        "ai:security-pass-failed",
+        "ai:done",
+        "ai:ready-to-merge",
+        "ai:needs-human",
+        "ai:waiting-on-dependency",
+        "ai:blocked",
+        "ai:review-blocked",
+        "ai:implementation-failed",
+        "ai:merged",
+        "ai:closed"
+      ]
+    },
+    {
+      "name": "failure_phase",
+      "members": [
+        "ai:clarify-failed",
+        "ai:clarify-respond-failed",
+        "ai:plan-failed",
+        "ai:implement-diagnose-failed",
+        "ai:review-autofix-failed",
+        "ai:validate-failed",
+        "ai:integration-judge-failed",
+        "ai:log-analysis-failed",
+        "ai:memory-maintenance-failed"
+      ]
+    }
+  ],
+  "retired_labels": [
+    "ai:claude",
+    "ai:claude-handoff-failed",
+    "ai:claude-blocked",
+    "ai:claude-issue-queue",
+    "ai:claude-issue-queue-stale",
+    "ai:permission-prompt"
+  ]
+}

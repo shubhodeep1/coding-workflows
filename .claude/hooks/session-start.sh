@@ -1,0 +1,231 @@
+#!/bin/bash
+set -euo pipefail
+
+log() { printf '[session-start] %s\n' "$*"; }
+
+install_gh() {
+  if command -v gh >/dev/null 2>&1; then
+    log "gh already installed: $(gh --version | head -n1)"
+    return 0
+  fi
+
+  log "Installing gh CLI..."
+  if ! command -v apt-get >/dev/null 2>&1; then
+    log "apt-get not available; skipping gh install."
+    return 0
+  fi
+
+  local sudo_cmd=()
+  if [ "$(id -u)" -ne 0 ]; then
+    if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+      sudo_cmd=(sudo -n)
+    else
+      log "Insufficient privileges (not root and no passwordless sudo); skipping gh install."
+      return 0
+    fi
+  fi
+
+  "${sudo_cmd[@]}" install -d -m 0755 /etc/apt/keyrings
+  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    | "${sudo_cmd[@]}" tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null
+  "${sudo_cmd[@]}" chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    | "${sudo_cmd[@]}" tee /etc/apt/sources.list.d/github-cli.list >/dev/null
+  "${sudo_cmd[@]}" apt-get update -y >/dev/null
+  "${sudo_cmd[@]}" apt-get install -y gh >/dev/null
+  log "gh installed: $(gh --version | head -n1)"
+}
+
+# Trailing <owner>/<repo> from the remote URL, with trailing slash and
+# `.git` suffix stripped (in that order — `repo.git/` would otherwise
+# leave the suffix attached). Restricted to GitHub remotes (github.com
+# host) and Claude Code Web's local proxy on 127.0.0.1/localhost so
+# non-GitHub remotes (gitlab.com, bitbucket.org, …) and arbitrary
+# `/git/owner/repo`-shaped URLs don't yield a plausible-looking slug
+# that `gh -R` would then probe against the wrong github.com repo.
+#
+# Host whitelisting parses the host explicitly rather than relying on
+# substring globs: `*github.com/*` would otherwise also match
+# `evilgithub.com/o/r`, and `*localhost*/git/*` would match
+# `localhost.evil.com/git/o/r`. Splitting the URL into host/path means
+# the host check is exact (`host = github.com`) and lookalike domains
+# can't sneak through.
+#
+# Empty output → caller logs a NOTE and skips the probe.
+extract_repo_slug() {
+  local url="$1" host="" path="" rest=""
+  url="${url%/}"
+  url="${url%.git}"
+  url="${url%/}"
+
+  # Split into host and path. Two URL families are accepted:
+  #   1. `scheme://[userinfo@]host[:port]/path` (HTTPS, ssh:// scheme)
+  #   2. `userinfo@host:path`                   (scp-style SSH)
+  # Anything else returns empty.
+  case "${url}" in
+    *://*)
+      rest="${url#*://}"
+      # Strip user[:pass]@ if present. Use ## (greedy) so multi-`@` URLs
+      # (an oddity, but possible in malformed input) collapse to the
+      # last `@` rather than leaving a trailing `@host` in `rest`.
+      case "${rest}" in
+        *@*) rest="${rest##*@}" ;;
+      esac
+      case "${rest}" in
+        */*)
+          host="${rest%%/*}"   # everything before first `/`
+          path="${rest#*/}"    # everything after first `/`
+          host="${host%%:*}"   # drop :port if present
+          ;;
+        *) return 0 ;;
+      esac
+      ;;
+    *@*:*)
+      rest="${url##*@}"
+      case "${rest}" in
+        *:*)
+          host="${rest%%:*}"
+          path="${rest#*:}"
+          ;;
+        *) return 0 ;;
+      esac
+      ;;
+    *) return 0 ;;
+  esac
+
+  # Exact host whitelist. For the Claude Code Web proxy (127.0.0.1 /
+  # localhost) the path must additionally start with `git/` — otherwise
+  # an arbitrary localhost service (a local Gitea, a dev server, …)
+  # would yield a slug that `gh -R` would then send at the wrong repo.
+  case "${host}" in
+    github.com) ;;
+    127.0.0.1|localhost)
+      case "${path}" in
+        git/*) path="${path#git/}" ;;
+        *) return 0 ;;
+      esac
+      ;;
+    *) return 0 ;;
+  esac
+
+  # Require exactly two non-empty path segments. URLs with extra segments
+  # (e.g. .../pulls, .../tree/main, .../actions/runs/123) would otherwise
+  # be returned as bogus slugs.
+  case "${path}" in
+    */*/*) return 0 ;;     # more than two segments
+    /*)    return 0 ;;     # leading slash (no owner)
+    */)    return 0 ;;     # trailing slash with no repo (defensive)
+    */*) ;;                # exactly two segments — proceed
+    *)     return 0 ;;     # zero or one segment
+  esac
+
+  # Validate character set: owner is GitHub-username-shaped (alphanumeric +
+  # `_-`, no `.`); repo additionally allows `.`. No match → no output, and
+  # the caller treats that as "couldn't derive — skip the actions:read probe".
+  if printf '%s\n' "${path}" | grep -qE '^[A-Za-z0-9_-]+/[A-Za-z0-9._-]+$'; then
+    printf '%s\n' "${path}"
+  fi
+}
+
+verify_token() {
+  if [ -z "${GH_TOKEN:-}" ] && [ -z "${GITHUB_TOKEN:-}" ]; then
+    log "WARNING: neither GH_TOKEN nor GITHUB_TOKEN is set."
+    log "  Add GH_TOKEN to your Claude Code cloud environment variables to enable"
+    log "  Actions log access (scopes: repo + workflow, or fine-grained actions:read)."
+    return 0
+  fi
+
+  if ! command -v gh >/dev/null 2>&1; then
+    log "WARNING: token is set but 'gh' is not installed; skipping auth check."
+    return 0
+  fi
+
+  # Three-stage probe so neither a blocked GraphQL endpoint nor a missing
+  # actions:read scope gets reported as "token broken" — gh remains usable
+  # for PRs, issues, commits, and file contents even when Actions logs are
+  # gated.
+  #
+  # Stage 1 is deliberately NOT `gh auth status`: that command verifies the
+  # token over GraphQL, which Claude Code Web's agent proxy rejects with
+  # HTTP 403 for every operation outside its pinned set, so it reports
+  # "The token in GH_TOKEN is invalid" for a perfectly good PAT. `gh api
+  # user` is a REST call and answers the real question (CLAUDE.md §23.D).
+  local gh_login="" gh_identity_probe=(gh api user --jq .login)
+  if command -v timeout >/dev/null 2>&1; then
+    gh_identity_probe=(timeout 15 "${gh_identity_probe[@]}")
+  fi
+  if ! gh_login=$("${gh_identity_probe[@]}" 2>/dev/null) || [ -z "${gh_login}" ]; then
+    log "WARNING: REST identity probe 'gh api user' failed. GitHub authentication is unavailable or api.github.com could not be reached; this does not prove the configured token is invalid in a web session."
+    log "  'gh auth status' is not used here: it verifies over GraphQL, which the Claude Code Web proxy blocks (HTTP 403) even for a valid token."
+    return 0
+  fi
+
+  # Stage 2: detect credential substitution. In Claude Code Web every
+  # request to api.github.com passes through the agent proxy, which strips
+  # the Authorization header and signs the request with its own short-lived
+  # GitHub App token. An *unauthenticated* GET /user is 401 straight from
+  # GitHub, so a 200 can only mean the proxy injected a credential — and
+  # therefore the configured session credential never reaches GitHub. Probing
+  # without any credential (rather than with a bogus one) keeps the check
+  # free of bad-credential attempts on the user's account.
+  local anon_probe_status="unavailable"
+  if command -v curl >/dev/null 2>&1; then
+    if ! anon_probe_status=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+      -H "Accept: application/vnd.github+json" \
+      "https://api.github.com/user" 2>/dev/null); then
+      anon_probe_status="000"
+    fi
+  fi
+
+  case "${anon_probe_status}" in
+    200)
+      log "NOTE: the agent proxy authenticates api.github.com calls itself (as '${gh_login}') and does NOT forward the configured session credential (GH_TOKEN or GITHUB_TOKEN)."
+      log "  Reach is the proxy's, not the PAT's: only repositories attached to this session (attach more with the host's add_repo mechanism), REST only (GraphQL is HTTP 403), and some Actions paths (e.g. repo variables) are refused."
+      log "  For PAT-backed access (other repos, GraphQL, repo variables) run Claude Code locally (CLI / desktop / IDE), where no proxy sits in front of api.github.com. See CLAUDE.md §23.A."
+      ;;
+    401)
+      log "NOTE: REST identity resolved as '${gh_login}' and the unauthenticated probe returned 401, so no always-on proxy credential was detected; this does not prove the configured session credential (GH_TOKEN or GITHUB_TOKEN) was forwarded."
+      ;;
+    *)
+      log "NOTE: REST identity resolved as '${gh_login}', but the proxy-substitution probe was inconclusive (result: ${anon_probe_status}); cannot determine whether the configured session credential (GH_TOKEN or GITHUB_TOKEN) or an agent-proxy credential authenticated the request."
+      ;;
+  esac
+
+  # In Claude Code Web the only git remote points at a local proxy
+  # (http://...@127.0.0.1:PORT/git/<owner>/<repo>), so `gh` can't infer
+  # the GitHub repo and bare `gh run list` fails with "failed to determine
+  # base repo" — unrelated to actions:read. Derive <owner>/<repo> from the
+  # remote and pass `-R` so the probe actually tests scope. Surface the
+  # resolved slug so model + user know the right `-R` value to pass on
+  # every `gh` call that needs repo context.
+  local remote_url repo_slug=""
+  if remote_url=$(git config --get remote.origin.url 2>/dev/null) && [ -n "${remote_url}" ]; then
+    repo_slug=$(extract_repo_slug "${remote_url}")
+  fi
+
+  if [ -z "${repo_slug}" ]; then
+    log "NOTE: could not derive <owner>/<repo> from git remote; actions:read probe skipped. 'gh' is still usable; pass '-R <owner>/<repo>' explicitly on calls that need repo context."
+    return 0
+  fi
+
+  if gh run list -L 1 -R "${repo_slug}" >/dev/null 2>&1; then
+    log "gh has actions:read for ${repo_slug}; Actions logs readable via 'gh run view --log <id> -R ${repo_slug}'."
+  else
+    log "NOTE: 'gh run list -R ${repo_slug}' failed — possible causes: token lacks actions:read, repo not accessible to this token (403/404), incorrect derived slug, or transient error. Actions log access unavailable; if PR/issue/file reads via 'gh -R ${repo_slug}' also fail, re-check with 'gh api user' and 'gh api repos/${repo_slug}' (REST — 'gh auth status' is GraphQL-backed and fails behind the Claude Code Web proxy regardless of token validity)."
+  fi
+}
+
+# Entrypoint. Gated on Claude Code Web so local sessions are unaffected.
+# Skipped when this file is sourced (so tests can call extract_repo_slug
+# directly without running install_gh / verify_token).
+main() {
+  if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
+    return 0
+  fi
+  install_gh || log "gh install failed (non-fatal)"
+  verify_token || true
+}
+
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  main "$@"
+fi
