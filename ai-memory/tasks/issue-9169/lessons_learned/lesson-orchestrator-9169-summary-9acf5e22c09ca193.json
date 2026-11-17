@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-11-17T23:32:10Z",
+  "issue_number": 9169,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Orchestrator project \"Run CI-failure re-issues on the branch that holds the failing code, and give the implement sandbox a Solidity compiler\" (#9169) completed only after 1 judge stall cycle(s). Similar projects may need smaller waves or more explicit issue specs.",
+  "phase": "orchestrator_completion",
+  "pr_number": 9178,
+  "record_id": "lesson-orchestrator-9169-summary-9acf5e22c09ca193",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:summary",
+    "project:9169"
+  ]
+}

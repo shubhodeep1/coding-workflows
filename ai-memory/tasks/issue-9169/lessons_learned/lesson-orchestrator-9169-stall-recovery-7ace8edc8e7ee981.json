@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-11-17T23:32:10Z",
+  "issue_number": 9169,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Orchestrator project \"Run CI-failure re-issues on the branch that holds the failing code, and give the implement sandbox a Solidity compiler\" (#9169): issues stalled and needed automated recovery (1 time(s)). Causes: stuck in ai:done for 265m; recovery: retrigger_review (#9622). Similar work may need smaller, more explicit issues for these phases.",
+  "phase": "orchestrator_completion",
+  "pr_number": 9178,
+  "record_id": "lesson-orchestrator-9169-stall-recovery-7ace8edc8e7ee981",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:stall_recovery",
+    "project:9169"
+  ]
+}
