@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_sandbox.sh:716-882 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: Two different relay host files, `claude_anthropic_relay.py` (line 716) and `chatgpt_codex_relay.py` (line 882), are bind-mounted at the same sandbox path `/relay.py`, while the coverage registry maps `/relay.py` only to `claude_anthropic_relay.py`, so `test_scanned_host_file_matches_the_registry` fails at tests/test_sandbox_python_coverage.py:293 with `'chatgpt_codex_relay.py' != 'claude_anthropic_relay.py'`.\n  WHY: This one assertion fails six CI checks on head da9b888: lint, tests-sandbox-python for clarify, review and codex-isolated-codex, tests-hooks-and-orchestrator, and tests-system-python shard 11. All three reviewers say the defect comes from the base branch and is outside this PR's three files, that linked issue #9449 forbids changing any script, and that the fix belongs on the base branch (a registry entry that accepts both relay files, or a separate mount path). The reviewers disagree on severity: anthropic_claude-sonnet-5_5 rated it NIT, while minimax_minimax-m3 and z-ai_glm-5_3-flash rated it MAJOR; the highest (MAJOR, mapped to high) is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_untrusted_sandbox.sh:Line 716 is `--mount \"type=bind,src=$(realpath \"${support}/claude_anthropic_relay.py\"),dst=/relay.py,readonly\"`. Line 882 is `--mount \"type=bind,src=$(realpath \"${support}/chatgpt_codex_relay.py\"),dst=/relay.py,readonly\"`. | severity=NIT | confidence=5\n  PROBLEM: Two different host files are mounted at the same sandbox path, `/relay.py`, and the registry allows only `claude_anthropic_relay.py` there, so `test_scanned_host_file_matches_the_registry` fails at tests/test_sandbox_python_coverage.py:293 with `'chatgpt_codex_relay.py' != 'claude_anthropic_relay.py'`. The failure text comes from the CI logs, because that test file is not in the review checkout.\n  WHY: The assertion causes all six failed checks on head da9b888. None of the PR's three files is involved, and the failure also occurs on the merge-base. Issue #9449 forbids script changes, so the fix belongs on the base branch. The reviewer reports it only because a failed check must be surfaced; earlier rounds rejected it as out of scope.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_untrusted_sandbox.sh:lines 716 (mounts claude_anthropic_relay.py) and 882 (mounts chatgpt_codex_relay.py) | severity=MAJOR | confidence=5\n  PROBLEM: Both lines bind-mount a host file at /relay.py, but the registry maps /relay.py only to claude_anthropic_relay.py, so test_scanned_host_file_matches_the_registry fails with 'chatgpt_codex_relay.py' != 'claude_anthropic_relay.py' (tests/test_sandbox_python_coverage.py:293).\n  WHY: Six CI checks fail on head da9b888. The PR body lists this as an inherited failure, and issue #9449 item 4 forbids the fix. The fix must land on the base branch, and no action is required from this PR.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_untrusted_sandbox.sh:line 716 `--mount \"type=bind,src=$(realpath \"${support}/claude_anthropic_relay.py\"),dst=/relay.py,readonly\"` and line 882 `--mount \"type=bind,src=$(realpath \"${support}/chatgpt_codex_relay.py\"),dst=/relay.py,readonly\"` | severity=MAJOR | confidence=5\n  PROBLEM: Two different relay host files are bind-mounted at `/relay.py`, while the registry maps it only to `claude_anthropic_relay.py`, so `test_scanned_host_file_matches_the_registry` fails at its line 293 with `AssertionError: 'chatgpt_codex_relay.py' != 'claude_anthropic_relay.py'`.\n  WHY: Six check-runs fail on head da9b888, and every failing log ends at the same assertion. The defect comes from the integration base, and this PR's diff neither introduces nor worsens it. Issue #9449 forbids script changes, so the editor should ignore it with the reason \"out of scope\" rather than apply a fix.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7f0995d139a8a9f4d40c094712778f00e24d6c4870d73f9c484f030990c1bad0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9454,
+    "run_id": "44010975424",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44010975424",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117055414_95408c170e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9454,
+    "run_id": "44010975424"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-17T05:54:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
