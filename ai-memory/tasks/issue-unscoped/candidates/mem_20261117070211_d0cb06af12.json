@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  expected_change_site: .github/workflows/ci.yml step placement for tests-promote-stall-and-review; placement contract in tests/test_ci_poll_test_sharding.py (MovedPromote9363StepsContractTest)\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The five steps are split across two target jobs by estimate because the step timings were unreadable; no headroom comparison or measurement identifies a single most-headroom job (ci.yml lines 2901\u20132905 and 1775\u20131779 say the picks are estimates). Severity differs across reviewers (NIT to MAJOR); the highest, MAJOR, is used. minimax_minimax-m3 saw the same gap and treated it as an accepted residual from prior iterations, so it does not list it.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: `.github/workflows/ci.yml` step placement.\n  Evidence of absence: The step timings were unreadable, so the headroom choice rests on an estimate, and the PR adds no measurement. This is allowed by the issue and has no new evidence since earlier passes.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: .github/workflows/ci.yml step placement and implementation justification.\n  Evidence of absence: The PR uses estimated step selection instead of data-driven analysis because the run's step timings were unreadable; no head-to-head comparison of job headroom is documented or demonstrated.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: `.github/workflows/ci.yml` step placement for `tests-promote-stall-and-review`; the placement contract in `tests/test_ci_poll_test_sharding.py`.\n  Evidence of absence: The PR moves five steps to two different jobs. The workflow comments at `.github/workflows/ci.yml` lines 2901\u20132905 and 1775\u20131779 say the step timings were unreadable and the selections were estimates. The diff does not identify the slowest steps from those timings or establish that both target jobs have the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml` step placement for `tests-promote-stall-and-review`; `tests/test_ci_poll_test_sharding.py` placement contract (`MovedPromote9363StepsContractTest`).\n  Evidence of absence: The diff splits the five steps across two target jobs and records no headroom comparison identifying a single \"most headroom\" job. This is a previously adjudicated residual: the step timings were unreadable, the release job is the most plausible target, and no hard constraint from the issue is broken. The last run's comment-only diff does not change this evidence.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2e70d97a3d00e4f47745338b00f467c828b366baa535e02c356c33fb93571ff5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9367,
+    "run_id": "44018726241",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44018726241",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117070211_d0cb06af12",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9367,
+    "run_id": "44018726241"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-17T07:02:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
