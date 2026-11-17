@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:Multiple (pre-push gate test failures) | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR introduces five pre-push gate test failures (`tests/test_agents_fragment_contract.py`, `tests/test_files_touched_scope_guard.py`, `tests/test_gh_api_write_guard.py`, `tests/test_pr_watch_guard.py`, `tests/test_workflow_checkout_integration_ref_audit.py`) that block the merge.\n  WHY: The reviewer says `.github/workflows/ci.yml` changes lack required agents registry fragments and template parity with `workflow-templates/`; severity was BLOCKER. Disagreement: minimax_minimax-m3 and z-ai_glm-5_3-flash found these failures do not reproduce in head-SHA check-runs.\n- docs/INVENTORY.md:111-146 | severity=medium | confidence=5\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The Scripts inventory omits `scripts/ci_sync_quick.sh` and `scripts/comment_signature.py`, so `tests/inventory_parity.py` fails.\n  WHY: The failing `tests-release-and-log-analysis` job fails the `lint` aggregate and blocks the PR; reviewers say the failure is inherited from the merge from main. Severity is MAJOR in both sources. minimax_minimax-m3 and google_gemini-3_1-flash-lite treated it as inherited and out of scope but did not flag it as a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Never add text to agents.md ... directly ... Write a fragment instead.\" High-materiality workflow changes in `.github/workflows/ci.yml` require documentation in the agents registry.\n  expected_change_site: agents.d/9560-sandbox-python-phase-limits.md\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR modifies `.github/workflows/ci.yml` but adds no corresponding agents.d fragment, causing the failure in `tests/test_agents_fragment_contract.py`.\n- requirement: Workflow changes to `.github/workflows/ci.yml` must keep parity with template definitions if the test contract requires it.\n  expected_change_site: workflow-templates/\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The failure in `tests/test_gh_api_write_guard.py::test_template_parity` indicates that `.github/workflows/ci.yml` changes need matching updates to `workflow-templates/`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:Multiple (pre-push gate test failures) | severity=BLOCKER | confidence=5\n  PROBLEM: The PR introduces five test failures that block the merge (`tests/test_agents_fragment_contract.py`, `tests/test_files_touched_scope_guard.py`, `tests/test_gh_api_write_guard.py`, `tests/test_pr_watch_guard.py`, `tests/test_workflow_checkout_integration_ref_audit.py`).\n  WHY: The changes to `.github/workflows/ci.yml` are missing required repository integrity metadata (e.g. agents registry fragments), and template parity with `workflow-templates/` has been broken.\n- TASK_GAP: Requirement: \"Never add text to agents.md ... directly ... Write a fragment instead.\" (CLAUDE.md \u00a730). High-materiality workflow changes in `.github/workflows/ci.yml` require documentation in the agents registry.\n  Expected change site: agents.d/9560-sandbox-python-phase-limits.md\n  Evidence of absence: The PR modifies `.github/workflows/ci.yml` but adds no corresponding agents.d fragment, causing the failure in `tests/test_agents_fragment_contract.py`.\n  SEVERITY: BLOCKER | ISSUE_CONFIDENCE: 5\n- TASK_GAP: Requirement: Workflow changes that touch repository infrastructure (like `.github/workflows/ci.yml`) must maintain parity with template definitions if required by the test contract.\n  Expected change site: workflow-templates/\n  Evidence of absence: The failure in `tests/test_gh_api_write_guard.py::test_template_parity` indicates that `.github/workflows/ci.yml` changes need matching updates to `workflow-templates/`.\n  SEVERITY: BLOCKER | ISSUE_CONFIDENCE: 4\n- Note: The reviewer judged the `tests-release-and-log-analysis` failure (`tests/inventory_parity.py` missing `ci_sync_quick.sh` and `comment_signature.py` in `docs/INVENTORY.md`) to be inherited from the merge-base and out of scope for this PR.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- docs/INVENTORY.md:111 | severity=MAJOR | confidence=5\n  PROBLEM: The scripts inventory omits `scripts/ci_sync_quick.sh` and `scripts/comment_signature.py`, although the check log reports they exist and are referenced by `README.md` and `agents.md`.\n  WHY: `tests/inventory_parity.py` fails in the head's `tests-release-and-log-analysis` check, and the `lint` aggregate then fails and blocks the PR. The failure came from the merge from `main`, not from this PR's changed files.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- docs/INVENTORY.md:143-146 (entire Scripts list lines 140-269) | severity=MAJOR | confidence=5\n  PROBLEM: `tests-release-and-log-analysis` and the `lint` aggregate fail on head b9d0aaa018922dd1ec8fc2c63b41d8b219b94255 because `docs/INVENTORY.md` has no entry for `scripts/ci_sync_quick.sh` or `scripts/comment_signature.py`. The log also shows the undocumented references `README.md:67` and `agents.md:2146`/`agents.md:3091`.\n  WHY: `tests/inventory_parity.py` exits non-zero on the combined tree, and `lint` fails with \"CI jobs that did not succeed: tests-release-and-log-analysis\", blocking auto-merge. The failure is inherited from the merge from main (commit b9d0aaa).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "18898a68ce953c18cfe3c40bc2528b76391f9fa590e43a4f2a88c24c42cc3413",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9591,
+    "run_id": "44078389118",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "github-actions[bot]",
+    "run_attempt": 1,
+    "run_id": "44078389118",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117144011_32ffc7de0a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9591,
+    "run_id": "44078389118"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-17T14:40:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
