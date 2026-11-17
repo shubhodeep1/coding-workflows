@@ -1,0 +1,16 @@
+{
+  "name": "child_target_branch_alias_plain",
+  "issues": {
+    "101": {
+      "body": "Child task body\n\n- Target branch: orchestrator/project-alias-plain\n"
+    },
+    "1047": {
+      "body": "## Project: Tracking\n\nNo integration line present"
+    }
+  },
+  "branch_exists": {
+    "orchestrator/project-alias-plain": true
+  },
+  "expected_stdout": "orchestrator/project-alias-plain",
+  "expected_exit_code": 0
+}

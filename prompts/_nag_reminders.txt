@@ -1,0 +1,3 @@
+review-editor=Re-engage with the queued fixes now. If changes are needed, perform the repository write in this turn instead of only describing it, then finish with the required editor summary.
+review-reviewer=Continue the review using the required plain-text issue format. If you found no qualifying issues, reply with the literal word NONE.
+orchestrate-poll-judge=Return exactly one JSON object matching the judge output contract, including a non-empty status field.

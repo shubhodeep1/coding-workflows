@@ -1,0 +1,42 @@
+# IMPORTANT: This file is managed by coding-workflows and will be overwritten
+# by the update process. Do not add custom logic here.
+name: AI Orchestrate
+on:
+  workflow_dispatch:
+    inputs:
+      project_description:
+        description: >
+          Full project description. The orchestrator will decompose it into
+          issues with a dependency DAG and dispatch them through the AI pipeline.
+        required: true
+        type: string
+      engine:
+        description: "Optional model engine for every role of the project: claude, codex, or empty for the repository default."
+        required: false
+        type: string
+        default: ""
+      tracking_comment:
+        description: Optional comment posted on the tracking issue after creation (the plan stage's split marker).
+        required: false
+        type: string
+        default: ""
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
+jobs:
+  orchestrate:
+    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate.yml@stable
+    with:
+      project_description: ${{ inputs.project_description }}
+      engine: ${{ inputs.engine }}
+      tracking_comment: ${{ inputs.tracking_comment }}
+    # Least privilege: forward only the secrets the reusable workflow
+    # declares, never inherit them all (consumer repos hold other secrets).
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}

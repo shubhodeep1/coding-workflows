@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+LOG_DIR="${LOG_DIR:-${ROOT_DIR}/logs}"
+COMPOSE_FILE="${COMPOSE_FILE:-validation/docker-compose.test.yml}"
+APP_SERVICE="${APP_SERVICE:-app}"
+mkdir -p "${LOG_DIR}"
+TEST_LOG="${LOG_DIR}/hardhat_test.log"
+
+# Surface manifest-level env_overrides (HARDHAT_TEST_CMD, HARDHAT_NETWORK, ...)
+# in the harness host shell so failure diagnostics report what actually ran
+# inside the container instead of a stale localhost fallback.
+if [ -f "${ROOT_DIR}/validate.env" ]; then
+	set -a
+	# shellcheck disable=SC1091
+	. "${ROOT_DIR}/validate.env"
+	set +a
+fi
+
+# shellcheck source=/dev/null
+. "${ROOT_DIR}/_lib/graceful_shutdown.sh"
+
+echo "1..1"
+
+REPORTED_HARDHAT_TEST_CMD="${HARDHAT_TEST_CMD:-npx hardhat test --network localhost}"
+
+# Check that the project tree reached the image before running the suite, so a
+# missing /workspace/package.json is reported as a harness problem rather than
+# as an npm ENOENT (fun-token-multi-chain#579). Exit 3 means "file missing";
+# any other failure (for example the service is not running) falls through to
+# the test run below, which reports it as before.
+set +e
+docker compose -f "${COMPOSE_FILE}" exec -T \
+	"${APP_SERVICE}" /bin/sh -c 'if [ -f /workspace/package.json ]; then exit 0; fi; exit 3' >/dev/null 2>&1
+PROJECT_TREE_STATUS=$?
+set -e
+if [ "${PROJECT_TREE_STATUS}" -eq 3 ]; then
+	echo "not ok 1 - hardhat test suite"
+	echo "# harness_error: project tree not staged at /workspace (package.json missing; check the repository .dockerignore)"
+	exit 1
+fi
+
+set +e
+# The container env (set via compose env_file + environment) already carries
+# the manifest-provided HARDHAT_TEST_CMD; do not re-export it from the harness
+# host shell with docker compose exec's per-call env flag, because that would
+# silently clobber the manifest override with the host shell fallback.
+docker compose -f "${COMPOSE_FILE}" exec -T \
+	"${APP_SERVICE}" /bin/sh -c 'cmd="${HARDHAT_TEST_CMD:-npx hardhat test --network localhost}"; exec /bin/sh -c "${cmd}"' >"${TEST_LOG}" 2>&1 &
+TEST_PID=$!
+
+(
+	sleep "300"
+	graceful_shutdown "${TEST_PID}" "3" "${TEST_LOG}"
+) &
+WATCHDOG_PID=$!
+
+wait "${TEST_PID}"
+TEST_STATUS=$?
+
+kill "${WATCHDOG_PID}" 2>/dev/null || true
+wait "${WATCHDOG_PID}" 2>/dev/null || true
+set -e
+
+if [ "${TEST_STATUS}" -ne 0 ]; then
+	echo "not ok 1 - hardhat test suite"
+	echo "# hardhat command failed: ${REPORTED_HARDHAT_TEST_CMD}"
+	echo "# log tail (${TAIL_LINES:-40} lines):"
+	tail -n "${TAIL_LINES:-40}" "${TEST_LOG}" 2>/dev/null || true
+	exit 1
+fi
+
+echo "ok 1 - hardhat test suite"
