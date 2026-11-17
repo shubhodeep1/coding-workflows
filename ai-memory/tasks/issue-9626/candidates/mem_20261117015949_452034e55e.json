@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Files likely to change\n- `tests/e2e_smoke_canary_b.txt`\n\n## Acceptance\nACCEPTANCE: check CI\nACCEPTANCE: post-merge none: this is a smoke-canary text edit, and no workflow after merge depends on its content.\n\n## Functions or modules to implement\nNone. This is a data-file edit only.\n\n## Data structures affected\nThe file `tests/e2e_smoke_canary_b.txt` currently holds `status: ok` and `decompose-run: 41445772297`. After the edit it must contain exactly these two lines, ending with one LF:\n```\nstatus: ok\ndecompose-run: 43987491813\n```\nOnly line 2 changes. Line 1 is already correct.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Do not edit the advisory test file\n- Chosen: edit only `tests/e2e_smoke_canary_b.txt`.\n- Alternatives considered: also edit `tests/test_review_conflict_resolve_smoke_deterministic.py`, which the decomposition listed as an advisory expected file.\n- Why: the issue says to touch only the canary_b file. That test refers only to `tests/e2e_smoke_canary.txt` and does not read canary_b, so no change is needed there.\n\n## Security considerations\nNo trust boundary, endpoint, secret or money surface is touched. The file content is static text.\n\n## Risks and edge cases\n- Conflict: the decomposition's \"Expected files\" list includes the test file, but the issue's scope rule forbids touching it. The scope rule wins (see D1).\n- The file must keep exactly one trailing newline, with no CRLF line endings and no extra blank line.\n- Do not touch `tests/e2e_smoke_canary.txt`, because the sibling issue edits it in parallel.\n\n## Testing considerations\n- `head -n 1` must print `status: ok`.\n- `sed -n '2p'` must print `decompose-run: 43987491813`.\n- `wc -l` must report 2.\n- `git diff --stat` must show only the canary_b file.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: the issue asks for a single-line value change in one existing canary file and nothing else. The plan delivers that complete change without widening scope, which matches the issue's explicit discipline rules (\u00a76 priorities: correctness first, and no scope expansion).\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "d91fa07d3ba86c9e0f3b53b8946fb80f15f87aa2f1b677e9b814b20f50c5a0cd",
+  "lineage": {
+    "issue_number": 9626,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43995877346",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43995877346",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9626"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261117015949_452034e55e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9626,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43995877346"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9626",
+  "timestamps": {
+    "created_at": "2026-11-17T01:59:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
