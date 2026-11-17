@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/INVENTORY.md:309-318 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The PR added entries for `scripts/review_final_ci_failed.sh` and `scripts/review_final_ci_sweep.sh` at lines 309-310, but both were already documented at lines 312-313 (Refs #9528) and 317-318 (#9535), so each script now appears three times in the Scripts section.\n  WHY: `tests/inventory_parity.py` fails with \"documented in multiple sections (Scripts, Scripts)\", which fails `tests-release-and-log-analysis` and the aggregate `lint` job. Source severity was BLOCKER, mapped to critical.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add `scripts/review_final_ci_failed.sh` and `scripts/review_final_ci_sweep.sh` under the Scripts section of `docs/INVENTORY.md`, next to `review_freshness_ci_failed.sh`\" (linked issue #9585, Suggested fix item 3)\n  expected_change_site: docs/INVENTORY.md Scripts section\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The entries were already present at lines 312-313 and 317-318 on the base branch. The PR adds a third entry per script at lines 309-310, so the failure changed from \"missing\" to \"documented in multiple sections\" and was not resolved.\n- requirement: \"In `scripts/review_untrusted_sandbox.sh`, change line 882 to `dst=/chatgpt_relay.py` and line 886 to `python3 /chatgpt_relay.py bridge ...`. In `tests/test_sandbox_python_coverage.py`, add a registry entry `\"/chatgpt_relay.py\": ...`.\" (linked issue #9585, Suggested fix item 1)\n  expected_change_site: scripts/review_untrusted_sandbox.sh (lines 882/886) and tests/test_sandbox_python_coverage.py\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: PR_CHANGED_FILES contains only `docs/INVENTORY.md`. There is no hunk in `scripts/review_untrusted_sandbox.sh` and no `/chatgpt_relay.py` registry entry in `tests/test_sandbox_python_coverage.py`.\n- requirement: \"Update the assertion in `tests/test_prepush_affected_tests.py:687` to accept both shapes [plain and `|| env.CI_FINAL_PR_BASE_SHA`].\" (linked issue #9585, Suggested fix item 2)\n  expected_change_site: tests/test_prepush_affected_tests.py:687\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: PR_CHANGED_FILES contains only `docs/INVENTORY.md`. No hunk in `tests/test_prepush_affected_tests.py` adjusts the count assertion.\n- requirement: \"Expected outcome: PR #8971's CI goes green.\" (linked issue #9585, top-level goal)\n  expected_change_site: docs/INVENTORY.md plus scripts/review_untrusted_sandbox.sh, tests/test_sandbox_python_coverage.py, tests/test_prepush_affected_tests.py\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Only `docs/INVENTORY.md` changed, and its edit makes `tests/inventory_parity.py` fail. The `lint` job at run 44047907450 reports `CI jobs that did not succeed: tests-release-and-log-analysis`.\n- requirement: Inventory parity requires every script referenced in `README.md` and `agents.md` to be documented in the Scripts section of `docs/INVENTORY.md` (`scripts/ci_sync_quick.sh` and `scripts/comment_signature.py` are reported missing).\n  expected_change_site: docs/INVENTORY.md Scripts section\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The PR adds only lines 309-310. The CI log shows `FAIL: docs/INVENTORY.md: Scripts: missing scripts/ci_sync_quick.sh` and `FAIL: docs/INVENTORY.md: Scripts: missing scripts/comment_signature.py`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- docs/INVENTORY.md:309-310 (PR additions) vs 312-313 and 317-318 (pre-existing) | severity=BLOCKER | confidence=5\n  PROBLEM: The PR added entries for `scripts/review_final_ci_failed.sh` and `scripts/review_final_ci_sweep.sh` that were already documented, so each script appears three times in the Scripts section.\n  WHY: `tests/inventory_parity.py` emits \"documented in multiple sections (Scripts, Scripts)\", failing `tests-release-and-log-analysis` and `lint`.\n- TASK_GAP (BLOCKER, ISSUE_CONFIDENCE 5): Requirement: add `review_final_ci_failed.sh` and `review_final_ci_sweep.sh` to the Scripts section of `docs/INVENTORY.md` (issue #9585, item 3). Expected change site: docs/INVENTORY.md Scripts section. Evidence of absence: the entries already existed at lines 312-313 and 317-318, and the PR adds a third copy, so the failure mode inverted.\n- TASK_GAP (BLOCKER, ISSUE_CONFIDENCE 4): Requirement: change `scripts/review_untrusted_sandbox.sh` lines 882/886 to `/chatgpt_relay.py` and add the registry entry in `tests/test_sandbox_python_coverage.py` (issue #9585, item 1). Expected change site: those two files. Evidence of absence: only `docs/INVENTORY.md` changed.\n- TASK_GAP (BLOCKER, ISSUE_CONFIDENCE 4): Requirement: update the assertion in `tests/test_prepush_affected_tests.py:687` to accept both shapes (issue #9585, item 2). Expected change site: tests/test_prepush_affected_tests.py:687. Evidence of absence: only `docs/INVENTORY.md` changed.\n- TASK_GAP (BLOCKER, ISSUE_CONFIDENCE 5): Requirement: \"PR #8971's CI goes green.\" Expected change site: docs/INVENTORY.md plus the three other files. Evidence of absence: the `lint` job fails with `tests-release-and-log-analysis`, and `tests/inventory_parity.py` fails.\n- TASK_GAP (MAJOR, ISSUE_CONFIDENCE 5): Requirement: `scripts/ci_sync_quick.sh` and `scripts/comment_signature.py` must be documented in the Scripts section of `docs/INVENTORY.md`. Expected change site: docs/INVENTORY.md Scripts section. Evidence of absence: the PR adds only lines 309-310, and the CI log reports both as missing.\n=== END FINDINGS FROM minimax_minimax-m3 ===",
+  "fingerprint": "132a547407656fbf509c47021cf2b0c5d1687502e3a7b23a20e6566fef8f450b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9601,
+    "run_id": "44099322644",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44099322644",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117162505_3e942f0511",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9601,
+    "run_id": "44099322644"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-17T16:25:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
