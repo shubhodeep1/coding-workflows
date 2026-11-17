@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The fix must remove the cause and ship a regression test that reproduces the failing condition: it fails on the reported head and passes with the fix. Record in the PR that you ran it both ways.\"\n  expected_change_site: PR description Acceptance table, the two red-on-base rows for test_plan_rate_limited_refusal_defers_without_failing and test_plan_setup_steps_skip_on_rate_limited_defer\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: Acceptance table rows still read \"not run\", PR body table is not a repository file and was not updated, the tests were run both ways only against a rebuilt old plan.yml (editor comment from run 44055647021) and not against the reported head f28b6eb0; severity disagreement (NIT to MAJOR, highest MAJOR)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"The fix must remove the cause and ship a regression test that reproduces the failing condition: it fails on the reported head and passes with the fix. Record in the PR that you ran it both ways.\"\nExpected change site: The PR description Acceptance table, where the two red-on-base rows for test_plan_rate_limited_refusal_defers_without_failing and test_plan_setup_steps_skip_on_rate_limited_defer still read \"not run\".\nEvidence of absence: Both regression tests exist in tests/test_workflow_checkout_integration_ref_audit.py. The editor comment from run 44055647021 records running them both ways: 2 failed against a rebuilt old plan.yml, 2 passed against the current one. The PR body table is not a repository file and was not updated. The reported head f28b6eb0 was not available in the sandbox, so the old workflow was rebuilt from the diff. This is a PR-description record, not code, and no repository change closes it.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"The fix must remove the cause and ship a regression test that reproduces the failing condition: it fails on the reported head and passes with the fix. Record in the PR that you ran it both ways.\"\nExpected change site: The PR description's Acceptance table, specifically the two 'red-on-base' rows (test_plan_rate_limited_refusal_defers_without_failing and test_plan_setup_steps_skip_on_rate_limited_defer).\nEvidence of absence: The Acceptance table rows for the regression tests remain marked \"not run\", even though the final reviewer summary confirms they were executed against both the old (rebuilt) and new workflow logic. The requirement specifically named recording this in the PR (implied by the table structure), which remains unfulfilled.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Record in the PR that you ran it both ways\" for the regression tests test_plan_rate_limited_refusal_defers_without_failing and test_plan_setup_steps_skip_on_rate_limited_defer (linked issue fix constraints).\nExpected change site: PR description Acceptance table, the two red-on-base rows for the above tests.\nEvidence of absence: PR description Acceptance table rows still read \"not run\". The LAST RUN DIFF only updates a comment in .github/workflows/plan.yml; it does not touch the PR description. The editor summary in run 44055647021 documents that both tests were run both ways (against a rebuilt old plan.yml and against the fixed plan.yml), but the PR description table was not updated. This is a real gap in the required PR-record, though no in-repo file can carry it.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"The fix must remove the cause and ship a regression test that reproduces the failing condition: it fails on the reported head and passes with the fix. Record in the PR that you ran it both ways.\"\nExpected change site: Verification for the two red-on-base tests listed in the PR description's Acceptance table.\nEvidence of absence: The PR discussion reports running the tests against a reconstructed old plan.yml, not the reported head f28b6eb0; the Acceptance table still marks both red-on-base tests \"not run.\" The required result against the reported head is therefore not recorded or demonstrated.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "8999f9b8f942cab9a8278fe391efbf36d73bc2ebabda082f8536c28272aa4a4b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9604,
+    "run_id": "44092226002",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44092226002",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117153008_939efd58a1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9604,
+    "run_id": "44092226002"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-17T15:30:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
