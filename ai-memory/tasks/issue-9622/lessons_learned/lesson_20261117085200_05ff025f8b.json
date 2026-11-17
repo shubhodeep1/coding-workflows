@@ -1,0 +1,23 @@
+{
+  "discovered_at": "2026-11-17T08:52:00Z",
+  "issue_number": 9622,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=scripts/resolve_integration_ref.sh:590-595; cited_path=scripts/resolve_integration_ref.sh; files_touched=.github/workflows/clarify.yml, .github/workflows/implement.yml, .github/workflows/orchestrate_clarify_respond.yml, .github/workflows/plan.yml, .github/workflows/validate.yml, README.md, agents.d/ci-reissue-merged-pr-base-branch-routing.md, agents.md, changelog.d/ci-reissue-merged-pr-base-branch-routing.md, tests/test_resolve_integration_ref_ci_triage.py.",
+  "phase": "review_autofix",
+  "pr_number": 9635,
+  "record_id": "lesson_20261117085200_05ff025f8b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/resolve_integration_ref.sh",
+    ".github/workflows/clarify.yml",
+    ".github/workflows/implement.yml",
+    ".github/workflows/orchestrate_clarify_respond.yml",
+    ".github/workflows/plan.yml",
+    ".github/workflows/validate.yml",
+    "README.md",
+    "agents.d/ci-reissue-merged-pr-base-branch-routing.md",
+    "agents.md",
+    "changelog.d/ci-reissue-merged-pr-base-branch-routing.md",
+    "tests/test_resolve_integration_ref_ci_triage.py"
+  ]
+}
