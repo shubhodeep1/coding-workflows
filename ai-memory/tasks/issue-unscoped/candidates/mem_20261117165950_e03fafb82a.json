@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: `.github/workflows/ci.yml`, moving the \"System-Python test shard\" step out of `tests-system-python`\n  confidence=[1]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: No step moves; the PR raises the shard count from 24 to 32 instead (approved auto-decision AD-1 in the PR description). The reviewer rated it NIT and did not report it as a gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP (severity=NIT, confidence=1)\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, moving the \"System-Python test shard\" step out of `tests-system-python`\n  Evidence of absence: No step moves. The PR raises the shard count from 24 to 32 instead (approved auto-decision AD-1 in the PR description). Moving the step to a setup-python 3.12 job would lose the #9233 `/usr/bin/python3` coverage. The reviewer called it a documented, approved change of approach and did not report it as a gap.\n- HARDENING_SUGGESTION: `tests/test_ci_job_split_contract.py`, `test_system_python_shard_count_covers_budget`, line 212. `assertGreaterEqual` has no failure message. Suggested fix: pass a message such as \"run 43412753795 (#9469): 24 shards left shard 11 at 15m16s of 20 minutes\". About 1 line changed. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "074690ad59b911d12db9acfaa69bba8907332c65f65557af4fd7df460bb69903",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9489,
+    "run_id": "44103487957",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44103487957",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117165950_e03fafb82a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9489,
+    "run_id": "44103487957"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-17T16:59:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
