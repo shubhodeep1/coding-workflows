@@ -417,3 +417,47 @@ def test_reissue_helper_switch_is_pinned_against_caller_value() -> None:
 		cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=120, check=False)
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert "self-test passed" in result.stdout
+
+
+# The five workflows that run scripts/resolve_integration_ref.sh forward the
+# re-issue routing kill switch from the repository variable, so the documented
+# rollback (vars.CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED=false) reaches
+# the resolver in Actions (#9169).
+REISSUE_FLAG_FORWARDING_WORKFLOWS = (
+	"clarify.yml",
+	"plan.yml",
+	"implement.yml",
+	"orchestrate_clarify_respond.yml",
+	"validate.yml",
+)
+REISSUE_FLAG_PARTNER_ENV_LINE = "CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'true' }}"
+REISSUE_FLAG_ENV_LINE = "CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED || 'true' }}"
+REISSUE_FLAG_PARTNER_FORWARD_LINE = 'CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" \\'
+REISSUE_FLAG_FORWARD_LINE = 'CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED:-true}" \\'
+
+
+def _resolve_ref_step_text(workflow: str) -> str:
+	text = (REPO_ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8")
+	start = text.index("- name: Resolve integration ref")
+	end = text.find("\n      - name:", start + 1)
+	return text[start:] if end == -1 else text[start:end]
+
+
+def _assert_directly_follows(step: str, partner: str, line: str, workflow: str) -> None:
+	assert step.count(line) == 1, f"{workflow}: expected exactly one {line!r}"
+	partner_at = step.index(partner)
+	line_at = step.index(line)
+	gap = step[partner_at + len(partner):line_at]
+	assert line_at > partner_at and gap.strip() == "" and "\n" in gap, (
+		f"{workflow}: {line!r} must sit on the line directly below {partner!r}"
+	)
+
+
+@pytest.mark.parametrize("workflow", REISSUE_FLAG_FORWARDING_WORKFLOWS)
+def test_resolver_workflows_forward_reissue_base_routing_flag(workflow: str) -> None:
+	step = _resolve_ref_step_text(workflow)
+	_assert_directly_follows(step, REISSUE_FLAG_PARTNER_ENV_LINE, REISSUE_FLAG_ENV_LINE, workflow)
+	_assert_directly_follows(step, REISSUE_FLAG_PARTNER_FORWARD_LINE, REISSUE_FLAG_FORWARD_LINE, workflow)
+	assert step.index(REISSUE_FLAG_FORWARD_LINE) < step.index('bash "${resolver_script}"'), (
+		f"{workflow}: the flag must prefix the resolver call"
+	)
