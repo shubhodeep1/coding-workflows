@@ -8,6 +8,9 @@
 # the SHA-verified .codex-head-gate-src sparse checkout (pinned to
 # review_support_sha), never from a PR-head copy or SUPPORT_SCRIPTS_DIR.
 set -euo pipefail
+# Signed job-token comments (run-volume plan item 15): route this script's
+# gh comment calls through the shim even when no earlier step loaded it.
+[ -z "${BASH_SOURCE[0]:-}" ] || AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" >/dev/null 2>&1 || true
 
 SHOULD_RUN="true"
 POST_MERGE_DISPATCH="false"
@@ -326,7 +329,8 @@ fi
 # characters; both markers sit at the ends of their comments), plus
 # the review-autofix-clean:v1 editor summaries and the
 # ai:final-ci-failed:v1 hand-back comments (scripts/review_final_ci_failed.sh,
-# posted by github-actions[bot]; both same-head skips read them). Every other non-Bot
+# posted by github-actions[bot]; both same-head skips read them), and the
+# ai:final-ci-repair:v1 markers (the final-CI repair caps). Every other non-Bot
 # comment is kept as a slim activity record ({id, author_login,
 # author_type, author_association, created_at, body: "",
 # activity_only: true}, no body text) in the same call and in the
@@ -356,7 +360,7 @@ gate_fetch_marker_comments()
   # shellcheck disable=SC2016
   if gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
     -f per_page=100 \
-    --jq '[.[] | (.body // "") as $b | ((select(($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or ($b | contains("review-autofix-failure")) or ($b | contains("AI review/autofix")) or ($b | contains("AI autofix editor summary")) or ($b | contains("Editor changes lost")) or ($b | contains("Editor no-op suspicious")) or ($b | contains("<!-- ai:claude-fixer-review-skipped:")) or ($b | contains("<!-- ai:merge-base-sync:v1 ")) or ($b | contains("<!-- review-autofix-clean:v1 ")) or ($b | contains("<!-- ai:single-issue-security-pass:v1 ")) or ($b | contains("<!-- ai:freshness-ci-failed:v1 ")) or ($b | contains("<!-- ai:final-ci-failed:v1 "))) | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: (if (($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or (($b | length) <= 4000)) then $b else ($b[0:2000] + "\n[... clipped ...]\n" + $b[-2000:]) end)}) // (select((.user.type // "") != "Bot") | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: "", activity_only: true}))]' \
+    --jq '[.[] | (.body // "") as $b | ((select(($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or ($b | contains("review-autofix-failure")) or ($b | contains("AI review/autofix")) or ($b | contains("AI autofix editor summary")) or ($b | contains("Editor changes lost")) or ($b | contains("Editor no-op suspicious")) or ($b | contains("<!-- ai:claude-fixer-review-skipped:")) or ($b | contains("<!-- ai:merge-base-sync:v1 ")) or ($b | contains("<!-- review-autofix-clean:v1 ")) or ($b | contains("<!-- ai:single-issue-security-pass:v1 ")) or ($b | contains("<!-- ai:freshness-ci-failed:v1 ")) or ($b | contains("<!-- ai:final-ci-failed:v1 ")) or ($b | contains("<!-- ai:final-ci-repair:v1 "))) | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: (if (($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or (($b | length) <= 4000)) then $b else ($b[0:2000] + "\n[... clipped ...]\n" + $b[-2000:]) end)}) // (select((.user.type // "") != "Bot") | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: "", activity_only: true}))]' \
     2>/dev/null | jq -c -s 'add // []' > "${gate_marker_comments_file}" 2>/dev/null \
     && [ -s "${gate_marker_comments_file}" ]; then
     gate_marker_fetch_state="ok"
@@ -1714,6 +1718,175 @@ if [ "${SHOULD_RUN}" != "true" ] && [ "${pr_state}" = "open" ] \
   fi
 fi
 
+# ----- Final-CI repair (docs/plans/final-ci-failure-ci-fix-plan.md Phase 2) -----
+# A run that will review an approved head whose final CI failed runs the
+# CI-fix path (review_autofix.yml "Integration post-sync test repair" with
+# FINAL_CI_REPAIR=true) instead of the reviewer panel. Output
+# final_ci_repair=true only when every condition holds:
+#   * FINAL_CI_REPAIR_ENABLED (repo variable, default true) is on;
+#   * a trusted ai:final-ci-failed:v1 marker names the current head
+#     (GH_PAT login or github-actions[bot], as in the same-head skips) and
+#     no GH_PAT-login review output (clean marker, partial marker, failure,
+#     changes-lost or no-op comment) is newer than it, so only the
+#     hand-back's first review repairs;
+#   * the head is not orchestrator/project-* (post_sync_test_repair keeps it);
+#   * no trusted ai:final-ci-repair:v1 marker has from=<head> (one attempt
+#     per head; a fallback posts repair=none) and fewer than 2 distinct heads
+#     were repaired (repair=<sha>) on the PR (Q7: A); a cap logs
+#     FINAL_CI_REPAIR ... outcome=skipped reason=head_cap|pr_cap;
+#   * the head's newest ai-review/head-gate status is success and was posted
+#     by the GH_PAT login.
+# final_ci_repair_attempt carries the repair's ordinal (1 or 2) for its
+# marker. API cost (CLAUDE.md §15): the comments come from the shared
+# gate_fetch_marker_comments read; one GET commits/<head>/statuses runs only
+# when every comment-based condition holds (no other gate call reads commit
+# statuses). Any read or parse failure keeps the full review.
+FINAL_CI_REPAIR="false"
+FINAL_CI_REPAIR_ATTEMPT=""
+final_ci_repair_switch="$(printf '%s' "${FINAL_CI_REPAIR_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
+if [ "${SHOULD_RUN}" = "true" ] && [ "${final_ci_repair_switch}" != "false" ] \
+  && [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]] && [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
+  if [ -n "${final_ci_repair_switch}" ] && [ "${final_ci_repair_switch}" != "true" ]; then
+    echo "::warning::FINAL_CI_REPAIR_ENABLED has an unrecognised value; the final-CI repair is off. Use true or false."
+  else
+    gate_fetch_marker_comments
+    final_ci_repair_decision=""
+    if [ "${gate_marker_fetch_state}" = "ok" ] && [ -n "${gate_marker_author_login}" ]; then
+      final_ci_repair_decision="$(FINAL_CI_REPAIR_COMMENTS_FILE="${gate_marker_comments_file}" GATE_HEAD_SHA="${pr_head_sha_gate}" GATE_HEAD_REF="${pr_head_ref}" GATE_PR_NUMBER="${PR_NUMBER}" GATE_MARKER_AUTHOR_LOGIN="${gate_marker_author_login}" python3 - 2>/dev/null <<'PY' || true
+# Final-CI repair decision from the shared marker comments (see above).
+# Prints `decision=<repair|none|skipped> reason=<token> attempt=<k>`.
+import json
+import os
+import re
+
+head = (os.environ.get("GATE_HEAD_SHA") or "").strip().lower()
+head_ref = os.environ.get("GATE_HEAD_REF") or ""
+pr = (os.environ.get("GATE_PR_NUMBER") or "").strip()
+login = (os.environ.get("GATE_MARKER_AUTHOR_LOGIN") or "").strip().lower()
+with open(os.environ["FINAL_CI_REPAIR_COMMENTS_FILE"], encoding="utf-8") as handle:
+    comments = json.load(handle)
+if not isinstance(comments, list) or not login or not re.fullmatch(r"[0-9a-f]{40}", head) or not re.fullmatch(r"[1-9][0-9]*", pr):
+    raise SystemExit(2)
+final_re = re.compile("<!-- ai:final-ci-failed:v1 pr=" + re.escape(pr) + " head=" + re.escape(head) + r" -->\s*$")
+# repair=none records a fallback (no repair pushed): it uses up the head's
+# one attempt but not one of the PR's two repairs.
+repair_re = re.compile(r"<!-- ai:final-ci-repair:v1 pr=" + re.escape(pr) + r" from=([0-9a-f]{40}) repair=([0-9a-f]{40}|none) attempt=([1-9][0-9]*) -->\s*$")
+# A GH_PAT-login comment with one of these ends a review round (a provider
+# pause notice does not: no review ran).
+OUTPUT_TOKENS = ("<!-- review-autofix-clean:v1 ", "<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->", "review-autofix-failure:v1",
+    "Editor changes lost", "Editor no-op suspicious")
+
+def author(comment: dict) -> str:
+    return str(comment.get("author_login") or "").strip().lower()
+
+final_at = ""
+output_at = ""
+tried = set()
+repaired = set()
+for comment in comments:
+    if not isinstance(comment, dict) or not isinstance(comment.get("body"), str):
+        continue
+    body = comment["body"]
+    created_at = str(comment.get("created_at") or "")
+    if final_re.search(body) and (author(comment) == login
+            or (author(comment) == "github-actions[bot]" and str(comment.get("author_type") or "") == "Bot")):
+        final_at = max(final_at, created_at)
+    if author(comment) != login:
+        continue
+    match = repair_re.search(body)
+    if match:
+        # Distinct heads: a retried marker POST must not count twice.
+        tried.add(match.group(1))
+        if match.group(2) != "none":
+            repaired.add(match.group(1))
+    elif any(token in body for token in OUTPUT_TOKENS):
+        output_at = max(output_at, created_at)
+
+if not final_at:
+    print("decision=none reason=no_final_ci_marker attempt=0")
+elif head_ref.startswith("orchestrator/project-"):
+    print("decision=none reason=orchestrator_head attempt=0")
+elif output_at > final_at:
+    print("decision=none reason=already_reviewed attempt=0")
+elif head in tried:
+    print(f"decision=skipped reason=head_cap attempt={len(repaired)}")
+elif len(repaired) >= 2:
+    print(f"decision=skipped reason=pr_cap attempt={len(repaired)}")
+else:
+    print(f"decision=repair reason=none attempt={len(repaired) + 1}")
+PY
+)"
+    fi
+    final_ci_repair_outcome="$(printf '%s' "${final_ci_repair_decision}" | sed -n 's/^decision=\([a-z]*\) .*/\1/p')"
+    final_ci_repair_reason="$(printf '%s' "${final_ci_repair_decision}" | sed -n 's/.* reason=\([a-z_]*\) .*/\1/p')"
+    final_ci_repair_count="$(printf '%s' "${final_ci_repair_decision}" | sed -n 's/.* attempt=\([0-9]*\)$/\1/p')"
+    case "${final_ci_repair_outcome}" in
+      repair)
+        final_ci_head_gate=""
+        if ! final_ci_head_gate="$(gh api "repos/${REPOSITORY}/commits/${pr_head_sha_gate}/statuses?per_page=100" \
+          --jq '[.[] | select(.context == "ai-review/head-gate")][0] // {} | "\(.state // "none") \(.creator.login // "-")"' 2>/dev/null)"; then
+          final_ci_head_gate=""
+        fi
+        read -r final_ci_head_gate_state final_ci_head_gate_creator <<< "${final_ci_head_gate:-unreadable -}"
+        if [ "${final_ci_head_gate_state}" = "success" ] \
+          && [ "$(printf '%s' "${final_ci_head_gate_creator}" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "${gate_marker_author_login}" | tr '[:upper:]' '[:lower:]')" ]; then
+          FINAL_CI_REPAIR="true"
+          FINAL_CI_REPAIR_ATTEMPT="${final_ci_repair_count}"
+          echo "FINAL_CI_REPAIR pr=${PR_NUMBER} head=${pr_head_sha_gate} outcome=selected attempt=${final_ci_repair_count}"
+        else
+          echo "FINAL_CI_REPAIR pr=${PR_NUMBER} head=${pr_head_sha_gate} outcome=skipped reason=head_gate_not_success state=${final_ci_head_gate_state}"
+        fi
+        ;;
+      skipped)
+        echo "FINAL_CI_REPAIR pr=${PR_NUMBER} head=${pr_head_sha_gate} outcome=skipped reason=${final_ci_repair_reason} repairs=${final_ci_repair_count}"
+        ;;
+      none)
+        if [ "${final_ci_repair_reason}" != "no_final_ci_marker" ]; then
+          echo "FINAL_CI_REPAIR pr=${PR_NUMBER} head=${pr_head_sha_gate} outcome=skipped reason=${final_ci_repair_reason}"
+        fi
+        ;;
+      *)
+        echo "FINAL_CI_REPAIR pr=${PR_NUMBER} head=${pr_head_sha_gate} outcome=error reason=marker_check_failed detail=comments_${gate_marker_fetch_state}"
+        ;;
+    esac
+  fi
+fi
+
+# ----- Final-CI repair delta review (docs/plans/final-ci-failure-ci-fix-plan.md Phase 3) -----
+# A head that is a verified final-CI repair commit (review_head_gate.sh
+# final-ci-repair: trusted marker with repair=<head>, single parent `from`,
+# pipeline committer, `from` approved by a pipeline head-gate success) is
+# reviewed on its own diff: output review_diff_base_sha=<from>, which the
+# "Generate diff context" step uses for the reviewer diff and file list.
+# The panel, editor and head-gate posting are unchanged (Q8: A).
+# Switch: FINAL_CI_REPAIR_DELTA_REVIEW_ENABLED (default true). Cost
+# (CLAUDE.md §15): the shared marker comments; the helper's two reads run
+# only when a trusted repair marker names the current head. Anything else
+# leaves the output empty (full merge-base review).
+REVIEW_DIFF_BASE_SHA=""
+final_ci_delta_switch="$(printf '%s' "${FINAL_CI_REPAIR_DELTA_REVIEW_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
+case "${final_ci_delta_switch}" in
+  ''|true) final_ci_delta_switch=true ;;
+  false) ;;
+  *) echo "::warning::FINAL_CI_REPAIR_DELTA_REVIEW_ENABLED has an unrecognised value; repair heads are reviewed in full. Use true or false." ;;
+esac
+if [ "${SHOULD_RUN}" = "true" ] && [ "${FINAL_CI_REPAIR}" != "true" ] \
+  && [ "${final_ci_delta_switch}" = "true" ] \
+  && [ "${HEAD_GATE_HELPER_VERIFIED:-false}" = "true" ] \
+  && [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]] && [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
+  gate_fetch_marker_comments
+  if [ "${gate_marker_fetch_state}" = "ok" ] && [ -n "${gate_marker_author_login}" ] \
+    && grep -Fq "repair=${pr_head_sha_gate} " "${gate_marker_comments_file}" 2>/dev/null; then
+    final_ci_delta_out="$(bash .codex-head-gate-src/scripts/review_head_gate.sh final-ci-repair "${REPOSITORY}" "${PR_NUMBER}" \
+      "${pr_head_sha_gate}" "${gate_marker_author_login}" "${gate_marker_comments_file}" 2>/dev/null || true)"
+    printf '%s\n' "${final_ci_delta_out}" | grep '^REVIEW_HEAD_GATE ' || true
+    final_ci_delta_from="$(printf '%s\n' "${final_ci_delta_out}" | sed -n 's/^final_ci_repair_from=\([0-9a-f]\{40\}\)$/\1/p' | tail -n 1)"
+    if [[ "${final_ci_delta_from}" =~ ^[0-9a-f]{40}$ ]]; then
+      REVIEW_DIFF_BASE_SHA="${final_ci_delta_from}"
+    fi
+  fi
+fi
+
 echo "should_run=${SHOULD_RUN}" >> "${GITHUB_OUTPUT}"
 echo "post_merge_dispatch=${POST_MERGE_DISPATCH}" >> "${GITHUB_OUTPUT}"
 echo "skip_reason=${SKIP_REASON}" >> "${GITHUB_OUTPUT}"
@@ -1737,6 +1910,9 @@ echo "retargeted_base_ref=${pr_base_ref_gate}" >> "${GITHUB_OUTPUT}"
 echo "retargeted_base_updated_at=${pr_updated_at_gate}" >> "${GITHUB_OUTPUT}"
 echo "base_retargeted=${pr_base_retargeted}" >> "${GITHUB_OUTPUT}"
 echo "base_sha=${pr_base_sha_gate}" >> "${GITHUB_OUTPUT}"
+echo "final_ci_repair=${FINAL_CI_REPAIR}" >> "${GITHUB_OUTPUT}"
+echo "final_ci_repair_attempt=${FINAL_CI_REPAIR_ATTEMPT}" >> "${GITHUB_OUTPUT}"
+echo "review_diff_base_sha=${REVIEW_DIFF_BASE_SHA}" >> "${GITHUB_OUTPUT}"
 printf 'post_merge_pr_text_json=%s\n' "${POST_MERGE_PR_TEXT_JSON}" >> "${GITHUB_OUTPUT}"
 printf 'post_merge_linked_issues_json=%s\n' "${POST_MERGE_LINKED_ISSUES_JSON}" >> "${GITHUB_OUTPUT}"
 echo "post_merge_validate_context_definitely_empty=${POST_MERGE_VALIDATE_CONTEXT_DEFINITELY_EMPTY}" >> "${GITHUB_OUTPUT}"
