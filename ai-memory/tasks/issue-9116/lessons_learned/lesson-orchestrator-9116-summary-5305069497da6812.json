@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-11-17T22:10:35Z",
+  "issue_number": 9116,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Orchestrator project \"Analysis findings: report delivery via PR, consumer coverage, collection checks, purge safety, findings checked first\" (#9116) completed only after 2 judge stall cycle(s). Similar projects may need smaller waves or more explicit issue specs.",
+  "phase": "orchestrator_completion",
+  "pr_number": 9124,
+  "record_id": "lesson-orchestrator-9116-summary-5305069497da6812",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:summary",
+    "project:9116"
+  ]
+}

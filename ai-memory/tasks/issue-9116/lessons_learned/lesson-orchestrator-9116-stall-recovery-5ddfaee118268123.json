@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-11-17T22:10:35Z",
+  "issue_number": 9116,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Orchestrator project \"Analysis findings: report delivery via PR, consumer coverage, collection checks, purge safety, findings checked first\" (#9116): issues stalled and needed automated recovery (16 time(s)). Causes: stuck in ai:review-blocked for 129m; recovery: dispatch_rb_judge (#9187); stuck in ai:review-blocked for 131m; recovery: dispatch_rb_judge (#9187); stuck in ai:clarification for 70m; recovery: auto_respond_clarify (#9202); stuck in ai:planning for 69m; recovery: retrigger_plan (#9202); stuck in ai:clarification for 60m; recovery: auto_respond_clarify (#9202); stuck in ai:planning for 85m; recovery: retrigger_plan (#9202); stuck in ai:clarification for 65m; recovery: auto_respond_clarify (#9202); stuck in ai:planning for 61m; recovery: retrigger_plan (#9202); stuck in ai:clarification for 72m; recovery: auto_respond_clarify (#9202); stuck in ai:planning for 67m; recovery: retrigger_plan (#9202); stuck in ai:clarification for 73m; recovery: auto_respond_clarify (#9202); stuck in ai:done for 314m; recovery: retrigger_review (#9202); stuck in ai:done for 492m; recovery: retrigger_review (#9503); stuck in ai:done for 223m; recovery: retrigger_review (#9503); stuck in ai:done for 129m; recovery: run_stall_judge (#9503); stuck in ai:done for 270m; recovery: run_stall_judge (#9503). Similar work may need smaller, more explicit issues for these phases.",
+  "phase": "orchestrator_completion",
+  "pr_number": 9124,
+  "record_id": "lesson-orchestrator-9116-stall-recovery-5ddfaee118268123",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:stall_recovery",
+    "project:9116"
+  ]
+}
