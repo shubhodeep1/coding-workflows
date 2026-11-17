@@ -10,8 +10,9 @@
 # message listing every probed account with both utilizations and the hours
 # until each window resets (plus the UTC reset time of each window at or above
 # `gate_utilization`), and every account whose token was rejected; nothing is
-# sent while every account is below the gate. The poller runs every five minutes, so the message goes out
-# at most once an hour: only the cycle whose clock minute is below
+# sent while every account is below the gate. The poller cron runs every 15
+# minutes (plus follow-up runs after progress), so the message goes out at
+# most once an hour, and some hours not at all: only the cycle whose clock minute is below
 # CLAUDE_POOL_HEALTH_WINDOW_MINUTES (default 5) sends it. A cycle delayed past
 # that window skips the hour rather than sending twice.
 #

@@ -11,7 +11,8 @@ semble_install_now_ms()
 {
 	local semble_install_now_value="" semble_install_now_realtime="${EPOCHREALTIME:-}"
 	# Bash's own clock first: on ubuntu-26.04 runners (Rust uutils coreutils)
-	# `date +%s%3N` sometimes returned a reading one digit short (#9240).
+	# `date +%s%3N` gave readings that went backwards within a run, or
+	# sometimes a reading one digit short (#9240).
 	# `date` stays as the fallback for bash < 5. Always returns 0.
 	if [[ "${semble_install_now_realtime}" =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
 		printf '%s\n' "$(( 10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]} / 1000 ))"
@@ -22,6 +23,7 @@ semble_install_now_ms()
 		printf '%s\n' "${semble_install_now_value}"
 		return 0
 	fi
+	# Whole seconds when `date` has no %3N; 0 when no clock is usable.
 	semble_install_now_value="$(date +%s 2>/dev/null || true)"
 	if [[ "${semble_install_now_value}" =~ ^[0-9]+$ ]]; then
 		printf '%s\n' "$(( 10#${semble_install_now_value} * 1000 ))"
@@ -137,6 +139,7 @@ mark_available()
 	local semble_install_elapsed_ms=0
 	if [ -n "${SEMBLE_INSTALL_RESULT_FILE:-}" ]; then printf 'available\n' > "${SEMBLE_INSTALL_RESULT_FILE}" || true; fi
 	semble_install_elapsed_ms="$(( $(semble_install_now_ms) - SEMBLE_INSTALL_START_MS ))"
+	# A clock that fails mid-run reads 0; never report a negative duration.
 	[ "${semble_install_elapsed_ms}" -ge 0 ] || semble_install_elapsed_ms=0
 	write_github_env "SEMBLE_INSTALL_MS" "${semble_install_elapsed_ms}"
 	write_github_env "SEMBLE_AVAILABLE" "true"
@@ -148,6 +151,7 @@ mark_unavailable()
 	local semble_install_elapsed_ms=0
 	if [ -n "${SEMBLE_INSTALL_RESULT_FILE:-}" ]; then printf 'unavailable\n' > "${SEMBLE_INSTALL_RESULT_FILE}" || true; fi
 	semble_install_elapsed_ms="$(( $(semble_install_now_ms) - SEMBLE_INSTALL_START_MS ))"
+	# A clock that fails mid-run reads 0; never report a negative duration.
 	[ "${semble_install_elapsed_ms}" -ge 0 ] || semble_install_elapsed_ms=0
 	write_github_env "SEMBLE_INSTALL_MS" "${semble_install_elapsed_ms}"
 	write_github_env "SEMBLE_AVAILABLE" "false"

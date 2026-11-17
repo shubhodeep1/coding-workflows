@@ -15,6 +15,17 @@
 #           the #4623 rules, so follow-ups of follow-ups never recurse). For an
 #           eligible PR the latest trusted marker decides:
 #             - `status=clean` for the current head: hold=false.
+#             - no marker for the current head, and the head is a verified
+#               merge-base freshness update (scripts/review_head_gate.sh
+#               freshness-sync: GitHub's own signed two-parent merge of the
+#               approved head with a base tip already on the default branch,
+#               bound by the pipeline's ai:merge-base-sync:v1 marker) whose
+#               approved head has a clean marker: hold=false without a new
+#               audit. The update adds only code already on the default
+#               branch, which merges unaudited whenever it touches no PR
+#               file. Chains of updates are walked back at most
+#               SINGLE_PASS_INHERIT_MAX_HOPS (10) verified updates; any
+#               failed check audits the head as before.
 #             - `status=pending` for the current head, younger than
 #               SECURITY_PASS_PENDING_STALE_HOURS: hold=true, nothing else.
 #             - `status=findings` for the current head: hold=true until the
@@ -74,7 +85,9 @@
 #   <!-- ai:single-issue-security-pass-extension:v1 head=<40 hex> -->
 #
 # API budget (CLAUDE.md §15). gate: none for an ineligible PR; for an eligible
-# one, reuses the PR payload and comments the review job already fetched, plus
+# one, reuses the PR payload and comments the review job already fetched (and,
+# for a head with no marker, one `commits/<sha>` and one compare read per
+# verified freshness update walked, at most SINGLE_PASS_INHERIT_MAX_HOPS), plus
 # at most 3 GETs for the skip check and one /user identity read (the gate
 # job's /user result is not exported), plus one paginated open ai:security
 # issue listing only for current-head findings in gate mode, then one dispatch
@@ -196,8 +209,8 @@ single_pass_extensions()
 {
 	local comments_file="$1" audited_head="$2" checkout="$3" branch_ref="$4" count=0 extension_line extension_sha extension_lines extension_ancestor_rc
 	local -A single_pass_extension_seen=()
-	if [ -z "${SECURITY_PASS_AUTHOR_LOGIN:-}" ] || [ ! -s "${comments_file}" ] \
-		|| [ "$(git -C "${checkout}" rev-parse HEAD 2>/dev/null || true)" != "${audited_head}" ]; then
+	local single_pass_extension_head_checked=false
+	if [ -z "${SECURITY_PASS_AUTHOR_LOGIN:-}" ] || [ ! -s "${comments_file}" ]; then
 		return 1
 	fi
 	if ! extension_lines="$(jq -r --arg author "${SECURITY_PASS_AUTHOR_LOGIN}" '
@@ -215,6 +228,16 @@ single_pass_extensions()
 				continue
 			fi
 			single_pass_extension_seen["${extension_sha}"]=1
+			# The checkout must sit at the audited head before a marker can be
+			# checked against it. With no marker there is nothing to verify and
+			# no cycle to grant, so an unpushed local commit (e.g. the review
+			# job's deferred [ai-merge-resolve] merge) must not hold the gate.
+			if [ "${single_pass_extension_head_checked}" != "true" ]; then
+				if [ "$(git -C "${checkout}" rev-parse HEAD 2>/dev/null || true)" != "${audited_head}" ]; then
+					return 1
+				fi
+				single_pass_extension_head_checked=true
+			fi
 			if ! git -C "${checkout}" cat-file -e "${extension_sha}^{commit}" 2>/dev/null; then
 				if [ "$(git -C "${checkout}" rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
 					# An absent object in a shallow clone may be a real fix outside
@@ -315,6 +338,60 @@ single_pass_marker_age_hours()
 	printf '%s\n' "${marker_hours:-999999}"
 }
 
+# Walk verified merge-base freshness updates back from <head> to an approved
+# head with a trusted clean marker (see the header). Prints the clean head and
+# the number of updates walked as "<sha> <hops>" and returns 0; returns 1 when
+# any update cannot be verified, the walk meets a head with a non-clean marker,
+# or the support helpers are unavailable. Verification is
+# review_head_gate_freshness_sync, the check that already lets the same head
+# skip the reviewer panel; it runs in a subshell from SUPPORT_SCRIPTS_DIR (the
+# trusted support checkout, never the PR head).
+SINGLE_PASS_INHERIT_MAX_HOPS=10
+single_pass_inherited_clean()
+{
+	local comments_file="$1" markers="$2" head_sha="$3" base_ref="$4"
+	local support_dir="${SUPPORT_SCRIPTS_DIR:-}" inherit_work inherit_comments inherit_markers inherit_result
+	[ -n "${support_dir}" ] && [ -f "${support_dir}/review_head_gate.sh" ] && [ -f "${support_dir}/gh_helpers.sh" ] || return 1
+	[ -n "${SECURITY_PASS_AUTHOR_LOGIN:-}" ] || return 1
+	inherit_work="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/single_pass_inherit.XXXXXX" 2>/dev/null)" || return 1
+	inherit_comments="${inherit_work}/comments.json"
+	inherit_markers="${inherit_work}/markers.tsv"
+	if ! jq '[.[]? | select(type == "object") | {author_login: (.user.login // ""), body: (.body // "")}]' "${comments_file}" > "${inherit_comments}" 2>/dev/null \
+		|| ! printf '%s\n' "${markers}" > "${inherit_markers}"; then
+		rm -rf "${inherit_work}"
+		return 1
+	fi
+	# One subshell sources the helpers once and walks the whole chain; only
+	# its last stdout line ("<clean head> <hops>") is the result.
+	inherit_result="$(
+		cd "${support_dir}" || exit 1
+		# shellcheck source=/dev/null
+		source "${support_dir}/gh_helpers.sh" >/dev/null 2>&1 || exit 1
+		# shellcheck source=/dev/null
+		source "${support_dir}/review_head_gate.sh" >/dev/null 2>&1 || exit 1
+		inherit_cur="${head_sha}"
+		inherit_hops=0
+		while [ "${inherit_hops}" -lt "${SINGLE_PASS_INHERIT_MAX_HOPS}" ]; do
+			review_head_gate_freshness_sync "${REPOSITORY}" "${PR_NUMBER}" "${inherit_cur}" "${base_ref}" \
+				"${SECURITY_PASS_AUTHOR_LOGIN}" "${inherit_comments}" >&2 || exit 1
+			inherit_from="${REVIEW_HEAD_GATE_FRESHNESS_SYNC_FROM:-}"
+			[[ "${inherit_from}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+			inherit_hops=$((inherit_hops + 1))
+			inherit_status="$(awk -F'\t' -v h="${inherit_from}" '$4 == h { s = $3 } END { print s }' "${inherit_markers}")"
+			case "${inherit_status}" in
+				clean) printf '%s %s\n' "${inherit_from}" "${inherit_hops}"; exit 0 ;;
+				"") inherit_cur="${inherit_from}" ;;
+				*) exit 1 ;;
+			esac
+		done
+		exit 1
+	)" || inherit_result=""
+	rm -rf "${inherit_work}"
+	[[ "${inherit_result}" =~ ^[0-9a-f]{40}\ [0-9]+$ ]] || return 1
+	printf '%s\n' "${inherit_result}"
+	return 0
+}
+
 single_pass_gate()
 {
 	local pr_json="${PR_PAYLOAD_FILE:-}" comments="${PR_ISSUE_COMMENTS_FILE:-}" default_branch="${DEFAULT_BRANCH:-}"
@@ -402,6 +479,18 @@ single_pass_gate()
 		single_pass_state clean
 		single_pass_output false
 		return 0
+	fi
+	# A verified freshness update of a clean head needs no audit of its own
+	# (see the header). Only a head with no marker at all is considered, so
+	# an audit already pending, found or failed on this head still decides.
+	if [ -z "${latest}" ]; then
+		local inherited=""
+		if inherited="$(single_pass_inherited_clean "${comments}" "${markers}" "${head_sha}" "${default_branch}")"; then
+			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=clean reason=freshness_sync_inherited from=${inherited%% *} hops=${inherited##* }"
+			single_pass_state clean
+			single_pass_output false
+			return 0
+		fi
 	fi
 	if [ "${latest_status}" = "pending" ] && [ "${latest_head}" = "${head_sha}" ]; then
 		age_hours=0
@@ -637,7 +726,11 @@ single_pass_report()
 	fi; } 2>/dev/null | jq -s 'add // []' > "${comments_file}" 2>/dev/null \
 		&& jq -e 'type == "array"' "${comments_file}" >/dev/null 2>&1; then
 		cycle="$(single_pass_markers "${comments_file}" | awk -F'\t' -v h="${head_sha}" '$3 == "pending" && $4 == h { c = $5 } END { print c + 0 }')"
-		if ! extensions="$(single_pass_extensions "${comments_file}" "${head_sha}" "${GITHUB_WORKSPACE:-.}/audit-data" "${SECURITY_PASS_AUDIT_BRANCH}")"; then
+		# The audit result is only for head_sha if the audit checkout sits there,
+		# whether or not any extension marker exists (single_pass_extensions now
+		# checks the checkout only when a marker needs it).
+		if [ "$(git -C "${GITHUB_WORKSPACE:-.}/audit-data" rev-parse HEAD 2>/dev/null || true)" != "${head_sha}" ] \
+			|| ! extensions="$(single_pass_extensions "${comments_file}" "${head_sha}" "${GITHUB_WORKSPACE:-.}/audit-data" "${SECURITY_PASS_AUDIT_BRANCH}")"; then
 			rm -f "${comments_file}"
 			single_pass_log "mode=report pr=${pr_number} head=${head_sha} outcome=skip reason=extensions_unverifiable"
 			return 0

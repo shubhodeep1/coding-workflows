@@ -106,11 +106,12 @@ ROLES: tuple[str, ...] = (
 	"SUMMARISER",
 	"BEHAVIOURAL_SMOKE",
 	"PANEL_REVIEWER",
+	"CS_INVESTIGATE",
 )
 UTILITY_ROLES: tuple[str, ...] = ("LOG_SUMMARY", "RETRO", "MATERIALITY", "SUMMARISER", "BEHAVIOURAL_SMOKE")
 # Roles whose codex call runs `--sandbox read-only` today keep a read-only
 # tool set on Claude; every other role edits its checkout.
-READ_ROLES: tuple[str, ...] = ("CLARIFY", "CLARIFY_RESPOND", "SECURITY_JUDGE", "SECURITY_AUDIT", "WORKFLOW_HEAL", "UNBLOCK_JUDGE", "PANEL_REVIEWER")
+READ_ROLES: tuple[str, ...] = ("CLARIFY", "CLARIFY_RESPOND", "SECURITY_JUDGE", "SECURITY_AUDIT", "WORKFLOW_HEAL", "UNBLOCK_JUDGE", "PANEL_REVIEWER", "CS_INVESTIGATE")
 
 LABEL_CODEX = "ai:codex"
 LABEL_ENGINE_CLAUDE = "ai:engine-claude"
@@ -298,8 +299,11 @@ def classify_chatgpt_events(text: str, exit_code: int | None) -> dict[str, str]:
 	"""
 	messages: list[str] = []
 	has_agent_message = False
+	has_turn_failed = False
 	for event in read_events(text):
 		event_type = event.get("type")
+		if event_type == "turn.failed":
+			has_turn_failed = True
 		if event_type in ("error", "turn.failed"):
 			error = event.get("error")
 			message = event.get("message")
@@ -313,7 +317,7 @@ def classify_chatgpt_events(text: str, exit_code: int | None) -> dict[str, str]:
 			if isinstance(item, dict) and item.get("type") in ("agent_message", "assistant_message"):
 				has_agent_message = True
 	# A completed run wins over earlier non-terminal errors Codex recovered from.
-	if exit_code == 0 and has_agent_message and not any(event.get("type") == "turn.failed" for event in read_events(text)):
+	if exit_code == 0 and has_agent_message and not has_turn_failed:
 		return {"outcome": "ok", "reason": "ok"}
 	joined = "\n".join(messages)
 	if messages and CHATGPT_AUTH_RE.search(joined):

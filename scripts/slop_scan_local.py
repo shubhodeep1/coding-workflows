@@ -84,9 +84,10 @@ def _is_docstring_expr(node: ast.stmt) -> bool:
 	if not isinstance(node, ast.Expr):
 		return False
 	value_node = getattr(node, "value", None)
-	if isinstance(value_node, ast.Constant):
-		return isinstance(value_node.value, str)
-	return isinstance(value_node, ast.Str)
+	# CPython 3.8+ parses every literal as ast.Constant; ast.Str was removed
+	# in 3.14, where the old fallback raised AttributeError for any
+	# non-constant expression statement such as `print(1)` (#9233).
+	return isinstance(value_node, ast.Constant) and isinstance(value_node.value, str)
 
 
 def _dotted_name(node: ast.AST | None) -> str | None:
