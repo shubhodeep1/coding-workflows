@@ -13220,6 +13220,26 @@ elif [ -f "scripts/orchestrate_stall_retired_conflict.sh" ]; then
   source scripts/orchestrate_stall_retired_conflict.sh
 fi
 unset _OPP_RETIRED_CONFLICT_DIR
+# Smoke-fixture project backstop (closes release-gate fixture projects whose
+# gate run has completed). Resolved like the retired-conflict helpers above;
+# when it is missing (an older staging list), the stub keeps every project on
+# the normal path.
+_OPP_SMOKE_REAP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "scripts")"
+if [ -f "${_OPP_SMOKE_REAP_DIR}/orchestrate_poll_smoke_fixture_reap.sh" ]; then
+  # shellcheck disable=SC1091
+  source "${_OPP_SMOKE_REAP_DIR}/orchestrate_poll_smoke_fixture_reap.sh"
+elif [ -f "scripts/orchestrate_poll_smoke_fixture_reap.sh" ]; then
+  # shellcheck disable=SC1091
+  source scripts/orchestrate_poll_smoke_fixture_reap.sh
+fi
+unset _OPP_SMOKE_REAP_DIR
+if ! type smoke_fixture_reap_if_gate_done >/dev/null 2>&1; then
+  smoke_fixture_reap_if_gate_done()
+  {
+    echo "SMOKE_FIXTURE_REAP tracking_issue=${1:-} gate_run=none outcome=skip reason=helper_unavailable"
+    return 1
+  }
+fi
 if ! type _stall_retired_host_only_conflict_check >/dev/null 2>&1; then
   _stall_retired_host_only_conflict_check() {
     echo "STALL_RETIRED_CONFLICT_REISSUE issue=${1:-} pr=${2:-} outcome=skip reason=helper_unavailable retired_paths=none"
@@ -29980,14 +30000,28 @@ FEATURE_SWEEP_DONE="false"
 # Smoke-gate fixture projects in this tick; tg_notify stays silent for them
 # whatever TRACKING_NUM currently names (Q42: A).
 SMOKE_FIXTURE_TRACKING_NUMS=""
+# Fixture projects the smoke-fixture backstop closed (or must retry) this tick;
+# they are dropped from TRACKING_ISSUES below so the loop does not drive them.
+SMOKE_FIXTURE_REAPED_NUMS_JSON='[]'
 for ((smoke_idx=0; smoke_idx<COUNT; smoke_idx++)); do
   smoke_candidate_num="$(echo "${TRACKING_ISSUES}" | jq -r ".[${smoke_idx}].number")"
   [[ "${smoke_candidate_num}" =~ ^[1-9][0-9]*$ ]] || continue
-  if tracking_issue_is_smoke_fixture "$(echo "${TRACKING_ISSUES}" | jq -r ".[${smoke_idx}].title // \"\"")" "$(echo "${TRACKING_ISSUES}" | jq -c ".[${smoke_idx}].labels // []")"; then
+  smoke_candidate_title="$(echo "${TRACKING_ISSUES}" | jq -r ".[${smoke_idx}].title // \"\"")"
+  smoke_candidate_labels="$(echo "${TRACKING_ISSUES}" | jq -c ".[${smoke_idx}].labels // []")"
+  if tracking_issue_is_smoke_fixture "${smoke_candidate_title}" "${smoke_candidate_labels}"; then
     SMOKE_FIXTURE_TRACKING_NUMS+=" ${smoke_candidate_num}"
     echo "SMOKE_FIXTURE_PROJECT tracking_issue=${smoke_candidate_num} alerts=silenced"
+    if smoke_fixture_reap_if_gate_done "${smoke_candidate_num}" "${smoke_candidate_title}" "${smoke_candidate_labels}"; then
+      SMOKE_FIXTURE_REAPED_NUMS_JSON="$(jq -c --argjson n "${smoke_candidate_num}" '. + [$n]' <<<"${SMOKE_FIXTURE_REAPED_NUMS_JSON}")"
+    fi
   fi
 done
+if [ "${SMOKE_FIXTURE_REAPED_NUMS_JSON}" != "[]" ]; then
+  if smoke_fixture_remaining="$(jq -c --argjson drop "${SMOKE_FIXTURE_REAPED_NUMS_JSON}" 'map(select((.number as $n | $drop | index($n)) | not))' <<<"${TRACKING_ISSUES}")"; then
+    TRACKING_ISSUES="${smoke_fixture_remaining}"
+    COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
+  fi
+fi
 if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then
   prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
 fi
