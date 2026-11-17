@@ -195,13 +195,9 @@ def load_prompt(prompt_path: Path) -> str:
 			)
 		return _normalize_prompt_text(decoded_prompt_text)
 	except (OSError, UnicodeDecodeError) as exc:
+		# Invalid UTF-8 in the prompt body is replaced above (#9261), so this
+		# handler names read failures; it supersedes #9341's exit-1 decode branch.
 		raise PromptLoadError(f"Unable to read prompt file '{prompt_path}': {exc}") from exc
-	except UnicodeDecodeError as exc:
-		# UnicodeDecodeError is a ValueError, not an OSError, so without this
-		# branch a non-UTF-8 prompt escaped as a raw traceback (#9341).
-		raise PromptLoadError(
-			f"Unable to decode prompt file '{prompt_path}' as UTF-8 at byte offset {exc.start}: {exc.reason}"
-		) from exc
 
 
 def _find_prompt_root(prompt_path: Path) -> Path | None:

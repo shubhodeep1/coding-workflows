@@ -312,19 +312,24 @@ def _brace(name: str) -> str:
 
 def test_render_prompt_py_reports_non_utf8_prompt_without_traceback() -> None:
 	# #9341: a non-UTF-8 prompt used to escape load_prompt as a raw
-	# UnicodeDecodeError traceback with no named ERROR line.
+	# UnicodeDecodeError traceback with no named ERROR line. #9261/#9398
+	# superseded #9341's exit-1 contract for render_prompt.py: load_prompt now
+	# replaces the bad bytes with U+FFFD, prints one named WARNING line and
+	# renders (exit 0). render_prompt.sh still exits 1 (test below).
 	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_non_utf8_py_") as td:
 		prompt_file = Path(td) / "mode-implement.txt"
 		prompt_file.write_bytes(_NON_UTF8_PROMPT_BYTES)
 		proc = _run_render_prompt_py(prompt_file)
 
-	assert proc.returncode == 1, proc.stderr
-	assert proc.stdout == ""
+	assert proc.returncode == 0, proc.stderr
 	assert "Traceback" not in proc.stderr
-	error_lines = _stderr_error_lines(proc.stderr)
-	assert len(error_lines) == 1, proc.stderr
-	assert str(prompt_file) in error_lines[0]
-	assert "byte offset 7" in error_lines[0]
+	assert _stderr_error_lines(proc.stderr) == [], proc.stderr
+	warning_lines = [line for line in proc.stderr.splitlines() if line.startswith("WARNING:")]
+	assert len(warning_lines) == 1, proc.stderr
+	assert str(prompt_file) in warning_lines[0]
+	assert "invalid UTF-8 at byte 7" in warning_lines[0]
+	assert "\ufffd" in proc.stdout, proc.stdout
+	assert "Header" in proc.stdout and "Footer" in proc.stdout, proc.stdout
 
 
 def test_render_prompt_sh_reports_non_utf8_prompt_without_traceback() -> None:

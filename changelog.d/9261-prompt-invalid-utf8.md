@@ -3,4 +3,6 @@
 
 The fallback UTF-8 trim in `scripts/review_rb_judge.sh` was dropped from this change; that file is unchanged.
 
+For `scripts/render_prompt.py` this supersedes the exit-1 `ERROR: Unable to decode prompt file ...` behaviour described in `changelog.d/9341-render-prompt-readable-errors.md`: a non-UTF-8 prompt now renders with the `WARNING:` line above and exits 0. `scripts/render_prompt.sh` is unchanged and still prints one `ERROR: collect_prompt_placeholders UnicodeDecodeError:` line and exits 1 for a non-UTF-8 prompt.
+
 Refs #9261
