@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-17T03:50:08Z",
+  "tick_at": "2026-11-17T04:19:34Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -37,7 +37,7 @@
     },
     {
       "current_wave": 4,
-      "integration_ahead_by": "89",
+      "integration_ahead_by": "90",
       "issue_counts": {
         "closed": 1,
         "done": 0,
@@ -58,7 +58,7 @@
     },
     {
       "current_wave": 3,
-      "integration_ahead_by": "56",
+      "integration_ahead_by": "58",
       "issue_counts": {
         "closed": 0,
         "done": 1,
@@ -141,11 +141,10 @@
       "wave_complete": false
     },
     {
-      "current_wave": 1,
-      "integration_ahead_by": "1",
+      "current_wave": 0,
       "issue_counts": {
         "closed": 0,
-        "done": 2,
+        "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
         "merged": 0,
@@ -158,7 +157,7 @@
       "project_complete": false,
       "status": "in-progress",
       "title": "[Orchestrator] [E2E Orchestrate Smoke 43987491813] Update two smoke canary files in parallel",
-      "total_waves": 1,
+      "total_waves": 0,
       "wave_complete": false
     }
   ]
