@@ -968,8 +968,9 @@ def test_failed_comment_post_removes_only_the_scope_label_this_run_added() -> No
 		result, _, _, gh_calls = _run_blocked_planning_step_with_gh(labels, routed)
 		assert result.returncode != 0
 		assert not any("--remove-label ai:scope-blocked" in call for call in gh_calls), (labels, gh_calls)
-	# An /answer release earlier in the same job removed the latch the job-start
-	# metadata still lists, so the re-added label is this run's and is rolled back.
+	# An /answer release earlier in the same job removed the latch (its edit
+	# succeeded) while the job-start metadata still lists it, so the re-added
+	# label is this run's and is rolled back.
 	result, _, _, gh_calls = _run_blocked_planning_step_with_gh(
 		["ai:planning", "ai:scope-blocked"], {**routed, "PLAN_SCOPE_LATCH_RELEASED": "true"}
 	)
@@ -998,6 +999,56 @@ def test_answer_on_blocked_issue_releases_a_planning_scope_latch() -> None:
 	assert "PLAN_SCOPE_RELEASE_ARGS=(--remove-label 'ai:scope-blocked')" in branch
 	assert 'echo "PLAN_SCOPE_LATCH_RELEASED=true" >> "$GITHUB_ENV"' in branch
 	assert "--add-label 'ai:planning' --remove-label 'ai:blocked'" in branch
+	# The flag is written only after the release edit succeeded.
+	assert branch.index("--add-label 'ai:planning' --remove-label 'ai:blocked'") < branch.index("PLAN_SCOPE_LATCH_RELEASED=true")
+
+
+def _run_answer_release_branch(fail_edit: bool) -> tuple[subprocess.CompletedProcess[str], str]:
+	(step,) = [step for step in _steps("plan.yml") if step.get("name") == "Validate planning phase label"]
+	script = step["run"]
+	branch = script[script.index("PLAN_SCOPE_RELEASE_ARGS=()"):]
+	branch = branch[: branch.index("else\n")].replace("${{ github.repository }}", "owner/repo")
+	assert "${{" not in branch, branch
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		(tmp / "scripts").mkdir()
+		(tmp / "bin").mkdir()
+		(tmp / "scripts" / "plan_scope_block_route.sh").write_text('echo "release=true"\n', encoding="utf-8")
+		gh = tmp / "bin" / "gh"
+		gh.write_text(
+			'#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "${GH_LOG}"\n'
+			'if [ "$1" = api ]; then echo pipeline-bot; exit 0; fi\n'
+			'if [ "${GH_FAIL_EDIT:-}" = 1 ] && [ "$1" = issue ]; then exit 1; fi\nexit 0\n',
+			encoding="utf-8",
+		)
+		gh.chmod(0o755)
+		meta = tmp / "issue_meta.json"
+		meta.write_text(json.dumps({"labels": [{"name": "ai:blocked"}, {"name": "ai:scope-blocked"}]}), encoding="utf-8")
+		github_env = tmp / "github_env"
+		github_env.write_text("", encoding="utf-8")
+		env = {
+			"PATH": f"{tmp / 'bin'}:/usr/bin:/bin",
+			"GH_LOG": str(tmp / "gh.log"),
+			"GH_FAIL_EDIT": "1" if fail_edit else "0",
+			"ISSUE_NUMBER": "746",
+			"ISSUE_META_FILE": str(meta),
+			"GITHUB_ENV": str(github_env),
+		}
+		result = subprocess.run(
+			["bash", "-c", "set -euo pipefail\ngh_retry() { \"$@\"; }\n" + branch],
+			cwd=tmp, env=env, capture_output=True, text=True, timeout=60, check=False,
+		)
+		return result, _read(github_env)
+
+
+def test_answer_release_flag_is_written_only_after_the_release_edit_succeeds() -> None:
+	result, github_env = _run_answer_release_branch(fail_edit=False)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert github_env == "PLAN_SCOPE_LATCH_RELEASED=true\n"
+	result, github_env = _run_answer_release_branch(fail_edit=True)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "PLAN_SCOPE_LATCH_RELEASED" not in github_env
+	assert "::warning::Issue #746: the /answer label edit that releases ai:scope-blocked failed" in result.stdout
 
 
 def test_prompts_carry_the_scope_missing_and_reused_job_rules() -> None:
