@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-17T10:45:05Z",
+  "tick_at": "2026-11-17T11:58:17Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,7 +11,7 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 6
+    "tracking_issues": 7
   },
   "tracking_issues": [
     {
@@ -100,7 +100,7 @@
     },
     {
       "current_wave": 1,
-      "integration_ahead_by": "31",
+      "integration_ahead_by": "32",
       "issue_counts": {
         "closed": 0,
         "done": 1,
@@ -121,7 +121,7 @@
     },
     {
       "current_wave": 1,
-      "integration_ahead_by": "23",
+      "integration_ahead_by": "24",
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -138,6 +138,27 @@
       "status": "in-progress",
       "title": "[Orchestrator] Stop runner-image drift, red-main cascades and queue-driven re-dispatch from jamming the pipeline",
       "total_waves": 3,
+      "wave_complete": false
+    },
+    {
+      "current_wave": 1,
+      "integration_ahead_by": "1",
+      "issue_counts": {
+        "closed": 0,
+        "done": 0,
+        "implementation_failed": 0,
+        "in_progress": 1,
+        "merged": 0,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 0,
+        "skipped": 0
+      },
+      "number": 9650,
+      "project_complete": false,
+      "status": "in-progress",
+      "title": "[Orchestrator] Pipeline human-wait elimination: CI-quick parity, red-main heal dedupe, resolver safeguards, .github/ai plan grants, hold re-evaluation, nothing-to-implement verify, operator-step tick",
+      "total_waves": 10,
       "wave_complete": false
     }
   ]
