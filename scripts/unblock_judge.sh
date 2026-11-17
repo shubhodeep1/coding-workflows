@@ -486,6 +486,44 @@ unblock_operator_step_placeholder()
 	' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null || true
 }
 
+# Issue #9484: the same trusted operator_step verdict comment as
+# unblock_operator_step_placeholder (wait marker posted at $1), as one JSON
+# object {name, kind, instructions}. `kind` is the "Operator step kind:" line
+# (`variable_or_secret` or `other`), "" for a verdict comment from before that
+# line existed; `instructions` is the "Operator instructions:" line or "".
+# Prints nothing when that verdict is not an `_UNSET_OPERATOR_STEP` operator_step.
+unblock_operator_step_record()
+{
+	jq -c --arg login "${UNBLOCK_LOGIN}" --arg item "${ITEM}" --arg at "$1" '
+		[.[] | select((.user.login // "") == $login and (.created_at // "") <= $at)
+			| ((.body // "") | split("\n") | map(select(test("\\S")) | rtrimstr("\r"))) as $lines
+			| select(($lines | last // "") | test("^<!-- ai:unblock:v1 item=" + $item + " stop=[a-z-]+ fingerprint=[0-9a-f]{12} verdict=[a-z_]+ round=[1-9][0-9]*( override=[a-z_]+)? -->$"))
+			| {at: (.created_at // ""), operator_step: (($lines | last) | test(" verdict=operator_step ")),
+				name: ([$lines[] | (capture("^Stays off behind `(?<n>[A-Z][A-Z0-9_]{2,63})` until the operator step is done\\.$")? | .n)] | first // ""),
+				kind: ([$lines[] | (capture("^Operator step kind: `(?<k>[a-z_]{1,40})`\\.$")? | .k)] | first // ""),
+				instructions: ([$lines[] | (capture("^Operator instructions: (?<t>.+)$")? | .t)] | first // "")}]
+		| sort_by(.at) | last // empty | select(.operator_step)
+		| select(.name | test("^[A-Z][A-Z0-9_]{2,63}$") and endswith("_UNSET_OPERATOR_STEP"))
+		| {name, kind, instructions}
+	' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null || true
+}
+
+# Issue #9484: the newest trusted operator-step escalation marker on the item:
+# "<id> <ref> <created_at>". Not a hold: it never counts toward MAX_HOLDS_PER_ITEM.
+unblock_latest_operator_escalation()
+{
+	jq -r --arg login "${UNBLOCK_LOGIN}" --arg item "${ITEM}" '
+		[.[] | select((.user.login // "") == $login)
+			| . as $c
+			| ((.body // "") | split("\n") | map(select(test("\\S"))) | last // "" | rtrimstr("\r")) as $last
+			| ($last | capture("^<!-- ai:unblock-wait:v1 item=(?<item>[0-9]+) escalated=operator_step ref=(?<ref>[A-Z][A-Z0-9_]{2,63}) -->$")?) as $m
+			| select($m.item == $item)
+			| {id: $c.id, ref: $m.ref, at: ($c.created_at // "")}]
+		| sort_by(.at) | last // empty
+		| "\(.id) \(.ref) \(.at)"
+	' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null || true
+}
+
 # Q129: run the check-triage resolution gate (#7095) that clarify runs. It
 # closes an ai:check-triage issue with evidence once its pull request merged
 # and the failure is verified fixed on the default branch. Returns 0 when this
@@ -1895,6 +1933,52 @@ unblock_main()
 				if unblock_wait_enabled; then
 					step_placeholder="$(unblock_operator_step_placeholder "${wait_at}")"
 				fi
+				# Issue #9484: hold only on a step that sets a repository variable or
+				# secret named exactly like the placeholder (the one condition the
+				# judge can check). Any other step, or a verdict comment without the
+				# kind line, is escalated to a person once instead of held forever.
+				if [ -n "${step_placeholder}" ]; then
+					local step_record step_kind step_instructions step_escalation_reason step_escalation_marker step_escalation_steps
+					step_record="$(unblock_operator_step_record "${wait_at}")"
+					[ -n "${step_record}" ] || step_record='{}'
+					step_kind="$(jq -r --arg n "${step_placeholder}" 'if .name == $n then (.kind // "") else "" end' <<< "${step_record}" 2>/dev/null || true)"
+					if [ "${step_kind}" != "variable_or_secret" ]; then
+						step_instructions="$(jq -r --arg n "${step_placeholder}" 'if .name == $n then (.instructions // "") else "" end' <<< "${step_record}" 2>/dev/null || true)"
+						step_escalation_reason="not_a_variable_step"
+						[ -z "${step_kind}" ] && step_escalation_reason="no_step_kind"
+						step_escalation_marker="<!-- ai:unblock-wait:v1 item=${ITEM} escalated=operator_step ref=${step_placeholder} -->"
+						if [ -n "${step_instructions}" ]; then
+							step_escalation_steps="The recorded operator step:
+
+> ${step_instructions}"
+						else
+							step_escalation_steps="The steps are in this repository's open \`ai:operator-step\` entry \`unblock-${ITEM}\`."
+						fi
+						# Posted once per fix-up: an escalation already posted for it (the
+						# wait marker update failed afterwards) is not posted again.
+						if ! jq -e --arg login "${UNBLOCK_LOGIN}" --arg marker "${step_escalation_marker}" --arg at "${wait_at}" '
+							any(.[]; ((.user.login // "") == $login) and ((.created_at // "") >= $at)
+								and (((.body // "") | split("\n") | map(select(test("\\S")) | rtrimstr("\r")) | last // "") == $marker))
+						' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; then
+							if ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="Fix-up #${wait_fixup} ${fixup_done_text}. Its operator step \`${step_placeholder}\` is not a repository variable or secret the unblock judge can check, so the judge cannot tell when it is done and will not resume this item by itself.
+
+${step_escalation_steps}
+
+Do the step, then post this item's resume command.
+
+${step_escalation_marker}" >/dev/null 2>&1; then
+								# The fix-up wait stays open, so the next run tries again.
+								unblock_log "item=${ITEM} fixup=${wait_fixup} op=escalate escalated=operator_step ref=${step_placeholder} outcome=skip reason=escalation_record_failed"
+								return 0
+							fi
+						fi
+						unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} ${fixup_done_text}; the unblock judge escalated operator step \`${step_placeholder}\` to a person instead of holding this item.
+
+<!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
+						unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${wait_fixup} op=escalate escalated=operator_step ref=${step_placeholder} outcome=escalated reason=${step_escalation_reason}"
+						return 0
+					fi
+				fi
 				# A hold already posted for this fix-up (its wait marker update failed
 				# afterwards) is not posted again: holds count toward MAX_HOLDS_PER_ITEM.
 				local prior_hold prior_hold_kind prior_hold_ref prior_hold_at
@@ -2061,6 +2145,31 @@ unblock_main()
 				|| unblock_log "item=${ITEM} op=hold hold=${hold_kind} ref=${hold_ref} outcome=skip reason=hold_refresh_failed"
 			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=hold hold=${hold_kind} ref=${hold_ref} outcome=expired reason=${hold_reason}"
 			last_activity="${now}"
+		fi
+	fi
+
+	# Issue #9484: an operator step escalated to a person parks the item until a
+	# trusted slash command (the item's resume command) follows the escalation.
+	# The comment is refreshed so the scan does not re-dispatch every tick.
+	local escalation="" escalation_id escalation_ref escalation_at
+	[ "${untrusted_project_pr}" = "true" ] || escalation="$(unblock_latest_operator_escalation)"
+	if [ -n "${escalation}" ]; then
+		read -r escalation_id escalation_ref escalation_at <<< "${escalation}"
+		if ! unblock_hold_resumed_since "${escalation_at}"; then
+			if [[ "${escalation_id}" =~ ^[0-9]+$ ]]; then
+				jq -r --argjson id "${escalation_id}" '[.[] | select(.id == $id) | (.body // "")] | first // ""' \
+					"${RUNTIME_DIR}/item_comments.json" 2>/dev/null \
+					| grep -v -e '^<!-- ai:unblock-wait:v1 ' -e '^Still waiting for an operator; last checked ' \
+					> "${RUNTIME_DIR}/escalation_body.txt" || true
+				# Trailing blank lines are dropped so repeated refreshes do not grow the body.
+				unblock_patch_comment "${escalation_id}" "$(cat "${RUNTIME_DIR}/escalation_body.txt")
+Still waiting for an operator; last checked ${now}.
+
+<!-- ai:unblock-wait:v1 item=${ITEM} escalated=operator_step ref=${escalation_ref} -->" \
+					|| unblock_log "item=${ITEM} op=escalation_refresh outcome=failed"
+			fi
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=escalate ref=${escalation_ref} outcome=skip reason=operator_escalated"
+			return 0
 		fi
 	fi
 
@@ -2390,6 +2499,8 @@ ${invalid_marker}" >/dev/null 2>&1 || invalid_record_rc=$?
 		+ (if (.rejection_run // "") != "" then "Bound to guard rejection from run " + .rejection_run + ".\n\n" else "" end)
 		+ (if (.placeholder // "") == "" then ""
 			elif (.placeholder | endswith("_UNSET_OPERATOR_STEP")) then "Stays off behind `" + .placeholder + "` until the operator step is done.\n\n"
+				+ "Operator step kind: `" + ((.operator_step_kind // "") | if . == "" then "other" else . end) + "`.\n\n"
+				+ (if (.operator_instructions // "") != "" then "Operator instructions: " + .operator_instructions + "\n\n" else "" end)
 			else "Ships on by default; `" + .placeholder + "=false` turns it off.\n\n" end)
 		+ $marker
 	' "${RUNTIME_DIR}/verdict.json")"

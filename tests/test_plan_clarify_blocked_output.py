@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import tempfile
@@ -787,6 +788,92 @@ def test_clarify_attempt_failure_line_edge_cases() -> None:
 		assert len(failed) == 3, (mode, result.stdout)
 		for line in failed:
 			assert check(line), (mode, line)
+
+
+# Issue #9120: a blocked ai:check-triage issue alerts at WARNING, not CRITICAL,
+# and its comment says the unblock judge re-checks the failing check. The first
+# line and the Reason: line stay byte-identical (scripts/unblock_judge.sh reads both).
+CHECK_TRIAGE_BLOCKED_PARAGRAPH = (
+	"This is a CI-failure triage issue. The unblock judge re-checks the failing check and closes this "
+	"issue with evidence once it passes on the pull request's newer head or on the default branch; "
+	"no reply is needed unless the check keeps failing."
+)
+
+
+def _run_blocked_planning_step(labels: list[str] | None) -> tuple[subprocess.CompletedProcess[str], str, list[list[str]]]:
+	(step,) = [step for step in _steps("plan.yml") if step.get("name") == "Handle blocked planning output"]
+	script = step["run"]
+	for expression, value in (
+		("${{ github.repository }}", "owner/repo"),
+		("${{ github.server_url }}", "https://github.com"),
+		("${{ github.run_id }}", "1"),
+	):
+		script = script.replace(expression, value)
+	assert "${{" not in script, script
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		(tmp / "scripts").mkdir()
+		(tmp / "bin").mkdir()
+		(tmp / "scripts" / "gh_helpers.sh").write_text('gh_retry() { "$@"; }\n', encoding="utf-8")
+		(tmp / "scripts" / "label_helpers.sh").write_text("ensure_label_exists() { :; }\n", encoding="utf-8")
+		(tmp / "scripts" / "tg_helpers.sh").write_text(
+			'tg_send_tracked() { printf \'%s\\t%s\\t%s\\n\' "$1" "$3" "${2//$\'\\n\'/ }" >> "${TG_LOG}"; }\n',
+			encoding="utf-8",
+		)
+		gh = tmp / "bin" / "gh"
+		gh.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+		gh.chmod(0o755)
+		env = {
+			"PATH": f"{tmp / 'bin'}:/usr/bin:/bin",
+			"ISSUE_NUMBER": "746",
+			"ISSUE_URL": "https://github.com/owner/repo/issues/746",
+			"BLOCKED_REASON": "work is already on the planning ref; nothing to implement",
+			"PLAN_COMMENT_FILE": str(tmp / "comment.md"),
+			"TG_LOG": str(tmp / "tg.log"),
+		}
+		if labels is not None:
+			meta = tmp / "issue_meta.json"
+			meta.write_text(json.dumps({"number": 746, "labels": [{"name": name} for name in labels]}), encoding="utf-8")
+			env["ISSUE_META_FILE"] = str(meta)
+		else:
+			env["ISSUE_META_FILE"] = str(tmp / "missing_issue_meta.json")
+		result = subprocess.run(["bash", "-c", script], cwd=tmp, env=env, capture_output=True, text=True, timeout=60, check=False)
+		comment = (tmp / "comment.md").read_text(encoding="utf-8") if (tmp / "comment.md").exists() else ""
+		sends = [line.split("\t") for line in (_read(tmp / "tg.log").splitlines() if (tmp / "tg.log").exists() else [])]
+	return result, comment, sends
+
+
+def test_blocked_check_triage_issue_alerts_at_warning_with_the_judge_paragraph() -> None:
+	result, comment, sends = _run_blocked_planning_step(["ai:check-triage", "ai:planning"])
+	assert result.returncode == 0, result.stdout + result.stderr
+	lines = comment.splitlines()
+	assert lines[0] == "Planning blocked: human input required."
+	assert lines[2] == "Reason: work is already on the planning ref; nothing to implement"
+	assert lines[3] == ""
+	assert lines[4] == CHECK_TRIAGE_BLOCKED_PARAGRAPH
+	assert "Provide the required input, then reply with /answer." in comment
+	assert len(sends) == 1
+	assert sends[0][:2] == ["746", "WARNING"]
+	assert sends[0][2].startswith(
+		"Planning blocked for issue #746 (CI triage; the unblock judge will re-check): work is already on the planning ref"
+	)
+
+
+def test_blocked_issue_without_check_triage_label_keeps_critical_and_text() -> None:
+	for labels in (["ai:planning"], None):
+		result, comment, sends = _run_blocked_planning_step(labels)
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert comment == (
+			"Planning blocked: human input required.\n\n"
+			"Reason: work is already on the planning ref; nothing to implement\n\n"
+			"Auto-answer has been paused to avoid unsatisfiable clarification loops.\n"
+			"Provide the required input, then reply with /answer.\n\n"
+			"Run: https://github.com/owner/repo/actions/runs/1\n"
+		), labels
+		assert CHECK_TRIAGE_BLOCKED_PARAGRAPH not in comment
+		assert len(sends) == 1
+		assert sends[0][:2] == ["746", "CRITICAL"], labels
+		assert sends[0][2].startswith("Planning blocked for issue #746: work is already"), labels
 
 
 def main() -> int:

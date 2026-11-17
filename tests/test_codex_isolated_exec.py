@@ -226,7 +226,10 @@ def test_missing_docker_fails_closed_and_never_runs_host_codex(sandbox, tmp_path
 			continue
 		for entry in Path(system_dir).iterdir():
 			target = no_docker / entry.name
-			if entry.name != "docker" and not target.exists():
+			# lexists, not exists: a dangling system symlink (ubuntu-26.04 ships
+			# /usr/bin/grub-ntldr-img as one) makes exists() false for the link
+			# already made, and /bin -> /usr/bin repeats every entry.
+			if entry.name != "docker" and not os.path.lexists(target):
 				target.symlink_to(entry)
 	path = f"{sandbox['bin']}:{no_docker}"
 	proc = run_helper(sandbox, "run", "--mode", "read-only", *CODEX_ARGS, path=path)
