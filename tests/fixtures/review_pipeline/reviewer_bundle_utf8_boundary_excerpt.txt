@@ -1,0 +1,9 @@
+FILE_PATH: /tmp/review_excerpt_utf8.txt
+BYTES: 100
+SHA256: utf8boundary
+CONTENT_START
+File: src/utf8_boundary.py
+Line or code reference: 7
+Problem: This excerpt is engineered so xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx—Z and trailing text after the cut.
+ISSUE_CONFIDENCE: 5/5
+CONTENT_END

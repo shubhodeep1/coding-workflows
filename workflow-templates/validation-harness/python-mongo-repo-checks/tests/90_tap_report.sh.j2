@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+_default_tap_plan={{ slots.get('tap_plan', 5) | shell_quote }}
+echo "1..${_default_tap_plan}"
+current=1
+while [ "${current}" -le "${_default_tap_plan}" ]; do
+	echo "ok ${current} - tap summary slot ${current}"
+	current=$((current + 1))
+done
+
+echo "# tap_report family=python-mongo-repo-checks stable_summary=1"

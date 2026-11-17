@@ -1,0 +1,15 @@
+{
+  "name": "issue_json_invalid",
+  "env": {
+    "CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED": "true"
+  },
+  "issues": {
+    "101": {
+      "raw_response": "[]"
+    }
+  },
+  "branch_exists": {},
+  "expected_stdout": "",
+  "expected_exit_code": 3,
+  "expected_error_reason": "issue_json_invalid"
+}

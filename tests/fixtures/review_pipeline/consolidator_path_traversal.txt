@@ -1,0 +1,12 @@
+=== ISSUE 004 ===
+FILE: ../secrets.txt
+LINES: 1
+LENS: SECURITY & INPUT VALIDATION
+SEVERITY: blocker
+FLAGGED_BY: reviewer_alpha
+CLASSIFICATION: must-fix
+EVIDENCE:
+  reviewer_alpha> "path traversal"
+SUGGESTED_APPROACH:
+  reject traversal
+=== END ISSUE 004 ===

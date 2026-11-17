@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/validation_history.v1.json",
+  "title": "ValidationHistoryV1",
+  "description": "Deterministic validation outcome history for one repository / integration SHA pair.",
+  "$comment": "Schema evolution rule: never repurpose existing fields in-place. Add additive fields when possible; otherwise publish validation_history.v2.json and update readers/writers.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "repository",
+    "integration_sha",
+    "entries"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "repository": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "integration_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{7,64}$"
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "outcome",
+          "raw_status",
+          "raw_conclusion",
+          "run_id",
+          "run_attempt",
+          "run_url",
+          "recorded_at",
+          "cycle",
+          "context",
+          "source"
+        ],
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "raw_status": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "raw_conclusion": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "run_id": {
+            "type": ["integer", "null"],
+            "minimum": 1
+          },
+          "run_attempt": {
+            "type": ["integer", "null"],
+            "minimum": 1
+          },
+          "run_url": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "cycle": {
+            "type": ["integer", "null"],
+            "minimum": 1
+          },
+          "context": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "source": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      }
+    }
+  }
+}

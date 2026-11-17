@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/operator_bypass_audit.v1.json",
+  "title": "OperatorBypassAuditV1",
+  "description": "Deterministic operator bypass audit log for one repository / tracking issue / integration SHA tuple.",
+  "$comment": "Schema evolution rule: never repurpose existing fields in-place. Add additive fields when possible; otherwise publish operator_bypass_audit.v2.json and update readers/writers.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "repository",
+    "tracking_issue_number",
+    "integration_sha",
+    "entries"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "repository": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "tracking_issue_number": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "integration_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{7,64}$"
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "actor",
+          "timestamp_utc",
+          "bypass_kind",
+          "reason",
+          "validation_context",
+          "source_comment_id",
+          "source_comment_url"
+        ],
+        "properties": {
+          "actor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "timestamp_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "bypass_kind": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "reason": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "validation_context": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "source_comment_id": {
+            "type": ["integer", "null"],
+            "minimum": 1
+          },
+          "source_comment_url": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        }
+      }
+    }
+  }
+}

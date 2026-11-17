@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/validation_discovery.v1.json",
+  "title": "ValidationDiscoveryV1",
+  "description": "Deterministic codex-driven .ai/validate.yml discovery outcome history for one consumer repository.",
+  "$comment": "Schema evolution rule: never repurpose existing fields in-place. Add additive fields when possible; otherwise publish validation_discovery.v2.json and update readers/writers.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "repository",
+    "entries"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "repository": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "outcome",
+          "recorded_at",
+          "consumer_head_sha",
+          "consumer_default_branch",
+          "discovered_type",
+          "committed_type",
+          "pr_url",
+          "pr_branch",
+          "codex_attempts_used",
+          "failure_reason"
+        ],
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "success_seeded",
+              "success_agree",
+              "success_disagree",
+              "dry_run",
+              "failed",
+              "push_denied"
+            ]
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "consumer_head_sha": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9a-fA-F]{7,64}$"
+          },
+          "consumer_default_branch": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "discovered_type": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "committed_type": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "pr_url": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "pr_branch": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "codex_attempts_used": {
+            "type": ["integer", "null"],
+            "minimum": 1
+          },
+          "failure_reason": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 512
+          }
+        }
+      }
+    }
+  }
+}
