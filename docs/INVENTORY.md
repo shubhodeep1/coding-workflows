@@ -53,7 +53,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/cancel_on_pr_close.yml` — GitHub Actions workflow: AI Cancel Runs on PR Close.
 - `.github/workflows/check_failure_triage.yml` — GitHub Actions workflow: AI Check Failure Triage (Reusable).
 - `.github/workflows/ci.yml` — GitHub Actions workflow: CI.
-- `.github/workflows/ci_pr_quick.yml` — GitHub Actions workflow: CI quick; per-push static checks (`quick / <job>` check-runs) for every PR, while the full `ci.yml` suite runs once per PR head at the end of review (cut-ci-runner-time Phase 4).
+- `.github/workflows/ci_pr_quick.yml` — GitHub Actions workflow: CI quick; per-push static checks (`quick / <job>` check-runs) for every PR, while the full `ci.yml` suite runs once per PR head at the end of review through ci.yml's workflow_dispatch final run (cut-ci-runner-time Phase 4).
 - `.github/workflows/clarify.yml` — GitHub Actions workflow: AI Clarify (Reusable).
 - `.github/workflows/claude-engine-smoke.yml` — GitHub Actions workflow: Claude engine smoke (dispatch-only self-test of the Claude engine plumbing).
 - `.github/workflows/comprehensive-test-and-release.yml` — GitHub Actions workflow: Workflow Log Analysis And Improvement.
@@ -146,7 +146,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/check_workflow_script_refs.py` — Verify every script referenced by a workflow file exists in scripts/.
 - `scripts/ci_budget_watch.py` — CI early warning on pushes to main: opens one `ai:ci-budget` issue when a workflow file nears the 480,000-byte guard or a CI job nears its timeout.
 - `scripts/ci_cancelled_rerun.py` — Scheduled sweep helper: re-run failed jobs once for cancelled, startup-failed, or runner-shutdown-failed CI on a current PR head.
-- `scripts/ci_docs_only_paths.sh` — Docs-only final CI path list: `classify` decides whether a PR's changed files are all docs-only, so the final `ci.yml` dispatch passes `docs_only=true`; `verify` re-checks the merge tree in the `lint` job (Refs #9528).
+- `scripts/ci_docs_only_paths.sh` — Docs-only final CI path list: `classify` prints `docs_only` or `code <reason>` for NUL-separated paths, so the final `ci.yml` dispatch passes `docs_only=true` when a PR's changed files are all docs-only; `verify` re-checks a docs-only run's merge tree in the `lint` job (log prefix `CI_DOCS_ONLY_GATE`, Refs #9528).
 - `scripts/clarify_base_image_preseed.sh` — Seed the clarify sandbox's Docker Official Image base from a mirror before the build (CLARIFY_BASE_IMAGE_PRESEED log prefix).
 - `scripts/clarify_data_provision_guard.py` — Post-processing guard for orchestrate_clarify_respond.
 - `scripts/clarify_github_facts.py` — Read referenced GitHub issue, PR, branch and run state for the isolated clarify-respond worker.

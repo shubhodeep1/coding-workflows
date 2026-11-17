@@ -67,14 +67,14 @@ def _payload(record: dict | None = None, **extra) -> dict:
 	return {"action": "alert-inbox", "client_payload": payload}
 
 
-def _store(tmp_path: Path, event: dict | None, queues: dict | None = None, **overrides):
+def _store(tmp_path: Path, event: dict | None, queues: dict | None = None, script: Path | None = None, **overrides):
 	env, state = _env(tmp_path, None, GH_TOKEN=None, **overrides)
 	(state / "queues.json").write_text(json.dumps(queues or {}), encoding="utf-8")
 	event_path = tmp_path / "event.json"
 	if event is not None:
 		event_path.write_text(json.dumps(event), encoding="utf-8")
 	env.update({"GITHUB_TOKEN": GH_TOKEN_VALUE, "GITHUB_EVENT_PATH": str(event_path)})
-	result = subprocess.run(["bash", "scripts/alert_inbox_store.sh"], cwd=REPO_ROOT, env=env,
+	result = subprocess.run(["bash", str(script or REPO_ROOT / "scripts" / "alert_inbox_store.sh")], cwd=REPO_ROOT, env=env,
 		capture_output=True, text=True, check=False, timeout=120)
 	calls = _calls(state)
 	assert GH_TOKEN_VALUE not in result.stdout + result.stderr
@@ -109,8 +109,21 @@ def test_valid_record_is_stored_at_the_expected_path(tmp_path: Path) -> None:
 
 
 def test_consumer_repo_is_allowed(tmp_path: Path) -> None:
-	consumer = json.loads((REPO_ROOT / ".github" / "ai" / "consumer_repos.json").read_text(encoding="utf-8"))[0]
-	result, calls = _store(tmp_path, _payload(_record(source_repo=consumer)))
+	# The script reads ../.github/ai/consumer_repos.json relative to its own
+	# directory. Run a copy against a fixture allow-list so the test does not
+	# depend on the registry file being present in this checkout; use the real
+	# registry's first entry when it exists.
+	registry = REPO_ROOT / ".github" / "ai" / "consumer_repos.json"
+	consumer = "example-org/consumer-repo"
+	if registry.is_file():
+		consumer = json.loads(registry.read_text(encoding="utf-8"))[0]
+	sandbox = tmp_path / "checkout"
+	(sandbox / "scripts").mkdir(parents=True)
+	(sandbox / ".github" / "ai").mkdir(parents=True)
+	(sandbox / ".github" / "ai" / "consumer_repos.json").write_text(json.dumps([consumer]), encoding="utf-8")
+	script = sandbox / "scripts" / "alert_inbox_store.sh"
+	script.write_text((REPO_ROOT / "scripts" / "alert_inbox_store.sh").read_text(encoding="utf-8"), encoding="utf-8")
+	result, calls = _store(tmp_path, _payload(_record(source_repo=consumer)), script=script)
 	assert result.returncode == 0, result.stderr
 	slug = consumer.replace("/", "-")
 	assert re.search(rf"/\d+-{re.escape(slug)}-777-01234567\.json$", calls[0]["url"])

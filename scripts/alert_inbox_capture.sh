@@ -168,6 +168,12 @@ alert_inbox_capture()
 			return 1
 			;;
 	esac
+	# The intake only accepts run_url under https://github.com; fail here so
+	# route mode falls back to Telegram instead of losing the alert.
+	if [ "${server}" != "https://github.com" ]; then
+		_alert_inbox_log failed payload_build
+		return 1
+	fi
 	if ! command -v jq >/dev/null 2>&1; then
 		_alert_inbox_log failed payload_build
 		return 1
