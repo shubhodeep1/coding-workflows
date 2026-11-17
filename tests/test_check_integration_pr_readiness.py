@@ -509,6 +509,34 @@ def test_post_commit_status_logs_subprocess_failures():
 		mod.subprocess.run = original_run
 
 
+def test_workflow_skips_label_events_for_every_label_but_the_override():
+	"""Run-volume plan item 10: a label change that the script never reads
+	skips the job (no runner); the override label still re-runs it."""
+	import re
+
+	import yaml
+
+	mod = _import()
+	workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "integration-pr-readiness.yml").read_text(encoding="utf-8"))
+	types = workflow["on"]["pull_request"]["types"]
+	assert "labeled" in types and "unlabeled" in types
+	condition = workflow["jobs"]["readiness"]["if"]
+	assert condition == (
+		"${{ (github.event.action != 'labeled' && github.event.action != 'unlabeled')"
+		" || github.event.label.name == 'ai:override-incomplete-merge' }}"
+	)
+	# The label in the expression is the one the script honours.
+	assert re.search(r"label\.name == '([^']+)'", condition).group(1) == mod.OVERRIDE_LABEL
+
+	def runs(action: str, label: str | None = None) -> bool:
+		return (action not in ("labeled", "unlabeled")) or label == mod.OVERRIDE_LABEL
+
+	for action in ("opened", "synchronize", "reopened", "ready_for_review"):
+		assert runs(action)
+	assert runs("labeled", mod.OVERRIDE_LABEL) and runs("unlabeled", mod.OVERRIDE_LABEL)
+	assert not runs("labeled", "ai:review-blocked") and not runs("unlabeled", "ai:in-progress")
+
+
 def main() -> int:
 	try:
 		import sys as _sys
