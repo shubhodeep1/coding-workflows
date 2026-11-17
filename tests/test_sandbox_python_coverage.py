@@ -77,7 +77,8 @@ SANDBOX_PYTHON_ENTRY_POINTS: dict[str, dict] = {
 		"tests": _RELAY_TESTS,
 		"families": ["clarify", "review"],
 	},
-	# ChatGPT reviewer relay bridge: review sandbox GPT slot (Refs #8969).
+	# ChatGPT account reviewer slot's relay bridge (review engine chatgpt,
+	# Refs #8969): its own container path, since /relay.py is the Claude relay.
 	"/chatgpt_relay.py": {
 		"host": "scripts/chatgpt_codex_relay.py",
 		"tests": ["tests/test_review_chatgpt_reviewer_slot.py"],

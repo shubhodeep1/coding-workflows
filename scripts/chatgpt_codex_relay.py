@@ -111,8 +111,8 @@ def read_credentials(codex_home):
 	fd = os.open(os.path.join(codex_home, "auth.json"), os.O_RDONLY | os.O_NOFOLLOW)
 	with os.fdopen(fd, "r", encoding="utf-8") as handle:
 		info = os.fstat(handle.fileno())
-		if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077:
-			raise ValueError("auth.json must be a regular 0600 file")
+		if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid():
+			raise ValueError("auth.json must be a regular 0600 file owned by this user")
 		auth = json.loads(handle.read(MAX_AUTH_FILE + 1)[:MAX_AUTH_FILE])
 	tokens = auth.get("tokens") if isinstance(auth, dict) else None
 	if not isinstance(tokens, dict):
@@ -209,15 +209,15 @@ class Relay(http.server.BaseHTTPRequestHandler):
 		headers = forwarded_request_headers(self.headers)
 		if (
 			self.path != UPSTREAM_PATH
-			or self.headers.get("Transfer-Encoding")
-			or self.headers.get("Content-Encoding")
+			or "Transfer-Encoding" in self.headers
+			or "Content-Encoding" in self.headers
 			or (
 				self.headers.get("Authorization") != "Bearer " + PLACEHOLDER
 				if mode == "bridge"
 				else self.headers.get("Authorization") is not None
 			)
 			or self.headers.get("X-Api-Key") is not None
-			or self.headers.get("Proxy-Authorization")
+			or "Proxy-Authorization" in self.headers
 			or self.headers.get("Host", "").split(":")[0] not in ("127.0.0.1", "localhost")
 			or self.headers.get("Content-Type", "").split(";")[0].strip().lower() != "application/json"
 			or not declared
@@ -314,7 +314,12 @@ def main():
 			token, account = read_credentials(sys.argv[3])
 		except (OSError, ValueError):
 			raise SystemExit(2) from None
-		server = UnixHTTPServer(sys.argv[2], Relay)
+		# Never create the socket group/other-accessible, even before the chmod below.
+		previous_umask = os.umask(0o077)
+		try:
+			server = UnixHTTPServer(sys.argv[2], Relay)
+		finally:
+			os.umask(previous_umask)
 		server.mode = "broker"
 		server.token = token
 		server.account = account
