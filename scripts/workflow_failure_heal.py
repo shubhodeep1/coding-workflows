@@ -11689,7 +11689,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 	p = sub.add_parser("reviewer-failure-evidence", help="Summarise a failed reviewer step (slot / summariser exit codes, self-named script errors) from its logs")
 	p.add_argument("--log-file", action="append", default=[], help="reviewer slot or summariser log; repeatable, unreadable files are skipped")
-	p.add_argument("--stage-stderr-file", action="append", default=[], help="the reviewer step's own stderr (issue #9533): the only source of the kept plain ERROR line; repeatable, unreadable files are skipped")
+	p.add_argument("--stage-stderr-file", action="append", default=[], help="the reviewer step's own stderr (issue #9533): the only source of the kept bash diagnostics and plain ERROR line (non-indented lines only); repeatable, unreadable files are skipped")
 	p.set_defaults(func=_cmd_reviewer_failure_evidence)
 
 	p = sub.add_parser(
