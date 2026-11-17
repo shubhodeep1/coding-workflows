@@ -117,9 +117,13 @@ def _marker(head_sha: str, *, resume_state: str, resume_round: int, should_conti
 	)
 
 
-def _run_parser(comments: list[dict[str, object]], head_sha: str) -> dict[str, str]:
+def _run_parser(comments: list[dict[str, object]], head_sha: str, final_ci_comments: list[dict[str, object]] | None = None) -> dict[str, str]:
 	env = dict(os.environ)
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	env.pop("FINAL_CI_FAILED_MARKER_COMMENTS_JSON", None)
+	if final_ci_comments is not None:
+		env["FINAL_CI_FAILED_MARKER_COMMENTS_JSON"] = json.dumps(final_ci_comments)
+		env["GATE_PR_NUMBER"] = "4077"
 	env["PARTIAL_MARKER_COMMENTS_JSON"] = json.dumps([{"author_login": MARKER_AUTHOR_LOGIN, **comment} for comment in comments])
 	env["GATE_HEAD_SHA"] = head_sha
 	env["GATE_BASE_REF"] = "main"
@@ -357,3 +361,58 @@ def _collect_clean_same_head_cases() -> None:
 
 
 _collect_clean_same_head_cases()
+
+
+# ---------------------------------------------------------------------------
+# Final-CI hand-back re-arms one review (final-ci-failure-ci-fix plan, Phase 1)
+# ---------------------------------------------------------------------------
+
+TERMINAL_TIME = "2026-09-12T15:55:33Z"
+
+
+def _terminal_comments() -> list[dict[str, object]]:
+	return [{"id": 2, "created_at": TERMINAL_TIME, "body": _marker(HEAD, resume_state="no_progress", resume_round=3, should_continue=False)}]
+
+
+def _final_ci(created_at: str, *, author: str = "github-actions[bot]", author_type: str = "Bot", head: str = HEAD, pr: str = "4077") -> dict[str, object]:
+	return {"id": 9, "author_login": author, "author_type": author_type, "created_at": created_at,
+		"body": f"**The final CI run failed.**\n\n<!-- ai:final-ci-failed:v1 pr={pr} head={head} -->"}
+
+
+def test_parser_final_ci_failed_marker_after_terminal_marker_rearms() -> None:
+	for created_at in (TERMINAL_TIME, "2026-09-12T16:30:00Z"):
+		for author, author_type in (("github-actions[bot]", "Bot"), (MARKER_AUTHOR_LOGIN, "User")):
+			decision = _run_parser(_terminal_comments(), HEAD, [_final_ci(created_at, author=author, author_type=author_type)])
+			assert decision["terminal"] == "false" and decision["final_ci_failed"] == "true", (created_at, author)
+
+
+def test_parser_final_ci_failed_marker_that_cannot_rearm() -> None:
+	for comment in (
+		_final_ci("2026-09-12T15:00:00Z"),
+		_final_ci("2026-09-12T16:30:00Z", author="mallory"),
+		_final_ci("2026-09-12T16:30:00Z", author_type="User"),
+		_final_ci("2026-09-12T16:30:00Z", head=OTHER_HEAD),
+		_final_ci("2026-09-12T16:30:00Z", pr="1"),
+	):
+		decision = _run_parser(_terminal_comments(), HEAD, [comment])
+		assert decision["terminal"] == "true" and decision["final_ci_failed"] == "false", comment
+	assert _run_parser(_terminal_comments(), HEAD)["final_ci_failed"] == "false"
+
+
+def test_gate_logs_the_final_ci_failed_reason() -> None:
+	gate = _gate_block()
+	assert 'FINAL_CI_FAILED_MARKER_COMMENTS_JSON="${terminal_final_ci_comments_json}" GATE_PR_NUMBER="${PR_NUMBER}"' in gate
+	assert 'terminal_no_skip_reason=" reason=final_ci_failed"' in gate
+	assert "marker_author_login=${terminal_marker_author_login}${terminal_no_skip_reason}\"" in gate
+
+
+def test_parser_final_ci_re_arm_stops_after_a_later_pipeline_failure_comment() -> None:
+	final = _final_ci("2026-09-12T16:30:00Z")
+	later_failure = {"id": 11, "author_login": MARKER_AUTHOR_LOGIN, "author_type": "User", "created_at": "2026-09-12T17:00:00Z",
+		"body": "**AI review/autofix failed**\n<!-- review-autofix-failure:v1 head=x -->"}
+	decision = _run_parser(_terminal_comments(), HEAD, [final, later_failure])
+	assert decision["terminal"] == "true" and decision["final_ci_failed"] == "false"
+	# An older failure comment, or one from another author, does not stop it.
+	for other in (dict(later_failure, created_at="2026-09-12T16:00:00Z"), dict(later_failure, author_login="mallory")):
+		decision = _run_parser(_terminal_comments(), HEAD, [final, other])
+		assert decision["terminal"] == "false" and decision["final_ci_failed"] == "true", other
