@@ -349,6 +349,7 @@ def test_route_mode_falls_back_to_telegram_when_capture_fails(tmp_path: Path, di
 	({"GH_TOKEN": None}, "no_token"),
 	({"GITHUB_RUN_ID": None}, "no_run_context"),
 	({"GITHUB_REPOSITORY": "bad repo"}, "no_run_context"),
+	({"GITHUB_SERVER_URL": "https://ghe.example"}, "payload_build"),
 ])
 def test_route_mode_without_context_sends_to_telegram(tmp_path: Path, override: dict, reason: str) -> None:
 	env, state = _env(tmp_path, "route", **override)
