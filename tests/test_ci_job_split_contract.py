@@ -166,10 +166,15 @@ class FinalCiFailedJobTest(unittest.TestCase):
 			with self.subTest(job=job_id):
 				if job_id == "static-checks":
 					self.assertNotIn("if", jobs[job_id])
+				elif job_id == "tests-sync-quick":
+					# Runs only in a sync-quick final-CI dispatch, never in quick
+					# mode; tests/test_ci_sync_quick.py pins that gate.
+					self.assertEqual(jobs[job_id]["if"], "inputs.mode != 'quick' && github.event_name == 'workflow_dispatch' && inputs.sync_quick == 'true'")
 				else:
-					# Docs-only final CI (run-volume plan item 4) also skips them;
-					# tests/test_ci_docs_only_final_ci.py pins that gate.
-					self.assertEqual(jobs[job_id]["if"], "inputs.mode != 'quick' && inputs.docs_only != 'true'")
+					# Docs-only and sync-quick final CI also skip them;
+					# tests/test_ci_docs_only_final_ci.py and
+					# tests/test_ci_sync_quick.py pin those gates.
+					self.assertEqual(jobs[job_id]["if"], "inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'")
 
 
 class SystemPythonJobTest(unittest.TestCase):

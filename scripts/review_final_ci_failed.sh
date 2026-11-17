@@ -27,7 +27,15 @@
 # reads the PR's comments), one comment POST (up to
 # 3 attempts) and one workflow dispatch (a failed dispatch tries the next
 # review workflow name). Never fails the job.
-# Logs: REVIEW_FINAL_CI_FAILED pr=<n> head=<sha> outcome=redispatched|already_reported|superseded|disabled|invalid_input|read_failed|marker_failed|dispatch_failed [workflow=<file>] [current=<sha>]
+# A failed sync-quick run (FINAL_CI_FAILED_SYNC_QUICK=true, the run's
+# `sync_quick` input; scripts/ci_sync_quick.sh) is not sent back to review:
+# it skipped the full suite on the dispatcher's word, so its failure may say
+# nothing about the PR. It dispatches the head's full final run instead
+# (FINAL_CI_FAILED_CI_WORKFLOW, default ci.yml), using the head ref from the
+# same `GET pulls/<n>` read, and posts no marker. That full run is named
+# `CI [pr:<n>]` without the suffix, so if it fails too the PR goes back to
+# review as usual and the hand-off cannot loop.
+# Logs: REVIEW_FINAL_CI_FAILED pr=<n> head=<sha> outcome=redispatched|already_reported|superseded|disabled|invalid_input|read_failed|marker_failed|dispatch_failed|full_suite_dispatched|full_suite_dispatch_failed [workflow=<file>] [current=<sha>]
 
 set -uo pipefail
 
@@ -65,8 +73,9 @@ review_final_ci_failed_main()
 
 	# The PR must still be open at the head this run tested; a newer head gets
 	# its own final run, so an old head is never sent back to review.
-	local current_head
-	current_head="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq 'if .state == "open" then (.head.sha // "") else "closed" end' 2>/dev/null || echo "")"
+	local current_head="" current_pull final_ci_failed_head_ref="" final_ci_failed_head_repo="" final_ci_failed_wf
+	current_pull="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq 'if .state == "open" then "\(.head.sha // "") \(.head.ref // "-") \(.head.repo.full_name // "-")" else "closed - -" end' 2>/dev/null || echo "")"
+	read -r current_head final_ci_failed_head_ref final_ci_failed_head_repo <<<"${current_pull}"
 	if [ -z "${current_head}" ]; then
 		echo "::warning::Could not read PR #${PR_NUMBER}; not sending it back to review this run."
 		review_final_ci_failed_log read_failed
@@ -74,6 +83,20 @@ review_final_ci_failed_main()
 	fi
 	if [ "${current_head}" != "${PR_HEAD_SHA}" ]; then
 		review_final_ci_failed_log superseded "current=${current_head}"
+		return 0
+	fi
+
+	if [ "${FINAL_CI_FAILED_SYNC_QUICK:-false}" = "true" ]; then
+		final_ci_failed_wf="${FINAL_CI_FAILED_CI_WORKFLOW:-ci.yml}"
+		if [[ "${final_ci_failed_wf}" =~ ^[A-Za-z0-9._-]+\.ya?ml$ ]] \
+			&& [ "${final_ci_failed_head_repo}" = "${REPOSITORY}" ] \
+			&& [[ "${final_ci_failed_head_ref}" =~ ^[A-Za-z0-9._/-]+$ ]] && [[ "${final_ci_failed_head_ref}" != *..* ]] && [[ "${final_ci_failed_head_ref}" != -* ]] \
+			&& gh workflow run "${final_ci_failed_wf}" --repo "${REPOSITORY}" --ref "${final_ci_failed_head_ref}" -f pr_number="${PR_NUMBER}" -f head_sha="${PR_HEAD_SHA}" >/dev/null 2>&1; then
+			review_final_ci_failed_log full_suite_dispatched "workflow=${final_ci_failed_wf}"
+			return 0
+		fi
+		echo "::warning::Could not dispatch the full final CI run for PR #${PR_NUMBER} after its sync-quick run failed; the next _pr_ensure_final_ci call dispatches it (a failed sync-quick run does not count as the head's final result)."
+		review_final_ci_failed_log full_suite_dispatch_failed "workflow=${final_ci_failed_wf}"
 		return 0
 	fi
 

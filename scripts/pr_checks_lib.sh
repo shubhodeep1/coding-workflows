@@ -839,6 +839,14 @@ _pr_auto_merge_required_ci_check_name()
 # the check-run gate alone would read the head as green although CI never
 # produced a result. The wait refuses with reason=ci_run_cancelled; a
 # later re-run returns the workflow to pending.
+# A run's `name` is its run name, so a `workflow_dispatch` final CI run of
+# ci.yml is named `CI [pr:<n>]` (or `CI [pr:<n>] [<mode>]`), not `CI`
+# (cut-ci-runner-time Phase 4). A `workflow_dispatch` run whose name is a
+# listed workflow name followed by `[pr:<n>]` and an optional `[<mode>]`
+# counts as a run of that workflow (PR_CHECKS_JQ_WAIT_WORKFLOW_KEY_DEF), so
+# the final run's `lint` binds and a queued final run counts as pending.
+# Without this, a head whose only CI run is its final run never binds
+# `lint` and the wait always timed out (`ci_state=absent`).
 # Input: head SHA. Output: PR_CHECKS_RUNS_PENDING, PR_CHECKS_RUNS_UNRUN
 # (integers), PR_CHECKS_RUNS_IDS (comma-separated run ids of the listed
 # workflows on the head, self excluded) and PR_CHECKS_RUNS_READ
@@ -846,6 +854,19 @@ _pr_auto_merge_required_ci_check_name()
 # API calls: one REST `actions/runs?head_sha=` read (per_page=100); none
 # when disabled or the SHA/repository is unusable. Fail-open: a failed or
 # malformed read counts as 0 pending (the check-run gate still applies).
+# jq def shared by both _pr_head_ci_runs_pending filters: `_wait_wf_key`
+# maps a workflow run to the listed workflow name it belongs to (lowercase),
+# or "" when it belongs to none. `$wanted` is the lowercased name list.
+PR_CHECKS_JQ_WAIT_WORKFLOW_KEY_DEF='
+	def _wait_wf_key($wanted):
+		(.name // "" | ascii_downcase) as $n
+		| if ($wanted | index($n)) != null then $n
+		elif (.event // "") == "workflow_dispatch" then
+			([$n | capture("^(?<base>.+) \\[pr:[1-9][0-9]*\\]( \\[[a-z0-9-]+\\])?$")? | .base] | first) as $base
+			| if ($base != null) and (($wanted | index($base)) != null) then $base else "" end
+		else "" end;
+'
+
 _pr_head_ci_runs_pending()
 {
 	local head_sha="$1" repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" names_csv runs_json self_run
@@ -866,13 +887,13 @@ _pr_head_ci_runs_pending()
 	# instead of reading the runs again (§15).
 	PR_CHECKS_RUNS_RAW_JSON="${runs_json}"
 	local counts
-	counts="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" '
+	counts="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" "${PR_CHECKS_JQ_WAIT_WORKFLOW_KEY_DEF}"'
 		($names | split(",") | map(gsub("^\\s+|\\s+$"; "") | ascii_downcase) | map(select(length > 0))) as $wanted
 		| [(.workflow_runs // [])[]
 			| select((.id | tostring) != $self_run)
-			| select((.name // "" | ascii_downcase) as $n | $wanted | index($n))] as $runs
+			| select(_wait_wf_key($wanted) != "")] as $runs
 		| ($runs | map(select(.status != "completed")) | length) as $pending
-		| ($runs | group_by(.name // "" | ascii_downcase)
+		| ($runs | group_by(_wait_wf_key($wanted))
 			| map(select(all(.[]; .status == "completed" and (.conclusion == "cancelled" or .conclusion == "startup_failure"))))
 			| length) as $unrun
 		| "\($pending) \($unrun)"' 2>/dev/null | tail -n1)"
@@ -883,11 +904,11 @@ _pr_head_ci_runs_pending()
 	# Run ids of the listed workflows on this head (self excluded), for the
 	# named CI check binding (issue #6963). Same listing, no extra call.
 	local run_ids
-	run_ids="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" '
+	run_ids="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" "${PR_CHECKS_JQ_WAIT_WORKFLOW_KEY_DEF}"'
 		($names | split(",") | map(gsub("^\\s+|\\s+$"; "") | ascii_downcase) | map(select(length > 0))) as $wanted
 		| if (type == "object" and (.workflow_runs | type) == "array") then
 			[.workflow_runs[] | select((.id | tostring) != $self_run)
-				| select((.name // "" | ascii_downcase) as $n | $wanted | index($n)) | (.id | tostring)] | "ids:" + join(",")
+				| select(_wait_wf_key($wanted) != "") | (.id | tostring)] | "ids:" + join(",")
 		else "invalid" end' 2>/dev/null | tail -n1)"
 	if [[ "${run_ids}" =~ ^ids:[0-9,]*$ ]]; then
 		PR_CHECKS_RUNS_READ="true"
@@ -917,7 +938,12 @@ _pr_head_ci_runs_pending()
 # Inputs: the arguments above; REVIEW_FINAL_CI_WORKFLOW (a bare
 # `<name>.yml` file under .github/workflows); optional PR_FINAL_CI_RUNS_JSON,
 # an `actions/runs?head_sha=<sha>` listing the caller already read (the
-# helper then reads nothing; runs are matched by `.path`).
+# helper then reads nothing; runs are matched by `.path`); optional
+# PR_FINAL_CI_SYNC_QUICK=true (set only by _pr_base_sync_dispatch_final_ci for
+# a verified freshness-update head): a dispatch that is not docs-only passes
+# -f sync_quick=true, and when the workflow refuses that input the full suite
+# is dispatched once more (one `REVIEW_FINAL_CI_SYNC_QUICK pr= head=
+# outcome=dispatched|dispatch_refused` line).
 # Outputs: PR_FINAL_CI_OUTCOME = dispatched | exists | disabled |
 # dispatch_failed | invalid_input, one `REVIEW_FINAL_CI pr= head= outcome=
 # reason=` line per decision (plus `outcome=read_failed action=dispatch` when
@@ -961,9 +987,11 @@ _pr_ensure_final_ci()
 				| select(type == "object")
 				| select(((.path // "") | split("@") | .[0]) == $path)
 				| select((.head_sha // "") == $sha)] as $runs
+			| ($runs | map(select(((.display_title // "") | endswith(" [sync-quick]")) | not))) as $full_runs
 			| if any($runs[]; (.status // "") != "completed") then "exists in_flight"
 			elif any($runs[]; (.conclusion // "") == "success") then "exists success"
-			elif any($runs[]; (.conclusion // "") == "failure") then "exists failure"
+			elif any($full_runs[]; (.conclusion // "") == "failure") then "exists failure"
+			elif any($runs[]; (.conclusion // "") == "failure") then "dispatch sync_quick_failed"
 			elif ($runs | length) > 0 then "dispatch only_unfinished"
 			else "dispatch no_run" end
 		else "read_failed" end' 2>/dev/null | tail -n1)"
@@ -1023,6 +1051,18 @@ _pr_ensure_final_ci()
 		# dispatch; the full-suite dispatch below still covers the head (a
 		# duplicate run after a lost success response is harmless).
 		echo "::warning::REVIEW_FINAL_CI_DOCS_ONLY pr=${pr} head=${sha} docs_only=dispatch_refused (retrying once without docs_only)"
+	fi
+	# Sync-quick final CI (merge-base sync churn): ci.yml's tests-sync-quick
+	# re-checks the claim, so a wrong flag fails CI instead of skipping tests.
+	# A failed sync-quick run is never answered with another quick run.
+	if [ "${PR_FINAL_CI_SYNC_QUICK:-false}" = "true" ] && [ "${reason}" != "sync_quick_failed" ]; then
+		if gh workflow run "${wf}" --repo "${repo}" --ref "${ref}" -f pr_number="${pr}" -f head_sha="${sha}" -f sync_quick=true >/dev/null 2>&1; then
+			PR_FINAL_CI_OUTCOME="dispatched"
+			echo "REVIEW_FINAL_CI_SYNC_QUICK pr=${pr} head=${sha} outcome=dispatched"
+			echo "REVIEW_FINAL_CI pr=${pr} head=${sha} outcome=dispatched reason=${reason} workflow=${wf}"
+			return 0
+		fi
+		echo "::warning::REVIEW_FINAL_CI_SYNC_QUICK pr=${pr} head=${sha} outcome=dispatch_refused (retrying once with the full suite)"
 	fi
 	# One attempt: a retry after a lost success response would start a
 	# second run; the review sweep's safety net retries a failed dispatch.
@@ -1475,7 +1515,9 @@ _pr_base_sync_count()
 # run reviews in full instead. Only an exact [approved head, compared tip]
 # pair, which GitHub merged without conflict, admits no editable merge.
 # <base ref> is accepted for compatibility and unused.
-# Sets PR_BASE_SYNC_MERGE_SHA / PR_BASE_SYNC_BASE_SHA and returns 0 on
+# Sets PR_BASE_SYNC_MERGE_SHA / PR_BASE_SYNC_BASE_SHA (plus, from the read
+# that saw the new head, PR_BASE_SYNC_HEAD_REF, PR_BASE_SYNC_HEAD_REPO and
+# PR_BASE_SYNC_MERGEABLE = true|false|null) and returns 0 on
 # success; otherwise returns 1 with PR_BASE_SYNC_OBSERVE_REASON =
 # head_not_observed | base_tip_unknown | pull_read_failed |
 # commit_read_failed | parents_mismatch | not_github_merge | base_mismatch.
@@ -1492,6 +1534,9 @@ _pr_base_sync_observe_update_commit()
 	PR_BASE_SYNC_MERGE_SHA=""
 	PR_BASE_SYNC_BASE_SHA=""
 	PR_BASE_SYNC_OBSERVE_REASON=""
+	PR_BASE_SYNC_HEAD_REF=""
+	PR_BASE_SYNC_HEAD_REPO=""
+	PR_BASE_SYNC_MERGEABLE=""
 	if [[ "${observe_attempts}" =~ ^[0-9]+$ ]] && [ "${observe_attempts}" -ge 1 ] && [ "${observe_attempts}" -le 20 ]; then :; else observe_attempts=5; fi
 	if [[ "${observe_sleep}" =~ ^[0-9]+$ ]] && [ "${observe_sleep}" -ge 1 ] && [ "${observe_sleep}" -le 30 ]; then :; else observe_sleep=3; fi
 	if ! [[ "${from_head}" =~ ^[0-9a-f]{40}$ ]]; then
@@ -1509,6 +1554,11 @@ _pr_base_sync_observe_update_commit()
 			observe_pull_ok="true"
 			observe_head="$(printf '%s' "${observe_pull_json}" | jq -r 'if (type == "object") then (.head.sha // "") else "" end' 2>/dev/null | tail -n1)"
 			if [[ "${observe_head}" =~ ^[0-9a-f]{40}$ ]] && [ "${observe_head}" != "${from_head}" ]; then
+				# Kept for _pr_base_sync_dispatch_final_ci: the same read names the
+				# head branch and whether GitHub has computed the merge ref yet.
+				PR_BASE_SYNC_HEAD_REF="$(printf '%s' "${observe_pull_json}" | jq -r 'if type == "object" then (.head.ref // "") else "" end' 2>/dev/null | tail -n1)"
+				PR_BASE_SYNC_HEAD_REPO="$(printf '%s' "${observe_pull_json}" | jq -r 'if type == "object" then (.head.repo.full_name // "") else "" end' 2>/dev/null | tail -n1)"
+				PR_BASE_SYNC_MERGEABLE="$(printf '%s' "${observe_pull_json}" | jq -r 'if type == "object" then (.mergeable | tostring) else "null" end' 2>/dev/null | tail -n1)"
 				break
 			fi
 		fi
@@ -1580,6 +1630,114 @@ _pr_base_sync_marker_post()
 	return 0
 }
 
+# Final CI at the moment of a verified freshness update (merge-base sync
+# churn, 2026-11-17; operator decision Q3: B). Before this, the update head's
+# final CI run was dispatched only when a later review run reached the
+# required-checks wait, after the synchronize review (and, before the
+# security-pass inheritance, a fresh audit) had waited for a runner; with
+# multi-hour queues `main` usually moved again first. Now the merge path that
+# made the update dispatches the run right away, so the review run that
+# follows finds it in flight (`_pr_ensure_final_ci` outcome=exists) instead of
+# starting it.
+#
+#   _pr_base_sync_dispatch_final_ci <pr> <approved head> <update head>
+#
+# No-op unless REVIEW_FINAL_CI_WORKFLOW is set and MERGE_BASE_SYNC_FINAL_CI_ENABLED
+# (default true; true/1/yes/on) is on. Requires the observe step's read to
+# name a same-repository head branch, and GitHub to have computed the merge
+# ref for the update head (`mergeable` true): ci.yml tests refs/pull/<n>/merge,
+# so a dispatch before that could test the previous head. The observe read
+# counts as the first check; up to MERGE_BASE_SYNC_MERGE_REF_POLL_ATTEMPTS more
+# `pulls/{n}` reads (default 3, 0-10), MERGE_BASE_SYNC_HEAD_POLL_SECONDS apart.
+# Anything unmet logs and returns: the required-checks wait still dispatches
+# the run later, as before.
+# Sync-quick: with MERGE_BASE_SYNC_QUICK_CI_ENABLED (default true) on, when every
+# overlap path is a CI-wiring file (scripts/ci_sync_quick.sh classify) and the
+# approved head passed a full final CI run (ci_sync_quick.sh full-ci-green, one
+# runs read), the dispatch passes sync_quick=true; ci.yml's tests-sync-quick
+# re-checks both conditions.
+# API budget (§15): the merge-ref reads above, at most one runs read for the
+# sync-quick check, then _pr_ensure_final_ci's own runs read, PR-files read and
+# dispatch. Always returns 0.
+# Log: `MERGE_BASE_SYNC_FINAL_CI pr=<n> head=<sha> outcome=<word> reason=<token> sync_quick=true|false`.
+_pr_base_sync_dispatch_final_ci()
+{
+	local pr_number="$1" sync_from_head="$2" sync_update_head="$3"
+	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	local sync_ci_attempts="${MERGE_BASE_SYNC_MERGE_REF_POLL_ATTEMPTS:-3}" sync_ci_sleep="${MERGE_BASE_SYNC_HEAD_POLL_SECONDS:-3}"
+	local sync_ci_i sync_ci_pull sync_ci_pull_head sync_ci_quick="false" sync_ci_verdict="" sync_ci_classifier sync_ci_reason="full_suite"
+	sync_ci_log()
+	{
+		echo "MERGE_BASE_SYNC_FINAL_CI pr=${pr_number:-?} head=${sync_update_head:-?} outcome=$1 reason=$2 sync_quick=${sync_ci_quick}"
+	}
+	case "$(printf '%s' "${MERGE_BASE_SYNC_FINAL_CI_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		true|1|yes|on) ;;
+		*) sync_ci_log skipped disabled; return 0 ;;
+	esac
+	if [ -z "${REVIEW_FINAL_CI_WORKFLOW:-}" ]; then
+		sync_ci_log skipped workflow_unset
+		return 0
+	fi
+	if ! [[ "${sync_from_head}" =~ ^[0-9a-f]{40}$ ]] || ! [[ "${sync_update_head}" =~ ^[0-9a-f]{40}$ ]] \
+		|| ! [[ "${repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+		sync_ci_log skipped invalid_input
+		return 0
+	fi
+	if [ "${PR_BASE_SYNC_HEAD_REPO:-}" != "${repo}" ] || ! [[ "${PR_BASE_SYNC_HEAD_REF:-}" =~ ^[A-Za-z0-9._/-]+$ ]] \
+		|| [[ "${PR_BASE_SYNC_HEAD_REF}" == *..* ]] || [[ "${PR_BASE_SYNC_HEAD_REF}" == -* ]]; then
+		sync_ci_log skipped head_branch_unusable
+		return 0
+	fi
+	if [[ "${sync_ci_attempts}" =~ ^[0-9]+$ ]] && [ "${#sync_ci_attempts}" -le 2 ] && [ "$((10#${sync_ci_attempts}))" -le 10 ]; then
+		sync_ci_attempts="$((10#${sync_ci_attempts}))"
+	else
+		sync_ci_attempts=3
+	fi
+	if [[ "${sync_ci_sleep}" =~ ^[0-9]+$ ]] && [ "${#sync_ci_sleep}" -le 2 ] && [ "$((10#${sync_ci_sleep}))" -ge 1 ] && [ "$((10#${sync_ci_sleep}))" -le 30 ]; then
+		sync_ci_sleep="$((10#${sync_ci_sleep}))"
+	else
+		sync_ci_sleep=3
+	fi
+	sync_ci_i=0
+	while [ "${PR_BASE_SYNC_MERGEABLE:-null}" = "null" ] && [ "${sync_ci_i}" -lt "${sync_ci_attempts}" ]; do
+		sync_ci_i=$((sync_ci_i + 1))
+		sleep "${sync_ci_sleep}"
+		sync_ci_pull="$(gh_retry _safe_gh_jq "repos/${repo}/pulls/${pr_number}" 2>/dev/null || echo "")"
+		sync_ci_pull_head="$(printf '%s' "${sync_ci_pull}" | jq -r 'if type == "object" then (.head.sha // "") else "" end' 2>/dev/null | tail -n1)"
+		# A failed or unreadable read is not a head move: keep polling.
+		[ -n "${sync_ci_pull_head}" ] || continue
+		if [ "${sync_ci_pull_head}" != "${sync_update_head}" ]; then
+			sync_ci_log skipped head_moved
+			return 0
+		fi
+		PR_BASE_SYNC_MERGEABLE="$(printf '%s' "${sync_ci_pull}" | jq -r 'if type == "object" then (.mergeable | tostring) else "null" end' 2>/dev/null | tail -n1)"
+	done
+	if [ "${PR_BASE_SYNC_MERGEABLE:-null}" != "true" ]; then
+		sync_ci_log skipped "merge_ref_${PR_BASE_SYNC_MERGEABLE:-null}"
+		return 0
+	fi
+	case "$(printf '%s' "${MERGE_BASE_SYNC_QUICK_CI_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		true|1|yes|on)
+			sync_ci_classifier="${BASH_SOURCE[0]%/*}/ci_sync_quick.sh"
+			if [ -f "${sync_ci_classifier}" ] && [ -n "${PR_BASE_FRESHNESS_OVERLAP:-}" ]; then
+				sync_ci_verdict="$(printf '%s' "${PR_BASE_FRESHNESS_OVERLAP}" | tr ',' '\n' | bash "${sync_ci_classifier}" classify 2>/dev/null)"
+				# reason= stays one token: the classifier's `other <path>` is logged as overlap_other.
+				if [ "${sync_ci_verdict}" != "ci_wiring_only" ]; then
+					sync_ci_reason="overlap_other"
+				elif bash "${sync_ci_classifier}" full-ci-green "${repo}" "${pr_number}" "${sync_from_head}" "${REVIEW_FINAL_CI_WORKFLOW}"; then
+					sync_ci_quick="true"
+					sync_ci_reason="ci_wiring_only"
+				else
+					sync_ci_reason="approved_head_not_full_green"
+				fi
+			fi
+			;;
+	esac
+	PR_FINAL_CI_SYNC_QUICK="${sync_ci_quick}" _pr_ensure_final_ci "${repo}" "${pr_number}" "${sync_update_head}" "${PR_BASE_SYNC_HEAD_REF}" || true
+	sync_ci_log "${PR_FINAL_CI_OUTCOME:-unknown}" "${sync_ci_reason}"
+	return 0
+}
+
 _pr_base_fresh_for_merge()
 {
 	local pr_number="$1"
@@ -1608,6 +1766,7 @@ _pr_base_fresh_for_merge()
 			if _pr_base_sync_for_fresh_ci "${pr_number}" "${PR_BASE_FRESHNESS_HEAD_SHA}"; then
 				if _pr_base_sync_observe_update_commit "${pr_number}" "${PR_BASE_FRESHNESS_HEAD_SHA}" "${base_ref:-${PR_BASE_FRESHNESS_BASE_REF:-}}"; then
 					_pr_base_sync_marker_post "${pr_number}" "${PR_BASE_FRESHNESS_HEAD_SHA}" "$(( ${sync_done:-0} + 1 ))" "${sync_max}" "${PR_BASE_SYNC_BASE_SHA}" "${PR_BASE_SYNC_MERGE_SHA}"
+					_pr_base_sync_dispatch_final_ci "${pr_number}" "${PR_BASE_FRESHNESS_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA}"
 				else
 					echo "MERGE_BASE_SYNC_MARKER pr=${pr_number} head_sha=${PR_BASE_FRESHNESS_HEAD_SHA:-unknown} outcome=skipped reason=${PR_BASE_SYNC_OBSERVE_REASON:-head_not_observed}"
 				fi
