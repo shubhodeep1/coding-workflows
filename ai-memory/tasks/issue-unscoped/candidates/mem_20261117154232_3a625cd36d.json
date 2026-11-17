@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_sandbox.sh:716,882 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The script mounts two different host files at the same sandbox path, `/relay.py`: `claude_anthropic_relay.py` at line 716 and `chatgpt_codex_relay.py` at line 882. The `/relay.py` registry entry in `tests/test_sandbox_python_coverage.py` lists only `claude_anthropic_relay.py`, so its basename check rejects the ChatGPT relay with `AssertionError: 'chatgpt_codex_relay.py' != 'claude_anthropic_relay.py'`.\n  WHY: The reviewer rated this MAJOR, mapped here to high. It turns six checks red on head da9b888: tests-sandbox-python for clarify, review and codex-isolated-codex, tests-hooks-and-orchestrator, tests-system-python (11), and lint. The failure also exists on the merge base, and issue #9449 forbids changing any script, so the fix belongs on the base branch: give the ChatGPT relay its own mount path, or let the `/relay.py` registry entry accept both basenames. The editor should not change anything in this PR for it. minimax_minimax-m3 and z-ai_glm-5_3-flash named the same cause in their notes but did not report it as a finding, because it is inherited and out of scope.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_untrusted_sandbox.sh:716,882 | severity=MAJOR | confidence=5\n  PROBLEM: Line 716 is `--mount \"type=bind,src=$(realpath \"${support}/claude_anthropic_relay.py\"),dst=/relay.py,readonly\"` and line 882 is `--mount \"type=bind,src=$(realpath \"${support}/chatgpt_codex_relay.py\"),dst=/relay.py,readonly\"`. Two different host files share the `/relay.py` entry point, but the registry in `tests/test_sandbox_python_coverage.py` lists only `claude_anthropic_relay.py` for it. The check `assertEqual(basename, Path(entry[\"host\"]).name)` at line 293 (taken from the CI traceback) therefore rejects the ChatGPT relay.\n  WHY: Every CI job that runs the coverage test fails with `AssertionError: 'chatgpt_codex_relay.py' != 'claude_anthropic_relay.py'`. Six checks on head da9b888 are red. The failure also exists on the merge base, and issue #9449 forbids changing scripts, so the fix belongs on the base branch: a separate mount path, or a registry entry that accepts both basenames. It is reported only because the CI rules require every failed check to be surfaced; the editor should not change anything in this PR for it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0ac13001bc3186179159d8582d260e954b5ab57c85fd6ff16a5e5c01dae50852",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9454,
+    "run_id": "44092256460",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44092256460",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117154232_3a625cd36d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9454,
+    "run_id": "44092256460"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-17T15:42:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
