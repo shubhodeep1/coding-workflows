@@ -291,6 +291,13 @@ def test_second_404_after_branch_check_fails(tmp_path: Path) -> None:
 	assert _seq(calls) == ["PUT contents", "GET contents_get", "GET ref_get", "PUT contents", "GET contents_get"]
 
 
+def test_branch_missing_422_with_concurrently_created_branch_retries_once(tmp_path: Path) -> None:
+	result, calls = _store(tmp_path, _payload(), {"contents": [[422, '{"message":"Branch ai/alert-inbox not found"}']]})
+	assert result.returncode == 0, result.stderr
+	assert "ALERT_INBOX store outcome=stored reason=ok" in result.stderr
+	assert _seq(calls) == ["PUT contents", "GET contents_get", "GET ref_get", "PUT contents"]
+
+
 def test_unexplained_422_with_existing_branch_fails(tmp_path: Path) -> None:
 	result, calls = _store(tmp_path, _payload(), {"contents": [[422, '{"message":"Validation Failed"}']]})
 	assert result.returncode == 1
