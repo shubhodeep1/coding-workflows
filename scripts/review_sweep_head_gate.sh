@@ -34,9 +34,10 @@
 #           exactly as before this helper existed.
 #
 # review_sweep_final_ci_state <owner/repo> <head sha> [<workflow file>]
+#   Needs scripts/pr_checks_lib.sh sourced (it uses that file's
+#   PR_FINAL_CI_JQ_DECISION_DEF; without it the answer is read_failed).
 #   stdout: one word for the final-CI runs of <workflow file> (default
-#           ci.yml) on <head sha>, decided like `_pr_ensure_final_ci` in
-#           scripts/pr_checks_lib.sh: `in_flight` (a run not completed),
+#           ci.yml) on <head sha>, the same decision `_pr_ensure_final_ci` makes: `in_flight` (a run not completed),
 #           `success`, `failure` (a full, non-sync-quick run failed and none
 #           succeeded), `none` (no run, or only cancelled / timed-out /
 #           sync-quick-failed runs: the final CI will be dispatched again), or
@@ -48,6 +49,13 @@
 #
 # Logs: `REVIEW_SWEEP_HEAD_GATE outcome=<annotated|read_failed> prs=<n>
 #       annotated=<n> success=<n>` on stderr (the step prints it).
+
+# review_sweep_final_ci_state shares _pr_ensure_final_ci's decision jq; load
+# the library beside this file (definitions only) when the caller has not.
+if [ -z "${PR_FINAL_CI_JQ_DECISION_DEF:-}" ] && [ -f "${BASH_SOURCE[0]%/*}/pr_checks_lib.sh" ]; then
+	# shellcheck source=/dev/null
+	source "${BASH_SOURCE[0]%/*}/pr_checks_lib.sh" 2>/dev/null || true
+fi
 
 REVIEW_SWEEP_HEAD_GATE_QUERY='query($owner: String!, $name: String!, $endCursor: String) {
   repository(owner: $owner, name: $name) {
@@ -73,7 +81,7 @@ review_sweep_annotate_head_gate()
 		return 0
 	fi
 	gate_pages="$(gh api graphql --paginate -f query="${REVIEW_SWEEP_HEAD_GATE_QUERY}" \
-		-F owner="${gate_repo%%/*}" -F name="${gate_repo#*/}" 2>/dev/null | jq -s 'if all(.[]; type == "object" and (.data.repository.pullRequests.nodes | type) == "array") and length > 0 then . else error("bad page") end' 2>/dev/null || true)"
+		-f owner="${gate_repo%%/*}" -f name="${gate_repo#*/}" 2>/dev/null | jq -s 'if all(.[]; type == "object" and (.data.repository.pullRequests.nodes | type) == "array") and length > 0 then . else error("bad page") end' 2>/dev/null || true)"
 	if [ -z "${gate_pages}" ]; then
 		echo "REVIEW_SWEEP_HEAD_GATE outcome=read_failed reason=graphql prs=$(printf '%s' "${gate_input}" | jq 'length')" >&2
 		printf '%s\n' "${gate_input}"
@@ -111,18 +119,18 @@ review_sweep_final_ci_state()
 		return 0
 	fi
 	fci_runs="$(gh api "repos/${fci_repo}/actions/workflows/${fci_wf}/runs?head_sha=${fci_sha}&per_page=20" 2>/dev/null || echo "")"
-	# Mirrors the decision in _pr_ensure_final_ci (scripts/pr_checks_lib.sh).
-	printf '%s' "${fci_runs}" | jq -r --arg path ".github/workflows/${fci_wf}" --arg sha "${fci_sha}" '
-		if (type == "object" and (.workflow_runs | type) == "array") then
-			[.workflow_runs[]
-				| select(type == "object")
-				| select(((.path // "") | split("@") | .[0]) == $path)
-				| select((.head_sha // "") == $sha)] as $runs
-			| ($runs | map(select(((.display_title // "") | endswith(" [sync-quick]")) | not))) as $full_runs
-			| if any($runs[]; (.status // "") != "completed") then "in_flight"
-			elif any($runs[]; (.conclusion // "") == "success") then "success"
-			elif any($full_runs[]; (.conclusion // "") == "failure") then "failure"
-			else "none" end
-		else "read_failed" end' 2>/dev/null | tail -n1 | grep -E '^(in_flight|success|failure|none)$' || echo "read_failed"
+	# The decision jq is _pr_ensure_final_ci's own (PR_FINAL_CI_JQ_DECISION_DEF
+	# in scripts/pr_checks_lib.sh); without that library nothing is decided.
+	if [ -z "${PR_FINAL_CI_JQ_DECISION_DEF:-}" ]; then
+		echo "read_failed"
+		return 0
+	fi
+	case "$(printf '%s' "${fci_runs}" | jq -r --arg path ".github/workflows/${fci_wf}" --arg sha "${fci_sha}" "${PR_FINAL_CI_JQ_DECISION_DEF}"' _pr_final_ci_decision' 2>/dev/null | tail -n1)" in
+		"exists in_flight") echo "in_flight" ;;
+		"exists success") echo "success" ;;
+		"exists failure") echo "failure" ;;
+		"dispatch "*) echo "none" ;;
+		*) echo "read_failed" ;;
+	esac
 	return 0
 }

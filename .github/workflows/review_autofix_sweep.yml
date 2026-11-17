@@ -267,12 +267,16 @@ jobs:
 
           # Head-gate state per PR (one GraphQL read per 100 open PRs, fail-open:
           # the snapshot is unchanged when the read fails). The final-CI step
-          # below reads `head_gate_state` from the same snapshot file.
+          # below reads `head_gate_state` from the same snapshot file. Skipped
+          # when there is no open PR or the provider outage pause holds the
+          # dispatches (that step then reads each head's status itself).
           if [ -f .ci-rerun-support/scripts/review_sweep_head_gate.sh ]; then
             # shellcheck source=/dev/null
             source .ci-rerun-support/scripts/review_sweep_head_gate.sh
           fi
-          if type review_sweep_annotate_head_gate >/dev/null 2>&1; then
+          if [ "${PROVIDER_OUTAGE_PAUSED:-false}" != "true" ] \
+            && printf '%s' "${prs_json}" | jq -e 'length > 0' >/dev/null 2>&1 \
+            && type review_sweep_annotate_head_gate >/dev/null 2>&1; then
             prs_json="$(printf '%s' "${prs_json}" | review_sweep_annotate_head_gate "${REPOSITORY}")"
           fi
 

@@ -13,6 +13,7 @@ call, including `gh workflow run`, in a log file.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import subprocess
@@ -590,3 +591,121 @@ def test_final_ci_state_read_failure_and_bad_input(fake_gh) -> None:
 	assert result.stdout.strip() == "read_failed"
 	result, calls = fake_gh(HELPER_PRELUDE + f'review_sweep_final_ci_state {REPO} nothex', {})
 	assert result.stdout.strip() == "read_failed" and calls == []
+
+
+# ---------------------------------------------------------------------------
+# Base update for a refused final-CI dispatch (_pr_final_ci_refused_base_update)
+
+BASE_TIP = "f" * 40
+UPDATE_SHA = "9" * 40
+
+
+def _contents(text: str) -> dict:
+	return {"body": {"encoding": "base64", "content": base64.b64encode(text.encode()).decode()}}
+
+
+OLD_CI = "name: CI\non:\n  pull_request:\n  push:\n"
+NEW_CI = "name: CI\non:\n  push:\n  workflow_dispatch:\n    inputs: {}\n"
+
+
+def _refused_fixtures(head_ci: str = OLD_CI, base_ci: str = NEW_CI) -> dict:
+	return {
+		**WAIT_FIXTURES,
+		f"repos/{REPO}/contents/.github/workflows/ci.yml?ref={SHA}": _contents(head_ci),
+		f"repos/{REPO}/contents/.github/workflows/ci.yml?ref=main": _contents(base_ci),
+		f"repos/{REPO}/pulls/7/update-branch": {"body": {"message": "Updating pull request branch."}},
+		f"repos/{REPO}/pulls/7": {"body": {"head": {"sha": UPDATE_SHA, "ref": "ai/issue-1", "repo": {"full_name": REPO}}, "mergeable": True}},
+		f"repos/{REPO}/commits/{UPDATE_SHA}": {"body": {
+			"parents": [{"sha": SHA}, {"sha": BASE_TIP}], "committer": {"login": "web-flow"},
+			"commit": {"verification": {"verified": True}}}},
+		f"repos/{REPO}/issues/7/comments": {"body": {"id": 1}},
+	}
+
+
+def _refused_wait(fake_gh, fixtures: dict, env: dict | None = None):
+	script = LIB_PRELUDE + f'_pr_wait_for_required_checks 7 "{SHA}" main 5; echo "rc=$? outcome=${{PR_CHECKS_WAIT_OUTCOME}}"'
+	full_env = {
+		"AUTO_MERGE_CHECKS_POLL_SECONDS": "30",
+		"AUTO_MERGE_REQUIRED_CI_CHECK": "lint",
+		"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "",
+		"PR_CHECKS_HEAD_REF": "ai/issue-1",
+		"REVIEW_FINAL_CI_WORKFLOW": "ci.yml",
+		"FAKE_GH_DISPATCH_RC": "1",
+		"MERGE_BASE_SYNC_HEAD_POLL_SECONDS": "1",
+		"MERGE_BASE_SYNC_HEAD_POLL_ATTEMPTS": "1",
+		"MERGE_BASE_SYNC_MERGE_REF_POLL_ATTEMPTS": "0",
+		# What _pr_base_fresh_for_merge left behind for this head (clean).
+		"PR_BASE_FRESHNESS_OUTCOME": "clean",
+		"PR_BASE_FRESHNESS_HEAD_SHA": SHA,
+		"PR_BASE_FRESHNESS_BASE_SHA": BASE_TIP,
+		"PR_BASE_FRESHNESS_BASE_REF": "main",
+		"PR_BASE_FRESHNESS_BEHIND_BY": "21",
+	}
+	full_env.update(env or {})
+	return fake_gh(script, fixtures, full_env)
+
+
+def _puts(calls: list[list[str]]) -> list[list[str]]:
+	return [c for c in calls if c[:3] == ["api", "-X", "PUT"]]
+
+
+def test_refused_dispatch_updates_the_approved_branch_once(fake_gh) -> None:
+	result, calls = _refused_wait(fake_gh, _refused_fixtures())
+	out = result.stdout + result.stderr
+	assert f"REVIEW_FINAL_CI_BASE_UPDATE pr=7 head={SHA} outcome=updated reason=workflow_predates_dispatch" in out, out
+	assert "reason=final_ci_dispatch_failed" in out and "rc=1 outcome=timeout" in out
+	puts = _puts(calls)
+	assert len(puts) == 1 and puts[0][3] == f"repos/{REPO}/pulls/7/update-branch" and f"expected_head_sha={SHA}" in puts[0]
+	posts = [c for c in calls if c[:3] == ["api", "-X", "POST"]]
+	assert len(posts) == 1
+	body = posts[0][-1]
+	assert body.startswith("body=**Branch updated from `main` before merging**")
+	assert "predates its `workflow_dispatch` trigger" in body
+	assert body.rstrip().endswith(f"<!-- ai:merge-base-sync:v1 pr=7 from={SHA} sync=1 base={BASE_TIP} merge={UPDATE_SHA} -->")
+	# The update head's final CI is dispatched right away (refused here too by the fake).
+	assert any(f"head_sha={UPDATE_SHA}" in arg for d in _dispatches(calls) for arg in d)
+
+
+@pytest.mark.parametrize("fixtures, env, reason", [
+	(_refused_fixtures(head_ci=NEW_CI), {}, "head_workflow_yes"),
+	(_refused_fixtures(head_ci="name: CI\non: [push, workflow_dispatch]\n"), {}, "head_workflow_yes"),
+	(_refused_fixtures(head_ci='name: CI\n"on": {"push": {}, "workflow_dispatch": {}}\n'), {}, "head_workflow_yes"),
+	(_refused_fixtures(head_ci="name: CI\non:\n  push:\n  # workflow_dispatch:\n", base_ci=OLD_CI), {}, "base_workflow_no"),
+	(_refused_fixtures(base_ci=OLD_CI), {}, "base_workflow_no"),
+	({**WAIT_FIXTURES}, {}, "head_workflow_unreadable"),
+	(_refused_fixtures(), {"PR_BASE_FRESHNESS_OUTCOME": "fresh"}, "freshness_fresh"),
+	(_refused_fixtures(), {"PR_BASE_FRESHNESS_HEAD_SHA": OTHER_SHA}, "freshness_clean"),
+	(_refused_fixtures(), {"FINAL_CI_REFUSED_BASE_UPDATE_ENABLED": "false"}, "disabled"),
+])
+def test_refused_dispatch_base_update_skips(fake_gh, fixtures: dict, env: dict, reason: str) -> None:
+	result, calls = _refused_wait(fake_gh, fixtures, env)
+	out = result.stdout + result.stderr
+	assert f"REVIEW_FINAL_CI_BASE_UPDATE pr=7 head={SHA} outcome=skipped reason={reason}" in out, out
+	assert _puts(calls) == []
+	assert "rc=1 outcome=timeout" in out
+
+
+def test_other_dispatch_failures_never_update_the_branch(fake_gh) -> None:
+	"""A fork head or an unreadable head ref is not a stale workflow file."""
+	env = {"PR_CHECKS_HEAD_REF": ""}
+	fixtures = {**_refused_fixtures(), f"repos/{REPO}/pulls/7": {"body": {"head": {"ref": "x", "repo": {"full_name": "fork/r"}}}}}
+	result, calls = _refused_wait(fake_gh, fixtures, env)
+	out = result.stdout + result.stderr
+	assert "reason=fork_head" in out, out
+	assert "REVIEW_FINAL_CI_BASE_UPDATE" not in out
+	assert _puts(calls) == []
+
+
+def test_refused_dispatch_marker_numbers_the_update_after_earlier_syncs(fake_gh) -> None:
+	earlier = [
+		{"user": {"login": "bot"}, "body": f"**Branch updated from `main` before merging** (update {k}; warning threshold 2).\n\nx\n\n<!-- ai:merge-base-sync:v1 pr=7 from={OTHER_SHA} sync={k} -->"}
+		for k in (1, 2)
+	]
+	fixtures = {**_refused_fixtures(), f"repos/{REPO}/issues/7/comments": {"body": earlier}, "user": {"body": {"login": "bot"}}}
+	result, calls = _refused_wait(fake_gh, fixtures)
+	out = result.stdout + result.stderr
+	assert "outcome=updated reason=workflow_predates_dispatch" in out, out
+	body = [c for c in calls if c[:3] == ["api", "-X", "POST"]][0][-1]
+	assert "(update 3; warning threshold 2)" in body
+	assert f"from={SHA} sync=3 base={BASE_TIP} merge={UPDATE_SHA} -->" in body
+	assert "If the base changes these files again" not in body
