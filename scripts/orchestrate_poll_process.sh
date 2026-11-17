@@ -19,6 +19,9 @@
 # that error-level CI step does not fail on.
 
 set -euo pipefail
+# Signed job-token comments (run-volume plan item 15): route this script's
+# gh comment calls through the shim even when no earlier step loaded it.
+[ -z "${BASH_SOURCE[0]:-}" ] || AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" >/dev/null 2>&1 || true
 
 # --- ORCH_POLL_CYCLE_SUMMARY helpers (begin) ---
 # Per-cycle timing summary (analysis/workflow-optimization-2026-10-08.md,
@@ -12769,6 +12772,26 @@ elif [ -f "scripts/orchestrate_stall_retired_conflict.sh" ]; then
   source scripts/orchestrate_stall_retired_conflict.sh
 fi
 unset _OPP_RETIRED_CONFLICT_DIR
+# Smoke-fixture project backstop (closes release-gate fixture projects whose
+# gate run has completed). Resolved like the retired-conflict helpers above;
+# when it is missing (an older staging list), the stub keeps every project on
+# the normal path.
+_OPP_SMOKE_REAP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "scripts")"
+if [ -f "${_OPP_SMOKE_REAP_DIR}/orchestrate_poll_smoke_fixture_reap.sh" ]; then
+  # shellcheck disable=SC1091
+  source "${_OPP_SMOKE_REAP_DIR}/orchestrate_poll_smoke_fixture_reap.sh"
+elif [ -f "scripts/orchestrate_poll_smoke_fixture_reap.sh" ]; then
+  # shellcheck disable=SC1091
+  source scripts/orchestrate_poll_smoke_fixture_reap.sh
+fi
+unset _OPP_SMOKE_REAP_DIR
+if ! type smoke_fixture_reap_if_gate_done >/dev/null 2>&1; then
+  smoke_fixture_reap_if_gate_done()
+  {
+    echo "SMOKE_FIXTURE_REAP tracking_issue=${1:-} gate_run=none outcome=skip reason=helper_unavailable"
+    return 1
+  }
+fi
 if ! type _stall_retired_host_only_conflict_check >/dev/null 2>&1; then
   _stall_retired_host_only_conflict_check() {
     echo "STALL_RETIRED_CONFLICT_REISSUE issue=${1:-} pr=${2:-} outcome=skip reason=helper_unavailable retired_paths=none"
@@ -26667,7 +26690,9 @@ STALL_EOF
           merge_base_ref="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .base.ref?) then .base.ref else empty end' 2>/dev/null | tail -n1)"
           # One observed head feeds the checks, the freshness gate and the
           # bound merge (two-argument checks call keeps the legacy
-          # block-on-any filter).
+          # block-on-any filter). Reset so a merge-lease wait below is read
+          # from this PR's gate, never from an earlier PR's.
+          PR_BASE_FRESHNESS_OUTCOME=""
           if [ "${merge_state}" = "open" ] && [ "${merge_mergeable}" = "true" ] \
             && [[ "${merge_head_sha}" =~ ^[0-9a-f]{40}$ ]] \
             && _pr_checks_completed "${merge_pr}" "${merge_head_sha}" \
@@ -26686,6 +26711,12 @@ STALL_EOF
             STALL_RECOVERY_SHOULD_INCREMENT="true"
             took_action="true"
           fi
+        elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+          # Waiting for the merge lease (scripts/pr_checks_lib.sh) is not a
+          # failed merge: the lease tick re-dispatches the PR when the lease
+          # is granted, so the recovery budget is not spent.
+          echo "  [standalone-stall] Issue #${issue_num}: PR #${merge_pr} waits for the merge lease (PR #${MERGE_LEASE_BLOCKER:-?}); not counting a recovery attempt."
+          STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_skipped_merge_lease_wait"
         else
           tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted merge retry for ready-to-merge issue (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "DEBUG"
           STALL_RECOVERY_SHOULD_INCREMENT="true"
@@ -28360,14 +28391,28 @@ FEATURE_SWEEP_DONE="false"
 # Smoke-gate fixture projects in this tick; tg_notify stays silent for them
 # whatever TRACKING_NUM currently names (Q42: A).
 SMOKE_FIXTURE_TRACKING_NUMS=""
+# Fixture projects the smoke-fixture backstop closed (or must retry) this tick;
+# they are dropped from TRACKING_ISSUES below so the loop does not drive them.
+SMOKE_FIXTURE_REAPED_NUMS_JSON='[]'
 for ((smoke_idx=0; smoke_idx<COUNT; smoke_idx++)); do
   smoke_candidate_num="$(echo "${TRACKING_ISSUES}" | jq -r ".[${smoke_idx}].number")"
   [[ "${smoke_candidate_num}" =~ ^[1-9][0-9]*$ ]] || continue
-  if tracking_issue_is_smoke_fixture "$(echo "${TRACKING_ISSUES}" | jq -r ".[${smoke_idx}].title // \"\"")" "$(echo "${TRACKING_ISSUES}" | jq -c ".[${smoke_idx}].labels // []")"; then
+  smoke_candidate_title="$(echo "${TRACKING_ISSUES}" | jq -r ".[${smoke_idx}].title // \"\"")"
+  smoke_candidate_labels="$(echo "${TRACKING_ISSUES}" | jq -c ".[${smoke_idx}].labels // []")"
+  if tracking_issue_is_smoke_fixture "${smoke_candidate_title}" "${smoke_candidate_labels}"; then
     SMOKE_FIXTURE_TRACKING_NUMS+=" ${smoke_candidate_num}"
     echo "SMOKE_FIXTURE_PROJECT tracking_issue=${smoke_candidate_num} alerts=silenced"
+    if smoke_fixture_reap_if_gate_done "${smoke_candidate_num}" "${smoke_candidate_title}" "${smoke_candidate_labels}"; then
+      SMOKE_FIXTURE_REAPED_NUMS_JSON="$(jq -c --argjson n "${smoke_candidate_num}" '. + [$n]' <<<"${SMOKE_FIXTURE_REAPED_NUMS_JSON}")"
+    fi
   fi
 done
+if [ "${SMOKE_FIXTURE_REAPED_NUMS_JSON}" != "[]" ]; then
+  if smoke_fixture_remaining="$(jq -c --argjson drop "${SMOKE_FIXTURE_REAPED_NUMS_JSON}" 'map(select((.number as $n | $drop | index($n)) | not))' <<<"${TRACKING_ISSUES}")"; then
+    TRACKING_ISSUES="${smoke_fixture_remaining}"
+    COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
+  fi
+fi
 if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then
   prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
 fi
