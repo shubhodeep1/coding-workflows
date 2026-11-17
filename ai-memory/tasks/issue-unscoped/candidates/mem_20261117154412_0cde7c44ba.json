@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/INVENTORY.md:(ref tests/inventory_parity.py:237-247, 276-279; invoked by .github/workflows/ci.yml:2675) | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The reported tests-release-and-log-analysis run fails inventory parity, with inventory entries missing for .github/workflows/ci_pr_quick.yml, scripts/ci_docs_only_paths.sh, scripts/review_final_ci_failed.sh and scripts/review_final_ci_sweep.sh, plus README.md and agents.md references to those paths.\n  WHY: The inventory parity test exits nonzero, which fails that CI job and the aggregate lint check; severity MAJOR in source was mapped to high, and anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash attributed this failure to merge-ref/base-branch drift in notes rather than reporting it as a finding.\n- .github/workflows/ci.yml:3918 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The reported orchestrate-poll (0) run fails when this step invokes tests/test_check_failure_triage_historical.py, and its log says Python cannot open the file, although that file exists in the current checkout.\n  WHY: Python exits with status 2, which fails the job and the aggregate lint check; severity MAJOR in source was mapped to high, and anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash attributed this failure to merge-ref/base-branch drift in notes rather than reporting it as a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- docs/INVENTORY.md:tests/inventory_parity.py:237-247, 276-279; invoked by .github/workflows/ci.yml:2675 | severity=MAJOR | confidence=5\n  PROBLEM: The reported tests-release-and-log-analysis run fails inventory parity, with inventory entries missing for .github/workflows/ci_pr_quick.yml, scripts/ci_docs_only_paths.sh, scripts/review_final_ci_failed.sh and scripts/review_final_ci_sweep.sh, plus README.md and agents.md references to those paths.\n  WHY: The inventory parity test exits nonzero, which fails that CI job and the aggregate lint check.\n- .github/workflows/ci.yml:3918 | severity=MAJOR | confidence=5\n  PROBLEM: The reported orchestrate-poll (0) run fails when this step invokes tests/test_check_failure_triage_historical.py, and its log says Python cannot open the file; that test file exists in the current checkout, so the current tree does not explain the failure.\n  WHY: Python exits with status 2, which fails the job and the aggregate lint check.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8c6941f5f6217d03e0ecd9e820e5bd54c6945ffb6c603d58be93ea3194c66f5f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9562,
+    "run_id": "44092241153",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44092241153",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117154412_0cde7c44ba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9562,
+    "run_id": "44092241153"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-17T15:44:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
