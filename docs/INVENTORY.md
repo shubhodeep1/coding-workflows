@@ -145,6 +145,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/ci_budget_watch.py` — CI early warning on pushes to main: opens one `ai:ci-budget` issue when a workflow file nears the 480,000-byte guard or a CI job nears its timeout.
 - `scripts/ci_cancelled_rerun.py` — Scheduled sweep helper: re-run failed jobs once for cancelled, startup-failed, or runner-shutdown-failed CI on a current PR head.
 - `scripts/ci_docs_only_paths.sh` — The list of paths no test job or CI step reads; a PR whose changed files are all on it gets a final CI run with `docs_only=true` (static checks and lint only, test jobs skipped; #9566).
+- `scripts/ci_sync_quick.sh` — Sync-quick final CI for merge-base freshness updates: `classify` decides whether the base commits overlap the PR only in CI-wiring files, so an update head whose approved head already passed a full final CI run gets a quick run (static checks, the PR's own tests and the ci.yml structure tests) instead of the full suite.
 - `scripts/clarify_base_image_preseed.sh` — Seed the clarify sandbox's Docker Official Image base from a mirror before the build (CLARIFY_BASE_IMAGE_PRESEED log prefix).
 - `scripts/clarify_data_provision_guard.py` — Post-processing guard for orchestrate_clarify_respond.
 - `scripts/clarify_github_facts.py` — Read referenced GitHub issue, PR, branch and run state for the isolated clarify-respond worker.
