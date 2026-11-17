@@ -28,6 +28,13 @@
 #                           OPENROUTER_API_KEY TG_BOT_SECRET). Each value is
 #                           read from the environment variable of the same
 #                           name; an empty value is skipped (status=skipped_empty).
+#   CONSUMER_OPTIONAL_SECRET_NAMES — names copied like CONSUMER_SECRET_NAMES
+#                           only when their value is present; an empty one is
+#                           left out silently (no warning, no skipped_empty
+#                           line). Default: AI_COMMENT_SIGNING_SECRET, the
+#                           opt-in key for signed job-token comments
+#                           (scripts/comment_signature.py), so every repo
+#                           shares one value and cross-repo reads verify.
 #   PROPAGATE_ONLY_MISSING — `true` or `false` (default `false`, which keeps
 #                           the overwrite behaviour of push and dispatch runs).
 #                           When `true` (the workflow's weekly schedule), each
@@ -58,6 +65,16 @@ cd "${REPO_ROOT}"
 CONSUMER_REPOS_FILE="${CONSUMER_REPOS_FILE:-${REPO_ROOT}/.github/ai/consumer_repos.json}"
 PROPAGATE_TARGETS="${PROPAGATE_TARGETS:-}"
 CONSUMER_SECRET_NAMES="${CONSUMER_SECRET_NAMES:-CHECK_TRIAGE_ISSUES_TOKEN GH_PAT OPENROUTER_API_KEY TG_BOT_SECRET}"
+CONSUMER_OPTIONAL_SECRET_NAMES="${CONSUMER_OPTIONAL_SECRET_NAMES-AI_COMMENT_SIGNING_SECRET}"
+for optional_secret_name in ${CONSUMER_OPTIONAL_SECRET_NAMES}; do
+	if ! [[ "${optional_secret_name}" =~ ^[A-Z][A-Z0-9_]*$ ]]; then
+		echo "::error::propagate-consumer-secrets: invalid secret name '${optional_secret_name}' in CONSUMER_OPTIONAL_SECRET_NAMES."
+		exit 1
+	fi
+	if [ -n "${!optional_secret_name:-}" ] && ! [[ " ${CONSUMER_SECRET_NAMES} " == *" ${optional_secret_name} "* ]]; then
+		CONSUMER_SECRET_NAMES="${CONSUMER_SECRET_NAMES} ${optional_secret_name}"
+	fi
+done
 PROPAGATE_ONLY_MISSING="${PROPAGATE_ONLY_MISSING:-false}"
 
 log()
