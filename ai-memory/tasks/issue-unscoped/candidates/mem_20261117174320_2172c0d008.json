@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- analysis/validation-selftest-status.json:1-7 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: latest_run.generated_at advanced from 2026-11-16T08:02:52Z to 2026-11-17T02:43:08Z while consecutive_green_runs stayed at 184, so the streak was not incremented for a passing run.\n  WHY: Consumers of the status artifact see a green-run streak one lower than the recorded run history (184 instead of 185). Severity is NIT in all three sources. Confidence ranged from 2 (minimax_minimax-m3, which could not tell a producer bug from an intentional seed from an older open PR) to 4. z-ai_glm-5_3-flash dropped this finding because the open-status-PR seeding path in _resolve_previous_status can legitimately leave the count unchanged.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- analysis/validation-selftest-status.json:line 2 | severity=NIT | confidence=4\n  PROBLEM: The consecutive_green_runs counter was not incremented despite the run passing.\n  WHY: Consumers reading the status artifact see a green-run streak one lower than the actual run history (184 instead of 185).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- analysis/validation-selftest-status.json:lines 1-7 (PR diff hunk); producer logic at scripts/validation_selftest_status.py:131-149 (and _same_latest_run at scripts/validation_selftest_status.py:85-91) | severity=NIT | confidence=2\n  PROBLEM: The artifact advances latest_run.generated_at from \"2026-11-16T08:02:52Z\" to \"2026-11-17T02:43:08Z\" while leaving consecutive_green_runs at 184. The producer's _build_next_status keeps the count only when _same_latest_run returns True, so a passing run with a different generated_at should increment it by 1. test_green_after_green_increments_streak pins this expectation.\n  WHY: If the producer read the BASE file as the previous status, the result should be 185, not 184, and consumers would see a streak one lower than the run history. The reviewer could not tell a producer bug from an intentional \"seed from older open PR\" path without the workflow logs for run 44002327101.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- analysis/validation-selftest-status.json:Lines 2-4 | severity=NIT | confidence=4\n  PROBLEM: The passing run's generated_at advances, but consecutive_green_runs remains 184. The status producer increments the streak when a passing run differs from the previous latest run (scripts/validation_selftest_status.py, lines 139-144).\n  WHY: Consumers of this status artifact see a green-run streak one lower than the recorded run history.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a7f32347591dea08e1d2af535eafe719bd1778208fad1543c5cfe23b02616b2d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9640,
+    "run_id": "44106976032",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44106976032",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117174320_2172c0d008",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9640,
+    "run_id": "44106976032"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-17T17:43:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
