@@ -945,7 +945,10 @@ _pr_head_ci_runs_pending()
 # is dispatched once more (one `REVIEW_FINAL_CI_SYNC_QUICK pr= head=
 # outcome=dispatched|dispatch_refused` line).
 # Outputs: PR_FINAL_CI_OUTCOME = dispatched | exists | disabled |
-# dispatch_failed | invalid_input, one `REVIEW_FINAL_CI pr= head= outcome=
+# dispatch_failed | invalid_input; PR_FINAL_CI_REASON = the decision's reason
+# token (in_flight, success, failure, no_run, ...; empty when there was none);
+# PR_FINAL_CI_FAILED_AT = the newest failed full run's `updated_at` when the
+# reason is `failure` (empty otherwise); one `REVIEW_FINAL_CI pr= head= outcome=
 # reason=` line per decision (plus `outcome=read_failed action=dispatch` when
 # the listing could not be read). Always returns 0 except for invalid input
 # (1); it never fails its caller's step.
@@ -964,6 +967,8 @@ _pr_ensure_final_ci()
 	local wf="${REVIEW_FINAL_CI_WORKFLOW:-}" runs_json="" decision="" reason="" pr_json="" head_repo=""
 	local final_ci_docs_only="false" final_ci_docs_only_classifier="" final_ci_docs_only_files="" final_ci_docs_only_verdict=""
 	PR_FINAL_CI_OUTCOME=""
+	PR_FINAL_CI_REASON=""
+	PR_FINAL_CI_FAILED_AT=""
 	if [ -z "${wf}" ]; then
 		PR_FINAL_CI_OUTCOME="disabled"
 		echo "REVIEW_FINAL_CI pr=${pr:-?} head=${sha:-?} outcome=disabled reason=workflow_unset"
@@ -998,10 +1003,20 @@ _pr_ensure_final_ci()
 	case "${decision}" in
 		"exists "*)
 			PR_FINAL_CI_OUTCOME="exists"
-			echo "REVIEW_FINAL_CI pr=${pr} head=${sha} outcome=exists reason=${decision#exists }"
+			PR_FINAL_CI_REASON="${decision#exists }"
+			if [ "${PR_FINAL_CI_REASON}" = "failure" ]; then
+				# Newest failed full run's completion time, for the review sweep's
+				# base sync (scripts/review_final_ci_sweep.sh); no extra read.
+				PR_FINAL_CI_FAILED_AT="$(printf '%s' "${runs_json}" | jq -r --arg path ".github/workflows/${wf}" --arg sha "${sha}" '
+					[.workflow_runs[]? | select(type == "object")
+						| select(((.path // "") | split("@") | .[0]) == $path and (.head_sha // "") == $sha)
+						| select((.conclusion // "") == "failure" and (((.display_title // "") | endswith(" [sync-quick]")) | not))
+						| (.updated_at // "")] | map(select(test("^[0-9]{4}-"))) | max // ""' 2>/dev/null | tail -n1)"
+			fi
+			echo "REVIEW_FINAL_CI pr=${pr} head=${sha} outcome=exists reason=${PR_FINAL_CI_REASON}"
 			return 0
 			;;
-		"dispatch "*) reason="${decision#dispatch }" ;;
+		"dispatch "*) reason="${decision#dispatch }"; PR_FINAL_CI_REASON="${reason}" ;;
 		*)
 			reason="read_failed"
 			echo "REVIEW_FINAL_CI pr=${pr} head=${sha} outcome=read_failed action=dispatch"
@@ -1474,7 +1489,11 @@ _pr_base_sync_for_fresh_ci()
 #
 # `_pr_base_sync_count <pr>` sets PR_BASE_SYNC_COUNT to the number of markers
 # (legacy and bound) for <pr> posted by the token's own login; returns 1
-# (count unknown) when either read fails.
+# (count unknown) when either read fails. It also sets
+# PR_BASE_SYNC_FINAL_CI_COUNT to how many of them the review sweep posted
+# after a failed final CI run (they carry `<!-- ai:final-ci-base-sync:v1 pr=<n> -->`
+# in their text; empty when unknown), and PR_BASE_SYNC_LOGIN to the token's
+# own login once the `user` read succeeded.
 # API budget (§15): one `user` read and one paginated issue-comments read,
 # only on the overlap path. No earlier call in this file reads comments or
 # the token's login; the review gate's own comments read happens in another
@@ -1485,8 +1504,13 @@ _pr_base_sync_count()
 	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
 	local sync_login sync_comments_json
 	PR_BASE_SYNC_COUNT=""
+	PR_BASE_SYNC_FINAL_CI_COUNT=""
+	PR_BASE_SYNC_LOGIN=""
 	sync_login="$(gh_retry _safe_gh_jq user 2>/dev/null | jq -r 'if type == "object" then (.login // "") else "" end' 2>/dev/null | tail -n1)"
 	[[ "${sync_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]] || return 1
+	# Kept for the review sweep's base sync, which trusts only this login's
+	# ai-review/head-gate status (scripts/review_final_ci_sweep.sh).
+	PR_BASE_SYNC_LOGIN="${sync_login}"
 	sync_comments_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${repo}/issues/${pr_number}/comments?per_page=100" 2>/dev/null)" || return 1
 	PR_BASE_SYNC_COUNT="$(printf '%s' "${sync_comments_json}" | jq -r --arg login "${sync_login}" --arg pr "${pr_number}" '
 		[ .[]? | if type == "array" then .[] else . end
@@ -1497,6 +1521,14 @@ _pr_base_sync_count()
 		PR_BASE_SYNC_COUNT=""
 		return 1
 	fi
+	# The subset the review sweep made after a failed final CI run
+	# (scripts/review_final_ci_sweep.sh); same read, same trust rules.
+	PR_BASE_SYNC_FINAL_CI_COUNT="$(printf '%s' "${sync_comments_json}" | jq -r --arg login "${sync_login}" --arg pr "${pr_number}" '
+		[ .[]? | if type == "array" then .[] else . end
+		  | select(type == "object" and ((.user.login // "") == $login))
+		  | (.body // "") | select(type == "string" and startswith("**Branch updated from `") and contains("<!-- ai:final-ci-base-sync:v1 pr=" + $pr + " -->") and test("<!-- ai:merge-base-sync:v1 pr=" + $pr + " from=[0-9a-f]{40} sync=[0-9]+( base=[0-9a-f]{40} merge=[0-9a-f]{40})? -->\\s*$")) ]
+		| length' 2>/dev/null | tail -n1)"
+	[[ "${PR_BASE_SYNC_FINAL_CI_COUNT}" =~ ^[0-9]+$ ]] || PR_BASE_SYNC_FINAL_CI_COUNT=""
 }
 
 # `_pr_base_sync_observe_update_commit <pr> <from head> [<base ref>]`
@@ -1606,7 +1638,7 @@ _pr_base_sync_marker_post()
 {
 	local pr_number="$1" head_sha="$2" sync_number="$3" sync_max="$4" sync_base_sha="${5:-}" sync_merge_sha="${6:-}"
 	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
-	local base_label="${PR_BASE_FRESHNESS_BASE_REF:-the base branch}" sync_body
+	local base_label="${PR_BASE_FRESHNESS_BASE_REF:-the base branch}" sync_body sync_lead
 	local overlap_label="${PR_BASE_FRESHNESS_OVERLAP:-shared paths}"
 	# Keep the comment far below GitHub's 65,536-character body limit.
 	[ "${#overlap_label}" -le 2000 ] || overlap_label="${overlap_label:0:2000}, ..."
@@ -1618,8 +1650,17 @@ _pr_base_sync_marker_post()
 		echo "MERGE_BASE_SYNC_MARKER pr=${pr_number} head_sha=${head_sha} outcome=skipped reason=unbound_update"
 		return 0
 	fi
-	sync_body="$(printf '**Branch updated from `%s` before merging** (update %s; warning threshold %s).\n\n`%s` gained %s commit(s) that touch files this PR also changes (%s), so CI must run on the combined tree first. This head was already approved for merge: the next review run for update commit `%s` only waits for CI and then merges, without running the reviewers again. Any other head is reviewed normally. If the base changes these files again before the merge, the branch is updated again and the merge waits for CI on the new combined tree.\n\n<!-- ai:merge-base-sync:v1 pr=%s from=%s sync=%s base=%s merge=%s -->' \
-		"${base_label}" "${sync_number}" "${sync_max}" "${base_label}" "${PR_BASE_FRESHNESS_BEHIND_BY:-?}" "${overlap_label}" "${sync_merge_sha}" "${pr_number}" "${head_sha}" "${sync_number}" "${sync_base_sha}" "${sync_merge_sha}")"
+	# PR_BASE_SYNC_MARKER_LEAD (optional): replaces the sentence that says why
+	# the branch was updated; the review sweep sets it for a sync after a failed
+	# final CI run. The heading and the closing marker line never change, so
+	# _pr_base_sync_count and the review gate read every marker the same way.
+	sync_lead="${PR_BASE_SYNC_MARKER_LEAD:-}"
+	if [ -z "${sync_lead}" ]; then
+		sync_lead="$(printf '`%s` gained %s commit(s) that touch files this PR also changes (%s), so CI must run on the combined tree first.' \
+			"${base_label}" "${PR_BASE_FRESHNESS_BEHIND_BY:-?}" "${overlap_label}")"
+	fi
+	sync_body="$(printf '**Branch updated from `%s` before merging** (update %s; warning threshold %s).\n\n%s This head was already approved for merge: the next review run for update commit `%s` only waits for CI and then merges, without running the reviewers again. Any other head is reviewed normally. If the base changes these files again before the merge, the branch is updated again and the merge waits for CI on the new combined tree.\n\n<!-- ai:merge-base-sync:v1 pr=%s from=%s sync=%s base=%s merge=%s -->' \
+		"${base_label}" "${sync_number}" "${sync_max}" "${sync_lead}" "${sync_merge_sha}" "${pr_number}" "${head_sha}" "${sync_number}" "${sync_base_sha}" "${sync_merge_sha}")"
 	# One attempt only: a retried POST whose first response was lost would
 	# post a duplicate marker.
 	if _safe_gh_jq -X POST "repos/${repo}/issues/${pr_number}/comments" -f "body=${sync_body}" >/dev/null 2>&1; then
