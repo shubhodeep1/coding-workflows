@@ -1,0 +1,359 @@
+---
+name: Validation Refresh
+
+"on":
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      repos_file:
+        description: "Path to consumer repo registry JSON"
+        required: false
+        default: ".github/ai/consumer_repos.json"
+        type: string
+      branch_name:
+        description: "Refresh branch name"
+        required: false
+        default: "ai/validation-refresh"
+        type: string
+      alert_msg_level:
+        description: Override the Telegram alert threshold for this run. Set to SILENT when dispatched from the test-and-mark-stable smoke gate to avoid drowning the gate's combined notification in per-job alerts.
+        required: false
+        default: ""
+        type: string
+      discovery_enabled:
+        description: Master gate for codex-driven .ai/validate.yml discovery. Set to "false" to skip discovery entirely for this run (drift monitoring still executes).
+        required: false
+        default: "true"
+        type: string
+      discovery_dry_run:
+        description: When "true", run discovery dedup + memory plumbing but skip the codex invocation and PR creation. Useful for validating the pipeline without LLM cost.
+        required: false
+        default: "false"
+        type: string
+
+env:
+  # Claude capacity wait (issue #7370): a capacity fallback waits for the
+  # hourly capacity-resume pass instead of running codex/OpenCode. Off for the
+  # `core` install profile, which has no orchestrate-poll wrapper to resume
+  # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
+  # `inputs` is null on schedule-triggered runs; use `github.event.inputs`
+  # (which is null-safe via `||`) to avoid a parse-time/runtime miss.
+  ALERT_MSG_LEVEL: ${{ (github.event.inputs.alert_msg_level || '') != '' && github.event.inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+
+permissions:
+  # Read-only: this workflow renders + self-tests validation assets in a temp
+  # clone of each consumer repo for drift monitoring only. It does not commit,
+  # push, or open pull requests in this repo or any consumer repo.
+  contents: read
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
+
+concurrency:
+  # Include `branch_name` in the group key so smoke-test dispatches from
+  # `test-and-mark-stable.yml` (which pass a per-run branch name like
+  # `ai/validation-refresh-smoke-<run_id>`) cannot be cancelled by the
+  # daily cron or by a parallel default-branch manual dispatch, which
+  # would otherwise share the same group and surface as
+  # `orphan-workflows-test` failing with `concluded cancelled`.
+  # Schedule events and dispatches without an override both resolve to
+  # `ai/validation-refresh` (the workflow's documented default), so they
+  # still share one group and the cancel-in-progress semantics for
+  # production runs are preserved.
+  group: validation-refresh-${{ github.repository }}-${{ github.event.inputs.branch_name || 'ai/validation-refresh' }}
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pyyaml jsonschema jinja2
+
+      - name: Install Codex CLI
+        # Required for the codex-driven .ai/validate.yml discovery dispatch
+        # in `scripts/validation_discovery_bootstrap.py`. When
+        # VALIDATION_DISCOVERY_ENABLED=false the codex CLI is never
+        # invoked but the install step is still cheap (~30s) and keeps the
+        # workflow's behavior identical across schedule + dispatch runs.
+        uses: ./.github/actions/install-codex
+
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          VALIDATION_DISCOVERY_ENABLED: ${{ github.event.inputs.discovery_enabled || vars.VALIDATION_DISCOVERY_ENABLED || 'true' }}
+          VALIDATION_DISCOVERY_DRY_RUN: ${{ github.event.inputs.discovery_dry_run || vars.VALIDATION_DISCOVERY_DRY_RUN || 'false' }}
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_VALIDATION_REFRESH: ${{ vars.AI_ENGINE_VALIDATION_REFRESH || '' }}
+          CLAUDE_ENGINE_SUPPORT_DEST: ${{ runner.temp }}/claude-engine-support
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || '' }}
+        run: |
+          set -euo pipefail
+          # Discovery (role VALIDATION_REFRESH) runs Claude through the engine
+          # root staged here from this workflow's own checkout; the codex CLI
+          # above stays installed as the fallback. No work item, so no labels.
+          # This workflow is not reusable (schedule + dispatch only): its YAML,
+          # the runner script and this checkout are one commit, so the checkout
+          # is the verified support source once HEAD is pinned to GITHUB_SHA
+          # and the run is on the default branch (schedule, or a dispatch of
+          # the default branch). A dispatch of any other ref runs codex, so
+          # unmerged engine support never fetches the Claude pool credential.
+          engine="codex"
+          trusted_ref="false"
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ] ||
+             { [ -n "${DEFAULT_BRANCH}" ] && [ "${GITHUB_REF}" = "refs/heads/${DEFAULT_BRANCH}" ]; }; then
+            trusted_ref="true"
+          fi
+          if [ "${VALIDATION_DISCOVERY_ENABLED}" = "true" ] && [ "${VALIDATION_DISCOVERY_DRY_RUN}" != "true" ]; then
+            checkout_head="$(git -C "${GITHUB_WORKSPACE}" rev-parse HEAD 2>/dev/null || true)"
+            # shellcheck disable=SC1091
+            if [ "${trusted_ref}" = "true" ] && [ -n "${checkout_head}" ] && [ "${checkout_head}" = "${GITHUB_SHA}" ] &&
+               source scripts/ai_engine.sh && ai_engine_stage_support "${GITHUB_WORKSPACE}" "${CLAUDE_ENGINE_SUPPORT_DEST}"; then
+              echo "CLAUDE_ENGINE_SUPPORT_DIR=${CLAUDE_ENGINE_SUPPORT_DEST}" >> "$GITHUB_ENV"
+              engine="$(ai_engine_for_role VALIDATION_REFRESH || echo codex)"
+            else
+              echo "::warning::Trusted Claude engine support is unavailable; discovery runs codex."
+            fi
+          fi
+          [ "${engine}" = "claude" ] || engine="codex"
+          echo "engine=${engine}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        id: claude_pool
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Run validation refresh
+        id: refresh
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Codex discovery (`codex exec`) authenticates to the model provider
+          # (OpenRouter) defined in ~/.codex/config.toml via this key. Without
+          # it every discovery attempt exits non-zero (codex_rc_nonzero) and the
+          # daily refresh silently degrades to drift-monitoring only. Same secret
+          # the rest of the codex pipeline (plan/implement/validate/...) uses.
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Codex version baked into the isolated discovery agent's image
+          # (scripts/codex_isolated_exec.sh).
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          VALIDATION_DISCOVERY_ENABLED: ${{ github.event.inputs.discovery_enabled || vars.VALIDATION_DISCOVERY_ENABLED || 'true' }}
+          VALIDATION_DISCOVERY_DRY_RUN: ${{ github.event.inputs.discovery_dry_run || vars.VALIDATION_DISCOVERY_DRY_RUN || 'false' }}
+          VALIDATION_DISCOVERY_DEDUP_DAYS: ${{ vars.VALIDATION_DISCOVERY_DEDUP_DAYS || '7' }}
+          VALIDATION_DISCOVERY_MAX_ATTEMPTS: ${{ vars.VALIDATION_DISCOVERY_MAX_ATTEMPTS || '3' }}
+          # Aggregate wall-clock budget (seconds) for the codex discovery phase
+          # across all consumer repos. The runner stops invoking codex once the
+          # remaining budget can no longer cover one repo's worst case
+          # (MAX_ATTEMPTS * 300s) and degrades the rest to drift-monitoring only,
+          # so discovery cannot exceed this job's `timeout-minutes` (60). Default
+          # 2100s (35m) leaves >=20m for clone + render/lint/self-test across all
+          # repos. See scripts/validation_refresh_runner.py.
+          VALIDATION_DISCOVERY_BUDGET_SECS: ${{ vars.VALIDATION_DISCOVERY_BUDGET_SECS || '2100' }}
+          # Wall-clock cap (seconds) for ONE consumer's sandboxed self-test. The
+          # runner default of 300s is too short for large monorepos (bitsafe.io
+          # exited 124). Invalid values fall back to 900; the runner clamps the
+          # value to 1800 (half the job's timeout-minutes). See scripts/validation_refresh_runner.py.
+          VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS: ${{ vars.VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS || '900' }}
+          VALIDATION_DISCOVERY_MODEL: ${{ vars.VALIDATION_DISCOVERY_MODEL || 'openai/gpt-6-sol' }}
+          VALIDATION_DISCOVERY_REASONING_EFFORT: ${{ vars.VALIDATION_DISCOVERY_REASONING_EFFORT || 'high' }}
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_VALIDATION_REFRESH: ${{ vars.AI_ENGINE_VALIDATION_REFRESH || '' }}
+          VALIDATION_DISCOVERY_PR_BRANCH_PREFIX: ${{ vars.VALIDATION_DISCOVERY_PR_BRANCH_PREFIX || 'automation/validate-discovery' }}
+          VALIDATION_DISCOVERY_PR_LABEL: ${{ vars.VALIDATION_DISCOVERY_PR_LABEL || 'automation:validate-bootstrap' }}
+          # Close obsolete discovery PRs (older head SHA, or a manifest already
+          # committed). Set the repo var to 'false' to stop the runner closing PRs.
+          VALIDATION_DISCOVERY_CLOSE_SUPERSEDED: ${{ vars.VALIDATION_DISCOVERY_CLOSE_SUPERSEDED || 'true' }}
+          VALIDATION_REFRESH_REPOS_FILE_INPUT: ${{ github.event.inputs.repos_file || '.github/ai/consumer_repos.json' }}
+          VALIDATION_REFRESH_BRANCH_NAME_INPUT: ${{ github.event.inputs.branch_name || 'ai/validation-refresh' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "ERROR: secrets.GH_PAT is required for validation-refresh cross-repository operations."
+            exit 1
+          fi
+
+          REPOS_FILE="${VALIDATION_REFRESH_REPOS_FILE_INPUT}"
+          BRANCH_NAME="${VALIDATION_REFRESH_BRANCH_NAME_INPUT}"
+          if [ -z "${REPOS_FILE}" ] || [[ "${REPOS_FILE}" = /* ]] || [[ "/${REPOS_FILE}/" = *"/../"* ]]; then
+            echo "::error::repos_file must be a non-empty repository-relative path without '..' traversal."
+            exit 1
+          fi
+          WORKSPACE_REAL="$(realpath -e "${GITHUB_WORKSPACE}")"
+          if ! REPOS_FILE_REAL="$(realpath -e "${GITHUB_WORKSPACE}/${REPOS_FILE}" 2>/dev/null)" \
+              || [ ! -f "${REPOS_FILE_REAL}" ] \
+              || [[ "${REPOS_FILE_REAL}" != "${WORKSPACE_REAL}/"* ]]; then
+            echo "::error::repos_file must resolve to an existing regular file inside GITHUB_WORKSPACE."
+            exit 1
+          fi
+          if ! git check-ref-format --branch "${BRANCH_NAME}" >/dev/null 2>&1; then
+            echo "::error::branch_name is not a valid Git branch name."
+            exit 1
+          fi
+
+          # Wire git to use the gh credential helper so raw `git fetch`/`ls-remote`
+          # calls inside cloned consumer repos authenticate with GH_TOKEN.
+          gh auth setup-git
+
+          # Codex discovery routes `openai/gpt-5.*` slugs through OpenRouter, which
+          # is defined in ~/.codex/config.toml (model_provider="openrouter",
+          # env_key="OPENROUTER_API_KEY"). Mirror the central "Create Codex config"
+          # step that plan/implement/validate/etc. run; without it `codex exec` has
+          # no provider routing or credentials and exits non-zero. Keep this
+          # best-effort: discovery must never block drift monitoring (runner Q4:A),
+          # so a config or key problem downgrades to a warning, not a job failure.
+          export CODEX_HOME="${HOME}/.codex"
+          if ! bash scripts/write_codex_config.sh \
+              --model "${VALIDATION_DISCOVERY_MODEL}" \
+              --reasoning "${VALIDATION_DISCOVERY_REASONING_EFFORT}"; then
+            echo "::warning::write_codex_config.sh failed; codex discovery will be skipped/failed but drift monitoring continues."
+          fi
+          if [ "${VALIDATION_DISCOVERY_ENABLED}" = "true" ] \
+              && [ "${VALIDATION_DISCOVERY_DRY_RUN}" != "true" ] \
+              && [ -z "${OPENROUTER_API_KEY:-}" ]; then
+            echo "::warning::VALIDATION_DISCOVERY_ENABLED=true but OPENROUTER_API_KEY is empty; codex discovery will fail with codex_rc_nonzero. Set the OPENROUTER_API_KEY repository secret to enable discovery."
+          fi
+
+          RUNTIME_DIR="${RUNNER_TEMP}/validation-refresh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "${RUNTIME_DIR}"
+          SUMMARY_JSON="${RUNTIME_DIR}/summary.json"
+
+          python3 scripts/validation_refresh_runner.py \
+            --repos-file "${REPOS_FILE}" \
+            --branch-name "${BRANCH_NAME}" \
+            --summary-json "${SUMMARY_JSON}"
+
+          echo "summary_json=${SUMMARY_JSON}" >> "${GITHUB_OUTPUT}"
+
+      - name: Summarize results
+        if: always()
+        env:
+          SUMMARY_JSON: ${{ steps.refresh.outputs.summary_json }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SUMMARY_JSON:-}" ] || [ ! -f "${SUMMARY_JSON}" ]; then
+            echo "No summary JSON was produced." >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          python3 - "${SUMMARY_JSON}" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          summary_path = Path(sys.argv[1])
+          try:
+              summary = json.loads(summary_path.read_text(encoding="utf-8"))
+          except (OSError, json.JSONDecodeError) as exc:
+              lines = [
+                  "## Validation Refresh Summary",
+                  "",
+                  f"- Summary parse failed: {exc}",
+                  f"- Raw path: `{summary_path}`",
+              ]
+              with open(Path.cwd() / "_validation_refresh_summary.md", "w", encoding="utf-8") as handle:
+                  handle.write("\n".join(lines) + "\n")
+              raise SystemExit(0)
+          totals = summary.get("totals", {})
+          results = summary.get("results", [])
+
+          lines = []
+          lines.append("## Validation Refresh Summary")
+          lines.append("")
+          lines.append(f"- Processed: {totals.get('processed', 0)}")
+          lines.append(f"- Green: {totals.get('green', 0)}")
+          lines.append(f"- Red: {totals.get('red', 0)}")
+          lines.append(f"- Skipped: {totals.get('skipped', 0)}")
+          lines.append(f"- Error: {totals.get('error', 0)}")
+          lines.append("")
+          discovery_pr_lines = []
+          for item in results:
+              repo = item.get("repository", "unknown")
+              outcome = item.get("outcome", "unknown")
+              pr_url = item.get("pr_url") or ""
+              line = f"- `{repo}`: `{outcome}`"
+              if pr_url:
+                  line += f" ([PR]({pr_url}))"
+              lines.append(line)
+              discovery_outcome = item.get("discovery_outcome")
+              discovery_pr_url = item.get("discovery_pr_url")
+              if discovery_outcome:
+                  dline = f"  - discovery: `{discovery_outcome}`"
+                  if discovery_pr_url:
+                      dline += f" ([discovery PR]({discovery_pr_url}))"
+                  discovery_pr_lines.append((repo, discovery_outcome, discovery_pr_url))
+                  lines.append(dline)
+
+          if discovery_pr_lines:
+              opened = [d for d in discovery_pr_lines if d[1] in ("pr_opened",)]
+              reused = [d for d in discovery_pr_lines if d[1] in ("pr_reused",)]
+              agreed = [d for d in discovery_pr_lines if d[1] in ("agree",)]
+              failed = [d for d in discovery_pr_lines if d[1] in ("failed", "push_denied")]
+              skipped = [d for d in discovery_pr_lines if d[1] in ("skipped_dedup", "disabled", "dry_run", "skipped_budget")]
+              lines.append("")
+              lines.append("### Discovery dispatch")
+              lines.append("")
+              lines.append(f"- PRs opened: {len(opened)}")
+              lines.append(f"- PRs reused: {len(reused)}")
+              lines.append(f"- Agreements: {len(agreed)}")
+              lines.append(f"- Failures: {len(failed)}")
+              lines.append(f"- Skipped: {len(skipped)}")
+
+          with open(Path.cwd() / "_validation_refresh_summary.md", "w", encoding="utf-8") as handle:
+              handle.write("\n".join(lines) + "\n")
+          PY
+
+          cat "_validation_refresh_summary.md" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Telegram failure notification
+        if: failure()
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
+            echo "Telegram notification skipped (missing TG_BOT_SECRET or TG_CHAT_ID)."
+            exit 0
+          fi
+          # This step uses raw curl (not tg_send_msg) so the
+          # ALERT_MSG_LEVEL=SILENT plumbing won't filter it
+          # automatically; gate explicitly on SILENT/ERROR/CRITICAL so
+          # the smoke gate's release-gate dispatch
+          # (alert_msg_level=SILENT) doesn't surface a failure ping.
+          case "$(printf '%s' "${ALERT_MSG_LEVEL:-WARNING}" | tr '[:lower:]' '[:upper:]')" in
+            ERROR|CRITICAL|SILENT)
+              echo "ALERT_MSG_LEVEL=${ALERT_MSG_LEVEL} suppresses this WARNING-level Telegram failure ping (ERROR/CRITICAL/SILENT all filter it)."
+              exit 0
+              ;;
+          esac
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          printf -v TEXT '⚠️ Validation refresh failed in %s\n%s' "${{ github.repository }}" "${RUN_URL}"
+          curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+            -d "chat_id=${TG_CHAT_ID}" \
+            --data-urlencode "text=${TEXT}" \
+            > /dev/null

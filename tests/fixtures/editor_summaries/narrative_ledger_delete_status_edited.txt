@@ -1,0 +1,31 @@
+Changes made:
+- Removed tracked ledger file from the repository index by deleting `.ai/review_issue_ledger/pr-1524.txt` (lines 1-6 removed). This is the validated critical fix and matches PR intent (stop committing review ledger artifacts).
+- Verified post-fix behavior:
+  - `git ls-files .ai/review_issue_ledger/pr-1524.txt` => no output (no longer tracked).
+  - `git check-ignore -v .ai/review_issue_ledger/pr-1524.txt` => ignored by `.gitignore` rule `.ai/review_issue_ledger/`.
+- Assumption: `linked_issue_context.txt` is empty, so PR metadata + diff are the authoritative intent source.
+- Missing-context note: advisory artifacts `floor_tags.txt`, `review_issues.txt`, and `ledger_status.txt` are empty in this run.
+
+Change status:
+- edited
+
+Already satisfied (suggested but already present):
+- none
+
+Ignored suggestions (with short reason):
+- none
+
+Reviewer files processed:
+- /runtime/reviewer_1.txt checksum=aaaa used
+
+Review file issue audit:
+- /runtime/reviewer_1.txt total issues listed: 1 issues applied: 1 issues already applied: 0 issues ignored: 0
+
+PR comment audit:
+- none
+
+Regression fingerprint:
+- n/a (no prior-hunk overlap)
+
+Runtime failure path:
+- n/a (no prior-hunk overlap)

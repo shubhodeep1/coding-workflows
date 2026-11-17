@@ -1,0 +1,19 @@
+name: "Internal: AI Orchestrate Poller"
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  actions: write
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
+
+jobs:
+  poll:
+    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate_poll.yml@promote-candidate
+    secrets: inherit

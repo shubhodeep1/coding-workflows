@@ -1,0 +1,26 @@
+Changes made:
+- Restored the removed `attempt_count` assertion in `apps/api/test/auth-service-verification.test.mjs` so the test again verifies the existing auth contract: wrong-length verification codes are rejected without consuming an attempt. This matches `apps/api/src/modules/auth/service.ts`, where the invalid-length path returns before `incrementVerificationChallengeAttempts(...)`.
+
+Change status:
+- edited
+
+Already satisfied (suggested but already present):
+- none
+
+Ignored suggestions (with short reason):
+- none
+
+Reviewer files processed:
+- /runtime/reviewer_1.txt checksum=aaaa used
+
+Review file issue audit:
+- /runtime/reviewer_1.txt total issues listed: 1 issues applied: 1 issues already applied: 0 issues ignored: 0
+
+PR comment audit:
+- none
+
+Regression fingerprint:
+- n/a (no prior-hunk overlap)
+
+Runtime failure path:
+- n/a (no prior-hunk overlap)

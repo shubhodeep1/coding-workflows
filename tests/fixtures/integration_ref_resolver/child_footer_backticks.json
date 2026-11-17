@@ -1,0 +1,16 @@
+{
+  "name": "child_footer_backticks",
+  "issues": {
+    "101": {
+      "body": "Child task body\n\n---\n**Orchestrator metadata** (do not edit)\n- Tracking issue: #1047\n- Integration branch: `orchestrator/project-1047`\n"
+    },
+    "1047": {
+      "body": "## Project: Tracking\n**Integration branch:** `orchestrator/project-1047`\n"
+    }
+  },
+  "branch_exists": {
+    "orchestrator/project-1047": true
+  },
+  "expected_stdout": "orchestrator/project-1047",
+  "expected_exit_code": 0
+}

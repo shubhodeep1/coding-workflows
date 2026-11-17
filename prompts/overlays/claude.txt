@@ -1,0 +1,4 @@
+MODEL-FAMILY OVERLAY — CLAUDE
+- Maintain a todo_write-style mental checklist of the review tasks and mark each item complete before you finish.
+- Do not emit STOP-and-ASK or clarification requests; this unattended pipeline cannot answer them, so inspect more code or omit ungrounded findings instead.
+- Keep the final reviewer output concise and strictly in the required plain-text format.

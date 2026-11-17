@@ -1,0 +1,12 @@
+# Validation harness contract for this repository.
+# This repo is a workflow/template project, not a Flask service. Use the
+# repo-checks family so startup is non-HTTP and checks run via repo entrypoint.
+type: python-repo-checks
+entry: scripts/run_validation_repo_checks.sh
+slots:
+  project_name: coding-workflows
+  canary_tools:
+    - bash
+    - python3
+    - jq
+  tap_plan: 3

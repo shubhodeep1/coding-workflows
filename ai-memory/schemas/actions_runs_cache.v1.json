@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/actions_runs_cache.v1.json",
+  "title": "ActionsRunsCacheV1",
+  "description": "Cross-tick cache of GitHub Actions runs for one repository. Bump schema_version and write a new schema file when payload shape changes.",
+  "$comment": "Schema evolution rule: never repurpose existing fields in-place. Add additive fields when possible; otherwise publish actions_runs_cache.v2.json and update readers/writers.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "repository",
+    "fetched_at",
+    "ttl_seconds",
+    "etag",
+    "runs"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "repository": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "fetched_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "ttl_seconds": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "etag": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "conclusion",
+          "name",
+          "workflow_id",
+          "created_at",
+          "updated_at",
+          "head_branch",
+          "event",
+          "run_attempt",
+          "html_url"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "status": {
+            "type": ["string", "null"],
+            "maxLength": 64
+          },
+          "conclusion": {
+            "type": ["string", "null"],
+            "maxLength": 64
+          },
+          "name": {
+            "type": ["string", "null"],
+            "maxLength": 300
+          },
+          "workflow_id": {
+            "type": ["integer", "null"],
+            "minimum": 1
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "head_branch": {
+            "type": ["string", "null"],
+            "maxLength": 255
+          },
+          "event": {
+            "type": ["string", "null"],
+            "maxLength": 128
+          },
+          "run_attempt": {
+            "type": ["integer", "null"],
+            "minimum": 1
+          },
+          "html_url": {
+            "type": ["string", "null"],
+            "maxLength": 2048
+          },
+          "head_sha": {
+            "type": ["string", "null"],
+            "maxLength": 128
+          },
+          "path": {
+            "type": ["string", "null"],
+            "maxLength": 512
+          },
+          "run_started_at": {
+            "type": ["string", "null"],
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  }
+}

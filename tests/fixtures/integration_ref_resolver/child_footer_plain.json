@@ -1,0 +1,17 @@
+{
+  "name": "child_footer_plain",
+  "issues": {
+    "101": {
+      "body": "Child task body\n\n- Tracking issue: #1047\nIntegration branch: orchestrator/project-plain\n"
+    },
+    "1047": {
+      "body": "## Project: Tracking\n**Integration branch:** `orchestrator/project-tracking`\n"
+    }
+  },
+  "branch_exists": {
+    "orchestrator/project-plain": true,
+    "orchestrator/project-tracking": true
+  },
+  "expected_stdout": "orchestrator/project-plain",
+  "expected_exit_code": 0
+}
