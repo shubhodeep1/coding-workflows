@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:3753-3775 | severity=low | confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: Group 0 already pins the fast-fail step and the triage step (about 162s), so the move may leave it little headroom.\n  WHY: Nothing in the code shows group 0 would exceed its timeout, so the reviewer called it an advisory note and not a defect (reported as NIT).\n- changelog.d/9639-ci-prepush-step-to-poll-group-1.md:filename | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The fragment name ends in `group-1`, but the body and the implementation say group 0.\n  WHY: It has no runtime effect, the plan grant lists this exact path, and renaming is cosmetic (reported as NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: `.github/workflows/ci.yml` guard of \"Pre-push affected-test gate tests\" and its placement rationale, plus its pinning in `tests/test_ci_poll_test_sharding.py`\n  confidence=4\n  flagged_by: [openai_gpt-6-luna, anthropic_claude-sonnet-5_5]\n  EVIDENCE: The step is pinned to group 0, but `.github/workflows/ci.yml` lines 3755\u20133756 say the run gave no step durations, and the diff has no measured timings showing group 0 has the most headroom (openai_gpt-6-luna, MAJOR, confidence 4). anthropic_claude-sonnet-5_5 found no gap (NIT, confidence 1): the step moved with its name, body and `timeout-minutes` kept, and the comments require measuring before the next move. Severity differs between the reviewers; the highest is MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:3753-3775 | severity=NIT | confidence=1\n  PROBLEM: Group 0 already pins the fast-fail step and the triage step (about 162s), so the move may leave it little headroom.\n  WHY: Nothing in the code shows group 0 would exceed its timeout. The reviewer could not confirm a runtime failure, so this is advisory.\n- changelog.d/9639-ci-prepush-step-to-poll-group-1.md:filename | severity=NIT | confidence=4\n  PROBLEM: The fragment name ends in `group-1`, but the body and the implementation say group 0.\n  WHY: It has no runtime effect, the plan grant lists this exact path, and renaming is cosmetic.\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml` guard of \"Pre-push affected-test gate tests\", plus its pinning in `tests/test_ci_poll_test_sharding.py`\n  Evidence of absence: None found. The step moved with its name and body kept, `timeout-minutes` unchanged and no new job. The run gave statuses only, with no step durations, and the comments and changelog require measuring before the next move.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \u201cMove its slowest steps (see the run's step timings) into the CI job with the most headroom.\u201d\n  Expected change site: `.github/workflows/ci.yml`, the `Pre-push affected-test gate tests` group guard and its placement rationale; corresponding pinning in `tests/test_ci_poll_test_sharding.py`.\n  Evidence of absence: The step is pinned to group 0, but `.github/workflows/ci.yml` lines 3755\u20133756 state that the run provided no step durations. The placement is described as an estimate, and the diff contains no measured step timings or group-duration evidence establishing that group 0 has the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d5e75b210301e51cf9555e5ac425b0654730092f6fb11643de1bc98b5ebde32e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9641,
+    "run_id": "44060032651",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44060032651",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117123357_718f13300f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9641,
+    "run_id": "44060032651"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-17T12:33:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
