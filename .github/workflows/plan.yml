@@ -459,8 +459,11 @@ jobs:
             # because failing it filed plan_failed heal reports for a limit that
             # clears by itself. Every setup step skips on rate_limited_defer, so
             # Checkout never resolves the empty ref to the default branch. No gh
-            # call here: the limit is exhausted. The issue keeps ai:planning and
-            # stall recovery re-posts /answer once the limit resets.
+            # call here: the limit is exhausted. No label changes either: the
+            # skipped "Validate planning phase label" step is what moves
+            # ai:clarification / ai:blocked to ai:planning, so only an issue
+            # already in ai:planning is re-posted /answer by stall recovery
+            # (ai:blocked has no retrigger_plan action).
             {
               echo "rate_limited_defer=true"
               echo "ref="
@@ -470,7 +473,7 @@ jobs:
             echo "::warning::INTEGRATION_REF_RESOLVE outcome=deferred reason=rate_limited rc=${resolver_rc} ci_triage_routing=on issue=${issue_number}; refusing to fall back to the default branch."
             # "Write run summary" skips on SKIP_PLAN, so leave a trace here for
             # installs without standalone stall recovery (core profile).
-            echo "Planning for issue #${issue_number} was deferred: the integration-ref lookup was rate-limited (exit 75) with CI-triage routing on. The issue keeps ai:planning; stall recovery re-posts /answer after the limit resets. Without stall recovery, post /answer again by hand." >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+            echo "Planning for issue #${issue_number} was deferred: the integration-ref lookup was rate-limited (exit 75) with CI-triage routing on. No label was changed. If the issue was already in ai:planning, standalone stall recovery re-posts /answer after the limit resets; otherwise (ai:clarification or ai:blocked), or without stall recovery, post /answer again by hand after the limit resets." >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
             exit 0
           elif [ "${resolver_rc}" -eq 2 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
             # Exit 2 = resolver API failure (retries exhausted or permanent error).

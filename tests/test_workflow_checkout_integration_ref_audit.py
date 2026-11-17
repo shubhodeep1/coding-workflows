@@ -1049,6 +1049,10 @@ def test_plan_rate_limited_refusal_defers_without_failing() -> None:
 		summary_text = summary_path.read_text(encoding="utf-8")
 		assert "Planning for issue #5 was deferred" in summary_text, summary_text
 		assert "post /answer again by hand" in summary_text, summary_text
+		# The label transition is skipped, so stall recovery only covers an
+		# issue that was already in ai:planning (ai:blocked has no retrigger).
+		assert "If the issue was already in ai:planning" in summary_text, summary_text
+		assert "The issue keeps ai:planning" not in summary_text, summary_text
 	# Routing off keeps the legacy default-branch fallback and the error replay.
 	rc, out, gh_output, env_text, _calls = _run_refctx_core("plan.yml", "ok", "false", rate_limited)
 	assert rc == 0 and "ref=\n" in gh_output, out
