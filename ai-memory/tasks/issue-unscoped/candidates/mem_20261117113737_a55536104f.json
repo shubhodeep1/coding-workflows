@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_alert_levels_human_only.py:`_collect_stall_active_runs_cache_cases` (end of file, ~lines 738-757) | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: CI now runs the cases in tests/test_orchestrate_stall_active_runs_cache.py twice. The ci.yml catch-all collects the file directly (tests/test_ci_wires_every_test_file.py:30 `UNWIRED_ALLOWLIST: dict[str, str] = {}`, `_is_wired` at lines 104-109), and the globals-injection collector runs the same cases again. The collector's comment (\"ci.yml was outside that issue's file grant\") is stale.\n  WHY: Nothing fails at runtime, but CI pays twice. Each of the ~12 cases spawns bash subprocesses that extract functions from the ~34k-line poller script. The source severity was NIT, mapped here to low. anthropic_claude-sonnet-5_5 and google_gemini-3_1-flash-lite raised the same point only as hardening suggestions. minimax_minimax-m3 chose not to flag it because the file is outside the last-run diff and the issue is not a correctness defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION: tests/test_alert_levels_human_only.py | location: _collect_stall_active_runs_cache_cases and its leading comment (end of file)\n  PROBLEM: The ci.yml catch-all now collects tests/test_orchestrate_stall_active_runs_cache.py directly (UNWIRED_ALLOWLIST is empty), so these subprocess-driven cases run twice. The comment's reason is stale. Results stay correct.\n  WHY: Suggested fix: reword the comment or remove the collector and its call, then re-run tests/test_ci_wires_every_test_file.py. Estimated lines changed: 3-22. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n- HARDENING_SUGGESTION: tests/test_alert_levels_human_only.py | location: _collect_stall_active_runs_cache_cases\n  PROBLEM: tests/test_orchestrate_stall_active_runs_cache.py is wired explicitly by the collector and is also collected by the CI catch-all job, so its tests run twice. The comment \"ci.yml was outside that issue's file grant\" is misleading.\n  WHY: Suggested fix: remove _collect_stall_active_runs_cache_cases and its call, then check that tests/test_ci_wires_every_test_file.py still finds the file collected. Estimated lines changed: 15-20. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_alert_levels_human_only.py:`_collect_stall_active_runs_cache_cases` (end of file, ~lines 738-757) | severity=NIT | confidence=4\n  PROBLEM: After the merge-resolve commit (6632a40), the ci.yml `tests-system-python` catch-all collects tests/test_orchestrate_stall_active_runs_cache.py directly (tests/test_ci_wires_every_test_file.py:30 `UNWIRED_ALLOWLIST: dict[str, str] = {}`, `_is_wired` at lines 104-109). The collector in test_alert_levels_human_only.py runs the same cases a second time, and its comment no longer matches the code.\n  WHY: Nothing fails at runtime, but every one of the ~12 subprocess-heavy cases runs twice per CI cycle. Suggested fix: remove the collector and its call (or update the comment), then run tests/test_ci_wires_every_test_file.py. A matching hardening suggestion gives estimated lines changed 3-22 and HARDENING_RISK_SCORE 1.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cd5a0f33978f9dc4925b805420fbc6a1eff8a3dfc7c5212c56af35e426f57ae4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9564,
+    "run_id": "44051293544",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44051293544",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117113737_a55536104f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9564,
+    "run_id": "44051293544"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-17T11:37:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
