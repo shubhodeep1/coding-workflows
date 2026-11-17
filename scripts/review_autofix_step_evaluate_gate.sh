@@ -324,7 +324,9 @@ fi
 # cap markers, failure comment texts and editor summaries the cap
 # scan reads (other bodies clipped to their first and last 2000
 # characters; both markers sit at the ends of their comments), plus
-# the review-autofix-clean:v1 editor summaries. Every other non-Bot
+# the review-autofix-clean:v1 editor summaries and the
+# ai:final-ci-failed:v1 hand-back comments (scripts/review_final_ci_failed.sh,
+# posted by github-actions[bot]; both same-head skips read them). Every other non-Bot
 # comment is kept as a slim activity record ({id, author_login,
 # author_type, author_association, created_at, body: "",
 # activity_only: true}, no body text) in the same call and in the
@@ -354,7 +356,7 @@ gate_fetch_marker_comments()
   # shellcheck disable=SC2016
   if gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
     -f per_page=100 \
-    --jq '[.[] | (.body // "") as $b | ((select(($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or ($b | contains("review-autofix-failure")) or ($b | contains("AI review/autofix")) or ($b | contains("AI autofix editor summary")) or ($b | contains("Editor changes lost")) or ($b | contains("Editor no-op suspicious")) or ($b | contains("<!-- ai:claude-fixer-review-skipped:")) or ($b | contains("<!-- ai:merge-base-sync:v1 ")) or ($b | contains("<!-- review-autofix-clean:v1 ")) or ($b | contains("<!-- ai:single-issue-security-pass:v1 ")) or ($b | contains("<!-- ai:freshness-ci-failed:v1 "))) | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: (if (($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or (($b | length) <= 4000)) then $b else ($b[0:2000] + "\n[... clipped ...]\n" + $b[-2000:]) end)}) // (select((.user.type // "") != "Bot") | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: "", activity_only: true}))]' \
+    --jq '[.[] | (.body // "") as $b | ((select(($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or ($b | contains("review-autofix-failure")) or ($b | contains("AI review/autofix")) or ($b | contains("AI autofix editor summary")) or ($b | contains("Editor changes lost")) or ($b | contains("Editor no-op suspicious")) or ($b | contains("<!-- ai:claude-fixer-review-skipped:")) or ($b | contains("<!-- ai:merge-base-sync:v1 ")) or ($b | contains("<!-- review-autofix-clean:v1 ")) or ($b | contains("<!-- ai:single-issue-security-pass:v1 ")) or ($b | contains("<!-- ai:freshness-ci-failed:v1 ")) or ($b | contains("<!-- ai:final-ci-failed:v1 "))) | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: (if (($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or (($b | length) <= 4000)) then $b else ($b[0:2000] + "\n[... clipped ...]\n" + $b[-2000:]) end)}) // (select((.user.type // "") != "Bot") | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: "", activity_only: true}))]' \
     2>/dev/null | jq -c -s 'add // []' > "${gate_marker_comments_file}" 2>/dev/null \
     && [ -s "${gate_marker_comments_file}" ]; then
     gate_marker_fetch_state="ok"
@@ -395,6 +397,10 @@ gate_fetch_marker_comments()
 #   * A comments API failure or an unparseable marker logs
 #     AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED and runs normally.
 #   * vars.AUTOFIX_SKIP_TERMINAL_SAME_HEAD=false disables the check.
+#   * A final-CI hand-back marker (`ai:final-ci-failed:v1`, pipeline login
+#     or github-actions[bot]) for the head at or after the newest terminal
+#     marker re-arms one review (AUTOFIX_GATE_NO_SKIP_TERMINAL_SAME_HEAD
+#     ... reason=final_ci_failed).
 # Cost (CLAUDE.md §15): head_sha rides on the existing /pulls fetch
 # above. The authenticated marker author cannot be derived from that
 # response or the comments response, so eligible dispatches issue one
@@ -434,11 +440,19 @@ if [ "${SHOULD_RUN}" = "true" ] \
           partial_marker_comments_json=""
         fi
       fi
+      # Final-CI hand-back markers (docs/plans/final-ci-failure-ci-fix-plan.md
+      # Phase 1): one newer than the terminal marker re-arms the review.
+      terminal_final_ci_comments_json="[]"
+      if [ -n "${partial_marker_comments_json}" ]; then
+        if ! terminal_final_ci_comments_json="$(jq -c --arg login "${terminal_marker_author_login}" '[.[] | select(((.body // "") | contains("<!-- ai:final-ci-failed:v1 ")) or ((((.author_login // "") | ascii_downcase) == ($login | ascii_downcase)) and ((.body // "") | test("review-autofix-failure:v1|AI review/autofix|Editor changes lost|Editor no-op suspicious"))))]' "${gate_marker_comments_file}" 2>/dev/null)"; then
+          partial_marker_comments_json=""
+        fi
+      fi
       if [ -z "${partial_marker_comments_json}" ]; then
         echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=api_error"
       else
         terminal_decision=""
-        if ! terminal_decision="$(PARTIAL_MARKER_COMMENTS_JSON="${partial_marker_comments_json}" GATE_HEAD_SHA="${pr_head_sha_gate}" GATE_BASE_REF="${pr_base_ref_gate}" GATE_BASE_UPDATED_AT="${pr_updated_at_gate}" GATE_BOT_LOGIN="${AUTOFIX_BOT_LOGIN:-codex}" GATE_MARKER_AUTHOR_LOGIN="${terminal_marker_author_login}" python3 - <<'PY'
+        if ! terminal_decision="$(PARTIAL_MARKER_COMMENTS_JSON="${partial_marker_comments_json}" FINAL_CI_FAILED_MARKER_COMMENTS_JSON="${terminal_final_ci_comments_json}" GATE_PR_NUMBER="${PR_NUMBER}" GATE_HEAD_SHA="${pr_head_sha_gate}" GATE_BASE_REF="${pr_base_ref_gate}" GATE_BASE_UPDATED_AT="${pr_updated_at_gate}" GATE_BOT_LOGIN="${AUTOFIX_BOT_LOGIN:-codex}" GATE_MARKER_AUTHOR_LOGIN="${terminal_marker_author_login}" python3 - <<'PY'
 import json
 import os
 import re
@@ -519,7 +533,43 @@ for comment in comments:
 terminal = "false"
 if matching and latest_fields.get("resume_should_continue", "").strip().lower() == "false":
     terminal = "true"
+
+# A final-CI hand-back for this head (scripts/review_final_ci_failed.sh,
+# posted by github-actions[bot] or the GH_PAT login) at or after the
+# terminal marker means CI failed after that cycle ended: run one review.
+# Bounded to one: that review ends with a newer partial marker or a
+# failure comment from the GH_PAT login after the hand-back, and either
+# stops the re-arm.
+final_ci_failed = "false"
+pr_number = (os.environ.get("GATE_PR_NUMBER") or "").strip()
+try:
+    final_ci_comments = json.loads(os.environ.get("FINAL_CI_FAILED_MARKER_COMMENTS_JSON") or "[]")
+except (TypeError, ValueError):
+    final_ci_comments = []
+if terminal == "true" and latest_key is not None and re.fullmatch(r"[1-9][0-9]*", pr_number) \
+        and re.fullmatch(r"[0-9a-f]{40}", head_sha) and isinstance(final_ci_comments, list):
+    final_ci_re = re.compile(
+        "<!-- ai:final-ci-failed:v1 pr=" + re.escape(pr_number) + " head=" + re.escape(head_sha) + r" -->\s*$"
+    )
+    final_at = ""
+    review_output_at = ""
+    for comment in final_ci_comments:
+        if not isinstance(comment, dict) or not isinstance(comment.get("body"), str):
+            continue
+        author_login = str(comment.get("author_login") or "").strip().lower()
+        created_at = str(comment.get("created_at") or "")
+        if final_ci_re.search(comment["body"]):
+            if (marker_author_login and author_login == marker_author_login) \
+                    or (author_login == "github-actions[bot]" and str(comment.get("author_type") or "") == "Bot"):
+                final_at = max(final_at, created_at)
+        elif marker_author_login and author_login == marker_author_login:
+            # A pipeline failure / no-op comment: a review ran.
+            review_output_at = max(review_output_at, created_at)
+    if final_at and final_at >= latest_key[0] and not review_output_at > final_at:
+        final_ci_failed = "true"
+        terminal = "false"
 print(f"terminal={terminal}")
+print(f"final_ci_failed={final_ci_failed}")
 print(f"matching_markers={matching}")
 print(f"untrusted_markers={untrusted_markers}")
 print(f"commit_bot_markers={commit_bot_markers}")
@@ -542,13 +592,18 @@ PY
           terminal_resume_round="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "resume_round" { print $2 }' | tail -n 1)"
           terminal_resume_round_limit="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "resume_round_limit" { print $2 }' | tail -n 1)"
           terminal_marker_comment_id="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "marker_comment_id" { print $2 }' | tail -n 1)"
+          terminal_final_ci_failed="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "final_ci_failed" { print $2 }' | tail -n 1)"
+          terminal_no_skip_reason=""
+          if [ "${terminal_final_ci_failed}" = "true" ]; then
+            terminal_no_skip_reason=" reason=final_ci_failed"
+          fi
           if [ "${terminal_same_head}" = "true" ]; then
             SHOULD_RUN="false"
             SKIP_REASON="terminal_same_head"
             GATE_SKIP_RECORDED="true"
             echo "AUTOFIX_GATE_SKIP reason=terminal_same_head pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} resume_state=${terminal_resume_state} resume_round=${terminal_resume_round} resume_round_limit=${terminal_resume_round_limit} marker_comment_id=${terminal_marker_comment_id} mergeable=${pr_mergeable}"
           elif [ "${terminal_matching_markers:-0}" != "0" ] || [ "${terminal_untrusted_markers:-0}" != "0" ]; then
-            echo "AUTOFIX_GATE_NO_SKIP_TERMINAL_SAME_HEAD pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} resume_state=${terminal_resume_state} resume_round=${terminal_resume_round} resume_round_limit=${terminal_resume_round_limit} matching_markers=${terminal_matching_markers:-0} untrusted_markers=${terminal_untrusted_markers:-0} commit_bot_markers=${terminal_commit_bot_markers:-0} marker_author_login=${terminal_marker_author_login}"
+            echo "AUTOFIX_GATE_NO_SKIP_TERMINAL_SAME_HEAD pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} resume_state=${terminal_resume_state} resume_round=${terminal_resume_round} resume_round_limit=${terminal_resume_round_limit} matching_markers=${terminal_matching_markers:-0} untrusted_markers=${terminal_untrusted_markers:-0} commit_bot_markers=${terminal_commit_bot_markers:-0} marker_author_login=${terminal_marker_author_login}${terminal_no_skip_reason}"
           fi
         fi
       fi
@@ -574,6 +629,8 @@ fi
 # dispatch, a retargeted base, a comment with no valid created_at, a
 # trusted freshness-ci-failed marker for the head, a newer trusted
 # single-issue security-pass result (clean/findings/failed) for the head,
+# a final-CI hand-back marker for the head (pipeline login or
+# github-actions[bot]) at or after the clean marker,
 # a newer trusted failure / partial comment, a newer non-pipeline non-Bot
 # comment, or a newer non-pipeline non-Bot submitted review. Every lookup or parse failure
 # logs AUTOFIX_GATE_CLEAN_SAME_HEAD_CHECK outcome=error and runs the
@@ -665,6 +722,17 @@ TIME_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}")
 freshness_re = re.compile(
     "<!-- ai:freshness-ci-failed:v1 pr=" + re.escape(pr_number) + " head=" + re.escape(head_sha) + r" -->\s*$"
 )
+# Final-CI hand-back (scripts/review_final_ci_failed.sh, posted by
+# github-actions[bot] through the CI run's token): when it is at or after the
+# clean marker, the approved head failed its final CI and needs one review.
+# A review after it posts a newer clean marker, so this cannot loop.
+final_ci_re = re.compile(
+    "<!-- ai:final-ci-failed:v1 pr=" + re.escape(pr_number) + " head=" + re.escape(head_sha) + r" -->\s*$"
+)
+
+def final_ci_trusted(comment: dict) -> bool:
+    author = str(comment.get("author_login") or "").strip().lower()
+    return author == marker_author or (author == "github-actions[bot]" and str(comment.get("author_type") or "") == "Bot")
 
 def clean(value: object, pattern: str = r"[^A-Za-z0-9_.-]") -> str:
     return re.sub(pattern, "", str(value or "")) or "unknown"
@@ -726,6 +794,8 @@ else:
         reason = "comment_time_unavailable"
     elif any(isinstance(c.get("body"), str) and freshness_re.search(c["body"]) for c in trusted):
         reason = "freshness_ci_failed"
+    elif any(isinstance(c.get("body"), str) and final_ci_re.search(c["body"]) and final_ci_trusted(c) for c in newer):
+        reason = "final_ci_failed"
     elif any(
         isinstance(c.get("body"), str) and security_pass_re.search(c["body"])
         for c in newer
@@ -1522,6 +1592,21 @@ PY
         "${gate_marker_comments_file}" >/dev/null 2>&1; then
       FRESHNESS_CI_FAILED_SKIP_SUPPRESSED="true"
       echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=freshness_ci_failed pr=${PR_NUMBER} candidate=${candidate_skip_reason}"
+    elif [ "${candidate_skip}" = "true" ] && [ "${gate_marker_fetch_state}" = "ok" ] \
+      && [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]] \
+      && jq -e --arg login "${gate_marker_author_login}" --arg pr "${PR_NUMBER}" --arg head "${pr_head_sha_gate}" '
+        [ .[]? | select(type == "object")
+          | select(((.author_login // "") | ascii_downcase) == ($login | ascii_downcase)
+            or ((.author_login // "") == "github-actions[bot]" and (.author_type // "") == "Bot"))
+          | (.body // "") | select(type == "string")
+          | test("<!-- ai:final-ci-failed:v1 pr=" + $pr + " head=" + $head + " -->\\s*$") ] | any' \
+        "${gate_marker_comments_file}" >/dev/null 2>&1; then
+      # Final-CI hand-back for this head (final-ci-failure-ci-fix plan,
+      # Phase 1): same reasoning as the freshness marker. The review that
+      # runs posts a newer clean marker, so the clean same-head skip above
+      # ends the repeat.
+      FRESHNESS_CI_FAILED_SKIP_SUPPRESSED="true"
+      echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=final_ci_failed pr=${PR_NUMBER} candidate=${candidate_skip_reason}"
     fi
 
     if [ "${candidate_skip}" = "true" ] && [ "${MATERIALITY_SKIP_SUPPRESSED}" != "true" ] \

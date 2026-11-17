@@ -110,7 +110,7 @@ def test_gate_script_wiring() -> None:
 	assert 'base_ref: (.base.ref // ""), base_sha: (.base.sha // ""), head_repo:' in text
 	assert '"${AUTOFIX_SKIP_CLEAN_SAME_HEAD:-true}" = "false"' in text
 	assert 'echo "base_sha=${pr_base_sha_gate}" >> "${GITHUB_OUTPUT}"' in text
-	assert 'or ($b | contains("<!-- review-autofix-clean:v1 ")) or ($b | contains("<!-- ai:single-issue-security-pass:v1 ")) or ($b | contains("<!-- ai:freshness-ci-failed:v1 "))) |' in text
+	assert 'or ($b | contains("<!-- review-autofix-clean:v1 ")) or ($b | contains("<!-- ai:single-issue-security-pass:v1 ")) or ($b | contains("<!-- ai:freshness-ci-failed:v1 ")) or ($b | contains("<!-- ai:final-ci-failed:v1 "))) |' in text
 	assert 'body: "", activity_only: true}))]' in text
 	# Order: terminal same-head skip, clean same-head skip, fingerprint cap.
 	block_start = text.index("# ----- Clean same-head skip (issue #8952) -----")
@@ -259,6 +259,38 @@ def test_parser_uses_the_newest_marker_for_the_head(tmp_path: Path) -> None:
 def test_parser_exits_2_on_garbage(tmp_path: Path) -> None:
 	assert _run_parser(tmp_path, "not json")[0] == 2
 	assert _run_parser(tmp_path, {"not": "a list"})[0] == 2
+
+
+def _final_ci_comment(*, created_at: str, author: str = "github-actions[bot]", author_type: str = "Bot", head: str = HEAD, pr: str = "42", comment_id: int = 30) -> dict[str, object]:
+	return {"id": comment_id, "author_login": author, "author_type": author_type, "created_at": created_at,
+		"body": f"**The final CI run failed on head `{head[:12]}`.**\n\n<!-- ai:final-ci-failed:v1 pr={pr} head={head} -->"}
+
+
+def test_parser_final_ci_failed_marker_at_or_after_the_clean_marker_rearms(tmp_path: Path) -> None:
+	# Final-CI hand-back (final-ci-failure-ci-fix plan, Phase 1).
+	for created_at in (MARKER_TIME, "2026-11-06T12:00:00Z"):
+		for author, author_type in (("github-actions[bot]", "Bot"), (PIPELINE, "User")):
+			comments = [_summary_comment(), _final_ci_comment(created_at=created_at, author=author, author_type=author_type)]
+			decision = _run_parser(tmp_path, comments)[1]
+			assert decision["decision"] == "no_skip" and decision["reason"] == "final_ci_failed", (created_at, author, decision)
+
+
+def test_parser_final_ci_failed_marker_that_cannot_rearm(tmp_path: Path) -> None:
+	cases = [
+		# Older than the clean marker: a review already ran after the failure.
+		_final_ci_comment(created_at="2026-11-05T00:00:00Z"),
+		# Untrusted authors.
+		_final_ci_comment(created_at="2026-11-06T12:00:00Z", author="mallory", author_type="Bot"),
+		_final_ci_comment(created_at="2026-11-06T12:00:00Z", author="github-actions[bot]", author_type="User"),
+		# Another head or PR.
+		_final_ci_comment(created_at="2026-11-06T12:00:00Z", head=OTHER_HEAD),
+		_final_ci_comment(created_at="2026-11-06T12:00:00Z", pr="43"),
+	]
+	for comment in cases:
+		decision = _run_parser(tmp_path, [_summary_comment(), comment])[1]
+		# A newer non-Bot comment still re-arms through newer_human_comment.
+		expected = "newer_human_comment" if comment["author_type"] == "User" else "none"
+		assert decision["reason"] == expected, (comment, decision)
 
 
 # ---------------------------------------------------------------------------
@@ -440,6 +472,16 @@ def test_gate_freshness_ci_failed_marker_rearms(tmp_path: Path) -> None:
 	result, outputs, _ = _run_gate(tmp_path, fixture)
 	assert outputs["should_run"] == "true"
 	assert "outcome=no_skip reason=freshness_ci_failed" in result.stdout
+
+
+def test_gate_final_ci_failed_marker_rearms(tmp_path: Path) -> None:
+	fixture = _gate_fixture()
+	fixture["comments"].append({"id": 40, "user": {"login": "github-actions[bot]", "type": "Bot"}, "created_at": "2026-11-06T12:00:00Z",
+		"author_association": "NONE", "body": f"**The final CI run failed on head `x`.**\n\n<!-- ai:final-ci-failed:v1 pr=42 head={HEAD} -->"})
+	result, outputs, calls = _run_gate(tmp_path, fixture)
+	assert outputs["should_run"] == "true", result.stdout + result.stderr
+	assert "AUTOFIX_GATE_CLEAN_SAME_HEAD_CHECK outcome=no_skip reason=final_ci_failed pr=42" in result.stdout
+	assert _reviews_calls(calls) == 0
 
 
 # ---------------------------------------------------------------------------
