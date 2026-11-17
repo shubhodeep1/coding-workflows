@@ -1,0 +1,28 @@
+{
+  "schema_version": "task_lineage.v1",
+  "lineage_id": "issue-42",
+  "issue_number": 42,
+  "issue_url": "https://github.com/example/repo/issues/42",
+  "state": "in_progress",
+  "prs": [
+    {
+      "pr_number": 314,
+      "url": "https://github.com/example/repo/pull/314",
+      "state": "in_progress"
+    }
+  ],
+  "runs": [
+    {
+      "run_id": "9001",
+      "workflow": "ai-implement",
+      "run_attempt": 1,
+      "status": "in_progress",
+      "timestamp": "2026-03-21T00:06:00Z"
+    }
+  ],
+  "memory_record_ids": [
+    "mem_example_0001"
+  ],
+  "created_at": "2026-03-21T00:00:00Z",
+  "updated_at": "2026-03-21T00:06:00Z"
+}

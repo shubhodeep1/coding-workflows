@@ -1,0 +1,137 @@
+[
+	{
+		"name": "primary_limit_with_reset",
+		"status": 403,
+		"headers": {"x-ratelimit-remaining": "0", "x-ratelimit-reset": "1000120", "x-ratelimit-resource": "core"},
+		"stderr": "gh: API rate limit exceeded for user ID 1. (HTTP 403)\n",
+		"body": "{\"message\":\"API rate limit exceeded\"}",
+		"now": 1000000,
+		"expected": {"kind": "primary", "wait_secs": 121, "bucket": "core"}
+	},
+	{
+		"name": "primary_limit_graphql_resource",
+		"status": 403,
+		"headers": {"x-ratelimit-remaining": "0", "x-ratelimit-reset": "1000050", "x-ratelimit-resource": "graphql"},
+		"stderr": "",
+		"body": "",
+		"now": 1000000,
+		"expected": {"kind": "primary", "wait_secs": 51, "bucket": "graphql"}
+	},
+	{
+		"name": "primary_limit_reset_in_past_floors_to_one",
+		"status": 429,
+		"headers": {"x-ratelimit-remaining": "0", "x-ratelimit-reset": "999000"},
+		"stderr": "",
+		"body": "",
+		"now": 1000000,
+		"expected": {"kind": "primary", "wait_secs": 1, "bucket": "-"}
+	},
+	{
+		"name": "secondary_retry_after",
+		"status": 403,
+		"headers": {"retry-after": "7", "x-ratelimit-remaining": "4000"},
+		"stderr": "",
+		"body": "{\"message\":\"You have exceeded a secondary rate limit\"}",
+		"now": 1000000,
+		"expected": {"kind": "secondary", "wait_secs": 7, "bucket": "-"}
+	},
+	{
+		"name": "secondary_message_without_retry_after",
+		"status": 403,
+		"headers": {"x-ratelimit-remaining": "4000"},
+		"stderr": "gh: You have exceeded a secondary rate limit. (HTTP 403)\n",
+		"body": "",
+		"now": 1000000,
+		"expected": {"kind": "secondary", "wait_secs": 60, "bucket": "-"}
+	},
+	{
+		"name": "bare_429",
+		"status": 429,
+		"headers": {},
+		"stderr": "",
+		"body": "",
+		"now": 1000000,
+		"expected": {"kind": "secondary", "wait_secs": 60, "bucket": "-"}
+	},
+	{
+		"name": "paginate_rate_limit_from_stderr_needs_probe",
+		"status": null,
+		"headers": {},
+		"stderr": "gh: API rate limit exceeded for user ID 1. (HTTP 403)\n",
+		"body": "",
+		"now": 1000000,
+		"expected": {"kind": "primary", "wait_secs": -1, "bucket": "-"}
+	},
+	{
+		"name": "non_limit_403_is_permanent",
+		"status": 403,
+		"headers": {"x-ratelimit-remaining": "4000"},
+		"stderr": "gh: Resource not accessible by integration (HTTP 403)\n",
+		"body": "",
+		"now": 1000000,
+		"expected": {"kind": "permanent", "wait_secs": 0, "bucket": "-"}
+	},
+	{
+		"name": "not_found",
+		"status": 404,
+		"headers": {},
+		"stderr": "gh: Not Found (HTTP 404)\n",
+		"body": "",
+		"now": 1000000,
+		"expected": {"kind": "permanent", "wait_secs": 0, "bucket": "-"}
+	},
+	{
+		"name": "unprocessable",
+		"status": 422,
+		"headers": {},
+		"stderr": "",
+		"body": "",
+		"now": 1000000,
+		"expected": {"kind": "permanent", "wait_secs": 0, "bucket": "-"}
+	},
+	{
+		"name": "bad_gateway",
+		"status": 502,
+		"headers": {},
+		"stderr": "gh: HTTP 502: Bad Gateway\n",
+		"body": "",
+		"now": 1000000,
+		"expected": {"kind": "transient", "wait_secs": 0, "bucket": "-"}
+	},
+	{
+		"name": "request_timeout",
+		"status": 408,
+		"headers": {},
+		"stderr": "",
+		"body": "",
+		"now": 1000000,
+		"expected": {"kind": "transient", "wait_secs": 0, "bucket": "-"}
+	},
+	{
+		"name": "network_error_no_status",
+		"status": null,
+		"headers": {},
+		"stderr": "error connecting to api.github.com\n",
+		"body": "",
+		"now": 1000000,
+		"expected": {"kind": "transient", "wait_secs": 0, "bucket": "-"}
+	},
+	{
+		"name": "status_from_stderr_404",
+		"status": null,
+		"headers": {},
+		"stderr": "gh: Not Found (HTTP 404)\n",
+		"body": "",
+		"now": 1000000,
+		"expected": {"kind": "permanent", "wait_secs": 0, "bucket": "-"}
+	},
+	{
+		"name": "status_from_stderr_500",
+		"status": null,
+		"headers": {},
+		"stderr": "gh: HTTP 500: Internal Server Error\n",
+		"body": "",
+		"now": 1000000,
+		"expected": {"kind": "transient", "wait_secs": 0, "bucket": "-"}
+	}
+]

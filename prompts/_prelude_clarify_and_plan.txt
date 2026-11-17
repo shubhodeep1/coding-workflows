@@ -1,0 +1,8 @@
+> **Q1: \<question\>**
+>
+> Choices:
+> - **A** — \<description\> (RECOMMENDED)
+> - **B** — \<description\>
+> - **C** — \<description\>
+>
+> Reply: `Q1: A`

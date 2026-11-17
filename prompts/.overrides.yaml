@@ -1,0 +1,16 @@
+# See agents.md "Override conventions" section.
+# Files listed here are skipped by any future automated
+# prompt-rewriter tooling. Listing a file does NOT prevent human
+# edits; it only blocks automated regeneration / "improve this
+# prompt" passes from a future tool.
+files:
+  - path: prompts/conflict-resolver.txt
+    skip_validation: true
+    reason: |
+      Wording is deliberately terse; prior LLM-driven rewrites
+      introduced verbosity that broke the resolver's narrow
+      single-purpose scope.
+  - path: prompts/integration-sync-conflict-resolver.txt
+    skip_validation: true
+    reason: |
+      Sibling of the file above; inherits the same constraint.
