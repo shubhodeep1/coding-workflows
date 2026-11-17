@@ -4599,4 +4599,6 @@ jobs:
           PR_HEAD_SHA: ${{ github.sha }}
           ALLOW_WORKFLOW_EDITS: ${{ contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true')) }}
           FINAL_CI_FAILED_REDISPATCH_ENABLED: ${{ vars.FINAL_CI_FAILED_REDISPATCH_ENABLED || 'true' }}
+          # A failed sync-quick run gets the full suite instead of a hand-back.
+          FINAL_CI_FAILED_SYNC_QUICK: ${{ inputs.sync_quick == 'true' }}
         run: bash scripts/review_final_ci_failed.sh

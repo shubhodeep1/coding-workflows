@@ -407,7 +407,7 @@ def test_a_verified_update_gets_its_full_final_ci_run_right_away(tmp_path: Path)
 	assert runs[0][:6] == ["workflow", "run", "ci.yml", "--repo", "owner/repo", "--ref"]
 	assert f"head_sha={UPDATE}" in runs[0] and "pr_number=7" in runs[0]
 	assert not any("sync_quick" in arg for arg in runs[0])
-	assert f"MERGE_BASE_SYNC_FINAL_CI pr=7 head={UPDATE} outcome=dispatched reason=other agents.md sync_quick=false" in result.stdout
+	assert f"MERGE_BASE_SYNC_FINAL_CI pr=7 head={UPDATE} outcome=dispatched reason=overlap_other sync_quick=false" in result.stdout
 
 
 def test_ci_wiring_overlap_with_a_green_approved_head_dispatches_sync_quick(tmp_path: Path) -> None:
@@ -449,6 +449,20 @@ def test_the_merge_ref_is_awaited_before_dispatching(tmp_path: Path) -> None:
 	polls = [{"head": {"sha": UPDATE}, "mergeable": None}, {"head": {"sha": UPDATE}, "mergeable": True}]
 	result, gh_calls, api_calls = _dispatch(tmp_path, mergeable="null", polls=polls)
 	assert len([c for c in api_calls if c.endswith("repos/owner/repo/pulls/7")]) == 2
+	assert len(_dispatches(gh_calls)) == 1, result.stdout + result.stderr
+
+
+def test_reason_names_why_the_quick_mode_was_refused(tmp_path: Path) -> None:
+	result, _, _ = _dispatch(tmp_path, overlap=".github/workflows/ci.yml", green=False)
+	assert "outcome=dispatched reason=approved_head_not_full_green sync_quick=false" in result.stdout
+	result, _, _ = _dispatch(tmp_path, overlap="", green=True)
+	assert "outcome=dispatched reason=full_suite sync_quick=false" in result.stdout
+
+
+def test_a_failed_poll_read_keeps_polling_instead_of_reporting_a_head_move(tmp_path: Path) -> None:
+	polls = [{}, {"head": {"sha": UPDATE}, "mergeable": True}]
+	result, gh_calls, _ = _dispatch(tmp_path, mergeable="null", polls=polls)
+	assert "head_moved" not in result.stdout
 	assert len(_dispatches(gh_calls)) == 1, result.stdout + result.stderr
 
 
@@ -574,3 +588,9 @@ def test_the_sync_job_missing_from_needs_fails_a_sync_quick_run() -> None:
 	results = _results("skipped", "success")
 	del results[SYNC_JOB]
 	assert _aggregate(results, "true").returncode == 1
+
+
+def test_a_failed_sync_quick_run_tells_final_ci_failed_to_run_the_full_suite() -> None:
+	steps = _ci()["jobs"]["final-ci-failed"]["steps"]
+	step = next(s for s in steps if s.get("run") == "bash scripts/review_final_ci_failed.sh")
+	assert step["env"]["FINAL_CI_FAILED_SYNC_QUICK"] == "${{ inputs.sync_quick == 'true' }}"

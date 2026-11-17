@@ -779,9 +779,11 @@ _pr_ensure_final_ci()
 				| select(type == "object")
 				| select(((.path // "") | split("@") | .[0]) == $path)
 				| select((.head_sha // "") == $sha)] as $runs
+			| ($runs | map(select(((.display_title // "") | endswith(" [sync-quick]")) | not))) as $full_runs
 			| if any($runs[]; (.status // "") != "completed") then "exists in_flight"
 			elif any($runs[]; (.conclusion // "") == "success") then "exists success"
-			elif any($runs[]; (.conclusion // "") == "failure") then "exists failure"
+			elif any($full_runs[]; (.conclusion // "") == "failure") then "exists failure"
+			elif any($runs[]; (.conclusion // "") == "failure") then "dispatch sync_quick_failed"
 			elif ($runs | length) > 0 then "dispatch only_unfinished"
 			else "dispatch no_run" end
 		else "read_failed" end' 2>/dev/null | tail -n1)"
@@ -844,7 +846,8 @@ _pr_ensure_final_ci()
 	fi
 	# Sync-quick final CI (merge-base sync churn): ci.yml's tests-sync-quick
 	# re-checks the claim, so a wrong flag fails CI instead of skipping tests.
-	if [ "${PR_FINAL_CI_SYNC_QUICK:-false}" = "true" ]; then
+	# A failed sync-quick run is never answered with another quick run.
+	if [ "${PR_FINAL_CI_SYNC_QUICK:-false}" = "true" ] && [ "${reason}" != "sync_quick_failed" ]; then
 		if gh workflow run "${wf}" --repo "${repo}" --ref "${ref}" -f pr_number="${pr}" -f head_sha="${sha}" -f sync_quick=true >/dev/null 2>&1; then
 			PR_FINAL_CI_OUTCOME="dispatched"
 			echo "REVIEW_FINAL_CI_SYNC_QUICK pr=${pr} head=${sha} outcome=dispatched"
@@ -1454,7 +1457,7 @@ _pr_base_sync_dispatch_final_ci()
 	local pr_number="$1" sync_from_head="$2" sync_update_head="$3"
 	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
 	local sync_ci_attempts="${MERGE_BASE_SYNC_MERGE_REF_POLL_ATTEMPTS:-3}" sync_ci_sleep="${MERGE_BASE_SYNC_HEAD_POLL_SECONDS:-3}"
-	local sync_ci_i sync_ci_pull sync_ci_quick="false" sync_ci_verdict="" sync_ci_classifier
+	local sync_ci_i sync_ci_pull sync_ci_pull_head sync_ci_quick="false" sync_ci_verdict="" sync_ci_classifier sync_ci_reason="full_suite"
 	sync_ci_log()
 	{
 		echo "MERGE_BASE_SYNC_FINAL_CI pr=${pr_number:-?} head=${sync_update_head:-?} outcome=$1 reason=$2 sync_quick=${sync_ci_quick}"
@@ -1492,7 +1495,10 @@ _pr_base_sync_dispatch_final_ci()
 		sync_ci_i=$((sync_ci_i + 1))
 		sleep "${sync_ci_sleep}"
 		sync_ci_pull="$(gh_retry _safe_gh_jq "repos/${repo}/pulls/${pr_number}" 2>/dev/null || echo "")"
-		if [ "$(printf '%s' "${sync_ci_pull}" | jq -r 'if type == "object" then (.head.sha // "") else "" end' 2>/dev/null | tail -n1)" != "${sync_update_head}" ]; then
+		sync_ci_pull_head="$(printf '%s' "${sync_ci_pull}" | jq -r 'if type == "object" then (.head.sha // "") else "" end' 2>/dev/null | tail -n1)"
+		# A failed or unreadable read is not a head move: keep polling.
+		[ -n "${sync_ci_pull_head}" ] || continue
+		if [ "${sync_ci_pull_head}" != "${sync_update_head}" ]; then
 			sync_ci_log skipped head_moved
 			return 0
 		fi
@@ -1507,15 +1513,20 @@ _pr_base_sync_dispatch_final_ci()
 			sync_ci_classifier="${BASH_SOURCE[0]%/*}/ci_sync_quick.sh"
 			if [ -f "${sync_ci_classifier}" ] && [ -n "${PR_BASE_FRESHNESS_OVERLAP:-}" ]; then
 				sync_ci_verdict="$(printf '%s' "${PR_BASE_FRESHNESS_OVERLAP}" | tr ',' '\n' | bash "${sync_ci_classifier}" classify 2>/dev/null)"
-				if [ "${sync_ci_verdict}" = "ci_wiring_only" ] \
-					&& bash "${sync_ci_classifier}" full-ci-green "${repo}" "${pr_number}" "${sync_from_head}" "${REVIEW_FINAL_CI_WORKFLOW}"; then
+				# reason= stays one token: the classifier's `other <path>` is logged as overlap_other.
+				if [ "${sync_ci_verdict}" != "ci_wiring_only" ]; then
+					sync_ci_reason="overlap_other"
+				elif bash "${sync_ci_classifier}" full-ci-green "${repo}" "${pr_number}" "${sync_from_head}" "${REVIEW_FINAL_CI_WORKFLOW}"; then
 					sync_ci_quick="true"
+					sync_ci_reason="ci_wiring_only"
+				else
+					sync_ci_reason="approved_head_not_full_green"
 				fi
 			fi
 			;;
 	esac
 	PR_FINAL_CI_SYNC_QUICK="${sync_ci_quick}" _pr_ensure_final_ci "${repo}" "${pr_number}" "${sync_update_head}" "${PR_BASE_SYNC_HEAD_REF}" || true
-	sync_ci_log "${PR_FINAL_CI_OUTCOME:-unknown}" "${sync_ci_verdict:-full_suite}"
+	sync_ci_log "${PR_FINAL_CI_OUTCOME:-unknown}" "${sync_ci_reason}"
 	return 0
 }
 

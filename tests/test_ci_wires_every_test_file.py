@@ -86,10 +86,11 @@ def _catch_all_collects_python_tests() -> bool:
 
 
 # A module the catch-all can run defines a pytest test function or a test
-# class at top level or one indent deep. A script-style file whose checks run
-# only under `if __name__ == "__main__"` collects nothing, so it still has to
+# class at top level (test methods live inside such a class). A test def
+# nested in `main()` or under `if __name__ == "__main__"` is indented, so it
+# does not count: such a script-style file collects nothing and still has to
 # be named in a workflow.
-_COLLECTABLE_TEST = re.compile(r"^(?:\s{0,4}|\t?)(?:async\s+)?def\s+test\w*\s*\(|^class\s+(?:Test\w*|\w+\([^)]*TestCase[^)]*\))", re.MULTILINE)
+_COLLECTABLE_TEST = re.compile(r"^(?:async\s+)?def\s+test\w*\s*\(|^class\s+(?:Test\w*|\w+\([^)]*TestCase[^)]*\))", re.MULTILINE)
 
 
 def _defines_collectable_tests(relative: str) -> bool:
@@ -169,6 +170,10 @@ def test_script_style_files_still_need_a_workflow_entry(tmp_path) -> None:
 		"async def test_y():\n\tpass\n": True,
 		"def main():\n\tassert 1\n\nif __name__ == '__main__':\n\tmain()\n": False,
 		"def check_thing():\n\tpass\n": False,
+		# Nested test defs run only when the script runs: pytest collects nothing.
+		"def main():\n\tdef test_case():\n\t\tpass\n\ttest_case()\n": False,
+		"if __name__ == '__main__':\n\tdef test_case():\n\t\tpass\n": False,
+		"def main():\n    def test_case():\n        pass\n": False,
 	}
 	for text, expected in samples.items():
 		assert bool(_COLLECTABLE_TEST.search(text)) is expected, text
