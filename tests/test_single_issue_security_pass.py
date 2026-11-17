@@ -77,6 +77,16 @@ if len(args) > 1 and args[0] == "api" and args[1].startswith("repos/o/r/commits/
 if len(args) > 1 and args[0] == "api" and args[1].startswith("repos/o/r/compare/") and os.environ.get("FAKE_GH_COMPARE"):
 	print(os.environ["FAKE_GH_COMPARE"])
 	sys.exit(0)
+if args[0] == "api" and len(args) > 1 and args[1].startswith("repos/o/r/commits/") and os.environ.get("FAKE_GH_COMMITS"):
+	commits = json.load(open(os.environ["FAKE_GH_COMMITS"]))
+	sha = args[1].rsplit("/", 1)[1]
+	if sha not in commits:
+		sys.exit(1)
+	print(json.dumps(commits[sha]))
+	sys.exit(0)
+if args[0] == "api" and len(args) > 1 and args[1].startswith("repos/o/r/compare/") and os.environ.get("FAKE_GH_COMMITS"):
+	print(os.environ.get("FAKE_GH_COMPARE_STATUS", "ahead"))
+	sys.exit(0)
 if args[0] == "api" and "--paginate" in args:
 	if "comments_once" in fail and sum('"--paginate"' in line for line in open(os.environ["FAKE_GH_LOG"])) == 1:
 		sys.exit(1)
@@ -1378,3 +1388,121 @@ def test_base_sync_carry_kill_switch(tmp_path: Path) -> None:
 	assert "outcome=carry_skipped reason=disabled" in result.stdout
 	assert output == "hold=true\nhold_reason=audit_dispatched\n"
 
+
+# --- Freshness-update heads reuse the approved head's clean audit ----------
+
+SYNC_ONE = "e" * 40
+BASE_ONE = "1" * 40
+BASE_TWO = "2" * 40
+
+
+def _sync_marker(from_head: str, merge: str, base: str, sync: int = 1) -> str:
+	return (
+		"**Branch updated from `main` before merging** (update 1; warning threshold 2).\n\n"
+		f"<!-- ai:merge-base-sync:v1 pr=42 from={from_head} sync={sync} base={base} merge={merge} -->"
+	)
+
+
+def _merge_commit(first: str, second: str, committer: str = "web-flow", verified: bool = True) -> dict:
+	return {"parents": [first, second], "verified": verified, "committer": committer}
+
+
+def _inherit_run(tmp_path: Path, comments: list, commits: dict, mode: str = "gate", compare_status: str = "ahead"):
+	support = tmp_path / "support"
+	support.mkdir(exist_ok=True)
+	(support / "review_head_gate.sh").write_text((ROOT / "scripts" / "review_head_gate.sh").read_text(encoding="utf-8"), encoding="utf-8")
+	(support / "gh_helpers.sh").write_text('gh_retry() { "$@"; }\n', encoding="utf-8")
+	(tmp_path / "commits.json").write_text(json.dumps(commits), encoding="utf-8")
+	return _run(
+		tmp_path,
+		mode,
+		comments=comments,
+		env={"FAKE_GH_COMMITS": str(tmp_path / "commits.json"), "FAKE_GH_COMPARE_STATUS": compare_status},
+	)
+
+
+def test_verified_freshness_update_of_a_clean_head_needs_no_new_audit(tmp_path: Path) -> None:
+	comments = [
+		_comment("ok\n" + _marker("clean", OLD, 1), comment_id=1),
+		_comment(_sync_marker(OLD, HEAD, BASE_ONE), comment_id=2),
+	]
+	result, calls, output = _inherit_run(tmp_path, comments, {HEAD: _merge_commit(OLD, BASE_ONE)})
+	assert output == "hold=false\n", result.stdout + result.stderr
+	assert f"outcome=clean reason=freshness_sync_inherited from={OLD} hops=1" in result.stdout
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+	assert not any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
+
+
+def test_chain_of_updates_walks_back_to_the_audited_head(tmp_path: Path) -> None:
+	comments = [
+		_comment("ok\n" + _marker("clean", OLD, 1), comment_id=1),
+		_comment(_sync_marker(OLD, SYNC_ONE, BASE_ONE), comment_id=2),
+		_comment(_sync_marker(SYNC_ONE, HEAD, BASE_TWO, sync=2), comment_id=3),
+	]
+	commits = {SYNC_ONE: _merge_commit(OLD, BASE_ONE), HEAD: _merge_commit(SYNC_ONE, BASE_TWO)}
+	result, _calls, output = _inherit_run(tmp_path, comments, commits)
+	assert output == "hold=false\n", result.stdout + result.stderr
+	assert f"from={OLD} hops=2" in result.stdout
+
+
+def test_status_mode_reports_an_inherited_clean_head(tmp_path: Path) -> None:
+	comments = [
+		_comment("ok\n" + _marker("clean", OLD, 1), comment_id=1),
+		_comment(_sync_marker(OLD, HEAD, BASE_ONE), comment_id=2),
+	]
+	result, calls, _output = _inherit_run(tmp_path, comments, {HEAD: _merge_commit(OLD, BASE_ONE)}, mode="status")
+	assert "SINGLE_ISSUE_SECURITY_PASS_STATE=clean" in result.stdout
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+@pytest.mark.parametrize(
+	"case",
+	["from_findings", "not_github_merge", "unsigned", "wrong_first_parent", "base_parent_mismatch", "base_not_on_main", "foreign_marker", "unbound_marker", "commit_unreadable"],
+)
+def test_unverifiable_updates_are_audited_as_before(tmp_path: Path, case: str) -> None:
+	prior = _marker("findings" if case == "from_findings" else "clean", OLD, 1)
+	sync_body = _sync_marker(OLD, HEAD, BASE_ONE)
+	if case == "unbound_marker":
+		sync_body = "**Branch updated from `main` before merging** (update 1).\n\n" + f"<!-- ai:merge-base-sync:v1 pr=42 from={OLD} sync=1 -->"
+	commit = _merge_commit(OLD, BASE_ONE)
+	if case == "not_github_merge":
+		commit = _merge_commit(OLD, BASE_ONE, committer="someone")
+	elif case == "unsigned":
+		commit = _merge_commit(OLD, BASE_ONE, verified=False)
+	elif case == "wrong_first_parent":
+		commit = _merge_commit(SYNC_ONE, BASE_ONE)
+	elif case == "base_parent_mismatch":
+		commit = _merge_commit(OLD, BASE_TWO)
+	comments = [
+		_comment("ok\n" + prior, comment_id=1),
+		_comment(sync_body, login="intruder" if case == "foreign_marker" else "owner", comment_id=2),
+	]
+	commits = {} if case == "commit_unreadable" else {HEAD: commit}
+	result, calls, output = _inherit_run(
+		tmp_path, comments, commits, compare_status="diverged" if case == "base_not_on_main" else "ahead"
+	)
+	assert "freshness_sync_inherited" not in result.stdout
+	assert output.startswith("hold=true\n"), result.stdout + result.stderr
+	assert any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+def test_a_marker_on_the_update_head_itself_still_decides(tmp_path: Path) -> None:
+	comments = [
+		_comment("ok\n" + _marker("clean", OLD, 1), comment_id=1),
+		_comment(_sync_marker(OLD, HEAD, BASE_ONE), comment_id=2),
+		_comment(_marker("pending", HEAD, 2), comment_id=3),
+	]
+	result, calls, output = _inherit_run(tmp_path, comments, {HEAD: _merge_commit(OLD, BASE_ONE)})
+	assert output == "hold=true\nhold_reason=audit_pending\n"
+	assert "freshness_sync_inherited" not in result.stdout
+	assert not any(call[:1] == ["api"] and "commits/" in call[1] for call in calls if len(call) > 1)
+
+
+def test_missing_support_helpers_fall_back_to_an_audit(tmp_path: Path) -> None:
+	comments = [
+		_comment("ok\n" + _marker("clean", OLD, 1), comment_id=1),
+		_comment(_sync_marker(OLD, HEAD, BASE_ONE), comment_id=2),
+	]
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	assert output.startswith("hold=true\n") and "freshness_sync_inherited" not in result.stdout
+	assert any(call[:2] == ["workflow", "run"] for call in calls)
