@@ -512,6 +512,20 @@ jobs:
             snapshot_active_review_runs "${wf}"
           done
 
+          # The same snapshot for the final-CI base sync
+          # (scripts/review_final_ci_sweep.sh), so it never updates a branch a
+          # queued or running review/autofix run is about to push to. One
+          # `<workflow>:<head ref or pr:<n>> <count>` line per entry, plus
+          # `incomplete` when a listing failed. No extra API call.
+          {
+            if [ "${active_snapshot_incomplete}" = "true" ]; then
+              echo "incomplete"
+            fi
+            for final_ci_active_key in "${!active_review_runs[@]}"; do
+              printf '%s %s\n' "${final_ci_active_key}" "${active_review_runs[${final_ci_active_key}]}"
+            done
+          } > "${RUNNER_TEMP}/final-ci-active-review-runs.txt" || true
+
           # Read into an array so counters survive the loop (no subshell pipe).
           mapfile -t rows < <(printf '%s' "${prs_json}" | jq -c '.[]')
 
@@ -744,6 +758,13 @@ jobs:
           REVIEW_FINAL_CI_WORKFLOW: ci.yml
           FINAL_CI_SWEEP_PR_SNAPSHOT: ${{ runner.temp }}/ci-cancelled-pr-snapshot.json
           FINAL_CI_SWEEP_MAX_PER_TICK: ${{ vars.FINAL_CI_SWEEP_MAX_PER_TICK || '10' }}
+          # Base sync after a failed final CI run (script header): a reviewed
+          # head that is behind its base gets the base merged in and a fresh
+          # final run.
+          FINAL_CI_SWEEP_BASE_SYNC_ENABLED: ${{ vars.FINAL_CI_SWEEP_BASE_SYNC_ENABLED || 'true' }}
+          FINAL_CI_SWEEP_BASE_SYNC_MIN_AGE_MINUTES: ${{ vars.FINAL_CI_SWEEP_BASE_SYNC_MIN_AGE_MINUTES || '30' }}
+          FINAL_CI_SWEEP_BASE_SYNC_MAX: ${{ vars.FINAL_CI_SWEEP_BASE_SYNC_MAX || '3' }}
+          FINAL_CI_SWEEP_ACTIVE_REVIEW_RUNS: ${{ runner.temp }}/final-ci-active-review-runs.txt
           FINAL_CI_SWEEP_HELPERS_DIR: .ci-rerun-support/scripts
           HEAD_REF_FILTER: ${{ inputs.head_ref_filter }}
           DRY_RUN: ${{ inputs.dry_run }}
