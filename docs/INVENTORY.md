@@ -50,7 +50,6 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/audit_consumer_drift.yml` — GitHub Actions workflow: Audit Consumer Drift.
 - `.github/workflows/auto-release-stable.yml` — GitHub Actions workflow: Auto release stable.
 - `.github/workflows/cancel_on_pr_close.yml` — GitHub Actions workflow: AI Cancel Runs on PR Close.
-- `.github/workflows/check-failure-triage-historical.yml` — GitHub Actions workflow: Internal: Historical check-failure triage (PR #6611 run 37922279826).
 - `.github/workflows/check_failure_triage.yml` — GitHub Actions workflow: AI Check Failure Triage (Reusable).
 - `.github/workflows/ci.yml` — GitHub Actions workflow: CI.
 - `.github/workflows/clarify.yml` — GitHub Actions workflow: AI Clarify (Reusable).
@@ -166,6 +165,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/codex_thread_reuse.sh` — Shell helper for codex thread reuse.
 - `scripts/collect_pr_check_runs_context.py` — Collect PR check-run context for review_autofix.
 - `scripts/collect_workflow_logs.py` — Collect GitHub Actions run/job telemetry for core AI workflow families.
+- `scripts/comment_signature.py` — Sign and verify job-token pipeline comments so trusted-author readers accept them without a `GH_PAT` post (opt-in via `AI_COMMENT_SIGNING_SECRET`).
 - `scripts/compare_issue_timeline_parity.sh` — Shell helper for compare issue timeline parity.
 - `scripts/comprehensive_test_and_release_gh_api.sh` — Shell helper for comprehensive test and release gh api.
 - `scripts/consolidate_soft_error_reports.py` — Consolidate per-phase soft-error reports into one deterministic markdown file.
