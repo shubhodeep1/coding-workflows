@@ -225,6 +225,14 @@
       "color": "b60205",
       "description": "Workflow failure heal chain hit the lineage cap; needs human attention"
     },
+    "ai:alert-triage": {
+      "color": "c5def5",
+      "description": "Issue filed by hourly alert triage for a captured workflow alert"
+    },
+    "ai:alert-self-fix": {
+      "color": "5319e7",
+      "description": "Pull request opened by alert self-fix for a pipeline-blocking alert"
+    },
     "ai:operator-step": {
       "color": "fbca04",
       "description": "Steps only a person can take; the pipeline continues and gated work stays off until they are done"
