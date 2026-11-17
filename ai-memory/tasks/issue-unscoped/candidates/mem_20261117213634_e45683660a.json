@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stable_e2e_step_wait_review.sh:153-155,866-874 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: A watched RUN_ID change resets E2E_REVIEW_RUN_EVER_STARTED but not LAST_ACTIVITY, and CUR_STATE omits the run id, so a successor run in the same state inherits the old run's idle time.\n  WHY: The successor can be labelled review_run_never_started although it was not queued for the whole wait. status=timeout is unaffected, so only the timeout_reason detail is wrong. (Both reviewers rated it NIT. z-ai_glm-5_3-flash mentioned it as a pass-1 NIT and did not re-report it.)\n- docs/INVENTORY.md:Scripts section (tests/inventory_parity.py:265-287) | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: docs/INVENTORY.md has no entries for scripts/ci_sync_quick.sh and scripts/comment_signature.py, so inventory parity fails and tests-release-and-log-analysis and the lint roll-up are red on this head.\n  WHY: The failure is inherited from the base branch and not introduced by this PR, and docs/INVENTORY.md is outside the plan's files_touched grant. Severity disagreement: anthropic_claude-sonnet-5_5 rated it NIT, while openai_gpt-6-luna and z-ai_glm-5_3-flash rated it MAJOR. The highest, MAJOR, is mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/stable_e2e_step_wait_review.sh:153-155,866-874 | severity=NIT | confidence=2\n  PROBLEM: The run-id change resets the \"ever started\" flag but not LAST_ACTIVITY, and CUR_STATE has no run id. If the old and new runs report the same status, conclusion, step, head SHA and log size, the inactivity timer keeps running across the pivot.\n  WHY: A successor run seen for only part of the window can be labelled review_run_never_started. The result is still status=timeout, so only the timeout_reason detail is affected.\n- tests/inventory_parity.py (fix site docs/INVENTORY.md) | severity=NIT | confidence=4\n  PROBLEM: CI fails with \"docs/INVENTORY.md: Scripts: missing scripts/ci_sync_quick.sh\" and \"missing scripts/comment_signature.py\", so the lint roll-up is red.\n  WHY: The failure is not caused by this PR, which touches neither script nor docs/INVENTORY.md, and docs/INVENTORY.md is outside the plan's files_touched grant. It needs a separate fix on the base.\n- HARDENING_SUGGESTIONS: scripts/stable_e2e_step_wait_review.sh, e2e_review_timeout_reason jq expression, about line 181. A missing total_count is treated as 0 (`(.total_count // 0) <= (.jobs | length)`). The suggested fix is to require `(.total_count | type == \"number\")`. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- HARDENING_SUGGESTIONS: scripts/stable_e2e_step_wait_review.sh line 181, e2e_review_timeout_reason jq predicate `((.total_count // 0) <= (.jobs | length))`. A missing or null total_count defaults to 0 and passes the completeness check. The suggested fix is `((.total_count | type == \"number\") and (.total_count <= (.jobs | length)))`. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/stable_e2e_step_wait_review.sh:153-155,866-874 | severity=NIT | confidence=4\n  PROBLEM: A watched run ID change resets E2E_REVIEW_RUN_EVER_STARTED but not the inactivity timer, and RUN_ID is not part of CUR_STATE. Replacing one queued run with another queued run does not reset LAST_ACTIVITY.\n  WHY: The successor can be queued for less than REVIEW_TIMEOUT while inheriting the previous run's idle duration, so it can be reported as review_run_never_started.\n- docs/INVENTORY.md:Scripts section beginning at line 111 (tests/inventory_parity.py:265-283) | severity=MAJOR | confidence=5\n  PROBLEM: Inventory parity fails because the Scripts inventory lacks entries for scripts/ci_sync_quick.sh and scripts/comment_signature.py. This PR did not introduce the failure, but it leaves CI red on the current head.\n  WHY: tests/inventory_parity.py exits non-zero, so tests-release-and-log-analysis and the lint roll-up fail.\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- docs/INVENTORY.md (entries) / tests/inventory_parity.py:276-287 | severity=MAJOR | confidence=5\n  PROBLEM: tests-release-and-log-analysis fails on head 5d9732e1cf5e, so the lint roll-up and the final CI run are red. Five FAILs are listed: missing scripts/ci_sync_quick.sh and scripts/comment_signature.py, plus README.md and agents.md references not documented.\n  WHY: inventory_parity.py exits 1, the lint aggregator exits 1, and the final-CI-failed hook re-queues the PR, so merge stays blocked until the inventory entries exist. The PR diff touches none of docs/INVENTORY.md, README.md or agents.md, so the drift is inherited from the base. docs/INVENTORY.md is outside the plan's files_touched grant.\n- scripts/stable_e2e_step_wait_review.sh:153-155 (verified, not re-reported) | PASS-1 NIT\n  PROBLEM: The queued\u2192queued run-id pivot resets E2E_REVIEW_RUN_EVER_STARTED while CUR_STATE (line 866) omits the run id. The reviewer mentioned it as flagged in pass 1 and did not re-report it.\n  WHY: The last-run diff (total_count guard, lines 181-183) does not touch that path, and status=timeout and exit behavior are unaffected.\n- HARDENING_SUGGESTIONS: scripts/stable_e2e_step_wait_review.sh line 181, e2e_review_timeout_reason jq guard. A missing or null total_count is treated as complete. The suggested fix is `(.total_count | type == \"number\") and (.total_count <= (.jobs | length))`. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "12dc91c16b26ed1c362d0bd1ca2dcb8713e187b4d2de348fb07c481cf1bd0e10",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9637,
+    "run_id": "44120017280",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44120017280",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117213634_e45683660a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9637,
+    "run_id": "44120017280"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-17T21:36:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
