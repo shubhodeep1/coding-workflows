@@ -133,6 +133,58 @@ e2e_watched_run_urls() {
   [ -z "$urls" ] || printf ' (watched runs:%s)' "$urls"
 }
 
+# BEGIN phase4 review timeout reason (#9619)
+# Refs #9418: a Phase 4 inactivity timeout whose watched review run
+# stayed queued/pending with no started job for the whole wait is
+# environmental (runner or concurrency starvation), not a review stall.
+# These helpers read only data the loop already fetched; no API call.
+# The flag is sticky: once any watched run or job is seen started it
+# stays 1, so a real stall is never relabelled as environmental.
+E2E_REVIEW_RUN_EVER_STARTED=0
+E2E_REVIEW_LAST_JOBS_JSON=""
+e2e_review_note_run_started() {
+  # Only jobs data fetched this poll for the current RUN_ID counts.
+  E2E_REVIEW_LAST_JOBS_JSON=""
+  if [ "${RUN_STATUS:-}" = "in_progress" ] && [ -n "${JOBS_JSON:-}" ]; then
+    E2E_REVIEW_LAST_JOBS_JSON="$JOBS_JSON"
+  elif [ "${E2E_REVIEW_JOBS_STEP_FRESH:-0}" = "1" ] && [ -n "${JOBS_STEP_JSON:-}" ]; then
+    E2E_REVIEW_LAST_JOBS_JSON="$JOBS_STEP_JSON"
+  fi
+  case "${RUN_STATUS:-}" in
+    in_progress|completed) E2E_REVIEW_RUN_EVER_STARTED=1; return 0 ;;
+  esac
+  if [ -n "$E2E_REVIEW_LAST_JOBS_JSON" ] \
+      && printf '%s' "$E2E_REVIEW_LAST_JOBS_JSON" | jq -e '(.jobs | type == "array") and any(.jobs[]; .status == "in_progress" or .status == "completed")' >/dev/null 2>&1; then
+    E2E_REVIEW_RUN_EVER_STARTED=1
+  fi
+  return 0
+}
+# Prints review_run_never_started or inactivity (fixed enum only).
+e2e_review_timeout_reason() {
+  if [ "${E2E_REVIEW_RUN_EVER_STARTED:-0}" = "0" ] \
+      && [[ "${RUN_ID:-}" =~ ^[0-9]+$ ]] \
+      && [[ "${RUN_STATUS:-}" =~ ^(queued|pending|waiting|requested)$ ]] \
+      && [ -n "${E2E_REVIEW_LAST_JOBS_JSON:-}" ] \
+      && printf '%s' "$E2E_REVIEW_LAST_JOBS_JSON" | jq -e '(.jobs | type == "array") and all(.jobs[]; (.status | type == "string") and (.status | test("^(queued|pending|waiting|requested)$")))' >/dev/null 2>&1; then
+    echo "review_run_never_started"
+  else
+    echo "inactivity"
+  fi
+}
+# Prints <job_id>=<status>[,...], none, or unavailable. Job names are
+# never printed, so no third-party text reaches the log.
+e2e_review_timeout_job_statuses() {
+  local statuses=""
+  if [ -z "${E2E_REVIEW_LAST_JOBS_JSON:-}" ]; then
+    echo "unavailable"
+    return 0
+  fi
+  statuses=$(printf '%s' "$E2E_REVIEW_LAST_JOBS_JSON" | jq -r 'if (.jobs | type == "array") then ([.jobs[] | select((.id | type == "number") and .id >= 0 and .id == (.id | floor) and (.status | type == "string") and (.status | test("^[a-z_]+$"))) | "\(.id)=\(.status)"] | if length == 0 then "none" else join(",") end) else "unavailable" end' 2>/dev/null || echo "unavailable")
+  [[ "$statuses" =~ ^(none|unavailable|[0-9]+=[a-z_]+(,[0-9]+=[a-z_]+)*)$ ]] || statuses="unavailable"
+  echo "$statuses"
+}
+# END phase4 review timeout reason (#9619)
+
 LAST_ACTIVITY="$REVIEW_PHASE_STARTED_AT"
 PREV_STATE=""
 LAST_STEP_GUARD_RUN_ID=""
@@ -717,6 +769,7 @@ while true; do
   CURRENT_STEP=""
   CURRENT_STEP_STARTED_AT=""
   STEP_METADATA_FETCH_OK=0
+  E2E_REVIEW_JOBS_STEP_FRESH=0
   if [ "$RUN_ID" != "unknown" ]; then
     if [ -n "${JOBS_JSON:-}" ]; then
       CURRENT_STEP=$(echo "$JOBS_JSON" | jq -r '[.jobs[].steps[] | select(.status == "in_progress")] | last | .name // ""' 2>/dev/null || echo "")
@@ -726,6 +779,7 @@ while true; do
       fi
     else
       JOBS_STEP_JSON=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" || echo "")
+      E2E_REVIEW_JOBS_STEP_FRESH=1
       if [ -n "$JOBS_STEP_JSON" ]; then
         CURRENT_STEP=$(echo "$JOBS_STEP_JSON" | jq -r '[.jobs[].steps[] | select(.status == "in_progress")] | last | .name // ""' 2>/dev/null || echo "")
         CURRENT_STEP_STARTED_AT=$(echo "$JOBS_STEP_JSON" | jq -r '[.jobs[].steps[] | select(.status == "in_progress")] | last | .started_at // ""' 2>/dev/null || echo "")
@@ -746,6 +800,9 @@ while true; do
   elif [ "${RUN_STATUS:-}" = "in_progress" ] && [ "$STEP_METADATA_FETCH_OK" != "1" ]; then
     echo "  ⚠ Jobs API returned no in-progress step timing for run ${RUN_ID}; per-step stall guard is unavailable this poll" >&2
   fi
+
+  # Record whether the watched review run ever started (#9619).
+  e2e_review_note_run_started
 
   # 2) Commit count on PR branch — editor pushes trigger changes
   PR_HEAD_SHA=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
@@ -846,7 +903,18 @@ while true; do
       exit 1
     fi
     echo "::error::Review phase stalled — no activity for ${REVIEW_TIMEOUT} minutes$(e2e_watched_run_urls)"
+    # timeout_reason (#9619, refs #9418) only adds detail: status stays
+    # timeout for every consumer. review_run_never_started means the
+    # watched run stayed queued/pending with no started job for the
+    # whole wait (environmental); anything else is inactivity.
+    E2E_REVIEW_TIMEOUT_REASON_VALUE=$(e2e_review_timeout_reason)
+    E2E_REVIEW_TIMEOUT_RUN_STATUS_SAFE="${RUN_STATUS:-none}"
+    [[ "$E2E_REVIEW_TIMEOUT_RUN_STATUS_SAFE" =~ ^[a-z_]+$ ]] || E2E_REVIEW_TIMEOUT_RUN_STATUS_SAFE="unknown"
+    E2E_REVIEW_TIMEOUT_RUN_ID_SAFE="${RUN_ID:-unknown}"
+    [[ "$E2E_REVIEW_TIMEOUT_RUN_ID_SAFE" =~ ^[0-9]+$ ]] || E2E_REVIEW_TIMEOUT_RUN_ID_SAFE="unknown"
+    echo "E2E_REVIEW_TIMEOUT_REASON run=${E2E_REVIEW_TIMEOUT_RUN_ID_SAFE} run_status=${E2E_REVIEW_TIMEOUT_RUN_STATUS_SAFE} reason=${E2E_REVIEW_TIMEOUT_REASON_VALUE} jobs=$(e2e_review_timeout_job_statuses)"
     echo "status=timeout" >> "$GITHUB_OUTPUT"
+    echo "timeout_reason=${E2E_REVIEW_TIMEOUT_REASON_VALUE}" >> "$GITHUB_OUTPUT"
     exit 1
   fi
 
