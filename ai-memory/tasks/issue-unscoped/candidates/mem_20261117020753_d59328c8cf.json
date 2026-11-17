@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:4550-4555 (identical copies at 4630-4635, 4707-4712, 4845-4850, 5162-5167; minimax cites 4551-4552, 4631-4632, 4708-4709, 4846-4847, 5163-5164) | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The invalid-switch path prints two lines that label the same condition differently: a warning saying \"treating it as false\" and a skip line saying \"unrecognised\".\n  WHY: The cancel is correctly skipped, but the two log lines could confuse triage. Both reviewers rated it NIT, so there is no severity disagreement. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash reviewed the same wording and chose not to report it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/test-and-mark-stable.yml:4550-4555 (and identical copies at 4630-4635, 4707-4712, 4845-4850, 5162-5167) | severity=NIT | confidence=3\n  PROBLEM: The invalid-switch path prints two lines that label the same condition differently.\n  WHY: Line 4551 reports \"DISPATCH_WATCH_CANCEL_ON_TIMEOUT is neither true nor false; treating it as false\", while line 4552 reports \"skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT unrecognised)\". The skip is functionally correct, but the redundant, slightly contradictory log messages could confuse an operator.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml:4551-4552, 4631-4632, 4708-4709, 4846-4847, 5163-5164 | severity=NIT | confidence=3\n  PROBLEM: When `DISPATCH_WATCH_CANCEL_ON_TIMEOUT` is neither `true` nor `false`, the step prints a `::warning::` saying `treating it as false` and a skip line saying `(DISPATCH_WATCH_CANCEL_ON_TIMEOUT unrecognised)`. The repo convention at `.github/workflows/update_workflows.yml:383` is a single `::warning::` line that names the operator-facing effect.\n  WHY: The cancel is correctly skipped and the step still fails with the watcher's exit code. The two log lines tell triage two different stories for the same event.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "01a406267b244662238b13b967be226272757f96d56316574e162ed7d824c270",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9547,
+    "run_id": "43980136924",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43980136924",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117020753_d59328c8cf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9547,
+    "run_id": "43980136924"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-17T02:07:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
