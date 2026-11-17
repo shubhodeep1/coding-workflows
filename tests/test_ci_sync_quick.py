@@ -503,10 +503,9 @@ def test_the_merge_path_dispatches_after_a_verified_update() -> None:
 
 
 def _ci() -> dict:
-	# Imported here so the git/script/dispatch tests above still run on a
-	# host Python without PyYAML; only the ci.yml checks need it.
-	import yaml
-
+	# PyYAML is installed in CI; only the ci.yml tests need it, so a host or
+	# container without it still runs the classify / verify / dispatch tests above.
+	yaml = pytest.importorskip("yaml")
 	return yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
 
 
