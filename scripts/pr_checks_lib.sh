@@ -839,6 +839,14 @@ _pr_auto_merge_required_ci_check_name()
 # the check-run gate alone would read the head as green although CI never
 # produced a result. The wait refuses with reason=ci_run_cancelled; a
 # later re-run returns the workflow to pending.
+# A run's `name` is its run name, so a `workflow_dispatch` final CI run of
+# ci.yml is named `CI [pr:<n>]` (or `CI [pr:<n>] [<mode>]`), not `CI`
+# (cut-ci-runner-time Phase 4). A `workflow_dispatch` run whose name is a
+# listed workflow name followed by `[pr:<n>]` and an optional `[<mode>]`
+# counts as a run of that workflow (PR_CHECKS_JQ_WAIT_WORKFLOW_KEY_DEF), so
+# the final run's `lint` binds and a queued final run counts as pending.
+# Without this, a head whose only CI run is its final run never binds
+# `lint` and the wait always timed out (`ci_state=absent`).
 # Input: head SHA. Output: PR_CHECKS_RUNS_PENDING, PR_CHECKS_RUNS_UNRUN
 # (integers), PR_CHECKS_RUNS_IDS (comma-separated run ids of the listed
 # workflows on the head, self excluded) and PR_CHECKS_RUNS_READ
@@ -846,6 +854,19 @@ _pr_auto_merge_required_ci_check_name()
 # API calls: one REST `actions/runs?head_sha=` read (per_page=100); none
 # when disabled or the SHA/repository is unusable. Fail-open: a failed or
 # malformed read counts as 0 pending (the check-run gate still applies).
+# jq def shared by both _pr_head_ci_runs_pending filters: `_wait_wf_key`
+# maps a workflow run to the listed workflow name it belongs to (lowercase),
+# or "" when it belongs to none. `$wanted` is the lowercased name list.
+PR_CHECKS_JQ_WAIT_WORKFLOW_KEY_DEF='
+	def _wait_wf_key($wanted):
+		(.name // "" | ascii_downcase) as $n
+		| if ($wanted | index($n)) != null then $n
+		elif (.event // "") == "workflow_dispatch" then
+			([$n | capture("^(?<base>.+) \\[pr:[1-9][0-9]*\\]( \\[[a-z0-9-]+\\])?$")? | .base] | first) as $base
+			| if ($base != null) and (($wanted | index($base)) != null) then $base else "" end
+		else "" end;
+'
+
 _pr_head_ci_runs_pending()
 {
 	local head_sha="$1" repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" names_csv runs_json self_run
@@ -866,13 +887,13 @@ _pr_head_ci_runs_pending()
 	# instead of reading the runs again (§15).
 	PR_CHECKS_RUNS_RAW_JSON="${runs_json}"
 	local counts
-	counts="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" '
+	counts="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" "${PR_CHECKS_JQ_WAIT_WORKFLOW_KEY_DEF}"'
 		($names | split(",") | map(gsub("^\\s+|\\s+$"; "") | ascii_downcase) | map(select(length > 0))) as $wanted
 		| [(.workflow_runs // [])[]
 			| select((.id | tostring) != $self_run)
-			| select((.name // "" | ascii_downcase) as $n | $wanted | index($n))] as $runs
+			| select(_wait_wf_key($wanted) != "")] as $runs
 		| ($runs | map(select(.status != "completed")) | length) as $pending
-		| ($runs | group_by(.name // "" | ascii_downcase)
+		| ($runs | group_by(_wait_wf_key($wanted))
 			| map(select(all(.[]; .status == "completed" and (.conclusion == "cancelled" or .conclusion == "startup_failure"))))
 			| length) as $unrun
 		| "\($pending) \($unrun)"' 2>/dev/null | tail -n1)"
@@ -883,11 +904,11 @@ _pr_head_ci_runs_pending()
 	# Run ids of the listed workflows on this head (self excluded), for the
 	# named CI check binding (issue #6963). Same listing, no extra call.
 	local run_ids
-	run_ids="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" '
+	run_ids="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" "${PR_CHECKS_JQ_WAIT_WORKFLOW_KEY_DEF}"'
 		($names | split(",") | map(gsub("^\\s+|\\s+$"; "") | ascii_downcase) | map(select(length > 0))) as $wanted
 		| if (type == "object" and (.workflow_runs | type) == "array") then
 			[.workflow_runs[] | select((.id | tostring) != $self_run)
-				| select((.name // "" | ascii_downcase) as $n | $wanted | index($n)) | (.id | tostring)] | "ids:" + join(",")
+				| select(_wait_wf_key($wanted) != "") | (.id | tostring)] | "ids:" + join(",")
 		else "invalid" end' 2>/dev/null | tail -n1)"
 	if [[ "${run_ids}" =~ ^ids:[0-9,]*$ ]]; then
 		PR_CHECKS_RUNS_READ="true"
