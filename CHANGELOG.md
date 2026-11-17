@@ -663,6 +663,24 @@ What this means for operators: nothing changes until the switch is on; then a he
 
 - **The check-failure triage post step now says why it stopped.** The `Post check-failure triage issue` step of `.github/workflows/check_failure_triage.yml` prints exactly one `CHECK_TRIAGE op=post stage=<code> pr=<n>` line on every exit path. The codes are `body_missing`, `marker_invalid`, `metadata_invalid`, `token_missing` (the issues token is empty; only its emptiness is tested), `create_failed`, `url_missing` and `created`. `create_failed` adds `http_class=<4xx|5xx|unknown>` (from the first `HTTP NNN` token in gh's stderr, which is captured to a run-local file and never printed) and `attempts=1` (issue creates are single-attempt). Failures still fail the step, no GitHub API call is added, and the existing `CHECK_TRIAGE created issue=...` and `CHECK_TRIAGE op=supersede outcome=skip_create` lines are unchanged. Refs #9033.
 
+- **Opt-in signed job-token comments: pipeline comments that cannot start work stop creating four comment-wrapper runs each.** Set the repository secret `AI_COMMENT_SIGNING_SECRET` to turn it on; with it unset nothing changes.
+
+Every comment posted with `GH_PAT` starts `internal-implement.yml`, `internal-clarify.yml`, `internal-plan.yml` and `internal-orchestrate-clarify-respond.yml` (the `ai-*` copies in consumers), and almost all of those runs skip within seconds. Readers trust most pipeline comments only when the `GH_PAT` login wrote them, so they could not simply move to the job token. With the secret set, `scripts/gh_helpers.sh` routes `gh` through a shim (`scripts/comment_signature.py`). The shim signs each comment that cannot start a wrapper, posts it as `github-actions[bot]` (which starts nothing), and on every comments read turns a validly signed comment back into exactly what the `GH_PAT` would have written. Readers need no change. Comments that start work (`/approved`, `/answer`, `/reclarify`, `Clarification required`) and plan comments stay on `GH_PAT`. An unsigned or forged bot comment stays untrusted.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Comments in coding-workflows, 2026-11-15 23:47 to 2026-11-16 23:47 UTC | 687, of which 622 posted with `GH_PAT` |
+| `issue_comment` runs in that window | 2,500, of which 59 did work |
+| `GH_PAT` comments that start work and stay on the PAT | about 55 a day (plus plan comments) |
+| Runs this removes in coding-workflows at that volume | up to about 2,270 a day (91%) |
+| Extra API calls | one `GET /user` per job; one `GET issues/comments/<id>` per edit of a signed comment |
+
+What this means for operators: create `AI_COMMENT_SIGNING_SECRET` in coding-workflows. The weekly `Propagate consumer secrets` run (or a dispatch of it) copies the same value to every consumer, and the consumers pick up the new template lines on their next `@stable` sync. To roll back, set the repository variable `AI_COMMENT_SIGNING_POST=false`: new comments go out with `GH_PAT` again, and comments already signed keep verifying. Do not delete the secret to roll back, because every signed comment, orchestrator state included, would then read as untrusted.
+
+### For contributors
+
+The signer is embedded in `scripts/gh_helpers.sh` and written to `RUNNER_TEMP` on activation, so it travels wherever the helpers are staged. `tests/test_comment_signature.py` fails when the embedded copy and `scripts/comment_signature.py` differ. Inside Actions the first activation adds the shim to `GITHUB_PATH`, so later steps and Python scripts run from a step go through it. `tests/conftest.py` strips the signing variables for the test session. Comment calls made with `curl` and steps before the first `gh_helpers.sh` source in a job keep the PAT.
+
 ### For contributors
 
 - New `workflow_call` outputs: `failure_owner` (`harness`, `project`, `mixed` or `none`), `harness_report`, `harness_stage`, `harness_reason` and `harness_fp`. The existing outputs are unchanged.
@@ -2120,6 +2138,71 @@ Refs #9046.
 - **The actionlint download in the CI job `static-checks` now rides out longer GitHub outages.** CI run 35615284953 failed on an HTTP 504 from the release download, and CI run 42465389350 (PR #9038) hit the same 504 again: the old `--retry 3 --retry-delay 0` used up curl's 1s/2s/4s exponential backoff in about 7 seconds. The `Install actionlint` step now runs curl with `--retry 5 --retry-all-errors --retry-delay 15 --retry-max-time 300`, so it makes up to 5 retries (6 attempts) a fixed 15 seconds apart, which rides out about 75 seconds of fast-failing 504s; the 300-second window only caps the total retry time. `--connect-timeout 20 --max-time 120` still bound each attempt. actionlint still runs, the pinned version and URL are unchanged, and the sha256 check still verifies the tarball after the download; operators have nothing to do. `tests/test_ci_actionlint_install_retry.py` now also checks that the retry delay is a fixed 10 to 60 seconds and that the retry window is bounded and long enough for every retry when attempts fail fast.
 
 Refs #9053.
+
+- **Fewer idle Actions runs: the poller runs every 15 minutes, the closed-PR sweep hourly, and consumer check-failure triage ignores default-branch runs.** Together these remove several thousand runs a day that did no work but crowded a shared, jammed runner pool.
+
+The orchestrator poller (`ai-orchestrate-poll.yml`, `internal-orchestrate-poll.yml`) now runs every 15 minutes instead of every 5, and the closed-PR sweep (`ai-cancel-on-pr-close.yml`, `internal-cancel-on-pr-close.yml`) runs hourly at minute 23. `workflow-templates/ai-check-failure-triage.yml` adds `branches-ignore: [main, master]` to its `workflow_run` trigger. It only ever triaged `pull_request` runs, which run on the PR head branch, so crons, comment wrappers and pushes no longer each create a skipped triage run. On 2026-11-14 an idle consumer such as `digital_pa` created 624 runs, and 583 of them did no work: 312 skipped triage runs and 271 poller and sweep runs cancelled while they waited for a runner.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Poller cron | `*/5 * * * *` → `*/15 * * * *` |
+| Closed-PR sweep cron | `*/5 * * * *` → `23 * * * *` |
+| Triage `workflow_run` filter | `branches-ignore: [main, master]` |
+| Idle consumer runs that did no work (`digital_pa`, 2026-11-14) | 583 of 624 |
+
+What this means for operators and consumer repos: a project that makes progress still gets its next poll at once (the follow-up poll after progress is unchanged), and merge-train releases still run on every poll tick and every PR close. A closed PR with merge conflicts can keep orphaned runs for up to an hour instead of five minutes. The Claude pool-health Telegram note, which only a poll in the first minutes of the hour sends, now arrives in fewer hours. A PR whose head branch is itself named `main` or `master` is no longer triaged. Consumers receive all of this on their next `@stable` sync.
+
+### For contributors
+
+The plan is `docs/plans/reduce-actions-run-volume-plan.md`. The triage template stays byte-identical across consumers, so release-manifest attestation is unaffected. `tests/test_ci_failure_workflow_run_triggers.py` and `tests/test_review_merge_train.py` pin the new trigger and crons.
+
+The release gate's Phase 7 (`test-and-mark-stable.yml`) now relies on its unconflict step: with an hourly sweep, a scheduled cancel run inside `PHASE7_WAIT_BUDGET_MINUTES` is unlikely, so a suppressed close event reports `no_run`.
+
+- **Three kinds of purely informational bot comments now post with the job's own token, so they no longer start the four `issue_comment` wrapper workflows.** These are the AI Materiality Advisory, the review-blocked judge's decision and hold notices, and the security-audit tracker report.
+
+Every comment the pipeline posts with `GH_PAT` starts `internal-implement.yml`, `internal-clarify.yml`, `internal-plan.yml` and `internal-orchestrate-clarify-respond.yml` (or the consumer `ai-*` wrappers), and almost all of those runs skip themselves. On 2026-11-14 coding-workflows got about 60 such comments of these three kinds. A comment posted with the job's `GITHUB_TOKEN` starts no workflows, and none of these three is ever read back by author. Single-issue security-pass comments stay on `GH_PAT`, because the next pass trusts its own earlier markers only when the PAT login wrote them.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Comments moved per day in coding-workflows (2026-11-14 sample) | about 60: 33 tracker reports, 16 judge notices, 11 advisories |
+| Skipped wrapper runs avoided per day here | about 240 |
+| Comment kinds kept on `GH_PAT` | security-pass results, attempt journal, autofix editor summary, orchestrator state, merge-base sync, phase markers |
+
+What this means for operators and consumer repos: these comments now show `github-actions[bot]` as their author instead of the PAT user. When GitHub refuses the job token (401/403, for example a read-only fork token), the post falls back to `GH_PAT` as before; any other failure is not resent, so a comment is never posted twice. An existing materiality advisory is still refreshed in place with `GH_PAT`, so a PR that already has one keeps a single advisory comment. Consumers get the change on their next `@stable` sync.
+
+### For contributors
+
+The posting sites are:
+- the `Post AI Materiality Advisory comment` step in `review_autofix.yml` (`MATERIALITY_COMMENT_TOKEN`);
+- `rb_judge_post_issue_comment` in `scripts/review_rb_judge.sh` (`RB_JUDGE_COMMENT_TOKEN`), which carries every comment that script posts (the security-pass markers in `review_rb_judge_security_pass.sh` stay on `GH_PAT`);
+- the tracker comment in `scripts/security_audit.sh` (`SECURITY_AUDIT_COMMENT_TOKEN`, set by `security-audit.yml`; poller-driven project audits keep `GH_PAT`).
+
+The model sandboxes start from `env -i`, so the job token never reaches a model. Tests are in `tests/test_review_rb_judge_head_binding.py` and `tests/test_security_audit_workflow_contract.py`.
+
+- **Integration branches sync from `main` only when needed, the review sweep stops replacing reviews that are only waiting for a runner, and the one-off historical triage workflow is gone.** These cut full CI runs and duplicate review runs while the runner pool is backed up.
+
+The orchestrator poller used to merge `main` into every open `orchestrator/project-*` branch on every tick. Each push started two full CI runs, so on 2026-11-12 project 8969 alone synced 13 times. A tick now syncs only when one of these holds:
+
+- the last sync is older than `INTEGRATION_SYNC_MIN_INTERVAL_SECS` (default 24 hours);
+- it was not clean;
+- the integration PR reports a conflict.
+
+In addition, one sync is forced right before the next wave is dispatched and right before a finished project starts its security pass, once per boundary.
+
+The poller logs `INTEGRATION_SYNC_THROTTLE` lines. `review_autofix_sweep.yml` still treats a review run queued past `SWEEP_STALE_QUEUED_MINUTES` as wedged, but now only when GitHub created no jobs for it (`SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS`, default `true`). Before, it replaced about 86 waiting reviews a day with pending duplicates. `.github/workflows/check-failure-triage-historical.yml`, which ran on every push to `main` and always skipped after its issue #7300 closed, is removed with its test, registry entry and docs.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Pushes to `orchestrator/project-8969` on 2026-11-12, all `chore: sync main` | 13 |
+| `INTEGRATION_SYNC_MIN_INTERVAL_SECS` default | `86400` (`0` = sync every tick) |
+| Sweep dispatches replaced while pending (2026-11-12) | 86 |
+| Extra API reads | 1 per stale queued review run (sweep); 1 final-PR read per would-be skip with a final PR (poller) |
+
+What this means for operators and consumer repos: integration branches pick up `main` at least daily, before every new wave and before the final security pass, and a conflict on the integration PR still triggers a sync at once. Set `INTEGRATION_SYNC_MIN_INTERVAL_SECS=0` to go back to syncing every tick. No review is lost: a waiting review run reviews the PR's current head when it starts. Consumers receive the poller and sweep changes on their next `@stable` sync.
+
+### For contributors
+
+The throttle is `_integration_sync_throttle_reason` in `scripts/orchestrate_poll_process.sh`. The security-pass caller passes `force`. Tests are in `tests/test_security_pass_final_pr_sync.py` and `tests/test_review_autofix_sweep_stale_queued.py`.
 
 ### For contributors
 
@@ -4551,6 +4634,14 @@ GitHub's `ubuntu-latest` runners moved to the `ubuntu-26.04` image (Python 3.14)
 | Lines changed in `scripts/render_prompt.py` | 1 |
 
 What this means for consumer repos: after the next `@stable` sync, clarify, plan, review and judge runs work on Python 3.14 runners again. Issues and PRs that stalled or were closed during the outage need a retry, since nothing re-runs them automatically.
+
+- Plan failures now say what crashed. When the "Run Codex planning" step of `plan.yml` fails, it prints one line, `::error::RUN_PLAN_CODEX_FAILED rc=<exit code> exception=<last exception line|none>`, taken from the runner's stderr (control characters removed, `%` encoded, at most 300 characters). The heal intake keeps that line even when it filters out the traceback, so the next heal can name the failing helper. The step keeps the runner's exit code and passes its stdout and stderr through unchanged, adding only this line to stderr on failure, and a run that cannot create its temporary stderr copy runs exactly as before. This does not fix the plan crash on tele-funtoken-msg-scoring#5216 itself; its cause is still unknown. Refs #9266.
+
+- The release gate's E2E cleanup now cancels the Phase 3c review run it dispatched. In run 43283656910 that `workflow_dispatch` review run stayed queued 48 minutes after cleanup closed the smoke PR, because closing a PR cancels its `pull_request` runs but not dispatched ones. The "Cleanup test artifacts" step of `test-and-mark-stable.yml` now lists active `workflow_dispatch` runs of the review workflow on the smoke issue branch (one API call) and cancels each one before deleting the branch; every call only warns on failure. This does not fix that run's Phase 4 timeout, which was most likely a temporary shortage of runners, so the release gate should pass when re-run. The run and job list printed when Phase 4 times out ships separately as the "Phase 4d: Review-timeout run inventory" step. Refs #9418.
+
+- When the release gate's Phase 4 review wait times out, the new step "Phase 4d: Review-timeout run inventory" lists the review runs on the smoke branch and the jobs of each unfinished run. A job that is `queued` with `runner=none` means no runner picked it up; a run with no jobs means a workflow-level concurrency group held it. The step only reads and never changes the job result. Release run 43283656910 most likely failed for a transient reason (runner starvation or a wedged queued job), so re-run the release gate. Refs #9418
+
+- When the release gate gives up waiting for a child run it dispatched, it now cancels that run. In release run 43590943288 the `validation-refresh`, `validate` and `orchestrate` children stayed queued for 3 to 4.7 hours with no runner, the watches timed out, and the children ran hours later anyway: the orchestrate child then created a smoke tracking issue and Wave 1 issues that the gate's cleanup could not see. Every dispatch step of `test-and-mark-stable.yml` that waits for its child to complete ("Dispatch & watch — validation-refresh", "Dispatch internal-orchestrate.yml with multi-issue project", "Dispatch internal-validate.yml standalone", "Dispatch & watch — update_workflows (allow_workflow_edits=false)", "Dispatch & watch — internal-memory-maintenance") now reads the timed-out child's jobs once, prints a `::warning::` with the number of jobs and how many are queued with no runner (`unknown` when the jobs read fails or returns no jobs list), and cancels the child. Both calls only warn when they fail, and the step still fails with the watcher's exit code. Set the `DISPATCH_WATCH_CANCEL_ON_TIMEOUT` repository variable to `false` to skip the cancel (the three jobs that own these steps map it into their environment, defaulting to `true`). Unset, empty or `true` (any letter case) cancels; any value other than `true` or `false` also skips the cancel and logs a `::warning::` that does not print the value, following the repository's boolean-variable convention. The cause of that run was most likely runner starvation, so re-run the release gate once the runner queue clears. Refs #9532.
 
 ### For contributors
 
