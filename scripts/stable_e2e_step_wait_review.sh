@@ -147,12 +147,18 @@ e2e_watched_run_urls() {
 E2E_REVIEW_RUN_EVER_STARTED=0
 E2E_REVIEW_STARTED_FOR_RUN_ID=""
 E2E_REVIEW_LAST_JOBS_JSON=""
+# Poll time (NOW) at which the watched RUN_ID was first seen. A pivot
+# between runs in an identical state does not reset LAST_ACTIVITY, so
+# the reason check below also requires that this run was watched since
+# the start of the idle window; otherwise it reports inactivity.
+E2E_REVIEW_RUN_FIRST_SEEN_AT=""
 e2e_review_note_run_started() {
   # Only jobs data fetched this poll for the current RUN_ID counts.
   E2E_REVIEW_LAST_JOBS_JSON=""
   if [[ "${RUN_ID:-}" =~ ^[0-9]+$ ]] && [ "$RUN_ID" != "${E2E_REVIEW_STARTED_FOR_RUN_ID:-}" ]; then
     E2E_REVIEW_STARTED_FOR_RUN_ID="$RUN_ID"
     E2E_REVIEW_RUN_EVER_STARTED=0
+    E2E_REVIEW_RUN_FIRST_SEEN_AT="${NOW:-}"
   fi
   if [ "${RUN_STATUS:-}" = "in_progress" ] && [ -n "${JOBS_JSON:-}" ]; then
     E2E_REVIEW_LAST_JOBS_JSON="$JOBS_JSON"
@@ -177,10 +183,14 @@ e2e_review_timeout_reason() {
   if [ "${E2E_REVIEW_RUN_EVER_STARTED:-0}" = "0" ] \
       && [[ "${RUN_ID:-}" =~ ^[0-9]+$ ]] \
       && [[ "${RUN_STATUS:-}" =~ ^(queued|pending|waiting|requested)$ ]] \
+      && [[ "${E2E_REVIEW_RUN_FIRST_SEEN_AT:-}" =~ ^[0-9]+$ ]] \
+      && [[ "${LAST_ACTIVITY:-}" =~ ^[0-9]+$ ]] \
+      && [ "$E2E_REVIEW_RUN_FIRST_SEEN_AT" -le "$LAST_ACTIVITY" ] \
       && [ -n "${E2E_REVIEW_LAST_JOBS_JSON:-}" ] \
-      && printf '%s' "$E2E_REVIEW_LAST_JOBS_JSON" | jq -e '(.jobs | type == "array") and ((.total_count // 0) <= (.jobs | length)) and all(.jobs[]; (.status | type == "string") and (.status | test("^(queued|pending|waiting|requested)$")))' >/dev/null 2>&1; then
+      && printf '%s' "$E2E_REVIEW_LAST_JOBS_JSON" | jq -e '(.jobs | type == "array") and (.total_count | type == "number") and (.total_count <= (.jobs | length)) and all(.jobs[]; (.status | type == "string") and (.status | test("^(queued|pending|waiting|requested)$")))' >/dev/null 2>&1; then
     # total_count guard: the jobs page holds at most 10 entries, so a
-    # longer run is never classified from a partial list (#9619).
+    # longer run (or a payload without a numeric count) is never
+    # classified from a partial list (#9619).
     echo "review_run_never_started"
   else
     echo "inactivity"

@@ -104,6 +104,8 @@ def _run_helpers(setup: str) -> str:
 	harness = (
 		"set -euo pipefail\n"
 		f"{_block()}\n"
+		# Default poll clock: run first seen at the start of the idle window.
+		"NOW=1000 LAST_ACTIVITY=1000\n"
 		f"{setup}\n"
 		"e2e_review_note_run_started\n"
 		'echo "REASON=$(e2e_review_timeout_reason)"\n'
@@ -140,6 +142,9 @@ def test_helper_cases() -> None:
 		# Partial jobs page (total_count above the listed jobs): not classified.
 		("RUN_ID=101 RUN_STATUS=queued E2E_REVIEW_JOBS_STEP_FRESH=1 JOBS_STEP_JSON='{\"total_count\":12,\"jobs\":[{\"id\":5,\"status\":\"queued\"}]}'",
 			"inactivity", "5=queued"),
+		# Jobs payload without total_count: completeness unknown, not classified.
+		("RUN_ID=101 RUN_STATUS=queued E2E_REVIEW_JOBS_STEP_FRESH=1 JOBS_STEP_JSON='{\"jobs\":[{\"id\":5,\"status\":\"queued\"}]}'",
+			"inactivity", "5=queued"),
 		# Jobs payload invalid.
 		("RUN_ID=101 RUN_STATUS=queued E2E_REVIEW_JOBS_STEP_FRESH=1 JOBS_STEP_JSON='not json'",
 			"inactivity", "unavailable"),
@@ -172,6 +177,27 @@ def test_flag_resets_when_watched_run_changes() -> None:
 	)
 	assert "REASON=review_run_never_started\n" in out
 	assert "JOBS=5=queued,6=waiting\n" in out
+
+
+def test_pivot_inside_idle_window_reports_inactivity() -> None:
+	# Queued run 100 is replaced by queued run 101 in the same state, so
+	# LAST_ACTIVITY (500) predates the successor's first poll (1000).
+	out = _run_helpers(
+		"LAST_ACTIVITY=500 NOW=500 RUN_ID=100 RUN_STATUS=queued E2E_REVIEW_JOBS_STEP_FRESH=1 "
+		f"JOBS_STEP_JSON='{QUEUED_JOBS}'\n"
+		"e2e_review_note_run_started\n"
+		f"NOW=1000 RUN_ID=101 RUN_STATUS=queued E2E_REVIEW_JOBS_STEP_FRESH=1 JOBS_STEP_JSON='{QUEUED_JOBS}'"
+	)
+	assert "REASON=inactivity\n" in out
+	assert "JOBS=5=queued,6=waiting\n" in out
+	# The same run watched since the start of the window still classifies.
+	out = _run_helpers(
+		"LAST_ACTIVITY=500 NOW=500 RUN_ID=101 RUN_STATUS=queued E2E_REVIEW_JOBS_STEP_FRESH=1 "
+		f"JOBS_STEP_JSON='{QUEUED_JOBS}'\n"
+		"e2e_review_note_run_started\n"
+		f"NOW=1000 E2E_REVIEW_JOBS_STEP_FRESH=1 JOBS_STEP_JSON='{QUEUED_JOBS}'"
+	)
+	assert "REASON=review_run_never_started\n" in out
 
 
 def test_unknown_run_id_poll_keeps_flag() -> None:
