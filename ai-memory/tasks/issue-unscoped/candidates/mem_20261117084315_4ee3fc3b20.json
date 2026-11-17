@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/INVENTORY.md:48-111 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The `tests-release-and-log-analysis` check failed inventory parity because entries are missing, including `scripts/review_final_ci_failed.sh` and `scripts/review_final_ci_sweep.sh`, which exist in the reviewed checkout; the reported missing `.github/workflows/ci_pr_quick.yml` and `scripts/ci_docs_only_paths.sh` are absent from this checkout, and all of these files are outside the PR's changed files (inventory parity is invoked by `.github/workflows/ci.yml:2675`).\n  WHY: `tests/inventory_parity.py` exits nonzero, which fails `tests-release-and-log-analysis` and the aggregate `lint` check (source severity MAJOR, mapped to high).\n- .github/workflows/ci.yml:3918 | severity=low | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The `orchestrate-poll (0)` run reports that Python could not open `tests/test_check_failure_triage_historical.py`, although the file exists in the reviewed checkout; the failure does not map to the PR's changed files and points to a difference between the run's checkout and this ref.\n  WHY: Python exits with code 2, which fails `orchestrate-poll (0)` and the aggregate `lint` check (source severity NIT, mapped to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- docs/INVENTORY.md:48-111 | severity=MAJOR | confidence=5\n  PROBLEM: The `tests-release-and-log-analysis` check failed inventory parity because entries are missing, including `scripts/review_final_ci_failed.sh` and `scripts/review_final_ci_sweep.sh`, which exist in the checkout; `.github/workflows/ci_pr_quick.yml` and `scripts/ci_docs_only_paths.sh` are absent from this checkout, and all are outside the PR's changed files (invoked by `.github/workflows/ci.yml:2675`).\n  WHY: `tests/inventory_parity.py` exits nonzero, which fails `tests-release-and-log-analysis` and the aggregate `lint` check.\n- .github/workflows/ci.yml:3918 | severity=NIT | confidence=5\n  PROBLEM: The `orchestrate-poll (0)` run could not open `tests/test_check_failure_triage_historical.py`, although the file exists in the reviewed checkout; the failure does not map to PR files and points to a difference between the run's checkout and this ref.\n  WHY: Python exits with code 2, which fails `orchestrate-poll (0)` and the aggregate `lint` check.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b7c56ea6d5c71f7dabed8d192eb79ed0e0581d25306b2d42354bb215cf54d0bf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9562,
+    "run_id": "44029704079",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44029704079",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117084315_4ee3fc3b20",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9562,
+    "run_id": "44029704079"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-17T08:43:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
