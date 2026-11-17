@@ -138,21 +138,34 @@ e2e_watched_run_urls() {
 # stayed queued/pending with no started job for the whole wait is
 # environmental (runner or concurrency starvation), not a review stall.
 # These helpers read only data the loop already fetched; no API call.
-# The flag is sticky: once any watched run or job is seen started it
-# stays 1, so a real stall is never relabelled as environmental.
+# The flag is sticky per watched run: once that run or one of its jobs
+# is seen started it stays 1, so a real stall is never relabelled as
+# environmental. It resets only when the watched RUN_ID changes (e.g.
+# the cancel-and-pivot to a successor); the run-status change that
+# comes with the pivot also resets the inactivity timer, so the
+# successor alone spans the timed-out window.
 E2E_REVIEW_RUN_EVER_STARTED=0
+E2E_REVIEW_STARTED_FOR_RUN_ID=""
 E2E_REVIEW_LAST_JOBS_JSON=""
 e2e_review_note_run_started() {
   # Only jobs data fetched this poll for the current RUN_ID counts.
   E2E_REVIEW_LAST_JOBS_JSON=""
+  if [[ "${RUN_ID:-}" =~ ^[0-9]+$ ]] && [ "$RUN_ID" != "${E2E_REVIEW_STARTED_FOR_RUN_ID:-}" ]; then
+    E2E_REVIEW_STARTED_FOR_RUN_ID="$RUN_ID"
+    E2E_REVIEW_RUN_EVER_STARTED=0
+  fi
   if [ "${RUN_STATUS:-}" = "in_progress" ] && [ -n "${JOBS_JSON:-}" ]; then
     E2E_REVIEW_LAST_JOBS_JSON="$JOBS_JSON"
   elif [ "${E2E_REVIEW_JOBS_STEP_FRESH:-0}" = "1" ] && [ -n "${JOBS_STEP_JSON:-}" ]; then
     E2E_REVIEW_LAST_JOBS_JSON="$JOBS_STEP_JSON"
   fi
-  case "${RUN_STATUS:-}" in
-    in_progress|completed) E2E_REVIEW_RUN_EVER_STARTED=1; return 0 ;;
-  esac
+  # completed alone is not proof: a run cancelled while queued is
+  # completed/cancelled with no job ever run, so completed is left to
+  # the jobs check below.
+  if [ "${RUN_STATUS:-}" = "in_progress" ]; then
+    E2E_REVIEW_RUN_EVER_STARTED=1
+    return 0
+  fi
   if [ -n "$E2E_REVIEW_LAST_JOBS_JSON" ] \
       && printf '%s' "$E2E_REVIEW_LAST_JOBS_JSON" | jq -e '(.jobs | type == "array") and any(.jobs[]; .status == "in_progress" or .status == "completed")' >/dev/null 2>&1; then
     E2E_REVIEW_RUN_EVER_STARTED=1
@@ -582,6 +595,7 @@ while true; do
     if [ "$RUN_STATUS" = "in_progress" ] && [ "$RUN_ID" != "unknown" ]; then
       # Fetch jobs once and reuse for failed-steps check, current step, and log size
       JOBS_JSON=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" || echo "")
+      E2E_REVIEW_JOBS_JSON_RUN_ID="$RUN_ID"
       if [ -n "$JOBS_JSON" ]; then
         FAILED_STEPS=$(echo "$JOBS_JSON" | jq '[.jobs[].steps[] | select(.conclusion == "failure")] | length' 2>/dev/null || echo "0")
       else
@@ -770,6 +784,12 @@ while true; do
   CURRENT_STEP_STARTED_AT=""
   STEP_METADATA_FETCH_OK=0
   E2E_REVIEW_JOBS_STEP_FRESH=0
+  # A cached JOBS_JSON belongs to the run it was fetched for. Drop it
+  # once the watched run changes so the successor's jobs are read by
+  # the existing fetch below, as for a run first seen queued (#9619).
+  if [ -n "${JOBS_JSON:-}" ] && [ "${E2E_REVIEW_JOBS_JSON_RUN_ID:-}" != "$RUN_ID" ]; then
+    JOBS_JSON=""
+  fi
   if [ "$RUN_ID" != "unknown" ]; then
     if [ -n "${JOBS_JSON:-}" ]; then
       CURRENT_STEP=$(echo "$JOBS_JSON" | jq -r '[.jobs[].steps[] | select(.status == "in_progress")] | last | .name // ""' 2>/dev/null || echo "")

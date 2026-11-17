@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Contract checks for the Phase 4 review ``timeout_reason`` output (#9619).
 
 Refs #9418: a release-gate Phase 4 inactivity timeout whose watched review
@@ -126,8 +125,8 @@ def test_helper_cases() -> None:
 		# Pending run with zero jobs (workflow-level concurrency hold).
 		("RUN_ID=101 RUN_STATUS=pending E2E_REVIEW_JOBS_STEP_FRESH=1 JOBS_STEP_JSON='{\"total_count\":0,\"jobs\":[]}'",
 			"review_run_never_started", "none"),
-		# Flag already set by an earlier poll.
-		(f"E2E_REVIEW_RUN_EVER_STARTED=1 RUN_ID=101 RUN_STATUS=queued E2E_REVIEW_JOBS_STEP_FRESH=1 JOBS_STEP_JSON='{QUEUED_JOBS}'",
+		# Flag already set by an earlier poll of the same run.
+		(f"E2E_REVIEW_RUN_EVER_STARTED=1 E2E_REVIEW_STARTED_FOR_RUN_ID=101 RUN_ID=101 RUN_STATUS=queued E2E_REVIEW_JOBS_STEP_FRESH=1 JOBS_STEP_JSON='{QUEUED_JOBS}'",
 			"inactivity", "5=queued,6=waiting"),
 		# Run in progress.
 		("RUN_ID=101 RUN_STATUS=in_progress JOBS_JSON='{\"jobs\":[{\"id\":5,\"status\":\"in_progress\"}]}'",
@@ -159,6 +158,56 @@ def test_flag_is_sticky_across_polls() -> None:
 		f"RUN_STATUS=queued E2E_REVIEW_JOBS_STEP_FRESH=1 JOBS_STEP_JSON='{QUEUED_JOBS}'"
 	)
 	assert "REASON=inactivity\n" in out
+
+
+def test_flag_resets_when_watched_run_changes() -> None:
+	# A started run is cancelled and the loop pivots to a queued successor.
+	out = _run_helpers(
+		"RUN_ID=100 RUN_STATUS=in_progress JOBS_JSON='{\"jobs\":[{\"id\":4,\"status\":\"in_progress\"}]}'\n"
+		"e2e_review_note_run_started\n"
+		f"RUN_ID=101 RUN_STATUS=queued E2E_REVIEW_JOBS_STEP_FRESH=1 JOBS_STEP_JSON='{QUEUED_JOBS}'"
+	)
+	assert "REASON=review_run_never_started\n" in out
+	assert "JOBS=5=queued,6=waiting\n" in out
+
+
+def test_unknown_run_id_poll_keeps_flag() -> None:
+	out = _run_helpers(
+		"RUN_ID=101 RUN_STATUS=in_progress JOBS_JSON='{\"jobs\":[]}'\n"
+		"e2e_review_note_run_started\n"
+		"RUN_ID=unknown RUN_STATUS=none E2E_REVIEW_JOBS_STEP_FRESH=0\n"
+		"e2e_review_note_run_started\n"
+		f"RUN_ID=101 RUN_STATUS=queued E2E_REVIEW_JOBS_STEP_FRESH=1 JOBS_STEP_JSON='{QUEUED_JOBS}'"
+	)
+	assert "REASON=inactivity\n" in out
+
+
+def test_completed_run_without_started_job_does_not_set_flag() -> None:
+	# Cancelled while queued: completed, but no job ever ran; then re-queued.
+	out = _run_helpers(
+		"RUN_ID=101 RUN_STATUS=completed E2E_REVIEW_JOBS_STEP_FRESH=1 JOBS_STEP_JSON='{\"jobs\":[{\"id\":5,\"status\":\"queued\"}]}'\n"
+		"e2e_review_note_run_started\n"
+		f"RUN_STATUS=queued JOBS_STEP_JSON='{QUEUED_JOBS}'"
+	)
+	assert "REASON=review_run_never_started\n" in out
+	out = _run_helpers(
+		"RUN_ID=101 RUN_STATUS=completed E2E_REVIEW_JOBS_STEP_FRESH=1 JOBS_STEP_JSON='{\"jobs\":[{\"id\":5,\"status\":\"completed\"}]}'\n"
+		"e2e_review_note_run_started\n"
+		f"RUN_STATUS=queued JOBS_STEP_JSON='{QUEUED_JOBS}'"
+	)
+	assert "REASON=inactivity\n" in out
+
+
+def test_cached_jobs_json_dropped_on_run_change() -> None:
+	text = _script()
+	loop = text[text.index("while true; do"):]
+	tag = 'E2E_REVIEW_JOBS_JSON_RUN_ID="$RUN_ID"'
+	assert loop.count(tag) == 1
+	assert loop.index('      JOBS_JSON=$(gh_api_safe_quiet_print') < loop.index(tag)
+	reset = 'if [ -n "${JOBS_JSON:-}" ] && [ "${E2E_REVIEW_JOBS_JSON_RUN_ID:-}" != "$RUN_ID" ]; then\n    JOBS_JSON=""\n  fi'
+	assert loop.count(reset) == 1
+	step_block = loop.index("# 1) Current step name")
+	assert step_block < loop.index(reset) < loop.index('    if [ -n "${JOBS_JSON:-}" ]; then\n      CURRENT_STEP=')
 
 
 def test_job_statuses_drop_unsafe_entries() -> None:
