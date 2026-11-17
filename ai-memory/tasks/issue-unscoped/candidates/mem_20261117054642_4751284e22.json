@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:invoke_stall_judge function (around lines 22630-22640 in the current implementation) | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The escalation streak is saved to the state file even when the tick is unverifiable.\n  WHY: The block `if [ \"${judge_action}\" = \"escalate_human\" ] || [ \"${_judge_force_escalate}\" = \"true\" ]; then ... jq ...` overwrites the state file with the incremented streak even when the tick should not count toward the backstop, which contradicts the design intent in `changelog.d/stall-active-runs-self-check.md` (source severity MAJOR; anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash each checked this claim and rejected it, stating that the jq write at `scripts/orchestrate_poll_process.sh:22781-22783` sits inside the verified-branch `elif [ \"${judge_action}\" = \"escalate_human\" ]` and is pinned by `test_unverifiable_tick_at_streak_cap_keeps_escalate_human_for_the_hold`).\n- tests/test_files_touched_scope_guard.py:CI check failure | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: This change causes a failure in the pre-push test gate.\n  WHY: The pre-push test gate shows this test is failing (source severity BLOCKER).\n- tests/test_orchestrate_lib.py:CI check failure | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: This change causes a failure in the pre-push test gate.\n  WHY: The pre-push test gate shows this test is failing (source severity BLOCKER).\n- shellcheck:CI check failure | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: This change causes a failure in the pre-push test gate.\n  WHY: The pre-push test gate shows this check is failing (source severity MAJOR).\n- tests/test_orchestrate_poll_process.py:CI check failure (timeout) | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: This change causes a failure (timeout) in the pre-push test gate.\n  WHY: The pre-push test gate shows this test is failing (source severity MAJOR).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The pre-push test gate failures (as listed in the untrusted context) need to be addressed before the PR can merge, particularly those identified as \"Failures caused by this change\".\n  expected_change_site: Relevant test files and scripts\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR check gate results (Pre-push test gate results) show 4 failures caused by this change that are not yet resolved.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:invoke_stall_judge function (around lines 22630-22640 in the current implementation) | severity=MAJOR | confidence=5\n  PROBLEM: The escalation streak is saved to the state file even when the tick is unverifiable.\n  WHY: The block `if [ \"${judge_action}\" = \"escalate_human\" ] || [ \"${_judge_force_escalate}\" = \"true\" ]; then ... jq ...` runs and overwrites the state file with the incremented streak even when the tick should not count toward the backstop, which contradicts the design intent in `changelog.d/stall-active-runs-self-check.md`.\n- tests/test_files_touched_scope_guard.py:CI check failure | severity=BLOCKER | confidence=5\n  PROBLEM: This change causes a failure in the pre-push test gate.\n  WHY: The pre-push test gate shows this test is failing.\n- tests/test_orchestrate_lib.py:CI check failure | severity=BLOCKER | confidence=5\n  PROBLEM: This change causes a failure in the pre-push test gate.\n  WHY: The pre-push test gate shows this test is failing.\n- shellcheck:CI check failure | severity=MAJOR | confidence=5\n  PROBLEM: This change causes a failure in the pre-push test gate.\n  WHY: The pre-push test gate shows this check is failing.\n- tests/test_orchestrate_poll_process.py:CI check failure (timeout) | severity=MAJOR | confidence=5\n  PROBLEM: This change causes a failure in the pre-push test gate.\n  WHY: The pre-push test gate shows this test is failing.\n- TASK_GAP | severity=BLOCKER | confidence=5\n  Requirement: The pre-push test gate failures (as listed in the untrusted context) need to be addressed before the PR can merge, particularly those identified as \"Failures caused by this change\".\n  Expected change site: Relevant test files and scripts\n  Evidence of absence: The PR check gate results (Pre-push test gate results) show 4 failures caused by this change that are not yet resolved.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "74d25f9aae0da6e52fabe44c49aca6ba421d65e4fefe14feeb7e30c05a389ff0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9564,
+    "run_id": "44010960702",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44010960702",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117054642_4751284e22",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9564,
+    "run_id": "44010960702"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-17T05:46:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
