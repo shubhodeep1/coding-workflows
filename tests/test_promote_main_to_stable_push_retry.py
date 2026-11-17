@@ -35,7 +35,7 @@ REMOTE_FAILED_OUTPUT = (
     " ! [remote rejected]         HEAD -> stable (failed)\n"
     "error: failed to push some refs\n"
 )
-RETRY_LINE = "stable fast-forward push transient failure"
+RETRY_LINE = "PROMOTE_STABLE_PUSH_RETRY"
 
 FAKE_GIT = r"""#!/usr/bin/env python3
 import json, os, sys
@@ -99,8 +99,13 @@ def _ff_step_script() -> str:
     step = _ff_step_lines()
     run_idx = next(i for i, line in enumerate(step) if line.strip() == "run: |")
     body = step[run_idx + 1 :]
-    indent = min(len(l) - len(l.lstrip()) for l in body if l.strip())
-    return "\n".join(l[indent:] if l.strip() else "" for l in body) + "\n"
+    indent = min(
+        len(body_line) - len(body_line.lstrip()) for body_line in body if body_line.strip()
+    )
+    return (
+        "\n".join(body_line[indent:] if body_line.strip() else "" for body_line in body)
+        + "\n"
+    )
 
 
 def _ff_step_env() -> dict:
@@ -179,7 +184,10 @@ class PromoteStablePushRetryTest(unittest.TestCase):
         self.assertIn("moved=true", out)
         self.assertIn(f"sha={TARGET}", out)
         self.assertEqual(sleeps, ["5"])
-        self.assertIn("class=server_error outcome=retry", proc.stdout)
+        self.assertIn(
+            "PROMOTE_STABLE_PUSH_RETRY attempt=1/2 class=server_error outcome=retry",
+            proc.stdout,
+        )
 
     def test_server_error_but_push_landed(self):
         proc, pushes, sleeps, out = self._run([[1, SERVER_ERROR_OUTPUT]], [TARGET])
@@ -193,8 +201,21 @@ class PromoteStablePushRetryTest(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertEqual(len(pushes), 3)
         self.assertEqual(sleeps, ["5", "10"])
-        self.assertIn("class=remote_rejected_failed outcome=gave_up", proc.stdout)
+        self.assertIn(
+            "PROMOTE_STABLE_PUSH_RETRY attempt=2/2 class=remote_rejected_failed outcome=gave_up",
+            proc.stdout,
+        )
         self.assertNotIn("moved=true", out)
+
+    def test_ls_remote_failure_is_logged_and_retried(self):
+        proc, pushes, sleeps, out = self._run(
+            [[1, SERVER_ERROR_OUTPUT], [0, ""]], ["FAIL", TARGET]
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(len(pushes), 2)
+        self.assertIn("git ls-remote origin refs/heads/stable failed (exit 128)", proc.stdout)
+        self.assertIn("class=server_error outcome=retry", proc.stdout)
+        self.assertIn("moved=true", out)
 
     def test_last_attempt_landed(self):
         proc, pushes, sleeps, out = self._run(
