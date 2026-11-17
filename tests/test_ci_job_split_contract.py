@@ -36,7 +36,9 @@ CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 AGGREGATE_JOB_ID = "lint"
 AGGREGATE_STEP_NAME = "Require every CI job to succeed"
 # Steps every job repeats to set itself up; everything else runs exactly once.
-PER_JOB_SETUP_STEPS = ("Checkout repository", "Setup Python", "Install Python CI dependencies")
+# "Verify the final-CI merge ref is current" follows every final-CI checkout
+# (scripts/ci_final_merge_ref_fresh.sh; tests/test_ci_final_merge_ref_fresh.py).
+PER_JOB_SETUP_STEPS = ("Checkout repository", "Verify the final-CI merge ref is current", "Setup Python", "Install Python CI dependencies")
 MAX_JOB_TIMEOUT_MINUTES = 20
 # Jobs deliberately outside the aggregate: they run only on pushes to main,
 # wait for the worker jobs so they can read their durations, and must never
@@ -49,6 +51,14 @@ ADVISORY_JOB_IDS = frozenset({"budget-watch"})
 # Alias kept for the advisory-job wiring test below.
 POST_AGGREGATE_ADVISORY_JOBS = ADVISORY_JOB_IDS
 ADVISORY_JOB_IF = "always() && github.event_name == 'push' && github.ref == 'refs/heads/main'"
+# The final-CI hand-back job (cut-ci-runner-time Phase 4) runs only after a
+# failed `lint` in a workflow_dispatch run and gates nothing, so it is neither
+# a worker job nor in `lint.needs`. Pinned in FinalCiFailedJobTest below.
+FINAL_CI_JOB_IDS = frozenset({"final-ci-failed"})
+FINAL_CI_JOB_IF = "failure() && !cancelled() && github.event_name == 'workflow_dispatch' && needs.lint.result == 'failure'"
+# `lint` runs even when a needed job fails, except in quick mode, where its
+# needed test jobs are skipped (Phase 4).
+AGGREGATE_JOB_IF = "always() && inputs.mode != 'quick'"
 
 
 def _ci_jobs() -> dict:
@@ -60,7 +70,7 @@ def _ci_jobs() -> dict:
 
 
 def _worker_job_ids(jobs: dict) -> list[str]:
-	return [job_id for job_id in jobs if job_id != AGGREGATE_JOB_ID and job_id not in ADVISORY_JOB_IDS]
+	return [job_id for job_id in jobs if job_id != AGGREGATE_JOB_ID and job_id not in ADVISORY_JOB_IDS and job_id not in FINAL_CI_JOB_IDS]
 
 
 def _aggregate_step() -> dict:
@@ -107,7 +117,7 @@ class AggregateJobWiringTest(unittest.TestCase):
 				self.assertNotIn(job_id, needs)
 
 	def test_lint_runs_even_when_a_needed_job_fails(self) -> None:
-		self.assertEqual(_ci_jobs()[AGGREGATE_JOB_ID]["if"], "always()")
+		self.assertEqual(_ci_jobs()[AGGREGATE_JOB_ID]["if"], AGGREGATE_JOB_IF)
 
 	def test_lint_reads_every_needed_result(self) -> None:
 		self.assertEqual(_aggregate_step()["env"]["CI_NEEDS_JSON"], "${{ toJSON(needs) }}")
@@ -127,6 +137,126 @@ class AggregateJobWiringTest(unittest.TestCase):
 				self.assertNotIn(job_id, jobs[AGGREGATE_JOB_ID]["needs"])
 				self.assertEqual(jobs[job_id]["if"], ADVISORY_JOB_IF)
 				self.assertEqual(jobs[job_id]["steps"][0].get("name"), "Checkout repository")
+
+
+class FinalCiFailedJobTest(unittest.TestCase):
+	"""cut-ci-runner-time Phase 4: a red final CI run goes back to review."""
+
+	def test_job_runs_only_after_a_failed_lint_in_dispatch_runs(self) -> None:
+		jobs = _ci_jobs()
+		for job_id in sorted(FINAL_CI_JOB_IDS):
+			with self.subTest(job=job_id):
+				job = jobs[job_id]
+				self.assertEqual(job["needs"], AGGREGATE_JOB_ID)
+				self.assertEqual(job["if"], FINAL_CI_JOB_IF)
+				self.assertNotIn(job_id, jobs[AGGREGATE_JOB_ID]["needs"])
+
+	def test_job_runs_the_trusted_script_from_the_default_branch(self) -> None:
+		job = _ci_jobs()["final-ci-failed"]
+		checkout = job["steps"][0]
+		self.assertEqual(checkout["with"]["ref"], "${{ github.event.repository.default_branch }}")
+		self.assertIs(checkout["with"]["persist-credentials"], False)
+		step = job["steps"][1]
+		self.assertEqual(step["run"], "bash scripts/review_final_ci_failed.sh")
+		self.assertEqual(step["env"]["PR_NUMBER"], "${{ inputs.pr_number }}")
+		self.assertEqual(step["env"]["PR_HEAD_SHA"], "${{ github.sha }}")
+		self.assertTrue((REPO_ROOT / "scripts" / "review_final_ci_failed.sh").is_file())
+
+	def test_worker_jobs_skip_in_quick_mode_except_static_checks(self) -> None:
+		jobs = _ci_jobs()
+		for job_id in _worker_job_ids(jobs):
+			with self.subTest(job=job_id):
+				if job_id == "static-checks":
+					self.assertNotIn("if", jobs[job_id])
+				elif job_id == "tests-sync-quick":
+					# Runs only in a sync-quick final-CI dispatch, never in quick
+					# mode; tests/test_ci_sync_quick.py pins that gate.
+					self.assertEqual(jobs[job_id]["if"], "inputs.mode != 'quick' && github.event_name == 'workflow_dispatch' && inputs.sync_quick == 'true'")
+				else:
+					# Docs-only and sync-quick final CI also skip them;
+					# tests/test_ci_docs_only_final_ci.py and
+					# tests/test_ci_sync_quick.py pin those gates.
+					self.assertEqual(jobs[job_id]["if"], "inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'")
+
+
+class SystemPythonJobTest(unittest.TestCase):
+	"""`tests-system-python` must test the runner's own interpreter (#9233)."""
+
+	SYSTEM_PYTHON_JOB_ID = "tests-system-python"
+	SANDBOX_PYTHON_JOB_ID = "tests-sandbox-python"
+
+	def _steps(self) -> dict:
+		return {step.get("name"): step for step in _ci_jobs()[self.SYSTEM_PYTHON_JOB_ID]["steps"]}
+
+	def test_system_python_job_uses_the_runner_interpreter(self) -> None:
+		jobs = _ci_jobs()
+		for step in jobs[self.SYSTEM_PYTHON_JOB_ID]["steps"]:
+			with self.subTest(step=step.get("name")):
+				self.assertFalse(str(step.get("uses", "")).startswith("actions/setup-python"))
+		steps = self._steps()
+		self.assertIn('/usr/bin/python3 -m venv "${RUNNER_TEMP}/system-python-venv"', steps["Setup Python"]["run"])
+		self.assertIn("GITHUB_PATH", steps["Setup Python"]["run"])
+		install = steps["Install Python CI dependencies"]["run"]
+		self.assertIn("sys.base_prefix", install)
+		self.assertIn('!= "/usr"', install)
+		self.assertEqual(jobs[self.SYSTEM_PYTHON_JOB_ID]["runs-on"], "ubuntu-latest")
+
+	def test_system_python_shards_come_from_the_matrix(self) -> None:
+		job = _ci_jobs()[self.SYSTEM_PYTHON_JOB_ID]
+		shards = job["strategy"]["matrix"]["system-python-shard"]
+		self.assertEqual(shards, list(range(len(shards))))
+		self.assertFalse(job["strategy"]["fail-fast"])
+		shard_step = self._steps()["System-Python test shard"]
+		self.assertEqual(shard_step["env"]["CI_SYSTEM_PYTHON_SHARD_INDEX"], "${{ strategy.job-index }}")
+		self.assertEqual(shard_step["env"]["CI_SYSTEM_PYTHON_SHARD_TOTAL"], "${{ strategy.job-total }}")
+		self.assertIn("pytest --collect-only -q -p no:cacheprovider tests", shard_step["run"])
+		self.assertIn("'NR % total == n'", shard_step["run"])
+		self.assertIn('-v n="${shard_index}" -v total="${shard_total}"', shard_step["run"])
+
+	def test_system_python_shard_keeps_default_tmpdir(self) -> None:
+		"""Regression guard for run 43053071771 (#9313).
+
+		A `TMPDIR` under `RUNNER_TEMP` made pytest's `tmp_path` long enough to
+		push the heal tests' broker socket past the 108-byte `AF_UNIX` limit.
+		A short `/tmp/...` `TMPDIR` stays allowed.
+		"""
+		step = self._steps()["System-Python test shard"]
+		long_tmpdir_markers = ("runner_temp", "runner.temp", "/home/runner/work")
+		step_tmpdir = (step.get("env") or {}).get("TMPDIR")
+		if step_tmpdir is not None:
+			step_tmpdir_value = str(step_tmpdir).lower()
+			self.assertNotIn("runner_temp", step_tmpdir_value)
+			self.assertNotIn("runner.temp", step_tmpdir_value)
+			self.assertFalse(step_tmpdir_value.startswith("/home/runner/work"), step_tmpdir_value)
+		# The shard step inherits a job-level `TMPDIR`, so hold it to the same rule.
+		job_tmpdir = (_ci_jobs()[self.SYSTEM_PYTHON_JOB_ID].get("env") or {}).get("TMPDIR")
+		if job_tmpdir is not None:
+			job_tmpdir_value = str(job_tmpdir).lower()
+			for marker in ("runner_temp", "runner.temp"):
+				self.assertNotIn(marker, job_tmpdir_value)
+			self.assertFalse(job_tmpdir_value.startswith("/home/runner/work"), job_tmpdir_value)
+		for raw_line in str(step.get("run", "")).splitlines():
+			run_line = raw_line.strip()
+			if not run_line or run_line.startswith("#") or "TMPDIR=" not in run_line:
+				continue
+			with self.subTest(line=run_line):
+				for marker in long_tmpdir_markers:
+					self.assertNotIn(marker, run_line.lower())
+
+	def test_system_python_shard_count_fits_the_job_budget(self) -> None:
+		shards = _ci_jobs()[self.SYSTEM_PYTHON_JOB_ID]["strategy"]["matrix"]["system-python-shard"]
+		self.assertGreaterEqual(
+			len(shards),
+			24,
+			"run 43053071771: 12 system-python shards hit the 20-minute job budget",
+		)
+
+	def test_runtime_python_jobs_gate_lint_and_feed_budget_watch(self) -> None:
+		jobs = _ci_jobs()
+		for job_id in (self.SYSTEM_PYTHON_JOB_ID, self.SANDBOX_PYTHON_JOB_ID):
+			with self.subTest(job=job_id):
+				self.assertIn(job_id, jobs[AGGREGATE_JOB_ID]["needs"])
+				self.assertIn(job_id, jobs["budget-watch"]["needs"])
 
 
 class AggregateJobBehaviourTest(unittest.TestCase):
