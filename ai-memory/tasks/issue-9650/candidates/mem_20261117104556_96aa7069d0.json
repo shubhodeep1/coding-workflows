@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Pipeline human-wait elimination: CI-quick parity, red-main heal dedupe, resolver safeguards, .github/ai plan grants, hold re-evaluation, nothing-to-implement verify, operator-step tick\",\"issues\":[{\"id\":\"phase-1\",\"title\":\"Pipeline human-wait elimination - Phase 1 (per docs/plans/pipeline-human-wait-elimination-plan.md)\",\"priority\":1},{\"id\":\"phase-2\",\"title\":\"Pipeline human-wait elimination - Phase 2 (per docs/plans/pipeline-human-wait-elimination-plan.md)\",\"priority\":2},{\"id\":\"phase-3\",\"title\":\"Pipeline human-wait elimination - Phase 3 (per docs/plans/pipeline-human-wait-elimination-plan.md)\",\"priority\":3},{\"id\":\"phase-4\",\"title\":\"Pipeline human-wait elimination - Phase 4 (per docs/plans/pipeline-human-wait-elimination-plan.md)\",\"priority\":4},{\"id\":\"phase-5\",\"title\":\"Pipeline human-wait elimination - Phase 5 (per docs/plans/pipeline-human-wait-elimination-plan.md)\",\"priority\":5},{\"id\":\"phase-6\",\"title\":\"Pipeline human-wait elimination - Phase 6 (per docs/plans/pipeline-human-wait-elimination-plan.md)\",\"priority\":6},{\"id\":\"phase-7\",\"title\":\"Pipeline human-wait elimination - Phase 7 (per docs/plans/pipeline-human-wait-elimination-plan.md)\",\"priority\":7},{\"id\":\"phase-8a\",\"title\":\"Pipeline human-wait elimination - Phase 8a (per docs/plans/pipeline-human-wait-elimination-plan.md)\",\"priority\":8},{\"id\":\"phase-8b\",\"title\":\"Pipeline human-wait elimination - Phase 8b (per docs/plans/pipeline-human-wait-elimination-plan.md)\",\"priority\":8},{\"id\":\"phase-9\",\"title\":\"Pipeline human-wait elimination - Phase 9 (per docs/plans/pipeline-human-wait-elimination-plan.md)\",\"priority\":9}],\"dependency_edges\":[{\"from\":\"phase-8a\",\"to\":\"phase-8b\"},{\"from\":\"phase-1\",\"to\":\"phase-2\"},{\"from\":\"phase-1\",\"to\":\"phase-3\"},{\"from\":\"phase-1\",\"to\":\"phase-4\"},{\"from\":\"phase-1\",\"to\":\"phase-5\"},{\"from\":\"phase-1\",\"to\":\"phase-6\"},{\"from\":\"phase-1\",\"to\":\"phase-7\"},{\"from\":\"phase-1\",\"to\":\"phase-8a\"},{\"from\":\"phase-1\",\"to\":\"phase-9\"},{\"from\":\"phase-2\",\"to\":\"phase-3\"},{\"from\":\"phase-2\",\"to\":\"phase-4\"},{\"from\":\"phase-2\",\"to\":\"phase-5\"},{\"from\":\"phase-2\",\"to\":\"phase-6\"},{\"from\":\"phase-2\",\"to\":\"phase-7\"},{\"from\":\"phase-2\",\"to\":\"phase-8a\"},{\"from\":\"phase-2\",\"to\":\"phase-9\"},{\"from\":\"phase-3\",\"to\":\"phase-4\"},{\"from\":\"phase-3\",\"to\":\"phase-5\"},{\"from\":\"phase-3\",\"to\":\"phase-6\"},{\"from\":\"phase-3\",\"to\":\"phase-7\"},{\"from\":\"phase-3\",\"to\":\"phase-8a\"},{\"from\":\"phase-3\",\"to\":\"phase-9\"},{\"from\":\"phase-4\",\"to\":\"phase-5\"},{\"from\":\"phase-4\",\"to\":\"phase-6\"},{\"from\":\"phase-4\",\"to\":\"phase-7\"},{\"from\":\"phase-4\",\"to\":\"phase-8a\"},{\"from\":\"phase-4\",\"to\":\"phase-9\"},{\"from\":\"phase-5\",\"to\":\"phase-6\"},{\"from\":\"phase-5\",\"to\":\"phase-7\"},{\"from\":\"phase-5\",\"to\":\"phase-8a\"},{\"from\":\"phase-5\",\"to\":\"phase-9\"},{\"from\":\"phase-6\",\"to\":\"phase-7\"},{\"from\":\"phase-6\",\"to\":\"phase-8a\"},{\"from\":\"phase-6\",\"to\":\"phase-9\"},{\"from\":\"phase-7\",\"to\":\"phase-8a\"},{\"from\":\"phase-7\",\"to\":\"phase-9\"},{\"from\":\"phase-8a\",\"to\":\"phase-9\"},{\"from\":\"phase-8b\",\"to\":\"phase-9\"}]}",
+  "fingerprint": "c82bcebf3feb4c3ea7da03daa128d9b99f374b9cf2ace55d69846474fa6a6df1",
+  "lineage": {
+    "issue_number": 9650,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44059697255",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44059697255",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261117104556_96aa7069d0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9650,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44059697255"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Pipeline human-wait elimination: CI-quick parity, red-main heal dedupe, resolver safeguards, .github/ai plan grants, hold re-evaluation, nothing-to-implement verify, operator-step tick' into 10 issues (tracking #9650)",
+  "timestamps": {
+    "created_at": "2026-11-17T10:45:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
