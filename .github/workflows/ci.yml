@@ -4453,6 +4453,7 @@ jobs:
       - orchestrate-poll
       - tests-system-python
       - tests-sandbox-python
+      - tests-sync-quick
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
