@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:455-476 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The exit-75 deferral comment and run-summary text say an `ai:clarification` issue needs `/answer` re-posted by hand, but stall recovery re-posts it automatically. The same wording appears in README.md:2762, agents.d/9599-plan-defer-rate-limited-integration-ref.md:2, changelog.d/9599-plan-defer-rate-limited-integration-ref.md:2 and tests/test_workflow_checkout_integration_ref_audit.py:1051.\n  WHY: `STALL_RECOVERY_ACTIONS[\"ai:clarification\"]` is `[\"auto_respond_clarify\", \"auto_respond_clarify\", \"escalate_human\"]` (scripts/orchestrate_lib.py:1669-1673), and scripts/orchestrate_poll_process.sh:26319-26353 posts `/answer`. Severity disagreement: the reviewers rated it NIT (anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna) and MAJOR (minimax_minimax-m3). Sonnet 5.5 also notes that runtime behavior is correct and the issue is documentation precision only. MAJOR is mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Record in the PR that you ran [the regression test] both ways\" (it fails on the reported head and passes with the fix).\n  expected_change_site: PR Description > Acceptance table\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The PR description marks both red-on-base tests (`test_plan_rate_limited_refusal_defers_without_failing`, `test_plan_setup_steps_skip_on_rate_limited_defer`) as \"not run\" and has no record of running them on the reported head and the fix. Severity disagreement: anthropic_claude-sonnet-5_5 rated it NIT with confidence 2 and said the PR description is not repository content. The other three rated it MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/plan.yml:459-476 (also README.md, agents.d/9599-plan-defer-rate-limited-integration-ref.md, changelog.d/9599-plan-defer-rate-limited-integration-ref.md, tests/test_workflow_checkout_integration_ref_audit.py) | severity=NIT | confidence=3\n  PROBLEM: The text says an `ai:clarification` issue needs `/answer` re-posted by hand, but `STALL_RECOVERY_ACTIONS[\"ai:clarification\"]` (`scripts/orchestrate_lib.py:1669-1673`) makes stall recovery re-post it automatically.\n  WHY: Runtime behavior is correct. The wording only overstates the manual work, so this is a documentation precision issue.\n- TASK_GAP: Requirement: \"Record in the PR that you ran [the regression test] both ways\"\n  Expected change site: PR description, Acceptance table\n  Evidence of absence: The PR description marks both red-on-base tests as \"not run\". The PR description is not repository content. The regression tests themselves are present.\n  SEVERITY: NIT | ISSUE_CONFIDENCE: 2\n- Correctness, naming and trust-boundary sections: NONE. The deferral branch is fail-closed and the new `rate_limited_defer` output is additive.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/plan.yml:473-474 | severity=NIT | confidence=4\n  PROBLEM: The run summary message incorrectly states that `ai:clarification` issues need manual `/answer` re-posting.\n  WHY: `ai:clarification` issues are covered by stall recovery (`auto_respond_clarify`), so the instruction to operators is misleading.\n- TASK_GAP: Requirement: \"Record in the PR that you ran [the regression test] both ways\" and verify it fails on the reported head and passes with the fix.\n  Expected change site: PR Description > Acceptance\n  Evidence of absence: The PR description marks both red-on-base test targets as \"not run\" and has no record that they were run against the reported head and the fix.\n  SEVERITY: MAJOR | ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/plan.yml:455-466 (propagated to README.md:2762, agents.d/9599-plan-defer-rate-limited-integration-ref.md:2, changelog.d/9599-plan-defer-rate-limited-integration-ref.md:2, tests/test_workflow_checkout_integration_ref_audit.py:1051) | severity=MAJOR | confidence=5\n  PROBLEM: The wording puts `ai:clarification` in the manual `/answer` bucket, but stall recovery re-posts `/answer` for it (`scripts/orchestrate_lib.py:1669-1673`, `scripts/orchestrate_poll_process.sh:26319-26353`). The test at tests/test_workflow_checkout_integration_ref_audit.py:1051 asserts \"post /answer again by hand\" and locks the wording in.\n  WHY: An operator reading the summary may post `/answer` by hand while stall recovery is about to do it, which duplicates the comment and the dispatch. The docs also do not distinguish the case where `ENABLE_STANDALONE_STALL_RECOVERY=false`.\n- TASK_GAP: Requirement: \"Record in the PR that you ran [the regression test] both ways\" and verify it fails on the reported head and passes with the fix (from the linked issue's Fix constraints section).\n  Expected change site: PR Description > Acceptance table, with results for the red-on-base and fixed-head runs of the two red-on-base tests.\n  Evidence of absence: The PR Description lists both `tests/test_workflow_checkout_integration_ref_audit.py::test_plan_rate_limited_refusal_defers_without_failing` and `tests/test_workflow_checkout_integration_ref_audit.py::test_plan_setup_steps_skip_on_rate_limited_defer` as `not run`. The earlier editor deferred this gap, but `gh pr edit --body` is in scope.\n  SEVERITY: MAJOR | ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/plan.yml:476 | severity=NIT | confidence=5\n  PROBLEM: The run summary says an `ai:clarification` issue needs `/answer` posted by hand, even when standalone stall recovery is enabled.\n  WHY: `ai:clarification` maps to `auto_respond_clarify` in `scripts/orchestrate_lib.py:1669-1672`, and `scripts/orchestrate_poll_process.sh:26319-26350` posts `/answer` for that action. The summary therefore gives incorrect recovery instructions.\n- TASK_GAP: Requirement: \"The fix must remove the cause and ship a regression test that reproduces the failing condition: it fails on the reported head and passes with the fix. Record in the PR that you ran it both ways.\"\n  Expected change site: PR Description > Acceptance, with results for the red-on-base and fixed-head runs.\n  Evidence of absence: The PR description marks the red-on-base test targets as \"not run\" and has no record of running the regression test against both the reported head and the fixed head.\n  SEVERITY: MAJOR | ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "c7238bb69826ce022eb832764a5e2a1eddc876b81341637a4d2e653023e24a3e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9604,
+    "run_id": "44009909788",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44009909788",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117053725_8f28f776aa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9604,
+    "run_id": "44009909788"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-17T05:37:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
