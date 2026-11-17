@@ -4006,7 +4006,7 @@ class MovedHooks9391StepsContractTest(unittest.TestCase):
 				self.assertLess(names.index(HOOKS_9391_SETUP_STEP), names.index(name))
 
 
-# Step moved from orchestrate-poll group 3 to group 1: orchestrate-poll (3)
+# Step moved from orchestrate-poll group 3 to group 0: orchestrate-poll (3)
 # took 15m17s of its 20 minutes on main (run 43993691500, budget-watch issue
 # #9639). The run's step results gave statuses only, with no durations, so the
 # pick is an estimate, not a measurement: the step was group 3's newest load
