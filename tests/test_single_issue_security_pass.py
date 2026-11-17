@@ -79,6 +79,11 @@ if args[0] == "api" and len(args) > 1 and args[1].startswith("repos/o/r/commits/
 if args[0] == "api" and len(args) > 1 and args[1].startswith("repos/o/r/compare/") and os.environ.get("FAKE_GH_COMMITS"):
 	print(os.environ.get("FAKE_GH_COMPARE_STATUS", "ahead"))
 	sys.exit(0)
+if args[0] == "api" and any("/actions/workflows/" in arg for arg in args):
+	if "runs" in fail or not os.environ.get("FAKE_GH_RUNS"):
+		sys.exit(1)
+	print(open(os.environ["FAKE_GH_RUNS"]).read())
+	sys.exit(0)
 if args[0] == "api" and "--paginate" in args:
 	if "comments_once" in fail and sum('"--paginate"' in line for line in open(os.environ["FAKE_GH_LOG"])) == 1:
 		sys.exit(1)
@@ -184,7 +189,7 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 		SUPPORT_SCRIPTS_DIR=str(support),
 		GITHUB_WORKSPACE=str(tmp_path),
 	)
-	for name in ("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "MAX_SECURITY_PASS_CYCLES", "ORCH_INTEGRATION_BRANCH_PATTERN", "SECURITY_PASS_PENDING_STALE_HOURS", "SECURITY_PASS_FOLLOWUP_STALE_HOURS", "SECURITY_PASS_PENDING_MARKER_ATTEMPTS", "SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS", "SECURITY_PASS_AUTHOR_LOGIN_FALLBACK", "FAKE_GIT_ANCESTORS", "FAKE_GIT_SHALLOW", "FAKE_GIT_FETCH_FAIL", "FAKE_GIT_UNSHALLOW_MARKER", "FAKE_GIT_INCOMPLETE_ANCESTRY"):
+	for name in ("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "MAX_SECURITY_PASS_CYCLES", "ORCH_INTEGRATION_BRANCH_PATTERN", "SECURITY_PASS_PENDING_STALE_HOURS", "SECURITY_PASS_FOLLOWUP_STALE_HOURS", "SECURITY_PASS_PENDING_MARKER_ATTEMPTS", "SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS", "SECURITY_PASS_AUTHOR_LOGIN_FALLBACK", "FAKE_GIT_ANCESTORS", "FAKE_GIT_SHALLOW", "FAKE_GIT_FETCH_FAIL", "FAKE_GIT_UNSHALLOW_MARKER", "FAKE_GIT_INCOMPLETE_ANCESTRY", "FAKE_GH_RUNS", "SECURITY_PASS_MAX_AUDIT_ATTEMPTS", "SECURITY_PASS_MAX_CONCURRENT_AUDITS", "SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES"):
 		run_env.pop(name, None)
 	run_env["SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS"] = "0"
 	# The pass defaults to off; tests that exercise it opt in, and None unsets a name.
@@ -512,10 +517,12 @@ def test_unaudited_exhaustion_label_already_present_does_not_recomment(tmp_path:
 
 
 def test_stale_pending_at_cap_does_not_consume_post_cap_budget(tmp_path: Path) -> None:
+	# An audit that never reported does not use a cycle: cycle 5 is still
+	# available, and the marker numbers the attempt (6).
 	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("pending", HEAD, 5), age_hours=7)])
-	assert output == "hold=true\nhold_reason=audit_dispatched\n" and "reason=exhausted_retry" in result.stdout
+	assert output == "hold=true\nhold_reason=audit_dispatched\n" and "reason=exhausted_retry" not in result.stdout
 	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
-	assert "head attempt 1 of 2" in posted[-1][-1]
+	assert "(cycle 5 of 5)" in posted[-1][-1] and posted[-1][-1].endswith(_marker("pending", HEAD, 6))
 	assert any(call[:2] == ["workflow", "run"] for call in calls)
 
 
@@ -1379,3 +1386,218 @@ def test_missing_support_helpers_fall_back_to_an_audit(tmp_path: Path) -> None:
 	result, calls, output = _run(tmp_path, "gate", comments=comments)
 	assert output.startswith("hold=true\n") and "freshness_sync_inherited" not in result.stdout
 	assert any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+# --- Convergence: per-PR audits, lost-audit retry, attempt-based budget ----
+
+
+def _iso(age_minutes: float) -> str:
+	return (dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=age_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _runs(tmp_path: Path, runs: list) -> str:
+	path = tmp_path / "runs.json"
+	path.write_text(json.dumps({"workflow_runs": runs}), encoding="utf-8")
+	return str(path)
+
+
+def _audit_run(status: str, conclusion: str | None, created_minutes: float, updated_minutes: float, pr: int = 42) -> dict:
+	return {
+		"display_title": f"AI Security Audit (PR #{pr})", "status": status, "conclusion": conclusion,
+		"created_at": _iso(created_minutes), "updated_at": _iso(updated_minutes),
+	}
+
+
+def test_unreported_pending_cycles_do_not_use_the_cycle_budget(tmp_path: Path) -> None:
+	# PR #9389's history: 3 completed clean audits on older heads, 5 audits
+	# that were cancelled in the queue and never reported.
+	heads = {n: f"{n:040x}" for n in range(1, 8)}
+	comments = []
+	for n, status in [(1, "clean"), (2, "clean"), (3, "pending"), (4, "pending"), (5, "pending"), (6, "clean"), (7, "pending")]:
+		comments.append(_comment(_marker("pending", heads[n], n), comment_id=2 * n - 1, age_hours=20 - n))
+		if status != "pending":
+			comments.append(_comment(_marker(status, heads[n], n), comment_id=2 * n, age_hours=19.5 - n))
+	comments.append(_comment(_marker("pending", HEAD, 8), comment_id=99, age_hours=7))
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert "outcome=dispatched cycle=9" in result.stdout and "exhausted_retry" not in result.stdout
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert "(cycle 4 of 5)" in posted[-1][-1] and posted[-1][-1].endswith(_marker("pending", HEAD, 9))
+	assert not any(call[:2] == ["api", "repos/o/r/issues/42/labels"] for call in calls)
+
+
+def test_attempts_cap_bounds_audits_that_never_report(tmp_path: Path) -> None:
+	comments = [_comment(_marker("pending", f"{n:040x}", n), comment_id=n, age_hours=30 - n) for n in range(1, 11)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	# Ten attempts (twice the 5-cycle cap) are spent: the exhausted path runs,
+	# which still grants this head its bounded retries.
+	assert output == "hold=true\nhold_reason=audit_dispatched\n" and "reason=exhausted_retry" in result.stdout
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert "head attempt 1 of 2" in posted[-1][-1] and posted[-1][-1].endswith(_marker("pending", HEAD, 11))
+	comments += [_comment(_marker("pending", HEAD, n), comment_id=n, age_hours=7) for n in (11, 12)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	assert output == "hold=true\nhold_reason=exhausted_without_completed_audit\n"
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+@pytest.mark.parametrize("value, dispatched", [("12", True), ("10", False), ("3", False), ("abc", False)])
+def test_attempts_cap_override_is_validated(tmp_path: Path, value: str, dispatched: bool) -> None:
+	comments = [_comment(_marker("pending", f"{n:040x}", n), comment_id=n, age_hours=30 - n) for n in range(1, 11)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"SECURITY_PASS_MAX_AUDIT_ATTEMPTS": value})
+	# Below the cycle cap (3) the cap is raised to it; invalid falls back to 10.
+	assert ("reason=exhausted_retry" not in result.stdout) is dispatched
+	assert "outcome=dispatched cycle=11" in result.stdout
+
+
+def test_cancelled_audit_is_retried_before_the_stale_window(tmp_path: Path) -> None:
+	runs = _runs(tmp_path, [
+		_audit_run("completed", "cancelled", 39, 30),
+		_audit_run("completed", "success", 300, 280),
+		_audit_run("in_progress", None, 5, 1, pr=7),
+	])
+	comments = [_comment(_marker("pending", HEAD, 1), age_hours=40 / 60)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GH_RUNS": runs})
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert "reason=audit_run_lost" in result.stdout and "outcome=dispatched cycle=2" in result.stdout
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	# The lost attempt used no cycle.
+	assert "(cycle 1 of 5)" in posted[-1][-1]
+	listings = [call for call in calls if any("/actions/workflows/ai-security-audit.yml/runs" in arg for arg in call)]
+	assert len(listings) == 1
+
+
+@pytest.mark.parametrize(
+	"run_specs, marker_minutes, expected_state, listed",
+	[
+		([("queued", None, 39, 39, 42)], 40, "live", True),
+		([("completed", "cancelled", 39, 5, 42)], 40, "live", True),
+		([("completed", "cancelled", 39, 30, 7)], 40, "unknown", True),
+		([("completed", "cancelled", 200, 190, 42)], 40, "unknown", True),
+		(None, 40, "unknown", True),
+		([("completed", "cancelled", 39, 30, 42)], 10, "", False),
+	],
+)
+def test_pending_audit_holds_without_positive_evidence_of_loss(tmp_path: Path, run_specs, marker_minutes: int, expected_state: str, listed: bool) -> None:
+	# Timestamps are built here, not at collection, so a slow run cannot age them.
+	runs = None if run_specs is None else [_audit_run(*spec[:4], pr=spec[4]) for spec in run_specs]
+	env = {"FAKE_GH_RUNS": _runs(tmp_path, runs)} if runs is not None else {}
+	comments = [_comment(_marker("pending", HEAD, 1), age_hours=marker_minutes / 60)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env=env)
+	assert output == "hold=true\nhold_reason=audit_pending\n"
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+	assert (f"audit_run={expected_state}" in result.stdout) if expected_state else ("audit_run=" not in result.stdout)
+	assert any(any("/actions/workflows/" in arg for arg in call) for call in calls) is listed
+
+
+def test_cancel_check_can_be_disabled(tmp_path: Path) -> None:
+	runs = _runs(tmp_path, [_audit_run("completed", "cancelled", 39, 30)])
+	comments = [_comment(_marker("pending", HEAD, 1), age_hours=40 / 60)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GH_RUNS": runs, "SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES": "0"})
+	assert output == "hold=true\nhold_reason=audit_pending\n"
+	assert not any(any("/actions/workflows/" in arg for arg in call) for call in calls)
+
+
+@pytest.mark.parametrize(
+	"active, env, throttled",
+	[(3, {}, True), (2, {}, False), (5, {"SECURITY_PASS_MAX_CONCURRENT_AUDITS": "6"}, False), (9, {"SECURITY_PASS_MAX_CONCURRENT_AUDITS": "0"}, False)],
+)
+def test_concurrent_audits_are_throttled_without_using_a_cycle(tmp_path: Path, active: int, env: dict, throttled: bool) -> None:
+	runs = [_audit_run("in_progress" if n % 2 else "queued", None, 5, 1, pr=100 + n) for n in range(active)]
+	runs.append(_audit_run("completed", "success", 50, 30, pr=200))
+	result, calls, output = _run(tmp_path, "gate", env={"FAKE_GH_RUNS": _runs(tmp_path, runs), **env})
+	if throttled:
+		assert output == "hold=true\nhold_reason=audit_throttled\n" and f"reason=audit_throttled active={active} max=3" in result.stdout
+		assert not any(call[:2] == ["workflow", "run"] for call in calls)
+		assert not any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
+	else:
+		assert output == "hold=true\nhold_reason=audit_dispatched\n" and "outcome=dispatched cycle=1" in result.stdout
+
+
+def test_throttle_fails_open_when_runs_cannot_be_listed(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", env={"FAKE_GH_RUNS": _runs(tmp_path, []), "FAKE_GH_FAIL": "runs"})
+	assert output == "hold=true\nhold_reason=audit_dispatched\n" and "outcome=dispatched cycle=1" in result.stdout
+
+
+def test_status_mode_never_lists_audit_runs_for_a_fresh_head(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "status", env={"FAKE_GH_RUNS": _runs(tmp_path, [])})
+	assert "SINGLE_ISSUE_SECURITY_PASS_STATE=needs_audit" in result.stdout
+	assert not any(any("/actions/workflows/" in arg for arg in call) for call in calls)
+
+
+@pytest.mark.parametrize("earlier, redispatch", [("pending", False), ("clean", True)])
+def test_report_last_cycle_ignores_unreported_attempts(tmp_path: Path, earlier: str, redispatch: bool) -> None:
+	# Cycle 5 with four earlier attempts: they used the budget only if they
+	# reported. Findings on the last budget cycle re-run the review.
+	extra = []
+	for n in range(1, 5):
+		extra.append(_comment(_marker("pending", f"{n:040x}", n), comment_id=10 + n))
+		if earlier != "pending":
+			extra.append(_comment(_marker(earlier, f"{n:040x}", n), comment_id=20 + n))
+	result, calls, _ = _report(tmp_path, "success", "2", cycle=5, extra_comments=extra)
+	assert "outcome=findings cycle=5" in result.stdout
+	review = ["workflow", "run", "ai-review.yml", "-R", "o/r", "--ref", "main", "-f", "pr_number=42"]
+	assert (review in calls) is redispatch
+
+
+def _since(tmp_path: Path, comments: list, ancestors: str = "", env: dict | None = None):
+	run_env = {"SECURITY_PASS_PR_NUMBER": "42", "SECURITY_PASS_HEAD_SHA": HEAD, "FAKE_GIT_ANCESTORS": ancestors}
+	run_env.update(env or {})
+	return _run(tmp_path, "since", comments=comments, env=run_env)
+
+
+def test_since_names_the_newest_clean_ancestor(tmp_path: Path) -> None:
+	first, second, foreign = "1" * 40, "2" * 40, "3" * 40
+	comments = [
+		_comment(_marker("clean", first, 1), comment_id=1),
+		_comment(_marker("clean", second, 2), comment_id=2),
+		_comment(_marker("clean", foreign, 3), comment_id=3),
+		_comment(_marker("clean", "4" * 40, 4), login="other[bot]", comment_id=4),
+	]
+	result, calls, _ = _since(tmp_path, comments, ancestors=f"{first},{second},{'4' * 40}")
+	assert result.stdout.strip() == second
+	assert "outcome=delta" in result.stderr
+
+
+@pytest.mark.parametrize(
+	"comments, ancestors, env, reason",
+	[
+		([], "", {}, "no_clean_ancestor"),
+		([_comment(_marker("findings", "1" * 40, 1))], "1" * 40, {}, "no_clean_ancestor"),
+		([_comment(_marker("clean", "1" * 40, 1))], "", {}, "no_clean_ancestor"),
+		([_comment(_marker("clean", HEAD, 1))], HEAD, {}, "no_clean_ancestor"),
+		([_comment(_marker("clean", "1" * 40, 1))], "1" * 40, {"FAKE_GIT_HEAD": "e" * 40}, "checkout_mismatch"),
+		([_comment(_marker("clean", "1" * 40, 1))], "1" * 40, {"FAKE_GH_FAIL": "identity"}, "author_unverifiable"),
+		([_comment(_marker("clean", "1" * 40, 1))], "1" * 40, {"SECURITY_PASS_PR_NUMBER": ""}, "missing_input"),
+	],
+)
+def test_since_falls_back_to_the_full_range(tmp_path: Path, comments: list, ancestors: str, env: dict, reason: str) -> None:
+	result, _, _ = _since(tmp_path, comments, ancestors=ancestors, env=env)
+	assert result.returncode == 0 and result.stdout.strip() == ""
+	assert f"outcome=full reason={reason}" in result.stderr
+
+
+def test_audit_concurrency_is_per_pr_in_both_workflows() -> None:
+	audit = yaml.safe_load(AUDIT.read_text(encoding="utf-8"))
+	wrapper = yaml.safe_load(AUDIT_TEMPLATE.read_text(encoding="utf-8"))
+	reusable_group = audit["concurrency"]["group"]
+	wrapper_group = wrapper["concurrency"]["group"]
+	for group in (reusable_group, wrapper_group):
+		assert "inputs.pr_number" in group and "format('pr-{0}', inputs.pr_number)" in group and "'default'" in group
+	# Distinct prefixes keep the caller/callee deadlock away (see the comment
+	# above the reusable workflow's concurrency block).
+	assert reusable_group.startswith("security-audit-reusable-") and not wrapper_group.startswith("security-audit-reusable-")
+	assert audit["concurrency"]["cancel-in-progress"] is False and wrapper["concurrency"]["cancel-in-progress"] is False
+	# The gate finds the run behind a pending marker by this title suffix.
+	assert "format('Security Audit (PR #{0})', inputs.pr_number)" in audit["run-name"]
+	assert "format('AI Security Audit (PR #{0})', inputs.pr_number)" in wrapper["run-name"]
+
+
+def test_audit_scope_step_wires_the_delta_helper() -> None:
+	audit = yaml.safe_load(AUDIT.read_text(encoding="utf-8"))
+	steps = {step.get("name"): step for step in audit["jobs"]["security-audit"]["steps"]}
+	scope = steps["Verify audit data and resolve scope"]
+	assert scope["env"]["SECURITY_PASS_PR_NUMBER"] == "${{ inputs.pr_number }}"
+	assert "SECURITY_PASS_DELTA_AUDIT_ENABLED" in scope["env"]
+	assert 'review_single_issue_security_pass.sh" since' in scope["run"]
+	assert 'echo "SECURITY_AUDIT_DIFF_SINCE=${audit_since}" >> "$GITHUB_ENV"' in scope["run"]
+	assert "SECURITY_PASS_MAX_AUDIT_ATTEMPTS" in steps["Report single-issue security pass"]["env"]

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Signed job-token comments (run-volume plan item 15): route this script's
+# gh comment calls through the shim even when no earlier step loaded it.
+[ -z "${BASH_SOURCE[0]:-}" ] || AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" >/dev/null 2>&1 || true
 # Single-issue security pass (port P1, docs/plans/replace-claude-sessions-with-cli-engine-plan.md
 # Phase 8a).
 #
@@ -27,7 +30,21 @@
 #               SINGLE_PASS_INHERIT_MAX_HOPS (10) verified updates; any
 #               failed check audits the head as before.
 #             - `status=pending` for the current head, younger than
-#               SECURITY_PASS_PENDING_STALE_HOURS: hold=true, nothing else.
+#               SECURITY_PASS_PENDING_STALE_HOURS: hold=true, nothing else,
+#               unless the marker is at least
+#               SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES (20; 0 = off) old
+#               and every audit run named for this PR since the marker
+#               completed 10+ minutes ago without a result (cancelled in
+#               the queue, or lost): then it is retried like a stale one.
+#             - pending-only cycles (no result marker ever posted) do not
+#               use the MAX_SECURITY_PASS_CYCLES budget. Every dispatch is
+#               still an attempt; SECURITY_PASS_MAX_AUDIT_ATTEMPTS (default
+#               twice the cycle cap) bounds them and is exhausted like the
+#               cycle cap.
+#             - before a dispatch, with SECURITY_PASS_MAX_CONCURRENT_AUDITS
+#               (3; 0 = off) audit runs already queued or running: hold
+#               with hold_reason=audit_throttled, no marker and no cycle
+#               used; the next review run (sweep tick) tries again.
 #             - `status=findings` for the current head: hold=true until the
 #               follow-up fixes change the head.
 #             - otherwise, with fewer than MAX_SECURITY_PASS_CYCLES cycles
@@ -52,7 +69,7 @@
 #           marker cannot be posted, the step still holds but exits 1 so the
 #           unrecorded failure surfaces through the review failure path.
 #           Every hold=true also writes `hold_reason=<reason>`: audit_dispatched,
-#           audit_pending or awaiting_followups when matching open follow-ups
+#           audit_pending, audit_throttled or awaiting_followups when matching open follow-ups
 #           are younger than the limit; followups_missing,
 #           followups_unverifiable, followups_stalled, markers_unverifiable,
 #           extensions_unverifiable, label_write_failed, pending_marker_failed,
@@ -75,6 +92,9 @@
 #           the audited commit. On clean, failed or final-cycle findings it
 #           re-dispatches review (also for findings with missing ID metadata),
 #           so the next review merges or escalates.
+#   since   Run by security-audit.yml's scope step: prints the last
+#           clean-audited ancestor of the audited head for a delta audit
+#           (see single_pass_since).
 #           Findings become follow-up issues that target
 #           the PR branch; their merges push to the PR and start a new review.
 #
@@ -93,7 +113,9 @@
 # verified freshness update walked, at most SINGLE_PASS_INHERIT_MAX_HOPS), plus
 # at most 3 GETs for the skip check and one /user identity read (the gate
 # job's /user result is not exported), plus one paginated open ai:security
-# issue listing only for current-head findings in gate mode, then one dispatch
+# issue listing only for current-head findings in gate mode, plus at most one
+# audit-runs listing (shared by the cancelled-audit check of a pending marker
+# and the concurrency throttle before a dispatch), then one dispatch
 # and up to SECURITY_PASS_PENDING_MARKER_ATTEMPTS pending-marker POSTs (default 3,
 # valid range 1-10; backoff base defaults to 5s, range 0-30s), or one label
 # write. report: one PR read to bind the audit inputs, one /user
@@ -284,6 +306,106 @@ single_pass_audit_workflow()
 	fi
 }
 
+# Cycle accounting (issue: single-issue pass convergence). Input: the marker
+# TSV from single_pass_markers, the effective cycle cap and, in report mode,
+# the cycle whose result is being posted (0 otherwise). Output, one line:
+#   <attempts> <used> <cap_cycle>
+# attempts  highest `cycle=` on any marker: every dispatch, the numbering
+#           source for the next marker and the input to the attempts cap.
+# used      cycles that count toward MAX_SECURITY_PASS_CYCLES: every cycle
+#           number up to <attempts> except one whose only markers are
+#           `pending` (an audit that never posted a result: cancelled in the
+#           concurrency queue, lost, or superseded by a new head). A gap with
+#           no marker at all still counts, so trimmed history never frees
+#           budget.
+# cap_cycle cycle number at which <used> reached the cap (0 = not reached);
+#           post-cap head retries are the attempts numbered above it.
+# Pure text processing; no API calls.
+single_pass_cycle_accounting()
+{
+	local markers="$1" cap="$2" reported_cycle="${3:-0}"
+	printf '%s\n' "${markers}" | awk -F'\t' -v cap="${cap}" -v rc="${reported_cycle}" '
+		NF >= 5 {
+			c = $5 + 0
+			if (c > max) max = c
+			seen[c] = 1
+			if ($3 != "pending") reported[c] = 1
+		}
+		END {
+			used = 0; cap_cycle = 0
+			for (c = 1; c <= max; c++) {
+				if (seen[c] && !reported[c] && c != rc + 0) continue
+				used++
+				if (used == cap && cap_cycle == 0) cap_cycle = c
+			}
+			print max + 0, used, cap_cycle
+		}'
+}
+
+# One Actions read shared by the cancelled-audit check and the concurrency
+# throttle (CLAUDE.md §15): the audit workflow's runs created in the last 24
+# hours (an audit times out after 60 minutes, so no live run is older), one
+# page of 100. Cached in SINGLE_PASS_AUDIT_RUNS for the rest of the gate run.
+# Returns 1 when the listing is unavailable; callers fail open.
+SINGLE_PASS_AUDIT_RUNS=""
+SINGLE_PASS_AUDIT_RUNS_STATE="unfetched"
+single_pass_audit_runs()
+{
+	local workflow since
+	if [ "${SINGLE_PASS_AUDIT_RUNS_STATE}" = "fetched" ]; then
+		return 0
+	fi
+	if [ "${SINGLE_PASS_AUDIT_RUNS_STATE}" = "failed" ]; then
+		return 1
+	fi
+	workflow="$(single_pass_audit_workflow)"
+	since="$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+	if [ -z "${since}" ] \
+		|| ! SINGLE_PASS_AUDIT_RUNS="$(gh api -X GET "repos/${REPOSITORY}/actions/workflows/${workflow}/runs" -f per_page=100 -f "created=>=${since}" 2>/dev/null)" \
+		|| ! jq -e '.workflow_runs | type == "array"' <<< "${SINGLE_PASS_AUDIT_RUNS}" >/dev/null 2>&1; then
+		SINGLE_PASS_AUDIT_RUNS_STATE="failed"
+		SINGLE_PASS_AUDIT_RUNS=""
+		return 1
+	fi
+	SINGLE_PASS_AUDIT_RUNS_STATE="fetched"
+	return 0
+}
+
+# Prints lost|live|unknown for the audit a pending marker stands for. The
+# audit run is named "... (PR #<n>)" (run-name in security-audit.yml and the
+# consumer wrapper). Only positive evidence counts as lost: at least one run
+# for this PR created from two minutes before the marker on, every such run
+# completed at least 10 minutes ago (time for its report step to post), and
+# the marker is still the latest for the head. A missing run (listing lag, or
+# a consumer wrapper without run-name) prints unknown and the 6-hour stale
+# window stays the backstop.
+single_pass_pending_audit_state()
+{
+	local marker_created="$1"
+	if ! single_pass_audit_runs; then
+		echo unknown
+		return 0
+	fi
+	jq -r --arg created "${marker_created}" --arg pr "${PR_NUMBER}" '
+		def ts: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
+		($created | ts) as $since
+		| [.workflow_runs[]
+			| select(((.display_title // "") | endswith(" (PR #" + $pr + ")")) and ((.created_at // "") | ts) >= ($since - 120))]
+		| if length == 0 then "unknown"
+		  elif any(.[]; .status != "completed") then "live"
+		  elif all(.[]; ((.updated_at // "") | ts) <= (now - 600)) then "lost"
+		  else "live" end
+	' <<< "${SINGLE_PASS_AUDIT_RUNS}" 2>/dev/null || echo unknown
+}
+
+# Prints how many audit runs are queued or running right now, or nothing when
+# the listing is unavailable (the caller then dispatches as before).
+single_pass_active_audits()
+{
+	single_pass_audit_runs || return 0
+	jq -r '[.workflow_runs[] | select(.status != "completed")] | length' <<< "${SINGLE_PASS_AUDIT_RUNS}" 2>/dev/null || true
+}
+
 single_pass_review_workflow()
 {
 	if [ "${REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then
@@ -331,6 +453,15 @@ single_pass_open_followups()
 	fi
 	rm -f "${followup_file}"
 	printf '%s\n' "${followup_total}"
+}
+
+# Minutes since an ISO-8601 timestamp; 0 for a missing or invalid one, so a
+# bad timestamp never triggers the early cancelled-audit check.
+single_pass_marker_age_minutes()
+{
+	local marker_minutes
+	marker_minutes="$(python3 -c 'import datetime,sys; t=datetime.datetime.fromisoformat(sys.argv[1].replace("Z","+00:00")); assert t.tzinfo is not None; print(max(0, int((datetime.datetime.now(datetime.timezone.utc)-t).total_seconds()//60)))' "$1" 2>/dev/null)" || marker_minutes=""
+	printf '%s\n' "${marker_minutes:-0}"
 }
 
 single_pass_marker_age_hours()
@@ -405,7 +536,17 @@ single_pass_gate()
 	local state base head_ref head_sha head_repo labels linked skip_json markers latest latest_status latest_head latest_created
 	local cycles_used next_cycle age_hours workflow body extensions effective_max completed_findings failed_marker_unrecorded="false"
 	local gate_checkout_head
+	local attempts_used cap_cycle effective_attempts pending_state="" active_audits
+	local max_attempts="${SECURITY_PASS_MAX_AUDIT_ATTEMPTS:-}" max_concurrent="${SECURITY_PASS_MAX_CONCURRENT_AUDITS:-3}"
+	local cancel_check_minutes="${SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES:-20}"
 	[[ "${max_cycles}" =~ ^[1-9][0-9]*$ ]] || max_cycles=5
+	# Attempts cap: every dispatch, reported or not. Default twice the cycle
+	# cap; never below it, so the cycle cap still decides first.
+	[[ "${max_attempts}" =~ ^[1-9][0-9]{0,3}$ ]] || max_attempts=$((max_cycles * 2))
+	[ "${max_attempts}" -ge "${max_cycles}" ] || max_attempts="${max_cycles}"
+	# 0 disables the throttle; 0 disables the cancelled-audit check.
+	[[ "${max_concurrent}" =~ ^[0-9]{1,3}$ ]] || max_concurrent=3
+	[[ "${cancel_check_minutes}" =~ ^[0-9]{1,4}$ ]] || cancel_check_minutes=20
 	[[ "${stale_hours}" =~ ^[1-9][0-9]*$ ]] || stale_hours=6
 	[[ "${followup_stale_hours}" =~ ^[1-9][0-9]*$ ]] || followup_stale_hours=24
 	[[ "${exhausted_head_limit}" =~ ^[1-9][0-9]*$ ]] || exhausted_head_limit=2
@@ -465,7 +606,6 @@ single_pass_gate()
 		single_pass_output true markers_unverifiable
 		return 0
 	fi
-	cycles_used="$(printf '%s\n' "${markers}" | awk -F'\t' 'NF >= 5 && $5 + 0 > m { m = $5 + 0 } END { print m + 0 }')"
 	if ! extensions="$(single_pass_extensions "${comments}" "${head_sha}" . "${head_ref}")"; then
 		# The checkout can be ahead of the PR head when this run made a commit
 		# it has not pushed yet: the conflict resolver's [ai-merge-resolve]
@@ -491,6 +631,13 @@ single_pass_gate()
 		return 0
 	fi
 	effective_max=$((max_cycles + extensions))
+	effective_attempts=$((max_attempts + extensions))
+	# Pending-only cycles (audits that never reported) do not use the cycle
+	# budget; the attempts cap bounds them instead.
+	read -r attempts_used cycles_used cap_cycle <<< "$(single_pass_cycle_accounting "${markers}" "${effective_max}")"
+	[[ "${attempts_used}" =~ ^[0-9]+$ ]] || attempts_used=0
+	[[ "${cycles_used}" =~ ^[0-9]+$ ]] || cycles_used=0
+	[[ "${cap_cycle}" =~ ^[0-9]+$ ]] || cap_cycle=0
 	latest="$(printf '%s\n' "${markers}" | awk -F'\t' -v h="${head_sha}" '$4 == h' | tail -n 1)"
 	latest_created="$(printf '%s' "${latest}" | cut -f1)"
 	latest_status="$(printf '%s' "${latest}" | cut -f3)"
@@ -519,8 +666,17 @@ single_pass_gate()
 		if [ -n "${latest_created}" ]; then
 			age_hours="$(python3 -c 'import datetime,sys; t=datetime.datetime.fromisoformat(sys.argv[1].replace("Z","+00:00")); print(int((datetime.datetime.now(datetime.timezone.utc)-t).total_seconds()//3600))' "${latest_created}" 2>/dev/null || echo 0)"
 		fi
-		if [ "${age_hours}" -lt "${stale_hours}" ]; then
-			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=audit_pending cycle=${cycles_used}"
+		# An audit cancelled in the concurrency queue (or otherwise finished
+		# without a result) is retried now instead of after the stale window.
+		if [ "${age_hours}" -lt "${stale_hours}" ] && [ "${cancel_check_minutes}" -gt 0 ] \
+			&& [ "$(single_pass_marker_age_minutes "${latest_created}")" -ge "${cancel_check_minutes}" ]; then
+			# Fetch in this shell so the cached listing survives for the
+			# throttle check; the $(...) below only reads it.
+			single_pass_audit_runs || true
+			pending_state="$(single_pass_pending_audit_state "${latest_created}")"
+		fi
+		if [ "${age_hours}" -lt "${stale_hours}" ] && [ "${pending_state}" != "lost" ]; then
+			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=audit_pending cycle=${cycles_used}${pending_state:+ audit_run=${pending_state}}"
 			single_pass_state pending
 			single_pass_output true audit_pending
 			return 0
@@ -569,9 +725,17 @@ single_pass_gate()
 		single_pass_output true awaiting_followups
 		return 0
 	fi
-	if [ "${cycles_used}" -ge "${effective_max}" ]; then
+	if [ "${pending_state}" = "lost" ]; then
+		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=retry reason=audit_run_lost cycle=${cycles_used} attempt=${attempts_used}"
+	fi
+	if [ "${cycles_used}" -ge "${effective_max}" ] || [ "${attempts_used}" -ge "${effective_attempts}" ]; then
+		# Post-cap head retries are the attempts numbered above the point the
+		# cap was reached (the cycle cap, or the attempts cap if that came first).
+		if [ "${cap_cycle}" -eq 0 ] || [ "${cap_cycle}" -gt "${effective_attempts}" ]; then
+			cap_cycle="${effective_attempts}"
+		fi
 		if [ -z "${completed_findings}" ]; then
-			head_attempts="$(printf '%s\n' "${markers}" | awk -F'\t' -v h="${head_sha}" -v cap="${effective_max}" '($3 == "pending" || $3 == "failed") && $4 == h && $5 + 0 > cap && !seen[$5]++ { n++ } END { print n + 0 }')"
+			head_attempts="$(printf '%s\n' "${markers}" | awk -F'\t' -v h="${head_sha}" -v cap="${cap_cycle}" '($3 == "pending" || $3 == "failed") && $4 == h && $5 + 0 > cap && !seen[$5]++ { n++ } END { print n + 0 }')"
 			if [ "${head_attempts}" -lt "${exhausted_head_limit}" ]; then
 				exhausted_retry="true"
 			fi
@@ -617,12 +781,25 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 			return 0
 		fi
 	fi
-	next_cycle=$((cycles_used + 1))
+	# The marker numbers every attempt; the message shows the budget cycle.
+	next_cycle=$((attempts_used + 1))
 	if [ "${SINGLE_PASS_STATUS_ONLY}" = "true" ]; then
 		single_pass_state needs_audit
 		return 0
 	fi
 	workflow="$(single_pass_audit_workflow)"
+	# Per-PR audit concurrency groups no longer serialise audits, so bound how
+	# many run at once. Throttled: no dispatch and no marker, so no cycle or
+	# attempt is used; the next review run (sweep tick) tries again.
+	if [ "${max_concurrent}" -gt 0 ]; then
+		single_pass_audit_runs || true
+		active_audits="$(single_pass_active_audits)"
+		if [[ "${active_audits}" =~ ^[0-9]+$ ]] && [ "${active_audits}" -ge "${max_concurrent}" ]; then
+			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=audit_throttled active=${active_audits} max=${max_concurrent} cycle=${cycles_used}"
+			single_pass_output true audit_throttled
+			return 0
+		fi
+	fi
 	if ! gh workflow run "${workflow}" -R "${REPOSITORY}" --ref "${default_branch}" -f ref="${head_ref}" -f pr_number="${PR_NUMBER}" >/dev/null 2>&1; then
 		if [ "${exhausted_retry}" = "true" ]; then
 			# Record the failed retry as a used head attempt (head_attempts counts
@@ -641,10 +818,10 @@ $(single_pass_marker failed "${head_sha}" "${next_cycle}")"
 		else
 			# Below the cycle cap, record the failed dispatch as a used cycle so
 			# repeated failures count toward exhaustion.
-			echo "::warning::Could not dispatch ${workflow} for PR #${PR_NUMBER}; holding auto-merge and recording cycle ${next_cycle} of ${effective_max} as failed. A later review run retries the dispatch."
+			echo "::warning::Could not dispatch ${workflow} for PR #${PR_NUMBER}; holding auto-merge and recording cycle $((cycles_used + 1)) of ${effective_max} as failed. A later review run retries the dispatch."
 			body="## Single-issue security pass
 
-The audit of \`${head_sha}\` could not be dispatched (\`${workflow}\`). A consumer \`ai-security-audit.yml\` that predates the \`pr_number\` input fails this way; syncing the wrapper fixes it. Auto-merge stays off, and this counts as cycle ${next_cycle} of ${effective_max}. A later review run retries the dispatch. Once the cycles are used up, the PR is labelled \`ai:security-pass-failed\`.
+The audit of \`${head_sha}\` could not be dispatched (\`${workflow}\`). A consumer \`ai-security-audit.yml\` that predates the \`pr_number\` input fails this way; syncing the wrapper fixes it. Auto-merge stays off, and this counts as cycle $((cycles_used + 1)) of ${effective_max}. A later review run retries the dispatch. Once the cycles are used up, the PR is labelled \`ai:security-pass-failed\`.
 
 $(single_pass_marker failed "${head_sha}" "${next_cycle}")"
 			if ! gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1; then
@@ -672,7 +849,7 @@ $(single_pass_marker pending "${head_sha}" "${next_cycle}")"
 	else
 		body="## Single-issue security pass
 
-Auto-merge waits for the security audit of \`${head_sha}\` (cycle ${next_cycle} of ${effective_max}). Findings become follow-up issues against this branch; a clean audit re-runs the review, which then merges.
+Auto-merge waits for the security audit of \`${head_sha}\` (cycle $((cycles_used + 1)) of ${effective_max}). Findings become follow-up issues against this branch; a clean audit re-runs the review, which then merges.
 
 $(single_pass_marker pending "${head_sha}" "${next_cycle}")"
 	fi
@@ -690,9 +867,11 @@ single_pass_report()
 {
 	local pr_number="${SECURITY_PASS_PR_NUMBER:-}" head_sha="${SECURITY_PASS_HEAD_SHA:-}" outcome="${SECURITY_PASS_AUDIT_OUTCOME:-}"
 	local findings="${SECURITY_PASS_FINDINGS:-}" default_branch="${DEFAULT_BRANCH:-}" comments_file status cycle body review_workflow pr_head report_ids report_ids_invalid="false"
-	local extensions=0
-	local max_cycles="${MAX_SECURITY_PASS_CYCLES:-5}"
+	local extensions=0 report_markers="" report_used=0 report_final="false"
+	local max_cycles="${MAX_SECURITY_PASS_CYCLES:-5}" max_attempts="${SECURITY_PASS_MAX_AUDIT_ATTEMPTS:-}"
 	[[ "${max_cycles}" =~ ^[1-9][0-9]*$ ]] || max_cycles=5
+	[[ "${max_attempts}" =~ ^[1-9][0-9]{0,3}$ ]] || max_attempts=$((max_cycles * 2))
+	[ "${max_attempts}" -ge "${max_cycles}" ] || max_attempts="${max_cycles}"
 	if ! [[ "${pr_number}" =~ ^[0-9]+$ ]] || ! [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
 		single_pass_log "mode=report pr=${pr_number} outcome=skip reason=missing_input"
 		return 0
@@ -747,7 +926,8 @@ single_pass_report()
 		gh api --paginate "repos/${REPOSITORY}/issues/${pr_number}/comments?per_page=100"
 	fi; } 2>/dev/null | jq -s 'add // []' > "${comments_file}" 2>/dev/null \
 		&& jq -e 'type == "array"' "${comments_file}" >/dev/null 2>&1; then
-		cycle="$(single_pass_markers "${comments_file}" | awk -F'\t' -v h="${head_sha}" '$3 == "pending" && $4 == h { c = $5 } END { print c + 0 }')"
+		report_markers="$(single_pass_markers "${comments_file}")" || report_markers=""
+		cycle="$(printf '%s\n' "${report_markers}" | awk -F'\t' -v h="${head_sha}" '$3 == "pending" && $4 == h { c = $5 } END { print c + 0 }')"
 		# The audit result is only for head_sha if the audit checkout sits there,
 		# whether or not any extension marker exists (single_pass_extensions now
 		# checks the checkout only when a marker needs it).
@@ -790,12 +970,75 @@ The audit of \`${head_sha}\` did not finish. The review re-runs and starts the n
 		single_pass_log "mode=report pr=${pr_number} head=${head_sha} outcome=skip reason=comment_write_failed cycle=${cycle}"
 		return 0
 	fi
-	if { [ "${status}" != "findings" ] || [ "${report_ids_invalid}" = "true" ] || [ "${cycle}" -ge "$((max_cycles + extensions))" ]; } && [ -n "${default_branch}" ]; then
+	# This result is the last budget cycle (pending-only cycles do not count,
+	# see single_pass_cycle_accounting) or the last attempt: re-run the review
+	# so the gate escalates instead of waiting for follow-ups.
+	read -r _ report_used _ <<< "$(single_pass_cycle_accounting "${report_markers}" "$((max_cycles + extensions))" "${cycle}")"
+	[[ "${report_used}" =~ ^[0-9]+$ ]] || report_used="${cycle}"
+	if [ "${report_used}" -ge "$((max_cycles + extensions))" ] || [ "${cycle}" -ge "$((max_attempts + extensions))" ]; then
+		report_final="true"
+	fi
+	if { [ "${status}" != "findings" ] || [ "${report_ids_invalid}" = "true" ] || [ "${report_final}" = "true" ]; } && [ -n "${default_branch}" ]; then
 		review_workflow="$(single_pass_review_workflow)"
 		gh workflow run "${review_workflow}" -R "${REPOSITORY}" --ref "${default_branch}" -f pr_number="${pr_number}" >/dev/null 2>&1 \
 			|| echo "::warning::Could not re-dispatch ${review_workflow} for PR #${pr_number}; the next review event picks the result up."
 	fi
 	single_pass_log "mode=report pr=${pr_number} head=${head_sha} outcome=${status} cycle=${cycle} findings=${findings:-unknown}"
+}
+
+# `since` mode (delta audit): run by security-audit.yml's scope step for an
+# audit dispatched with pr_number. Prints the newest commit with a trusted
+# `status=clean` marker on this PR that is an ancestor of the audited head
+# in the audit checkout, or nothing. The workflow passes it as
+# SECURITY_AUDIT_DIFF_SINCE, so the audit covers only range files changed
+# since that clean audit. Fails open: any missing input, failed read or
+# non-ancestor prints nothing and the audit covers the full range.
+# Inputs: SECURITY_PASS_PR_NUMBER, SECURITY_PASS_HEAD_SHA, REPOSITORY,
+# SECURITY_PASS_AUDIT_CHECKOUT (default audit-data), optional
+# SECURITY_PASS_AUTHOR_LOGIN_FALLBACK. API budget: one /user read and one
+# paginated PR comments read. At most 10 clean heads are checked, newest
+# first, with local git only.
+# Log (stderr): SINGLE_ISSUE_SECURITY_PASS mode=since pr= head= outcome=delta|full reason= since=
+single_pass_since()
+{
+	local pr_number="${SECURITY_PASS_PR_NUMBER:-}" head_sha="${SECURITY_PASS_HEAD_SHA:-}" checkout="${SECURITY_PASS_AUDIT_CHECKOUT:-audit-data}"
+	local comments_file since_markers since_candidate since_checked=0
+	if ! [[ "${pr_number}" =~ ^[0-9]+$ ]] || ! [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] || [ -z "${REPOSITORY:-}" ]; then
+		single_pass_log "mode=since pr=${pr_number} head=${head_sha} outcome=full reason=missing_input" >&2
+		return 0
+	fi
+	if [ "$(git -C "${checkout}" rev-parse HEAD 2>/dev/null || true)" != "${head_sha}" ]; then
+		single_pass_log "mode=since pr=${pr_number} head=${head_sha} outcome=full reason=checkout_mismatch" >&2
+		return 0
+	fi
+	SECURITY_PASS_AUTHOR_LOGIN="$(gh api user --jq '.login // ""' 2>/dev/null || true)"
+	[ -n "${SECURITY_PASS_AUTHOR_LOGIN}" ] || SECURITY_PASS_AUTHOR_LOGIN="${SECURITY_PASS_AUTHOR_LOGIN_FALLBACK:-}"
+	if [ -z "${SECURITY_PASS_AUTHOR_LOGIN}" ]; then
+		single_pass_log "mode=since pr=${pr_number} head=${head_sha} outcome=full reason=author_unverifiable" >&2
+		return 0
+	fi
+	comments_file="$(mktemp)" || return 0
+	if ! gh api --paginate "repos/${REPOSITORY}/issues/${pr_number}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' > "${comments_file}" 2>/dev/null \
+		|| ! jq -e 'type == "array"' "${comments_file}" >/dev/null 2>&1 \
+		|| ! since_markers="$(single_pass_markers "${comments_file}")"; then
+		rm -f "${comments_file}"
+		single_pass_log "mode=since pr=${pr_number} head=${head_sha} outcome=full reason=markers_unverifiable" >&2
+		return 0
+	fi
+	rm -f "${comments_file}"
+	while IFS= read -r since_candidate; do
+		[[ "${since_candidate}" =~ ^[0-9a-f]{40}$ ]] || continue
+		[ "${since_candidate}" != "${head_sha}" ] || continue
+		since_checked=$((since_checked + 1))
+		[ "${since_checked}" -le 10 ] || break
+		if git -C "${checkout}" merge-base --is-ancestor "${since_candidate}" "${head_sha}" 2>/dev/null; then
+			single_pass_log "mode=since pr=${pr_number} head=${head_sha} outcome=delta since=${since_candidate}" >&2
+			printf '%s\n' "${since_candidate}"
+			return 0
+		fi
+	done <<< "$(printf '%s\n' "${since_markers}" | awk -F'\t' '$3 == "clean" { print $4 }' | tac | awk '!seen[$0]++')"
+	single_pass_log "mode=since pr=${pr_number} head=${head_sha} outcome=full reason=no_clean_ancestor checked=${since_checked}" >&2
+	return 0
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
@@ -806,8 +1049,9 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 			single_pass_gate
 			;;
 		report) single_pass_report ;;
+		since) single_pass_since ;;
 		*)
-			echo "usage: $0 gate|status|report" >&2
+			echo "usage: $0 gate|status|report|since" >&2
 			exit 2
 			;;
 	esac
