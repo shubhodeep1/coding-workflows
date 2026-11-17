@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/resolve_integration_ref.sh:590-595, 657-669, 723-743 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: `resolve_ci_reissue_base_branch()` now returns 0 with no branch when the PR lookup, branch lookup or branch validation fails, where it used to refuse.\n  WHY: `resolve_ref()` accepts the empty result and continues on the default branch, so for example a PR API error other than rate limiting lets the workflow proceed instead of failing closed, and this changes resolver logic despite the task's \"No resolver logic changes\" constraint (the source severity MAJOR is mapped to high).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The red-on-base check for `tests/test_resolve_integration_ref_ci_triage.py::test_resolver_workflows_forward_reissue_base_routing_flag` must be completed.\n  expected_change_site: The red-on-base test gate for `tests/test_resolve_integration_ref_ci_triage.py`.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR acceptance table marks this check \"not run.\"\n- requirement: `tests/test_workflow_checkout_integration_ref_audit.py` must pass.\n  expected_change_site: The workflow checkout integration-ref audit test gate.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR acceptance table marks this check \"unmet.\"\n- requirement: `tests/test_workflow_support_ref_follows_pin.py` must pass.\n  expected_change_site: The workflow support-ref pin test gate.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR acceptance table marks this check \"unmet.\"\n- requirement: `tests/test_workflow_file_size_limit.py` must pass.\n  expected_change_site: The workflow file-size test gate for `.github/workflows/implement.yml`.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR acceptance table marks this check \"unmet.\"\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/resolve_integration_ref.sh:`resolve_ci_reissue_base_branch()` at lines 590-595 and 657-669; `resolve_ref()` at lines 723-743 | severity=MAJOR | confidence=5\n  PROBLEM: The last-run changes turn unverified re-issue routing failures into success: PR lookup failures and branch lookup or validation failures return 0 with no branch, where the prior behavior was to refuse.\n  WHY: `resolve_ref()` accepts that empty result and continues with the default branch. For example, a PR API error other than rate limiting now lets the workflow proceed on the default branch instead of failing closed. This also changes resolver behavior despite the task's \"No resolver logic changes\" constraint.\n- TASK_GAP | severity=NIT | confidence=5\n  Requirement: The red-on-base check for `tests/test_resolve_integration_ref_ci_triage.py::test_resolver_workflows_forward_reissue_base_routing_flag` must be completed.\n  Expected change site: The red-on-base test gate for `tests/test_resolve_integration_ref_ci_triage.py`.\n  Evidence of absence: The PR acceptance table marks this check \"not run.\"\n- TASK_GAP | severity=NIT | confidence=5\n  Requirement: `tests/test_workflow_checkout_integration_ref_audit.py` must pass.\n  Expected change site: The workflow checkout integration-ref audit test gate.\n  Evidence of absence: The PR acceptance table marks this check \"unmet.\"\n- TASK_GAP | severity=NIT | confidence=5\n  Requirement: `tests/test_workflow_support_ref_follows_pin.py` must pass.\n  Expected change site: The workflow support-ref pin test gate.\n  Evidence of absence: The PR acceptance table marks this check \"unmet.\"\n- TASK_GAP | severity=NIT | confidence=5\n  Requirement: `tests/test_workflow_file_size_limit.py` must pass.\n  Expected change site: The workflow file-size test gate for `.github/workflows/implement.yml`.\n  Evidence of absence: The PR acceptance table marks this check \"unmet.\"\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "8ba3f1044b174d50ea101839f0003ef4f3c2b4a032a28deb7bae49eec5e9871a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9635,
+    "run_id": "44003404074",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44003404074",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117044329_ab9104555c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9635,
+    "run_id": "44003404074"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-17T04:43:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
