@@ -230,11 +230,15 @@ review_head_gate_main()
 # of {author_login, body}); this adds no comments call. API budget (§15): one
 # `commits/<head>` and one compare read, both only when a bound marker names
 # the head. Exit 0 = skip the reviewers; 1 = review normally. Every outcome
-# logs one REVIEW_HEAD_GATE mode=freshness_sync line.
+# logs one REVIEW_HEAD_GATE mode=freshness_sync line. On exit 0 it also sets
+# REVIEW_HEAD_GATE_FRESHNESS_SYNC_FROM to the verified approved head (`from`),
+# empty otherwise; the single-issue security pass reads it to reuse that
+# head's clean audit (scripts/review_single_issue_security_pass.sh).
 review_head_gate_freshness_sync()
 {
 	local fs_repo="${1:-}" fs_pr="${2:-}" fs_head="${3:-}" fs_base="${4:-}" fs_login="${5:-}" fs_comments="${6:-}"
 	local fs_markers fs_marker fs_from fs_sync fs_base_parent fs_commit fs_parent_count fs_first fs_second fs_verified fs_committer fs_status
+	REVIEW_HEAD_GATE_FRESHNESS_SYNC_FROM=""
 	fs_log()
 	{
 		echo "REVIEW_HEAD_GATE mode=freshness_sync pr=${fs_pr:-?} head=${fs_head:-?} outcome=$1 reason=$2${3:+ $3}"
@@ -310,6 +314,7 @@ review_head_gate_freshness_sync()
 			;;
 	esac
 	fs_log skip freshness_sync "from=${fs_from} base_parent=${fs_second} sync=${fs_sync} merge=${fs_head}"
+	REVIEW_HEAD_GATE_FRESHNESS_SYNC_FROM="${fs_from}"
 	return 0
 }
 
