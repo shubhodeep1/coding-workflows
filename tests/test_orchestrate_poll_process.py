@@ -21770,7 +21770,9 @@ def test_stall_judge_review_run_listing_failure_keeps_context():
 	)
 	diagnostics = _sjr_judge_diagnostics(result)
 	assert "STALL_JUDGE_REVIEW_RUNS outcome=failed issue=10 pr=77 runs=0 waiting=false reason=list_failed" in result["stdout"]
-	assert diagnostics["review_waiting_for_runner"] is False
+	# Not computed on a failed listing, so absent (unknown), never a false
+	# that the prompt would read as "queued entries are stale".
+	assert "review_waiting_for_runner" not in diagnostics
 	assert diagnostics["recent_review_workflow_outcomes"] == []
 	assert "ai:needs-human" in result["issues"]["10"]["labels"]
 

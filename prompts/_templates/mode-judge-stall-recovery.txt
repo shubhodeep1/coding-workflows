@@ -43,9 +43,12 @@ Action guidance:
   or `close_and_reissue` for that reason; while it is true the pipeline holds
   both for that tick. An empty `recent_review_workflow_outcomes` does not
   prove reviews were never dispatched. A requested, queued, waiting or
-  pending entry while `review_waiting_for_runner` is false is stale (older
-  than REVIEW_RUN_MAX_RUNTIME_MINUTES) and no longer shows the PR is
-  waiting; judge the issue on the other evidence.
+  pending entry while `review_waiting_for_runner` is present and false is
+  stale (older than REVIEW_RUN_MAX_RUNTIME_MINUTES) or on an earlier head and
+  no longer shows the PR is waiting; judge the issue on the other evidence.
+  When `review_waiting_for_runner` is absent the live check did not run: a
+  requested, queued, waiting or pending entry on the PR head then still means
+  the PR is waiting, so do not escalate or reissue for that reason.
 - Choose `resolve_merge_conflict` only when there is a linked PR and merge
   conflict evidence indicates review/conflict resolution should run.
 - Choose retrigger/auto actions when the issue is likely recoverable with

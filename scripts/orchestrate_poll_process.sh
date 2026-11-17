@@ -22711,7 +22711,12 @@ invoke_stall_judge() {
     }' 2>/dev/null || echo '')"
   # Issue #9546: the queued-review flag, only with the switch on (off: the
   # diagnostics are unchanged). The fallback payload below is not touched.
-  if [ "${STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED:-true}" = "true" ] && [ -n "${diagnostics}" ]; then
+  # Added only when the flag was computed (listing and merge ok, clock read):
+  # on list_failed / merge_failed / no_pr / no clock the cached outcomes may
+  # still hold a fresh queued run, so an uncomputed `false` must not reach the
+  # judge, whose prompt reads a present `false` as "queued entries are stale".
+  if [ "${STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED:-true}" = "true" ] && [ -n "${diagnostics}" ] \
+    && [ "${_sjr_outcome:-}" = "ok" ] && [ -n "${_sjr_now:-}" ]; then
     local _sjr_diag=""
     if _sjr_diag="$(printf '%s' "${diagnostics}" | jq -c --argjson w "${review_waiting_for_runner}" \
       'if type == "object" then . + {review_waiting_for_runner: $w} else . end' 2>/dev/null)" && [ -n "${_sjr_diag}" ]; then
