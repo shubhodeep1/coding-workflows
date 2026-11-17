@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/INVENTORY.md:308 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `scripts/review_final_ci_failed.sh` entry says the script posts an `ai:final-ci-failed:v1` marker and dispatches PR review on a final CI lint failure, but with FINAL_CI_FAILED_SYNC_QUICK=true it instead dispatches the head's full final CI run and posts no marker (scripts/review_final_ci_failed.sh:89-101, set at ci.yml:4604).\n  WHY: The entry misstates the recovery behavior for failed sync-quick runs, and it contradicts the script and agents.d/9642-merge-base-sync-churn.md:7. Severity disagreement: minimax_minimax-m3 rated it MAJOR, and the other three rated it NIT. The highest is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- docs/INVENTORY.md:308 | severity=NIT | confidence=5\n  PROBLEM: The description for scripts/review_final_ci_failed.sh incorrectly states it posts a marker and dispatches review for all final CI lint failures.\n  WHY: When FINAL_CI_FAILED_SYNC_QUICK=true the script exits early without posting a marker or dispatching review, contrary to the inventory.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- docs/INVENTORY.md:308 | severity=MAJOR | confidence=5\n  PROBLEM: The entry claims the script posts one `ai:final-ci-failed:v1` marker per head and dispatches the PR's review workflow. On FINAL_CI_FAILED_SYNC_QUICK=true (set by ci.yml:4604) the script instead dispatches the head's full final CI run (scripts/review_final_ci_failed.sh:89-101) and posts no marker.\n  WHY: Readers will expect a marker and review dispatch for sync-quick runs and not know a silent full-suite re-dispatch happens. The earlier, longer entry covered both branches, and the last run shortened it to one.\n- HARDENING: docs/INVENTORY.md:308 | HARDENING_RISK_SCORE=1\n  PROBLEM: The entry omits the FINAL_CI_FAILED_SYNC_QUICK=true branch.\n  WHY: Suggested fix: append a clause saying that for a sync-quick run the script dispatches the head's full final CI run and posts no marker (1 line changed).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- docs/INVENTORY.md:308 | severity=NIT | confidence=5\n  PROBLEM: The entry says a failed final CI lint run posts a marker and dispatches PR review. For sync-quick failures the script dispatches a full CI run without posting a marker or dispatching review.\n  WHY: No runtime code path is changed, but the inventory gives maintainers the wrong recovery behavior for a failed sync-quick run.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- docs/INVENTORY.md:308 | severity=NIT | confidence=5\n  PROBLEM: The entry describes only the non-sync-quick path. For a failed sync-quick run, ci.yml:4604 passes FINAL_CI_FAILED_SYNC_QUICK=true, and scripts/review_final_ci_failed.sh:89-101 dispatches the head's full final CI run (FINAL_CI_FAILED_CI_WORKFLOW, default ci.yml) with no marker and no review dispatch.\n  WHY: No runtime failure, but the entry contradicts the script and agents.d/9642-merge-base-sync-churn.md:7, so someone triaging a sync-quick failure would expect a marker that never appears.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "05ef94640c332af0f7b3b855aa1cc8f318927ad6b33b92645e0c742e28c296f1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9456,
+    "run_id": "44034111179",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44034111179",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117105600_edd874f14d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9456,
+    "run_id": "44034111179"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-17T10:56:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
