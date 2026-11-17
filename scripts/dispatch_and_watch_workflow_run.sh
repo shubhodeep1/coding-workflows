@@ -268,6 +268,15 @@ if [ -z "${NEW_ID}" ]; then
 	exit 1
 fi
 
+# Written as soon as the run registers, so a caller's `if: always()` cleanup
+# can cancel a run this script stopped watching (completion timeout). `run_id`
+# keeps its meaning (written only once the run completes, or in snapshot mode),
+# so steps gated on it are unchanged. The release gate's orchestrate-decompose
+# cleanup reads this output: a bootstrap left queued past the timeout created
+# smoke projects after the gate finished (gates 43445515854, 43590943288,
+# 43708007145).
+echo "dispatched_run_id=${NEW_ID}" >> "${GITHUB_OUTPUT}"
+
 if [ "${SNAPSHOT_ONLY}" = "1" ]; then
 	echo "Registered run #${NEW_ID}"
 	RUN_JSON="$(gh_api_safe_quiet_print "repos/${TARGET_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' || echo "")"
