@@ -572,6 +572,25 @@ unblock_check_triage_resolved()
 # The plan-phase blocker (prompts/mode-plan.txt) for an issue with no edits left.
 UNBLOCK_NOTHING_TO_IMPLEMENT_REASON="work is already on the planning ref; nothing to implement"
 
+# unblock_nothing_to_implement_blocked (#8470, shared with #9659): 0 when the
+# newest trusted "Planning blocked" comment on the item gives the
+# nothing-to-implement reason and no trusted implementation plan (the has_plan
+# rule in unblock_main) was posted after it; 1 otherwise. Reads only the
+# item_comments.json this run already fetched.
+unblock_nothing_to_implement_blocked()
+{
+	jq -e --arg login "${UNBLOCK_LOGIN}" --arg reason "Reason: ${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}" '
+		([.[] | select((.user.login // "") == $login)
+			| ((.body // "") | split("\n") | map(rtrimstr("\r"))) as $lines
+			| select(($lines | map(select(test("\\S"))) | first // "") == "Planning blocked: human input required.")
+			| {at: (.created_at // ""), match: ($lines | index($reason) != null)}]
+		| sort_by(.at) | last // {at: "", match: false}) as $block
+		| ([.[] | select(((.body // "") | test("(?im)^\\s*implementation\\s+plan\\b")) and (((.user.type // "") == "Bot") or ((.author_association // "") as $a | ["OWNER", "MEMBER", "COLLABORATOR"] | index($a)) or ((.user.login // "") == $login)))
+			| (.created_at // "")] | max // "") as $plan
+		| $block.match and ($plan == "" or $plan < $block.at)
+	' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1
+}
+
 # unblock_nothing_to_implement_close <fixup> <done text> (#8470): when the
 # newest trusted "Planning blocked" comment on a standalone issue gives the
 # nothing-to-implement reason, the issue is closed as completed once its
@@ -596,16 +615,7 @@ unblock_nothing_to_implement_close()
 	# A trusted implementation plan (the has_plan rule in unblock_main) posted
 	# after that block means planning moved on, so the stale block never closes
 	# the issue: it resumes as usual (`/approved`).
-	jq -e --arg login "${UNBLOCK_LOGIN}" --arg reason "Reason: ${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}" '
-		([.[] | select((.user.login // "") == $login)
-			| ((.body // "") | split("\n") | map(rtrimstr("\r"))) as $lines
-			| select(($lines | map(select(test("\\S"))) | first // "") == "Planning blocked: human input required.")
-			| {at: (.created_at // ""), match: ($lines | index($reason) != null)}]
-		| sort_by(.at) | last // {at: "", match: false}) as $block
-		| ([.[] | select(((.body // "") | test("(?im)^\\s*implementation\\s+plan\\b")) and (((.user.type // "") == "Bot") or ((.author_association // "") as $a | ["OWNER", "MEMBER", "COLLABORATOR"] | index($a)) or ((.user.login // "") == $login)))
-			| (.created_at // "")] | max // "") as $plan
-		| $block.match and ($plan == "" or $plan < $block.at)
-	' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1 || return 1
+	unblock_nothing_to_implement_blocked || return 1
 	marker="<!-- ai:unblock-nothing-to-implement:v1 item=${ITEM} fixup=${fixup} -->"
 	if jq -e --arg login "${UNBLOCK_LOGIN}" --arg marker "${marker}" \
 		'any(.[]; (.user.login // "") == $login and ((.body // "") | sub("\\s+$"; "") | endswith($marker)))' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; then
@@ -626,6 +636,59 @@ ${marker}" >/dev/null 2>&1; then
 	fi
 	UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT="closed"
 	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup} op=nothing_to_implement outcome=closed"
+	return 0
+}
+
+# unblock_triage_superseded_note <tracking> (#9659): a standalone
+# ai:check-triage issue whose newest trusted "Planning blocked" comment gives
+# the nothing-to-implement reason has its fix on the planning ref already, so
+# resuming it with `/answer` or `/approved` would only loop planning (#629 in
+# shubhodeep1/binance-blessings). This run's Q129 check-triage resolution gate
+# verdict (triage_resolution.json, cached by unblock_check_triage_resolved)
+# decides: resolved or already_resolved means that gate has closed the issue;
+# any other verdict posts one trusted note (marker
+# `<!-- ai:unblock-triage-superseded:v1 item=<n> -->`, once per issue) saying
+# the issue waits for the pull request head's check to pass, and stops the
+# run without a resume command. No cached verdict (gate off, missing or
+# errored) judges as usual. Returns 0 when this run must stop, 1 to judge as
+# usual. UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED=false (default true)
+# restores the previous behaviour.
+# API budget: no reads; at most one comment write per issue.
+# Log key: UNBLOCK_JUDGE ... op=triage_superseded outcome=closed|noted|skip reason=<token>
+unblock_triage_superseded_note()
+{
+	local tracking_issue="${1:-}" marker status
+	if [ "$(printf '%s' "${UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "false" ]; then
+		return 1
+	fi
+	[ "${ITEM_KIND}" = "issue" ] && [ "${ITEM_STOP}" = "blocked" ] && [ -z "${tracking_issue}" ] || return 1
+	jq -e 'index("ai:check-triage") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1 || return 1
+	unblock_nothing_to_implement_blocked || return 1
+	if ! { [ -s "${RUNTIME_DIR}/triage_resolution.json" ] \
+		&& jq -e --argjson item "${ITEM}" '.issue == $item' "${RUNTIME_DIR}/triage_resolution.json" >/dev/null 2>&1; }; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=skip reason=gate_unavailable"
+		return 1
+	fi
+	status="$(jq -r '.status // ""' "${RUNTIME_DIR}/triage_resolution.json" 2>/dev/null || true)"
+	status="$(printf '%s' "${status}" | tr -cd 'a-z_' | cut -c1-40)"
+	if [ "${status}" = "resolved" ] || [ "${status}" = "already_resolved" ]; then
+		# Defensive: the Q129 gate closed the issue and normally returns first.
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=closed reason=${status}"
+		return 0
+	fi
+	marker="<!-- ai:unblock-triage-superseded:v1 item=${ITEM} -->"
+	if jq -e --arg login "${UNBLOCK_LOGIN}" --arg marker "${marker}" \
+		'any(.[]; (.user.login // "") == $login and ((.body // "") | sub("\\s+$"; "") | endswith($marker)))' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=noted reason=already_noted"
+		return 0
+	fi
+	if ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="Planning found the fix for this check failure already on the planning ref (\`${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}\`), so the unblock judge is not resuming planning: it would only stop here again. This issue now waits for the pull request head's check to pass; the check-triage resolution gate closes it with evidence once the failure is verified fixed on the default branch. Reply with \`/reclarify\` if work is still missing.
+
+${marker}" >/dev/null 2>&1; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=skip reason=comment_failed"
+		return 0
+	fi
+	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=noted reason=posted"
 	return 0
 }
 
@@ -2065,6 +2128,12 @@ ${step_escalation_marker}" >/dev/null 2>&1; then
 	if [ "${ITEM_KIND}" = "issue" ] && [ -f "${SUPPORT_DIR}/scripts/check_triage_resolution.py" ] \
 		&& jq -e 'index("ai:check-triage") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1 \
 		&& unblock_check_triage_resolved; then
+		return 0
+	fi
+
+	# #9659: a check-triage issue planning found nothing to implement for waits
+	# on its check (noted once) instead of looping planning with a resume.
+	if [ "${ITEM_KIND}" = "issue" ] && [ -z "${tracking}" ] && unblock_triage_superseded_note "${tracking}"; then
 		return 0
 	fi
 
