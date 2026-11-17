@@ -88,8 +88,9 @@ User decisions (interactive clarification, 2026-11-11):
 
 1. A consumer turns brainstorming on with one repo variable
    (`BRAINSTORM_ENABLED=true`) and one or more brief files; with the variable
-   unset, the wrapper's jobs exit after the gate step and make no API call
-   beyond reading the brief directory listing.
+   unset, the wrapper's caller job is skipped (no runner, no API call). The
+   gate still checks the variable as a second guard and exits
+   `outcome=disabled`.
 2. Each due topic produces one session issue in the consumer repo that holds
    the whole debate as comments, and a session interrupted mid-run resumes from
    its last completed turn on the next run.
@@ -102,7 +103,8 @@ User decisions (interactive clarification, 2026-11-11):
    session posts both final positions and waits for `/brainstorm-pick A|B`.
 6. The agreed idea becomes a plan in the consumer repo, `docs/plans/`, in the
    `/write-plan` structure plus a §18.E section and a key-points summary at the
-   top, opened as a ready PR with `GH_PAT`.
+   top, opened as a draft PR with `GH_PAT` so the consumer's review and
+   auto-merge pipeline cannot merge it before the owner decides.
 7. The owner gets one Telegram message per finished session with the key
    points, the issue link, the PR link and the commands.
 8. `/brainstorm-approve` from the repo owner dispatches the consumer's
@@ -147,11 +149,26 @@ User decisions (interactive clarification, 2026-11-11):
 - **§14.** The wrapper reaches every `full`-profile consumer in
   `.github/ai/consumer_repos.json` on the next `@stable` sync and stays inert
   there until the consumer sets `BRAINSTORM_ENABLED=true`.
+- **§26 (runner concurrency).** The template's caller job carries
+  `if: vars.BRAINSTORM_ENABLED == 'true'`, so an opted-out consumer takes no
+  runner slot; the daily schedule still records one skipped run there, which
+  is accepted because the profile is synced before the consumer opts in. Jobs
+  per scheduled event: before 0; after 0 runner jobs for an opted-out
+  consumer, 1 (`gate`) + one `session` job per due topic for an opted-in one.
+  `gate` stays a separate job because one topic session may take up to 240
+  minutes, so serial topics in one job could pass the 360-minute job limit;
+  `session` legs run with `max-parallel: 1`. Comment events start the
+  `command` job only for owner comments (Phase 3).
 - **§15.** Per scheduled run, the gate makes one contents-listing call for the
   brief directory and one `GET /repos/{repo}/issues?labels=ai:brainstorm&state=all&per_page=100`
-  call (ledger + open sessions + outcome eligibility from the same result).
-  Resume reads the session issue's comments once per run. Turns are posted as
-  they finish (one create call each); nothing polls.
+  call (ledger + open sessions from the same result; the ledger fields live in
+  each session issue's body marker, which that call returns). Outcome
+  eligibility adds at most 3 timeline reads per run, only for approved
+  sessions with no recorded outcome ("Ledger and outcomes"). The session job
+  makes one more issues-list call under its concurrency group to recheck for
+  an open session before it creates one. Resume reads the session issue's
+  comments once per run. Turns are posted as they finish (one create call
+  each); nothing polls.
 - **§18.** No manual script. Everything runs from the wrapper's `schedule`,
   `workflow_dispatch` and `issue_comment` triggers.
 - **§19.** The hand-off references the tracking issue only with `Refs #N`; the
@@ -176,10 +193,13 @@ User decisions (interactive clarification, 2026-11-11):
 ```
 schedule (daily) ─► gate ──► due topics (brief cadence, no open session, enabled)
                           └► ledger + outcome-eligible sessions (one issues call)
-session (per topic, max-parallel 1)
+session (per topic, max-parallel 1, concurrency group per topic)
   1. resolve seats: claude-pool-token (BRAINSTORM) + chatgpt-pool-token (BRAINSTORM_CHATGPT)
        unavailable / capacity wait → defer: WARNING Telegram notice, exit 0
-  2. open or resume the session issue  (marker <!-- ai-brainstorm:v1 topic=… -->)
+       (no session issue is created, so the topic stays due and the next
+        daily run retries it; see "Due rule" below)
+  2. recheck open sessions for the topic (one issues call, under the lock);
+     open or resume the session issue  (marker <!-- ai-brainstorm:v1 topic=… -->)
   3. collect data: brief collector, default-branch checkout, BRAINSTORM_DATA_SECRETS only
   4. outcome review for eligible shipped ideas (both seats, one joint comment)
   5. ideas round: both seats in parallel, blind → 2 comments
@@ -192,9 +212,16 @@ session (per topic, max-parallel 1)
   9. Telegram report: key points, issue link, PR link, commands
 issue_comment
   /brainstorm-pick A|B  → steps 7–9 for that position
-  /brainstorm-approve   → dispatch ai-orchestrate.yml engine=claude, label approved
+  /brainstorm-approve   → claim label approved, mark plan PR ready,
+                          dispatch ai-orchestrate.yml engine=claude
   /brainstorm-reject r  → label rejected, close issue and plan PR, record r
 ```
+
+**Due rule.** A topic is due when it is enabled, has no open session, and no
+session issue for it was created since its most recent scheduled date (the
+brief's weekday for `weekly`, today for `daily`, both in UTC). A deferral
+creates no issue, so a weekly topic deferred on its weekday is retried on each
+daily run until a session opens or the next scheduled date arrives (Q23).
 
 ### Brief (consumer-owned, `.github/ai/brainstorm/<topic>.yml`)
 
@@ -219,24 +246,60 @@ query:                           # optional; enables data requests (Q18)
   command: python3 -I scripts/brainstorm_query.py --topic arb
   max_requests_per_round: 5
   max_result_bytes: 200000
+  allowed_requests:              # required when query is set; request allowlist
+    - type: fills_by_day         # ^[a-z0-9_]{1,48}$
+      params:                    # JSON Schema for the request's params object
+        type: object
+        additionalProperties: false
+        properties: {days: {type: integer, minimum: 1, maximum: 90}}
 ```
 
 The collector writes `snapshot.json` + `snapshot.md` to `$BRAINSTORM_OUT`. The
-query command reads one JSON request on stdin and writes one JSON result; the
-consumer script decides what it allows (binance-blessings will map requests to
-its read-only Mongo bridge). Both run on the host with only
-`BRAINSTORM_DATA_SECRETS` exported, a clean `HOME`, `timeout`, and output
-truncated to the caps. A missing or invalid brief is skipped with
+query command reads one JSON request `{type, params}` on stdin and writes one
+JSON result; request content never reaches argv, a shell or the environment.
+Before running it, the host validates each seat request against
+`query.allowed_requests` (known `type`, `params` valid against its schema);
+a request that fails is not run and is recorded as
+`data_rejected reason=not_allowed`. The consumer script still decides what it
+serves (binance-blessings will map requests to its read-only Mongo bridge).
+Both run on the host with only `BRAINSTORM_DATA_SECRETS` exported, a clean
+`HOME`, `timeout`, and output truncated to the caps.
+
+**Secret scan.** Collector and query output passes a host-side scan before it
+reaches a snapshot file, a seat prompt or a comment. Every string value in
+`BRAINSTORM_DATA_SECRETS` of 6 or more characters is matched literally, and
+so are its base64 and URL-encoded forms. A match fails closed: collector output
+fails the session (`ai:brainstorm-failed`, ERROR alert,
+`BRAINSTORM step=collect outcome=secret_in_output`), and a query result is
+dropped and recorded as `data_rejected reason=secret_in_output`. Common token
+shapes (`ghp_`/`github_pat_`, `sk-`, `AKIA`, PEM blocks, `Bearer …`) are
+replaced with `[REDACTED]` and counted in the log line. Raw output is never
+logged.
+
+A missing or invalid brief is skipped with
 `BRAINSTORM gate outcome=brief_invalid topic=<t>`.
 
 ### Seats
 
 - **Claude seat**: role `BRAINSTORM` (`profile: read`, web search on), model
   `vars.BRAINSTORM_CLAUDE_MODEL || 'claude-fable-5-2'`, effort
-  `vars.THINKING_LEVEL_BRAINSTORM || 'high'`. If the run fails because the
-  model is not available on the account (not a capacity or usage limit), the
-  seat retries once on `vars.BRAINSTORM_CLAUDE_FALLBACK_MODEL || 'claude-opus-5-5'`
-  and logs `BRAINSTORM seat=claude outcome=model_fallback`.
+  `vars.THINKING_LEVEL_BRAINSTORM || 'high'`. The model reaches
+  `resolve_role` as the role's model hint (D3), so the checked-in
+  `role_defaults` keeps the code default `claude_model`. If the run fails
+  because the model is not available on the account (not a capacity or usage
+  limit), the seat retries once on
+  `vars.BRAINSTORM_CLAUDE_FALLBACK_MODEL || 'claude-opus-5-5'` and logs
+  `BRAINSTORM seat=claude outcome=model_fallback`.
+- **Model-unavailable signal.** `classify()` in `scripts/claude_engine.py`
+  has no such outcome (`OUTCOMES` is `success`, `auth_failed`, `usage_limit`,
+  `crashed`, `timeout`), and it is not changed, so other roles keep their
+  behaviour. Instead `scripts/brainstorm_seat.sh` checks a `crashed` run's
+  result-error text against a fixed list of model-not-found / model-not-allowed
+  patterns per engine and exits 81 (`model_unavailable`). Only exit 81 triggers
+  the one fallback retry; any other crash exits 1 with no retry. The pattern
+  list ships with recorded fixtures and is ACCEPTED — pending the first live
+  run's exact error text. An unmatched model error shows up as `seat_failed`,
+  which is safe.
 - **ChatGPT seat**: role `BRAINSTORM_CHATGPT`, Codex through
   `scripts/review_untrusted_sandbox.sh`'s `chatgpt` engine with the login from
   `.github/actions/chatgpt-pool-token`, read-only sandbox, live web search,
@@ -245,6 +308,18 @@ truncated to the caps. A missing or invalid brief is skipped with
   `vars.BRAINSTORM_CHATGPT_FALLBACK_MODEL || 'gpt-6-sol'`. When the action or
   the sandbox engine is missing (ChatGPT plan not merged), the seat reports
   `seat_unavailable reason=chatgpt_pool_not_installed` and the session defers.
+- **ChatGPT seat interface contract.** The trial plan defines the `chatgpt`
+  sandbox engine only for the review panel: fixed reviewer prompt and output,
+  `xhigh` effort, `PANEL_REVIEWER_CHATGPT` classification. This plan's Phase 1b
+  extends that engine with optional inputs, and the reviewer defaults stay as
+  they are when the inputs are unset: `CHATGPT_SEAT_MODEL`,
+  `CHATGPT_SEAT_EFFORT`, `CHATGPT_SEAT_WEB_SEARCH` (`live`/`disabled`, default
+  `disabled`), `CHATGPT_SEAT_PROMPT_FILE`, `CHATGPT_SEAT_OUTPUT_FILE`. It also
+  registers `BRAINSTORM_CHATGPT` with the same Codex auth / quota `classify`
+  mapping the trial plan adds for `PANEL_REVIEWER_CHATGPT`. Seat detection
+  checks for these inputs, not only for the engine; an engine without them
+  reports `seat_unavailable reason=chatgpt_seat_interface_missing` and the
+  session defers.
 - Both seats get the same prompt file per stage (`prompts/mode-brainstorm-*.txt`),
   the snapshot and context as files in the workdir (read with `Read`), and must
   answer in a fenced JSON block the engine validates (ideas, critique, vote,
@@ -266,6 +341,15 @@ truncated to the caps. A missing or invalid brief is skipped with
   `<!-- ai-brainstorm-turn:v1 session=<id> stage=<ideas|round|vote|data|plan|outcome> round=<n> seat=<claude|chatgpt|host> -->`,
   followed by readable markdown and a collapsed JSON block. Resume rebuilds the
   state from these markers; a turn without its marker is ignored.
+- **Turn trust.** Resume and the command job accept a turn marker only when
+  the comment's author is the login that opened the session issue (the job
+  token's bot). When `AI_COMMENT_SIGNING_SECRET` is set, which the template
+  forwards as an optional secret, turns are also signed with
+  `scripts/comment_signature.py`, and a turn whose signature fails is
+  rejected. A rejected or foreign marker is ignored and logged as
+  `BRAINSTORM resume outcome=untrusted_turn comment=<id>`. Human comments
+  never change votes, agreement or plan state; only the Phase 3 owner
+  commands do.
 - The issue is opened with the job's `github.token` (a Bot author, so the
   existing clarify trigger never fires), and `clarify.yml`'s issue-opened skip
   list also gains `ai:brainstorm` as a second guard.
@@ -291,29 +375,58 @@ returns blocking findings; Claude revises; at most 3 passes, remaining findings
 go into a `## Reviewer notes` section. File
 `docs/plans/brainstorm-<topic>-<YYYYMMDD>-<slug>-plan.md`, branch
 `ai/brainstorm-<topic>-<YYYYMMDD>`, PR title `docs: plan for <idea title>`,
-body = the write-plan PR template plus `Refs #<session issue>`.
+body = the write-plan PR template plus `Refs #<session issue>`. The PR is
+opened as a draft (`gh pr create --draft`), so the consumer's review and
+auto-merge pipeline (`ENABLE_AUTO_MERGE` defaults to `true`) cannot merge it
+before the owner decides.
 
 ### Hand-off (Goal 8)
 
 On `/brainstorm-approve` (author association `OWNER`, issue labelled
-`ai:brainstorm-awaiting-approval`, plan PR still open), the job composes the
-same `project_description` as `/implement-plan-ai` (title line, preamble that
-preserves the plan's phases, path + branch + PR URL, and the line
-`Engine requested: Claude (ai:engine-claude)`) and runs
-`gh workflow run ai-orchestrate.yml -R <repo> -f project_description=… -f engine=claude`
-with `GH_PAT`. It comments the run link, swaps the label to
-`ai:brainstorm-approved`, and leaves the plan PR open for the orchestrator. In
-coding-workflows itself the target is `internal-orchestrate.yml`.
+`ai:brainstorm-awaiting-approval`, plan PR still open), the job:
+
+1. claims the session by swapping `ai:brainstorm-awaiting-approval` for
+   `ai:brainstorm-approved` before dispatching. The `command` job runs in the
+   per-issue concurrency group `brainstorm-cmd-${{ github.repository }}-<issue>`
+   with `cancel-in-progress: false`, so a second approve sees the claimed
+   label and exits with `outcome=already_approved`;
+2. marks the draft plan PR ready (`gh pr ready`);
+3. composes the same `project_description` as `/implement-plan-ai` (title line,
+   preamble that preserves the plan's phases, path + branch + PR URL, and the
+   line `Engine requested: Claude (ai:engine-claude)`) and runs
+   `gh workflow run ai-orchestrate.yml -R <repo> -f project_description=… -f engine=claude -f tracking_comment='Refs #<session issue> <!-- ai-brainstorm-ref:v1 session=<id> -->'`
+   with `GH_PAT`;
+4. comments the dispatch and leaves the plan PR open for the orchestrator.
+
+If the dispatch fails, the job restores `ai:brainstorm-awaiting-approval`,
+returns the PR to draft and comments the error, so a later approve can retry.
+If the plan PR is already merged or closed, approve is refused with a comment
+(`outcome=pr_not_open`) and no label changes. In coding-workflows itself the
+target is `internal-orchestrate.yml`.
 
 ### Ledger and outcomes (Goal 9)
 
-The gate's single issues call gives every session for the repo. For each
-topic the engine builds a ledger (≤ 50 entries, newest first: idea title,
-state, expected impact, outcome summary if recorded). An approved session is
-outcome-eligible when the orchestrator tracking issue named in its hand-off
-comment is closed for at least `BRAINSTORM_OUTCOME_DELAY_DAYS` and it has no
-`ai:brainstorm-outcome-recorded` label; that one extra issue read happens only
-for eligible sessions, at most 3 per run.
+The gate's single issues call gives every session for the repo, including
+issue bodies. The ledger fields live in each session issue's body marker,
+`<!-- ai-brainstorm:v1 … idea=<title> expected=<impact> tracking=<N> outcome=<summary> -->`,
+which the engine edits as the session advances. For each topic the engine
+builds a ledger from those bodies alone (≤ 50 entries, newest first: idea
+title, state, expected impact, outcome summary if recorded).
+
+`gh workflow run` returns no tracking issue number, so the tracking issue is
+found afterwards. The orchestrator posts the hand-off's `tracking_comment`
+(`Refs #<session issue>`) on its new tracking issue, which records a
+`cross-referenced` event on the session issue. For each approved session
+without a recorded outcome, at most 3 per run and oldest first, the gate reads
+the session issue's timeline once. It takes the earliest cross-referencing
+issue labelled `ai:orchestrator-tracking` and created after the approval
+comment, and writes `tracking=<N>` into the body marker. Phase 3 checks that
+`internal-orchestrate.yml` forwards `tracking_comment` the way
+`orchestrate.yml` accepts it.
+The session becomes outcome-eligible when that issue's `closed_at` (from the
+same timeline payload) is at least `BRAINSTORM_OUTCOME_DELAY_DAYS` old and it
+has no `ai:brainstorm-outcome-recorded` label. After the outcome review, the
+engine writes `outcome=<summary>` into the marker and adds that label.
 
 ### Settings (repo variables, all optional)
 
@@ -323,13 +436,15 @@ for eligible sessions, at most 3 per run.
 | `BRAINSTORM_CLAUDE_MODEL` / `_FALLBACK_MODEL` | `claude-fable-5-2` / `claude-opus-5-5` | Claude seat model |
 | `BRAINSTORM_CHATGPT_MODEL` / `_FALLBACK_MODEL` | `gpt-6-astra` / `gpt-6-sol` | ChatGPT seat model |
 | `THINKING_LEVEL_BRAINSTORM` | `high` | Effort for both seats |
-| `BRAINSTORM_MAX_ROUNDS` | `4` | Debate round cap (1–8) |
+| `BRAINSTORM_MAX_ROUNDS` | `4` | Debate round cap, clamped to 1–4 (Q2 / D1); out-of-range values are clamped and logged |
 | `BRAINSTORM_IDEAS_PER_SEAT` | `5` | Ideas per seat (1–10) |
 | `BRAINSTORM_OUTCOME_DELAY_DAYS` | `14` | Days after project close before outcome review |
 | `BRAINSTORM_SESSION_BUDGET_MINUTES` | `200` | Soft wall-clock budget; past it the session saves state and resumes next run |
 
 Secret: `BRAINSTORM_DATA_SECRETS` (optional JSON object, consumer-defined
-keys), passed only to the collector and query steps.
+keys), passed only to the collector, query and secret-scan steps. The existing
+optional `AI_COMMENT_SIGNING_SECRET` is forwarded too, and only the
+comment-posting and resume steps receive it ("Turn trust").
 
 Alternatives considered: one model judging the other (rejected: the owner
 asked for two peers to agree); a third tie-break model (Q2); Telegram buttons
@@ -360,7 +475,8 @@ file in the repo (Q15); per-repo collectors in this repo (Q20).
 
 Every phase is inert until a consumer sets `BRAINSTORM_ENABLED=true`, and the
 binance-blessings plan (Q21) does that only after all three phases are on
-`@stable` and the broker is redeployed, so the phases can merge in any order.
+`@stable` and the broker is redeployed, so phases 1–3 can merge in any order;
+Phase 1b waits for the ChatGPT trial plan's Phase 2.
 Each phase's tests use stub seats and a fake GitHub API and do not need the
 other phases.
 
@@ -372,8 +488,20 @@ other phases.
    `prompts/mode-brainstorm-{ideas,round,vote,plan-draft,plan-review,outcome}.txt`,
    roles `BRAINSTORM` / `BRAINSTORM_CHATGPT` in `scripts/claude_engine.py` and
    `.github/ai/claude_engine.json`, `ai-memory/schemas/brainstorm_brief.v1.json`.
-   Done: `tests/test_brainstorm_engine.py` green, existing engine tests
-   unchanged, nothing calls the engine. Rollback: revert.
+   Done: `tests/test_brainstorm_engine.py` green; `tests/test_claude_engine.py`
+   updated only by adding `BRAINSTORM` to `CUTOVER_ROLES`, with all of its
+   other assertions unchanged and green; nothing calls the engine.
+   Rollback: revert.
+1b. **ChatGPT seat interface.** The optional seat inputs on the `chatgpt`
+   engine in `scripts/review_untrusted_sandbox.sh`, and the
+   `BRAINSTORM_CHATGPT` `classify` mapping in `scripts/claude_engine.py`
+   ("ChatGPT seat interface contract"). Merge order: after the ChatGPT trial
+   plan's Phase 2, which creates that engine; this is the one ordering
+   constraint between phases. Until it merges, the seat reports
+   `chatgpt_pool_not_installed` or `chatgpt_seat_interface_missing` and
+   sessions defer. Done: the reviewer-slot tests from the trial plan are
+   unchanged and green, and a seat test covers model, effort, web search and
+   prompt/output files. Rollback: revert (the reviewer slot is unaffected).
 2. **Scheduled session workflow.** `.github/workflows/brainstorm.yml` (gate +
    session jobs), `internal-brainstorm.yml`, `workflow-templates/ai-brainstorm.yml`
    (schedule + dispatch), `profiles/full.txt`, `scripts/brainstorm_gate.py`,
@@ -400,9 +528,14 @@ other phases.
 1. `scripts/claude_engine.py`: add `BRAINSTORM` and `BRAINSTORM_CHATGPT` to
    `ROLES`, both to `READ_ROLES`; `.github/ai/claude_engine.json`
    `role_defaults`: `BRAINSTORM` → `{engine: claude, claude_model:
-   claude-fable-5-2, profile: read}`, `BRAINSTORM_CHATGPT` →
+   claude-opus-5-5, profile: read}`, the code default, so
+   `test_checked_in_config_matches_code_defaults` and
+   `test_utility_roles_use_sonnet_and_the_rest_opus` hold. Fable comes from
+   `BRAINSTORM_CLAUDE_MODEL` as the model hint (D3). `BRAINSTORM_CHATGPT` →
    `{engine: codex, claude_model: claude-opus-5-5, profile: read}` (never run on
-   Claude; listed so `resolve` accepts the role).
+   Claude; listed so `resolve` accepts the role). `tests/test_claude_engine.py`:
+   add `BRAINSTORM` to `CUTOVER_ROLES`, the only test that pins the Claude-role
+   set (`assert on_claude == CUTOVER_ROLES`).
 2. `ai-memory/schemas/brainstorm_brief.v1.json` [new]: the brief schema above.
 3. `prompts/mode-brainstorm-*.txt` [new]: one per stage, each ending with the
    JSON output contract; shared rules (untrusted data, scorecard, no credential
@@ -410,16 +543,34 @@ other phases.
 4. `scripts/brainstorm_engine.py` [new]: subcommands `next` (given the issue's
    comments JSON and the brief, print the next action), `render` (turn →
    comment body with marker), `validate` (seat JSON → normalised JSON or error),
-   `ledger` (issues JSON → ledger markdown), `agreement`, `data-requests`
-   (validate against the brief's caps). Pure functions, no network.
+   `ledger` (issue bodies JSON → ledger markdown), `agreement`, `data-requests`
+   (validate against the brief's caps and `query.allowed_requests`),
+   `secret-scan` (output + secrets JSON → redacted output or a fail-closed
+   error). `next` accepts turn comments only from the trusted author, with a
+   valid signature when signing is on ("Turn trust"). It also clamps
+   `BRAINSTORM_MAX_ROUNDS` to 1–4. Pure functions, no network.
 5. `scripts/brainstorm_seat.sh` [new]: `brainstorm_seat <claude|chatgpt> <stage>
    <prompt_file> <out_file>`; exits 0 ok, 75 unavailable (defer), 80 capacity
-   wait (defer), 1 failed; logs `BRAINSTORM seat=<s> stage=<g> outcome=<o>`.
+   wait (defer), 81 model unavailable (fallback retry once, then 1), 1 failed;
+   logs `BRAINSTORM seat=<s> stage=<g> outcome=<o>`.
 6. `tests/test_brainstorm_engine.py` [new]: blind ideas (the ideas prompt of one
    seat never contains the other's output), agreement in round 2, no agreement
-   after N → awaiting-pick, resume after a missing turn, invalid JSON → one
-   repair then fail, data-request caps, ledger excludes other topics, model
-   fallback only on model-unavailable errors.
+   after N → awaiting-pick, rounds clamped to 4, resume after a missing turn,
+   forged turn from another author or with a bad signature ignored, invalid
+   JSON → one repair then fail, data-request caps and allowlist (unknown
+   `type` and invalid `params` rejected), secret scan (a literal, base64 or
+   URL-encoded secret value fails closed; token shapes redacted), ledger
+   excludes other topics, model fallback only on exit 81 (other crashes do
+   not retry).
+
+### Phase 1b
+
+1. `scripts/review_untrusted_sandbox.sh`: optional `CHATGPT_SEAT_*` inputs on
+   the `chatgpt` engine (contract above); unset inputs keep the reviewer path
+   byte-identical.
+2. `scripts/claude_engine.py`: `BRAINSTORM_CHATGPT` `classify` mapping for
+   Codex auth / quota errors, same as `PANEL_REVIEWER_CHATGPT`.
+3. Tests: the seat inputs, and the reviewer-path golden test unchanged.
 
 ### Phase 2
 
@@ -431,30 +582,40 @@ other phases.
    Job `session` (matrix, `max-parallel: 1`, `timeout-minutes: 240`): checkout
    consumer default branch, install Claude/Codex, resolve both seats, detect the
    ChatGPT action/engine, then `scripts/brainstorm_step_{collect,run,plan_pr,report}.sh`.
-   Concurrency group `brainstorm-${{ github.repository }}-<topic>`.
-2. `scripts/brainstorm_gate.py` [new]: due-topic calculation, open-session
-   detection and ledger from the one issues call; `outcome=disabled|none_due|due`.
+   Concurrency group `brainstorm-${{ github.repository }}-<topic>`,
+   `cancel-in-progress: false` (the job writes issues and PRs). Under that
+   group, before it creates a session issue, the session job re-lists open
+   `ai:brainstorm` issues for the topic and exits `outcome=already_open` if one
+   exists, so a stale gate matrix cannot open a duplicate.
+2. `scripts/brainstorm_gate.py` [new]: due-topic calculation (Due rule),
+   open-session detection and ledger from the one issues call;
+   `outcome=disabled|none_due|due`.
 3. `scripts/brainstorm_step_collect.sh` [new]: runs the brief's collector with
-   only `BRAINSTORM_DATA_SECRETS`, clean env, caps; the step's `env:` names
-   nothing else.
+   only `BRAINSTORM_DATA_SECRETS`, clean env, caps, then the secret scan; the
+   step's `env:` names nothing else.
 4. `scripts/brainstorm_step_run.sh` [new]: loop over `brainstorm_engine.py next`,
-   call seats (ideas in parallel), run data requests via the brief's query
-   command (same isolation as collect), post turns, stop on agreement, cap,
-   failure, deferral or the soft budget.
+   call seats (ideas in parallel), validate data requests against the
+   allowlist, run them via the brief's query command (request on stdin only,
+   same isolation and secret scan as collect), post turns, stop on agreement,
+   cap, failure, deferral or the soft budget.
 5. `scripts/brainstorm_step_plan_pr.sh` [new]: write the plan file, branch,
    commit, lint the body with `scripts/lint_pr_body_auto_close.py`, open the PR
-   with `GH_PAT`, set `ai:brainstorm-awaiting-approval`.
+   as a draft with `GH_PAT`, set `ai:brainstorm-awaiting-approval`.
 6. `scripts/brainstorm_step_report.sh` [new]: `tg_send_report_msg` for finished
    sessions; `tg_send_msg … WARNING` for deferrals; `ERROR` for failures.
 7. `.github/workflows/internal-brainstorm.yml` [new] (`workflow_dispatch`) and
    `workflow-templates/ai-brainstorm.yml` [new] (schedule + dispatch,
-   `id-token: write`, forwards only `GH_PAT`, `TG_BOT_SECRET`,
-   `BRAINSTORM_DATA_SECRETS`); add `ai-brainstorm.yml` to
-   `workflow-templates/profiles/full.txt`.
+   `id-token: write`, caller job `if: vars.BRAINSTORM_ENABLED == 'true'` so an
+   opted-out consumer takes no runner (§26), forwards only `GH_PAT`,
+   `TG_BOT_SECRET`, `BRAINSTORM_DATA_SECRETS`, `AI_COMMENT_SIGNING_SECRET`);
+   add `ai-brainstorm.yml` to `workflow-templates/profiles/full.txt`.
 8. `tools/claude-pool-broker/src/index.ts`: add `brainstorm.yml` to
    `ALLOWED_WORKFLOW_FILES`; update broker tests and `tests/test_claude_pool_token.py`.
 9. `.github/ai/label_contract.v1.json`: the seven labels.
-   `.github/workflows/clarify.yml` (line 32 skip list): add `ai:brainstorm`.
+   `.github/workflows/clarify.yml`: add
+   `!contains(toJson(github.event.issue.labels.*.name), 'ai:brainstorm')` to the
+   `issues`/`opened` label-exclusion clause of the `clarify` job's `if:`
+   (currently line 41, next to `ai:heal-intake-queue`).
 10. Docs: `docs/brainstorm.md` [new] (brief format, onboarding, commands,
     failure modes, cost notes), README section, `agents.d/<N>-brainstorm.md`
     blocks for "Workflow architecture", "Models in use (defaults; overridable via
@@ -462,28 +623,41 @@ other phases.
     surfaces", "Stable log prefixes (contractual)" (`BRAINSTORM`),
     `changelog.d/<N>-brainstorm-workflow.md`.
 11. Tests: `tests/test_brainstorm_gate.py` [new] (disabled, due/not due by
-    weekday, open session blocks a new one, invalid brief skipped, one issues
-    call); a stub-seat dry-run test of the step scripts; existing wrapper
+    weekday, a weekly topic deferred on its weekday is due again the next day
+    and not after a session opened, open session blocks a new one, invalid
+    brief skipped, one issues call); a stub-seat dry-run test of the step
+    scripts, including the under-lock recheck exiting `already_open`; a
+    template test that the caller job carries the `BRAINSTORM_ENABLED`
+    `if:`; existing wrapper
     integrity, profile manifest and workflow size tests updated.
 
 ### Phase 3
 
 1. `workflow-templates/ai-brainstorm.yml`: add `issue_comment: types: [created]`,
    with job `if:` requiring `github.event.issue.pull_request == null`, label
-   `ai:brainstorm`, and a body starting with `/brainstorm-`.
+   `ai:brainstorm`, `github.event.comment.user.type == 'User'`,
+   `github.event.comment.author_association == 'OWNER'`, and a body starting
+   with `/brainstorm-`. A non-owner comment then starts no job and holds no
+   secret or runner slot.
 2. `.github/workflows/brainstorm.yml`: job `command` (runs when
-   `event_name == 'issue_comment'`): pick → reuse the session job's plan steps
+   `event_name == 'issue_comment'`), concurrency group
+   `brainstorm-cmd-${{ github.repository }}-<issue>` with
+   `cancel-in-progress: false`: pick → reuse the session job's plan steps
    for the chosen position; approve / reject → `scripts/brainstorm_handoff.py`.
-3. `scripts/brainstorm_handoff.py` [new]: parse the command; require
-   `author_association == OWNER` and the matching state label; for approve,
-   check the plan PR is open, compose `project_description`, dispatch
-   `ai-orchestrate.yml` (or `internal-orchestrate.yml`) with `engine=claude`,
-   record the dispatch and tracking-issue reference in a turn comment; for
-   reject, record the reason, close the PR and the issue. Logs
+3. `scripts/brainstorm_handoff.py` [new]: parse the command; re-check
+   `author_association == OWNER` (defence in depth) and the matching state
+   label; for approve, follow the Hand-off order: claim the label, mark the PR
+   ready, dispatch `ai-orchestrate.yml` (or `internal-orchestrate.yml`) with
+   `engine=claude` and the `tracking_comment` ref, and restore the label and
+   draft state on dispatch failure. Refuse when the PR is merged or closed. For
+   reject, record the reason and close the PR and the issue. Logs
    `BRAINSTORM command=<c> outcome=<o>`.
-4. `scripts/brainstorm_gate.py`: outcome-eligibility (Goal 9) and the
-   `outcome` stage hook in `brainstorm_engine.py next`.
-5. Tests `tests/test_brainstorm_handoff.py` [new]; docs and changelog fragment.
+4. `scripts/brainstorm_gate.py`: tracking-issue discovery and
+   outcome-eligibility from the session timeline (Goal 9, ≤ 3 reads per run)
+   and the `outcome` stage hook in `brainstorm_engine.py next`.
+5. Tests `tests/test_brainstorm_handoff.py` [new]: two approvals dispatch
+   once; a dispatch failure restores the label; a merged plan PR is refused;
+   tracking discovery from a fixture timeline. Docs and changelog fragment.
 
 ## Files & Modules
 
@@ -498,7 +672,9 @@ other phases.
 - `scripts/brainstorm_seat.sh` [new]
 - `scripts/brainstorm_step_collect.sh`, `_run.sh`, `_plan_pr.sh`, `_report.sh` [new]
 - `scripts/claude_engine.py`
+- `scripts/review_untrusted_sandbox.sh` (Phase 1b, optional `CHATGPT_SEAT_*` inputs)
 - `.github/ai/claude_engine.json`
+- `tests/test_claude_engine.py` (`CUTOVER_ROLES` gains `BRAINSTORM`)
 - `.github/ai/label_contract.v1.json`
 - `ai-memory/schemas/brainstorm_brief.v1.json` [new]
 - `prompts/_prelude_brainstorm.txt`, `prompts/mode-brainstorm-*.txt` [new]
@@ -540,7 +716,9 @@ None in this repo (no MongoDB). State lives in GitHub issues and labels.
   per-idea concede/hold with evidence, and independent votes.
 - Prompt injection through web pages, collector output or comments.
   Mitigation: read-only seats without credentials, untrusted-data framing, owner
-  approval before anything ships, owner-only commands.
+  approval before anything ships, owner-only commands gated in the job `if:`,
+  turn markers trusted only from the bot author (signed when signing is on),
+  the data-request allowlist, and the fail-closed secret scan on data output.
 - A session runs longer than the job. Mitigation: per-turn persistence, the
   soft budget, resume on the next run.
 - The ChatGPT plan's pieces are not merged when this ships. Mitigation: run-time
@@ -559,7 +737,8 @@ None in this repo (no MongoDB). State lives in GitHub issues and labels.
    default-branch commit (§24.C) so `brainstorm.yml` can fetch tokens; confirm
    with a dispatched `internal-brainstorm.yml` stub run.
 3. ChatGPT trial plan Phase 1 (+ the sandbox `chatgpt` engine from its Phase 2)
-   must be live before a consumer is enabled; until then sessions defer.
+   and this plan's Phase 1b must be live before a consumer is enabled; until
+   then sessions defer.
 4. binance-blessings plan (Q21): briefs `arb.yml` and `mm.yml`, collector and
    query scripts, `BRAINSTORM_DATA_SECRETS`, `BRAINSTORM_ENABLED=true`, first
    session by `workflow_dispatch`.
