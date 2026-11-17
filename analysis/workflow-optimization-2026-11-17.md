@@ -615,3 +615,170 @@ TODO, FIXME, HACK and XXX markers: none found in `scripts/` or `.github/workflow
 | Code modularization | 9 workflows (DUP-001) + new `.github/actions/resolve-support-ref/action.yml`, `scripts/gh_helpers.sh`, `.github/workflows/workflow-log-analysis.yml`, `.github/workflows/plan.yml`, new `scripts/wla_phase_failure.sh`, `tests/test_workflow_support_ref_follows_pin.py` | Large |
 | Expression size reduction | `.github/workflows/orchestrate_poll.yml`, `.github/workflows/workflow-log-analysis.yml`, `.github/workflows/implement.yml` | Small |
 | Medium/Low fixes | `.github/workflows/integration-pr-readiness.yml`, `.github/workflows/lint-pr-body-auto-close.yml`, `scripts/check_integration_pr_readiness.py`, `scripts/implement_diagnose_post_codex_failure.sh`, `scripts/orchestrate_poll_process.sh`, `.github/workflows/implement.yml`, `scripts/label_helpers.sh`, `.github/workflows/sync_ai_labels.yml`, 8 workflows for DEAD-001 | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-11-17)
+
+### Safety Tag Legend
+- **`SAFE_TO_MERGE`**: every precondition was proven by reading the code. Both calls use the same endpoint and fields, sit in the same function, have nothing that could change the data between them, keep the same error and retry behaviour, and cross no concurrency boundary. The implement stage may act on these without further review.
+- **`NEEDS_VERIFICATION`**: the change looks correct, but at least one precondition can't be proven from the code alone. Do the listed check before changing anything.
+- **`RISKY_SKIP`**: the call sits in a path that must not be changed automatically. That covers `orchestrate_poll_process.sh`, auth or identity flows, retry or stall-recovery paths, pagination, and log keys other code greps for. These are listed for visibility only and need manual review.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001: `branches/promote-candidate` is read up to three times in the single `implement` job of `implement.yml`**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Calls involved:**
+  - `.github/workflows/implement.yml:470-498`: duplicate-PR notice ref, call at line 489.
+  - `.github/workflows/implement.yml:772-803`: CI-triage PR-not-open ref, call at line 794.
+  - `.github/workflows/implement.yml:1353-1382`: main "Resolve workflow support ref", call at line 1373.
+  - All three are in the `implement` job (`implement.yml:109`). The `heal-report` job copy (`implement.yml:7262+`) is excluded because it is a separate job.
+- **Current call count:** 1–3 per run, only when `workflow_ref` is `…implement.yml@refs/heads/promote-candidate`. **Proposed:** 1.
+- **Endpoint:** `GET /repos/shubhodeep1/coding-workflows/branches/promote-candidate`
+- **Evidence:** each step has the same body, and each comment only checks its own step:
+  ```bash
+  # One branches read, only on this path: no earlier call in this step
+  # returns the promote-candidate tip or its protection flag.
+  promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+  ```
+  The results go to three different env keys: `DUPLICATE_NOTICE_SCRIPT_REF` (line 498), `PR_NOT_OPEN_SCRIPT_REF` (line 803) and `SCRIPT_REF` (line 1382).
+- **Why this is net-new:** API-002 covers the same pattern, but only in `orchestrate_poll.yml`. DUP-001 lists these `implement.yml` sites as code duplication, not as repeated API reads. This finding also carries over BUG-004's risk: steps that read at different times can pin support code to different promote-candidate tips within one job.
+- **Proposed fix:**
+  - Whichever of these steps runs first exports the resolved SHA once, for example `PROMOTE_CANDIDATE_RESOLVED_SHA` (name checked as unused per §10), to `$GITHUB_ENV`.
+  - Later steps reuse it when it is a 40-hex value and fall back to the existing read otherwise.
+  - Keep each step's existing `SUPPORT_REF source=…` lines and its own env key.
+- **Safety rationale:** the steps are conditional (`existing_pr == 'true'`, `pr_not_open == 'true'`, `SKIP_IMPLEMENT != 'true'`). It is not proven whether more than one runs in a single job; if they are mutually exclusive the saving is zero. The change also touches `SUPPORT_REF` log output, which `tests/test_workflow_support_ref_follows_pin.py` asserts on.
+- **Downstream signal (verify first):**
+  1. Check whether `existing_pr == 'true'` or `pr_not_open == 'true'` ever lets the later "Resolve workflow support ref" (line 1353) run in the same job, i.e. whether `SKIP_IMPLEMENT` is always set on those paths. If they are mutually exclusive, close this as no-saving.
+  2. Check that `tests/test_workflow_support_ref_follows_pin.py` accepts an "env-reuse" branch in the step body.
+  3. Fold the fix into DUP-001's composite action instead of patching three inline copies.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001: `check_integration_pr_readiness.py` fetches the tracking issue twice when the body file is empty and the labels file lacks the tracking label**
+- **Safety tag:** `SAFE_TO_MERGE`
+- **Calls involved:**
+  - `scripts/check_integration_pr_readiness.py:200-214`: first `_fetch_issue`, line 201.
+  - `scripts/check_integration_pr_readiness.py:216-223`: second `_fetch_issue`, line 221.
+  - Both use `_fetch_issue` (lines 73-88): `gh issue view <n> --repo <repo> --json labels,body`.
+- **Current call count:** 2 on this path. **Proposed:** 1. Other paths are unchanged.
+- **Endpoint:** `gh issue view` (GraphQL `issue { labels body }`). Both calls use the same command, fields and token.
+- **Evidence:**
+  - When `--tracking-labels-file` is non-empty (`labels_from_file` is true, line 198) but the body is empty, line 201 fetches the issue.
+  - Line 211 then keeps the file labels and drops `fetched_issue["labels"]`:
+    ```python
+    if not issue["labels"]:
+        issue["labels"] = fetched_issue["labels"]
+    ```
+  - If the file labels lack `TRACKING_LABEL`, line 221 runs the same fetch again, milliseconds later:
+    ```python
+    fresh_issue = _fetch_issue(args.repo, tracking_num)
+    if fresh_issue is not None and fresh_issue["labels"]:
+        issue["labels"] = fresh_issue["labels"]
+    ```
+  - The existing test `tests/test_check_integration_pr_readiness.py:361-399` asserts `fetch_calls == [2734]` only for the body-present case. The double fetch on the empty-body path is not tested.
+- **Proposed fix:**
+  - In `main()`, declare `fetched_issue: dict | None = None` before line 200.
+  - At line 221, use `fresh_issue = fetched_issue if fetched_issue is not None else _fetch_issue(args.repo, tracking_num)`, keeping the guard `fresh_issue is not None and fresh_issue["labels"]`.
+  - Add a test with an empty body file and a labels file containing `enhancement` that asserts `fetch_calls == [n]`.
+  - This works alongside the report's Reliability item 1 (a retry inside `_fetch_issue`).
+- **Safety rationale:**
+  - Both calls are the same command in the same function, with only pure Python between them.
+  - If line 201 fails, the script already returns 1 at line 207 and never reaches line 221, so error behaviour is unchanged. Neither call retries.
+  - There is no concurrency boundary.
+  - The stale-poller-snapshot defence described at lines 217-220 is still met, because the reused result is a live read from the same process.
+- **Downstream signal:** In `scripts/check_integration_pr_readiness.py` `main()`, reuse the line-201 `fetched_issue` result as `fresh_issue` at line 221 when it is not `None`, and add the single-fetch test described above.
+
+**REUSE-002: the poller's readiness refresh fetches the integration PR, then fetches that PR's labels again**
+- **Safety tag:** `RISKY_SKIP`
+- **Calls involved:**
+  - `scripts/orchestrate_poll_process.sh:4761`: `_fetch_pr_json`, defined at lines 2534-2538.
+  - `scripts/orchestrate_poll_process.sh:4772`: `get_issue_labels_json`, defined at lines 4611-4614.
+- **Current call count:** 2 REST calls per readiness refresh. **Proposed:** 1.
+- **Endpoints:** `GET /repos/{repo}/pulls/{final_pr}` and `GET /repos/{repo}/issues/{final_pr}/labels`.
+- **Evidence:**
+  - The pulls response already includes a `labels` array, and `pr_json` is already in scope:
+    ```bash
+    pr_json="$(_fetch_pr_json "${final_pr}")"
+    ...
+    pr_labels_json="$(get_issue_labels_json "${final_pr}")"
+    ```
+  - `get_issue_labels_json` runs only after `pr_state == open` and a non-empty `pr_head_sha` (line 4766), so `pr_json` has already been parsed successfully at that point.
+  - `get_issue_labels_json` has no `--paginate`, so it caps at 30 labels. This is the same pattern as BUG-003.
+  - A failure falls back to `'[]'`, which hides `ai:override-incomplete-merge` and so fails closed.
+- **Proposed fix:** `pr_labels_json="$(jq -c '[.labels[]?.name]' <<< "${pr_json}")"`, falling back to `get_issue_labels_json` only when `.labels` is missing.
+- **Safety rationale:** the code is inside `orchestrate_poll_process.sh`, a mandatory `RISKY_SKIP` trigger. The change also merges two separate fail-closed paths into one, and the output feeds a required merge gate (`orchestrator/integration-pr-not-ready`) that BUG-001 shows is already exposed to a race.
+- **Downstream signal (manual review):**
+  - Do not auto-implement.
+  - A reviewer must confirm that `_safe_gh_jq` returns the unfiltered pulls object, including `.labels`.
+  - They must also confirm that reusing it does not hide a label added between the two reads in a way that matters for the override path.
+  - Consider bundling with BUG-003's pagination fix and the `POLL_PHASE_TIMING` measurement.
+
+**REUSE-003: the bulk-delete override step looks up `GET /user` again, although the same job already exported the login**
+- **Safety tag:** `RISKY_SKIP`
+- **Calls involved:**
+  - `.github/workflows/implement.yml:2134-2141`: "Fetch issue metadata" runs `gh api user --jq .login` and, after a shape check, exports `IMPLEMENT_SCOPE_PIPELINE_LOGIN` (line 2140).
+  - `.github/workflows/implement.yml:2480`: "Unblock judge bulk-delete override" runs `gh api user --jq '.login'` again.
+- **Current call count:** 2 per run when an `override=bulk_delete -->` marker is present (gated at line 2477); otherwise 1. **Proposed:** 1.
+- **Endpoint:** `GET /user`. Both steps use `GH_TOKEN: ${{ secrets.GH_PAT }}` (lines 2082 and 2474).
+- **Evidence:**
+  ```bash
+  pipeline_login="$(gh api user --jq '.login' 2>/dev/null || true)"
+  if [ -z "${pipeline_login}" ]; then
+    echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=login_unavailable"
+  ```
+  The comment at lines 2131-2133 covers only the reverse direction: the later read cannot feed the earlier grant. Nothing stops the later step from reading `IMPLEMENT_SCOPE_PIPELINE_LOGIN`.
+- **Proposed fix:** `pipeline_login="${IMPLEMENT_SCOPE_PIPELINE_LOGIN:-}"`, falling back to the live `gh api user` read when it is empty.
+- **Safety rationale:**
+  - The login is the trust anchor for deciding which comments the pipeline wrote. Those comments lift the bulk-delete threshold, so this is an authentication or identity-probe flow, a mandatory `RISKY_SKIP` trigger.
+  - `GITHUB_ENV` values can be written by any earlier step in the job, which a live read is not exposed to.
+  - The reuse would also change when `reason=login_unavailable` is logged.
+- **Downstream signal (manual review):**
+  - Do not auto-implement.
+  - A security reviewer must decide whether a `GITHUB_ENV`-sourced identity is acceptable for the override marker check. The saving is at most one call, and only on rare override runs, so declining is a reasonable outcome.
+
+### Dead Calls (DEAD-API-###)
+
+**DEAD-API-001: the label-read fallback in "Validate approval phase label" can effectively never run**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Calls involved:**
+  - `.github/workflows/implement.yml:2377-2379`: the fallback call.
+  - `.github/workflows/implement.yml:2329-2335`: the earlier read it depends on.
+- **Current call count:** 0–1 per run, in practice 0. **Proposed:** 0.
+- **Endpoint:** `GET /repos/{repo}/issues/{n}` (`--jq '[.labels[].name]'`).
+- **Evidence:**
+  1. Line 2329 fetches the issue. An empty result exits at lines 2330-2333 (`reason=metadata_unavailable`).
+  2. Line 2335 writes that result to `${ISSUE_META_FILE}` unconditionally.
+  3. Line 2346 runs `security_dependency.py` on the file. Unparseable JSON is caught (`scripts/security_dependency.py:119-124`, `except (OSError, ValueError, AttributeError)`) and returns `held`, which exits at lines 2347-2350.
+  4. The fallback therefore runs only if the file holds valid JSON whose `.labels[].name` jq fails, which a successful `GET /issues/{n}` response never produces:
+     ```bash
+     if [ -z "${ISSUE_LABELS_JSON}" ]; then
+       ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+     fi
+     ```
+  5. The comment at lines 2366-2372 ("Reuse the issue snapshot fetched in 'Fetch issue metadata'") is out of date: line 2335 now replaces that snapshot within the same step.
+- **Proposed fix:**
+  - Replace the fallback with the existing fail-closed skip: `echo "AI_PHASE_GATE_V1 phase=implement gate=phase_validation reason=metadata_unavailable outcome=skip issue=${ISSUE_NUMBER}"`, set `SKIP_IMPLEMENT=true` and `exit 0`.
+  - Update the stale comment.
+  - This reuses an existing reason token and adds no new prefix.
+- **Safety rationale:** the dead path depends on `security_dependency.py` and `pr_dependency.py` always returning `held` for malformed metadata. That holds for `security_dependency.py` (lines 119-124) but was not checked for `pr_dependency.py`. Also, under `set -euo pipefail` the current fallback fails the step, while the proposed fix skips, which is a different error behaviour.
+- **Downstream signal (verify first):**
+  1. Confirm that `scripts/pr_dependency.py pr-dependency` returns `held` (or exits non-zero) on unparseable `--issue-json`.
+  2. Check `tests/` for any harness that runs the "Validate approval phase label" step with a valid JSON file that has no `labels`.
+  3. Decide whether "skip" or "fail the step" is the right result for unreadable labels. Then drop lines 2377-2379.
+
+### Cross-References to Deep Audit Section
+- API-001: `RISKY_SKIP`. The finding is correct, but it sits in `orchestrate_poll_process.sh` (lines 30779-30791) and changes a fail-open split that is documented on purpose.
+  - Net-new detail: before seeding `LABELS_JSON` from the details cache, check that `_fetch_candidate_issue_details_graphql` leaves out (rather than returns empty) issues whose batch failed. Otherwise a missing entry becomes `[]` and repeats BUG-003.
+- BATCH-001: `RISKY_SKIP`. The per-blocker REST loops are in `orchestrate_poll_process.sh` (lines 7778-7795 and 33425-33446), inside blocker and stall handling.
+  - Net-new detail: the new batch helper must keep "miss leads to `unknown`", so a blocker that failed to read is never counted as closed.
+- API-002: `NEEDS_VERIFICATION`. Reusing `SCRIPT_REF` from `$GITHUB_ENV` changes the second step's `SUPPORT_REF source=…` lines, which `tests/test_workflow_support_ref_follows_pin.py` asserts on. Apply it together with BUG-004 and MERGE-001.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 1 | REUSE-001 |
+| NEEDS_VERIFICATION | 3 | MERGE-001, DEAD-API-001, API-002 (cross-ref) |
+| RISKY_SKIP | 4 | REUSE-002, REUSE-003, API-001 (cross-ref), BATCH-001 (cross-ref) |
+
+### Implement-Stage Handoff
+- REUSE-001: in `scripts/check_integration_pr_readiness.py` `main()`, reuse the line-201 `fetched_issue` as `fresh_issue` at line 221 when it is not `None`, and add a single-fetch regression test to `tests/test_check_integration_pr_readiness.py`.
