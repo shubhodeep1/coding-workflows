@@ -66,9 +66,12 @@ run-name: "${{ github.event_name == 'workflow_dispatch' && format('CI [pr:{0}]',
 # Cancel replaced PR CI (cut-ci-runner-time Phase 2). A pull_request run
 # (none since Phase 4 removed the trigger; the arm stays for a workflow_call
 # caller with mode full) shares one group per PR, so a newer push cancels
-# the older run while it is queued or running. Every other run (pushes to main, stable and orchestrator/project-*)
-# gets a group of its own and is never cancelled, because check-failure
-# triage compares a failing PR against the base branch's newest push run.
+# the older run while it is queued or running. A push run (main, stable and
+# orchestrator/project-*) shares `ci-push-<ref>` without cancel-in-progress
+# (run-volume plan, D14): the running run always finishes, so check-failure
+# triage still reads a real result from the branch's newest push run, and a
+# newer push replaces only the run still waiting in the group. Every other
+# run gets a group of its own and is never cancelled.
 # The cancelled-CI rerun sweep (scripts/ci_cancelled_rerun.py) skips a
 # cancelled run whose head is no longer the PR's head (superseded_head).
 # Phase 4: a final-CI dispatch run shares `ci-final-pr-<PR number>` and
@@ -76,7 +79,7 @@ run-name: "${{ github.event_name == 'workflow_dispatch' && format('CI [pr:{0}]',
 # (its event is the caller's pull_request) gets a group of its own here,
 # because its caller workflow cancels replaced quick runs itself.
 concurrency:
-  group: ${{ inputs.mode == 'quick' && format('ci-quick-{0}', github.run_id) || github.event_name == 'workflow_dispatch' && format('ci-final-pr-{0}', inputs.pr_number) || github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-{0}', github.run_id) }}
+  group: ${{ inputs.mode == 'quick' && format('ci-quick-{0}', github.run_id) || github.event_name == 'workflow_dispatch' && format('ci-final-pr-{0}', inputs.pr_number) || github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && format('ci-push-{0}', github.ref) || format('ci-{0}', github.run_id) }}
   cancel-in-progress: ${{ inputs.mode != 'quick' && (github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request') }}
 
 env:
