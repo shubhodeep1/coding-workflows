@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/INVENTORY.md:310-311 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The entries this PR adds for `scripts/review_final_ci_failed.sh` and `scripts/review_final_ci_sweep.sh` at lines 310-311 duplicate the base's entries at lines 316-317, so each script is documented twice in the Scripts section.\n  WHY: `tests/inventory_parity.py` fails with \"documented in multiple sections (Scripts, Scripts)\", which fails `tests-release-and-log-analysis` and the aggregate `lint` job. The reviewer rated this BLOCKER, which is mapped to critical here. The fix is to delete lines 310-311 and keep lines 316-317.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Linked issue #9618 says `tests/inventory_parity.py` must pass on the final-CI tree and must not be weakened or skipped. The inventory entries for the two `review_final_ci_*` scripts are to be added to `docs/INVENTORY.md`.\n  expected_change_site: docs/INVENTORY.md (exactly one entry per script)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: After the merge from `ai/issue-9519`, docs/INVENTORY.md has each script twice (lines 310-311 and 316-317). `tests/inventory_parity.py` still fails with \"documented in multiple sections\". The duplicates this PR added must be removed.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- docs/INVENTORY.md:310-311 | severity=BLOCKER | confidence=5\n  PROBLEM: The merge of `ai/issue-9519` brought in the base's entries for `scripts/review_final_ci_failed.sh` and `scripts/review_final_ci_sweep.sh` (lines 316-317). The entries this PR adds at lines 310-311 duplicate them.\n  WHY: `tests/inventory_parity.py` fails on head 1a214854 with \"documented in multiple sections (Scripts, Scripts)\". That fails `tests-release-and-log-analysis` and the aggregate `lint` job. Fix: delete lines 310-311 and keep the base's entries at lines 316-317.\n- TASK_GAP:\n  Requirement: Linked issue #9618 says `tests/inventory_parity.py` must pass on the final-CI tree and must not be weakened or skipped. The inventory entries for the two `review_final_ci_*` scripts are to be added to `docs/INVENTORY.md`.\n  Expected change site: `docs/INVENTORY.md`, with exactly one entry per script.\n  Evidence of absence: After the merge from `ai/issue-9519`, the file has each script twice (lines 310-311 and 316-317). `tests/inventory_parity.py` still fails with \"documented in multiple sections\". The duplicates this PR added are now redundant and must be removed.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===",
+  "fingerprint": "936731923789556021483eccd5d3c9ae4a3c6583694aa9dd2455d19f61a06ceb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9621,
+    "run_id": "44173665121",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "github-actions[bot]",
+    "run_attempt": 1,
+    "run_id": "44173665121",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117231751_0d8977ca1a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9621,
+    "run_id": "44173665121"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-17T23:17:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
