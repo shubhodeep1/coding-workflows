@@ -89,6 +89,9 @@ on:
         required: true
       TG_BOT_SECRET:
         required: false
+      # Signed job-token comments (run-volume plan item 15): optional; see scripts/comment_signature.py.
+      AI_COMMENT_SIGNING_SECRET:
+        required: false
   workflow_dispatch:
     inputs:
       pr_number:
@@ -314,6 +317,14 @@ env:
   # verified workflow checkout when the staging helper does not install them.
   REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS: >-
     workflow_failure_heal.py workflow_failure_heal_autofix_report.sh provider_outage.py ai_engine_fallback_report.sh
+  # Signed job-token comments (run-volume plan item 15, D16): opt-in by the
+  # AI_COMMENT_SIGNING_SECRET repository secret; unset changes nothing. See
+  # scripts/comment_signature.py.
+  AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+  AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+  # Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false posts with
+  # GH_PAT again while signed comments already posted still verify.
+  AI_COMMENT_SIGNING_POST: ${{ vars.AI_COMMENT_SIGNING_POST || 'true' }}
 
 jobs:
   gate:

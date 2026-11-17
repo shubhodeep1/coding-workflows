@@ -34,6 +34,16 @@ permissions:
   pull-requests: write
   issues: write
 
+env:
+  # Signed job-token comments (run-volume plan item 15, D16): opt-in by the
+  # AI_COMMENT_SIGNING_SECRET repository secret; unset changes nothing. See
+  # scripts/comment_signature.py.
+  AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+  AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+  # Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false posts with
+  # GH_PAT again while signed comments already posted still verify.
+  AI_COMMENT_SIGNING_POST: ${{ vars.AI_COMMENT_SIGNING_POST || 'true' }}
+
 jobs:
   intake:
     runs-on: ubuntu-latest

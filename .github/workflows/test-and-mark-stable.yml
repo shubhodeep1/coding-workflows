@@ -133,6 +133,14 @@ run-name: ${{ inputs.gate_cycle_id != '' && format('Test & Mark Stable Release [
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Signed job-token comments (run-volume plan item 15, D16): opt-in by the
+  # AI_COMMENT_SIGNING_SECRET repository secret; unset changes nothing. See
+  # scripts/comment_signature.py.
+  AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+  AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+  # Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false posts with
+  # GH_PAT again while signed comments already posted still verify.
+  AI_COMMENT_SIGNING_POST: ${{ vars.AI_COMMENT_SIGNING_POST || 'true' }}
 
 permissions:
   contents: write
@@ -655,6 +663,13 @@ jobs:
       # workflow file size guard). They are read from this run's own commit,
       # never from the main checkout above, and copied to RUNNER_TEMP so they
       # live outside the workspace that the later Phase 5 re-checkout cleans.
+      - name: Activate signed job-token comments
+        # Run-volume plan item 15 (D16): with AI_COMMENT_SIGNING_SECRET set,
+        # later steps' comment reads see signed job-token comments as the
+        # PAT wrote them (scripts/comment_signature.py). No-op without it.
+        if: env.AI_COMMENT_SIGNING_SECRET != ''
+        shell: bash
+        run: source scripts/gh_helpers.sh
       - name: Checkout release-gate step scripts
         uses: actions/checkout@v5
         with:
@@ -4463,6 +4478,13 @@ jobs:
           ref: main
           fetch-depth: 1
 
+      - name: Activate signed job-token comments
+        # Run-volume plan item 15 (D16): with AI_COMMENT_SIGNING_SECRET set,
+        # later steps' comment reads see signed job-token comments as the
+        # PAT wrote them (scripts/comment_signature.py). No-op without it.
+        if: env.AI_COMMENT_SIGNING_SECRET != ''
+        shell: bash
+        run: source scripts/gh_helpers.sh
       - name: Dispatch & snapshot — workflow-log-analysis
         id: dispatch_log_analysis
         # Rate-limit shaping: the script below opens with a brief 4s
@@ -4609,6 +4631,13 @@ jobs:
       # long tail can no longer block `validate` / `release` /
       # `sync-to-main`). The dispatches that remain here are the short,
       # deterministic ones whose failures still gate the release.
+      - name: Activate signed job-token comments
+        # Run-volume plan item 15 (D16): with AI_COMMENT_SIGNING_SECRET set,
+        # later steps' comment reads see signed job-token comments as the
+        # PAT wrote them (scripts/comment_signature.py). No-op without it.
+        if: env.AI_COMMENT_SIGNING_SECRET != ''
+        shell: bash
+        run: source scripts/gh_helpers.sh
       - name: Dispatch & watch — validation-refresh
         id: dispatch_validation_refresh
         timeout-minutes: 95
@@ -4781,6 +4810,13 @@ jobs:
           ref: main
           fetch-depth: 1
 
+      - name: Activate signed job-token comments
+        # Run-volume plan item 15 (D16): with AI_COMMENT_SIGNING_SECRET set,
+        # later steps' comment reads see signed job-token comments as the
+        # PAT wrote them (scripts/comment_signature.py). No-op without it.
+        if: env.AI_COMMENT_SIGNING_SECRET != ''
+        shell: bash
+        run: source scripts/gh_helpers.sh
       - name: Dispatch internal-orchestrate.yml with multi-issue project
         id: dispatch
         run: |
@@ -5117,6 +5153,13 @@ jobs:
           ref: main
           fetch-depth: 1
 
+      - name: Activate signed job-token comments
+        # Run-volume plan item 15 (D16): with AI_COMMENT_SIGNING_SECRET set,
+        # later steps' comment reads see signed job-token comments as the
+        # PAT wrote them (scripts/comment_signature.py). No-op without it.
+        if: env.AI_COMMENT_SIGNING_SECRET != ''
+        shell: bash
+        run: source scripts/gh_helpers.sh
       - name: Dispatch internal-validate.yml standalone
         id: dispatch
         # 1800s watcher wait + one 20s poll + gh retry backoff headroom.
@@ -5190,6 +5233,13 @@ jobs:
           ref: main
           fetch-depth: 1
 
+      - name: Activate signed job-token comments
+        # Run-volume plan item 15 (D16): with AI_COMMENT_SIGNING_SECRET set,
+        # later steps' comment reads see signed job-token comments as the
+        # PAT wrote them (scripts/comment_signature.py). No-op without it.
+        if: env.AI_COMMENT_SIGNING_SECRET != ''
+        shell: bash
+        run: source scripts/gh_helpers.sh
       - name: Create unsolvable issue
         id: create
         run: |
@@ -5435,6 +5485,13 @@ jobs:
           ref: main
           fetch-depth: 1
 
+      - name: Activate signed job-token comments
+        # Run-volume plan item 15 (D16): with AI_COMMENT_SIGNING_SECRET set,
+        # later steps' comment reads see signed job-token comments as the
+        # PAT wrote them (scripts/comment_signature.py). No-op without it.
+        if: env.AI_COMMENT_SIGNING_SECRET != ''
+        shell: bash
+        run: source scripts/gh_helpers.sh
       - name: Validate prerequisites
         run: |
           set -euo pipefail

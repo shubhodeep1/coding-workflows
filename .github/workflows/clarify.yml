@@ -10,6 +10,9 @@ name: AI Clarify (Reusable)
         required: true
       TG_BOT_SECRET:
         required: false
+      # Signed job-token comments (run-volume plan item 15): optional; see scripts/comment_signature.py.
+      AI_COMMENT_SIGNING_SECRET:
+        required: false
 
 env:
   # Claude capacity wait (issue #7370): a capacity fallback waits for the
@@ -23,6 +26,14 @@ env:
   PERSIST_EVIDENCE_PACK_ENABLED: ${{ vars.PERSIST_EVIDENCE_PACK_ENABLED || 'false' }}
   PERSIST_EVIDENCE_PACK_MAX_BYTES: ${{ vars.PERSIST_EVIDENCE_PACK_MAX_BYTES || '12000' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Signed job-token comments (run-volume plan item 15, D16): opt-in by the
+  # AI_COMMENT_SIGNING_SECRET repository secret; unset changes nothing. See
+  # scripts/comment_signature.py.
+  AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+  AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+  # Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false posts with
+  # GH_PAT again while signed comments already posted still verify.
+  AI_COMMENT_SIGNING_POST: ${{ vars.AI_COMMENT_SIGNING_POST || 'true' }}
 
 jobs:
   clarify:

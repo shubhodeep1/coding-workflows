@@ -41,6 +41,9 @@ name: AI Validate (Reusable)
         required: true
       TG_BOT_SECRET:
         required: false
+      # Signed job-token comments (run-volume plan item 15): optional; see scripts/comment_signature.py.
+      AI_COMMENT_SIGNING_SECRET:
+        required: false
     outputs:
       status:
         description: "Validation status (pass|fail|error)"
@@ -107,6 +110,14 @@ env:
   SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
   WORKSPACE_HOOK_TIMEOUT_SECONDS: ${{ vars.WORKSPACE_HOOK_TIMEOUT_SECONDS || '600' }}
   WORKSPACE_REUSE_ENABLED: ${{ vars.WORKSPACE_REUSE_ENABLED || 'false' }}
+  # Signed job-token comments (run-volume plan item 15, D16): opt-in by the
+  # AI_COMMENT_SIGNING_SECRET repository secret; unset changes nothing. See
+  # scripts/comment_signature.py.
+  AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+  AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+  # Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false posts with
+  # GH_PAT again while signed comments already posted still verify.
+  AI_COMMENT_SIGNING_POST: ${{ vars.AI_COMMENT_SIGNING_POST || 'true' }}
 
 jobs:
   validate:
