@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/resolve_integration_ref.sh:590-595 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: When the PR lookup fails, `resolve_ci_reissue_base_branch()` now returns success (`0`) instead of refusing with `CI_TRIAGE_REFUSED_RC`, which breaks the task constraint \"No resolver logic changes.\"\n  WHY: For a lookup failure that is not rate-limited, the resolver returns 0 without a branch, and the implement workflow continues on the default branch instead of failing closed. Severity: openai_gpt-6-luna said MAJOR and google_gemini-3_1-flash-lite gave none, so the highest is used. anthropic_claude-sonnet-5_5 explicitly rejected this finding and minimax_minimax-m3 agreed: this file is not in the PR diff, the fail-open behaviour comes from precursor PR #9175 / #9170, and the approved plan asks for \"Fail-open, not fail-closed\".\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Issue #9622 expects the resolver to read `CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED` from its own environment so `vars.CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED=false` turns the routing off\n  expected_change_site: All five workflow \"Resolve integration ref\" steps, both in the step `env:` block and on the resolver command line\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Verified present in `.github/workflows/clarify.yml:105,214`, `plan.yml:181,300`, `implement.yml:607,719`, `orchestrate_clarify_respond.yml:246,351`, `validate.yml:199,328`; contract test at `tests/test_resolve_integration_ref_ci_triage.py:456-463` enforces the position rule (reviewer marked SEVERITY: NIT)\n- requirement: \"The 'New environment variables' row and the operator note should say that the repository variable `CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED=false` turns the re-issue routing off.\"\n  expected_change_site: `changelog.d/ci-reissue-merged-pr-base-branch-routing.md`, \"New environment variables\" row.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The row at line 10 says the variable defaults to `true` and is forwarded from the repository variable, but does not say that setting it to `false` turns routing off. The operator note includes that behavior; the row does not. (reviewer marked SEVERITY: NIT)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/resolve_integration_ref.sh:590-595 | confidence=5\n  PROBLEM: The logic in `resolve_ci_reissue_base_branch` was changed from failing closed (returning `CI_TRIAGE_REFUSED_RC`) to failing open (returning `0` on PR lookup failure).\n  WHY: This breaks the \"No resolver logic changes\" constraint in the task requirements, even though the documentation fragments the PR updates ask for \"Fail-open\". The reviewer flags the conflict as a potential correctness issue.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: Issue #9622 expects the resolver to read `CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED` from its own environment so `vars.CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED=false` turns the routing off\n  Expected change site: All five workflow \"Resolve integration ref\" steps, both in the step `env:` block and on the resolver command line\n  Evidence of absence: Verified present in `.github/workflows/clarify.yml:105,214`, `plan.yml:181,300`, `implement.yml:607,719`, `orchestrate_clarify_respond.yml:246,351`, `validate.yml:199,328`; contract test at `tests/test_resolve_integration_ref_ci_triage.py:456-463` enforces the position rule\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/resolve_integration_ref.sh:resolve_ci_reissue_base_branch(), lines 590-595 | severity=MAJOR | confidence=5\n  PROBLEM: The last-run change makes a failed PR lookup return success instead of the existing refusal, despite the task constraint \"No resolver logic changes.\"\n  WHY: For a non-rate-limited lookup failure, the resolver now returns 0 without a branch; the implement workflow treats that as success and continues with the default branch instead of failing closed.\n- TASK_GAP\n  Requirement: \"The 'New environment variables' row and the operator note should say that the repository variable `CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED=false` turns the re-issue routing off.\"\n  Expected change site: `changelog.d/ci-reissue-merged-pr-base-branch-routing.md`, \"New environment variables\" row.\n  Evidence of absence: The row at line 10 says the variable defaults to `true` and is forwarded from the repository variable, but does not say that setting it to `false` turns routing off. The operator note includes that behavior; the row does not.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "53767464c1c4a3b4e23c638552f454a2e5a29b5fcb1efe27fa24dada3738037d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9635,
+    "run_id": "44030575486",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44030575486",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261117085010_c25e58810c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9635,
+    "run_id": "44030575486"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-17T08:50:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
