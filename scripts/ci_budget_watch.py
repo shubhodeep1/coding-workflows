@@ -77,7 +77,9 @@ def job_timeouts(ci_workflow: Path) -> dict[str, int]:
 
 
 def _seconds(start: str | None, end: str | None) -> int | None:
-	if not start or not end:
+	# A non-string value (only possible with malformed API data) would raise
+	# AttributeError at `.replace` and stop the duration check for every job.
+	if not isinstance(start, str) or not isinstance(end, str) or not start or not end:
 		return None
 	try:
 		a = datetime.fromisoformat(start.replace("Z", "+00:00"))

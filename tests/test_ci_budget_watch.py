@@ -121,6 +121,16 @@ def test_job_duration_findings_log_jobs_with_no_usable_start(tmp_path: Path, cap
 	assert "ci_budget_watch" not in capsys.readouterr().out
 
 
+def test_job_duration_findings_survive_non_string_job_times(tmp_path: Path, capsys) -> None:
+	# A non-string job-level time is not measured and does not crash the check.
+	root = _tree(tmp_path, {}, CI)
+	timeouts = cbw.job_timeouts(root / ".github" / "workflows" / "ci.yml")
+	odd_start = {**_job("tests-a", 60), "started_at": 12345}
+	odd_end = {**_job("tests-a", 60), "completed_at": 12345}
+	assert cbw.job_duration_findings([odd_start, odd_end, _job("tests-a", 19 * 60)], timeouts, 0.75)[0]["value"] == 1140
+	assert capsys.readouterr().out.count("has no usable start or completion time") == 2
+
+
 def test_issue_text_names_the_fix_and_carries_the_marker() -> None:
 	size = {"kind": "workflow_size", "subject": ".github/workflows/review_autofix.yml", "value": 481_287, "limit": 480_000}
 	assert cbw.issue_title(size) == "CI budget: .github/workflows/review_autofix.yml is 481,287 bytes (guard 480,000)"
