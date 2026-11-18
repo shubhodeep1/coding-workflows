@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_prepush_test_gate.sh:733-746 | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: `load()` returns `{}` for a missing or corrupt result file, so `status` prints `unverified 0 0` and exits 0, and the \"skip the guard when status cannot be read\" path never fires. Only the z-ai_glm-5_3-flash reviewer filed this as an issue (SEVERITY: NIT, ISSUE_CONFIDENCE: 2).\n  WHY: The guard could revert a repair with no verified `pr_caused=0` reading. This is not reachable through current call paths, because `review_prepush_test_gate_run_once` always writes a valid result.json.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_autofix_step_prepush_test_gate.sh:733-737 (guard) vs 132-137, 145-147, 163-165 (embedded helper `load`/`status_of`/`status`) | severity=low | confidence=2\n  PROBLEM: The issue requires \"If the status cannot be read, skip the guard\", but `load()` returns `{}` for a missing or corrupt result file. `status_of` maps that to `unverified`, and `status` still prints `unverified 0 0` and exits 0. A corrupt or missing result is therefore read as a readable `pr_caused=0`.\n  WHY: This only matters if `result.json` is absent or corrupt at repair time. The guard would then revert a repair with no verified `pr_caused=0` reading. The reviewer rated it NIT and said it is not reachable through current call paths.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5d8c03fce37f9b34cbaca464446c80d7ab681fa830158a090f6b2415512d2763",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9731,
+    "run_id": "44339050209",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44339050209",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118175441_eca6b44233",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9731,
+    "run_id": "44339050209"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T17:54:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
