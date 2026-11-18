@@ -10,7 +10,7 @@ When the `ubuntu-latest` runners moved to Ubuntu 26.04, CI on `main` broke and h
 | Extra API reads per triage run | 1 when the default branch failed the same workflow, plus 2 jobs reads (PR run and main's run) when a heal issue matches, plus one read of the heal issue's comments before the note is posted |
 | Kill switch | `CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED` (default `true`; repository variable, forwarded by `check_failure_triage.yml`) |
 
-What this means for operators: a red `main` produces one heal issue and comments on it, not an issue and a CRITICAL page for every open PR. A planning block that is only waiting for another PR to merge no longer asks you for input.
+What this means for operators: a red `main` produces one heal issue and comments on it, not an issue and a CRITICAL page for every open PR. A planning block that is only waiting for another PR to merge no longer asks you for input. On the `stable` line, heal issues do not carry the `<!-- workflow-failure-heal:workflow=<path> -->` header yet (it comes with #8812 on `main`), so the per-PR skip finds no matching heal issue and triage files as before; the planning-block change applies now.
 
 ### For contributors
 
