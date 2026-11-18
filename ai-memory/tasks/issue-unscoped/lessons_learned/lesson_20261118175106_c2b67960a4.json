@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-11-18T17:51:06Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 008 as out-of-scope; anchor=workflow-templates/profiles/full.txt:N/A; cited_path=workflow-templates/profiles/full.txt, scripts/label_helpers.sh, docs/INVENTORY.md; files_touched=docs/plans/brainstorm-debate-workflow-plan.md.",
+  "phase": "review_autofix",
+  "pr_number": 9239,
+  "record_id": "lesson_20261118175106_c2b67960a4",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "workflow-templates/profiles/full.txt, scripts/label_helpers.sh, docs/INVENTORY.md",
+    "workflow-templates/profiles/full.txt",
+    "docs/plans/brainstorm-debate-workflow-plan.md"
+  ]
+}
