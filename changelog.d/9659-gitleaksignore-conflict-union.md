@@ -7,6 +7,6 @@ One gitleaks false positive stalled an orchestrator project three ways (shubhode
 | --- | --- |
 | New switches (default `true`) | 2 (`CONFLICT_GITLEAKSIGNORE_UNION_ENABLED`, `UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED`) |
 | New log keys | `CONFLICT_RESOLVER_GITLEAKSIGNORE_UNION`, `REVIEW_EDITOR_GITLEAKS_SUGGESTION`, `UNBLOCK_JUDGE op=triage_superseded` |
-| Extra GitHub API calls | at most 1 note comment per check-triage issue; once the note outlives `UNBLOCK_JUDGE_WAIT_MAX_DAYS`, 1 `close` marker comment plus the needs-human park's label and digest calls |
+| Extra GitHub API calls | at most 1 note comment per check-triage issue, re-written once per held judge run (at most once per `--marker-hours` window, since the note's last line is a throttle marker); once the note outlives `UNBLOCK_JUDGE_WAIT_MAX_DAYS`, 1 `close` marker comment plus the needs-human park's label and digest calls |
 
 What this means for consumer repos: after the next `@stable` sync, a `.gitleaksignore` conflict resolves without a model run. Set the repository variable `UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED=false` to restore the previous unblock judging; `CONFLICT_GITLEAKSIGNORE_UNION_ENABLED=false` in the review job environment turns the union off.

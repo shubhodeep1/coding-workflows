@@ -5745,6 +5745,28 @@ def test_pr_check_green_ignores_a_cached_verdict_for_another_item(tmp_path: Path
 # for is noted once and waits for its check, instead of looping planning.
 TRIAGE_SUPERSEDED_MARKER = "<!-- ai:unblock-triage-superseded:v1 item=7 -->"
 TRIAGE_RETRY_VERDICT = {"verdict": "retry_budget", "reason": "r", "instructions": "i"}
+TRIAGE_WAIT_MARKER = "<!-- ai:unblock-wait:v1 item=7 reason=triage_superseded -->"
+TRIAGE_NOTE_ID = 9659
+
+
+def _triage_note(created_at: str = "2026-10-04T10:00:00Z") -> dict:
+	return dict(_comment("Planning found the fix already on the planning ref.\n\n" + TRIAGE_SUPERSEDED_MARKER + "\n", BOT, created_at), id=TRIAGE_NOTE_ID)
+
+
+def _assert_note_refreshed(state: dict) -> None:
+	# The held run re-writes the note so the scan's recent_verdict throttle
+	# (keyed on updatedAt) restarts instead of re-dispatching every tick.
+	refreshes = [fields for endpoint, fields in state["patched"] if endpoint == f"repos/o/r/issues/comments/{TRIAGE_NOTE_ID}"]
+	assert len(refreshes) == 1, state["patched"]
+	lines = refreshes[0]["body"].rstrip().splitlines()
+	assert lines[-1] == TRIAGE_WAIT_MARKER and lines[-2] == TRIAGE_SUPERSEDED_MARKER, lines
+
+
+def _scan_module():
+	scan_spec = importlib.util.spec_from_file_location("unblock_scan_9659_select", ROOT / "scripts" / "unblock_scan.py")
+	scan = importlib.util.module_from_spec(scan_spec)
+	scan_spec.loader.exec_module(scan)
+	return scan
 
 
 def _judge_triage_superseded(tmp_path: Path, item: dict = TRIAGE_ISSUE, comments: list | None = None, **env):
@@ -5769,21 +5791,31 @@ def test_unverified_nothing_to_implement_triage_issue_is_noted_once_without_a_re
 	assert "outcome=acted" not in result.stdout
 	assert len(state["comments"]) == 1
 	body = state["comments"][0]["body"]
-	assert body.endswith(TRIAGE_SUPERSEDED_MARKER)
+	lines = body.rstrip().splitlines()
+	assert lines[-2:] == [TRIAGE_SUPERSEDED_MARKER, TRIAGE_WAIT_MARKER], lines
 	assert "already on the planning ref" in body and "/reclarify" in body
 	assert not any(comment["body"].startswith(("/answer", "/approved")) for comment in state["comments"])
 	assert not _closed_completed(state)
+	# The poller throttles the noted item instead of re-dispatching it every tick.
+	selection = _scan_module().select(
+		[{"number": 7, "labels": [{"name": "ai:blocked"}, {"name": "ai:check-triage"}], "updated_at": "2026-10-01T00:00:00Z"}],
+		{"7": {"labeled": [{"label": "ai:blocked", "created_at": "2026-10-01T00:00:00Z"}],
+			"comments": [{"login": BOT, "body": body, "created_at": "2026-10-04T10:00:00Z"}]}},
+		[], [], BOT, dt.datetime(2026, 10, 4, 12, tzinfo=dt.timezone.utc),
+		dt.timedelta(minutes=30), dt.timedelta(hours=6), dt.timedelta(minutes=60), 1)
+	assert selection["dispatch"] == [] and selection["skipped"].get("recent_verdict") == 1, selection
 
 
 def test_triage_superseded_note_is_not_posted_again_on_a_rerun(tmp_path: Path) -> None:
 	comments = [
 		_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z"),
-		_comment("Planning found the fix already on the planning ref.\n\n" + TRIAGE_SUPERSEDED_MARKER + "\n", BOT, "2026-10-04T10:00:00Z"),
+		_triage_note(),
 	]
 	result, state = _judge_triage_superseded(tmp_path, comments=comments, FAKE_TRIAGE_STATUS="unverified")
 	assert "op=triage_superseded outcome=noted reason=already_noted" in result.stdout, result.stdout + result.stderr
 	assert state["comments"] == []
 	assert "outcome=acted" not in result.stdout
+	_assert_note_refreshed(state)
 
 
 @pytest.mark.parametrize("status", ["not_triage", "disabled"])
@@ -5792,7 +5824,7 @@ def test_terminal_gate_verdict_judges_as_usual_without_a_note(tmp_path: Path, st
 	result, state = _judge_triage_superseded(tmp_path, FAKE_TRIAGE_STATUS=status)
 	assert "op=triage_superseded outcome=skip reason=gate_terminal" in result.stdout, result.stdout + result.stderr
 	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout
-	assert not any(comment["body"].endswith(TRIAGE_SUPERSEDED_MARKER) for comment in state["comments"])
+	assert not any(TRIAGE_SUPERSEDED_MARKER in comment["body"] for comment in state["comments"])
 
 
 def test_expired_superseded_note_parks_the_item_instead_of_resuming(tmp_path: Path) -> None:
@@ -5807,7 +5839,7 @@ def test_expired_superseded_note_parks_the_item_instead_of_resuming(tmp_path: Pa
 	assert "op=triage_superseded outcome=parked reason=note_expired" in result.stdout, result.stdout + result.stderr
 	assert "outcome=acted" not in result.stdout
 	assert not any(comment["body"].startswith(("/answer", "/approved")) for comment in state["comments"])
-	assert not any(comment["body"].endswith(TRIAGE_SUPERSEDED_MARKER) for comment in state["comments"])
+	assert not any(TRIAGE_SUPERSEDED_MARKER in comment["body"] for comment in state["comments"])
 	assert [label for _, label in state["labels_added"]] == ["ai:needs-human"]
 	assert any(fields.get("body", "").startswith("<!-- ai:needs-human:v1 -->") for fields in state["created"])
 	# The park is visible to scripts/unblock_scan.py: one trusted `close` round
@@ -5837,13 +5869,14 @@ def test_expired_superseded_note_does_not_record_a_second_close_marker(tmp_path:
 def test_expired_superseded_note_holds_when_the_park_is_unavailable(tmp_path: Path) -> None:
 	comments = [
 		_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z"),
-		_comment("Planning found the fix already on the planning ref.\n\n" + TRIAGE_SUPERSEDED_MARKER + "\n", BOT, "2026-10-04T10:00:00Z"),
+		_triage_note(),
 	]
 	result, state = _judge_triage_superseded(tmp_path, comments=comments, FAKE_TRIAGE_STATUS="unverified",
 		MOCK_UNBLOCK_JUDGE_NOW="2026-10-19T10:00:00Z", NEEDS_HUMAN_DIGEST_ENABLED="false")
 	assert "op=triage_superseded outcome=held reason=park_failed" in result.stdout, result.stdout + result.stderr
 	assert "outcome=acted" not in result.stdout
 	assert state["comments"] == []
+	_assert_note_refreshed(state)
 
 
 def test_an_untrusted_superseded_marker_does_not_suppress_the_note(tmp_path: Path) -> None:
@@ -5873,14 +5906,14 @@ def test_triage_superseded_note_keeps_todays_judging_otherwise(tmp_path: Path, c
 	result, state = _judge_triage_superseded(tmp_path, item=item, comments=comments, **env)
 	assert "op=triage_superseded" not in result.stdout, result.stdout
 	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout, result.stdout + result.stderr
-	assert not any(comment["body"].endswith(TRIAGE_SUPERSEDED_MARKER) for comment in state["comments"])
+	assert not any(TRIAGE_SUPERSEDED_MARKER in comment["body"] for comment in state["comments"])
 
 
 def test_triage_superseded_note_skips_when_the_gate_verdict_is_unavailable(tmp_path: Path) -> None:
 	result, state = _judge_triage_superseded(tmp_path, FAKE_TRIAGE_STATUS="", FAKE_TRIAGE_RC="1")
 	assert "op=triage_superseded outcome=skip reason=gate_unavailable" in result.stdout, result.stdout + result.stderr
 	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout
-	assert not any(comment["body"].endswith(TRIAGE_SUPERSEDED_MARKER) for comment in state["comments"])
+	assert not any(TRIAGE_SUPERSEDED_MARKER in comment["body"] for comment in state["comments"])
 
 
 def test_triage_superseded_note_skips_orchestrator_items(tmp_path: Path) -> None:
@@ -5888,7 +5921,7 @@ def test_triage_superseded_note_skips_orchestrator_items(tmp_path: Path) -> None
 	result, state = _judge_triage_superseded(tmp_path, item=item, FAKE_TRIAGE_STATUS="unverified",
 		FAKE_GH_PROJECT_COMMENTS=_project_comments_for_item(7))
 	assert "op=triage_superseded" not in result.stdout, result.stdout + result.stderr
-	assert not any(comment["body"].endswith(TRIAGE_SUPERSEDED_MARKER) for comment in state["comments"])
+	assert not any(TRIAGE_SUPERSEDED_MARKER in comment["body"] for comment in state["comments"])
 
 
 def test_triage_superseded_note_skips_managed_items_without_a_tracking_line(tmp_path: Path) -> None:
@@ -5897,7 +5930,7 @@ def test_triage_superseded_note_skips_managed_items_without_a_tracking_line(tmp_
 	item = dict(TRIAGE_ISSUE, labels=TRIAGE_ISSUE["labels"] + [{"name": "ai:orchestrator-managed"}])
 	result, state = _judge_triage_superseded(tmp_path, item=item, FAKE_TRIAGE_STATUS="unverified")
 	assert "op=triage_superseded" not in result.stdout, result.stdout + result.stderr
-	assert not any(comment["body"].endswith(TRIAGE_SUPERSEDED_MARKER) for comment in state["comments"])
+	assert not any(TRIAGE_SUPERSEDED_MARKER in comment["body"] for comment in state["comments"])
 
 
 def test_unblock_workflow_forwards_triage_nothing_to_implement_gate_switch() -> None:

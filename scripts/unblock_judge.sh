@@ -639,6 +639,30 @@ ${marker}" >/dev/null 2>&1; then
 	return 0
 }
 
+# unblock_triage_superseded_body <checked> (#9659): the superseded note. Its
+# last line is an `ai:unblock-wait:v1 ... reason=triage_superseded` marker, a
+# prefix scripts/unblock_scan.py throttles on (keyed on the comment's
+# updatedAt), so a held item is re-dispatched once per --marker-hours instead
+# of on every tick; `reason=` (no `hold=`) keeps it out of the hold parsers.
+# The once-per-issue `ai:unblock-triage-superseded:v1` marker is the line above.
+unblock_triage_superseded_body()
+{
+	printf '%s' "Planning found the fix for this check failure already on the planning ref (\`${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}\`), so the unblock judge is not resuming planning: it would only stop here again. This issue now waits for the pull request head's check to pass; the check-triage resolution gate closes it with evidence once the failure is verified fixed on the default branch. Reply with \`/reclarify\` if work is still missing. Last checked ${1:-}.
+
+<!-- ai:unblock-triage-superseded:v1 item=${ITEM} -->
+<!-- ai:unblock-wait:v1 item=${ITEM} reason=triage_superseded -->"
+}
+
+# unblock_triage_superseded_refresh <comment id> (#9659): re-writes the note so
+# its updatedAt restarts the scan's throttle while the item stays held. A
+# failed refresh only means an earlier re-dispatch; the next run retries it.
+unblock_triage_superseded_refresh()
+{
+	[[ "${1:-}" =~ ^[1-9][0-9]*$ ]] || return 0
+	unblock_patch_comment "$1" "$(unblock_triage_superseded_body "$(unblock_now)")" || true
+	return 0
+}
+
 # unblock_triage_superseded_note <tracking> (#9659): a standalone
 # ai:check-triage issue whose newest trusted "Planning blocked" comment gives
 # the nothing-to-implement reason has its fix on the planning ref already, so
@@ -662,11 +686,14 @@ ${marker}" >/dev/null 2>&1; then
 # restores the previous behaviour.
 # API budget: no reads; at most one note comment per issue, plus, once the
 # note expires, one close-marker comment and the needs-human park's label
-# and digest read/write.
+# and digest read/write. Each held run (already_noted, park_failed,
+# marker_failed) re-writes the note once (PATCH): the note's last line is an
+# `ai:unblock-wait:v1` marker, so scripts/unblock_scan.py's recent_verdict
+# throttle re-dispatches the item once per --marker-hours, not every tick.
 # Log key: UNBLOCK_JUDGE ... op=triage_superseded outcome=closed|noted|parked|held|skip reason=<token>
 unblock_triage_superseded_note()
 {
-	local tracking_issue="${1:-}" marker status noted_at
+	local tracking_issue="${1:-}" marker status noted_at triage_noted triage_note_id
 	if [ "$(printf '%s' "${UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "false" ]; then
 		return 1
 	fi
@@ -695,8 +722,19 @@ unblock_triage_superseded_note()
 		return 1
 	fi
 	marker="<!-- ai:unblock-triage-superseded:v1 item=${ITEM} -->"
-	noted_at="$(jq -r --arg login "${UNBLOCK_LOGIN}" --arg marker "${marker}" \
-		'[.[] | select((.user.login // "") == $login and ((.body // "") | sub("\\s+$"; "") | endswith($marker))) | (.created_at // "")] | if length == 0 then "none" else (max // "") end' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null || echo none)"
+	# The note carries the marker on its own line (the throttle marker follows
+	# it); "<id>|<created_at>" of the newest trusted note, or "none".
+	triage_noted="$(jq -r --arg login "${UNBLOCK_LOGIN}" --arg marker "${marker}" '
+		[.[] | select((.user.login // "") == $login
+			and (((.body // "") | split("\n") | map(rtrimstr("\r") | sub("^\\s+"; "") | sub("\\s+$"; ""))) | index($marker) != null))
+			| {at: (.created_at // ""), id: ((.id // "") | tostring)}]
+		| if length == 0 then "none" else (sort_by(.at) | last | "\(.id)|\(.at)") end' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null || echo none)"
+	noted_at="none"
+	triage_note_id=""
+	if [ "${triage_noted}" != "none" ] && [[ "${triage_noted}" == *"|"* ]]; then
+		triage_note_id="${triage_noted%%|*}"
+		noted_at="${triage_noted#*|}"
+	fi
 	if [ "${noted_at}" != "none" ]; then
 		# The hold ends with the wait lifetime: an unverified verdict that never
 		# resolves (a linked PR closed unmerged) goes to a person, not held forever.
@@ -734,6 +772,7 @@ unblock_triage_superseded_note()
 Reason: planning found nothing to implement and this check-triage issue's check stayed unverified past the wait lifetime, so it is parked in the needs-human digest for a person to decide (#9659). It stays open and keeps its block; no resume command is posted.
 
 ${triage_close_marker}" >/dev/null 2>&1; then
+					unblock_triage_superseded_refresh "${triage_note_id}"
 					unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=held reason=marker_failed"
 					return 0
 				fi
@@ -749,15 +788,17 @@ ${triage_close_marker}" >/dev/null 2>&1; then
 				unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=parked reason=note_expired"
 				return 0
 			fi
+			unblock_triage_superseded_refresh "${triage_note_id}"
 			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=held reason=park_failed"
 			return 0
 		fi
+		# Refresh the note so the scan waits --marker-hours before the next check
+		# instead of re-dispatching this held item on every tick.
+		unblock_triage_superseded_refresh "${triage_note_id}"
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=noted reason=already_noted"
 		return 0
 	fi
-	if ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="Planning found the fix for this check failure already on the planning ref (\`${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}\`), so the unblock judge is not resuming planning: it would only stop here again. This issue now waits for the pull request head's check to pass; the check-triage resolution gate closes it with evidence once the failure is verified fixed on the default branch. Reply with \`/reclarify\` if work is still missing.
-
-${marker}" >/dev/null 2>&1; then
+	if ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="$(unblock_triage_superseded_body "$(unblock_now)")" >/dev/null 2>&1; then
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=held reason=comment_failed"
 		return 0
 	fi
