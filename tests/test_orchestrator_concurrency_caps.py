@@ -59,6 +59,8 @@ mkdir -p extracted
 	echo
 	extract_fn 'phase_cap_running_for_state'
 	echo
+	extract_fn 'queue_backpressure_holds_dispatch'
+	echo
 	extract_fn 'phase_cap_can_dispatch'
 	echo
 	extract_fn 'phase_cap_note_dispatch'
@@ -395,7 +397,7 @@ def test_automation_path_replan_waits_for_planning_cap() -> None:
 			(REPO_ROOT / "scripts" / "files_touched_scope_guard.py").read_text(encoding="utf-8"), encoding="utf-8")
 		poller = POLLER_SCRIPT.read_text(encoding="utf-8").splitlines()
 		chunks = []
-		for name in ("phase_cap_running_for_state", "phase_cap_can_dispatch", "phase_cap_note_dispatch",
+		for name in ("phase_cap_running_for_state", "queue_backpressure_holds_dispatch", "phase_cap_can_dispatch", "phase_cap_note_dispatch",
 				"_plan_auto_approval_gate"):
 			start = next(i for i, line in enumerate(poller) if line.startswith(f"{name}()"))
 			end = next(i for i in range(start, len(poller)) if poller[i] == "}")

@@ -18195,6 +18195,12 @@ sync_validation_fix_issues_from_comments() {
 
 declare -g _ACTIONS_RUNS_BLOB_CACHE=''
 declare -g _ACTIONS_RUNS_BLOB_READY='false'
+# Queue depth from the queued read's total_count (stuck-backlog Phase 3). The
+# cached blob holds at most 50 queued rows, so the row count cannot reach the
+# backpressure threshold. Empty means unknown: cache hits, 304 reuse, mktemp
+# failures and unconfirmed fetches leave it empty, and the backpressure hold
+# then fails open (legacy behaviour).
+declare -g ACTIONS_QUEUED_TOTAL=''
 declare -g PHASE_CAPS_ENABLED='false'
 declare -g PHASE_CAPS_STATUS='missing'
 declare -g PHASE_CAPS_GLOBAL_MAX='-1'
@@ -18208,6 +18214,7 @@ _load_actions_runs_cached() {
     printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE:-${empty_blob}}"
     return 0
   fi
+  ACTIONS_QUEUED_TOTAL=''
 
   local repo="${GITHUB_REPOSITORY:-}"
   if [ -z "${repo}" ]; then
@@ -18331,8 +18338,19 @@ _load_actions_runs_cached() {
 		local runs_only
 		runs_only="$(printf '%s' "${body_json}" | jq -c '.workflow_runs // []' 2>/dev/null || echo '[]')"
 		local queued_runs='[]'
-		queued_runs="$(gh_retry _safe_gh_jq "repos/${repo}/actions/runs?status=queued&per_page=50" --jq '.workflow_runs' || echo '[]')"
+		# Same queued read as before; it also projects total_count so the queue
+		# backpressure hold sees the real depth (no extra API call, §14). A bare
+		# array (older shape or a stub) still works and leaves the total unknown.
+		local queued_read_json='[]'
+		queued_read_json="$(gh_retry _safe_gh_jq "repos/${repo}/actions/runs?status=queued&per_page=50" --jq '{total_count: .total_count, workflow_runs: .workflow_runs}' || echo '[]')"
+		[ -n "${queued_read_json}" ] || queued_read_json='[]'
+		queued_runs="$(printf '%s' "${queued_read_json}" | jq -c 'if type == "object" then (.workflow_runs // []) elif type == "array" then . else [] end' 2>/dev/null || echo '[]')"
 		[ -n "${queued_runs}" ] || queued_runs='[]'
+		local queued_total_read=''
+		queued_total_read="$(printf '%s' "${queued_read_json}" | jq -r 'if type == "object" and (.total_count | type) == "number" then (.total_count | floor | tostring) else "" end' 2>/dev/null || echo '')"
+		if [[ "${queued_total_read}" =~ ^[0-9]+$ ]]; then
+			ACTIONS_QUEUED_TOTAL="${queued_total_read}"
+		fi
 		# Include a small completed window so stall-judge diagnostics can inspect
 		# recent review/autofix workflow outcomes (conclusions).
 		local completed_runs='[]'
@@ -18406,6 +18424,75 @@ phase_cap_running_for_state() {
   jq -r --arg state "${state}" '.[$state] // 0' <<<"${PHASE_CAPS_RUNNING_BY_STATE:-"{}"}" 2>/dev/null || echo 0
 }
 
+# Queue backpressure (stuck-backlog Phase 3). When the Actions queue depth
+# (ACTIONS_QUEUED_TOTAL, from the per-tick loader's queued read) is at or above
+# ACTIONS_QUEUE_BACKPRESSURE_HIGH, hold every dispatch that would add runs to
+# the jammed queue. Stateless at HIGH: hysteresis needs a marker persisted by
+# orchestrate_poll.yml, which this phase does not edit. Fails open: an unknown
+# depth or an invalid / disabled threshold keeps the legacy behaviour. Never
+# calls the loader, so it adds no API call. Returns 0 to hold. The one-line
+# per-shell summary (outcome=on|off|unknown) goes to stderr so legacy callers'
+# stdout is unchanged; the outcome=held line goes to stdout like phase_capped.
+declare -g QUEUE_BACKPRESSURE_ACTIVE='false'
+declare -g _QUEUE_BACKPRESSURE_LOGGED='false'
+
+queue_backpressure_holds_dispatch() {
+  local qbp_state="$1"
+  local qbp_action="$2"
+  local qbp_issue="$3"
+  local qbp_high qbp_total
+
+  case "${qbp_action}" in
+    attempt_merge|escalate_human|skip)
+      return 1
+      ;;
+  esac
+
+  ACTIONS_QUEUE_BACKPRESSURE_HIGH="${ACTIONS_QUEUE_BACKPRESSURE_HIGH:-150}"
+  qbp_high="${ACTIONS_QUEUE_BACKPRESSURE_HIGH}"
+  if ! [[ "${qbp_high}" =~ ^-?[0-9]+$ ]]; then
+    if [ "${_QUEUE_BACKPRESSURE_LOGGED:-false}" != "true" ]; then
+      _QUEUE_BACKPRESSURE_LOGGED='true'
+      echo "::warning::QUEUE_BACKPRESSURE outcome=off reason=invalid_threshold" >&2
+    fi
+    QUEUE_BACKPRESSURE_ACTIVE='false'
+    return 1
+  fi
+  if [ "${qbp_high}" -lt 1 ]; then
+    QUEUE_BACKPRESSURE_ACTIVE='false'
+    return 1
+  fi
+
+  qbp_total="${ACTIONS_QUEUED_TOTAL:-}"
+  if ! [[ "${qbp_total}" =~ ^[0-9]+$ ]]; then
+    if [ "${_QUEUE_BACKPRESSURE_LOGGED:-false}" != "true" ]; then
+      _QUEUE_BACKPRESSURE_LOGGED='true'
+      echo "QUEUE_BACKPRESSURE outcome=unknown queued=unknown high=${qbp_high}" >&2
+    fi
+    QUEUE_BACKPRESSURE_ACTIVE='false'
+    return 1
+  fi
+
+  if [ "${qbp_total}" -ge "${qbp_high}" ]; then
+    QUEUE_BACKPRESSURE_ACTIVE='true'
+  else
+    QUEUE_BACKPRESSURE_ACTIVE='false'
+  fi
+  if [ "${_QUEUE_BACKPRESSURE_LOGGED:-false}" != "true" ]; then
+    _QUEUE_BACKPRESSURE_LOGGED='true'
+    if [ "${QUEUE_BACKPRESSURE_ACTIVE:-false}" = "true" ]; then
+      echo "QUEUE_BACKPRESSURE outcome=on queued=${qbp_total} high=${qbp_high}" >&2
+    else
+      echo "QUEUE_BACKPRESSURE outcome=off queued=${qbp_total} high=${qbp_high}" >&2
+    fi
+  fi
+  if [ "${QUEUE_BACKPRESSURE_ACTIVE:-false}" = "true" ]; then
+    echo "QUEUE_BACKPRESSURE outcome=held state=${qbp_state} action=${qbp_action} issue=${qbp_issue} queued=${qbp_total}"
+    return 0
+  fi
+  return 1
+}
+
 phase_cap_can_dispatch() {
   local state="$1"
   local action="$2"
@@ -18414,6 +18501,10 @@ phase_cap_can_dispatch() {
   local state_running
   local global_limit
   local global_running
+
+  if queue_backpressure_holds_dispatch "${state}" "${action}" "${issue_num}"; then
+    return 1
+  fi
 
   if [ "${PHASE_CAPS_ENABLED:-false}" != "true" ]; then
     return 0
@@ -18893,8 +18984,43 @@ build_active_issue_set() {
     ] | unique | .[]
   ' 2>/dev/null || true)"
 
+  # [issue:N] run-name linkage (stuck-backlog Phase 3). Clarify, plan and
+  # implement wrappers run on the default branch, so head_branch carries no
+  # issue number; their run-name is "<workflow name> [issue:N]". A run links
+  # only when its event is issues/issue_comment AND display_title equals
+  # name + " [issue:N]" exactly, so a pull-request title carrying a forged tag
+  # cannot suppress another issue's stall recovery. Untagged runs are
+  # unaffected. Tagged queued runs stay linked up to QUEUED_RUN_ZOMBIE_MINUTES
+  # (default 1440) after creation, because a backed-up queue holds them past
+  # the general stall cutoff.
+  QUEUED_RUN_ZOMBIE_MINUTES="${QUEUED_RUN_ZOMBIE_MINUTES:-1440}"
+  local tagged_zombie_minutes="${QUEUED_RUN_ZOMBIE_MINUTES}"
+  if ! [[ "${tagged_zombie_minutes}" =~ ^[1-9][0-9]{0,6}$ ]]; then
+    tagged_zombie_minutes="${STALL_THRESHOLD_MINUTES:-120}"
+  fi
+  [[ "${tagged_zombie_minutes}" =~ ^[0-9]+$ ]] || tagged_zombie_minutes=120
+  local tagged_run_jq_defs='
+    def tagged_issue_num:
+      if (((.event // "") == "issues") or ((.event // "") == "issue_comment"))
+         and ((.name | type) == "string")
+         and ((.display_title | type) == "string")
+      then
+        ((.display_title | capture("\\[issue:(?<num>[1-9][0-9]{0,9})\\]$")? | .num) // null) as $n
+        | if ($n != null) and (.display_title == (.name + " [issue:" + $n + "]")) then $n else empty end
+      else empty end;
+    def created_epoch:
+      ((.created_at // empty | tostring | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?) // null);
+  '
+  local tagged_fresh_nums
+  tagged_fresh_nums="$(printf '%s' "${fresh_runs}" | jq -r "${tagged_run_jq_defs}"' [.[]? | tagged_issue_num] | unique | .[]' 2>/dev/null || true)"
+  local tagged_queued_nums
+  tagged_queued_nums="$(printf '%s' "${all_runs}" | jq -r \
+    --argjson now "${now_epoch}" \
+    --argjson max_age "$(( tagged_zombie_minutes * 60 ))" \
+    "${tagged_run_jq_defs}"' [.[]? | select((.status // "") == "queued") | created_epoch as $c | select($c != null and ($now - $c) < $max_age) | tagged_issue_num] | unique | .[]' 2>/dev/null || true)"
+
   # Combine and deduplicate
-  printf '%s\n%s\n' "${issue_nums}" "${branch_nums}" | sort -u | grep -E '^[0-9]+$' || true
+  printf '%s\n%s\n%s\n%s\n' "${issue_nums}" "${branch_nums}" "${tagged_fresh_nums}" "${tagged_queued_nums}" | sort -u | grep -E '^[0-9]+$' || true
 }
 
 # Check if a specific issue has an active (fresh) workflow run.

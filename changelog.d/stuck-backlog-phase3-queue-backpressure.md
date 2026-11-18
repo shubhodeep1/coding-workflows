@@ -1,0 +1,10 @@
+<!-- changelog: added -->
+- **The poller now sees queued clarify, plan and implement runs, and stops re-dispatching while the Actions queue is backed up.** These wrapper runs start from issue comments on the default branch, so their `head_branch` carries no issue number. When the queue was deep, the poller treated their queued runs as missing and stall recovery re-posted `/answer` or `/approved`, which added more runs to the jammed queue (Refs #9421, Phase 3 of the stuck-backlog plan).
+
+What changed:
+- The six wrappers (`internal-clarify.yml`, `internal-plan.yml`, `internal-implement.yml` and the consumer templates `ai-clarify.yml`, `ai-plan.yml`, `ai-implement.yml`) name their runs `<workflow name> [issue:N]`. Release-gate smoke issues, whose titles start with `[E2E `, keep the issue title as the run title, because the stable gate finds their runs by that title.
+- `build_active_issue_set` in `scripts/orchestrate_poll_process.sh` also links a run to issue N when its event is `issues` or `issue_comment` and its title is exactly `<workflow name> [issue:N]`. A tagged queued run stays linked for up to `QUEUED_RUN_ZOMBIE_MINUTES` (default 1440) after it was created. Untagged runs behave as before.
+- `phase_cap_can_dispatch` holds every dispatch except `attempt_merge`, `escalate_human` and `skip` while the queue depth is at or above `ACTIONS_QUEUE_BACKPRESSURE_HIGH` (default 150; `0` or `-1` turns the hold off). It logs `QUEUE_BACKPRESSURE outcome=held …`. The depth is the `total_count` of the queued-runs read the poller already makes, so no API call is added. When the depth is unknown, nothing is held.
+- `scripts/workflow_failure_heal.py` still links these runs to their issue now that the title is not the issue title.
+
+What this means for consumer repos: after the next `@stable` sync, clarify, plan and implement runs show as `AI Plan [issue:N]` (and so on) in the Actions list instead of the issue title.

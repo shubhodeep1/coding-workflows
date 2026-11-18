@@ -1,4 +1,8 @@
 name: "Internal: AI Plan"
+# [issue:N] links the run to its issue for the poller's stall recovery.
+# Release-gate smoke issues ([E2E ...] titles) keep the issue title: the
+# stable gate finds their runs by display_title == issue title.
+run-name: "${{ startsWith(github.event.issue.title, '[E2E ') && github.event.issue.title || format('Internal: AI Plan [issue:{0}]', github.event.issue.number) }}"
 
 on:
   issue_comment:
