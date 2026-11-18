@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ci_final_merge_ref_fresh.sh:182 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: Every visible failed check-run in final CI run 44364270740 stops at the merge-ref freshness guard before any test runs, ending with `CI_FINAL_MERGE_REF pr=9691 head=98ab92f4605f... outcome=stale reason=not_refreshed tested_base=fc5f8284... tip=2f851921...`. That covers tests-system-python shards 5, 9, 11, 12, 14, 17 and 18, plus the lint roll-up.\n  WHY: The source severity was NIT, mapped here to low. The failure is outside the PR's scope because the PR does not touch scripts/ci_final_merge_ref_fresh.sh or .github/workflows/ci.yml. The fix is to update the PR head onto current main and run CI again, with no code edit, so the editor should classify this as ignored. Only the first 80 KB of check-run context was visible. minimax_minimax-m3 and z-ai_glm-5_3-flash noted the same stale-base failures but did not report them as a PR defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/ci_final_merge_ref_fresh.sh:line 182, `ci_final_merge_ref_log stale not_refreshed \"base=${base_ref} tested_base=${first:-none} tip=${tip:-none}\"` (final CI run 44364270740) | severity=NIT | confidence=4\n  PROBLEM: Every visible failed check-run stops at this merge-ref freshness guard before any test runs. That covers tests-system-python shards 5, 9, 11, 12, 14, 17 and 18, plus lint, which only rolls up the job results. Each log ends with `CI_FINAL_MERGE_REF pr=9691 head=98ab92f4605f... outcome=stale reason=not_refreshed tested_base=fc5f8284... tip=2f851921...`. None maps to a line this PR changed: the PR does not touch scripts/ci_final_merge_ref_fresh.sh or .github/workflows/ci.yml.\n  WHY: The final CI refuses to test an old base. It needs the PR head updated onto current main and CI run again, with no code edit. The editor should classify this as ignored because it is outside the PR's scope. Only the first 80 KB of check-run context was visible, so the remaining failed entries were not confirmed.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c636bd35f00cdb9f5dcf01bc1bb3ff584eb418d28adf5c00b28893e394dd1d96",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9691,
+    "run_id": "44343092806",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44343092806",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118202913_c467dba8d7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9691,
+    "run_id": "44343092806"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T20:29:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
