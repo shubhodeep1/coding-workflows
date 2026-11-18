@@ -10,11 +10,14 @@
 #      untracked files) using the host checkout's git;
 #   3. exports the merge-base tree with git archive (baseline for the
 #      inherited-failure classification);
-#   4. snapshots the worktree through review_untrusted_workspace.py's
-#      credential filter (no .git, .env*, keys or credential stores);
+#   4. builds the PR tree from git the same way: the tracked files (HEAD
+#      plus staged and unstaged edits and deletions) through a temporary
+#      index, and untracked files only when review_untrusted_workspace.py's
+#      credential filter admits them (no .env*, keys or credential stores);
+#      .git is never copied;
 #   5. runs the module in `docker run --network none --read-only --cap-drop ALL
 #      --security-opt no-new-privileges` with no environment from the runner,
-#      the snapshot read-write and the module, baseline and dependency roots
+#      the PR tree read-write and the module, baseline and dependency roots
 #      read-only, under `timeout --kill-after=30s`;
 #   6. copies back only result.json and summary.md (regular files, 1 MiB cap).
 #
@@ -52,7 +55,7 @@
 #
 # --node-modules mounts a prepared node_modules directory (the Node prep root
 # of codex_isolated_exec.sh prepare --deps) read-only at /source/node_modules
-# and /baseline/node_modules, because the snapshot leaves node_modules out and
+# and /baseline/node_modules, because the PR tree holds no untracked node_modules and
 # Node resolves packages from the project directory upward (issue #8190).
 #
 # --venv mounts a dependency venv read-only at /opt/codex-venv (where
@@ -230,15 +233,67 @@ if ! "${git_safe[@]}" archive --format=tar "${merge_base}" | tar -x -C "${root}/
 	exit 0
 fi
 host_git_dir="$("${git_safe[@]}" rev-parse --absolute-git-dir 2>/dev/null)" || host_git_dir=""
-snapshot_args=()
-[ -z "${host_git_dir}" ] || snapshot_args+=("${host_git_dir}")
-if ! PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${worktree_real}" "${root}/source" "${root}/manifest.json" "${snapshot_args[@]}" >/dev/null 2>&1; then
+# The PR tree is built from git, like the baseline, so a test that reads a
+# tracked dotfile or .github/ai/*.json sees it on both trees. Before, /source
+# was the review sandbox's filtered snapshot, which drops those files, so
+# such tests failed only on the PR side and were reported as caused by the
+# change. Tracked files are the real index's paths (HEAD plus staged adds,
+# minus staged deletions) with their worktree content, written through a
+# temporary index and object directory in the private run root: the real
+# index and the checkout's .git are only read. Global and system Git config
+# are left out, so a PR's .gitattributes cannot pick a filter driver (git-lfs)
+# configured there; the repository-local config is the runner's own.
+# checkout-index (not git archive) writes the tree, so a PR's export-ignore
+# cannot hide a file from the gate. .git itself is never copied.
+toplevel="$("${git_safe[@]}" rev-parse --show-toplevel 2>/dev/null)" || toplevel=""
+objects_dir="$("${git_safe[@]}" rev-parse --path-format=absolute --git-path objects 2>/dev/null)" || objects_dir=""
+# GIT_ALTERNATE_OBJECT_DIRECTORIES is a colon-separated list.
+if [ -z "${host_git_dir}" ] || [ "${toplevel}" != "${worktree_real}" ] || [ ! -d "${objects_dir}" ] || [[ "${objects_dir}" == *[:\"]* ]]; then
+	synthetic_result source_export_failed
+	exit 0
+fi
+mkdir -m 0700 "${root}/objects" "${root}/objects/pack" "${root}/objects/info" "${root}/filtered"
+pr_git=(env GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_INDEX_FILE="${root}/pr.index"
+	GIT_OBJECT_DIRECTORY="${root}/objects" GIT_ALTERNATE_OBJECT_DIRECTORIES="${objects_dir}"
+	git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.splitIndex=false -c core.untrackedCache=false
+	--git-dir="${host_git_dir}" --work-tree="${worktree_real}" -C "${worktree_real}")
+# Staged additions and deletions relative to HEAD, read from the real index.
+if ! "${git_safe[@]}" diff-index --cached --no-renames --name-only --diff-filter=A -z HEAD > "${root}/staged_added" 2>/dev/null \
+	|| ! "${git_safe[@]}" diff-index --cached --no-renames --name-only --diff-filter=D -z HEAD > "${root}/staged_deleted" 2>/dev/null \
+	|| ! "${pr_git[@]}" read-tree HEAD >/dev/null 2>&1 \
+	|| ! "${pr_git[@]}" update-index --force-remove -z --stdin < "${root}/staged_deleted" >/dev/null 2>&1 \
+	|| ! "${pr_git[@]}" add -u -- :/ >/dev/null 2>&1 \
+	|| ! "${pr_git[@]}" update-index --add --remove -z --stdin < "${root}/staged_added" >/dev/null 2>&1 \
+	|| ! "${pr_git[@]}" checkout-index -a --prefix="${root}/source/" >/dev/null 2>&1; then
+	synthetic_result source_export_failed
+	exit 0
+fi
+# Untracked, non-ignored files enter only through the review sandbox's
+# credential filter: the snapshot keeps the ones allowed() admits (no .env*,
+# keys, credential stores or secret-named paths), and only those are copied.
+snapshot_args=("${host_git_dir}")
+if ! PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${worktree_real}" "${root}/filtered" "${root}/manifest.json" "${snapshot_args[@]}" >/dev/null 2>&1; then
 	synthetic_result snapshot_failed
 	exit 0
 fi
-# The snapshot filter leaves out Makefile and .ai/, which the gate reads to
-# resolve test commands; copy those two regular files in so the PR tree and
-# the git-archive baseline resolve the same commands.
+"${git_safe[@]}" ls-files --others --exclude-standard -z > "${root}/untracked" 2>/dev/null || { synthetic_result git_diff_failed; exit 0; }
+source_real="$(realpath -e "${root}/source")"
+while IFS= read -r -d '' untracked; do
+	[ -f "${root}/filtered/${untracked}" ] && [ ! -L "${root}/filtered/${untracked}" ] || continue
+	# Never write through a symlink of the PR tree.
+	if [ "$(realpath -m "${source_real}/${untracked}")" != "${source_real}/${untracked}" ]; then
+		gate_log "outcome=warning reason=untracked_copy_skipped detail=symlink_in_path"
+		continue
+	fi
+	if ! mkdir -p "$(dirname "${source_real}/${untracked}")" || ! cp -p -- "${root}/filtered/${untracked}" "${source_real}/${untracked}"; then
+		synthetic_result snapshot_failed
+		exit 0
+	fi
+done < "${root}/untracked"
+rm -rf -- "${root}/filtered"
+# The gate reads Makefile and .ai/validate.yml to resolve test commands. A
+# tracked copy is already in the PR tree; the credential filter leaves out an
+# untracked one, so copy those two regular files in from the worktree.
 for overlay in Makefile .ai/validate.yml; do
 	if [ -f "${worktree_real}/${overlay}" ] && [ ! -L "${worktree_real}/${overlay}" ] && [ ! -L "${worktree_real}/$(dirname "${overlay}")" ]; then
 		mkdir -p "${root}/source/$(dirname "${overlay}")" && install -m 0644 "${worktree_real}/${overlay}" "${root}/source/${overlay}" || { synthetic_result snapshot_failed; exit 0; }
@@ -267,7 +322,9 @@ if [ -n "${venv}" ]; then
 	fi
 fi
 if [ -n "${node_modules}" ]; then
+	# The PR tree can hold a tracked node_modules symlink: never mkdir through it.
 	if nm_real="$(realpath -e "${node_modules}" 2>/dev/null)" && [ -d "${nm_real}" ] && [ ! -L "${node_modules}" ] \
+		&& [ ! -L "${root}/source/node_modules" ] && [ ! -L "${root}/baseline/node_modules" ] \
 		&& mkdir -p "${root}/source/node_modules" "${root}/baseline/node_modules"; then
 		mounts+=(--mount "type=bind,src=${nm_real},dst=/source/node_modules,readonly")
 		mounts+=(--mount "type=bind,src=${nm_real},dst=/baseline/node_modules,readonly")
