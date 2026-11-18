@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_test_and_mark_stable_step_scripts_contract.py:32-76 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The test test_workflow_keeps_fifty_thousand_bytes_of_headroom fails on head a120ac7a94aa because `.github/workflows/test-and-mark-stable.yml` measures 430,203 bytes, which is over the `MAX_WORKFLOW_BYTES = 430_000` guard (`AssertionError: 430203`).\n  WHY: The failure breaks tests-system-python (shard 1) and tests-promote-stall-and-review, and the aggregate lint job fails because it collects both, so the PR cannot merge. Reviewers agree the growth came from base-branch merges from orchestrator/project-8291, not from this PR, and that the file is outside the PR's files_touched grant. Severity disagreement: google_gemini-3_1-flash-lite rated it BLOCKER (critical); the other three rated it MAJOR (high).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/test-and-mark-stable.yml (measured by tests/test_test_and_mark_stable_step_scripts_contract.py):tests/test_test_and_mark_stable_step_scripts_contract.py line 32 `MAX_WORKFLOW_BYTES = 430_000` and line 76 `assert size <= MAX_WORKFLOW_BYTES, size` in test_workflow_keeps_fifty_thousand_bytes_of_headroom | severity=MAJOR | confidence=4\n  PROBLEM: The final CI run on head a120ac7a94aa fails because the workflow measures 430,203 bytes against the 430,000-byte limit (`AssertionError: 430203`). The failing jobs are tests-system-python shard 1 and tests-promote-stall-and-review. The aggregate lint job fails only because it collects them. The growth came through the base-branch sync (merge a120ac7a from orchestrator/project-8291). The PR did not cause it: its only workflow edit is to orchestrate_poll.yml, which this guard does not measure. A pass-1 finding that blames orchestrate_poll.yml for the failure is wrong.\n  WHY: Every head built on this base snapshot keeps failing the lint gate, so the PR cannot merge. The editor cannot fix it within this PR's grant, because \u00a724 forbids raising the guard and the workflow is not granted. The fix belongs in the base branch.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_test_and_mark_stable_step_scripts_contract.py:line 76 (assert size <= MAX_WORKFLOW_BYTES, size) | severity=BLOCKER | confidence=5\n  PROBLEM: The test test_workflow_keeps_fifty_thousand_bytes_of_headroom fails because .github/workflows/test_and_mark_stable.yml measures 430,203 bytes, which is over the 430,000-byte guard.\n  WHY: The CI jobs tests-system-python (shard 1) and tests-promote-stall-and-review fail and block the merge. The problem comes from the base branch, not this PR, but it must be resolved before the PR can merge.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_test_and_mark_stable_step_scripts_contract.py:test_workflow_keeps_fifty_thousand_bytes_of_headroom, lines 32 and 74-76 | severity=MAJOR | confidence=5\n  PROBLEM: The current PR-head CI run measures `.github/workflows/test-and-mark-stable.yml` at 430,203 bytes, which is over the test's 430,000-byte limit.\n  WHY: The size assertion fails, so `tests-system-python`, `tests-promote-stall-and-review` and the aggregate lint check fail. The workflow is not among this PR's changed files.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/test-and-mark-stable.yml:whole file; guard at tests/test_test_and_mark_stable_step_scripts_contract.py:32 (MAX_WORKFLOW_BYTES = 430_000) and :74-76 (test_workflow_keeps_fifty_thousand_bytes_of_headroom) | severity=MAJOR | confidence=5\n  PROBLEM: Final CI on head a120ac7a94aa fails tests-system-python (1) and tests-promote-stall-and-review with `AssertionError: 430203` / `assert 430203 <= 430000`, and the aggregate lint job fails because it collects both. The 203-byte overrun arrived with the base-branch merges from orchestrator/project-8291. The PR's only workflow change is 14 lines in orchestrate_poll.yml, and this workflow is outside the issue's `files_touched` grant.\n  WHY: Every CI run on a head built on this base snapshot fails the size guard until the workflow is back under 430,000 bytes. The fix (moving `run:` bodies into `scripts/`) belongs to a change that touches the workflow, not to this PR's grant.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c5d3be452a02a54b1e08607adb4e9122f9414500e98800e27ad56e33f92bdcc2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9602,
+    "run_id": "44247163795",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "github-actions[bot]",
+    "run_attempt": 1,
+    "run_id": "44247163795",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118090720_141a0a29b7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9602,
+    "run_id": "44247163795"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T09:07:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
