@@ -365,6 +365,21 @@ def test_enumerate_step_fails_closed_on_an_unlistable_path() -> None:
 		assert github_output == ""
 
 
+def test_enumerate_step_fails_closed_on_a_unicode_line_separator() -> None:
+	"""The lint script reads the list with str.splitlines(), which also
+	splits on U+2028 and U+0085. Such a name under docs/completed/ takes the
+	guided exit-3 path instead of reaching the lint as fragments."""
+	def _adds_a_plan_with_a_line_separator(repo_dir: Path) -> None:
+		(repo_dir / "docs" / "completed" / "a\u2028b.md").write_text("new\n", encoding="utf-8")
+
+	with tempfile.TemporaryDirectory() as tmp:
+		repo_dir = _merge_commit_repo(Path(tmp), _adds_a_plan_with_a_line_separator)
+		rc, output, github_output = _run_enumerate_step(repo_dir, Path(tmp))
+		assert rc == 1, output
+		assert "outcome=enumerate_failed exit_code=3" in output, output
+		assert github_output == ""
+
+
 def test_enumerate_step_fails_closed_on_a_non_utf8_completed_path() -> None:
 	"""The lint script reads the list as UTF-8. A name that is not valid
 	UTF-8 under docs/completed/ takes the guided exit-3 path, not a traceback

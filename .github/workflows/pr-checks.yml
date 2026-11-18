@@ -338,7 +338,12 @@ jobs:
                       added.append(path)
           archived = [path for path in added if path.startswith(prefix)]
           def unlistable(path):
-              return "\n" in path or "\r" in path or any("\udc80" <= ch <= "\udcff" for ch in path)
+              # The lint script splits added.txt with str.splitlines(), which
+              # also breaks on \x0b, \x0c, \x1c-\x1e, \x85, U+2028 and U+2029.
+              return (
+                  "\n" in path or "\r" in path or path.splitlines() != [path]
+                  or any("\udc80" <= ch <= "\udcff" for ch in path)
+              )
           if any(unlistable(path) for path in archived):
               sys.exit(3)
           listable = [path for path in added if not unlistable(path)]
