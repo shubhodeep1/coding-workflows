@@ -1716,6 +1716,10 @@ LOG_FILES=()
 # Job logs actually fetched (placeholders for unreadable logs do not count).
 READ_JOB_LOG_COUNT=0
 RUN_COUNT=0
+# Runs whose every failed job lost its do-runner droplet (DigitalOcean runners
+# plan, goal G6); they are left out of the evidence below.
+RUNNER_LOST_RUN_COUNT=0
+RUNNER_LOST_DIR="${RUNTIME_DIR}/runner-lost"
 
 while IFS=$'\t' read -r run_id run_url; do
 	[ -n "${run_id}" ] || continue
@@ -1790,6 +1794,32 @@ while IFS=$'\t' read -r run_id run_url; do
 		log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=current_run_no_failed_job"
 		exit 0
 	fi
+	# Lost DigitalOcean runner (docs/plans/digitalocean-runners-for-consumer-pipelines-plan.md,
+	# goal G6): when every failed job of this run ran on a do-runner droplet and
+	# GitHub annotated it as a lost runner, the runner scaler re-runs the job, so
+	# this run is no code evidence. CLAUDE.md §15 audit: the jobs response above
+	# carries labels but no annotations, and no earlier intake call reads check-run
+	# annotations, so one annotations read per candidate job is added, at most
+	# RUNNER_LOST_MAX_JOBS (10) per run and only for runs whose every failed job
+	# ran on do-runner (none for a consumer that never set PIPELINE_RUNS_ON). Any
+	# read failure leaves that job without evidence, so the run is reported as
+	# before (fail-open towards filing).
+	runner_lost_job_ids="$(python3 "${HEAL_PY}" runner-lost-candidates --jobs-json "${JOBS_FILE}" 2>/dev/null || true)"
+	if [ -n "${runner_lost_job_ids}" ]; then
+		run_lost_dir="${RUNNER_LOST_DIR}/run-${run_id}"
+		mkdir -p "${run_lost_dir}"
+		while IFS= read -r lost_job_id; do
+			[[ "${lost_job_id}" =~ ^[0-9]+$ ]] || continue
+			gh_api_json_to_file "${run_lost_dir}/${lost_job_id}.json" gh api --method GET "repos/${SOURCE_REPO}/check-runs/${lost_job_id}/annotations" -F per_page=100 2>/dev/null \
+				|| rm -f "${run_lost_dir}/${lost_job_id}.json"
+		done <<< "${runner_lost_job_ids}"
+		if [ "$(python3 "${HEAL_PY}" runner-lost --jobs-json "${JOBS_FILE}" --annotations-dir "${run_lost_dir}" 2>/dev/null || echo false)" = "true" ]; then
+			RUNNER_LOST_RUN_COUNT=$((RUNNER_LOST_RUN_COUNT + 1))
+			log "runner_lost outcome=skipped run=${run_id} source=${SOURCE_REPO}"
+			continue
+		fi
+		log "runner_lost outcome=not_runner_lost run=${run_id} source=${SOURCE_REPO}"
+	fi
 	SELECTED_JOBS_FILE="${LOG_DIR}/run-${run_id}-selected.json"
 	python3 "${HEAL_PY}" select-evidence-jobs --jobs-json "${JOBS_FILE}" --kind "${SOURCE_KIND}" --limit "${MAX_FAILED_JOBS}" > "${SELECTED_JOBS_FILE}"
 	JOB_COUNT=0
@@ -1835,6 +1865,13 @@ while IFS=$'\t' read -r run_id run_url; do
 	done < <(jq -r '.[] | [(.id|tostring), (.name // ""), (.workflow_name // ""), ((.steps // []) | map(select((.conclusion // "") | IN("failure","timed_out","cancelled"))) | first | .name // ""), .selection]
 		| map(gsub("[\\t\\n\\r]"; " ")) | @tsv' "${SELECTED_JOBS_FILE}")
 done < <(jq -r '.run_refs[] | [.run_id, .url] | @tsv' "${PAYLOAD_FILE}")
+
+# Every reported run that reached evidence collection lost its do-runner
+# droplet: an infrastructure failure the runner scaler handles, not a heal case.
+if [ "${RUNNER_LOST_RUN_COUNT}" -gt 0 ] && [ "$(jq 'length' "${SUMMARIES_FILE}" 2>/dev/null || echo 0)" = "0" ]; then
+	log "skip reason=runner_lost source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} runs=${RUNNER_LOST_RUN_COUNT}"
+	exit 0
+fi
 
 if { [ "${SOURCE_KIND}" = "phase_failure" ] || [ "${SOURCE_KIND}" = "validation_failure" ]; } && [ -n "${PENDING_CURRENT_RUN}" ] \
 	&& ! jq -e --arg run_id "${PENDING_CURRENT_RUN}" 'any(.[]; .run_id == $run_id)' "${SUMMARIES_FILE}" >/dev/null 2>&1; then

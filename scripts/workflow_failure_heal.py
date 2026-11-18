@@ -478,6 +478,16 @@ REPORT_IDENTITY_WORKFLOW_BY_KIND = {
 # successful-review-job fallback stay intact.
 PROVENANCE_BOUND_KINDS = ("phase_failure", "autofix_failure", "workflow_run", "validation_failure")
 FAILED_JOB_CONCLUSIONS = ("failure", "timed_out", "cancelled")
+# Lost DigitalOcean runners (docs/plans/digitalocean-runners-for-consumer-pipelines-plan.md,
+# goal G6). A consumer that sets PIPELINE_RUNS_ON=do-runner runs the reusable
+# workflows' jobs on single-use droplets; a droplet that dies mid-job fails the
+# job with one of these GitHub annotations. That is an infrastructure failure the
+# runner scaler re-runs once, not a code defect, so the intake files no heal issue.
+RUNNER_LOST_LABEL = "do-runner"
+RUNNER_LOST_ANNOTATION_RE = re.compile(
+	r"The self-hosted runner: .* lost communication with the server|The runner has received a shutdown signal"
+)
+RUNNER_LOST_MAX_JOBS = 10
 SIGNATURE_LINE_LIMIT = 5
 # Ownership facts carried by an autofix_failure report (self-repo routing).
 CHANGED_FILES_MAX_ENTRIES = 200
@@ -9648,6 +9658,80 @@ def _cmd_select_evidence_jobs(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _runner_lost_failed_jobs(jobs_doc: Any) -> list[dict[str, Any]]:
+	jobs = jobs_doc.get("jobs") if isinstance(jobs_doc, dict) else None
+	if not isinstance(jobs, list):
+		return []
+	return [job for job in jobs if isinstance(job, dict) and job.get("conclusion") in FAILED_JOB_CONCLUSIONS]
+
+
+def _runner_lost_job_on_do_runner(job: dict[str, Any]) -> bool:
+	labels = job.get("labels")
+	return isinstance(labels, list) and RUNNER_LOST_LABEL in labels and isinstance(job.get("id"), int)
+
+
+def runner_lost_candidate_job_ids(jobs_doc: Any, *, limit: int = RUNNER_LOST_MAX_JOBS) -> list[int]:
+	"""Ids of the run's failed jobs that ran on a ``do-runner`` droplet.
+
+	``jobs_doc`` is one ``actions/runs/<id>/jobs`` response. Returns an empty
+	list when any failed job ran elsewhere (a mixed failure is reported as
+	usual), and at most ``limit`` ids, so the intake's annotation reads stay
+	bounded (CLAUDE.md §15). The caller reads
+	``repos/<repo>/check-runs/<job id>/annotations`` for each id.
+	"""
+	failed = _runner_lost_failed_jobs(jobs_doc)
+	if not failed or not all(_runner_lost_job_on_do_runner(job) for job in failed) or len(failed) > limit:
+		return []
+	return [int(job["id"]) for job in failed]
+
+
+def runner_lost_failure(jobs_doc: Any, annotations_by_job: dict[int, Any]) -> bool:
+	"""True when every failed job of the run lost its ``do-runner`` droplet.
+
+	Each failed job must be a candidate of :func:`runner_lost_candidate_job_ids`
+	and have an annotation (``annotations_by_job[<job id>]``, a check-run
+	annotations list) whose ``message`` matches RUNNER_LOST_ANNOTATION_RE. A
+	missing or malformed annotations list counts as no evidence, so the run is
+	reported as usual (fail-open towards filing).
+	"""
+	candidates = runner_lost_candidate_job_ids(jobs_doc)
+	if not candidates:
+		return False
+	for job_id in candidates:
+		annotations = annotations_by_job.get(job_id)
+		if not isinstance(annotations, list):
+			return False
+		if not any(isinstance(item, dict) and RUNNER_LOST_ANNOTATION_RE.search(str(item.get("message") or "")) for item in annotations):
+			return False
+	return True
+
+
+def _cmd_runner_lost_candidates(args: argparse.Namespace) -> int:
+	try:
+		jobs_doc = _load_json_file(args.jobs_json)
+	except (OSError, ValueError):
+		jobs_doc = None
+	for job_id in runner_lost_candidate_job_ids(jobs_doc, limit=args.limit):
+		sys.stdout.write(f"{job_id}\n")
+	return 0
+
+
+def _cmd_runner_lost(args: argparse.Namespace) -> int:
+	try:
+		jobs_doc = _load_json_file(args.jobs_json)
+	except (OSError, ValueError):
+		jobs_doc = None
+	annotations_by_job: dict[int, Any] = {}
+	annotations_dir = Path(args.annotations_dir)
+	for job_id in runner_lost_candidate_job_ids(jobs_doc):
+		try:
+			annotations_by_job[job_id] = _load_json_file(str(annotations_dir / f"{job_id}.json"))
+		except (OSError, ValueError):
+			continue
+	sys.stdout.write("true\n" if runner_lost_failure(jobs_doc, annotations_by_job) else "false\n")
+	return 0
+
+
 def _cmd_verify_run(args: argparse.Namespace) -> int:
 	_write_json(verify_run(_load_json_file(args.run_json), repo=args.repo, kind=args.kind, head_sha=args.head_sha, target_repo=args.target_repo, allow_pending=args.allow_pending, pr_number=args.pr_number, marker_head_bound=args.marker_head_bound))
 	return 0
@@ -11679,6 +11763,16 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--kind", default="issue")
 	p.add_argument("--limit", type=int, default=3)
 	p.set_defaults(func=_cmd_select_evidence_jobs)
+
+	p = sub.add_parser("runner-lost-candidates", help="Print the failed do-runner job ids of a run (empty unless every failed job ran on do-runner)")
+	p.add_argument("--jobs-json", required=True)
+	p.add_argument("--limit", type=int, default=RUNNER_LOST_MAX_JOBS)
+	p.set_defaults(func=_cmd_runner_lost_candidates)
+
+	p = sub.add_parser("runner-lost", help="Print true when every failed job of the run lost its do-runner droplet")
+	p.add_argument("--jobs-json", required=True)
+	p.add_argument("--annotations-dir", required=True)
+	p.set_defaults(func=_cmd_runner_lost)
 
 	p = sub.add_parser("verify-run")
 	p.add_argument("--run-json", required=True)

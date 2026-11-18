@@ -2040,6 +2040,13 @@ if args[:1] == ["api"]:
 		if jobs is None:
 			fail("HTTP 404")
 		out(json.dumps({"jobs": jobs}))
+	if "/check-runs/" in path and path.endswith("/annotations"):
+		if method != "GET":
+			fail("HTTP method must be GET for check-run annotations")
+		annotations = state.get("annotations", {}).get(path.split("/")[-2])
+		if annotations is None:
+			fail("HTTP 404")
+		out(json.dumps(annotations))
 	if "/actions/runs/" in path and path.split("/")[-1].isdigit():
 		if method != "GET":
 			fail("HTTP method must be GET for run details")
@@ -2489,6 +2496,77 @@ def test_intake_opens_upstream_hotfix_issue_for_workflow_defect() -> None:
 	for call in state["calls"]:
 		if any(part.endswith("/jobs") or part.endswith("/issues") for part in call):
 			assert "--method" in call and call[call.index("--method") + 1] == "GET"
+
+
+RUNNER_LOST_MESSAGE = "The self-hosted runner: do-runner-digital-pa-1a2b3c4d lost communication with the server. Verify the machine is running and has a healthy network connection."
+
+
+def _runner_lost_jobs(*, labels: list[str] | None = None) -> list[dict]:
+	jobs = _intake_state()["jobs"]["500"]
+	jobs = json.loads(json.dumps(jobs))
+	for job in jobs:
+		job["labels"] = list(labels if labels is not None else ["do-runner"])
+	return jobs
+
+
+def test_runner_lost_candidates_need_every_failed_job_on_do_runner() -> None:
+	jobs = {"jobs": _runner_lost_jobs()}
+	assert heal.runner_lost_candidate_job_ids(jobs) == [9001]
+	# A failed job on a GitHub-hosted runner makes the failure a mixed one: report it.
+	mixed = {"jobs": _runner_lost_jobs() + [{"id": 9003, "name": "other", "conclusion": "failure", "labels": ["ubuntu-latest"]}]}
+	assert heal.runner_lost_candidate_job_ids(mixed) == []
+	assert heal.runner_lost_candidate_job_ids({"jobs": _runner_lost_jobs(labels=["ubuntu-latest"])}) == []
+	# Bounded annotation reads (§15): more failed jobs than the limit report as usual.
+	many = {"jobs": [{"id": 100 + n, "conclusion": "failure", "labels": ["do-runner"]} for n in range(heal.RUNNER_LOST_MAX_JOBS + 1)]}
+	assert heal.runner_lost_candidate_job_ids(many) == []
+	assert heal.runner_lost_candidate_job_ids(None) == []
+	assert heal.runner_lost_candidate_job_ids({"jobs": "x"}) == []
+
+
+@pytest.mark.parametrize(
+	("annotations", "expected"),
+	(
+		({9001: [{"message": RUNNER_LOST_MESSAGE}]}, True),
+		({9001: [{"message": "The runner has received a shutdown signal. This can happen when the runner service is stopped."}]}, True),
+		({9001: [{"message": "Process completed with exit code 1."}]}, False),
+		({9001: []}, False),
+		({9001: {"message": RUNNER_LOST_MESSAGE}}, False),
+		({}, False),
+	),
+)
+def test_runner_lost_failure_needs_the_lost_runner_annotation(annotations: dict, expected: bool) -> None:
+	assert heal.runner_lost_failure({"jobs": _runner_lost_jobs()}, annotations) is expected
+
+
+def test_intake_skips_a_run_whose_do_runner_droplet_was_lost() -> None:
+	state = _intake_state(jobs={"500": _runner_lost_jobs()}, annotations={"9001": [{"message": RUNNER_LOST_MESSAGE}]})
+	result, state_after, prompt = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL runner_lost outcome=skipped run=500 " in result.stdout
+	assert f"WORKFLOW_HEAL skip reason=runner_lost source={CONSUMER_REPO} kind=issue issue=42 runs=1" in result.stdout
+	assert not state_after.get("composed_issue") and not prompt
+	# No job log was read for the lost run, and the annotations read was a GET.
+	assert not any(any(part.endswith("/logs") for part in call) for call in state_after["calls"])
+	annotation_calls = [call for call in state_after["calls"] if any(part.endswith("/check-runs/9001/annotations") for part in call)]
+	assert len(annotation_calls) == 1 and annotation_calls[0][annotation_calls[0].index("--method") + 1] == "GET"
+
+
+@pytest.mark.parametrize("case", ("droplet_real_failure", "annotations_unreadable", "github_hosted"))
+def test_intake_reports_failures_that_are_not_lost_runners(case: str) -> None:
+	state_overrides: dict = {}
+	if case == "droplet_real_failure":
+		# A real failure on a droplet: the annotation names the exit code, not a lost runner.
+		state_overrides = {"jobs": {"500": _runner_lost_jobs()}, "annotations": {"9001": [{"message": "Process completed with exit code 1."}]}}
+	elif case == "annotations_unreadable":
+		# The annotations read failed (HTTP 404): no evidence, so report as before.
+		state_overrides = {"jobs": {"500": _runner_lost_jobs()}}
+	result, state_after, _ = _run_intake(_consumer_payload(), _intake_state(**state_overrides), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "skip reason=runner_lost" not in result.stdout
+	assert len(_composed_issues(state_after)) == 1
+	reads = [call for call in state_after["calls"] if any(part.endswith("/annotations") for part in call)]
+	# GitHub-hosted jobs never cost an annotations read (§15).
+	assert len(reads) == (0 if case == "github_hosted" else 1)
 
 
 @pytest.mark.parametrize("status", ("behind", "diverged"))
