@@ -300,13 +300,13 @@ jobs:
           # Zombie run reaper (P11b): it reads the active-run snapshot taken
           # further down, so the early exits below skip it. Say so in the log
           # instead of skipping silently (silent while the reaper is off).
-          # The default is now opt-in (false); P11b's default-on form was
-          # case "$(printf '%s' "${ZOMBIE_RUN_REAPER_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+          # Opt-in (P11b first shipped it default-on): only 1/true/yes/on
+          # enable it, so a typo in the repo variable keeps it off.
           zombie_reaper_skip_note()
           {
             case "$(printf '%s' "${ZOMBIE_RUN_REAPER_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
-              false|0|no|off) ;;
-              *) echo "ZOMBIE_RUN_REAPER_END outcome=skipped reason=$1" ;;
+              1|true|yes|on) echo "ZOMBIE_RUN_REAPER_END outcome=skipped reason=$1" ;;
+              *) ;;
             esac
           }
 
@@ -574,8 +574,7 @@ jobs:
           # sweep. An incomplete snapshot skips it: a run whose in_progress
           # copy was not listed must not be cancelled.
           case "$(printf '%s' "${ZOMBIE_RUN_REAPER_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
-            false|0|no|off) ;;
-            *)
+            1|true|yes|on)
               if [ "${active_snapshot_incomplete}" = "true" ]; then
                 echo "ZOMBIE_RUN_REAPER_END outcome=snapshot_incomplete"
               elif [ -f .ci-rerun-support/scripts/review_autofix_sweep_reaper.sh ] \
