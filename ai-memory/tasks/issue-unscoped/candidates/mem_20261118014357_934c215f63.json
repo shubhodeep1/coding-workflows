@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:3940-3941 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The moved CI steps rely on estimated step durations rather than actual runtime metrics for orchestration balancing.\n  WHY: If the estimates are inaccurate, the newly targeted matrix groups in orchestrate-poll may also time out, leading to continued CI instability.\n- tests/test_ci_poll_test_sharding.py:1042-1046 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The contract test comment relies on dated, non-deterministic estimates for step costs.\n  WHY: This undermines the purpose of contract tests, which should enforce rigid, verifiable bounds, making the grouping strategy hard to maintain or validate as the codebase evolves.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml (the #9496 moved steps and their destination groups)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The step picks are estimates because run 43544291165's step timings could not be read, and the destination groups' headroom is unmeasured (workflow comments at lines 3816-3818); the PR does not establish these are the slowest steps or that the destination has the most headroom. Sonnet rated it NIT (post-merge budget-watch is the designed check); Gemini and Luna rated it MAJOR.\n- requirement: \"Update the README sections... Add an agents.d/ fragment covering... the new flow...\" (based on repository conventions for material changes).\n  expected_change_site: agents.d/9496-ci-hooks-merge-train-semble-preseed-to-poll.md\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR modifies CI workflows but introduces no agents.d/ fragment documenting the move, which would fail tests/test_agents_fragment_contract.py::test_instructions_point_at_fragments. Severity stated: BLOCKER.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: `.github/workflows/ci.yml`, the choice of moved steps and their destination groups.\nEvidence of absence: The three steps moved with names and bodies unchanged, no `timeout-minutes` change, no new job and no new required job name. The picks are estimates because the step timings of run 43544291165 could not be read, and the destination groups' headroom is unmeasured. The PR states this openly. The post-merge `budget-watch` job on `main` is the designed check.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:3940-3941 | confidence=4\n  PROBLEM: The moved CI steps rely on estimated step durations rather than actual runtime metrics for orchestration balancing.\n  WHY: If the estimates are inaccurate, the newly targeted matrix groups in orchestrate-poll may also time out, leading to continued CI instability.\n- tests/test_ci_poll_test_sharding.py:1042-1046 | confidence=3\n  PROBLEM: The contract test comment relies on dated, non-deterministic estimates for step costs.\n  WHY: This undermines the purpose of contract tests, which should enforce rigid, verifiable bounds, making the grouping strategy hard to maintain or validate as the codebase evolves.\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: .github/workflows/ci.yml\nEvidence of absence: The step move is based on estimates from test/subprocess counts because the actual run timings were unreadable, and the destination headroom is not measured.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n\nTASK_GAP:\nRequirement: \"Update the README sections... Add an agents.d/ fragment covering... the new flow...\" (based on repository conventions for material changes).\nExpected change site: agents.d/9496-ci-hooks-merge-train-semble-preseed-to-poll.md\nEvidence of absence: The PR is material (modifies CI workflows), which triggers the `test_agents_fragment_contract` failure, but the PR does not introduce an `agents.d/` fragment documenting the move.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: `.github/workflows/ci.yml`, the #9496 moved steps and their destination groups.\nEvidence of absence: The workflow comments at lines 3816-3818 state that the run's step timings could not be read and group 0's headroom is unmeasured. The PR does not establish that these are the slowest steps or that the chosen destination groups have the most headroom.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e195f4f6e4ee2efbebbac1dacebd863e9945ed254c2e54a4555804c6b2a93c3e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9515,
+    "run_id": "44201838729",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44201838729",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118014357_934c215f63",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9515,
+    "run_id": "44201838729"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T01:43:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
