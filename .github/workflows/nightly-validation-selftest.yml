@@ -496,7 +496,10 @@ jobs:
     # starts, skipped jobs included, so this grant must cover them all. The
     # write scopes come from ci.yml's budget-watch (issues: write; push only,
     # skipped here) and final-ci-failed (issues, pull-requests and actions:
-    # write; skipped here by `!inputs.runner_image`). ci.yml jobs that declare
+    # write; skipped here by `!inputs.runner_image`). Read scopes count too:
+    # final-ci-failed also asks for checks: read. When ci.yml gains a scope,
+    # widen this grant; test_canary_grants_exactly_what_ci_jobs_request
+    # recomputes the union and is the source of truth. ci.yml jobs that declare
     # no permissions of their own (static-checks and the test jobs) do inherit
     # this grant; they run trusted main code only (see the `if:` above) and no
     # secrets are forwarded.
@@ -505,6 +508,7 @@ jobs:
       pull-requests: write
       actions: write
       issues: write
+      checks: read
     concurrency:
       group: ${{ github.workflow }}-runner-image-canary-${{ github.ref }}
       cancel-in-progress: true
