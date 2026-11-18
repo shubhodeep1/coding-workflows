@@ -259,8 +259,12 @@ if [ -n "${SVB_REASON:-}" ]; then
         guard_rejection_marker scope "${SVB_REASON}" "${SVB_FILES}" "${SVB_COUNT}" || true
       fi
     } > "${GUARD_COMMENT_FILE}"
+    # Single raw attempt (a retry could duplicate the comment); fail open as
+    # before, but say so: for remediation-no-code a missing marker means the
+    # heal reporter will not recognise the park and may dispatch a heal.
     gh issue comment "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
-      --body-file "${GUARD_COMMENT_FILE}" 2>/dev/null || true
+      --body-file "${GUARD_COMMENT_FILE}" 2>/dev/null \
+      || echo "::warning::Could not post the guard rejection comment (reason=${SVB_REASON}) on #${ISSUE_NUMBER}; without its marker the heal reporter may dispatch a heal for this park."
   }
   # remediation-no-code: post the comment (with its reason=remediation-no-code
   # marker) BEFORE adding ai:scope-blocked. The label fires `issues: labeled`
