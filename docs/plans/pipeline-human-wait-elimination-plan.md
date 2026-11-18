@@ -100,7 +100,7 @@ The decisions were clarified in the authoring session (Q1–Q8 all `A`):
 - The stall judge's single-PR resolution prefers the issue's implementation PR over a cross-reference.
 - A "nothing to implement" planning block closes the issue through the existing verify-and-close path when a deterministic acceptance check passes. Only a failing check leaves it blocked.
 - A daily pass ticks operator steps whose condition is observable and closes the tracker when nothing is left.
-- A final CI run whose merge ref is behind the base only by integration-sync merges that touch none of the PR's files runs its tests instead of stopping as `stale`.
+- A final CI run whose merge ref is behind the base only by integration-sync merges and `[ai-merge-resolve]` commits that touch none of the PR's files runs its tests instead of stopping as `stale`.
 
 ## Non-goals
 
@@ -207,7 +207,7 @@ There are ten phases and eleven PRs (Phase 8 ships as 8a and 8b). Phase 10 was a
    - **Rollback:** `OPERATOR_STEP_DAILY_TICK_ENABLED=false`.
 10. **Sync-only stale merge ref accepted (R7).**
     - **Files:** `scripts/ci_final_merge_ref_fresh.sh`, `.github/workflows/ci.yml` (the ten final-CI check steps' `env:` blocks), `tests/test_ci_final_merge_ref_fresh.py`, README env var table, fragments.
-    - **Done:** the #9602 shape logs `outcome=stale_accepted`, and the job runs its tests. That shape is an integration-branch PR whose merge ref is behind only by `chore: sync <default branch> into <base>` merges that touch none of the PR's files. Any other stale merge ref still fails, including every stale merge ref of a PR based on the default branch.
+    - **Done:** the #9602 shape logs `outcome=stale_accepted`, and the job runs its tests. That shape is an integration-branch PR whose merge ref is behind only by `chore: sync <default branch> into <base>` merges and `[ai-merge-resolve]` commits (merge or not), none of which touches the PR's files. Any other stale merge ref still fails, including every stale merge ref of a PR based on the default branch.
     - **Rollback:** `CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED=false`.
 
 Phases 3 and 4 both edit `scripts/review_conflict_resolve.sh`, in different functions: the soft-validation block at about :4208 and the targeted-paths block at about :3423. They can conflict textually but not logically, and either can merge first. Phases 6 and 8b both edit `scripts/unblock_judge.sh`, again in different functions (`unblock_hold_condition` and `unblock_nothing_to_implement_close`).
@@ -361,7 +361,7 @@ Phases 3 and 4 both edit `scripts/review_conflict_resolve.sh`, in different func
 
    It accepts only when all of these hold, checked in this order and stopping at the first failure:
    0. **Integration base only:** the base ref is not the default branch. For a default-branch-based PR every commit in range is a default-branch commit, so the commit-type check below would pass vacuously.
-   1. **Ancestry and range:** `GET compare/<tested_base>...<tip>` reports `status=ahead`, and the listing is complete: `total_commits` is at most 250, and `files` is under GitHub's 300-file cap.
+   1. **Ancestry and range:** `GET compare/<tested_base>...<tip>` reports `status=ahead`, and the listing is complete: `total_commits` is at most 250, the `commits` array holds exactly `total_commits` entries (the check `scripts/workflow_failure_heal.py` uses, `total_commits > len(commits)`, means a cut page), and `files` is under GitHub's 300-file cap. The same `commits` count check applies to the second compare in (2). Either shortfall fails as `detail=truncated`, so commits are never classified from a partial page.
    2. **Commit types:** each listed commit is a default-branch commit, an integration-sync merge, or an `[ai-merge-resolve]` commit, judged as follows.
       - **Default-branch commits:** `GET compare/<tested_base>...<default branch>` gives the set of default-branch commits in range. Any commit in that set is fine. This listing must be complete too (`total_commits` at most 250); a truncated one fails as `detail=truncated` rather than classifying commits against a partial set.
       - **Remaining commits:** each must be either a two-parent merge whose subject is exactly `chore: sync <default branch> into <base ref>` (the subject `scripts/orchestrate_poll_process.sh` writes, with `<default branch>` from the `ls-remote --symref` read above, not a literal `main`) and whose second parent is in that default-branch set, or a commit whose subject starts with `[ai-merge-resolve]`, merge or not (D10 records that this admits resolver-authored content). The subject and parent count are author-controlled, so the second-parent check keeps a crafted merge from passing as a sync.
@@ -389,7 +389,10 @@ Phases 3 and 4 both edit `scripts/review_conflict_resolve.sh`, in different func
      - a non-sync, non-default-branch commit in range fails with `detail=foreign_commit`;
      - a merge with the sync subject whose second parent is not a default-branch commit also fails with `detail=foreign_commit`;
      - `status=diverged` fails with `detail=not_ahead`;
-     - a truncated compare fails;
+     - a truncated first compare (`<tested_base>...<tip>`: `total_commits` over 250, fewer listed commits than `total_commits`, or 300 files) fails with `detail=truncated`;
+     - a truncated second compare (`<tested_base>...<default branch>`) fails with `detail=truncated`;
+     - a sync merge in an origin whose default branch is not `main` (subject `chore: sync <that branch> into <base>`, branch read via `ls-remote --symref`) is accepted;
+     - a non-merge `[ai-merge-resolve]` commit in range that touches none of the PR's files is accepted;
      - an API error fails closed as `stale`;
      - the switch off keeps today's `stale` exit;
      - `tested_base` is the checked-out commit's first parent even when a re-fetch moved the merge ref without a checkout;
