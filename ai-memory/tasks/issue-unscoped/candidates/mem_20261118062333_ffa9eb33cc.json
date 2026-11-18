@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Fix the ci.yml failure on main\" and \"For each failure, fix the root cause with the smallest change.\"\n  expected_change_site: `.github/workflows/ci.yml` or `tests/test_ci_job_split_contract.py`, at the failing contract or workflow configuration.\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff changes only `test_review_utility_roles_never_start_host_opencode` in `tests/test_summarize_reviewer_consensus_sandbox_pin.py`, and the PR description reports `tests/test_ci_job_split_contract.py` as an inherited failure with its acceptance check unmet, so the CI failure remains unresolved. (Reviewer severity: MAJOR)\n- requirement: \"Name every failing test.\"\n  expected_change_site: The PR description's inherited-failures report.\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The report names `tests/test_ci_job_split_contract.py` but does not identify the failing test case. (Reviewer severity: NIT)\n- requirement: \"Use Refs #9472 and Refs #9495, not auto-close keywords.\"\n  expected_change_site: PR description.\n  confidence=[3]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The provided PR description contains no references to #9472 or #9495. (Reviewer stated no severity or confidence; confidence is a placeholder.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Fix the ci.yml failure on main\" and \"For each failure, fix the root cause with the smallest change.\"\n  Expected change site: `.github/workflows/ci.yml` or `tests/test_ci_job_split_contract.py`, at the failing contract or workflow configuration.\n  Evidence of absence: The PR diff changes only `test_review_utility_roles_never_start_host_opencode` in `tests/test_summarize_reviewer_consensus_sandbox_pin.py`. The PR description reports `tests/test_ci_job_split_contract.py` as an inherited failure and marks its acceptance check unmet; the CI failure remains unresolved.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Name every failing test.\"\n  Expected change site: The PR description's inherited-failures report.\n  Evidence of absence: The report names `tests/test_ci_job_split_contract.py` but does not identify the failing test case.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Use Refs #9472 and Refs #9495, not auto-close keywords.\"\n  Expected change site: PR description.\n  Evidence of absence: The provided PR description contains no references to #9472 or #9495.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "74169b2089c8d872b11a3904f11fa783fa6ff2c7b3a5bd30a03992727bc48d24",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9694,
+    "run_id": "44233253579",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44233253579",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118062333_ffa9eb33cc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9694,
+    "run_id": "44233253579"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T06:23:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
