@@ -3,8 +3,8 @@
 
 When no trusted plan comment precedes the triggering /approved, the step
 still prints its message and exits 1, and now also prints one
-`::error::IMPLEMENT_PLAN_NOT_FOUND reason=<token> ...` line plus up to 20
-`::warning::IMPLEMENT_PLAN_CANDIDATE ...` lines. Comment bodies are never
+`::error::IMPLEMENT_PLAN_NOT_FOUND reason=<token> ...` line plus one
+`::warning::IMPLEMENT_PLAN_CANDIDATE ...` line per plan-like comment. Comment bodies are never
 printed, and every comment-derived value is reduced to a safe charset.
 """
 
@@ -221,14 +221,16 @@ def test_crafted_login_cannot_inject_workflow_commands(tmp_path: Path) -> None:
 	assert "%" not in candidates[0]
 
 
-def test_candidate_lines_are_capped_at_twenty(tmp_path: Path) -> None:
+def test_every_candidate_gets_a_line(tmp_path: Path) -> None:
+	# Issue #9724 asks for the metadata of every comment matching the plan heading.
 	comments = [_plan(100 + i, f"2026-11-18T12:{i:02d}:00Z") for i in range(25)]
 	comments.append(_approval())
 	result, _ = _run(comments, tmp_path)
 	error = _assert_failed(result, "plan_after_approval")
 	assert "plan_candidates=25" in error
 	candidates = _candidate_lines(result.stdout)
-	assert len(candidates) == 20
+	assert len(candidates) == 25
+	assert "id=100 " in candidates[0]
 	assert "id=124 " in candidates[-1]
 
 
