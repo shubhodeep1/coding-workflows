@@ -5530,6 +5530,8 @@ jobs:
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
           WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
           SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}
+          REMEDIATION_NO_CODE_GUARD_ENABLED: ${{ vars.REMEDIATION_NO_CODE_GUARD_ENABLED || 'true' }}
+          PRIOR_PR_BASELINE_BRANCH: ${{ steps.baseline_refctx.outputs.branch }}
         run: |
           set -euo pipefail
           bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"
