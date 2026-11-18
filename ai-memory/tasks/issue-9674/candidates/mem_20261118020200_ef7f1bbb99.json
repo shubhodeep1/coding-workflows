@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which log reason should the new \"an open base-keyed triage issue already exists\" skip use? `skip reason=base_failure_tracked` already exists at `scripts/check_failure_triage.sh:1681` with `heal_issue=\u2026`. It is paired with the `base_failure_tracked=<n>` GitHub output that drives the note step.\nChoices:\nA) Use a new, separate reason, for example `skip reason=base_triage_tracked base=<BASE_REF> issue=<N> pr=<PR> check=<check>`. It never writes the `base_failure_tracked` output, so the existing heal-issue key and note step keep their current meaning (RECOMMENDED)\nB) Reuse `reason=base_failure_tracked` with `issue=<N>` exactly as the issue says, log only, without writing the `base_failure_tracked` GitHub output. Log parsers then have to tell the two cases apart by `issue=` versus `heal_issue=`\nC) Reuse `reason=base_failure_tracked` and also write the `base_failure_tracked=<N>` output, so the note step adds the PR to the base-keyed triage issue the same way it does for heal issues\nQ2: How should base-keying fit with the existing heal-issue skip (`TRIAGE_BASE_TRACKED_SKIP_ENABLED`, lines 1637\u20131698), especially when its job comparison finds `failed_jobs_differ`, meaning the PR fails jobs that main does not?\nChoices:\nA) The heal-issue skip runs first and is unchanged. Base-keying applies only when it falls through, except for `failed_jobs_differ`, which keeps today's per-PR fingerprint because that failure is partly the PR's own (RECOMMENDED)\nB) The heal-issue skip runs first and is unchanged. Base-keying applies to every fall-through, including `failed_jobs_differ`, which then folds into the base issue, as the issue's \"Risks\" section accepts\nC) Base-keying runs before the heal-issue skip and replaces it whenever a base-keyed triage issue is open\nQ3: Which filings does the open-issue cap (`CHECK_FAILURE_TRIAGE_MAX_OPEN_ISSUES`, default 5) block? A supersede files a new issue and then closes the old one, so the open count doesn't grow. A base-keyed match should also never be treated as a supersede, because every new PR has a different head.\nChoices:\nA) The cap applies to every new filing in normal mode. It does not apply in historical mode or to a supersede replacement, and base-keyed matches skip supersede entirely (RECOMMENDED)\nB) The cap applies to every new filing in normal mode, supersede replacements included. Historical mode is exempt and base-keyed matches skip supersede\nC) The cap applies to every filing, historical mode and supersede included",
+  "fingerprint": "5f422eda6c92dde67b11bc982bd33c593637eb38bcfafd50f5e3dbb45de66aae",
+  "lineage": {
+    "issue_number": 9674,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44214120719",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44214120719",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261118020200_ef7f1bbb99",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9674,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44214120719"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9674 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-18T02:02:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
