@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ci_budget_watch.py:321-325 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new closed-issue API call has no `args.repo` guard, while the open-issue listing above it does. With an empty `--repo` the URL is malformed and a warning is printed.\n  WHY: The try/except catches the failure and the cooldown fails open as documented, so only an extra warning line appears. The reviewer rated this NIT.\n- scripts/ci_final_merge_ref_fresh.sh:N/A | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: All 38 failed check-runs on head c86b4bf (lint, tests-system-python shards 4/9/10/16/20/21, orchestrate-poll (1)) come from `CI_FINAL_MERGE_REF outcome=stale reason=not_refreshed`. The merge ref is still based on b456cee while main is at ab6cdcb.\n  WHY: The branch is behind its base and the guard refuses to test a stale merge ref. No diff hunk causes this, so the branch only needs updating onto current main. The reviewer rated this NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Closed security follow-ups never match\" and \"A finding that comes back after its issue closed is filed again.\"\n  expected_change_site: scripts/security_audit.sh (issues-mode existing-follow-up deduplication, lines 3462 and 3491)\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The script adds marker IDs to `existing_finding_ids` without checking issue state at line 3462. It skips a finding with any ID in that set at line 3491. A finding returning with the same ID as a closed follow-up is therefore still skipped, not filed again. The documentation edits describe this exception but do not implement the stated behavior. Reviewer severity MAJOR. Three other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) explicitly rejected this gap, calling the exact-id skip pre-existing, documented behavior.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/ci_budget_watch.py:321-325 | severity=NIT | confidence=3\n  PROBLEM: The new closed-issue API call has no `args.repo` guard, while the open-issue listing above it does. With an empty `--repo` the URL is malformed and a warning is printed.\n  WHY: The try/except catches the failure and the cooldown fails open as documented, so only an extra warning line appears.\n- TASK_GAP (none unmet): The reviewer concluded that the cross-pollinated \"closed follow-ups\" gap is not an unmet requirement.\n  Requirement: (none unmet; every concrete deliverable is implemented)\n  Expected change site: (n/a)\n  Evidence of absence: (n/a)\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Closed security follow-ups never match\" and \"A finding that comes back after its issue closed is filed again.\"\n  Expected change site: `scripts/security_audit.sh`, issues-mode existing-follow-up deduplication.\n  Evidence of absence: The script adds marker IDs to `existing_finding_ids` without checking issue state at line 3462, then skips a finding with any ID in that set at line 3491. A finding returning with the same ID as a closed follow-up is therefore still skipped rather than filed again. The latest documentation edits describe this exception but do not implement the stated behavior.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/ci_final_merge_ref_fresh.sh:N/A | severity=NIT | confidence=5\n  PROBLEM: All 38 failed check-runs on head c86b4bf09bba6f8cfad7b626c5c2e4c0bade25b7 (lint aggregation, tests-system-python shards 4/9/10/16/20/21, orchestrate-poll (1)) come from `CI_FINAL_MERGE_REF pr=9681 outcome=stale reason=not_refreshed base=main tested_base=b456cee1cde0... tip=ab6cdcb8f706...`. refs/pull/9681/merge still merges into an old base after 6 refresh attempts.\n  WHY: The PR branch is behind its base and the guard refuses to test a stale merge ref. No hunk in the PR diff triggers these failures, and the branch only needs updating onto the current main tip.\n- TASK_GAP (not a gap): The reviewer concluded the \"closed follow-ups\" requirement is met.\n  Requirement: \"Closed security follow-ups never match\" and \"A finding that comes back after its issue closed is filed again.\"\n  Expected change site: scripts/security_audit.sh (issues-mode follow-up dedupe) and README.md / agents.d / changelog.d wording.\n  Evidence of absence: Not a gap. `open_by_location` is populated only when `state == \"open\"` (scripts/security_audit.sh:3468). The docs now state the exact-id skip, which matches the code at scripts/security_audit.sh:3462 and 3491.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4bd706e2fc6c5725160d2776d1ee1a2ea6c9409ddabf7c0972b82772157c084f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9681,
+    "run_id": "44307351427",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "github-actions[bot]",
+    "run_attempt": 1,
+    "run_id": "44307351427",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118145441_b418380a0b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9681,
+    "run_id": "44307351427"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T14:54:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
