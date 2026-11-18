@@ -1,0 +1,24 @@
+{
+  "discovered_at": "2026-11-18T19:02:05Z",
+  "issue_number": 9674,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=scripts/unblock_actions.py:253; cited_path=scripts/unblock_actions.py; files_touched=.github/workflows/check_failure_triage.yml, README.md, agents.d/9674-triage-base-keyed-fingerprint.md, changelog.d/9674-triage-base-keyed-fingerprint.md, scripts/check_failure_triage.sh, scripts/resolve_integration_ref.sh, tests/fixtures/integration_ref_resolver_ci_triage/base_keyed_triage_issue_keeps_default.json, tests/test_check_failure_triage_base_fingerprint.py, tests/test_check_failure_triage_post_stage.py, tests/test_check_failure_triage_workflow_security.py, tests/test_resolve_integration_ref_ci_triage.py.",
+  "phase": "review_autofix",
+  "pr_number": 9703,
+  "record_id": "lesson_20261118190205_0175cd59a4",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/unblock_actions.py",
+    ".github/workflows/check_failure_triage.yml",
+    "README.md",
+    "agents.d/9674-triage-base-keyed-fingerprint.md",
+    "changelog.d/9674-triage-base-keyed-fingerprint.md",
+    "scripts/check_failure_triage.sh",
+    "scripts/resolve_integration_ref.sh",
+    "tests/fixtures/integration_ref_resolver_ci_triage/base_keyed_triage_issue_keeps_default.json",
+    "tests/test_check_failure_triage_base_fingerprint.py",
+    "tests/test_check_failure_triage_post_stage.py",
+    "tests/test_check_failure_triage_workflow_security.py",
+    "tests/test_resolve_integration_ref_ci_triage.py"
+  ]
+}
