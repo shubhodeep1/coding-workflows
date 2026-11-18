@@ -99,8 +99,12 @@
 #           closed as not_planned. Failures only log
 #           outcome=followup_retire_failed; the clean result still stands.
 #   followup-guard
-#           Run by review_enable_auto_merge.sh for the reviewed PR
-#           (PR_PAYLOAD_FILE = its /pulls/<n> JSON). Prints
+#           Run before a merge by review_enable_auto_merge.sh, by each
+#           review_rb_judge.sh merge site (rb_judge_followup_merge_guard, #9671)
+#           and by the deterministic-skip-merge job
+#           (review_autofix_step_det_skip_followup_guard.sh) for the PR
+#           (PR_PAYLOAD_FILE = its /pulls/<n> JSON, or on the skip path a
+#           payload built from the gate's outputs). Prints
 #           SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=allow|refuse|unverifiable.
 #           Refuses (and comments once) when the PR's base is the head branch
 #           of an open standalone PR whose current head has a status=clean
@@ -138,6 +142,9 @@
 # "Enable auto-merge on PR" step (review_enable_auto_merge.sh) invokes it up to
 # twice, before the success status and again after the required-checks wait,
 # so one step can double them; a refusal on the first call skips the second.
+# The review-blocked judge and the deterministic-skip-merge job invoke it once
+# per merge attempt, right before the merge (#9671), with a payload they
+# already hold, so they add no PR read of their own.
 #
 # Log: SINGLE_ISSUE_SECURITY_PASS mode= pr= head= outcome= reason= cycle=
 #      (followup_guard adds parent=; retirement adds item=, issues=, prs=)
@@ -1130,8 +1137,9 @@ single_pass_followup_merge_guard()
 		source "$(dirname -- "${BASH_SOURCE[0]}")/gh_helpers.sh" 2>/dev/null || true
 	fi
 	# Kill switch: an explicit `false` turns the guard off like the gate. Unset
-	# keeps it on, because the auto-merge step env does not pass the variable
-	# and a silently disabled guard would let a follow-up move a clean head.
+	# keeps it on: the callers pass the raw repository variable (never the
+	# `|| 'false'` step default), and a silently disabled guard would let a
+	# follow-up move a clean head.
 	if [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED-}" = "false" ]; then
 		single_pass_followup_guard_emit allow disabled
 		return 0

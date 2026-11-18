@@ -724,7 +724,7 @@ def test_close_and_reissue_spot_fix_preserves_baseline_branch_and_keeps_caller_c
 		- prior_pr_baseline_branch: {baseline_branch}
 		- files_touched:
 		  - src/app.py
-		  - README.md"""
+		  - README.md"""  # noqa: E101
 	)
 	assert body.rstrip().endswith(expected_footer.rstrip()), (
 		"spot-fix reissue body must emit the canonical footer-scoped baseline metadata contract"
@@ -1017,7 +1017,7 @@ def test_close_and_reissue_spot_fix_unions_closed_pr_files_into_files_touched() 
 		- files_touched:
 		  - src/app.py
 		  - db/contracts/example.yml
-		  - tests/test_app.py"""
+		  - tests/test_app.py"""  # noqa: E101
 	).rstrip(), footer
 	assert "removed_by_pr.py" not in body
 	assert "outside.py" not in body
@@ -1106,7 +1106,7 @@ def test_close_and_reissue_spot_fix_adds_declared_new_output_paths_to_files_touc
 		  - src/app.py
 		  - tests/test_app.py
 		  - tests/fixtures/integration_ref_resolver/mixed_fence_tilde_footer.json
-		  - changelog.d/4605-security-issue-base-binding.md"""
+		  - changelog.d/4605-security-issue-base-binding.md"""  # noqa: E101
 	).rstrip(), footer
 	assert "REISSUE_FILES_TOUCHED_UNION pr=42 judge_files=1 pr_files_added=1 pr_files_skipped=0 total=2" in state["_stdout"]
 	assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS pr=42 declared=2 added=2 skipped=0 total=4" in state["_stdout"]
@@ -2191,7 +2191,7 @@ def _build_merge_with_followup_harness(
 	    true and every test would skip the issue-create path.
 	  - `sleep` is no-op'd so the mergeability-poll backoff (which the
 	    real script measures in seconds) doesn't slow tests.
-	"""
+	"""  # noqa: E101
 	xpg_echo_line = "shopt -s xpg_echo\n\n" if enable_xpg_echo else ""
 	# The check-runs gate now delegates to the shared _pr_checks_completed
 	# helper in scripts/pr_checks_lib.sh; source it so the branch can call it
@@ -2212,6 +2212,9 @@ _resilient_phase_swap() {{ :; }}
 _safe_gh_jq() {{ gh api "$@"; }}
 sleep() {{ :; }}
 review_head_gate_post_status() {{ :; }}
+# The security follow-up guard (#9671) has its own tests in
+# test_review_rb_judge_head_binding.py; these cases cover the follow-up issue.
+rb_judge_followup_merge_guard() {{ return 0; }}
 source "{pr_checks_lib_path}"
 {merge_err_helpers}
 GITHUB_OUTPUT="{github_output}"

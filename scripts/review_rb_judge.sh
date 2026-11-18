@@ -2505,6 +2505,53 @@ rb_judge_merge_retry_transient() {
 }
 # END rb-judge merge error capture (#7659)
 
+# BEGIN rb-judge security follow-up guard (#9671)
+# A PR whose base is a standalone PR's head branch must not merge once that
+# head has a clean single-issue security audit (#9479): the merge would move
+# the clean head. Each judge merge site runs this right before its merge,
+# after the checks wait and the freshness re-check, as
+# `rb_judge_followup_merge_guard <merge|terminal|sync> <pulls/<n> JSON>`.
+# The payload is one the judge already fetched (no new API call); PRs into
+# the default or an integration branch get `allow` from the guard with no
+# call. Anything but `allow` returns 1, so the caller skips the merge and the
+# PR stays open in ai:review-blocked. A payload without `.base.ref` (failed
+# fetch: `{}`) fails closed as `unavailable`, because the guard itself
+# answers `allow no_base` for it. SINGLE_PASS_FOLLOWUP_GUARD_SWITCH carries
+# the raw repository variable: only an explicit `false` turns the guard off;
+# unset keeps it on (the step's SINGLE_ISSUE_SECURITY_PASS_ENABLED defaults
+# to `false` for the judge's own security pass and is not forwarded).
+RB_JUDGE_FOLLOWUP_GUARD_RESULT=""
+rb_judge_followup_merge_guard() {
+  local rb_judge_fg_path="${1:-merge}" rb_judge_fg_payload="${2:-}"
+  local rb_judge_fg_script="${SUPPORT_SCRIPTS_DIR:-scripts}/review_single_issue_security_pass.sh"
+  local rb_judge_fg_file="" rb_judge_fg_output=""
+  RB_JUDGE_FOLLOWUP_GUARD_RESULT="unavailable"
+  # Non-empty check first: `jq -e` on empty input exits 0 on some jq versions.
+  if [ -f "${rb_judge_fg_script}" ] && [ -n "${rb_judge_fg_payload}" ] \
+    && printf '%s' "${rb_judge_fg_payload}" | jq -e 'type == "object" and ((.base.ref // "") | type == "string" and length > 0)' >/dev/null 2>&1 \
+    && rb_judge_fg_file="$(mktemp "${TMPDIR:-/tmp}/rb_judge_followup_guard.XXXXXX" 2>/dev/null)"; then
+    if printf '%s' "${rb_judge_fg_payload}" > "${rb_judge_fg_file}"; then
+      rb_judge_fg_output="$(REPOSITORY="${REPOSITORY:-}" PR_NUMBER="${PR_NUMBER:-}" PR_PAYLOAD_FILE="${rb_judge_fg_file}" \
+        DEFAULT_BRANCH="${DEFAULT_BRANCH:-}" SINGLE_ISSUE_SECURITY_PASS_ENABLED="${SINGLE_PASS_FOLLOWUP_GUARD_SWITCH:-}" \
+        bash "${rb_judge_fg_script}" followup-guard 2>/dev/null)" || rb_judge_fg_output=""
+      printf '%s\n' "${rb_judge_fg_output}" | grep '^SINGLE_ISSUE_SECURITY_PASS ' || true
+      RB_JUDGE_FOLLOWUP_GUARD_RESULT="$(printf '%s\n' "${rb_judge_fg_output}" | sed -n 's/^SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=//p' | tail -n 1)" || RB_JUDGE_FOLLOWUP_GUARD_RESULT=""
+      case "${RB_JUDGE_FOLLOWUP_GUARD_RESULT}" in
+        allow|refuse|unverifiable) ;;
+        *) RB_JUDGE_FOLLOWUP_GUARD_RESULT="unavailable" ;;
+      esac
+    fi
+  fi
+  [ -n "${rb_judge_fg_file}" ] && rm -f "${rb_judge_fg_file}"
+  if [ "${RB_JUDGE_FOLLOWUP_GUARD_RESULT}" = "allow" ]; then
+    return 0
+  fi
+  echo "RB_JUDGE_SECURITY_FOLLOWUP_GUARD pr=${PR_NUMBER:-} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${rb_judge_fg_path} result=${RB_JUDGE_FOLLOWUP_GUARD_RESULT} action=skip_merge"
+  echo "::warning::Review-blocked judge did not merge PR #${PR_NUMBER:-}: the security follow-up guard returned '${RB_JUDGE_FOLLOWUP_GUARD_RESULT}' (its base branch's head passed a clean security audit, or that could not be verified). The PR stays open in ai:review-blocked."
+  return 1
+}
+# END rb-judge security follow-up guard (#9671)
+
 case "${RB_ACTION}" in
   merge)
     echo "Judge says merge PR #${PR_NUMBER} as-is."
@@ -2604,6 +2651,9 @@ case "${RB_ACTION}" in
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
           fi
+        elif ! rb_judge_followup_merge_guard merge "${_pr_json:-}"; then
+          # Security follow-up guard (#9671): no success status and no merge.
+          RB_MERGE_STATUS="security_followup_guard"
         else
           rb_judge_merge_err_open
           review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
@@ -2703,6 +2753,9 @@ case "${RB_ACTION}" in
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
           fi
+        elif ! rb_judge_followup_merge_guard terminal "${_guard_pr_meta:-${_pr_meta:-}}"; then
+          # Security follow-up guard (#9671): no success status and no merge.
+          RB_MERGE_STATUS="security_followup_guard"
         else
           rb_judge_merge_err_open
           review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
@@ -3240,6 +3293,10 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
               echo "::warning::PR #${PR_NUMBER} base freshness could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}) — merge_with_followup deferred, no branch update requested. Leaving linked issues in ai:review-blocked."
               echo "judge_skip_reason=base_freshness_unknown" >> "$GITHUB_OUTPUT"
             fi
+          elif [ "${ENABLE_AUTO_MERGE}" = "true" ] && ! rb_judge_followup_merge_guard sync "${_pr_json:-}"; then
+            # Security follow-up guard (#9671): no success status, no merge and
+            # so no follow-up issue; linked issues stay in ai:review-blocked.
+            echo "judge_skip_reason=security_followup_guard" >> "$GITHUB_OUTPUT"
           elif [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
             # Sync merge only — NEVER --auto enrollment. The whole point
             # of the conservative ladder is to ensure follow-up creation
