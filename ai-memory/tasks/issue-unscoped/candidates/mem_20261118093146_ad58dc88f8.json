@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add `.github/ai/alert_inbox.json` with both switches off, so the change still has no effect on consumers.\" (issue #9608, fix #1) \u2014 the linked issue supplies the exact JSON body with `capture_enabled: false`, `route_warning_error_to_inbox: false`, and the three non-empty lists `pipeline_self_files`, `break_glass_allowed_paths`, `break_glass_denied_paths`.\n  expected_change_site: new file `.github/ai/alert_inbox.json` at the repository root\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: PR CHANGED FILES lists only `docs/INVENTORY.md`; LAST RUN CHANGED FILES lists only `.github/workflows/alert-inbox-intake.yml`, no hunk in PR DIFF or LAST RUN DIFF creates `.github/ai/alert_inbox.json`, previous autofix run on HEAD `f73bfa0db236` deferred this as TASK_GAP_DEFERRED because the editor sandbox excludes paths under `.github/ai/` other than `claude_engine.json`, `tests/test_alert_inbox_store.py::test_consumer_repo_is_allowed` fails as a regression and `tests/test_tg_helpers_alert_inbox.py::test_shipped_config_is_off` fails as inherited (test at `tests/test_tg_helpers_alert_inbox.py:408-414`; `scripts/alert_inbox_capture.sh:36` sets `_ALERT_INBOX_CONFIG_REL=\".github/ai/alert_inbox.json\"`), `docs/INVENTORY.md:121` lists the file as a trusted input, changelog fragment `changelog.d/alert-triage-phase1-inbox-capture.md` declares both switches ship `false`. Severity stated: BLOCKER.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: \"Add `.github/ai/alert_inbox.json` with both switches off, so the change still has no effect on consumers.\" (issue #9608, fix #1)\n  Expected change site: new file `.github/ai/alert_inbox.json` at the repository root\n  Evidence of absence: PR CHANGED FILES lists only `docs/INVENTORY.md`; LAST RUN CHANGED FILES lists only `.github/workflows/alert-inbox-intake.yml`. No hunk in PR DIFF or LAST RUN DIFF creates `.github/ai/alert_inbox.json`. Previous autofix run on HEAD `f73bfa0db236` deferred this as TASK_GAP_DEFERRED because the editor sandbox excludes paths under `.github/ai/` other than `claude_engine.json`. Failing tests: `tests/test_alert_inbox_store.py::test_consumer_repo_is_allowed` (regression), `tests/test_tg_helpers_alert_inbox.py::test_shipped_config_is_off` (inherited); `tests/test_tg_helpers_alert_inbox.py:408-414`; `scripts/alert_inbox_capture.sh:36`; `docs/INVENTORY.md:121`; `changelog.d/alert-triage-phase1-inbox-capture.md`.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- All other checklist categories (security, correctness, concurrency, error paths, performance, index-contract, naming, trust-boundary): NONE.\n=== END FINDINGS FROM minimax_minimax-m3 ===",
+  "fingerprint": "4557e4f7905fa257b4349c59f56bc790fd81121d4043517041ea3fd009882d4f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9614,
+    "run_id": "44249402776",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "github-actions[bot]",
+    "run_attempt": 1,
+    "run_id": "44249402776",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118093146_ad58dc88f8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9614,
+    "run_id": "44249402776"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T09:31:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
