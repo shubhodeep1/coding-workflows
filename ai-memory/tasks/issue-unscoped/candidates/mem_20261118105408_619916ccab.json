@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:2468-2502 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: rb_judge_merge_retry_transient() re-issues `gh pr merge` (lines 2500, 2502) after a delay without re-running the security follow-up guard.\n  WHY: A clean-audit result recorded during the retry delay lets a follow-up PR merge into a head the guard would now refuse. Both reviewers rated this MAJOR, which is mapped to high. The sonnet, minimax and glm reviewers treated it as a pre-existing residual risk and did not report it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"In scripts/review_rb_judge.sh, add one shared pre-merge helper... Call it before each merge site listed above.\"\n  expected_change_site: scripts/review_rb_judge.sh, inside rb_judge_merge_retry_transient() before its `gh pr merge` calls (lines 2500, 2502)\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: rb_judge_merge_retry_transient() at lines 2468-2502 has no rb_judge_followup_merge_guard call before either retry merge command, the guard calls at lines 2654, 2760 and 3300 run only before the initial merge attempts\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_rb_judge.sh:2500-2502 | severity=high | confidence=4\n  PROBLEM: The retry loop in `rb_judge_merge_retry_transient()` executes `gh pr merge` without re-running the security follow-up guard before each retry attempt.\n  WHY: During the 10-40 second delay between retries, a new clean-audited head could be produced, and the retry could then merge a superseded follow-up PR the guard would now refuse.\n- TASK_GAP: Requirement: \"In scripts/review_rb_judge.sh, add one shared pre-merge helper... Call it before each merge site listed above.\"\n  Expected change site: `scripts/review_rb_judge.sh` (all merge sites, including those handled by `rb_judge_merge_retry_transient`)\n  Evidence of absence: The guard `rb_judge_followup_merge_guard` is added to the `merge` and `terminal` arms and the sync path, but is not called within `rb_judge_merge_retry_transient`.\n  severity=high | confidence=4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_rb_judge.sh:2468-2502 | severity=high | confidence=4\n  PROBLEM: The guard is not re-run before the transient retry merge commands. The retry helper waits, reads PR state, and then issues `gh pr merge` at lines 2500 and 2502.\n  WHY: A clean-audit result recorded during the retry delay lets a follow-up PR merge into a head the guard would now refuse.\n- TASK_GAP: Requirement: \"Call it before each merge site listed above.\"\n  Expected change site: `scripts/review_rb_judge.sh`, inside `rb_judge_merge_retry_transient()` before its `gh pr merge` calls.\n  Evidence of absence: The retry helper at lines 2468-2502 has no follow-up guard call before either merge command. The guard calls at lines 2654, 2760 and 3300 run before the initial merge attempts, not before the retry commands at lines 2500 and 2502.\n  severity=high | confidence=4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fc028d20ba00e14b436d26cf68dca3a193116aa5fe03d60da812c0fb6c082820",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9692,
+    "run_id": "44272387488",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44272387488",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118105408_619916ccab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9692,
+    "run_id": "44272387488"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T10:54:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
