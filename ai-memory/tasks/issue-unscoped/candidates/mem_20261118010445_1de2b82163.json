@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:N/A (the `bash scripts/ci_final_merge_ref_fresh.sh --depth 1` checkout step; not in the PR diff) | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The sharded tests-system-python jobs fail at the merge-ref freshness guard (CI_FINAL_MERGE_REF pr=9655 outcome=stale reason=not_refreshed) because GitHub did not recompute refs/pull/9655/merge after 6 refresh attempts, and the aggregate `lint` job fails on the same jobs.\n  WHY: The guard fails closed so a run never tests an old base. No edit to the PR diff can clear it, so the editor should take no action. The reviewer rated it NIT, which is mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:N/A (the `bash scripts/ci_final_merge_ref_fresh.sh --depth 1` checkout step; not in the PR diff) | severity=NIT | confidence=4\n  PROBLEM: The sharded tests-system-python jobs fail at the merge-ref freshness guard (CI_FINAL_MERGE_REF pr=9655 head=6a7e7b7aba7b... outcome=stale reason=not_refreshed base=main tested_base=cb8b16ea... tip=d067f69d...). The PR head is behind main and GitHub did not recompute refs/pull/9655/merge after 6 refresh attempts.\n  WHY: The guard fails closed so a run never tests an old base. The log says this is not a defect in the PR. The fix is to bring the head up to date with main, and the editor should take no action.\n- TASK_GAP (reviewer judged it satisfied; severity=NIT, confidence=1)\n  Requirement: Add `scripts/review_final_ci_failed.sh` and `scripts/review_final_ci_sweep.sh` entries to the Scripts list in `docs/INVENTORY.md`, so that `tests/inventory_parity.py` passes.\n  Expected change site: docs/INVENTORY.md, Scripts list.\n  Evidence of absence: The PR diff has no hunk in `docs/INVENTORY.md`. Lines 314-315 of the working tree already contain both entries, so the deliverable is satisfied in the checked-out tree. The changelog fragment says the entries were added outside the heal pipeline.\n- TASK_GAP (reviewer judged it satisfied; severity=NIT, confidence=1)\n  Requirement: No code change is needed for the `tests/test_prepush_affected_tests.py` failure, because the fix is already on main.\n  Expected change site: none.\n  Evidence of absence: The diff correctly leaves `tests/test_prepush_affected_tests.py` and `ci.yml` unchanged. The requirement is satisfied.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===",
+  "fingerprint": "53cf07a118c491ed0bd0109a16f9c09aaa1f8f0c2e8ba66eba9c7f7e34393e1a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9655,
+    "run_id": "44189825801",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "github-actions[bot]",
+    "run_attempt": 1,
+    "run_id": "44189825801",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118010445_1de2b82163",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9655,
+    "run_id": "44189825801"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T01:04:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
