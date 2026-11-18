@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-18T08:09:37Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=none:1; cited_path=quick / lint, quick / static-checks, quick / budget-watch, quick / final-ci-failed (run 44248027907); files_touched=agents.md, changelog.d/9705-integrity-push-paths.md, tests/test_workflow_integrity.py, workflow-templates/ai-workflow-integrity.yml.",
+  "phase": "review_autofix",
+  "pr_number": 9705,
+  "record_id": "lesson_20261118080937_cce4d51695",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "quick / lint, quick / static-checks, quick / budget-watch, quick / final-ci-failed (run 44248027907)",
+    "none",
+    "agents.md",
+    "changelog.d/9705-integrity-push-paths.md",
+    "tests/test_workflow_integrity.py",
+    "workflow-templates/ai-workflow-integrity.yml"
+  ]
+}
