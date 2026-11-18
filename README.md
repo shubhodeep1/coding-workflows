@@ -4770,6 +4770,17 @@ Offline `do-runner-*` runners with no droplet are deleted, at most 10 per pass.
   service. A DigitalOcean Uptime check
   on it alerts by email when the service is down.
 
+**Onboarding a consumer.** `/seed-repo` offers the fleet for a new private
+consumer once the rollout has recorded the app as the `runner-scaler` row of the
+agents file's `## DigitalOcean resources` table. The order is fixed:
+
+1. Add the repository to the GitHub App `shubhodeep1-runner-scaler`. This is a
+   browser step.
+2. Add it to `RUNNER_SCALER_REPOS`.
+3. Only then set `PIPELINE_RUNS_ON=do-runner` on it.
+
+The same order applies to an existing consumer that opts in later.
+
 **Rollback.** Unset `PIPELINE_RUNS_ON` on the consumer: new jobs go back to
 GitHub-hosted runners at once. Jobs already queued with `do-runner` are
 cancelled and re-run.

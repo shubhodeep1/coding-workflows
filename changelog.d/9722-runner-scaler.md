@@ -10,6 +10,8 @@ Failures stay bounded:
 
 Nothing runs until the App Platform app is created from `tools/runner_scaler/app.yaml`, and its first deploy is a dry run.
 
+`/seed-repo` now offers the fleet when it seeds a new private consumer, once the rollout has recorded the `runner-scaler` app. It runs the three onboarding steps in a fixed order, so a job never queues with nothing to serve it: the user installs the GitHub App, then the session adds the repository to `RUNNER_SCALER_REPOS`, then sets `PIPELINE_RUNS_ON=do-runner`. Public repositories and coding-workflows are never offered.
+
 | The numbers that matter | Value |
 | --- | --- |
 | Droplet size, region, image | `s-4vcpu-8gb` ($0.07143/hr), `nyc3`, `ubuntu-26-04-x64` |
