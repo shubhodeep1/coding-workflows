@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:2475-2521 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash, anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  PROBLEM: When the retry's PR read fails or omits `.base.ref`, `_rb_retry_base` is cleared and the saved payload is not refreshed. The guard re-runs on the stale base, and the retried merge, bound only to the head SHA, can merge into a clean-audited standalone head after a retarget.\n  WHY: The guard is the only base-side gate, and it allows on stale default-base data. Severity disagreement: openai and glm rated it MAJOR. anthropic and minimax rated it a hardening suggestion with risk 1, and anthropic and minimax recommend keeping the fail-open behavior as the accepted tradeoff. glm notes that `test_followup_guard_rerun_keeps_payload_when_base_unreadable_or_unchanged` locks in the fail-open behavior.\n- scripts/review_rb_judge.sh:2473-2482 | severity=high | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: This is the race lens of the same stale-base window. The retarget-during-delay race is covered only when the retry read succeeds.\n  WHY: glm says it is not a separate defect and reports it under CORRECTNESS. Severity is MAJOR.\n- scripts/review_rb_judge.sh:2506 | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: If the base-rewrite `jq -c` fails, the payload becomes empty and the guard fails closed as `unavailable`.\n  WHY: glm verified this as sound and found no additional defect (NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_rb_judge.sh:2501-2507 | hardening_risk_score=1\n  PROBLEM: An unreadable retry PR read keeps the saved payload, so a retarget during an API outage is not seen by the guard re-run.\n  WHY: The reviewer recommends no fix. Failing closed would block every merge on a transient API error, and the head-bound merge was the accepted design.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_rb_judge.sh:2499-2517 | hardening_risk_score=1\n  PROBLEM: When the retry's `/pulls/<n>` read returns no usable base, the guard re-run uses the original payload. A retarget during the delay is then missed.\n  WHY: The reviewer suggests logging `note=base_unreadable_kept_saved_payload`, or failing closed only when the saved base equals `DEFAULT_BRANCH`. The estimate is 2-5 lines.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_rb_judge.sh:2475-2482, 2504-2521 | severity=high | confidence=5\n  PROBLEM: If the retry's PR read fails or omits `.base.ref`, `_rb_retry_base` is cleared and the payload is not refreshed. The guard re-runs on the stale payload.\n  WHY: A retarget onto a clean-audited standalone head is then allowed. The merge is bound to the head SHA, not the base. Source severity is MAJOR.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_rb_judge.sh:2504-2507, 2513-2517 | severity=high | confidence=4\n  PROBLEM: When the retry's PR read fails, the base refresh is skipped. The guard re-runs on the stale `.base.ref`, and the retried merge can land in a clean-audited head after a retarget.\n  WHY: The retried merge is bound to the head SHA only, and the guard evaluates stale data. The test `test_followup_guard_rerun_keeps_payload_when_base_unreadable_or_unchanged` locks in this behavior. Source severity is MAJOR.\n- scripts/review_rb_judge.sh:2473-2482 | severity=high | confidence=4\n  PROBLEM: This is the same failure mode viewed as a race. The retarget-during-delay race is covered only when the retry read succeeds.\n  WHY: It is reported as not a separate defect. Source severity is MAJOR.\n- scripts/review_rb_judge.sh:2506 | severity=low | confidence=5\n  PROBLEM: If the base-rewrite `jq -c` fails, the payload becomes empty and the guard fails closed as `unavailable`.\n  WHY: Verified sound, with no additional defect. Source severity is NIT.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ac5a05ed986422e103879c30c76709c5eb0bd033ab93d6a7aa8ca841938bf1d4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9692,
+    "run_id": "44340862845",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44340862845",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118182720_5909b3205d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9692,
+    "run_id": "44340862845"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T18:27:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
