@@ -9,6 +9,9 @@ from pathlib import Path
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_implement_text  # noqa: E402
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
@@ -17,7 +20,8 @@ COMMIT_HELPER = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
 
 
 def _workflow_text() -> str:
-	return IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+	# implement.yml sources some post-editor step bodies from scripts/ (#9678).
+	return expanded_implement_text()
 
 
 def _diagnose_text() -> str:

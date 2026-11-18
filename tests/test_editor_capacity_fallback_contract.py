@@ -19,7 +19,11 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_implement_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -87,7 +91,8 @@ def test_plan_loop_switches_model_on_final_attempt() -> None:
 
 
 def test_implement_loop_switches_model_on_final_attempt() -> None:
-	text = IMPLEMENT.read_text(encoding="utf-8")
+	# implement.yml sources some post-editor step bodies from scripts/ (#9678).
+	text = expanded_implement_text()
 	assert 'attempt_model="${MODEL_EDITOR}"' in text
 	assert (
 		'[ "${attempt}" -eq "${max_attempts}" ] '

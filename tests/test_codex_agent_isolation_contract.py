@@ -23,6 +23,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
+from review_autofix_step_scripts import expanded_implement_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO_ROOT / "scripts"
@@ -181,7 +182,8 @@ def step_block(workflow_text: str, name: str) -> str:
 
 
 def test_implement_runs_privileged_helpers_from_the_trusted_copy():
-	text = (WORKFLOWS / "implement.yml").read_text(encoding="utf-8")
+	# implement.yml sources some post-editor step bodies from scripts/ (#9678).
+	text = expanded_implement_text()
 	stage = step_block(text, "Stage workflow support files")
 	# The trusted run copy exists in every repo, not only coding-workflows.
 	run_dir_line = 'IMPLEMENT_STAGED_SUPPORT_RUN_DIR="${RUNTIME_DIR}/staged_support_run/scripts"'
@@ -211,7 +213,7 @@ def test_implement_runs_privileged_helpers_from_the_trusted_copy():
 
 
 def test_isolated_runs_carry_no_serena_hints():
-	text = (WORKFLOWS / "implement.yml").read_text(encoding="utf-8")
+	text = expanded_implement_text()
 	assert "Serena MCP is available in this run" not in text
 	for script in ("validate_process.sh", "self_heal_validation.sh"):
 		body = (SCRIPTS / script).read_text(encoding="utf-8")
@@ -705,7 +707,7 @@ IMAGE_BUILD_RETRY_PREPARE = 'CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS=3 bash "${CODEX
 
 @pytest.mark.parametrize("step", ["Run Codex implementation", "Attempt post-Codex syntax repair"])
 def test_implement_prepare_retries_only_the_image_build_and_fails_closed(step):
-	block = step_block((WORKFLOWS / "implement.yml").read_text(encoding="utf-8"), step)
+	block = step_block(expanded_implement_text(), step)
 	assert block.count(IMAGE_BUILD_RETRY_PREPARE) == 1
 	after = block[block.index(IMAGE_BUILD_RETRY_PREPARE):]
 	assert after.index('echo "::error::CODEX_ISOLATION sandbox preparation failed; Codex is never run on the host."') < after.index("exit 1")
@@ -714,7 +716,7 @@ def test_implement_prepare_retries_only_the_image_build_and_fails_closed(step):
 
 
 def test_image_build_retry_knob_is_never_exported_by_implement():
-	text = (WORKFLOWS / "implement.yml").read_text(encoding="utf-8")
+	text = expanded_implement_text()
 	assert text.count("CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS") == 2
 	assert text.count(IMAGE_BUILD_RETRY_PREPARE) == 2
 	assert not re.search(r"^\s*CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS:", text, re.M)

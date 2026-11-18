@@ -252,6 +252,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/orphan_fixup_close.py` — Pick the open unblock fix-up issues whose source issue is already closed, for the poller to close.
 - `scripts/post_review_comment.sh` — a single pull-request review when `--review-state` is supplied.
 - `scripts/pr_checks_lib.sh` — Shared PR check-runs merge gate.
+- `scripts/implement_step_post_codex_syntax_repair.sh` — Body of implement.yml's "Attempt post-Codex syntax repair" step, moved out to keep the workflow under the size limit and sourced only from the trusted pre-editor `IMPLEMENT_STAGED_SUPPORT_RUN_DIR` copy (issue #9678).
+- `scripts/implement_step_preflight_destructive_guard.sh` — Body of implement.yml's "Preflight destructive-commit guard" step (bulk-delete, automation-path and files_touched preflight guards), moved out to keep the workflow under the size limit and sourced only from the trusted pre-editor `IMPLEMENT_STAGED_SUPPORT_RUN_DIR` copy (issue #9678).
 - `scripts/implement_step_prepush_test_gate.sh` — Implement's pre-push affected-test gate step: runs the gate before commit, gives PR-caused failures one repair turn and writes the PR-body summary (issue #8190).
 - `scripts/prepush_test_gate_run.sh` — Run the pre-push affected-test gate in a credential-free container and copy back only its result (issue #7137).
 - `scripts/promote_candidate_follow.sh` — Fast-forward the `promote-candidate` branch to the main tip unless the `promote-cycle-frozen` tag freezes it (log prefix `PROMOTE_CANDIDATE_FOLLOW`).
