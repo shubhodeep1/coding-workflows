@@ -189,6 +189,7 @@ jobs:
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'true' }}
+          CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED || 'true' }}
           HOLD_EVENT_NAME: ${{ github.event_name }}
           HOLD_COMMENT_LOGIN: ${{ github.event.comment.user.login }}
           HOLD_COMMENT_ASSOCIATION: ${{ github.event.comment.author_association }}
@@ -307,6 +308,7 @@ jobs:
             ISSUE="${issue_number}" \
             GH_TOKEN="${GH_TOKEN}" \
             CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" \
+            CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED:-true}" \
             bash "${resolver_script}" 2>"${resolver_err_file}"
           })" || resolver_rc=$?
           resolver_pr_not_open=false
