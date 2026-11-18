@@ -206,3 +206,25 @@ def test_mac_setup_steps_are_skipped_unless_output_needs_them(command: Path) -> 
 	assert "Right before the first step that needs the latest repo files locally" in procedure
 	assert "`git pull --ff-only`" in procedure
 	assert "**Assume my Mac is set up.**" in text.split("## Rules", 1)[1]
+
+
+@pytest.mark.parametrize("command", COMMANDS, ids=("live", "template"))
+def test_one_session_keeps_its_log_updates_in_one_pull_request(command: Path) -> None:
+	text = command.read_text(encoding="utf-8")
+	section = text.split("\n## Activation Log\n", 1)[1].split("\n## ", 1)[0]
+	section = " ".join(section.split())
+	for required in (
+		"**One log PR per session.**",
+		"goes to a single pull request",
+		"open one PR for it as a **draft**",
+		"titled `chore: activation log updates`",
+		"never open a second PR while that one is open",
+		"then mark it ready for review once",
+		"If it has merged or been closed in the meantime, do not commit onto its branch",
+		"CLAUDE.md §21.A",
+		"then open one new draft PR for the updates that remain",
+		"merge that branch into your working branch before your first log commit",
+		"closing it yourself is ask-first (CLAUDE.md §23.C)",
+		"**commit and push the log** to the session's one log PR (below)",
+	):
+		assert required in section, (command, required)
