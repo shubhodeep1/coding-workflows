@@ -1698,6 +1698,8 @@ jobs:
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
           INTEGRATION_BRANCH: ${{ steps.integration_branch.outputs.integration_branch }}
+          # Read by orchestrate_state_v2.py pack; see orchestrate_poll.yml.
+          ORCH_STATE_COMPRESS: ${{ vars.ORCH_STATE_COMPRESS || 'false' }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -1760,7 +1762,7 @@ jobs:
               exit 1
             fi
           done
-          echo "Posted initial state to tracking issue #${TRACKING_ISSUE_NUMBER} (ORCHESTRATOR_STATE_V2 parts=${STATE_PACK_PART} raw_bytes=${STATE_PACK_RAW_BYTES})"
+          echo "Posted initial state to tracking issue #${TRACKING_ISSUE_NUMBER} (ORCHESTRATOR_STATE_V2 parts=${STATE_PACK_PART} raw_bytes=${STATE_PACK_RAW_BYTES} compressed=$(jq -r '.compressed // false' <<< "${STATE_PACK_MANIFEST}"))"
 
       - name: Record decomposition candidate
         if: env.CLAUDE_CAPACITY_WAIT != 'true'
