@@ -151,7 +151,8 @@ if [ -f "${SUPPORT_DIR}/scripts/label_helpers.sh" ]; then
 fi
 # CONSIST-001: retry transient GitHub errors (5xx, connection reset) on the
 # judge's read-only GETs the same way the poller paths do. gh_retry wraps only
-# the comments, identity, item-metadata, item re-check and cited-run reads;
+# the comments, identity, item-metadata, item re-check, cited-run and
+# chain-title (a trusted PR's `ai/issue-<n>` issue) reads;
 # writes (comment POSTs, label POST/DELETE, PATCH, issue creation, dispatches)
 # stay single-attempt on purpose. gh_helpers.sh has a load guard, so this is a
 # no-op when label_helpers.sh already sourced it. A missing or unsourceable

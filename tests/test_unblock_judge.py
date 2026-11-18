@@ -1524,7 +1524,7 @@ def test_comment_post_stays_single_attempt_on_a_transient_error(tmp_path: Path) 
 
 
 def test_only_the_listed_reads_are_wrapped_in_gh_retry() -> None:
-	"""CONSIST-001: the helper source, the pass-through fallback and the five wrapped reads."""
+	"""CONSIST-001: the helper source, the pass-through fallback and the six wrapped reads."""
 	text = JUDGE.read_text(encoding="utf-8")
 	assert 'if [ -f "${SUPPORT_DIR}/scripts/gh_helpers.sh" ]; then' in text
 	assert 'source "${SUPPORT_DIR}/scripts/gh_helpers.sh" >/dev/null 2>&1 || true' in text
@@ -1535,6 +1535,7 @@ def test_only_the_listed_reads_are_wrapped_in_gh_retry() -> None:
 		'gh_retry gh api "repos/${REPOSITORY}/issues/${ITEM}" > "${RUNTIME_DIR}/item.json"',
 		'gh_retry gh api "repos/${REPOSITORY}/issues/${ITEM}" > "${RUNTIME_DIR}/item_recheck.json"',
 		'gh_retry gh api "repos/${REPOSITORY}/actions/runs/${candidate_id}"',
+		'gh_retry gh api "repos/${REPOSITORY}/issues/${BASH_REMATCH[1]}" --jq \'(.title // "") | .[0:400]\'',
 	):
 		assert text.count(read) == 1, read
 	for line in text.splitlines():
