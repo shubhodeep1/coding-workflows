@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:1804-1809, 1842-1843, 2261-2271 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: When the source-issue title read fails, `chain_title` stays empty and the PR's own title is passed to the ledger. That title has no chain prefix, so the depth is 0 and the splitting verdicts stay on the menu.\n  WHY: A transient read failure can defeat the chain-depth cap and let the chain continue past two steps. Severity is MAJOR in all three sources, mapped to high. The reviewers cite different locations: gemini cites `scripts/unblock_ledger.py` `decide()`, minimax cites lines 1804-1809 and 2261-2271, and luna cites lines 1808-1809, 1842-1843 and 2268. The anthropic and z-ai reviewers examined this path and judged it accepted, documented fail-open behaviour, so they did not report it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description: \"At `MAX_CHAIN_DEPTH = 2`, `decide()` takes `reissue`, `accept_with_followup`, `descope` and `operator_step` off the judge's menu, and `validate` refuses them like any verdict that is not offered.\"\n  expected_change_site: scripts/unblock_judge.sh lines 1804-1809 (chain_title read) and 2261-2271 (decide_args assembly); scripts/unblock_ledger.py decide() chain cap\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: No diff hunk covers the read-failure path. An empty `chain_title` becomes `null` in `context.json`, and the jq fallback `(.chain_title // .title // \"\")` substitutes the PR title. `chain_depth()` then returns 0 and the chain verdicts stay on the menu. The reviewer suggests treating an empty `chain_title` as depth = MAX_CHAIN_DEPTH. Reported severity is MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_ledger.py:decide() function and subsequent use of item_chain_depth | severity=MAJOR | confidence=4\n  PROBLEM: The chain-depth cap is defeated if the issue title read fails.\n  WHY: `scripts/unblock_judge.sh` falls back to the PR title, which has no chain prefixes, so the depth is 0. `chain_capped` is then False and the splitting verdicts (reissue, accept_with_followup, descope, operator_step) stay on the menu.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/unblock_judge.sh:1804-1809 and 2261-2271 | severity=MAJOR | confidence=4\n  PROBLEM: When the `gh_retry gh api ... | head -n 1 || true` read fails or returns empty, `chain_title` is serialised as `null`. The decide_args assembly then falls back to the PR title via `.chain_title // .title // \"\"`, so `chain_depth()` is 0 and `chain_capped` is False.\n  WHY: A transient read failure silently undoes the cap for that judgement round, and the only trace is one `op=chain_title outcome=unavailable reason=read_failed` log line. The reviewer notes the PR description documents the fallback, but argues that failing open defeats the brake. The last run did not touch this path.\n- TASK_GAP: requirement: PR description: \"At `MAX_CHAIN_DEPTH = 2`, `decide()` takes `reissue`, `accept_with_followup`, `descope` and `operator_step` off the judge's menu, and `validate` refuses them like any verdict that is not offered. The judge can then only continue on the item itself (`retry_budget`, `auto_answer`, `override_guard`, `wait`). When nothing is left the item is terminal (`menu_exhausted`).\"\n  Expected change site: scripts/unblock_judge.sh lines 1804-1809 (chain_title read) and 2261-2271 (decide_args assembly); scripts/unblock_ledger.py decide() chain cap.\n  Evidence of absence: No diff hunk covers the read-failure path. The PR description acknowledges the fallback and treats it as a \u00a715 budget note. The reviewer suggests treating an empty chain_title as depth = MAX_CHAIN_DEPTH instead of failing open.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/unblock_judge.sh:1808-1809, 1842-1843, 2268 | severity=MAJOR | confidence=4\n  PROBLEM: If the source-issue title read fails, `chain_title` stays empty and the PR's own title is passed to the ledger. A normal PR title has no chain prefix, so the depth is 0.\n  WHY: The judge can offer chain verdicts for an item already at the cap. Any new issue it creates carries only the new prefix, so the earlier depth is lost. Repeated read failures can let the chain run past two steps.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "318d5e0a4226c839219d01105d298de8f96b6e7faf5c409ace0200b46980441b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9685,
+    "run_id": "44272326793",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44272326793",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118105527_c458efa871",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9685,
+    "run_id": "44272326793"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T10:55:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
