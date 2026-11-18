@@ -2464,19 +2464,21 @@ rb_judge_merge_err_is_transient() {
 rb_judge_merge_retry_transient() {
   local _rb_retry_mode="${1:-direct}" _rb_retry_path="${2:-unknown}"
   local _rb_retry_attempt=0 _rb_retry_delay="" _rb_retry_pr=""
-  local _rb_retry_state="" _rb_retry_merged="" _rb_retry_auto="" _rb_retry_head=""
+  local _rb_retry_state="" _rb_retry_merged="" _rb_retry_auto="" _rb_retry_head="" _rb_retry_base=""
   for _rb_retry_delay in 10 20 40; do
     rb_judge_merge_err_is_transient || return 1
     _rb_retry_attempt=$((_rb_retry_attempt + 1))
     echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 delay_s=${_rb_retry_delay} reason=transient"
     sleep "${_rb_retry_delay}"
-    _rb_retry_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, (.merged // false), (.auto_merge != null), .head.sha] | @tsv' 2>/dev/null)" || _rb_retry_pr=""
-    IFS=$'\t' read -r _rb_retry_state _rb_retry_merged _rb_retry_auto _rb_retry_head <<< "${_rb_retry_pr}" || true
+    # The base ref (last field, #9671) lets the follow-up guard re-run below
+    # see a retarget made during the delay; same single read, no extra call.
+    _rb_retry_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, (.merged // false), (.auto_merge != null), .head.sha, (.base.ref // "")] | @tsv' 2>/dev/null)" || _rb_retry_pr=""
+    IFS=$'\t' read -r _rb_retry_state _rb_retry_merged _rb_retry_auto _rb_retry_head _rb_retry_base <<< "${_rb_retry_pr}" || true
     # gh api prints an HTTP error's response body to stdout (--jq is skipped),
     # so a failed read or a state other than open/closed counts as unreadable.
     case "${_rb_retry_state}" in
       open|closed) ;;
-      *) _rb_retry_state=""; _rb_retry_merged=""; _rb_retry_auto=""; _rb_retry_head="" ;;
+      *) _rb_retry_state=""; _rb_retry_merged=""; _rb_retry_auto=""; _rb_retry_head=""; _rb_retry_base="" ;;
     esac
     # Head first: a PR merged at a head other than the judged one is not the
     # judge's merge, so it stays a failure (head_moved).
@@ -2495,6 +2497,13 @@ rb_judge_merge_retry_transient() {
     if [ "${_rb_retry_mode}" = "auto" ] && [ "${_rb_retry_auto}" = "true" ] && [ "${_rb_retry_head}" = "${RB_JUDGED_HEAD_SHA:-}" ]; then
       echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=auto_merge_enabled"
       return 0
+    fi
+    # A PR retargeted during the delay (#9671): the guard re-run evaluates the
+    # live base, not the one in the site's payload. An unreadable base keeps
+    # the payload as it is; a failed rewrite empties it, so the guard fails closed.
+    if [ -n "${RB_JUDGE_FOLLOWUP_GUARD_RESULT:-}" ] && [ -n "${_rb_retry_base}" ] \
+      && [ "${_rb_retry_base}" != "$(printf '%s' "${RB_JUDGE_FOLLOWUP_GUARD_PAYLOAD:-}" | jq -r '.base.ref // ""' 2>/dev/null)" ]; then
+      RB_JUDGE_FOLLOWUP_GUARD_PAYLOAD="$(printf '%s' "${RB_JUDGE_FOLLOWUP_GUARD_PAYLOAD:-}" | jq -c --arg base "${_rb_retry_base}" '.base.ref = $base' 2>/dev/null)" || RB_JUDGE_FOLLOWUP_GUARD_PAYLOAD=""
     fi
     # Security follow-up guard (#9671): a clean audit of the base branch's
     # head can land during the delay, so a site that ran the guard re-runs

@@ -719,7 +719,7 @@ def test_transient_merge_error_is_retried_and_succeeds(path: str) -> None:
 	assert sleeps == ["10"]
 	expected = _expected_calls(path)
 	assert calls[: len(expected)] == expected
-	assert calls[len(expected)] == ["api", "repos/o/r/pulls/42", "--jq", "[.state, (.merged // false), (.auto_merge != null), .head.sha] | @tsv"]
+	assert calls[len(expected)] == ["api", "repos/o/r/pulls/42", "--jq", '[.state, (.merged // false), (.auto_merge != null), .head.sha, (.base.ref // "")] | @tsv']
 	assert calls[len(expected) + 1 :] == expected[:1]
 	retry = _retry_lines(proc.stdout)
 	assert retry == [f"RB_JUDGE_MERGE_RETRY pr=42 head={JUDGED} path={path} attempt=1/3 delay_s=10 reason=transient"]
@@ -1577,12 +1577,13 @@ n=$(cat "${FG_STUB_COUNT}" 2>/dev/null || echo 0)
 echo $((n + 1)) > "${FG_STUB_COUNT}"
 IFS=, read -r -a results <<< "${FG_STUB_RESULTS}"
 r="${results[$n]:-${results[${#results[@]}-1]}}"
+if [ -n "${FG_STUB_PAYLOADS:-}" ]; then cp "${PR_PAYLOAD_FILE}" "${FG_STUB_PAYLOADS}/payload_$((n + 1)).json"; fi
 echo "SINGLE_ISSUE_SECURITY_PASS mode=followup_guard stub=1 call=$((n + 1))"
 echo "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=${r}"
 """
 
 
-def _run_fg_site_with_retry(path: str, guard_results: list[str], responses: list[dict]) -> dict:
+def _run_fg_site_with_retry(path: str, guard_results: list[str], responses: list[dict], payload: str = FG_PAYLOAD) -> dict:
 	with tempfile.TemporaryDirectory(prefix="test_rb_judge_followup_guard_retry_") as td:
 		tmp = Path(td)
 		bin_dir = tmp / "bin"
@@ -1646,9 +1647,10 @@ def _run_fg_site_with_retry(path: str, guard_results: list[str], responses: list
 			"ENABLE_AUTO_MERGE": "true",
 			"SUPPORT_SCRIPTS_DIR": str(support),
 			"DEFAULT_BRANCH": "main",
-			"FG_PAYLOAD_JSON": FG_PAYLOAD,
+			"FG_PAYLOAD_JSON": payload,
 			"FG_STUB_RESULTS": ",".join(guard_results),
 			"FG_STUB_COUNT": str(tmp / "stub_count"),
+			"FG_STUB_PAYLOADS": str(tmp),
 		}
 		proc = subprocess.run(["bash", str(harness)], env=env, text=True, capture_output=True, timeout=60)
 		calls = [json.loads(line) for line in gh_log.read_text(encoding="utf-8").splitlines() if line.strip()] if gh_log.exists() else []
@@ -1658,6 +1660,7 @@ def _run_fg_site_with_retry(path: str, guard_results: list[str], responses: list
 			"calls": calls,
 			"outputs": github_output.read_text(encoding="utf-8").splitlines(),
 			"guard_calls": int(count_file.read_text(encoding="utf-8").strip()) if count_file.exists() else 0,
+			"payloads": [json.loads(p.read_text(encoding="utf-8")) for p in sorted(tmp.glob("payload_*.json"))],
 			"leftovers": sorted(p.name for p in scratch.iterdir()),
 		}
 
@@ -1694,3 +1697,27 @@ def test_followup_guard_rerun_allow_lets_transient_retry_merge(path: str) -> Non
 	assert "RB_JUDGE_SECURITY_FOLLOWUP_GUARD" not in proc.stdout
 	_assert_merge_succeeded(path, "\n".join(run["outputs"]), proc.stdout)
 	assert run["leftovers"] == []
+
+
+@needs_jq
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_followup_guard_rerun_uses_the_retry_reads_live_base(path: str) -> None:
+	"""A retarget during the retry delay reaches the guard re-run (#9671)."""
+	payload = json.dumps({"number": 42, "state": "open", "base": {"ref": "main", "repo": {"default_branch": "main"}}, "head": {"sha": JUDGED}})
+	retargeted = {"code": 0, "stdout": f"open\tfalse\tfalse\t{JUDGED}\tai/issue-7\n"}
+	run = _run_fg_site_with_retry(path, ["allow", "refuse"], _first_failure(path) + [retargeted, _ok()], payload=payload)
+	assert run["proc"].returncode == 0, run["proc"].stderr
+	assert [p["base"]["ref"] for p in run["payloads"]] == ["main", "ai/issue-7"]
+	assert run["payloads"][1]["head"] == {"sha": JUDGED}
+	assert _retry_lines(run["proc"].stdout)[-1].endswith("outcome=security_followup_guard")
+	assert _fg_merge_calls(run["calls"][len(_expected_calls(path)):]) == []
+
+
+@needs_jq
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_followup_guard_rerun_keeps_payload_when_base_unreadable_or_unchanged(path: str) -> None:
+	for state in (_pr_state(), {"code": 0, "stdout": f"open\tfalse\tfalse\t{JUDGED}\tai/issue-7\n"}):
+		run = _run_fg_site_with_retry(path, ["allow"], _first_failure(path) + [state, _ok()])
+		assert run["proc"].returncode == 0, run["proc"].stderr
+		assert run["payloads"] == [json.loads(FG_PAYLOAD)] * 2
+		_assert_merge_succeeded(path, "\n".join(run["outputs"]), run["proc"].stdout)
