@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-18T14:21:42Z",
+  "issue_number": 9688,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=.github/workflows/ci.yml:164; cited_path=.github/workflows/ci.yml; files_touched=README.md, agents.d/9688-final-ci-sync-only-merge-ref.md, changelog.d/9688-final-ci-sync-only-merge-ref.md, scripts/ci_final_merge_ref_fresh.sh, tests/test_ci_final_merge_ref_fresh.py.",
+  "phase": "review_autofix",
+  "pr_number": 9708,
+  "record_id": "lesson_20261118142142_166f202f0f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/ci.yml",
+    "README.md",
+    "agents.d/9688-final-ci-sync-only-merge-ref.md",
+    "changelog.d/9688-final-ci-sync-only-merge-ref.md",
+    "scripts/ci_final_merge_ref_fresh.sh",
+    "tests/test_ci_final_merge_ref_fresh.py"
+  ]
+}
