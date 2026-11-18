@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\nQ2: A\nQ3: A\n\nRATIONALE:\nQ1: Option A can't be carried out. The issue's plan grant lists only the step script, `tests/**`, `.github/workflows/ci.yml`, `changelog.d/*` and `agents.d/*`. Per agents.md lines 2132-2139, any staged `.github/` file needs an exact `files_touched` entry, and `review_autofix.yml` has none, so the automation-path guard would block the commit (it would also hold auto-approval). Option C doesn't work either: `AUTOFIX_BOT_LOGIN` (default `codex`) is the commit-bot login, but the cap comment is posted through `GH_PAT` (`review_autofix.yml:1918`) and trusted by the PAT login (`:1834`), so C would never match. That leaves B, with the lookup kept lazy: the script calls `gh api user` once, only when the label is present and the snapshot holds a cap marker that is stale for the clean marker. This copies the gate's documented one-time lookup at `review_autofix_step_evaluate_gate.sh:349-358`, so the extra calls happen only on that rare path.\nQ2: The step's job already holds the data, so no new read is needed. `review_collect_pr_metadata.sh:224-229` writes the full REST PR payload to `PR_PAYLOAD_FILE`, which carries `.labels[].name`, and the paginated issue comments to `PR_ISSUE_COMMENTS_FILE`. That comments read goes through the signing shim, so signed bot comments show up as the PAT login (`gh_helpers.sh:200-210`). Any cap marker comes from an earlier run's fingerprint-cap-block job, so it is older than this run's snapshot.\nQ3: Follow the cap job's own matching rule at `review_autofix.yml:1834-1835`. When the clean support is a valid SHA, a cap marker with no `support=` counts as different support, and the label is removed. When the clean marker's support is `none`, a cap marker with no `support=` counts as the same support, so with the same head the label is kept (`reason=same_head_same_support`).\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/review_autofix_step_post_editor_summary.sh (clean-marker post at lines 280-343)\n    - scripts/review_autofix_step_evaluate_gate.sh:349-358 (precedent for `gh api user` and its audit comment)\n    - .github/workflows/review_autofix.yml:1834-1835, 1886 (cap-marker trust rule and format)\n  steps:\n    - Run the new block only after the clean-marker comment posts successfully (`clean_marker_suffix` is non-empty and the POST succeeded).\n    - If `ai:review-blocked` is not among the `PR_PAYLOAD_FILE` labels, stop with no log line or a `REVIEW_BLOCKED_STALE_CLEAR ... outcome=kept reason=label_absent` line, and make no calls.\n    - Pick the newest comment in `PR_ISSUE_COMMENTS_FILE` (highest `id`) whose body has a `<!-- review-autofix-failure-cap:v1 head=<40hex> ... -->` marker on its own line. If there is none, log `outcome=kept reason=no_cap_marker` and make no calls.\n    - If its head and support match the clean marker (using the Q3 rule), log `outcome=kept reason=same_head_same_support` and make no calls.\n    - Only after that, call `gh api user --jq '.login // \"\"'` once, with a comment above it naming the existing calls checked (the PR payload and comments in the metadata snapshot carry no PAT identity). If the login comes back empty or the call fails, log `outcome=kept reason=marker_author_unavailable`.\n    - Compare the selected marker comment's author to the login, ignoring case. Otherwise log `outcome=kept reason=untrusted_cap_author`. On a match, send one `DELETE repos/<repo>/issues/<pr>/labels/ai%3Areview-blocked`. A 2xx or 404 logs `outcome=removed`. Any other failure logs `outcome=error reason=delete_failed`, and the step still exits 0.\n  replaces_acceptance_criterion: \"\u00a715: at most one extra REST call (the DELETE)\" becomes \"at most two extra REST calls (`gh api user` plus the DELETE), only when the label is present and the snapshot's newest cap marker is stale; zero extra calls otherwise\".\n  equivalence_argument: This uses the same trust anchor the gate and the cap job use (the GH_PAT login), stays inside the granted files, and adds calls only on the rare stale-label path. The usual clean run with no label makes no new calls.\n  reversibility: If a human later allows editing `review_autofix.yml`, swap the `gh api user` call for an `AUTOFIX_CAP_MARKER_AUTHOR_LOGIN` env read from `needs.gate.outputs.fingerprint_cap_marker_author_login`. The rest of the logic stays the same.\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/review_collect_pr_metadata.sh:224-229 (`PR_PAYLOAD_FILE` REST PR payload, `PR_ISSUE_COMMENTS_FILE` paginated comments)\n  steps:\n    - Read labels with `jq '[.labels[]?.name]' \"${PR_PAYLOAD_FILE}\"`, and read comments with `.id`, `.user.login` and `.body` from `PR_ISSUE_COMMENTS_FILE`.\n    - If either file is missing or can't be parsed, fall back to one GET: the PR read for labels, or the paginated comments read for markers. If that read also fails, log `outcome=kept reason=snapshot_unavailable` and exit 0.\n  replaces_acceptance_criterion: none\n  equivalence_argument: The snapshot is taken at the start of this run. Every cap marker comes from an earlier run, so it is already in the snapshot.\n  reversibility: Switching to a fresh read means changing one input path.\nQ3:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/review_autofix.yml:1829-1835, 1886\n    - scripts/review_autofix_step_post_editor_summary.sh:317-319 (clean `support=<sha|none>`)\n  steps:\n    - Read the cap's `support` from the marker line. Missing counts as empty.\n    - If the clean support is 40-hex: the cap is stale when its support is empty or differs.\n    - If the clean support is `none`: compare heads only.\n    - Tests add one case: same head, cap with no `support=`, valid clean support \u2192 removed (`reason=cap_support_mismatch`).\n  replaces_acceptance_criterion: none\n  equivalence_argument: This mirrors the cap job's existing rule for which markers count against a given support SHA, so clearing and capping can't disagree.\n  reversibility: Switching to option B is a one-condition change in the comparison.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- None.",
+  "fingerprint": "69c302e7a7effac9b5395795a68c728beadc4434eb4fb3af9cdf2fad3509ebc9",
+  "lineage": {
+    "issue_number": 9716,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44273476751",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44273476751",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9716"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261118092148_37d8681b0e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9716,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44273476751"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9716",
+  "timestamps": {
+    "created_at": "2026-11-18T09:21:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
