@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add a structured `STANDALONE_SKIP ... outcome=skip reason=linked_pr_merged` line...\" (when the poller prints its own single skip line).\n  expected_change_site: scripts/orchestrate_poll_process.sh, _reconcile_standalone_merged_pr_issue\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The implementation in `scripts/orchestrate_poll_process.sh` around lines 24333-24351 does not print `STALL_SKIP ... reason=linked_pr_merged`. It only prints `STALL_SKIP ... reason=merged_non_target_base`. The test `test_standalone_ready_to_merge_logs_linked_pr_merged_when_merged_into_default_branch` checks for this line, but the poller does not print it when the base is not an integration branch. The PR diffs and the changelog/agents fragments describe the `STALL_SKIP` behavior.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Add a structured `STANDALONE_SKIP ... outcome=skip reason=linked_pr_merged` line...\" (when the poller prints its own single skip line).\n  Expected change site: scripts/orchestrate_poll_process.sh, _reconcile_standalone_merged_pr_issue\n  Evidence of absence: The PR diffs introduce logic to handle the merged PR skip, and the changelog/agents fragments describe the `STALL_SKIP` behavior, but the implementation in `scripts/orchestrate_poll_process.sh` around lines 24333-24351 does not print `STALL_SKIP ... reason=linked_pr_merged`. It only prints `STALL_SKIP ... reason=merged_non_target_base`. The test `test_standalone_ready_to_merge_logs_linked_pr_merged_when_merged_into_default_branch` checks for this line, but based on the code in `scripts/orchestrate_poll_process.sh`, the line is not printed by the poller when the base is not an integration branch.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8b461cddec324e396d4d52a99272d8ad62d997a7bd13af329e458889b00bb84e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9502,
+    "run_id": "44376182315",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44376182315",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118210550_e816017587",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9502,
+    "run_id": "44376182315"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T21:05:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
