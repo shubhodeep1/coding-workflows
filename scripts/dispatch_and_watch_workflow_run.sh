@@ -357,7 +357,9 @@ done
 # the workflow steps' timeout block extracts the run id from it.
 if [ "${WATCH_SAW_IN_PROGRESS}" = "1" ]; then
 	echo "::warning::${DISPLAY_NAME} run #${NEW_ID} watch diagnosis: status=in_progress (a runner was assigned; the run was slow); status_reads=${WATCH_STATUS_READS}"
-elif [ "${WATCH_STATUS_READS}" -gt 0 ] && [ "${WATCH_QUEUED_READS}" -eq "${WATCH_STATUS_READS}" ]; then
+# A trailing failed read leaves STATUS empty: the watcher then cannot claim
+# "the whole time" and falls through to the could-not-tell line.
+elif [ "${WATCH_STATUS_READS}" -gt 0 ] && [ "${WATCH_QUEUED_READS}" -eq "${WATCH_STATUS_READS}" ] && [ "${STATUS}" = "queued" ]; then
 	echo "::warning::${DISPLAY_NAME} run #${NEW_ID} watch diagnosis: status=queued the whole time (no runner was assigned); status_reads=${WATCH_STATUS_READS}"
 else
 	echo "::warning::${DISPLAY_NAME} run #${NEW_ID} watch diagnosis: last status=${STATUS:-unknown} (could not tell queued from in_progress); status_reads=${WATCH_STATUS_READS}"
@@ -367,11 +369,18 @@ WATCH_CANCEL_SWITCH="$(printf '%s' "${DISPATCH_WATCH_CANCEL_ON_TIMEOUT:-true}" |
 case "${WATCH_CANCEL_SWITCH}" in
 	true)
 		if [[ "${NEW_ID}" =~ ^[0-9]+$ ]]; then
-			if gh_api_safe_quiet -X POST "repos/${TARGET_REPO}/actions/runs/${NEW_ID}/cancel"; then
+			# Bounded like the workflow steps' twin cancel (`timeout 20 gh api`):
+			# gh_api_safe retries rate-limit errors on writes for up to ~210 s,
+			# which could outlast the step's remaining time and lose the
+			# `::error::... timed out` line the workflow cleanup parses.
+			if timeout 20 gh api -X POST "repos/${TARGET_REPO}/actions/runs/${NEW_ID}/cancel" >/dev/null 2>&1; then
 				echo "Cancel requested for watched run #${NEW_ID} (completion watch timeout)"
 			else
 				echo "::warning::Could not cancel watched run #${NEW_ID} after the completion watch timeout"
 			fi
+		else
+			# The id is not printed here because it is not numeric.
+			echo "::warning::Cancel of watched run skipped after the completion watch timeout: run id is not numeric"
 		fi
 		;;
 	false)

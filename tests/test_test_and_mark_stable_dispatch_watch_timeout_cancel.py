@@ -355,6 +355,8 @@ def _run_real_watcher(cancel_switch: str | None = None) -> tuple[int, str, list[
 
 
 def test_real_watcher_against_queued_stub_times_out_and_cancels_once() -> None:
+	"""The name predates #9706 and is kept: the run is now cancelled twice,
+	once by the watcher and once by the workflow's timeout block."""
 	rc, out, calls = _run_real_watcher()
 	assert rc == 1, out
 	assert "status=queued" in out, out
