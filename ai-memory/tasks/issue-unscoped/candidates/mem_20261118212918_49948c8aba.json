@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_intake.sh:1874 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The comment \"Every examined run (at most MAX_RUNS) lost its do-runner droplet\" contradicts the code (line 1890 `RUNNER_LOST_EXAMINED_RUNS=$((RUN_COUNT + RUNNER_LOST_BIND_DROPPED))`, uncapped) and the comment at lines 1880-1884, which says the total is deliberately not capped.\n  WHY: This is comment drift only, with no runtime failure, but it could mislead a maintainer into re-adding the removed cap. All reviewers rated it NIT; it is mapped to low here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/workflow_failure_heal_intake.sh:1874 | severity=NIT | confidence=5\n  PROBLEM: The \"(at most MAX_RUNS)\" parenthetical contradicts the code at line 1890 (uncapped) and the comment at lines 1880-1884. RUN_COUNT can reach MAX_RUNS + 1 through the pre-break increment.\n  WHY: It is comment drift in the block that documents the gate bound, and it could lead a future editor to re-add the removed cap.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal_intake.sh:1874 | severity=NIT | confidence=5\n  PROBLEM: The comment \"Every examined run (at most MAX_RUNS)\" contradicts the logic in the same hunk.\n  WHY: The code no longer caps `RUNNER_LOST_EXAMINED_RUNS` (line 1888) at `MAX_RUNS`, so the comment misleads future maintainers.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal_intake.sh:1874 | severity=NIT | confidence=5\n  PROBLEM: The opening line of the runner_lost gate comment says \"(at most MAX_RUNS)\". Lines 1879-1880 and the code at line 1890 say the total is deliberately not capped. This entry was reported under the TASK COMPLETENESS / INTENT GAPS heading but has the standard finding shape.\n  WHY: There is no runtime failure. It is comment drift that misleads readers about the bound the gate enforces.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/workflow_failure_heal_intake.sh:1874 (comment) vs 1880-1884 (same comment) and 1890 (code) | severity=NIT | confidence=5\n  PROBLEM: The first sentence still says \"(at most MAX_RUNS)\", but the comment later says the total \"is deliberately not capped at MAX_RUNS\". The code at line 1890 sums RUN_COUNT (which reaches MAX_RUNS + 1 before the break at lines 1727-1730) and RUNNER_LOST_BIND_DROPPED.\n  WHY: This is comment-only drift with no runtime failure. It misleads maintainers about the enforced invariant. The suggested fix is to drop the parenthetical.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a1efb9392d6975675dc1486592b82e0588b5f3344b7ffa0a84b77788f766188b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9723,
+    "run_id": "44380591008",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44380591008",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118212918_49948c8aba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9723,
+    "run_id": "44380591008"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T21:29:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
