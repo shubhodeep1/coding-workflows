@@ -1337,7 +1337,13 @@ rewrite:** some consumer rulesets put `non_fast_forward` on every branch
 force-push to this branch`) and a stale or conflicted sync pull request used to
 stay stuck until the next release. When the refresh push is refused for that
 reason (`GH013`, `Cannot force-push`, `protected branch hook declined`, or a
-remote `non-fast-forward` rejection), the updater pushes the rebuilt sync to
+remote `non-fast-forward` rejection), it looks at the open pull request's
+`mergeable` state (from the lookup it already makes). A pull request that is
+not `CONFLICTING` keeps its head, which carries the same release, and the
+`verify` job checks that head again (`UPDATER_PR_RESEND outcome=kept_head`):
+under such a ruleset every refresh is refused, so moving a healthy pull request
+would only use up branch names. For a conflicting pull request, or a branch
+with no open pull request, the updater pushes the rebuilt sync to
 the first free `<branch>-r2` .. `<branch>-r5`, opens the sync pull request from
 it (same title and body; the `verify` job handles auto-merge as usual), and
 closes the old pull request, if the `GH_PAT` account opened it, with one comment
@@ -1347,7 +1353,7 @@ Later runs for the same release continue on the highest `-rN` branch. Any
 other push failure (a lease mismatch because someone else pushed, a network or
 an auth error) still fails the run with
 `reason=lease_mismatch_or_push_rejected` and creates no branch. Each step logs
-an `UPDATER_PR_RESEND outcome=pushed|opened|cap_reached|push_failed` line. The
+an `UPDATER_PR_RESEND outcome=kept_head|pushed|opened|cap_reached|push_failed` line. The
 review pipeline treats `-r2` .. `-r5` branches like the base updater branch: it
 never edits, pushes to, resolves conflicts on, or merges them.
 

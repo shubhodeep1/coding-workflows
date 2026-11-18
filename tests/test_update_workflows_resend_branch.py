@@ -81,7 +81,7 @@ def _install_hook(fx: Fixture, body: str) -> None:
 	hook.chmod(hook.stat().st_mode | stat.S_IXUSR)
 
 
-def _open_pr(number: int, branch: str, author: str = PAT_LOGIN, state: str = "OPEN") -> dict:
+def _open_pr(number: int, branch: str, author: str = PAT_LOGIN, state: str = "OPEN", mergeable: str = "CONFLICTING") -> dict:
 	return {
 		"number": number,
 		"url": f"https://github.com/octo/consumer/pull/{number}",
@@ -92,6 +92,7 @@ def _open_pr(number: int, branch: str, author: str = PAT_LOGIN, state: str = "OP
 		"id": f"PR_node{number}",
 		"autoMergeRequest": None,
 		"author": {"login": author},
+		"mergeable": mergeable,
 	}
 
 
@@ -349,3 +350,41 @@ def test_failed_resend_push_creates_nothing(fx: Fixture) -> None:
 	assert _remote_sha(fx.origin, f"refs/heads/{BRANCH}-r2") == ""
 	assert _remote_sha(fx.origin, f"refs/heads/{BRANCH}-r3") == ""
 	assert not _calls(fx, "pr create") and not _calls(fx, "pr close")
+
+
+@pytest.mark.parametrize("mergeable", ["MERGEABLE", "UNKNOWN", None])
+@needs_jq
+def test_refused_refresh_of_a_mergeable_pr_keeps_its_head(fx: Fixture, mergeable: str | None) -> None:
+	# Under a no-force-push rule every refresh is refused, because the commit is
+	# rebuilt on the current default branch. A PR that is not conflicting keeps
+	# its head (same release) and the verify job re-checks it: no new branch.
+	old_sha = _seed_updater_branch(fx, BRANCH)
+	_install_hook(fx, GH013_HOOK)
+	pr = _open_pr(5, BRANCH, mergeable=mergeable or "")
+	if mergeable is None:
+		pr.pop("mergeable")
+	fx.pr_list.write_text(json.dumps([pr]), encoding="utf-8")
+	result = fx.run()
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert _remote_sha(fx.origin, f"refs/heads/{BRANCH}") == old_sha
+	assert _remote_sha(fx.origin, f"refs/heads/{BRANCH}-r2") == ""
+	outputs = fx.outputs()
+	assert outputs["branch"] == BRANCH
+	assert outputs["pr_number"] == "5"
+	assert outputs["pr_action"] == "refreshed"
+	assert outputs["pushed_sha"] == old_sha
+	assert f"UPDATER_PR_RESEND outcome=kept_head branch={BRANCH} pr=5 mergeable={mergeable or 'unknown'}" in result.stdout
+	assert "UPDATER_PR_DELIVERY outcome=refreshed reason=rewrite_refused_kept_head" in result.stdout
+	assert not _calls(fx, "pr create") and not _calls(fx, "pr close")
+
+
+@needs_jq
+def test_refused_refresh_without_an_open_pr_resends(fx: Fixture) -> None:
+	# A branch left without a PR (an earlier create failed) has nothing to keep.
+	_seed_updater_branch(fx, BRANCH)
+	_install_hook(fx, GH013_HOOK)
+	result = fx.run()
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert _remote_sha(fx.origin, f"refs/heads/{BRANCH}-r2") != ""
+	assert f"UPDATER_PR_RESEND outcome=opened from={BRANCH} branch={BRANCH}-r2 pr=77 old_pr=none old_pr_closed=none" in result.stdout
+	assert not _calls(fx, "pr close")

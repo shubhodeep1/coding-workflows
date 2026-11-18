@@ -1399,18 +1399,25 @@ jobs:
           # most) and closes the old PR. Later runs for the same release pick
           # up the highest -rN already on the remote. One git-protocol read,
           # no GitHub API call (§15).
+          # UPDATER_RESEND_MAX must match the -r[2-5] suffix in the branch
+          # regexes here, in the stale sweep, in the review guards
+          # (review_autofix.yml, scripts/review_*.sh) and in
+          # scripts/audit_consumer_drift.py.
           UPDATER_RELEASE_BRANCH="${BRANCH}"
           UPDATER_RESEND_MAX=5
           UPDATER_RESEND_FROM_BRANCH=""
           UPDATER_RESEND_FROM_PR=""
-          UPDATER_RESEND_REFS="$(git ls-remote origin "refs/heads/${UPDATER_RELEASE_BRANCH}-r*")" || pr_fail remote_lookup_failed
-          UPDATER_RESEND_ACTIVE="$(printf '%s\n' "${UPDATER_RESEND_REFS}" | awk -v prefix="refs/heads/${UPDATER_RELEASE_BRANCH}-r" -v max="${UPDATER_RESEND_MAX}" '
+          # Prints the highest -r2..-rMAX suffix among ls-remote lines (0: none).
+          # shellcheck disable=SC2016 # awk program text: $2 is awk's field.
+          UPDATER_RESEND_AWK='
             index($2, prefix) == 1 {
               suffix = substr($2, length(prefix) + 1)
               value = suffix + 0
               if (suffix ~ /^[2-9]$/ && value <= max && value > best) best = value
             }
-            END { print best + 0 }')"
+            END { print best + 0 }'
+          UPDATER_RESEND_REFS="$(git ls-remote origin "refs/heads/${UPDATER_RELEASE_BRANCH}-r*")" || pr_fail remote_lookup_failed
+          UPDATER_RESEND_ACTIVE="$(printf '%s\n' "${UPDATER_RESEND_REFS}" | awk -v prefix="refs/heads/${UPDATER_RELEASE_BRANCH}-r" -v max="${UPDATER_RESEND_MAX}" "${UPDATER_RESEND_AWK}")"
           if [ "${UPDATER_RESEND_ACTIVE}" -ge 2 ]; then
             BRANCH="${UPDATER_RELEASE_BRANCH}-r${UPDATER_RESEND_ACTIVE}"
           fi
@@ -1517,7 +1524,7 @@ jobs:
 
           # One lookup scoped to head and base. The list API (not search) sees a
           # pull request created seconds earlier.
-          PR_LIST_JSON="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "${BRANCH}" --base "${BASE}" --state all --limit 20 --json number,url,state,isCrossRepository,headRefName,mergedAt,id,autoMergeRequest,author)" || pr_fail pr_lookup_failed
+          PR_LIST_JSON="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "${BRANCH}" --base "${BASE}" --state all --limit 20 --json number,url,state,isCrossRepository,headRefName,mergedAt,id,autoMergeRequest,author,mergeable)" || pr_fail pr_lookup_failed
           OPEN_PR="$(printf '%s' "${PR_LIST_JSON}" | jq -r --arg b "${BRANCH}" '[.[] | select(.isCrossRepository == false and .headRefName == $b and .state == "OPEN")] | .[0] | if . == null then "" else "\(.number) \(.url)" end')" || pr_fail pr_lookup_failed
           CLOSED_UNMERGED="$(printf '%s' "${PR_LIST_JSON}" | jq -r --arg b "${BRANCH}" '[.[] | select(.isCrossRepository == false and .headRefName == $b and .state == "CLOSED" and .mergedAt == null)] | length')" || pr_fail pr_lookup_failed
           [[ "${CLOSED_UNMERGED}" =~ ^[0-9]+$ ]] || pr_fail pr_lookup_failed
@@ -1619,37 +1626,55 @@ jobs:
               if ! printf '%s\n' "${UPDATER_REFRESH_PUSH_ERR}" | grep -Eqi 'GH013|cannot force-push|protected branch hook declined|denying non-fast-forward|\[remote rejected\].*non-fast-forward'; then
                 pr_fail lease_mismatch_or_push_rejected
               fi
-              UPDATER_RESEND_FROM_BRANCH="${BRANCH}"
-              UPDATER_RESEND_FROM_PR="${PR_NUMBER}"
-              updater_resend_current=1
-              if [ "${BRANCH}" != "${UPDATER_RELEASE_BRANCH}" ]; then
-                updater_resend_current="${BRANCH##*-r}"
+              # Under such a rule every refresh is refused, because the commit
+              # is rebuilt on the current default branch. Move only a PR that
+              # GitHub reports as conflicting (the stuck case); otherwise keep
+              # its head, which carries the same release, and let the verify
+              # job re-check it. Reuses the head+base lookup (§15); UNKNOWN
+              # keeps the head and the next run looks again.
+              updater_resend_mergeable=""
+              if [ -n "${PR_NUMBER}" ]; then
+                updater_resend_mergeable="$(printf '%s' "${PR_LIST_JSON}" | jq -r --arg n "${PR_NUMBER}" '[.[] | select((.number | tostring) == $n)] | .[0].mergeable // ""' 2>/dev/null)" || updater_resend_mergeable=""
               fi
-              # Fresh read: take the first free name above the current one.
-              UPDATER_RESEND_REFS="$(git ls-remote origin "refs/heads/${UPDATER_RELEASE_BRANCH}-r*")" || pr_fail remote_lookup_failed
-              updater_resend_target=""
-              for ((updater_resend_idx = updater_resend_current + 1; updater_resend_idx <= UPDATER_RESEND_MAX; updater_resend_idx++)); do
-                if ! printf '%s\n' "${UPDATER_RESEND_REFS}" | awk -v ref="refs/heads/${UPDATER_RELEASE_BRANCH}-r${updater_resend_idx}" '$2 == ref { found = 1 } END { exit !found }'; then
-                  updater_resend_target="${UPDATER_RELEASE_BRANCH}-r${updater_resend_idx}"
-                  break
+              if [ -n "${PR_NUMBER}" ] && [ "${updater_resend_mergeable}" != "CONFLICTING" ]; then
+                echo "UPDATER_PR_RESEND outcome=kept_head branch=${BRANCH} pr=${PR_NUMBER} mergeable=${updater_resend_mergeable:-unknown}"
+                PUSHED_SHA="${REMOTE_SHA}"
+                PUSH_REASON="rewrite_refused_kept_head"
+              else
+                UPDATER_RESEND_FROM_BRANCH="${BRANCH}"
+                UPDATER_RESEND_FROM_PR="${PR_NUMBER}"
+                updater_resend_current=1
+                if [ "${BRANCH}" != "${UPDATER_RELEASE_BRANCH}" ]; then
+                  updater_resend_current="${BRANCH##*-r}"
                 fi
-              done
-              if [ -z "${updater_resend_target}" ]; then
-                echo "::error::UPDATER_PR_RESEND outcome=cap_reached from=${UPDATER_RESEND_FROM_BRANCH} max=-r${UPDATER_RESEND_MAX} old_pr=${UPDATER_RESEND_FROM_PR:-none}"
-                pr_fail resend_cap_reached
+                # Fresh read: the next name above both the current branch and
+                # every -rN already on the remote.
+                UPDATER_RESEND_REFS="$(git ls-remote origin "refs/heads/${UPDATER_RELEASE_BRANCH}-r*")" || pr_fail remote_lookup_failed
+                updater_resend_highest="$(printf '%s\n' "${UPDATER_RESEND_REFS}" | awk -v prefix="refs/heads/${UPDATER_RELEASE_BRANCH}-r" -v max="${UPDATER_RESEND_MAX}" "${UPDATER_RESEND_AWK}")"
+                if [ "${updater_resend_highest}" -gt "${updater_resend_current}" ]; then
+                  updater_resend_current="${updater_resend_highest}"
+                fi
+                updater_resend_target=""
+                if [ $((updater_resend_current + 1)) -le "${UPDATER_RESEND_MAX}" ]; then
+                  updater_resend_target="${UPDATER_RELEASE_BRANCH}-r$((updater_resend_current + 1))"
+                fi
+                if [ -z "${updater_resend_target}" ]; then
+                  echo "::error::UPDATER_PR_RESEND outcome=cap_reached from=${UPDATER_RESEND_FROM_BRANCH} max=-r${UPDATER_RESEND_MAX} old_pr=${UPDATER_RESEND_FROM_PR:-none}"
+                  pr_fail resend_cap_reached
+                fi
+                BRANCH="${updater_resend_target}"
+                # Empty lease value: the push succeeds only if the branch still
+                # does not exist. A failure here ends the run: never a second
+                # new branch in one run.
+                if ! git push --force-with-lease="refs/heads/${BRANCH}:" origin "HEAD:refs/heads/${BRANCH}"; then
+                  echo "::error::UPDATER_PR_RESEND outcome=push_failed from=${UPDATER_RESEND_FROM_BRANCH} branch=${BRANCH} old_pr=${UPDATER_RESEND_FROM_PR:-none}"
+                  pr_fail resend_push_failed
+                fi
+                echo "UPDATER_PR_RESEND outcome=pushed from=${UPDATER_RESEND_FROM_BRANCH} branch=${BRANCH} old_pr=${UPDATER_RESEND_FROM_PR:-none}"
+                PR_NUMBER=""
+                PR_URL=""
+                PUSH_REASON="resent_rewrite_refused"
               fi
-              BRANCH="${updater_resend_target}"
-              # Empty lease value: the push succeeds only if the branch still
-              # does not exist. A failure here ends the run: never a second
-              # new branch in one run.
-              if ! git push --force-with-lease="refs/heads/${BRANCH}:" origin "HEAD:refs/heads/${BRANCH}"; then
-                echo "::error::UPDATER_PR_RESEND outcome=push_failed from=${UPDATER_RESEND_FROM_BRANCH} branch=${BRANCH} old_pr=${UPDATER_RESEND_FROM_PR:-none}"
-                pr_fail resend_push_failed
-              fi
-              echo "UPDATER_PR_RESEND outcome=pushed from=${UPDATER_RESEND_FROM_BRANCH} branch=${BRANCH} old_pr=${UPDATER_RESEND_FROM_PR:-none}"
-              PR_NUMBER=""
-              PR_URL=""
-              PUSH_REASON="resent_rewrite_refused"
             fi
           fi
 
