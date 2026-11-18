@@ -20716,6 +20716,17 @@ STALL_EOF
           STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_capacity_wait"
           return 1
         fi
+        # Owner hold (draft / `[skip ai]` title): no dispatch, no empty
+        # commit, no conflict routing, no attempt counted. Reads the payload
+        # fetched above (0 extra API calls).
+        local _rtr_ai_hold_reason=""
+        _rtr_ai_hold_reason="$(_stall_pr_ai_hold_reason "${_rtr_pr_json}")"
+        if [ -n "${_rtr_ai_hold_reason}" ]; then
+          echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${pr_num} detail=${_rtr_ai_hold_reason} phase=${phase} action=none"
+          STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_pr_ai_hold"
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
+          return 1
+        fi
         head_ref="$(_jq_field "${_rtr_pr_json}" '.head.ref')"
         _rtr_mergeable="$(_jq_field "${_rtr_pr_json}" '.mergeable' 'true|false')"
         _rtr_merge_state="$(_jq_field "${_rtr_pr_json}" '.mergeable_state')"
@@ -23154,7 +23165,7 @@ _fetch_candidate_issue_details_graphql() {
                 source {
                   __typename
                   ... on PullRequest {
-                    number state merged
+                    number state merged isDraft title
                     labels(first: 100) { nodes { name } }
                     repository { nameWithOwner }
 	                    mergedAt
@@ -23249,6 +23260,8 @@ _fetch_candidate_issue_details_graphql() {
 	                      head_sha: (.headRefOid // null),
                       mergeable: (.mergeable // null),
                       merge_state_status: (.mergeStateStatus // null),
+                      draft: (.isDraft // null),
+                      title: (.title // null),
                       headPushedAt: (
                       ((.commits.nodes // [])[0].commit.pushedDate)
                       // ((.commits.nodes // [])[0].commit.committedDate)
@@ -23329,7 +23342,7 @@ _fetch_linked_pr_status_graphql() {
                 source {
                   __typename
                   ... on PullRequest {
-                    number state merged
+                    number state merged isDraft title
                     labels(first: 100) { nodes { name } }
                     baseRefName
                     repository { nameWithOwner }
@@ -23376,6 +23389,8 @@ _fetch_linked_pr_status_graphql() {
                   merged: (.merged // false),
                   labels: [(.labels.nodes // [])[]?.name],
                   base_ref: (.baseRefName // null),
+                  draft: (.isDraft // null),
+                  title: (.title // null),
                   headPushedAt: (
                     ((.commits.nodes // [])[0].commit.pushedDate)
                     // ((.commits.nodes // [])[0].commit.committedDate)
@@ -23452,6 +23467,43 @@ _linked_pr_is_capacity_waiting()
         end]
     | index("ai:claude-capacity-wait") != null
   ' >/dev/null 2>&1
+}
+
+# _stall_pr_ai_hold_reason <pr_json> — owner hold on a PR (issue #9746).
+# Prints `draft` when the PR is a draft, `skip_ai_title` when its title holds
+# the `[skip ai]` marker (the same substring match as the review gate in
+# scripts/review_autofix_step_evaluate_gate.sh), and nothing otherwise.
+# Accepts a full REST pulls/<n> payload (.draft, .title) and the batched
+# GraphQL linked_pr shape (.draft, .title; .isDraft also read). Only an open,
+# unmerged PR (or one whose state is absent) can be held. A missing or
+# malformed payload prints nothing, so recovery fails open to the old path.
+# Stall recovery never dispatches a review, pushes an empty commit or calls
+# the stall judge for a held PR; a manual workflow_dispatch of
+# internal-review.yml still overrides the hold in the review gate.
+# Makes no API calls.
+_stall_pr_ai_hold_reason()
+{
+  local _spahr_json="$1"
+  [ -n "${_spahr_json}" ] && [ "${_spahr_json}" != "null" ] && [ "${_spahr_json}" != "{}" ] || return 0
+  local _spahr_fields
+  _spahr_fields="$(printf '%s' "${_spahr_json}" | jq -r '
+    select(type == "object")
+    | select(((.state // "open") | tostring | ascii_downcase) == "open")
+    | select((.merged // false) != true)
+    | [ (if ((.draft // .isDraft // false) == true) then "draft" else "" end),
+        (if (.title | type) == "string" then (.title | gsub("[\r\n]"; " ")) else "" end) ]
+    | join("\n")
+  ' 2>/dev/null)" || return 0
+  [ -n "${_spahr_fields}" ] || return 0
+  local _spahr_draft _spahr_title
+  _spahr_draft="$(printf '%s\n' "${_spahr_fields}" | sed -n '1p')"
+  _spahr_title="$(printf '%s\n' "${_spahr_fields}" | sed -n '2p')"
+  if [ "${_spahr_draft}" = "draft" ]; then
+    printf 'draft\n'
+  elif [[ "${_spahr_title}" == *"[skip ai]"* ]]; then
+    printf 'skip_ai_title\n'
+  fi
+  return 0
 }
 
 # _pr_json_closes_issue — conservative closing-keyword check used only
@@ -26027,7 +26079,8 @@ PY
           number: (.number // null), state: (.state // null), merged: (.merged // false),
           labels: [(.labels // [])[]? | if type == "object" then (.name // empty) else . end],
           head_ref: (.head.ref // null), head_sha: (.head.sha // null), base_ref: (.base.ref // null),
-          mergeable: (.mergeable // null), merge_state_status: (.mergeable_state // null)
+          mergeable: (.mergeable // null), merge_state_status: (.mergeable_state // null),
+          draft: (.draft // null), title: (.title // null)
         }' 2>/dev/null || echo "null")"
       fi
     fi
@@ -26052,6 +26105,25 @@ PY
         write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
       fi
       continue
+    fi
+
+    # Owner hold (draft PR or `[skip ai]` title): leave an ai:done issue alone
+    # before the stall judge, conflict dispatch or review retrigger runs. The
+    # linked_pr entry comes from the batched details GraphQL (isDraft/title
+    # ride on the existing query) or the implementation-PR REST payload
+    # resolved above, so this adds no API calls. No attempt is counted and
+    # the stall clock is not reset. A payload without the fields fails open;
+    # the retrigger_review arms re-check the implementation PR payload.
+    if [ "${phase}" = "ai:done" ] && [ "${action}" != "skip" ]; then
+      local _std_ai_hold_reason=""
+      _std_ai_hold_reason="$(_stall_pr_ai_hold_reason "${_std_linked_json}")"
+      if [ -n "${_std_ai_hold_reason}" ]; then
+        echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=$(printf '%s' "${_std_linked_json}" | jq -r '.number // "unknown"' 2>/dev/null || echo unknown) detail=${_std_ai_hold_reason} phase=${phase} action=none"
+        if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+          write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+        fi
+        continue
+      fi
     fi
 
     # Fresh-push guard complements issue_has_active_workflow above; see
@@ -26587,6 +26659,18 @@ STALL_EOF
               fi
             fi
           fi
+          # Owner hold (draft / `[skip ai]` title) on the resolved PR: no
+          # review dispatch, no empty-commit fallback, no attempt counted.
+          # Reads the payload already in pr_json (0 extra API calls).
+          if [ -n "${head_ref}" ] && [ "${head_ref}" != "null" ]; then
+            local _std_rtr_ai_hold_reason=""
+            _std_rtr_ai_hold_reason="$(_stall_pr_ai_hold_reason "${pr_json}")"
+            if [ -n "${_std_rtr_ai_hold_reason}" ]; then
+              echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${pr_num} detail=${_std_rtr_ai_hold_reason} phase=${phase} action=none"
+              STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_pr_ai_hold"
+              head_ref=""
+            fi
+          fi
           if [ -n "${head_ref}" ] && [ "${head_ref}" != "null" ]; then
             # Mirror execute_stall_recovery_action(retrigger_review):
             # if issue_has_active_workflow misses a live review run on
@@ -26715,7 +26799,8 @@ STALL_EOF
             took_action="true"
           elif [ "${STALL_RECOVERY_EFFECTIVE_ACTION}" != "retrigger_review_skipped_inflight" ] \
             && [ "${STALL_RECOVERY_EFFECTIVE_ACTION}" != "retrigger_review_skipped_wrong_pr" ] \
-            && [ "${STALL_RECOVERY_EFFECTIVE_ACTION}" != "retrigger_review_skipped_pr_lookup_failed" ]; then
+            && [ "${STALL_RECOVERY_EFFECTIVE_ACTION}" != "retrigger_review_skipped_pr_lookup_failed" ] \
+            && [ "${STALL_RECOVERY_EFFECTIVE_ACTION}" != "retrigger_review_skipped_pr_ai_hold" ]; then
             echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} empty-commit retrigger did not reach a successful push; skipping recovery increment."
           fi
         elif [ "${pr_lookup_ok}" = "true" ]; then

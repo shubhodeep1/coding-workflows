@@ -1,0 +1,16 @@
+<!-- changelog: fixed -->
+- **Stall recovery no longer re-runs AI review on PRs the owner has put on hold.** A linked PR that is a draft, or whose title contains `[skip ai]`, now stops stall recovery for its `ai:done` issue: no review dispatch, no empty-commit push, no stall-judge call, and no recovery attempt counted.
+
+Before this fix, standalone stall recovery in `scripts/orchestrate_poll_process.sh` dispatched `Internal: AI Review & Autofix` on held drafts about every 150 to 160 minutes per issue. Poller run 44412748957 dispatched five such runs between 22:58 and 23:14 UTC on 2026-11-18, for #9510, #9538, #9637, #9628 and #9737. The review gate could not stop them, because a `workflow_dispatch` of `internal-review.yml` is the documented manual override for `[skip ai]`. That override is unchanged: a review you dispatch by hand still runs. The poller now logs `STALL_SKIP issue=<n> reason=pr_ai_hold pr=<m> detail=draft|skip_ai_title phase=ai:done action=none` and checks the issue again on the next tick, so recovery resumes on its own once the PR is marked ready or the marker is removed from the title.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Extra GitHub API calls per stalled candidate | 0 (`isDraft` and `title` ride on the existing batched linked-PR GraphQL query) |
+| Review runs dispatched on held PRs in run 44412748957 | 5 |
+| Recovery attempts counted while held | 0 |
+
+What this means for operators: the stopgap repository variable `ENABLE_STANDALONE_STALL_RECOVERY=false` can be set back to `true` once this change is promoted to `promote-candidate`, which the `internal-review.yml` and `orchestrate_poll.yml` callers pin.
+
+### For contributors
+
+The check is `_stall_pr_ai_hold_reason <pr_json>`. It runs in three places: in `run_standalone_stall_recovery` for every non-`skip` action on an `ai:done` issue (before the stall judge, the conflict dispatch and `retrigger_review`), in the inline standalone `retrigger_review` arm on the resolved implementation-PR payload, and in `execute_stall_recovery_action retrigger_review`, which the managed path and the stall judge reach. Only an open, unmerged PR can be held. A payload without the fields fails open to the old behaviour. The title match is the review gate's substring match. The description-line marker is not checked.

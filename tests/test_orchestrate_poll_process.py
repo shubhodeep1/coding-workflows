@@ -2296,6 +2296,10 @@ if args[0] == 'api':
 								'labels': {
 									'nodes': [{'name': label} for label in pr.get('labels', [])],
 								},
+								**({} if store.get('graphql_omit_pr_hold_fields') else {
+									'isDraft': bool(pr.get('draft', False)),
+									'title': pr.get('title', ''),
+								}),
 					'mergedAt': pr.get('merged_at', None),
 					'headRefName': pr.get('headRefName', ''),
 					'baseRefName': pr.get('baseRefName', ''),
@@ -15823,6 +15827,118 @@ def test_standalone_retrigger_review_dispatch_skip_spends_no_budget():
 	assert standalone_state is None or standalone_state["stall_recovery_count"] == 0
 
 
+def _standalone_pr_ai_hold_run(pr_extra: dict, recovery_count: int = 0, **extra) -> dict:
+	"""Standalone ai:done issue #504 with implementation PR #419 (owner hold cases)."""
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": recovery_count,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	pr = {
+		"number": 419,
+		"body": "Automated implementation. Closes #504",
+		"state": "open",
+		"baseRefName": "main",
+		"headRefName": "ai/issue-504",
+		"headRefFromApi": "ai/issue-504",
+		"headSha": "0000000000000000000000000000000000000419",
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"title": "AI implementation for issue #504",
+	}
+	pr.update(pr_extra)
+	return _run_poller(
+		state=_base_state(status="complete"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 504: ["ai:done"]},
+		issue_comments={504: [standalone_state_comment]},
+		issue_linked_prs={504: 419},
+		mock_gh_issue_list_label_filter=True,
+		prs=[pr],
+		mock_git_push_success=True,
+		**extra,
+	)
+
+
+def _assert_pr_ai_hold_skipped(result: dict, detail: str, recovery_count: int) -> None:
+	assert f"STALL_SKIP issue=504 reason=pr_ai_hold pr=419 detail={detail} phase=ai:done action=none" in result["stdout"], result["stdout"]
+	assert [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "419"] == []
+	assert result.get("git_push_calls", []) == []
+	standalone_state = _extract_latest_standalone_state(result["issues"]["504"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == recovery_count
+	assert standalone_state.get("phase_attempts", {}).get("ai:done", 0) == 0
+	assert not any(
+		"Stall Judge" in str(comment.get("body", "")) or "/approved" in str(comment.get("body", ""))
+		for comment in result["issues"]["504"]["comments"]
+	)
+
+
+def test_standalone_stall_recovery_skips_draft_pr_before_retrigger():
+	result = _standalone_pr_ai_hold_run({"draft": True})
+	_assert_pr_ai_hold_skipped(result, "draft", 0)
+
+
+def test_standalone_stall_recovery_skips_skip_ai_title_pr_before_retrigger():
+	result = _standalone_pr_ai_hold_run({"title": "[skip ai] AI implementation for issue #504"})
+	_assert_pr_ai_hold_skipped(result, "skip_ai_title", 0)
+
+
+def test_standalone_stall_recovery_reports_draft_first_for_draft_skip_ai_pr():
+	result = _standalone_pr_ai_hold_run({"draft": True, "title": "[skip ai] held"})
+	_assert_pr_ai_hold_skipped(result, "draft", 0)
+
+
+def _assert_held_pr_skips_stall_judge(pr_extra: dict, detail: str) -> None:
+	# Attempt 3+ goes to the stall judge; a held PR must skip the judge call
+	# itself, even when the judge would answer retrigger_review.
+	result = _standalone_pr_ai_hold_run(
+		pr_extra,
+		recovery_count=2,
+		mock_stall_judge_json={"action": "retrigger_review", "justification": "test", "confidence": "high"},
+	)
+	_assert_pr_ai_hold_skipped(result, detail, 2)
+	assert "Action: run_stall_judge" in result["stdout"]
+
+
+def test_standalone_stall_recovery_skips_stall_judge_for_draft_pr():
+	_assert_held_pr_skips_stall_judge({"draft": True}, "draft")
+
+
+def test_standalone_stall_recovery_skips_stall_judge_for_skip_ai_title_pr():
+	_assert_held_pr_skips_stall_judge({"title": "WIP [skip ai]"}, "skip_ai_title")
+
+
+def test_standalone_retrigger_review_rechecks_hold_on_resolved_pr_payload():
+	# Linked-PR cache without isDraft/title (fails open): the inline
+	# retrigger_review arm re-checks the REST payload and never reaches the
+	# empty-commit fallback even when the dispatch would fail.
+	result = _standalone_pr_ai_hold_run(
+		{"draft": True},
+		mock_store_extra={"graphql_omit_pr_hold_fields": True},
+		review_dispatch_fail_for_prs=[419],
+	)
+	_assert_pr_ai_hold_skipped(result, "draft", 0)
+	assert "empty-commit retrigger did not reach a successful push" not in result["stdout"]
+	assert "falling back to empty-commit push" not in result["stdout"]
+
+
+def test_standalone_retrigger_review_dispatches_for_unheld_pr():
+	for title in ("AI implementation for issue #504", "Mentions skip ai without brackets"):
+		result = _standalone_pr_ai_hold_run({"title": title, "draft": False})
+		assert any(str(d.get("pr_number")) == "419" for d in result.get("review_dispatches", [])), result["stdout"]
+		assert "reason=pr_ai_hold" not in result["stdout"]
+		standalone_state = _extract_latest_standalone_state(result["issues"]["504"]["comments"])
+		assert standalone_state is not None
+		assert standalone_state["stall_recovery_count"] == 1
+
+
 def test_standalone_retrigger_review_mixed_fetch_failure_counts_conclusive_rejection():
 	state = _base_state(status="complete")
 	standalone_state_comment = (
@@ -21761,6 +21877,56 @@ def test_retrigger_review_skips_merge_train_queued_pr_without_consuming_stall_bu
 	assert result.get("git_push_calls", []) == []
 	assert result["review_dispatches"] == []
 	assert "reason=merge_train_queued pr=87 phase=ai:done action=retrigger_review" in result["stdout"]
+
+
+def test_retrigger_review_skips_draft_pr_without_consuming_stall_budget():
+	_assert_retrigger_review_skips_held_pr({"draft": True}, "draft")
+
+
+def test_retrigger_review_skips_skip_ai_title_pr_without_consuming_stall_budget():
+	_assert_retrigger_review_skips_held_pr({"title": "[skip ai] parked"}, "skip_ai_title")
+
+
+def _assert_retrigger_review_skips_held_pr(pr_extra: dict, detail: str) -> None:
+	# execute_stall_recovery_action(retrigger_review), reached by the managed
+	# path and by the standalone stall judge: a held PR whose last review was
+	# cancelled gets no dispatch, no empty commit and no conflict routing.
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	pr = {
+		"number": 89,
+		"body": "Closes #10",
+		"state": "open",
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"headSha": "sha89",
+		"baseRefName": "main",
+		"title": "AI implementation for issue #10",
+	}
+	pr.update(pr_extra)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 89},
+		prs=[pr],
+		active_autofix_runs=[
+			{"workflow": "internal-review.yml", "branch": "ai/issue-10", "status": "completed", "conclusion": "cancelled"},
+		],
+		mock_git_push_success=True,
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0
+	assert result.get("git_push_calls", []) == []
+	assert result["review_dispatches"] == []
+	assert f"STALL_SKIP issue=10 reason=pr_ai_hold pr=89 detail={detail} phase=ai:done action=none" in result["stdout"]
 
 
 def test_managed_stall_recovery_reconciles_merged_pr_with_stale_merge_train_label():
