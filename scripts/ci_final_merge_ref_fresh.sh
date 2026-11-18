@@ -60,7 +60,8 @@
 #   - the local merge cannot be built (`outcome=stale` with reason
 #     `merge_base_too_deep`: the merge base is more than
 #     CI_FINAL_MERGE_REF_MERGE_DEPTH commits below the head or the base, so the
-#     head is far behind; `merge_fetch_failed`; `merge_failed`): `::error::`
+#     head is far behind; `merge_fetch_failed`; `merge_tree_unsupported`: the
+#     runner's git predates `--attr-source` (2.40); `merge_failed`): `::error::`
 #     and exit 1, as a stale ref did before. The red `lint` sends the PR back
 #     through `final-ci-failed`, and the review sweep's base sync
 #     (scripts/review_final_ci_sweep.sh) updates a head that is behind.
@@ -238,6 +239,12 @@ ci_final_merge_ref_merge_locally()
 	# (this repository sets `CHANGELOG.md merge=union`) cannot resolve a
 	# conflict that GitHub's merge would report: a doubtful merge fails.
 	merge_tree_out="$(git -c core.hooksPath=/dev/null --attr-source="${CI_FINAL_MERGE_REF_EMPTY_TREE}" merge-tree --write-tree --no-messages "${merge_into}" "${GITHUB_SHA}" 2>/dev/null)" || merge_tree_rc=$?
+	if [ "${merge_tree_rc}" -eq 129 ]; then
+		# Usage error: the runner's git predates `--attr-source` (git 2.40),
+		# so tell an old git apart from a merge that really failed.
+		CI_FINAL_MERGE_REF_LOCAL_REASON="merge_tree_unsupported"
+		return 2
+	fi
 	if [ "${merge_tree_rc}" -eq 1 ]; then
 		CI_FINAL_MERGE_REF_LOCAL_REASON="merge_conflict"
 		return 1
@@ -273,7 +280,7 @@ ci_final_merge_ref_merge_locally()
 ci_final_merge_ref_main()
 {
 	local depth=1 switch attempts sleep_s base_ref tip first second seen_tips attempt mergeable fetched
-	local merge_depth pin pin_note merge_into merge_reason local_rc=0 head_tree
+	local merge_depth pin pin_note merge_into merge_reason local_rc=0 head_tree fresh_tip deferred_to_pin=false
 	CI_FINAL_MERGE_REF_FETCHED=false
 	while [ "$#" -gt 0 ]; do
 		case "$1" in
@@ -355,10 +362,21 @@ ci_final_merge_ref_main()
 		for (( attempt = 1; attempt <= attempts; attempt++ )); do
 			mergeable="$(ci_final_merge_ref_pull '.mergeable | tostring' || true)"
 			[ -n "${mergeable}" ] || mergeable="unknown"
+			if [ "${mergeable}" = "false" ] && [ -n "${pin}" ]; then
+				# The cached tip predates GitHub's answer (on attempt 1 it was
+				# read before the pin): re-read it, so a conflict GitHub found
+				# with a tip that moved past the pin is recognised as such.
+				fresh_tip="$(ci_final_merge_ref_tip "${base_ref}")"
+				if [[ "${fresh_tip}" =~ ^[0-9a-f]{40}$ ]]; then
+					tip="${fresh_tip}"
+					seen_tips+="${tip} "
+				fi
+			fi
 			if [ "${mergeable}" = "false" ] && [ -n "${pin}" ] && [ "${tip}" != "${pin}" ]; then
 				# GitHub judged a newer tip than the run's pin: let the local
 				# merge into the pin decide, as the run's other jobs do.
 				echo "CI_FINAL_MERGE_REF: GitHub reports a conflict with ${base_ref} at ${tip}, past this run's base ${pin}; merging into the pin locally."
+				deferred_to_pin=true
 				break
 			fi
 			if [ "${mergeable}" = "false" ]; then
@@ -392,7 +410,7 @@ ci_final_merge_ref_main()
 				echo "::warning::CI_FINAL_MERGE_REF: could not check out the refreshed merge ref; retrying."
 			fi
 		done
-		if [ "${CI_FINAL_MERGE_REF_FETCHED}" != "true" ]; then
+		if [ "${deferred_to_pin}" != "true" ] && [ "${CI_FINAL_MERGE_REF_FETCHED}" != "true" ]; then
 			# No fetch worked (e.g. a private repository and a checkout without
 			# persisted credentials): staleness is known but cannot be fixed
 			# here, so warn and test the checkout rather than fail a run that
@@ -405,7 +423,9 @@ ci_final_merge_ref_main()
 		if [ -z "${pin}" ] && [[ "${tip}" =~ ^[0-9a-f]{40}$ ]]; then
 			merge_into="${tip}"
 		fi
-		echo "CI_FINAL_MERGE_REF: GitHub did not recompute refs/pull/${FINAL_CI_PR_NUMBER}/merge after ${attempts} attempt(s) (it still merges into ${first:-unknown}); merging ${GITHUB_SHA} into ${merge_into} locally."
+		if [ "${deferred_to_pin}" != "true" ]; then
+			echo "CI_FINAL_MERGE_REF: GitHub did not recompute refs/pull/${FINAL_CI_PR_NUMBER}/merge after ${attempts} attempt(s) (it still merges into ${first:-unknown}); merging ${GITHUB_SHA} into ${merge_into} locally."
+		fi
 	else
 		merge_reason="pinned_base"
 		echo "CI_FINAL_MERGE_REF: this run's base is ${pin}, the tip of ${base_ref} when the run was created; ${base_ref} is now at ${tip} and refs/pull/${FINAL_CI_PR_NUMBER}/merge merges into ${first}, so the job merges ${GITHUB_SHA} into ${pin} locally."

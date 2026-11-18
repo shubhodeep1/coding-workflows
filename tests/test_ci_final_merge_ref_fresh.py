@@ -270,6 +270,17 @@ def test_github_conflict_past_the_pin_defers_to_the_local_merge(world) -> None:
 	assert sum(1 for c in calls if ".mergeable | tostring" in c) == 2
 
 
+def test_github_conflict_on_the_first_attempt_after_the_tip_moved_defers_to_the_local_merge(world) -> None:
+	"""main moves past the pin between the pre-loop tip read and GitHub's first answer: the tip is re-read before judging."""
+	result, tested, calls = world["run"](env={"FAKE_GH_MOVE_MAIN_TO": world["later_base"], "FAKE_GH_MERGEABLE": "false"})
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "outcome=conflict reason=not_mergeable" not in result.stdout
+	assert "past this run's base" in result.stdout and "did not recompute" not in result.stdout
+	assert f"outcome=merged_locally reason=not_refreshed base=main tested_base={world['new_base']} tip={world['later_base']}" in result.stdout
+	_assert_local_merge_of(result, tested, world, world["new_base"], world["new_merge"])
+	assert sum(1 for c in calls if ".mergeable | tostring" in c) == 1
+
+
 def test_event_payload_pushed_at_pins_without_an_api_call(world, tmp_path: Path) -> None:
 	_git(world["origin"], "update-ref", "refs/heads/main", world["later_base"])
 	for value in (f"{DAY}03:00:00Z", 1767236400):  # 03:00 UTC as ISO and as a push-event epoch
