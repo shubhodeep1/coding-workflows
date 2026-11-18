@@ -323,6 +323,8 @@ if endpoint.endswith("/pulls/42/reviews"):
 	if fixture.get("reviews_fail"):
 		sys.exit(1)
 	emit(fixture.get("reviews", []))
+if "/commits/" in endpoint and "/statuses" not in endpoint and "commit" in fixture:
+	emit(fixture["commit"])
 if "/commits/" in endpoint and "/statuses" in endpoint:
 	if fixture.get("statuses_fail"):
 		sys.exit(1)
@@ -687,3 +689,57 @@ def test_gate_final_ci_repair_ignores_a_provider_pause_notice(tmp_path: Path) ->
 		"body": "**AI review/autofix paused — model provider unavailable**"}
 	result, outputs, _ = _run_gate(tmp_path, _repair_fixture(pause))
 	assert outputs["final_ci_repair"] == "true", result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Final-CI repair delta review output (final-ci-failure-ci-fix plan, Phase 3)
+# ---------------------------------------------------------------------------
+
+def _delta_fixture(*, parents: list[str] | None = None, committer: str = "codex-bot", repair: str = HEAD) -> dict:
+	fixture = _gate_fixture()
+	fixture["comments"] = [{"id": 80, "user": {"login": PIPELINE, "type": "User"}, "created_at": "2026-11-06T13:00:00Z", "author_association": "OWNER",
+		"body": f"**Final CI repair.** x\n\n<!-- ai:final-ci-repair:v1 pr=42 from={OTHER_HEAD} repair={repair} attempt=1 -->"}]
+	fixture["commit"] = {"sha": HEAD, "parents": [{"sha": sha} for sha in (parents if parents is not None else [OTHER_HEAD])],
+		"commit": {"committer": {"name": committer, "email": f"{committer}@users.noreply.invalid"}}}
+	fixture["statuses"] = [{"context": "ai-review/head-gate", "state": "success", "creator": {"login": PIPELINE}}]
+	return fixture
+
+
+def _stage_head_gate_src(tmp_path: Path) -> None:
+	src = tmp_path / "work" / ".codex-head-gate-src" / "scripts"
+	src.mkdir(parents=True, exist_ok=True)
+	for name in ("review_head_gate.sh", "gh_helpers.sh"):
+		(src / name).write_text((REPO_ROOT / "scripts" / name).read_text(encoding="utf-8"), encoding="utf-8")
+
+
+def _commit_calls(calls: list[list[str]]) -> int:
+	return sum(1 for call in calls if any("/commits/" in arg and "/statuses" not in arg for arg in call))
+
+
+def test_gate_outputs_the_delta_base_for_a_verified_repair_head(tmp_path: Path) -> None:
+	_stage_head_gate_src(tmp_path)
+	result, outputs, calls = _run_gate(tmp_path, _delta_fixture(), HEAD_GATE_HELPER_VERIFIED="true", GH_RETRY_MAX_ATTEMPTS="1")
+	assert outputs["should_run"] == "true", result.stdout + result.stderr
+	assert outputs["review_diff_base_sha"] == OTHER_HEAD, result.stdout + result.stderr
+	assert f"REVIEW_HEAD_GATE mode=final_ci_repair pr=42 head={HEAD} outcome=delta reason=final_ci_repair from={OTHER_HEAD}" in result.stdout
+	assert _commit_calls(calls) == 1 and _statuses_calls(calls) == 1
+
+
+def test_gate_keeps_the_full_review_when_the_delta_check_fails(tmp_path: Path) -> None:
+	_stage_head_gate_src(tmp_path)
+	cases = [
+		(_delta_fixture(parents=[OTHER_HEAD, BASE]), {"HEAD_GATE_HELPER_VERIFIED": "true"}, "reason=head_is_not_the_repair", 1),
+		(_delta_fixture(committer="mallory"), {"HEAD_GATE_HELPER_VERIFIED": "true"}, "reason=committer_not_pipeline", 1),
+		(_delta_fixture(repair=BASE), {"HEAD_GATE_HELPER_VERIFIED": "true"}, None, 0),
+		(_delta_fixture(), {}, None, 0),
+		(_delta_fixture(), {"HEAD_GATE_HELPER_VERIFIED": "true", "FINAL_CI_REPAIR_DELTA_REVIEW_ENABLED": "false"}, None, 0),
+		(_delta_fixture(), {"HEAD_GATE_HELPER_VERIFIED": "true", "FINAL_CI_REPAIR_DELTA_REVIEW_ENABLED": "on"},
+			"FINAL_CI_REPAIR_DELTA_REVIEW_ENABLED has an unrecognised value", 0),
+	]
+	for fixture, env, expected, commit_reads in cases:
+		result, outputs, calls = _run_gate(tmp_path, fixture, GH_RETRY_MAX_ATTEMPTS="1", **env)
+		assert outputs["should_run"] == "true", (expected, result.stdout + result.stderr)
+		assert outputs["review_diff_base_sha"] == "", (expected, result.stdout)
+		if expected:
+			assert expected in result.stdout, (expected, result.stdout)
+		assert _commit_calls(calls) == commit_reads, expected
