@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-18T14:50:50Z",
+  "issue_number": 9684,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=.github/workflows/ci.yml:1330-1344; cited_path=scripts/ci_final_merge_ref_fresh.sh; files_touched=.github/workflows/ci.yml, changelog.d/9420-ci-heal-job-steps-to-hooks-job.md, tests/test_ci_poll_test_sharding.py.",
+  "phase": "review_autofix",
+  "pr_number": 9702,
+  "record_id": "lesson_20261118145050_0995190d42",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/ci_final_merge_ref_fresh.sh",
+    ".github/workflows/ci.yml",
+    "changelog.d/9420-ci-heal-job-steps-to-hooks-job.md",
+    "tests/test_ci_poll_test_sharding.py"
+  ]
+}
