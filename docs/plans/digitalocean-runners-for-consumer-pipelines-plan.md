@@ -49,7 +49,7 @@ Consumer repositories run the AI pipeline's reusable workflows on GitHub-hosted 
 
 ## Non-goals
 
-- Moving `coding-workflows`' own jobs, including `ci.yml` and the release workflows, off GitHub-hosted runners.
+- Moving `coding-workflows`' own jobs, including `ci.yml` and the release workflows, off GitHub-hosted runners (D15, Q24 C: never).
 - Jobs defined directly in consumer wrapper templates (`workflow-templates/ai-implement.yml`, `ai-plan.yml`, `ai-review.yml`: 5 small gate and sweep jobs). These are not reusable-workflow jobs (Q3), and droplet boot time would outweigh their sub-minute run time.
 - Consumers' own CI workflows, which this repository does not manage.
 - Automatic fallback to GitHub-hosted runners when the fleet fails (Q14 B). This is recorded as future work. The rollback in this plan is unsetting the variable.
@@ -148,13 +148,32 @@ User answers, 2026-11-18.
 - **Alternatives considered:** Go (Q7); a PAT with one webhook per repo (Q8); another region (Q9); committed reporting code (Q10); passing any value through (Q19); a `claude/write-plan-*` branch (Q20).
 - **Why:** each follows from repo conventions or from an earlier answer. All were listed as assumptions and none was overridden.
 
+### D14 — Runner network (Q23 A)
+
+- **Chosen:** every runner droplet is created in a dedicated VPC (`RUNNER_SCALER_VPC_UUID`). While repositories are configured, the scaler refuses to start without it.
+- **Alternatives considered:** the region's default VPC.
+- **Why:** the account already runs other droplets. A compromised job on a runner in the default VPC could reach them over private IPs.
+
+### D15 — coding-workflows itself (Q24 C)
+
+- **Chosen:** coding-workflows never moves to the droplet fleet. Its `ci.yml`, release workflows and its own runs of the reusable workflows stay on GitHub-hosted runners, and the scaler skips this repository even if it is listed.
+- **Alternatives considered:** moving it after 7 days of consumer use; moving it now in a Phase 3.
+- **Why:** it is public, so its hosted minutes cost nothing; its `CI` at about 56,000 runner-minutes a day would cost about $2,000–2,400 a month on droplets; and its fork PRs would need same-repo-only routing. Run-volume reduction stays the remedy for its share of the queue.
+
+### D16 — Scaler location (implementation)
+
+- **Chosen:** the service lives at `tools/runner_scaler/`, not `runner_scaler/`.
+- **Alternatives considered:** a top-level `runner_scaler/` directory.
+- **Why:** deployed services already live under `tools/` (`tools/claude-pool-broker/`). The App Platform build context is then the service directory alone.
+
 ## Constraints
 
 - **§1 security:** droplets receive the job's secrets (`GH_PAT`, `OPENROUTER_API_KEY` and others) exactly as GitHub-hosted runners do, so each droplet:
   - runs one job only;
   - is destroyed afterwards;
   - holds no DigitalOcean or GitHub App credential of its own;
-  - accepts no inbound traffic (cloud firewall on tag `gh-runner`).
+  - accepts no inbound traffic (cloud firewall on tag `gh-runner`);
+  - sits in a dedicated VPC, never the region's default one (D14).
 
   The scaler holds the only privileged credentials. Webhooks are rejected unless their `X-Hub-Signature-256` HMAC verifies.
 - **§4:** every new env var and repo variable has a default. Unset `PIPELINE_RUNS_ON` means GitHub-hosted. Unset `RUNNER_SCALER_REPOS` means the scaler serves no repository.
@@ -489,8 +508,9 @@ Each step that creates or changes an external resource is ask-first and performe
 
    You also create the custom-scoped DigitalOcean token. Both are one-time steps in the browser.
 3. **R3.** The session, after approval:
+   - creates a dedicated VPC in `nyc3` for the runners (D14);
    - creates the cloud firewall on tag `gh-runner` (no inbound, all outbound);
-   - creates the App Platform app from `runner_scaler/app.yaml` with `RUNNER_SCALER_REPOS` listing the 7 consumers and `RUNNER_SCALER_DRY_RUN=true`;
+   - creates the App Platform app from `tools/runner_scaler/app.yaml` with `RUNNER_SCALER_REPOS` listing the 7 consumers, `RUNNER_SCALER_VPC_UUID` set to that VPC and `RUNNER_SCALER_DRY_RUN=true`;
    - sets the encrypted secrets;
    - creates the Uptime check on `/healthz`;
    - records every resource ID through an `agents.d/` fragment in a small PR (§22.C).
