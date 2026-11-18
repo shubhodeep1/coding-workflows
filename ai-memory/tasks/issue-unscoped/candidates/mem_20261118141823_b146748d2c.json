@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:5187-5226 | severity=medium | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The docs say a queued run older than `ZOMBIE_RUN_MAX_QUEUED_HOURS` \"is still treated as wedged\", but `.github/workflows/review_autofix_sweep.yml:526-538` still applies the default `SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS=true` check, so a stale run that has jobs is logged `outcome=waiting_for_runner` and keeps suppressing dispatch.\n  WHY: Operators who set `SWEEP_STALE_QUEUED_MINUTES=0` expecting the 24h floor to release stuck sweeps will still see backlogs on runs that have jobs. This is a documentation-only inaccuracy. The reviewers rated it NIT; severity medium is the nearest scale value, and all four said no runtime failure.\n- agents.d/9473-ignore-wedged-queued-runs.md:section marker | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `<!-- agents: section=\"Workflow file size limit\" -->` marker is claimed not to match the exact `##` heading required.\n  WHY: The reviewer says the mismatch fails `tests/test_agents_fragment_contract.py` and blocks folding of the fragment. The source rated it BLOCKER.\n- tests/test_files_touched_scope_guard.py:Test suite | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The files_touched scope guard test is reported as failing.\n  WHY: The reviewer attributes it to the PR's changes exceeding the guard's expected scope. The source rated it BLOCKER. z-ai_glm-5_3-flash could not verify this failure against the PR head.\n- tests/test_orchestrate_lib.py:Test suite | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The orchestrate library test is reported as failing, tied to the new `zombie_run_max_queued_hours` and `is_wedged_queued_run` logic in `scripts/orchestrate_lib.py`.\n  WHY: The reviewer says the new logic is incompatible with the test suite's expectations. The source rated it BLOCKER. z-ai_glm-5_3-flash could not verify this failure against the PR head.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.md:line 5187 and the `SWEEP_STALE_QUEUED_MINUTES` table row near line 5226 | severity=NIT | confidence=3\n  PROBLEM: The docs say a queued run past the 24h floor is \"still treated as wedged\", but the `SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS` check in `.github/workflows/review_autofix_sweep.yml` (lines 526-536) still applies to it.\n  WHY: Nothing breaks in execution. The documentation overstates the floor, because a run with jobs is logged `outcome=waiting_for_runner` and keeps suppressing dispatch.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.d/9473-ignore-wedged-queued-runs.md:<!-- agents: section=\"Workflow file size limit\" --> | severity=BLOCKER | confidence=4\n  PROBLEM: Incorrect section marker; the instruction \u00a730 requires the exact ## heading.\n  WHY: The mismatch causes tests/test_agents_fragment_contract.py to fail, preventing automation from folding the fragment into agents.md.\n- tests/test_files_touched_scope_guard.py:Test suite | severity=BLOCKER | confidence=4\n  PROBLEM: The files_touched scope guard test is failing.\n  WHY: The PR changes, likely the new `agents.d/` fragment or edits to multiple workflow/script files, exceed the scope or structure the guard allows.\n- tests/test_orchestrate_lib.py:Test suite | severity=BLOCKER | confidence=5\n  PROBLEM: The orchestrate library test is failing.\n  WHY: The new zombie-run logic in scripts/orchestrate_lib.py (zombie_run_max_queued_hours, is_wedged_queued_run) appears incompatible with the test suite's expectations or environment configuration.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.md:line 5187 and line 5226 | severity=NIT | confidence=4\n  PROBLEM: Both lines claim a queued run older than `ZOMBIE_RUN_MAX_QUEUED_HOURS` \"is still treated as wedged\" or \"still counts as wedged\" when `SWEEP_STALE_QUEUED_MINUTES=0`. `.github/workflows/review_autofix_sweep.yml:526-538` gates that on `SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS=true`, so a run with jobs stays in the active set and still suppresses dispatch.\n  WHY: Line 5291 of agents.md states the correct carve-out, so the last run's edits contradict the adjacent section. Operators may expect the floor to release stuck sweeps and still see backlogs. This is a documentation-only drift.\n- TASK COMPLETENESS / INTENT GAPS: none. The reviewer found every deliverable site named in the PR description and #9473 present, and treated the `created_at` vs `run_started_at` re-run dedup gap as deferred.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.md:Lines 5187 and 5226; `.github/workflows/review_autofix_sweep.yml` lines 526, 534-537 | severity=NIT | confidence=4\n  PROBLEM: The documentation says a queued run older than `ZOMBIE_RUN_MAX_QUEUED_HOURS` is treated as wedged without stating that the sweep's jobs check still applies.\n  WHY: With the default `SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS=true`, a stale run with jobs is counted as active and keeps suppressing dispatch, so operators may expect the age floor to ignore it.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.md:line 5187 and the same wording at line 5226 | severity=NIT | confidence=3\n  PROBLEM: The sentence \"(a `queued` run older than `ZOMBIE_RUN_MAX_QUEUED_HOURS`, default 24, is still treated as wedged; ...)\" overstates the sweep's behaviour. `.github/workflows/review_autofix_sweep.yml:526-538` applies `SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS` (default `true`) to every stale candidate, so a run older than 24h with `total_count > 0` is recorded as `outcome=waiting_for_runner` (line 536) and keeps suppressing dispatch.\n  WHY: No runtime failure; this is a documentation-accuracy issue in the lines the last run rewrote. The `ZOMBIE_RUN_IGNORED` line at sweep lines 541-542 is only reached on the wedged path.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e2396f92b7ebed740bea8e7df2aea3620864b6730be59ff59ce821fccb21e043",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9711,
+    "run_id": "44305417337",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44305417337",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118141823_b146748d2c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9711,
+    "run_id": "44305417337"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T14:18:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
