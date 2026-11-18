@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_poll_test_sharding.py:4016-4021 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: `MovedPollGroupThree9639StepsContractTest` and `POLL_GROUP_THREE_9639_TARGET_GROUP` say \"Three\" and the changelog path says \"group-1\", but they describe a move to group 0.\n  WHY: The reviewer calls this cosmetic, with no runtime effect. Renaming would break \u00a710. The reviewer gave the severity as NIT, which I mapped to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: `.github/workflows/ci.yml`, placement of `Pre-push affected-test gate tests`; `tests/test_ci_poll_test_sharding.py`, `MovedPollGroupThree9639StepsContractTest`\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  EVIDENCE: The diff has no measured step durations. The ci.yml comment (lines 3755-3763) says run 43993691500 gave statuses only and the group 0 pick is an estimate. The test contract pins group 0 but does not show the moved step was among the slowest or that group 0 had the most headroom. Severity disagreement: anthropic_claude-sonnet-5_5 gave NIT (confidence 2), which is a documented residual, and openai_gpt-6-luna gave MAJOR (confidence 5). The highest severity is MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_ci_poll_test_sharding.py:4016-4021 | severity=NIT | confidence=2\n  PROBLEM: `MovedPollGroupThree9639StepsContractTest` and `POLL_GROUP_THREE_9639_TARGET_GROUP` say \"Three\" and \"group-1\" (also `changelog.d/9639-ci-prepush-step-to-poll-group-1.md`) while they describe a move to group 0.\n  WHY: It does not fail at runtime. The names are cosmetic, and renaming would break \u00a710.\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, placement of `Pre-push affected-test gate tests`\n  Evidence of absence: The diff has no measured step durations. The ci.yml comment, the changelog and the test comments all say run 43993691500 gave statuses only, so the pick is an estimate. This is a documented residual. The step was moved unchanged with its name kept, the timeout was not raised and no job was added. The plural \"steps\" is covered by the same residual, because group 3's other pinned step already runs its three modules in parallel.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- Correctness, security, concurrency, error paths, performance, index contract and implicit-execution sections: NONE. The last-run comment fix at line 4009 matches `POLL_GROUP_THREE_9639_TARGET_GROUP = 0`, the `GROUP_PINNED_STEPS` entry at line 1168 and the guard at ci.yml:3774-3775.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, placement of `Pre-push affected-test gate tests`; `tests/test_ci_poll_test_sharding.py`, `MovedPollGroupThree9639StepsContractTest`.\n  Evidence of absence: The workflow comment at lines 3755-3763 says run 43993691500 provided no step durations and that the group 0 selection is an estimate from test and subprocess counts. The test contract verifies the group 0 pin but does not establish that the moved step was among the slowest by measured timings or that group 0 had the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1c5603d19e9e7533d404aad48410d2ee64004613c351a9de86f25caea349300f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9641,
+    "run_id": "44227063871",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44227063871",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118052028_58c783ef20",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9641,
+    "run_id": "44227063871"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T05:20:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
