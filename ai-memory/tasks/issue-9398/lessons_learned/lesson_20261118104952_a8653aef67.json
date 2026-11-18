@@ -1,0 +1,19 @@
+{
+  "discovered_at": "2026-11-18T10:49:52Z",
+  "issue_number": 9398,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=scripts/ci_final_merge_ref_fresh.sh:181-183; cited_path=scripts/ci_final_merge_ref_fresh.sh; files_touched=.github/workflows/ci.yml, changelog.d/9261-prompt-invalid-utf8.md, scripts/gh_helpers.sh, scripts/render_prompt.py, tests/test_prompt_invalid_utf8.py, tests/test_render_prompt_foundation.py.",
+  "phase": "review_autofix",
+  "pr_number": 9402,
+  "record_id": "lesson_20261118104952_a8653aef67",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/ci_final_merge_ref_fresh.sh",
+    ".github/workflows/ci.yml",
+    "changelog.d/9261-prompt-invalid-utf8.md",
+    "scripts/gh_helpers.sh",
+    "scripts/render_prompt.py",
+    "tests/test_prompt_invalid_utf8.py",
+    "tests/test_render_prompt_foundation.py"
+  ]
+}
