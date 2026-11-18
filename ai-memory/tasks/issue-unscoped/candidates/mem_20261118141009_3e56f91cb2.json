@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:4736-4755 (with scripts/dispatch_and_watch_workflow_run.sh:376) | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The watcher now cancels the timed-out child run before the workflow timeout block reads `/jobs` and posts its own second cancel. The `queued_without_runner` diagnostic can under-report, and the duplicate cancel can print a misleading `Could not cancel timed-out child run` warning.\n  WHY: Cancelled jobs stop being `status=queued`, and a repeat cancel on an already-cancelled run can be rejected. The PR cannot fix this because the issue forbids editing the workflow file. Severity disagreement: sonnet, openai and glm rated it NIT, minimax rated it MAJOR (mapped to high), and gemini called it an expected side-effect. The highest rating is used.\n- scripts/dispatch_and_watch_workflow_run.sh:376-380 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The cancel failure warning discards the exit status and stderr. A timeout, a 403, a 404 and a 409 all print the same \"Could not cancel watched run\" line.\n  WHY: Operators cannot tell a transport failure, an auth failure and an already-cancelled run apart. The suggested fix is to capture `cancel_rc=$?` and append ` (exit N)` to the warning. Reviewers rated this a NIT or a hardening suggestion with risk score 1.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/test-and-mark-stable.yml:4736-4755 | severity=NIT | confidence=3\n  PROBLEM: The watcher's cancel (at lines 369-380) runs before the workflow timeout block, which then reads `/jobs` and counts `queued_without_runner`. The block then posts a second cancel, which may fail with the misleading warning `Could not cancel timed-out child run #N`.\n  WHY: Jobs are no longer `queued` after the first cancel, so the #9532 `queued_without_runner` count can under-report. This is a diagnostic-quality loss only. Exit codes and the `::error::\u2026 timed out` line are unaffected. The issue forbids a workflow edit, so the PR cannot fix it. The test asserts `queued_without_runner=2` only because its stub does not model cancellation.\n- Hardening suggestion (risk score 1): scripts/dispatch_and_watch_workflow_run.sh, `else` branch of the cancel `if` (about lines 376-380). Capture the exit status of `timeout 20 gh api \u2026` and append ` (exit N)` to the warning. About 3 lines changed.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- No numbered finding. The reviewer calls the double-cancellation and possibly stale diagnostic logs in the workflow step an expected side-effect of not editing the workflow file.\n- Hardening suggestion (risk score 1): scripts/dispatch_and_watch_workflow_run.sh, lines 367-369 (else arm of the cancel check). The warning does not capture the exit status of `gh` or `timeout`. Capture `cancel_rc=$?` and append ` (exit ${cancel_rc})`. About 2 lines changed.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/dispatch_and_watch_workflow_run.sh:376 and .github/workflows/test-and-mark-stable.yml:4736-4754 | severity=MAJOR | confidence=4\n  PROBLEM: The watcher cancels the run before the workflow block reads jobs (line 4736) and posts its own cancel (line 4751). The `queued_without_runner` count computed at line 4740 undercounts, and the duplicate cancel can return HTTP 409 and log a spurious `Could not cancel timed-out child run` warning.\n  WHY: On every timeout with `DISPATCH_WATCH_CANCEL_ON_TIMEOUT=true`, the workflow logs an inaccurate count and a warning that masks the watcher's successful cancel. The test stub does not model this sequence. The issue constraints mean the PR cannot fully fix it.\n- scripts/dispatch_and_watch_workflow_run.sh:378-380 | severity=NIT | confidence=4\n  PROBLEM: The else branch swallows stdout and stderr and does not capture the exit code. HTTP 409, 403, 404, transport failures and the `timeout 20` limit all produce the same warning.\n  WHY: Operators cannot tell a transport problem, an auth problem and a state problem apart from the log.\n- Hardening suggestion (risk score 1): scripts/dispatch_and_watch_workflow_run.sh, lines 378-380. Capture the exit code and include ` (exit ${cancel_rc})` in the warning. About 3 lines changed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/dispatch_and_watch_workflow_run.sh:376; .github/workflows/test-and-mark-stable.yml:4736 and 4751 | severity=NIT | confidence=4\n  PROBLEM: The workflow's `queued_without_runner` diagnostic now runs after the watcher has requested cancellation, so it may report post-cancellation job state. The timeout block also repeats the cancel request.\n  WHY: The logged queued-job count may no longer describe the run at timeout, and a rejected second cancel emits a warning. The real-watcher test stub keeps returning queued jobs after cancellation, so it does not exercise this ordering.\n- Hardening suggestions: NONE (risk score 0).\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/dispatch_and_watch_workflow_run.sh:368-380, interacting with .github/workflows/test-and-mark-stable.yml:4733-4755 | severity=NIT | confidence=4\n  PROBLEM: The workflow timeout block re-reads jobs at line 4736 and re-posts the cancel at line 4751 after the watcher has cancelled. The `queued_without_runner` diagnostic at line 4740 describes post-cancel state, and the second cancel may return a 409 and print the warning at line 4754.\n  WHY: Jobs flip to `cancelled` asynchronously, so the count can under-report and a duplicate-cancel warning can appear. The ordering is inherent to the issue's design, and no exit-code or failure-path break occurs. `tests/test_test_and_mark_stable_dispatch_watch_timeout_cancel.py:355-371` still asserts `jobs=3 queued_without_runner=2` only because the stub does not model cancellation.\n- Hardening suggestion (risk score 1): scripts/dispatch_and_watch_workflow_run.sh, else arm of the cancel `if`, lines 378-380. Capture `cancel_rc=$?` and append ` (exit ${cancel_rc})` to the warning. About 2 lines changed.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e86852f966d7a0131f9adb149b7b11c8edb8dbba46e42be5cea24f207f8ce317",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9712,
+    "run_id": "44304930443",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44304930443",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118141009_3e56f91cb2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9712,
+    "run_id": "44304930443"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T14:10:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
