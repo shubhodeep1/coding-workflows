@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:3950-3957 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The 32-entry system-Python matrix has no `max-parallel` limit, so it can occupy up to 32 runner slots concurrently.\n  WHY: The repository documents a 40-job account limit and average utilization of 39.8 jobs (docs/plans/cut-ci-runner-time-plan.md:5, 13), so full CI runs can starve other workflows and add queue time. The reviewer labelled this SEVERITY: MAJOR, which is mapped here to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:3950-3957 | severity=high (source: MAJOR) | confidence=4\n  PROBLEM: The change allows the system-Python matrix to occupy up to 32 runner slots concurrently, and the strategy has no `max-parallel` limit.\n  WHY: The repository documents a 40-job account limit and average utilization of 39.8 jobs (docs/plans/cut-ci-runner-time-plan.md:5, 13), so full CI runs can consume most of the shared runner pool and add queue time for other workflows.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6c350806cee9d32847b5b139f26195406facd837714ab33f12fd0706d3db90c4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9489,
+    "run_id": "44260188098",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44260188098",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118091056_ae05d779f0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9489,
+    "run_id": "44260188098"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T09:10:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
