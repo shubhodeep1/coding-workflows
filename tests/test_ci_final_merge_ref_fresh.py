@@ -50,6 +50,9 @@ FAKE_GH = textwrap.dedent(
 		move_main = os.environ.get("FAKE_GH_MOVE_MAIN_TO", "")
 		if move_main:
 			subprocess.run(["git", "-C", os.environ["FAKE_ORIGIN"], "update-ref", "refs/heads/main", move_main], check=True)
+		if os.environ.get("FAKE_GH_DELETE_MAIN") == "1":
+			# The tip re-read (`git ls-remote`) then finds no branch.
+			subprocess.run(["git", "-C", os.environ["FAKE_ORIGIN"], "update-ref", "-d", "refs/heads/main"], check=True)
 		seq = os.environ.get("FAKE_GH_MERGEABLE_SEQ", "")
 		if seq:
 			counter = os.environ["FAKE_GH_LOG"] + ".mergeable"
@@ -277,6 +280,17 @@ def test_github_conflict_on_the_first_attempt_after_the_tip_moved_defers_to_the_
 	assert "outcome=conflict reason=not_mergeable" not in result.stdout
 	assert "past this run's base" in result.stdout and "did not recompute" not in result.stdout
 	assert f"outcome=merged_locally reason=not_refreshed base=main tested_base={world['new_base']} tip={world['later_base']}" in result.stdout
+	_assert_local_merge_of(result, tested, world, world["new_base"], world["new_merge"])
+	assert sum(1 for c in calls if ".mergeable | tostring" in c) == 1
+
+
+def test_github_conflict_with_an_unreadable_tip_defers_to_the_local_merge(world) -> None:
+	"""GitHub says not mergeable and the tip re-read fails: the local merge into the pin decides, not a not_mergeable failure."""
+	result, tested, calls = world["run"](env={"FAKE_GH_DELETE_MAIN": "1", "FAKE_GH_MERGEABLE": "false"})
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "outcome=conflict reason=not_mergeable" not in result.stdout
+	assert "could not be re-read" in result.stdout and "did not recompute" not in result.stdout
+	assert f"outcome=merged_locally reason=not_refreshed base=main tested_base={world['new_base']} tip={world['new_base']}" in result.stdout
 	_assert_local_merge_of(result, tested, world, world["new_base"], world["new_merge"])
 	assert sum(1 for c in calls if ".mergeable | tostring" in c) == 1
 

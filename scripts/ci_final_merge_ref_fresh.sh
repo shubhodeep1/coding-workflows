@@ -370,6 +370,13 @@ ci_final_merge_ref_main()
 				if [[ "${fresh_tip}" =~ ^[0-9a-f]{40}$ ]]; then
 					tip="${fresh_tip}"
 					seen_tips+="${tip} "
+				else
+					# Unknown whether GitHub judged the pin or a newer tip: the
+					# local merge into the pin decides (a real conflict with the
+					# pin still fails as merge_conflict).
+					echo "CI_FINAL_MERGE_REF: GitHub reports a conflict but the tip of ${base_ref} could not be re-read; merging into this run's base ${pin} locally to decide."
+					deferred_to_pin=true
+					break
 				fi
 			fi
 			if [ "${mergeable}" = "false" ] && [ -n "${pin}" ] && [ "${tip}" != "${pin}" ]; then
@@ -445,7 +452,11 @@ ci_final_merge_ref_main()
 		ci_final_merge_ref_log skipped fetch_unavailable "base=${base_ref} tested_base=${first} tip=${tip:-none}"
 		return 0
 	fi
-	echo "::error::CI_FINAL_MERGE_REF: refs/pull/${FINAL_CI_PR_NUMBER}/merge merges into ${first:-unknown}, not ${merge_into} (${base_ref}), and the job could not build the merge itself (${CI_FINAL_MERGE_REF_LOCAL_REASON:-unknown}). This run would test an old base, so it stops here; this is not a defect in the PR. The review sweep updates a head that is behind its base, and the next final run tests the current base."
+	if [ "${CI_FINAL_MERGE_REF_LOCAL_REASON}" = "merge_tree_unsupported" ]; then
+		echo "::error::CI_FINAL_MERGE_REF: the runner's git does not support --attr-source (git 2.40 or newer is required), so the job could not build the merge of ${GITHUB_SHA} into ${merge_into} (${base_ref}) itself. This is a runner problem, not a defect in the PR."
+	else
+		echo "::error::CI_FINAL_MERGE_REF: refs/pull/${FINAL_CI_PR_NUMBER}/merge merges into ${first:-unknown}, not ${merge_into} (${base_ref}), and the job could not build the merge itself (${CI_FINAL_MERGE_REF_LOCAL_REASON:-unknown}). This run would test an old base, so it stops here; this is not a defect in the PR. The review sweep updates a head that is behind its base, and the next final run tests the current base."
+	fi
 	ci_final_merge_ref_log stale "${CI_FINAL_MERGE_REF_LOCAL_REASON:-merge_failed}" "base=${base_ref} tested_base=${first:-none} tip=${tip:-none} ${pin_note}"
 	return 1
 }
