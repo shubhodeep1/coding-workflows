@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CI check-runs on head 97c398744c66 (final-CI run 44256284610; `scripts/ci_final_merge_ref_fresh.sh`) | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The 38 failed check-runs (`tests-system-python (6/10/13/15/19/20/23)` and `lint`) all fail at the stale-merge-ref gate (`outcome=stale reason=not_refreshed`), because `refs/pull/9402/merge` still merges into the old base b9d9db22 while `main` has moved.\n  WHY: The gate stops before any test runs, and no failure maps to a hunk in the PR. A branch update from `main` and a fresh final CI run clear it. Source severity was NIT.\n- scripts/gh_helpers.sh:3791 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `grep` call for the path-based file search has no `--` separator.\n  WHY: A file path that starts with '-' is read as an option, which causes a runtime error. Source severity was MAJOR.\n- scripts/render_prompt.py:197 | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The `UnicodeDecodeError` half of `except (OSError, UnicodeDecodeError)` is unreachable, because the inner try already catches it and re-decodes with `errors=\"replace\"`.\n  WHY: The handler is harmless dead residue from the #9341 branch, but it could mislead future edits to `load_prompt`. Source severity was NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add one line to changelog.d/9261-prompt-invalid-utf8.md: the fallback UTF-8 trim in review_rb_judge.sh was dropped from this change.\"\n  expected_change_site: changelog.d/9261-prompt-invalid-utf8.md\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The required line is already present in the existing changelog fragment, so there is no actual gap. Source severity was NIT.\n- requirement: \"Run pytest on tests/test_prompt_invalid_utf8.py and tests/test_ci_wires_every_test_file.py, and confirm both pass.\"\n  expected_change_site: N/A (verification requirement)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The latest issue_comment reports that tests/test_prompt_invalid_utf8.py passes locally, and the CI check-runs show 0 failed on head. Source severity was NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- CI check-runs on head 97c398744c66 (final-CI run 44256284610; `scripts/ci_final_merge_ref_fresh.sh`) | severity=NIT | confidence=5\n  PROBLEM: The 38 failed check-runs I could map all fail at the stale-merge-ref gate (`outcome=stale reason=not_refreshed`), because `refs/pull/9402/merge` still merges into the old base b9d9db22 while `main` has moved.\n  WHY: The gate stops before any test runs, and no failure maps to a hunk in the PR. A branch update from `main` and a fresh final CI run clear it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/gh_helpers.sh:3791 | severity=MAJOR | confidence=4\n  PROBLEM: The `grep` call for the path-based file search has no `--` separator.\n  WHY: A file path that starts with '-' is read as an option, which causes a runtime error.\n- TASK_GAP: Requirement: \"Add one line to changelog.d/9261-prompt-invalid-utf8.md: the fallback UTF-8 trim in review_rb_judge.sh was dropped from this change.\"\n  Expected change site: changelog.d/9261-prompt-invalid-utf8.md\n  Evidence of absence: The required line is already present in the existing changelog fragment.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP: Requirement: \"Run pytest on tests/test_prompt_invalid_utf8.py and tests/test_ci_wires_every_test_file.py, and confirm both pass.\"\n  Expected change site: N/A (verification requirement)\n  Evidence of absence: The latest issue_comment reports that tests/test_prompt_invalid_utf8.py passes locally, and the CI check-runs show 0 failed on head.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/render_prompt.py:197 | severity=NIT | confidence=5\n  PROBLEM: The `UnicodeDecodeError` half of `except (OSError, UnicodeDecodeError) as exc:` is unreachable, because the inner try (lines 183-195) already catches it and re-decodes with `errors=\"replace\"`.\n  WHY: No decode error can reach this handler. It is harmless residue, flagged so future edits to `load_prompt` keep `tests/test_render_prompt_foundation.py:312-335` and `tests/test_prompt_invalid_utf8.py` in sync with the actual catch surface.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ce11efe8e3c204b8965d4f28839d4dda055eceb3cb1df52ce56aecb6a1ea7e7a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9402,
+    "run_id": "44237476686",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44237476686",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118085249_f55c8771d2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9402,
+    "run_id": "44237476686"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T08:52:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
