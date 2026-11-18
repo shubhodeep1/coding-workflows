@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_files_touched_scope_guard.py:(All tests in the file) | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Infrastructure test failures caused by the new path filter in the integrity workflow.\n  WHY: The reviewer says the `push` trigger in `workflow-templates/ai-workflow-integrity.yml` now uses `paths: ['.github/workflows/**']`, so the integrity check is skipped on pushes that do not touch workflows, and this test assumes it runs on every push. Other reviewers (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) examined this claim and dropped it. No severity was stated in the source, so medium is a placeholder.\n- tests/test_gh_api_write_guard.py:tests/test_gh_api_write_guard.py::test_template_parity | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `test_template_parity` fails after `workflow-templates/ai-workflow-integrity.yml` was modified.\n  WHY: The reviewer says the parity check likely expects the template to match a canonical representation that was not updated. Other reviewers dropped this claim. No severity was stated in the source, so medium is a placeholder.\n- tests/test_orchestrate_lib.py:(All tests in the file) | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Infrastructure test failures caused by the new path filter in the integrity workflow.\n  WHY: The reviewer says these tests assume the integrity workflow runs on every push. Other reviewers dropped this claim. No severity was stated in the source, so medium is a placeholder.\n- tests/test_session_start_extract_repo_slug.py:(All tests in the file) | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Infrastructure test failures caused by the new path filter in the integrity workflow.\n  WHY: The reviewer says these tests assume the integrity workflow runs on every push. Other reviewers dropped this claim. No severity was stated in the source, so medium is a placeholder.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update tests to verify the new trigger filter and ensure system integrity.\n  expected_change_site: Infrastructure tests in tests/ that rely on the integrity workflow's trigger behavior.\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: tests/test_files_touched_scope_guard.py, tests/test_gh_api_write_guard.py (test_template_parity), tests/test_orchestrate_lib.py, tests/test_session_start_extract_repo_slug.py are reported failing on the new PR head. Severity stated as MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_files_touched_scope_guard.py:(All tests in the file) | confidence=4\n  PROBLEM: Infrastructure test failures caused by the new path filter in the integrity workflow.\n  WHY: The `push` trigger now uses `paths: ['.github/workflows/**']`, so the integrity workflow no longer runs on pushes outside `.github/workflows/`. The reviewer says these tests assume it runs on every push, so they fail when it is skipped.\n- tests/test_gh_api_write_guard.py:tests/test_gh_api_write_guard.py::test_template_parity | confidence=4\n  PROBLEM: Template parity test failure.\n  WHY: `test_template_parity` fails after `workflow-templates/ai-workflow-integrity.yml` was modified. The reviewer says the parity check likely expects a canonical representation that was not updated.\n- tests/test_orchestrate_lib.py:(All tests in the file) | confidence=4\n  PROBLEM: Infrastructure test failures caused by the new path filter in the integrity workflow.\n  WHY: Same reasoning as for `tests/test_files_touched_scope_guard.py`.\n- tests/test_session_start_extract_repo_slug.py:(All tests in the file) | confidence=4\n  PROBLEM: Infrastructure test failures caused by the new path filter in the integrity workflow.\n  WHY: Same reasoning as for `tests/test_files_touched_scope_guard.py`.\n- TASK_GAP: Requirement: Update tests to verify the new trigger filter and ensure system integrity. | Expected change site: Infrastructure tests in tests/ that rely on the integrity workflow's trigger behavior. | Evidence of absence: The four tests above are failing on the new PR head after the workflow trigger change. The reviewer says this shows the test suite was not fully updated for the new filtering contract. | SEVERITY: MAJOR | ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "48ee97936397393f266194d6869bd324ff7424fe0a8a8c1d5783dce9b35fe4a7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9705,
+    "run_id": "44377759482",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44377759482",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118211140_5a022d68a1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9705,
+    "run_id": "44377759482"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T21:11:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
