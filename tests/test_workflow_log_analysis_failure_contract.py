@@ -296,6 +296,237 @@ def test_label_helpers_retry_through_real_gh_retry() -> None:
 	assert (rc, calls) == (0, 2)
 
 
+def _analyze_step_body(wf: str) -> str:
+	return wf.split("      - name: Run workflow log analysis\n", 1)[1].split("\n      - name: ", 1)[0]
+
+
+def test_analyze_runs_report_structure_check_with_kill_switch() -> None:
+	wf = _workflow_text()
+	analyze = _analyze_step_body(wf)
+	assert "WORKFLOW_LOG_ANALYSIS_REPORT_CHECK_ENABLED: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_CHECK_ENABLED || 'true' }}" in analyze
+	assert "${WORKFLOW_LOG_ANALYSIS_REPORT_CHECK_ENABLED:-true}" in analyze
+	assert "false|0|no|off) wla_report_check_enabled=\"false\" ;;" in analyze
+	assert "[ ! -f scripts/check_workflow_analysis_report.py ]" in analyze
+	assert (
+		'python3 -I -B scripts/check_workflow_analysis_report.py --report "${REPORT_FILE}" '
+		"--collect-report workflow_log_report.json"
+	) in analyze
+	assert 'codex_failure_mode="report_structure_invalid"' in analyze
+	assert 'elif [ "${wla_report_check_rc}" -eq 1 ]; then' in analyze
+	# The existing failure modes keep their exact assignments.
+	assert 'codex_failure_mode="codex_rc_nonzero"' in analyze
+	assert 'codex_failure_mode="codex_empty_output"' in analyze
+	assert (
+		'handle_log_analysis_codex_failure "analysis_codex_pass" "report_structure_invalid" '
+		'"${analyze_attempts_used}" 0 "${failure_summary}"'
+	) in analyze
+	assert 'echo "held_report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"' in analyze
+	# The held report gets the data-gap line before the handler exits.
+	held_branch = analyze.split('if [ "${codex_failure_mode}" = "report_structure_invalid" ]; then', 1)[1]
+	assert held_branch.index("--insert-data-gap") < held_branch.index("handle_log_analysis_codex_failure")
+	# The held report is never marked completed: the handler exits first.
+	invalid_branch = analyze.split('if [ "${codex_failure_mode}" = "report_structure_invalid" ]; then', 1)[1]
+	assert invalid_branch.index("handle_log_analysis_codex_failure") < invalid_branch.index("analysis_status=completed")
+	assert 'wla_logs_missing="false"' in analyze
+	assert 'wla_logs_missing="true"' in analyze
+	assert 'echo "WORKFLOW_LOG_ANALYSIS_COVERAGE logs=missing"' in analyze
+	assert 'python3 -I -B scripts/check_workflow_analysis_report.py --insert-data-gap --report "${REPORT_FILE}"' in analyze
+	assert analyze.index("--insert-data-gap") < analyze.index('echo "report_file=${REPORT_FILE}"')
+	# ${{ }} never reaches the run: body for the new variable.
+	run_body = analyze.split("run: |", 1)[1]
+	assert "${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_CHECK_ENABLED" not in run_body
+
+
+def test_analyze_report_artifact_upload_is_always_gated() -> None:
+	wf = _workflow_text()
+	step = wf.split("      - name: Upload workflow log analysis report\n", 1)[1].split("\n      - name: ", 1)[0]
+	assert "if: always() && (steps.analyze.outputs.report_file != '' || steps.analyze.outputs.held_report_file != '')" in step
+	assert "continue-on-error: true" in step
+	assert "uses: actions/upload-artifact@v6" in step
+	assert "name: workflow-log-analysis-report" in step
+	assert "path: ${{ steps.analyze.outputs.report_file || steps.analyze.outputs.held_report_file }}" in step
+	assert "if-no-files-found: warn" in step
+	assert "retention-days: 30" in step
+	assert "run:" not in step
+	# Placed right after the analyze step and before the trace renderer.
+	assert wf.index("      - name: Run workflow log analysis\n") < wf.index("      - name: Upload workflow log analysis report\n")
+	assert wf.index("      - name: Upload workflow log analysis report\n") < wf.index("      - name: Render workflow scenario traces\n")
+
+
+# The report-delivery-via-PR cases live in
+# tests/test_workflow_log_analysis_report_pr.py and are collected here, since
+# CI already runs this file and ci.yml was outside that issue's file grant. A
+# name clash would hide a test, so it fails loudly.
+_REPORT_PR_CASE_NAMES: list[str] = []
+
+
+_COVERAGE_BEGIN = "# --- collection coverage (P3) begin ---"
+_COVERAGE_END = "# --- collection coverage (P3) end ---"
+_COVERAGE_PROMPT_BULLET = (
+	"- If `coverage` in `analysis_context.json` lists any `repositories_failed` or "
+	"`repositories_truncated`, name each such repository in `## Executive Summary` as a "
+	"data gap (failed: not analysed; truncated: only part of its runs listed)."
+)
+
+
+def _collect_logs_step(name: str) -> str:
+	wf = _workflow_text()
+	job = wf.split("\n  collect-logs:\n", 1)[1].split("\n  weekly-retro:\n", 1)[0]
+	return job.split(f"      - name: {name}\n", 1)[1].split("\n      - name: ", 1)[0]
+
+
+def _run_coverage_block(tmp: str, report: dict | None) -> tuple[int, str, str]:
+	import json
+	import shutil
+	import textwrap
+
+	step = _collect_logs_step("Collect workflow logs")
+	block = step.split(_COVERAGE_BEGIN, 1)[1].split(_COVERAGE_END, 1)[0]
+	script = "set -euo pipefail\n" + textwrap.dedent(block)
+	work = Path(tmp)
+	for leftover in ("workflow_log_report.json", "out.txt"):
+		(work / leftover).unlink(missing_ok=True)
+	if report is not None:
+		(work / "workflow_log_report.json").write_text(json.dumps(report), encoding="utf-8")
+	output_file = work / "out.txt"
+	output_file.write_text("", encoding="utf-8")
+	env = dict(os.environ)
+	env["GITHUB_OUTPUT"] = str(output_file)
+	proc = subprocess.run(
+		[shutil.which("bash") or "bash", "-c", script],
+		cwd=tmp,
+		env=env,
+		capture_output=True,
+		text=True,
+		timeout=60,
+	)
+	return proc.returncode, proc.stdout, output_file.read_text(encoding="utf-8")
+
+
+def test_collect_step_logs_coverage_line_and_annotations() -> None:
+	import shutil
+
+	step = _collect_logs_step("Collect workflow logs")
+	assert "        id: collect\n" in step
+	assert 'collect_rc=0; python3 scripts/collect_workflow_logs.py "${COLLECT_ARGS[@]}" || collect_rc=$?' in step
+	assert (
+		"WORKFLOW_LOG_COLLECT_COVERAGE repos=${coverage_repos} failed=${#coverage_failed_list[@]} "
+		"truncated=${#coverage_truncated_list[@]} failed_repos=${coverage_failed_csv} "
+		"truncated_repos=${coverage_truncated_csv}"
+	) in step
+	assert "[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+" in step
+	assert step.rstrip().endswith('exit "${collect_rc}"')
+	assert step.index(_COVERAGE_BEGIN) < step.index(_COVERAGE_END) < step.index('exit "${collect_rc}"')
+	block = step.split(_COVERAGE_BEGIN, 1)[1].split(_COVERAGE_END, 1)[0]
+	assert "${{" not in block
+	if shutil.which("jq") is None or shutil.which("bash") is None:
+		print("SKIP: jq or bash unavailable; coverage block not executed")
+		return
+
+	secret_text = "HTTP 403 Forbidden secret-token-xyz"
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, outputs = _run_coverage_block(
+			tmp,
+			{
+				"coverage": {
+					"repositories_requested": ["o/a", "o/b", "o/c", "a/b\n::error::x"],
+					"repositories_failed": [
+						{"repository": "o/b", "message": secret_text},
+						{"repository": "a/b\n::error::x", "message": secret_text},
+					],
+					"repositories_truncated": ["o/c", "o/a", "bad name"],
+					"page_limit_reached": True,
+				},
+			},
+		)
+		assert rc == 0, out
+		assert "WORKFLOW_LOG_COLLECT_COVERAGE repos=4 failed=1 truncated=2 failed_repos=o/b truncated_repos=o/a,o/c\n" in out
+		assert out.count("::error title=Workflow log collection::Could not read workflow runs for o/b;") == 1
+		assert out.count("::error") == 1
+		assert "::warning title=Workflow log collection::Run listing for o/a was truncated;" in out
+		assert "::warning title=Workflow log collection::Run listing for o/c was truncated;" in out
+		assert "::error::x" not in out and "bad name" not in out
+		assert secret_text not in out and secret_text not in outputs
+		assert "coverage_failed_count=1\n" in outputs
+		assert "coverage_truncated_count=2\n" in outputs
+		assert "coverage_failed_repos=o/b\n" in outputs
+		assert "coverage_truncated_repos=o/a,o/c\n" in outputs
+
+		rc, out, outputs = _run_coverage_block(tmp, {"runs": []})
+		assert rc == 0
+		assert "WORKFLOW_LOG_COLLECT_COVERAGE" not in out
+		assert "::warning::workflow_log_report.json has no coverage object; collection coverage is unknown." in out
+		assert outputs == ""
+
+		rc, out, outputs = _run_coverage_block(tmp, None)
+		assert rc == 0
+		assert "collection coverage is unknown" in out
+		assert outputs == ""
+
+		rc, out, outputs = _run_coverage_block(
+			tmp,
+			{"coverage": {"repositories_requested": [], "repositories_failed": [], "repositories_truncated": [], "page_limit_reached": False}},
+		)
+		assert rc == 0
+		assert "WORKFLOW_LOG_COLLECT_COVERAGE repos=0 failed=0 truncated=0 failed_repos= truncated_repos=\n" in out
+		assert "::error" not in out and "::warning" not in out
+		assert "coverage_failed_count=0\n" in outputs
+
+
+def test_collection_gap_alert_step_is_warning_and_fail_open() -> None:
+	step = _collect_logs_step("Alert on workflow log collection gaps")
+	assert "        id: coverage_alert\n" in step
+	assert "continue-on-error: true" in step
+	if_line = next(line for line in step.splitlines() if line.strip().startswith("if:"))
+	assert "always()" in if_line
+	assert "(steps.collect.outputs.coverage_failed_count || '0') != '0'" in if_line
+	assert "(steps.collect.outputs.coverage_truncated_count || '0') != '0'" in if_line
+	assert "!(github.event_name == 'schedule' && github.event.schedule == '0 6 * * *')" in if_line
+	assert "TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}" in step
+	assert "TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}" in step
+	run_body = step.split("        run: |\n", 1)[1]
+	assert "${{" not in run_body
+	assert "source scripts/tg_helpers.sh" in run_body
+	assert 'tg_send_msg "${MSG}" "WARNING" >/dev/null || echo "::warning::' in run_body
+	# Ordered after the artifact uploads so it cannot affect them.
+	wf = _workflow_text()
+	assert wf.index("- name: Upload full workflow log directory artifact") < wf.index(
+		"- name: Alert on workflow log collection gaps"
+	)
+	# GH_PAT and the Telegram secret never share a step.
+	collect_step = _collect_logs_step("Collect workflow logs")
+	assert "TG_BOT_SECRET" not in collect_step
+	assert "GH_PAT" not in step
+
+
+def test_prompt_names_coverage_gaps_in_executive_summary() -> None:
+	for rel in ("prompts/_templates/mode-workflow-analysis.txt", "prompts/mode-workflow-analysis.txt"):
+		text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+		assert text.count(_COVERAGE_PROMPT_BULLET + "\n") == 1, rel
+		anchor = "- Do not invent data. If evidence is incomplete, state the exact gap"
+		assert text.index(anchor) < text.index(_COVERAGE_PROMPT_BULLET), rel
+
+
+def _collect_report_pr_cases() -> None:
+	spec = importlib.util.spec_from_file_location(
+		"workflow_log_analysis_report_pr_cases",
+		Path(__file__).resolve().parent / "test_workflow_log_analysis_report_pr.py",
+	)
+	assert spec is not None and spec.loader is not None, "cannot load tests/test_workflow_log_analysis_report_pr.py"
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			_REPORT_PR_CASE_NAMES.append(case_name)
+	# A renamed or emptied cases module must fail loudly, not collect nothing.
+	assert len(_REPORT_PR_CASE_NAMES) >= 10, f"only {len(_REPORT_PR_CASE_NAMES)} report PR cases collected"
+
+
+_collect_report_pr_cases()
+
+
 def main() -> int:
 	test_codex_retry_knobs_are_env_driven()
 	test_issue_context_failure_marker_and_label_contract_present()
@@ -307,6 +538,13 @@ def main() -> int:
 	test_failure_label_writes_route_through_gh_retry_with_fallback()
 	test_label_create_helper_does_not_retry_an_existing_label()
 	test_label_helpers_retry_through_real_gh_retry()
+	test_analyze_runs_report_structure_check_with_kill_switch()
+	test_analyze_report_artifact_upload_is_always_gated()
+	test_collect_step_logs_coverage_line_and_annotations()
+	test_collection_gap_alert_step_is_warning_and_fail_open()
+	test_prompt_names_coverage_gaps_in_executive_summary()
+	for case_name in _REPORT_PR_CASE_NAMES:
+		globals()[case_name]()
 	for case_name in _REPORT_DELIVERY_CASES:
 		globals()[case_name]()
 	return 0
