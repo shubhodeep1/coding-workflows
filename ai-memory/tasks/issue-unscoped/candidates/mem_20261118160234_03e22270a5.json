@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/check_failure_triage.sh:1744-1748 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The logic does not reset `SUPERSEDE_OLD_ISSUE` or other supersede-related variables when `BASE_KEYED_REF` is set and a skip occurs.\n  WHY: If triage kept running after the skip, those variables could hold stale state. The reviewer notes that this path currently ends with `exit 0`, so it is safe now. The source severity was NIT, mapped here to low.\n- scripts/check_failure_triage.sh:1740-1742 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `triage_report_routing_unverified` is called within the `base_keyed_existing` block, but that function normally assumes the PR-head routing check has run or is relevant.\n  WHY: When `PR_HEAD_ROUTING_ENABLED` is true, it may log a warning that does not apply to a base-keyed issue, which adds noise to the Telegram notifications. The source severity was NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add a `changelog.d/<issue>-triage-base-keyed-fingerprint.md` fragment (\u00a720, `changed`).\"\n  expected_change_site: changelog.d/\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: According to the reviewer, the PR diff and the last run diff contain no new file in `changelog.d/` that matches this requirement. The PR description lists `changelog.d/9674-triage-base-keyed-fingerprint.md` as a changed file, but it is not in the PR patch or the last run diff, and the last commit status did not list it. The source severity was BLOCKER. minimax_minimax-m3 and z-ai_glm-5_3-flash state that the changelog fragment is present.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/check_failure_triage.sh:lines 1744-1748 | severity=NIT | confidence=2\n  PROBLEM: The logic does not reset `SUPERSEDE_OLD_ISSUE` or other supersede-related variables when `BASE_KEYED_REF` is set and a skip occurs.\n  WHY: The code logs `op=supersede outcome=skip reason=base_triage_tracked old=99`, and the variables could be stale if triage continued. The path currently ends with `exit 0`, so it is safe, but keeping inconsistent state after a skip is risky.\n- scripts/check_failure_triage.sh:lines 1740-1742 | severity=NIT | confidence=3\n  PROBLEM: `triage_report_routing_unverified` is called within the `base_keyed_existing` block, but it normally assumes the PR-head routing check has run or is relevant.\n  WHY: When `PR_HEAD_ROUTING_ENABLED` is true, it may log a warning that does not apply to a base-keyed issue, which adds noise to the Telegram notifications.\n- TASK_GAP\n  Requirement: \"Add a `changelog.d/<issue>-triage-base-keyed-fingerprint.md` fragment (\u00a720, `changed`).\"\n  Expected change site: changelog.d/\n  Evidence of absence: The PR diff and last run diff do not contain any new file in `changelog.d/` matching this requirement. The PR description lists `changelog.d/9674-triage-base-keyed-fingerprint.md` as a changed file, but it is not present in the PR patch or the last run diff, and the last commit status did not list it.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "93f3cbe86fa27872fe8229fc9d4b47745723635cf5c9bf424b2721465cfa597a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9703,
+    "run_id": "44322043129",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44322043129",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118160234_03e22270a5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9703,
+    "run_id": "44322043129"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T16:02:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
