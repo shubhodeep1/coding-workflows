@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ci_final_merge_ref_fresh.sh:181 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: All 37 failed check-runs fail at the `CI_FINAL_MERGE_REF ... still merges into ...` step. `refs/pull/9603/merge` still merged head e4385597 into 434bc2c6 after 6 refresh attempts, while the base `orchestrator/project-9394` had moved to 421b7b55.\n  WHY: This is an environmental stale merge-ref condition, and the script fails closed on purpose. No repository edit is needed and the script should not be weakened. The reviewer rated it NIT, which is mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/ci_final_merge_ref_fresh.sh:181 | severity=NIT | confidence=4\n  PROBLEM: All 37 failed check-runs fail at the `CI_FINAL_MERGE_REF ... still merges into ...` step. `refs/pull/9603/merge` still merged head e4385597 into 434bc2c6 after 6 refresh attempts, while the base `orchestrator/project-9394` had moved to 421b7b55. No failing check maps to the `docs/INVENTORY.md` hunks.\n  WHY: This is an environmental stale merge-ref condition. Later runs on the current base recompute the merge ref. No repository edit is needed, and the script should not be weakened.\n- Task completeness: NONE. The reviewer checked the linked issue's deliverables and found them present: the INVENTORY entries, the parity assertion in `.github/workflows/ci.yml` and the deferred item.\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===",
+  "fingerprint": "50ceb2578a8fda2943789a1a1ae393832cc61cc3aa5cde09726435d27efae51e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9603,
+    "run_id": "44252920594",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "github-actions[bot]",
+    "run_attempt": 1,
+    "run_id": "44252920594",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118091730_04b8d96152",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9603,
+    "run_id": "44252920594"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T09:17:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
