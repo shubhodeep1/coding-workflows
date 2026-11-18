@@ -2,7 +2,15 @@
 
 ## Summary
 
-Three small workflows in coding-workflows each take their own runner on a pull request event for under a minute of work: `Integration PR readiness check`, `Lint PR body for auto-close keywords against orchestrator-tracking issues` and `Lint plan-archival completeness`. This plan folds them into one job in one workflow, keeps every name that carries a verdict, and narrows the `push` trigger of the consumers' `AI Workflow Integrity` wrapper. It is two independently mergeable PRs.
+Three small workflows in coding-workflows each take their own runner on a pull request event for under a minute of work: `Integration PR readiness check`, `Lint PR body for auto-close keywords against orchestrator-tracking issues` and `Lint plan-archival completeness`. This plan folds them into one job in one workflow, keeps the readiness status context, adds the folded job's name `pr-body-lint` to the merge gate's default list in the same PR, and narrows the `push` trigger of the consumers' `AI Workflow Integrity` wrapper. It is two independently mergeable PRs.
+
+## §18.E Automation
+
+- No new script, supervisor or scheduled workflow. Phase 1 adds one workflow file that replaces three and extends existing scripts (`scripts/pr_checks_lib.sh`, `scripts/orchestrate_poll_process.sh`: one gate-list entry); Phase 2 edits one template.
+- Entry points: `.github/workflows/pr-checks.yml` (`pull_request` into `main` and `stable`); `workflow-templates/ai-workflow-integrity.yml` (`pull_request_target` and `push`), delivered by `.github/workflows/update_workflows.yml`.
+- No long-running supervisor is needed.
+- No DB work.
+- `docs/scripts-pending-removal.md`: no entry added or removed.
 
 ## Context
 
@@ -19,9 +27,11 @@ Audit of issues, PRs and Actions runs for 2026-11-10 to 2026-11-17 (eight days):
 
 Each of these runs holds one slot of the account's shared runner pool (CLAUDE.md §33). The work is small; the cost is the slot and the queue wait.
 
-What the code says today (read on `main` at 88de9d5, with the PR-body job rename already applied):
+What the code says today (read on `main` at 88de9d5 and re-checked against this branch; `main` has since moved, so Phase 1 step 0 re-verifies every bullet below on the current tip before any edit):
 
-- **Check-run names are job names, not workflow names.** PR #9636's head carries check-runs named `readiness` and `lint`; none is named after a workflow. `_pr_checks_completed` (`scripts/pr_checks_lib.sh`) matches a failed check-run by `.name` against the required set. So the entries `Integration PR readiness check`, `Lint plan-archival completeness` and `Lint PR body for auto-close keywords against orchestrator-tracking issues` in `ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT` match no check-run. A failed PR-body lint blocks through the entry `pr-body-lint` (through `lint` before the rename), and a failed plan-archival lint blocks through `lint`, the name its job shares with CI's aggregate job.
+- **Check-run names are job names, not workflow names.** PR #9636's head carries check-runs named `readiness` and `lint`; none is named after a workflow. `_pr_checks_completed` (`scripts/pr_checks_lib.sh`) matches a failed check-run by `.name` against the required set, and counts only check-runs that exist: a listed name with no check-run blocks nothing. So the entries `Integration PR readiness check`, `Lint plan-archival completeness` and `Lint PR body for auto-close keywords against orchestrator-tracking issues` in `ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT` match no check-run.
+- **Three jobs are named `lint`.** `ci.yml` (CI's aggregate job), `lint-pr-body-auto-close.yml` and `lint-plan-archival.yml` each have a job with id `lint` (the `_mark_superseded` comment in `scripts/pr_checks_lib.sh` says so). No job is named `pr-body-lint` yet, and `ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT` (`scripts/pr_checks_lib.sh` and `scripts/orchestrate_poll_process.sh`, pinned equal by `tests/test_pr_checks_lib_required_filter.py`) does not list it. A failed PR-body lint and a failed plan-archival lint both block through the entry `lint`, the name they share with CI's aggregate job.
+- **The gate's treatment of same-name check-runs.** `skipped`, `success` and `neutral` are acceptable. Only a `cancelled` run can be superseded by a newer run of its name; a failed, timed-out or running check-run blocks on its own even when a newer run of the same name exists.
 - **The readiness verdict is a commit status, not the job result.** `scripts/check_integration_pr_readiness.py` posts `orchestrator/integration-pr-not-ready` and exits 0 for ready and not-ready alike. It exits 1 only when it cannot post the status. The orchestrator refreshes the same status itself when a tracking issue's checkboxes change (`TRACKING_BODY_READINESS_REFRESH` in `scripts/orchestrate_poll_process.sh`).
 - **The PR-body and plan-archival verdicts are job results.** Both scripts exit non-zero on a violation.
 - **All three run on `pull_request`** into `main` or `stable`, from the PR's merge ref, with `github.token` and no secret. Their permissions differ only in `statuses: write` (readiness).
@@ -32,7 +42,7 @@ What the code says today (read on `main` at 88de9d5, with the PR-body job rename
 
 An earlier session tried the fold directly and stopped on three points. This plan answers each:
 
-- The merge gate list names two of the workflows. Those entries match nothing (first bullet), so the fold needs no lockstep change to the list as long as the job that carries the PR-body verdict keeps the name `pr-body-lint`.
+- The merge gate list names two of the workflows. Those entries match nothing (first bullet), so removing the workflows changes nothing there. The lint verdicts block through `lint` today; the folded job gets a new id (`pr-body-lint`, OD1), so Phase 1 adds that name to `ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT` in the same PR and keeps `lint`, which CI owns.
 - `Internal: Issue-PR Status Sync` runs on `closed` only, with `secrets: inherit` and `issues: write`. It stays out (Non-goals).
 - `AI Workflow Integrity` runs on `pull_request_target`. It is never merged with a `pull_request` job; only its `push` trigger changes.
 
@@ -56,7 +66,7 @@ An earlier session tried the fold directly and stopped on three points. This pla
 
 ## Constraints
 
-- §6: the workflow files, workflow names and job ids that go away are removals. The user approved the fold as a planned change (Q10: A); the exact removals are listed under Names that change, and OD1 and OD2 ask for the two that go beyond the question as asked. The status context `orchestrator/integration-pr-not-ready`, the check-run name `pr-body-lint`, the three scripts and their CLI flags, and every log prefix stay.
+- §6: the workflow files, workflow names and job ids that go away are removals. The user approved the fold as a planned change (Q10: A); the exact removals are listed under Names that change, and OD1 and OD2 ask for the two that go beyond the question as asked. The status context `orchestrator/integration-pr-not-ready`, the check-run name `lint` (CI's), every existing `ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT` entry, the three scripts and their CLI flags, and every log prefix stay. The check-run name `pr-body-lint` and its gate-list entry are additions.
 - §19: the PR-body lint is a load-bearing check. Its steps move verbatim, and its failure must fail the job.
 - §33.A: fold before adding; say why anything stays separate; coalesce superseded runs; set the merged job's `timeout-minutes` to the sum plus headroom.
 - §33.B: jobs per event before and after are stated below.
@@ -113,13 +123,16 @@ Nobody was available to answer questions while this plan was written. D1 to D7 a
 
 ### OD1 — Name of the folded job (open)
 
-- **Recommended: A — keep the job id `pr-body-lint`.** The check-run that carries the lint verdicts keeps the name the merge gate lists (`ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT`) and the name a pull request opened before the fold already reports. No gate list change, no ruleset change, no open PR left waiting.
-- **B — a new job id `pr-checks`.** The name fits the content better. It needs `pr-checks` added to the gate list in the same PR, `pr-body-lint` kept there for old branches, and, if the user has made `pr-body-lint` a required ruleset check by then, a ruleset swap timed to the merge.
-- **If B:** Implementation steps 1, 6 and 8 change as noted there.
+Today the lint verdicts are carried by jobs named `lint`. The folded job must not be named `lint` (Goals), so whatever its id, that id is new and must be added to `ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT` in the same PR; otherwise `_pr_checks_completed` ignores a failed folded lint and the §19 check stops blocking the pipeline's merges.
+
+- **Recommended: A — job id `pr-body-lint`.** It names the check with consequences (§19). Phase 1 adds `pr-body-lint` to the default in `scripts/pr_checks_lib.sh` and `scripts/orchestrate_poll_process.sh` (kept identical), the README row, and the tests that pin the string. `lint` stays in the list: it is CI's aggregate job, and heads from before the fold still carry the old lints under that name.
+- **B — job id `pr-checks`.** The name fits the content better; the same gate-list addition is made with `pr-checks`.
+- **Rejected — keep the id `lint`.** It keeps the duplicate `lint` that can satisfy the ruleset's `lint` requirement before CI finishes (PR #9570).
+- **If B:** read `pr-checks` for `pr-body-lint` in Implementation steps 1 and 6 and in Tests.
 
 ### OD2 — Fold the plan-archival lint (open)
 
-- **Recommended: A — fold it.** It removes `lint-plan-archival.yml` and with it the last job outside CI named `lint`, which today can satisfy the ruleset's `lint` requirement on a PR that changes `docs/completed/**` (the same defect the PR-body rename fixed). A failed plan-archival lint then blocks through `pr-body-lint`.
+- **Recommended: A — fold it.** It removes `lint-plan-archival.yml` and with it the last job outside CI named `lint`, which today can satisfy the ruleset's `lint` requirement on a PR that changes `docs/completed/**` (the defect PR #9570 showed for the PR-body lint's `lint`). A failed plan-archival lint then blocks through `pr-body-lint`, which Phase 1 adds to the gate default (OD1).
 - **B — leave it.** Fewer files change (`.claude/commands/audit-plans.md`, `.claude/commands/implement-plan-ai.md` and their `workflow-templates/.claude/commands/` copies cite the file), and its runs are rare because of the path filter. The duplicate `lint` stays.
 - **If B:** drop the plan-archival steps from step 1 and the plan-archival rows from Names that change; the guard test in step 7 keeps `lint-plan-archival.yml` in its allowlist.
 
@@ -135,8 +148,8 @@ Nobody was available to answer questions while this plan was written. D1 to D7 a
 
 ### OD5 — Ruleset entries for the folded checks (open)
 
-- **Recommended: A — after Phase 1, add `pr-body-lint` (GitHub Actions app) to the `main` ruleset,** so GitHub's own merge button and auto-merge wait for the §19 check as the pipeline's gate does. The order is under Manual steps.
-- **B — leave the ruleset as it is.** The pipeline's merges are still blocked by its own gate; a manual merge or an armed auto-merge is not.
+- **Recommended: B — leave the ruleset as it is.** The pipeline's merges are blocked by its own gate (OD1); a manual merge or an armed auto-merge is not, as today. The reason not to require `pr-body-lint`: the folded job is skipped on every label event for a label other than `ai:override-incomplete-merge`, and each skip adds a `pr-body-lint` check-run with conclusion `skipped` to the head. GitHub reports a job skipped by a conditional as Success and counts it as passing a required check ([Troubleshooting required status checks](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks)), so a label change after a failed lint could satisfy a required `pr-body-lint` that never ran on that event. The pipeline's gate is not affected: `skipped` is acceptable there, and a failed run blocks on its own whatever newer same-name runs exist (Context).
+- **A — require `pr-body-lint` in the `main` ruleset after Phase 1.** Safe only once no event can produce a skipped `pr-body-lint`, for example by moving the label filter from the job-level `if:` into the steps (every label event then takes a runner, which undoes `docs/plans/reduce-actions-run-volume-plan.md` item 10). Not part of this plan.
 - Whether `orchestrator/integration-pr-not-ready` should be required as well is the same kind of decision. The readiness workflow's header says to require it; the ruleset does not. This plan does not depend on it.
 
 ## Approach
@@ -146,7 +159,7 @@ Nobody was available to answer questions while this plan was written. D1 to D7 a
 | Workflow today | After | Why |
 | --- | --- | --- |
 | `Integration PR readiness check` (`integration-pr-readiness.yml`, job `readiness`) | step group in `PR checks` | same trigger, token and trust as the lints |
-| `Lint PR body for auto-close keywords…` (`lint-pr-body-auto-close.yml`, job `pr-body-lint`) | step group in `PR checks`, job id kept | carries the verdict name |
+| `Lint PR body for auto-close keywords…` (`lint-pr-body-auto-close.yml`, job `lint`) | step group in `PR checks`, job id `pr-body-lint` (OD1), added to the gate default | carries the verdict; must not be named `lint` |
 | `Lint plan-archival completeness` (`lint-plan-archival.yml`, job `lint`) | step group in `PR checks`, runs when the PR changes `docs/completed/**` (OD2) | removes the duplicate `lint` |
 | `CI quick` | separate | other bases, `cancel-in-progress: true`, wider permissions, heavier work |
 | `Internal: AI Review & Autofix` | separate | secrets, `ai-review/head-gate` |
@@ -160,7 +173,7 @@ Nobody was available to answer questions while this plan was written. D1 to D7 a
 
 - `on: pull_request`, `types: [opened, edited, synchronize, reopened, ready_for_review, labeled, unlabeled]`, `branches: [main, stable]`. This is the union of the three trigger lists. No `paths:` filter, because the PR-body lint and the readiness status are needed on every PR.
 - Job `pr-body-lint`, `timeout-minutes: 10` (three 5-minute jobs whose real work is under a minute each).
-- Job-level `if:`, taken from the readiness workflow: run unless the event is `labeled` or `unlabeled` for a label other than `ai:override-incomplete-merge`. A skipped job takes no runner.
+- Job-level `if:`, taken from the readiness workflow: run unless the event is `labeled` or `unlabeled` for a label other than `ai:override-incomplete-merge`. A skipped job takes no runner, but it still adds a `pr-body-lint` check-run with conclusion `skipped` to the head. The pipeline's gate accepts `skipped` and still blocks on any earlier failed `pr-body-lint` on that head (Context), so a skip cannot mask a failure there; GitHub's ruleset would count the skip as passing, which is why OD5 recommends B.
 - `concurrency:` per D5. The group expression repeats the job-level condition: `pr-checks-<PR number>` when the job will run, `pr-checks-skip-<run id>` otherwise.
 - One checkout with `fetch-depth: 2`. The merge commit's first parent is the base tip, so `git diff --no-renames --name-only --diff-filter=A HEAD^1 HEAD` lists the files the PR adds without full history and without an API call. If `HEAD` is not a two-parent merge commit, the step fails closed (the plan-archival steps run and the job fails with a clear message) rather than skipping.
 - Step groups, each step with its original `name:` and body:
@@ -174,14 +187,14 @@ Nobody was available to answer questions while this plan was written. D1 to D7 a
 
 | Name | Change | Readers to update |
 | --- | --- | --- |
-| File `.github/workflows/lint-pr-body-auto-close.yml` | deleted | `CLAUDE.md` §19 (enforcement item 1) and its copy `workflow-templates/CLAUDE.md`; `unattended_system_instructions.md` §21 if it names the file; `agents.md` (the §19 paragraph, the two `_pr_checks_completed` paragraphs, the TREE block through `make generate`); `docs/INVENTORY.md`; `scripts/pr_checks_lib.sh` comments; `tests/test_lint_pr_body_auto_close.py`; `tests/test_pr_base_freshness_gate.py` and `tests/test_pr_checks_lib_required_filter.py` docstrings; `tests/test_workflow_checkout_integration_ref_audit.py` registry |
+| File `.github/workflows/lint-pr-body-auto-close.yml`, job id `lint` | deleted | `CLAUDE.md` §19 (enforcement item 1; there is no `workflow-templates/CLAUDE.md`, do not create one); `unattended_system_instructions.md` §21 if it names the file; `agents.md` (the §19 paragraph, the two `_pr_checks_completed` paragraphs, the TREE block through `make generate`); `docs/INVENTORY.md`; `scripts/pr_checks_lib.sh` comments; `tests/test_lint_pr_body_auto_close.py`; `tests/test_pr_base_freshness_gate.py` and `tests/test_pr_checks_lib_required_filter.py` docstrings; `tests/test_workflow_checkout_integration_ref_audit.py` registry |
 | Workflow name `Lint PR body for auto-close keywords against orchestrator-tracking issues` | no run carries it any more | `CLAUDE.md` §19; README `ORCH_FINAL_MERGE_REQUIRED_CHECKS` row (prose); the gate list entry stays (OD3) |
 | File `.github/workflows/integration-pr-readiness.yml`, job id `readiness` | deleted | `tests/test_check_integration_pr_readiness.py` (loads the file and reads `jobs.readiness.if`); `tests/test_workflow_checkout_integration_ref_audit.py`; `docs/INVENTORY.md`; `agents.md` TREE block; `agents.d/run-volume-2026-11-push-ci-coalesce.md` if not yet folded, else the folded agents.md text |
 | Workflow name `Integration PR readiness check` | no run carries it any more | the gate list entry stays (OD3); the `ci.yml` step "Integration PR readiness check unit tests" is a step name for the script's tests and stays |
-| File `.github/workflows/lint-plan-archival.yml`, job id `lint` (OD2) | deleted | `.claude/commands/audit-plans.md`, `.claude/commands/implement-plan-ai.md` and their copies under `workflow-templates/.claude/commands/`; `tests/test_lint_plan_archival_completeness.py`; `tests/test_mark_stable_release_tag_refspec_contract.py` (a comment); `tests/test_workflow_checkout_integration_ref_audit.py`; `docs/INVENTORY.md`; `agents.md`; `scripts/pr_checks_lib.sh` and `scripts/persist_orchestrator.py` comments that count the jobs named `lint` |
+| File `.github/workflows/lint-plan-archival.yml`, job id `lint` (OD2) | deleted | `.claude/commands/audit-plans.md`, `.claude/commands/implement-plan-ai.md` and their copies under `workflow-templates/.claude/commands/`; `tests/test_mark_stable_release_tag_refspec_contract.py` (a comment); `tests/test_workflow_checkout_integration_ref_audit.py`; `docs/INVENTORY.md`; `agents.md`; `scripts/pr_checks_lib.sh` and `scripts/persist_orchestrator.py` comments that count the jobs named `lint` |
 | Check-run name `readiness` | gone | none: no script, heal rule or log parser reads it (searched `scripts/`, `tests/`, `.github/`, `prompts/`) |
-| Check-run name `lint` from plan-archival | gone | none by name; its failure blocked through the gate entry `lint` and now blocks through `pr-body-lint` |
-| Check-run name `pr-body-lint` | kept (OD1) | `ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT`, already lists it |
+| Check-run name `lint` from the PR-body lint and from plan-archival | gone; `ci.yml`'s `lint` stays | the gate entry `lint` stays (CI's aggregate, and heads from before the fold); `tests/test_pr_checks_lib_required_filter.py` cross-workflow `lint` supersession tests stay valid, their docstrings and the `_mark_superseded` comment stop saying three workflows share the name; after the fold both failures block through `pr-body-lint` |
+| Check-run name `pr-body-lint` | new (OD1) | added to `ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT` in `scripts/pr_checks_lib.sh` and `scripts/orchestrate_poll_process.sh`; README `ORCH_FINAL_MERGE_REQUIRED_CHECKS` default column; the default-string pins in `tests/test_pr_checks_lib_required_filter.py` and `tests/test_orchestrate_final_merge_required_checks_gate.py` |
 | Status context `orchestrator/integration-pr-not-ready` | kept | unchanged |
 
 Release manifests and the `@stable` sync: none of the three workflows is under `workflow-templates/`, in a profile manifest or in `sync-manifest.json`, so consumers never had them. The synced files that change are `CLAUDE.md` and the two command files.
@@ -189,17 +202,17 @@ Release manifests and the `@stable` sync: none of the three workflows is under `
 ### How the old names retire
 
 - A `pull_request` run uses the workflow files of the PR's merge ref. After the fold merges, the next event on an open PR runs `PR checks` and none of the three old workflows.
-- A PR that gets no further event keeps the check-runs and the status already on its head. They have the names the gate reads (`pr-body-lint`, or `lint` on a branch older than the rename, and the status context), so it merges as before.
+- A PR that gets no further event keeps the check-runs and the status already on its head. The lints there are named `lint`, which the gate keeps reading, and the status context is unchanged, so it merges as before. A head that runs `PR checks` carries `pr-body-lint`, which the gate reads from the same PR on, so a passing `pr-body-lint` alone never stands in for an unchecked body. `lint` never leaves the list (CI owns it), so no deprecation window is needed for either name.
 - A PR whose branch conflicts with `main` runs no `pull_request` workflow until the conflict is resolved, today and after.
 - Promotion PRs into `stable` take the workflow from their merge ref, which contains `main`'s files, so they switch with `main`.
-- Consumers pinned to an older stable read an unchanged gate list; this plan adds and removes no entry (OD3: A).
+- Consumers pinned to an older stable read the old gate list. Consumers on the next stable read the list with `pr-body-lint` added; no consumer workflow produces that check-run, and a listed name with no check-run blocks nothing, so their merges are unchanged. No entry is removed (OD3: A).
 
 ### Manual steps, per repository
 
 | Repository | Step | When |
 | --- | --- | --- |
 | coding-workflows | none required for the fold | |
-| coding-workflows (OD5: A) | add `pr-body-lint` (GitHub Actions app) to ruleset `Required checks for default branch` | after Phase 1 has merged and every open PR into `main` reports a `pr-body-lint` check-run on its head. Earlier, a PR whose branch predates the rename reports `lint` only and would wait for a check that arrives with its next push or body edit |
+| coding-workflows | none for OD5 (B recommended); OD5: A is not safe while label events skip the job | |
 | each consumer | none | the ruleset `coding-workflows managed wrappers` requires the status the `pull_request_target` run posts, which Phase 2 does not touch |
 | `binance-blessings` | none from this plan (OD4) | |
 
@@ -214,7 +227,7 @@ coding-workflows, a PR into `main` or `stable`, counting only the workflows this
 | `labeled` / `unlabeled`, override label | 1 (`readiness`) | 1 |
 | `labeled` / `unlabeled`, any other label | 0 jobs, 1 skipped run | 0 jobs, 1 skipped run |
 
-Upper bound of the saving: one job for every event of the first row, at most 1,015 in the audited eight days. The exact number is the count of those events. Coalescing (D5) removes more when pushes and edits arrive in bursts.
+The saving is one job per event of the first row, two when the PR changes `docs/completed/**`, and one per `edited` event that changes `docs/completed/**`. The audit counted runs per workflow, not events per type, so it does not give that number directly: the 1,015 PR-body lint runs include `edited` events, which save nothing in the common case, so the first-row count is below 1,015 by the number of `edited` events. Coalescing (D5) removes more when pushes and edits arrive in bursts.
 
 Consumers: one `AI Workflow Integrity` push run per push before; after, one only for a push that changes `.github/workflows/**`. The `pull_request_target` run is unchanged, one per `opened`, `synchronize` and `reopened`.
 
@@ -223,7 +236,7 @@ No job, workflow or matrix leg is added. One workflow file is added and three ar
 ## Phases & Merge Strategy
 
 1. **Phase 1: fold the three checks (coding-workflows only).** Adds `.github/workflows/pr-checks.yml`; deletes the three old workflow files; updates the readers listed above; one changelog fragment and one agents fragment.
-   - Done when: the tests in the Tests section pass; `PR checks` runs on the phase's own PR and reports `pr-body-lint`; the PR's head carries the status `orchestrator/integration-pr-not-ready`; no workflow other than `ci.yml` has a job named `lint`.
+   - Done when: the tests in the Tests section pass; `ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT` lists `pr-body-lint` in both scripts; `PR checks` runs on the phase's own PR and reports `pr-body-lint`; the PR's head carries the status `orchestrator/integration-pr-not-ready`; no workflow other than `ci.yml` has a job named `lint`.
    - Rollback: revert the PR. The old files return, and open PRs pick them up on their next event.
 2. **Phase 2: path-filter the consumer integrity wrapper's push trigger.** Changes `workflow-templates/ai-workflow-integrity.yml` and its tests and docs.
    - Done when: `tests/test_workflow_integrity.py` passes with the new trigger pinned, and a test proves every managed candidate path the reusable workflow lists lies under `.github/workflows/`.
@@ -235,14 +248,15 @@ The phases touch disjoint files and can merge in either order.
 
 ### Phase 1
 
+0. On the current `main` tip, re-verify the Context bullets: the job ids in the three old files, the `ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT` string in both scripts, and the reader lists in Names that change. Where the tree differs, follow the tree and correct the plan in the same PR.
 1. Create `.github/workflows/pr-checks.yml` as described under Approach. Move each step body verbatim; keep each step's `name:`. Pass every `${{ }}` value through `env:` as the old files do. (OD1: B — name the job `pr-checks`.)
 2. Delete `.github/workflows/integration-pr-readiness.yml`, `.github/workflows/lint-pr-body-auto-close.yml` and `.github/workflows/lint-plan-archival.yml` (the last only with OD2: A).
-3. Update `tests/test_lint_pr_body_auto_close.py`, `tests/test_check_integration_pr_readiness.py` and `tests/test_lint_plan_archival_completeness.py` to read `pr-checks.yml`. Keep every existing assertion about step content and order.
+3. Update `tests/test_lint_pr_body_auto_close.py` and `tests/test_check_integration_pr_readiness.py` to read `pr-checks.yml`. Keep every existing assertion about step content and order. (`tests/test_lint_plan_archival_completeness.py` tests the script only and does not read the workflow; it needs no change.)
 4. Update `tests/test_workflow_checkout_integration_ref_audit.py`: one registry entry for `pr-checks.yml` replaces three.
-5. Correct text in place: `CLAUDE.md` §19 enforcement item 1 (new workflow name and file; the section number and the rule are unchanged), the same lines in `workflow-templates/CLAUDE.md`, `unattended_system_instructions.md` if it names the old file, the two command files and their template copies, `docs/INVENTORY.md`, the README `ORCH_FINAL_MERGE_REQUIRED_CHECKS` prose, and the agents.md paragraphs that name the old files. Run `make generate` for the TREE block.
-6. `scripts/pr_checks_lib.sh` and `scripts/persist_orchestrator.py`: comments only. After the fold only `ci.yml` has a job named `lint`. The CI-run binding (`PR_CHECKS_CI_RUN_IDS`) stays, because branches older than the fold still carry the old check-runs. (OD1: B — also add `pr-checks` to `ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT` in both scripts, the README row and the two tests that pin the string.)
+5. Correct text in place: `CLAUDE.md` §19 enforcement item 1 (new workflow name and file; the section number and the rule are unchanged; there is no `workflow-templates/CLAUDE.md` to edit), `unattended_system_instructions.md` if it names the old file, the two command files and their template copies, `docs/INVENTORY.md`, the README `ORCH_FINAL_MERGE_REQUIRED_CHECKS` prose, and the agents.md paragraphs that name the old files. Run `make generate` for the TREE block.
+6. Gate list (required, not optional): append `pr-body-lint` to `ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT` in `scripts/pr_checks_lib.sh` and `scripts/orchestrate_poll_process.sh`, keeping the two strings identical and every existing entry, `lint` included. Update the README `ORCH_FINAL_MERGE_REQUIRED_CHECKS` default column and prose, and the default-string pins in `tests/test_pr_checks_lib_required_filter.py` and `tests/test_orchestrate_final_merge_required_checks_gate.py`. Comments in `scripts/pr_checks_lib.sh` and `scripts/persist_orchestrator.py` that count three jobs named `lint` now say only `ci.yml` has one. The CI-run binding (`PR_CHECKS_CI_RUN_IDS`) and the `lint` supersession rule stay, because branches older than the fold still carry the old check-runs. (OD1: B — use `pr-checks` in place of `pr-body-lint`.)
 7. Tests: see Tests.
-8. Add `changelog.d/<pr>-fold-per-pr-checks.md` (`changed`) and `agents.d/<pr>-fold-per-pr-checks.md` (section "Workflow architecture"). (OD1: B — the fragment also tells operators to swap the ruleset entry.)
+8. Add `changelog.d/<pr>-fold-per-pr-checks.md` (`changed`, naming the new gate-list entry) and `agents.d/<pr>-fold-per-pr-checks.md` (section "Workflow architecture").
 
 ### Phase 2
 
@@ -260,9 +274,9 @@ Phase 1:
 - `.github/workflows/lint-pr-body-auto-close.yml` [del]
 - `.github/workflows/lint-plan-archival.yml` [del] (OD2: A)
 - `tests/test_pr_checks_workflow.py` [new]
-- `tests/test_lint_pr_body_auto_close.py`, `tests/test_check_integration_pr_readiness.py`, `tests/test_lint_plan_archival_completeness.py`, `tests/test_workflow_checkout_integration_ref_audit.py`, `tests/test_mark_stable_release_tag_refspec_contract.py`, `tests/test_pr_base_freshness_gate.py`, `tests/test_pr_checks_lib_required_filter.py`
-- `scripts/pr_checks_lib.sh`, `scripts/persist_orchestrator.py` (comments)
-- `CLAUDE.md`, `workflow-templates/CLAUDE.md`, `unattended_system_instructions.md`, `.claude/commands/audit-plans.md`, `.claude/commands/implement-plan-ai.md`, `workflow-templates/.claude/commands/audit-plans.md`, `workflow-templates/.claude/commands/implement-plan-ai.md`
+- `tests/test_lint_pr_body_auto_close.py`, `tests/test_check_integration_pr_readiness.py`, `tests/test_workflow_checkout_integration_ref_audit.py`, `tests/test_mark_stable_release_tag_refspec_contract.py`, `tests/test_pr_base_freshness_gate.py`, `tests/test_pr_checks_lib_required_filter.py`, `tests/test_orchestrate_final_merge_required_checks_gate.py`
+- `scripts/pr_checks_lib.sh`, `scripts/orchestrate_poll_process.sh` (gate default gains `pr-body-lint`; comments), `scripts/persist_orchestrator.py` (comments)
+- `CLAUDE.md`, `unattended_system_instructions.md`, `.claude/commands/audit-plans.md`, `.claude/commands/implement-plan-ai.md`, `workflow-templates/.claude/commands/audit-plans.md`, `workflow-templates/.claude/commands/implement-plan-ai.md`
 - `README.md`, `agents.md`, `docs/INVENTORY.md`
 - `changelog.d/<pr>-fold-per-pr-checks.md` [new], `agents.d/<pr>-fold-per-pr-checks.md` [new]
 
@@ -283,10 +297,10 @@ Phase 1, new `tests/test_pr_checks_workflow.py`:
 - Every step after the checkout has an `if:` that starts with `!cancelled()`.
 - The job-level `if:` and the concurrency group agree: for each of the event shapes (non-label event, override label, other label) the group is the per-PR group exactly when the job runs. Evaluated by a small expression table in the test, not by string equality alone.
 - `cancel-in-progress` is false.
-- No workflow under `.github/workflows/` other than `ci.yml` has a job with id `lint` (replaces the two-file allowlist the rename PR added).
+- No workflow under `.github/workflows/` other than `ci.yml` has a job with id `lint` (a new guard; no test pins this today).
 - The plan-archival diff: in a temporary repository with a base commit, a head commit that adds `docs/completed/x.md` and a merge commit, the enumerate step's command prints that path; with a non-merge `HEAD` it exits non-zero.
 
-Phase 1, existing tests updated: the three per-check test files keep their assertions against the new file; `tests/test_pr_checks_lib_required_filter.py` keeps the test that a failed `pr-body-lint` blocks under the default set.
+Phase 1, existing tests updated: the two per-check test files that read a workflow keep their assertions against the new file; the default-string pins in `tests/test_pr_checks_lib_required_filter.py` and `tests/test_orchestrate_final_merge_required_checks_gate.py` include `pr-body-lint`, and the drift test keeps the two scripts equal. `tests/test_pr_checks_lib_required_filter.py` gains: a failed `pr-body-lint` blocks under the default set; a failed `pr-body-lint` still blocks when a newer `pr-body-lint` with conclusion `skipped` exists on the same head (the label-event skip); a failed `lint` still blocks (CI and pre-fold heads).
 
 Phase 1, on the PR itself: `PR checks` runs once per push, reports `pr-body-lint`, and posts the readiness status; the three old workflows do not run.
 
@@ -299,7 +313,9 @@ Both phases: `bash -n`, shellcheck, `yamllint -s`, `make generate-check`, `pytho
 - **A failing step hides the others' results.** Mitigated by D2 and its test.
 - **A skipped label run displaces a waiting real run.** Mitigated by D5 and its test.
 - **`fetch-depth: 2` and a merge ref GitHub has not refreshed.** The plan-archival lint then judges a slightly older base. It reads only the files the PR adds, so an older base cannot hide an added file. ACCEPTED.
-- **A stale failed `lint` or `pr-body-lint` on a head from before the fold.** The gate evaluates every failed required-name check-run on its own, so such a head stays blocked until its next push, exactly as today. ACCEPTED.
+- **The folded job gets a name the gate does not list.** A failed PR-body or plan-archival lint would then stop blocking. Mitigated by step 6, which adds `pr-body-lint` to the default in the same PR, and by its tests.
+- **A skipped `pr-body-lint` from a label event.** The pipeline's gate accepts `skipped` and still blocks on an earlier failed run of the name; GitHub's ruleset would treat the skip as passing, so OD5 recommends not requiring the name there. Mitigated by OD5: B and the skipped-after-failed test.
+- **A stale failed `lint` on a head from before the fold.** The gate evaluates every failed required-name check-run on its own, so such a head stays blocked until its next push, exactly as today. ACCEPTED.
 - **`CLAUDE.md` text changes reach consumers.** Only the workflow name and file in §19's enforcement note change; consumers never had the workflow. ACCEPTED.
 - **Phase 2 hides a wrapper change made outside `.github/workflows/`.** There is none by construction; the candidate-path test proves it and fails if the reusable workflow ever lists a candidate elsewhere.
 - **A direct push that changes only the integrity wrapper's pin.** The file is under `.github/workflows/`, so the push run still starts.
@@ -308,14 +324,6 @@ Both phases: `bash -n`, shellcheck, `yamllint -s`, `make generate-check`, `pytho
 ## Rollout
 
 Phase 1 is effective on merge, for each open PR at its next event. Phase 2 reaches consumers on the next `@stable` sync (`.github/workflows/update_workflows.yml`, daily 04:00 UTC plus the release dispatch); the sync PR updates the wrapper and its pin together, and the integrity run that judges that PR is the base branch's old wrapper. Rollback of either phase is a revert.
-
-## §18.E Automation
-
-- No new script, supervisor or scheduled workflow. Phase 1 adds one workflow file that replaces three; Phase 2 edits one template.
-- Entry points: `.github/workflows/pr-checks.yml` (`pull_request` into `main` and `stable`); `workflow-templates/ai-workflow-integrity.yml` (`pull_request_target` and `push`), delivered by `.github/workflows/update_workflows.yml`.
-- No long-running supervisor is needed.
-- No DB work.
-- `docs/scripts-pending-removal.md`: no entry added or removed.
 
 ## References
 
