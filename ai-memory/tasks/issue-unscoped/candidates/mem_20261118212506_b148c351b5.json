@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/prepush_test_gate_run.sh:322-329 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: If the synthetic `/source` Git repository fails to build, the wrapper removes `.git`, logs a `source_git_init_failed` warning and continues the gate run.\n  WHY: Git-dependent tests then fail on both `/source` and `/baseline` and are classed as inherited, so the gate can report pass and skip the repair turn. Severity disagreement: sonnet-5_5 and minimax rated it NIT, gemini and openai rated it MAJOR. minimax noted it is documented best-effort behaviour and not a regression.\n- scripts/prepush_test_gate_run.sh:325 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The synthetic repo's `info/exclude` omits `venv/`, `.tox/` and `.mypy_cache/`.\n  WHY: Untracked, non-ignored directories with these names would be indexed by `git add --all` and could be picked as test candidates. glm-5_3-flash checked and said `review_untrusted_workspace.py` EXCLUDED already drops them from the filtered untracked copy, and sonnet-5_5 said this matches the old snapshot list. Neither reported it as a finding.\n- scripts/prepush_test_gate_run.sh:325-326 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: `git add --all` applies the PR tree's `.gitignore` to the synthetic repository, so tracked files that match an ignore rule are left out of its index.\n  WHY: `list_repo_files` uses `git ls-files` (`workflow-templates/.claude/hooks/prepush_affected_tests.py:197-204`), so an ignored-but-tracked test file is not discovered or selected and the gate can skip a relevant test.\n- scripts/prepush_test_gate_run.sh:323-329 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `HOME` is set to `${root}`, so a stray `.gitignore_global` there would still be honoured. `GIT_CONFIG_GLOBAL=/dev/null` does not cover that file.\n  WHY: The wrapper builds `${root}` fresh and never seeds that file, so the likelihood is very low.\n- workflow-templates/.claude/hooks/prepush_affected_tests.py:204 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `git ls-files` branch of `list_repo_files` uses `is_file()`, which follows symlinks, and it now runs because `/source` has a `.git`. A tracked symlink named like a test file is now selected.\n  WHY: `/baseline` has the same symlink, so any failure would be classed as inherited. The old snapshot also created a `.git` at `/source`, so this restores earlier behaviour. The file is outside this PR's diff.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/prepush_test_gate_run.sh:325-328 | severity=low | confidence=2\n  PROBLEM: If creating the synthetic repository fails, the wrapper removes `.git`, logs a warning and carries on with the gate run.\n  WHY: Git tests fail on both trees and may be classed as inherited. The path is uncommon, the warning is logged, and the fail-open choice is documented.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/prepush_test_gate_run.sh:325-328 | severity=medium | confidence=4\n  PROBLEM: The wrapper logs a warning and continues if `git init` or the commit fails in the PR tree (`/source`).\n  WHY: Git-based tests fail on both trees and may be classed as inherited, which hides PR-caused failures and prevents the repair turn.\n- scripts/prepush_test_gate_run.sh:325 | severity=low | confidence=3\n  PROBLEM: The `.git/info/exclude` file omits `venv/`, `.tox/` and `.mypy_cache/`.\n  WHY: Untracked directories with these names would be copied into `/source` and indexed by `git add --all`. That could change test runtimes or cause false positives or negatives.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/prepush_test_gate_run.sh:325 | severity=low | confidence=3\n  PROBLEM: The synthetic repo's `info/exclude` omits `venv/`, `.tox/` and `.mypy_cache/`, which are in SKIP_DIRS at `workflow-templates/.claude/hooks/prepush_affected_tests.py:84`.\n  WHY: An untracked, non-ignored test file in one of those directories would be indexed and selected. The walk fallback skips them, so the two paths diverge. The trigger is uncommon.\n- scripts/prepush_test_gate_run.sh:325-329 | severity=low | confidence=2\n  PROBLEM: When the synthetic repo init fails, the wrapper removes `.git`, logs `source_git_init_failed` and continues.\n  WHY: This is the documented best-effort path and is not a regression. Failures in both trees classify as inherited, and the warning appears in the gate log.\n- scripts/prepush_test_gate_run.sh:323-329 | severity=low | confidence=2\n  PROBLEM: `HOME` is set to `${root}`, and `GIT_CONFIG_GLOBAL=/dev/null` does not neutralise `$HOME/.gitignore_global`.\n  WHY: A stray global ignore file in `${root}` could change what is indexed. It is absent in normal runs.\n- workflow-templates/.claude/hooks/prepush_affected_tests.py:204 | severity=low | confidence=3\n  PROBLEM: The `git ls-files` branch of `list_repo_files` uses `is_file()`, which follows symlinks, and that branch now runs because `/source` has a `.git`.\n  WHY: A tracked symlink named like a test would now be selected where the walk fallback excluded it. `/baseline` has the same symlink, and this restores the old snapshot's behaviour. The file is outside this PR's diff.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/prepush_test_gate_run.sh:325-326 | severity=high | confidence=4\n  PROBLEM: `git add --all` applies the PR tree's `.gitignore` to the fresh synthetic repository, so tracked files matching an ignore rule are present in `/source` but omitted from its index.\n  WHY: `list_repo_files` uses `git ls-files` when `/source` has a Git repository (`workflow-templates/.claude/hooks/prepush_affected_tests.py:197-204`), so an ignored-but-tracked test file is not selected and the gate can skip a relevant test.\n- scripts/prepush_test_gate_run.sh:322-329 | severity=high | confidence=4\n  PROBLEM: If initializing or committing the synthetic `/source` Git repository fails, the wrapper deletes its partial `.git`, logs a warning and continues running the gate.\n  WHY: Tests that invoke Git at `/source` lose the repository. If they also fail on `/baseline`, `classify_baseline` treats them as inherited, and `run_gate` reports `pass` when no PR-caused failures remain.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5a8c9c10bea5f631d27ffb0358700b0d896ddb34a9af86663a41bfd208f70a88",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9721,
+    "run_id": "44379485483",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44379485483",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118212506_b148c351b5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9721,
+    "run_id": "44379485483"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T21:25:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
