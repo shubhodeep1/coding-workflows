@@ -37,7 +37,8 @@ GUARD_SITES = {
 	"scripts/promote_main_cycle.sh": ["promote_cycle_self", "promote_cycle_gate_idle"],
 	"scripts/apply_analysis_on_main.sh": ["apply_analysis_orchestrate_in_flight"],
 	"scripts/worktree_registry.sh": ["worktree_registry_active_runs"],
-	".github/workflows/test-and-mark-stable.yml": ["stable_gate_plan_runs"],
+	# Body of test-and-mark-stable.yml "Phase 2: Wait for plan to complete".
+	"scripts/stable_e2e_step_wait_plan.sh": ["stable_gate_plan_runs"],
 }
 PY_GUARD_SITES = {
 	"scripts/unblock_scan.py": ["unblock_scan_busy", "unblock_scan_active_judge"],

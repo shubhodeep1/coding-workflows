@@ -13,3 +13,6 @@ GitHub can leave a workflow run in `status=queued` with zero jobs and refuses to
 <!-- agents: section="Stable log prefixes (contractual)" -->
 - `ZOMBIE_RUN_IGNORED` — `run=<id> workflow=<path> age_h=<n> guard=<guard>`, on stderr, once per run per guard per process, when an active-run guard ignores a wedged queued run (issue #9473).
 LOG_PREFIX.name=ZOMBIE_RUN_IGNORED
+
+<!-- agents: section="Workflow file size limit" -->
+- Phase 2 moved too (#9473): the `e2e-smoke-test` step "Phase 2: Wait for plan to complete" (`id: wait-plan`) sources `scripts/stable_e2e_step_wait_plan.sh` through the same `github.sha`-pinned wrapper as Phase 4 and Phase 4b. The step's `env:` sets `PLAN_CREATED_AFTER` from `steps.create-issue.outputs.created_after`, because a script file cannot hold a `${{ }}` expression. With the wedged-queued filter added to that step, `test-and-mark-stable.yml` would have been 431,166 bytes, over the 430,000-byte limit in `tests/test_test_and_mark_stable_step_scripts_contract.py`; it is now about 415,000 bytes.
