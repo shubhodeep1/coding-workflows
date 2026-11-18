@@ -20,7 +20,7 @@ Nothing runs until the App Platform app is created from `tools/runner_scaler/app
 | Register timeout, idle window, max lifetime | 15 min, 15 min, 300 min |
 | Breaker | opens after 3 failures in a row or more than 50% failed in 15 min; one trial after 15 min |
 | Lost-runner re-run | once, at `run_attempt` 1 only |
-| Steady-state GitHub API calls | under about 600 an hour for 7 repositories |
+| GitHub API calls, 7 repositories | about 300 an hour when idle; at most about 3,450 an hour under continuous webhooks and full scan pages (installation limit 5,000) |
 
 What this means for operators: nothing changes until rollout. The rollout covers the GitHub App, the scoped DigitalOcean token, the firewall, the App Platform app and the Uptime check, and each step is ask-first. Then a consumer sets `PIPELINE_RUNS_ON=do-runner`. To roll back, unset that variable.
 

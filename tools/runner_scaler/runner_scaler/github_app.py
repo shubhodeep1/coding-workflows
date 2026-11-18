@@ -1,10 +1,11 @@
 """GitHub App client: installation tokens, JIT runners, runners, jobs, annotations, re-runs.
 
 The App is installed on the account for the consumer repositories only, with
-repository permissions Actions (read and write), Administration (read and write)
-and Metadata (read), and the `workflow_job` webhook event. One installation
-serves every repository, so the installation id and token are cached and shared
-(the token until 5 minutes before it expires). PyJWT and cryptography are
+repository permissions Actions (read and write), Administration (read and write),
+Checks (read, for the lost-runner annotations) and Metadata (read), and the
+`workflow_job` webhook event. A GitHub App has one installation per account, so
+the installation id and token are cached per repository owner and shared by
+that owner's repositories (the token until 5 minutes before it expires). PyJWT and cryptography are
 imported only when a token is minted, so the unit tests need neither.
 
 API calls per use (CLAUDE.md §15) are listed on each method.
@@ -31,6 +32,10 @@ def _default_jwt_encode(payload: dict[str, Any], private_key: str) -> str:
 	return jwt.encode(payload, private_key, algorithm="RS256")
 
 
+def _owner(repo: str) -> str:
+	return repo.split("/", 1)[0].lower()
+
+
 class GitHubApp:
 	def __init__(self, *, app_id: str, private_key: str, clock: Callable[[], float] = time.time, request: Callable[..., Any] = request_json, jwt_encode: Callable[[dict[str, Any], str], str] = _default_jwt_encode, api_url: str = API_URL):
 		self.app_id = app_id
@@ -39,9 +44,9 @@ class GitHubApp:
 		self.request = request
 		self.jwt_encode = jwt_encode
 		self.api_url = api_url.rstrip("/")
-		self._installation_id: int | None = None
-		self._token = ""
-		self._token_expires = 0.0
+		# Keyed by the lower-cased repository owner (one installation per account).
+		self._installation_ids: dict[str, int] = {}
+		self._tokens: dict[str, tuple[str, float]] = {}
 
 	def _headers(self, token: str) -> dict[str, str]:
 		return {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": API_VERSION}
@@ -51,23 +56,28 @@ class GitHubApp:
 		return self.jwt_encode({"iat": now - 60, "exp": now + 540, "iss": self.app_id}, self.private_key)
 
 	def _installation_token(self, repo: str) -> str:
-		"""1 call for the installation id (once per process) + 1 per token (about hourly)."""
-		if self._token and self.clock() < self._token_expires - 300:
-			return self._token
+		"""1 call for the installation id (once per owner per process) + 1 per token (about hourly per owner)."""
+		owner = _owner(repo)
+		cached = self._tokens.get(owner)
+		if cached and self.clock() < cached[1] - 300:
+			return cached[0]
 		app_jwt = self._app_jwt()
-		if self._installation_id is None:
+		installation_id = self._installation_ids.get(owner)
+		if installation_id is None:
 			doc = self.request("GET", f"{self.api_url}/repos/{repo}/installation", headers=self._headers(app_jwt))
-			self._installation_id = int(doc["id"])
-		doc = self.request("POST", f"{self.api_url}/app/installations/{self._installation_id}/access_tokens", headers=self._headers(app_jwt), body={})
-		self._token = str(doc["token"])
-		self._token_expires = self.clock() + 3600
+			installation_id = int(doc["id"])
+			self._installation_ids[owner] = installation_id
+		doc = self.request("POST", f"{self.api_url}/app/installations/{installation_id}/access_tokens", headers=self._headers(app_jwt), body={})
+		token = str(doc["token"])
+		token_expires = self.clock() + 3600
 		expires_at = doc.get("expires_at")
 		if isinstance(expires_at, str):
 			try:
-				self._token_expires = datetime.strptime(expires_at[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+				token_expires = datetime.strptime(expires_at[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
 			except ValueError:
 				pass
-		return self._token
+		self._tokens[owner] = (token, token_expires)
+		return token
 
 	def api(self, method: str, repo: str, path: str, *, body: Any = None, query: dict[str, Any] | None = None) -> Any:
 		url = f"{self.api_url}/repos/{repo}/{path}"
@@ -78,7 +88,7 @@ class GitHubApp:
 		except ApiError as exc:
 			if exc.status == 401:
 				# A revoked or rotated token: mint a fresh one on the next call.
-				self._token = ""
+				self._tokens.pop(_owner(repo), None)
 			raise
 
 	def generate_jit_config(self, repo: str, *, name: str, label: str) -> tuple[int, str]:

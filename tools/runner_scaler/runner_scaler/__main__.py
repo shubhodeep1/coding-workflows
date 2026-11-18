@@ -29,8 +29,11 @@ from .server import App, make_server
 
 BOOT_SCRIPT = Path(__file__).resolve().parent.parent / "bootstrap" / "runner-boot.sh"
 # Webhook bursts are debounced to one pass per 15 s: each pass costs one runners
-# list per repository, so 7 repositories stay under about 1,700 GitHub calls an
-# hour even when webhooks arrive continuously (CLAUDE.md §15).
+# list per repository, about 1,700 calls an hour for 7 repositories when webhooks
+# arrive continuously. Full scans every 10 minutes add at most 2 run lists plus
+# 2 x RUNNER_SCALER_SCAN_MAX_RUNS jobs reads per repository, about 1,760 an hour
+# more at the defaults, so the worst case is about 3,450 GitHub calls an hour,
+# under the installation's 5,000 (CLAUDE.md §15).
 MIN_PASS_INTERVAL_SECONDS = 15
 
 

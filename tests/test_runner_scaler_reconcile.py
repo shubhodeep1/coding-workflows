@@ -397,3 +397,28 @@ def test_failed_delete_still_counts_against_the_cap_and_alerts() -> None:
 	h.do.delete_droplet = original
 	h.scaler.reconcile()
 	assert name not in h.do.names()
+
+
+def test_full_page_scan_is_partial_and_keeps_older_jobs() -> None:
+	h = Harness(scan_max_runs=2)
+	h.queue(5)
+	h.clock.advance(120)  # past the webhook grace window
+	h.github.runs[(REPO, "queued")] = [{"id": 10}, {"id": 11}]
+	h.scaler.reconcile()
+	assert 5 in h.scaler.queued[REPO]  # job 5 sits in a run behind the full page
+	assert any(line.get("reason") == "page_full" for line in h.outcomes("scan_incomplete"))
+
+
+def test_create_without_response_keeps_the_runner_and_never_double_creates() -> None:
+	h = Harness()
+	h.queue(1)
+	h.do.fail["create"] = ApiError(0, "TimeoutError")
+	h.scaler.reconcile()
+	h.scaler.reconcile()
+	assert len([call for call in h.do.calls if call[0] == "create"]) == 1
+	assert not any(call[0] == "delete_runner" for call in h.github.calls)
+	assert h.outcomes("create_failed")[0]["reason"] == "droplet_create_ambiguous"
+	h.clock.advance(h.config.register_timeout_seconds + 1)
+	h.scaler.reconcile()
+	assert h.outcomes("create_lost")
+	assert any(call[0] == "delete_runner" for call in h.github.calls)  # its runner became an orphan

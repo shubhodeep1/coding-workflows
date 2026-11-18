@@ -94,7 +94,25 @@ def test_unauthorized_response_drops_the_cached_token() -> None:
 	app = _app(recorder, clock)
 	with pytest.raises(ApiError):
 		app.list_runners("o/r")
-	assert app._token == ""
+	assert not app._tokens
+
+
+def test_installation_tokens_are_kept_per_owner() -> None:
+	clock = Clock()
+	recorder = Recorder({
+		("GET", "/repos/a/r/installation"): {"id": 1},
+		("GET", "/repos/b/r/installation"): {"id": 2},
+		("POST", "/app/installations/1/access_tokens"): {"token": "token-a"},
+		("POST", "/app/installations/2/access_tokens"): {"token": "token-b"},
+		("GET", "/actions/runners"): {"runners": []},
+	})
+	app = _app(recorder, clock)
+	app.list_runners("a/r")
+	app.list_runners("b/r")
+	app.list_runners("a/r")
+	auth = [call[2]["Authorization"] for call in recorder.calls if "/actions/runners" in call[1]]
+	assert auth == ["Bearer token-a", "Bearer token-b", "Bearer token-a"]
+	assert sum(1 for call in recorder.calls if "access_tokens" in call[1]) == 2
 
 
 def test_digitalocean_requests() -> None:

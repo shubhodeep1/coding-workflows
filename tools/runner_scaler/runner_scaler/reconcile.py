@@ -60,6 +60,12 @@ STARTED_MEMORY_SECONDS = 600
 # job timeout is 240 minutes), and at most PENDING_RERUNS_PER_PASS per pass.
 PENDING_RERUN_MAX_SECONDS = 6 * 3600
 PENDING_RERUNS_PER_PASS = 10
+# A transient failure (transport, 5xx, rate limit) of the annotations read puts
+# the completion back for the next pass, at most this many reads per job, so one
+# bad response cannot lose a lost-runner re-run.
+ANNOTATION_READ_ATTEMPTS = 5
+# A list_run_jobs page holds at most this many jobs (github_app.list_run_jobs).
+RUN_JOBS_PAGE_SIZE = 100
 # A healthy pass must complete at least this often; a full-scan pass over 7
 # repositories can take several minutes when the APIs are slow.
 MIN_HEALTH_WINDOW_SECONDS = 900
@@ -131,6 +137,7 @@ class Scaler:
 		self.deleted: dict[int, float] = {}
 		self.pending_reruns: dict[tuple[str, int], float] = {}
 		self.rerun_deferred_logged: set[tuple[str, int]] = set()
+		self.annotation_attempts: dict[int, int] = {}
 		self.last_full_scan = 0.0
 		self.last_pass_completed = clock()
 
@@ -341,6 +348,7 @@ class Scaler:
 
 	def _process_completions(self, completions: list[tuple[str, dict[str, Any]]]) -> set[str]:
 		names: set[str] = set()
+		retry_later: list[tuple[str, dict[str, Any]]] = []
 		for repo, job in completions:
 			runner_name = str(job.get("runner_name") or "")
 			if runner_name:
@@ -351,14 +359,26 @@ class Scaler:
 			try:
 				annotations = self.github.job_annotations(repo, job_id)
 			except ApiError as exc:
+				attempts = self.annotation_attempts.get(job_id, 0) + 1
+				transient = isinstance(exc, RateLimited) or exc.status == 0 or exc.status >= 500
+				if transient and attempts < ANNOTATION_READ_ATTEMPTS:
+					self.annotation_attempts[job_id] = attempts
+					self.log("rerun_deferred", reason="annotations_failed", repo=repo, job=job_id, status=exc.status, attempt=attempts)
+					retry_later.append((repo, job))
+					continue
+				self.annotation_attempts.pop(job_id, None)
 				self.log("rerun_skipped", reason="annotations_failed", repo=repo, job=job_id, status=exc.status)
 				continue
+			self.annotation_attempts.pop(job_id, None)
 			decision = rerun.decide(job, label=self.config.label, annotations=annotations)
 			if decision == rerun.GIVEN_UP:
 				self.log("rerun_skipped", reason="attempt_limit", repo=repo, job=job_id, attempt=job.get("run_attempt"))
 				self.alerter.alert(f"rerun_given_up:{repo}", f"{repo} job {job_id} lost its droplet again at attempt {job.get('run_attempt')}; not re-run.")
 			elif decision == rerun.RERUN:
 				self.pending_reruns.setdefault((repo, job_id), self.clock())
+		if retry_later:
+			with self._lock:
+				self.completions = (retry_later + self.completions)[:MAX_COMPLETIONS]
 		return names
 
 	def _process_pending_reruns(self, now: float, summary: dict[str, int]) -> None:
@@ -396,6 +416,10 @@ class Scaler:
 					complete = False
 					self.log("scan_incomplete", repo=repo, status_filter=status, http=exc.status)
 					break
+				if len(runs) >= self.config.scan_max_runs:
+					# A full page may hide older runs: a partial scan only adds jobs.
+					complete = False
+					self.log("scan_incomplete", repo=repo, status_filter=status, reason="page_full")
 				for run in runs[: self.config.scan_max_runs]:
 					try:
 						jobs = self.github.list_run_jobs(repo, int(run.get("id") or 0))
@@ -403,6 +427,8 @@ class Scaler:
 						complete = False
 						self.log("scan_incomplete", repo=repo, run=run.get("id"), http=exc.status)
 						continue
+					if len(jobs) >= RUN_JOBS_PAGE_SIZE:
+						complete = False
 					for job in jobs:
 						if job.get("status") == "queued" and job.get("labels") == [self.config.label] and isinstance(job.get("id"), int):
 							found[int(job["id"])] = _epoch(job.get("created_at")) or now
@@ -497,6 +523,15 @@ class Scaler:
 			)
 		except (ApiError, ValueError) as exc:
 			status = exc.status if isinstance(exc, ApiError) else 0
+			if isinstance(exc, ApiError) and status == 0:
+				# Transport failure: DigitalOcean may have accepted the create. Keep the
+				# JIT runner and count the droplet as booting; if the tag listing never
+				# shows it, it is dropped as create_lost after the register timeout and
+				# its offline runner is then deleted as an orphan.
+				self.created[name] = (now, repo)
+				self.log("create_failed", reason="droplet_create_ambiguous", repo=repo, droplet=name, status=status)
+				self.alerter.alert("do_api_error", f"droplet create for {repo} got no response; counted as booting until it shows up or times out.")
+				return False
 			self.log("create_failed", reason="droplet_create_failed", repo=repo, droplet=name, status=status)
 			self.alerter.alert("do_api_error", f"droplet create failed for {repo} (HTTP {status}).")
 			try:

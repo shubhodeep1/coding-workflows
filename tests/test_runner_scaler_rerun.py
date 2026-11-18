@@ -8,6 +8,7 @@ import pytest
 from runner_scaler_fakes import REPO, Harness, job_event
 from runner_scaler import rerun
 from runner_scaler.api import ApiError
+from runner_scaler.reconcile import ANNOTATION_READ_ATTEMPTS
 
 LOST = [{"message": "The self-hosted runner: do-runner-digital-pa-00000001 lost communication with the server. Verify the machine is running."}]
 REAL = [{"message": "Process completed with exit code 1."}]
@@ -80,5 +81,24 @@ def test_rerun_disabled_and_annotation_errors_never_rerun() -> None:
 	h = Harness()
 	h.github.fail["annotations"] = ApiError(502, "bad gateway")
 	_complete(h, annotations=LOST)
+	assert h.outcomes("rerun_deferred")[0]["reason"] == "annotations_failed"  # transient: retried next pass
+	for _ in range(ANNOTATION_READ_ATTEMPTS - 1):
+		h.scaler.reconcile()
 	assert not any(call[0] == "rerun" for call in h.github.calls)
+	assert len([call for call in h.github.calls if call[0] == "annotations"]) == ANNOTATION_READ_ATTEMPTS
 	assert h.outcomes("rerun_skipped")[0]["reason"] == "annotations_failed"
+	h = Harness()
+	h.github.fail["annotations"] = ApiError(403, "Resource not accessible by integration")
+	_complete(h, annotations=LOST)
+	assert h.outcomes("rerun_skipped")[0]["reason"] == "annotations_failed"  # permanent: no retry
+
+
+def test_transient_annotations_failure_is_retried_and_the_job_rerun() -> None:
+	h = Harness()
+	h.github.fail["annotations"] = ApiError(502, "bad gateway")
+	_complete(h, annotations=LOST)
+	del h.github.fail["annotations"]
+	h.scaler.reconcile()
+	h.scaler.reconcile()
+	assert ("rerun", REPO, 1) in h.github.calls
+	assert not h.scaler.annotation_attempts

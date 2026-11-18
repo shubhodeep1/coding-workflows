@@ -30,6 +30,7 @@ def test_signature_valid_only_for_the_exact_body_and_secret() -> None:
 	assert not signature_valid(SECRET, body, None)
 	assert not signature_valid(SECRET, body, "sha1=abc")
 	assert not signature_valid("", body, _sign(body, ""))
+	assert not signature_valid(SECRET, body, "sha256=\u00e9" + _sign(body)[8:])  # non-ASCII: False, not TypeError
 
 
 class _Recorder:

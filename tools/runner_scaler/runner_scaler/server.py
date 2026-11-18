@@ -13,19 +13,26 @@ import hashlib
 import hmac
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 
 from .log import LogFn, log as default_log
 
 MAX_BODY_BYTES = 1024 * 1024
+# Total time a client may take to send the webhook body. The handler's socket
+# timeout only bounds each read, so a client trickling bytes would otherwise
+# hold a thread for as long as it likes.
+BODY_READ_DEADLINE_SECONDS = 10
 
 
 def signature_valid(secret: str, body: bytes, header: str | None) -> bool:
 	if not secret or not header or not header.startswith("sha256="):
 		return False
 	expected = "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
-	return hmac.compare_digest(expected, header)
+	# Compare bytes: compare_digest raises TypeError on a non-ASCII str, and a
+	# malformed header must get the plain 401 and the webhook_rejected line.
+	return hmac.compare_digest(expected.encode("ascii"), header.encode("utf-8", "replace"))
 
 
 class App:
@@ -87,7 +94,20 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
 			if length < 0 or length > MAX_BODY_BYTES:
 				self._reply(413, "body too large")
 				return
-			self._reply(*app.webhook(self.headers, self.rfile.read(length)))
+			body = bytearray()
+			deadline = time.monotonic() + BODY_READ_DEADLINE_SECONDS
+			while len(body) < length:
+				left = deadline - time.monotonic()
+				if left <= 0:
+					self._reply(408, "request timeout")
+					return
+				# A socket timeout here ends the request (handle_one_request drops it).
+				self.connection.settimeout(left)
+				chunk = self.rfile.read1(min(length - len(body), 65536))
+				if not chunk:
+					break
+				body += chunk
+			self._reply(*app.webhook(self.headers, bytes(body)))
 
 		def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
 			# Request lines are not logged: decisions are logged by the scaler.

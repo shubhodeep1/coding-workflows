@@ -4782,8 +4782,10 @@ agents file's `## DigitalOcean resources` table. The order is fixed:
 The same order applies to an existing consumer that opts in later.
 
 **Rollback.** Unset `PIPELINE_RUNS_ON` on the consumer: new jobs go back to
-GitHub-hosted runners at once. Jobs already queued with `do-runner` are
-cancelled and re-run.
+GitHub-hosted runners at once. Jobs already queued keep their `do-runner`
+label: leave the repository in `RUNNER_SCALER_REPOS` until they have run, or
+cancel and re-run them so they pick up a GitHub-hosted runner. The service
+does not cancel them.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -4816,8 +4818,10 @@ is set and one of them or `RUNNER_SCALER_VPC_UUID` is missing):
   create, read and delete, plus tag create and read.
 - `RUNNER_SCALER_GH_APP_ID` and `RUNNER_SCALER_GH_APP_PRIVATE_KEY` belong to a
   GitHub App installed only on the consumer repositories. Its repository
-  permissions are Actions read and write, Administration read and write, and
-  Metadata read, and its webhook event is Workflow job.
+  permissions are Actions read and write, Administration read and write,
+  Checks read (the lost-runner re-run reads the job's check-run annotations),
+  and Metadata read, and its webhook event is Workflow job. The service keeps
+  one installation token per repository owner.
 - `RUNNER_SCALER_WEBHOOK_SECRET` is the App's webhook secret.
 
 Droplets hold none of these. They are created in the dedicated VPC named by
