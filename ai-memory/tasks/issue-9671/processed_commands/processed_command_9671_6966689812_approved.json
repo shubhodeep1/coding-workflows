@@ -5,13 +5,35 @@
   "entry_id": "processed_command_9671_6966689812_approved",
   "issue_number": 9671,
   "metadata": {
+    "branch": "ai/issue-9671",
+    "changed_files": [
+      ".github/workflows/review_autofix.yml",
+      "agents.d/9479-security-pass-retire-superseded-followups.md",
+      "agents.d/9671-security-followup-guard-merge-sites.md",
+      "changelog.d/9671-security-followup-guard-merge-sites.md",
+      "docs/INVENTORY.md",
+      "scripts/review_autofix_step_det_skip_followup_guard.sh",
+      "scripts/review_enable_auto_merge.sh",
+      "scripts/review_rb_judge.sh",
+      "scripts/review_single_issue_security_pass.sh",
+      "tests/test_pr_base_freshness_gate.py",
+      "tests/test_rb_judge_incomplete_comment_context.py",
+      "tests/test_review_rb_judge_head_binding.py",
+      "tests/test_review_rb_judge_label_propagation.py",
+      "tests/test_single_issue_security_pass.py"
+    ],
+    "issue_number": 9671,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9671",
+    "pr_number": 9692,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9692",
+    "run_attempt": "1",
+    "run_id": "44219757935",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/44219757935"
   },
   "run_attempt": 1,
   "run_id": "44219757935",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-18T02:49:20Z",
+  "status": "completed",
+  "timestamp": "2026-11-18T03:49:09Z",
   "workflow": "implement"
 }
