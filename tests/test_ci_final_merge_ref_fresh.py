@@ -57,6 +57,10 @@ FAKE_GH = textwrap.dedent(
 		source = os.environ.get("FAKE_GH_COMPARE_DEFAULT" if path.endswith("..." + default) else "FAKE_GH_COMPARE_RANGE", "")
 	elif "/pulls/7/files" in path:
 		source = os.environ.get("FAKE_GH_PR_FILES", "")
+		move_base = os.environ.get("FAKE_GH_MOVE_BASE_TO", "")
+		if move_base:
+			# The integration branch advances while the check reads the file list.
+			subprocess.run(["git", "-C", os.environ["FAKE_ORIGIN"], "update-ref", "refs/heads/" + os.environ.get("FAKE_GH_BASE_REF", "main"), move_base], check=True)
 		page = int(path.split("page=")[-1]) if "&page=" in path else 1
 		page_slice = (100 * (page - 1), 100 * page)
 	if source and os.path.isfile(source):
@@ -465,4 +469,15 @@ def test_sync_only_tokenless_job_reads_the_public_api(world, tmp_path: Path) -> 
 	assert f"repos/o/r/compare/{world['old_base']}...{world['new_base']}" in paths
 	assert f"repos/o/r/compare/{world['old_base']}...main" in paths
 	assert "repos/o/r/pulls/7/files?per_page=100&page=1" in paths
+	assert tested == world["old_merge"]
+
+
+def test_sync_only_base_tip_moved_during_the_reads_fails_closed(world, tmp_path: Path) -> None:
+	"""A base commit that lands while the check reads the API is outside the checked range."""
+	env = _sync_env(tmp_path)
+	env["FAKE_GH_MOVE_BASE_TO"] = world["new_merge"]
+	result, tested, _ = world["run"](env=env)
+	assert result.returncode == 1, result.stdout + result.stderr
+	assert "outcome=stale reason=not_refreshed" in result.stdout and "detail=api_error" in result.stdout
+	assert "stale_accepted" not in result.stdout
 	assert tested == world["old_merge"]

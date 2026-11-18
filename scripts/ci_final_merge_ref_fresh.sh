@@ -230,6 +230,11 @@ ci_final_merge_ref_sync_only()
 	# other files) would have been checked against the wrong set.
 	sync_live_head="$(ci_final_merge_ref_pull '.head.sha // ""' 2>/dev/null)" || sync_reject api_error
 	[ "${sync_live_head}" = "${GITHUB_SHA}" ] || sync_reject api_error
+	# The live base tip after all reads (`git ls-remote`, no API call): a base
+	# commit that landed during the reads above is outside the checked range,
+	# so a moved (or unreadable) tip fails closed as api_error.
+	sync_tip_now="$(ci_final_merge_ref_tip "${sync_base_ref}")"
+	[ "${sync_tip_now}" = "${sync_tip}" ] || sync_reject api_error
 
 	sync_counts="$(jq -r '"\(.total_commits) \(.files | length)"' "${sync_tmp}/range.json" 2>/dev/null)" || sync_reject api_error
 	[[ "${sync_counts}" =~ ^[0-9]+\ [0-9]+$ ]] || sync_reject api_error
