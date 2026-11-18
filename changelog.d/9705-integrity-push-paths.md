@@ -1,7 +1,7 @@
 <!-- changelog: changed -->
 - **`AI Workflow Integrity` no longer starts on every push in consumer repos.** The wrapper's `push` trigger now has `paths: ['.github/workflows/**']`, so a push starts a run only when it changes a workflow file.
 
-The consumer wrapper `workflow-templates/ai-workflow-integrity.yml` ran on `pull_request_target` and on every branch push. Only the pull request run posts the required status `coding-workflows/workflow-integrity`. A push run posts nothing, and for a push that changed no managed wrapper it ended at `no_managed_wrapper_changed` after taking a runner slot. Every managed wrapper is a top-level file under `.github/workflows/`, so the filter removes only runs that did nothing. The `pull_request_target` trigger, the required status and the reusable workflow's checks are unchanged.
+The consumer wrapper `workflow-templates/ai-workflow-integrity.yml` ran on `pull_request_target` and on every branch push. Only the pull request run posts the required status `coding-workflows/workflow-integrity`. A push run posts nothing, and for a push that changed no managed wrapper it ended at `no_managed_wrapper_changed` after taking a runner slot. Every managed wrapper is a top-level file under `.github/workflows/`, so for a push to an existing branch the filter removes only runs that did nothing. A push that creates a branch, or whose old tip is gone, is compared with the default branch, so a skipped run of that kind could have reported a stale wrapper; the pull request run still judges that branch. The `pull_request_target` trigger, the required status and the reusable workflow's checks are unchanged.
 
 | The numbers that matter | Value |
 | --- | --- |

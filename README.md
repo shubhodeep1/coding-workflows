@@ -1376,8 +1376,9 @@ enforce it:
 
 1. **Integrity check.** [`workflow-templates/ai-workflow-integrity.yml`](workflow-templates/ai-workflow-integrity.yml)
    calls [`.github/workflows/workflow_integrity.yml`](.github/workflows/workflow_integrity.yml)
-   on `pull_request_target` and on every branch `push`. When a pull request or
-   push changes a managed wrapper, every managed wrapper in the head tree
+   on `pull_request_target` and on a branch `push` that changes a file under
+   `.github/workflows/` (the pull request run is not path-filtered). When a
+   pull request or push changes a managed wrapper, every managed wrapper in the head tree
    (the `WORKFLOW_PROFILE` manifest, the integrity wrapper, and the updater
    when present) must be byte-identical to the template rendered at the
    release SHA the head's `ai-workflow-integrity.yml` pins, and that SHA must

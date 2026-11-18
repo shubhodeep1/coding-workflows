@@ -16,11 +16,14 @@
 #
 # The push run starts only for a push that changes a file under
 # .github/workflows/. Every managed wrapper is a top-level file there, and a
-# push that changes none of them ended at no_managed_wrapper_changed without
-# posting anything, after taking a runner. The pull_request_target run is
-# not path-filtered: the ruleset requires its status on every pull request
-# head. GitHub evaluates a path filter on at most the first 300 changed
-# files of a push and always runs when it cannot compute the diff.
+# push to an existing branch that changes none of them ended at
+# no_managed_wrapper_changed without posting anything, after taking a runner.
+# A push that creates a branch, or whose old tip is gone, is compared with the
+# default branch, so its skipped run could have reported a stale wrapper; the
+# pull_request_target run still judges that branch. It is not path-filtered:
+# the ruleset requires its status on every pull request head. GitHub
+# evaluates a path filter on at most the first 300 changed files of a push
+# and always runs when it cannot compute the diff.
 name: AI Workflow Integrity
 on:
   pull_request_target:

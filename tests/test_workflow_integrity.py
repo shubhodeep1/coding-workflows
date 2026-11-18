@@ -171,8 +171,13 @@ def test_push_runs_never_post_the_pull_request_status() -> None:
 def test_push_path_filter_covers_every_managed_candidate(checker, consumer, tmp_path) -> None:
 	"""The wrapper's push trigger is filtered to `.github/workflows/**`. That
 	is safe only while the checker can never report a managed candidate
-	outside that directory: a push that changes none of its files must be one
-	the unfiltered run would have ended at `no_managed_wrapper_changed`."""
+	outside that directory: a push to an existing branch that changes none of
+	its files must be one the unfiltered run would have ended at
+	`no_managed_wrapper_changed`. This test covers that same-branch case only.
+	A push that creates a branch, or whose old tip is gone, is compared with
+	the default branch, so the filter can skip a push run that would have
+	reported a stale wrapper; the unfiltered pull_request_target run still
+	judges that branch."""
 	text = WORKFLOW.read_text(encoding="utf-8")
 	# The checker lists one directory of the tree and keeps its top-level files.
 	assert text.count('"ls-tree"') == 1
