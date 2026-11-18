@@ -10908,7 +10908,9 @@ def test_post_sync_test_repair_step_follows_the_topology_gate() -> None:
 	following = raw[topology + 1:step]
 	assert following.count("      - name: ") == 0
 	block = raw[step:reviewers]
-	assert "if: inputs.post_sync_test_repair && startsWith(env.TARGET_BRANCH, 'orchestrator/project-') && env.CAN_PUSH == 'true'" in block
+	# Widened for the final-CI repair (final-ci-failure-ci-fix plan, Phase 2).
+	assert ("if: ((inputs.post_sync_test_repair && startsWith(env.TARGET_BRANCH, 'orchestrator/project-')) "
+		"|| needs.gate.outputs.final_ci_repair == 'true') && env.CAN_PUSH == 'true'") in block
 	assert "continue-on-error: true" in block
 	assert "PREPUSH_TEST_GATE_STEP_MODE: integration" in block
 	assert "POST_SYNC_TEST_REPAIR: ${{ inputs.post_sync_test_repair }}" in block

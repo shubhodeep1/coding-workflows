@@ -13,6 +13,7 @@ call, including `gh workflow run`, in a log file.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import subprocess
@@ -287,6 +288,25 @@ def test_wait_dispatches_the_final_run_when_lint_is_absent(fake_gh) -> None:
 	assert "rc=1" in result.stdout  # max_minutes=0: no green lint yet, so no merge
 
 
+def test_wait_stops_at_once_when_the_final_run_cannot_be_dispatched(fake_gh) -> None:
+	"""A head whose final CI dispatch is refused (its ci.yml predates the
+	workflow_dispatch trigger) never gets `lint`: no 45-minute wait (PR #9579)."""
+	script = LIB_PRELUDE + f'_pr_wait_for_required_checks 7 "{SHA}" main 5; echo "rc=$? outcome=${{PR_CHECKS_WAIT_OUTCOME}} final=${{PR_FINAL_CI_OUTCOME:-unset}}"'
+	env = {
+		"AUTO_MERGE_CHECKS_POLL_SECONDS": "30",
+		"AUTO_MERGE_REQUIRED_CI_CHECK": "lint",
+		"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "",
+		"PR_CHECKS_HEAD_REF": "ai/issue-1",
+		"REVIEW_FINAL_CI_WORKFLOW": "ci.yml",
+		"FAKE_GH_DISPATCH_RC": "1",
+	}
+	result, calls = fake_gh(script, WAIT_FIXTURES, env)
+	assert "outcome=dispatch_failed reason=dispatch_refused" in result.stdout, result.stdout + result.stderr
+	assert "outcome=timeout waited_s=0 pending=0 reason=final_ci_dispatch_failed ci_check=lint ci_state=absent" in result.stdout
+	assert "rc=1 outcome=timeout final=dispatch_failed" in result.stdout
+	assert len(_dispatches(calls)) == 1
+
+
 def test_wait_hook_is_off_without_the_workflow(fake_gh) -> None:
 	result, calls = _wait(fake_gh, WAIT_FIXTURES, {})
 	assert "REVIEW_FINAL_CI" not in result.stdout
@@ -393,6 +413,128 @@ def test_comment_read_failure_does_not_dispatch(fake_gh) -> None:
 	result, calls = _failed(fake_gh, {_comments_key(): {"rc": 1}})
 	assert "outcome=read_failed" in result.stdout
 	assert _dispatches(calls) == []
+
+
+# ---------------------------------------------------------------------------
+# Infra failures are left to the sweep's re-run (final-ci-failure-ci-fix plan,
+# Phase 1).
+
+SHUTDOWN_TEXT = "The runner has received a shutdown signal. This can happen when the runner service is stopped."
+JOBS_KEY = "actions/runs/555/attempts/1/jobs"
+
+
+def _job(name: str, job_id: int, conclusion: str | None = "failure", status: str = "completed") -> dict:
+	return {"id": job_id, "name": name, "status": status, "conclusion": conclusion,
+		"check_run_url": f"https://api.github.com/repos/{REPO}/check-runs/{job_id + 1000}"}
+
+
+def _infra_fixtures(static_message: str = SHUTDOWN_TEXT) -> dict:
+	jobs = [_job("static-checks", 1), _job("lint", 2), _job("final-ci-failed", 3, None, "in_progress")]
+	return {
+		_comments_key(): {"body": []},
+		f"repos/{REPO}/{JOBS_KEY}": {"body": {"total_count": 3, "jobs": jobs}},
+		f"repos/{REPO}/check-runs/1001/annotations": {"body": [{"message": static_message, "annotation_level": "failure"}]},
+		f"repos/{REPO}/check-runs/1002/annotations": {"body": [{"message": "CI jobs that did not succeed: static-checks", "annotation_level": "failure"}]},
+	}
+
+
+INFRA_REPO = "shubhodeep1/coding-workflows"
+INFRA_ENV = {"FINAL_CI_FAILED_RUN_ID": "555", "FINAL_CI_FAILED_RUN_ATTEMPT": "1", "REPOSITORY": INFRA_REPO}
+
+
+def _infra_failed(fake_gh, fixtures: dict, env: dict):
+	# Serve the fixtures under the env's repository (the sweep's re-run
+	# exists only in shubhodeep1/coding-workflows).
+	repo = env.get("REPOSITORY", REPO)
+	renamed = {key.replace(f"repos/{REPO}/", f"repos/{repo}/"): value for key, value in fixtures.items()}
+	renamed.setdefault(f"repos/{repo}/pulls/7", {"body": {"state": "open", "head": {"sha": SHA}}})
+	return _failed(fake_gh, renamed, env)
+
+
+def test_infra_failure_posts_no_marker_and_dispatches_nothing(fake_gh) -> None:
+	result, calls = _infra_failed(fake_gh, _infra_fixtures(), INFRA_ENV)
+	assert f"REVIEW_FINAL_CI_FAILED pr=7 head={SHA} outcome=infra_rerun_deferred reason=shutdown" in result.stdout, result.stdout + result.stderr
+	assert not any(call[:3] == ["api", "-X", "POST"] for call in calls)
+	assert _dispatches(calls) == []
+	assert any(JOBS_KEY in arg for call in calls for arg in call)
+
+
+@pytest.mark.parametrize("fixtures, env", [
+	# A real test failure is handed back as before.
+	(_infra_fixtures("Process completed with exit code 1."), INFRA_ENV),
+	# A classifier read error keeps the hand-back.
+	({**_infra_fixtures(), f"repos/{REPO}/{JOBS_KEY}": {"rc": 1}}, INFRA_ENV),
+])
+def test_genuine_or_unreadable_failure_keeps_the_hand_back(fake_gh, fixtures: dict, env: dict) -> None:
+	result, calls = _infra_failed(fake_gh, fixtures, env)
+	assert "outcome=redispatched" in result.stdout, result.stdout + result.stderr
+	assert len([call for call in calls if call[:3] == ["api", "-X", "POST"]]) == 1
+
+
+@pytest.mark.parametrize("env", [
+	{**INFRA_ENV, "FINAL_CI_FAILED_RUN_ATTEMPT": "2"},
+	{**INFRA_ENV, "FINAL_CI_FAILED_INFRA_RERUN_ENABLED": "false"},
+	{**INFRA_ENV, "FINAL_CI_FAILED_INFRA_RERUN_ENABLED": "maybe"},
+	{**INFRA_ENV, "CI_CANCELLED_AUTO_RERUN_ENABLED": "false"},
+	{**INFRA_ENV, "CI_CANCELLED_AUTO_RERUN_ENABLED": ""},
+	{**INFRA_ENV, "FINAL_CI_FAILED_RUN_ID": "x"},
+	{"FINAL_CI_FAILED_RUN_ATTEMPT": "1", "REPOSITORY": INFRA_REPO},
+	# Another repository has no sweep re-run to defer to.
+	{"FINAL_CI_FAILED_RUN_ATTEMPT": "1", "FINAL_CI_FAILED_RUN_ID": "555", "REPOSITORY": "other/repo"},
+])
+def test_infra_deferral_needs_attempt_one_and_both_switches(fake_gh, env: dict) -> None:
+	result, calls = _infra_failed(fake_gh, _infra_fixtures(), env)
+	assert "outcome=redispatched" in result.stdout, result.stdout + result.stderr
+	assert not any(JOBS_KEY in arg for call in calls for arg in call)
+
+
+def test_already_reported_head_is_not_classified(fake_gh) -> None:
+	marker = f"x\n\n<!-- ai:final-ci-failed:v1 pr=7 head={SHA} -->"
+	fixtures = {**_infra_fixtures(), _comments_key(): {"body": [{"body": marker, "user": {"type": "Bot"}, "author_association": "NONE"}]}}
+	result, calls = _infra_failed(fake_gh, fixtures, INFRA_ENV)
+	assert "outcome=already_reported" in result.stdout
+	assert not any(JOBS_KEY in arg for call in calls for arg in call)
+
+
+def test_ci_workflow_passes_the_run_identity_and_switches() -> None:
+	text = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+	job = text[text.index("\n  final-ci-failed:\n"):]
+	for line in (
+		"FINAL_CI_FAILED_RUN_ID: ${{ github.run_id }}",
+		"FINAL_CI_FAILED_RUN_ATTEMPT: ${{ github.run_attempt }}",
+		"FINAL_CI_FAILED_INFRA_RERUN_ENABLED: ${{ vars.FINAL_CI_FAILED_INFRA_RERUN_ENABLED || 'true' }}",
+		"CI_CANCELLED_AUTO_RERUN_ENABLED: ${{ vars.CI_CANCELLED_AUTO_RERUN_ENABLED || 'true' }}",
+		"      checks: read\n",
+	):
+		assert line in job, line
+	script = (SCRIPTS / "review_final_ci_failed.sh").read_text(encoding="utf-8")
+	assert "classify-run" in script and "--ignore-job final-ci-failed" in script
+
+
+def _det_skip_final_ci_jq() -> str:
+	text = (SCRIPTS / "review_autofix_step_evaluate_gate.sh").read_text(encoding="utf-8")
+	block = text[text.index('FRESHNESS_CI_FAILED_SKIP_SUPPRESSED="false"'):]
+	block = block[:block.index("reason=final_ci_failed pr=${PR_NUMBER} candidate=${candidate_skip_reason}")]
+	start = block.rindex("jq -e --arg login")
+	program = block[start:].split("'", 2)[1]
+	return program
+
+
+@pytest.mark.parametrize("comment, expected", [
+	({"author_login": "github-actions[bot]", "author_type": "Bot"}, 0),
+	({"author_login": "Workflow-PAT-User", "author_type": "User"}, 0),
+	({"author_login": "github-actions[bot]", "author_type": "User"}, 1),
+	({"author_login": "mallory", "author_type": "Bot"}, 1),
+])
+def test_final_ci_marker_suppresses_the_deterministic_skip(tmp_path: Path, comment: dict, expected: int) -> None:
+	comments = tmp_path / "comments.json"
+	comments.write_text(json.dumps([{**comment, "body": f"x\n\n<!-- ai:final-ci-failed:v1 pr=7 head={SHA} -->"}]), encoding="utf-8")
+	result = subprocess.run(["jq", "-e", "--arg", "login", "workflow-pat-user", "--arg", "pr", "7", "--arg", "head", SHA,
+		_det_skip_final_ci_jq(), str(comments)], capture_output=True, text=True)
+	assert result.returncode == expected, result.stderr
+	result = subprocess.run(["jq", "-e", "--arg", "login", "workflow-pat-user", "--arg", "pr", "7", "--arg", "head", OTHER_SHA,
+		_det_skip_final_ci_jq(), str(comments)], capture_output=True, text=True)
+	assert result.returncode == 1
 
 
 # ---------------------------------------------------------------------------
@@ -717,3 +859,223 @@ def test_review_autofix_exports_the_input_and_the_sweep_runs_the_helper() -> Non
 	enumerate_step = next(s for s in sweep["jobs"]["sweep"]["steps"] if s.get("name") == "Enumerate open PRs and dispatch internal-review.yml")
 	assert '> "${RUNNER_TEMP}/final-ci-active-review-runs.txt"' in enumerate_step["run"]
 	assert enumerate_step["run"].index("final-ci-active-review-runs.txt") > enumerate_step["run"].index('snapshot_active_review_runs "${wf}"')
+
+
+# ---------------------------------------------------------------------------
+# Head-gate state in the sweep snapshot (scripts/review_sweep_head_gate.sh)
+# and the final-CI sweep's use of it.
+
+
+def test_sweep_checks_known_success_heads_first_and_reads_no_known_state(fake_gh, tmp_path: Path) -> None:
+	"""2026-11-17 08:30: the cap of 10 went to gate-pending heads listed first
+	(checked=10 gate_not_success=10 ensured=0). Known-success heads go first,
+	known non-success heads cost neither a read nor a cap slot."""
+	shas = {n: f"{n:040x}" for n in range(1, 7)}
+	snapshot = [
+		{"number": 1, "head_ref": "ai/issue-1", "head_sha": shas[1], "head_gate_state": "pending"},
+		{"number": 2, "head_ref": "ai/issue-2", "head_sha": shas[2], "head_gate_state": "pending"},
+		{"number": 3, "head_ref": "ai/issue-3", "head_sha": shas[3]},  # unknown: read
+		{"number": 4, "head_ref": "ai/issue-4", "head_sha": shas[4], "head_gate_state": "failure"},
+		{"number": 5, "head_ref": "ai/issue-5", "head_sha": shas[5], "head_gate_state": "success"},
+		{"number": 6, "head_ref": "ai/issue-6", "head_sha": shas[6], "head_gate_state": "success"},
+	]
+	fixtures = {
+		f"repos/{REPO}/actions/workflows/ci.yml/runs?per_page=100": {"body": {"workflow_runs": []}},
+		"/status": {"body": {"statuses": [{"context": "ai-review/head-gate", "state": "pending"}]}},
+		"/actions/workflows/ci.yml/runs?head_sha=": {"body": {"workflow_runs": []}},
+	}
+	result, calls = _sweep(fake_gh, tmp_path, snapshot, fixtures, {"FINAL_CI_SWEEP_MAX_PER_TICK": "2"})
+	assert "candidates=6 checked=2 gate_not_success=3 ensured=2 cap=2" in result.stdout, result.stdout + result.stderr
+	assert sorted(d[d.index("-f") + 1] for d in _dispatches(calls)) == ["pr_number=5", "pr_number=6"]
+	assert not any(call[1].endswith("/status") for call in calls if len(call) > 1 and call[0] == "api")
+
+
+def _gate_page(*nodes: tuple) -> dict:
+	"""GraphQL page: (number, head oid, commit oid, state or None)."""
+	return {"data": {"repository": {"pullRequests": {
+		"pageInfo": {"hasNextPage": False, "endCursor": None},
+		"nodes": [{"number": n, "headRefOid": head, "commits": {"nodes": [{"commit": {
+			"oid": oid, "status": None if state is None else {"context": {"state": state} if state != "-" else None}}}]}}
+			for n, head, oid, state in nodes],
+	}}}}
+
+
+HELPER_PRELUDE = f"""
+set -uo pipefail
+source "{SCRIPTS}/review_sweep_head_gate.sh"
+"""
+
+
+def test_annotate_adds_the_gate_state_only_for_the_snapshot_head(fake_gh) -> None:
+	c_sha = "c" * 40
+	snapshot = [
+		{"number": 1, "head_sha": SHA}, {"number": 2, "head_sha": OTHER_SHA},
+		{"number": 3, "head_sha": c_sha}, {"number": 4, "head_sha": "d" * 40}, {"number": 5, "head_sha": "e" * 40},
+	]
+	page = _gate_page(
+		(1, SHA, SHA, "SUCCESS"),
+		(2, c_sha, c_sha, "SUCCESS"),  # head moved since the snapshot: unknown
+		(3, c_sha, c_sha, "-"),  # no head-gate status: absent
+		(4, "d" * 40, "d" * 40, "PENDING"),
+	)  # PR 5 missing from the read: unknown
+	script = HELPER_PRELUDE + f"printf '%s' {json.dumps(json.dumps(snapshot))} | review_sweep_annotate_head_gate {REPO}"
+	result, calls = fake_gh(script, {"graphql": {"body": page}})
+	rows = {row["number"]: row for row in json.loads(result.stdout)}
+	assert rows[1]["head_gate_state"] == "success"
+	assert "head_gate_state" not in rows[2]
+	assert rows[3]["head_gate_state"] == "absent"
+	assert rows[4]["head_gate_state"] == "pending"
+	assert "head_gate_state" not in rows[5]
+	assert "REVIEW_SWEEP_HEAD_GATE outcome=annotated prs=5 annotated=3 success=1" in result.stderr
+	assert len(calls) == 1 and calls[0][:2] == ["api", "graphql"] and "--paginate" in calls[0]
+
+
+@pytest.mark.parametrize("fixture", [{"graphql": {"rc": 1}}, {"graphql": {"body": {"errors": [{"message": "x"}]}}}])
+def test_annotate_fails_open_with_the_snapshot_unchanged(fake_gh, fixture: dict) -> None:
+	snapshot = [{"number": 1, "head_sha": SHA, "title": "t"}]
+	script = HELPER_PRELUDE + f"printf '%s' {json.dumps(json.dumps(snapshot))} | review_sweep_annotate_head_gate {REPO}"
+	result, _ = fake_gh(script, fixture)
+	assert json.loads(result.stdout) == snapshot
+	assert "REVIEW_SWEEP_HEAD_GATE outcome=read_failed reason=graphql prs=1" in result.stderr
+
+
+@pytest.mark.parametrize("runs, expected", [
+	([], "none"),
+	([{"status": "in_progress", "conclusion": None}], "in_flight"),
+	([{"status": "completed", "conclusion": "failure"}, {"status": "completed", "conclusion": "success"}], "success"),
+	([{"status": "completed", "conclusion": "failure", "display_title": "CI [pr:7]"}], "failure"),
+	([{"status": "completed", "conclusion": "failure", "display_title": "CI [pr:7] [sync-quick]"}], "none"),
+	([{"status": "completed", "conclusion": "cancelled"}], "none"),
+	([{"status": "completed", "conclusion": "failure", "path": ".github/workflows/other.yml"}], "none"),
+])
+def test_final_ci_state_matches_the_ensure_decision(fake_gh, runs: list, expected: str) -> None:
+	script = HELPER_PRELUDE + f'review_sweep_final_ci_state {REPO} {SHA} ci.yml'
+	result, calls = fake_gh(script, {RUNS_KEY: {"body": _runs(*runs)}})
+	assert result.stdout.strip() == expected, result.stdout + result.stderr
+	assert len(calls) == 1
+
+
+def test_final_ci_state_read_failure_and_bad_input(fake_gh) -> None:
+	result, _ = fake_gh(HELPER_PRELUDE + f'review_sweep_final_ci_state {REPO} {SHA}', {RUNS_KEY: {"rc": 1}})
+	assert result.stdout.strip() == "read_failed"
+	result, calls = fake_gh(HELPER_PRELUDE + f'review_sweep_final_ci_state {REPO} nothex', {})
+	assert result.stdout.strip() == "read_failed" and calls == []
+
+
+# ---------------------------------------------------------------------------
+# Base update for a refused final-CI dispatch (_pr_final_ci_refused_base_update)
+
+REFUSED_BASE_TIP = "f" * 40
+UPDATE_SHA = "9" * 40
+
+
+def _contents(text: str) -> dict:
+	return {"body": {"encoding": "base64", "content": base64.b64encode(text.encode()).decode()}}
+
+
+OLD_CI = "name: CI\non:\n  pull_request:\n  push:\n"
+NEW_CI = "name: CI\non:\n  push:\n  workflow_dispatch:\n    inputs: {}\n"
+
+
+def _refused_fixtures(head_ci: str = OLD_CI, base_ci: str = NEW_CI) -> dict:
+	return {
+		**WAIT_FIXTURES,
+		f"repos/{REPO}/contents/.github/workflows/ci.yml?ref={SHA}": _contents(head_ci),
+		f"repos/{REPO}/contents/.github/workflows/ci.yml?ref=main": _contents(base_ci),
+		f"repos/{REPO}/pulls/7/update-branch": {"body": {"message": "Updating pull request branch."}},
+		f"repos/{REPO}/pulls/7": {"body": {"head": {"sha": UPDATE_SHA, "ref": "ai/issue-1", "repo": {"full_name": REPO}}, "mergeable": True}},
+		f"repos/{REPO}/commits/{UPDATE_SHA}": {"body": {
+			"parents": [{"sha": SHA}, {"sha": REFUSED_BASE_TIP}], "committer": {"login": "web-flow"},
+			"commit": {"verification": {"verified": True}}}},
+		f"repos/{REPO}/issues/7/comments": {"body": {"id": 1}},
+	}
+
+
+def _refused_wait(fake_gh, fixtures: dict, env: dict | None = None):
+	script = LIB_PRELUDE + f'_pr_wait_for_required_checks 7 "{SHA}" main 5; echo "rc=$? outcome=${{PR_CHECKS_WAIT_OUTCOME}}"'
+	full_env = {
+		"AUTO_MERGE_CHECKS_POLL_SECONDS": "30",
+		"AUTO_MERGE_REQUIRED_CI_CHECK": "lint",
+		"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "",
+		"PR_CHECKS_HEAD_REF": "ai/issue-1",
+		"REVIEW_FINAL_CI_WORKFLOW": "ci.yml",
+		"FAKE_GH_DISPATCH_RC": "1",
+		"MERGE_BASE_SYNC_HEAD_POLL_SECONDS": "1",
+		"MERGE_BASE_SYNC_HEAD_POLL_ATTEMPTS": "1",
+		"MERGE_BASE_SYNC_MERGE_REF_POLL_ATTEMPTS": "0",
+		# What _pr_base_fresh_for_merge left behind for this head (clean).
+		"PR_BASE_FRESHNESS_OUTCOME": "clean",
+		"PR_BASE_FRESHNESS_HEAD_SHA": SHA,
+		"PR_BASE_FRESHNESS_BASE_SHA": REFUSED_BASE_TIP,
+		"PR_BASE_FRESHNESS_BASE_REF": "main",
+		"PR_BASE_FRESHNESS_BEHIND_BY": "21",
+	}
+	full_env.update(env or {})
+	return fake_gh(script, fixtures, full_env)
+
+
+def _refused_puts(calls: list[list[str]]) -> list[list[str]]:
+	return [c for c in calls if c[:3] == ["api", "-X", "PUT"]]
+
+
+def test_refused_dispatch_updates_the_approved_branch_once(fake_gh) -> None:
+	result, calls = _refused_wait(fake_gh, _refused_fixtures())
+	out = result.stdout + result.stderr
+	assert f"REVIEW_FINAL_CI_BASE_UPDATE pr=7 head={SHA} outcome=updated reason=workflow_predates_dispatch" in out, out
+	assert "reason=final_ci_dispatch_failed" in out and "rc=1 outcome=timeout" in out
+	puts = _refused_puts(calls)
+	assert len(puts) == 1 and puts[0][3] == f"repos/{REPO}/pulls/7/update-branch" and f"expected_head_sha={SHA}" in puts[0]
+	posts = [c for c in calls if c[:3] == ["api", "-X", "POST"]]
+	assert len(posts) == 1
+	body = posts[0][-1]
+	assert body.startswith("body=**Branch updated from `main` before merging**")
+	assert "predates its `workflow_dispatch` trigger" in body
+	assert body.rstrip().endswith(f"<!-- ai:merge-base-sync:v1 pr=7 from={SHA} sync=1 base={REFUSED_BASE_TIP} merge={UPDATE_SHA} -->")
+	# The update head's final CI is dispatched right away (refused here too by the fake).
+	assert any(f"head_sha={UPDATE_SHA}" in arg for d in _dispatches(calls) for arg in d)
+
+
+@pytest.mark.parametrize("fixtures, env, reason", [
+	(_refused_fixtures(head_ci=NEW_CI), {}, "head_workflow_yes"),
+	(_refused_fixtures(head_ci="name: CI\non: [push, workflow_dispatch]\n"), {}, "head_workflow_yes"),
+	(_refused_fixtures(head_ci='name: CI\n"on": {"push": {}, "workflow_dispatch": {}}\n'), {}, "head_workflow_yes"),
+	(_refused_fixtures(head_ci="name: CI\non:\n  push:\n  # workflow_dispatch:\n", base_ci=OLD_CI), {}, "base_workflow_no"),
+	(_refused_fixtures(base_ci=OLD_CI), {}, "base_workflow_no"),
+	({**WAIT_FIXTURES}, {}, "head_workflow_unreadable"),
+	(_refused_fixtures(), {"PR_BASE_FRESHNESS_OUTCOME": "fresh"}, "freshness_fresh"),
+	(_refused_fixtures(), {"PR_BASE_FRESHNESS_HEAD_SHA": OTHER_SHA}, "freshness_clean"),
+	(_refused_fixtures(), {"FINAL_CI_REFUSED_BASE_UPDATE_ENABLED": "false"}, "disabled"),
+])
+def test_refused_dispatch_base_update_skips(fake_gh, fixtures: dict, env: dict, reason: str) -> None:
+	result, calls = _refused_wait(fake_gh, fixtures, env)
+	out = result.stdout + result.stderr
+	assert f"REVIEW_FINAL_CI_BASE_UPDATE pr=7 head={SHA} outcome=skipped reason={reason}" in out, out
+	assert _refused_puts(calls) == []
+	assert "rc=1 outcome=timeout" in out
+
+
+def test_other_dispatch_failures_never_update_the_branch(fake_gh) -> None:
+	"""A fork head or an unreadable head ref is not a stale workflow file."""
+	env = {"PR_CHECKS_HEAD_REF": ""}
+	fixtures = {**_refused_fixtures(), f"repos/{REPO}/pulls/7": {"body": {"head": {"ref": "x", "repo": {"full_name": "fork/r"}}}}}
+	result, calls = _refused_wait(fake_gh, fixtures, env)
+	out = result.stdout + result.stderr
+	assert "reason=fork_head" in out, out
+	assert "REVIEW_FINAL_CI_BASE_UPDATE" not in out
+	assert _refused_puts(calls) == []
+
+
+def test_refused_dispatch_marker_numbers_the_update_after_earlier_syncs(fake_gh) -> None:
+	earlier = [
+		{"user": {"login": "bot"}, "body": f"**Branch updated from `main` before merging** (update {k}; warning threshold 2).\n\nx\n\n<!-- ai:merge-base-sync:v1 pr=7 from={OTHER_SHA} sync={k} -->"}
+		for k in (1, 2)
+	]
+	fixtures = {**_refused_fixtures(), f"repos/{REPO}/issues/7/comments": {"body": earlier}, "user": {"body": {"login": "bot"}}}
+	result, calls = _refused_wait(fake_gh, fixtures)
+	out = result.stdout + result.stderr
+	assert "outcome=updated reason=workflow_predates_dispatch" in out, out
+	body = [c for c in calls if c[:3] == ["api", "-X", "POST"]][0][-1]
+	assert "(update 3; warning threshold 2)" in body
+	assert f"from={SHA} sync=3 base={REFUSED_BASE_TIP} merge={UPDATE_SHA} -->" in body
+	assert "predates its `workflow_dispatch` trigger" in body
+

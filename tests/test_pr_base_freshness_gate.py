@@ -226,8 +226,10 @@ class Wiring(unittest.TestCase):
 		case_text = text[text.index("# END rb-judge merge error capture (#7659)") :]
 		sites = case_text.split('"${RB_MERGE_METHOD_FLAG:---squash}" --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}"')[:-1]
 		self.assertEqual(len(sites), 2)
+		# 1600: the merge-lease `lease_wait` branch (2026-11-17) sits between
+		# the post-wait gate and the merge call.
 		for site in sites:
-			self.assertIn("_pr_base_fresh_for_merge", site[-1200:])
+			self.assertIn("_pr_base_fresh_for_merge", site[-1600:])
 		# Each call to the retry helper follows its site's gate.
 		retry_calls = list(re.finditer(r"\|\| rb_judge_merge_retry_transient (?:auto|direct) (?:merge|terminal|sync); then", case_text))
 		self.assertEqual(len(retry_calls), 3)
@@ -709,7 +711,10 @@ class RequiredChecksWiring(unittest.TestCase):
 
 	def test_review_rb_judge_waits_before_both_auto_merge_calls(self) -> None:
 		text = RB_JUDGE.read_text(encoding="utf-8")
-		self.assertEqual(text.count('elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then'), 2)
+		# FINAL_CI_MERGE_RESUME_ENABLED=false: the judge posts its head-gate
+		# success only after the wait, so a final-CI pending mark could never
+		# resume (tests/test_merge_lease.py).
+		self.assertEqual(text.count('elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" FINAL_CI_MERGE_RESUME_ENABLED=false _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then'), 2)
 
 	def test_missing_library_fails_the_wait_closed(self) -> None:
 		for path in (ENABLE_AUTO_MERGE, RB_JUDGE, WORKFLOW):

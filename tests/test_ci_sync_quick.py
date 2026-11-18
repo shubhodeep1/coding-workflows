@@ -27,7 +27,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "ci_sync_quick.sh"
@@ -504,6 +503,9 @@ def test_the_merge_path_dispatches_after_a_verified_update() -> None:
 
 
 def _ci() -> dict:
+	# PyYAML is installed in CI; only the ci.yml tests need it, so a container
+	# without it still runs the classify / verify / dispatch tests above.
+	yaml = pytest.importorskip("yaml")
 	return yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
 
 
