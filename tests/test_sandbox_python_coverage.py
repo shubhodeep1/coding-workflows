@@ -53,6 +53,15 @@ SCANNED_LAUNCH_SCRIPTS = (
 # writer is plain shell (its own tests run on the host).
 NON_PYTHON_ENTRY_POINTS = frozenset({"/support/write_codex_config.sh"})
 
+# In-image files that run only during `docker build`, never in an agent
+# container, so no sandbox test family can run them: the opt-in solc installer
+# (scripts/codex_isolated_exec.sh write_image_context, SANDBOX_SOLC_VERSIONS)
+# downloads from binaries.soliditylang.org, which the no-network sandbox test
+# step cannot reach. Its host-side tests are in tests/test_codex_isolated_exec.py
+# (_load_solc_installer). test_no_stale_registry_entries still requires the
+# scanner to find each one.
+BUILD_TIME_ONLY_ENTRY_POINTS = frozenset({"/tmp/solc_install.py"})
+
 _GUARD_TESTS = ["tests/test_gh_api_write_guard.py"]
 _RELAY_TESTS = ["tests/test_claude_anthropic_relay.py"]
 _BRIDGE_TESTS = ["tests/test_clarify_openrouter_broker_bridge.py"]
@@ -265,7 +274,7 @@ class RegistryCoverageTest(unittest.TestCase):
 		found = scan_entry_points()
 		self.assertTrue(found, "the scanner found no entry point; the launch scripts or the patterns changed")
 		for path, sites in sorted(found.items()):
-			if path in NON_PYTHON_ENTRY_POINTS:
+			if path in NON_PYTHON_ENTRY_POINTS or path in BUILD_TIME_ONLY_ENTRY_POINTS:
 				continue
 			with self.subTest(entry_point=path):
 				self.assertIn(
@@ -313,6 +322,10 @@ class RegistryCoverageTest(unittest.TestCase):
 		for path in sorted(NON_PYTHON_ENTRY_POINTS):
 			with self.subTest(non_python=path):
 				self.assertIn(path, found)
+		for path in sorted(BUILD_TIME_ONLY_ENTRY_POINTS):
+			with self.subTest(build_time_only=path):
+				self.assertIn(path, found)
+				self.assertNotIn(path, SANDBOX_PYTHON_ENTRY_POINTS)
 
 	def test_registry_files_exist_and_families_are_known(self) -> None:
 		for path, entry in sorted(SANDBOX_PYTHON_ENTRY_POINTS.items()):

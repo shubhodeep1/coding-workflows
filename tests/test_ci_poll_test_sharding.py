@@ -1176,6 +1176,7 @@ LAST_GROUP_PINNED_STEPS = (
 )
 POLL_JOB_UNGUARDED_STEPS = {
 	"Checkout repository",
+	"Verify the final-CI merge ref is current",
 	"Setup Python",
 	"Install Python CI dependencies",
 	"Derive orchestrate poll test subsets",

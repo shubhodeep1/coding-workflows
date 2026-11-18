@@ -55,6 +55,8 @@ def _fetch_body() -> str:
 	job_id, step_name = next(iter(SHALLOW_JOBS.items()))
 	return next(step for step in jobs[job_id]["steps"] if step.get("name") == step_name)["run"]
 
+MERGE_REF_CHECK_STEP = "Verify the final-CI merge ref is current"
+
 
 @pytest.mark.parametrize("job_id", sorted(SHALLOW_JOBS))
 def test_checkout_is_shallow(job_id: str) -> None:
@@ -71,7 +73,11 @@ def test_checkout_is_shallow(job_id: str) -> None:
 def test_fetch_step_follows_checkout_before_any_base_reader(job_id: str) -> None:
 	job = _jobs()[job_id]
 	steps = job["steps"]
-	fetch = steps[1]
+	# The final-CI merge-ref check (scripts/ci_final_merge_ref_fresh.sh) may sit
+	# between the checkout and the fetch: it reads only HEAD, never the base
+	# the fetch provides.
+	assert steps[1]["name"] == MERGE_REF_CHECK_STEP
+	fetch = steps[2]
 	assert fetch["name"] == SHALLOW_JOBS[job_id]
 	assert "if" not in fetch
 	assert fetch["env"] == FETCH_STEP_ENV
@@ -79,7 +85,7 @@ def test_fetch_step_follows_checkout_before_any_base_reader(job_id: str) -> None
 	for index, step in enumerate(steps):
 		reads_base = str(step.get("name", "")).startswith("Prepare template-only PR live copies") or "CLAUDE_PARITY_PR_BASE_SHA" in (step.get("env") or {})
 		if reads_base:
-			assert index > 1, f"{job_id}: {step.get('name')} runs before the base fetch"
+			assert index > 2, f"{job_id}: {step.get('name')} runs before the base fetch"
 
 
 def test_fetch_bodies_are_identical_and_fetch_what_the_readers_need() -> None:

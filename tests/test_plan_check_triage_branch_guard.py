@@ -240,7 +240,16 @@ def test_refctx_emits_resolver_status_on_every_exit_path() -> None:
 	# hold_skip_plan, which writes resolver_status=failed in a group redirect.
 	hold_exits = body.count("hold_skip_plan\n")
 	assert hold_exits == 2
-	assert body.count("exit 0") == body.count('echo "resolver_status=unavailable"') + hold_exits
+	# The rate-limited deferral (#9599) is one more exit 0 path. It writes
+	# resolver_status=failed in a group redirect, so the count above stays 2.
+	assert body.count('echo "rate_limited_defer=true"') == 1
+	defer_exits = 1
+	assert body.count("exit 0") == body.count('echo "resolver_status=unavailable"') + hold_exits + defer_exits
+	defer_start = body.index('echo "rate_limited_defer=true"')
+	defer_block = body[defer_start:body.index("exit 0", defer_start)]
+	for line in ('echo "ref="', 'echo "resolver_status=failed"', '} >> "$GITHUB_OUTPUT"', 'echo "SKIP_PLAN=true" >> "$GITHUB_ENV"'):
+		assert line in defer_block, line
+	assert "gh " not in defer_block
 	hold_fn = body[body.index("hold_skip_plan() {"):body.index("hold_login=")]
 	for line in ('echo "label_missing_hold=true"', 'echo "resolver_status=failed"', '} >> "$GITHUB_OUTPUT"', 'echo "SKIP_PLAN=true" >> "$GITHUB_ENV"'):
 		assert line in hold_fn, line

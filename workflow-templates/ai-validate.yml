@@ -62,3 +62,4 @@ jobs:
       GH_PAT: ${{ secrets.GH_PAT }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}

@@ -36,7 +36,9 @@ CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 AGGREGATE_JOB_ID = "lint"
 AGGREGATE_STEP_NAME = "Require every CI job to succeed"
 # Steps every job repeats to set itself up; everything else runs exactly once.
-PER_JOB_SETUP_STEPS = ("Checkout repository", "Setup Python", "Install Python CI dependencies")
+# "Verify the final-CI merge ref is current" follows every final-CI checkout
+# (scripts/ci_final_merge_ref_fresh.sh; tests/test_ci_final_merge_ref_fresh.py).
+PER_JOB_SETUP_STEPS = ("Checkout repository", "Verify the final-CI merge ref is current", "Setup Python", "Install Python CI dependencies")
 MAX_JOB_TIMEOUT_MINUTES = 20
 # Jobs deliberately outside the aggregate: they run only on pushes to main,
 # wait for the worker jobs so they can read their durations, and must never
@@ -166,10 +168,15 @@ class FinalCiFailedJobTest(unittest.TestCase):
 			with self.subTest(job=job_id):
 				if job_id == "static-checks":
 					self.assertNotIn("if", jobs[job_id])
+				elif job_id == "tests-sync-quick":
+					# Runs only in a sync-quick final-CI dispatch, never in quick
+					# mode; tests/test_ci_sync_quick.py pins that gate.
+					self.assertEqual(jobs[job_id]["if"], "inputs.mode != 'quick' && github.event_name == 'workflow_dispatch' && inputs.sync_quick == 'true'")
 				else:
-					# Docs-only final CI (run-volume plan item 4) also skips them;
-					# tests/test_ci_docs_only_final_ci.py pins that gate.
-					self.assertEqual(jobs[job_id]["if"], "inputs.mode != 'quick' && inputs.docs_only != 'true'")
+					# Docs-only and sync-quick final CI also skip them;
+					# tests/test_ci_docs_only_final_ci.py and
+					# tests/test_ci_sync_quick.py pin those gates.
+					self.assertEqual(jobs[job_id]["if"], "inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'")
 
 
 class SystemPythonJobTest(unittest.TestCase):
