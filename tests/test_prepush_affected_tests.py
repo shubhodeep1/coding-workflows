@@ -1153,8 +1153,12 @@ def test_wrapper_pr_tree_ignores_global_filters_and_export_ignore(tmp_path):
 	home.mkdir()
 	(home / ".gitconfig").write_text(
 		f'[filter "evil"]\n\tclean = "sed s/3/CLEANED/"\n\tsmudge = "touch {marker}; cat"\n', encoding="utf-8")
-	_commit(root, {".gitattributes": "*.py filter=evil\ntests/** export-ignore\n", "lib/a.py": "X = 2\n"})
+	_commit(root, {".gitattributes": "*.py filter=evil\n*.bin filter=lfs\ntests/** export-ignore\n", "lib/a.py": "X = 2\n", "data.bin": "3\n"})
 	(root / "lib" / "a.py").write_text("X = 3\n", encoding="utf-8")
+	# A repository-local git-lfs driver (actions/checkout lfs: true) is switched off.
+	_git(root, "config", "filter.lfs.clean", "sed s/3/CLEANED/")
+	_git(root, "config", "filter.lfs.smudge", f"touch {tmp_path / 'lfs_smudge_ran'}; cat")
+	(root / "data.bin").write_text("3 edited\n", encoding="utf-8")
 	env, _ = _wrapper_env(tmp_path)
 	env["HOME"] = str(home)
 	capture = _capture_source(tmp_path)
@@ -1163,6 +1167,8 @@ def test_wrapper_pr_tree_ignores_global_filters_and_export_ignore(tmp_path):
 	assert (capture / "lib" / "a.py").read_text(encoding="utf-8") == "X = 3\n"
 	assert (capture / "tests" / "test_a.py").is_file()
 	assert not marker.exists()
+	assert (capture / "data.bin").read_text(encoding="utf-8") == "3 edited\n"
+	assert not (tmp_path / "lfs_smudge_ran").exists()
 
 
 def test_wrapper_skips_a_tracked_node_modules_symlink_in_the_pr_tree(tmp_path):

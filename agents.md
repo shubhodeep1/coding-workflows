@@ -5516,15 +5516,12 @@ post-sync repair) are follow-ups; until they land no pipeline runs the gate.
   `summary.md` (regular files, 1 MiB). `/source` holds every path in the real
   index (HEAD plus staged additions, minus staged deletions) with its worktree
   content, written by `checkout-index` from a temporary index and object
-  directory in the private run root, with global and system Git config left
-  out; the real index and `.git` are only read, `.git` is never copied, and a
+  directory in the private run root, with global and system Git config and
+  the git-lfs driver left out; the real index and `.git` are only read, `.git` is never copied, and a
   PR's `export-ignore` does not hide a file. Untracked, non-ignored files are
   copied in only when `review_untrusted_workspace.py snapshot` (the review
   sandbox's credential filter) admits them, so an untracked `.env*`, key or
-  credential file never enters the container. Before, `/source` was that
-  filtered snapshot, so tests reading tracked dotfiles, `.github/ai/*.json` or
-  `.claude/settings.json` failed only on the PR side and were reported as
-  caused by the change (PR #9666). The changed-file list is the worktree
+  credential file never enters the container. The changed-file list is the worktree
   against the merge-base (uncommitted tracked edits included); an untracked
   `Makefile` or `.ai/validate.yml`, which the filter leaves out, is copied
   into `/source`; a tree-build failure gives `source_export_failed`; a

@@ -238,11 +238,14 @@ host_git_dir="$("${git_safe[@]}" rev-parse --absolute-git-dir 2>/dev/null)" || h
 # was the review sandbox's filtered snapshot, which drops those files, so
 # such tests failed only on the PR side and were reported as caused by the
 # change. Tracked files are the real index's paths (HEAD plus staged adds,
-# minus staged deletions) with their worktree content, written through a
-# temporary index and object directory in the private run root: the real
-# index and the checkout's .git are only read. Global and system Git config
-# are left out, so a PR's .gitattributes cannot pick a filter driver (git-lfs)
-# configured there; the repository-local config is the runner's own.
+# minus staged deletions) with their worktree content (after Git's built-in
+# eol/ident conversions, as a commit and checkout would apply them), written
+# through a temporary index and object directory in the private run root: the
+# real index and the checkout's .git are only read. Global and system Git
+# config are left out and the git-lfs driver is switched off, so a PR's
+# .gitattributes cannot run a filter driver (git-lfs would write into
+# .git/lfs and fetch over the network); repository-local config is the
+# runner's own.
 # checkout-index (not git archive) writes the tree, so a PR's export-ignore
 # cannot hide a file from the gate. .git itself is never copied.
 toplevel="$("${git_safe[@]}" rev-parse --show-toplevel 2>/dev/null)" || toplevel=""
@@ -256,6 +259,7 @@ mkdir -m 0700 "${root}/objects" "${root}/objects/pack" "${root}/objects/info" "$
 pr_git=(env GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_INDEX_FILE="${root}/pr.index"
 	GIT_OBJECT_DIRECTORY="${root}/objects" GIT_ALTERNATE_OBJECT_DIRECTORIES="${objects_dir}"
 	git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.splitIndex=false -c core.untrackedCache=false
+	-c filter.lfs.clean= -c filter.lfs.smudge= -c filter.lfs.process= -c filter.lfs.required=false
 	--git-dir="${host_git_dir}" --work-tree="${worktree_real}" -C "${worktree_real}")
 # Staged additions and deletions relative to HEAD, read from the real index.
 if ! "${git_safe[@]}" diff-index --cached --no-renames --name-only --diff-filter=A -z HEAD > "${root}/staged_added" 2>/dev/null \
@@ -271,8 +275,7 @@ fi
 # Untracked, non-ignored files enter only through the review sandbox's
 # credential filter: the snapshot keeps the ones allowed() admits (no .env*,
 # keys, credential stores or secret-named paths), and only those are copied.
-snapshot_args=("${host_git_dir}")
-if ! PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${worktree_real}" "${root}/filtered" "${root}/manifest.json" "${snapshot_args[@]}" >/dev/null 2>&1; then
+if ! PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${worktree_real}" "${root}/filtered" "${root}/manifest.json" "${host_git_dir}" >/dev/null 2>&1; then
 	synthetic_result snapshot_failed
 	exit 0
 fi
