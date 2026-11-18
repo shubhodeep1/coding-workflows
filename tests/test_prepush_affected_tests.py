@@ -1156,6 +1156,28 @@ def test_wrapper_builds_the_pr_tree_from_git_with_tracked_dotfiles_and_filtered_
 	assert _git_state(root) == before
 
 
+def test_wrapper_fails_closed_when_the_source_git_repository_cannot_be_built(tmp_path):
+	# Without /source's one-commit repository, git-dependent tests would fail on
+	# both trees and be classified as inherited (a false pass), so the run must
+	# stop as unverified instead of carrying on without it.
+	root = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	shim = tmp_path / "bin" / "git"
+	real_git = os.path.realpath(shim)
+	shim.unlink()
+	# Only the wrapper's commit at /source fails (the credential-filter snapshot
+	# commits from its own cwd, without -C); every other git call is real.
+	shim.write_text(f'#!/usr/bin/env bash\ncase " $* " in *" -C "*"/source "*" -qm snapshot "*) exit 1 ;; esac\nexec "{real_git}" "$@"\n', encoding="utf-8")
+	shim.chmod(0o755)
+	proc, out = _run_wrapper(tmp_path, root, MODULE_PATH, env)
+	assert proc.returncode == 0, proc.stderr
+	assert "outcome=error reason=source_git_init_failed" in proc.stderr
+	result = json.loads((out / "result.json").read_text(encoding="utf-8"))
+	assert result["status"] == "unverified"
+	assert result["reason"] == "snapshot_failed"
+	assert not log.exists() or not any(line.startswith("run ") for line in log.read_text(encoding="utf-8").splitlines())
+
+
 def test_wrapper_baseline_keeps_export_ignored_files(tmp_path):
 	# export-ignore already at the merge-base: git archive would drop tests/
 	# from /baseline only, so a failure there could never be classified as inherited.
