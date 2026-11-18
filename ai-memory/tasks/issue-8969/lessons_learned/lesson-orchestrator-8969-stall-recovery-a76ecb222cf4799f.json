@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-11-18T07:32:23Z",
+  "issue_number": 8969,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Orchestrator project \"ChatGPT account reviewer trial: run the review panel's GPT slot on a ChatGPT account via claude-pool-broker (Phases 1-4)\" (#8969): issues stalled and needed automated recovery (20 time(s)). Causes: stuck in ai:ready-to-merge for 66m; recovery: run_stall_judge (#9111); stuck in ai:done for 133m; recovery: retrigger_review (#9143); stuck in ai:done for 126m; recovery: retrigger_review (#9143); stuck in ai:awaiting-approval for 71m; recovery: auto_approve (#9111); stuck in ai:awaiting-approval for 65m; recovery: run_stall_judge (#9111); stuck in ai:awaiting-approval for 72m; recovery: auto_approve (#9111); stuck in ai:awaiting-approval for 68m; recovery: auto_approve (#9111); stuck in ai:done for 509m; recovery: retrigger_review (#9179); stuck in ai:review-blocked for 133m; recovery: dispatch_rb_judge (#9179); stuck in ai:review-blocked for 122m; recovery: dispatch_rb_judge (#9179); stuck in ai:review-blocked for 122m; recovery: run_stall_judge (#9179); stuck in ai:review-blocked for 125m; recovery: run_stall_judge (#9179); stuck in ai:clarification for 91m; recovery: auto_respond_clarify (#9179); stuck in ai:planning for 71m; recovery: retrigger_plan (#9179); stuck in ai:planning for 89m; recovery: retrigger_plan (#9179); stuck in ai:planning for 67m; recovery: run_stall_judge (#9179); stuck in ai:done for 1082m; recovery: retrigger_review (#9449); stuck in ai:done for 2154m; recovery: retrigger_review (#9449); stuck in ai:done for 352m; recovery: run_stall_judge (#9449); stuck in ai:done for 135m; recovery: run_stall_judge (#9449). Similar work may need smaller, more explicit issues for these phases.",
+  "phase": "orchestrator_completion",
+  "pr_number": 8971,
+  "record_id": "lesson-orchestrator-8969-stall-recovery-a76ecb222cf4799f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:stall_recovery",
+    "project:8969"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-11-18T07:32:23Z",
+  "issue_number": 8969,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Orchestrator project \"ChatGPT account reviewer trial: run the review panel's GPT slot on a ChatGPT account via claude-pool-broker (Phases 1-4)\" (#8969) completed only after 2 judge stall cycle(s). Similar projects may need smaller waves or more explicit issue specs.",
+  "phase": "orchestrator_completion",
+  "pr_number": 8971,
+  "record_id": "lesson-orchestrator-8969-summary-b3684ba15573a3f9",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:summary",
+    "project:8969"
+  ]
+}
