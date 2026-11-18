@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Contract of `.github/workflows/pr-checks.yml`, the folded per-PR checks.
 
-One job does the work that `lint-pr-body-auto-close.yml` and, for every
+One job does the work that `lint-pr-body-auto-close.yml`,
+`lint-plan-archival.yml` and, for every
 event but a label change, `integration-pr-readiness.yml` did in a job each
 (docs/plans/fold-per-pr-checks-plan.md, CLAUDE.md §33.A). The names that
 carry a verdict must not move: the check-run name `pr-body-lint` (in
@@ -12,8 +13,11 @@ tests/test_lint_pr_body_auto_close.py; this file pins the shape of the fold.
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import yaml
@@ -28,17 +32,23 @@ LABEL_EVENT_TYPES = ["labeled", "unlabeled"]
 # Step ids of each group. A step may depend on the checkout and on steps of
 # its own group, never on a step of the other group.
 LINT_GROUP_STEP_IDS = {"pr_body_file", "pr_commit_messages"}
+ARCHIVAL_GROUP_STEP_IDS = {"plan_archival_added_files", "plan_archival_body_file"}
 READINESS_GROUP_STEP_IDS = {"pr_labels_file"}
 EXPECTED_STEP_NAMES = [
 	"Checkout repository",
 	"Write PR title and body to file",
 	"Write PR commit messages to file",
 	"Run auto-close keyword lint",
+	"Enumerate added files in PR",
+	"Write PR body to file",
+	"Run plan-archival completeness lint",
 	"Write PR labels to file",
 	"Check integration PR readiness and post status",
 ]
 LINT_GROUP_STEP_NAMES = EXPECTED_STEP_NAMES[1:4]
-READINESS_GROUP_STEP_NAMES = EXPECTED_STEP_NAMES[4:6]
+ARCHIVAL_GROUP_STEP_NAMES = EXPECTED_STEP_NAMES[4:7]
+READINESS_GROUP_STEP_NAMES = EXPECTED_STEP_NAMES[7:9]
+ARCHIVAL_SCRATCH_DIR = "/tmp/plan-archival-lint"
 
 
 def _load_workflow(path: Path) -> dict:
@@ -58,6 +68,12 @@ def _expression_body(expression: str) -> str:
 
 def test_lint_workflow_file_is_gone() -> None:
 	assert not (WORKFLOWS_DIR / "lint-pr-body-auto-close.yml").exists()
+
+
+def test_plan_archival_workflow_file_is_gone() -> None:
+	"""Its job was named `lint`, the check-run name the `main` ruleset
+	requires and means ci.yml's aggregate job by."""
+	assert not (WORKFLOWS_DIR / "lint-plan-archival.yml").exists()
 
 
 def test_exactly_one_job_with_the_verdict_name() -> None:
@@ -128,31 +144,225 @@ def test_every_step_after_checkout_survives_another_groups_failure() -> None:
 
 def test_step_groups_do_not_depend_on_each_other() -> None:
 	by_name = {step["name"]: step for step in _folded_job()["steps"]}
-	for names, foreign_ids in (
-		(LINT_GROUP_STEP_NAMES, READINESS_GROUP_STEP_IDS),
-		(READINESS_GROUP_STEP_NAMES, LINT_GROUP_STEP_IDS),
+	for names, own_ids in (
+		(LINT_GROUP_STEP_NAMES, LINT_GROUP_STEP_IDS),
+		(ARCHIVAL_GROUP_STEP_NAMES, ARCHIVAL_GROUP_STEP_IDS),
+		(READINESS_GROUP_STEP_NAMES, READINESS_GROUP_STEP_IDS),
 	):
 		for name in names:
 			referenced = set(re.findall(r"steps\.([A-Za-z0-9_]+)\.", by_name[name]["if"]))
-			assert not (referenced & foreign_ids), (name, referenced)
-			assert referenced <= {"checkout"} | LINT_GROUP_STEP_IDS | READINESS_GROUP_STEP_IDS, (name, referenced)
+			assert referenced <= {"checkout"} | own_ids, (name, referenced)
 	# Within a group a step still waits for the step it reads from.
 	assert "steps.checkout.outcome == 'success'" in by_name["Write PR title and body to file"]["if"]
 	assert "steps.checkout.outcome == 'success'" in by_name["Write PR labels to file"]["if"]
+	assert "steps.checkout.outcome == 'success'" in by_name["Enumerate added files in PR"]["if"]
+	assert "steps.plan_archival_added_files.outcome == 'success'" in by_name["Write PR body to file"]["if"]
+	assert "steps.plan_archival_body_file.outcome == 'success'" in by_name["Run plan-archival completeness lint"]["if"]
 	assert "steps.pr_body_file.outcome == 'success'" in by_name["Run auto-close keyword lint"]["if"]
 	assert "steps.pr_commit_messages.outcome != 'failure'" in by_name["Run auto-close keyword lint"]["if"]
 	assert "steps.pr_labels_file.outcome == 'success'" in by_name["Check integration PR readiness and post status"]["if"]
 
 
 def test_only_the_lint_can_fail_the_job() -> None:
-	"""The job result is the §19 verdict the merge gate reads. The readiness
+	"""The job result carries the two lint verdicts the merge gate reads
+	(§19 PR-body lint, plan-archival lint). The readiness
 	verdict is a commit status; a failed tracking-issue read or status POST
 	(a fork PR's token is read-only) must not turn `pr-body-lint` red."""
 	by_name = {step["name"]: step for step in _folded_job()["steps"]}
 	for name in READINESS_GROUP_STEP_NAMES:
 		assert by_name[name].get("continue-on-error") is True, name
-	for name in ["Checkout repository", *LINT_GROUP_STEP_NAMES]:
+	for name in ["Checkout repository", *LINT_GROUP_STEP_NAMES, *ARCHIVAL_GROUP_STEP_NAMES]:
 		assert "continue-on-error" not in by_name[name], name
+
+
+def test_checkout_depth_is_the_merge_commit_and_its_parents() -> None:
+	"""The plan-archival group diffs the merge commit against its first
+	parent, which needs depth 2 and no more."""
+	checkout = _folded_job()["steps"][0]
+	assert checkout["uses"].startswith("actions/checkout@")
+	assert checkout["with"] == {"fetch-depth": 2}
+
+
+def test_plan_archival_lint_runs_only_for_added_completed_files() -> None:
+	"""The step condition replaces the old workflow's `paths:` filter. The
+	enumerate step runs on every event (also `edited`: the PR body is an
+	input of the lint), and the lint steps only when it reports a file
+	added under docs/completed/."""
+	by_name = {step["name"]: step for step in _folded_job()["steps"]}
+	enumerate_step = by_name["Enumerate added files in PR"]
+	assert _expression_body(enumerate_step["if"]) == "!cancelled() && steps.checkout.outcome == 'success'"
+	assert "steps.plan_archival_added_files.outputs.needed == 'true'" in by_name["Write PR body to file"]["if"]
+	for name in ARCHIVAL_GROUP_STEP_NAMES:
+		assert "github.event.action" not in by_name[name]["if"], name
+	assert enumerate_step["env"] == {"PLAN_ARCHIVAL_HEAD_SHA": "${{ github.event.pull_request.head.sha }}"}, (
+		"the enumerate step reads the checkout and the event's head SHA only: no token, no API call"
+	)
+	lint_step = by_name["Run plan-archival completeness lint"]
+	assert lint_step["env"] == {"GH_TOKEN": "${{ github.token }}"}
+	assert "scripts/lint_plan_archival_completeness.py" in lint_step["run"]
+	assert f"--pr-body-file {ARCHIVAL_SCRATCH_DIR}/body.txt" in lint_step["run"]
+	assert f"--added-files-file {ARCHIVAL_SCRATCH_DIR}/added.txt" in lint_step["run"]
+
+
+def test_plan_archival_failure_names_itself() -> None:
+	"""A red `pr-body-lint` otherwise means a §19 violation. Every failing
+	exit of the plan-archival group prints an `::error` line that names the
+	plan-archival lint and says it is not the PR-body lint."""
+	by_name = {step["name"]: step for step in _folded_job()["steps"]}
+	for name in ("Enumerate added files in PR", "Run plan-archival completeness lint"):
+		body = by_name[name]["run"]
+		error_lines = [line for line in body.splitlines() if "::error" in line]
+		assert error_lines, name
+		exit_lines = [line for line in body.splitlines() if re.match(r"\s*exit ", line)]
+		assert len(exit_lines) == len(error_lines), name
+		for line in error_lines:
+			assert "::error title=Plan-archival completeness lint (not the PR-body lint)::[lint_plan_archival] outcome=" in line, line
+	lint_body = by_name["Run plan-archival completeness lint"]["run"]
+	assert 'exit "${plan_archival_rc}"' in lint_body, "the lint script's exit code is the step's"
+
+
+def _git_test_env() -> dict:
+	"""The caller's environment without any GIT_* variable (a hook or
+	`git rebase --exec` exports GIT_DIR and GIT_INDEX_FILE, which would point
+	these commands at the real repository), plus a fixed identity."""
+	env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+	env.update({
+		"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+		"GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+		"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull,
+	})
+	return env
+
+
+def _git(repo_dir: Path, *args: str) -> str:
+	result = subprocess.run(
+		["git", *args], cwd=repo_dir, env=_git_test_env(),
+		capture_output=True, text=True, timeout=60, check=True,
+	)
+	return result.stdout.strip()
+
+
+def _run_enumerate_step(repo_dir: Path, scratch_dir: Path, event_head_sha: str | None = None) -> tuple[int, str, str]:
+	"""Run the enumerate step's shell body in repo_dir. Returns (exit code,
+	combined output, GITHUB_OUTPUT text). event_head_sha defaults to the
+	tip of the PR branch, as in a `pull_request` event."""
+	by_name = {step["name"]: step for step in _folded_job()["steps"]}
+	body = by_name["Enumerate added files in PR"]["run"]
+	assert ARCHIVAL_SCRATCH_DIR in body
+	body = body.replace(ARCHIVAL_SCRATCH_DIR, str(scratch_dir / "plan-archival-lint"))
+	github_output = scratch_dir / "github_output.txt"
+	github_output.write_text("", encoding="utf-8")
+	env = _git_test_env()
+	env["GITHUB_OUTPUT"] = str(github_output)
+	env["PLAN_ARCHIVAL_HEAD_SHA"] = event_head_sha or _git(repo_dir, "rev-parse", "pr-branch")
+	result = subprocess.run(
+		["bash", "-c", body], cwd=repo_dir, env=env, capture_output=True, text=True, timeout=60, check=False,
+	)
+	return result.returncode, result.stdout + result.stderr, github_output.read_text(encoding="utf-8")
+
+
+def _merge_commit_repo(root: Path, head_changes) -> Path:
+	"""A repository shaped like the `pull_request` checkout: a base commit
+	on `main`, one more base commit, a PR branch from the first, and HEAD on
+	the merge commit of the PR branch into `main`."""
+	repo_dir = root / "repo"
+	repo_dir.mkdir()
+	_git(repo_dir, "init", "-q", "-b", "main")
+	(repo_dir / "docs" / "plans").mkdir(parents=True)
+	(repo_dir / "docs" / "completed").mkdir(parents=True)
+	(repo_dir / "docs" / "plans" / "moved-plan.md").write_text("# plan\n\nbody line\n" * 20, encoding="utf-8")
+	(repo_dir / "docs" / "completed" / "old.md").write_text("old\n", encoding="utf-8")
+	_git(repo_dir, "add", "-A")
+	_git(repo_dir, "commit", "-q", "-m", "base")
+	_git(repo_dir, "checkout", "-q", "-b", "pr-branch")
+	head_changes(repo_dir)
+	_git(repo_dir, "add", "-A")
+	_git(repo_dir, "commit", "-q", "-m", "head")
+	_git(repo_dir, "checkout", "-q", "main")
+	# A file added on the base after the branch point is not the PR's.
+	(repo_dir / "docs" / "completed" / "base-only.md").write_text("base\n", encoding="utf-8")
+	_git(repo_dir, "add", "-A")
+	_git(repo_dir, "commit", "-q", "-m", "base moves on")
+	_git(repo_dir, "merge", "-q", "--no-ff", "-m", "merge", "pr-branch")
+	return repo_dir
+
+
+def test_enumerate_step_lists_what_the_pr_adds() -> None:
+	def _moves_a_plan_and_adds_code(repo_dir: Path) -> None:
+		# `git mv` into docs/completed/ is an archival: git reports it as
+		# a rename, which the old workflow's `--diff-filter=A` dropped.
+		_git(repo_dir, "mv", "docs/plans/moved-plan.md", "docs/completed/moved-plan.md")
+		(repo_dir / "docs" / "completed" / "plän.md").write_text("new\n", encoding="utf-8")
+		(repo_dir / "new_code.py").write_text("x = 1\n", encoding="utf-8")
+		# A rename inside docs/completed/ is not an archival.
+		_git(repo_dir, "mv", "docs/completed/old.md", "docs/completed/renamed.md")
+
+	with tempfile.TemporaryDirectory() as tmp:
+		repo_dir = _merge_commit_repo(Path(tmp), _moves_a_plan_and_adds_code)
+		rc, output, github_output = _run_enumerate_step(repo_dir, Path(tmp))
+		assert rc == 0, output
+		added = (Path(tmp) / "plan-archival-lint" / "added.txt").read_text(encoding="utf-8").splitlines()
+		assert sorted(added) == ["docs/completed/moved-plan.md", "docs/completed/plän.md", "new_code.py"], added
+		assert github_output == "needed=true\n", github_output
+		assert "[lint_plan_archival] outcome=enumerated added_files=3 lint_needed=true" in output, output
+
+
+def test_enumerate_step_skips_the_lint_without_an_added_completed_file() -> None:
+	def _edits_and_deletes_only(repo_dir: Path) -> None:
+		(repo_dir / "docs" / "completed" / "old.md").write_text("edited\n", encoding="utf-8")
+		(repo_dir / "new_code.py").write_text("x = 1\n", encoding="utf-8")
+		# Moving a plan out of docs/completed/ is not an archival either.
+		_git(repo_dir, "mv", "docs/plans/moved-plan.md", "docs/moved-plan.md")
+
+	with tempfile.TemporaryDirectory() as tmp:
+		repo_dir = _merge_commit_repo(Path(tmp), _edits_and_deletes_only)
+		rc, output, github_output = _run_enumerate_step(repo_dir, Path(tmp))
+		assert rc == 0, output
+		assert github_output == "needed=false\n", github_output
+		assert "lint_needed=false" in output, output
+
+
+def test_enumerate_step_fails_closed_without_a_merge_commit() -> None:
+	def _adds_a_completed_plan(repo_dir: Path) -> None:
+		(repo_dir / "docs" / "completed" / "x.md").write_text("new\n", encoding="utf-8")
+
+	with tempfile.TemporaryDirectory() as tmp:
+		repo_dir = _merge_commit_repo(Path(tmp), _adds_a_completed_plan)
+		_git(repo_dir, "checkout", "-q", "--detach", "pr-branch")
+		rc, output, github_output = _run_enumerate_step(repo_dir, Path(tmp))
+		assert rc == 1, output
+		assert "outcome=not_a_merge_commit" in output, output
+		assert github_output == "", "a failed enumerate step must not report needed=false"
+
+
+def test_enumerate_step_fails_closed_on_a_stale_merge_commit() -> None:
+	"""A merge ref GitHub has not rebuilt merges the previous head: its diff
+	would miss what the new push added."""
+	def _adds_a_completed_plan(repo_dir: Path) -> None:
+		(repo_dir / "docs" / "completed" / "x.md").write_text("new\n", encoding="utf-8")
+
+	with tempfile.TemporaryDirectory() as tmp:
+		repo_dir = _merge_commit_repo(Path(tmp), _adds_a_completed_plan)
+		rc, output, github_output = _run_enumerate_step(repo_dir, Path(tmp), event_head_sha="0" * 40)
+		assert rc == 1, output
+		assert "outcome=stale_merge_commit" in output, output
+		assert github_output == ""
+
+
+def test_enumerate_step_fails_closed_on_an_unlistable_path() -> None:
+	"""The lint script reads one path per line. A line break in the name of
+	a file added under docs/completed/ cannot be passed that way, also when
+	another added file there is listable."""
+	def _adds_a_plan_with_a_newline_in_its_name(repo_dir: Path) -> None:
+		(repo_dir / "docs" / "completed" / "a\nb.md").write_text("new\n", encoding="utf-8")
+		(repo_dir / "docs" / "completed" / "ok.md").write_text("fine\n", encoding="utf-8")
+
+	with tempfile.TemporaryDirectory() as tmp:
+		repo_dir = _merge_commit_repo(Path(tmp), _adds_a_plan_with_a_newline_in_its_name)
+		rc, output, github_output = _run_enumerate_step(repo_dir, Path(tmp))
+		assert rc == 1, output
+		assert "outcome=enumerate_failed exit_code=3" in output, output
+		assert github_output == ""
 
 
 def test_readiness_step_matches_the_label_workflow() -> None:
@@ -168,7 +378,7 @@ def test_readiness_step_matches_the_label_workflow() -> None:
 def test_step_ids_are_unique() -> None:
 	step_ids = [step["id"] for step in _folded_job()["steps"] if "id" in step]
 	assert len(step_ids) == len(set(step_ids)), step_ids
-	assert set(step_ids) == {"checkout"} | LINT_GROUP_STEP_IDS | READINESS_GROUP_STEP_IDS
+	assert set(step_ids) == {"checkout"} | LINT_GROUP_STEP_IDS | ARCHIVAL_GROUP_STEP_IDS | READINESS_GROUP_STEP_IDS
 
 
 def test_run_bodies_carry_no_expressions() -> None:
