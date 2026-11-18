@@ -54,7 +54,8 @@
 #     jobs can be compared;
 #   - GitHub reports the PR as not mergeable during the attempts while the
 #     tip is still the pin (`outcome=conflict reason=not_mergeable`; once the
-#     tip has moved past the pin, the local merge into the pin decides), or
+#     tip has moved past the pin, or when the tip cannot be re-read after
+#     that answer, the local merge into the pin decides), or
 #     the local merge conflicts (`.gitattributes` merge drivers are ignored)
 #     (`outcome=conflict reason=merge_conflict`): `::error::` and exit 1;
 #   - the local merge cannot be built (`outcome=stale` with reason
