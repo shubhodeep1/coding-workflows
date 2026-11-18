@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add `.github/ai/alert_inbox.json` with both switches off (`capture_enabled: false`, `route_warning_error_to_inbox: false`) and three non-empty path lists (`pipeline_self_files`, `break_glass_allowed_paths`, `break_glass_denied_paths`) so `test_shipped_config_is_off` passes and the change has no effect on consumers.\" (linked issue #9608 Suggested Fix #1)\n  expected_change_site: new file `.github/ai/alert_inbox.json` at the repository root\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: PR DIFF modifies only `docs/INVENTORY.md`; LAST RUN DIFF modifies only `.github/workflows/alert-inbox-intake.yml`; neither creates `.github/ai/alert_inbox.json`, glob finds no `.github/ai/*.json`, `.github/workflows/alert-inbox-intake.yml:9` references the file, `tests/test_tg_helpers_alert_inbox.py:410` reads it and will raise FileNotFoundError, `docs/INVENTORY.md:121` lists it as a trusted input (severity BLOCKER)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: \"Add `.github/ai/alert_inbox.json` with both switches off (`capture_enabled: false`, `route_warning_error_to_inbox: false`) and three non-empty path lists (`pipeline_self_files`, `break_glass_allowed_paths`, `break_glass_denied_paths`) so `test_shipped_config_is_off` passes and the change has no effect on consumers.\" (linked issue #9608 Suggested Fix #1, also listed under AFFECTED_FILES)\n  Expected change site: new file `.github/ai/alert_inbox.json` at the repository root\n  Evidence of absence: PR DIFF modifies only `docs/INVENTORY.md`; LAST RUN DIFF modifies only `.github/workflows/alert-inbox-intake.yml` (two comment/string rewording lines); neither creates `.github/ai/alert_inbox.json`. `glob` for `.github/ai/alert_inbox.json` and `.github/ai/*.json` returns no files. `.github/workflows/alert-inbox-intake.yml:9` explicitly references the file. `tests/test_tg_helpers_alert_inbox.py:410` reads the file directly and will keep raising `FileNotFoundError`. PR description lists `tests/test_alert_inbox_store.py::test_consumer_repo_is_allowed` under \"Failures caused by this change\". `docs/INVENTORY.md:121` lists the file as a trusted input.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===",
+  "fingerprint": "5d78e1516b37ce969084d3ada866479511960e1f2c11cc0c2b5388e228da24c9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9614,
+    "run_id": "44242341986",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44242341986",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118074940_e0882024cd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9614,
+    "run_id": "44242341986"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T07:49:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
