@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue change?\nChoices:\nA) One specific workflow or pipeline phase (clarify, plan, implement, review/autofix, orchestrate, validate). Name it in your answer. (RECOMMENDED)\nB) A specific script or helper under `scripts/`. Name the file.\nC) Documentation only (README.md, `docs/`, or an agents.d fragment).\nD) Something else. Describe it in your answer.\nQ2: What problem should the change fix?\nChoices:\nA) A bug or a failure that keeps coming back. Give a run ID, error text or steps to reproduce it. (RECOMMENDED)\nB) Cost or speed: fewer Actions runs, less runner time, fewer tokens or GitHub API calls.\nC) A new capability or behaviour. Describe what it should do.\nD) Readability or maintainability, with the current behaviour left exactly as it is.\nQ3: How should we judge that the work is finished?\nChoices:\nA) A specific, observable result you state in your answer, such as a named failure no longer happening or a check passing. (RECOMMENDED)\nB) A number you can measure, such as a percentage or count reduction you state in your answer.\nC) No set target. The plan phase proposes how to judge it and you approve that before implementation starts.",
+  "fingerprint": "014c412b6d852194d09fa0aa6b0df7f122473460712a9355af9621086631ee2f",
+  "lineage": {
+    "issue_number": 9739,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44385706507",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44385706507",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261118202354_0c9524b8ab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9739,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44385706507"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9739 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-18T20:23:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
