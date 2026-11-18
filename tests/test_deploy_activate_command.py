@@ -224,6 +224,7 @@ def test_one_session_keeps_its_log_updates_in_one_pull_request(command: Path) ->
 		"CLAUDE.md §21.A",
 		"then open one new draft PR for the updates that remain",
 		"If it was closed without merging, its log commits never reached the default branch, so do not drop them",
+		"skip that `git checkout -B` reset and instead rebase the branch onto the latest default branch",
 		"if that rebase conflicts, run `git rebase --abort`, stop, and tell me before you commit or open any PR.",
 		"merge that branch into your working branch before your first log commit",
 		"closing it yourself is ask-first (CLAUDE.md §23.C)",
