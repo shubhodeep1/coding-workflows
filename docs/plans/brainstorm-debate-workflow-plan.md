@@ -150,7 +150,7 @@ User decisions (interactive clarification, 2026-11-11):
 - **§14.** The wrapper reaches every `full`-profile consumer in
   `.github/ai/consumer_repos.json` on the next `@stable` sync and stays inert
   there until the consumer sets `BRAINSTORM_ENABLED=true`.
-- **§26 (runner concurrency).** The template's caller job carries
+- **§33 (runner concurrency).** The template's caller job carries
   `if: vars.BRAINSTORM_ENABLED == 'true'`, so an opted-out consumer takes no
   runner slot; the daily schedule still records one skipped run there, which
   is accepted because the profile is synced before the consumer opts in. Jobs
@@ -181,7 +181,12 @@ User decisions (interactive clarification, 2026-11-11):
   more paginated list call under its concurrency group to recheck the topic's
   active session before it creates or resumes one. Resume reads the session
   issue's comments once per run (paginated). Turns are posted as they finish
-  (one create call each); nothing polls.
+  (one create call each); nothing polls. The recheck and comments read are per
+  `session` job, so a run pays them once per due or resumed topic. The outcome
+  step adds writes after its one query: per session read, at most one body
+  edit (`checked`, plus `tracking` when found); per abandoned or reviewed
+  session, one label add and one close. At the 10-session cap that is at most
+  10 body edits and 20 label/close calls per run.
 - **§18.** No manual script. Everything runs from the wrapper's `schedule`,
   `workflow_dispatch` and `issue_comment` triggers.
 - **§19.** The hand-off references the tracking issue only with `Refs #N`; the
@@ -215,7 +220,10 @@ session (per topic, max-parallel 1, concurrency group per topic)
      open a new session issue (mode=new) or continue the in-progress one
      (mode=resume)  (marker <!-- ai-brainstorm:v1 topic=… -->)
   3. collect data: brief collector, default-branch checkout, BRAINSTORM_DATA_SECRETS only
-  4. outcome review for eligible shipped ideas (both seats, one joint comment)
+  4. outcome review for eligible shipped ideas: each seat writes its own
+       assessment (blind, like ideas); the host stitches both into one
+       comment with seat=host stage=outcome, and the ledger outcome summary
+       records both seats' verdicts
   5. ideas round: both seats in parallel, blind → 2 comments
   6. debate rounds 1..N: each seat sees both idea lists + previous rounds,
        critiques, may request data, then votes (independently)
@@ -370,9 +378,13 @@ A missing or invalid brief is skipped with
 ### Persistence on the session issue
 
 - Issue title `Brainstorm: <topic> — <YYYY-MM-DD>`, labels `ai:brainstorm`
-  (+ state label), body holds the marker
-  `<!-- ai-brainstorm:v1 topic=<t> session=<id> state=<s> -->` and the key
-  points as the session advances (edited, not appended).
+  (+ state label), body holds the marker in its full format from "Ledger and
+  outcomes" (`topic`, `session`, `state`, `approved`, `tracking`, `checked`,
+  `ledger`; fields not yet known are omitted, never written empty) and the key
+  points as the session advances (edited, not appended). The engine always
+  writes the marker as the body's first line, and replaces `<!--` and `-->`
+  in model-authored key-points text before composing the body, so no forged
+  marker can precede the real one.
 - Each turn is one comment beginning with
   `<!-- ai-brainstorm-turn:v1 session=<id> stage=<ideas|round|vote|data|plan|outcome> round=<n> seat=<claude|chatgpt|host> -->`,
   followed by readable markdown and a collapsed JSON block. Resume rebuilds the
@@ -429,7 +441,8 @@ On `/brainstorm-approve` (author association `OWNER`, issue labelled
 `ai:brainstorm-awaiting-approval`, plan PR still open), the job:
 
 1. claims the session by swapping `ai:brainstorm-awaiting-approval` for
-   `ai:brainstorm-approved` before dispatching. The `command` job runs in the
+   `ai:brainstorm-approved` and writing `approved=<now, UTC>` into the body
+   marker before dispatching (a failed dispatch removes it again). The `command` job runs in the
    per-issue concurrency group `brainstorm-cmd-${{ github.repository }}-<issue>`
    with `cancel-in-progress: false`, so a second approve sees the claimed
    label and exits with `outcome=already_approved`;
@@ -454,10 +467,11 @@ target is `internal-orchestrate.yml`.
 
 The gate's paginated issues list gives every session for the repo, including
 issue bodies. The ledger fields live in each session issue's body marker,
-`<!-- ai-brainstorm:v1 topic=<t> session=<id> state=<s> tracking=<N> checked=<YYYY-MM-DD> ledger=<b64> -->`,
+`<!-- ai-brainstorm:v1 topic=<t> session=<id> state=<s> approved=<YYYY-MM-DDTHH:MM:SSZ> tracking=<N> checked=<YYYY-MM-DD> ledger=<b64> -->`,
 which the engine edits as the session advances. Only `topic` (brief-schema
-pattern), `session`, `state` (fixed enum), `tracking` (digits) and `checked`
-(date) are plain values. The free-text fields (idea title, expected impact,
+pattern), `session`, `state` (fixed enum), `approved` (UTC timestamp written
+by the approve step when it claims the session), `tracking` (digits) and
+`checked` (date) are plain values. The free-text fields (idea title, expected impact,
 outcome summary) are one JSON object in `ledger`, base64url-encoded without
 padding, so model text cannot put `-->`, spaces, `=` or a second marker inside
 the marker. The parser takes only the first `ai-brainstorm:v1` marker in the
@@ -484,12 +498,14 @@ session, `timelineItems(itemTypes: [CROSS_REFERENCED_EVENT], first: 100)` with
 the source issue's number, labels, `createdAt` and `closedAt`, so turn
 comments and label events cannot push the cross-reference off the page. For a
 session without `tracking`, the gate takes the earliest source issue labelled
-`ai:orchestrator-tracking` and created after the approval, and writes
+`ai:orchestrator-tracking` whose `createdAt` is after the marker's
+`approved` timestamp, and writes
 `tracking=<N>`. Every session read gets `checked=<today>`, which rotates the
 next run onto the others. A session becomes outcome-eligible when its
 tracking issue's `closedAt` is at least `BRAINSTORM_OUTCOME_DELAY_DAYS` old.
 A pending session whose tracking issue is still open or was never found
-90 days after approval gets the outcome `abandoned` without a review, the
+90 days after the marker's `approved` timestamp gets the outcome `abandoned`
+without a review, the
 label, and a closed issue, so it stops taking a slot. A failed query skips
 outcomes for that run (`BRAINSTORM gate outcome=outcome_query_failed`, fail
 open). After an outcome review, the engine writes the outcome summary into
@@ -560,6 +576,8 @@ it.
    `prompts/mode-brainstorm-{ideas,round,vote,plan-draft,plan-review,outcome}.txt`,
    roles `BRAINSTORM` / `BRAINSTORM_CHATGPT` in `scripts/claude_engine.py` and
    `.github/ai/claude_engine.json`, `ai-memory/schemas/brainstorm_brief.v1.json`.
+   Each new prompt and script gets its `docs/INVENTORY.md` entry ("Phase
+   prompts", "Scripts") in the same phase, so `tests/inventory_parity.py` passes.
    Done: `tests/test_brainstorm_engine.py` green; `tests/test_claude_engine.py`
    updated only by adding `BRAINSTORM` to `CUTOVER_ROLES`, with all of its
    other assertions unchanged and green; nothing calls the engine.
@@ -577,7 +595,8 @@ it.
    session jobs), `internal-brainstorm.yml`, `workflow-templates/ai-brainstorm.yml`
    (schedule + dispatch), `profiles/full.txt`, `scripts/brainstorm_gate.py`,
    `scripts/brainstorm_step_*.sh`, broker allowlist entry + broker test,
-   labels, `clarify.yml` skip, docs. Done: with the `enabled` input false
+   labels, `clarify.yml` skip, docs, `docs/INVENTORY.md` entries for the new
+   workflows and step scripts. Done: with the `enabled` input false
    (`BRAINSTORM_ENABLED` unset) the gate exits `outcome=disabled`; a dispatched
    `internal-brainstorm.yml` smoke run (it passes `enabled: true`,
    `brief_dir: tests/fixtures/brainstorm` and `stub_seats: true`, Phase 2
@@ -592,7 +611,7 @@ it.
    `tests/test_brainstorm_handoff.py` green (non-owner, wrong label, closed PR
    and `/approved` all ignored; approve composes the documented description and
    dispatch); a command on an issue without a session marker exits
-   `outcome=no_session`.
+   `outcome=no_session`. `docs/INVENTORY.md` gains the hand-off script.
    Rollback: revert; sessions then stop at awaiting-approval.
 
 ## Implementation Steps
@@ -611,8 +630,9 @@ it.
    add `BRAINSTORM` to `CUTOVER_ROLES`, the only test that pins the Claude-role
    set (`assert on_claude == CUTOVER_ROLES`).
 2. `ai-memory/schemas/brainstorm_brief.v1.json` [new]: the brief schema above.
-3. `prompts/mode-brainstorm-*.txt` [new]: one per stage, each ending with the
-   JSON output contract; shared rules (untrusted data, scorecard, no credential
+3. `prompts/mode-brainstorm-*.txt` [new]: one per stage, each starting with
+   `# tier: DEFAULT` (and within its 250 lines, `tests/prompt_size_budget.py`)
+   and ending with the JSON output contract; shared rules (untrusted data, scorecard, no credential
    requests, default-off rollout) in `prompts/_prelude_brainstorm.txt` [new].
 4. `scripts/brainstorm_engine.py` [new]: subcommands `next` (given the issue's
    comments JSON and the brief, print the next action), `render` (turn →
@@ -692,14 +712,20 @@ it.
    passes `enabled: true`, `brief_dir: tests/fixtures/brainstorm`,
    `stub_seats: true`) and
    `workflow-templates/ai-brainstorm.yml` [new] (schedule + dispatch,
-   `id-token: write`, caller job `if: vars.BRAINSTORM_ENABLED == 'true'` so an
-   opted-out consumer takes no runner (§26), passes
+   `permissions:` `contents: write`, `issues: write`, `pull-requests: write`,
+   `id-token: write`, the same set as `brainstorm.yml`, because a caller's
+   permissions cap the called workflow's token; one caller job `brainstorm` `if: vars.BRAINSTORM_ENABLED == 'true'` so an
+   opted-out consumer takes no runner (§33), passes
    `enabled: ${{ vars.BRAINSTORM_ENABLED == 'true' }}`, forwards only `GH_PAT`,
    `TG_BOT_SECRET`, `BRAINSTORM_DATA_SECRETS`, `AI_COMMENT_SIGNING_SECRET`);
    add `ai-brainstorm.yml` to `workflow-templates/profiles/full.txt`.
 8. `tools/claude-pool-broker/src/index.ts`: add `brainstorm.yml` to
    `ALLOWED_WORKFLOW_FILES`; update broker tests and `tests/test_claude_pool_token.py`.
-9. `.github/ai/label_contract.v1.json`: the seven labels.
+9. `.github/ai/label_contract.v1.json`: the seven labels, and the same seven
+   with identical colors and descriptions in `scripts/label_helpers.sh`
+   (`_AI_LABEL_COLORS`, `_AI_LABEL_DESCS`), which
+   `tests/test_ai_labels.py::test_contract_labels_match_helper_color_and_description_catalogs`
+   keeps equal to the contract.
    `.github/workflows/clarify.yml`: add
    `!contains(toJson(github.event.issue.labels.*.name), 'ai:brainstorm')` to the
    `issues`/`opened` label-exclusion clause of the `clarify` job's `if:`
@@ -724,21 +750,29 @@ it.
 
 ### Phase 3
 
-1. `workflow-templates/ai-brainstorm.yml`: add `issue_comment: types: [created]`,
-   with job `if:` requiring `vars.BRAINSTORM_ENABLED == 'true'`,
+1. `workflow-templates/ai-brainstorm.yml`: add `issue_comment: types: [created]`
+   and a second caller job `brainstorm-command` (same permissions and secrets,
+   `event_name: issue_comment`). The Phase 2 caller job `brainstorm` gains
+   `github.event_name != 'issue_comment'` in its `if:`, so schedule and
+   dispatch runs, where `github.event.issue` is absent, are unaffected.
+   `brainstorm-command`'s `if:` requires `github.event_name == 'issue_comment'`,
+   `vars.BRAINSTORM_ENABLED == 'true'`,
    `github.event.issue.pull_request == null`, label
    `ai:brainstorm`, `github.event.comment.user.type == 'User'`,
    `github.event.comment.author_association == 'OWNER'`, and a body starting
    with `/brainstorm-`. A non-owner comment then starts no job and holds no
    secret or runner slot.
 2. `.github/workflows/brainstorm.yml`: job `command` (runs when
-   `event_name == 'issue_comment'`), concurrency group
+   `event_name == 'issue_comment'`; `gate` and `session` gain
+   `inputs.event_name != 'issue_comment'`, so a command comment never runs the
+   due calculation or starts a session leg), concurrency group
    `brainstorm-cmd-${{ github.repository }}-<issue>` with
    `cancel-in-progress: false`: pick → reuse the session job's plan steps
    for the chosen position; approve / reject → `scripts/brainstorm_handoff.py`.
 3. `scripts/brainstorm_handoff.py` [new]: parse the command; re-check
    `author_association == OWNER` (defence in depth) and the matching state
-   label; for approve, follow the Hand-off order: claim the label, mark the PR
+   label; for approve, follow the Hand-off order: claim the label and write
+   `approved` into the marker, mark the PR
    ready, dispatch `ai-orchestrate.yml` (or `internal-orchestrate.yml`) with
    `engine=claude` and the `tracking_comment` ref, and restore the label and
    draft state on dispatch failure. Refuse when the PR is merged or closed. For
@@ -752,7 +786,10 @@ it.
    once; a dispatch failure restores the label; a merged plan PR is refused;
    tracking discovery from a fixture timeline; three long-open projects do not
    starve a fourth pending session; a test pins `tracking_comment` forwarding
-   in `workflow-templates/ai-orchestrate.yml` and `internal-orchestrate.yml`.
+   in `workflow-templates/ai-orchestrate.yml` and `internal-orchestrate.yml`;
+   tracking discovery ignores a tracking issue created before `approved`; a
+   template test that `brainstorm` skips `issue_comment` and only
+   `brainstorm-command` runs on it.
    Docs and changelog fragment.
 
 ## Files & Modules
@@ -771,12 +808,14 @@ it.
 - `scripts/review_untrusted_sandbox.sh` (Phase 1b, optional `CHATGPT_SEAT_*` inputs)
 - `.github/ai/claude_engine.json`
 - `tests/test_claude_engine.py` (`CUTOVER_ROLES` gains `BRAINSTORM`)
-- `.github/ai/label_contract.v1.json`
+- `.github/ai/label_contract.v1.json`, `scripts/label_helpers.sh` (label catalogs)
 - `ai-memory/schemas/brainstorm_brief.v1.json` [new]
 - `prompts/_prelude_brainstorm.txt`, `prompts/mode-brainstorm-*.txt` [new]
 - `tools/claude-pool-broker/src/index.ts` and its tests
 - `tests/test_brainstorm_engine.py`, `tests/test_brainstorm_gate.py`,
   `tests/test_brainstorm_handoff.py` [new]; `tests/test_claude_pool_token.py`
+- `docs/INVENTORY.md` (Phase 1: prompts, engine and seat scripts; Phase 2:
+  workflows, gate and step scripts; Phase 3: hand-off script)
 - `docs/brainstorm.md` [new], `README.md`, `agents.d/<N>-brainstorm*.md` [new],
   `changelog.d/<N>-brainstorm*.md` [new]
 
@@ -790,8 +829,9 @@ None in this repo (no MongoDB). State lives in GitHub issues and labels.
   (Phase 1); gate scheduling and API-call count (Phase 2); command parsing,
   author/label checks, description composition, §19 lint (Phase 3).
 - Integration: `internal-brainstorm.yml` dispatch with a fixture brief in this
-  repo's `tests/fixtures/brainstorm/` and stub seats (`BRAINSTORM_STUB_SEATS=true`
-  honoured only in this repo's internal wrapper), proving issue, turns, plan PR
+  repo's `tests/fixtures/brainstorm/` and stub seats (the `stub_seats: true`
+  input, the only stub channel, honoured only when `github.workflow_ref` names
+  this repo's `internal-brainstorm.yml`), proving issue, turns, plan PR
   and report end to end without pool usage.
 - Existing: wrapper integrity, profile manifests, broker allowlist parity,
   label contract, workflow size (§27).
