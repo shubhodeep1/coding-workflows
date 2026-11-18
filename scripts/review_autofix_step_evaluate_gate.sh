@@ -8,6 +8,9 @@
 # the SHA-verified .codex-head-gate-src sparse checkout (pinned to
 # review_support_sha), never from a PR-head copy or SUPPORT_SCRIPTS_DIR.
 set -euo pipefail
+# Signed job-token comments (run-volume plan item 15): route this script's
+# gh comment calls through the shim even when no earlier step loaded it.
+[ -z "${BASH_SOURCE[0]:-}" ] || AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" >/dev/null 2>&1 || true
 
 SHOULD_RUN="true"
 POST_MERGE_DISPATCH="false"
@@ -1849,6 +1852,41 @@ PY
   fi
 fi
 
+# ----- Final-CI repair delta review (docs/plans/final-ci-failure-ci-fix-plan.md Phase 3) -----
+# A head that is a verified final-CI repair commit (review_head_gate.sh
+# final-ci-repair: trusted marker with repair=<head>, single parent `from`,
+# pipeline committer, `from` approved by a pipeline head-gate success) is
+# reviewed on its own diff: output review_diff_base_sha=<from>, which the
+# "Generate diff context" step uses for the reviewer diff and file list.
+# The panel, editor and head-gate posting are unchanged (Q8: A).
+# Switch: FINAL_CI_REPAIR_DELTA_REVIEW_ENABLED (default true). Cost
+# (CLAUDE.md §15): the shared marker comments; the helper's two reads run
+# only when a trusted repair marker names the current head. Anything else
+# leaves the output empty (full merge-base review).
+REVIEW_DIFF_BASE_SHA=""
+final_ci_delta_switch="$(printf '%s' "${FINAL_CI_REPAIR_DELTA_REVIEW_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
+case "${final_ci_delta_switch}" in
+  ''|true) final_ci_delta_switch=true ;;
+  false) ;;
+  *) echo "::warning::FINAL_CI_REPAIR_DELTA_REVIEW_ENABLED has an unrecognised value; repair heads are reviewed in full. Use true or false." ;;
+esac
+if [ "${SHOULD_RUN}" = "true" ] && [ "${FINAL_CI_REPAIR}" != "true" ] \
+  && [ "${final_ci_delta_switch}" = "true" ] \
+  && [ "${HEAD_GATE_HELPER_VERIFIED:-false}" = "true" ] \
+  && [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]] && [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
+  gate_fetch_marker_comments
+  if [ "${gate_marker_fetch_state}" = "ok" ] && [ -n "${gate_marker_author_login}" ] \
+    && grep -Fq "repair=${pr_head_sha_gate} " "${gate_marker_comments_file}" 2>/dev/null; then
+    final_ci_delta_out="$(bash .codex-head-gate-src/scripts/review_head_gate.sh final-ci-repair "${REPOSITORY}" "${PR_NUMBER}" \
+      "${pr_head_sha_gate}" "${gate_marker_author_login}" "${gate_marker_comments_file}" 2>/dev/null || true)"
+    printf '%s\n' "${final_ci_delta_out}" | grep '^REVIEW_HEAD_GATE ' || true
+    final_ci_delta_from="$(printf '%s\n' "${final_ci_delta_out}" | sed -n 's/^final_ci_repair_from=\([0-9a-f]\{40\}\)$/\1/p' | tail -n 1)"
+    if [[ "${final_ci_delta_from}" =~ ^[0-9a-f]{40}$ ]]; then
+      REVIEW_DIFF_BASE_SHA="${final_ci_delta_from}"
+    fi
+  fi
+fi
+
 echo "should_run=${SHOULD_RUN}" >> "${GITHUB_OUTPUT}"
 echo "post_merge_dispatch=${POST_MERGE_DISPATCH}" >> "${GITHUB_OUTPUT}"
 echo "skip_reason=${SKIP_REASON}" >> "${GITHUB_OUTPUT}"
@@ -1874,6 +1912,7 @@ echo "base_retargeted=${pr_base_retargeted}" >> "${GITHUB_OUTPUT}"
 echo "base_sha=${pr_base_sha_gate}" >> "${GITHUB_OUTPUT}"
 echo "final_ci_repair=${FINAL_CI_REPAIR}" >> "${GITHUB_OUTPUT}"
 echo "final_ci_repair_attempt=${FINAL_CI_REPAIR_ATTEMPT}" >> "${GITHUB_OUTPUT}"
+echo "review_diff_base_sha=${REVIEW_DIFF_BASE_SHA}" >> "${GITHUB_OUTPUT}"
 printf 'post_merge_pr_text_json=%s\n' "${POST_MERGE_PR_TEXT_JSON}" >> "${GITHUB_OUTPUT}"
 printf 'post_merge_linked_issues_json=%s\n' "${POST_MERGE_LINKED_ISSUES_JSON}" >> "${GITHUB_OUTPUT}"
 echo "post_merge_validate_context_definitely_empty=${POST_MERGE_VALIDATE_CONTEXT_DEFINITELY_EMPTY}" >> "${GITHUB_OUTPUT}"
