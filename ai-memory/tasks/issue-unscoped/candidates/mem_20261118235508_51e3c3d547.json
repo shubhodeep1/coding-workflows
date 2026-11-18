@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ci_final_merge_ref_fresh.sh:181-183 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The final-CI merge-ref freshness gate exhausted its refresh attempts and returned nonzero (`outcome=stale reason=not_refreshed`), so all 38 failed check-runs stopped before any test ran.\n  WHY: Severity disagreement: minimax_minimax-m3 rated it NIT and openai_gpt-6-luna rated it MAJOR, so the highest is used. Both reviewers say the cause is a stale merge ref, the script is outside the PR's changed files, and it is not a defect in the PR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/ci_final_merge_ref_fresh.sh:181-183 | severity=NIT | confidence=5\n  PROBLEM: All 38 failed check-runs on head d8173de77264 stop in this gate before any test runs, so the PR has no green final-CI test result.\n  WHY: The merge ref still merged the head into base 7ab9c01 while `main` had advanced to 2f85192, and after six refresh attempts the script returns 1. The gate is not in the PR's changed files and its own message says it is not a defect in the PR, so no change to this PR is warranted.\n- scripts/unblock_judge.sh:1808-1809 | severity=hardening | confidence=\n  PROBLEM: The single log reason `read_failed` covers both a missing issue (HTTP 404) and an API failure after retries (5xx, rate limit).\n  WHY: An operator reading the workflow log cannot tell a dead branch reference from a transient API outage. The suggested fix is to capture the read's exit status and log `rc=${chain_title_rc}` (about 3 lines).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/ci_final_merge_ref_fresh.sh:181-183 | severity=MAJOR | confidence=5\n  PROBLEM: The supplied final CI run could not complete validation: the merge-ref freshness check exhausted its refresh attempts and returned failure.\n  WHY: The merge ref still targeted an outdated base, so this branch returns nonzero before the test jobs run. The failure is a stale merge-ref condition, not a defect in the PR changes.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "329486712e8a6f3959b3368b09752df8596d0a0d280c20222177731521bd168b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9685,
+    "run_id": "44389818569",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44389818569",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118235508_51e3c3d547",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9685,
+    "run_id": "44389818569"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T23:55:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
