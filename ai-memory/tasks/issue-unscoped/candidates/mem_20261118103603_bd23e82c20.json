@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (not a finding): file: tests/test_prepush_affected_tests.py, covering scripts/prepush_test_gate_run.sh; location: the wrapper's prune-failure branch, prepush_test_gate_run.sh lines 272-279 | HARDENING_RISK_SCORE: 1\n  PROBLEM: No test drives the wrapper into the prune-failure branch, so neither the outcome=warning reason=baseline_filter_detail detail=<code> log line nor the synthetic reason=baseline_filter_failed result is pinned by a test, although agents.d lists both as contractual log output.\n  WHY: Suggested minimal fix: add one wrapper test using _repo, _commit, _wrapper_env and _run_wrapper that deletes \"${root}/manifest.json.admitted_commands.json\" after the snapshot (or that points at a copy of review_untrusted_workspace.py whose prune_gate_baseline raises ValueError(\"admitted command inventory missing\")). It should assert that stderr contains \"reason=baseline_filter_detail detail=admitted_inventory_missing\" and that result[\"reason\"] == \"baseline_filter_failed\". About 10 to 15 lines, test only.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING_SUGGESTION (not a finding): file: tests/test_prepush_affected_tests.py; location: wrapper-level tests (near test_wrapper_gate_trees_hold_tracked_assets_and_drop_credential_paths, line ~1700); the covered wrapper path is scripts/prepush_test_gate_run.sh:272-278 | HARDENING_RISK_SCORE: 1\n  PROBLEM: The new wrapper log contract `outcome=warning reason=baseline_filter_detail detail=<code>`, followed by the synthetic `baseline_filter_failed` result (scripts/prepush_test_gate_run.sh:272-278), has no wrapper-level regression test. The only coverage is the module-level subprocess test `test_prune_gate_baseline_applies_the_snapshot_filter`, which checks the module's stderr but not the wrapper's log line or result.json.\n  WHY: The agents.d/9672 fragment declares this line under \"Stable log prefixes (contractual)\", and this repo pairs contractual log lines with tests. Suggested minimal fix: add one wrapper test that deletes the admitted-commands file before the prune runs, then asserts `PREPUSH_TEST_GATE phase=wrapper outcome=warning reason=baseline_filter_detail detail=admitted_inventory_missing` in stderr and `result[\"reason\"] == \"baseline_filter_failed\"` in result.json. About 30 lines, test only.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f3a08b16e29c731608a184abb4268a2bcd902bb632ea90d2f648c99eb13795f5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9691,
+    "run_id": "44270924781",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44270924781",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118103603_bd23e82c20",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9691,
+    "run_id": "44270924781"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T10:36:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
