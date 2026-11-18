@@ -43,7 +43,8 @@
 # or above AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS. The skipped tick spends no
 # attempt. Once the failure is older than the window, one cycle is dispatched
 # whatever the queue, so a deep queue delays a release (a hotfix on a new tip
-# included) by at most the window and never holds it for good; if that cycle
+# included) by at most the window (rounded up to the next 6-hour tick) and
+# never holds it for good; if that cycle
 # fails too, the window starts again. Only `queued` runs of this repository are
 # counted: `pending` runs wait for a concurrency group, not a runner, and other
 # repositories' queues are not readable from here.
@@ -138,18 +139,19 @@ fi
 
 # A malformed knob falls back to its default with a warning: the back-off and
 # the cleanup are additions to the dispatch decision and must not stop it.
+# The digit caps keep the 10# arithmetic below far from overflow.
 if ! [[ "${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS}" =~ ^[0-9]{1,6}$ ]]; then
-	echo "::warning::AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS is not a non-negative integer; using 100."
+	echo "::warning::AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS is not a non-negative integer of at most 6 digits; using 100."
 	AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS=100
 fi
 AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS=$((10#${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS}))
 if ! [[ "${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}" =~ ^[0-9]{1,5}$ ]]; then
-	echo "::warning::AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS is not a non-negative integer; using 24."
+	echo "::warning::AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS is not a non-negative integer of at most 5 digits; using 24."
 	AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS=24
 fi
 AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS=$((10#${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}))
 if ! [[ "${AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX}" =~ ^[0-9]{1,3}$ ]]; then
-	echo "::warning::AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX is not a non-negative integer; using 30."
+	echo "::warning::AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX is not a non-negative integer of at most 3 digits; using 30."
 	AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX=30
 fi
 AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX=$((10#${AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX}))

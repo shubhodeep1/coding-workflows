@@ -434,8 +434,8 @@ def test_queue_back_off_fails_open_and_can_be_disabled() -> None:
 		({"queued_error": True}, None, f"AUTO_RELEASE_QUEUE_CHECK outcome=read_failed lookup=queued_runs last_run={GATE_RUN}", True),
 		({}, {"AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS": "0"}, f"AUTO_RELEASE_DISPATCHED sha={TIP}", True),
 		({}, {"AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS": "0"}, "AUTO_RELEASE_QUEUE_CHECK outcome=not_recent", True),
-		({}, {"AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS": "many"}, "AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS is not a non-negative integer; using 100.", False),
-		({}, {"AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS": "soon"}, "AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS is not a non-negative integer; using 24.", False),
+		({}, {"AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS": "many"}, "AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS is not a non-negative integer of at most 6 digits; using 100.", False),
+		({}, {"AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS": "soon"}, "AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS is not a non-negative integer of at most 5 digits; using 24.", False),
 	):
 		with tempfile.TemporaryDirectory() as tmp:
 			proc, final = _run(Path(tmp), _state(**base, **overrides), env=env)
@@ -515,12 +515,27 @@ def test_fixtures_of_gate_runs_on_other_branches_and_of_cancelled_runs_are_close
 
 
 def test_fixture_cleanup_is_skipped_when_no_gate_run_failed() -> None:
-	for runs in ([], [_failed_gate(conclusion="success")], [{**_failed_gate(), "status": "in_progress", "conclusion": None, "head_branch": "nope"}]):
+	for runs in ([], [_failed_gate(conclusion="success")]):
 		with tempfile.TemporaryDirectory() as tmp:
 			proc, final = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs, fixtures=_fixtures()))
 		assert proc.returncode == 0, proc.stderr
+		assert "AUTO_RELEASE_FIXTURE_CLEANUP" not in proc.stdout, runs
 		assert not any("search/issues" in path or path == "api user --jq .login // \"\"" for path in _api_paths(final)), runs
 		assert not final.get("closed"), runs
+		assert len(final["dispatches"]) == 1, runs
+
+
+def test_fixture_cleanup_does_not_run_while_a_gate_is_in_flight() -> None:
+	# A running gate still owns its fixtures: the in-flight skip comes before
+	# the cleanup, so even a failed earlier run's fixtures wait for a later tick.
+	running = {**_failed_gate(run_id=GATE_RUN + 5), "status": "in_progress", "conclusion": None}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[running, _failed_gate()], fixtures=_fixtures()))
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight" in proc.stdout
+	assert not any("search/issues" in path for path in _api_paths(final))
+	assert not final.get("closed")
+	assert not final.get("dispatches")
 
 
 def test_fixture_cleanup_never_blocks_the_dispatch() -> None:
