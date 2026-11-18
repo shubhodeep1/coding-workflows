@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add regression tests for the system-Python job's TMPDIR and shard count.\n  expected_change_site: tests/test_ci_job_split_contract.py, test_system_python_shard_keeps_default_tmpdir and test_system_python_shard_count_fits_the_job_budget\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff changes only tests/test_summarize_reviewer_consensus_sandbox_pin.py; it contains no hunk adding either named regression test. (severity=MAJOR)\n- requirement: Fix the ci.yml failure on main that predates PR #9495. Run the specified tests, compare against isolated-base, and fix each failure at its root cause.\n  expected_change_site: .github/workflows/ci.yml or tests/test_ci_job_split_contract.py\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: Neither file is changed in the PR diff, the PR description marks tests/test_ci_job_split_contract.py unmet, the supplied failed CI logs show stale merge-ref checks stopping jobs before the tests ran, and the diff contains no diagnosis or root-cause fix. (severity=MAJOR)\n- requirement: Use Refs #9472 and Refs #9495, not auto-close keywords.\n  expected_change_site: PR description\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The supplied PR description contains no references to #9472 or #9495. (severity=NIT)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \"Add regression tests for the system-Python job's TMPDIR and shard count.\"\n  Expected change site: `tests/test_ci_job_split_contract.py`, `test_system_python_shard_keeps_default_tmpdir` and `test_system_python_shard_count_fits_the_job_budget`.\n  Evidence of absence: The PR diff changes only `tests/test_summarize_reviewer_consensus_sandbox_pin.py`; it contains no hunk adding either named regression test.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP: Requirement: \"Fix the ci.yml failure on main that predates PR #9495.\" Run the specified tests, compare against `isolated-base`, and fix each failure at its root cause.\n  Expected change site: `.github/workflows/ci.yml` or `tests/test_ci_job_split_contract.py`.\n  Evidence of absence: Neither file is changed in the PR diff. The PR description marks `tests/test_ci_job_split_contract.py` unmet, and the supplied failed CI logs show stale merge-ref checks stopping jobs before the tests ran. The diff contains no diagnosis or root-cause fix for the specified failure.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP: Requirement: \"Use Refs #9472 and Refs #9495, not auto-close keywords.\"\n  Expected change site: PR description.\n  Evidence of absence: The supplied PR description contains no references to #9472 or #9495.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "86310e4a3c195af2f902fa835265865270528b4ced5a7091cc9cc89dea0b65fb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9694,
+    "run_id": "44290459442",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "github-actions[bot]",
+    "run_attempt": 1,
+    "run_id": "44290459442",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118140215_884f51ce69",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9694,
+    "run_id": "44290459442"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T14:02:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
