@@ -189,6 +189,7 @@ jobs:
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'true' }}
+          CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED || 'true' }}
           HOLD_EVENT_NAME: ${{ github.event_name }}
           HOLD_COMMENT_LOGIN: ${{ github.event.comment.user.login }}
           HOLD_COMMENT_ASSOCIATION: ${{ github.event.comment.author_association }}
@@ -307,6 +308,7 @@ jobs:
             ISSUE="${issue_number}" \
             GH_TOKEN="${GH_TOKEN}" \
             CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" \
+            CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED:-true}" \
             bash "${resolver_script}" 2>"${resolver_err_file}"
           })" || resolver_rc=$?
           resolver_pr_not_open=false
@@ -330,6 +332,10 @@ jobs:
               sed 's/^::error::CI_TRIAGE_PR_BRANCH_ROUTING /::notice::CI_TRIAGE_PR_BRANCH_ROUTING /' "${resolver_err_file}" >&2
             elif [ "${resolver_label_missing}" = "true" ]; then
               sed 's/^::error::CI_TRIAGE_PR_BRANCH_ROUTING /::warning::CI_TRIAGE_PR_BRANCH_ROUTING /' "${resolver_err_file}" >&2
+            elif [ "${resolver_rc}" -eq 75 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
+              # The exit-75 deferral (#9599) ends the step green, so the
+              # resolver's rate-limit line is replayed as a warning.
+              sed 's/^::error::INTEGRATION_REF_RESOLVE outcome=rate_limited /::warning::INTEGRATION_REF_RESOLVE outcome=rate_limited /' "${resolver_err_file}" >&2
             else
               cat "${resolver_err_file}" >&2
             fi
@@ -460,8 +466,29 @@ jobs:
             echo "::error::CI-triage PR-branch routing refused for issue #${issue_number}; refusing to fall back to the default branch."
             exit 1
           elif [ "${resolver_rc}" -eq 75 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
-            echo "::error::INTEGRATION_REF_RESOLVE outcome=rate_limited rc=${resolver_rc} ci_triage_routing=on; refusing to fall back to the default branch."
-            exit 1
+            # Rate-limited resolver with CI-triage routing on (#9599, heal of
+            # #9582, run 43885930759). The refusal stays: no ref is written and
+            # nothing falls back to the default branch. The job no longer fails,
+            # because failing it filed plan_failed heal reports for a limit that
+            # clears by itself. Every setup step skips on rate_limited_defer, so
+            # Checkout never resolves the empty ref to the default branch. No gh
+            # call here: the limit is exhausted. No label changes either: the
+            # skipped "Validate planning phase label" step is what moves
+            # ai:clarification / ai:blocked to ai:planning. Stall recovery still
+            # re-posts /answer for an issue in ai:planning (retrigger_plan) or
+            # ai:clarification (auto_respond_clarify); ai:blocked is a
+            # dedicated-handler phase with no stall-recovery action.
+            {
+              echo "rate_limited_defer=true"
+              echo "ref="
+              echo "resolver_status=failed"
+            } >> "$GITHUB_OUTPUT"
+            echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
+            echo "::warning::INTEGRATION_REF_RESOLVE outcome=deferred reason=rate_limited rc=${resolver_rc} ci_triage_routing=on issue=${issue_number}; refusing to fall back to the default branch."
+            # "Write run summary" skips on SKIP_PLAN, so leave an operator-visible
+            # trace here on every install (it also covers the manual cases).
+            echo "Planning for issue #${issue_number} was deferred: the integration-ref lookup was rate-limited (exit 75) with CI-triage routing on. No label was changed. If the issue is in ai:planning or ai:clarification, standalone stall recovery re-posts /answer after the limit resets; if it is in ai:blocked, or stall recovery is off, post /answer again by hand after the limit resets." >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+            exit 0
           elif [ "${resolver_rc}" -eq 2 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
             # Exit 2 = resolver API failure (retries exhausted or permanent error).
             # With routing off, keep the legacy default-branch fallback, matching the exit-75 policy.
@@ -479,8 +506,10 @@ jobs:
         # as in clarify, so a transient checkout, staging or API failure cannot
         # fail a held run and file a plan_failed heal report. This comment sits
         # inside the step: a less-indented line before it would end up in the
-        # refctx body that the tests extract and dedent.
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        # refctx body that the tests extract and dedent. The rate-limited
+        # deferral (#9599) skips the same steps: otherwise the empty ref would
+        # check out the default branch and later reads would hit the limit.
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         uses: actions/checkout@v5
         with:
           ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
@@ -490,7 +519,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
 
       - name: Log checkout ref
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         env:
           PLAN_RESOLVED_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
         run: |
@@ -504,7 +533,7 @@ jobs:
           fi
 
       - name: Configure git auth for memory helper clones
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
@@ -518,7 +547,7 @@ jobs:
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
       - name: Resolve workflow support ref
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
@@ -565,7 +594,7 @@ jobs:
 
       - name: Checkout workflow support source
         id: checkout_support_source
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -576,7 +605,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout workflow support source fallback
-        if: ${{ steps.refctx.outputs.label_missing_hold != 'true' && steps.checkout_support_source.outcome == 'failure' && env.SCRIPT_REF == 'stable' }}
+        if: ${{ steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true' && steps.checkout_support_source.outcome == 'failure' && env.SCRIPT_REF == 'stable' }}
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
@@ -586,7 +615,7 @@ jobs:
           fetch-depth: 1
 
       - name: Ensure workflow support source checkout
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         run: |
           set -euo pipefail
           if [ ! -d .codex-workflow-src ]; then
@@ -601,7 +630,7 @@ jobs:
           fi
 
       - name: Checkout workflow support source main snapshot
-        if: ${{ steps.refctx.outputs.label_missing_hold != 'true' && env.SCRIPT_REF == 'stable' }}
+        if: ${{ steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true' && env.SCRIPT_REF == 'stable' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -612,7 +641,7 @@ jobs:
           fetch-depth: 1
 
       - name: Stage workflow support files
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
@@ -872,7 +901,7 @@ jobs:
           rm -rf .codex-workflow-src-main
 
       - name: Create runtime workspace
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         run: |
           set -euo pipefail
           RUNTIME_DIR="/tmp/codex-plan-${GITHUB_RUN_ID}"
@@ -893,7 +922,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Fetch issue metadata
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
@@ -1209,6 +1238,7 @@ jobs:
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           REPO_SLUG: ${{ github.repository }}
           PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED: ${{ vars.PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED || 'true' }}
+          CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}
           PLAN_SUPERSEDE_RESOLVED_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
           PLAN_PR_NOT_OPEN: ${{ steps.refctx.outputs.pr_not_open }}
           PLAN_PR_NOT_OPEN_PR: ${{ steps.refctx.outputs.pr_not_open_pr }}
@@ -1440,7 +1470,63 @@ jobs:
                 # to planning on the default branch.
                 pr_not_open_unresolved invalid_base_ref
               else
-                log "source=${source_issue} pr=${pr_number} check=${check_label} outcome=plan reason=merged_check_not_passed"
+                # The check is red on the merged PR's final head, but the
+                # default branch may have run it green after the merge
+                # (consumer fun-token-multi-chain #765: CI failed on a 504
+                # while installing Foundry, the PR merged, main went green,
+                # and planning still ran and blocked on "re-run and close").
+                # The #7095 resolution gate verifies that from GitHub and
+                # closes the issue with evidence; anything it cannot verify
+                # plans as before. It honours CHECK_TRIAGE_RESOLVED_GATE_ENABLED.
+                triage_gate="$(dirname "${helper}")/check_triage_resolution.py"
+                triage_gate_status=""
+                # "not_run" until the gate actually runs, so a skipped gate is
+                # never logged as a successful one.
+                triage_gate_rc="not_run"
+                if [ -f "${triage_gate}" ] && [ ! -L "${triage_gate}" ] && \
+                  [[ "${PLAN_DEFAULT_BRANCH:-}" =~ ^[A-Za-z0-9._/-]{1,200}$ ]]; then
+                  triage_gate_rc=0
+                  triage_gate_err="$(mktemp 2>/dev/null || echo /dev/null)"
+                  triage_gate_json="$(python3 -I -B "${triage_gate}" gate --issue-json "${ISSUE_META_FILE}" \
+                    --repo "${REPO_SLUG}" --issue-number "${ISSUE_NUMBER}" \
+                    --default-branch "${PLAN_DEFAULT_BRANCH}" 2>"${triage_gate_err}")" || triage_gate_rc=$?
+                  if [ "${triage_gate_rc}" != "0" ] && [ "${triage_gate_rc}" != "3" ]; then
+                    echo "::warning::Check-triage resolution gate exited ${triage_gate_rc} for issue #${ISSUE_NUMBER}; planning as before."
+                    if [ -s "${triage_gate_err}" ]; then
+                      # Keep the gate's diagnostics: last lines, printable ASCII,
+                      # workflow-command prefixes broken up.
+                      tail -n 10 "${triage_gate_err}" | tr -cd '[:print:]\n' | cut -c1-300 | sed 's/::/: :/g; s/^/| /'
+                    fi
+                  fi
+                  [ "${triage_gate_err}" = "/dev/null" ] || rm -f "${triage_gate_err}"
+                  triage_gate_status="$(printf '%s' "${triage_gate_json}" | python3 -I -B -c 'import json, sys
+          try:
+              value = json.load(sys.stdin).get("status")
+          except Exception:
+              value = ""
+          sys.stdout.write(value if isinstance(value, str) else "")' 2>/dev/null | tr -cd 'a-z_' | cut -c1-40)"
+                fi
+                if [ "${triage_gate_rc}" = "0" ] && { [ "${triage_gate_status}" = "resolved" ] || \
+                  [ "${triage_gate_status}" = "already_resolved" ]; }; then
+                  echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
+                  # The gate adds ai:closed but leaves this job's ai:planning;
+                  # drop it like the superseded close path (best effort).
+                  triage_label_state="applied"
+                  if ! gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO_SLUG}" \
+                    --remove-label 'ai:planning' >/dev/null 2>&1; then
+                    triage_label_state="failed"
+                    echo "::warning::Check-triage issue #${ISSUE_NUMBER} was closed but ai:planning could not be removed."
+                  fi
+                  log "source=${source_issue} pr=${pr_number} check=${check_label} outcome=resolved reason=default_branch_green gate=${triage_gate_status} gate_rc=${triage_gate_rc} label=${triage_label_state}"
+                elif [ "${triage_gate_rc}" = "3" ]; then
+                  # Verified fixed, but the close write failed: never plan a
+                  # fixed issue; stall recovery retries the close.
+                  echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
+                  echo "::warning::Check-triage issue #${ISSUE_NUMBER} is verified fixed on the default branch but could not be closed; skipping planning this run."
+                  log "source=${source_issue} pr=${pr_number} check=${check_label} outcome=skip reason=resolved_close_failed gate=${triage_gate_status:-none} gate_rc=${triage_gate_rc}"
+                else
+                  log "source=${source_issue} pr=${pr_number} check=${check_label} outcome=plan reason=merged_check_not_passed gate=${triage_gate_status:-none} gate_rc=${triage_gate_rc}"
+                fi
               fi
               ;;
             *)
@@ -2310,6 +2396,12 @@ jobs:
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           BLOCKED_REASON: ${{ steps.parse_plan.outputs.blocked_reason }}
+          # The open-PR wait branch below promises an automatic resume only
+          # while the unblock judge runs (same default as orchestrate_poll.yml).
+          UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
+          # The pr_on_branch hold also needs the judge's `wait` verdict, which
+          # UNBLOCK_JUDGE_WAIT_ENABLED=false removes (same default as unblock_judge.yml).
+          UNBLOCK_JUDGE_WAIT_ENABLED: ${{ vars.UNBLOCK_JUDGE_WAIT_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -2328,27 +2420,87 @@ jobs:
             --remove-label 'ai:clarification' \
             --remove-label 'ai:awaiting-approval' >/dev/null 2>&1 || true
 
+          # Issue #9120: a blocked ai:check-triage issue is re-checked by the
+          # unblock judge, so it alerts at WARNING, not CRITICAL. Labels come from
+          # the issue metadata this run already fetched (no API call); a missing
+          # or unreadable file keeps CRITICAL and today's comment text.
+          BLOCKED_CHECK_TRIAGE=false
+          if [ -s "${ISSUE_META_FILE:-}" ] &&
+            jq -e 'any(.labels[]?.name; . == "ai:check-triage")' "${ISSUE_META_FILE}" >/dev/null 2>&1; then
+            BLOCKED_CHECK_TRIAGE=true
+          fi
+
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          {
-            printf '%s\n' "Planning blocked: human input required."
-            printf '\n'
-            printf '%s\n' "Reason: ${BLOCKED_REASON}"
-            printf '\n'
-            printf '%s\n' "Auto-answer has been paused to avoid unsatisfiable clarification loops."
-            printf '%s\n' "Provide the required input, then reply with /answer."
-            printf '\n'
-            printf '%s\n' "Run: ${RUN_URL}"
-          } > "${PLAN_COMMENT_FILE}"
+          # A block that only waits for another open PR (the planner's
+          # "work is delivered by open PR #<N>" self-check, #8335) needs no
+          # human: the unblock judge parks it on a pr_on_branch hold and
+          # resumes it after that PR merges. Say so, and page at WARNING
+          # instead of CRITICAL. Every other reason keeps the old comment and
+          # page. The "Planning blocked:" opening stays, because
+          # orchestrate_lib.py reads it as an automation comment.
+          PLAN_BLOCKED_WAIT_PR=""
+          plan_blocked_wait_re='^work is delivered by open PR #([1-9][0-9]{0,8}); resume once it is merged$'
+          if [[ "${BLOCKED_REASON}" =~ ${plan_blocked_wait_re} ]]; then
+            PLAN_BLOCKED_WAIT_PR="${BASH_REMATCH[1]}"
+          fi
+          # With the unblock judge off nothing resumes the issue, so keep the
+          # human-input comment and CRITICAL page.
+          if [ "${UNBLOCK_JUDGE_ENABLED:-true}" = "false" ]; then
+            PLAN_BLOCKED_WAIT_PR=""
+          fi
+          # Without the judge's `wait` verdict (scripts/unblock_judge.sh passes
+          # --wait-disabled) no pr_on_branch hold is placed either. Parsed like
+          # unblock_wait_enabled: unset, empty or true keeps waits on.
+          case "${UNBLOCK_JUDGE_WAIT_ENABLED:-true}" in
+            ""|true|TRUE|True) ;;
+            *) PLAN_BLOCKED_WAIT_PR="" ;;
+          esac
+          if [ -n "${PLAN_BLOCKED_WAIT_PR}" ]; then
+            {
+              printf '%s\n' "Planning blocked: waiting on open PR #${PLAN_BLOCKED_WAIT_PR}."
+              printf '\n'
+              printf '%s\n' "Reason: ${BLOCKED_REASON}"
+              printf '\n'
+              printf '%s\n' "No action is needed. The unblock judge resumes this issue after PR #${PLAN_BLOCKED_WAIT_PR} merges."
+              printf '\n'
+              printf '%s\n' "Run: ${RUN_URL}"
+            } > "${PLAN_COMMENT_FILE}"
+          else
+            {
+              printf '%s\n' "Planning blocked: human input required."
+              printf '\n'
+              printf '%s\n' "Reason: ${BLOCKED_REASON}"
+              printf '\n'
+              if [ "${BLOCKED_CHECK_TRIAGE}" = "true" ]; then
+                printf '%s\n' "This is a CI-failure triage issue. The unblock judge re-checks the failing check and closes this issue with evidence once it passes on the pull request's newer head or on the default branch; no reply is needed unless the check keeps failing."
+                printf '\n'
+              fi
+              printf '%s\n' "Auto-answer has been paused to avoid unsatisfiable clarification loops."
+              printf '%s\n' "Provide the required input, then reply with /answer."
+              printf '\n'
+              printf '%s\n' "Run: ${RUN_URL}"
+            } > "${PLAN_COMMENT_FILE}"
+          fi
 
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="$(cat "${PLAN_COMMENT_FILE}")" >/dev/null
 
-          MSG="Planning blocked for issue #${ISSUE_NUMBER}: ${BLOCKED_REASON}"
+          if [ -n "${PLAN_BLOCKED_WAIT_PR}" ]; then
+            echo "PLAN_BLOCKED_WAIT issue=${ISSUE_NUMBER} pr=${PLAN_BLOCKED_WAIT_PR} level=WARNING"
+            MSG="Planning for issue #${ISSUE_NUMBER} is waiting on open PR #${PLAN_BLOCKED_WAIT_PR}; it resumes automatically after that PR merges."
+            PLAN_BLOCKED_TG_LEVEL="WARNING"
+          elif [ "${BLOCKED_CHECK_TRIAGE}" = "true" ]; then
+            MSG="Planning blocked for issue #${ISSUE_NUMBER} (CI triage; the unblock judge will re-check): ${BLOCKED_REASON}"
+            PLAN_BLOCKED_TG_LEVEL="WARNING"
+          else
+            MSG="Planning blocked for issue #${ISSUE_NUMBER}: ${BLOCKED_REASON}"
+            PLAN_BLOCKED_TG_LEVEL="CRITICAL"
+          fi
           MSG+=$'\n'
           MSG+="Issue: ${ISSUE_URL}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "CRITICAL"
+          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "${PLAN_BLOCKED_TG_LEVEL}"
 
       - name: Complete /answer command (blocked)
         if: env.SKIP_PLAN != 'true' && env.PROCESSED_ANSWER_CLAIMED == 'true' && steps.parse_plan.outputs.blocked == 'true'
