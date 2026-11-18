@@ -606,3 +606,27 @@ def test_captured_alert_is_stored_as_one_record(tmp_path: Path) -> None:
 	body = json.loads(puts[0]["body"])
 	assert body["branch"] == "ai/alert-inbox"
 	assert json.loads(base64.b64decode(body["content"])) == record
+
+
+def test_captured_at_ignores_a_short_date_reading(tmp_path: Path) -> None:
+	# ubuntu-26.04 (uutils) `date +%3N` sometimes prints one digit short (#9240):
+	# captured_at must come from EPOCHREALTIME, and without it fall back to
+	# whole seconds rather than dropping the capture.
+	real_date = shutil.which("date")
+	assert real_date
+	env, state = _env(tmp_path, "capture")
+	shim = tmp_path / "bin" / "date"
+	shim.write_text(
+		"#!/bin/sh\n"
+		'case "$*" in *%3N*) echo "2026-11-18T01:02:03.12Z"; exit 0 ;; esac\n'
+		f'exec "{real_date}" "$@"\n', encoding="utf-8")
+	shim.chmod(0o755)
+	_send(env, "ERROR")
+	record = _record(_kinds(_calls(state), "dispatch")[0])
+	assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z", record["captured_at"])
+	(state / "calls.jsonl").unlink()
+	env2 = dict(env)
+	env2["T_MSG"] = "deploy broke"
+	_run(env2, 'unset EPOCHREALTIME\nalert_inbox_capture ERROR "$T_MSG" true || true')
+	record = _record(_kinds(_calls(state), "dispatch")[0])
+	assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.000Z", record["captured_at"])

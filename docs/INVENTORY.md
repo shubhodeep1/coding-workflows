@@ -156,12 +156,12 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/clarify_informal_detect.py` — Score clarify issue bodies for advisory informal-issue signals.
 - `scripts/clarify_isolated_run.sh` — Launch the read-only, credential-free clarification container.
 - `scripts/clarify_openrouter_broker.py` — Restrict clarification model traffic through a host Unix socket.
-- `scripts/comment_signature.py` — Signed job-token pipeline comments: signs comments posted with the job token so they start no `issue_comment` wrapper, and verifies the signature on read (run-volume plan item 15, #9643).
 - `scripts/dependency_registry_proxy.py` — Restrict network-isolated dependency installs to allowlisted HTTPS registries via a host Unix socket.
 - `scripts/clarify_sandbox/Dockerfile` — Pinned Codex container for isolated clarification.
 - `scripts/claude_anthropic_relay.py` — Host-side Anthropic relay and in-container bridge that keep the Claude OAuth token out of sandboxed runs.
 - `scripts/claude_engine.py` — Claude engine decisions: role resolution, the P5 settings, transcript extraction and classification, probe parsing, account order.
 - `scripts/claude_pool_token.sh` — Fetch the Claude account pool from claude-pool-broker with the job's OIDC token, probe each account, and write the ordered pool (run by `.github/actions/claude-pool-token`).
+- `scripts/chatgpt_pool_token.sh` — Fetch one ChatGPT account `auth.json` (refresh token stripped) or the per-account status from claude-pool-broker with the job's OIDC token (run by `.github/actions/chatgpt-pool-token`).
 - `scripts/claude_pool_health_alert.sh` — Send the hourly Telegram WARNING naming every Claude pool account at or above the usage gate, from the pool action's `probes` output (run by `orchestrate_poll.yml`).
 - `scripts/claude_pool_daily_usage.sh` — Once-a-day Telegram report of every Claude pool account's 5-hour and 7-day usage in one message: `slot` decides whether this poll tick is due, `send` posts the pool action's `probes` (run by `orchestrate_poll.yml`, coding-workflows only).
 - `scripts/claude_settings.json.tmpl` — P5 permission policy template rendered into the Claude engine's `--settings` file.
@@ -175,6 +175,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/codex_thread_reuse.sh` — Shell helper for codex thread reuse.
 - `scripts/collect_pr_check_runs_context.py` — Collect PR check-run context for review_autofix.
 - `scripts/collect_workflow_logs.py` — Collect GitHub Actions run/job telemetry for core AI workflow families.
+- `scripts/comment_signature.py` — Signed job-token comments: with `AI_COMMENT_SIGNING_SECRET` set, signs pipeline comments that cannot start a wrapper, posts them with the job token and verifies signed comments on read (embedded in `scripts/gh_helpers.sh` as the `gh` shim; rollback via `AI_COMMENT_SIGNING_POST=false`).
 - `scripts/compare_issue_timeline_parity.sh` — Shell helper for compare issue timeline parity.
 - `scripts/comprehensive_test_and_release_gh_api.sh` — Shell helper for comprehensive test and release gh api.
 - `scripts/consolidate_soft_error_reports.py` — Consolidate per-phase soft-error reports into one deterministic markdown file.

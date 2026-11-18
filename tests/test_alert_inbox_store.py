@@ -4,7 +4,8 @@ Alert triage plan, Phase 1. The intake validates one untrusted
 alert_inbox.v1 record from $GITHUB_EVENT_PATH and writes it to the branch
 `ai/alert-inbox` with the Contents API: one retry on HTTP 409, bootstrap of a
 missing branch from a parentless root commit, a re-run of the same dispatch
-reported as a duplicate, and never a PATCH, DELETE or force update.
+reported as a duplicate, and never a PATCH, DELETE or force update. The
+409 retry now repeats up to three times before the store fails.
 
 The fake `curl` (shared with tests/test_tg_helpers_alert_inbox.py) answers
 each endpoint from a scripted queue and logs every call.
@@ -198,11 +199,18 @@ def test_conflict_is_retried_once(tmp_path: Path) -> None:
 	assert calls[0]["url"] == calls[1]["url"]
 
 
-def test_second_conflict_fails(tmp_path: Path) -> None:
-	result, calls = _store(tmp_path, _payload(), {"contents": [[409, "{}"], [409, "{}"]]})
+def test_third_conflict_is_still_retried(tmp_path: Path) -> None:
+	result, calls = _store(tmp_path, _payload(), {"contents": [[409, "{}"], [409, "{}"], [409, "{}"]]})
+	assert result.returncode == 0, result.stderr
+	assert "ALERT_INBOX store outcome=stored reason=ok" in result.stderr
+	assert _seq(calls) == ["PUT contents"] * 4
+
+
+def test_fourth_conflict_fails(tmp_path: Path) -> None:
+	result, calls = _store(tmp_path, _payload(), {"contents": [[409, "{}"]] * 4})
 	assert result.returncode == 1
 	assert "ALERT_INBOX store outcome=failed reason=conflict" in result.stderr
-	assert _seq(calls) == ["PUT contents", "PUT contents"]
+	assert _seq(calls) == ["PUT contents"] * 4
 
 
 @pytest.mark.parametrize("missing_status", [404, 422])

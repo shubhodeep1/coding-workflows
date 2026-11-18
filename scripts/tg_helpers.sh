@@ -123,7 +123,9 @@ _tg_prepend_level()
 #   capture on, routing on, WARNING/ERROR -> capture only (empty id);
 #                                           Telegram when capture fails
 #   CRITICAL with capture on             -> Telegram, then capture
-# A capture failure never fails the caller.
+# A capture failure never fails the caller. "Capture fails" means the dispatch
+# was not accepted (HTTP 204); a later store failure in the intake workflow is
+# reported there by one CRITICAL notice naming the source run instead.
 # ---------------------------------------------------------------
 tg_send_msg()
 {
