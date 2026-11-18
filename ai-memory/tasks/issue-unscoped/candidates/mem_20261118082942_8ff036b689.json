@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_log_analysis_report_pr.py:178-204 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: _Sandbox.run strips WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR from the test env but not WLA_REPORT_PR_PAT_SET, so a caller shell value such as false leaks into the PR-mode tests.\n  WHY: An exported WLA_REPORT_PR_PAT_SET=false makes every default PR-mode test fail at the new token_missing gate. Fix: add env.pop(\"WLA_REPORT_PR_PAT_SET\", None). Severity was NIT or hardening in all sources.\n- .github/workflows/workflow-log-analysis.yml:1952-1958 | severity=low | confidence=5\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The new comment, and the agents.d and changelog fragments, say the missing-token guard fails before any gh call. In fact apply_analysis_on_main.sh (invoked at line 1882) makes gh api calls first.\n  WHY: In PR mode without GH_PAT, API calls using the github.token fallback happen before reason=token_missing is emitted, so the documented ordering claim is wrong. Source severity is NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Keep the step name, id, if and outputs unchanged.\n  expected_change_site: .github/workflows/workflow-log-analysis.yml step commit_report\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: No explicit test assertion or plan-verification comment confirms that the step ID, name, if condition and outputs are unchanged. z-ai_glm-5_3-flash disputed this gap: STEP_MARKER and test_report_pr_static_contract already pin the name and outputs.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_workflow_log_analysis_report_pr.py:_Sandbox.run | severity=NIT | confidence=3\n  PROBLEM: Incomplete environment variable cleanup during test execution.\n  WHY: _Sandbox.run strips WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR but not WLA_REPORT_PR_PAT_SET, which could leak environment between tests.\n- TASK_GAP:\n  Requirement: Keep the step name, id, if and outputs unchanged.\n  Expected change site: .github/workflows/workflow-log-analysis.yml step commit_report\n  Evidence of absence: No explicit test assertion or plan-verification comment confirms that the step ID, name, if condition and outputs remain unchanged.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_workflow_log_analysis_report_pr.py:178-204 (_Sandbox.run) | hardening (HARDENING_RISK_SCORE=1)\n  PROBLEM: _Sandbox.run pops WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR but not WLA_REPORT_PR_PAT_SET.\n  WHY: A developer shell with WLA_REPORT_PR_PAT_SET=false makes every PR-mode test fail at the new pre-push check, masking real regressions. Suggested fix: env.pop(\"WLA_REPORT_PR_PAT_SET\", None), about 1 line.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/workflow-log-analysis.yml:1952-1958 (purge helper invoked earlier at line 1882) | severity=NIT | confidence=5\n  PROBLEM: The new comment says the missing-token guard runs before any gh call, but it runs after apply_analysis_on_main.sh, which makes gh api requests.\n  WHY: In PR mode without GH_PAT, GitHub API requests occur before reason=token_missing is emitted. This contradicts the documented fail-before-gh behavior.\n- tests/test_workflow_log_analysis_report_pr.py:178-201 (_Sandbox.run) | hardening (HARDENING_RISK_SCORE=1)\n  PROBLEM: The test env removes WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR but not WLA_REPORT_PR_PAT_SET.\n  WHY: An exported WLA_REPORT_PR_PAT_SET=false makes the default PR-mode tests fail at the new guard. Suggested fix: remove it from env before applying extra, about 1 line.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/workflow-log-analysis.yml:1952-1956 (vs line 1882 and scripts/apply_analysis_on_main.sh:240-355) | severity=NIT | confidence=4\n  PROBLEM: The comment and the agents.d/changelog fragments claim the step fails before any push, ls-remote or gh call when GH_PAT is unset. But line 1882 runs scripts/apply_analysis_on_main.sh, which makes many gh_retry gh api calls (apply_analysis_on_main.sh:240, 254, 279, 310, 337, 355) before the token check at 1956.\n  WHY: A PR-mode run without GH_PAT spends purge-guard gh API calls before failing with reason=token_missing, so the documented ordering claim is wrong. The sandbox test misses it because tests/test_workflow_log_analysis_report_pr.py:142 stubs apply_analysis_on_main.sh with exit 0. Suggested fix: reword to \"before any report push, PR creation or delivery gh call\" in the workflow comment and in agents.d/9135-wla-report-pr-token-check.md and changelog.d/9135-wla-report-pr-token-check.md.\n- tests/test_workflow_log_analysis_report_pr.py:200 (_Sandbox.run) | hardening (HARDENING_RISK_SCORE=1)\n  PROBLEM: git_env is built from os.environ (line 103), so WLA_REPORT_PR_PAT_SET=false in a developer shell leaks into every PR-mode test and fails them at the new gate.\n  WHY: The sibling WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR is already stripped for this reason. Suggested fix: add env.pop(\"WLA_REPORT_PR_PAT_SET\", None) next to line 200.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4d88afe5bae5aa705e4db3e86b909c32bf44e4503ae3be5b53530c9b2644fa57",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9707,
+    "run_id": "44248657241",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44248657241",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118082942_8ff036b689",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9707,
+    "run_id": "44248657241"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T08:29:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
