@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:4489 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `image_id` variable is interpolated unsanitized into a `::error::` workflow command, so newlines or `::` in it could inject further workflow commands.\n  WHY: The error is printed with the raw `image_id` when resolution fails, before the `^sha256:[0-9a-f]{64}$` check. The reviewer rated this a NIT and called the risk theoretical, because the resolution script is part of the PR. minimax_minimax-m3 and z-ai_glm-5_3-flash noted it as a rejected earlier-round finding and did not re-flag it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:4489 | severity=NIT | confidence=3\n  PROBLEM: The `image_id` variable is interpolated directly into a GitHub Actions workflow command (`::error::...`) without sanitization. Newlines or `::` in it could inject further workflow commands.\n  WHY: The raw `image_id` is printed when resolution fails, before the sha256 check. The reviewer called this a theoretical injection risk, since the resolution script is part of the PR. Suggested fix: strip disallowed characters with `tr -cd '[:alnum:]:'` before logging.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8b19e97ee07e80fa03ed53796d5b4d6408f0ca07641abd5c7b0dddd8196d544e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9591,
+    "run_id": "44191608640",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "github-actions[bot]",
+    "run_attempt": 1,
+    "run_id": "44191608640",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118034751_1af2da6a87",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9591,
+    "run_id": "44191608640"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T03:47:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
