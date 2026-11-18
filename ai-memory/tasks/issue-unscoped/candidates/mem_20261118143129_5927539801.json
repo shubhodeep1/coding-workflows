@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps ... into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  expected_change_site: .github/workflows/ci.yml, tests-system-python job\n  confidence=[1]\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: Reviewer states \"No gap\" (SEVERITY: NIT). The approved auto-decision AD-1 replaced step-moving with raising the shard matrix from 24 to 32 (ci.yml:3957). timeout-minutes: 20, the job ID and the step names are unchanged, and no new required check name was added. The plan-grant scope (ci.yml, test, changelog fragment) is delivered.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP (reported as no gap): \n  Requirement: \"Move its slowest steps ... into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml, tests-system-python job\n  Evidence of absence: No gap. The approved auto-decision AD-1 (recorded in the PR body and issue summary comment) deliberately replaced step-moving with raising the shard matrix from 24 to 32 (ci.yml:3957); every hard limit in the issue is met (timeout-minutes: 20 unchanged, job ID and step names unchanged, no new required check name), and the plan-grant scope (ci.yml, test, changelog fragment) is fully delivered. The last run's message-only test edit does not alter delivery.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fe3d4c2895c22ac559d05beab35c5c15be9a8f82018895ec3b8bda677e1e307f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9489,
+    "run_id": "44307574972",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44307574972",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118143129_5927539801",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9489,
+    "run_id": "44307574972"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T14:31:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
