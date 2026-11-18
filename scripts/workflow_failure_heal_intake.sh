@@ -1877,17 +1877,17 @@ done < <(jq -r '.run_refs[] | [.run_id, .url] | @tsv' "${PAYLOAD_FILE}")
 # on the normal path (fail-open towards filing). That includes a claimed run of
 # an issue / pull_request report dropped at binding because its jobs could not
 # be read (`run_not_in_source_repo`): it never reaches the loop, so it is added
-# to the examined total here. The sum stays capped at MAX_RUNS, the most runs
-# binding and the loop ever read.
+# to the counted total here. The total is deliberately not capped at MAX_RUNS:
+# a claimed run past that cap (dropped at binding as `run_not_in_source_repo`
+# because binding never read its jobs, or counted by the loop just before its
+# `break`) was never examined, so it must keep the total above the lost count
+# and the report on the normal path.
 RUNNER_LOST_BIND_DROPPED=0
 if [ -s "${BIND_RESULT_FILE:-}" ]; then
 	RUNNER_LOST_BIND_DROPPED="$(jq '[.dropped[]? | select(.reason == "run_not_in_source_repo")] | length' "${BIND_RESULT_FILE}" 2>/dev/null || echo 1)"
 	[[ "${RUNNER_LOST_BIND_DROPPED}" =~ ^[0-9]+$ ]] || RUNNER_LOST_BIND_DROPPED=1
 fi
-RUNNER_LOST_EXAMINED_RUNS="${RUN_COUNT}"
-[ "${RUNNER_LOST_EXAMINED_RUNS}" -le "${MAX_RUNS}" ] || RUNNER_LOST_EXAMINED_RUNS="${MAX_RUNS}"
-RUNNER_LOST_EXAMINED_RUNS=$((RUNNER_LOST_EXAMINED_RUNS + RUNNER_LOST_BIND_DROPPED))
-[ "${RUNNER_LOST_EXAMINED_RUNS}" -le "${MAX_RUNS}" ] || RUNNER_LOST_EXAMINED_RUNS="${MAX_RUNS}"
+RUNNER_LOST_EXAMINED_RUNS=$((RUN_COUNT + RUNNER_LOST_BIND_DROPPED))
 if [ "${RUNNER_LOST_RUN_COUNT}" -gt 0 ] && [ "${RUNNER_LOST_RUN_COUNT}" -eq "${RUNNER_LOST_EXAMINED_RUNS}" ] \
 	&& [ "$(jq 'length' "${SUMMARIES_FILE}" 2>/dev/null || echo 0)" = "0" ]; then
 	VALIDATION_ROUTE_SKIP_REASON="runner_lost"

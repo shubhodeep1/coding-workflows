@@ -2575,7 +2575,7 @@ def test_intake_reports_failures_that_are_not_lost_runners(case: str) -> None:
 	assert len(reads) == (0 if case in ("github_hosted", "rerun_lost_again") else 1)
 
 
-@pytest.mark.parametrize("case", ("bind_dropped", "loop_rejected"))
+@pytest.mark.parametrize("case", ("bind_dropped", "loop_rejected", "beyond_max_runs"))
 def test_intake_reports_when_another_run_was_not_examined(case: str) -> None:
 	# Run 500 lost its droplet, but run 501's failure was never examined, so the
 	# report is not skipped as runner_lost (fail-open towards filing).
@@ -2592,14 +2592,22 @@ def test_intake_reports_when_another_run_was_not_examined(case: str) -> None:
 			"id": 500, "repository": {"full_name": CONSUMER_REPO}, "head_sha": SHA_A, "html_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
 			"status": "completed", "conclusion": "failure", "path": ".github/workflows/ai-review.yml", "pull_requests": [{"number": 42}],
 		}}
+	extra_env: dict[str, str | None] | None = None
+	if case == "beyond_max_runs":
+		# Run 501's jobs are readable and it really failed, but it lies past
+		# WORKFLOW_HEAL_MAX_RUNS=1: binding never reads it and drops it as
+		# run_not_in_source_repo. Capping the examined total at MAX_RUNS would
+		# erase it and skip the report as runner_lost.
+		jobs["501"] = [{"id": 9101, "name": "review", "workflow_name": "AI Review", "conclusion": "failure", "labels": ["ubuntu-latest"], "steps": []}]
+		extra_env = {"WORKFLOW_HEAL_MAX_RUNS": "1"}
 	# For bind_dropped, run 501 has no jobs fixture: its jobs read 404s at
 	# binding and bind_report_claims drops it (run_not_in_source_repo) before
 	# the evidence loop.
 	state = _intake_state(jobs=jobs, annotations={"9001": [{"message": RUNNER_LOST_MESSAGE}]}, **overrides)
-	result, _, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	result, _, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=extra_env)
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert "WORKFLOW_HEAL runner_lost outcome=skipped run=500 " in result.stdout
-	if case == "bind_dropped":
+	if case in ("bind_dropped", "beyond_max_runs"):
 		assert "runs_kept=1 runs_dropped=1" in result.stdout, result.stdout
 	else:
 		assert "run_ref_rejected run=501 reason=unverified" in result.stdout, result.stdout
