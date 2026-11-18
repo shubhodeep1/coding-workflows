@@ -2551,7 +2551,7 @@ def test_intake_skips_a_run_whose_do_runner_droplet_was_lost() -> None:
 	assert len(annotation_calls) == 1 and annotation_calls[0][annotation_calls[0].index("--method") + 1] == "GET"
 
 
-@pytest.mark.parametrize("case", ("droplet_real_failure", "annotations_unreadable", "github_hosted"))
+@pytest.mark.parametrize("case", ("droplet_real_failure", "annotations_unreadable", "github_hosted", "rerun_lost_again"))
 def test_intake_reports_failures_that_are_not_lost_runners(case: str) -> None:
 	state_overrides: dict = {}
 	if case == "droplet_real_failure":
@@ -2560,13 +2560,45 @@ def test_intake_reports_failures_that_are_not_lost_runners(case: str) -> None:
 	elif case == "annotations_unreadable":
 		# The annotations read failed (HTTP 404): no evidence, so report as before.
 		state_overrides = {"jobs": {"500": _runner_lost_jobs()}}
+	elif case == "rerun_lost_again":
+		# The scaler's one re-run lost its droplet too: a job that kills its runner is reported.
+		state_overrides = {"jobs": {"500": _runner_lost_jobs()}, "annotations": {"9001": [{"message": RUNNER_LOST_MESSAGE}]}, "run_details": {"500": {
+			"id": 500, "repository": {"full_name": CONSUMER_REPO}, "head_sha": SHA_A, "html_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+			"status": "completed", "conclusion": "failure", "path": ".github/workflows/ai-review.yml", "pull_requests": [{"number": 42}], "run_attempt": 2,
+		}}}
 	result, state_after, _ = _run_intake(_consumer_payload(), _intake_state(**state_overrides), diagnosis=DIAG_WORKFLOW_DEFECT)
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert "skip reason=runner_lost" not in result.stdout
 	assert len(_composed_issues(state_after)) == 1
 	reads = [call for call in state_after["calls"] if any(part.endswith("/annotations") for part in call)]
-	# GitHub-hosted jobs never cost an annotations read (§15).
-	assert len(reads) == (0 if case == "github_hosted" else 1)
+	# GitHub-hosted jobs and re-run attempts never cost an annotations read (§15).
+	assert len(reads) == (0 if case in ("github_hosted", "rerun_lost_again") else 1)
+
+
+def test_intake_reports_when_another_run_was_not_examined() -> None:
+	# Run 500 lost its droplet, but run 501's jobs could not be read: its failure
+	# was never examined, so the report is not skipped as runner_lost.
+	payload = _consumer_payload()
+	payload["run_refs"] = [*payload["run_refs"], {"repo": CONSUMER_REPO, "run_id": "501", "url": f"https://github.com/{CONSUMER_REPO}/actions/runs/501"}]
+	state = _intake_state(jobs={"500": _runner_lost_jobs()}, annotations={"9001": [{"message": RUNNER_LOST_MESSAGE}]})
+	result, _, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL runner_lost outcome=skipped run=500 " in result.stdout
+	assert "jobs_fetch_failed" in result.stdout
+	assert "skip reason=runner_lost" not in result.stdout
+	assert "WORKFLOW_HEAL fingerprint " in result.stdout
+
+
+def test_intake_validation_failure_runner_lost_skip_is_routed() -> None:
+	jobs = _validation_intake_state()["jobs"]["500"]
+	jobs = json.loads(json.dumps(jobs))
+	for job in jobs:
+		job["labels"] = ["do-runner"]
+	state = _validation_intake_state(jobs={"500": jobs}, annotations={"9201": [{"message": RUNNER_LOST_MESSAGE}]})
+	result, state_after, _ = _run_intake(_validation_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "WORKFLOW_HEAL skip reason=runner_lost " in result.stdout, result.stdout
+	comment = _assert_validation_route(result, state_after, "skipped", classification="none")
+	assert "`runner_lost`" in comment["body"]
 
 
 @pytest.mark.parametrize("status", ("behind", "diverged"))

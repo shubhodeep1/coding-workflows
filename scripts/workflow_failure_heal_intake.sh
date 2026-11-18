@@ -1804,7 +1804,12 @@ while IFS=$'\t' read -r run_id run_url; do
 	# ran on do-runner (none for a consumer that never set PIPELINE_RUNS_ON). Any
 	# read failure leaves that job without evidence, so the run is reported as
 	# before (fail-open towards filing).
-	runner_lost_job_ids="$(python3 "${HEAL_PY}" runner-lost-candidates --jobs-json "${JOBS_FILE}" 2>/dev/null || true)"
+	# Only a first attempt is checked: the scaler re-runs a lost job once, so a
+	# re-run that lost its droplet again (a job that kills its runner) is reported.
+	runner_lost_job_ids=""
+	if [ "$(jq -r '.run_attempt // 1' "${RUN_INFO_FILE}" 2>/dev/null || echo 1)" = "1" ]; then
+		runner_lost_job_ids="$(python3 "${HEAL_PY}" runner-lost-candidates --jobs-json "${JOBS_FILE}" 2>/dev/null || true)"
+	fi
 	if [ -n "${runner_lost_job_ids}" ]; then
 		run_lost_dir="${RUNNER_LOST_DIR}/run-${run_id}"
 		mkdir -p "${run_lost_dir}"
@@ -1866,9 +1871,15 @@ while IFS=$'\t' read -r run_id run_url; do
 		| map(gsub("[\\t\\n\\r]"; " ")) | @tsv' "${SELECTED_JOBS_FILE}")
 done < <(jq -r '.run_refs[] | [.run_id, .url] | @tsv' "${PAYLOAD_FILE}")
 
-# Every reported run that reached evidence collection lost its do-runner
-# droplet: an infrastructure failure the runner scaler handles, not a heal case.
-if [ "${RUNNER_LOST_RUN_COUNT}" -gt 0 ] && [ "$(jq 'length' "${SUMMARIES_FILE}" 2>/dev/null || echo 0)" = "0" ]; then
+# Every examined run (at most MAX_RUNS) lost its do-runner droplet: an
+# infrastructure failure the runner scaler handles, not a heal case. A run
+# dropped for any other reason (unverified, jobs unreadable) keeps the report
+# on the normal path (fail-open towards filing).
+RUNNER_LOST_EXAMINED_RUNS="${RUN_COUNT}"
+[ "${RUNNER_LOST_EXAMINED_RUNS}" -le "${MAX_RUNS}" ] || RUNNER_LOST_EXAMINED_RUNS="${MAX_RUNS}"
+if [ "${RUNNER_LOST_RUN_COUNT}" -gt 0 ] && [ "${RUNNER_LOST_RUN_COUNT}" -eq "${RUNNER_LOST_EXAMINED_RUNS}" ] \
+	&& [ "$(jq 'length' "${SUMMARIES_FILE}" 2>/dev/null || echo 0)" = "0" ]; then
+	VALIDATION_ROUTE_SKIP_REASON="runner_lost"
 	log "skip reason=runner_lost source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} runs=${RUNNER_LOST_RUN_COUNT}"
 	exit 0
 fi
