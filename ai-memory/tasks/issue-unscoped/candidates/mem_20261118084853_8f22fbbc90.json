@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/deploy-activate.md:59 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The earlier-session open log PR detection criterion does not exclude the session's own draft PR, so it self-matches after the first log commit.\n  WHY: The session may merge its own branch and wrongly tell the operator the \"older PR can be closed\", which causes a mid-runbook restart and PR churn; severity disagreement (BLOCKER from gemini, MAJOR from minimax and glm; sonnet-5_5 dropped it as having no trigger in the intended flow, so BLOCKER is used as the highest).\n- workflow-templates/.claude/commands/deploy-activate.md:62-66 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The consumer template copy has the same self-matching detection criterion, which propagates to consumer repos.\n  WHY: The behaviour is identical to the live copy; severity disagreement (BLOCKER vs MAJOR), so the highest is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/commands/deploy-activate.md:59 | severity=BLOCKER | confidence=5\n  PROBLEM: The detection logic for an \"earlier session's open log PR\" does not exclude the PR opened by the current session itself.\n  WHY: After the first step the session finds its own PR, merges its branch into itself, and wrongly tells the operator to close the PR it is using.\n- workflow-templates/.claude/commands/deploy-activate.md:66 | severity=BLOCKER | confidence=5\n  PROBLEM: The detection logic for an \"earlier session's open log PR\" does not exclude the PR opened by the current session itself.\n  WHY: After the first step the session finds its own PR, merges its branch into itself, and wrongly tells the operator to close the PR it is using.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/commands/deploy-activate.md:59 | severity=MAJOR | confidence=4\n  PROBLEM: The parenthetical matching criterion (open, this repo, title, file set) is satisfied by the session's own draft PR, so the \"earlier session\" qualifier is not mechanically enforced.\n  WHY: Every step after the first finds its own PR, does a no-op self-merge, and emits the wrong \"older PR can be closed\" message. Closing it forces a \u00a721.A reset and a new draft PR.\n- workflow-templates/.claude/commands/deploy-activate.md:66 | severity=MAJOR | confidence=4\n  PROBLEM: Same self-match defect as the live copy, in the consumer template.\n  WHY: The defect propagates to every consumer repo on the next `@stable` sync.\n- .claude/commands/deploy-activate.md:59 | severity=NIT | confidence=1\n  PROBLEM: The merge-conflict clause (\"git merge --abort\", stop, tell me) is well-formed. It was recorded as a coverage confirmation, not a defect.\n  WHY: It does not fail.\n- .claude/commands/deploy-activate.md:160 | severity=NIT | confidence=1\n  PROBLEM: The new \"The session's log PR\" Tool Access bullet carves out PR writes (and the template adds the same at line 166). It was recorded as properly gated, not a defect.\n  WHY: It does not fail; the scope is bounded.\n- TASK_GAP (covered, NIT, confidence 5): Requirement: restart on merged or closed mid-session (\u00a721.A). Expected change site: the \"One log PR per session\" bullet in both copies. Evidence: line 59 and template line 66 contain the restart text.\n- TASK_GAP (covered, NIT, confidence 5): Requirement: a later session merges the earlier session's branch and leaves closing to the operator (\u00a723.C). Expected change site: the earlier-session clause. Evidence: covered at line 59, but the matching criterion is the defect above.\n- TASK_GAP (covered, NIT, confidence 5): Requirement: the first log commit opens one draft PR titled `chore: activation log updates`. Expected change site: the same bullet. Evidence: covered at line 59.\n- TASK_GAP (covered, NIT, confidence 5): Requirement: docs/deploy-activation/README.md describes the same rule. Expected change site: docs/deploy-activation/README.md. Evidence: covered by the added paragraph.\n- TASK_GAP (covered, NIT, confidence 5): Requirement: tests/test_deploy_activate_command.py covers the new contract for both copies. Expected change site: test_one_session_keeps_its_log_updates_in_one_pull_request. Evidence: lines 211-244 cover the literal text, but no test asserts the self-match exclusion.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .claude/commands/deploy-activate.md:59 | severity=MAJOR | confidence=3\n  PROBLEM: The earlier-session log-PR detection criterion does not exclude the session's own log PR (also line 55, and workflow-templates/.claude/commands/deploy-activate.md lines 62 and 66), so a resumed invocation self-matches.\n  WHY: The session merges its own branch (a no-op) and tells the operator the \"older PR can be closed\". If the operator closes it, the next log commit hits the \u00a721.A restart and opens a second draft PR. tests/test_deploy_activate_command.py:226-236 pins the current wording.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6bbf7896a21048bbc8a009f328760f279f6b2c4a9ce56a94487d756fe39ebe91",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9675,
+    "run_id": "44253049509",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44253049509",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118084853_8f22fbbc90",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9675,
+    "run_id": "44253049509"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T08:48:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
