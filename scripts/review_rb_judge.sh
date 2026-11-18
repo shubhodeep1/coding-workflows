@@ -2718,8 +2718,12 @@ case "${RB_ACTION}" in
       RB_MERGE_STATUS=""
 
       # GitHub's REST /pulls/{N} returns .state as one of `open` or
-      # `closed`; drop the unreachable `merged` alt.
-      PR_STATE="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed' || echo "")"
+      # `closed`; drop the unreachable `merged` alt. The same single read
+      # keeps the full payload for the security follow-up guard below
+      # (#9671): `_pr_meta` and `_guard_pr_meta` are unset by now, and this
+      # replaces the old `--jq '.state'` read, so it adds no API call.
+      _rb_terminal_pr_json="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+      PR_STATE="$(printf '%s\n' "${_rb_terminal_pr_json}" | jq -r '.state // ""' 2>/dev/null | grep -xE 'open|closed' || echo "")"
       if [ "${PR_STATE}" = "open" ] && [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
         # Best-effort merge — see note above re: gh_retry.
         # Gates first: the head-gate success status is posted only for a
@@ -2753,7 +2757,7 @@ case "${RB_ACTION}" in
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
           fi
-        elif ! rb_judge_followup_merge_guard terminal "${_guard_pr_meta:-${_pr_meta:-}}"; then
+        elif ! rb_judge_followup_merge_guard terminal "${_rb_terminal_pr_json:-}"; then
           # Security follow-up guard (#9671): no success status and no merge.
           RB_MERGE_STATUS="security_followup_guard"
         else

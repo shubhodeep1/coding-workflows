@@ -1277,7 +1277,7 @@ FG_BEGIN = "# BEGIN rb-judge security follow-up guard (#9671)"
 FG_END = "# END rb-judge security follow-up guard (#9671)"
 FG_SITE_STARTS = {
 	"merge": '        elif ! rb_judge_followup_merge_guard merge "${_pr_json:-}"; then\n',
-	"terminal": '        elif ! rb_judge_followup_merge_guard terminal "${_guard_pr_meta:-${_pr_meta:-}}"; then\n',
+	"terminal": '        elif ! rb_judge_followup_merge_guard terminal "${_rb_terminal_pr_json:-}"; then\n',
 	"sync": '          elif [ "${ENABLE_AUTO_MERGE}" = "true" ] && ! rb_judge_followup_merge_guard sync "${_pr_json:-}"; then\n',
 }
 FG_STUB = """#!/usr/bin/env bash
@@ -1348,7 +1348,9 @@ def _run_fg_site(
 			+ "\n"
 			+ _fg_helper_block()
 			+ "\n"
-			+ '_pr_json="${FG_PAYLOAD_JSON}"\n_guard_pr_meta="${FG_PAYLOAD_JSON}"\n_pr_meta="${FG_PR_META_JSON:-}"\n'
+			# Seed only what each arm sets itself: `_pr_meta` and `_guard_pr_meta`
+			# are unset long before any merge site runs.
+			+ '_pr_json="${FG_PAYLOAD_JSON}"\n_rb_terminal_pr_json="${FG_PAYLOAD_JSON}"\nunset _guard_pr_meta _pr_meta\n'
 			+ "if false; then :\n"
 			+ _fg_site_snippet(path)
 			+ "fi\n"
@@ -1454,10 +1456,84 @@ def test_followup_guard_forwards_explicit_kill_switch(path: str) -> None:
 	assert run["stub_switch"] == ""
 
 
-def test_followup_guard_terminal_falls_back_to_first_pr_read() -> None:
-	run = _run_fg_site("terminal", "allow", payload="", extra_env={"FG_PR_META_JSON": FG_PAYLOAD})
-	assert json.loads(run["stub_payload"]) == json.loads(FG_PAYLOAD)
-	assert _fg_merge_calls(run["calls"]) == _expected_calls("terminal")[:1]
+TERMINAL_ARM_START = '      _rb_terminal_pr_json="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo \'{}\')"\n'
+TERMINAL_ARM_END = '        RB_MERGE_STATUS="not_open"\n      fi\n'
+
+
+@needs_jq
+@pytest.mark.parametrize("base, merged", [("main", True), ("orchestrator/project-9", True), ("ai/issue-7", False)])
+def test_followup_guard_terminal_arm_uses_its_own_pr_read(base: str, merged: bool) -> None:
+	"""The real terminal arm, from its one /pulls/<n> read to the merge, with
+	`_pr_meta` and `_guard_pr_meta` unset as in production (#9671)."""
+	text = _script_text()
+	start = text.index(TERMINAL_ARM_START)
+	assert text.count(TERMINAL_ARM_START) == 1
+	end = text.index(TERMINAL_ARM_END, start) + len(TERMINAL_ARM_END)
+	payload = json.dumps({"number": 42, "state": "open", "base": {"ref": base}, "head": {"sha": JUDGED}})
+	with tempfile.TemporaryDirectory(prefix="test_rb_judge_terminal_arm_") as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir()
+		gh_log = tmp / "gh_calls.jsonl"
+		gh_shim = bin_dir / "gh"
+		gh_shim.write_text(
+			"#!/usr/bin/env python3\n"
+			"import json, os, sys\n"
+			"with open(os.environ['GH_CALL_LOG'], 'a', encoding='utf-8') as fh:\n"
+			"\tfh.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+			"sys.exit(0)\n",
+			encoding="utf-8",
+		)
+		gh_shim.chmod(0o755)
+		reads = tmp / "reads.log"
+		harness = tmp / "harness.sh"
+		harness.write_text(
+			"set -euo pipefail\n"
+			"unset _pr_meta _guard_pr_meta\n"
+			'gh_retry() { "$@"; }\n'
+			f"_safe_gh_jq() {{ printf '%s\\n' \"$*\" >> {str(reads)!r}; printf '%s' \"${{FG_PAYLOAD_JSON}}\"; }}\n"
+			"_pr_base_fresh_for_merge() { return 0; }\n"
+			"_pr_wait_for_required_checks() { return 0; }\n"
+			"review_head_gate_post_status() { :; }\n"
+			+ _merge_err_helpers()
+			+ "\n"
+			+ _fg_helper_block()
+			+ "\n"
+			+ text[start:end]
+			+ 'echo "RB_MERGE_STATUS=${RB_MERGE_STATUS:-}"\n',
+			encoding="utf-8",
+		)
+		scratch = tmp / "scratch"
+		scratch.mkdir()
+		env = {
+			"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			"GH_CALL_LOG": str(gh_log),
+			"TMPDIR": str(scratch),
+			"PR_NUMBER": "42",
+			"REPOSITORY": "o/r",
+			"RB_JUDGED_HEAD_SHA": JUDGED,
+			"ENABLE_AUTO_MERGE": "true",
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"DEFAULT_BRANCH": "main",
+			"FG_PAYLOAD_JSON": payload,
+			"GH_RETRY_MAX_ATTEMPTS": "1",
+		}
+		proc = subprocess.run(["bash", str(harness)], env=env, text=True, capture_output=True, timeout=60)
+		assert proc.returncode == 0, proc.stderr
+		calls = [json.loads(line) for line in gh_log.read_text(encoding="utf-8").splitlines() if line.strip()] if gh_log.exists() else []
+		# One PR read, the arm's own.
+		assert reads.read_text(encoding="utf-8").splitlines() == ["repos/o/r/pulls/42"]
+		if merged:
+			assert "RB_MERGE_STATUS=merge_requested" in proc.stdout.splitlines(), proc.stdout + proc.stderr
+			assert _fg_merge_calls(calls) == _expected_calls("terminal")[:1]
+			assert "RB_JUDGE_SECURITY_FOLLOWUP_GUARD" not in proc.stdout
+		else:
+			# A standalone-PR base reaches the guard's parent lookup; the shim
+			# answers nothing, so the guard does not allow and no merge runs.
+			assert "RB_MERGE_STATUS=security_followup_guard" in proc.stdout.splitlines(), proc.stdout + proc.stderr
+			assert _fg_merge_calls(calls) == []
+			assert "path=terminal result=" in proc.stdout
+		assert sorted(p.name for p in scratch.iterdir()) == []
 
 
 @needs_jq
