@@ -15784,9 +15784,10 @@ def test_standalone_stall_state_ignores_forged_marker_comment_from_other_author(
 def test_standalone_stall_state_skips_candidate_when_pipeline_login_unavailable():
 	# Without the pipeline's login no state comment can be verified: skip
 	# the candidate (fail closed) instead of recovering from a default state.
-	# The tick-level identity gate in run_standalone_stall_recovery skips the
-	# whole sweep first; the per-candidate STANDALONE_STATE_AUTHOR_FILTER skip
-	# is the second line of defence. Either way nothing acts on the issue.
+	# When tracking_issues.json lists a tracking issue, the managed-set identity
+	# check in run_standalone_stall_recovery skips the whole sweep first; with no
+	# tracking issues, the per-candidate STANDALONE_STATE_AUTHOR_FILTER skip is
+	# the only gate. Either way nothing acts on the issue.
 	result = _run_standalone_forged_state_tick_9718(mock_store_extra={"fail_user_lookup": True})
 	combined_log = result["stdout"] + result["stderr"]
 	assert (
@@ -15824,9 +15825,9 @@ def _standalone_state_parsers_script_9718(login: str, comments: list[dict], help
 def test_standalone_state_parsers_trust_only_pipeline_login():
 	comments = [
 		{"id": 11, "created_at": "2026-01-01T00:00:00Z", "user": {"login": "pipeline-bot"},
-		 "body": _standalone_state_body_9718(2)},
+			"body": _standalone_state_body_9718(2)},
 		{"id": 12, "created_at": "2026-12-01T00:00:00Z", "user": {"login": "outsider"},
-		 "body": _standalone_state_body_9718(99)},
+			"body": _standalone_state_body_9718(99)},
 		{"id": 13, "created_at": "2026-12-02T00:00:00Z", "body": _standalone_state_body_9718(77)},
 	]
 
