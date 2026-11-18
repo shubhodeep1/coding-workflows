@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  expected_change_site: `.github/workflows/ci.yml`, the moved step (`Pre-push affected-test gate tests`) and its target matrix group selection\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: Run 43993691500 gave only step statuses, not durations, so the choice of group 0 as the target with the most headroom is an estimate with no measured timings in the diff, The rationale is documented at .github/workflows/ci.yml:3753-3773, changelog.d/9639-ci-prepush-step-to-poll-group-1.md:2 and tests/test_ci_poll_test_sharding.py:4009-4019, Severity disagreement: NIT (anthropic_claude-sonnet-5_5, minimax_minimax-m3) vs MAJOR (openai_gpt-6-luna); highest is MAJOR\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: `.github/workflows/ci.yml`, where the moved step and its target group are chosen.\n  Evidence of absence: Run 43993691500 gave only step statuses, with no durations. So the choice of the \"slowest\" step and of group 0 as the target is an estimate with no measured timings in the diff. It is documented in the `ci.yml` comment block (lines ~3750-3773), the changelog fragment and the test comments. Treated as a documented residual, not a code defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: .github/workflows/ci.yml (target group selection for the moved step)\n  Evidence of absence: Run 43993691500 gave only step statuses, not durations. The PR selects group 0 by heuristic without measured step timings. The rationale at .github/workflows/ci.yml:3753-3773, changelog.d/9639-ci-prepush-step-to-poll-group-1.md:2 and tests/test_ci_poll_test_sharding.py:4009-4019 disclose the move is an estimate. The last-run diff is a one-line stale-comment correction and does not address this gap. Documented residual.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: `.github/workflows/ci.yml`, the moved step and its target matrix group selection.\n  Evidence of absence: The diff moves `Pre-push affected-test gate tests` from group 3 to group 0, but the rationale says the run provided no durations and describes the selection as an estimate. The diff contains no measured step timings or evidence that group 0 had the most headroom, so the requested timing-based selection is not implemented.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3f90d068d6257143c8143e267f6f648f1a80e660042664e25536343bfcefa92c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9641,
+    "run_id": "44229919397",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44229919397",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118075142_9eb08ee1c7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9641,
+    "run_id": "44229919397"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T07:51:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
