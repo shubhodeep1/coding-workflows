@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"It is not resumed with `/answer` or `/approved`, so planning doesn't loop.\" (from: \"otherwise, post one trusted note (marker <!-- ai:unblock-triage-superseded:v1 item=<n> -->, posted once per issue) ... It is not resumed with /answer or /approved, so planning doesn't loop.\")\n  expected_change_site: scripts/unblock_judge.sh, unblock_triage_superseded_note (lines 695-704) and its caller in unblock_main (lines 2156-2158).\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: When the trusted note is older than unblock_wait_max_hours (UNBLOCK_JUDGE_WAIT_MAX_DAYS x 24, default 336 hours / 14 days), unblock_triage_superseded_note logs \"op=triage_superseded outcome=skip reason=note_expired\" and returns 1 (lines 698-700), the caller at lines 2156-2158 then falls through to normal judging, the new test `test_expired_superseded_note_judges_as_usual` (`tests/test_unblock_judge.py:5797-5806`) asserts `\"verdict=retry_budget round=1 outcome=acted\"`, so an unverified triage issue can get the `/answer` or `/approved` resume the spec forbids, and the note is never re-posted because noted_at keeps the old timestamp. Severity disagreement: anthropic_claude-sonnet-5_5 rated it NIT (a deliberate, bounded departure that is documented in README.md and agents.d and still bounded by the round budget and park; it asks the plan owner to accept it, or the expiry path to hold and page/park the item), while minimax_minimax-m3 and openai_gpt-6-luna rated it MAJOR. google_gemini-3_1-flash-lite and z-ai_glm-5_3-flash did not flag it and said it is intended, bounded behaviour.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"otherwise, post one trusted note (marker <!-- ai:unblock-triage-superseded:v1 item=<n> -->, posted once per issue) ... It is not resumed with /answer or /approved, so planning doesn't loop.\"\n  Expected change site: scripts/unblock_judge.sh, unblock_triage_superseded_note (lines 695-704) and its caller in unblock_main (lines 2156-2158).\n  Evidence of absence: When the note is older than unblock_wait_max_hours (UNBLOCK_JUDGE_WAIT_MAX_DAYS x 24, default 336 hours), the function logs \"outcome=skip reason=note_expired\" and returns 1, and the caller at line 2156 then judges as usual. The test test_expired_superseded_note_judges_as_usual asserts \"verdict=retry_budget round=1 outcome=acted\", so the issue gets the forbidden /answer resume. The note is never re-posted because noted_at keeps the old timestamp. The loop stays bounded by the round budget and park, and the expiry is documented in README.md and agents.d. This is a deliberate, bounded departure from the spec. The plan owner should accept it, or the expiry path should hold and page/park the item.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- HARDENING_SUGGESTION: scripts/review_conflict_prepare.sh lines 1796-1803 (the .gitleaksignore waiver) together with the hand-off at lines 1877-1882\n  PROBLEM: The waiver only removes .gitleaksignore from the prepare-time expansion. The resolver's post-run verify_integration_fingerprints.py has no matching waiver, so it can flag .gitleaksignore again and end the run in retry or escalation instead of a commit. This still fails closed and is no worse than before the PR.\n  FIX: when _gl_resolved=true, append CONFLICT_GITLEAKSIGNORE_UNION_VERIFIED=true to GITHUB_ENV, and drop the `.gitleaksignore` line with grep -Fxv in the resolver's post-run violated-file handling (6-8 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n- NOTE: Reports no runtime issues. Says the TASK_GAP about planning resumption on expiry is intended expiry behaviour, not an infinite planning loop.\n- HARDENING_SUGGESTION: scripts/review_conflict_resolve.sh post-resolver fingerprint verification (lines 4385+) and soft check `_verify_fingerprints_soft` (lines 2670+)\n  PROBLEM: The post-run verifier (`verify_integration_fingerprints.py`) has no waiver for union-verified `.gitleaksignore` content, so the run can end in retry or escalation instead of a commit.\n  FIX: Export `CONFLICT_GITLEAKSIGNORE_UNION_VERIFIED=true` from `review_conflict_prepare.sh` when `_gl_resolved=true`, and filter with `grep -Fxv -- \".gitleaksignore\"` in `review_conflict_resolve.sh` (6-8 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"It is not resumed with `/answer` or `/approved`, so planning doesn't loop.\"\n  Expected change site: `scripts/unblock_judge.sh` `unblock_triage_superseded_note` (lines 695-704) and the caller in `unblock_main` (lines 2156-2158).\n  Evidence of absence: When the note reaches `UNBLOCK_JUDGE_WAIT_MAX_DAYS` (default 14), the function returns 1 (lines 698-700) and logs `op=triage_superseded outcome=skip reason=note_expired`. The caller at lines 2156-2158 then falls through to normal judging, where a `retry_budget` verdict can post `/answer` or `/approved` and restart planning. `test_expired_superseded_note_judges_as_usual` (`tests/test_unblock_judge.py:5797-5806`) asserts `assert \"verdict=retry_budget round=1 outcome=acted\" in result.stdout`. The \"is not resumed\" wording is not met when the wait lifetime expires and the PR never closes the failure on the default branch.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"It is not resumed with `/answer` or `/approved`, so planning doesn't loop.\"\n  Expected change site: `scripts/unblock_judge.sh`, `unblock_triage_superseded_note` and its caller in `unblock_main`.\n  Evidence of absence: At lines 695-700, an expired note returns 1. The caller at lines 2156-2158 continues to judging, and the added expiry test confirms that path can act on a retry verdict. After `UNBLOCK_JUDGE_WAIT_MAX_DAYS`, the issue can resume planning instead of waiting for the check.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- NOTE: Checked the last-run hunks against the code: review_autofix_step_post_editor_summary.sh:306-315, review_conflict_prepare.sh:1877-1882 (mirrors 1866-1871, allowlist at 1820, waiver at 1796-1803), and unblock_judge.sh:688-703 (helpers at :270 and :916). Rejects the pass-1 TASK_GAP on note expiry as a deliberate, documented, tested bounded hold, consistent with unblock_judge.sh:2139-2142.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7879f9bcaf69bd4196f99ed5c156fa34b164efc1df3db6dc96f77dacd9fe0c23",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9666,
+    "run_id": "44200246125",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44200246125",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118013903_d140bd1058",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9666,
+    "run_id": "44200246125"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T01:39:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
