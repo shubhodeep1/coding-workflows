@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/pr-checks.yml:274-292 | severity=high | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The \"Enumerate added files in PR\" step exits 1 whenever HEAD is not a two-parent merge commit (lines 291-292), and it is not path-filtered, so it runs on every PR event.\n  WHY: On a conflicting PR with no merge ref, `pr-body-lint` can fail on PRs that never touch docs/completed/. The reviewer rated it MAJOR (conditional) and did not verify GitHub's checkout behaviour.\n- .github/workflows/pr-checks.yml:332-341 and scripts/lint_plan_archival_completeness.py:239 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: `unlistable()` rejects only \\n and \\r, but the lint reads added.txt with `.splitlines()`, which also splits on \\x0b, \\x0c, \\x1c-\\x1e, \\x85, U+2028 and U+2029.\n  WHY: A docs/completed/ filename containing one of these characters is split or misreported, so the diagnostics are garbled. Severity disagreement: gemini rated it MAJOR, while sonnet and luna rated it NIT. glm called it a hardening issue with no bypass.\n- tests/test_workflow_checkout_integration_ref_audit.py:65,81-87 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: `ALLOWLIST_EXCEPTIONS` lists propagate-consumer-secrets.yml, but the reviewer found no such file in .github/workflows/, so `test_checkout_workflows_are_all_classified` fails. The reviewer rated this a pre-existing NIT.\n  WHY: The glob over WORKFLOWS_DIR cannot return a missing file. This conflicts with the z-ai_glm-5_3-flash finding, which says the file exists at line 53.\n- .github/workflows/pr-checks.yml; tests/test_workflow_checkout_integration_ref_audit.py | severity=high | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push gate reports a PR-caused failure in tests/test_workflow_checkout_integration_ref_audit.py. The editor's diagnosis is contradicted by .github/workflows/propagate-consumer-secrets.yml:53, which contains `uses: actions/checkout@v5`.\n  WHY: The real cause of the failure is undiagnosed, and the change was committed on a red gate with a wrong explanation. The reviewer rated it MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/pr-checks.yml:274-292 | severity=MAJOR (conditional) | confidence=3\n  PROBLEM: The \"Enumerate added files in PR\" step exits 1 when HEAD is not a two-parent merge commit (lines 291-292), and it is not path-filtered.\n  WHY: On a conflicting PR with no merge ref, `pr-body-lint` fails on PRs that never touch docs/completed/.\n- scripts/lint_plan_archival_completeness.py:239 | severity=NIT | confidence=4\n  PROBLEM: `.splitlines()` also splits on U+2028, U+2029 and \\x85.\n  WHY: A docs/completed/ filename containing one of these is reported as unlistable. The failure is misleading, not a silent pass.\n- tests/test_workflow_checkout_integration_ref_audit.py:65,81-87 | severity=NIT | confidence=4\n  PROBLEM: `propagate-consumer-secrets.yml` is allow-listed but absent from .github/workflows/, so the assertion `classified - checkout_files` fails. The reviewer called this pre-existing.\n  WHY: The glob cannot return a missing file. The reviewer cited analysis/workflow-optimization-2026-10-22-3.md:473 (DEAD-002) as evidence.\n- Security: NONE. `statuses: write` at .github/workflows/pr-checks.yml:145 is a declared scope expansion.\n- Performance, index/DB, naming, task completeness: NONE.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/pr-checks.yml:332 | severity=MAJOR | confidence=3\n  PROBLEM: `unlistable()` does not account for all line-breaking characters recognized by `str.splitlines()`.\n  WHY: Paths containing characters such as \\x0b may be split, so files under docs/completed/ may be missed by the lint.\n- Hardening suggestion (risk score 1, about 1 line): change `unlistable` to `return len(path.splitlines()) != 1 or any(\"\\udc80\" <= ch <= \"\\udcff\" for ch in path)`.\n- All other lenses: NONE.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/pr-checks.yml:341 | severity=NIT | confidence=4\n  PROBLEM: `unlistable()` permits filenames with U+0085 and U+2028, but scripts/lint_plan_archival_completeness.py:239 reads them with `splitlines()`.\n  WHY: The lint still runs, but the parsed paths and diagnostics are split. The suggested fix is to reject paths when `len(path.splitlines()) != 1`.\n- All other lenses: NONE.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/pr-checks.yml; tests/test_workflow_checkout_integration_ref_audit.py | severity=MAJOR | confidence=3\n  PROBLEM: The pre-push gate reports one PR-caused failure in tests/test_workflow_checkout_integration_ref_audit.py. The editor's diagnosis is contradicted by .github/workflows/propagate-consumer-secrets.yml:53, which contains `uses: actions/checkout@v5`.\n  WHY: The real cause is undiagnosed. The reviewer statically checked that all 42 files containing checkout@v5 are classified, and the change was committed on a red gate with a wrong explanation.\n- .github/workflows/pr-checks.yml (`unlistable()`) and scripts/lint_plan_archival_completeness.py:239 | hardening, risk score 1\n  PROBLEM: `unlistable()` rejects only \\n and \\r, but `splitlines()` also breaks on \\x0b, \\x0c, \\x1c-\\x1e, \\x85, U+2028 and U+2029.\n  WHY: The archived-files message is garbled. There is no bypass, because the first fragment keeps the docs/completed/ prefix. The suggested fix is `len(path.splitlines()) != 1`.\n- Task completeness: NONE. The reviewer found all deliverables present, with the main ruleset addition deferred as OD5.\n- Other lenses: NONE.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "925a1e6a9df23ffea117dbf5f5fd6785ceca9c9096db86981fa6893e00c4697b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9709,
+    "run_id": "44274188380",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44274188380",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118111612_5144463bfc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9709,
+    "run_id": "44274188380"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T11:16:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
