@@ -5,13 +5,25 @@
   "entry_id": "processed_command_9728_6982640205_approved",
   "issue_number": 9728,
   "metadata": {
+    "branch": "ai/issue-9728",
+    "changed_files": [
+      "agents.d/9728-prepush-repair-passing-change-erased.md",
+      "changelog.d/9728-prepush-repair-passing-change-erased.md",
+      "scripts/review_autofix_step_prepush_test_gate.sh",
+      "tests/test_review_prepush_test_gate.py"
+    ],
+    "issue_number": 9728,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9728",
+    "pr_number": 9731,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9731",
+    "run_attempt": "1",
+    "run_id": "44332937849",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/44332937849"
   },
   "run_attempt": 1,
   "run_id": "44332937849",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-18T15:28:12Z",
+  "status": "completed",
+  "timestamp": "2026-11-18T15:44:37Z",
   "workflow": "implement"
 }
