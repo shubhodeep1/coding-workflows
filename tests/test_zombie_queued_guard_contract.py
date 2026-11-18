@@ -52,6 +52,8 @@ WIRED_WORKFLOWS = [
 	"auto-release-stable.yml",
 	"promote-main-to-stable.yml",
 	"review_autofix_sweep.yml",
+	# The merge-train release step only; the cancel step stays unfiltered.
+	"cancel_on_pr_close.yml",
 ]
 WIRING = "ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}"
 
@@ -94,7 +96,14 @@ def test_kill_switch_is_wired(workflow: str) -> None:
 def test_documented_exclusions_stay_unchanged(rel: str) -> None:
 	text = _text(rel)
 	assert "is_wedged_queued" not in text
-	assert "ZOMBIE_RUN_MAX_QUEUED_HOURS" not in text
+	if rel.endswith("cancel_on_pr_close.yml"):
+		# Only the merge-train release step reads the variable (through
+		# review_merge_train.sh); the cancel step itself stays unfiltered.
+		assert text.count("ZOMBIE_RUN_MAX_QUEUED_HOURS:") == 1
+		release = text.index("- name: Release merge-queued PRs (merge train)")
+		assert text.index("ZOMBIE_RUN_MAX_QUEUED_HOURS:") > release
+	else:
+		assert "ZOMBIE_RUN_MAX_QUEUED_HOURS" not in text
 
 
 def test_log_prefix_is_registered_in_the_agents_fragment() -> None:

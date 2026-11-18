@@ -9,6 +9,8 @@
 # of this file from RUNNER_TEMP, so exit/GITHUB_OUTPUT act on the step.
 # The one edit: the three inline steps.create-issue.outputs.created_after
 # expressions read PLAN_CREATED_AFTER, which the step's env: now sets.
+# Review autofix later narrowed the #9473 ZOMBIE_RUN_IGNORED logging below
+# to the runs the guard counts, logging each run once.
 set -euo pipefail
 echo "Waiting for plan to finish on issue #${ISSUE_NUMBER}..."
 echo "Inactivity timeout: ${PLAN_PHASE_TIMEOUT} minutes"
@@ -227,17 +229,23 @@ while true; do
     # subshell so this step's shell is not changed; when they are
     # unavailable every queued run stays active.
     if [ -z "${PLAN_ZQ_CUTOFF:-}" ]; then
-      PLAN_ZQ_CUTOFF="$(bash -c '. scripts/gh_helpers.sh >/dev/null 2>&1; zombie_queued_cutoff_epoch' 2>/dev/null || echo 0)"
+      # stderr is kept so an invalid ZOMBIE_RUN_MAX_QUEUED_HOURS warning shows.
+      PLAN_ZQ_CUTOFF="$(bash -c '. scripts/gh_helpers.sh >/dev/null 2>&1; declare -F zombie_queued_cutoff_epoch >/dev/null || exit 1; zombie_queued_cutoff_epoch' || echo 0)"
       [[ "$PLAN_ZQ_CUTOFF" =~ ^[0-9]+$ ]] || PLAN_ZQ_CUTOFF=0
       PLAN_ZQ_DEF="$(bash -c '. scripts/gh_helpers.sh >/dev/null 2>&1; zombie_queued_jq_def' 2>/dev/null || true)"
       [ -n "$PLAN_ZQ_DEF" ] || PLAN_ZQ_DEF='def is_wedged_queued($cutoff): false;'
     fi
-    if [ -z "${PLAN_ZQ_LOGGED:-}" ] && [ "$PLAN_ZQ_CUTOFF" -gt 0 ]; then
-      PLAN_ZQ_LINES="$(printf '%s' "$PLAN_RUNS_JSON" | jq -c --arg title "${ISSUE_TITLE}" '[.workflow_runs[]? | select(.display_title == $title)]' 2>/dev/null \
-        | bash -c '. scripts/gh_helpers.sh >/dev/null 2>&1 && zombie_queued_log_ignored stable_gate_plan_runs "$1"' _ "$PLAN_ZQ_CUTOFF" 2>&1 >/dev/null || true)"
-      if [ -n "$PLAN_ZQ_LINES" ]; then
-        printf '%s\n' "$PLAN_ZQ_LINES" >&2
-        PLAN_ZQ_LOGGED=1
+    # Log each wedged run once, and only runs the guard below would count
+    # (Plan name, our title, active status). The ids already logged are
+    # kept in this shell, so the helper subshell starts only for new ones.
+    if [ "$PLAN_ZQ_CUTOFF" -gt 0 ]; then
+      PLAN_ZQ_NEW="$(printf '%s' "$PLAN_RUNS_JSON" \
+        | jq -c --arg title "${ISSUE_TITLE}" --argjson zq_cutoff "$PLAN_ZQ_CUTOFF" "$PLAN_ZQ_DEF"'[.workflow_runs[]? | select((.name // "") | test("Plan"; "i")) | select(.display_title == $title) | select(.status == "in_progress" or .status == "queued") | select(is_wedged_queued($zq_cutoff))]' 2>/dev/null \
+        | jq -c --arg seen ",${PLAN_ZQ_SEEN:-}," '[.[] | ((.id | tostring) as $zq_id | select(($seen | contains("," + $zq_id + ",")) | not))]' 2>/dev/null || echo '[]')"
+      if [ -n "$PLAN_ZQ_NEW" ] && [ "$PLAN_ZQ_NEW" != "[]" ]; then
+        printf '%s' "$PLAN_ZQ_NEW" \
+          | bash -c '. scripts/gh_helpers.sh >/dev/null 2>&1 && zombie_queued_log_ignored stable_gate_plan_runs "$1"' _ "$PLAN_ZQ_CUTOFF" >/dev/null || true
+        PLAN_ZQ_SEEN="${PLAN_ZQ_SEEN:-}$(printf '%s' "$PLAN_ZQ_NEW" | jq -r '[.[].id | tostring] | join(",")' 2>/dev/null || true),"
       fi
     fi
     OTHER_ACTIVE_PLAN_RUNS=0
