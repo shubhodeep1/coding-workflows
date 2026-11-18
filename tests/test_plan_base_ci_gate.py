@@ -326,6 +326,20 @@ def test_auto_approve_step_wiring() -> None:
 	assert 'echo "auto_approve_hold_reason=base_ci_red" >> "$GITHUB_OUTPUT"' in run
 
 
+def test_helper_is_staged_from_the_workflow_source() -> None:
+	"""Consumer checkouts do not ship the helper, so the staging step must install
+	the pipeline copy (and drop a checkout copy when none can be staged)."""
+	run = _step("Stage workflow support files")["run"]
+	loop_start = run.index("for f in plan_base_ci_gate.sh; do")
+	loop = run[loop_start:run.index("\ndone", loop_start)]
+	assert 'src=".codex-workflow-src/scripts/${f}"' in loop
+	assert 'src=".codex-workflow-src-main/scripts/${f}"' in loop
+	assert 'rm -f "scripts/${f}"' in loop
+	assert 'install -m 0755 "${src}" "scripts/${f}"' in loop
+	assert '_fetched_scripts+=("${f}")' in loop
+	assert run.index("for f in plan_base_ci_gate.sh; do") < run.index('if [ "${{ github.repository }}" != "${wf_source}" ]; then')
+
+
 def test_telegram_uses_debug_only_for_base_ci_red() -> None:
 	step = _step("Telegram plan notification")
 	assert step["env"]["PLAN_AUTO_APPROVE_HOLD_REASON"] == "${{ steps.auto_approve.outputs.auto_approve_hold_reason || '' }}"

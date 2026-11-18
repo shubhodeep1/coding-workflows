@@ -745,6 +745,25 @@ jobs:
             _fetched_scripts+=("${f}")
           done
 
+          # Red-base approval hold helper (Refs #9421): optional, so a support ref
+          # without it never fails planning; the auto_approve step then skips the
+          # hold. The pipeline copy always replaces a checkout file of that name,
+          # and when none is staged the checkout copy is removed so the
+          # secret-bearing auto_approve step never sources a caller's file.
+          for f in plan_base_ci_gate.sh; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::notice::Optional red-base approval hold helper ${f} unavailable on ${SCRIPT_REF}; plan auto-approval is not held on a red base."
+              rm -f "scripts/${f}"
+              continue
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
+            _fetched_scripts+=("${f}")
+          done
+
           # Stage codex_model_catalog.json so scripts/write_codex_config.sh
           # can wire `model_catalog_json` and codex registers
           # `apply_patch_tool_type = "freeform"` for our `openai/gpt-5.*`
@@ -3732,7 +3751,7 @@ jobs:
                   {
                     echo "### Automatic plan approval held (base CI red)"
                     echo ""
-                    echo "The newest \`${RED_BASE_HOLD_WORKFLOW:-none}\` push run on \`${PLAN_DEFAULT_BRANCH:-}\` failed (run \`${RED_BASE_HOLD_RUN_ID:-none}\`) and workflow-heal issue #${RED_BASE_HOLD_HEAL:-none} tracks it, so no automatic \`/approved\` was posted. Stall recovery re-runs the approval checks later; a maintainer can reply \`/approved\` to start now."
+                    echo "The newest \`${RED_BASE_HOLD_WORKFLOW:-none}\` push run on \`${PLAN_DEFAULT_BRANCH:-}\` failed (run \`${RED_BASE_HOLD_RUN_ID:-none}\`) and workflow-heal issue #${RED_BASE_HOLD_HEAL:-none} tracks it, so no automatic \`/approved\` was posted. Stall recovery may approve it later without re-checking base CI (that check is not in this phase); a maintainer can reply \`/approved\` to start now."
                   } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
                   red_base_approval_hold_comment "${PLAN_STEP_REPO}" "${ISSUE_NUMBER}" "${PLAN_DEFAULT_BRANCH:-}" || true
                   exit 0
@@ -3788,7 +3807,7 @@ jobs:
             # Red-base approval hold (Refs #9421): stall recovery releases it, so
             # no human is needed and the notice is DEBUG.
             MSG+=$'\n'
-            MSG+="Automatic approval held: CI on the default branch is red (stall recovery re-runs the approval checks)."
+            MSG+="Automatic approval held: CI on the default branch is red (stall recovery or a maintainer /approved releases it)."
             tg_send_phase_tracked "${ISSUE_NUMBER}" "plan" "${MSG}" "DEBUG"
           else
             tg_send_phase_tracked "${ISSUE_NUMBER}" "plan" "${MSG}" "CRITICAL"

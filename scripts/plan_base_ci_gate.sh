@@ -282,6 +282,8 @@ red_base_approval_hold_comment()
 			(map(select(trusted and is_plan)) | max_by(event_key)) as $plan
 			| any(.[]; trusted and ((.body // "") | contains($marker))
 				and (if $plan == null then true else (event_key > ($plan | event_key)) end))' 2>/dev/null)" || duplicate="false"
+	else
+		echo "::warning::Could not read comments on issue #${comment_issue} to de-duplicate the red-base approval hold comment; posting it."
 	fi
 	if [ "${duplicate}" = "true" ]; then
 		echo "Red-base approval hold already reported for issue #${comment_issue}; not posting another comment."
@@ -294,7 +296,7 @@ red_base_approval_hold_comment()
 	fi
 	hold_body="**Automatic approval held: CI on \`${comment_branch}\` is red.**"$'\n\n'
 	hold_body+="The plan is ready. The newest \`${comment_workflow}\` push run on \`${comment_branch}\` ${run_line}, and workflow-heal issue #${comment_heal} tracks it, so no automatic \`/approved\` was posted. A pull request started now would inherit the red base and fail CI."$'\n\n'
-	hold_body+="Stall recovery re-runs the approval checks later, and a maintainer can reply \`/approved\` to start now. \`RED_BASE_APPROVAL_HOLD_ENABLED=false\` turns the hold off."$'\n\n'
+	hold_body+="Stall recovery may approve the plan later without re-checking base CI, and a maintainer can reply \`/approved\` to start now. \`RED_BASE_APPROVAL_HOLD_ENABLED=false\` turns the hold off."$'\n\n'
 	hold_body+="${comment_marker}"
 	if ! _red_base_hold_gh api "repos/${comment_repo}/issues/${comment_issue}/comments" -f body="${hold_body}" >/dev/null 2>&1; then
 		echo "::warning::Could not post the red-base approval hold comment for issue #${comment_issue}."
