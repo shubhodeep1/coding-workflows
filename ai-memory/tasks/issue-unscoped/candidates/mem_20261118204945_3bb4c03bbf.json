@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_test_and_mark_stable_step_scripts_contract.py:32-76 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: `.github/workflows/test-and-mark-stable.yml` is 430,486 bytes on head 8c04d15b, over the 430,000-byte guard (`MAX_WORKFLOW_BYTES = 430_000` at line 32, asserted at line 76 in test_workflow_keeps_fifty_thousand_bytes_of_headroom). Because of this, tests-system-python (23) and tests-promote-stall-and-review fail, and the aggregate lint job fails with them.\n  WHY: Every CI run on this head fails that assertion, so the final CI gate cannot go green. This PR does not change the workflow; the bytes came in through base merges from orchestrator/project-8291. Per \u00a724 the guard must not be raised, and the fix (moving `run:` bodies into `scripts/`) belongs on the integration branch. All three reviewers rated it MAJOR, mapped here to high. sonnet and glm put File: on the test file; luna and glm put it on the workflow file. minimax_minimax-m3 saw this entry and chose not to raise it, calling it a floor finding outside this PR's scope.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_test_and_mark_stable_step_scripts_contract.py:line 32 \"MAX_WORKFLOW_BYTES = 430_000\"; line 76 \"assert size <= MAX_WORKFLOW_BYTES, size\" in test_workflow_keeps_fifty_thousand_bytes_of_headroom | severity=MAJOR | confidence=5\n  PROBLEM: CI on head 8c04d15b fails because `.github/workflows/test-and-mark-stable.yml` is 430,486 bytes, over the 430,000-byte guard. This assertion fails tests-system-python (23) (log: \"AssertionError: 430486\") and tests-promote-stall-and-review, and lint fails because it collects those two jobs. The workflow is not in this PR's changed files or its files_touched grant; the bytes came in through base merges from orchestrator/project-8291, including the latest merge, 8c04d15b.\n  WHY: No head of this PR can pass final CI until the integration branch brings the workflow back under the guard. Per \u00a724 the fix belongs on orchestrator/project-8291 (move `run:` bodies into `scripts/`, do not raise the guard). No edit to this PR's files can clear it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml:Workflow size is 430,486 bytes on PR head 8c04d15b; the enforcing assertion is tests/test_test_and_mark_stable_step_scripts_contract.py:74-76. | severity=MAJOR | confidence=5\n  PROBLEM: The workflow exceeds the test-enforced 430,000-byte limit.\n  WHY: CI fails the system-Python and promote-stall-and-review jobs at the size assertion, so the aggregate lint job fails too. The failure is unrelated to the latest changelog wording edit.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/test-and-mark-stable.yml:file size 430,486 bytes vs guard at tests/test_test_and_mark_stable_step_scripts_contract.py:32 (MAX_WORKFLOW_BYTES = 430_000), asserted at line 76 (test_workflow_keeps_fifty_thousand_bytes_of_headroom) | severity=MAJOR | confidence=5\n  PROBLEM: All three failed checks on head 8c04d15b (tests-system-python (23), tests-promote-stall-and-review and the aggregate lint job) come from this one size assertion. The workflow is 486 bytes over the guard.\n  WHY: Every CI run on this head fails the assertion, so the final CI gate cannot go green. This PR does not change the workflow; the bytes arrived through base merges from orchestrator/project-8291 (430,203 \u2192 430,394 \u2192 430,486 across successive base syncs). Per \u00a724 the guard must not be raised, and the fix belongs on the integration branch. No PR-side edit can clear it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d661316f1cb5b2cfcb824137cdb0fb505437179c3bf5ad849b6bb7404e776139",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9602,
+    "run_id": "44373383483",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "github-actions[bot]",
+    "run_attempt": 1,
+    "run_id": "44373383483",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118204945_3bb4c03bbf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9602,
+    "run_id": "44373383483"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T20:49:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
