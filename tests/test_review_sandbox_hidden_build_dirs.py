@@ -122,8 +122,8 @@ def test_sandbox_appends_the_note_after_every_prompt_install():
 	text = SANDBOX_SH.read_text(encoding="utf-8")
 	assert 'hidden-note "${root}/baseline.json"' in text
 	installs = text.count('install -m 0600 "${prompt}" "${root}/prompt"')
-	assert installs == 2
-	assert text.count('install -m 0600 "${prompt}" "${root}/prompt"\n\treview_append_hidden_build_note\n') == 1
+	assert installs == 3
+	assert text.count('install -m 0600 "${prompt}" "${root}/prompt"\n\treview_append_hidden_build_note\n') == 2
 	assert text.count('install -m 0600 "${prompt}" "${root}/prompt"\nreview_append_hidden_build_note\n') == 1
 
 
