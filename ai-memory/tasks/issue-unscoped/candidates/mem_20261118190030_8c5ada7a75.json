@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/check_failure_triage.yml:820-835 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The post-filing step adds a new `gh api` call that lists the open `ai:check-triage` issues again, to reduce a race condition. This breaks the \"No new API call\" constraint (Constraint #15 / Issue #9674).\n  WHY: The issue's stated non-goal is \"No new API call; both guards read the existing OPEN_TRIAGE listing\". The extra synchronous call also conflicts with \u00a714 API call hygiene and could count against the rate limit. The reviewer rated it MAJOR; it is mapped to high here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"No new API call; both guards read the existing `OPEN_TRIAGE` listing.\" (Issue #9674 Goals / \u00a715)\n  expected_change_site: .github/workflows/check_failure_triage.yml, \"Post check-failure triage issue\" step\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The PR adds a new `gh api` call at lines 820-835 of the post step to list `ai:check-triage` issues again (google_gemini-3_1-flash-lite), the second paginated `gh api` request at lines 833-840 in the PR diff lists open `ai:check-triage` issues once more just before `gh issue create` (minimax_minimax-m3). minimax_minimax-m3 notes that the collect-stage guards do meet the constraint (scripts/check_failure_triage.sh:1727, scripts/check_failure_triage.sh:1796). It rates this MAJOR, not BLOCKER, because a \u00a714 audit comment documents the deviation, the read runs only for base-keyed filings, a failed read falls back to the legacy behaviour, and earlier autofix rounds accepted it.\n- requirement: Resolve re-issue logic for base-keyed triage issues in unblock-judge automation (scripts/unblock_actions.py / scripts/unblock_judge.sh).\n  expected_change_site: scripts/unblock_actions.py / scripts/unblock_judge.sh\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: Not implemented in this PR. The PR description / review comments say it was deliberately deferred because of sandbox limitations. The reviewer itself states: \"As it was explicitly deferred by the issue, this is not a gap.\"\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/check_failure_triage.yml:lines 820-835 | severity=MAJOR | confidence=5\n  PROBLEM: Breaks the \"No new API call\" constraint (Constraint #15 / Issue #9674). A new `gh api` call in the post-filing step lists `ai:check-triage` issues again to reduce a race condition.\n  WHY: This goes against the stated non-goal \"No new API call; both guards read the existing OPEN_TRIAGE listing\" and conflicts with \u00a714 API call hygiene. It adds a synchronous call that could count against the rate limit and that better state management could have avoided.\n- TASK_GAP\n  Requirement: \"No new API call; both guards read the existing `OPEN_TRIAGE` listing.\" (Issue #9674 Goals).\n  Expected change site: .github/workflows/check_failure_triage.yml\n  Evidence of absence: The PR adds a new `gh api` call at lines 820-835 of the post step to list `ai:check-triage` issues again. The constraint says only the existing `OPEN_TRIAGE` listing, already read in the collect stage, should be used.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: Resolve re-issue logic for base-keyed triage issues in unblock-judge automation (scripts/unblock_actions.py / scripts/unblock_judge.sh).\n  Expected change site: scripts/unblock_actions.py / scripts/unblock_judge.sh\n  Evidence of absence: The PR description / review comments say this was deliberately deferred because of sandbox limitations, so it is not implemented in this PR. Because the issue deferred it on purpose, this is not a gap.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \u00a715 in the linked issue reads \"no new API call; both guards read the existing `OPEN_TRIAGE` listing.\"\n  Expected change site: `.github/workflows/check_failure_triage.yml`, \"Post check-failure triage issue\" step (the second paginated `gh api` request at lines 833-840 in the PR diff).\n  Evidence of absence: Just before `gh issue create`, the post step's base-keyed re-check lists open `ai:check-triage` issues once more, which is one extra `gh api` call. No other path makes a new API call beyond what the collect-stage guards use. The collect-stage guards meet the constraint: scripts/check_failure_triage.sh:1727 and scripts/check_failure_triage.sh:1796 both read the existing `OPEN_TRIAGE` listing.\n  ISSUE_CONFIDENCE: 3\n  Severity assessment: MAJOR (not BLOCKER).\n  - A \u00a714 audit comment documents the deviation.\n  - The read runs only for base-keyed filings that reach the post step.\n  - A failed read falls back to the legacy `gh issue create`.\n  - Five earlier autofix rounds kept the deviation as a deliberate race fix.\n- Unblock-judge base-marker handling (`scripts/unblock_actions.py` `ci_owner_candidate` / `scripts/unblock_judge.sh`): the reviewer says this is not a gap. It is outside the plan grant's `files_touched`, and PR comment 6974306881 marked it TASK_GAP_DEFERRED.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b0649c0d720c859356571809acca2470e2e080cbda165d2db57e0e26b123c4b8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9703,
+    "run_id": "44351198618",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44351198618",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118190030_8c5ada7a75",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9703,
+    "run_id": "44351198618"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T19:00:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
