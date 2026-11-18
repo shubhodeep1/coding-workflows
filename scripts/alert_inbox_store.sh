@@ -14,13 +14,14 @@
 #
 # Output: inbox/<YYYY>/<MM>/<DD>/<HH>/<epoch_ms>-<owner-repo>-<run_id>-<id8>.json
 # on the branch ai/alert-inbox, written with the Contents API and GITHUB_TOKEN.
-#   - HTTP 409: one retry after 1-3 s.
+#   - HTTP 409 (a concurrent intake moved the branch head): up to 3 retries
+#     with growing jittered backoff (2-4 s, 4-6 s, 6-8 s).
 #   - Branch missing: bootstrapped from a parentless root commit (empty tree,
 #     or a one-file marker tree when GitHub rejects the empty tree), then one
 #     more PUT. The branch only moves forward: no force-push, no ref PATCH,
 #     no deletion.
 #   - The path already exists (re-run of the same dispatch): outcome=duplicate.
-# API calls per record: 1 normally, 2 on a 409, up to 7 on bootstrap; each
+# API calls per record: 1 normally, up to 4 on 409s, up to 7 on bootstrap; each
 # bounded by curl --max-time 20.
 #
 # Log line (stderr, stable prefix ALERT_INBOX):
@@ -232,9 +233,12 @@ while true; do
 			exit 0
 			;;
 		409)
-			if [ "${conflict_retried}" -eq 0 ]; then
-				conflict_retried=1
-				sleep $((1 + RANDOM % 3))
+			# Intake runs are not serialised (per-run concurrency group), so a
+			# burst can conflict more than once; the bound keeps the job far
+			# inside its 5-minute timeout.
+			if [ "${conflict_retried}" -lt 3 ]; then
+				conflict_retried=$((conflict_retried + 1))
+				sleep $((conflict_retried * 2 + RANDOM % 3))
 				continue
 			fi
 			_alert_inbox_fail conflict
