@@ -293,21 +293,26 @@ jobs:
           fi
           plan_archival_merged_head="$(git rev-parse --verify 'HEAD^2^{commit}')"
           if [ "${plan_archival_merged_head}" != "${PLAN_ARCHIVAL_HEAD_SHA}" ]; then
-            echo "::error title=Plan-archival completeness lint (not the PR-body lint)::[lint_plan_archival] outcome=stale_merge_commit The checked-out merge commit merges ${plan_archival_merged_head}, not this event's head ${PLAN_ARCHIVAL_HEAD_SHA}, so the files this PR adds cannot be listed. Push again or re-run the job. This is not a CLAUDE.md §19 violation."
+            echo "::error title=Plan-archival completeness lint (not the PR-body lint)::[lint_plan_archival] outcome=stale_merge_commit The checked-out merge commit merges ${plan_archival_merged_head}, not this event's head ${PLAN_ARCHIVAL_HEAD_SHA}, so the files this PR adds cannot be listed. Push again, or edit the PR title or body, to start a new run: re-running this job checks out the same merge commit. This is not a CLAUDE.md §19 violation."
             exit 1
           fi
           mkdir -p /tmp/plan-archival-lint
           # NUL-separated name-status with rename detection pinned on, so
           # the result does not depend on git configuration or on how a
           # path is printed.
-          git diff -z --name-status --find-renames 'HEAD^1' HEAD > /tmp/plan-archival-lint/diff.bin
+          if ! git diff -z --name-status --find-renames 'HEAD^1' HEAD > /tmp/plan-archival-lint/diff.bin; then
+            echo "::error title=Plan-archival completeness lint (not the PR-body lint)::[lint_plan_archival] outcome=enumerate_failed The diff of the merge commit against its first parent failed, so the files this PR adds cannot be listed. This is not a CLAUDE.md §19 violation."
+            exit 1
+          fi
           # Added files are status A, plus a rename whose destination is
           # under docs/completed/ and whose source is not: a plan moved with
           # `git mv` into docs/completed/ is an archival (the old workflow's
           # `--diff-filter=A` dropped it as a rename). A rename inside
           # docs/completed/ is not an archival, as before. Exit 3: a file
-          # added under docs/completed/ has a line break in its name and
-          # cannot be passed to the lint script one path per line.
+          # added under docs/completed/ has a line break in its name, or a
+          # name that is not valid UTF-8, and cannot be passed to the lint
+          # script (one UTF-8 path per line). Other added files with such a
+          # name are left out of the list; the lint reads docs/completed/ only.
           plan_archival_enum_rc=0
           python3 -I -c '
           import sys
@@ -332,10 +337,12 @@ jobs:
                   if status[:1] == "A":
                       added.append(path)
           archived = [path for path in added if path.startswith(prefix)]
-          if any("\n" in path or "\r" in path for path in archived):
+          def unlistable(path):
+              return "\n" in path or "\r" in path or any("\udc80" <= ch <= "\udcff" for ch in path)
+          if any(unlistable(path) for path in archived):
               sys.exit(3)
-          listable = [path for path in added if "\n" not in path and "\r" not in path]
-          with open(dst, "w", encoding="utf-8", errors="surrogateescape") as out:
+          listable = [path for path in added if not unlistable(path)]
+          with open(dst, "w", encoding="utf-8") as out:
               out.write("".join(path + "\n" for path in listable))
           needed = "true" if archived else "false"
           with open(github_output, "a", encoding="utf-8") as out:
@@ -344,7 +351,7 @@ jobs:
           ' /tmp/plan-archival-lint/diff.bin /tmp/plan-archival-lint/added.txt "${GITHUB_OUTPUT}" \
             || plan_archival_enum_rc=$?
           if [ "${plan_archival_enum_rc}" -ne 0 ]; then
-            echo "::error title=Plan-archival completeness lint (not the PR-body lint)::[lint_plan_archival] outcome=enumerate_failed exit_code=${plan_archival_enum_rc} The files this PR adds could not be listed (exit code 3: a file added under docs/completed/ has a line break in its name; rename it). This is not a CLAUDE.md §19 violation."
+            echo "::error title=Plan-archival completeness lint (not the PR-body lint)::[lint_plan_archival] outcome=enumerate_failed exit_code=${plan_archival_enum_rc} The files this PR adds could not be listed (exit code 3: a file added under docs/completed/ has a line break in its name or a name that is not valid UTF-8; rename it). This is not a CLAUDE.md §19 violation."
             exit 1
           fi
 

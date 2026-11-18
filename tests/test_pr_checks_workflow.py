@@ -365,6 +365,53 @@ def test_enumerate_step_fails_closed_on_an_unlistable_path() -> None:
 		assert github_output == ""
 
 
+def test_enumerate_step_fails_closed_on_a_non_utf8_completed_path() -> None:
+	"""The lint script reads the list as UTF-8. A name that is not valid
+	UTF-8 under docs/completed/ takes the guided exit-3 path, not a traceback
+	in the lint step; such a name elsewhere is left out of the list."""
+	def _adds_a_plan_with_a_non_utf8_name(repo_dir: Path) -> None:
+		with open(os.path.join(os.fsencode(repo_dir), b"docs", b"completed", b"bad\xff.md"), "wb") as fh:
+			fh.write(b"new\n")
+
+	def _adds_code_with_a_non_utf8_name(repo_dir: Path) -> None:
+		with open(os.path.join(os.fsencode(repo_dir), b"code\xff.py"), "wb") as fh:
+			fh.write(b"x = 1\n")
+		(repo_dir / "docs" / "completed" / "ok.md").write_text("fine\n", encoding="utf-8")
+
+	with tempfile.TemporaryDirectory() as tmp:
+		repo_dir = _merge_commit_repo(Path(tmp), _adds_a_plan_with_a_non_utf8_name)
+		rc, output, github_output = _run_enumerate_step(repo_dir, Path(tmp))
+		assert rc == 1, output
+		assert "outcome=enumerate_failed exit_code=3" in output, output
+		assert github_output == ""
+	with tempfile.TemporaryDirectory() as tmp:
+		repo_dir = _merge_commit_repo(Path(tmp), _adds_code_with_a_non_utf8_name)
+		rc, output, github_output = _run_enumerate_step(repo_dir, Path(tmp))
+		assert rc == 0, output
+		added = (Path(tmp) / "plan-archival-lint" / "added.txt").read_text(encoding="utf-8").splitlines()
+		assert added == ["docs/completed/ok.md"], added
+		assert github_output == "needed=true\n", github_output
+
+
+def test_enumerate_step_works_in_a_depth_2_clone() -> None:
+	"""The job checks out the merge commit with `fetch-depth: 2`. A clone of
+	that depth has the merge commit and both parents, which is all the
+	enumerate step reads."""
+	def _adds_a_completed_plan(repo_dir: Path) -> None:
+		(repo_dir / "docs" / "completed" / "x.md").write_text("new\n", encoding="utf-8")
+
+	with tempfile.TemporaryDirectory() as tmp:
+		source_dir = _merge_commit_repo(Path(tmp), _adds_a_completed_plan)
+		clone_dir = Path(tmp) / "clone"
+		_git(Path(tmp), "clone", "-q", "--depth", "2", "--branch", "main", source_dir.as_uri(), str(clone_dir))
+		assert _git(clone_dir, "rev-parse", "--is-shallow-repository") == "true"
+		head_sha = _git(source_dir, "rev-parse", "pr-branch")
+		rc, output, github_output = _run_enumerate_step(clone_dir, Path(tmp), event_head_sha=head_sha)
+		assert rc == 0, output
+		assert github_output == "needed=true\n", github_output
+		assert "added_files=1 lint_needed=true" in output, output
+
+
 def test_readiness_step_matches_the_label_workflow() -> None:
 	"""Both workflows call the readiness script the same way, so the status
 	means the same whichever event posted it."""
