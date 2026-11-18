@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/update_workflows.yml:1635-1642 | severity=major | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The resend-vs-kept_head decision uses a single lazily computed `mergeable` read (from line 1527), so UNKNOWN or empty is treated as non-conflicting and a conflicted PR is not moved to a `-rN` branch.\n  WHY: A stuck PR can stay stuck across daily runs. Severity disagreement: z-ai_glm-5_3-flash rated it NIT because it self-corrects on the next run, and the other three reviewers rated it MAJOR. The highest is used.\n- .github/workflows/update_workflows.yml:1626 | severity=major | confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The refusal-classifier grep matches bare `GH013`, which GitHub emits for any ruleset violation, not only force-push or non-fast-forward refusals.\n  WHY: Unrelated ruleset refusals are misclassified as rewrite refusals. Non-conflicting PRs silently take `kept_head`, and the run reports the push as done and continues as a successful refresh. Conflicting PRs resend to a branch that will likely be refused again.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/update_workflows.yml:1635-1642 | severity=major | confidence=3\n  PROBLEM: The move to `-rN` happens only when the single `mergeable` read returns exactly CONFLICTING. UNKNOWN or empty takes `kept_head`.\n  WHY: A stuck PR whose base moved can read UNKNOWN again on every daily run, so the fun-token-multi-chain #889 case stays stuck. The reviewer suggests one extra `gh pr view --json mergeable` read after a short sleep when the value is empty or UNKNOWN.\n- Hardening: .github/workflows/update_workflows.yml:1626 (risk score 1)\n  PROBLEM: Bare `GH013` is GitHub's code for any ruleset violation, so other refusals are classified as rewrite refusals.\n  WHY: The suggested fix is to drop bare `GH013` or use `GH013.*(force-push|non-fast-forward)`. The change is about 1 line.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/update_workflows.yml:1635 | severity=major | confidence=4\n  PROBLEM: `mergeable` is fetched once via `gh pr list`. UNKNOWN or empty is treated as not conflicting, which skips the resend path for stuck PRs.\n  WHY: Conflicted PRs reported as UNKNOWN stay stuck until a later run gets CONFLICTING.\n- Hardening: .github/workflows/update_workflows.yml:1626 (risk score 1)\n  PROBLEM: The `GH013` grep pattern is generic and triggers on any repository rule violation.\n  WHY: The suggested fix is to pair `GH013` with the specific force-push or non-fast-forward text.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/update_workflows.yml:1626 | severity=major | confidence=4\n  PROBLEM: The grep alternation matches bare `GH013`, which GitHub emits for any ruleset violation.\n  WHY: Unrelated violations such as a missing signature are misclassified as rewrite refusals. This produces misleading `UPDATER_PR_RESEND outcome=push_failed` and `resend_push_failed` results, and the run never converges.\n- .github/workflows/update_workflows.yml:1633-1642 | severity=major | confidence=3\n  PROBLEM: When `mergeable` is UNKNOWN, the `kept_head` branch runs and no fresh commit is pushed.\n  WHY: If UNKNOWN is the steady-state value at run time, a conflicting PR keeps its head, never moves to `-rN`, and is never merged. The \"next run looks again\" claim does not converge.\n- Hardening: .github/workflows/update_workflows.yml:1626 (risk score 3)\n  PROBLEM: Bare `GH013` over-matches.\n  WHY: The suggested fix is `(GH013.*(force-push|non-fast-forward))|cannot force-push|...`, which falls back to `lease_mismatch_or_push_rejected` for unrelated ruleset failures. The change is about 1 line.\n- Hardening: .github/workflows/update_workflows.yml:1633-1642\n  PROBLEM: The source text ends mid-entry (\"lines 1633-1642 (UNKNOW\"), so this second hardening item is truncated and its content is not available.\n  WHY: (not stated)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/update_workflows.yml:1626 and 1639-1642 | severity=major | confidence=4\n  PROBLEM: The refusal classifier treats any push error containing `GH013` as a refusal to rewrite the branch, but `GH013` identifies repository-rule violations in general.\n  WHY: If another rule rejects the refreshed commit, a non-conflicting PR takes `kept_head`. The run reports the remote SHA as pushed and continues as a successful refresh although the push failed and the rebuilt tree was not applied.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/update_workflows.yml:1635-1642 | severity=nit | confidence=3\n  PROBLEM: The resend-vs-kept_head decision trusts one `mergeable` value, sourced from the `gh pr list` read at line 1527. If it is UNKNOWN or absent, a conflicted PR takes `kept_head`.\n  WHY: The conflict fix is deferred to the next daily run. The reviewer judges this intentional per the in-code comment and PR description, and the impact is a delayed fix, not a stuck release.\n- Hardening: .github/workflows/update_workflows.yml:1626 (risk score 1)\n  PROBLEM: Bare `GH013` matches any ruleset violation, so a refusal on a non-conflicting PR silently takes `kept_head` and reports `rewrite_refused_kept_head` although the refresh never landed.\n  WHY: The suggested fix is to drop bare `GH013` or use `GH013.*(force-push|non-fast-forward)`. The change is 1-2 lines.\n- Hardening: .github/workflows/update_workflows.yml:1635-1642 (risk score 1)\n  PROBLEM: When `mergeable` is empty or UNKNOWN, the run cannot tell a healthy PR from a lazily uncomputed conflict.\n  WHY: The suggested fix is to re-read once with `gh pr view \"${PR_NUMBER}\" --repo ... --json mergeable` only in this refused path. The change is about 3 lines.\n- Missing-context note: all five check runs on the head SHA (quick / lint, static-checks, budget-watch, final-ci-failed, readiness) are `cancelled`, so there is no CI signal for the new tests in tests/test_update_workflows_resend_branch.py. The PR description says 22 tests, but the reviewer counts 21 test functions.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "96e57f29fc8328ced175de77d5dac43268d83048384e271415134d79f0dc05fa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9713,
+    "run_id": "44263909117",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44263909117",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118093814_a99ed4484b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9713,
+    "run_id": "44263909117"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T09:38:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
