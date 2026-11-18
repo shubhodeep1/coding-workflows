@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/9677-release-gate-queue-backoff.md:9-14 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The list of earlier skips that bypass the cleanup omits `guard_unavailable`, which `scripts/auto_release_stable.sh` raises at lines 205, 214 and 223, before the cleanup call at line 345.\n  WHY: A reader would wrongly conclude that `guard_unavailable` ticks reach the cleanup. All reviewers rated it NIT.\n- scripts/auto_release_stable.sh:177,237 | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new gh api calls are not integrated into gh_api_write_guard.py.\n  WHY: The CI enforcement hook may block these calls and fail CI. The reviewer rated it BLOCKER. Other reviewers (minimax_minimax-m3, anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) rejected the claim.\n- .github/workflows/auto-release-stable.yml:53-64 | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: CI failures in tests/test_files_touched_scope_guard.py.\n  WHY: The reviewer says the README.md and other changes violate the scope guards. The reviewer rated it BLOCKER. Other reviewers (minimax_minimax-m3, anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) rejected the claim.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.d/9677-release-gate-queue-backoff.md (sentence \"A tick that skips earlier (...) does not run the cleanup.\") | severity=NIT | confidence=4\n  PROBLEM: The list omits `guard_unavailable`, which `scripts/auto_release_stable.sh` raises at lines 205, 214 and 223, before the cleanup.\n  WHY: Nothing fails at runtime. A reader would wrongly conclude that `guard_unavailable` ticks reach the cleanup.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/auto_release_stable.sh:177, 237 | severity=BLOCKER | confidence=4\n  PROBLEM: The new gh api calls are not integrated into gh_api_write_guard.py.\n  WHY: The CI enforcement hook will likely block or mishandle these API calls because they are missing from the allowed list, causing CI failures.\n- agents.d/9677-release-gate-queue-backoff.md:14 | severity=NIT | confidence=4\n  PROBLEM: The list of earlier skips that bypass the cleanup omits `guard_unavailable`.\n  WHY: The script calls `skip_release guard_unavailable` at lines 205, 214 and 223, before the cleanup at line 345, so a reader would wrongly assume those ticks reach the cleanup.\n- .github/workflows/auto-release-stable.yml:53-64 | severity=BLOCKER | confidence=4\n  PROBLEM: CI failures in tests/test_files_touched_scope_guard.py.\n  WHY: The changes to README.md and other files appear to violate the repository's scope guards, causing test failure and blocking the PR.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.d/9677-release-gate-queue-backoff.md:9 | severity=NIT | confidence=4\n  PROBLEM: The list of earlier skips that bypass the cleanup omits `guard_unavailable`. `scripts/auto_release_stable.sh` calls `skip_release guard_unavailable` at lines 205, 214 and 223, all before the cleanup call site at line 345.\n  WHY: There is no runtime failure. A reader would wrongly conclude that `guard_unavailable` ticks reach the cleanup.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.d/9677-release-gate-queue-backoff.md:9 | severity=NIT | confidence=4\n  PROBLEM: The list of skips that bypass fixture cleanup omits `guard_unavailable`.\n  WHY: On tag lookup failures, `scripts/auto_release_stable.sh` exits with `guard_unavailable` at lines 205, 214 or 223, before the cleanup at line 345, so the documentation can mislead operators about when fixtures are handled.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.d/9677-release-gate-queue-backoff.md (paragraph after the two bullet points) | severity=NIT | confidence=4\n  PROBLEM: The enumeration of earlier skips is incomplete. `guard_unavailable` also exits before the cleanup (`skip_release guard_unavailable` at scripts/auto_release_stable.sh:205, :214 and :223, all before the cleanup call at scripts/auto_release_stable.sh:345).\n  WHY: No runtime failure. The log/doc mismatch misleads operators correlating tick logs with the documented skip list, and the sentence was newly introduced in the last-run diff.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "42192d60ddcd8a2f3db2f051acec3e4d1bcd011850ae87c7366959345b1f38dc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9677,
+    "run_id": "44243942514",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44243942514",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118075544_7bcd387086",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9677,
+    "run_id": "44243942514"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T07:55:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
