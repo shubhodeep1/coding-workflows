@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/ai-workflow-integrity.yml:16-27 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The push trigger paths filter `.github/workflows/**` also starts a run for nested files that the checker does not treat as managed candidates, so the run is started unnecessarily.\n  WHY: This works against the goal of reducing runner usage, but the reviewer itself says the filter is correct for starting the run and the job logic only needs to be robust (source severity NIT).\n- workflow-templates/ai-workflow-integrity.yml:header comment | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The header comment says a push that changes more than 300 files could skip the push run even though a wrapper changed.\n  WHY: This is a known GitHub path-filter limitation, and the reviewer states the implementation is correct within GitHub's constraints (source severity NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- workflow-templates/ai-workflow-integrity.yml:lines 16-27 | severity=NIT | confidence=3\n  PROBLEM: The push trigger paths filter is `.github/workflows/**`.\n  WHY: A push that changes a nested file such as `.github/workflows/nested/ai-plan.yml` still starts the workflow, but the `integrity` job may not treat it as a candidate because the checker lists only top-level files. The run is started unnecessarily, which works against the goal of reducing runner usage. The path filter is correct for starting the run, but the job logic should be robust.\n- workflow-templates/ai-workflow-integrity.yml:header comment | severity=NIT | confidence=5\n  PROBLEM: The comment states that a push that changes more than 300 files could skip the push run even though a wrapper changed.\n  WHY: This is a known GitHub path-filter limitation. The implementation is correct within GitHub's constraints.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f9b1402f4023ee82475fc0f16d52d6fdf59498f5b18440da5d970a3d9ffd2896",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9705,
+    "run_id": "44269690400",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44269690400",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118101655_fb16cd737c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9705,
+    "run_id": "44269690400"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T10:16:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
