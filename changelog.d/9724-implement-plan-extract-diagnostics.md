@@ -1,0 +1,6 @@
+<!-- changelog: changed -->
+- **Implement now says why it found no approved plan.** When the "Extract implementation plan" step cannot find a trusted plan comment posted before the triggering `/approved`, it still fails as before, and now also prints one `::error::IMPLEMENT_PLAN_NOT_FOUND reason=<token>` line plus a `::warning::IMPLEMENT_PLAN_CANDIDATE` line for each plan-like comment it saw.
+
+Implement run 44292180289 (issue #9718) failed with only `Process completed with exit code 1.`, and the heal intake could not tell whether the plan comment had been deleted, edited, posted after the approval, or written by an untrusted author. The reason token now names which: `approval_not_found`, `no_plan_comment`, `plan_after_approval`, `plan_author_untrusted` or `plan_body_mismatch`. Candidate lines (at most 20) give each comment's id, time, author, author type and association, and whether it still has the `Implementation plan` heading or only the `<!-- ai:plan-proposal:v1 -->` marker. Comment bodies are never printed. Which plan is accepted, and the step's exit status, are unchanged. No GitHub API calls are added.
+
+What this means for consumer repos: after the next `@stable` sync, a failed plan lookup in implement names its cause in the job log and in workflow-heal evidence. Nothing to configure.
