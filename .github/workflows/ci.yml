@@ -1814,6 +1814,9 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_retro.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_log_analysis_failure_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stage_workflow_log_bundle.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_check_workflow_analysis_report.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_log_analysis_purge_safety.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_log_analysis_since_last_report.py
 
       - name: Semantic cache unit tests
         run: |
@@ -2865,6 +2868,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_core_modes.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_review_judge_modes.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_validate_analytics_modes.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mode_workflow_analysis_prompt_findings_first.py
 
       # Moved again from tests-heal-plan-and-validation, which took 16m08s of
       # its 20 minutes on main (run 42373283876, budget-watch issue #8993). The
@@ -4703,6 +4707,8 @@ jobs:
       issues: write
       pull-requests: write
       actions: write
+      # classify-run reads the run's check-run annotations (infra failures).
+      checks: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -4724,4 +4730,14 @@ jobs:
           FINAL_CI_FAILED_REDISPATCH_ENABLED: ${{ vars.FINAL_CI_FAILED_REDISPATCH_ENABLED || 'true' }}
           # A failed sync-quick run gets the full suite instead of a hand-back.
           FINAL_CI_FAILED_SYNC_QUICK: ${{ inputs.sync_quick == 'true' }}
+          # Infra failures are left to the sweep's failed-jobs re-run
+          # (docs/plans/final-ci-failure-ci-fix-plan.md Phase 1); the
+          # classifier switches match the sweep's step.
+          FINAL_CI_FAILED_RUN_ID: ${{ github.run_id }}
+          FINAL_CI_FAILED_RUN_ATTEMPT: ${{ github.run_attempt }}
+          FINAL_CI_FAILED_INFRA_RERUN_ENABLED: ${{ vars.FINAL_CI_FAILED_INFRA_RERUN_ENABLED || 'true' }}
+          CI_CANCELLED_AUTO_RERUN_ENABLED: ${{ vars.CI_CANCELLED_AUTO_RERUN_ENABLED || 'true' }}
+          CI_ACTION_RESOLUTION_RERUN_ENABLED: ${{ vars.CI_ACTION_RESOLUTION_RERUN_ENABLED || 'true' }}
+          CI_CHECKOUT_FETCH_RERUN_ENABLED: ${{ vars.CI_CHECKOUT_FETCH_RERUN_ENABLED || 'true' }}
+          CI_ABANDONED_JOB_RERUN_ENABLED: ${{ vars.CI_ABANDONED_JOB_RERUN_ENABLED || 'true' }}
         run: bash scripts/review_final_ci_failed.sh

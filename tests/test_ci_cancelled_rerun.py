@@ -1051,3 +1051,149 @@ def test_process_forwards_abandoned_job_flag():
 def test_workflow_forwards_abandoned_job_flag():
 	text = (ROOT / ".github/workflows/review_autofix_sweep.yml").read_text(encoding="utf-8")
 	assert "CI_ABANDONED_JOB_RERUN_ENABLED: ${{ vars.CI_ABANDONED_JOB_RERUN_ENABLED || 'true' }}" in text
+
+
+# --- Final-CI dispatch runs (final-ci-failure-ci-fix plan, Phase 1) ---------
+
+def final_run(sha=SHA, number=11, conclusion="failure", attempt=1, run_id=321, title=None, **extra):
+	return {
+		"id": run_id, "head_sha": sha, "pull_requests": [], "event": "workflow_dispatch",
+		"display_title": f"CI [pr:{number}]" if title is None else title, "status": "completed",
+		"conclusion": conclusion, "run_attempt": attempt, "created_at": "2026-11-17T06:00:00Z",
+		"path": ".github/workflows/ci.yml", "head_branch": "topic", **extra,
+	}
+
+
+@pytest.mark.parametrize("verdict,reason", [
+	("shutdown", "runner_shutdown"), ("action_resolution", "action_resolution"),
+	("checkout_fetch", "checkout_fetch"), ("abandoned", "abandoned"),
+])
+def test_final_ci_infra_failure_is_rerun_once_with_final_ci_flag(verdict, reason):
+	lines, _, post = exercise(completed=[final_run()], classify=verdict)
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=321 action=rerun reason={reason} final_ci=true"]
+	post.assert_called_once_with(HELPER.SOURCE_REPO, 321)
+
+
+@pytest.mark.parametrize("verdict,reason", [("genuine", "other_conclusion"), ("unverified", "runner_shutdown_unverified")])
+def test_final_ci_genuine_or_unverified_failure_is_not_rerun(verdict, reason):
+	lines, _, post = exercise(completed=[final_run()], classify=verdict)
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=321 action=skip reason={reason} final_ci=true"]
+	post.assert_not_called()
+
+
+def test_final_ci_cancelled_run_is_rerun_like_a_pr_run():
+	lines, _, post = exercise(completed=[final_run(conclusion="cancelled")])
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=321 action=rerun reason=cancelled_ci final_ci=true"]
+	exercise.classifier.assert_not_called()
+	post.assert_called_once_with(HELPER.SOURCE_REPO, 321)
+
+
+@pytest.mark.parametrize("completed", [
+	[final_run(sha=OLD_SHA)],
+	[final_run(number=12)],
+	[final_run(title="CI [pr:11] [sync-quick]")],
+	[final_run(title="CI")],
+	[final_run(title="CI [pr:011]")],
+])
+def test_final_ci_run_must_name_the_pr_on_its_current_head(completed):
+	lines, _, post = exercise(completed=completed, classify="shutdown")
+	assert "reason=no_attributable_run" in lines[0]
+	post.assert_not_called()
+
+
+def test_final_ci_second_attempt_is_never_rerun():
+	lines, _, post = exercise(completed=[final_run(attempt=2)], classify="shutdown")
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=321 action=skip reason=already_retried final_ci=true"]
+	exercise.classifier.assert_not_called()
+	post.assert_not_called()
+	# An older, re-attempted sync-quick or manual dispatch on the head does
+	# not use up the final run's re-run (the hand-back deferred to it).
+	for title in ("CI [pr:11] [sync-quick]", ""):
+		older = final_run(run_id=300, attempt=2, title=title, created_at="2026-11-17T05:00:00Z")
+		lines, _, post = exercise(completed=[final_run(), older], classify="shutdown")
+		assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=321 action=rerun reason=runner_shutdown final_ci=true"], title
+		post.assert_called_once_with(HELPER.SOURCE_REPO, 321)
+
+
+def test_newer_sync_quick_run_on_the_head_is_not_a_candidate():
+	newer = final_run(run_id=400, title="CI [pr:11] [sync-quick]", created_at="2026-11-17T07:00:00Z")
+	lines, _, post = exercise(completed=[final_run(), newer], classify="shutdown")
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=400 action=skip reason=not_final_ci"]
+	post.assert_not_called()
+
+
+@pytest.mark.parametrize("title", ["CI [pr:11]", "CI [pr:11] [sync-quick]", "CI [pr:99]"])
+def test_active_dispatch_on_the_head_blocks(title):
+	active = final_run(run_id=500, title=title, status="in_progress", conclusion=None)
+	lines, _, post = exercise(completed=[final_run()], active=[active], classify="shutdown")
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=321 action=skip reason=active_run final_ci=true"]
+	post.assert_not_called()
+
+
+def test_listing_accepts_dispatch_runs_only_with_a_title():
+	good = {"total_count": 2, "workflow_runs": [run(), final_run()]}
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(good))):
+		assert len(HELPER.list_runs(HELPER.SOURCE_REPO, "completed")) == 2
+	bad = {"total_count": 1, "workflow_runs": [{k: v for k, v in final_run().items() if k != "display_title"}]}
+	other_event = {"total_count": 1, "workflow_runs": [final_run(event="schedule")]}
+	for payload in (bad, other_event):
+		with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(payload))):
+			with pytest.raises(ValueError, match="invalid_listing"):
+				HELPER.list_runs(HELPER.SOURCE_REPO, "completed")
+
+
+def test_list_run_jobs_can_ignore_the_callers_running_job():
+	payload = {"total_count": 2, "jobs": [job("lint", 1), dict(job("final-ci-failed", 2), status="in_progress", conclusion=None)]}
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(payload))):
+		with pytest.raises(ValueError, match="jobs_unreadable"):
+			HELPER.list_run_jobs(HELPER.SOURCE_REPO, 123)
+		assert [item["name"] for item in HELPER.list_run_jobs(HELPER.SOURCE_REPO, 123, ("final-ci-failed",))] == ["lint"]
+	# The count must still match the whole page.
+	short = dict(payload, total_count=3)
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(short))):
+		with pytest.raises(ValueError, match="jobs_unreadable"):
+			HELPER.list_run_jobs(HELPER.SOURCE_REPO, 123, ("final-ci-failed",))
+
+
+def test_classify_run_cli_prints_the_verdict(monkeypatch):
+	output = io.StringIO()
+	with mock.patch.object(HELPER, "classify_runner_shutdown", return_value="shutdown") as classifier, \
+		contextlib.redirect_stdout(output):
+		assert HELPER.classify_run_cli(["--repo", "o/r", "--run-id", "77", "--ignore-job", "final-ci-failed"]) == 0
+	assert output.getvalue() == "shutdown\n"
+	assert classifier.call_args.args == ("o/r", 77)
+	assert classifier.call_args.kwargs["ignore_job_names"] == ("final-ci-failed",)
+	monkeypatch.setenv("CI_CHECKOUT_FETCH_RERUN_ENABLED", "false")
+	with mock.patch.object(HELPER, "classify_runner_shutdown", return_value="genuine") as classifier, \
+		contextlib.redirect_stdout(io.StringIO()):
+		HELPER.classify_run_cli(["--repo", "o/r", "--run-id", "77"])
+	assert classifier.call_args.kwargs["checkout_fetch_enabled"] is False
+	assert classifier.call_args.kwargs["ignore_job_names"] == ()
+
+
+@pytest.mark.parametrize("argv", [
+	[], ["--repo", "o/r"], ["--repo", "o/r", "--run-id", "0"], ["--repo", "../r", "--run-id", "7"],
+	["--repo", "o/r", "--run-id", "7", "--bogus"], ["--repo", "o/r", "--run-id", "7", "--ignore-job", "a;b"],
+])
+def test_classify_run_cli_bad_arguments_print_unverified(argv):
+	output = io.StringIO()
+	with mock.patch.object(HELPER, "classify_runner_shutdown") as classifier, contextlib.redirect_stdout(output):
+		assert HELPER.classify_run_cli(argv) == 0
+	assert output.getvalue() == "unverified\n"
+	classifier.assert_not_called()
+
+
+def test_classify_run_against_its_own_running_run():
+	jobs = [job("static-checks", 1), job("lint", 2),
+		dict(job("final-ci-failed", 3), status="in_progress", conclusion=None)]
+	reads = {1: [annotation(SHUTDOWN)], 2: [annotation("CI jobs that did not succeed: static-checks")]}
+	payload = json.dumps({"total_count": 3, "jobs": jobs})
+	def fake(argv, **_kwargs):
+		endpoint = argv[4]
+		if endpoint.endswith("/attempts/1/jobs"):
+			return mock.Mock(returncode=0, stdout=payload)
+		check_run = int(endpoint.split("/")[-2]) - 1000
+		return mock.Mock(returncode=0, stdout=json.dumps(reads[check_run]))
+	with mock.patch.object(HELPER.subprocess, "run", side_effect=fake):
+		assert HELPER.classify_runner_shutdown(HELPER.SOURCE_REPO, 9, ignore_job_names=("final-ci-failed",)) == "shutdown"
+		assert HELPER.classify_runner_shutdown(HELPER.SOURCE_REPO, 9) == "unverified"

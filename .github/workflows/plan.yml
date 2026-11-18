@@ -189,6 +189,7 @@ jobs:
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'true' }}
+          CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED || 'true' }}
           HOLD_EVENT_NAME: ${{ github.event_name }}
           HOLD_COMMENT_LOGIN: ${{ github.event.comment.user.login }}
           HOLD_COMMENT_ASSOCIATION: ${{ github.event.comment.author_association }}
@@ -307,6 +308,7 @@ jobs:
             ISSUE="${issue_number}" \
             GH_TOKEN="${GH_TOKEN}" \
             CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" \
+            CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED:-true}" \
             bash "${resolver_script}" 2>"${resolver_err_file}"
           })" || resolver_rc=$?
           resolver_pr_not_open=false
@@ -330,6 +332,10 @@ jobs:
               sed 's/^::error::CI_TRIAGE_PR_BRANCH_ROUTING /::notice::CI_TRIAGE_PR_BRANCH_ROUTING /' "${resolver_err_file}" >&2
             elif [ "${resolver_label_missing}" = "true" ]; then
               sed 's/^::error::CI_TRIAGE_PR_BRANCH_ROUTING /::warning::CI_TRIAGE_PR_BRANCH_ROUTING /' "${resolver_err_file}" >&2
+            elif [ "${resolver_rc}" -eq 75 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
+              # The exit-75 deferral (#9599) ends the step green, so the
+              # resolver's rate-limit line is replayed as a warning.
+              sed 's/^::error::INTEGRATION_REF_RESOLVE outcome=rate_limited /::warning::INTEGRATION_REF_RESOLVE outcome=rate_limited /' "${resolver_err_file}" >&2
             else
               cat "${resolver_err_file}" >&2
             fi
@@ -460,8 +466,29 @@ jobs:
             echo "::error::CI-triage PR-branch routing refused for issue #${issue_number}; refusing to fall back to the default branch."
             exit 1
           elif [ "${resolver_rc}" -eq 75 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
-            echo "::error::INTEGRATION_REF_RESOLVE outcome=rate_limited rc=${resolver_rc} ci_triage_routing=on; refusing to fall back to the default branch."
-            exit 1
+            # Rate-limited resolver with CI-triage routing on (#9599, heal of
+            # #9582, run 43885930759). The refusal stays: no ref is written and
+            # nothing falls back to the default branch. The job no longer fails,
+            # because failing it filed plan_failed heal reports for a limit that
+            # clears by itself. Every setup step skips on rate_limited_defer, so
+            # Checkout never resolves the empty ref to the default branch. No gh
+            # call here: the limit is exhausted. No label changes either: the
+            # skipped "Validate planning phase label" step is what moves
+            # ai:clarification / ai:blocked to ai:planning. Stall recovery still
+            # re-posts /answer for an issue in ai:planning (retrigger_plan) or
+            # ai:clarification (auto_respond_clarify); ai:blocked is a
+            # dedicated-handler phase with no stall-recovery action.
+            {
+              echo "rate_limited_defer=true"
+              echo "ref="
+              echo "resolver_status=failed"
+            } >> "$GITHUB_OUTPUT"
+            echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
+            echo "::warning::INTEGRATION_REF_RESOLVE outcome=deferred reason=rate_limited rc=${resolver_rc} ci_triage_routing=on issue=${issue_number}; refusing to fall back to the default branch."
+            # "Write run summary" skips on SKIP_PLAN, so leave an operator-visible
+            # trace here on every install (it also covers the manual cases).
+            echo "Planning for issue #${issue_number} was deferred: the integration-ref lookup was rate-limited (exit 75) with CI-triage routing on. No label was changed. If the issue is in ai:planning or ai:clarification, standalone stall recovery re-posts /answer after the limit resets; if it is in ai:blocked, or stall recovery is off, post /answer again by hand after the limit resets." >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+            exit 0
           elif [ "${resolver_rc}" -eq 2 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
             # Exit 2 = resolver API failure (retries exhausted or permanent error).
             # With routing off, keep the legacy default-branch fallback, matching the exit-75 policy.
@@ -479,8 +506,10 @@ jobs:
         # as in clarify, so a transient checkout, staging or API failure cannot
         # fail a held run and file a plan_failed heal report. This comment sits
         # inside the step: a less-indented line before it would end up in the
-        # refctx body that the tests extract and dedent.
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        # refctx body that the tests extract and dedent. The rate-limited
+        # deferral (#9599) skips the same steps: otherwise the empty ref would
+        # check out the default branch and later reads would hit the limit.
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         uses: actions/checkout@v5
         with:
           ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
@@ -490,7 +519,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
 
       - name: Log checkout ref
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         env:
           PLAN_RESOLVED_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
         run: |
@@ -504,7 +533,7 @@ jobs:
           fi
 
       - name: Configure git auth for memory helper clones
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
@@ -518,7 +547,7 @@ jobs:
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
       - name: Resolve workflow support ref
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
@@ -565,7 +594,7 @@ jobs:
 
       - name: Checkout workflow support source
         id: checkout_support_source
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -576,7 +605,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout workflow support source fallback
-        if: ${{ steps.refctx.outputs.label_missing_hold != 'true' && steps.checkout_support_source.outcome == 'failure' && env.SCRIPT_REF == 'stable' }}
+        if: ${{ steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true' && steps.checkout_support_source.outcome == 'failure' && env.SCRIPT_REF == 'stable' }}
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
@@ -586,7 +615,7 @@ jobs:
           fetch-depth: 1
 
       - name: Ensure workflow support source checkout
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         run: |
           set -euo pipefail
           if [ ! -d .codex-workflow-src ]; then
@@ -601,7 +630,7 @@ jobs:
           fi
 
       - name: Checkout workflow support source main snapshot
-        if: ${{ steps.refctx.outputs.label_missing_hold != 'true' && env.SCRIPT_REF == 'stable' }}
+        if: ${{ steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true' && env.SCRIPT_REF == 'stable' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -612,7 +641,7 @@ jobs:
           fetch-depth: 1
 
       - name: Stage workflow support files
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
@@ -872,7 +901,7 @@ jobs:
           rm -rf .codex-workflow-src-main
 
       - name: Create runtime workspace
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         run: |
           set -euo pipefail
           RUNTIME_DIR="/tmp/codex-plan-${GITHUB_RUN_ID}"
@@ -893,7 +922,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Fetch issue metadata
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
