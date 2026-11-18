@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.74,
+  "details": "Changes touching workflow inventory or CI gates should account for docs/INVENTORY.md and the relevant parity checks. An explicit inventory exemption file is also used, so investigate existing exemptions before treating a mismatch as intentional.",
+  "fingerprint": "6c705e3a4ae1af67777e4879f40e6f7b6cd22855e4d7ca9bd4de26f67770b8e5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44415135628",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44415135628",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9135",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9582",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9631",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9682",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9714",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9603",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9694",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9700",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9707",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9717"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261118230923_8a92df9f38",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow inventory parity is maintained through documentation and CI checks.",
+  "timestamps": {
+    "created_at": "2026-11-18T23:09:23Z",
+    "promoted_at": "2026-11-18T23:09:59Z",
+    "superseded_at": null
+  }
+}
