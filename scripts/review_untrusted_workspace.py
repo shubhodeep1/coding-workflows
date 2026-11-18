@@ -136,7 +136,10 @@ def git_env(manifest):
 		"GIT_TERMINAL_PROMPT": "0", "GIT_LFS_SKIP_SMUDGE": "1"}
 
 
-def allowed(name, host=None, commands=None):
+def allowed(name, host=None, commands=None, *, admit_any_suffix=False):
+	# admit_any_suffix (issue #9672) skips only the final suffix allowlist
+	# below; every earlier reject (credential filter, dot paths, command
+	# admission) still applies. Only the pre-push gate's trees use it.
 	parts = PurePosixPath(name).parts
 	if not parts or name.startswith("/") or ".." in parts or "\\" in name or "\n" in name or "\r" in name:
 		return False
@@ -159,7 +162,7 @@ def allowed(name, host=None, commands=None):
 		return commands is not None and name in commands
 	if parts[0].startswith(".") and (len(parts) < 3 or parts[:2] not in ((".github", "workflows"), (".github", "actions"))):
 		return False
-	return name in ROOT_FILES or PurePosixPath(name).suffix.lower() in SUFFIXES or parts[-1] == "Dockerfile"
+	return admit_any_suffix or name in ROOT_FILES or PurePosixPath(name).suffix.lower() in SUFFIXES or parts[-1] == "Dockerfile"
 
 
 def checked_path(root, name):
@@ -367,7 +370,14 @@ def enumerate_workspace(root, host=None, commands=None, strict=False):
 			yield name, data, mode
 
 
-def snapshot(host, workspace, manifest, host_git_dir=None, skip_oversized=False):
+def snapshot(host, workspace, manifest, host_git_dir=None, skip_oversized=False, include_tracked_assets=False):
+	"""Copy the admitted host files into ``workspace``.
+
+	include_tracked_assets (issue #9672) is set only by the pre-push gate
+	wrapper: a tracked file that allowed() refuses for its suffix alone is
+	admitted too, so the gate's PR tree matches its merge-base baseline. The
+	editor snapshot never sets it.
+	"""
 	paths = set()
 	env = git_env(manifest)
 	# A per-PR workspace has no .git of its own: list it through the checkout's
@@ -399,9 +409,13 @@ def snapshot(host, workspace, manifest, host_git_dir=None, skip_oversized=False)
 	baseline = {}
 	total = 0
 	oversized = 0
+	asset_files = 0
 	for name in sorted(paths):
+		gate_asset = False
 		if not allowed(name, commands=commands):
-			continue
+			if not (include_tracked_assets and name in tracked and allowed(name, commands=commands, admit_any_suffix=True)):
+				continue
+			gate_asset = True
 		if (host / name).is_symlink():
 			continue  # Existing tracked symlinks are not in the editor snapshot.
 		path = checked_path(host, name)
@@ -417,7 +431,11 @@ def snapshot(host, workspace, manifest, host_git_dir=None, skip_oversized=False)
 		data, mode = read_regular(path)
 		total += len(data)
 		if len(baseline) >= MAX_FILES or total > MAX_TOTAL:
+			if include_tracked_assets:
+				# Counts only: paths are PR-controlled and stay out of workflow logs.
+				print(f"REVIEW_ISOLATION_SNAPSHOT gate_files={len(baseline)} gate_bytes={total} asset_files={asset_files} limit_exceeded=1", file=sys.stderr)
 			raise ValueError("snapshot size limit exceeded")
+		asset_files += gate_asset
 		target = checked_path(workspace, name)
 		target.parent.mkdir(parents=True, exist_ok=True)
 		with target.open("xb") as out:
@@ -427,6 +445,9 @@ def snapshot(host, workspace, manifest, host_git_dir=None, skip_oversized=False)
 	if oversized:
 		# A count only: paths are PR-controlled and stay out of workflow logs.
 		print(f"REVIEW_ISOLATION_SNAPSHOT oversized_skipped={oversized} max_file_bytes={MAX_FILE}", file=sys.stderr)
+	if include_tracked_assets:
+		# A count only: paths are PR-controlled and stay out of workflow logs.
+		print(f"REVIEW_ISOLATION_SNAPSHOT gate_files={len(baseline)} gate_bytes={total} asset_files={asset_files}", file=sys.stderr)
 	admitted_commands_path(manifest).write_text(json.dumps(sorted(commands)), encoding="utf-8")
 	# Count only tracked files still present in the worktree (an unstaged
 	# deletion was not hidden by the snapshot, it was absent).
@@ -443,6 +464,47 @@ def snapshot(host, workspace, manifest, host_git_dir=None, skip_oversized=False)
 	subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "add", "--all"], cwd=workspace, check=True, env=env)
 	subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-c", "user.name=isolated", "-c", "user.email=isolated@invalid", "commit", "--allow-empty", "-qm", "snapshot"], cwd=workspace, check=True, env=env)
 	synthetic_git_config_path(manifest).write_text(hashlib.sha256((workspace / ".git/config").read_bytes()).hexdigest(), encoding="ascii")
+
+
+def prune_gate_baseline(tree, manifest, keep=()):
+	"""Remove from the gate's baseline tree what the gate's PR tree may not hold.
+
+	Issue #9672: the pre-push gate's baseline is a full ``git archive`` of the
+	merge-base, while its PR tree is a ``snapshot --include-tracked-assets``.
+	This keeps only regular files that the same predicate admits (with the
+	command inventory that snapshot froze next to ``manifest``) or that are
+	named in ``keep`` (the wrapper's overlay paths). Symlinks are unlinked,
+	never followed, and directories left empty are removed (never ``tree``).
+	"""
+	tree = Path(tree)
+	if tree.is_symlink() or not tree.is_dir():
+		raise ValueError("gate baseline tree missing")
+	commands = load_admitted_commands(manifest)
+	keep_names = frozenset(keep)
+	pruned = 0
+	kept = 0
+	for directory, dirs, files in os.walk(tree, topdown=True, followlinks=False):
+		base = Path(directory)
+		rel = base.relative_to(tree)
+		for child in dirs[:]:
+			if (base / child).is_symlink():
+				(base / child).unlink()
+				dirs.remove(child)
+				pruned += 1
+		for child in files:
+			path = base / child
+			name = (rel / child).as_posix()
+			if stat.S_ISREG(path.lstat().st_mode) and (name in keep_names or allowed(name, commands=commands, admit_any_suffix=True)):
+				kept += 1
+				continue
+			path.unlink()
+			pruned += 1
+	for directory, _dirs, _files in os.walk(tree, topdown=False, followlinks=False):
+		path = Path(directory)
+		if path != tree and not path.is_symlink() and not any(path.iterdir()):
+			path.rmdir()
+	# Counts only: paths are PR-controlled and stay out of workflow logs.
+	print(f"REVIEW_ISOLATION_SNAPSHOT baseline_pruned={pruned} baseline_files={kept}", file=sys.stderr)
 
 
 def _check_destination_parents(host, name, deleted_names):
@@ -931,6 +993,20 @@ def main():
 			print("paired live copy mirror failed", file=sys.stderr)
 			raise SystemExit(1) from None
 		return
+	if sys.argv[1:2] == ["prune-gate-baseline"]:
+		# prune-gate-baseline TREE MANIFEST [KEEP...] (issue #9672).
+		if len(sys.argv) < 4:
+			raise SystemExit(2)
+		try:
+			prune_gate_baseline(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4:])
+		except Exception as exc:  # noqa: BLE001 - fail closed with a fixed, path-free reason
+			reason_code = {
+				"admitted command inventory missing": "admitted_inventory_missing",
+				"gate baseline tree missing": "baseline_missing",
+			}.get(str(exc), "unknown") if isinstance(exc, ValueError) else "unknown"
+			print(f"::error::Review isolation gate baseline prune rejected ({type(exc).__name__}) reason={reason_code}", file=sys.stderr)
+			raise SystemExit(1) from None
+		return
 	if sys.argv[1:2] == ["hidden-note"]:
 		if len(sys.argv) != 3:
 			raise SystemExit(2)
@@ -949,6 +1025,12 @@ def main():
 			print("unsupported path", file=sys.stderr)
 			raise SystemExit(1) from None
 		return
+	include_tracked_assets = False
+	# Only the pre-push gate wrapper passes this, as snapshot's last argument
+	# (issue #9672); anywhere else it fails the argv check below.
+	if sys.argv[1:2] == ["snapshot"] and len(sys.argv) > 2 and sys.argv[-1] == "--include-tracked-assets":
+		sys.argv = sys.argv[:-1]
+		include_tracked_assets = True
 	if sys.argv[1:2] == ["seed"]:
 		if len(sys.argv) != 7:
 			raise SystemExit(2)
@@ -963,7 +1045,8 @@ def main():
 			seed(host, workspace, manifest, sys.argv[5], Path(sys.argv[6]))
 		elif sys.argv[1] == "snapshot":
 			snapshot(host, workspace, manifest, Path(sys.argv[5]) if len(sys.argv) == 6 else None,
-				skip_oversized=os.environ.get("REVIEW_SNAPSHOT_SKIP_OVERSIZED", "0") == "1")
+				skip_oversized=os.environ.get("REVIEW_SNAPSHOT_SKIP_OVERSIZED", "0") == "1",
+				include_tracked_assets=include_tracked_assets)
 		elif sys.argv[1] == "refresh":
 			refresh(host, workspace, manifest)
 		else:

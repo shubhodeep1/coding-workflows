@@ -1617,3 +1617,199 @@ def test_red_on_base_target_failing_on_head_is_not_rerun_on_base(tmp_path, monke
 	assert reran == ["tests/red_case.py"]
 	assert result["acceptance"]["tests/broken_case.py"] == {"head": "fail", "base": "not_run"}
 	assert result["acceptance"]["tests/red_case.py"] == {"head": "pass", "base": "fail"}
+
+
+# --- gate tree parity (issue #9672) -----------------------------------------
+
+RUW_PATH = REPO_ROOT / "scripts" / "review_untrusted_workspace.py"
+_ruw_spec = importlib.util.spec_from_file_location("review_untrusted_workspace_gate_parity", RUW_PATH)
+assert _ruw_spec is not None and _ruw_spec.loader is not None
+ruw = importlib.util.module_from_spec(_ruw_spec)
+_ruw_spec.loader.exec_module(ruw)
+
+# Runs the real gate module on the host: container paths in its argv are
+# rewritten to the bind-mount sources, so the test sees what the gate would.
+FAKE_DOCKER_REAL_GATE = r'''#!/usr/bin/env python3
+import subprocess
+import sys
+
+args = sys.argv[1:]
+with open("__LOG__", "a", encoding="utf-8") as log:
+	log.write(" ".join(args) + "\n")
+if not args or args[0] != "run":
+	sys.exit(0)
+mounts = {}
+for index, arg in enumerate(args[:-1]):
+	if arg == "--mount":
+		fields = dict(field.split("=", 1) for field in args[index + 1].split(",") if "=" in field)
+		mounts[fields["dst"]] = fields["src"]
+
+
+def mapped(value):
+	for dst in sorted(mounts, key=len, reverse=True):
+		if value == dst or value.startswith(dst + "/"):
+			return mounts[dst] + value[len(dst):]
+	return value
+
+
+command = [mapped(arg) for arg in args[args.index("gate-image:test") + 1:]]
+sys.exit(subprocess.run(command, cwd=mounts["/source"]).returncode)
+'''
+
+ASSET_TEST = (
+	"# Reads an asset next to lib/a.py.\n"
+	"import os\nimport sys\n"
+	"logo = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, 'assets', 'logo.png')\n"
+	"if not os.path.isfile(logo):\n\tprint('FAIL: test_logo (mod.Case)')\n\tsys.exit(1)\n"
+)
+
+
+def _tree_listing_docker(tmp_path: Path, capture: Path) -> None:
+	fake = tmp_path / "bin" / "docker"
+	fake.write_text(fake.read_text(encoding="utf-8").replace(
+		'\tprintf \'{"schema"',
+		'\troot="${results%/results}"\n'
+		'\t(cd "$root/source" && find . -mindepth 1 -path ./.git -prune -o -print | sort) > "__CAP__.source"\n'
+		'\t(cd "$root/baseline" && find . -mindepth 1 -print | sort) > "__CAP__.baseline"\n'
+		'\tprintf \'{"schema"',
+	).replace("__CAP__", str(capture)), encoding="utf-8")
+
+
+def test_wrapper_gate_trees_hold_tracked_assets_and_drop_credential_paths(tmp_path):
+	worktree = _repo(tmp_path, {
+		"lib/a.py": "X = 1\n", "assets/logo.png": "png", "fonts/a.ttf": "ttf", "Makefile": "test:\n\ttrue\n",
+		".ai/validate.yml": "family: x\n", ".env": "TOKEN=x\n", "secrets/token.txt": "x\n", "config/server.pem": "x\n",
+		".github/ai/x.json": "{}\n",
+	}, name="worktree")
+	os.symlink("logo.png", worktree / "assets" / "link.png")
+	_git(worktree, "add", "-A")
+	_git(worktree, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "symlink")
+	_commit(worktree, {"lib/a.py": "X = 2\n"})
+	(worktree / "scratch.png").write_text("untracked\n", encoding="utf-8")
+	env, _ = _wrapper_env(tmp_path)
+	capture = tmp_path / "capture"
+	_tree_listing_docker(tmp_path, capture)
+	proc, _ = _run_wrapper(tmp_path, worktree, MODULE_PATH, env)
+	assert proc.returncode == 0, proc.stderr
+	source = set((tmp_path / "capture.source").read_text(encoding="utf-8").split("\n"))
+	baseline = set((tmp_path / "capture.baseline").read_text(encoding="utf-8").split("\n"))
+	for tree in (source, baseline):
+		for kept in ("./assets/logo.png", "./fonts/a.ttf", "./Makefile", "./.ai/validate.yml", "./lib/a.py"):
+			assert kept in tree
+		for dropped in ("./.env", "./secrets/token.txt", "./secrets", "./config/server.pem", "./.github/ai/x.json", "./assets/link.png"):
+			assert dropped not in tree
+	assert "./scratch.png" not in source
+	assert "PREPUSH_TEST_GATE phase=wrapper outcome=info reason=gate_trees files=" in proc.stderr
+	line = next(text for text in proc.stderr.splitlines() if "reason=gate_trees" in text)
+	assert " asset_files=3 " in line
+	for key in ("files", "bytes", "baseline_pruned"):
+		assert any(token.startswith(key + "=") and token.split("=", 1)[1].isdigit() for token in line.split())
+
+
+def test_wrapper_does_not_blame_an_asset_test_on_an_unrelated_change(tmp_path):
+	worktree = _repo(tmp_path, {"lib/a.py": "X = 1\n", "assets/logo.png": "png", "tests/test_logo.py": ASSET_TEST}, name="worktree")
+	_commit(worktree, {"lib/a.py": "X = 2\n"})
+	env, log = _wrapper_env(tmp_path)
+	fake = tmp_path / "bin" / "docker"
+	fake.write_text(FAKE_DOCKER_REAL_GATE.replace("__LOG__", str(log)), encoding="utf-8")
+	proc, out = _run_wrapper(tmp_path, worktree, MODULE_PATH, env)
+	assert proc.returncode == 0, proc.stderr
+	result = json.loads((out / "result.json").read_text(encoding="utf-8"))
+	assert "tests/test_logo.py" in result["ran"], result
+	assert result["failures"] == [] and result["inherited"] == [], result
+	assert result["status"] == "pass", result
+
+
+def test_wrapper_over_max_files_with_tracked_assets_is_snapshot_failed(tmp_path):
+	files = {f"assets/a{index}.png": "" for index in range(ruw.MAX_FILES + 1)}
+	files["lib/a.py"] = "X = 1\n"
+	worktree = _repo(tmp_path, files, name="worktree")
+	_commit(worktree, {"lib/a.py": "X = 2\n"})
+	env, log = _wrapper_env(tmp_path)
+	proc, out = _run_wrapper(tmp_path, worktree, MODULE_PATH, env)
+	assert proc.returncode == 0, proc.stderr
+	result = json.loads((out / "result.json").read_text(encoding="utf-8"))
+	assert result["status"] == "unverified" and result["reason"] == "snapshot_failed"
+	assert f"outcome=warning reason=snapshot_size files={ruw.MAX_FILES} bytes=" in proc.stderr
+	assert not log.exists() or not any(line.startswith("run ") for line in log.read_text(encoding="utf-8").splitlines())
+
+
+def _ruw_env() -> dict[str, str]:
+	env = {key: value for key, value in os.environ.items() if not key.startswith(("GITHUB_", "GIT_"))}
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	return env
+
+
+def test_editor_snapshot_without_gate_flag_is_unchanged(tmp_path):
+	host = _repo(tmp_path, {"lib/a.py": "X = 1\n", "assets/logo.png": "png", "Makefile": "all:\n", "README.md": "r\n", ".env": "x\n"}, name="host")
+	(host / "notes.txt").write_text("untracked\n", encoding="utf-8")
+	(host / "scratch.png").write_text("untracked\n", encoding="utf-8")
+	workspace = tmp_path / "ws"
+	workspace.mkdir()
+	manifest = tmp_path / "manifest.json"
+	proc = subprocess.run([sys.executable, str(RUW_PATH), "snapshot", str(host), str(workspace), str(manifest)],
+		capture_output=True, text=True, env=_ruw_env(), timeout=60)
+	assert proc.returncode == 0, proc.stderr
+	listed = set(_git(host, "ls-files").split("\n")) | set(_git(host, "ls-files", "--others", "--exclude-standard").split("\n"))
+	expected = {name for name in listed if name and ruw.allowed(name, commands=frozenset())}
+	assert set(json.loads(manifest.read_text(encoding="utf-8"))) == expected == {"lib/a.py", "README.md", "notes.txt"}
+	assert not (workspace / "assets").exists() and not (workspace / "Makefile").exists()
+	assert "gate_files=" not in proc.stderr
+	for name in ("lib/a.py", "assets/logo.png", "Makefile", ".env", "secrets/a.png", ".github/workflows/ci.yml", ".claude/commands/x.md", "a/node_modules/b.js"):
+		assert ruw.allowed(name) == ruw.allowed(name, admit_any_suffix=False)
+	# The flag never lifts a credential, dot-path or command-admission reject.
+	for name in ("secrets/a.png", ".env.png", "x.pem", ".github/ai/key.json", ".claude/commands/x.md", "a/node_modules/b.png", "tests/test_audit_plans_command.py"):
+		assert not ruw.allowed(name, commands=frozenset(), admit_any_suffix=True)
+	assert ruw.allowed("assets/logo.png", admit_any_suffix=True)
+	# The gate flag is honoured only as the last argument; anywhere else it is
+	# read as a positional path and the snapshot fails.
+	misplaced = subprocess.run([sys.executable, str(RUW_PATH), "snapshot", "--include-tracked-assets", str(host), str(tmp_path / "ws2"), str(manifest)],
+		capture_output=True, text=True, env=_ruw_env(), timeout=60)
+	assert misplaced.returncode != 0
+
+
+def test_snapshot_with_tracked_assets_fails_whole_over_max_total(tmp_path, monkeypatch, capsys):
+	host = _repo(tmp_path, {"lib/a.py": "X = 1\n", "assets/logo.png": "p" * 64}, name="host")
+	monkeypatch.delenv("GITHUB_WORKSPACE", raising=False)
+	ok_ws = tmp_path / "ok"
+	ok_ws.mkdir()
+	ruw.snapshot(host, ok_ws, tmp_path / "ok.json", include_tracked_assets=True)
+	assert (ok_ws / "assets" / "logo.png").read_text(encoding="utf-8") == "p" * 64
+	assert "REVIEW_ISOLATION_SNAPSHOT gate_files=2 gate_bytes=70 asset_files=1" in capsys.readouterr().err
+	monkeypatch.setattr(ruw, "MAX_TOTAL", 32)
+	capped_ws = tmp_path / "capped"
+	capped_ws.mkdir()
+	with pytest.raises(ValueError, match="snapshot size limit exceeded"):
+		ruw.snapshot(host, capped_ws, tmp_path / "capped.json", include_tracked_assets=True)
+	assert "limit_exceeded=1" in capsys.readouterr().err
+	assert not (tmp_path / "capped.json").exists()
+
+
+def test_prune_gate_baseline_applies_the_snapshot_filter(tmp_path):
+	tree = tmp_path / "baseline"
+	outside = tmp_path / "outside"
+	outside.mkdir()
+	(outside / "keep.txt").write_text("outside\n", encoding="utf-8")
+	for name in ("assets/logo.png", "lib/a.py", "Makefile", ".ai/validate.yml", ".ai/other.yml", ".env", "secrets/token.txt",
+		"config/server.pem", ".github/ai/x.json", ".claude/commands/x.md", ".github/workflows/ci.yml"):
+		(tree / name).parent.mkdir(parents=True, exist_ok=True)
+		(tree / name).write_text("x\n", encoding="utf-8")
+	os.symlink("logo.png", tree / "assets" / "link.png")
+	os.symlink(str(outside), tree / "linked_dir")
+	manifest = tmp_path / "manifest.json"
+	manifest.write_text("{}", encoding="utf-8")
+	ruw.admitted_commands_path(manifest).write_text("[]", encoding="utf-8")
+	proc = subprocess.run([sys.executable, str(RUW_PATH), "prune-gate-baseline", str(tree), str(manifest), "Makefile", ".ai/validate.yml"],
+		capture_output=True, text=True, env=_ruw_env(), timeout=60)
+	assert proc.returncode == 0, proc.stderr
+	remaining = sorted(str(path.relative_to(tree)) for path in tree.rglob("*"))
+	assert remaining == sorted([".ai", ".ai/validate.yml", ".github", ".github/workflows", ".github/workflows/ci.yml", "Makefile",
+		"assets", "assets/logo.png", "lib", "lib/a.py"])
+	assert (outside / "keep.txt").read_text(encoding="utf-8") == "outside\n"
+	assert "REVIEW_ISOLATION_SNAPSHOT baseline_pruned=8 baseline_files=5" in proc.stderr
+	bad = subprocess.run([sys.executable, str(RUW_PATH), "prune-gate-baseline", str(tree)], capture_output=True, text=True, env=_ruw_env(), timeout=60)
+	assert bad.returncode == 2
+	ruw.admitted_commands_path(manifest).unlink()
+	missing = subprocess.run([sys.executable, str(RUW_PATH), "prune-gate-baseline", str(tree), str(manifest)], capture_output=True, text=True, env=_ruw_env(), timeout=60)
+	assert missing.returncode == 1 and "reason=admitted_inventory_missing" in missing.stderr
+	assert str(tree) not in missing.stderr

@@ -11,7 +11,11 @@
 #   3. exports the merge-base tree with git archive (baseline for the
 #      inherited-failure classification);
 #   4. snapshots the worktree through review_untrusted_workspace.py's
-#      credential filter (no .git, .env*, keys or credential stores);
+#      credential filter (no .git, .env*, keys or credential stores) with
+#      --include-tracked-assets, so tracked files of any suffix (images,
+#      fonts) are copied too, then prunes the baseline with the same filter
+#      (prune-gate-baseline), so both trees differ only by the change itself
+#      (issue #9672: asset-reading tests were blamed on every change);
 #   5. runs the module in `docker run --network none --read-only --cap-drop ALL
 #      --security-opt no-new-privileges` with no environment from the runner,
 #      the snapshot read-write and the module, baseline and dependency roots
@@ -90,6 +94,16 @@ baseline_fail_file_given=0
 gate_log()
 {
 	echo "PREPUSH_TEST_GATE phase=wrapper $*" >&2
+}
+
+# gate_tree_count KEY FILE: the digits of " KEY=<n>" on a
+# REVIEW_ISOLATION_SNAPSHOT line, or "unknown". Raw stderr is never echoed.
+gate_tree_count()
+{
+	local value
+	value="$(grep -E '^REVIEW_ISOLATION_SNAPSHOT ' "$2" 2>/dev/null | grep -Eo " $1=[0-9]+" | head -n 1 | cut -d= -f2)" || value=""
+	[[ "${value}" =~ ^[0-9]+$ ]] || value="unknown"
+	printf '%s' "${value}"
 }
 
 synthetic_result()
@@ -232,18 +246,34 @@ fi
 host_git_dir="$("${git_safe[@]}" rev-parse --absolute-git-dir 2>/dev/null)" || host_git_dir=""
 snapshot_args=()
 [ -z "${host_git_dir}" ] || snapshot_args+=("${host_git_dir}")
-if ! PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${worktree_real}" "${root}/source" "${root}/manifest.json" "${snapshot_args[@]}" >/dev/null 2>&1; then
+# --include-tracked-assets (issue #9672): gate-only, the editor snapshot never
+# passes it. The size caps still apply: an over-cap tree fails as
+# snapshot_failed, never as a partial tree.
+if ! PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${worktree_real}" "${root}/source" "${root}/manifest.json" "${snapshot_args[@]}" --include-tracked-assets >/dev/null 2>"${root}/snapshot.err"; then
+	if grep -Eq '^REVIEW_ISOLATION_SNAPSHOT gate_files=[0-9]+ gate_bytes=[0-9]+ asset_files=[0-9]+ limit_exceeded=1$' "${root}/snapshot.err" 2>/dev/null; then
+		gate_log "outcome=warning reason=snapshot_size files=$(gate_tree_count gate_files "${root}/snapshot.err") bytes=$(gate_tree_count gate_bytes "${root}/snapshot.err") asset_files=$(gate_tree_count asset_files "${root}/snapshot.err")"
+	fi
 	synthetic_result snapshot_failed
 	exit 0
 fi
-# The snapshot filter leaves out Makefile and .ai/, which the gate reads to
-# resolve test commands; copy those two regular files in so the PR tree and
-# the git-archive baseline resolve the same commands.
-for overlay in Makefile .ai/validate.yml; do
+# The snapshot filter leaves out .ai/ (and, untracked, Makefile), which the
+# gate reads to resolve test commands; copy those two regular files in so the
+# PR tree and the git-archive baseline resolve the same commands. The baseline
+# prune below keeps the same paths.
+overlays=(Makefile .ai/validate.yml)
+for overlay in "${overlays[@]}"; do
 	if [ -f "${worktree_real}/${overlay}" ] && [ ! -L "${worktree_real}/${overlay}" ] && [ ! -L "${worktree_real}/$(dirname "${overlay}")" ]; then
 		mkdir -p "${root}/source/$(dirname "${overlay}")" && install -m 0644 "${worktree_real}/${overlay}" "${root}/source/${overlay}" || { synthetic_result snapshot_failed; exit 0; }
 	fi
 done
+# Apply the snapshot's filter to the baseline too (issue #9672), so a file the
+# PR tree may not hold (credential-shaped paths, dot paths, symlinks) is not in
+# the baseline either. Runs before any node_modules mount point is created.
+if ! PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" prune-gate-baseline "${root}/baseline" "${root}/manifest.json" "${overlays[@]}" >/dev/null 2>"${root}/prune.err"; then
+	synthetic_result baseline_filter_failed
+	exit 0
+fi
+gate_log "outcome=info reason=gate_trees files=$(gate_tree_count gate_files "${root}/snapshot.err") bytes=$(gate_tree_count gate_bytes "${root}/snapshot.err") asset_files=$(gate_tree_count asset_files "${root}/snapshot.err") baseline_pruned=$(gate_tree_count baseline_pruned "${root}/prune.err")"
 
 mounts=(
 	--mount "type=bind,src=${root}/source,dst=/source"
