@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/render_prompt.py:181-200 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `UnicodeDecodeError` in the outer `except (OSError, UnicodeDecodeError)` is unreachable, because the inner try/except already handles decode errors.\n  WHY: The source labels it NIT with no runtime effect (the removal is safe), so it is harmless dead code. Severity disagreement: anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash noticed the same residue but did not report it as a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/render_prompt.py:181-200 | severity=NIT | confidence=2\n  PROBLEM: The `UnicodeDecodeError` in the outer `except (OSError, UnicodeDecodeError)` is unreachable. The inner try/except already catches it, `errors=\"replace\"` cannot raise it, and `_normalize_prompt_text` cannot raise it.\n  WHY: It does not fail at runtime. Removing it is safe and matches the comment, and the catch list is a harmless superset.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0b1b380fa23976add1bada54d4cf9620ad3a626ab8158c575a55273d6f1bb84f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9402,
+    "run_id": "44340426892",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44340426892",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118181845_bf8351729d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9402,
+    "run_id": "44340426892"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T18:18:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
