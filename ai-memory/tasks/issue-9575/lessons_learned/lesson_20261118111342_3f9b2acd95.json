@@ -1,0 +1,22 @@
+{
+  "discovered_at": "2026-11-18T11:13:42Z",
+  "issue_number": 9575,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=tests/test_test_and_mark_stable_step_scripts_contract.py:32-76; cited_path=.github/workflows/test-and-mark-stable.yml; files_touched=.github/workflows/orchestrate_poll.yml, README.md, agents.d/stuck-states-p13b-security-pass-rebind.md, changelog.d/stuck-states-p13b-security-pass-rebind.md, docs/how-it-works.md, docs/plans/security-pass-convergence-plan.md, scripts/orchestrate_poll_process.sh, tests/test_orchestrate_poll_process.py.",
+  "phase": "review_autofix",
+  "pr_number": 9602,
+  "record_id": "lesson_20261118111342_3f9b2acd95",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/test-and-mark-stable.yml",
+    "tests/test_test_and_mark_stable_step_scripts_contract.py",
+    ".github/workflows/orchestrate_poll.yml",
+    "README.md",
+    "agents.d/stuck-states-p13b-security-pass-rebind.md",
+    "changelog.d/stuck-states-p13b-security-pass-rebind.md",
+    "docs/how-it-works.md",
+    "docs/plans/security-pass-convergence-plan.md",
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_orchestrate_poll_process.py"
+  ]
+}
