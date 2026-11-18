@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR acceptance target `tests/test_workflow_gh_retry_fallback_contract.py` must be met; the PR description marks it \"unmet.\"\n  expected_change_site: `tests/test_workflow_gh_retry_fallback_contract.py` and the relevant helper behavior it tests\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff contains no change addressing this acceptance target, and the PR description explicitly reports it as unmet. The reported inherited-failure status explains the failure but does not satisfy the listed acceptance criterion.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: The PR acceptance target `tests/test_workflow_gh_retry_fallback_contract.py` must be met; the PR description marks it \"unmet.\"\n  Expected change site: `tests/test_workflow_gh_retry_fallback_contract.py` and the relevant helper behavior it tests.\n  Evidence of absence: The PR diff contains no change addressing this acceptance target, and the PR description explicitly reports it as unmet. The reported inherited-failure status explains the failure but does not satisfy the listed acceptance criterion.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/dispatch_and_watch_workflow_run.sh:376-381 | severity=NIT | confidence=5\n  PROBLEM: None found; `WATCH_CANCEL_RC=$?` in the else branch of the `timeout 20 gh api ...` check correctly captures the cancel exit status (reviewer reports it is correct, no defect).\n  WHY: In bash `$?` at the top of the else branch holds the condition's exit status, and the assignment cannot trip `set -e`.\n- TASK_GAP (informational, no gap found): Requirement: cancel call, diagnostic line, failed cancel as warning with exit 1, new test file, changelog fragment, keep exit codes/output lines/env var names.\n  Expected change site: scripts/dispatch_and_watch_workflow_run.sh (lines 350-399), tests/test_dispatch_and_watch_cancel_on_timeout.py, changelog.d/9706-dispatch-watch-cancel-on-timeout.md\n  Evidence of absence: none; every deliverable is present in the PR diff.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5055e5ee4629eb98bf87e0277148c29770ab20f4f0fed6b1ced4d78c903aa117",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9712,
+    "run_id": "44322237268",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44322237268",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118160359_1ce1347920",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9712,
+    "run_id": "44322237268"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T16:03:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
