@@ -1110,11 +1110,14 @@ def _git_state(root: Path) -> tuple[bytes, list[str]]:
 def test_wrapper_builds_the_pr_tree_from_git_with_tracked_dotfiles_and_filtered_untracked(tmp_path):
 	root = _repo(tmp_path, {
 		"lib/a.py": "X = 1\n", "tests/test_a.py": "# lib/a.py\n",
-		".gitattributes": "CHANGELOG.md merge=union\n", ".gitignore": "ignored.txt\n",
+		".gitattributes": "CHANGELOG.md merge=union\n", ".gitignore": "ignored.txt\ntests/test_tracked_ignored.py\n",
+		"tests/test_tracked_ignored.py": "# tracked although ignored\n",
 		".github/ai/label_contract.v1.json": "{}\n", ".github/ai/dropped.json": "{}\n",
 		".claude/settings.json": "{}\n", "scripts/propagate_consumer_secrets.sh": "true\n",
 		"changelog.d/.gitkeep": "", "gone.txt": "gone\n", "old.txt": "old\n",
 	}, name="worktree")
+	# Tracked although a .gitignore rule matches it (git add -f).
+	_git(root, "add", "-f", "tests/test_tracked_ignored.py")
 	_commit(root, {"lib/a.py": "X = 2\n"})
 	(root / "tests" / "test_a.py").write_text("# unstaged edit\n", encoding="utf-8")
 	(root / "old.txt").write_text("staged\n", encoding="utf-8")
@@ -1146,6 +1149,8 @@ def test_wrapper_builds_the_pr_tree_from_git_with_tracked_dotfiles_and_filtered_
 	assert not (capture / ".git" / "objects" / "info" / "alternates").exists()
 	synthetic_files = set(_git(capture, "ls-files").splitlines())
 	assert {".gitattributes", "staged_new.py", "untracked_ok.py"} <= synthetic_files
+	# A tracked file a .gitignore rule matches stays listed in the synthetic index.
+	assert "tests/test_tracked_ignored.py" in synthetic_files
 	assert not {".env", "credentials.json", "gone.txt"} & synthetic_files
 	# The real index and the checkout's .git are only read.
 	assert _git_state(root) == before

@@ -319,13 +319,20 @@ done
 # run git at /source keep passing there instead of failing on both trees and
 # being listed as inherited. It is built from /source's own files with no
 # runner environment, no global or system config and no hooks; the checkout's
-# .git is never copied. On failure it is removed and the gate runs without it.
+# .git is never copied. `add --force`: /source holds only the files the gate
+# should see (tracked ones, and untracked ones the filter admitted), and a
+# tracked .gitignore now present in it must not drop a tracked file that one
+# of its rules also matches from the index the module lists tests from. On
+# failure the run is unverified (snapshot_failed), as with the old snapshot,
+# because without the repository git-dependent tests would fail on both trees
+# and be classified as inherited.
 source_git=(env -i PATH="${PATH}" HOME="${root}" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0
 	git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c commit.gpgsign=false -C "${source_real}")
 if ! { "${source_git[@]}" init -q && printf '.review-venv/\nnode_modules/\n.venv/\n__pycache__/\n*.egg-info/\n*.dist-info/\n.pytest_cache/\n' > "${source_real}/.git/info/exclude" \
-	&& "${source_git[@]}" add --all && "${source_git[@]}" -c user.name=isolated -c user.email=isolated@invalid commit --allow-empty -qm snapshot; } >/dev/null 2>&1; then
-	rm -rf -- "${source_real}/.git"
-	gate_log "outcome=warning reason=source_git_init_failed"
+	&& "${source_git[@]}" add --all --force && "${source_git[@]}" -c user.name=isolated -c user.email=isolated@invalid commit --allow-empty -qm snapshot; } >/dev/null 2>&1; then
+	gate_log "outcome=error reason=source_git_init_failed"
+	synthetic_result snapshot_failed
+	exit 0
 fi
 
 mounts=(
