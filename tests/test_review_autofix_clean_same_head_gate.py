@@ -613,7 +613,7 @@ FAKE_GH_STALE_FUNC = """gh() {
       ok) return 0 ;;
       404) echo "gh: Not Found (HTTP 404)" >&2; return 1 ;;
       notfound) echo "gh: not found (AI_COMMENT_SIG shim)" >&2; return 127 ;;
-      *) echo "gh: Server Error (HTTP 500)" >&2; return 1 ;;
+      *) printf '%s\\n' "::error::gh command failed after 5 attempts: api -X DELETE" "::warning::  stderr: gh: Server Error (HTTP 500)" >&2; return 1 ;;
     esac
   fi
   return 0

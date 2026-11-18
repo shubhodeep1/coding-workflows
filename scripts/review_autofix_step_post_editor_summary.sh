@@ -512,8 +512,9 @@ review_blocked_stale_clear_after_clean()
     review_blocked_stale_clear_log removed "${rb_stale_reason}"
     return 0
   fi
-  # gh_retry prints its retry notices first and gh's own error last.
-  rb_stale_del_first="$(printf '%s\n' "${rb_stale_del_err}" | tr -d '\r' | awk 'NF { l = $0 } END { print substr(l, 1, 200) }' || true)"
+  # gh_retry's last stderr line is its own `::warning::  stderr: <excerpt>`
+  # wrapper around gh's error; keep only the excerpt.
+  rb_stale_del_first="$(printf '%s\n' "${rb_stale_del_err}" | tr -d '\r' | awk 'NF { l = $0 } END { sub(/^::warning::[ \t]*stderr: /, "", l); print substr(l, 1, 200) }' || true)"
   echo "::warning::Could not remove stale ai:review-blocked from PR #${rb_stale_pr}: ${rb_stale_del_first//::/: :}"
   review_blocked_stale_clear_log error delete_failed
   return 0
