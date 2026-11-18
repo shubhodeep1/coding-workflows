@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/implement_handle_guard_block.sh:267 | severity=nit | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The failed-post warning names a heal-reporter consequence that applies only to `SVB_REASON=remediation-no-code`, but `scope_post_guard_comment` runs for every scope reason.\n  WHY: For `out-of-scope`, `scope-lock-label` and `automation-path`, a lost marker affects the unblock ledger, not the heal reporter, so the log points triage at the wrong signal.\n- scripts/implement_handle_guard_block.sh:265-267,277-280 | severity=major | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: When posting the remediation rejection comment fails, `scope_post_guard_comment` prints a warning but still returns success, so the caller sets `SCOPE_COMMENT_POSTED_BEFORE_LABEL=true` and adds `ai:scope-blocked` without retrying.\n  WHY: The heal reporter skips this park only when it finds the remediation marker comment (`scripts/workflow_failure_heal_report.sh:185\u2013195`), so with no comment it dispatches a heal. Disagreement: anthropic_claude-sonnet-5_5 explicitly declined to report this as accepted residual behavior, and the other reviewers did not report it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/implement_handle_guard_block.sh:262-267 | severity=nit | confidence=4\n  PROBLEM: The warning text names a heal-reporter consequence that only applies to `SVB_REASON=remediation-no-code`, while `scope_post_guard_comment` runs for every scope reason.\n  WHY: For the other reasons, a failed post loses the marker the unblock ledger reads (`GUARD_REJECTION_HEADERS` and `REJECTION_RE` in `scripts/unblock_ledger.py`). The heal reporter's skip check only matches `reason=remediation-no-code`. The impact is small because the failure is reported and nothing is suppressed.\n- (Not reported as a finding: a failed remediation comment post still leads to the label being added and a heal being dispatched. The reviewer treats this as accepted residual behavior, since the design is a single raw attempt with no retry and a warning on failure.)\n- HARDENING_SUGGESTIONS: drop the heal-reporter clause at line 267, or add it only when `SVB_REASON` is `remediation-no-code` (about 2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/implement_handle_guard_block.sh:267 | severity=nit | confidence=4\n  PROBLEM: The diagnostic warning for a failed guard rejection comment is remediation-specific for all block reasons.\n  WHY: The text \"...the heal reporter may dispatch a heal for this park.\" is only relevant for `remediation-no-code`. For `out-of-scope` or `automation-path`, a missing comment marker affects the unblock ledger, not the heal reporter, which misleads triage.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/implement_handle_guard_block.sh:267 | severity=nit | confidence=4\n  PROBLEM: The warning's consequence clause is remediation-specific, but `scope_post_guard_comment` is invoked for every `SVB_REASON`, including `out-of-scope`, `scope-lock-label` and `automation-path` (lines 329-331, after the label is added).\n  WHY: The heal reporter's skip rule (`scripts/workflow_failure_heal_report.sh:185-196`) only matches `reason=remediation-no-code`, so for the other three reasons a heal is dispatched whether or not the marker was posted. The real consequence is the unblock ledger's `GUARD_REJECTION_HEADERS` match failing, so operators look in the wrong subsystem.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/implement_handle_guard_block.sh:265-267,277-280 | severity=major | confidence=5\n  PROBLEM: When posting the remediation rejection comment fails, the warning is printed but `scope_post_guard_comment` still returns success. The caller then unconditionally sets `SCOPE_COMMENT_POSTED_BEFORE_LABEL=true` and adds `ai:scope-blocked` without retrying the comment.\n  WHY: The label event starts the heal reporter, which skips this park only when it finds the remediation marker comment (`scripts/workflow_failure_heal_report.sh:185\u2013195`). With no comment, it builds and dispatches a heal for the parked issue.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bedf1d1638666e127eddb4173b8510ea84d27c0405b9166851138e2dc9e20a00",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9699,
+    "run_id": "44316544556",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44316544556",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118153652_bf3be810f7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9699,
+    "run_id": "44316544556"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T15:36:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
