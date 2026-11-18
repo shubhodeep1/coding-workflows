@@ -86,6 +86,17 @@
 #   CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED    "true" adds a "Target branch: <head ref>"
 #                                            line for a verified open same-repo PR
 #                                            head (default false: no routing line)
+#   CHECK_TRIAGE_TARGET_FILES_GUARD_ENABLED  default true (unset, empty or true in any
+#                                            case); "false" turns it off; any other value
+#                                            turns it off with a warning. When on, a
+#                                            "Target branch" route to the PR head is
+#                                            dropped (the issue is planned on the default
+#                                            branch) when none of the failing test files
+#                                            the CI log names exists at the failing head
+#                                            but at least one exists on the default
+#                                            branch (issue #9733, R1c)
+#   CHECK_TRIAGE_TARGET_FILES_GUARD_CHECKOUT_DIR  git checkout of the failing PR head
+#                                            the guard reads (default GITHUB_WORKSPACE)
 #   CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED     "true" adds a verified
 #                                            "Integration branch" line naming
 #                                            the failing PR's head ref
@@ -445,6 +456,99 @@ esac
 # value cannot carry markdown, backticks, path segments or newlines.
 INTEGRATION_BRANCH_RE='^orchestrator/project-[1-9][0-9]*$'
 INTEGRATION_BRANCH=""
+
+# --- Target-files guard (issue #9733, R1c) -----------------------------------
+# On by default; "false" (any case) turns it off, any other value turns it off
+# and warns, so a typo never changes where a fix is planned.
+TARGET_FILES_GUARD_ENABLED=true
+case "$(printf '%s' "${CHECK_TRIAGE_TARGET_FILES_GUARD_ENABLED:-}" | tr '[:upper:]' '[:lower:]')" in
+	''|true) ;;
+	false) TARGET_FILES_GUARD_ENABLED=false ;;
+	*)
+		TARGET_FILES_GUARD_ENABLED=false
+		echo "::warning::CHECK_TRIAGE_TARGET_FILES_GUARD_ENABLED has an unrecognised value; the target-files guard stays off. Use true or false."
+		;;
+esac
+TARGET_FILES_GUARD_CHECKOUT_DIR="${CHECK_TRIAGE_TARGET_FILES_GUARD_CHECKOUT_DIR:-${GITHUB_WORKSPACE:-}}"
+
+# triage_target_files_guard: keep or drop the "Target branch" route chosen by
+# the routing block. A route sends the fix to the failing PR's head branch;
+# when that branch has none of the failing test files the CI log names, but
+# the default branch has at least one, a fix there cannot touch the failing
+# code, so the route is cleared and the issue is planned on the default branch
+# (today's behaviour without routing). The files come from the deterministic
+# `heal-scope failing-tests` extractor over the collected check-run context
+# (CI log text, untrusted: tests/ paths only, strict charset, no "..", at
+# most 8). The head is read with local `git cat-file` on the PR-head checkout
+# (validated 40-hex SHA), the default branch with one batched GraphQL read
+# (paths passed only as variables). Every failure keeps the route (fail open).
+triage_target_files_guard()
+{
+	[ -n "${ROUTING_TARGET_BRANCH}" ] || return 0
+	if [ "${TARGET_FILES_GUARD_ENABLED}" != "true" ]; then
+		log "routing outcome=keep reason=target_files_guard_disabled target_branch=${ROUTING_TARGET_BRANCH}"
+		return 0
+	fi
+	[ "${HISTORICAL_MODE}" != "true" ] || return 0
+	local guard_tests_json="" guard_path="" guard_dir="${TARGET_FILES_GUARD_CHECKOUT_DIR}"
+	local -a guard_files=()
+	if [ -s "${PR_CHECK_RUNS_CONTEXT_FILE}" ] && [ -f "${HEAL_HELPER}" ]; then
+		guard_tests_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${HEAL_HELPER}" heal-scope failing-tests --log-files "${PR_CHECK_RUNS_CONTEXT_FILE}" 2>/dev/null || true)"
+	fi
+	[ -n "${guard_tests_json}" ] || guard_tests_json='{}'
+	while IFS= read -r guard_path; do
+		[ -n "${guard_path}" ] || continue
+		[[ "${guard_path}" =~ ^tests/[A-Za-z0-9._/-]{1,194}$ ]] || continue
+		case "${guard_path}" in *..*|-*|/*) continue ;; esac
+		guard_files+=("${guard_path}")
+		[ "${#guard_files[@]}" -lt 8 ] || break
+	done < <(jq -r '(.files // [])[]? | strings' <<< "${guard_tests_json}" 2>/dev/null || true)
+	if [ "${#guard_files[@]}" -eq 0 ]; then
+		log "routing outcome=keep reason=no_failing_files target_branch=${ROUTING_TARGET_BRANCH}"
+		return 0
+	fi
+	if ! [[ "${HEAD_SHA}" =~ ^[0-9a-fA-F]{40}$ ]] || [ -z "${guard_dir}" ] || [ ! -d "${guard_dir}" ] \
+		|| ! git -C "${guard_dir}" cat-file -e "${HEAD_SHA}^{commit}" >/dev/null 2>&1; then
+		log "routing outcome=keep reason=head_commit_unavailable target_branch=${ROUTING_TARGET_BRANCH}"
+		return 0
+	fi
+	for guard_path in "${guard_files[@]}"; do
+		if git -C "${guard_dir}" cat-file -e "${HEAD_SHA}:${guard_path}" >/dev/null 2>&1; then
+			log "routing outcome=keep reason=target_branch_has_files target_branch=${ROUTING_TARGET_BRANCH} files=${#guard_files[@]}"
+			return 0
+		fi
+	done
+	if [ -z "${ROUTING_DEFAULT_BRANCH:-}" ] || ! [[ "${REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+		log "routing outcome=keep reason=default_lookup_failed target_branch=${ROUTING_TARGET_BRANCH}"
+		return 0
+	fi
+	local guard_query_vars='$owner: String!, $name: String!' guard_query_fields="" guard_index=0 guard_response=""
+	local -a guard_args=(-f "owner=${REPO%%/*}" -f "name=${REPO#*/}")
+	for guard_path in "${guard_files[@]}"; do
+		guard_query_vars+=", \$e${guard_index}: String!"
+		guard_query_fields+=" f${guard_index}: object(expression: \$e${guard_index}) { __typename }"
+		guard_args+=(-f "e${guard_index}=${ROUTING_DEFAULT_BRANCH}:${guard_path}")
+		guard_index=$((guard_index + 1))
+	done
+	# §14 audit: the calls made so far (the PR payload, the source issue, the
+	# git/ref check, the base-gate run reads and the check-run context
+	# collector) return no tree contents of the default branch, and the PR-head
+	# checkout has no credentials to fetch it. One aliased GraphQL read covers
+	# every file (at most 8), and only when the route would name a head that
+	# lacks all of them. A failed read keeps the route (today's behaviour).
+	if ! guard_response="$(gh_retry gh api graphql -f query="query(${guard_query_vars}) { repository(owner: \$owner, name: \$name) {${guard_query_fields} } }" "${guard_args[@]}" 2>/dev/null)" \
+		|| ! jq -e '.data.repository | type == "object"' <<< "${guard_response}" >/dev/null 2>&1; then
+		log "routing outcome=keep reason=default_lookup_failed target_branch=${ROUTING_TARGET_BRANCH}"
+		return 0
+	fi
+	if jq -e '[.data.repository[]? | objects | select(.__typename == "Blob")] | length > 0' <<< "${guard_response}" >/dev/null 2>&1; then
+		log "routing outcome=fallback reason=target_branch_lacks_files target_branch=${ROUTING_DEFAULT_BRANCH} from_branch=${ROUTING_TARGET_BRANCH} files=${#guard_files[@]}"
+		ROUTING_TARGET_BRANCH=""
+		return 0
+	fi
+	log "routing outcome=keep reason=files_missing_on_default target_branch=${ROUTING_TARGET_BRANCH} files=${#guard_files[@]}"
+	return 0
+}
 
 REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 RUNTIME_DIR="${RUNTIME_DIR:-/tmp/check-triage-${GITHUB_RUN_ID:-local}}"
@@ -2197,6 +2301,8 @@ elif [ -f scripts/collect_pr_check_runs_context.py ]; then
 else
 	log "warn context_collector_missing"
 fi
+# Issue #9733 (R1c): drop a PR-head route whose branch lacks every failing file.
+triage_target_files_guard || true
 
 if [ "${TRIAGE_STAGE}" = "collect" ]; then
 	jq -n --arg pr_number "${PR_NUMBER}" --arg check_name "${CHECK_NAME}" \

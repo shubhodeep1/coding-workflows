@@ -13271,3 +13271,221 @@ def test_code_ref_switch_defaults_and_workflow_wiring() -> None:
 	assert workflow.count(CODE_REF_ENV_LINE) == 2
 	assert intake_job.split("\n  intake:\n", 1)[1].count(CODE_REF_ENV_LINE) == 1
 	assert scan_job.split("\n  heal-verify:\n", 1)[0].count(CODE_REF_ENV_LINE) == 1
+
+
+# ---------------------------------------------------------------------------
+# Red-main heal dedupe (issue #9733, R1b of
+# docs/plans/pipeline-human-wait-elimination-plan.md). While the default branch
+# stays red, each failure of the same workflow and job gave a new fingerprint
+# and a new heal issue. A push failure on the default branch now carries a
+# red-main group key; an open heal issue with the same `red-main-group=` header
+# line takes the report as an occurrence. WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED
+# (default 'true') set to 'false' restores fingerprint-only dedupe.
+# ---------------------------------------------------------------------------
+
+RM_KEY = "e" * 64
+RM_NOW = datetime(2026, 11, 18, 12, tzinfo=timezone.utc)
+RM_ENV_LINE = "      WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED: ${{ vars.WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED || 'true' }}\n"
+
+
+def _rm_issue(number: int, *, fp: str, key: str = RM_KEY, state: str = "open", gen: int = 1) -> dict:
+	issue = _heal_issue(number, state=state, fp=fp, gen=gen, created=RM_NOW - timedelta(days=1))
+	issue["body"] += (f"\n<!-- {heal.MARKER_PREFIX}source={SELF_REPO}#run -->\n<!-- {heal.MARKER_PREFIX}classification=workflow-defect -->\n"
+		f"<!-- {heal.MARKER_PREFIX}red-main-group={key} -->\n\nbody")
+	return issue
+
+
+def test_red_main_group_key_eligibility() -> None:
+	key = heal.red_main_group_key("CI", "tests (3)", "main", event="push", default_branch="main")
+	assert re.fullmatch(r"[0-9a-f]{64}", key)
+	assert key == hashlib.sha256(b"red-main|ci|tests (3)|main").hexdigest()
+	# The [cycle:<id>] suffix is stripped; case does not matter for names.
+	assert heal.red_main_group_key("ci [cycle:41]", "Tests (3)", "main", event="push", default_branch="main") == key
+	# Different job or workflow: different key.
+	assert heal.red_main_group_key("CI", "tests (4)", "main", event="push", default_branch="main") != key
+	assert heal.red_main_group_key("Nightly", "tests (3)", "main", event="push", default_branch="main") != key
+	# Ineligible: not a push, not the default branch, empty job / workflow / default branch, invalid branch.
+	assert heal.red_main_group_key("CI", "tests", "main", event="pull_request", default_branch="main") == ""
+	assert heal.red_main_group_key("CI", "tests", "main", event="workflow_dispatch", default_branch="main") == ""
+	assert heal.red_main_group_key("CI", "tests", "feature", event="push", default_branch="main") == ""
+	assert heal.red_main_group_key("CI", "", "main", event="push", default_branch="main") == ""
+	assert heal.red_main_group_key("CI", "   ", "main", event="push", default_branch="main") == ""
+	assert heal.red_main_group_key("", "tests", "main", event="push", default_branch="main") == ""
+	assert heal.red_main_group_key("[cycle:3]", "tests", "main", event="push", default_branch="main") == ""
+	assert heal.red_main_group_key("CI", "tests", "main", event="push", default_branch="") == ""
+	assert heal.red_main_group_key("CI", "tests", "", event="push", default_branch="") == ""
+	assert heal.red_main_group_key("CI", "tests", "../main", event="push", default_branch="../main") == ""
+
+
+def test_budget_decision_red_main_group_match() -> None:
+	fp, other = "1" * 64, "2" * 64
+	group = _rm_issue(9700, fp=other)
+	decision = heal.budget_decision([group], fp=fp, now=RM_NOW, red_main_group=RM_KEY)
+	assert decision == {
+		"action": "duplicate", "match": "red_main", "red_main_group": RM_KEY, "existing_issue": 9700,
+		"existing_url": group["html_url"], "existing_repo": "", "gen": 1, "root": other,
+		"open_count": 1, "today_count": 0, "lineage_source": "none",
+	}
+	# A closed group heal or a different key never matches.
+	assert heal.budget_decision([_rm_issue(9700, fp=other, state="closed")], fp=fp, now=RM_NOW, red_main_group=RM_KEY)["action"] == "open"
+	assert heal.budget_decision([_rm_issue(9700, fp=other, key="d" * 64)], fp=fp, now=RM_NOW, red_main_group=RM_KEY)["action"] == "open"
+	# The marker only counts in the header, not quoted in the body.
+	quoted = _heal_issue(9701, state="open", fp=other, created=RM_NOW - timedelta(days=1))
+	quoted["body"] += f"\n\n<!-- {heal.MARKER_PREFIX}red-main-group={RM_KEY} -->"
+	assert heal.budget_decision([quoted], fp=fp, now=RM_NOW, red_main_group=RM_KEY)["action"] == "open"
+	# A fingerprint duplicate still wins.
+	same_fp = _heal_issue(9, state="open", fp=fp)
+	assert heal.budget_decision([group, same_fp], fp=fp, now=RM_NOW, red_main_group=RM_KEY)["match"] == "fingerprint"
+	# The match outranks the lineage cap and the budget caps.
+	capped = _heal_issue(5, state="closed", fp=fp, gen=3)
+	assert heal.budget_decision([group, capped], fp=fp, now=RM_NOW, max_depth=3)["action"] == "escalate"
+	capped_match = heal.budget_decision([group, capped], fp=fp, now=RM_NOW, max_depth=3, red_main_group=RM_KEY)
+	assert capped_match["match"] == "red_main" and capped_match["lineage_source"] == "fingerprint"
+	assert heal.budget_decision([group], fp=fp, now=RM_NOW, max_open=1)["action"] == "budget_exhausted"
+	assert heal.budget_decision([group], fp=fp, now=RM_NOW, max_open=1, red_main_group=RM_KEY)["match"] == "red_main"
+	# It outranks a cause match too.
+	cause_issue = _p5_cause_issue(8376, fp="3" * 64, created=RM_NOW - timedelta(days=1))
+	assert heal.budget_decision([cause_issue, group], fp=fp, now=RM_NOW, cause=P5_CAUSE, red_main_group=RM_KEY)["match"] == "red_main"
+	# Several group heals: the preferred-duplicate rule picks the newest number.
+	assert heal.budget_decision([group, _rm_issue(9710, fp="4" * 64)], fp=fp, now=RM_NOW, red_main_group=RM_KEY)["existing_issue"] == 9710
+	# No (or an invalid) key: every decision is identical to today's.
+	for issues in ([group], [group, capped], [group, same_fp], []):
+		baseline = heal.budget_decision(issues, fp=fp, now=RM_NOW, max_depth=3)
+		for value in (None, "", "E" * 64, "e" * 63, "not-hex"):
+			assert heal.budget_decision(issues, fp=fp, now=RM_NOW, max_depth=3, red_main_group=value) == baseline, value
+
+
+def test_compose_issue_body_red_main_group_line() -> None:
+	five = _p5_body()
+	with_cause = _p5_body(cause=P5_CAUSE)
+	both = _p5_body(cause=P5_CAUSE, red_main_group=RM_KEY)
+	lines = both.split("\n")
+	assert lines[5] == f"<!-- {heal.MARKER_PREFIX}cause={P5_CAUSE} -->"
+	assert lines[6] == f"<!-- {heal.MARKER_PREFIX}red-main-group={RM_KEY} -->"
+	assert lines[:6] + lines[7:] == with_cause.split("\n")
+	only = _p5_body(red_main_group=RM_KEY).split("\n")
+	assert only[5] == f"<!-- {heal.MARKER_PREFIX}red-main-group={RM_KEY} -->" and only[:5] + only[6:] == five.split("\n")
+	assert heal.parse_red_main_group_marker(both) == RM_KEY
+	assert heal.parse_red_main_group_marker(five) == ""
+	# Absent, empty or invalid key: byte-identical body.
+	for value in (None, "", "E" * 64, "e" * 63, "z" * 64):
+		assert _p5_body(red_main_group=value) == five, value
+		assert _p5_body(cause=P5_CAUSE, red_main_group=value) == with_cause, value
+
+
+def test_validator_accepts_only_an_exact_red_main_group_line() -> None:
+	check = lambda body: heal.validate_heal_issue_body_routing(body, target_branch="main", integration_branch=None)  # noqa: E731
+	both = _p5_body(cause=P5_CAUSE, red_main_group=RM_KEY)
+	only = _p5_body(red_main_group=RM_KEY)
+	assert check(both) == "" and check(only) == ""
+	lines = both.split("\n")
+	marker = lines[6]
+	# A duplicate line, a malformed key, a leading space, or the line in the body: rejected.
+	assert check("\n".join(lines[:7] + [marker] + lines[7:])) == "marker"
+	for bad in ("E" * 64, "e" * 63, "e" * 65, "g" * 64):
+		assert check("\n".join(lines[:6] + [f"<!-- {heal.MARKER_PREFIX}red-main-group={bad} -->"] + lines[7:])) == "marker", bad
+	assert check("\n".join(lines[:6] + [" " + marker] + lines[7:])) == "marker"
+	assert check(_p5_body(cause=P5_CAUSE) + "\n" + marker + "\n") == "marker"
+	# The group line before the cause line is not the order compose writes.
+	assert check("\n".join(lines[:5] + [lines[6], lines[5]] + lines[7:])) == "marker"
+	# Lineage trust (build_issue_payload) still holds with the extra header line.
+	body = (f"<!-- {heal.MARKER_PREFIX}fp={FP_HEX} -->\n<!-- {heal.MARKER_PREFIX}gen=2 -->\n"
+		f"<!-- {heal.MARKER_PREFIX}root={FP_HEX} -->\n<!-- {heal.MARKER_PREFIX}source={CONSUMER_REPO}#39 -->\n"
+		f"<!-- {heal.MARKER_PREFIX}classification=workflow-defect -->\n{marker}\nsome body")
+	payload = heal.build_issue_payload(
+		repo=CONSUMER_REPO, kind="issue", label="ai:needs-human",
+		issue=dict(_issue(body=body, labels=["ai:workflow-heal", "ai:needs-human"]), author_association="OWNER"),
+		comments=[], runs=[], wrapper_sha=None, reporter_run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/1",
+	)
+	normalized = heal.validate_payload(payload)
+	assert normalized["source_gen"] == 2 and normalized["source_root"] == FP_HEX
+
+
+def test_red_main_group_cli_subcommands(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+	assert heal.main(["red-main-group-key", "--workflow-name", "CI [cycle:2]", "--failing-job", "tests (3)", "--branch", "main",
+		"--event", "push", "--default-branch", "main"]) == 0
+	assert json.loads(capsys.readouterr().out) == {"key": heal.red_main_group_key("CI", "tests (3)", "main", event="push", default_branch="main")}
+	# Every argument defaults to empty; an ineligible run prints an empty key and still exits 0.
+	assert heal.main(["red-main-group-key"]) == 0
+	assert json.loads(capsys.readouterr().out) == {"key": ""}
+	assert heal.main(["red-main-group-key", "--workflow-name", "CI", "--failing-job", "t", "--branch", "main", "--event", "pull_request", "--default-branch", "main"]) == 0
+	assert json.loads(capsys.readouterr().out) == {"key": ""}
+	issues = tmp_path / "issues.json"
+	issues.write_text(json.dumps([_rm_issue(9700, fp="2" * 64)]), encoding="utf-8")
+	assert heal.main(["budget", "--issues-json", str(issues), "--fingerprint", "1" * 64, "--red-main-group", RM_KEY]) == 0
+	decision = json.loads(capsys.readouterr().out)
+	assert decision["match"] == "red_main" and decision["existing_issue"] == 9700 and decision["red_main_group"] == RM_KEY
+	assert heal.main(["budget", "--issues-json", str(issues), "--fingerprint", "1" * 64]) == 0
+	assert json.loads(capsys.readouterr().out)["action"] == "open"
+	assert heal.main(["budget", "--issues-json", str(issues), "--fingerprint", "1" * 64, "--red-main-group", ""]) == 0
+	assert json.loads(capsys.readouterr().out)["action"] == "open"
+
+
+def _rm_push_state_and_payload() -> tuple[dict, dict]:
+	run = _p1_run()
+	run["event"] = "push"
+	state = _p1_state()
+	state["run_details"][str(P1_RUN_ID)] = run
+	return state, heal.build_workflow_run_payload(repo=SELF_REPO, workflow_run=run)
+
+
+def _rm_key_from(result: subprocess.CompletedProcess[str], outcome: str) -> str:
+	match = re.search(rf"^WORKFLOW_HEAL red_main_group key=([0-9a-f]{{64}}) outcome={outcome} ", result.stdout, re.MULTILINE)
+	assert match, result.stdout
+	return match.group(1)
+
+
+def test_intake_red_main_group_default_on_switch_off_and_occurrence() -> None:
+	base_env = {"WORKFLOW_HEAL_DEFAULT_BRANCH": "main", "WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED": None}
+	state, payload = _rm_push_state_and_payload()
+	# Unset means on: the new heal issue carries the group line.
+	first, first_state, _ = _run_p1_intake(state, base_env, payload)
+	assert first.returncode == 0, first.stderr + first.stdout
+	key = _rm_key_from(first, "new")
+	assert "reason=no_open_group_heal" in first.stdout
+	assert key == heal.red_main_group_key("Test & Mark Stable Release", "e2e-smoke-test", "main", event="push", default_branch="main")
+	header = first_state["composed_issue"]["body"].split("\n\n", 1)[0].split("\n")
+	assert f"<!-- {heal.MARKER_PREFIX}red-main-group={key} -->" == header[-1]
+	assert heal.parse_red_main_group_marker(first_state["composed_issue"]["body"]) == key
+	# An open heal of the same group (another fingerprint) takes the next report as an occurrence.
+	group_state, _ = _rm_push_state_and_payload()
+	group_state["heal_issues"] = [_rm_issue(9700, fp="a" * 64, key=key)]
+	dup, dup_state, _ = _run_p1_intake(group_state, base_env, payload)
+	assert dup.returncode == 0, dup.stderr + dup.stdout
+	assert "composed_issue" not in dup_state
+	assert [item["path"] for item in dup_state.get("comments_posted", [])] == [f"repos/{SELF_REPO}/issues/9700/comments"]
+	assert re.search(rf"^WORKFLOW_HEAL red_main_group key={key} outcome=duplicate reason=open_group_heal existing_issue=9700$", dup.stdout, re.MULTILINE)
+	assert re.search(r"^WORKFLOW_HEAL duplicate existing_issue=9700 .* match=red_main$", dup.stdout, re.MULTILINE)
+	# Switch off: the group heal is ignored and the body has no group line.
+	off_state, _ = _rm_push_state_and_payload()
+	off_state["heal_issues"] = [_rm_issue(9700, fp="a" * 64, key=key)]
+	off, off_after, _ = _run_p1_intake(off_state, {**base_env, "WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED": "false"}, payload)
+	assert off.returncode == 0, off.stderr + off.stdout
+	assert "WORKFLOW_HEAL red_main_group key=none outcome=skipped reason=disabled" in off.stdout
+	assert not off_after.get("comments_posted")
+	assert "red-main-group=" not in off_after["composed_issue"]["body"]
+	# A run that is not a default-branch push is never grouped.
+	dispatch, dispatch_state, _ = _run_p1_intake(_p1_state(), {**base_env, "WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED": "true"})
+	assert dispatch.returncode == 0, dispatch.stderr + dispatch.stdout
+	assert "WORKFLOW_HEAL red_main_group key=none outcome=skipped reason=not_default_branch_push" in dispatch.stdout
+	assert "red-main-group=" not in dispatch_state["composed_issue"]["body"]
+
+
+def test_red_main_grouping_switch_defaults_and_workflow_wiring() -> None:
+	script = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	assert 'RED_MAIN_GROUPING_ENABLED="${WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED:-true}"' in script
+	# Computed after the cause key, before the budget decision; no API call.
+	assert script.index("\n_heal_cause_key ||") < script.index("\n_heal_red_main_group_key ||") < script.index('python3 "${HEAL_PY}" budget "${BUDGET_ARGS[@]}" >')
+	body = script.split("\n_heal_red_main_group_key()\n{", 1)[1].split("\n}\n", 1)[0]
+	assert "gh " not in body and "gh_retry" not in body
+	assert 'BUDGET_ARGS+=(--red-main-group "${RED_MAIN_GROUP_KEY}")' in script
+	assert 'red_main_args=(--red-main-group "${RED_MAIN_GROUP_KEY}")' in script
+	# Scope recovery never replaces a group-matched heal and drops the argument from its re-run.
+	recovery = script.split("\n_heal_scope_recovery_evaluate()\n{", 1)[1].split("\n}\n", 1)[0]
+	assert '!= "red_main" ] || return 0' in recovery
+	assert "\t\t\t--red-main-group)\n\t\t\t\trecovery_arg_index=$((recovery_arg_index + 2))\n\t\t\t\tcontinue\n" in recovery
+	workflow = INTAKE_WORKFLOW.read_text(encoding="utf-8")
+	intake_job, scan_job = workflow.split("\n  recovery-scan:\n", 1)
+	assert workflow.count(RM_ENV_LINE) == 2
+	assert intake_job.split("\n  intake:\n", 1)[1].count(RM_ENV_LINE) == 1
+	assert scan_job.split("\n  heal-verify:\n", 1)[0].count(RM_ENV_LINE) == 1

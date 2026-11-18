@@ -246,6 +246,9 @@ jobs:
       # Opt-in: add a verified "Target branch: <PR head>" line to new triage
       # issues (same-repository open PRs only). Off until an operator sets it.
       CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'false' }}
+      # Issue #9733: drop that route when the PR head lacks every failing test file
+      # and the default branch has one; 'false' keeps the route as before.
+      CHECK_TRIAGE_TARGET_FILES_GUARD_ENABLED: ${{ vars.CHECK_TRIAGE_TARGET_FILES_GUARD_ENABLED || 'true' }}
       # Off by default: add a verified PR-head Integration branch line to the
       # triage issue only after an operator enables it.
       CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED: ${{ vars.CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED || 'false' }}

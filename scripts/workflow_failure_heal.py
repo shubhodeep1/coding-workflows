@@ -535,6 +535,10 @@ _FAILURE_MARKER_TRAILING_RE = re.compile(
 _FP_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 # Optional sixth heal issue header line (cause grouping, P5 / D3); matched with fullmatch.
 _HEAL_CAUSE_MARKER_LINE_RE = re.compile(r"<!-- " + re.escape(MARKER_PREFIX) + r"cause=[0-9a-f]{64} -->")
+# Optional red-main group header line (issue #9733, R1b), after the optional
+# cause= line; matched with fullmatch. A dedicated regex because _MARKER_RE
+# only reads `[a-z_]+` keys and this key is hyphenated.
+_RED_MAIN_GROUP_MARKER_LINE_RE = re.compile(r"<!-- " + re.escape(MARKER_PREFIX) + r"red-main-group=([0-9a-f]{64}) -->")
 # Authorship facts on ai:scope-blocked reports (Q81): the automation-path
 # guard grants by author, so the diagnosis needs the issue author, its
 # association and the pipeline login. Invalid values are dropped, never fatal.
@@ -750,6 +754,9 @@ def validate_heal_issue_body_routing(body: str, *, target_branch: str | None, in
 			header_length += 1
 	if len(lines) > header_length and _HEAL_CAUSE_MARKER_LINE_RE.fullmatch(lines[header_length]):
 		header_length += 1
+	# Issue #9733 (R1b): then at most one exact `red-main-group=<64 lowercase hex>` line.
+	if len(lines) > header_length and _RED_MAIN_GROUP_MARKER_LINE_RE.fullmatch(lines[header_length]):
+		header_length += 1
 	if "<!--" in "\n".join(lines[header_length:]):
 		return "marker"
 	if re.search(r"Re-issued from\s*#|review-blocked-reissue", body, re.IGNORECASE):
@@ -812,6 +819,22 @@ def parse_heal_markers(body: str | None) -> dict[str, str]:
 	for match in _MARKER_RE.finditer(body or ""):
 		markers.setdefault(match.group("key"), match.group("value"))
 	return markers
+
+
+def parse_red_main_group_marker(body: str | None) -> str:
+	"""Return the ``red-main-group=<hex>`` header key of a heal issue body, or ``""``.
+
+	Issue #9733 (R1b). Only the leading header lines (up to the first blank
+	line) are read, and only an exact own-line marker counts, so the key
+	quoted in the issue text never matches.
+	"""
+	for line in (body or "").split("\n"):
+		if not line.strip():
+			break
+		match = _RED_MAIN_GROUP_MARKER_LINE_RE.fullmatch(line.rstrip("\r"))
+		if match:
+			return match.group(1)
+	return ""
 
 
 def extract_run_refs(texts: Iterable[str], repo: str, limit: int = MAX_RUN_REFS) -> list[dict[str, Any]]:
@@ -3904,6 +3927,27 @@ def cause_key(workflow: str, failing_step: str, shape: str) -> str:
 	return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
+def red_main_group_key(workflow_name: str, failing_job: str, branch: str, *, event: str, default_branch: str) -> str:
+	"""Red-main group key over (workflow name, failing job, branch); issue #9733 (R1b).
+
+	Input: the failing run's workflow name, the first failing job name, the
+	run's head branch and event, and the repository's default branch.
+	Output: a 64-hex SHA-256 of ``red-main|<workflow>|<job>|<branch>`` (the
+	workflow name lowercased with its ``[cycle:<id>]`` suffix stripped, the
+	job single-lined and lowercased), only for a ``push`` run on the default
+	branch with a non-empty workflow name and job; ``""`` otherwise. Pure, no
+	API call.
+	"""
+	if event != "push" or not is_valid_branch(branch) or not default_branch or branch != default_branch:
+		return ""
+	stable_workflow_name = _CYCLE_RUN_NAME_SUFFIX_RE.sub("", single_line(workflow_name, 200)).strip()
+	job = single_line(failing_job, 200).strip()
+	if not stable_workflow_name or not job:
+		return ""
+	material = "|".join(["red-main", stable_workflow_name.lower(), job.lower(), branch])
+	return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
 # ---------------------------------------------------------------------------
 # Identical-failure fingerprint cap (review_autofix.yml)
 # ---------------------------------------------------------------------------
@@ -5952,6 +5996,7 @@ def budget_decision(
 	reissues: Iterable[dict[str, Any]] | None = None,
 	cause: str | None = None,
 	cause_window_days: int = 3,
+	red_main_group: str | None = None,
 ) -> dict[str, Any]:
 	"""Decide what to do with a fingerprinted failure given the heal issue list.
 
@@ -5989,6 +6034,18 @@ def budget_decision(
 	(``match: cause``), ahead of the budget caps. A missing or unparseable
 	``created_at`` never matches. ``None`` (or anything but 64 lowercase hex)
 	leaves the decision unchanged.
+
+	``red_main_group`` (optional, issue #9733 R1b, see
+	:func:`red_main_group_key`): when no fingerprint or source duplicate (and,
+	inside this function, no re-issue duplicate) exists, an open heal issue
+	whose header carries the same ``red-main-group=`` line is the duplicate
+	(``match: red_main``), ahead of the lineage cap, the cause match and the
+	budget caps, so a red default branch records occurrences on one heal
+	instead of opening or escalating more. The intake runs its re-issue lookup
+	only when the first decision is not a duplicate, so there a red-main match
+	also outranks a re-issue. ``gen`` / ``root`` are the matched heal's own,
+	for display; the report's lineage is unchanged. ``None`` (or anything but
+	64 lowercase hex) leaves every decision unchanged.
 	"""
 	now = now or _utc_now()
 	day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -5996,6 +6053,9 @@ def budget_decision(
 		cause = None
 	cause_window_start = now - timedelta(days=min(max(cause_window_days, 1), 30) if type(cause_window_days) is int else 3)
 	cause_duplicate: dict[str, Any] | None = None
+	if not (isinstance(red_main_group, str) and _FP_HEX_RE.fullmatch(red_main_group)):
+		red_main_group = None
+	red_main_duplicate: dict[str, Any] | None = None
 	open_issues: list[dict[str, Any]] = []
 	created_today = 0
 	prior_same_fp: list[tuple[int, int, str, str]] = []
@@ -6050,6 +6110,8 @@ def budget_decision(
 		is_linked_heal_issue = linked_heal_issue is not None and number == linked_heal_issue and issue_repository in (linked_heal_repo, "")
 		if state == "open":
 			open_issues.append(issue)
+			if red_main_group is not None and parse_red_main_group_marker(issue.get("body")) == red_main_group:
+				red_main_duplicate = _preferred_duplicate(red_main_duplicate, issue)
 			if markers.get("fp") == fp:
 				duplicate = _preferred_duplicate(duplicate, issue)
 			elif same_source:
@@ -6155,6 +6217,23 @@ def budget_decision(
 	lineage_metadata = {"lineage_source": lineage_source}
 	if lineage_ignored_reason:
 		lineage_metadata["lineage_ignored_reason"] = lineage_ignored_reason
+	if red_main_duplicate is not None:
+		red_main_markers = parse_heal_markers(red_main_duplicate.get("body"))
+		# gen / root are the matched heal's own, for display only; the
+		# report's lineage is neither inherited nor altered (issue #9733).
+		return {
+			"action": "duplicate",
+			"match": "red_main",
+			"red_main_group": red_main_group,
+			"existing_issue": _positive_int(red_main_duplicate.get("number")),
+			"existing_url": sanitize_text(red_main_duplicate.get("html_url"), 300),
+			"existing_repo": red_main_duplicate.get("repository") if is_valid_repo_slug(red_main_duplicate.get("repository")) else "",
+			"gen": _positive_int(red_main_markers.get("gen")) or 1,
+			"root": red_main_markers.get("root") or fp,
+			"open_count": len(open_issues),
+			"today_count": created_today,
+			**lineage_metadata,
+		}
 	if gen > max_depth:
 		return {
 			"action": "escalate",
@@ -7849,6 +7928,7 @@ def compose_issue_body(
 	suspect_commits_section: str | None = None,
 	cause: str | None = None,
 	code_ran_from: str | None = None,
+	red_main_group: str | None = None,
 ) -> str:
 	"""Compose the heal issue body (upstream or consumer-side).
 
@@ -7881,6 +7961,11 @@ def compose_issue_body(
 	``workflow=`` line of a workflow_run source (#8808); ``None``, empty or
 	invalid adds nothing, so a switch-off body is byte-identical.
 
+	``red_main_group`` (optional, :func:`red_main_group_key`, 64 lowercase
+	hex, issue #9733 R1b) adds ``red-main-group=<hex>`` after the optional
+	``cause=`` line; ``None``, empty or invalid adds nothing, so a switch-off
+	body is byte-identical.
+
 	``code_ran_from`` (optional, ``<branch>@<sha>``, code-ref routing P6) adds
 	``- **Code ran from:** <branch>@<sha>`` after the ``Head SHA`` line (after
 	``Failed on branch`` without one); ``None`` or an invalid value
@@ -7900,6 +7985,8 @@ def compose_issue_body(
 		parts.append(f"<!-- {MARKER_PREFIX}workflow={workflow_path} -->")
 	if isinstance(cause, str) and _FP_HEX_RE.fullmatch(cause):
 		parts.append(f"<!-- {MARKER_PREFIX}cause={cause} -->")
+	if isinstance(red_main_group, str) and _FP_HEX_RE.fullmatch(red_main_group):
+		parts.append(f"<!-- {MARKER_PREFIX}red-main-group={red_main_group} -->")
 	parts.append("")
 	if target_branch:
 		parts.append(f"- **Target branch:** `{target_branch}`")
@@ -10780,6 +10867,16 @@ def _cmd_cause_key(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _cmd_red_main_group_key(args: argparse.Namespace) -> int:
+	"""Print {"key": "<64 hex or empty>"} (issue #9733 R1b). Pure, no API call; always exits 0."""
+	try:
+		key = red_main_group_key(args.workflow_name, args.failing_job, args.branch, event=args.event, default_branch=args.default_branch)
+	except Exception:  # noqa: BLE001 - fail open: an empty key keeps today's dedupe
+		key = ""
+	_write_json({"key": key})
+	return 0
+
+
 def _cmd_budget(args: argparse.Namespace) -> int:
 	issues = _load_json_file(args.issues_json)
 	decision = budget_decision(
@@ -10798,6 +10895,7 @@ def _cmd_budget(args: argparse.Namespace) -> int:
 		reissues=_load_reissues(args.reissues_json) if args.reissues_json else None,
 		cause=args.cause or None,
 		cause_window_days=min(max(args.cause_window_days, 1), 30),
+		red_main_group=getattr(args, "red_main_group", "") or None,
 	)
 	_write_json(decision)
 	return 0
@@ -11075,6 +11173,7 @@ def _cmd_compose_issue(args: argparse.Namespace) -> int:
 		suspect_commits_section=suspect_commits_text or None,
 		cause=getattr(args, "cause", "") or None,
 		code_ran_from=getattr(args, "code_ran_from", "") or None,
+		red_main_group=getattr(args, "red_main_group", "") or None,
 	)
 	reason = validate_heal_issue_body_routing(body, target_branch=args.target_branch or None, integration_branch=args.integration_branch or None)
 	if reason:
@@ -11915,6 +12014,14 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--failing-tests-json", default="")
 	p.set_defaults(func=_cmd_cause_key)
 
+	p = sub.add_parser("red-main-group-key", help="Red-main group key (workflow, failing job, default branch push) as JSON; pure, no API call, always exits 0")
+	p.add_argument("--workflow-name", default="")
+	p.add_argument("--failing-job", default="")
+	p.add_argument("--branch", default="")
+	p.add_argument("--event", default="")
+	p.add_argument("--default-branch", default="")
+	p.set_defaults(func=_cmd_red_main_group_key)
+
 	p = sub.add_parser("budget", help="Dedup / lineage / budget decision")
 	p.add_argument("--issues-json", required=True)
 	p.add_argument("--fingerprint", required=True)
@@ -11931,6 +12038,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--reissues-json", default="", help="issues opening with the unblock judge's re-issue line (Q147)")
 	p.add_argument("--cause", default="", help="cause grouping key (P5 / D3); empty disables the cause match")
 	p.add_argument("--cause-window-days", type=int, default=3, help="cause match window in days (clamped to 1..30)")
+	p.add_argument("--red-main-group", default="", help="red-main group key (issue #9733); empty disables the red-main match")
 	p.set_defaults(func=_cmd_budget)
 
 	p = sub.add_parser("heal-already-fixed", help="Closed siblings whose fix merged, for a blocked heal issue (Q148)")
@@ -11972,6 +12080,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--suspect-commits-file", default="")
 	p.add_argument("--cause", default="", help="cause grouping key for the sixth header line (P5 / D3)")
 	p.add_argument("--code-ran-from", default="", help="<branch>@<sha> for the `Code ran from` line (code-ref routing P6); invalid values add nothing")
+	p.add_argument("--red-main-group", default="", help="red-main group key for the header line after cause= (issue #9733)")
 	p.add_argument("--max-depth", type=int, default=DEFAULT_MAX_LINEAGE_DEPTH)
 	p.add_argument("--intake-run-url", required=True)
 	p.add_argument("--title-out", required=True)
