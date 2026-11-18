@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:2748-2749 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The README rows for `SWEEP_STALE_QUEUED_MINUTES` and `ZOMBIE_RUN_MAX_QUEUED_HOURS` say a queued run older than `ZOMBIE_RUN_MAX_QUEUED_HOURS` is unconditionally treated as wedged. The corrected `agents.md` (lines 5187, 5226) and `review_autofix_sweep.yml` (line 536) add a no-jobs condition under `SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS`.\n  WHY: An operator who follows the README would expect such a run to stop suppressing dispatch, but a floor-aged queued run that has jobs is logged `outcome=waiting_for_runner` and keeps suppressing it. All reviewers rated this NIT, which is mapped to low here, and it is documentation drift only.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- README.md:2748 (the `SWEEP_STALE_QUEUED_MINUTES` row; the adjacent `ZOMBIE_RUN_MAX_QUEUED_HOURS` row is at line 2749) | severity=NIT | confidence=5\n  PROBLEM: The README row says a queued run older than `ZOMBIE_RUN_MAX_QUEUED_HOURS` is still treated as wedged. The last run corrected this same claim in `agents.md` (lines 5187 and 5226) to add the no-jobs condition under `SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS`, but the README was not updated.\n  WHY: `.github/workflows/review_autofix_sweep.yml` (line 536) logs `outcome=waiting_for_runner \u2014 still suppressing dispatch` for a floor-aged queued run that has jobs. An operator setting `SWEEP_STALE_QUEUED_MINUTES=0` would expect that run to be ignored. This is documentation drift only.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- README.md:2748-2749 | severity=NIT | confidence=5\n  PROBLEM: The README descriptions imply any queued run older than `ZOMBIE_RUN_MAX_QUEUED_HOURS` is unconditionally wedged. This contradicts the implementation, which requires zero jobs (per agents.md and review_autofix_sweep.yml).\n  WHY: The misleading documentation misguides operators debugging why a queued run still suppresses dispatch.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- README.md:2748-2749 | severity=NIT | confidence=5\n  PROBLEM: Line 2748 omits the no-jobs qualifier, and line 2749 says the rule \"counts as wedged in every active-run guard\". Both contradict the corrected `agents.md` (lines 5187, 5226) and the `SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS` carve-out documented at line 2750. `review_autofix_sweep.yml` lines 526-538 re-add a run with `total_count > 0` to `active_review_runs`.\n  WHY: This is not a runtime bug. Setting both variables to 0 does not restore the previous no-cutoff behaviour, and `SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS=false` would. The README drifted from `agents.md`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- README.md:2748-2749 | severity=NIT | confidence=5\n  PROBLEM: The README says a run past the queued-age cutoff is wedged and no longer blocks dispatch, and that the rule applies in every active-run guard. The sweep actually keeps a stale run with jobs active when `SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS` is enabled.\n  WHY: The sweep logs `outcome=waiting_for_runner` and keeps suppressing dispatch for a run with jobs. `agents.md` lines 5187 and 5226 document this exception, so the README is inconsistent.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- README.md:2748-2749 | severity=NIT | confidence=5\n  PROBLEM: The README rows for `SWEEP_STALE_QUEUED_MINUTES` and `ZOMBIE_RUN_MAX_QUEUED_HOURS` use the old unconditional \"wedged\" wording. The last run corrected that wording in `agents.md` (lines 5187 and 5226), so the two reference tables now disagree.\n  WHY: `.github/workflows/review_autofix_sweep.yml:536` logs `outcome=waiting_for_runner \u2014 still suppressing dispatch` for a floor-aged queued run that has jobs. An operator following the README and setting `SWEEP_STALE_QUEUED_MINUTES=0` would expect that run to clear, and it does not.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b5ce3d14490a1d264f25ff3bd8e0011a1b96b4057c34b95296173df222cbfee3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9711,
+    "run_id": "44329336775",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44329336775",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118172846_01bee8db0c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9711,
+    "run_id": "44329336775"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T17:28:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
