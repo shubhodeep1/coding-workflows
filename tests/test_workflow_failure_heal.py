@@ -13568,3 +13568,14 @@ def test_intake_workflow_wires_the_occurrence_and_heal_source_switches() -> None
 		"HEAL_SOURCE_DEDUPE_ENABLED: ${{ vars.HEAL_SOURCE_DEDUPE_ENABLED || 'true' }}",
 	):
 		assert workflow.count(line) == 2, line
+
+
+def test_heal_scope_recovery_budget_rerun_drops_the_report_issue() -> None:
+	# The recovery re-run keeps only the caps that bind the lineage: another
+	# open heal issue whose own run failed must not make the replacement a
+	# `match: heal_source` duplicate.
+	script = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	recovery = script.split("\n_heal_scope_recovery_evaluate()\n{", 1)[1].split("\n}\n", 1)[0]
+	loop = recovery.split("local recovery_budget_args=()", 1)[1].split("done", 1)[0]
+	report_arm = loop.split("--report-issue)", 1)[1].split(";;", 1)[0]
+	assert "recovery_arg_index=$((recovery_arg_index + 2))" in report_arm and "continue" in report_arm

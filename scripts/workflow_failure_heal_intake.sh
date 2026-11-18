@@ -2261,7 +2261,8 @@ fi
 # Heal-of-heal dedupe: a heal issue's own failed clarify / plan / implement run
 # is recorded on that heal issue as an occurrence, never filed as a new heal
 # issue for the heal issue. It is not diagnosed and not escalated here: only a
-# run that fails with the issue's own fingerprint is escalated (below), and
+# run that fails with the issue's own fingerprint (or its own cause, inside the
+# cause-grouping window) is escalated (below), and
 # stall recovery's budgets bound the retries. The budget checks the number
 # against the GitHub heal-issue list, not against the report's labels.
 if [ "${HEAL_SOURCE_DEDUPE_ON}" = "true" ] && [ "${SOURCE_KIND}" = "phase_failure" ] && [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
@@ -2491,6 +2492,13 @@ _heal_scope_recovery_evaluate()
 		# unrelated same-cause heal issue must not block the replacement.
 		case "${BUDGET_ARGS[${recovery_arg_index}]}" in
 			--cause|--cause-window-days)
+				recovery_arg_index=$((recovery_arg_index + 2))
+				continue
+				;;
+			# Heal-of-heal dedupe is not a cap either: another open heal issue
+			# whose own run failed must not turn the replacement into a
+			# `match: heal_source` duplicate.
+			--report-issue)
 				recovery_arg_index=$((recovery_arg_index + 2))
 				continue
 				;;
