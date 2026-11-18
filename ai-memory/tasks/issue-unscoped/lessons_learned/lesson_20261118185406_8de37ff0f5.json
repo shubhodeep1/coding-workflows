@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-11-18T18:54:06Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 008 as out-of-scope; anchor=scripts/ci_final_merge_ref_fresh.sh:1-1; cited_path=scripts/ci_final_merge_ref_fresh.sh; files_touched=docs/plans/fold-per-pr-checks-plan.md.",
+  "phase": "review_autofix",
+  "pr_number": 9690,
+  "record_id": "lesson_20261118185406_8de37ff0f5",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/ci_final_merge_ref_fresh.sh",
+    "docs/plans/fold-per-pr-checks-plan.md"
+  ]
+}
