@@ -376,7 +376,9 @@ case "${WATCH_CANCEL_SWITCH}" in
 			if timeout 20 gh api -X POST "repos/${TARGET_REPO}/actions/runs/${NEW_ID}/cancel" >/dev/null 2>&1; then
 				echo "Cancel requested for watched run #${NEW_ID} (completion watch timeout)"
 			else
-				echo "::warning::Could not cancel watched run #${NEW_ID} after the completion watch timeout"
+				# $? here is the cancel's status: 124 means the 20 s limit hit.
+				WATCH_CANCEL_RC=$?
+				echo "::warning::Could not cancel watched run #${NEW_ID} after the completion watch timeout (exit ${WATCH_CANCEL_RC})"
 			fi
 		else
 			# The id is not printed here because it is not numeric.
