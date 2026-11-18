@@ -146,6 +146,9 @@ jobs:
         env:
           ALERT_TRIAGE_MODEL: ${{ vars.ALERT_TRIAGE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
           CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          # The codex fallback's host-side broker needs the inference key
+          # (scripts/codex_isolated_exec.sh); it never enters the sandbox.
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SUPPORT_INSTRUCTIONS_FILE: ${{ github.workspace }}/unattended_system_instructions.md
         run: bash scripts/alert_triage_route.sh diagnose
 

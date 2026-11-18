@@ -239,6 +239,9 @@ _at_send()
 		_at_log "escalate target=${target} id=${id} outcome=sent"
 	else
 		_at_log "escalate target=${target} id=${id} outcome=failed"
+		# An item flag is committed before the send (at most once), so a
+		# failed item send is not retried: surface it on the run.
+		case "${target}" in issue|pr) echo "::warning::Alert triage escalation for ${id} failed and will not be retried." ;; esac
 	fi
 }
 

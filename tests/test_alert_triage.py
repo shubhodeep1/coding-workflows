@@ -348,7 +348,7 @@ def test_invalid_record_is_marked_and_escalated_once(tmp_path: Path) -> None:
 	bad["extra"] = 1
 	_write_record(inbox, bad)
 	result = _prepare(tmp_path, FakeGh())
-	assert result["invalid"] == 1 and result["groups"] == 0 and result["list_calls"] == 0
+	assert result["invalid"] == 1 and result["groups"] == 0 and result["list_calls"] == 2
 	decisions = at.decide(tmp_path / "work", inbox, self_fix_enabled=False, self_fix_present=False, run_url="u")
 	assert len(decisions["escalations"]) == 1
 	counts = at.apply(tmp_path / "work", inbox, dry_run=True, run_id="5", now=NOW)
@@ -389,7 +389,9 @@ def test_second_run_on_the_same_records_does_nothing(tmp_path: Path) -> None:
 	assert ledger["occurrences"] == 2 and ledger["attempts"] == []
 	gh = FakeGh()
 	second = _prepare(tmp_path, gh)
-	assert second["groups"] == 0 and second["model_groups"] == 0 and gh.calls == []
+	assert second["groups"] == 0 and second["model_groups"] == 0 and second["evidence_gets"] == 0
+	# Only the two per-run list calls (overdue re-check); no evidence GETs.
+	assert gh.count("issues?state=open") == 2 and len(gh.calls) == 2
 
 
 def test_dispatch_routes_record_an_attempt_only_outside_dry_run(tmp_path: Path) -> None:
@@ -442,3 +444,47 @@ def test_build_self_fix_body_caps_the_diagnosis(tmp_path: Path) -> None:
 	assert len(body["inputs"]["diagnosis"].encode("utf-8")) <= at.DIAGNOSIS_MAX_BYTES
 	with pytest.raises(at.TriageError):
 		at.build_self_fix_body(work, fp, ref="../evil")
+
+
+def test_overdue_items_are_escalated_with_a_drained_inbox(tmp_path: Path) -> None:
+	inbox = tmp_path / "inbox"
+	inbox.mkdir()
+	issue = {"number": 21, "body": "", "labels": [{"name": "ai:workflow-heal"}, {"name": "ai:alert-triage"}], "created_at": "2026-11-15T00:00:00Z"}
+	pr = {"number": 22, "pull_request": {}, "body": "", "labels": [], "created_at": "2026-11-17T01:00:00Z"}
+	gh = FakeGh(heal_issues=[issue], prs=[pr])
+	result = _prepare(tmp_path, gh)
+	assert result["groups"] == 0 and result["list_calls"] == 2 and gh.count("issues?state=open") == 2
+	decisions = at.decide(tmp_path / "work", inbox, self_fix_enabled=False, self_fix_present=False, run_url="u")
+	assert sorted(item["id"] for item in decisions["items"]) == ["issue:21", "pr:22"]
+
+
+def test_job_log_read_allows_escape_sequences(tmp_path: Path) -> None:
+	inbox = tmp_path / "inbox"
+	_write_record(inbox, _record(1))
+	gh = FakeGh()
+	_prepare(tmp_path, gh)
+	log_calls = [call for call in gh.calls if any(part.endswith("/logs") for part in call)]
+	assert len(log_calls) == 1 and "--allow-escape-sequences" in log_calls[0]
+
+
+def test_alert_text_is_redacted_before_the_prompt(tmp_path: Path) -> None:
+	inbox = tmp_path / "inbox"
+	token = "ghp_" + "A" * 36
+	_write_record(inbox, _record(1, message=f"ERROR: push failed with {token}"))
+	_prepare(tmp_path, FakeGh())
+	text = next((tmp_path / "work" / "groups").glob("*/input.md")).read_text(encoding="utf-8")
+	assert token not in text
+
+
+def test_build_self_fix_body_stays_valid_json_when_every_field_is_at_its_limit(tmp_path: Path) -> None:
+	work = tmp_path / "work"
+	fp = "8" * 64
+	(work / "groups" / fp).mkdir(parents=True)
+	big = _reply(fingerprint=fp, summary="s" * 2000, proposed_fix="x" * 4000, evidence=["y" * 500] * 20,
+		files=["scripts/" + "f" * 190 + str(n) for n in range(50)], decisions=[{"question": "q" * 500, "chosen": "c" * 500, "reason": "r" * 500}] * 20)
+	(work / "groups" / fp / "diagnosis.json").write_text(json.dumps(big), encoding="utf-8")
+	(work / "decisions.json").write_text(json.dumps({"groups": [{"fingerprint": fp, "route": "self_fix_dispatch", "records": []}]}), encoding="utf-8")
+	body = at.build_self_fix_body(work, fp, ref="main")
+	assert len(body["inputs"]["diagnosis"].encode("utf-8")) <= at.DIAGNOSIS_MAX_BYTES
+	parsed = json.loads(body["inputs"]["diagnosis"])
+	assert parsed["fingerprint"] == fp and parsed["summary"] == "s" * 2000

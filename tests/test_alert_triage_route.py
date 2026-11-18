@@ -448,4 +448,6 @@ def test_only_the_prepare_step_gets_the_pat() -> None:
 	prepare = text.split("- name: Prepare groups", 1)[1].split("- name:", 1)[0]
 	assert "secrets.GH_PAT" in prepare
 	diagnose = text.split("- name: Diagnose groups", 1)[1].split("- name:", 1)[0]
-	assert "TOKEN" not in diagnose and "secrets." not in diagnose
+	# Only the inference key the codex fallback's host-side broker needs.
+	assert "TOKEN" not in diagnose and "GH_PAT" not in diagnose
+	assert re.findall(r"secrets\.[A-Za-z0-9_]+", diagnose) == ["secrets.OPENROUTER_API_KEY"]
