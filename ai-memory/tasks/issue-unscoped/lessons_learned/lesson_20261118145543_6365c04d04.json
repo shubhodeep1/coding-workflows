@@ -1,0 +1,22 @@
+{
+  "discovered_at": "2026-11-18T14:55:43Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=scripts/ci_final_merge_ref_fresh.sh:1; cited_path=scripts/ci_final_merge_ref_fresh.sh; files_touched=.github/workflows/ci.yml, .github/workflows/security-audit.yml, README.md, agents.d/9465-security-finding-and-ci-budget-dedupe.md, changelog.d/9465-security-finding-and-ci-budget-dedupe.md, scripts/ci_budget_watch.py, scripts/security_audit.sh, tests/test_ci_budget_watch.py, tests/test_security_audit_workflow_contract.py.",
+  "phase": "review_autofix",
+  "pr_number": 9681,
+  "record_id": "lesson_20261118145543_6365c04d04",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/ci_final_merge_ref_fresh.sh",
+    ".github/workflows/ci.yml",
+    ".github/workflows/security-audit.yml",
+    "README.md",
+    "agents.d/9465-security-finding-and-ci-budget-dedupe.md",
+    "changelog.d/9465-security-finding-and-ci-budget-dedupe.md",
+    "scripts/ci_budget_watch.py",
+    "scripts/security_audit.sh",
+    "tests/test_ci_budget_watch.py",
+    "tests/test_security_audit_workflow_contract.py"
+  ]
+}
