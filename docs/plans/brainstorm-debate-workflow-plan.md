@@ -186,7 +186,8 @@ User decisions (interactive clarification, 2026-11-11):
   step adds writes after its one query: per session read, at most one body
   edit (`checked`, plus `tracking` when found); per abandoned or reviewed
   session, one label add and one close. At the 10-session cap that is at most
-  10 body edits and 20 label/close calls per run.
+  10 body edits and 20 label/close calls per run. A stale in-progress session
+  ("Active sessions") adds one label write, once per session.
 - **§18.** No manual script. Everything runs from the wrapper's `schedule`,
   `workflow_dispatch` and `issue_comment` triggers.
 - **§19.** The hand-off references the tracking issue only with `Refs #N`; the
@@ -246,7 +247,14 @@ they feed the ledger and outcomes but never block a new session. An active
 session is *in progress* when it has no `ai:brainstorm-awaiting-*` label
 (stopped by the job timeout, the soft budget or a seat deferral after it
 opened) and *waiting* when it has `ai:brainstorm-awaiting-pick` or
-`ai:brainstorm-awaiting-approval`.
+`ai:brainstorm-awaiting-approval`. The issue is created with `ai:brainstorm`
+in the same create call, so no session exists without its label. A resume
+that finds zero trusted turns starts at the ideas round on the same issue. An
+in-progress session whose issue was created more than 7 days ago (issue
+`created_at` from the same list) is labelled `ai:brainstorm-failed` by the
+gate (`BRAINSTORM gate outcome=stale_session issue=<n>`), so a session that
+keeps crashing cannot block its topic for good. An `ai:brainstorm` issue
+without a valid body marker is never a session ("Ledger and outcomes").
 
 **Due rule.** For each enabled topic the gate emits at most one matrix entry:
 `mode=resume` with the issue number when the topic has an in-progress session,
@@ -383,8 +391,15 @@ A missing or invalid brief is skipped with
   `ledger`; fields not yet known are omitted, never written empty) and the key
   points as the session advances (edited, not appended). The engine always
   writes the marker as the body's first line, and replaces `<!--` and `-->`
-  in model-authored key-points text before composing the body, so no forged
-  marker can precede the real one.
+  in model-authored key-points text with `&lt;!--` and `--&gt;` (rendered as
+  the same visible text, never parsed as a comment) before composing the
+  body, so no forged marker can precede the real one.
+- **Body edits.** Anyone with write access can edit the issue body, as they
+  can its labels; the comment signature does not cover the body. Such users
+  are trusted the same way they are for labels. Every plain marker field is
+  still pattern-checked, and decoded `ledger` text is framed as untrusted data
+  in every seat prompt, so an edit can at most skew the outcome bookkeeping or
+  the ledger an owner-reviewed plan sees, never reach a credential.
 - Each turn is one comment beginning with
   `<!-- ai-brainstorm-turn:v1 session=<id> stage=<ideas|round|vote|data|plan|outcome> round=<n> seat=<claude|chatgpt|host> -->`,
   followed by readable markdown and a collapsed JSON block. Resume rebuilds the
@@ -459,7 +474,10 @@ On `/brainstorm-approve` (author association `OWNER`, issue labelled
 
 If the dispatch fails, the job restores `ai:brainstorm-awaiting-approval`,
 returns the PR to draft and comments the error, so a later approve can retry.
-If the plan PR is already merged or closed, approve is refused with a comment
+If the `approved=` marker edit fails after the label swap, the job restores
+`ai:brainstorm-awaiting-approval`, comments the error and exits
+`outcome=claim_failed` before it touches the PR or dispatches, so no
+approved session is left without `approved`. If the plan PR is already merged or closed, approve is refused with a comment
 (`outcome=pr_not_open`) and no label changes. In coding-workflows itself the
 target is `internal-orchestrate.yml`.
 
@@ -477,7 +495,11 @@ padding, so model text cannot put `-->`, spaces, `=` or a second marker inside
 the marker. The parser takes only the first `ai-brainstorm:v1` marker in the
 body, only when the issue was opened by the trusted author ("Turn trust"),
 rejects a plain field that fails its pattern, and caps the decoded `ledger` at
-4 KB. For each topic the engine builds a ledger from those bodies alone
+4 KB. A plain field that fails its pattern, an oversized or undecodable
+`ledger`, an untrusted author or no marker at all makes the whole marker
+invalid: the gate leaves that issue out of active sessions, the ledger and
+outcomes, logs `BRAINSTORM gate outcome=marker_invalid issue=<n>`, and never
+lets it block a topic; the command job answers `outcome=no_session`. For each topic the engine builds a ledger from those bodies alone
 (≤ 50 entries, newest first: idea title, state, expected impact, outcome
 summary if recorded).
 
@@ -500,7 +522,11 @@ comments and label events cannot push the cross-reference off the page. For a
 session without `tracking`, the gate takes the earliest source issue labelled
 `ai:orchestrator-tracking` whose `createdAt` is after the marker's
 `approved` timestamp, and writes
-`tracking=<N>`. Every session read gets `checked=<today>`, which rotates the
+`tracking=<N>`. An approved session whose otherwise valid marker lacks
+`approved` (only possible through a body edit) gets `approved=<now>` written
+by the gate in the same body edit, logged as
+`BRAINSTORM gate outcome=approved_backfilled issue=<n>`, so the 90-day rule
+still ends it. Every session read gets `checked=<today>`, which rotates the
 next run onto the others. A session becomes outcome-eligible when its
 tracking issue's `closedAt` is at least `BRAINSTORM_OUTCOME_DELAY_DAYS` old.
 A pending session whose tracking issue is still open or was never found
@@ -634,6 +660,13 @@ it.
    `# tier: DEFAULT` (and within its 250 lines, `tests/prompt_size_budget.py`)
    and ending with the JSON output contract; shared rules (untrusted data, scorecard, no credential
    requests, default-off rollout) in `prompts/_prelude_brainstorm.txt` [new].
+   Like `prompts/mode-clarify.txt`, each prompt's opening carries a
+   `Role: <x>. Goal: <y>.` line (`tests/test_render_prompt_foundation.py`,
+   `ROLE_GOAL_LINE_RE`), and each gets a same-named
+   `prompts/_templates/mode-brainstorm-<stage>.txt` [new] that assembles to
+   its active prompt's exact bytes (`tests/test_assemble_prompt.py`:
+   `test_every_active_mode_prompt_has_a_template`,
+   `test_assembled_templates_match_legacy_prompt_bytes`).
 4. `scripts/brainstorm_engine.py` [new]: subcommands `next` (given the issue's
    comments JSON and the brief, print the next action), `render` (turn →
    comment body with marker), `validate` (seat JSON → normalised JSON or error),
@@ -658,7 +691,11 @@ it.
    fails closed; token shapes redacted), marker round-trip (an idea title
    containing `-->`, `=` or a second marker cannot change other fields), ledger
    excludes other topics, model fallback only on exit 81 (other crashes do
-   not retry).
+   not retry), key points containing a forged `<!-- ai-brainstorm:v1 … -->`
+   come out as `&lt;!--` / `--&gt;` and the real marker stays the only one
+   and first, a body with no marker or with one bad plain field parses as
+   `marker_invalid`, and a resume with zero trusted turns starts at the ideas
+   round.
 
 ### Phase 1b
 
@@ -741,7 +778,10 @@ it.
     and not after a session opened, an in-progress session yields
     `mode=resume`, a waiting session blocks a new one, approved, rejected and
     failed sessions do not, `force` never overrides an active session, invalid
-    brief skipped, the issues list followed across two pages); a stub-seat
+    brief skipped, the issues list followed across two pages, a
+    `marker_invalid` issue blocks nothing, an in-progress session older than
+    7 days is marked failed, an approved session without `approved` is
+    backfilled); a stub-seat
     dry-run test of the step scripts, including the under-lock recheck exiting
     `already_open` and `already_finished`; a
     template test that the caller job carries the `BRAINSTORM_ENABLED`
@@ -783,7 +823,9 @@ it.
    `checked`, `abandoned` after 90 days)
    and the `outcome` stage hook in `brainstorm_engine.py next`.
 5. Tests `tests/test_brainstorm_handoff.py` [new]: two approvals dispatch
-   once; a dispatch failure restores the label; a merged plan PR is refused;
+   once; a dispatch failure restores the label; a failed `approved=` marker
+   edit restores the label and neither readies the PR nor dispatches
+   (`claim_failed`); a merged plan PR is refused;
    tracking discovery from a fixture timeline; three long-open projects do not
    starve a fourth pending session; a test pins `tracking_comment` forwarding
    in `workflow-templates/ai-orchestrate.yml` and `internal-orchestrate.yml`;
@@ -810,7 +852,8 @@ it.
 - `tests/test_claude_engine.py` (`CUTOVER_ROLES` gains `BRAINSTORM`)
 - `.github/ai/label_contract.v1.json`, `scripts/label_helpers.sh` (label catalogs)
 - `ai-memory/schemas/brainstorm_brief.v1.json` [new]
-- `prompts/_prelude_brainstorm.txt`, `prompts/mode-brainstorm-*.txt` [new]
+- `prompts/_prelude_brainstorm.txt`, `prompts/mode-brainstorm-*.txt`,
+  `prompts/_templates/mode-brainstorm-*.txt` [new]
 - `tools/claude-pool-broker/src/index.ts` and its tests
 - `tests/test_brainstorm_engine.py`, `tests/test_brainstorm_gate.py`,
   `tests/test_brainstorm_handoff.py` [new]; `tests/test_claude_pool_token.py`
