@@ -39,7 +39,9 @@
 # exit 0.
 #
 # A blank target picks the highest same-major release below the current one
-# that passes every check. When a hold is already active for the current
+# that passes every check. The scan stops after STABLE_ROLLBACK_MAX_CANDIDATES
+# releases without both manifest assets; that refusal carries
+# candidates_capped=<n> (raise the cap or pass target_version). When a hold is already active for the current
 # stable version (a re-dispatch after a rollback), a blank target re-confirms
 # that version instead of rolling back further; pass an explicit
 # target_version to go further back. An explicit target on the current
@@ -306,11 +308,15 @@ if [ -n "${target_input}" ]; then
 	target_version="${target_input}"
 else
 	lookups=0
+	candidates_capped=false
 	while IFS= read -r candidate; do
 		[[ "${candidate}" =~ ${STABLE_ROLLBACK_VERSION_RE} ]] || continue
 		[ "${candidate%%.*}" = "${current_major}" ] || continue
 		version_lt "${candidate}" "${current_version}" || continue
 		if [ "${lookups}" -ge "${STABLE_ROLLBACK_MAX_CANDIDATES}" ]; then
+			# Older releases were not checked: say so instead of a bare refusal.
+			candidates_capped=true
+			echo "::warning::Stopped at ${candidate} after ${lookups} release(s) without both manifest assets (STABLE_ROLLBACK_MAX_CANDIDATES=${STABLE_ROLLBACK_MAX_CANDIDATES}); raise it or pass target_version."
 			break
 		fi
 		set +e
@@ -330,6 +336,9 @@ else
 		echo "Skipping ${candidate}: ${TARGET_REFUSAL}."
 	done < <(git tag --list 'v*' | grep -E "${STABLE_ROLLBACK_VERSION_RE}" | sort -V -r || true)
 	if [ -z "${target_version}" ]; then
+		if [ "${candidates_capped}" = "true" ]; then
+			refuse no_eligible_target "from=${current_version}" "candidates_capped=${lookups}"
+		fi
 		refuse no_eligible_target "from=${current_version}"
 	fi
 fi

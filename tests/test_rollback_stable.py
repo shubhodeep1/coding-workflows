@@ -310,6 +310,18 @@ def test_target_without_release_manifest_is_refused(fx: Fixture) -> None:
 	_assert_untouched(fx)
 
 
+def test_candidate_cap_is_reported_in_the_refusal(fx: Fixture) -> None:
+	# v1.45.0 lacks the assets and uses up a cap of 1, so the eligible v1.44.0
+	# is never checked; the refusal says the scan was capped.
+	fx.state["releases"]["v1.45.0"]["assets"] = []
+	proc, state, events = fx.run({"STABLE_ROLLBACK_MAX_CANDIDATES": "1"})
+	assert proc.returncode == 1
+	assert "STABLE_ROLLBACK outcome=refused reason=no_eligible_target from=v1.46.0 candidates_capped=1" in proc.stdout
+	assert "STABLE_ROLLBACK_MAX_CANDIDATES=1" in proc.stdout
+	assert not state.get("hold_puts") and not events
+	_assert_untouched(fx)
+
+
 def test_release_lookup_error_stops_instead_of_walking_further_back(fx: Fixture) -> None:
 	fx.state["release_error"] = True
 	proc, state, events = fx.run()
