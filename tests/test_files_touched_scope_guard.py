@@ -2308,6 +2308,14 @@ def test_remediation_fragment_blocks_docs_and_tests_only_change() -> None:
 	assert "did_commit" not in gh_output and "scope_violation_allowlist" not in gh_output
 
 
+def test_remediation_fragment_blocks_non_ascii_doc_only_change() -> None:
+	# core.quotePath=false keeps the name literal; a C-quoted name would read as code.
+	code, out, gh_output = _run_remediation_fragment(REMEDIATION_BODY, ["docs/caf\u00e9.md", "tests/test_na\u00efve.py"])
+	assert code == 1, out
+	assert "outcome=block reason=no_code_change issue=77 count=2" in out
+	assert "docs/caf\u00e9.md" in gh_output and "\\303" not in gh_output
+
+
 def test_remediation_fragment_allows_and_fails_open() -> None:
 	cases = [
 		# (body, staged, extra_env, with_helper, expected log text)

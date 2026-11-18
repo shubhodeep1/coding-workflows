@@ -677,7 +677,10 @@ if [ "${REMEDIATION_NO_CODE_GUARD_ENABLED:-true}" != "true" ]; then
 elif [ -n "${PRIOR_PR_BASELINE_BRANCH:-}" ]; then
   echo "IMPLEMENT_REMEDIATION_NO_CODE_GUARD outcome=allow reason=prior_pr_baseline issue=${ISSUE_NUMBER:-}"
 elif [ "${HEAL_ROUTE:-false}" != true ] && [ -n "${ISSUE_BODY_FILE:-}" ] && [ -f "${ISSUE_BODY_FILE}" ]; then
-  remediation_staged="$(git diff --cached --name-only --diff-filter=ACMRD || true)"
+  # Same query as the automation-path guard: core.quotePath=false keeps
+  # non-ASCII names literal (a C-quoted name would read as code), and
+  # --no-renames plus T lists a moved-away code path and type changes.
+  remediation_staged="$(git -c core.quotePath=false diff --cached --name-only --no-renames --diff-filter=ACMDT || true)"
   if [ -n "${remediation_staged}" ]; then
     remediation_staged_file="$(mktemp "${TMPDIR:-/tmp}/implement-remediation-staged.XXXXXX" 2>/dev/null || true)"
     remediation_record=""
@@ -689,7 +692,7 @@ elif [ "${HEAL_ROUTE:-false}" != true ] && [ -n "${ISSUE_BODY_FILE:-}" ] && [ -f
       remediation_record="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
         --remediation-no-code-check \
         --issue-body-file "${ISSUE_BODY_FILE}" \
-        --staged-file "${remediation_staged_file}" 2>/dev/null)"
+        --staged-file "${remediation_staged_file}")"
       remediation_rc=$?
       set -e
     else
