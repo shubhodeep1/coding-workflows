@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:26750-26806 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: When the implementation-PR fetch fails or returns empty JSON, merge_state is empty and the first gate records reason=state_not_open, which mislabels a fetch failure as a state refusal.\n  WHY: Only the log line, the effective action and the DEBUG text are affected, and control flow is unchanged. Severity was given as NIT by all four reviewers, so it is mapped to low.\n- tests/test_standalone_stall_attempt_merge_refusal.py:_run() | severity=medium | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test environment does not initialise merge_state, merge_mergeable or merge_head_sha, which the attempt_merge arm expects.\n  WHY: The claim is that the test could run on undefined values. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash checked the code and said the arm parses STALL_IMPL_PR_JSON itself, so this is a reviewer disagreement.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: New test files need explicit CI coverage (via tests/test_files_touched_scope_guard.py)\n  expected_change_site: tests/test_files_touched_scope_guard.py\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: tests/test_standalone_stall_attempt_merge_refusal.py is added but not registered in tests/test_files_touched_scope_guard.py. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash rejected this: the tests-system-python catch-all collects the file, so no per-file wiring is needed.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:26750-26767 | severity=NIT | confidence=3\n  PROBLEM: If the PR JSON is empty and the fallback fetch fails, merge_state is empty and the first gate records state_not_open although the state was never read.\n  WHY: Only the log line, the effective action and the DEBUG text are mislabelled. Control flow and the attempt count match the old behaviour, the issue has no fetch-failure token, and the code comment documents the mapping.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_standalone_stall_attempt_merge_refusal.py:_run() | confidence=5\n  PROBLEM: The test environment does not initialise merge_state, merge_mergeable or merge_head_sha, which the attempt_merge arm needs.\n  WHY: The arm may run on undefined or incorrect values, which could make the test coverage invalid.\n- scripts/orchestrate_poll_process.sh:26750-26806 | confidence=3\n  PROBLEM: If the implementation-PR fetch fails or is empty, merge_state is empty and the logic records reason=state_not_open.\n  WHY: The log and notification misclassify a fetch failure, which degrades diagnostic accuracy for stall investigations.\n- TASK_GAP:\n  Requirement: \"New test files need explicit CI coverage.\" (via tests/test_files_touched_scope_guard.py)\n  Expected change site: tests/test_files_touched_scope_guard.py\n  Evidence of absence: tests/test_standalone_stall_attempt_merge_refusal.py is not registered in tests/test_files_touched_scope_guard.py, so the scope guard validation fails.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:26767-26783 | severity=NIT | confidence=3\n  PROBLEM: When the PR fetch returns empty JSON via the gh_retry fallback at line 26750, merge_state is empty and the first gate records state_not_open, which mislabels a fetch failure in the log, the DEBUG notification and STALL_RECOVERY_EFFECTIVE_ACTION.\n  WHY: An operator could misdiagnose the cause as the PR being closed or merged. The spec lists six reasons with no fetch-failure token, and the in-line comment at line 26763-26764 acknowledges the mapping.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:26750, 26763-26768 | severity=NIT | confidence=4\n  PROBLEM: When the fallback gh_retry fetch at line 26750 fails, merge_pr_json is empty, merge_state is empty, and the first gate at line 26767 records reason=state_not_open although the state was never read.\n  WHY: An operator triaging after a transient API outage would inspect PR state instead of the failed fetch. Control flow, increment behaviour and gate order are unaffected, and the code comment at lines 26763-26764 documents the mapping.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0db11afda04cb02921908c8d45921c1f8e77135f3167d6bc97bc45b686dd3773",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9720,
+    "run_id": "44288654055",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44288654055",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118131555_a7587fec69",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9720,
+    "run_id": "44288654055"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T13:15:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
