@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-18T18:54:36Z",
+  "issue_number": 9482,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=README.md:341-341; cited_path=README.md; files_touched=agents.d/9482-standalone-stall-merged-linked-pr.md, changelog.d/9482-standalone-stall-merged-linked-pr.md, scripts/orchestrate_poll_process.sh, tests/test_orchestrate_poll_process.py.",
+  "phase": "review_autofix",
+  "pr_number": 9502,
+  "record_id": "lesson_20261118185436_4e2ce3ae12",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "README.md",
+    "agents.d/9482-standalone-stall-merged-linked-pr.md",
+    "changelog.d/9482-standalone-stall-merged-linked-pr.md",
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_orchestrate_poll_process.py"
+  ]
+}
