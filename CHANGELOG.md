@@ -4587,6 +4587,10 @@ The daily `audit_consumer_drift.yml` run sent a Telegram WARNING whenever a cons
 
 What this means for operators: a drift WARNING now always needs action, either a stuck sync pull request to merge or close, or a problem the audit could not fix itself.
 
+### For contributors
+
+The summary JSON's `repairs` entries gain `pr_created_at`, `pr_stale` and `pr_for_release` (false when the sync pull request was built for another release; its note then says to close it or wait for one for the current release instead of "merge or close it"). The report step treats a missing `pr_stale` (older summaries) as stale.
+
 - **The orchestrator now tracks a wave issue's review-blocked reissue instead of opening a duplicate.** When the review pipeline's review-blocked judge closed a wave PR and reissued its issue, the poller never mapped the new issue into the project, so the wave judge saw "closed without merge" and opened a second redo of the same work.
 
 On project #8969, wave issue #8970 was reissued as #8994 by `scripts/review_rb_judge.sh`, and eight minutes later the wave judge opened #8995 for the same Phase 1. Both PRs built it; #9003 merged and #9005 was left conflicting, and the project raised the CRITICAL "wave PR(s) closed without merge" alert. The poller (`scripts/orchestrate_poll_process.sh`) now finds such a reissue from the closed issue's timeline and re-points the wave entry at it before wave status or the judge run. The reissue must carry `ai:orchestrator-managed` and the `Tracking issue`, `Replaces` and `review-blocked-reissue` lines. `scripts/review_rb_judge.sh` also stops dropping a wave parent's `Local ID`, `Priority` and `Managed by` lines, which it discarded because wave issues write the integration branch without backticks.
@@ -4639,37 +4643,6 @@ What this means for consumer repos: after the next `@stable` sync, clarify, plan
 
 - When the release gate gives up waiting for a child run it dispatched, it now cancels that run. In release run 43590943288 the `validation-refresh`, `validate` and `orchestrate` children stayed queued for 3 to 4.7 hours with no runner, the watches timed out, and the children ran hours later anyway: the orchestrate child then created a smoke tracking issue and Wave 1 issues that the gate's cleanup could not see. Every dispatch step of `test-and-mark-stable.yml` that waits for its child to complete ("Dispatch & watch — validation-refresh", "Dispatch internal-orchestrate.yml with multi-issue project", "Dispatch internal-validate.yml standalone", "Dispatch & watch — update_workflows (allow_workflow_edits=false)", "Dispatch & watch — internal-memory-maintenance") now reads the timed-out child's jobs once, prints a `::warning::` with the number of jobs and how many are queued with no runner (`unknown` when the jobs read fails or returns no jobs list), and cancels the child. Both calls only warn when they fail, and the step still fails with the watcher's exit code. Set the `DISPATCH_WATCH_CANCEL_ON_TIMEOUT` repository variable to `false` to skip the cancel (the three jobs that own these steps map it into their environment, defaulting to `true`). Unset, empty or `true` (any letter case) cancels; any value other than `true` or `false` also skips the cancel and logs a `::warning::` that does not print the value, following the repository's boolean-variable convention. The cause of that run was most likely runner starvation, so re-run the release gate once the runner queue clears. Refs #9532.
 
-- **Approved PRs now take turns updating from their base branch.** Before this, an approved PR could be updated from its base up to six times without merging, because every other merge made its CI run stale.
-
-Each base branch now has one merge lease. Only the PR holding it may update its branch from the base and run CI on the combined tree. Other approved PRs that need an update wait under `ai:merge-lease-wait` instead of each starting a CI run that the next merge makes stale. A PR that needs no update still merges at once, unless it changes a file the lease holder changes. The merge-train release step, on every poll tick and every PR close, frees a lease whose holder closed or expired and hands it to the next waiter. Priority labels come first, then the lowest PR number.
-
-| The numbers that matter | Value |
-| --- | --- |
-| Most updates seen on one approved PR before this change | 6 (#9367) |
-| Lease expiry without renewal (`MERGE_LEASE_TTL_MINUTES`) | 240 minutes |
-| Longest total hold (`MERGE_LEASE_MAX_HOLD_MINUTES`) | 720 minutes |
-| Release step cadence | every poll tick (15 min) and every PR close |
-| New jobs or workflows | 0 |
-
-What this means for operators: expect fewer `Branch updated from main before merging` comments and fewer CI runs per merged PR. Waiting PRs show `ai:merge-lease-wait`. `MERGE_LEASE_ENABLED=false` turns the lease off. A lease read or write failure logs `MERGE_LEASE ... outcome=unavailable`, and the merge then behaves as it did before.
-
-### For contributors
-
-The lease record is a commit on `refs/merge-lease/<base>`, changed only by fast-forward PATCH, so two writers that read the same record cannot both win. Code: `_merge_lease_gate` in `scripts/pr_checks_lib.sh` and `_mt_merge_lease_tick` in `scripts/review_merge_train.sh`. Tests: `tests/test_merge_lease.py`. On `main`, #9660 also shipped a final-CI merge resume; it depends on this repository's final CI and is not part of the stable line.
-
-- **Signed job-token comments now cover orchestrator state and the review pipeline's comments.** With `AI_COMMENT_SIGNING_SECRET` set, most new pipeline comments were still posted with `GH_PAT` and kept starting the four `issue_comment` wrappers.
-
-Part of it was temporary: runs queued before the secret existed run with it empty. Two gaps were bugs. Full orchestrator state parts were packed so close to GitHub's 65,536-character comment cap that the signature line pushed them over, so only the last part of each state was signed; `scripts/orchestrate_state_v2.py` now leaves room for it. Scripts that post comments in a step where no earlier step had loaded the `gh` shim, such as the single-issue security pass in review_autofix's `deterministic-skip-merge` job, called the real `gh`; every comment-posting script now installs the shim itself.
-
-| The numbers that matter | Value |
-| --- | --- |
-| New comments that should have been signed but went out with `GH_PAT`, 10:30 to 12:47 UTC on 2026-11-17 (backlog runs included) | 96 of 128 |
-| Orchestrator state parts kept on the PAT for size | 59 |
-| State framing headroom | 256 → 768 bytes |
-| Scripts that now install the shim themselves | 17 bash, 5 Python (stable line; `main` also has 2 bash scripts that stable does not) |
-
-What this means for operators: nothing to configure. Comment-driven wrapper runs drop further once this reaches `promote-candidate` (this repository) and the next `@stable` release (consumers). Large orchestrator states can take one more comment part than before.
-
 ### For contributors
 
 Only the `render_prompt.py` part of #9240 is on `stable`. The CI-only test fixes and the poller `EPOCHREALTIME` clock change reach `stable` with the next `main` → `stable` promotion.
@@ -4679,10 +4652,6 @@ Only the `render_prompt.py` part of #9240 is on `stable`. The CI-only test fixes
 `tests/test_orchestrate_integration_ahead_by_gate.py` adds three cases that drive the extracted function against a local bare `origin`: a stale clone after the child PR lands on the integration branch (not superseded), a real supersede where the default branch already has the change (still superseded), and an unreachable `origin` (not confident).
 
 `scripts/orchestrate_poll_process.sh` also adds `|| true` to the `blocker_stderr` cleanup pipeline in `_runtime_blocker_dispatch_eligible`. That line only builds the text of a fail-open warning, so under `set -euo pipefail` a failing `tr | sed | cut` can no longer abort the poller there. Behaviour is otherwise unchanged.
-
-### For contributors
-
-The summary JSON's `repairs` entries gain `pr_created_at`, `pr_stale` and `pr_for_release` (false when the sync pull request was built for another release; its note then says to close it or wait for one for the current release instead of "merge or close it"). The report step treats a missing `pr_stale` (older summaries) as stale.
 
 - **The poller's deterministic validation-failure short-circuit no longer depends on SIGPIPE-prone pipelines.** `mark_validation_failed()` in `scripts/orchestrate_poll_process.sh` now matches the `AI_VALIDATION_FAILURE_CLASS:deterministic_*` marker with one Bash regex match and reads the class from `BASH_REMATCH[1]`, instead of a `printf | grep -q` test and a `grep -o | head` extraction. Under `set -euo pipefail` those pipelines could return 141 (SIGPIPE) on a long failure comment, which skipped the short-circuit and spent the recovery budget on a failure that retrying cannot fix. The first marker still wins, the class charset is still `[a-z_]+`, and the log message, labels, comments and state updates are unchanged. Refs #8975.
 

@@ -173,13 +173,23 @@ def test_ci_runs_the_check_on_pull_requests_except_project_final_prs() -> None:
 	jobs = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))["jobs"]
 	step = next(step for step in jobs["static-checks"]["steps"] if step.get("name") == "agents.md direct-edit check (CLAUDE.md §30)")
 	assert step["if"] == (
-		"github.event_name == 'pull_request' && !(github.event.pull_request.head.repo.full_name == github.repository"
+		"(github.event_name == 'pull_request' && !(github.event.pull_request.head.repo.full_name == github.repository"
 		" && github.base_ref == github.event.repository.default_branch"
-		" && (startsWith(github.head_ref, 'orchestrator/project-') || startsWith(github.head_ref, 'auto/forward-merge-stable-')))"
+		" && (startsWith(github.head_ref, 'orchestrator/project-') || startsWith(github.head_ref, 'auto/forward-merge-stable-'))))"
+		" || github.event_name == 'workflow_dispatch'"
 	)
-	assert 'git fetch --no-tags --depth=2 origin "${GITHUB_SHA}"' in step["run"]
-	assert 'scripts/check_agents_md_direct_edits.py' in step["run"]
-	assert '--base "$(git rev-parse "${GITHUB_SHA}^1")" --head "${GITHUB_SHA}"' in step["run"]
+	# pull_request runs compare GitHub's merge commit (GITHUB_SHA) with its
+	# first parent; a final-CI dispatch run (cut-ci-runner-time Phase 4)
+	# checks out the PR's merge ref and compares HEAD the same way, applying
+	# the same project/forward-merge skips from the PR's metadata.
+	run = step["run"]
+	assert 'head_commit="${GITHUB_SHA}"' in run
+	assert 'head_commit="$(git rev-parse HEAD)"' in run
+	assert 'orchestrator/project-*|auto/forward-merge-stable-*)' in run
+	assert 'git fetch --no-tags --depth=2 origin "${head_commit}"' in run
+	assert 'scripts/check_agents_md_direct_edits.py' in run
+	assert '--base "$(git rev-parse "${head_commit}^1")" --head "${head_commit}"' in run
+	assert step["env"]["FINAL_CI_PR_NUMBER"] == "${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}"
 
 
 def _collapsed(text: str) -> str:

@@ -546,7 +546,45 @@ case "${REPORT_ORIGIN}" in
 				VERIFY_FILE="${RUNTIME_DIR}/report_identity_verify.json"
 				if ! python3 "${HEAL_PY}" verify-report-identity --token-file "${REPORT_IDENTITY_FILE}" --jwks-json "${JWKS_FILE}" \
 					--payload-json "${PAYLOAD_FILE}" --self-repo "${SELF_REPO}" --max-age "${REPORT_MAX_AGE}" > "${VERIFY_FILE}" 2>/dev/null; then
-					_report_auth_reject "$(jq -r '.reason // "verification_failed"' "${VERIFY_FILE}" 2>/dev/null | tr -cd 'a-z0-9_' | head -c 60 || echo verification_failed)"
+					IDENTITY_REJECT_REASON="$(jq -r '.reason // "verification_failed"' "${VERIFY_FILE}" 2>/dev/null | tr -cd 'a-z0-9_' | head -c 60 || echo verification_failed)"
+					# The age limit applies at arrival, and the heal-queue credit
+					# above covers only the queue. A job can also wait hours for a
+					# runner before its first step (about 3h50m for six reports
+					# on 2026-11-14, all rejected identity_stale). On a stale
+					# rejection, credit the wait since this attempt started
+					# (run_started_at, set by GitHub when the dispatch arrived;
+					# a re-run resets it, so an old report is not revived) and
+					# verify once more. CLAUDE.md §15 audit: no earlier call in
+					# this script or the queue step reads this run, and the read
+					# is made only on this path. Fails closed: when the read fails
+					# the rejection stands.
+					if [ "${IDENTITY_REJECT_REASON}" = "identity_stale" ]; then
+						INTAKE_SELF_RUN_FILE="${RUNTIME_DIR}/intake_self_run.json"
+						INTAKE_ARRIVAL_WAITED_SECONDS=0
+						if [[ "${GITHUB_RUN_ID:-}" =~ ^[1-9][0-9]{0,19}$ ]] \
+							&& gh_api_json_to_file "${INTAKE_SELF_RUN_FILE}" gh api --method GET "repos/${SELF_REPO}/actions/runs/${GITHUB_RUN_ID}" 2>/dev/null; then
+							INTAKE_RUN_STARTED_AT="$(jq -r '.run_started_at // ""' "${INTAKE_SELF_RUN_FILE}" 2>/dev/null || true)"
+							INTAKE_RUN_STARTED_EPOCH="$(date -u -d "${INTAKE_RUN_STARTED_AT}" +%s 2>/dev/null || true)"
+							if [[ "${INTAKE_RUN_STARTED_AT}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]] && [[ "${INTAKE_RUN_STARTED_EPOCH}" =~ ^[0-9]+$ ]]; then
+								INTAKE_ARRIVAL_WAITED_SECONDS=$(( $(date -u +%s) - INTAKE_RUN_STARTED_EPOCH ))
+								[ "${INTAKE_ARRIVAL_WAITED_SECONDS}" -ge 0 ] || INTAKE_ARRIVAL_WAITED_SECONDS=0
+							fi
+						fi
+						log "report_identity_age_credit arrival_waited_seconds=${INTAKE_ARRIVAL_WAITED_SECONDS} queue_waited_seconds=${QUEUE_WAITED_SECONDS} source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none}"
+						# The queue wait is part of the arrival wait, so the larger one is credited.
+						if [ "${INTAKE_ARRIVAL_WAITED_SECONDS}" -gt "$((10#${QUEUE_WAITED_SECONDS}))" ]; then
+							REPORT_MAX_AGE=$(( REPORT_MAX_AGE - 10#${QUEUE_WAITED_SECONDS} + INTAKE_ARRIVAL_WAITED_SECONDS ))
+							if python3 "${HEAL_PY}" verify-report-identity --token-file "${REPORT_IDENTITY_FILE}" --jwks-json "${JWKS_FILE}" \
+								--payload-json "${PAYLOAD_FILE}" --self-repo "${SELF_REPO}" --max-age "${REPORT_MAX_AGE}" > "${VERIFY_FILE}" 2>/dev/null; then
+								IDENTITY_REJECT_REASON=""
+							else
+								IDENTITY_REJECT_REASON="$(jq -r '.reason // "verification_failed"' "${VERIFY_FILE}" 2>/dev/null | tr -cd 'a-z0-9_' | head -c 60 || echo verification_failed)"
+							fi
+						fi
+					fi
+					if [ -n "${IDENTITY_REJECT_REASON}" ]; then
+						_report_auth_reject "${IDENTITY_REJECT_REASON}"
+					fi
 				fi
 				REPORT_AUTH="verified"
 				;;
@@ -2434,10 +2472,38 @@ case "${ACTION}" in
 			# The heal issue's own clarify / plan / implement run failed the way
 			# the issue was filed for: the pipeline cannot run the fix, and every
 			# retry would only add another occurrence here. Hand it to a human.
+			# The CRITICAL alert fires only on the first escalation (issue
+			# #9248; #9200 alerted four times): the validated report payload
+			# carries this issue's own labels, so when it already shows the
+			# escalated label the alert is replaced by a stable
+			# `escalate_repeat ... alert=suppressed` line. The check cannot tell
+			# which path set the label, and it is suppressed whenever the label
+			# is present. Post-merge verification
+			# (workflow_failure_heal_verify.sh) and the `escalate)` lineage-cap
+			# branch below each sent their own CRITICAL alert. The synced-file
+			# security and synced-check lineage caps (above) send only a
+			# WARNING summary, so a self-failure of an issue they escalated
+			# never gets a CRITICAL; that gap is accepted. A missing or unreadable label list
+			# fails open (alert sent). Two intakes racing on the same issue may
+			# both alert; that is accepted.
+			HEAL_SELF_ESCALATED="$(jq -r --arg l "${ESCALATED_LABEL}" '[.labels[]? | if type == "object" then .name else . end] | index($l) != null' "${PAYLOAD_FILE}" 2>/dev/null || echo false)"
+			# validate-payload iterates whatever `labels` holds, so a reported
+			# object such as {"ai:workflow-heal-escalated": true} would survive
+			# as its keys. Only a label array in the raw report counts as
+			# readable; any other shape fails open (alert sent).
+			HEAL_SELF_LABELS_SHAPE="$(jq -r 'if type == "object" then ((.labels | type) == "array") else false end' "${PAYLOAD_RAW_FILE}" 2>/dev/null || echo false)"
+			# Record when the shape check overturns a suppression, so the CRITICAL
+			# alert that follows can be told apart from a first escalation.
+			[ "${HEAL_SELF_LABELS_SHAPE}" = "true" ] || [ "${HEAL_SELF_ESCALATED}" != "true" ] || log "warn heal_self_labels_unreadable issue=${EXISTING} repo=${EXISTING_REPO}"
+			[ "${HEAL_SELF_LABELS_SHAPE}" = "true" ] || HEAL_SELF_ESCALATED=false
 			ensure_label_exists "${ESCALATED_LABEL}" "${EXISTING_REPO}" || true
 			gh_retry gh issue edit "${EXISTING}" --repo "${EXISTING_REPO}" --add-label "${ESCALATED_LABEL}" >/dev/null 2>&1 || log "warn escalation_label_failed issue=${EXISTING} repo=${EXISTING_REPO}"
 			log "escalate reason=heal_issue_failed_itself issue=${EXISTING} repo=${EXISTING_REPO} fp=${FP} failure=${FAILURE_REASON}"
-			tg_send_msg "Workflow failure heal: heal issue ${EXISTING_URL:-${EXISTING_REPO}#${EXISTING}} failed its own ${FAILURE_REASON%_failed} run with the failure it was filed for, so the pipeline cannot fix it; a human should look at this."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+			if [ "${HEAL_SELF_ESCALATED}" != "true" ]; then
+				tg_send_msg "Workflow failure heal: heal issue ${EXISTING_URL:-${EXISTING_REPO}#${EXISTING}} failed its own ${FAILURE_REASON%_failed} run with the failure it was filed for, so the pipeline cannot fix it; a human should look at this."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+			else
+				log "escalate_repeat reason=heal_issue_failed_itself issue=${EXISTING} repo=${EXISTING_REPO} fp=${FP} failure=${FAILURE_REASON} alert=suppressed"
+			fi
 			exit 0
 		fi
 		if [ "${SOURCE_KIND}" = "validation_failure" ]; then
@@ -4305,6 +4371,13 @@ _open_issue()
 	rm -f "${title_file}" "${body_file}"
 	local compose_payload_file
 	compose_payload_file="$(_compose_payload_file)" || compose_payload_file="${PAYLOAD_FILE}"
+	# Issue #8808: a run-sourced issue names its failing workflow file (the
+	# verified run's `.path`, no API call) for the poller's stale auto-close.
+	# compose-issue drops an invalid path; any error composes as before.
+	local heal_workflow_path=""
+	if [ "${SOURCE_KIND}" = "workflow_run" ]; then
+		heal_workflow_path="$(_heal_slurp_verified_runs '[.[] | .path | strings | select(. != "")] | first // ""' | jq -r '. // ""' 2>/dev/null)" || heal_workflow_path=""
+	fi
 	# Evidence pack (P1): passed only when it is on and has text, so a
 	# switch-off body is byte-identical. compose-issue validates it with the body.
 	local -a evidence_pack_args=()
@@ -4349,6 +4422,7 @@ _open_issue()
 		--target-branch "${target_branch}" \
 		--integration-branch "${integration_branch}" \
 		--scope-marker-file "${scope_marker_file}" \
+		--workflow-path "${heal_workflow_path}" \
 		--max-depth "${MAX_DEPTH}" \
 		--intake-run-url "${RUN_URL}" \
 		--title-out "${title_file}" \

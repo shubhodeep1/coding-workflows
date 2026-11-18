@@ -1,0 +1,276 @@
+---
+# CS ticket investigation (issue #9440; Phase 2 of tele-funtoken-msg-scoring's
+# docs/plans/cs-triage-bot-plan.md). Investigates one CS ticket on the
+# CS_INVESTIGATE engine role (Claude pool, codex fallback) with read-only repo
+# access and database reads through the agent DB bridge, and returns a
+# schema-checked cs_verdict v1 JSON (scripts/templates/cs_verdict.v1.schema.json)
+# as the `verdict` output.
+#
+# Caller: tele-funtoken-msg-scoring's repo-owned .github/workflows/ai-cs-investigate.yml
+# (workflow_dispatch from the CS hub). Its job 2 validates the verdict again,
+# posts it to the hub and files issues. Not propagated: this workflow is in no
+# workflow template and no install profile.
+#
+# Trust model: no GitHub write token, no provenance secret, no repair key. The
+# only credentials are GitHub OIDC tokens (audiences cs-hub and agent-db-bridge),
+# fetched on the runner by scripts/cs_bridge_query.sh's cs_oidc_fetch, kept in
+# 0600 files and never given to the agent. The agent runs read-only with no
+# network; it asks for bridge queries as JSON data and the runner sends them
+# (scripts/cs_investigate.sh, at most 3 rounds). Ticket text, photos and bridge
+# results enter the prompt only as UNTRUSTED data.
+#
+# Invalid inputs fail the job (no verdict). Every later failure emits
+# {"ticket_id":"<id>","outcome":"invalid_verdict"} and the job stays green.
+name: AI CS Investigate (Reusable)
+
+"on":
+  workflow_call:
+    inputs:
+      ticket_id:
+        description: CS ticket ID (^[A-Za-z0-9_-]{1,40}$)
+        required: true
+        type: string
+      mode:
+        description: investigate or verify
+        required: true
+        type: string
+      attempt:
+        description: Attempt number, 1-9
+        required: true
+        type: string
+      hub_url:
+        description: CS hub base URL (https only, no path)
+        required: true
+        type: string
+    outputs:
+      verdict:
+        description: cs_verdict v1 JSON (compact, at most 32 KB), or the invalid_verdict object
+        value: ${{ jobs.investigate.outputs.verdict }}
+    secrets:
+      OPENROUTER_API_KEY:
+        required: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  # No capacity-resume pass re-runs CS tickets, so an exhausted Claude pool
+  # falls back to codex instead of waiting (exit 80).
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: 'false'
+  # Keep the codex fallback whenever Claude is unavailable, not only on
+  # exhausted capacity (issue #9440 "keep the existing codex fallback"): no
+  # credential, a broker-refused token, isolation unavailable, or every account
+  # usage-limited or failed. Under the shared default `capacity`, a missing or
+  # broker-refused credential (for example an @stable caller: the broker
+  # refuses tag refs) returns 76 and no codex runs. A Claude timeout (124/137)
+  # or crash (other non-zero) is not retried on codex: scripts/cs_investigate.sh
+  # emits invalid_verdict (engine_timeout / engine_failed), since a second
+  # round could overrun the run deadline.
+  # Fixed here, not read from vars.AI_ENGINE_FALLBACK_POLICY, so a caller-repo
+  # `capacity` value cannot turn the fallback off for CS tickets.
+  AI_ENGINE_FALLBACK_POLICY: 'always'
+  AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+  AI_ENGINE_CS_INVESTIGATE: ${{ vars.AI_ENGINE_CS_INVESTIGATE || '' }}
+
+jobs:
+  investigate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      verdict: ${{ steps.investigate.outputs.verdict }}
+    steps:
+      - name: Validate inputs
+        env:
+          TICKET_ID: ${{ inputs.ticket_id }}
+          CS_MODE: ${{ inputs.mode }}
+          CS_ATTEMPT: ${{ inputs.attempt }}
+          CS_HUB_URL: ${{ inputs.hub_url }}
+          CS_HUB_ALLOWED_HOSTS: ${{ vars.CS_HUB_ALLOWED_HOSTS || '' }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${TICKET_ID}" =~ ^[A-Za-z0-9_-]{1,40}$ ]]; then
+            echo "::error::cs_investigate: ticket_id is invalid."
+            exit 1
+          fi
+          case "${CS_MODE}" in investigate|verify) ;; *) echo "::error::cs_investigate: mode must be investigate or verify."; exit 1 ;; esac
+          if [[ ! "${CS_ATTEMPT}" =~ ^[1-9]$ ]]; then
+            echo "::error::cs_investigate: attempt must be 1-9."
+            exit 1
+          fi
+          if ! python3 -I -B - <<'PY'
+          import os, re, sys, urllib.parse
+          url = os.environ["CS_HUB_URL"]
+          try:
+              parts = urllib.parse.urlsplit(url)
+              port = parts.port
+          except ValueError:
+              sys.exit(1)
+          if not re.fullmatch(r"https://[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?/?", url):
+              sys.exit(1)
+          if parts.scheme != "https" or not parts.hostname or parts.username or parts.password:
+              sys.exit(1)
+          if parts.query or parts.fragment or parts.path not in ("", "/") or (port is not None and not 0 < port < 65536):
+              sys.exit(1)
+          # The cs-hub OIDC token goes to this host, so the allowlist is
+          # required (fail closed when empty). An entry is `host` (port 443)
+          # or `host:port`; a host on the list is not accepted on another port.
+          # An entry written `host:443` is the same as `host`.
+          allowed = [entry.lower().removesuffix(":443") for entry in os.environ.get("CS_HUB_ALLOWED_HOSTS", "").split()]
+          key = parts.hostname if port in (None, 443) else f"{parts.hostname}:{port}"
+          if key not in allowed:
+              sys.exit(1)
+          PY
+          then
+            echo "::error::cs_investigate: hub_url must be https://<host>[:port] with no userinfo, path, query or fragment, and its host (host:port for a port other than 443) must be on the required CS_HUB_ALLOWED_HOSTS variable."
+            exit 1
+          fi
+
+      # The support commit comes from the job context (no API call and no
+      # token): the workflow's own repository, ref and SHA. The broker hands
+      # out the Claude pool only to refs/heads/main or a 40-hex SHA pin it can
+      # verify; other approved refs (refs/tags/stable, branches in this repo)
+      # get no pool token and run on codex (AI_ENGINE_FALLBACK_POLICY above).
+      - name: Resolve trusted CS support commit
+        id: resolve_support
+        env:
+          WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          CALLER_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          support_workflow_repository="$(jq -r '.workflow_repository // ""' <<< "${WORKFLOW_JOB_JSON}")"
+          support_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${WORKFLOW_JOB_JSON}")"
+          support_sha="$(jq -r '.workflow_sha // ""' <<< "${WORKFLOW_JOB_JSON}")"
+          main_ref='^shubhodeep1/coding-workflows/\.github/workflows/cs_investigate\.yml@refs/heads/main$'
+          branch_ref='^shubhodeep1/coding-workflows/\.github/workflows/cs_investigate\.yml@refs/heads/[^[:space:]]+$'
+          stable_ref='^shubhodeep1/coding-workflows/\.github/workflows/cs_investigate\.yml@refs/tags/stable$'
+          sha_pin='^shubhodeep1/coding-workflows/\.github/workflows/cs_investigate\.yml@[0-9a-f]{40}$'
+          if [ "${support_workflow_repository}" != "shubhodeep1/coding-workflows" ] || [[ ! "${support_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::CS support workflow identity is unapproved."
+            exit 1
+          fi
+          approved="false"
+          if [[ "${support_workflow_ref}" =~ ${main_ref} ]] || [[ "${support_workflow_ref}" =~ ${stable_ref} ]]; then
+            approved="true"
+          elif [[ "${support_workflow_ref}" =~ ${sha_pin} ]] && [ "${support_workflow_ref##*@}" = "${support_sha}" ]; then
+            approved="true"
+          elif [ "${CALLER_REPOSITORY}" = "shubhodeep1/coding-workflows" ] && [[ "${support_workflow_ref}" =~ ${branch_ref} ]]; then
+            approved="true"
+          fi
+          if [ "${approved}" != "true" ]; then
+            echo "::error::CS support workflow identity is unapproved."
+            exit 1
+          fi
+          echo "support_sha=${support_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout trusted CS support
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ steps.resolve_support.outputs.support_sha }}
+          token: ${{ github.token }}
+          path: .codex-workflow-src
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify trusted CS support
+        env:
+          SUPPORT_SHA: ${{ steps.resolve_support.outputs.support_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${SUPPORT_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
+             [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${SUPPORT_SHA}" ] ||
+             [ ! -f .codex-workflow-src/scripts/cs_investigate.sh ]; then
+            echo "::error::CS support checkout is not the approved commit."
+            exit 1
+          fi
+
+      - name: Resolve caller default branch
+        id: target_ref
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          ref="${DEFAULT_BRANCH:-}"
+          if [ -n "${ref}" ] && ! git check-ref-format --branch "${ref}" >/dev/null 2>&1; then
+            echo "::error::Caller default branch name is invalid."
+            exit 1
+          fi
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout default branch for the investigation to read
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.target_ref.outputs.ref }}
+          token: ${{ github.token }}
+          path: target
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Install Codex CLI
+        uses: ./.codex-workflow-src/.github/actions/install-codex
+        with:
+          codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+
+      - name: Create Codex config
+        env:
+          CS_INVESTIGATE_MODEL: ${{ vars.CS_INVESTIGATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+          CS_INVESTIGATE_REASONING: ${{ vars.THINKING_LEVEL_CS_INVESTIGATE || 'high' }}
+        run: |
+          set -euo pipefail
+          # The catalog path MUST be absolute (codex resolves a relative one
+          # against CODEX_HOME).
+          bash "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/write_codex_config.sh" \
+            --model "${CS_INVESTIGATE_MODEL}" \
+            --reasoning "${CS_INVESTIGATE_REASONING}" \
+            --catalog-path "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/codex_model_catalog.json"
+          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+
+      # The CS_INVESTIGATE role runs on Claude unless the engine policy says
+      # codex (scripts/ai_engine.sh); when Claude is unavailable (for example
+      # no credential) claude_run selects fallback (75) under
+      # AI_ENGINE_FALLBACK_POLICY=always and claude_run_selected runs the
+      # isolated codex command, so these steps never fail the job.
+      - name: Install Claude Code CLI
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/install-claude
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/claude-pool-token
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      - name: Stage Claude engine support
+        run: |
+          set -euo pipefail
+          claude_engine_support_dest="${RUNNER_TEMP}/claude-engine-support"
+          # shellcheck disable=SC1091
+          if source "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/ai_engine.sh" &&
+             ai_engine_stage_support "${GITHUB_WORKSPACE}/.codex-workflow-src" "${claude_engine_support_dest}"; then
+            echo "CLAUDE_ENGINE_SUPPORT_DIR=${claude_engine_support_dest}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Trusted Claude engine support is unavailable; the investigation emits invalid_verdict."
+          fi
+
+      - name: Investigate the ticket
+        id: investigate
+        env:
+          TICKET_ID: ${{ inputs.ticket_id }}
+          CS_MODE: ${{ inputs.mode }}
+          CS_ATTEMPT: ${{ inputs.attempt }}
+          CS_HUB_URL: ${{ inputs.hub_url }}
+          CS_HUB_ALLOWED_HOSTS: ${{ vars.CS_HUB_ALLOWED_HOSTS || '' }}
+          CS_BRIDGE_URL: ${{ vars.CS_BRIDGE_URL || '' }}
+          CS_PHOTO_MAX_BYTES: ${{ vars.CS_PHOTO_MAX_BYTES || '5242880' }}
+          CS_INVESTIGATE_MODEL: ${{ vars.CS_INVESTIGATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          PYTHONDONTWRITEBYTECODE: "1"
+          SUPPORT_INSTRUCTIONS_FILE: ${{ github.workspace }}/.codex-workflow-src/unattended_system_instructions.md
+        run: |
+          SUPPORT_DIR="${GITHUB_WORKSPACE}/.codex-workflow-src" \
+          TARGET_DIR="${GITHUB_WORKSPACE}/target" \
+          RUNTIME_DIR="${RUNNER_TEMP}/cs-investigate" \
+            bash "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/cs_investigate.sh"
