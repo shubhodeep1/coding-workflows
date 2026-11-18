@@ -225,6 +225,8 @@ jobs:
           SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS: ${{ vars.SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS || 'true' }}
           PROVIDER_OUTAGE_PAUSED: ${{ steps.provider_outage.outputs.paused }}
           MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
+          MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
+          MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
         run: |
           set -euo pipefail
           # Classified retry for the active-run snapshot (issue #6634): the
@@ -530,6 +532,22 @@ jobs:
               skipped_merge_queued=$((skipped_merge_queued + 1))
               continue
             fi
+
+            # A PR waiting for the merge lease (scripts/pr_checks_lib.sh
+            # "Merge lease") is re-dispatched by the merge-train release
+            # tick when the lease is granted to it, which removes the label
+            # first; a sweep dispatch would only reach the lease and wait
+            # again. Skipped only while both the lease and the merge train
+            # are enabled: the train's release step is what re-dispatches
+            # waiters, so with the train off they are swept as before.
+            case "$(printf '%s' "${MERGE_LEASE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+              true|1|yes|on)
+                if [ "${merge_train_skip_active}" = "true" ] && printf '%s' "${row}" | jq -e --arg l "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" '(.labels // []) | index($l) != null' >/dev/null 2>&1; then
+                  echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=merge_lease_wait head_ref=${head_ref}"
+                  continue
+                fi
+                ;;
+            esac
 
             # A PR waiting for Claude capacity (issue #7370) is re-dispatched
             # by the hourly capacity-resume pass in orchestrate_poll.yml, which

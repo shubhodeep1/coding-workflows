@@ -885,6 +885,7 @@ jobs:
               tests/test_gh_api_retry.py \
               tests/test_gh_api_retry_py.py \
               tests/test_comment_signature.py \
+              tests/test_merge_lease.py \
               tests/test_gh_pr_comments_argv_limit.py > /tmp/merge_train_rest.log 2>&1
             echo "$?" > /tmp/merge_train_rest.rc
           ) &

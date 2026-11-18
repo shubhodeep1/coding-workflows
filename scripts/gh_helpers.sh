@@ -956,6 +956,14 @@ if __name__ == "__main__":
 AI_COMMENT_SIGNER_PY
 }
 _ai_comment_sig_activate
+# Activate-only mode: a script that posts comments but does not otherwise use
+# these helpers runs `AI_COMMENT_SIG_ACTIVATE_ONLY=1 source .../gh_helpers.sh`
+# to put the shim on PATH without defining the rest of the library (so none of
+# its own functions are overridden). A later full source still loads it.
+if [ "${AI_COMMENT_SIG_ACTIVATE_ONLY:-}" = "1" ]; then
+	unset _GH_HELPERS_LOADED AI_COMMENT_SIG_ACTIVATE_ONLY
+	return 0 2>/dev/null || true
+fi
 
 # Shared PAT counters are only an estimate of job usage: other jobs may run
 # concurrently. /rate_limit does not debit the primary REST allowance.

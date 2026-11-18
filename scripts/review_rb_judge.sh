@@ -2579,6 +2579,9 @@ case "${RB_ACTION}" in
           if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
             echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, merge deferred to the synchronize run."
             RB_MERGE_STATUS="deferred_base_moved"
+          elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+            echo "Review-blocked judge: PR #${PR_NUMBER} waits for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; merge deferred, re-dispatched when the lease is granted."
+            RB_MERGE_STATUS="mergeability_pending"
           else
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
@@ -2594,6 +2597,9 @@ case "${RB_ACTION}" in
           if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
             echo "::warning::Review-blocked judge: base moved under files PR #${PR_NUMBER} touches during the checks wait; branch update requested, merge deferred."
             RB_MERGE_STATUS="deferred_base_moved"
+          elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+            echo "Review-blocked judge: PR #${PR_NUMBER} waits for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; merge deferred, re-dispatched when the lease is granted."
+            RB_MERGE_STATUS="mergeability_pending"
           else
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
@@ -2672,6 +2678,9 @@ case "${RB_ACTION}" in
           if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
             echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, terminal merge deferred to the synchronize run."
             RB_MERGE_STATUS="deferred_base_moved"
+          elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+            echo "Review-blocked judge: PR #${PR_NUMBER} waits for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; merge deferred, re-dispatched when the lease is granted."
+            RB_MERGE_STATUS="mergeability_pending"
           else
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
@@ -2687,6 +2696,9 @@ case "${RB_ACTION}" in
           if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
             echo "::warning::Review-blocked judge: base moved under files PR #${PR_NUMBER} touches during the checks wait; branch update requested, merge deferred."
             RB_MERGE_STATUS="deferred_base_moved"
+          elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+            echo "Review-blocked judge: PR #${PR_NUMBER} waits for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; merge deferred, re-dispatched when the lease is granted."
+            RB_MERGE_STATUS="mergeability_pending"
           else
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"

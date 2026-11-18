@@ -74,6 +74,8 @@ base_freshness_defer_reason()
 {
 	if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
 		echo "base_moved_overlap"
+	elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+		echo "merge_lease_wait"
 	else
 		echo "base_freshness_unknown"
 	fi
@@ -267,6 +269,8 @@ if ! printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRAN
 	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=defer reason=$(base_freshness_defer_reason)"
 	if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
 		echo "Auto-merge not enabled for PR #${PR_NUMBER}: the base moved under files this PR touches since its checks ran. The branch update's synchronize run re-validates and re-enables auto-merge."
+	elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+		echo "Auto-merge not enabled for PR #${PR_NUMBER}: waiting for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}. The merge-train release re-dispatches this PR when the lease is granted to it."
 	else
 		echo "Auto-merge not enabled for PR #${PR_NUMBER}: base freshness could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); no branch update was requested. The review sweep or the next review round retries."
 	fi
@@ -294,6 +298,8 @@ if [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
 	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=defer reason=$(base_freshness_defer_reason)"
 	if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
 		echo "Auto-merge not enabled for PR #${PR_NUMBER}: the base moved under files this PR touches while its checks ran. The branch update's synchronize run re-validates and re-enables auto-merge."
+	elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+		echo "Auto-merge not enabled for PR #${PR_NUMBER}: waiting for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?} after the checks wait. The merge-train release re-dispatches this PR when the lease is granted to it."
 	else
 		echo "Auto-merge not enabled for PR #${PR_NUMBER}: base freshness could not be verified after the checks wait (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); no branch update was requested. The review sweep or the next review round retries."
 	fi

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Signed job-token comments (run-volume plan item 15): route this script's
+# gh comment calls through the shim even when no earlier step loaded it.
+[ -z "${BASH_SOURCE[0]:-}" ] || AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" >/dev/null 2>&1 || true
 # review_merge_train.sh — serialize ai/issue-* PRs that edit the same files.
 #
 # Problem this solves: when several ai/issue-* PRs open against one base
@@ -122,6 +125,18 @@ elif [ -f "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" ]; then
 	source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" 2>/dev/null || true
 fi
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+# Merge lease (scripts/pr_checks_lib.sh), used by the release step only.
+# Best-effort: an older support checkout without the library skips the lease
+# tick, and the release behaves as before.
+MT_PR_CHECKS_LIB_LOADED=false
+if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/pr_checks_lib.sh" ]; then
+	# shellcheck disable=SC1091
+	source "${SUPPORT_SCRIPTS_DIR}/pr_checks_lib.sh" 2>/dev/null && MT_PR_CHECKS_LIB_LOADED=true
+elif [ -f "$(dirname "${BASH_SOURCE[0]}")/pr_checks_lib.sh" ]; then
+	# shellcheck disable=SC1091
+	source "$(dirname "${BASH_SOURCE[0]}")/pr_checks_lib.sh" 2>/dev/null && MT_PR_CHECKS_LIB_LOADED=true
+fi
+type _merge_lease_gate >/dev/null 2>&1 || MT_PR_CHECKS_LIB_LOADED=false
 
 MT_SUBCOMMAND="${1:-}"
 MT_ENABLED="${MERGE_TRAIN_ENABLED:-true}"
@@ -1351,6 +1366,99 @@ _mt_dispatch_review() {
 	return 1
 }
 
+# Merge-lease tick (scripts/pr_checks_lib.sh "Merge lease"). For each lease
+# ref (one `git/matching-refs` call), frees a held lease whose holder is no
+# longer open (from the open-PR list this pass already read) or whose expiry
+# passed, then reserves a free lease for the first waiter in queue order
+# (priority label, then lowest PR number), removes that waiter's
+# MERGE_LEASE_WAIT_LABEL and re-dispatches its review. The reservation makes
+# the waiter the holder, so its merge path updates the branch at once.
+#
+# Input: $1 the _mt_list_open_prs output (one JSON object per line), $2 the
+# base filter ("" = every base).
+# API calls: 1 matching-refs read; per lease ref one commit read; a release
+# write is 1 commit POST + 1 ref PATCH; a grant adds 1 paginated files read,
+# the write, 1 label DELETE and 1 workflow dispatch. No call when the library
+# is unavailable or MERGE_LEASE_ENABLED is off.
+# Fail-open: every failure logs and returns 0; a lease left held expires
+# after MERGE_LEASE_TTL_MINUTES.
+# Log: MERGE_LEASE pr=<n> base=<ref> mode=tick outcome=held|released|granted|
+# no_waiter|write_failed|lost_race reason=<token>
+_mt_merge_lease_tick()
+{
+	local tick_prs_json="$1" tick_base_filter="$2"
+	local tick_refs_json tick_prefix tick_ref tick_base tick_rc tick_reason tick_base_prs tick_first tick_first_head tick_paths
+	[ "${MT_PR_CHECKS_LIB_LOADED}" = "true" ] || return 0
+	_merge_lease_enabled || return 0
+	tick_prefix="$(_merge_lease_ref_name "")"
+	if ! tick_refs_json="$(gh_retry _safe_gh_jq "repos/${MT_REPO}/git/matching-refs/${tick_prefix%/}" 2>/dev/null)" \
+		|| ! jq -e 'type == "array"' >/dev/null 2>&1 <<< "${tick_refs_json}"; then
+		_mt_warn "MERGE_LEASE mode=tick outcome=unavailable reason=refs_list_failed (no lease freed or granted this tick)"
+		return 0
+	fi
+	while IFS= read -r tick_ref; do
+		[ -n "${tick_ref}" ] || continue
+		tick_base="${tick_ref#refs/"${tick_prefix}"}"
+		_merge_lease_valid_base "${tick_base}" || continue
+		if [ -n "${tick_base_filter}" ] && [ "${tick_base}" != "${tick_base_filter}" ]; then
+			continue
+		fi
+		tick_rc=0
+		_merge_lease_read "${tick_base}" || tick_rc=$?
+		if [ "${tick_rc}" -ne 0 ]; then
+			_mt_warn "MERGE_LEASE base=${tick_base} mode=tick outcome=unavailable reason=read_failed"
+			continue
+		fi
+		if [ "${MERGE_LEASE_STATE}" = "held" ]; then
+			tick_reason=""
+			if [ "${MERGE_LEASE_EXPIRES}" -le "$(date -u +%s)" ]; then
+				tick_reason="expired"
+			elif ! printf '%s\n' "${tick_prs_json}" | jq -e --argjson n "${MERGE_LEASE_PR}" 'select(type == "object" and .number == $n)' >/dev/null 2>&1; then
+				# The open-PR list was read at the start of this pass; confirm
+				# with a live read so a holder opened since is never freed.
+				if [ "$(gh_retry _safe_gh_jq "repos/${MT_REPO}/pulls/${MERGE_LEASE_PR}" --jq '.state // ""' 2>/dev/null | tail -n1)" = "closed" ]; then
+					tick_reason="holder_closed"
+				fi
+			fi
+			if [ -z "${tick_reason}" ]; then
+				_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=held reason=holder_open"
+				continue
+			fi
+			tick_rc=0
+			_merge_lease_write "${tick_base}" released "${MERGE_LEASE_PR}" "${MERGE_LEASE_HEAD}" "" || tick_rc=$?
+			if [ "${tick_rc}" -ne 0 ]; then
+				_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=$([ "${tick_rc}" -eq 3 ] && echo lost_race || echo write_failed) reason=${tick_reason}"
+				continue
+			fi
+			_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=released reason=${tick_reason}"
+			MERGE_LEASE_STATE="released"
+		fi
+		tick_base_prs="$(printf '%s\n' "${tick_prs_json}" | jq -sc --arg b "${tick_base}" '[ .[] | select(type == "object" and .base == $b) ]' 2>/dev/null || echo '[]')"
+		tick_first="$(_merge_lease_queue_first "${tick_base_prs}" "")"
+		if [ -z "${tick_first}" ]; then
+			_mt_log "MERGE_LEASE pr=- base=${tick_base} mode=tick outcome=no_waiter reason=lease_free"
+			continue
+		fi
+		tick_first_head="$(jq -r --argjson n "${tick_first}" '[ .[] | select(.number == $n) | .head_sha // "" ][0] // ""' <<< "${tick_base_prs}" 2>/dev/null)"
+		tick_paths="$(_merge_lease_pr_paths "${tick_first}" 2>/dev/null || true)"
+		tick_rc=0
+		_merge_lease_write "${tick_base}" held "${tick_first}" "${tick_first_head}" "${tick_paths:-*}" || tick_rc=$?
+		if [ "${tick_rc}" -ne 0 ]; then
+			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=$([ "${tick_rc}" -eq 3 ] && echo lost_race || echo write_failed) reason=grant"
+			continue
+		fi
+		# Unlabel before the dispatch: if the dispatch fails, the sweep (which
+		# skips labelled waiters) picks the PR up again within 30 minutes.
+		_merge_lease_unlabel_wait "${tick_first}"
+		if _mt_dispatch_review "${tick_first}" "$(jq -r --argjson n "${tick_first}" '[ .[] | select(.number == $n) | .head // "" ][0] // ""' <<< "${tick_base_prs}" 2>/dev/null)"; then
+			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=first_in_queue"
+		else
+			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=dispatch_failed_sweep_retries"
+		fi
+	done < <(jq -r --arg p "refs/${tick_prefix}" '.[] | select(type == "object" and ((.ref // "") | startswith($p))) | .ref' <<< "${tick_refs_json}" 2>/dev/null)
+	return 0
+}
+
 _mt_release() {
 	local base_filter="${BASE_BRANCH:-}" prs_json line num head base labels files blockers inflight_review_branches="" released=0 examined=0
 	local release_queue_comment_id release_comment_body release_label_restored
@@ -1481,6 +1589,9 @@ _mt_release() {
 			fi
 		fi
 	done < <(printf '%s\n' "${prs_json}")
+	# Lease hand-off: a closed or expired holder frees its lease, and the
+	# first waiter gets it.
+	_mt_merge_lease_tick "${prs_json}" "${base_filter}" || true
 	if [ -n "${release_oldest_created_epoch}" ]; then
 		release_oldest_age=$((release_now_epoch - release_oldest_created_epoch))
 		# Clock skew: a future-dated PR reports 0, never a negative age.
