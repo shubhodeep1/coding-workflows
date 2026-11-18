@@ -14,6 +14,9 @@
 #   VALIDATE_PREFLIGHT_PYFLAKES_ENABLED, VALIDATE_PREFLIGHT_PYFLAKES_RULES
 
 set -euo pipefail
+# Signed job-token comments (run-volume plan item 15): route this script's
+# gh comment calls through the shim even when no earlier step loaded it.
+[ -z "${BASH_SOURCE[0]:-}" ] || AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" >/dev/null 2>&1 || true
 
 compact_validation_summary_value_bootstrap()
 {

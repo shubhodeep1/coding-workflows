@@ -9,6 +9,9 @@ on:
         required: true
       TG_BOT_SECRET:
         required: false
+      # Signed job-token comments (run-volume plan item 15): optional; see scripts/comment_signature.py.
+      AI_COMMENT_SIGNING_SECRET:
+        required: false
 
 env:
   # Claude capacity wait (issue #7370): a capacity fallback waits for the
@@ -28,6 +31,12 @@ env:
   PERSIST_EVIDENCE_BROKER_MAX_REQUESTS: ${{ vars.PERSIST_EVIDENCE_BROKER_MAX_REQUESTS || '10' }}
   PERSIST_EVIDENCE_BROKER_MAX_BYTES: ${{ vars.PERSIST_EVIDENCE_BROKER_MAX_BYTES || '32768' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Signed job-token comments (run-volume plan item 15, D16; see
+  # scripts/comment_signature.py). The opt-in secret and the job token sit
+  # next to each step's GH_PAT, never here, so a step without the PAT never
+  # sees them. Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false
+  # posts with GH_PAT again while signed comments already posted still verify.
+  AI_COMMENT_SIGNING_POST: ${{ vars.AI_COMMENT_SIGNING_POST || 'true' }}
 
 jobs:
   plan:
@@ -177,7 +186,10 @@ jobs:
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'true' }}
+          CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED || 'true' }}
           HOLD_EVENT_NAME: ${{ github.event_name }}
           HOLD_COMMENT_LOGIN: ${{ github.event.comment.user.login }}
           HOLD_COMMENT_ASSOCIATION: ${{ github.event.comment.author_association }}
@@ -296,6 +308,7 @@ jobs:
             ISSUE="${issue_number}" \
             GH_TOKEN="${GH_TOKEN}" \
             CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" \
+            CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED:-true}" \
             bash "${resolver_script}" 2>"${resolver_err_file}"
           })" || resolver_rc=$?
           resolver_pr_not_open=false
@@ -319,6 +332,10 @@ jobs:
               sed 's/^::error::CI_TRIAGE_PR_BRANCH_ROUTING /::notice::CI_TRIAGE_PR_BRANCH_ROUTING /' "${resolver_err_file}" >&2
             elif [ "${resolver_label_missing}" = "true" ]; then
               sed 's/^::error::CI_TRIAGE_PR_BRANCH_ROUTING /::warning::CI_TRIAGE_PR_BRANCH_ROUTING /' "${resolver_err_file}" >&2
+            elif [ "${resolver_rc}" -eq 75 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
+              # The exit-75 deferral (#9599) ends the step green, so the
+              # resolver's rate-limit line is replayed as a warning.
+              sed 's/^::error::INTEGRATION_REF_RESOLVE outcome=rate_limited /::warning::INTEGRATION_REF_RESOLVE outcome=rate_limited /' "${resolver_err_file}" >&2
             else
               cat "${resolver_err_file}" >&2
             fi
@@ -449,8 +466,29 @@ jobs:
             echo "::error::CI-triage PR-branch routing refused for issue #${issue_number}; refusing to fall back to the default branch."
             exit 1
           elif [ "${resolver_rc}" -eq 75 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
-            echo "::error::INTEGRATION_REF_RESOLVE outcome=rate_limited rc=${resolver_rc} ci_triage_routing=on; refusing to fall back to the default branch."
-            exit 1
+            # Rate-limited resolver with CI-triage routing on (#9599, heal of
+            # #9582, run 43885930759). The refusal stays: no ref is written and
+            # nothing falls back to the default branch. The job no longer fails,
+            # because failing it filed plan_failed heal reports for a limit that
+            # clears by itself. Every setup step skips on rate_limited_defer, so
+            # Checkout never resolves the empty ref to the default branch. No gh
+            # call here: the limit is exhausted. No label changes either: the
+            # skipped "Validate planning phase label" step is what moves
+            # ai:clarification / ai:blocked to ai:planning. Stall recovery still
+            # re-posts /answer for an issue in ai:planning (retrigger_plan) or
+            # ai:clarification (auto_respond_clarify); ai:blocked is a
+            # dedicated-handler phase with no stall-recovery action.
+            {
+              echo "rate_limited_defer=true"
+              echo "ref="
+              echo "resolver_status=failed"
+            } >> "$GITHUB_OUTPUT"
+            echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
+            echo "::warning::INTEGRATION_REF_RESOLVE outcome=deferred reason=rate_limited rc=${resolver_rc} ci_triage_routing=on issue=${issue_number}; refusing to fall back to the default branch."
+            # "Write run summary" skips on SKIP_PLAN, so leave an operator-visible
+            # trace here on every install (it also covers the manual cases).
+            echo "Planning for issue #${issue_number} was deferred: the integration-ref lookup was rate-limited (exit 75) with CI-triage routing on. No label was changed. If the issue is in ai:planning or ai:clarification, standalone stall recovery re-posts /answer after the limit resets; if it is in ai:blocked, or stall recovery is off, post /answer again by hand after the limit resets." >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+            exit 0
           elif [ "${resolver_rc}" -eq 2 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
             # Exit 2 = resolver API failure (retries exhausted or permanent error).
             # With routing off, keep the legacy default-branch fallback, matching the exit-75 policy.
@@ -468,8 +506,10 @@ jobs:
         # as in clarify, so a transient checkout, staging or API failure cannot
         # fail a held run and file a plan_failed heal report. This comment sits
         # inside the step: a less-indented line before it would end up in the
-        # refctx body that the tests extract and dedent.
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        # refctx body that the tests extract and dedent. The rate-limited
+        # deferral (#9599) skips the same steps: otherwise the empty ref would
+        # check out the default branch and later reads would hit the limit.
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         uses: actions/checkout@v5
         with:
           ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
@@ -479,7 +519,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
 
       - name: Log checkout ref
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         env:
           PLAN_RESOLVED_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
         run: |
@@ -493,9 +533,11 @@ jobs:
           fi
 
       - name: Configure git auth for memory helper clones
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
@@ -505,10 +547,12 @@ jobs:
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
       - name: Resolve workflow support ref
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
@@ -550,7 +594,7 @@ jobs:
 
       - name: Checkout workflow support source
         id: checkout_support_source
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -561,7 +605,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout workflow support source fallback
-        if: ${{ steps.refctx.outputs.label_missing_hold != 'true' && steps.checkout_support_source.outcome == 'failure' && env.SCRIPT_REF == 'stable' }}
+        if: ${{ steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true' && steps.checkout_support_source.outcome == 'failure' && env.SCRIPT_REF == 'stable' }}
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
@@ -571,7 +615,7 @@ jobs:
           fetch-depth: 1
 
       - name: Ensure workflow support source checkout
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         run: |
           set -euo pipefail
           if [ ! -d .codex-workflow-src ]; then
@@ -586,7 +630,7 @@ jobs:
           fi
 
       - name: Checkout workflow support source main snapshot
-        if: ${{ steps.refctx.outputs.label_missing_hold != 'true' && env.SCRIPT_REF == 'stable' }}
+        if: ${{ steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true' && env.SCRIPT_REF == 'stable' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -597,7 +641,7 @@ jobs:
           fetch-depth: 1
 
       - name: Stage workflow support files
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
@@ -857,7 +901,7 @@ jobs:
           rm -rf .codex-workflow-src-main
 
       - name: Create runtime workspace
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         run: |
           set -euo pipefail
           RUNTIME_DIR="/tmp/codex-plan-${GITHUB_RUN_ID}"
@@ -878,9 +922,11 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Fetch issue metadata
-        if: steps.refctx.outputs.label_missing_hold != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && steps.refctx.outputs.rate_limited_defer != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -907,6 +953,8 @@ jobs:
         if: env.SKIP_PLAN != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
@@ -972,6 +1020,8 @@ jobs:
         if: env.SKIP_PLAN != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -982,6 +1032,8 @@ jobs:
         if: env.SKIP_PLAN != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           TRIGGER_COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           set -euo pipefail
@@ -1047,6 +1099,8 @@ jobs:
         if: env.SKIP_PLAN != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -1180,6 +1234,8 @@ jobs:
         if: env.SKIP_PLAN != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           REPO_SLUG: ${{ github.repository }}
           PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED: ${{ vars.PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED || 'true' }}
           CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}
@@ -1483,6 +1539,8 @@ jobs:
         if: env.SKIP_PLAN != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           TRIGGER_COMMENT_ID: ${{ github.event.comment.id }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -1556,6 +1614,8 @@ jobs:
         if: env.SKIP_PLAN != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
@@ -1576,6 +1636,8 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           source scripts/tg_helpers.sh
@@ -1585,6 +1647,8 @@ jobs:
         if: env.SKIP_PLAN != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -1769,6 +1833,8 @@ jobs:
         if: env.SKIP_PLAN != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -1795,6 +1861,8 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
@@ -2018,6 +2086,8 @@ jobs:
         if: env.SKIP_PLAN != 'true' && env.CHECK_TRIAGE_BRANCH_GUARD_BLOCKED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_PLAN || '40' }}
           PLAN_ENGINE: ${{ steps.ai_engine.outputs.engine || 'codex' }}
@@ -2320,6 +2390,8 @@ jobs:
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
@@ -2434,6 +2506,8 @@ jobs:
         if: env.SKIP_PLAN != 'true' && env.PROCESSED_ANSWER_CLAIMED == 'true' && steps.parse_plan.outputs.blocked == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           TRIGGER_COMMENT_ID: ${{ github.event.comment.id }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -2587,6 +2661,8 @@ jobs:
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true' && !endsWith(github.repository, '/coding-workflows')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           # Template-owned paths are fetched from coding-workflows templates
@@ -2793,6 +2869,8 @@ jobs:
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           IS_ORCHESTRATOR_MANAGED: ${{ steps.orchestrator_auto_answer_eval.outputs.is_orchestrator }}
           AUTO_ANSWER_PARSE_FAILED: ${{ steps.orchestrator_auto_answer_eval.outputs.auto_answer_parse_failed }}
           AUTO_ANSWER_FAILURE_REASON: ${{ steps.orchestrator_auto_answer_eval.outputs.auto_answer_failure_reason }}
@@ -2856,6 +2934,8 @@ jobs:
         id: post_orchestrator_auto_answer
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           AUTO_ANSWER_COMMAND: ${{ steps.orchestrator_auto_answer_eval.outputs.auto_answer_command }}
           AUTO_ANSWER_MAPPING: ${{ steps.orchestrator_auto_answer_eval.outputs.auto_answer_mapping }}
         run: |
@@ -2873,6 +2953,8 @@ jobs:
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
@@ -2895,6 +2977,8 @@ jobs:
         if: env.SKIP_PLAN != 'true' && env.PROCESSED_ANSWER_CLAIMED == 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           TRIGGER_COMMENT_ID: ${{ github.event.comment.id }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -2915,6 +2999,8 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           IS_ORCHESTRATOR_MANAGED: ${{ steps.orchestrator_auto_answer_eval.outputs.is_orchestrator }}
           AUTO_ANSWER_POSTED: ${{ steps.post_orchestrator_auto_answer.outputs.auto_answer_posted }}
@@ -2953,6 +3039,8 @@ jobs:
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -3008,6 +3096,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: "1"
           PLAN_HELD: ${{ steps.parse_plan.outputs.blocked == 'true' || steps.parse_plan.outputs.needs_clarification == 'true' }}
         run: |
@@ -3033,6 +3123,8 @@ jobs:
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
@@ -3055,6 +3147,8 @@ jobs:
         if: env.SKIP_PLAN != 'true' && env.PROCESSED_ANSWER_CLAIMED == 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           TRIGGER_COMMENT_ID: ${{ github.event.comment.id }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -3074,6 +3168,8 @@ jobs:
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
           HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED: ${{ vars.HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED || '' }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
@@ -3636,6 +3732,8 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -euo pipefail
@@ -3665,6 +3763,8 @@ jobs:
         if: env.SKIP_PLAN != 'true' && success()
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
@@ -3684,6 +3784,8 @@ jobs:
         if: (failure() || cancelled()) && env.SKIP_PLAN != 'true' && env.PROCESSED_ANSWER_CLAIMED == 'true' && env.PROCESSED_ANSWER_COMPLETED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           TRIGGER_COMMENT_ID: ${{ github.event.comment.id }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -3711,6 +3813,8 @@ jobs:
         if: (failure() || cancelled()) && env.SKIP_PLAN != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
@@ -3740,6 +3844,8 @@ jobs:
         if: failure() || cancelled()
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -3766,6 +3872,8 @@ jobs:
         if: failure() || cancelled()
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [ ! -f scripts/label_helpers.sh ]; then
@@ -3797,6 +3905,8 @@ jobs:
         if: failure() || cancelled()
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -3816,6 +3926,8 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -euo pipefail
@@ -3856,6 +3968,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
           REPORT_WORKFLOW_NAME: ${{ github.workflow }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -3889,6 +4003,8 @@ jobs:
       id-token: write
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+      AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
       WORKFLOW_HEAL_PHASE_FAILURE_STREAK: ${{ vars.WORKFLOW_HEAL_PHASE_FAILURE_STREAK || '1' }}
       WORKFLOW_HEAL_PHASE: plan
@@ -3899,6 +4015,8 @@ jobs:
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"

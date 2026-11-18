@@ -41,6 +41,14 @@ PYPROJECT = ROOT / "pyproject.toml"
 CATCH_ALL_JOB = "tests-system-python"
 CATCH_ALL_COLLECT_COMMAND = "python3 -m pytest --collect-only -q -p no:cacheprovider tests "
 
+# Former allowlist entry kept for the record (project #9116, P1). The
+# catch-all above now runs this file directly, so it no longer needs an entry;
+# its cases are also still collected through the failure-contract file:
+#	"tests/test_workflow_log_analysis_report_pr.py": (
+#		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
+#		"through tests/test_workflow_log_analysis_failure_contract.py, which collects them"
+#	),
+
 
 def _strip_comment(line: str) -> str:
 	"""Drop a full-line comment or a trailing ` #` comment (YAML or shell), so a path named only in a comment is not wired."""
