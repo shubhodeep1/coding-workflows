@@ -1949,10 +1949,12 @@ jobs:
             exit 0
           fi
 
-          # Issue #9135: in PR mode, fail closed before any push, ls-remote or
-          # gh call when GH_PAT is unset (same rule and reason as
-          # deliver-report). Unset flag keeps the old behaviour; push mode
-          # keeps the github.token fallback.
+          # Issue #9135: in PR mode, fail closed before any report push,
+          # ls-remote or PR-delivery gh call when GH_PAT is unset (same rule
+          # and reason as deliver-report). The purge guard above
+          # (apply_analysis_on_main.sh) has already made its read-only gh
+          # calls by now. Unset flag keeps the old behaviour; push mode keeps
+          # the github.token fallback.
           if [ "${report_delivery_mode}" = "pr" ] && [ "${WLA_REPORT_PR_PAT_SET:-true}" != "true" ]; then
             echo "::error::WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=failed reason=token_missing branch=${REPORT_PR_BRANCH}"
             echo "GH_PAT is not set, so the report PR was not opened: a PR opened with github.token starts no required checks. The report is kept as artifact workflow-log-analysis-report; set GH_PAT or WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR=false."

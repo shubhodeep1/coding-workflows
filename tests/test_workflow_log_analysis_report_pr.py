@@ -198,6 +198,8 @@ class _Sandbox:
 			}
 		)
 		env.pop("WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR", None)
+		# Issue #9135: a caller shell value must not trip the PR-mode PAT gate.
+		env.pop("WLA_REPORT_PR_PAT_SET", None)
 		env.update(extra)
 		return subprocess.run(
 			["bash", "-c", _step_body()], cwd=self.work, env=env, capture_output=True, text=True, check=False
