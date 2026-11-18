@@ -22,7 +22,8 @@ a restart, or an API error in one pass can only delay a droplet, never add an
 extra one. API calls per pass (CLAUDE.md §15): 1 DigitalOcean list, 1 runners
 list per allowlisted repository (up to 3 pages), and, on full-scan passes only,
 2 run lists plus at most RUNNER_SCALER_SCAN_MAX_RUNS jobs reads per status per
-repository; plus at most PENDING_RERUNS_PER_PASS re-run attempts.
+repository; plus at most PENDING_RERUNS_PER_PASS re-run attempts, each pending
+job at most once per PENDING_RERUN_RETRY_SECONDS.
 """
 
 from __future__ import annotations
@@ -56,10 +57,13 @@ SCAN_GRACE_SECONDS = 60
 # put it back.
 STARTED_MEMORY_SECONDS = 600
 # GitHub re-runs a job only once its run has completed, so a lost-runner re-run
-# waits until then: it is retried each pass for at most this long (the longest
-# job timeout is 240 minutes), and at most PENDING_RERUNS_PER_PASS per pass.
+# waits until then: it is retried for at most this long (the longest job
+# timeout is 240 minutes), each job at most once per PENDING_RERUN_RETRY_SECONDS
+# and at most PENDING_RERUNS_PER_PASS per pass, so a mass droplet loss costs at
+# most 12 calls an hour per pending job instead of one per pass (CLAUDE.md §15).
 PENDING_RERUN_MAX_SECONDS = 6 * 3600
 PENDING_RERUNS_PER_PASS = 10
+PENDING_RERUN_RETRY_SECONDS = 300
 # A transient failure (transport, 5xx, rate limit) of the annotations read puts
 # the completion back for the next pass, at most this many reads per job, so one
 # bad response cannot lose a lost-runner re-run.
@@ -137,6 +141,7 @@ class Scaler:
 		self.deleted: dict[int, float] = {}
 		self.pending_reruns: dict[tuple[str, int], float] = {}
 		self.rerun_deferred_logged: set[tuple[str, int]] = set()
+		self.rerun_last_try: dict[tuple[str, int], float] = {}
 		self.annotation_attempts: dict[int, int] = {}
 		self.last_full_scan = 0.0
 		self.last_pass_completed = clock()
@@ -383,17 +388,20 @@ class Scaler:
 
 	def _process_pending_reruns(self, now: float, summary: dict[str, int]) -> None:
 		"""Re-run lost-runner jobs; GitHub accepts a re-run only after the run completed."""
-		for (repo, job_id), first in list(self.pending_reruns.items())[:PENDING_RERUNS_PER_PASS]:
+		due = [(key, first) for key, first in self.pending_reruns.items() if now - self.rerun_last_try.get(key, float("-inf")) >= PENDING_RERUN_RETRY_SECONDS]
+		for (repo, job_id), first in due[:PENDING_RERUNS_PER_PASS]:
 			if self.config.dry_run:
 				self.log("dry_run", action="rerun", repo=repo, job=job_id)
 				del self.pending_reruns[(repo, job_id)]
 				continue
+			self.rerun_last_try[(repo, job_id)] = now
 			try:
 				self.github.rerun_job(repo, job_id)
 			except ApiError as exc:
 				if now - first > PENDING_RERUN_MAX_SECONDS:
 					del self.pending_reruns[(repo, job_id)]
 					self.rerun_deferred_logged.discard((repo, job_id))
+					self.rerun_last_try.pop((repo, job_id), None)
 					self.log("rerun_skipped", reason="rerun_window_expired", repo=repo, job=job_id, status=exc.status)
 					self.alerter.alert(f"rerun_given_up:{repo}", f"{repo} job {job_id} lost its droplet and could not be re-run within {PENDING_RERUN_MAX_SECONDS // 3600} h (HTTP {exc.status}).")
 				elif (repo, job_id) not in self.rerun_deferred_logged:
@@ -402,6 +410,7 @@ class Scaler:
 				continue
 			del self.pending_reruns[(repo, job_id)]
 			self.rerun_deferred_logged.discard((repo, job_id))
+			self.rerun_last_try.pop((repo, job_id), None)
 			summary["reruns"] += 1
 			self.log("rerun", reason="runner_lost", repo=repo, job=job_id)
 
@@ -492,6 +501,9 @@ class Scaler:
 						capacity -= 1
 						if allowed is not None:
 							allowed -= 1
+						# It is booting supply (as the next pass counts it), so the
+						# queued_without_supply check below must not page for it.
+						booting[repo] += 1
 					break
 				want -= 1
 				capacity -= 1

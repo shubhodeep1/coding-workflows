@@ -33,7 +33,8 @@ BOOT_SCRIPT = Path(__file__).resolve().parent.parent / "bootstrap" / "runner-boo
 # arrive continuously. Full scans every 10 minutes add at most 2 run lists plus
 # 2 x RUNNER_SCALER_SCAN_MAX_RUNS jobs reads per repository, about 1,760 an hour
 # more at the defaults, so the worst case is about 3,450 GitHub calls an hour,
-# under the installation's 5,000 (CLAUDE.md §15).
+# under the installation's 5,000 (CLAUDE.md §15). Pending lost-runner re-runs
+# add at most 12 calls an hour per pending job (reconcile.PENDING_RERUN_RETRY_SECONDS).
 MIN_PASS_INTERVAL_SECONDS = 15
 
 

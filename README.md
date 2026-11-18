@@ -4753,8 +4753,8 @@ Offline `do-runner-*` runners with no droplet are deleted, at most 10 per pass.
   `RUNNER_SCALER_BREAKER_COOLDOWN_MINUTES`.
 - **Lost runners.** A job whose droplet was lost, shown by GitHub's
   lost-runner annotation, is re-run once, only at `run_attempt` 1. GitHub
-  accepts the re-run only after the whole run completes, so it is retried each
-  pass for up to 6 hours. The heal
+  accepts the re-run only after the whole run completes, so it is retried at
+  most every 5 minutes for up to 6 hours. The heal
   intake files no heal issue for it (`skip reason=runner_lost`).
 - **Repair path.** The heal and check-failure triage workflows always run on
   GitHub-hosted runners.
@@ -4781,7 +4781,11 @@ agents file's `## DigitalOcean resources` table. The order is fixed:
    service creates no droplets and raises no queue alert.
 3. Only then set `PIPELINE_RUNS_ON=do-runner` on it.
 
-The same order applies to an existing consumer that opts in later.
+The same order applies to an existing consumer that opts in later. If the
+`started` line still shows `dry_run=true`, leave `PIPELINE_RUNS_ON` unset:
+turning dry run off is a fleet-wide app spec change
+(`RUNNER_SCALER_DRY_RUN=false`, ask-first), and step 3 follows only once a
+later `started` line shows `dry_run=false`.
 
 **Rollback.** Unset `PIPELINE_RUNS_ON` on the consumer: new jobs go back to
 GitHub-hosted runners at once. Jobs already queued keep their `do-runner`

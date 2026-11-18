@@ -11,7 +11,7 @@ import pytest
 
 from runner_scaler_fakes import JIT, OTHER_REPO, REPO, VPC, Harness, job_event
 from runner_scaler.api import ApiError
-from runner_scaler.reconcile import JIT_PLACEHOLDER, MIN_HEALTH_WINDOW_SECONDS, PENDING_RERUN_MAX_SECONDS, Scaler, render_user_data, validate_user_data_template
+from runner_scaler.reconcile import JIT_PLACEHOLDER, MIN_HEALTH_WINDOW_SECONDS, PENDING_RERUN_MAX_SECONDS, PENDING_RERUN_RETRY_SECONDS, Scaler, render_user_data, validate_user_data_template
 
 
 def test_one_droplet_per_queued_job_with_name_tags_and_user_data() -> None:
@@ -356,6 +356,8 @@ def test_lost_runner_rerun_waits_for_the_run_to_complete() -> None:
 	h.scaler.handle_event("workflow_job", job_event("completed", 1, runner_name="do-runner-digital-pa-00000009", conclusion="failure"))
 	for _ in range(4):
 		h.scaler.reconcile()
+		h.scaler.reconcile()  # within the retry spacing: no extra re-run call
+		h.clock.advance(PENDING_RERUN_RETRY_SECONDS)
 	assert attempts["n"] == 3  # deferred twice, accepted once, never again
 	assert len(h.outcomes("rerun_deferred")) == 1 and len(h.outcomes("rerun")) == 1
 	assert len([call for call in h.github.calls if call[0] == "annotations"]) == 1
@@ -432,3 +434,13 @@ def test_ambiguous_create_holds_its_cap_slot_for_the_rest_of_the_pass() -> None:
 	h.scaler.reconcile()
 	# The timed-out create may exist: the other repository must not reuse its slot.
 	assert len([call for call in h.do.calls if call[0] == "create"]) == 1
+
+
+def test_ambiguous_create_is_booting_supply_for_the_queue_alert() -> None:
+	h = Harness()
+	h.clock.advance(h.config.queue_alert_minutes * 60 + 1)
+	h.queue(1)  # created at T0, so it has waited past the alert threshold
+	h.do.fail["create"] = ApiError(0, "TimeoutError")
+	h.scaler.reconcile()
+	# The timed-out create may be booting: no queued_without_supply page for it.
+	assert f"queued_without_supply:{REPO}" not in h.alerter.keys()
