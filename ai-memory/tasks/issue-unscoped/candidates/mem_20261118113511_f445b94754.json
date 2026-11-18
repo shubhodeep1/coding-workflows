@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_files_touched_scope_guard.py:(no line given) | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test test_files_touched_scope_guard.py is failing in the pre-push test gate, which is a regression caused by this change.\n  WHY: The pre-push test gate results show the failure was caused by the current PR changes, and the test file was modified in the last run. (Source severity BLOCKER.)\n- scripts/implement_handle_guard_block.sh:240-244,306-307 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash, google_gemini-3_1-flash-lite]\n  PROBLEM: The handler adds the `ai:scope-blocked` label (lines 240-244) before it posts the rejection comment with the `reason=remediation-no-code` marker (lines 306-307). The `issues: labeled` heal reporter can read the comments first, find no marker, and dispatch the heal the park was meant to suppress.\n  WHY: The reporter's skip check in `scripts/workflow_failure_heal_report.sh` (lines 185-196) needs the marker to be present. Severity disagreement: sonnet-5_5 rated it NIT (confidence 2) because the window is narrow. gemini rated it MAJOR (confidence 3) and cited a different ordering at about lines 287-292. minimax, luna and glm rated it MAJOR (confidence 4-5). The highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"An implement run for an auto-heal remediation issue now stops before the commit when every staged path is a doc, test, fragment or DB contract path. Nothing is committed or pushed, no PR is opened and no review runs.\"\n  expected_change_site: implement_handle_guard_block.sh and implement_commit_changes.sh\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The label/comment race can still dispatch a follow-up heal, so the \"no review runs\" requirement is not strictly met in every race scenario.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/implement_handle_guard_block.sh:240-244,306-307 | severity=NIT | confidence=2\n  PROBLEM: The `ai:scope-blocked` label is applied about 60 lines before the rejection comment with the `reason=remediation-no-code` marker. A reporter that reads the comments first finds no marker and dispatches the heal.\n  WHY: The window is narrow, and the `agents.d` fragment already documents it. The consequence is one redundant heal report. Moving the comment before the label would break the comment's latch-status line.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_files_touched_scope_guard.py:(pre-push test gate failure) | severity=BLOCKER | confidence=5\n  PROBLEM: The test test_files_touched_scope_guard.py is failing, which is a regression caused by this change.\n  WHY: The pre-push test gate results show this failure is caused by the PR changes, and the test file was modified in the last run.\n- scripts/implement_handle_guard_block.sh:(around 287-292) | severity=MAJOR | confidence=3\n  PROBLEM: The comment is posted before the label, but the label may still be applied before the comment is indexed and available to `workflow_failure_heal_report.sh`.\n  WHY: If the `labeled` event triggers the reporter before the comment is indexed, the reporter may not find the marker and may dispatch the follow-up heal.\n- TASK_GAP:\n  Requirement: \"An implement run for an auto-heal remediation issue now stops before the commit when every staged path is a doc, test, fragment or DB contract path. Nothing is committed or pushed, no PR is opened and no review runs.\"\n  Expected change site: implement_handle_guard_block.sh and implement_commit_changes.sh\n  Evidence of absence: The race condition might still lead to a follow-up heal dispatch, so the \"no review runs\" requirement is not strictly met in all race scenarios.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/implement_handle_guard_block.sh:240-244,305-307 | severity=MAJOR | confidence=5\n  PROBLEM: The label write at lines 240-244 fires `issues: labeled` into `internal-workflow-failure-heal.yml` (lines 3-7). The marker comment is posted at lines 306-307. If `workflow_failure_heal_report.sh` fetches comments (lines 124-134) before the comment lands, its marker check (lines 185-196) fails and it dispatches the heal via `build-issue-payload` at line 199.\n  WHY: This defeats the PR's purpose of suppressing heals for parked remediations. The reporter fetches comments once, with no retry, and `agents.d/audit-2026-11-remediation-no-code-guard.md:2` acknowledges the race. The last-run diff made the guard more accurate, so the race fires more often.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/implement_handle_guard_block.sh:240-244,306-307 | severity=MAJOR | confidence=5\n  PROBLEM: The label-triggered heal reporter can run before the marker comment is posted.\n  WHY: `.github/workflows/internal-workflow-failure-heal.yml` triggers on `issues: labeled` (lines 4-5). If the reporter reads comments before the post, the check at `scripts/workflow_failure_heal_report.sh:185-193` finds no marker and continues to the heal dispatch path (lines 282 onward).\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/implement_handle_guard_block.sh:240-244,306-307 | severity=MAJOR | confidence=4\n  PROBLEM: The label is added at lines 240-244 before the marker comment is posted at lines 306-307. The `issues: labeled` reporter (`scripts/workflow_failure_heal_report.sh:185-196`) can read the comments first, miss the marker and dispatch a heal.\n  WHY: The dispatched heal runs with `HEAL_ROUTE=true`, and the guard at `scripts/implement_commit_changes.sh:677` fails open on the heal route. The no-code remediation then commits, a PR opens and review runs.\n- scripts/implement_handle_guard_block.sh:240-244,306-307 | severity=MAJOR | confidence=4\n  PROBLEM: The label write and the marker comment post are not atomic with respect to the `issues: labeled` consumer. The suggested fix is to post the marker comment first and then add the label, or to gate the reporter skip on a label with no newer comments.\n  WHY: See the entry above: the heal dispatch bypasses the guard via `HEAL_ROUTE=true`.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "45b5729e6709765fe8baa53ac690f2e7142c4a8b1abd6f0c2d87946a98c615c6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9699,
+    "run_id": "44276876401",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44276876401",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118113511_f445b94754",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9699,
+    "run_id": "44276876401"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T11:35:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
