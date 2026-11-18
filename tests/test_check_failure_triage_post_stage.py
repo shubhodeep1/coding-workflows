@@ -314,6 +314,21 @@ class PostStageBehaviourTests(unittest.TestCase):
 		self.assertIn("CHECK_TRIAGE skip reason=base_triage_tracked base=main issue=512 pr=17 check=CI / lint stage=post", proc.stdout)
 		self.assertIn("CHECK_TRIAGE op=post stage=base_triage_tracked pr=17", proc.stdout)
 		self.assertNotIn("issue create", self.calls.read_text())
+		self.assertNotIn("op=supersede", proc.stdout)
+
+	def test_base_keyed_skip_logs_the_supersede_candidate_it_leaves_open(self) -> None:
+		# The supersede-check passed, then another PR's run filed the base-keyed issue.
+		_write_executable(self.support / "scripts" / "check_failure_triage.sh", "#!/usr/bin/env bash\nexit 0\n")
+		self._write_metadata({
+			"fingerprint": FINGERPRINT, "generation": 1, "root": FINGERPRINT, "base_keyed_ref": "main", "supersede_issue": "99",
+		})
+		self._write_base_keyed_body()
+		self._use_listing_gh(json.dumps([{"number": 512, "body": f"<!-- check-failure-triage:fp={FINGERPRINT} -->"}]))
+		proc = self._run()
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE op=supersede outcome=skip reason=base_triage_tracked old=99 pr=17 stage=post", proc.stdout)
+		self.assertIn("CHECK_TRIAGE op=post stage=base_triage_tracked pr=17", proc.stdout)
+		self.assertNotIn("issue create", self.calls.read_text())
 
 	def test_base_keyed_recheck_read_failure_files_as_before(self) -> None:
 		self._write_metadata({"fingerprint": FINGERPRINT, "generation": 1, "root": FINGERPRINT, "base_keyed_ref": "main"})

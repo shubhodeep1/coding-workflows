@@ -841,6 +841,12 @@ jobs:
               if [[ "${triage_post_base_existing}" =~ ^[1-9][0-9]*$ ]]; then
                 printf 'CHECK_TRIAGE skip reason=base_triage_tracked base=%s issue=%s pr=%s check=%s stage=post\n' \
                   "${triage_post_base_ref}" "${triage_post_base_existing}" "${PR_NUMBER}" "${triage_post_check_name}"
+                # A recorded supersede candidate is not replaced (nothing is
+                # filed), so it stays open; say so, as the collect stage does.
+                triage_post_supersede_old="$(jq -r '.supersede_issue // "" | tostring' "${RUNTIME_DIR}/triage_metadata.json" 2>/dev/null || true)"
+                if [[ "${triage_post_supersede_old}" =~ ^[1-9][0-9]*$ ]]; then
+                  printf 'CHECK_TRIAGE op=supersede outcome=skip reason=base_triage_tracked old=%s pr=%s stage=post\n' "${triage_post_supersede_old}" "${PR_NUMBER}"
+                fi
                 printf 'CHECK_TRIAGE op=post stage=base_triage_tracked pr=%s\n' "${PR_NUMBER}"
                 exit 0
               fi
