@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: `.github/workflows/ci.yml`, guard on `Pre-push affected-test gate tests` (and additional step guards moved out of group 3)\n  confidence=[2]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  EVIDENCE: Only one step (`Pre-push affected-test gate tests`) moved to group 0 although the issue says \"steps\"; the pick is an estimate from test and subprocess counts because run 43993691500 gave statuses only, with comments at `.github/workflows/ci.yml:3753-3773` requiring measurement before any further move; group 3's other pinned step (`Orchestrate poll single-file module tests`, line 3640) was left unmoved because its modules already run in parallel. Documented residual, severity NIT.\n- requirement: The issue tells the picker to consult \"the run's step timings\" and pick the destination \"with the most headroom\".\n  expected_change_site: `changelog.d/9639-ci-prepush-step-to-poll-group-1.md`, `.github/workflows/ci.yml` (lines 3753-3773), `tests/test_ci_poll_test_sharding.py:4009-4019`\n  confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The three rationale blocks say the pick is an estimate, not a measurement; no measured durations of the moved step or of candidate destination groups from run 43993691500 appear in the diff. Documented residual, severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP (severity=NIT, confidence=2)\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, the guard on `Pre-push affected-test gate tests`.\n  Evidence of absence: The step moved unchanged to group 0, name kept, `timeout-minutes` unchanged, no job added. The choice comes from test and subprocess counts, not measured durations. Run 43993691500 gave statuses only, and the comments at `.github/workflows/ci.yml:3753-3773` say the pick is an estimate. Only one step moved although the issue says \"steps\". Earlier rounds accepted this as a documented residual.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP (severity=NIT, confidence=2)\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml` \u2014 additional step guards moved out of group 3 alongside `Pre-push affected-test gate tests`.\n  Evidence of absence: Only `Pre-push affected-test gate tests` (line 3774) moved from group 3 to group 0. Group 3's only other pinned step is `Orchestrate poll single-file module tests` (line 3640, `if: strategy.job-index == 3`), declined because its three modules already run in parallel. Deferral documented in `ci.yml:3767-3773` and the changelog fragment; the source run reported no durations.\n- TASK_GAP (severity=NIT, confidence=2)\n  Requirement: The issue tells the picker to consult \"the run's step timings\" and pick the destination \"with the most headroom\".\n  Expected change site: `changelog.d/9639-ci-prepush-step-to-poll-group-1.md`, `.github/workflows/ci.yml` (lines 3753-3773), `tests/test_ci_poll_test_sharding.py:4009-4019`\n  Evidence of absence: The three rationale blocks say the pick is an estimate; no measured durations appear in the diff. Documented residual.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "87ea9b2e9a2ffa7ac6b9bc46e104d3de07d8ce736db160e5bc70264c4cd6ab94",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9641,
+    "run_id": "44376588469",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44376588469",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118205441_850c6668b5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9641,
+    "run_id": "44376588469"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T20:54:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
