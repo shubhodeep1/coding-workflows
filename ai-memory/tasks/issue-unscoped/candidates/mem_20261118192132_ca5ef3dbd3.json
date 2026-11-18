@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_intake.sh:1884-1891 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: Capping RUNNER_LOST_EXAMINED_RUNS at MAX_RUNS can make RUNNER_LOST_RUN_COUNT equal the examined count, so the report is skipped with runner_lost while a run was never examined.\n  WHY: Reviewers rated this MAJOR, which is mapped to high. anthropic_claude-sonnet-5_5 disputed it and found it not reproducible, because only the first MAX_RUNS refs can ever be evidence and failures to read those runs lower the lost count below MAX_RUNS. The cap defeats the fail-open-towards-filing contract when binding drops a ref beyond MAX_RUNS.\n- tests/test_workflow_failure_heal.py:test_intake_reports_when_another_run_was_not_examined | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new regression test uses only 2 run_refs with the default MAX_RUNS of 3, so it never exercises the MAX_RUNS cap.\n  WHY: A future run with MAX_RUNS=2 and three refs would hit the false-positive skip without CI catching it. The source rated this NIT, which is mapped to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description: \"When no other evidence remains, it skips the report with `WORKFLOW_HEAL skip reason=runner_lost`\", and the intake comment: \"A run dropped for any other reason (unverified, jobs unreadable) keeps the report on the normal path (fail-open towards filing).\"\n  expected_change_site: scripts/workflow_failure_heal_intake.sh, the RUNNER_LOST_EXAMINED_RUNS gate (lines 1874-1896)\n  confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: The gate honors the fail-open contract only while RUN_COUNT + RUNNER_LOST_BIND_DROPPED stays within MAX_RUNS, and both clamps at lines 1888 and 1890 remove the fail-open signal beyond that, and no test in tests/test_workflow_failure_heal.py covers a report claiming more runs than MAX_RUNS.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal_intake.sh:1888-1891 | severity=MAJOR | confidence=4\n  PROBLEM: The runner-lost skip logic incorrectly suppresses reports when the number of processed runs is capped at MAX_RUNS.\n  WHY: If the loop processes MAX_RUNS runs and all are classified as runner-lost, RUNNER_LOST_RUN_COUNT -eq RUNNER_LOST_EXAMINED_RUNS is true (assuming no binding drops), so the intake skips the whole report even if unexamined runs contain real failures.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal_intake.sh:1882-1890 (especially line 1890) | severity=MAJOR | confidence=4\n  PROBLEM: RUNNER_LOST_EXAMINED_RUNS is capped at MAX_RUNS after adding RUNNER_LOST_BIND_DROPPED, but bind_report_claims iterates over all payload run_refs while the binding loop fetches jobs for only the first MAX_RUNS.\n  WHY: Refs beyond MAX_RUNS are dropped as run_not_in_source_repo (workflow_failure_heal.py:3517), so the cap at line 1890 masks the excess. With MAX_RUNS=2, three refs and the first two lost, line 1891 sees 2==2 and skips, so the real failure of run 502 is never filed.\n- tests/test_workflow_failure_heal.py:test_intake_reports_when_another_run_was_not_examined (bind_dropped and loop_rejected cases) | severity=NIT | confidence=4\n  PROBLEM: The new regression test never exercises the cap at MAX_RUNS, because the payload has only 2 run_refs and the default WORKFLOW_HEAL_MAX_RUNS is 3.\n  WHY: The cap defect has no regression test, so CI would not catch a MAX_RUNS=2 case with three refs.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal_intake.sh:1884-1891 (binding loop at 708-717) | severity=MAJOR | confidence=4\n  PROBLEM: The skip gate can count a never-examined run as a binding drop, then clamp it away and treat the remaining runs as fully examined.\n  WHY: With WORKFLOW_HEAL_MAX_RUNS=2 and three refs, the third is dropped as run_not_in_source_repo, and the total is clamped to 2. If the first two are runner-lost with no summaries, the equality check skips the report even though the third run was never examined.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/workflow_failure_heal_intake.sh:1886-1890 | severity=MAJOR | confidence=4\n  PROBLEM: Capping RUNNER_LOST_EXAMINED_RUNS at MAX_RUNS makes the skip gate pass when a report claims more runs than the intake inspects, so the report is wrongly skipped with WORKFLOW_HEAL skip reason=runner_lost.\n  WHY: With MAX_RUNS=3 and four claimed runs, either all four bind and RUN_COUNT reaches 4, or a 4th is dropped at binding (workflow_failure_heal.py:3515-3517). In both cases the clamp forces the examined count to 3, equal to the lost count, and the unexamined run's failure is never filed.\n- TASK_GAP: scripts/workflow_failure_heal_intake.sh (RUNNER_LOST_EXAMINED_RUNS gate, lines 1874-1896) | severity=MAJOR | confidence=4\n  Requirement: PR description: \"When no other evidence remains, it skips the report with `WORKFLOW_HEAL skip reason=runner_lost`\", and the intake comment: \"A run dropped for any other reason (unverified, jobs unreadable) keeps the report on the normal path (fail-open towards filing).\"\n  Expected change site: scripts/workflow_failure_heal_intake.sh, the RUNNER_LOST_EXAMINED_RUNS gate (lines 1874-1896)\n  Evidence of absence: Both clamps at lines 1888 and 1890 remove the fail-open signal in the >MAX_RUNS cases, and no test covers a report claiming more than MAX_RUNS runs, since the new bind_dropped/loop_rejected cases use exactly 2 refs.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6050b2722d6270fbca7b4df63556d89da7510e1c61a4befa5394cd3440fc7f3f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9723,
+    "run_id": "44351714987",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44351714987",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118192132_ca5ef3dbd3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9723,
+    "run_id": "44351714987"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T19:21:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
