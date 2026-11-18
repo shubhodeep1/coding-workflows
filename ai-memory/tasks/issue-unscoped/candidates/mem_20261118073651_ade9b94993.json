@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_poll_test_sharding.py:4127-4135 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new test test_group_one_guarded_steps_match_its_pins asserts bidirectional equality between group-1 guarded steps and GROUP_PINNED_STEPS group-1 entries. The reviewer concluded the logic is correct and sound (NIT).\n  WHY: The reviewer states it does not fail at runtime. The severity is NIT, mapped to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml, selection of steps and their placement in the orchestrate-poll groups\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: .github/workflows/ci.yml:3811-3818 and 3920-3940 say the step timings could not be read, the picks are estimates, and group 0's headroom is unmeasured, changelog.d/9496-ci-hooks-merge-train-semble-preseed-to-poll.md says the same, so the diff does not establish that these are the slowest steps or that the destination groups have the most headroom (severity NIT per anthropic_claude-sonnet-5_5, MAJOR per minimax_minimax-m3 and openai_gpt-6-luna; highest is MAJOR)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, where the moved steps sit in `orchestrate-poll`\n  Evidence of absence: Workflow comments (ci.yml around 3811-3818 and 3920-3940) and the changelog fragment say the timings could not be read and the picks are estimates. The structural requirements are met. The post-merge budget-watch is the safety net.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_ci_poll_test_sharding.py:4127-4135 | severity=low | confidence=4\n  PROBLEM: The new test test_group_one_guarded_steps_match_its_pins asserts bidirectional equality between group-1 guarded steps and GROUP_PINNED_STEPS group-1 entries. The reviewer concluded the logic is correct (NIT).\n  WHY: The reviewer states it does not fail at runtime.\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml, the selection of which steps leave tests-hooks-and-orchestrator and which orchestrate-poll group absorbs them\n  Evidence of absence: ci.yml:3811-3818 and 3920-3940 say the timings could not be read and the picks are estimates, and changelog.d/9496-ci-hooks-merge-train-semble-preseed-to-poll.md:2 says the same. Prior editor rounds deferred this gap, and the post-merge budget-watch is the safety net.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n\nHARDENING_SUGGESTIONS: tests/test_ci_poll_test_sharding.py MovedHooks9496StepsContractTest.test_group_one_guarded_steps_match_its_pins (~line 4127): the guard string comparison does not check which context job-index belongs to. The reviewer suggests a normalized predicate, but notes that a sibling reviewer flagged this and the editor rejected it. (1-2 lines, HARDENING_RISK_SCORE: 1)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of steps and their placement in the `orchestrate-poll` groups.\n  Evidence of absence: `.github/workflows/ci.yml:3816-3818` says the timings could not be read, the selection is an estimate, and group 0's headroom is unmeasured. Lines 3923-3924 and 3935-3936 describe the group 1 placements as estimates.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b792789374514e4df708991772809b883b41f24fe08bab6505aaf3d2347e07cc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9515,
+    "run_id": "44242184775",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44242184775",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118073651_ade9b94993",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9515,
+    "run_id": "44242184775"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T07:36:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
