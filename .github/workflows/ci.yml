@@ -3021,6 +3021,8 @@ jobs:
             tests/test_retrigger_default_branch_dispatch.py
             tests/test_review_autofix_reasoning_schedule.py
             tests/test_review_autofix_sweep_merge_queued_skip.py
+            tests/test_review_gate_generated_chore_skip.py
+            tests/test_review_sweep_round_cap.py
             tests/test_review_commit_changelog_fragment_preserved.py
             tests/test_review_conflict_prepare_state_author.py
             tests/test_review_floor_rules.py
