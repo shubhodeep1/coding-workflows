@@ -152,7 +152,7 @@ jobs:
 
           mkdir -p scripts
           install -m 0755 "${src}" scripts/gh_helpers.sh
-          for helper in review_merge_train.sh label_helpers.sh; do
+          for helper in review_merge_train.sh label_helpers.sh pr_checks_lib.sh; do
             src=".codex-workflow-src/scripts/${helper}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${helper}" ]; then
               src=".codex-workflow-src-main/scripts/${helper}"
@@ -419,6 +419,9 @@ jobs:
           BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
           EVENT_NAME: ${{ github.event_name }}
           MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
+          MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
+          MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '240' }}
+          MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
           MERGE_TRAIN_MAX_OLDER_PRS: ${{ vars.MERGE_TRAIN_MAX_OLDER_PRS || '20' }}
           MERGE_TRAIN_CONFLICT_CHECK_ENABLED: ${{ vars.MERGE_TRAIN_CONFLICT_CHECK_ENABLED || 'true' }}
           MERGE_TRAIN_HEAD_MAX_AGE_HOURS: ${{ vars.MERGE_TRAIN_HEAD_MAX_AGE_HOURS || '6' }}

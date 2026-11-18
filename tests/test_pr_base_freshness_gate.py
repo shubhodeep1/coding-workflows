@@ -226,8 +226,10 @@ class Wiring(unittest.TestCase):
 		case_text = text[text.index("# END rb-judge merge error capture (#7659)") :]
 		sites = case_text.split('"${RB_MERGE_METHOD_FLAG:---squash}" --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}"')[:-1]
 		self.assertEqual(len(sites), 2)
+		# 1600: the merge-lease `lease_wait` branch (2026-11-17) sits between
+		# the post-wait gate and the merge call.
 		for site in sites:
-			self.assertIn("_pr_base_fresh_for_merge", site[-1200:])
+			self.assertIn("_pr_base_fresh_for_merge", site[-1600:])
 		# Each call to the retry helper follows its site's gate.
 		retry_calls = list(re.finditer(r"\|\| rb_judge_merge_retry_transient (?:auto|direct) (?:merge|terminal|sync); then", case_text))
 		self.assertEqual(len(retry_calls), 3)
