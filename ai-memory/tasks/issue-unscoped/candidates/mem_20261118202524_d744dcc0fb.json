@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:2748 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The closing clause \"set that variable to `0` as well\" is ambiguous. Its nearest referent is `SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS`, which only the literal `false` disables, but the intended variable is `ZOMBIE_RUN_MAX_QUEUED_HOURS`. The same clause is at agents.md:5187.\n  WHY: An operator who sets the wrong variable to `0` changes nothing, so the no-cutoff behaviour is not restored. Both reviewers rated it NIT.\n- README.md:2748 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The opening sentence (\"Past this age the run is treated as wedged ... and no longer blocks the sweep\") is unqualified. With the default `SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS=true`, a stale queued run that has jobs still blocks dispatch (`.github/workflows/review_autofix_sweep.yml:526-538`, logged `outcome=waiting_for_runner`).\n  WHY: An operator relying on the row expects dispatch after the age cutoff, but the sweep keeps suppressing it for runs with jobs. All reviewers rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- README.md:2748 | severity=low | confidence=4\n  PROBLEM: \"that variable\" has two possible referents. The nearest is `SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS`, but the intended one is `ZOMBIE_RUN_MAX_QUEUED_HOURS`. The workflow turns the jobs check off only for the literal `false` (.github/workflows/review_autofix_sweep.yml:526). The same wording is at agents.md:5187. The opening sentence also overstates that a run past the cutoff no longer blocks the sweep.\n  WHY: Reading \"that variable\" as the jobs check and setting it to `0` changes nothing, so a queued run older than 24h that has jobs keeps suppressing dispatch. The cost is wasted operator effort and no code path breaks. Reviewer severity: NIT.\n- HARDENING_SUGGESTIONS: replace \"set that variable to `0` as well\" with \"set `ZOMBIE_RUN_MAX_QUEUED_HOURS` to `0` as well\" in README.md:2748 and agents.md:5187 (about 2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- README.md:2748 | severity=low | confidence=5\n  PROBLEM: The opening sentence presents the age-only rule as the whole story. With the default `SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS=true`, a stale queued run that has jobs is added back to `active_review_runs` (`.github/workflows/review_autofix_sweep.yml:526-538`) and keeps suppressing dispatch. Only the closing clause qualifies this, and the last diff did not touch the opening sentence.\n  WHY: An operator who sets `SWEEP_STALE_QUEUED_MINUTES=0` expecting no cutoff is surprised that a 25h queued run with jobs still suppresses dispatch. agents.md:5226 words this correctly. Reviewer severity: NIT.\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- README.md:2748 | severity=low | confidence=5\n  PROBLEM: The row says a run past `SWEEP_STALE_QUEUED_MINUTES` is treated as wedged and no longer blocks the sweep, but the default `SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS` check keeps a stale run with jobs active.\n  WHY: An operator may expect dispatch after the age cutoff, while the workflow keeps suppressing it when the run has jobs. Reviewer severity: NIT.\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- README.md:2748 | severity=low | confidence=4\n  PROBLEM: The rewritten row keeps two ambiguities. (1) \"set that variable to `0` as well\" has `SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS` as its nearest antecedent, but that variable is disabled only by the literal `false` (README.md:2750). The intended referent is `ZOMBIE_RUN_MAX_QUEUED_HOURS`, and the same clause is at agents.md:5187. (2) The opening sentence is unqualified, while under the default jobs check a stale run with jobs is logged `outcome=waiting_for_runner` and keeps suppressing dispatch (review_autofix_sweep.yml:536).\n  WHY: Following either sentence leaves dispatch suppressed, or the floor enabled, while the operator believes the previous no-cutoff behaviour was restored. Reviewer severity: NIT.\n- HARDENING_SUGGESTIONS: in README.md:2748 write \"...set `ZOMBIE_RUN_MAX_QUEUED_HOURS` to `0` as well...\", and mirror the change in agents.md:5187 (about 2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "dd5f634254b50ca6929a0ebe1f8cb1e2a9a749d5f735558c9cee4c9c809a6e42",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9711,
+    "run_id": "44366177636",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44366177636",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118202524_d744dcc0fb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9711,
+    "run_id": "44366177636"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T20:25:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
