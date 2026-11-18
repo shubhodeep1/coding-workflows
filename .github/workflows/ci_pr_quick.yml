@@ -32,6 +32,8 @@ permissions:
   pull-requests: write
   issues: write
   actions: write
+  # final-ci-failed reads check-run annotations (classify-run).
+  checks: read
 
 jobs:
   quick:
