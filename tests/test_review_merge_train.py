@@ -56,6 +56,12 @@ for ((i=0; i<${#args[@]}; i++)); do
   if [ "${args[$i]}" = "--jq" ]; then jqf="${args[$((i+1))]}"; fi
 done
 path="${endpoint%%\?*}"
+# Merge lease refs (scripts/pr_checks_lib.sh): none exist unless a fixture
+# provides lease_refs.json, as on a repository that never used the lease.
+if [ "${method}" = "GET" ] && [[ "${path}" == repos/*/git/matching-refs/* ]]; then
+  if [ -f "${FAKE_GH_DIR}/lease_refs.json" ]; then cat "${FAKE_GH_DIR}/lease_refs.json"; else printf '[]'; fi
+  exit 0
+fi
 # actions/runs is served like the REST listing: filtered by the status query
 # parameter and by a URL-encoded created=<=<timestamp> bound (runs without a
 # created_at never match a bound), paged by page/per_page, with total_count
