@@ -7,6 +7,8 @@ Pins the switch-over:
     check-runs are `quick / <job>`;
   * in quick mode only `static-checks` can run: every other ci.yml job, the
     `lint` aggregate included, is skipped by `if:`;
+  * static-checks also runs the inventory parity gate, so it fails on every
+    PR push instead of only in the final CI run;
   * internal-review.yml passes final_ci_workflow: ci.yml, and the review
     sweep's safety net names the same file.
 """
@@ -83,6 +85,17 @@ def test_only_static_checks_can_run_in_quick_mode() -> None:
 			assert "github.event_name == 'workflow_dispatch'" in condition
 		else:
 			assert "inputs.mode != 'quick'" in condition, job_id
+
+
+def test_static_checks_runs_inventory_parity() -> None:
+	steps = _load("ci.yml")["jobs"]["static-checks"]["steps"]
+	names = [s.get("name") for s in steps]
+	matches = [i for i, s in enumerate(steps) if "tests/inventory_parity.py" in str(s.get("run", ""))]
+	assert matches, "static-checks has no step running tests/inventory_parity.py"
+	index = matches[0]
+	assert steps[index]["name"] == "Inventory parity (quick)"
+	assert "if" not in steps[index]
+	assert index > names.index("CI test wiring guard")
 
 
 def test_review_and_sweep_name_the_same_final_ci_workflow() -> None:
