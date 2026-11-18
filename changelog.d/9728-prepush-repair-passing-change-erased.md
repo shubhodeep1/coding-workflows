@@ -1,0 +1,4 @@
+<!-- changelog: fixed -->
+- **The review pre-push gate no longer lets a done-check repair erase the PR's whole change.** When a repair turn leaves no change at all while the gate found no failure caused by the PR, the repair is reverted and the editor's change is kept.
+
+PR #9562 failed the pre-push gate three times in a row on the same failure (implement run 43776508765 and review runs 43810110302 and 44256491415 all ended at `pr_caused=3`, failure_key `4f1dfe05c95c`), and the repair loop had no record of what each repair turn left behind. `review_prepush_test_gate_repair` now restores the pre-repair tree when a turn with `pr_caused=0` (done-check targets only) empties the change list, logging `outcome=repair_reverted reason=passing_change_erased`, and logs one `outcome=repair_diff before=<N> after=<N> paths=<first 10, sanitised>` line per editor turn. Existing outcomes, including the lint-only guard and PR-caused repairs, are unchanged.
