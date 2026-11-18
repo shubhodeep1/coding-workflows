@@ -612,6 +612,7 @@ FAKE_GH_STALE_FUNC = """gh() {
     case "${FAKE_GH_DELETE_MODE:-ok}" in
       ok) return 0 ;;
       404) echo "gh: Not Found (HTTP 404)" >&2; return 1 ;;
+      notfound) echo "gh: not found (AI_COMMENT_SIG shim)" >&2; return 127 ;;
       *) echo "gh: Server Error (HTTP 500)" >&2; return 1 ;;
     esac
   fi
@@ -717,9 +718,15 @@ def test_stale_clear_keeps_label_for_untrusted_cap_author(tmp_path: Path) -> Non
 	assert result.returncode == 0, result.stderr
 	assert lines == [_stale_line("kept", "untrusted_cap_author", cap_head=OTHER_HEAD, cap_support=SUPPORT)], result.stdout
 	assert _user_calls(calls) == 1 and _delete_calls(calls) == 0
-	# The newest marker wins; a newer forged one keeps the label (fails closed).
+	# The newest trusted marker wins: a newer marker from another author does
+	# not shadow the older trusted stale one.
 	_, lines, calls = _run_stale_clear(tmp_path, [_cap_comment(comment_id=20), _cap_comment(comment_id=30, author="intruder")])
-	assert lines[0].split(" ")[2:4] == ["outcome=kept", "reason=untrusted_cap_author"] and _delete_calls(calls) == 0
+	assert lines == [_stale_line("removed", "cap_head_mismatch", cap_head=OTHER_HEAD, cap_support=SUPPORT)]
+	assert _user_calls(calls) == 1 and _delete_calls(calls) == 1
+	# A newer stale forged marker cannot remove a label the trusted marker holds.
+	_, lines, calls = _run_stale_clear(tmp_path, [_cap_comment(head=HEAD, comment_id=20), _cap_comment(comment_id=30, author="intruder")])
+	assert lines == [_stale_line("kept", "same_head_same_support", cap_head=HEAD, cap_support=SUPPORT)]
+	assert _user_calls(calls) == 1 and _delete_calls(calls) == 0
 	# Without a trusted login nothing is removed.
 	_, lines, calls = _run_stale_clear(tmp_path, [_cap_comment()], user_login="")
 	assert lines[0].split(" ")[2:4] == ["outcome=kept", "reason=marker_author_unavailable"] and _delete_calls(calls) == 0
@@ -735,6 +742,9 @@ def test_stale_clear_delete_failure_logs_error_and_exits_zero(tmp_path: Path) ->
 	# A 404 means the label is already gone.
 	result, lines, _ = _run_stale_clear(tmp_path, [_cap_comment()], delete_mode="404")
 	assert result.returncode == 0 and lines == [_stale_line("removed", "cap_head_mismatch", cap_head=OTHER_HEAD, cap_support=SUPPORT)]
+	# Other "not found" text without HTTP 404 is a failure, not "already gone".
+	result, lines, _ = _run_stale_clear(tmp_path, [_cap_comment()], delete_mode="notfound")
+	assert result.returncode == 0 and lines == [_stale_line("error", "delete_failed", cap_head=OTHER_HEAD, cap_support=SUPPORT)]
 
 
 def test_stale_clear_keeps_label_when_absent_or_from_another_path(tmp_path: Path) -> None:

@@ -345,18 +345,46 @@ review_blocked_stale_clear_log()
   echo "REVIEW_BLOCKED_STALE_CLEAR pr=${rb_stale_pr_log} outcome=$1 reason=$2 cap_head=${rb_stale_cap_head_log} cap_support=${rb_stale_cap_support_log} clean_head=${rb_stale_clean_head} clean_support=${rb_stale_clean_support}"
 }
 
+# Classifies one cap-marker row against the clean head / support. Prints
+# cap_head_mismatch or cap_support_mismatch when the marker is stale and
+# labelled the PR itself, else same_head_same_support or cap_not_pr_label.
+# Reads the caller's rb_stale_clean_* locals. A cap with no support= counts as
+# a different support only when the clean support is a SHA (the cap job's own
+# matching rule).
+review_blocked_stale_clear_row_reason()
+{
+  local rb_row_head="$1" rb_row_support="$2" rb_row_pr_label="$3" rb_row_stale=""
+  if [ "${rb_row_head}" != "${rb_stale_clean_head}" ]; then
+    rb_row_stale="cap_head_mismatch"
+  elif [[ "${rb_stale_clean_support}" =~ ^[0-9a-f]{40}$ ]] && [ "${rb_row_support}" != "${rb_stale_clean_support}" ]; then
+    rb_row_stale="cap_support_mismatch"
+  else
+    echo "same_head_same_support"
+    return 0
+  fi
+  # With a linked issue the cap labels the issue, never the PR, so a PR label
+  # next to such a marker came from another path: leave it.
+  if [ "${rb_row_pr_label}" != "true" ]; then
+    echo "cap_not_pr_label"
+    return 0
+  fi
+  echo "${rb_row_stale}"
+}
+
 review_blocked_stale_clear_after_clean()
 {
   local rb_stale_pr="${PR_NUMBER:-}" rb_stale_repo="${AUTOFIX_STEP_REPOSITORY:-}"
   local rb_stale_pr_log="unknown" rb_stale_cap_head_log="none" rb_stale_cap_support_log="none"
   local rb_stale_clean_head="${clean_marker_head:-unknown}" rb_stale_clean_support="${clean_marker_support:-none}"
   local rb_stale_labels="" rb_stale_comments_raw="" rb_stale_selected="" rb_stale_reason=""
-  local rb_stale_cap_login="" rb_stale_cap_head="" rb_stale_cap_support="" rb_stale_cap_pr_label=""
+  local rb_stale_cap_head="" rb_stale_cap_support="" rb_stale_cap_pr_label=""
   local rb_stale_login="" rb_stale_del_err="" rb_stale_del_first=""
-  # Selects the newest (highest id) comment with an own-line cap marker, the
-  # same own-line shape the cap job matches; output is one row of
-# unit-separator (0x1f) joined fields, or nothing. A whitespace IFS such as
-# tab would collapse an empty login or support field.
+  local rb_stale_row="" rb_stale_row_login="" rb_stale_row_head="" rb_stale_row_support="" rb_stale_row_pr_label=""
+  local rb_stale_row_reason="" rb_stale_any_removable="" rb_stale_trusted_row=""
+  # Lists every comment with an own-line cap marker, the same own-line shape
+  # the cap job matches, newest (highest id) first; output is one row per
+  # marker comment of unit-separator (0x1f) joined fields, or nothing. A
+  # whitespace IFS such as tab would collapse an empty login or support field.
   # shellcheck disable=SC2016
   local rb_stale_select_jq='if type != "array" then error("not an array") else
     [ .[] | select(type == "object") | (.body // "" | tostring) as $b
@@ -367,7 +395,7 @@ review_blocked_stale_clear_after_clean()
           head: $m[-1].h,
           support: ($m[-1].f | split(" ") | map(select(startswith("support="))) | last // "" | ltrimstr("support=") | gsub("[[:cntrl:]]"; "")),
           pr_label: ($b | contains("this pull request (no linked issue found)")) } ]
-    | sort_by(.id) | last // empty | [.login, .head, .support, (.pr_label | tostring)] | join("\u001f") end'
+    | sort_by(.id) | reverse | .[] | [.login, .head, .support, (.pr_label | tostring)] | join("\u001f") end'
 
   [[ "${rb_stale_pr}" =~ ^[0-9]+$ ]] && rb_stale_pr_log="${rb_stale_pr}"
   if ! [[ "${rb_stale_pr}" =~ ^[0-9]+$ ]]; then
@@ -394,7 +422,7 @@ review_blocked_stale_clear_after_clean()
     return 0
   fi
 
-  # 2. Newest own-line cap marker, from the snapshot or one fallback read.
+  # 2. Own-line cap markers, from the snapshot or one fallback read.
   if [ -n "${PR_ISSUE_COMMENTS_FILE:-}" ] && [ -r "${PR_ISSUE_COMMENTS_FILE}" ] \
     && rb_stale_selected="$(jq -r "${rb_stale_select_jq}" "${PR_ISSUE_COMMENTS_FILE}" 2>/dev/null)"; then
     :
@@ -405,40 +433,38 @@ review_blocked_stale_clear_after_clean()
     review_blocked_stale_clear_log kept snapshot_unavailable
     return 0
   fi
-  rb_stale_selected="$(printf '%s\n' "${rb_stale_selected}" | head -n 1)"
+  rb_stale_selected="$(printf '%s\n' "${rb_stale_selected}" | grep -v '^$' || true)"
   if [ -z "${rb_stale_selected}" ]; then
     review_blocked_stale_clear_log kept no_cap_marker
     return 0
   fi
-  IFS=$'\x1f' read -r rb_stale_cap_login rb_stale_cap_head rb_stale_cap_support rb_stale_cap_pr_label <<< "${rb_stale_selected}" || true
+  # The log reports the newest marker until a trusted one is selected.
+  IFS=$'\x1f' read -r _ rb_stale_cap_head rb_stale_cap_support rb_stale_cap_pr_label <<< "$(printf '%s\n' "${rb_stale_selected}" | head -n 1)" || true
   rb_stale_cap_support="$(printf '%s' "${rb_stale_cap_support}" | tr 'A-F' 'a-f')"
   [[ "${rb_stale_cap_head}" =~ ^[0-9a-f]{40}$ ]] && rb_stale_cap_head_log="${rb_stale_cap_head}"
   [[ "${rb_stale_cap_support}" =~ ^[0-9a-f]{40}$ ]] && rb_stale_cap_support_log="${rb_stale_cap_support}"
 
-  # 3. Stale? A cap with no support= counts as a different support only when
-  # the clean support is a SHA (the cap job's own matching rule).
-  if [ "${rb_stale_cap_head}" != "${rb_stale_clean_head}" ]; then
-    rb_stale_reason="cap_head_mismatch"
-  elif [[ "${rb_stale_clean_support}" =~ ^[0-9a-f]{40}$ ]] && [ "${rb_stale_cap_support}" != "${rb_stale_clean_support}" ]; then
-    rb_stale_reason="cap_support_mismatch"
-  else
-    review_blocked_stale_clear_log kept same_head_same_support
+  # 3. When no marker from any author is stale and labelled the PR, nothing
+  # can be removed whoever is trusted: keep the label with the newest marker's
+  # reason and skip the trust lookup (no new call off the stale path).
+  while IFS=$'\x1f' read -r rb_stale_row_login rb_stale_row_head rb_stale_row_support rb_stale_row_pr_label; do
+    rb_stale_row_support="$(printf '%s' "${rb_stale_row_support}" | tr 'A-F' 'a-f')"
+    rb_stale_row_reason="$(review_blocked_stale_clear_row_reason "${rb_stale_row_head}" "${rb_stale_row_support}" "${rb_stale_row_pr_label}")"
+    case "${rb_stale_row_reason}" in
+      cap_head_mismatch|cap_support_mismatch) rb_stale_any_removable="true"; break ;;
+    esac
+  done <<< "${rb_stale_selected}"
+  if [ "${rb_stale_any_removable}" != "true" ]; then
+    review_blocked_stale_clear_log kept "$(review_blocked_stale_clear_row_reason "${rb_stale_cap_head}" "${rb_stale_cap_support}" "${rb_stale_cap_pr_label}")"
     return 0
   fi
 
-  # 4. With a linked issue the cap labels the issue, never the PR, so a PR
-  # label next to such a marker came from another path: leave it.
-  if [ "${rb_stale_cap_pr_label}" != "true" ]; then
-    review_blocked_stale_clear_log kept cap_not_pr_label
-    return 0
-  fi
-
-  # 5. Trusted author. The PR payload and comments in the metadata snapshot
+  # 4. Trusted author. The PR payload and comments in the metadata snapshot
   # (and their fallback reads above) do not expose the identity authenticated
   # by GH_PAT, so this lookup cannot be merged into an existing call (§14). It
-  # runs once, only on this stale path (same lookup as the gate in
+  # runs once, only when some marker is stale (same lookup as the gate in
   # review_autofix_step_evaluate_gate.sh).
-  if ! rb_stale_login="$(gh api user --jq '.login // ""' 2>/dev/null)"; then
+  if ! rb_stale_login="$(GH_RETRY_IDEMPOTENT=true gh_retry gh api user --jq '.login // ""' 2>/dev/null)"; then
     rb_stale_login=""
   fi
   rb_stale_login="$(printf '%s' "${rb_stale_login}" | head -n 1 | tr -d '\r')"
@@ -446,10 +472,35 @@ review_blocked_stale_clear_after_clean()
     review_blocked_stale_clear_log kept marker_author_unavailable
     return 0
   fi
-  if [ -z "${rb_stale_cap_login}" ] || [ "${rb_stale_cap_login,,}" != "${rb_stale_login,,}" ]; then
+  # The newest trusted marker decides (trust first, then newest, as the cap
+  # job and the evaluate gate match markers), so a newer marker from another
+  # author cannot shadow the trusted one.
+  while IFS= read -r rb_stale_row; do
+    IFS=$'\x1f' read -r rb_stale_row_login _ <<< "${rb_stale_row}" || true
+    if [ -n "${rb_stale_row_login}" ] && [ "${rb_stale_row_login,,}" = "${rb_stale_login,,}" ]; then
+      rb_stale_trusted_row="${rb_stale_row}"
+      break
+    fi
+  done <<< "${rb_stale_selected}"
+  if [ -z "${rb_stale_trusted_row}" ]; then
     review_blocked_stale_clear_log kept untrusted_cap_author
     return 0
   fi
+  IFS=$'\x1f' read -r _ rb_stale_cap_head rb_stale_cap_support rb_stale_cap_pr_label <<< "${rb_stale_trusted_row}" || true
+  rb_stale_cap_support="$(printf '%s' "${rb_stale_cap_support}" | tr 'A-F' 'a-f')"
+  rb_stale_cap_head_log="none" rb_stale_cap_support_log="none"
+  [[ "${rb_stale_cap_head}" =~ ^[0-9a-f]{40}$ ]] && rb_stale_cap_head_log="${rb_stale_cap_head}"
+  [[ "${rb_stale_cap_support}" =~ ^[0-9a-f]{40}$ ]] && rb_stale_cap_support_log="${rb_stale_cap_support}"
+
+  # 5. Is the newest trusted marker stale and did it label this PR?
+  rb_stale_reason="$(review_blocked_stale_clear_row_reason "${rb_stale_cap_head}" "${rb_stale_cap_support}" "${rb_stale_cap_pr_label}")"
+  case "${rb_stale_reason}" in
+    cap_head_mismatch|cap_support_mismatch) ;;
+    *)
+      review_blocked_stale_clear_log kept "${rb_stale_reason}"
+      return 0
+      ;;
+  esac
 
   # 6. Remove the label from the PR only. A 404 means it is already gone.
   if rb_stale_del_err="$(GH_RETRY_IDEMPOTENT=true gh_retry gh api -X DELETE \
@@ -457,7 +508,7 @@ review_blocked_stale_clear_after_clean()
     review_blocked_stale_clear_log removed "${rb_stale_reason}"
     return 0
   fi
-  if printf '%s' "${rb_stale_del_err}" | grep -qiE 'HTTP 404|Not Found'; then
+  if printf '%s' "${rb_stale_del_err}" | grep -qE 'HTTP 404'; then
     review_blocked_stale_clear_log removed "${rb_stale_reason}"
     return 0
   fi
