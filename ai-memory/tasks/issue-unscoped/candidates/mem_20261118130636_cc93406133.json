@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Fold the readiness check and the PR-body lint into one PR checks job\"\n  expected_change_site: .github/workflows/pr-checks.yml\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The readiness steps use `continue-on-error: true`, so their failures are silently ignored and the job summary does not reflect them (reported as SEVERITY: NIT). Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) reviewed this item and judged it intended, documented design, not a gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: \"Fold the readiness check and the PR-body lint into one PR checks job\"\n  Expected change site: .github/workflows/pr-checks.yml\n  Evidence of absence: The folded job uses `continue-on-error: true` for the readiness check steps, meaning failures (e.g., Python environment issues or network failures reading the tracking issue) are silently ignored. The PR description and plan imply a unified check that maintains readiness visibility, but the job summary does not reflect readiness failures after they occur, risking silent integration-PR unreadiness.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "952354635d339c4797b673adbb629c5e7e10873a3793bcd86b624966ec71cbf8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9698,
+    "run_id": "44290211411",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44290211411",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118130636_cc93406133",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9698,
+    "run_id": "44290211411"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T13:06:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
