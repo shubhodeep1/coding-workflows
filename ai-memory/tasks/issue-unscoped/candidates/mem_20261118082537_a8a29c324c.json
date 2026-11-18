@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:152-155 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The second CONSIST-001 comment says \"gh_retry wraps only the comments, identity, item-metadata, item re-check and cited-run reads\". The new chain-title read at line 1807 is a sixth wrapped read, and this comment was not updated.\n  WHY: There is no runtime failure. The comment is stale and contradicts the updated top comment at lines 111-114, which will mislead maintainers. All reviewers rated it NIT.\n- tests/test_unblock_judge.py:1527 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The docstring of test_only_the_listed_reads_are_wrapped_in_gh_retry says \"the five wrapped reads\", but the script now has six gh_retry-wrapped reads.\n  WHY: The test still passes, so only the docstring and allow-list are stale. All reviewers rated it NIT.\n- scripts/unblock_judge.sh:1808 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The chain-title fallback logs `reason=read_failed` whenever chain_title is empty. That conflates a failed API read with a successful read of an issue whose title is empty.\n  WHY: Operators cannot tell why chain_depth fell back to 0, though nothing fails at runtime. Rated NIT.\n- README.md:4159-4177 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The README.md edit documenting the chain depth cap is missing from the pre-push test gate allowlist, so test_files_touched_scope_guard.py fails.\n  WHY: The reviewer says the CI test gate blocks merge on the undeclared file modification. Rated BLOCKER. z-ai_glm-5_3-flash disputed this: CI check-runs on the same head SHA show 0 failures. anthropic_claude-sonnet-5_5 could not confirm it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/unblock_judge.sh:152-155 | severity=low | confidence=3\n  PROBLEM: The \"wraps only\" comment is stale. The sixth gh_retry read (the chain-title GET in unblock_main) was added, and the test's five-read allow-list is unchanged.\n  WHY: There is no runtime failure. Only the comment and the test docstring at tests/test_unblock_judge.py:1527 are out of date.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- README.md:4159-4177 | severity=critical | confidence=5\n  PROBLEM: The README.md edit documenting the chain depth cap is missing from the pre-push test gate allowlist, so test_files_touched_scope_guard.py fails.\n  WHY: The CI test gate blocks merge because of the undeclared file modification. Rated BLOCKER. It was reported under TASK COMPLETENESS / INTENT GAPS in the standard issue shape.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/unblock_judge.sh:152-154 | severity=low | confidence=5\n  PROBLEM: The secondary CONSIST-001 block still lists five wrapped reads, but the chain-title GET at line 1807 is the sixth.\n  WHY: It is a static comment only and does not fail at runtime. It is stale relative to the line 114 comment, and CI does not catch the drift.\n- tests/test_unblock_judge.py:1527 | severity=low | confidence=5\n  PROBLEM: The docstring says \"the five wrapped reads\", but the script now has six.\n  WHY: The test still passes because it iterates over exactly five patterns. Only the docstring is misleading.\n- scripts/unblock_judge.sh:1808 | severity=low | confidence=4\n  PROBLEM: `reason=read_failed` is logged whenever chain_title is empty, conflating an API failure with a legitimately empty title.\n  WHY: Only the quality of the log line is affected, and operators cannot distinguish the two cases.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/unblock_judge.sh:153-155 | severity=low | confidence=4\n  PROBLEM: The last run updated the top CONSIST-001 comment (lines 111-112) but left the second block stale. The chain-title read at line 1807 is now a sixth wrapped read. The same staleness is in the test docstring at tests/test_unblock_judge.py:1527.\n  WHY: There is no runtime failure. The two in-file comment blocks now contradict each other and will mislead future editors.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2f4879753ee1e1b328a2c48206e816cc7f0aca14f83bdd7c992f2b8295142751",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9685,
+    "run_id": "44248615249",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44248615249",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118082537_a8a29c324c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9685,
+    "run_id": "44248615249"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T08:25:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
