@@ -29,6 +29,15 @@
 # for a head whose gate is success, `_pr_ensure_final_ci` (one head-SHA runs
 # read, at most one dispatch). orchestrator/project-* heads are skipped:
 # their push CI run already covers them.
+# Snapshot rows that carry `head_gate_state` (written by
+# scripts/review_sweep_head_gate.sh in the enumerate step, one GraphQL read
+# per 100 PRs) need no status read: a known non-success head is counted as
+# gate_not_success without spending the cap, and known-success heads are
+# checked first. Before this, the cap went to gate-pending heads in PR order
+# and starved approved heads further down (2026-11-17 08:30: candidates=42
+# checked=10 gate_not_success=10 ensured=0). Rows without the field (the
+# GraphQL read failed) are read one by one after the known-success heads, as
+# before.
 # Fail-open: a failed listing or status read skips that PR this tick.
 # Logs: one `REVIEW_FINAL_CI_SWEEP outcome=... ` summary line, plus the
 # helper's `REVIEW_FINAL_CI` lines.
@@ -251,7 +260,7 @@ review_final_ci_sweep_base_sync()
 
 review_final_ci_sweep_main()
 {
-	local helpers_dir wf max listing candidates count checked=0 ensured=0 skipped_gate=0 number sha ref state
+	local helpers_dir wf max listing candidates count checked=0 ensured=0 skipped_gate=0 number sha ref state known_state
 	local base_sync_switch base_sync_queue="" failed_candidates base_sync_checked=0 failed_at
 	wf="${REVIEW_FINAL_CI_WORKFLOW:-}"
 	if [ -z "${wf}" ]; then
@@ -299,16 +308,27 @@ review_final_ci_sweep_main()
 			| select(((.number | tostring) | test("^[1-9][0-9]*$")) and ((.head_sha // "") | test("^[0-9a-f]{40}$")))
 			| select(((.head_ref // "") | startswith("orchestrator/project-")) | not)
 			| select($filter == "" or ((.head_ref // "") | contains($filter)))
-			| select(.head_sha as $s | ($covered | index($s)) == null)]
-		| .[] | "\(.number) \(.head_sha) \(.head_ref // "")"' "${FINAL_CI_SWEEP_PR_SNAPSHOT}" 2>/dev/null || true)"
+			| select(.head_sha as $s | ($covered | index($s)) == null)
+			| . + {known_gate: (.head_gate_state // "unknown" | if type == "string" and test("^[a-z]{1,16}$") then . else "unknown" end)}]
+		| (map(select(.known_gate == "success")) + map(select(.known_gate != "success")))
+		| .[] | "\(.number) \(.head_sha) \(.known_gate) \(.head_ref // "")"' "${FINAL_CI_SWEEP_PR_SNAPSHOT}" 2>/dev/null || true)"
 	count=0
 	[ -n "${candidates}" ] && count="$(printf '%s\n' "${candidates}" | grep -c .)"
-	while read -r number sha ref; do
+	while read -r number sha known_state ref; do
 		[ -n "${number:-}" ] || continue
-		[ "${checked}" -lt "${max}" ] || break
+		# Known from the snapshot and not success: no read, no cap spent.
+		if [ "${known_state:-unknown}" != "unknown" ] && [ "${known_state}" != "success" ]; then
+			skipped_gate=$((skipped_gate + 1))
+			continue
+		fi
+		[ "${checked}" -lt "${max}" ] || continue
 		checked=$((checked + 1))
-		state="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/commits/${sha}/status" \
-			--jq '[.statuses[]? | select(.context == "ai-review/head-gate") | .state] | first // "absent"' 2>/dev/null || echo "unknown")"
+		if [ "${known_state}" = "success" ]; then
+			state="success"
+		else
+			state="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/commits/${sha}/status" \
+				--jq '[.statuses[]? | select(.context == "ai-review/head-gate") | .state] | first // "absent"' 2>/dev/null || echo "unknown")"
+		fi
 		if [ "${state}" != "success" ]; then
 			skipped_gate=$((skipped_gate + 1))
 			continue

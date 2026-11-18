@@ -19,6 +19,9 @@
 # that error-level CI step does not fail on.
 
 set -euo pipefail
+# Signed job-token comments (run-volume plan item 15): route this script's
+# gh comment calls through the shim even when no earlier step loaded it.
+[ -z "${BASH_SOURCE[0]:-}" ] || AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" >/dev/null 2>&1 || true
 
 # --- ORCH_POLL_CYCLE_SUMMARY helpers (begin) ---
 # Per-cycle timing summary (analysis/workflow-optimization-2026-10-08.md,
@@ -26687,7 +26690,9 @@ STALL_EOF
           merge_base_ref="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .base.ref?) then .base.ref else empty end' 2>/dev/null | tail -n1)"
           # One observed head feeds the checks, the freshness gate and the
           # bound merge (two-argument checks call keeps the legacy
-          # block-on-any filter).
+          # block-on-any filter). Reset so a merge-lease wait below is read
+          # from this PR's gate, never from an earlier PR's.
+          PR_BASE_FRESHNESS_OUTCOME=""
           if [ "${merge_state}" = "open" ] && [ "${merge_mergeable}" = "true" ] \
             && [[ "${merge_head_sha}" =~ ^[0-9a-f]{40}$ ]] \
             && _pr_checks_completed "${merge_pr}" "${merge_head_sha}" \
@@ -26706,6 +26711,12 @@ STALL_EOF
             STALL_RECOVERY_SHOULD_INCREMENT="true"
             took_action="true"
           fi
+        elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+          # Waiting for the merge lease (scripts/pr_checks_lib.sh) is not a
+          # failed merge: the lease tick re-dispatches the PR when the lease
+          # is granted, so the recovery budget is not spent.
+          echo "  [standalone-stall] Issue #${issue_num}: PR #${merge_pr} waits for the merge lease (PR #${MERGE_LEASE_BLOCKER:-?}); not counting a recovery attempt."
+          STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_skipped_merge_lease_wait"
         else
           tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted merge retry for ready-to-merge issue (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "DEBUG"
           STALL_RECOVERY_SHOULD_INCREMENT="true"
