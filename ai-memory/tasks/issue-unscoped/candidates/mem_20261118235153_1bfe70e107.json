@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:5534 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: PRIOR_PR_BASELINE_BRANCH is keyed only on steps.baseline_refctx.outputs.branch, so the remediation guard is skipped even when checkout_baseline failed (continue-on-error) and the run fell back to the default ref.\n  WHY: A remediation issue with only docs/tests/fragments staged gets a PR opened, which is the failure this PR exists to stop. Reviewer labelled it MAJOR.\n- scripts/workflow_failure_heal_report.sh:185-196 | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The remediation_no_code_park jq filter requires the comment author to be the reporter's login and the marker to be the last non-empty line. With AI_COMMENT_SIGNING_SECRET set, the signing shim posts the comment as github-actions[bot] with a signature line after the marker.\n  WHY: The skip does not trigger in that supported configuration, so a heal is dispatched for the deliberately parked remediation. Reviewer labelled it MAJOR.\n- scripts/files_touched_scope_guard.py:559-601 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: _REMEDIATION_MARKER_LINE_RE (line 601) accepts the no-space marker form that _AUTO_HEAL_REMEDIATION_RE (line 559) rejects.\n  WHY: The new guard can park an issue that the companion rules do not classify as a remediation. The direction is fail-safe, and the reviewers labelled it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/files_touched_scope_guard.py:601 | severity=NIT | confidence=3\n  PROBLEM: _REMEDIATION_MARKER_LINE_RE accepts markers that the companion rule _AUTO_HEAL_REMEDIATION_RE rejects.\n  WHY: An issue body carrying \"<!-- auto-heal-remediation:v1>\" without the trailing space is treated as a remediation by the new guard but not by the companion rule. This can park issues that are not remediations by the rest of the pipeline's definition.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/implement.yml:5534 | severity=MAJOR | confidence=4\n  PROBLEM: PRIOR_PR_BASELINE_BRANCH is keyed only on steps.baseline_refctx.outputs.branch, so the guard is skipped (outcome=allow reason=prior_pr_baseline) even when checkout_baseline failed and the run fell back to the default ref.\n  WHY: A remediation issue with only docs/tests/fragments staged gets a PR opened, which is the 2026-11 audit failure this PR exists to stop. Suggested fix: gate on steps.checkout_baseline.outcome == 'success'.\n- scripts/workflow_failure_heal_report.sh:185-196 | severity=MAJOR | confidence=3\n  PROBLEM: The remediation_no_code_park jq filter requires the author to be the reporter's login and the marker to be the last non-empty line. With AI_COMMENT_SIGNING_SECRET set, the signing shim posts the comment as github-actions[bot] with a signature line after the marker.\n  WHY: The skip does not trigger, so a heal is dispatched for the deliberately parked remediation. A correct fix needs signature-aware matching.\n- HARDENING scripts/implement_handle_guard_block.sh:266-271 | risk=1\n  PROBLEM: The failed-post warning discards gh's stderr, so the log does not show why the post failed.\n  WHY: Capture and truncate stderr in the warning, keeping a single attempt and exit status 0.\n- HARDENING scripts/implement_handle_guard_block.sh:280-285,333-335 | risk=2\n  PROBLEM: SCOPE_COMMENT_POSTED_BEFORE_LABEL=true is set unconditionally after the first post, so a failed post is never retried and the reason=remediation-no-code marker never exists.\n  WHY: Set the flag only on a successful post so the post-label block can retry. A retry after a failed post cannot duplicate a comment.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/files_touched_scope_guard.py:559-601 | severity=NIT | confidence=3\n  PROBLEM: _REMEDIATION_MARKER_LINE_RE (line 601) and _AUTO_HEAL_REMEDIATION_RE (line 559) disagree on the no-space form `<!-- auto-heal-remediation:v1-->`. is_auto_heal_remediation_body returns True for it, while auto_heal_companions_allowed (line 588) returns False.\n  WHY: The guard can block an issue that the companion rules do not classify as a remediation. The direction is fail-safe (over-blocks), so severity is low.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7c4b530e1a6e9f1c974794b25fe6cb79be5340cf1929131ba6b8623d4ee7d56b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9699,
+    "run_id": "44391860069",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44391860069",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118235153_1bfe70e107",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9699,
+    "run_id": "44391860069"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T23:51:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
