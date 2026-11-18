@@ -488,3 +488,32 @@ def test_build_self_fix_body_stays_valid_json_when_every_field_is_at_its_limit(t
 	assert len(body["inputs"]["diagnosis"].encode("utf-8")) <= at.DIAGNOSIS_MAX_BYTES
 	parsed = json.loads(body["inputs"]["diagnosis"])
 	assert parsed["fingerprint"] == fp and parsed["summary"] == "s" * 2000
+
+
+@pytest.mark.parametrize("alias", ["scripts/./ai_engine.sh", "./scripts/ai_engine.sh", "scripts//ai_engine.sh"])
+def test_file_aliases_are_canonicalised_before_the_host_pipeline_check(alias: str) -> None:
+	out = at.validate_diagnosis(_reply(files=[alias]), "b" * 64)
+	assert out["files"] == ["scripts/ai_engine.sh"]
+	decision = at.decide_group(_group(), {"classification": "healable", "files": out["files"]}, "ok", self_files=SELF_FILES, self_fix_enabled=True, self_fix_present=True)
+	assert (decision["classification"], decision["route"]) == ("pipeline_blocked", "self_fix_dispatch")
+
+
+def test_a_path_of_only_dot_components_is_rejected() -> None:
+	with pytest.raises(at.TriageError):
+		at.validate_diagnosis(_reply(files=["./"]), "b" * 64)
+
+
+def test_failed_list_call_defers_groups_instead_of_treating_them_as_untracked(tmp_path: Path) -> None:
+	inbox = tmp_path / "inbox"
+	_write_record(inbox, _record(1))
+	gh = FakeGh(fail_lists=True)
+	result = _prepare(tmp_path, gh)
+	group = _groups(tmp_path)[0]
+	assert group["tracking_unavailable"] is True and group["needs_model"] is False
+	assert result["model_groups"] == 0 and result["evidence_gets"] == 0
+	decisions = at.decide(tmp_path / "work", inbox, self_fix_enabled=False, self_fix_present=False, run_url="u")
+	assert (decisions["groups"][0]["route"], decisions["groups"][0]["reason"]) == ("deferred", "tracking_unavailable")
+	counts = at.apply(tmp_path / "work", inbox, dry_run=False, run_id="9", now=NOW)
+	assert counts["markers"] == 0
+	# The next run with working list calls picks the records up again.
+	assert _prepare(tmp_path, FakeGh())["model_groups"] == 1

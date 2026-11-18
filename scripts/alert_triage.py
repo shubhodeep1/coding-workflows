@@ -468,8 +468,11 @@ def prepare(*, inbox_dir: Path, repo_root: Path, config_path: Path, self_repo: s
 			"capped": recent_attempts(ledger, now) >= LEDGER_CAP_ATTEMPTS,
 			"mapped_paths": mapped,
 			"from_self_workflow": bool(set(mapped) & self_files),
+			# A failed list call cannot tell tracked from untracked: fail
+			# closed and defer the group to the next run (no model, no dispatch).
+			"tracking_unavailable": not lists_ok,
 		})
-		group["needs_model"] = not group["capped"] and (not group["tracked"] or group["stalled"])
+		group["needs_model"] = lists_ok and not group["capped"] and (not group["tracked"] or group["stalled"])
 		if group["needs_model"]:
 			model_groups.append(group)
 	model_groups.sort(key=lambda group: (-len(group["records"]), group["first_captured_at"]))
@@ -503,7 +506,7 @@ def prepare(*, inbox_dir: Path, repo_root: Path, config_path: Path, self_repo: s
 
 
 def _public_group(group: dict[str, Any]) -> dict[str, Any]:
-	keys = ("fingerprint", "source_repo", "workflow", "heal_fp", "tracked", "tracked_issue", "stalled", "capped", "mapped_paths", "from_self_workflow", "needs_model", "first_captured_at")
+	keys = ("fingerprint", "source_repo", "workflow", "heal_fp", "tracked", "tracked_issue", "stalled", "capped", "mapped_paths", "from_self_workflow", "needs_model", "first_captured_at", "tracking_unavailable")
 	out = {key: group.get(key) for key in keys}
 	out["records"] = [{key: record[key] for key in ("key", "path", "captured_at", "run_id", "run_url")} for record in group["records"]]
 	return out
@@ -608,6 +611,12 @@ def validate_diagnosis(raw: Any, fp: str) -> dict[str, Any]:
 	for path in files:
 		if not (isinstance(path, str) and _FILE_PATH_RE.match(path) and ".." not in path.split("/") and not path.startswith("/")):
 			raise TriageError("files")
+		# Canonical form: drop empty and "." components so an alias such as
+		# scripts/./x.sh or ./scripts//x.sh still meets the host's exact
+		# pipeline_self_files match in decide_group.
+		path = "/".join(part for part in path.split("/") if part not in ("", "."))
+		if not path:
+			raise TriageError("files")
 		clean_files.append(path)
 	clean_decisions = []
 	for item in decisions:
@@ -657,6 +666,9 @@ def decide_group(group: dict[str, Any], diagnosis: dict[str, Any] | None, outcom
 	decision = {"route": "", "reason": "", "classification": None, "alert_workflow_path": None}
 	if group.get("capped"):
 		decision.update(route="escalate", reason="ledger_cap")
+		return decision
+	if group.get("tracking_unavailable"):
+		decision.update(route="deferred", reason="tracking_unavailable")
 		return decision
 	if group.get("tracked") and not group.get("stalled"):
 		decision.update(route="ledger_note", reason="already_tracked")
