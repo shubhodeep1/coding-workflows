@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9674,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9674\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9703\",\"pr_number\":9703,\"branch\":\"ai/issue-9674\",\"run_id\":\"44231044599\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/44231044599\",\"changed_files\":[\".github/workflows/check_failure_triage.yml\",\"README.md\",\"agents.d/9674-triage-base-keyed-fingerprint.md\",\"changelog.d/9674-triage-base-keyed-fingerprint.md\",\"scripts/check_failure_triage.sh\",\"scripts/resolve_integration_ref.sh\",\"tests/fixtures/integration_ref_resolver_ci_triage/base_keyed_triage_issue_keeps_default.json\",\"tests/test_check_failure_triage_base_fingerprint.py\",\"tests/test_check_failure_triage_post_stage.py\",\"tests/test_check_failure_triage_workflow_security.py\",\"tests/test_resolve_integration_ref_ci_triage.py\"]}",
+  "fingerprint": "5fd9ae478f3cf1b7ec536294066d1047d4d89c9fa834c39b7cbd8bb287504de3",
+  "lineage": {
+    "issue_number": 9674,
+    "parent_ids": [],
+    "pr_number": 9703,
+    "run_id": "44231044599",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44231044599",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9703"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261118053127_f5d5535273",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9674,
+    "level": "run",
+    "pr_number": 9703,
+    "run_id": "44231044599"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9674: https://github.com/shubhodeep1/coding-workflows/pull/9703",
+  "timestamps": {
+    "created_at": "2026-11-18T05:31:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
