@@ -10,6 +10,7 @@ ai:workflow-heal issue tracks that workflow, the approval is held
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 from pathlib import Path
@@ -67,8 +68,14 @@ def _workflow_text() -> str:
 	return PLAN_WF.read_text(encoding="utf-8")
 
 
+@functools.lru_cache(maxsize=1)
+def _workflow_parsed() -> dict:
+	# plan.yml is ~247 KB; parse it once per module (no caller mutates the steps).
+	return yaml.safe_load(_workflow_text())
+
+
 def _step(name: str) -> dict:
-	workflow = yaml.safe_load(_workflow_text())
+	workflow = _workflow_parsed()
 	return next(step for step in workflow["jobs"]["plan"]["steps"] if step.get("name") == name)
 
 
