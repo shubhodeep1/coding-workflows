@@ -1,0 +1,59 @@
+FILE_PATH: /tmp/review_alpha.txt
+BYTES: 100
+SHA256: alpha
+CONTENT_START
+File: src/tolerance_plus.py
+Line or code reference: line 40
+Problem: Anchor for +3 tolerance check.
+ISSUE_CONFIDENCE: 4
+CONTENT_END
+
+FILE_PATH: /tmp/review_beta.txt
+BYTES: 100
+SHA256: beta
+CONTENT_START
+File: src/tolerance_plus.py
+Line or code reference: 43
+Problem: Partner anchor should match +3 tolerance.
+ISSUE_CONFIDENCE: 4
+CONTENT_END
+
+FILE_PATH: /tmp/review_gamma.txt
+BYTES: 100
+SHA256: gamma
+CONTENT_START
+File: src/tolerance_minus.py
+Line or code reference: line 50
+Problem: Anchor for -3 tolerance check.
+ISSUE_CONFIDENCE: 4
+CONTENT_END
+
+FILE_PATH: /tmp/review_delta.txt
+BYTES: 100
+SHA256: delta
+CONTENT_START
+File: src/tolerance_minus.py
+Code: src/tolerance_minus.py:47
+Problem: Partner anchor should match -3 tolerance.
+ISSUE_CONFIDENCE: 4
+CONTENT_END
+
+FILE_PATH: /tmp/review_epsilon.txt
+BYTES: 100
+SHA256: epsilon
+CONTENT_START
+File: src/tolerance_far.py
+Line or code reference: line 40
+Problem: This issue has maximum confidence but no pair within tolerance.
+ISSUE_CONFIDENCE: 5
+CONTENT_END
+
+FILE_PATH: /tmp/review_zeta.txt
+BYTES: 100
+SHA256: zeta
+CONTENT_START
+File: src/tolerance_far.py
+Line or code reference: 44
+Problem: This issue is four lines away and should not trigger the agreement floor.
+ISSUE_CONFIDENCE: 5
+CONTENT_END

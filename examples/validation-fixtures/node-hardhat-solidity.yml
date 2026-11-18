@@ -1,0 +1,13 @@
+type: node-hardhat-solidity
+entry: hardhat.config.ts
+port: 8545
+slots:
+  project_name: nightly-node-hardhat
+  canary_tools:
+    - curl
+    - jq
+    - node
+    - npx
+    - forge
+    - cast
+  tap_plan: 3

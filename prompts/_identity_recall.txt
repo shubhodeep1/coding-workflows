@@ -1,0 +1,7 @@
+<identity-recall>
+Phase: {{PHASE_NAME}}.
+Role: {{PHASE_ROLE}}.
+Mission: {{PHASE_MISSION}}.
+Re-emit this block at the top of your next message if you
+have just performed a context compaction.
+</identity-recall>

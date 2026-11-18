@@ -1,0 +1,51 @@
+[
+	{
+		"id": 1,
+		"event": "labeled"
+	},
+	{
+		"id": 2,
+		"event": "cross-referenced",
+		"source": {
+			"issue": {
+				"number": 42
+			}
+		}
+	},
+	{
+		"id": 3,
+		"event": "cross-referenced",
+		"source": {
+			"issue": {
+				"number": 101,
+				"pull_request": {
+					"url": "https://api.github.com/repos/acme/demo/pulls/101"
+				},
+				"state": "closed",
+				"merged_at": "2026-04-01T10:00:00Z",
+				"merged": true,
+				"lookup_failed": false
+			}
+		}
+	},
+	{
+		"id": 4,
+		"event": "closed"
+	},
+	{
+		"id": 5,
+		"event": "cross-referenced",
+		"source": {
+			"issue": {
+				"number": 103,
+				"pull_request": {
+					"url": "https://api.github.com/repos/acme/demo/pulls/103"
+				},
+				"state": "open",
+				"merged_at": null,
+				"merged": false,
+				"lookup_failed": false
+			}
+		}
+	}
+]

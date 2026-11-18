@@ -1,0 +1,1501 @@
+---
+name: Mark Stable Release
+
+"on":
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: >
+          Semantic version tag (e.g. v1.2.0). Leave blank to auto-increment
+          patch from the latest stable release.
+        required: false
+        type: string
+        default: ""
+      dry_run:
+        description: Validate only — do not push tags or create release
+        required: false
+        type: boolean
+        default: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Signed job-token comments (run-volume plan item 15, D16; see
+  # scripts/comment_signature.py). The opt-in secret and the job token sit
+  # next to each step's GH_PAT, never here, so a step without the PAT never
+  # sees them. Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false
+  # posts with GH_PAT again while signed comments already posted still verify.
+  AI_COMMENT_SIGNING_POST: ${{ vars.AI_COMMENT_SIGNING_POST || 'true' }}
+
+permissions:
+  contents: write
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────
+  # Job -1: Validate dispatch ref — must be `stable`
+  #
+  # Mirrors the lockdown applied to test-and-mark-stable.yml. This
+  # workflow only releases from the long-lived `stable` branch.
+  # Dispatching from `main` (or any other ref) is rejected so an
+  # operator cannot accidentally tag main as stable. To promote `main`
+  # to the new stable baseline, run promote-main-to-stable.yml — it
+  # fast-forwards stable to main and then dispatches the full release
+  # gate (test-and-mark-stable.yml) on stable automatically.
+  # ──────────────────────────────────────────────────────────────────
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      branch: ${{ steps.detect.outputs.branch }}
+    steps:
+      # The dispatch ref is writer-controlled (a branch may be named
+      # `$(...)`): it reaches the shell only through env and must equal
+      # refs/heads/stable exactly, which also rejects the `stable` tag.
+      - name: Validate dispatch ref
+        id: detect
+        env:
+          DISPATCH_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [ "${DISPATCH_REF}" != "refs/heads/stable" ]; then
+            printf "::error::mark-stable.yml must be dispatched from the 'stable' branch (refs/heads/stable; got '%s').\n" "${DISPATCH_REF}"
+            echo "::error::To promote 'main' to a new stable baseline, run promote-main-to-stable.yml — it fast-forwards stable to main and then dispatches the full release gate on stable automatically."
+            exit 1
+          fi
+          echo "Dispatched from 'stable' — proceeding"
+          printf 'branch=stable\n' >> "$GITHUB_OUTPUT"
+
+      # Writer-controlled github.sha must be the stable tip or an ancestor of
+      # it before any later job checks it out (the release job does so with
+      # GH_PAT and runs its scripts). This step runs no repository code: it
+      # never checks anything out and uses github.token read-only.
+      - name: Verify dispatched commit is on stable
+        id: verify_commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISPATCH_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if ! [[ "${DISPATCH_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            printf "::error::Dispatched commit '%s' is not a 40-character hex SHA; refusing to release.\n" "${DISPATCH_SHA}"
+            exit 1
+          fi
+          backoff="${RELEASE_SOURCE_VERIFY_BACKOFF_SECONDS:-2}"
+          case "${backoff}" in ''|*[!0-9]*) backoff=2 ;; esac
+          # Bounded retry; only the successful attempt's stdout is used
+          # (gh api prints error bodies to stdout, #5495).
+          release_source_api() {
+            local attempt=1 delay="${backoff}" out=""
+            while [ "${attempt}" -le 3 ]; do
+              if out="$(gh api "$@")"; then
+                printf '%s' "${out}"
+                return 0
+              fi
+              if [ "${attempt}" -lt 3 ]; then
+                echo "::warning::gh api $1 failed (attempt ${attempt}/3); retrying in ${delay}s." >&2
+                sleep "${delay}"
+                delay=$((delay * 2))
+              fi
+              attempt=$((attempt + 1))
+            done
+            return 1
+          }
+          # GitHub API audit (§14): the source job makes no other API call to
+          # extend, and scripts/gh_helpers.sh is not available because
+          # checking it out would run repository code before this trust check.
+          # heads/ is fully qualified: `stable` is also a tag.
+          if ! STABLE_TIP="$(release_source_api "repos/${GITHUB_REPOSITORY}/git/ref/heads/stable" --jq '.object.sha')"; then
+            echo "::error::Could not read the stable branch tip after 3 attempts; refusing to release an unverified commit."
+            exit 1
+          fi
+          if ! [[ "${STABLE_TIP}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The stable branch tip lookup returned no valid SHA; refusing to release an unverified commit."
+            exit 1
+          fi
+          if [ "${STABLE_TIP}" = "${DISPATCH_SHA}" ]; then
+            echo "Dispatched commit ${DISPATCH_SHA} is the stable tip — OK"
+            exit 0
+          fi
+          if ! COMPARE_STATUS="$(release_source_api "repos/${GITHUB_REPOSITORY}/compare/${DISPATCH_SHA}...${STABLE_TIP}" --jq '.status')"; then
+            echo "::error::Could not compare ${DISPATCH_SHA} with the stable tip ${STABLE_TIP} after 3 attempts; refusing to release an unverified commit."
+            exit 1
+          fi
+          case "${COMPARE_STATUS}" in
+            identical|ahead)
+              echo "Dispatched commit ${DISPATCH_SHA} is in the history of the stable tip ${STABLE_TIP} — OK"
+              ;;
+            *)
+              printf "::error::RELEASE_UNTESTED_HEAD tested=%s tip=%s compare='%s': the dispatched commit is not in the stable branch history; refusing to release.\n" "${DISPATCH_SHA}" "${STABLE_TIP}" "${COMPARE_STATUS}"
+              exit 1
+              ;;
+          esac
+
+  resolve-version:
+    needs: [source]
+    runs-on: ubuntu-latest
+    # The full-history checkout (fetch-depth: 0, for the tag list) took 87s
+    # on 2026-10-15 02:21 and passed 2 minutes at 10:04, cancelling the
+    # release after stable had already moved (run 38717659089).
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.source.outputs.branch }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve version tag
+        id: resolve
+        env:
+          SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
+          INPUT_VERSION: ${{ inputs.version_tag }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "$INPUT_VERSION" ]; then
+            if [[ ! "$INPUT_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Provided version '${INPUT_VERSION}' is invalid; must match vX.Y.Z"
+              exit 1
+            fi
+            echo "Using user-provided version: ${INPUT_VERSION}"
+            echo "version=${INPUT_VERSION}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Refresh tags from origin BEFORE computing LATEST. If a new
+          # tag was pushed after checkout, computing LATEST first would
+          # pick an outdated base. Bounded retry tolerates transient
+          # network/auth flakes; persistent failure is a hard error
+          # since running on stale tag data could pick a colliding
+          # version.
+          # Capture each attempt's stderr to /tmp/_git_fetch_err so the
+          # underlying transport/auth failure cause is visible in logs
+          # instead of being swallowed by the retry warning.
+          fetch_attempt=1
+          while [ "$fetch_attempt" -le 3 ]; do
+            if git fetch --tags --force origin 2>/tmp/_git_fetch_err; then
+              break
+            fi
+            if [ "$fetch_attempt" -eq 3 ]; then
+              echo "::error::Failed to fetch remote tags from origin after 3 attempts — refusing to compute next version on potentially stale tag data"
+              cat /tmp/_git_fetch_err >&2 2>/dev/null || true
+              exit 1
+            fi
+            backoff=$(( 2 ** fetch_attempt ))
+            echo "::warning::git fetch --tags failed (attempt ${fetch_attempt}/3), retrying in ${backoff}s…"
+            cat /tmp/_git_fetch_err >&2 2>/dev/null || true
+            sleep "${backoff}"
+            fetch_attempt=$((fetch_attempt + 1))
+          done
+
+          # Find the latest vX.Y.Z tag reachable from `stable`'s HEAD.
+          # `--merged HEAD` is critical: if main is on v1.5.0 and stable
+          # is on v1.4.2, the next stable patch must bump from v1.4.2
+          # (→ v1.4.3), not from main's v1.5.0. Filter to strict semver
+          # with grep (the shell glob also matches prerelease tags like
+          # `v1.4.2-beta.1` which would break `cut -d. -f3` arithmetic).
+          # `{ grep ... || true; }` keeps the pipeline exit status at 0
+          # when no semver tags exist so the empty-LATEST fallback can
+          # run under pipefail.
+          LATEST=$(git tag --merged HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname \
+            | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } \
+            | head -n1)
+
+          NEXT=""
+          if [ -z "$LATEST" ]; then
+            NEXT="v1.0.0"
+            echo "No existing version tags reachable from ${SOURCE_BRANCH}. Defaulting to ${NEXT}"
+          else
+            # Bump patch and skip any candidate that already exists
+            # anywhere in the repo (e.g. main may have tagged a v1.4.3
+            # before bumping to v1.5.0 while stable is still at v1.4.2;
+            # without this check the workflow would fail later at the
+            # tag-push step). Bounded to 1000 iterations.
+            MAJOR=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f1)
+            MINOR=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f2)
+            PATCH=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f3)
+            i=0
+            while [ "$i" -lt 1000 ]; do
+              PATCH=$((PATCH + 1))
+              CANDIDATE="v${MAJOR}.${MINOR}.${PATCH}"
+              if ! git rev-parse "refs/tags/${CANDIDATE}" >/dev/null 2>&1; then
+                NEXT="$CANDIDATE"
+                break
+              fi
+              echo "Tag ${CANDIDATE} already exists elsewhere in repo — skipping"
+              i=$((i + 1))
+            done
+            if [ -z "$NEXT" ]; then
+              echo "::error::Could not find an unused patch tag after 1000 attempts starting from ${LATEST}"
+              exit 1
+            fi
+            echo "Latest tag on ${SOURCE_BRANCH}: ${LATEST} → next version: ${NEXT}"
+          fi
+
+          echo "version=${NEXT}" >> "$GITHUB_OUTPUT"
+
+      # Release credential preflight (analysis/workflow-optimization-2026-09-22.md,
+      # Speed #4 / Reliability #2): release run 35639756385 spent about 94
+      # minutes before GitHub refused the tag push for a classic GH_PAT without
+      # the `workflow` scope. Fails here only when the classic PAT lacks that
+      # scope AND stable..HEAD changes .github/workflows/; every uncertain case
+      # proceeds. RELEASE_TAG_PREFLIGHT_ENABLED=false turns it off.
+      - name: Preflight release tag credential
+        id: release_tag_preflight
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          RELEASE_TAG_PREFLIGHT_ENABLED: ${{ vars.RELEASE_TAG_PREFLIGHT_ENABLED || 'true' }}
+          STABLE_RELEASE_ENABLED: ${{ vars.STABLE_RELEASE_ENABLED || 'true' }}
+          RELEASE_TAGGING_ENABLED: ${{ vars.RELEASE_TAGGING_ENABLED || 'true' }}
+        run: |
+          set -euo pipefail
+          base="$(git rev-parse -q --verify 'refs/tags/stable^{commit}' 2>/dev/null || true)"
+          head="$(git rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null || true)"
+          if [ ! -f scripts/release_tag_preflight.sh ] || [ -L scripts/release_tag_preflight.sh ]; then
+            echo "::warning::scripts/release_tag_preflight.sh is missing on this commit; skipping the release credential preflight."
+            echo "RELEASE_TAG_PREFLIGHT result=unknown error_class=none reason=script_missing"
+            exit 0
+          fi
+          RELEASE_TAG_PREFLIGHT_BASE_SHA="${base}" RELEASE_TAG_PREFLIGHT_HEAD_SHA="${head}" \
+            bash scripts/release_tag_preflight.sh
+
+  # ──────────────────────────────────────────────────────────────────
+  # Script correctness validation — gates the release
+  # ──────────────────────────────────────────────────────────────────
+  validate-scripts:
+    needs: [source, resolve-version]
+    runs-on: ubuntu-latest
+    # 45, not 30: the orchestrate-poll module is this job's critical path
+    # even after sharding, and shards can be slower on a cold runner than
+    # on a warm one. At 30 the serial suite in the test-and-mark-stable
+    # twin of this job was cancelled mid-run (release v1.27.0, run
+    # 33073743283). It mirrored the `CI / lint` budget from #3844 until #4707 split that job.
+    # 60, not 45 (#4707): the job measured 37 minutes on 2026-09-28
+    # (test-and-mark-stable run 36374918973: orchestrate-poll 21 minutes,
+    # unit tests 14.5 minutes), too close to 45. `CI` splits the same
+    # suite into parallel jobs; this manually dispatched gate keeps one runner
+    # and the longer budget instead.
+    # 90, not 60: the job hit 60 minutes and was cancelled mid "Unit tests"
+    # in test-and-mark-stable run 39526632477 (2026-10-21, v1.37.0 attempt):
+    # orchestrate-poll took 39.5 minutes and unit tests had run 19 more. The
+    # prior release (run 39213880700, 2026-10-19) already used 56 of 60.
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.source.outputs.branch }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: YAML lint
+        run: |
+          set -euo pipefail
+          pip install -q yamllint
+          yamllint -s .github/workflows/*.yml .github/actions/*/action.yml
+
+      - name: Shell script syntax check
+        run: |
+          set -euo pipefail
+          for f in scripts/*.sh; do
+            bash -n "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+          done
+
+      - name: ShellCheck static analysis
+        run: |
+          set -euo pipefail
+          # Issue #6680: ShellCheck 0.9.x (the runner image's copy) always runs
+          # its dataflow analysis, which takes the runner down on
+          # scripts/orchestrate_poll_process.sh. ShellCheck 0.10+ honours that
+          # file's `# shellcheck extended-analysis=false` directive, so pin it.
+          # A failed install keeps the runner's copy with a warning.
+          sc=shellcheck
+          if python3 -m pip install --quiet 'shellcheck-py==0.10.0.1'; then
+            sc_dir="$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts"))')" || sc_dir=""
+            if [ -x "${sc_dir}/shellcheck" ]; then
+              sc="${sc_dir}/shellcheck"
+            else
+              echo "::warning::ShellCheck 0.10.0.1 installed but ${sc_dir:-<unknown>}/shellcheck is missing; using $(command -v shellcheck || echo 'no shellcheck')."
+            fi
+          else
+            echo "::warning::Could not install ShellCheck 0.10.0.1; using $(command -v shellcheck || echo 'no shellcheck')."
+          fi
+          "${sc}" --version
+          for f in scripts/*.sh; do
+            "${sc}" --severity=error "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+          done
+
+      - name: Python syntax check
+        run: |
+          set -euo pipefail
+          for f in scripts/*.py; do
+            python3 -m py_compile "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+          done
+
+      - name: Python lint (ruff)
+        run: |
+          set -euo pipefail
+          pip install -q ruff
+          ruff check --select E,F --ignore E501 scripts/*.py
+
+      - name: Install Python test dependencies
+        run: |
+          set -euo pipefail
+          # test_validation_refresh_runner.py exercises the real discovery
+          # manifest validator (validate_discovered_manifest_yaml), which needs
+          # pyyaml + jsonschema; jinja2 is required by the template-render tests.
+          # Those three dependencies match validation-refresh.yml and
+          # nightly-validation-selftest.yml; pytest runs the release-gate
+          # watchdog contract test. Without the first three, the validator
+          # short-circuits with jsonschema_missing, the codex retry loop fires,
+          # and the FakeExecutor planned-call sequence desyncs (false failure).
+          python3 -m pip install --quiet pyyaml jsonschema jinja2 pytest
+
+      - name: Orchestrate poll process unit tests
+        env:
+          CI_POLL_TEST_SHARDS: ${{ vars.CI_POLL_TEST_SHARDS || '4' }}
+        run: |
+          set -euo pipefail
+          # Ported from ci.yml's sharded step (#3844): this module is the
+          # job's critical path. Most of its 300+ tests spawn the real poller
+          # as a bash subprocess inside a throwaway sandbox, so they cost
+          # seconds each rather than milliseconds; run sequentially the module
+          # consumed ~24 of the 30 budgeted minutes in the test-and-mark-stable
+          # twin of this job and the job was cancelled mid-suite (release
+          # v1.27.0, run 33073743283), which skipped `validate`/`release` and
+          # failed the release. Each test allocates its own tempdir sandbox in
+          # _make_poller_sandbox, so the module shards with no shared state.
+          # Unlike ci.yml there is no fast-fail subset here: the shard input
+          # is the full module.
+          shards="${CI_POLL_TEST_SHARDS:-4}"
+          if ! [ "${shards}" -ge 1 ] 2>/dev/null; then
+            echo "::warning::CI_POLL_TEST_SHARDS='${shards}' is not a positive integer; falling back to 1 (sequential)."
+            shards=1
+          fi
+
+          # Partition-contract guard: the awk split below must lose nothing
+          # and duplicate nothing. tests/test_ci_poll_test_sharding.py pins
+          # the expression for every workflow that shards this module.
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ci_poll_test_sharding.py
+
+          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+          import ast
+          from pathlib import Path
+
+          module = ast.parse(
+              Path("tests/test_orchestrate_poll_process.py").read_text(encoding="utf-8")
+          )
+          tests = [
+              node.name
+              for node in module.body
+              if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
+          ]
+          tests.sort()
+          if not tests:
+              raise SystemExit("No tests discovered in the orchestrate-poll module")
+          Path("/tmp/orchestrate_poll_all_tests.txt").write_text("\n".join(tests) + "\n")
+          PY
+
+          rm -f /tmp/poll_shard_*.txt /tmp/poll_shard_*.log /tmp/poll_shard_*.rc
+          shard_pids=()
+          for shard in $(seq 0 "$((shards - 1))"); do
+            awk -v n="${shard}" -v total="${shards}" 'NR % total == n' \
+              /tmp/orchestrate_poll_all_tests.txt > "/tmp/poll_shard_${shard}.txt"
+            [ -s "/tmp/poll_shard_${shard}.txt" ] || continue
+            (
+              mapfile -t shard_tests < "/tmp/poll_shard_${shard}.txt"
+              set +e
+              PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py \
+                "${shard_tests[@]}" > "/tmp/poll_shard_${shard}.log" 2>&1
+              echo "$?" > "/tmp/poll_shard_${shard}.rc"
+            ) &
+            shard_pids+=("$!")
+          done
+
+          # Reap every shard before judging any of them, so one early failure
+          # cannot leave siblings orphaned on the runner.
+          for shard_pid in "${shard_pids[@]}"; do
+            wait "${shard_pid}" || true
+          done
+
+          # Each failed shard's failing tests are repeated after the loop (#6888).
+          # The shard logs above sit in collapsed groups, so in run 37907017153 the
+          # job tail showed only the last shard's "33 passed", not shard 1's failure.
+          shard_failures=0
+          shard_failure_lines=()
+          for shard in $(seq 0 "$((shards - 1))"); do
+            [ -s "/tmp/poll_shard_${shard}.txt" ] || continue
+            # A shard with tests but no log died before its runner started, so
+            # its tests never ran: count it as failed instead of skipping it.
+            if [ ! -f "/tmp/poll_shard_${shard}.log" ]; then
+              echo "::error::orchestrate-poll shard ${shard} produced no log; its tests did not run"
+              shard_failures=$((shard_failures + 1))
+              shard_failure_lines+=("shard ${shard}: no log recorded, its tests did not run")
+              continue
+            fi
+            echo "::group::orchestrate-poll shard ${shard} ($(wc -l < "/tmp/poll_shard_${shard}.txt" | tr -d '[:space:]') tests)"
+            cat "/tmp/poll_shard_${shard}.log"
+            echo "::endgroup::"
+            # A missing .rc means the subshell died before recording one; treat
+            # that as a failure rather than silently passing the shard.
+            shard_rc="$(cat "/tmp/poll_shard_${shard}.rc" 2>/dev/null || echo 1)"
+            case "${shard_rc}" in
+              ''|*[!0-9]*) shard_rc=1 ;;
+            esac
+            if [ "${shard_rc}" -ne 0 ]; then
+              echo "::error::orchestrate-poll shard ${shard} failed (exit ${shard_rc})"
+              # Name the failing tests in annotations (#6885): the per-shard
+              # log above sits inside a ::group:: that triage cannot read.
+              # Match the runner's exact "  FAIL  <name>: ..." prefix, cap at
+              # 20 lines, and escape workflow-command data. Without a FAIL
+              # line (interrupted shard), print the log tail with a prefix so
+              # log text can never start a workflow command.
+              mapfile -t shard_fail_lines < <(grep -a -E '^  FAIL  ' "/tmp/poll_shard_${shard}.log" | head -n 20 || true)
+              if [ "${#shard_fail_lines[@]}" -gt 0 ]; then
+                for shard_fail_line in "${shard_fail_lines[@]}"; do
+                  shard_fail_line="${shard_fail_line//%/%25}"
+                  shard_fail_line="${shard_fail_line//$'\r'/%0D}"
+                  shard_fail_line="${shard_fail_line//$'\n'/%0A}"
+                  echo "::error::orchestrate-poll shard ${shard}: ${shard_fail_line#  }"
+                done
+              else
+                echo "::error::orchestrate-poll shard ${shard} had no FAIL line; last log lines follow"
+                while IFS= read -r shard_tail_line || [ -n "${shard_tail_line}" ]; do
+                  echo "orchestrate-poll shard ${shard} | ${shard_tail_line}"
+                done < <(tail -n 20 "/tmp/poll_shard_${shard}.log" || true)
+              fi
+              shard_failures=$((shard_failures + 1))
+              # Prefer the runner's FAIL line (it carries the exception); fall back
+              # to its "complete" fail events; else say no failure was recorded.
+              # Every match is kept so the "... and <k> more" count below is exact.
+              # `-a`: a NUL byte in the log must not turn the matches into grep's
+              # "Binary file ... matches" line.
+              mapfile -t shard_fail_matches < <(grep -a -E '^[[:space:]]*FAIL[[:space:]]' "/tmp/poll_shard_${shard}.log" 2>/dev/null || true)
+              if [ "${#shard_fail_matches[@]}" -eq 0 ]; then
+                mapfile -t shard_fail_matches < <(grep -a -E '^TEST_CASE_EVENT: .*"event":"complete"' "/tmp/poll_shard_${shard}.log" 2>/dev/null | grep -a -F '"status":"fail"' || true)
+              fi
+              if [ "${#shard_fail_matches[@]}" -eq 0 ]; then
+                shard_failure_lines+=("shard ${shard}: exit ${shard_rc}, no FAIL line recorded (runner likely died)")
+              else
+                for shard_fail_match in "${shard_fail_matches[@]}"; do
+                  shard_failure_lines+=("shard ${shard}: ${shard_fail_match#"${shard_fail_match%%[![:space:]]*}"}")
+                done
+              fi
+            fi
+          done
+          if [ "${shard_failures}" -ne 0 ]; then
+            # At most 20 annotations; CR removed, cut to 400 characters, then "%"
+            # escaped so a test message cannot break the annotation syntax.
+            shard_failure_shown=0
+            for shard_failure_line in "${shard_failure_lines[@]}"; do
+              if [ "${shard_failure_shown}" -ge 20 ]; then
+                break
+              fi
+              shard_failure_line="${shard_failure_line//$'\r'/}"
+              shard_failure_line="${shard_failure_line:0:400}"
+              shard_failure_line="${shard_failure_line//\%/%25}"
+              echo "::error::orchestrate-poll failing test: ${shard_failure_line}"
+              shard_failure_shown=$((shard_failure_shown + 1))
+            done
+            if [ "${#shard_failure_lines[@]}" -gt 20 ]; then
+              echo "::error::orchestrate-poll failing test: ... and $(( ${#shard_failure_lines[@]} - 20 )) more (see the shard groups above)"
+            fi
+            echo "::error::${shard_failures} orchestrate-poll shard(s) failed."
+            exit 1
+          fi
+
+      - name: Unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_blocker_check.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_poller.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_force_tick.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrator_concurrency_caps.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_integration_ahead_by_gate.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_noop_suspicious_recovery.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_state_snapshot.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_run_substate_ledger.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_pr_body_auto_close.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_plan_archival_completeness.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_plan_decisions.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_integration_pr_readiness.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mark_stable_release_tag_refspec_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_targeted_file_context.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_prompt_untrusted_context_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_workflow_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_detect_editor_changes_lost.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_review_pipeline_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_force_tick_repository_env.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rb_judge_self_run_exclusion.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rereview_and_approval_rubric.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_surface_prompt_hardening.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_editor_audit.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_apply_fixes_reviewer_manifest_validation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_reject_verify.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_recovery_pr_lookup.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_editor_fifo_drain.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_editor_watchdog_kill_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_subissue_closing_pr.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_state_selfheal.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_loop_and_churn_fixes.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_freshness_branch_fallback.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_retrigger_inflight_direct_fallback.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_linked_pr_implementation_guard.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_actions_runs_fetch_unconfirmed_warning.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_smoke_deterministic.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_prelude_render.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_conflict_manifest_union_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_cost_audit_semble_metrics.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_log_analysis_failure_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_skip_gate_telemetry_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_gh_retry_fallback_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_semble_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_judge_semble_prefetch_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_judge_interim_round_trip.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_scripts.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_memory_record_schema.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_consumer_drift.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_workflows_guardrails.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_foundation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_assemble_prompt.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_core_modes.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_review_judge_modes.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_validate_analytics_modes.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_synthesise_smoke.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_semble_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_record_id_format_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_clarify_informal_detect.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_repo_root_helper.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_generate_resource_id.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_repo_tree.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_semble_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_driver_synthesised_filter.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_runner.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_discovery_bootstrap.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_render_validation_templates_shell_quoting.py tests/test_validation_harness_sandbox.py tests/test_validate_driver_credential_scrub.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_core.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_skip_git_repo_check_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_init.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_hooks.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_cache_maintenance.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_family_node_runtime.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_workflow_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state_unblock.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_orchestrator.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mcp_handshake_probe.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_setup_serena_toml.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_serena_stats_emit.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_template_mode.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_semble_workflow_parity_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_drift_audit_job.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_quarantine.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_state.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_consumer_artifact_cleanup_preserves_tracked.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_tiers.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_post_capture_evolution.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_reasoning_step_down.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_smoke_alert_silencing_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_promote_main_cycle.py tests/test_apply_analysis_on_main.py tests/test_auto_release_stable.py tests/test_orchestrate_poll_promote_cycle.py tests/test_implement_blocked_verdict_terminalizes.py
+
+      # The @stable sync (update_workflows.yml) ships CLAUDE.md and
+      # workflow-templates/.claude/ (hooks, scripts, commands, settings.json)
+      # to every consumer together with the workflow wrappers, so the release
+      # gate runs the same Claude asset suites CI runs on every PR.
+      # Parity runs on the committed tree without PR-time dry-run preparation;
+      # a template waiting for a live-copy sync PR blocks the release.
+      - name: Claude asset tests (CLAUDE.md, .claude hooks, scripts, commands)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_claude_template_live_parity.py \
+            tests/test_pr_merge_status_guard.py \
+            tests/test_pr_watch_guard.py \
+            tests/test_gh_api_write_guard.py \
+            tests/test_no_session_automation.py \
+            tests/test_ai_labels_retired.py \
+            tests/test_update_workflows_retired_files.py \
+            tests/test_security_pass_skip.py \
+            tests/test_claude_md_section_numbers.py \
+            tests/test_audit_plans_command.py \
+            tests/test_deploy_activate_command.py \
+            tests/test_safe_fetch_url.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_session_start_extract_repo_slug.py
+
+      - name: Prompt files integrity
+        run: |
+          set -euo pipefail
+          for f in prompts/*.txt; do
+            if [ ! -s "$f" ]; then
+              echo "FAIL: $f is empty"
+              exit 1
+            fi
+            echo "OK: $f ($(wc -c < "$f") bytes)"
+          done
+
+      - name: Script-workflow cross-reference
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py
+
+  validate:
+    needs: [source, resolve-version]
+    runs-on: ubuntu-latest
+    # 45, not 5: the CI gate below waits up to RELEASE_CI_GATE_WAIT_SECS
+    # (default 30 minutes, maximum 40) for a pending `CI / lint` run; the
+    # extra 5 minutes cover checkout and the tag preflight so the gate can
+    # log its wait_timeout outcome. A job timeout fails closed.
+    timeout-minutes: 45
+    # checks/actions read let the CI gate read check-runs and workflow runs
+    # with github.token; this job writes nothing.
+    permissions:
+      contents: read
+      checks: read
+      actions: read
+    steps:
+      - name: Validate version format
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.resolve-version.outputs.version }}"
+          if [[ ! "${VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid version tag '${VERSION}'. Must match vX.Y.Z"
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.source.outputs.branch }}
+          fetch-depth: 0
+
+      - name: Validate existing version tag
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.resolve-version.outputs.version }}"
+          # Query the remote directly: `git rev-parse refs/tags/<V>` only
+          # checks the local tag namespace, which can race a concurrent
+          # tag push (or be incomplete depending on checkout fetch
+          # config). `git ls-remote --exit-code` returns 0 if the ref
+          # exists on origin, 2 if it does not, and any other non-zero
+          # value for transport / auth / repo errors. A matching existing
+          # tag is a partial-release recovery; a tag targeting any other
+          # commit remains an immutable conflict.
+          set +e
+          git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" >/dev/null 2>/tmp/release_version_tag_lsremote_err
+          rc=$?
+          set -e
+          case "$rc" in
+            0)
+              git fetch origin "refs/tags/${VERSION}:refs/tags/${VERSION}"
+              intended_release_commit="$(git rev-parse HEAD)"
+              existing_release_commit="$(git rev-parse "${VERSION}^{commit}")"
+              if [ "${existing_release_commit}" != "${intended_release_commit}" ]; then
+                echo "::error::Tag ${VERSION} already exists on origin at ${existing_release_commit}, not intended release commit ${intended_release_commit}. Refusing to retarget the immutable tag."
+                exit 1
+              fi
+              echo "Tag ${VERSION} already targets ${intended_release_commit} — accepting partial-release recovery."
+              ;;
+            2)
+              echo "Tag ${VERSION} does not yet exist on origin — OK"
+              ;;
+            *)
+              echo "::error::git ls-remote failed with exit code ${rc} (transport/auth/repo error). Refusing to proceed without a confirmed tag-absent signal."
+              cat /tmp/release_version_tag_lsremote_err >&2 2>/dev/null || true
+              exit 1
+              ;;
+          esac
+
+      # Security finding #6548 (Refs #7029): the legacy combined commit
+      # status never contains GitHub Actions check-runs, so this check used
+      # to pass on an empty or pending state. It now reuses the bounded
+      # release CI gate (scripts/release_ci_gate.sh, #6797): the newest
+      # github-actions `lint` check-run from ci.yml on the validated SHA must
+      # be completed with success; missing, failed, cancelled, timed-out or
+      # unreadable results fail closed after the bounded wait.
+      - name: Verify CI passed on stable
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
+          GATE_REPO: ${{ github.repository }}
+          RELEASE_CI_GATE_WAIT_SECS: ${{ vars.RELEASE_CI_GATE_WAIT_SECS || '1800' }}
+          RELEASE_CI_GATE_POLL_SECS: ${{ vars.RELEASE_CI_GATE_POLL_SECS || '30' }}
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse HEAD)"
+          echo "Checking CI / lint for ${SOURCE_BRANCH} @ ${SHA} ..."
+          if [ ! -f scripts/release_ci_gate.sh ]; then
+            echo "::error::scripts/release_ci_gate.sh is missing on ${SOURCE_BRANCH}@${SHA}. Refusing to release without a confirmed CI signal."
+            exit 1
+          fi
+          bash scripts/release_ci_gate.sh "${GATE_REPO}" "${SHA}"
+
+  release:
+    needs: [source, resolve-version, validate, validate-scripts]
+    runs-on: ubuntu-latest
+    # 50, not 10: the CI gate below waits up to RELEASE_CI_GATE_WAIT_SECS
+    # (default 30 minutes) for a pending `CI / lint` run, and the tag-push
+    # retries still have to fit after it. A job timeout fails closed.
+    timeout-minutes: 50
+    # Least privilege: only this job gets an OIDC token and attestation write,
+    # for the release-manifest attestation (#6943). A job-level block replaces
+    # the inherited one, so contents: write is listed again.
+    # checks: read lets the CI lint gates read check-runs with github.token;
+    # actions: read lets the CI gate read workflow runs when GH_PAT is absent;
+    # contents: write keeps the tag and release writes.
+    # id-token/attestations write also sign the consumer sync manifest (#7128).
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      checks: read
+      actions: read
+    outputs:
+      # true only when both STABLE_RELEASE_ENABLED and RELEASE_TAGGING_ENABLED
+      # let this run publish, so sync-to-main and the notify summary never
+      # treat an untagged run as a release.
+      release_enabled: ${{ steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' && 'true' || 'false' }}
+    env:
+      STABLE_RELEASE_ENABLED: ${{ vars.STABLE_RELEASE_ENABLED || 'true' }}
+      STABLE_RELEASE_CI_WAIT_SECS: ${{ vars.STABLE_RELEASE_CI_WAIT_SECS || '600' }}
+    # Serialise the mutating tag pushes across every stable-tag writer
+    # (test-and-mark-stable.yml, this legacy path, and everything that
+    # dispatches them). The stale-tip guard in the tagging step covers the
+    # ordering half: a gate whose checkout is no longer the branch tip
+    # refuses to tag.
+    concurrency:
+      group: stable-release-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout source branch
+        uses: actions/checkout@v5
+        with:
+          # The dispatched commit, not the branch name: the branch may move
+          # while the test jobs run, and only the dispatched commit was tested.
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Record the tested commit
+        env:
+          DISPATCHED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-parse HEAD)" != "${DISPATCHED_SHA}" ]; then
+            echo "::error::Release checkout is $(git rev-parse HEAD), not the dispatched commit ${DISPATCHED_SHA}."
+            exit 1
+          fi
+          echo "RELEASE_TESTED_SHA=${DISPATCHED_SHA}" >> "$GITHUB_ENV"
+
+      # Publishing switch (issue #6532 / #6809). On by default: an unset or
+      # empty repository variable STABLE_RELEASE_ENABLED, or `true` (any
+      # case), publishes. `false` turns publishing off; any other value also
+      # turns it off and warns, so a typo never publishes. The default was
+      # off until the off switch held every release since v1.31.0 back
+      # (#7029: stable tagging was never meant to sit behind an off switch).
+      # While off the gate still runs every validation job and the CI lint
+      # check below, but the changelog push, tags, GitHub release, consumer
+      # dispatch and sync-to-main are skipped. The value reaches the script
+      # only through env.
+      - name: Resolve stable release switch
+        id: release_switch
+        run: |
+          set -euo pipefail
+          release_switch_value="${STABLE_RELEASE_ENABLED:-true}"
+          release_switch_value="${release_switch_value,,}"
+          if [ "${release_switch_value}" = "true" ]; then
+            release_switch_enabled=true
+          else
+            release_switch_enabled=false
+            if [ "${release_switch_value}" != "false" ]; then
+              echo "::warning::STABLE_RELEASE_ENABLED has an unrecognised value; publishing stays off. Use true or false."
+            fi
+          fi
+          echo "STABLE_RELEASE_SWITCH enabled=${release_switch_enabled}"
+          printf 'enabled=%s\n' "${release_switch_enabled}" >> "$GITHUB_OUTPUT"
+
+      # Issue #6532: never release a commit whose CI failed. GitHub Actions
+      # jobs report as check-runs, not commit statuses, so the validate job's
+      # combined-status read cannot see `lint`, the aggregate job of ci.yml.
+      # Runs before the first step that can push, whatever dry_run and the
+      # switch say. Only `lint` check-runs created by the github-actions app
+      # in a check suite of a `.github/workflows/ci.yml` run for the SHA
+      # count (other workflows also have `lint` jobs). As in
+      # scripts/release_ci_gate.sh, the newest of them (highest check-run id)
+      # decides, so a re-run that passed outweighs an older failed attempt;
+      # it must be completed with `success`. Missing and incomplete results are
+      # re-checked within a bounded wait; whatever is still missing or
+      # incomplete then, and failed or unreadable results, fail closed.
+      # GitHub API audit (§14): no existing call in this job returns
+      # check-runs; each poll makes two reads (ci.yml runs for the SHA,
+      # then the commit's `lint` check-runs).
+      - name: Require successful CI lint check-run
+        id: ci_lint_gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CHECK_NAME: lint
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          gate_sha="${RELEASE_TESTED_SHA:-}"
+          if ! [[ "${gate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::STABLE_RELEASE_CI_GATE outcome=fail reason=invalid_sha sha=invalid runs=0"
+            exit 1
+          fi
+          gate_check_name="${CI_CHECK_NAME:-lint}"
+          gate_wait_secs="${STABLE_RELEASE_CI_WAIT_SECS:-600}"
+          case "${gate_wait_secs}" in
+            ''|*[!0-9]*)
+              echo "::warning::STABLE_RELEASE_CI_WAIT_SECS is not a non-negative integer; using 600."
+              gate_wait_secs=600
+              ;;
+          esac
+          # Drop leading zeros first so a zero-padded in-range value (`002400`)
+          # is not mistaken for an oversized one by the length check below.
+          gate_wait_secs="${gate_wait_secs#"${gate_wait_secs%%[!0]*}"}"
+          gate_wait_secs="${gate_wait_secs:-0}"
+          # Same range as RELEASE_CI_GATE_WAIT_SECS (0..2400); the length check
+          # runs first so a huge value never reaches shell arithmetic.
+          if [ "${#gate_wait_secs}" -gt 4 ] || [ "$((10#${gate_wait_secs}))" -gt 2400 ]; then
+            echo "::warning::STABLE_RELEASE_CI_WAIT_SECS is above 2400; using 600."
+            gate_wait_secs=600
+          fi
+          # Force base 10: a leading zero (`0900`, `08`) would be read as octal.
+          gate_wait_secs=$((10#${gate_wait_secs}))
+          gate_poll_secs=30
+          # Round up so any positive budget below one poll interval still re-checks once.
+          gate_polls_left=$(((gate_wait_secs + gate_poll_secs - 1) / gate_poll_secs))
+          gate_response_file="$(mktemp "${RUNNER_TEMP:-/tmp}/stable_release_ci_gate.XXXXXX")"
+          gate_runs_file="$(mktemp "${RUNNER_TEMP:-/tmp}/stable_release_ci_gate_runs.XXXXXX")"
+          trap 'rm -f "${gate_response_file}" "${gate_runs_file}"' EXIT
+
+          # Prints "<reason> <runs>" where reason is one of
+          # pass|missing|incomplete|failed|unreadable.
+          stable_release_ci_gate_classify() {
+            local gate_rc=0
+            local gate_verdict=""
+            set +e
+            gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${gate_sha}&per_page=100" >"${gate_runs_file}"
+            gate_rc=$?
+            if [ "${gate_rc}" -eq 0 ]; then
+              gh_retry gh api "repos/${GITHUB_REPOSITORY}/commits/${gate_sha}/check-runs?check_name=${gate_check_name}&filter=latest&per_page=100" >"${gate_response_file}"
+              gate_rc=$?
+            fi
+            set -e
+            if [ "${gate_rc}" -ne 0 ]; then
+              printf 'unreadable 0\n'
+              return 0
+            fi
+            if ! gate_verdict="$(jq -rn --arg name "${gate_check_name}" --arg sha "${gate_sha}" \
+                --slurpfile checks "${gate_response_file}" --slurpfile ci_runs "${gate_runs_file}" '
+                if ($checks | length) != 1 or ($ci_runs | length) != 1 then "unreadable 0"
+                else $ci_runs[0] as $wr
+                  | $checks[0]
+                  | if (type != "object") or ((.check_runs | type) != "array") or ((.total_count | type) != "number") then "unreadable 0"
+                    elif ($wr | type) != "object" or (($wr.workflow_runs | type) != "array") or (($wr.total_count | type) != "number") then "unreadable 0"
+                    elif .total_count > (.check_runs | length) or $wr.total_count > ($wr.workflow_runs | length) then "unreadable \(.check_runs | length)"
+                    else
+                      [$wr.workflow_runs[] | select(type == "object" and .head_sha == $sha) | .check_suite_id | select(type == "number")] as $suites
+                      | [.check_runs[] | select(type == "object" and .name == $name and (.app.slug? // "") == "github-actions"
+                          and ((.check_suite.id? // null) as $sid | ($sid | type) == "number" and any($suites[]; . == $sid))
+                          and ((.id? // null) | type) == "number")] as $runs
+                      | if ($runs | length) == 0 then "missing 0"
+                        else ($runs | max_by(.id)) as $newest
+                          | if $newest.status != "completed" then "incomplete \($runs | length)"
+                            elif $newest.conclusion != "success" then "failed \($runs | length)"
+                            else "pass \($runs | length)"
+                            end
+                        end
+                    end
+                end' 2>/dev/null)"; then
+              printf 'unreadable 0\n'
+              return 0
+            fi
+            case "${gate_verdict}" in
+              *$'\n'*) printf 'unreadable 0\n' ;;
+              "pass "*|"missing "*|"incomplete "*|"failed "*|"unreadable "*) printf '%s\n' "${gate_verdict}" ;;
+              *) printf 'unreadable 0\n' ;;
+            esac
+          }
+
+          while :; do
+            gate_result="$(stable_release_ci_gate_classify)"
+            gate_reason="${gate_result%% *}"
+            gate_runs="${gate_result##* }"
+            if [ "${gate_reason}" = "pass" ]; then
+              echo "STABLE_RELEASE_CI_GATE outcome=pass sha=${gate_sha} runs=${gate_runs}"
+              exit 0
+            fi
+            if { [ "${gate_reason}" = "incomplete" ] || [ "${gate_reason}" = "missing" ]; } && [ "${gate_polls_left}" -gt 0 ]; then
+              gate_polls_left=$((gate_polls_left - 1))
+              echo "STABLE_RELEASE_CI_GATE outcome=wait reason=${gate_reason} sha=${gate_sha} runs=${gate_runs} polls_left=${gate_polls_left}"
+              sleep "${gate_poll_secs}"
+              continue
+            fi
+            echo "::error::STABLE_RELEASE_CI_GATE outcome=fail reason=${gate_reason} sha=${gate_sha} runs=${gate_runs}"
+            exit 1
+          done
+
+      # Security finding release-gate-ignores-actions-ci (#6797, Refs #6532):
+      # the jobs above run this workflow's own tests, and the combined commit
+      # status never contains GitHub Actions check-runs, so a commit whose
+      # `CI / lint` aggregate was red, cancelled or never ran could be tagged.
+      # Require the github-actions `lint` check-run from ci.yml on the exact
+      # tested commit to be completed with success. Pending or missing runs
+      # are waited for (bounded); anything else fails closed. It runs before
+      # the changelog push and every tag write, and in dry runs too (read only).
+      # The tag may point at this commit plus a changelog-only commit; the
+      # RELEASE_UNTESTED_HEAD and RELEASE_STALE_TIP guards below bind it.
+      - name: Require CI / lint success on the tested commit
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          GATE_REPO: ${{ github.repository }}
+          RELEASE_CI_GATE_WAIT_SECS: ${{ vars.RELEASE_CI_GATE_WAIT_SECS || '1800' }}
+          RELEASE_CI_GATE_POLL_SECS: ${{ vars.RELEASE_CI_GATE_POLL_SECS || '30' }}
+        run: |
+          set -euo pipefail
+          bash scripts/release_ci_gate.sh "${GATE_REPO}" "${RELEASE_TESTED_SHA}"
+
+      # Kill switch for stable tag writes (Refs #6548, #7029). Default on:
+      # any value other than `true` (case-insensitive) skips the changelog
+      # commit, the tag pushes, the GitHub Release and the consumer dispatch.
+      # The CI gate above and the validate job still run.
+      - name: Resolve release tagging switch
+        id: release_tagging
+        env:
+          RELEASE_TAGGING_ENABLED: ${{ vars.RELEASE_TAGGING_ENABLED || 'true' }}
+        run: |
+          set -euo pipefail
+          raw="${RELEASE_TAGGING_ENABLED-true}"
+          value="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+          if [ -z "${value}" ] || [ "${value}" = "true" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "Release tagging enabled."
+            exit 0
+          fi
+          shown="$(printf '%s' "${raw}" | tr -cd 'A-Za-z0-9_.-' | cut -c1-32)"
+          echo "enabled=false" >> "$GITHUB_OUTPUT"
+          echo "::warning::RELEASE_TAGGING_ENABLED=${shown} — skipping tag writes, GitHub Release and consumer dispatch; CI gate and validation still ran."
+          echo "Release tagging disabled (RELEASE_TAGGING_ENABLED=${shown}): no changelog commit, tag push, GitHub Release or consumer dispatch." >> "${GITHUB_STEP_SUMMARY:-/dev/null}" || true
+
+      - name: Assemble changelog fragments
+        id: changelog_assemble
+        env:
+          SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
+          # The switch off behaves like a dry run here: assembled locally, never pushed.
+          DRY_RUN: ${{ (inputs.dry_run || steps.release_switch.outputs.enabled != 'true') && 'true' || 'false' }}
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+          RELEASE_TAGGING: ${{ steps.release_tagging.outputs.enabled }}
+        run: |
+          set -euo pipefail
+
+          # Upstream assembly host (CLAUDE.md §20, §18.A/§18.B). Agents write
+          # one changelog.d/<issue-or-pr>-<slug>.md fragment per PR instead of
+          # editing CHANGELOG.md, so concurrent PRs never touch the same path
+          # and cannot conflict. This step folds the accumulated fragments into
+          # CHANGELOG.md's ## [Unreleased] section and deletes them, before the
+          # release notes are extracted and the version tag is cut, so the tag
+          # carries the assembled changelog.
+          #
+          # Fails open: if the assembled commit cannot be pushed (branch
+          # protection, a concurrent push that survives the retry loop), the
+          # working tree is reset to the remote tip so the tag below still
+          # points at pushed history, and the fragments simply wait for the
+          # next release. A release must never fail because of changelog
+          # bookkeeping.
+
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_changelog.py assemble --repo-root .
+          # agents.d/ fragments (CLAUDE.md §30) fold into agents.md in the same
+          # commit. Fail open: a fragment that cannot fold stays in agents.d/
+          # for the next release, and a missing script (an older ref) is a no-op.
+          if [ -f scripts/assemble_agents.py ]; then
+            PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_agents.py assemble --repo-root . \
+              || echo "::warning::agents.md fragment assembly failed; fragments stay in agents.d/ for the next release."
+          fi
+
+          if [ -z "$(git status --porcelain -- CHANGELOG.md changelog.d agents.md agents.d)" ]; then
+            echo "No changelog fragments to fold — nothing to commit."
+            exit 0
+          fi
+
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "Dry run — assembled CHANGELOG.md left uncommitted."
+            exit 0
+          fi
+
+          # Kill switch: anything but an explicit `true` (including a missing
+          # output) leaves the stable branch untouched.
+          if [ "${RELEASE_TAGGING:-}" != "true" ]; then
+            echo "Release tagging disabled — assembled CHANGELOG.md left uncommitted."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A -- CHANGELOG.md changelog.d agents.md agents.d
+          git commit -m "chore: assemble changelog fragments for ${VERSION}"
+
+          pushed="false"
+          delay=2
+          for attempt in 1 2 3 4; do
+            # refs/heads/ on the push and on the tip lookup below: `stable` is
+            # also a tag, so a bare `HEAD:stable` is rejected with "dst refspec
+            # stable matches more than one" and `git fetch origin stable`
+            # resolves to the tag, leaving origin/stable stale.
+            if git push origin "HEAD:refs/heads/${SOURCE_BRANCH}"; then
+              pushed="true"
+              break
+            fi
+            echo "::warning::Push of assembled changelog failed (attempt ${attempt}); retrying in ${delay}s."
+            sleep "${delay}"
+            delay=$((delay * 2))
+            # Never rebase onto a moved branch: only the tested commit may be
+            # released. A remote tip other than RELEASE_TESTED_SHA means the
+            # branch moved under this run, so fail closed instead of
+            # re-baselining onto untested history.
+            _remote_tip="$(git ls-remote origin "refs/heads/${SOURCE_BRANCH}" 2>/dev/null | awk '{print $1}' || true)"
+            if [ -n "${_remote_tip}" ] && [ "${_remote_tip}" != "${RELEASE_TESTED_SHA}" ]; then
+              echo "::error::RELEASE_STALE_TIP branch=${SOURCE_BRANCH} tested=${RELEASE_TESTED_SHA} tip=${_remote_tip}: the branch moved after this gate started; not releasing a stale checkout."
+              exit 1
+            fi
+          done
+
+          if [ "${pushed}" != "true" ]; then
+            echo "::warning::Could not push the assembled changelog to ${SOURCE_BRANCH}; releasing without it. Fragments remain in changelog.d/ for the next release."
+            git reset --hard "${RELEASE_TESTED_SHA}"
+          fi
+
+      - name: Extract changelog for this version
+        id: changelog
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.resolve-version.outputs.version }}"
+          # Pull the section between this version header and the next
+          NOTES=$(awk \
+            "/^## \\[${VERSION}\\]/{found=1; next} /^## \\[/{if(found) exit} found{print}" \
+            CHANGELOG.md)
+          if [ -z "$NOTES" ]; then
+            NOTES="No changelog entry found for ${VERSION}."
+          fi
+          # Write to file to avoid quoting issues
+          echo "$NOTES" > /tmp/release_notes.md
+          echo "notes_file=/tmp/release_notes.md" >> "$GITHUB_OUTPUT"
+
+      # Signed consumer sync manifest (#7128). Built on the final release
+      # commit (HEAD: the tested commit plus any changelog/agents fold), on
+      # dry runs too so the builder is exercised. Consumers verify its
+      # attestation and hashes before running any fetched upstream code.
+      - name: Build sync manifest
+        id: sync_manifest
+        env:
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          SYNC_MANIFEST_PATH="${RUNNER_TEMP}/sync-manifest.json"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/build_sync_manifest.py build \
+            --repo-root . \
+            --commit "$(git rev-parse HEAD)" \
+            --version "${VERSION}" \
+            --out "${SYNC_MANIFEST_PATH}"
+          echo "path=${SYNC_MANIFEST_PATH}" >> "$GITHUB_OUTPUT"
+
+      # A failed attestation fails the job here, before any tag is pushed.
+      - name: Attest sync manifest
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: ${{ steps.sync_manifest.outputs.path }}
+
+      - name: Tag version and update stable pointer
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
+        env:
+          SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          VERSION="${{ needs.resolve-version.outputs.version }}"
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          VERSION_TAG_ALREADY_PUBLISHED=false
+
+          publish_tag_with_remote_verification() {
+            local tag_ref="$1"
+            local publication_mode="$2"
+            local expected_object_id=""
+            local remote_lookup_error=""
+            local remote_lookup_error_file=""
+            local remote_lookup_output=""
+            local remote_object_id=""
+            local attempt=1
+            local max_attempts=5
+            local backoff_seconds=2
+            local lookup_rc=0
+            local push_error_file=""
+            local push_rc=0
+
+            case "${publication_mode}" in
+              immutable|moving) ;;
+              *)
+                echo "::error::Unsupported tag publication mode '${publication_mode}' for ${tag_ref}."
+                return 1
+                ;;
+            esac
+
+            if ! expected_object_id="$(git rev-parse "${tag_ref}" 2>/dev/null)"; then
+              echo "::error::Could not resolve ${tag_ref} to a local Git object."
+              return 1
+            fi
+            if [[ ! "${expected_object_id}" =~ ^[0-9a-fA-F]{40,64}$ ]]; then
+              echo "::error::Could not resolve ${tag_ref} to a valid local Git object ID."
+              return 1
+            fi
+
+            while [ "${attempt}" -le "${max_attempts}" ]; do
+              echo "Publishing ${tag_ref} (attempt ${attempt}/${max_attempts})..."
+              push_error_file="$(mktemp "${RUNNER_TEMP:-/tmp}/release_tag_push_err.XXXXXX")"
+              set +e
+              if [ "${publication_mode}" = "immutable" ]; then
+                git push origin "${tag_ref}" 2>"${push_error_file}"
+              else
+                git push -f origin "${tag_ref}" 2>"${push_error_file}"
+              fi
+              push_rc=$?
+              set -e
+              cat "${push_error_file}" >&2 || true
+              if [ "${push_rc}" -eq 0 ]; then
+                rm -f "${push_error_file}"
+                return 0
+              fi
+              # A missing workflow scope never clears on retry (run 35639756385): stop now.
+              if { grep -qi 'refusing to allow' "${push_error_file}" && grep -qi 'workflow' "${push_error_file}"; } \
+                || grep -qiE 'workflows[^[:alnum:]]{0,2}permission' "${push_error_file}"; then
+                rm -f "${push_error_file}"
+                echo "::error::RELEASE_TAG_PUBLISH outcome=failed error_class=workflow_scope tag_ref=${tag_ref}: GitHub refused the push because the release credential cannot update workflow files. Give GH_PAT the \`workflow\` scope (classic PAT) or \`workflows: write\` (fine-grained PAT / GitHub App), then re-run the release."
+                return 1
+              fi
+              rm -f "${push_error_file}"
+
+              remote_lookup_error_file="$(mktemp "${RUNNER_TEMP:-/tmp}/release_tag_lsremote_err.XXXXXX")"
+              set +e
+              remote_lookup_output="$(git ls-remote --exit-code origin "${tag_ref}" 2>"${remote_lookup_error_file}")"
+              lookup_rc=$?
+              set -e
+              remote_lookup_error="$(<"${remote_lookup_error_file}")"
+              rm -f "${remote_lookup_error_file}"
+              remote_object_id=""
+              if [ "${lookup_rc}" -eq 0 ]; then
+                remote_object_id="$(printf '%s\n' "${remote_lookup_output}" | awk -v expected_ref="${tag_ref}" '$2 == expected_ref { print $1 }')"
+                if [[ "${remote_object_id}" =~ ^[0-9a-fA-F]{40,64}$ ]] && [ "${remote_object_id}" = "${expected_object_id}" ]; then
+                  echo "Remote ${tag_ref} already matches the local tag object; treating the failed push as accepted."
+                  return 0
+                fi
+                if [ "${publication_mode}" = "immutable" ] && [[ "${remote_object_id}" =~ ^[0-9a-fA-F]{40,64}$ ]]; then
+                  echo "::error::Immutable ${tag_ref} exists remotely at a different object ID; refusing to overwrite it."
+                  return 1
+                fi
+              fi
+
+              if [ "${attempt}" -eq "${max_attempts}" ]; then
+                echo "::error::Failed to publish and verify ${tag_ref} after ${max_attempts} attempts."
+                if [ "${lookup_rc}" -ne 0 ] && [ -n "${remote_lookup_error}" ]; then
+                  printf '%s\n' "${remote_lookup_error}" >&2
+                fi
+                return 1
+              fi
+
+              echo "::warning::Push result for ${tag_ref} was not confirmed; retrying in ${backoff_seconds}s."
+              sleep "${backoff_seconds}"
+              backoff_seconds=$((backoff_seconds * 2))
+              attempt=$((attempt + 1))
+            done
+          }
+
+          # Re-check after changelog assembly because that step may have moved
+          # HEAD. Only a tag peeled to this final release commit is recoverable.
+          set +e
+          git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" >/dev/null 2>/tmp/release_version_tag_lsremote_err
+          version_tag_lookup_rc=$?
+          set -e
+          case "${version_tag_lookup_rc}" in
+            0)
+              git fetch origin "refs/tags/${VERSION}:refs/tags/${VERSION}"
+              intended_release_commit="$(git rev-parse HEAD)"
+              existing_release_commit="$(git rev-parse "${VERSION}^{commit}")"
+              if [ "${existing_release_commit}" != "${intended_release_commit}" ]; then
+                echo "::error::Tag ${VERSION} already exists on origin at ${existing_release_commit}, not final release commit ${intended_release_commit}. Refusing to retarget the immutable tag."
+                exit 1
+              fi
+              VERSION_TAG_ALREADY_PUBLISHED=true
+              echo "Tag ${VERSION} already targets ${intended_release_commit} — retaining it for partial-release recovery."
+              ;;
+            2) ;;
+            *)
+              echo "::error::git ls-remote failed with exit code ${version_tag_lookup_rc}; refusing to publish without authoritative immutable-tag state."
+              cat /tmp/release_version_tag_lsremote_err >&2 2>/dev/null || true
+              exit 1
+              ;;
+          esac
+          # Stale-tip guard. RELEASE_TESTED_SHA is the commit this run was
+          # dispatched on and the gate tested. HEAD may be that commit or
+          # that commit plus the changelog-assembly commit, nothing else, and
+          # the branch tip must still be HEAD: a gate dispatched on an older
+          # tip that finishes after the branch moved (a promotion
+          # fast-forwarded `stable`, or a patch landed) would otherwise move
+          # the `stable` tag onto history the newer gate has superseded.
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "${HEAD_SHA}" != "${RELEASE_TESTED_SHA}" ]; then
+            if [ "$(git rev-parse HEAD^)" != "${RELEASE_TESTED_SHA}" ] \
+              || [ -n "$(git diff --name-only HEAD^ HEAD | grep -vE '^(CHANGELOG\.md$|changelog\.d/|agents\.md$|agents\.d/)' || true)" ]; then
+              echo "::error::RELEASE_UNTESTED_HEAD tested=${RELEASE_TESTED_SHA} head=${HEAD_SHA}: HEAD is not the tested commit plus its changelog/agents.md assembly; refusing to tag."
+              exit 1
+            fi
+          fi
+          BRANCH_TIP="$(git ls-remote origin "refs/heads/${SOURCE_BRANCH}" | awk '{print $1}')"
+          if [ -z "${BRANCH_TIP}" ]; then
+            echo "::error::Could not read the tip of ${SOURCE_BRANCH} from origin; refusing to tag without confirming the checkout is current."
+            exit 1
+          fi
+          if [ "${BRANCH_TIP}" != "${HEAD_SHA}" ]; then
+            echo "::error::RELEASE_STALE_TIP branch=${SOURCE_BRANCH} tested=${RELEASE_TESTED_SHA} tip=${BRANCH_TIP}: the branch moved after this gate started; not tagging a stale checkout. The gate on the new tip owns the release."
+            exit 1
+          fi
+
+          # Immutable version tag (refs/tags/ prefix for consistency with the moving-tag pushes below)
+          if [ "${VERSION_TAG_ALREADY_PUBLISHED}" != "true" ]; then
+            git tag -a "$VERSION" -m "Release $VERSION"
+            publish_tag_with_remote_verification "refs/tags/$VERSION" immutable
+          fi
+
+          # Moving stable pointer (use refs/tags/ to disambiguate from refs/heads/stable)
+          git tag -f stable "$VERSION"
+          publish_tag_with_remote_verification refs/tags/stable moving
+
+          # Moving major-version pointer (e.g. v1)
+          git tag -f "$MAJOR" "$VERSION"
+          publish_tag_with_remote_verification "refs/tags/$MAJOR" moving
+
+          echo "Tagged $VERSION and updated stable + $MAJOR pointers."
+
+      # Release manifest (safeguarded consumer updater, phase 1, #6943):
+      # build it from the tagged tree, attest it, and upload it as a release
+      # asset before consumers are notified. Any failure stops the job before
+      # consumer dispatch; dry runs skip all three steps. Logic lives in
+      # scripts/release_manifest_publish.sh (log prefix RELEASE_MANIFEST).
+      - name: Build release manifest
+        id: release_manifest
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
+        env:
+          RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
+          RELEASE_MANIFEST_DIR: ${{ runner.temp }}/release-manifest
+        run: |
+          set -euo pipefail
+          RELEASE_SHA="$(git rev-parse "${RELEASE_VERSION}^{commit}")"
+          RELEASE_SHA="${RELEASE_SHA,,}"
+          bash scripts/release_manifest_publish.sh build \
+            --tag "${RELEASE_VERSION}" \
+            --release-sha "${RELEASE_SHA}" \
+            --output-dir "${RELEASE_MANIFEST_DIR}"
+
+      - name: Attest release manifest
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: ${{ steps.release_manifest.outputs.manifest_path }}
+
+      - name: Create GitHub Release
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          VERSION="${{ needs.resolve-version.outputs.version }}"
+          RELEASE_LOOKUP_ERROR_FILE="/tmp/release_lookup_err"
+          RELEASE_CREATE_ERROR_FILE="/tmp/release_create_err"
+
+          # Audited the adjacent consumer-dispatch API calls: they publish an
+          # event but return no release-by-tag state, so this lookup cannot be
+          # merged with or served by existing workflow data.
+          set +e
+          EXISTING_RELEASE_TAG="$(gh_retry gh api "repos/${{ github.repository }}/releases/tags/${VERSION}" --jq 'if (.draft == false and .prerelease == false) then .tag_name else error("release-is-draft-or-prerelease") end' 2>"${RELEASE_LOOKUP_ERROR_FILE}")"
+          RELEASE_LOOKUP_RC=$?
+          set -e
+
+          if [ "${RELEASE_LOOKUP_RC}" -eq 0 ]; then
+            if [ "${EXISTING_RELEASE_TAG}" != "${VERSION}" ]; then
+              echo "::error::Release lookup for ${VERSION} returned unexpected tag '${EXISTING_RELEASE_TAG}'."
+              exit 1
+            fi
+            echo "GitHub Release ${VERSION} already exists — accepting partial-release recovery."
+            exit 0
+          fi
+
+          if ! grep -Fq "HTTP 404" "${RELEASE_LOOKUP_ERROR_FILE}"; then
+            echo "::error::Failed to determine whether GitHub Release ${VERSION} exists."
+            cat "${RELEASE_LOOKUP_ERROR_FILE}" >&2 2>/dev/null || true
+            exit "${RELEASE_LOOKUP_RC}"
+          fi
+
+          set +e
+          gh_retry gh release create "${VERSION}" \
+            --title "${VERSION}" \
+            --notes-file "${{ steps.changelog.outputs.notes_file }}" \
+            --target "${SOURCE_BRANCH}" 2>"${RELEASE_CREATE_ERROR_FILE}"
+          RELEASE_CREATE_RC=$?
+          set -e
+          if [ "${RELEASE_CREATE_RC}" -eq 0 ]; then
+            exit 0
+          fi
+
+          # A concurrent recovery run may have created the release after the
+          # confirmed 404. Accept that race only after an exact-tag recheck.
+          set +e
+          EXISTING_RELEASE_TAG="$(gh_retry gh api "repos/${{ github.repository }}/releases/tags/${VERSION}" --jq 'if (.draft == false and .prerelease == false) then .tag_name else error("release-is-draft-or-prerelease") end' 2>"${RELEASE_LOOKUP_ERROR_FILE}")"
+          RELEASE_RECHECK_RC=$?
+          set -e
+          if [ "${RELEASE_RECHECK_RC}" -eq 0 ] && [ "${EXISTING_RELEASE_TAG}" = "${VERSION}" ]; then
+            echo "GitHub Release ${VERSION} appeared concurrently — accepting it as complete."
+            exit 0
+          fi
+
+          cat "${RELEASE_CREATE_ERROR_FILE}" >&2 2>/dev/null || true
+          cat "${RELEASE_LOOKUP_ERROR_FILE}" >&2 2>/dev/null || true
+          exit "${RELEASE_CREATE_RC}"
+
+      # Separate from "Create GitHub Release", which exits early on
+      # partial-release recovery. A rerun rebuilds a byte-identical manifest
+      # for the same commit and --clobber replaces the asset.
+      - name: Upload sync manifest
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+          SYNC_MANIFEST_PATH: ${{ steps.sync_manifest.outputs.path }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          if ! gh_retry gh release upload "${VERSION}" "${SYNC_MANIFEST_PATH}" --clobber; then
+            echo "::error::SYNC_MANIFEST outcome=upload_failed version=${VERSION}"
+            exit 1
+          fi
+          echo "SYNC_MANIFEST outcome=uploaded version=${VERSION}"
+
+      - name: Upload release manifest asset
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
+          RELEASE_MANIFEST_PATH: ${{ steps.release_manifest.outputs.manifest_path }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          bash scripts/release_manifest_publish.sh upload \
+            --tag "${RELEASE_VERSION}" \
+            --manifest "${RELEASE_MANIFEST_PATH}" \
+            --repo "${RELEASE_REPOSITORY}"
+
+      - name: Notify consumer repos via repository_dispatch
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          VERSION="${{ needs.resolve-version.outputs.version }}"
+          RELEASE_SHA="$(git rev-parse "${VERSION}^{commit}")"
+          if [[ ! "${RELEASE_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Could not peel ${VERSION} to a 40-character release commit SHA."
+            exit 1
+          fi
+          RELEASE_SHA="${RELEASE_SHA,,}"
+
+          # Read consumer repos from .github/ai/consumer_repos.json (a JSON
+          # array of repo strings, e.g. ["owner/repo"]). If the file is
+          # absent the step is a no-op — consumers still pick up changes via
+          # their daily schedule.
+          CONSUMER_FILE=".github/ai/consumer_repos.json"
+          if [ ! -f "$CONSUMER_FILE" ]; then
+            echo "No consumer_repos.json found — skipping repository_dispatch."
+            exit 0
+          fi
+
+          # The registry must be a JSON array; `.[]` on an object would dispatch to its values.
+          if ! jq -e 'type == "array"' "$CONSUMER_FILE" >/dev/null 2>&1; then
+            echo "::warning::${CONSUMER_FILE} is not a JSON array of owner/repo strings — skipping repository_dispatch."
+            exit 0
+          fi
+
+          REPOS=$(jq -r '.[] | tostring | explode | map(if . < 32 or . == 127 then 32 else . end) | implode' "$CONSUMER_FILE" 2>/dev/null || true)
+          if [ -z "$REPOS" ]; then
+            echo "consumer_repos.json is empty — skipping."
+            exit 0
+          fi
+
+          # Control characters (CR, LF, NUL, ...) become spaces inside jq, before bash
+          # command substitution could silently drop a NUL and let the entry pass.
+          # One entry per line; each must be a plain owner/repo before it reaches a
+          # URL path, so a malformed entry can never split or glob into extra targets.
+          # The rejected value is never printed, only its position in the list.
+          REPO_INDEX=0
+          while IFS= read -r REPO; do
+            REPO_INDEX=$((REPO_INDEX + 1))
+            [ -z "${REPO}" ] && continue
+            if [[ ! "${REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
+              || [[ "${REPO}" =~ (^|/)\.{1,2}(/|$) ]]; then
+              echo "::warning::Skipping malformed consumer registry entry #${REPO_INDEX} in ${CONSUMER_FILE} (expected owner/repo)."
+              continue
+            fi
+            echo "Dispatching coding-workflows-stable-released to ${REPO} ..."
+            # A duplicate event is harmless: the consumer updater renders current
+            # stable regardless of the payload, so a retried POST is safe.
+            GH_RETRY_IDEMPOTENT=true gh_retry gh api "repos/${REPO}/dispatches" \
+              -f event_type="coding-workflows-stable-released" \
+              -f "client_payload[version]=${VERSION}" \
+              -f "client_payload[sha]=${RELEASE_SHA}" \
+              </dev/null \
+              || echo "::warning::Failed to dispatch to ${REPO} (may lack permissions)"
+          done <<< "${REPOS}"
+
+      - name: Release disabled summary
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled != 'true' }}
+        env:
+          RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "::notice::STABLE_RELEASE_DISABLED version=${RELEASE_VERSION} sha=${RELEASE_TESTED_SHA}: validation and the CI lint gate passed; changelog push, tags, GitHub release, consumer dispatch and sync-to-main skipped"
+          printf 'Stable release %s passed the gate but was not published: STABLE_RELEASE_ENABLED is off.\n' "${RELEASE_VERSION}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Dry-run summary
+        if: ${{ inputs.dry_run }}
+        env:
+          SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
+        run: |
+          echo "=== DRY RUN ==="
+          VERSION="${{ needs.resolve-version.outputs.version }}"
+          echo "Would tag ${SOURCE_BRANCH} as: ${VERSION}"
+          echo "Would update pointers: stable, $(echo "${VERSION}" | cut -d. -f1)"
+          echo ""
+          echo "Changelog notes:"
+          cat "${{ steps.changelog.outputs.notes_file }}"

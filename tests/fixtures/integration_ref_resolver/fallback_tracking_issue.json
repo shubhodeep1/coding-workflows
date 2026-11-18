@@ -1,0 +1,16 @@
+{
+  "name": "fallback_tracking_issue",
+  "issues": {
+    "101": {
+      "body": "Child task without integration metadata\n\nTracking issue: #1047\n"
+    },
+    "1047": {
+      "body": "## Project: Tracking\n\n**Integration branch:** `orchestrator/project-fallback`\n"
+    }
+  },
+  "branch_exists": {
+    "orchestrator/project-fallback": true
+  },
+  "expected_stdout": "orchestrator/project-fallback",
+  "expected_exit_code": 0
+}

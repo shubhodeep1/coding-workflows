@@ -1,0 +1,34 @@
+# IMPORTANT: This file is managed by coding-workflows and will be overwritten
+# by the update process. Do not add custom logic here.
+#
+# Fails any pull request or push that changes a coding-workflows managed
+# wrapper (.github/workflows/ai-*.yml and the other files the sync installs,
+# including ai-update-workflows.yml and this file) unless every managed
+# wrapper equals the upstream template rendered at the signed release this
+# file pins. The sync's own update pull requests and the daily restore pull
+# requests pass; hand edits do not.
+#
+# pull_request_target runs this file from the base branch, so a pull request
+# cannot change the check that judges it. Nothing from the pull request is
+# executed: its files are read as data. The verdict is the commit status
+# coding-workflows/workflow-integrity on the pull request head, which the
+# default-branch ruleset requires.
+name: AI Workflow Integrity
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: ['**']
+permissions:
+  contents: read
+  statuses: write
+concurrency:
+  group: ai-workflow-integrity-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  integrity:
+    uses: shubhodeep1/coding-workflows/.github/workflows/workflow_integrity.yml@stable
+    # Least privilege: forward only the secrets the reusable workflow
+    # declares, never inherit them all (consumer repos hold other secrets).
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}

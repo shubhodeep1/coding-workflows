@@ -1,0 +1,65 @@
+Repository task: Resolve merge conflicts.
+
+The repository currently contains files with Git merge conflict markers.
+
+A Git merge conflict marker block is the standard output `git merge` writes
+into a conflicted file: a start line consisting of seven less-than characters
+followed by a space and the name HEAD, then the lines from HEAD, then a
+separator line consisting of seven equals characters, then the lines from the
+other branch, then an end line consisting of seven greater-than characters
+followed by a space and the name of the other branch. These start, separator,
+and end lines are what you must look for and remove; this prompt deliberately
+does not reproduce them literally so a repository-wide scan for conflict
+markers does not match this file.
+
+Conflicted files reported by `git diff --name-only --diff-filter=U` ({{CONFLICTED_FILES_COUNT}} total):
+{{CONFLICTED_FILES_LIST}}
+
+Your task:
+Resolve merge conflicts safely.
+
+{{SERENA_TOOL_HINTS_RESOLVER}}
+
+Rules:
+- You MUST resolve EVERY conflicted file listed above in this single run. Do not stop after fixing only one file or a subset.
+- Before declaring success, re-scan every file in the repository to confirm no Git conflict markers (the seven-character lines git inserts at the start, separator, and end of each conflict hunk) remain anywhere. If any remain, keep resolving until none are left.
+- Only resolve conflicts.
+- Do not introduce new functionality.
+- Do not refactor unrelated code.
+- Do not modify files that do not contain conflict markers.
+- Prefer preserving behavior from both sides when possible.
+- If both sides are incompatible, choose the version consistent with surrounding code.
+- Remove all conflict markers.
+- Ensure the final code compiles logically.
+- You may read repository files as needed.
+- You may modify repository files directly.
+- Do not generate patches.
+- Do not generate scripts.
+- Do not modify GitHub workflow files except when resolving merge conflicts.
+- Do not access the network.
+
+Edit-tool discipline (use your available file-editing tools with fallbacks,
+verify-after-write, and avoid `sed -i`/`perl -i`/`awk` for multi-line edits)
+is defined in `unattended_system_instructions.md` §4. Apply it; don't restate
+it.
+
+Note: "Do not generate patches" above means do not output a textual unified-
+diff as your final response — use your available file-editing tools to write
+the resolution to disk.
+
+Your edits are diff-checked against the set of files that actually had merge conflicts. Any file you modify that did NOT contain conflict markers will abort the run with no commit. Do not "improve" surrounding code, rewrite unrelated sections, or add helper scripts, env vars, or workflow steps — if a file has no conflict markers, leave it alone.
+
+Before finalizing, verify every file path you reference in your edits (including paths mentioned in shell commands, sourced scripts, or workflow steps) exists in the repository by reading it. If you cannot read a referenced file, your resolution is wrong — revert that edit and choose a resolution that does not invent new files, scripts, or invocations. The most common failure mode is hallucinating a plausible helper script (e.g. build_repo_overview.sh) and wiring it into the bootstrap loop; the downstream existence check will catch this and abort the merge-resolve commit.
+
+Final output must be plain text.
+
+Output sections:
+Conflicts resolved:
+- list files where conflicts were resolved
+
+Self-check:
+- confirm every edited file contained conflict markers
+- confirm every file path referenced by your edits exists in the repository
+
+Notes:
+- brief explanation if any resolution required choosing one side

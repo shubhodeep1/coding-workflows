@@ -1,0 +1,58 @@
+---
+name: Auto release stable
+
+# Releases the `stable` branch when it is ahead of the `stable` tag.
+#
+# Consumers pin the tag, not the branch, so a patch merged straight into the
+# `stable` branch is invisible to them until test-and-mark-stable.yml runs.
+# This schedule dispatches that gate whenever the branch tip differs from the
+# tag commit, skipping while a gate run is queued or running on any branch
+# (the gate's e2e job cancels concurrent siblings) and once the gate has
+# failed AUTO_RELEASE_STABLE_MAX_ATTEMPTS times on the current tip (a human
+# has to look at that; earlier failures are retried on the next tick, and a
+# cancelled gate never counts). See scripts/auto_release_stable.sh for the
+# decision order.
+#
+# Promotion of `main` to `stable` stays with promote-main-to-stable.yml:
+# its daily cycle job proves `main` first, and an operator can still run it
+# by hand.
+
+"on":
+  schedule:
+    # Half past the hour so this never starts in the same minute as the
+    # daily promote cycle (00:00): whichever of the two dispatched a gate
+    # first is then visible to the other's in-flight check.
+    - cron: "30 */6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  actions: write
+
+# Shares the promote job's group so the check-then-dispatch here can never
+# interleave with a poller-driven promotion (which fast-forwards stable and
+# dispatches the same release gate): one of the two waits for the other, and
+# the later one then sees the in-flight gate run and skips.
+concurrency:
+  group: promote-main-to-stable
+  cancel-in-progress: false
+
+jobs:
+  release-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Dispatch the release gate when stable is ahead of its tag
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AUTO_RELEASE_STABLE_ENABLED: ${{ vars.AUTO_RELEASE_STABLE_ENABLED || 'true' }}
+          AUTO_RELEASE_STABLE_MAX_ATTEMPTS: ${{ vars.AUTO_RELEASE_STABLE_MAX_ATTEMPTS || '3' }}
+        run: |
+          set -euo pipefail
+          bash scripts/auto_release_stable.sh

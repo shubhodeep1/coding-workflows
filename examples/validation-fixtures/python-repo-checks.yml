@@ -1,0 +1,9 @@
+type: python-repo-checks
+entry: scripts/run_validation_repo_checks.sh
+slots:
+  project_name: nightly-python-repo-checks
+  canary_tools:
+    - bash
+    - python3
+    - jq
+  tap_plan: 3

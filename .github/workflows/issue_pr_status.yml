@@ -1,0 +1,1466 @@
+---
+name: AI Issue PR Status Sync
+
+"on":
+  workflow_call:
+    secrets:
+      GH_PAT:
+        required: true
+      TG_BOT_SECRET:
+        required: false
+      OPENROUTER_API_KEY:
+        required: false
+      # Signed job-token comments (run-volume plan item 15): optional; see scripts/comment_signature.py.
+      AI_COMMENT_SIGNING_SECRET:
+        required: false
+
+env:
+  # Claude capacity wait (issue #7370): a capacity fallback waits for the
+  # hourly capacity-resume pass instead of running codex/OpenCode. Off for the
+  # `core` install profile, which has no orchestrate-poll wrapper to resume
+  # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
+  FINAL_LABEL: ${{ github.event.pull_request.merged && 'ai:merged' || 'ai:closed' }}
+  # Signed job-token comments (run-volume plan item 15, D16; see
+  # scripts/comment_signature.py). The opt-in secret and the job token sit
+  # next to each step's GH_PAT, never here, so a step without the PAT never
+  # sees them. Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false
+  # posts with GH_PAT again while signed comments already posted still verify.
+  AI_COMMENT_SIGNING_POST: ${{ vars.AI_COMMENT_SIGNING_POST || 'true' }}
+
+jobs:
+  sync-issue-status:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      linked_issue: ${{ steps.linked_issue.outputs.number }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Configure git auth for memory helper clones
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
+          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
+          SERVER_HOST="${SERVER_HOST#http://}"
+          SERVER_HOST="${SERVER_HOST%/}"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Fetch memory helper scripts
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          PERSIST_POSTMERGE_VERIFY_ENABLED: ${{ vars.PERSIST_POSTMERGE_VERIFY_ENABLED || 'false' }}
+        run: |
+          set -euo pipefail
+
+          wf_source="shubhodeep1/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            script_ref="${{ github.sha }}"
+          else
+            script_ref="stable"
+          fi
+
+          mkdir -p scripts
+
+          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
+          SERVER_HOST="${SERVER_HOST#http://}"
+          SERVER_HOST="${SERVER_HOST%/}"
+          WF_REMOTE_URL="https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${wf_source}"
+
+          support_stage_root="${RUNNER_TEMP}/codex-issue-pr-status-support-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          support_primary_dir="${support_stage_root}/primary"
+          support_main_dir="${support_stage_root}/main"
+          is_self_repo="false"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            is_self_repo="true"
+          fi
+
+          checkout_support_ref() {
+            local ref="$1"
+            local dest="$2"
+            rm -rf "${dest}"
+            mkdir -p "$(dirname "${dest}")"
+            if git clone --quiet --no-tags --depth 1 --branch "${ref}" "${WF_REMOTE_URL}" "${dest}" 2>/dev/null; then
+              return 0
+            fi
+            rm -rf "${dest}"
+            return 1
+          }
+
+          support_primary_root=""
+          resolved_script_ref="${script_ref}"
+          if [ "${is_self_repo}" = "true" ]; then
+            support_primary_root="${GITHUB_WORKSPACE}"
+          elif checkout_support_ref "${script_ref}" "${support_primary_dir}"; then
+            support_primary_root="${support_primary_dir}"
+          elif checkout_support_ref "main" "${support_primary_dir}"; then
+            echo "::warning::Support checkout ref ${script_ref} is unavailable; using main."
+            support_primary_root="${support_primary_dir}"
+            resolved_script_ref="main"
+          fi
+
+          support_main_root=""
+          if [ "${resolved_script_ref}" != "main" ] && checkout_support_ref "main" "${support_main_dir}"; then
+            support_main_root="${support_main_dir}"
+          fi
+
+          fetch_from_ref_or_local() {
+            local repo_path="$1"
+            local target_path="$2"
+            local allow_main_fallback="${3:-true}"
+            local source_path=""
+
+            mkdir -p "$(dirname "${target_path}")"
+
+            if [ -n "${support_primary_root}" ] && [ -f "${support_primary_root}/${repo_path}" ]; then
+              source_path="${support_primary_root}/${repo_path}"
+            elif [ "${allow_main_fallback}" = "true" ] && [ -n "${support_main_root}" ] && [ -f "${support_main_root}/${repo_path}" ]; then
+              echo "::warning::${repo_path} not found on ${resolved_script_ref}; falling back to main"
+              source_path="${support_main_root}/${repo_path}"
+            fi
+
+            if [ -n "${source_path}" ]; then
+              if [ -e "${target_path}" ] && [ "$(realpath -m "${source_path}")" = "$(realpath -m "${target_path}")" ]; then
+                return 0
+              fi
+              cp "${source_path}" "${target_path}" || {
+                echo "Failed to copy ${repo_path} from ${source_path} to ${target_path}" >&2
+                return 1
+              }
+              return 0
+            fi
+
+            if [ -f "${target_path}" ]; then
+              echo "Using local fallback for ${target_path} (not found on ${resolved_script_ref}: ${repo_path})"
+              return 0
+            fi
+
+            echo "Missing required file: ${repo_path} (${resolved_script_ref}) and local fallback ${target_path}" >&2
+            return 1
+          }
+
+          MEMORY_HELPERS_READY=1
+          _fetched_scripts=()
+          for f in gh_helpers.sh label_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py memory_helpers.sh; do
+            if ! fetch_from_ref_or_local "scripts/${f}" "scripts/${f}"; then
+              MEMORY_HELPERS_READY=0
+            fi
+            _fetched_scripts+=("${f}")
+          done
+          # Issue #6631: orchestrate_lib.py parses an issue's declared
+          # integration branch for the PR-close label/close gate. Fetched
+          # outside the memory-helper loop so a miss does not disable lineage
+          # finalization; when absent, the declared branch is treated as empty.
+          if ! fetch_from_ref_or_local "scripts/orchestrate_lib.py" "scripts/orchestrate_lib.py"; then
+            echo "::warning::scripts/orchestrate_lib.py unavailable; declared integration branches will be treated as empty."
+          fi
+          _fetched_scripts+=("orchestrate_lib.py")
+          # Issue #7657: partial_delivery.py reads the deferred-scope section of
+          # a merged PR body. Fetched outside the memory-helper loop; when it is
+          # missing, a PR carrying the partial-delivery marker leaves its issue
+          # open with a warning (reason=helper_missing) instead of closing it.
+          if ! fetch_from_ref_or_local "scripts/partial_delivery.py" "scripts/partial_delivery.py" "false"; then
+            echo "::warning::scripts/partial_delivery.py unavailable; partial-delivery PRs will leave their issues open without the remaining-items comment."
+          fi
+          _fetched_scripts+=("partial_delivery.py")
+          # Heal port (P6 step 2, Refs #8434): this repository only. Fetched
+          # without the main fallback so the script and its helper come from
+          # one ref, and kept out of _fetched_scripts so the consumer
+          # .gitignore is unchanged. A miss skips the heal port step.
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            HEAL_PORT_READY=1
+            for heal_port_file in heal_port_to_default.sh workflow_failure_heal.py; do
+              if ! fetch_from_ref_or_local "scripts/${heal_port_file}" "scripts/${heal_port_file}" "false"; then
+                echo "::warning::scripts/${heal_port_file} unavailable; the heal port step will skip."
+                HEAL_PORT_READY=0
+              fi
+            done
+            echo "HEAL_PORT_READY=${HEAL_PORT_READY}" >> "$GITHUB_ENV"
+          fi
+          # Issue #8427 P5: helpers of the "Arm check after merge" step, fetched
+          # only when PERSIST_POSTMERGE_VERIFY_ENABLED is true. Optional: a miss
+          # leaves that step to log reason=helper_absent (or a fail-open error).
+          # targeted_file_context.py is imported by acceptance_check.py.
+          if [ "${PERSIST_POSTMERGE_VERIFY_ENABLED:-false}" = "true" ]; then
+            for _ppv_f in persist_postmerge_verify.py acceptance_check.py attempt_journal.py gh_api_retry.py targeted_file_context.py; do
+              if ! fetch_from_ref_or_local "scripts/${_ppv_f}" "scripts/${_ppv_f}" "false"; then
+                echo "::warning::scripts/${_ppv_f} unavailable; the check after merge may not arm."
+              fi
+              _fetched_scripts+=("${_ppv_f}")
+            done
+          fi
+          # Block fetched scripts from being committed in consumer repos.
+          if [ "${{ github.repository }}" != "${wf_source}" ]; then
+            {
+              echo "# Auto-generated by coding-workflows — DO NOT EDIT"
+              echo "# Prevents runtime-fetched support scripts from being committed."
+              printf '%s\n' "${_fetched_scripts[@]}" tg_helpers.sh .gitignore
+            } > scripts/.gitignore
+          fi
+          # Fetch AI memory schema files so consumer repos that lack
+          # schemas on their default branch can bootstrap the ai-memory
+          # branch (schemas are validated during memory operations).
+          # Include H5/H6 cache schemas; fetch remains best-effort until
+          # these files exist on the selected support ref.
+          mkdir -p ai-memory/schemas
+          for sf in \
+            memory_record.v1.json \
+            processed_command_entry.v1.json \
+            run_ledger_entry.v1.json \
+            task_lineage.v1.json \
+            actions_runs_cache.v1.json \
+            workflow_log_analysis_cache.v1.json \
+            validation_history.v1.json \
+            operator_bypass_audit.v1.json \
+            revalidate_events.v1.json \
+            validation_discovery.v1.json \
+            lessons_learned_record.v1.json; do
+            if [ ! -f "ai-memory/schemas/${sf}" ]; then
+              if fetch_from_ref_or_local "ai-memory/schemas/${sf}" "ai-memory/schemas/${sf}.tmp"; then
+                mv "ai-memory/schemas/${sf}.tmp" "ai-memory/schemas/${sf}"
+              else
+                rm -f "ai-memory/schemas/${sf}.tmp"
+              fi
+            fi
+          done
+
+          echo "MEMORY_HELPERS_READY=${MEMORY_HELPERS_READY}" >> "$GITHUB_ENV"
+
+      - name: Update linked issue labels when PR closes
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PR_MERGED: ${{ github.event.pull_request.merged }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body || '' }}
+          # Issue #7160: binding facts for an unmerged close (event payload, no API call).
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          PR_AUTHOR_LOGIN: ${{ github.event.pull_request.user.login || '' }}
+          # Issue #7657: the merged head, for the bound ai/issue-<n> ref delete.
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+          PARTIAL_DELIVERY_TRACKING_ENABLED: ${{ vars.PARTIAL_DELIVERY_TRACKING_ENABLED || 'true' }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+          # Issue #7160 (decision Q1: A): the GH_PAT login, read lazily at most
+          # once per step and only for an unmerged close whose issue already
+          # passed the head-repository and branch checks. Fails closed.
+          UNMERGED_CLOSE_LOGIN=""
+          UNMERGED_CLOSE_LOGIN_STATE="unresolved"
+          resolve_unmerged_close_login() {
+            if [ "${UNMERGED_CLOSE_LOGIN_STATE}" = "unresolved" ]; then
+              local resolved_login=""
+              resolved_login="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null || true)"
+              resolved_login="$(printf '%s' "${resolved_login}" | tr -d '[:space:]')"
+              if [ -n "${resolved_login}" ]; then
+                UNMERGED_CLOSE_LOGIN="${resolved_login}"
+                UNMERGED_CLOSE_LOGIN_STATE="ok"
+              else
+                UNMERGED_CLOSE_LOGIN_STATE="failed"
+              fi
+            fi
+            [ "${UNMERGED_CLOSE_LOGIN_STATE}" = "ok" ]
+          }
+
+          # BEGIN partial-delivery merge handling (#7657)
+          # A merged PR whose body carries `<!-- ai:partial-delivery:v1
+          # issue=<n> -->` (written by implement.yml from the approved plan's
+          # `## Deferred scope` section) delivered only part of issue <n>. When
+          # the PR is bound to that issue by the #7160 rules (same-repository
+          # head, head branch ai/issue-<n>, PR author equal to the GH_PAT
+          # login), the issue stays open: the remaining items are posted once,
+          # the phase label returns to ai:clarification and clarify restarts
+          # with the automated `<!-- ai:partial-delivery-restart:<n> -->`
+          # marker. Returns 0 when the issue was kept open, 1 to close it.
+          # GitHub API audit (CLAUDE.md §14): only for a merged, bound partial
+          # PR: the memoized GET /user, one paginated comments read, at most
+          # two comment POSTs, the existing label call, one ref GET and at most
+          # one ref DELETE. Every other PR adds no call.
+          handle_partial_delivery_merge() {
+            local issue="$1"
+            local marker="<!-- ai:partial-delivery:v1 issue=${issue} -->"
+            local switch
+            switch="$(printf '%s' "${PARTIAL_DELIVERY_TRACKING_ENABLED:-}" | tr '[:upper:]' '[:lower:]')"
+            case "${switch}" in
+              ""|true) ;;
+              false) return 1 ;;
+              *)
+                echo "::warning::PARTIAL_DELIVERY_TRACKING_ENABLED has an unrecognized value; partial-delivery tracking is off."
+                return 1
+                ;;
+            esac
+            if ! printf '%s\n' "${PR_BODY:-}" | tr -d '\r' | sed 's/[[:space:]]*$//' | grep -Fqx -- "${marker}"; then
+              return 1
+            fi
+            local reason=""
+            if [ -z "${PR_HEAD_REPO:-}" ] || [ "${PR_HEAD_REPO}" != "${REPOSITORY}" ]; then
+              reason="foreign_head"
+            elif [ -z "${BRANCH_ISSUE_NUMBER}" ] || [ "${BRANCH_ISSUE_NUMBER}" != "${issue}" ] || [ "${PR_HEAD_REF:-}" != "ai/issue-${issue}" ]; then
+              # Exact head ref, as the poller's close sweep requires.
+              reason="unbound_issue"
+            elif ! resolve_unmerged_close_login; then
+              # The binding cannot be checked: keep the issue open rather than
+              # lose the deferred items (the close sweep defers the same way).
+              # Move it off its pre-merge phase label (ai:ready-to-merge) so it
+              # visibly re-enters clarification instead of looking merge-ready.
+              set_issue_phase_label_resilient "${issue}" "ai:clarification" "${REPOSITORY}" || true
+              echo "::warning::PR #${PR_NUMBER} marks issue #${issue} as partially delivered but the pipeline login could not be read; the issue stays open in ai:clarification without the remaining-items comment. Post /reclarify on it to restart clarification for the deferred items."
+              echo "PARTIAL_DELIVERY mode=merge pr=${PR_NUMBER} issue=${issue} outcome=kept_open reason=identity_unavailable label=${SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME:-unknown}"
+              return 0
+            elif [ -z "${PR_AUTHOR_LOGIN:-}" ] || [ "${PR_AUTHOR_LOGIN,,}" != "${UNMERGED_CLOSE_LOGIN,,}" ]; then
+              reason="author_mismatch"
+            fi
+            if [ -n "${reason}" ]; then
+              echo "PARTIAL_DELIVERY mode=merge pr=${PR_NUMBER} issue=${issue} outcome=skip reason=${reason}"
+              return 1
+            fi
+            local work body_file status_json pd_status
+            work="$(mktemp -d)"
+            body_file="${work}/pr_body.md"
+            printf '%s\n' "${PR_BODY:-}" > "${body_file}"
+            if [ ! -f scripts/partial_delivery.py ] || [ -L scripts/partial_delivery.py ]; then
+              set_issue_phase_label_resilient "${issue}" "ai:clarification" "${REPOSITORY}" || true
+              echo "::warning::PR #${PR_NUMBER} marks issue #${issue} as partially delivered but scripts/partial_delivery.py is unavailable; the issue stays open in ai:clarification. Post /reclarify on it to restart clarification for the deferred items."
+              echo "PARTIAL_DELIVERY mode=merge pr=${PR_NUMBER} issue=${issue} outcome=kept_open reason=helper_missing label=${SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME:-unknown}"
+              rm -rf "${work}"
+              return 0
+            fi
+            status_json="$(python3 -I -B scripts/partial_delivery.py pr-body-status --body-file "${body_file}" --issue "${issue}" 2>/dev/null || echo '{}')"
+            pd_status="$(printf '%s' "${status_json}" | python3 -I -B -c 'import json, sys; print(json.load(sys.stdin).get("status") or "")' 2>/dev/null || echo '')"
+            if [ "${pd_status}" != "partial" ]; then
+              echo "PARTIAL_DELIVERY mode=merge pr=${PR_NUMBER} issue=${issue} outcome=skip reason=not_partial"
+              rm -rf "${work}"
+              return 1
+            fi
+            local login_lc="${UNMERGED_CLOSE_LOGIN,,}"
+            local remaining_marker="<!-- ai:partial-delivery-remaining:v1 issue=${issue} pr=${PR_NUMBER} -->"
+            local restart_text="/reclarify"$'\n'"<!-- ai:partial-delivery-restart:${issue} -->"
+            local comments_file="${work}/comments.jsonl"
+            local comment_state="failed" restart_state="failed" branch_state="failed"
+            local remaining_id=""
+            if gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${issue}/comments?per_page=100" \
+              --jq '.[] | {id: .id, login: ((.user.login // "") | ascii_downcase), body: ((.body // "") | gsub("\r"; "") | sub("\\s+$"; ""))}' \
+              > "${comments_file}" 2>/dev/null; then
+              remaining_id="$(jq -rs --arg login "${login_lc}" --arg m "${remaining_marker}" \
+                '[.[] | select(.login == $login and (.body | contains($m))) | .id] | max // empty' "${comments_file}" 2>/dev/null || true)"
+              if [ -n "${remaining_id}" ]; then
+                comment_state="present"
+              else
+                local comment_file="${work}/remaining.md"
+                if python3 -I -B scripts/partial_delivery.py remaining-comment --body-file "${body_file}" --issue "${issue}" --pr "${PR_NUMBER}" \
+                  > "${comment_file}" 2>/dev/null && [ -s "${comment_file}" ] \
+                  && remaining_id="$(gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue}/comments" -F "body=@${comment_file}" --jq '.id' 2>/dev/null)" \
+                  && [[ "${remaining_id}" =~ ^[0-9]+$ ]]; then
+                  comment_state="posted"
+                else
+                  remaining_id=""
+                fi
+              fi
+            fi
+            set_issue_phase_label_resilient "${issue}" "ai:clarification" "${REPOSITORY}" || true
+            if [ -n "${remaining_id}" ]; then
+              if [ "${comment_state}" = "present" ] && jq -es --arg login "${login_lc}" --arg body "${restart_text}" --argjson after "${remaining_id}" \
+                'any(.[]; .login == $login and .body == $body and .id > $after)' "${comments_file}" >/dev/null 2>&1; then
+                restart_state="present"
+              elif gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue}/comments" -f "body=${restart_text}" >/dev/null 2>&1; then
+                restart_state="posted"
+              fi
+            fi
+            local ref_sha=""
+            if [[ ! "${PR_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+              branch_state="kept"
+            elif ref_sha="$(gh api "repos/${REPOSITORY}/git/ref/heads/ai/issue-${issue}" --jq '.object.sha' 2>"${work}/ref.err")"; then
+              if [ "${ref_sha}" = "${PR_HEAD_SHA}" ]; then
+                if gh api -X DELETE "repos/${REPOSITORY}/git/refs/heads/ai/issue-${issue}" >/dev/null 2>&1; then
+                  branch_state="deleted"
+                fi
+              else
+                branch_state="kept"
+              fi
+            elif grep -qiE 'HTTP 404|Not Found' "${work}/ref.err" 2>/dev/null; then
+              branch_state="absent"
+            fi
+            if [ "${comment_state}" = "failed" ] || [ "${restart_state}" = "failed" ]; then
+              echo "::warning::Issue #${issue} stays open after partial-delivery PR #${PR_NUMBER}, but the remaining-items or restart comment could not be posted (comment=${comment_state} restart=${restart_state}); stall recovery or a person must restart clarify."
+            fi
+            echo "PARTIAL_DELIVERY mode=merge pr=${PR_NUMBER} issue=${issue} outcome=kept_open reason=deferred_scope comment=${comment_state} restart=${restart_state} branch=${branch_state} label=${SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME:-unknown}"
+            rm -rf "${work}"
+            return 0
+          }
+          # END partial-delivery merge handling (#7657)
+
+          # The default branch comes from the event payload (consumer repos
+          # do not all use `main`); fall back to `main` only when the payload
+          # lacks the field, which keeps the previous behaviour (#5776).
+          REPO_DEFAULT_BRANCH="${PR_DEFAULT_BRANCH:-}"
+          if [ -z "${REPO_DEFAULT_BRANCH}" ]; then
+            echo "::warning::Event payload has no repository.default_branch; assuming main."
+            REPO_DEFAULT_BRANCH="main"
+          fi
+
+          TRACKING_ISSUES=""
+          MANAGED_ISSUES=""
+          ORCHESTRATOR_CLASSIFICATION_COMPLETE="true"
+          # Issues this PR close actually completes (closed unmerged, merged
+          # into the default branch, or merged into the issue's declared
+          # integration branch / a managed child's orchestrator/project-*
+          # branch). Only these get lineage finalized.
+          LINEAGE_FINALIZE_ISSUE_NUMBERS=""
+          # "<issue> <branch>" lines: the `Integration branch:` each linked
+          # issue declares in its body (absent when the body has none).
+          MANAGED_INTEGRATION_BRANCHES=""
+          JQ_INTEGRATION_BRANCH_DEF='def integration_branch: [ (.body // "") | split("\n")[] | capture("^\\s*(?:-\\s*)?(?:\\*\\*Integration branch:\\*\\*|Integration branch:)\\s*`?\\s*(?<b>[^`\\s]+)\\s*`?\\s*$")? | .b ] | first // "";'
+          # Issue #6631: issue bodies already returned by the GraphQL/REST
+          # lookups below, keyed by issue number (no extra API call). Used to
+          # read each issue's declared integration branch.
+          ISSUE_BODIES_JSON='{}'
+
+          add_issue_bodies_from_json() {
+            local entries_json="$1"
+            local merged_bodies
+            merged_bodies="$(jq -c -n --argjson cur "${ISSUE_BODIES_JSON}" --argjson add "${entries_json:-[]}" '
+              $cur + ([$add[]? | select(type == "object" and (.number | type == "number"))
+                | {key: (.number | tostring), value: (.body // "")}] | from_entries)
+            ' 2>/dev/null || echo '')"
+            if [ -n "${merged_bodies}" ]; then
+              ISSUE_BODIES_JSON="${merged_bodies}"
+            fi
+          }
+
+          # Issue #8955: labels and author of each linked issue, from the same
+          # GraphQL/REST lookups that fill ISSUE_BODIES_JSON (no extra API call).
+          # Shape: {"<number>": {"labels": [names], "author": login}}.
+          ISSUE_TRIAGE_META_JSON='{}'
+
+          add_issue_triage_meta_from_json() {
+            local entries_json="$1"
+            local merged_meta
+            merged_meta="$(jq -c -n --argjson cur "${ISSUE_TRIAGE_META_JSON}" --argjson add "${entries_json:-[]}" '
+              $cur + ([$add[]? | select(type == "object" and (.number | type == "number"))
+                | {key: (.number | tostring), value: {
+                    labels: [(.labels // [])[]? | if type == "string" then . elif type == "object" then (.name // empty) else empty end | select(type == "string")],
+                    author: (if (.author | type) == "string" then .author else "" end)
+                  }}] | from_entries)
+            ' 2>/dev/null || echo '')"
+            if [ -n "${merged_meta}" ]; then
+              ISSUE_TRIAGE_META_JSON="${merged_meta}"
+            fi
+          }
+
+          declared_branch_for_issue() {
+            local issue_num="$1"
+            [ -f scripts/orchestrate_lib.py ] || return 0
+            printf '%s' "${ISSUE_BODIES_JSON}" | jq -r --arg n "${issue_num}" '.[$n] // ""' 2>/dev/null \
+              | PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_lib.py extract-integration-branch 2>/dev/null \
+              | head -n 1 || true
+          }
+
+          sanitize_ref_for_log() {
+            local log_ref
+            log_ref="$(printf '%s' "${1:-}" | tr -d '\r\n' | cut -c1-200)"
+            if [ -z "${log_ref}" ]; then
+              printf '%s' "none"
+            elif [[ "${log_ref}" == ::* ]]; then
+              printf '\\%s' "${log_ref}"
+            else
+              printf '%s' "${log_ref}"
+            fi
+          }
+
+          export_orchestrator_issue_classification() {
+            echo "LINKED_ISSUE_NUMBERS<<EOF" >> "$GITHUB_ENV"
+            printf '%s\n' "${ISSUE_NUMBERS:-}" >> "$GITHUB_ENV"
+            echo "EOF" >> "$GITHUB_ENV"
+            echo "TRACKING_ISSUES<<EOF" >> "$GITHUB_ENV"
+            printf '%s\n' "${TRACKING_ISSUES:-}" >> "$GITHUB_ENV"
+            echo "EOF" >> "$GITHUB_ENV"
+            echo "MANAGED_ISSUES<<EOF" >> "$GITHUB_ENV"
+            printf '%s\n' "${MANAGED_ISSUES:-}" >> "$GITHUB_ENV"
+            echo "EOF" >> "$GITHUB_ENV"
+            echo "ORCHESTRATOR_CLASSIFICATION_COMPLETE=${ORCHESTRATOR_CLASSIFICATION_COMPLETE}" >> "$GITHUB_ENV"
+            echo "LINEAGE_FINALIZE_ISSUE_NUMBERS<<EOF" >> "$GITHUB_ENV"
+            printf '%s\n' "${LINEAGE_FINALIZE_ISSUE_NUMBERS:-}" >> "$GITHUB_ENV"
+            echo "EOF" >> "$GITHUB_ENV"
+          }
+
+          classify_orchestrator_issues_from_payload() {
+            local payload="$1"
+            local expected_count="$2"
+
+            [ -n "${payload}" ] || return 1
+            printf '%s' "${payload}" | jq -e --argjson expected "${expected_count}" '
+              ((.errors // []) | length) == 0
+              and (.data.repository? != null)
+              and (([.data.repository.pullRequest.closingIssuesReferences.nodes[]? | select(. != null)] | length) == $expected)
+            ' >/dev/null 2>&1 || return 1
+
+            TRACKING_ISSUES="$(printf '%s' "${payload}" | jq -r '
+              .data.repository.pullRequest.closingIssuesReferences.nodes[]? | select(. != null) |
+              select(((.labels.nodes // []) | map(.name) | index("ai:orchestrator-tracking")) != null) |
+              .number
+            ' 2>/dev/null || echo '')"
+            MANAGED_ISSUES="$(printf '%s' "${payload}" | jq -r '
+              .data.repository.pullRequest.closingIssuesReferences.nodes[]? | select(. != null) |
+              select(((.labels.nodes // []) | map(.name) | index("ai:orchestrator-tracking")) == null) |
+              select(
+                ((.labels.nodes // []) | map(.name) | index("ai:orchestrator-managed")) != null
+                or ((.body // "") | contains("Managed by: AI Orchestrator"))
+              ) |
+              .number
+            ' 2>/dev/null || echo '')"
+            MANAGED_INTEGRATION_BRANCHES="$(printf '%s' "${payload}" | jq -r "${JQ_INTEGRATION_BRANCH_DEF}"'
+              .data.repository.pullRequest.closingIssuesReferences.nodes[]? | select(. != null) |
+              (integration_branch) as $b | select($b != "") | "\(.number) \($b)"
+            ' 2>/dev/null || echo '')"
+          }
+
+          merge_issue_number_list() {
+            local current_list="$1"
+            local incoming_list="$2"
+
+            if [ -z "${current_list}" ]; then
+              printf '%s' "${incoming_list}"
+            elif [ -z "${incoming_list}" ]; then
+              printf '%s' "${current_list}"
+            else
+              printf '%s\n%s\n' "${current_list}" "${incoming_list}" | awk 'NF' | sort -un
+            fi
+          }
+
+          LOOKUP_ISSUE_NUMBERS=""
+          CLOSING_ISSUE_NUMBERS=""
+          CLOSING_ISSUES_RESP=""
+
+          CLOSING_ISSUES_RESP="$(gh_retry gh api graphql \
+            -f owner="${REPOSITORY%/*}" \
+            -f name="${REPOSITORY#*/}" \
+            -F number="${PR_NUMBER}" \
+            -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number body author { login } labels(first: 50) { nodes { name } } } } } } }' \
+            2>/dev/null || true)"
+
+          CLOSING_ISSUE_NUMBERS="$(printf '%s' "${CLOSING_ISSUES_RESP}" | jq -r '.data.repository.pullRequest.closingIssuesReferences.nodes[]?.number' 2>/dev/null || true)"
+          add_issue_bodies_from_json "$(printf '%s' "${CLOSING_ISSUES_RESP}" | jq -c '[.data.repository.pullRequest.closingIssuesReferences.nodes[]? | select(. != null) | {number, body}]' 2>/dev/null || echo '[]')"
+          add_issue_triage_meta_from_json "$(printf '%s' "${CLOSING_ISSUES_RESP}" | jq -c '[.data.repository.pullRequest.closingIssuesReferences.nodes[]? | select(. != null) | {number, labels: [(.labels.nodes // [])[]? | .name], author: (.author.login? // "")}]' 2>/dev/null || echo '[]')"
+          ISSUE_NUMBERS="${CLOSING_ISSUE_NUMBERS}"
+
+          if [ -n "${CLOSING_ISSUE_NUMBERS}" ]; then
+            LOOKUP_COUNT="$(printf '%s\n' "${CLOSING_ISSUE_NUMBERS}" | awk 'NF' | wc -l | tr -d '[:space:]')"
+            if ! classify_orchestrator_issues_from_payload "${CLOSING_ISSUES_RESP}" "${LOOKUP_COUNT}"; then
+              TRACKING_ISSUES=""
+              MANAGED_ISSUES=""
+              LOOKUP_ISSUE_NUMBERS="${CLOSING_ISSUE_NUMBERS}"
+            fi
+          fi
+
+          if [ -z "${ISSUE_NUMBERS}" ]; then
+            # Fallback: extract issue number from PR body/title only when the
+            # PR explicitly references an issue via a supported closing keyword
+            # (close(s|d)/fix(es|ed)/resolve(s|d) #N) or a full repo-scoped
+            # URL/path.
+            # Bare prose mentions like "issue #N" or "issues/N" are NOT treated
+            # as closing links — those are documentation references and
+            # auto-labeling/closing on them caused incorrect ai:merged
+            # transitions on orchestrator-tracking issues mentioned in PR
+            # bodies (see issue #1469).
+            PR_DATA="${PR_TITLE:-} ${PR_BODY:-}"
+            if type extract_repo_scoped_issue_refs_from_text >/dev/null 2>&1; then
+              ISSUE_NUMBERS="$(extract_repo_scoped_issue_refs_from_text "${REPOSITORY}" "${PR_DATA}" || true)"
+            else
+              ISSUE_NUMBERS=""
+            fi
+            if [ -z "${ISSUE_NUMBERS}" ]; then
+              echo "No linked issues found for PR #${PR_NUMBER} (even after body/title fallback)."
+              ISSUE_NUMBERS=""
+            fi
+            if [ -n "${ISSUE_NUMBERS}" ]; then
+              LOOKUP_ISSUE_NUMBERS="$(merge_issue_number_list "${LOOKUP_ISSUE_NUMBERS}" "${ISSUE_NUMBERS}")"
+              echo "Found linked issues via PR body/title fallback: ${ISSUE_NUMBERS}"
+            fi
+          fi
+
+          BRANCH_ISSUE_NUMBER="$(printf '%s\n' "${PR_HEAD_REF}" | sed -nE 's#^ai/issue-([0-9]+)([-/].*)?$#\1#p' | head -n1)"
+          if [ -n "${BRANCH_ISSUE_NUMBER}" ]; then
+            ISSUE_NUMBERS="$(merge_issue_number_list "${ISSUE_NUMBERS}" "${BRANCH_ISSUE_NUMBER}")"
+            if [ -z "${CLOSING_ISSUE_NUMBERS}" ] || ! printf '%s\n' "${CLOSING_ISSUE_NUMBERS}" | grep -qxF "${BRANCH_ISSUE_NUMBER}"; then
+              LOOKUP_ISSUE_NUMBERS="$(merge_issue_number_list "${LOOKUP_ISSUE_NUMBERS}" "${BRANCH_ISSUE_NUMBER}")"
+            fi
+            echo "Resolved linked issue from branch ${PR_HEAD_REF}: #${BRANCH_ISSUE_NUMBER}"
+          fi
+
+          if [ -z "${ISSUE_NUMBERS}" ]; then
+            echo "No linked issues found for PR #${PR_NUMBER}."
+            export_orchestrator_issue_classification
+            exit 0
+          fi
+
+          if [ ! -f "scripts/label_helpers.sh" ]; then
+            echo "::error::Missing required support script scripts/label_helpers.sh" >&2
+            exit 1
+          fi
+          source scripts/label_helpers.sh
+          if ! type set_issue_phase_label_resilient >/dev/null 2>&1; then
+            set_issue_phase_label_resilient() {
+              local issue_number="$1"
+              local target_label="$2"
+              local repo="$3"
+              ensure_label_exists "${target_label}" "${repo}" || true
+              GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+                -f "labels[]=${target_label}" >/dev/null 2>&1 \
+                || echo "::warning::Fallback label add failed for #${issue_number}."
+            }
+          fi
+          # Classify each linked issue into one of three buckets so the
+          # label/close path applies the right policy:
+          #
+          #   1. TRACKING_ISSUES — orchestrator project tracking issues
+          #      (label `ai:orchestrator-tracking`). Their terminal phase
+          #      label and close lifecycle are owned exclusively by
+          #      scripts/orchestrate_poll_process.sh. SKIP entirely.
+          #      This is the regression guard for issue #1469: when a
+          #      child PR's body mentions a tracking issue, we must not
+          #      relabel or auto-close it.
+          #
+          #   2. MANAGED_ISSUES — orchestrator-managed child issues
+          #      (label `ai:orchestrator-managed` OR the
+          #      "Managed by: AI Orchestrator" body marker). These
+          #      merge into orchestrator/project-N, never the default
+          #      branch. When the child body declares no integration
+          #      branch of its own (its branch lives on the tracking
+          #      issue), any merge counts so waves are not stranded.
+          #      The orchestrator poller's reconcile_managed_issue_labels
+          #      and close_merged_issues_sweep paths remain authoritative
+          #      backstops; this path is idempotent with them.
+          #
+          #   3. Other issues — neither tracking nor managed.
+          #
+          # Issue #6631 (incident #4688 / PR #4748): a MERGED PR only
+          # counts (FINAL_LABEL=ai:merged + close) when its base is the
+          # repository default branch, or the issue's own declared
+          # `Integration branch:` / `Target branch:` line, or the issue is
+          # managed with no declared branch. Any other merge leaves the
+          # issue's labels and open state unchanged. A closed-unmerged PR
+          # keeps the ai:closed label + close behaviour.
+          #
+          # Single batched GraphQL call (one API request regardless of
+          # N) per CLAUDE.md §15. Fail-open with a per-issue REST
+          # fallback so a transient GraphQL failure cannot silently
+          # degrade detection.
+          ORCH_ALIAS_FRAGMENT=""
+          ORCH_IDX=0
+          while IFS= read -r _orch_num; do
+            [ -n "${_orch_num}" ] || continue
+            [[ "${_orch_num}" =~ ^[0-9]+$ ]] || continue
+            ORCH_ALIAS_FRAGMENT+=" i${ORCH_IDX}: issue(number: ${_orch_num}) { number labels(first: 50) { nodes { name } } body author { login } }"
+            ORCH_IDX=$((ORCH_IDX + 1))
+          done <<< "${LOOKUP_ISSUE_NUMBERS}"
+
+          if [ -n "${ORCH_ALIAS_FRAGMENT}" ]; then
+            ORCH_QUERY="query { repository(owner: \"${REPOSITORY%/*}\", name: \"${REPOSITORY#*/}\") {${ORCH_ALIAS_FRAGMENT} } }"
+            ORCH_RESP="$(gh_retry gh api graphql -f query="${ORCH_QUERY}" 2>/dev/null || echo '')"
+            ORCH_BATCH_FAILED=true
+            if [ -n "${ORCH_RESP}" ] && printf '%s' "${ORCH_RESP}" | jq -e --argjson expected "${ORCH_IDX}" '
+              ((.errors // []) | length) == 0
+              and (.data.repository? != null)
+              and (([.data.repository | to_entries[] | .value | select(. != null)] | length) == $expected)
+            ' >/dev/null 2>&1; then
+              _tracking_issues="$(printf '%s' "${ORCH_RESP}" | jq -r '
+                .data.repository | to_entries[] | .value | select(. != null) |
+                select(((.labels.nodes // []) | map(.name) | index("ai:orchestrator-tracking")) != null) |
+                .number
+              ' 2>/dev/null || echo '')"
+              _managed_issues="$(printf '%s' "${ORCH_RESP}" | jq -r '
+                .data.repository | to_entries[] | .value | select(. != null) |
+                select(((.labels.nodes // []) | map(.name) | index("ai:orchestrator-tracking")) == null) |
+                select(
+                  ((.labels.nodes // []) | map(.name) | index("ai:orchestrator-managed")) != null
+                  or
+                  ((.body // "") | contains("Managed by: AI Orchestrator"))
+                ) | .number
+              ' 2>/dev/null || echo '')"
+              _managed_branches="$(printf '%s' "${ORCH_RESP}" | jq -r "${JQ_INTEGRATION_BRANCH_DEF}"'
+                .data.repository | to_entries[] | .value | select(. != null) |
+                (integration_branch) as $b | select($b != "") | "\(.number) \($b)"
+              ' 2>/dev/null || echo '')"
+              MANAGED_INTEGRATION_BRANCHES="$(printf '%s\n%s\n' "${MANAGED_INTEGRATION_BRANCHES}" "${_managed_branches}" | awk 'NF')"
+              TRACKING_ISSUES="$(merge_issue_number_list "${TRACKING_ISSUES}" "${_tracking_issues}")"
+              MANAGED_ISSUES="$(merge_issue_number_list "${MANAGED_ISSUES}" "${_managed_issues}")"
+              add_issue_bodies_from_json "$(printf '%s' "${ORCH_RESP}" | jq -c '[.data.repository | to_entries[] | .value | select(. != null) | {number, body}]' 2>/dev/null || echo '[]')"
+              add_issue_triage_meta_from_json "$(printf '%s' "${ORCH_RESP}" | jq -c '[.data.repository | to_entries[] | .value | select(. != null) | {number, labels: [(.labels.nodes // [])[]? | .name], author: (.author.login? // "")}]' 2>/dev/null || echo '[]')"
+              ORCH_BATCH_FAILED=false
+            fi
+            if [ "${ORCH_BATCH_FAILED}" = true ]; then
+              # GraphQL batch failed — fall back to per-issue REST detection
+              # so a transient failure cannot re-introduce the #1469 bug
+              # (tracking issue auto-closed) or strand a managed child.
+              echo "::warning::Orchestrator-issue batch detection failed; falling back to per-issue REST."
+              while IFS= read -r _orch_num; do
+                [ -n "${_orch_num}" ] || continue
+                [[ "${_orch_num}" =~ ^[0-9]+$ ]] || continue
+                _orch_meta="$(gh_retry gh api "repos/${REPOSITORY}/issues/${_orch_num}" --jq '{labels:[.labels[].name], body:(.body // ""), author:(.user.login // "")}' 2>/dev/null || echo '')"
+                if [ -z "${_orch_meta}" ]; then
+                  # Conservative fail-open: treat as tracking so we skip
+                  # the label/close mutation. Mis-classifying a managed
+                  # child as tracking only delays its close to the next
+                  # orchestrator poll cycle; mis-classifying a tracking
+                  # issue as managed would re-introduce #1469.
+                  echo "::warning::Orchestrator fallback lookup failed for issue #${_orch_num}; conservatively treating as tracking (skip)."
+                  ORCHESTRATOR_CLASSIFICATION_COMPLETE="false"
+                  TRACKING_ISSUES+="${_orch_num}"$'\n'
+                  continue
+                fi
+                add_issue_bodies_from_json "$(printf '%s' "${_orch_meta}" | jq -c --argjson n "${_orch_num}" '[{number: $n, body: (.body // "")}]' 2>/dev/null || echo '[]')"
+                add_issue_triage_meta_from_json "$(printf '%s' "${_orch_meta}" | jq -c --argjson n "${_orch_num}" '[{number: $n, labels: (.labels // []), author: (.author // "")}]' 2>/dev/null || echo '[]')"
+                if printf '%s' "${_orch_meta}" | jq -e '((.labels // []) | index("ai:orchestrator-tracking")) != null' >/dev/null 2>&1; then
+                  TRACKING_ISSUES+="${_orch_num}"$'\n'
+                elif printf '%s' "${_orch_meta}" | jq -e '
+                  ((.labels // []) | index("ai:orchestrator-managed")) != null
+                  or ((.body // "") | contains("Managed by: AI Orchestrator"))
+                ' >/dev/null 2>&1; then
+                  MANAGED_ISSUES+="${_orch_num}"$'\n'
+                  _orch_branch="$(printf '%s' "${_orch_meta}" | jq -r "${JQ_INTEGRATION_BRANCH_DEF} integration_branch" 2>/dev/null || echo '')"
+                  if [ -n "${_orch_branch}" ]; then
+                    MANAGED_INTEGRATION_BRANCHES+=$'\n'"${_orch_num} ${_orch_branch}"
+                  fi
+                fi
+              done <<< "${LOOKUP_ISSUE_NUMBERS}"
+            fi
+          fi
+
+          while IFS= read -r issue_number; do
+            [ -n "${issue_number}" ] || continue
+
+            is_managed_child=false
+            if [ -n "${MANAGED_ISSUES}" ] && printf '%s\n' "${MANAGED_ISSUES}" | grep -qxF "${issue_number}"; then
+              is_managed_child=true
+            fi
+
+            # Tracking issues are skipped before the completion check so they
+            # never enter LINEAGE_FINALIZE_ISSUE_NUMBERS: their label, close and
+            # lineage are owned by orchestrate_poll_process.sh (#5619).
+            if [ -n "${TRACKING_ISSUES}" ] && printf '%s\n' "${TRACKING_ISSUES}" | grep -qxF "${issue_number}"; then
+              echo "Skipping orchestrator-tracking issue #${issue_number} — terminal phase label, close and lineage are owned by orchestrate_poll_process.sh; PR-close path must not mutate it."
+              continue
+            fi
+
+            # A real completion is a close without merge (ai:closed), a merge
+            # into the default branch, a merge into the issue's own declared
+            # integration branch, or an orchestrator-managed child that
+            # declares none merged into an `orchestrator/project-*` branch. A
+            # merge into any other branch must not mark the issue ai:merged or
+            # finalize its lineage (#5776: PR #5649 merged into a claude/*
+            # project branch relabelled #4867; #6631: incident #4688 / PR
+            # #4748). A declared branch is authoritative: a merge into another
+            # project's orchestrator/project-* branch is not this child's
+            # completion. The poller's reconcile/close sweeps remain the
+            # backstop for managed children.
+            # The declared branch comes from the shared orchestrate_lib.py
+            # parser (`Integration branch:` / `Target branch:`), else the
+            # `Integration branch:` captured during classification.
+            declared_branch="$(declared_branch_for_issue "${issue_number}")"
+            if [ -z "${declared_branch}" ]; then
+              declared_branch="$(printf '%s\n' "${MANAGED_INTEGRATION_BRANCHES}" | awk -v n="${issue_number}" '$1 == n { print $2; exit }')"
+            fi
+            target_merge_reason=""
+            if [ "${PR_MERGED}" != "true" ]; then
+              # Issue #7160 (decision Q1: A): an unmerged close only completes
+              # the issue its own pipeline PR is bound to: same-repository
+              # head, head branch ai/issue-<this issue>, and a PR author equal
+              # to the GH_PAT login. Any other referenced issue is left
+              # unchanged (labels, state and lineage); the poller's stall and
+              # unblock sweeps remain the backstop.
+              unmerged_skip_reason=""
+              if [ -z "${PR_HEAD_REPO:-}" ] || [ "${PR_HEAD_REPO}" != "${REPOSITORY}" ]; then
+                unmerged_skip_reason="foreign_head"
+              elif [ -z "${BRANCH_ISSUE_NUMBER}" ] || [ "${BRANCH_ISSUE_NUMBER}" != "${issue_number}" ]; then
+                unmerged_skip_reason="unbound_issue"
+              elif ! resolve_unmerged_close_login; then
+                unmerged_skip_reason="identity_unavailable"
+              elif [ -z "${PR_AUTHOR_LOGIN:-}" ] || [ "${PR_AUTHOR_LOGIN}" != "${UNMERGED_CLOSE_LOGIN}" ]; then
+                unmerged_skip_reason="author_mismatch"
+              fi
+              if [ -n "${unmerged_skip_reason}" ]; then
+                echo "Unmerged close of PR #${PR_NUMBER} left issue #${issue_number} unchanged (reason=${unmerged_skip_reason})."
+                continue
+              fi
+              target_merge_reason="closed_unmerged"
+            elif [ -n "${PR_BASE_REF}" ] && [ "${PR_BASE_REF}" = "${REPO_DEFAULT_BRANCH}" ]; then
+              target_merge_reason="default_branch"
+            elif [ -n "${declared_branch}" ] && [ "${PR_BASE_REF}" = "${declared_branch}" ]; then
+              target_merge_reason="declared_integration_branch"
+            elif [ "${is_managed_child}" = "true" ] && [ -z "${declared_branch}" ]; then
+              if [[ "${PR_BASE_REF}" == orchestrator/project-* ]]; then
+                target_merge_reason="managed_no_child_metadata"
+              fi
+            fi
+
+            # Issue #8955: an ai:check-triage issue's fix PR merges into the head
+            # branch of the PR whose check failed (marker
+            # `<!-- check-failure-triage:pr=<N> -->`). Count that merge as
+            # completion only when the PR is merged, same-repository and bound
+            # to this issue (head ai/issue-<n>), the issue carries
+            # ai:check-triage, was written by the pipeline login and has exactly
+            # one marker, and the marker PR's API head (same repository) equals
+            # this PR's base. Any failure leaves the reason empty (fail closed).
+            if [ -z "${target_merge_reason}" ] && [ "${PR_MERGED}" = "true" ] \
+              && [ -n "${PR_HEAD_REPO:-}" ] && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
+              && [ -n "${BRANCH_ISSUE_NUMBER}" ] && [ "${BRANCH_ISSUE_NUMBER}" = "${issue_number}" ] \
+              && printf '%s' "${ISSUE_TRIAGE_META_JSON}" | jq -e --arg n "${issue_number}" '(.[$n].labels // []) | index("ai:check-triage") != null' >/dev/null 2>&1; then
+              _triage_skip_reason=""
+              _triage_marker_pr=""
+              _triage_head_ref=""
+              if [ ! -f scripts/orchestrate_lib.py ]; then
+                _triage_skip_reason="helper_missing"
+              elif ! resolve_unmerged_close_login; then
+                _triage_skip_reason="identity_unavailable"
+              else
+                _triage_labels_json="$(printf '%s' "${ISSUE_TRIAGE_META_JSON}" | jq -c --arg n "${issue_number}" '.[$n].labels // []' 2>/dev/null || echo '[]')"
+                _triage_author="$(printf '%s' "${ISSUE_TRIAGE_META_JSON}" | jq -r --arg n "${issue_number}" '.[$n].author // ""' 2>/dev/null || echo '')"
+                _triage_marker_pr="$(printf '%s' "${ISSUE_BODIES_JSON}" | jq -r --arg n "${issue_number}" '.[$n] // ""' 2>/dev/null \
+                  | PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_lib.py check-triage-target-pr \
+                    --labels-json "${_triage_labels_json}" --author "${_triage_author}" --pipeline-login "${UNMERGED_CLOSE_LOGIN}" 2>/dev/null \
+                  | head -n 1 || true)"
+                if [[ ! "${_triage_marker_pr}" =~ ^[1-9][0-9]{0,9}$ ]] || [ "${_triage_marker_pr}" = "${PR_NUMBER}" ]; then
+                  _triage_skip_reason="no_trusted_marker"
+                else
+                  # GitHub API audit (CLAUDE.md §14): the event payload carries
+                  # only this PR, and the closing-refs / classification GraphQL
+                  # calls above return issue data, not another PR's head. One
+                  # pulls/<N> read, only for a bound ai:check-triage issue whose
+                  # merge every existing rule already rejected.
+                  _triage_pull_meta="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${_triage_marker_pr}" \
+                    --jq '{head_ref: (.head.ref // ""), head_repo: (.head.repo.full_name // "")}' 2>/dev/null || echo '')"
+                  _triage_head_ref="$(printf '%s' "${_triage_pull_meta}" | jq -r '.head_ref // ""' 2>/dev/null || echo '')"
+                  _triage_head_repo="$(printf '%s' "${_triage_pull_meta}" | jq -r '.head_repo // ""' 2>/dev/null || echo '')"
+                  if [ -z "${_triage_pull_meta}" ] || [ -z "${_triage_head_repo}" ]; then
+                    _triage_skip_reason="pull_read_failed"
+                  elif [ "${_triage_head_repo}" != "${REPOSITORY}" ]; then
+                    _triage_skip_reason="foreign_marker_head"
+                  elif [ -z "${_triage_head_ref}" ] || [ "${_triage_head_ref}" != "${PR_BASE_REF}" ]; then
+                    _triage_skip_reason="ref_mismatch"
+                  else
+                    target_merge_reason="check_triage_pr_branch"
+                  fi
+                fi
+              fi
+              if [ -n "${_triage_skip_reason}" ]; then
+                echo "Check-triage completion not applied to issue #${issue_number} (reason=${_triage_skip_reason}; marker_pr=$(sanitize_ref_for_log "${_triage_marker_pr}"); base=$(sanitize_ref_for_log "${PR_BASE_REF}"); marker_head=$(sanitize_ref_for_log "${_triage_head_ref}"))."
+              fi
+            fi
+
+            if [ -z "${target_merge_reason}" ]; then
+              echo "PR #${PR_NUMBER} merged into $(sanitize_ref_for_log "${PR_BASE_REF}") (default branch: $(sanitize_ref_for_log "${REPO_DEFAULT_BRANCH}")); issue #${issue_number} labels, state and lineage left unchanged (not a target merge; declared=$(sanitize_ref_for_log "${declared_branch}"))."
+              continue
+            fi
+            # Issue #7657: a merged PR that delivered only part of a standalone
+            # issue keeps it open and restarts clarify for the deferred items.
+            if [ "${PR_MERGED}" = "true" ] && [ "${is_managed_child}" != "true" ] \
+              && { [ "${target_merge_reason}" = "default_branch" ] || [ "${target_merge_reason}" = "declared_integration_branch" ] || [ "${target_merge_reason}" = "check_triage_pr_branch" ]; } \
+              && handle_partial_delivery_merge "${issue_number}"; then
+              continue
+            fi
+            LINEAGE_FINALIZE_ISSUE_NUMBERS="$(merge_issue_number_list "${LINEAGE_FINALIZE_ISSUE_NUMBERS}" "${issue_number}")"
+
+            if [ "${FINAL_LABEL_ENSURED:-false}" != "true" ]; then
+              ensure_label_exists "${FINAL_LABEL}" "${REPOSITORY}"
+              FINAL_LABEL_ENSURED=true
+            fi
+
+            echo "Updating issue #${issue_number} with label ${FINAL_LABEL}"
+            set_issue_phase_label_resilient "${issue_number}" "${FINAL_LABEL}" "${REPOSITORY}"
+
+            if [ "${is_managed_child}" = "true" ] && [ "${PR_MERGED}" = "true" ] && [ "${PR_BASE_REF}" != "${REPO_DEFAULT_BRANCH}" ]; then
+              echo "Closing orchestrator-managed child issue #${issue_number} after PR #${PR_NUMBER} merged into $(sanitize_ref_for_log "${PR_BASE_REF}") (integration branch, reason=${target_merge_reason})."
+            elif [ "${PR_MERGED}" = "true" ]; then
+              echo "Closing issue #${issue_number} after PR #${PR_NUMBER} merged into $(sanitize_ref_for_log "${PR_BASE_REF}") (reason=${target_merge_reason})."
+            else
+              echo "Closing issue #${issue_number} after PR #${PR_NUMBER} close event."
+            fi
+            if ! gh_retry gh issue close "${issue_number}" -R "${REPOSITORY}"; then
+              echo "::warning::Failed to close issue #${issue_number}."
+            fi
+          done <<< "${ISSUE_NUMBERS}"
+
+          # Export linked issue numbers and orchestrator classification for
+          # downstream lineage, alerting, and cleanup steps.
+          export_orchestrator_issue_classification
+
+      - name: Open heal port issue on the default branch
+        # P6 step 2 (decision D4) of docs/plans/heal-evidence-reproduction-and-trends-plan.md,
+        # Refs #8434: after a heal PR merges into stable, file one heal issue on
+        # the default branch when the same patch still applies there
+        # (scripts/heal_port_to_default.sh; WORKFLOW_HEAL port log key). Runs
+        # only in this repository, so consumer callers are unaffected; the
+        # script defaults its switch to false and always exits 0.
+        if: ${{ !cancelled() && github.event.pull_request.merged == true && github.repository == 'shubhodeep1/coding-workflows' }}
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          PR_MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha || '' }}
+          PR_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED || 'false' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -uo pipefail
+          if [ "${HEAL_PORT_READY:-0}" != "1" ] || [ ! -f scripts/heal_port_to_default.sh ]; then
+            echo "::warning::scripts/heal_port_to_default.sh is not staged; skipping the heal port check."
+            exit 0
+          fi
+          bash scripts/heal_port_to_default.sh
+
+      - name: Arm check after merge
+        # Issue #8427 P5 (scripts/persist_postmerge_verify.py arm): when the
+        # approved plan's done-check names a post-merge workflow, post the
+        # pending marker and add ai:verify-pending; the poller grades it later.
+        # Only standalone issues this default-branch merge completed
+        # (LINEAGE_FINALIZE_ISSUE_NUMBERS minus MANAGED_ISSUES) are armed, and
+        # nothing is armed when the classification above is incomplete.
+        if: github.event.pull_request.merged == true && vars.PERSIST_POSTMERGE_VERIFY_ENABLED == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PR_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha || '' }}
+          PR_MERGED_AT: ${{ github.event.pull_request.merged_at || '' }}
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PERSIST_POSTMERGE_VERIFY_ENABLED: ${{ vars.PERSIST_POSTMERGE_VERIFY_ENABLED || 'false' }}
+          PERSIST_POSTMERGE_WINDOW_HOURS: ${{ vars.PERSIST_POSTMERGE_WINDOW_HOURS || '24' }}
+          PERSIST_JOURNAL_ENABLED: ${{ vars.PERSIST_JOURNAL_ENABLED || 'false' }}
+          WORKFLOW_HEAL_VERIFY_ENABLED: ${{ vars.WORKFLOW_HEAL_VERIFY_ENABLED || 'false' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -uo pipefail
+          if [ ! -f scripts/persist_postmerge_verify.py ] || [ -L scripts/persist_postmerge_verify.py ]; then
+            echo "PERSIST postmerge outcome=skipped reason=helper_absent"
+            exit 0
+          fi
+          if [ -z "${PR_BASE_REF:-}" ] || [ "${PR_BASE_REF}" != "${PR_DEFAULT_BRANCH:-}" ]; then
+            echo "PERSIST postmerge outcome=skipped reason=not_default_branch"
+            exit 0
+          fi
+          if [ "${ORCHESTRATOR_CLASSIFICATION_COMPLETE:-false}" != "true" ]; then
+            echo "PERSIST postmerge outcome=skipped reason=classification_incomplete"
+            exit 0
+          fi
+          while IFS= read -r ppv_issue; do
+            [[ "${ppv_issue}" =~ ^[1-9][0-9]*$ ]] || continue
+            if [ -n "${MANAGED_ISSUES:-}" ] && printf '%s\n' "${MANAGED_ISSUES}" | grep -qxF "${ppv_issue}"; then
+              echo "PERSIST postmerge outcome=skipped reason=orchestrator_managed issue=${ppv_issue}"
+              continue
+            fi
+            python3 -I -B scripts/persist_postmerge_verify.py arm --repo "${REPOSITORY}" --issue "${ppv_issue}" \
+              --pr "${PR_NUMBER}" --merge-sha "${PR_MERGE_SHA}" --merged-at "${PR_MERGED_AT}" \
+              --base "${PR_BASE_REF}" --pr-labels-json "${PR_LABELS_JSON}" || true
+          done <<< "${LINEAGE_FINALIZE_ISSUE_NUMBERS:-}"
+
+      - name: Expose the first linked issue
+        # For the activation-verify job (port P4); LINKED_ISSUE_NUMBERS comes
+        # from the step above, so this costs no API call.
+        id: linked_issue
+        if: always()
+        run: |
+          first_linked="$(printf '%s\n' "${LINKED_ISSUE_NUMBERS:-}" | grep -E '^[0-9]+$' | head -n 1 || true)"
+          echo "number=${first_linked}" >> "$GITHUB_OUTPUT"
+
+      - name: Finalize linked issue lineage state
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          AI_MEMORY_ENABLED: ${{ vars.AI_MEMORY_ENABLED || 'true' }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+
+          AI_MEMORY_ENABLED_NORMALIZED=false
+          case "$(printf '%s' "${AI_MEMORY_ENABLED}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) AI_MEMORY_ENABLED_NORMALIZED=true ;;
+          esac
+
+          if [ -z "${LINKED_ISSUE_NUMBERS:-}" ]; then
+            echo "No linked issues found; skipping lineage finalization."
+            echo "AI_MEMORY_TELEMETRY: {\"op\":\"finalize-task\",\"ok\":true,\"enabled\":${AI_MEMORY_ENABLED_NORMALIZED},\"fail_open\":true,\"reason\":\"no_linked_issues\",\"source\":\"issue_pr_status.yml\"}"
+            exit 0
+          fi
+
+          if [ "${AI_MEMORY_ENABLED_NORMALIZED}" != "true" ]; then
+            echo "AI memory disabled; skipping lineage finalization."
+            echo "AI_MEMORY_TELEMETRY: {\"op\":\"finalize-task\",\"ok\":true,\"enabled\":${AI_MEMORY_ENABLED_NORMALIZED},\"fail_open\":true,\"reason\":\"ai_memory_disabled\",\"source\":\"issue_pr_status.yml\"}"
+            exit 0
+          fi
+
+          if [ -z "${LINEAGE_FINALIZE_ISSUE_NUMBERS:-}" ]; then
+            echo "No linked issue completed by this PR; skipping lineage finalization."
+            echo "AI_MEMORY_TELEMETRY: {\"op\":\"finalize-task\",\"ok\":true,\"enabled\":${AI_MEMORY_ENABLED_NORMALIZED},\"fail_open\":true,\"reason\":\"non_completion_merge\",\"source\":\"issue_pr_status.yml\"}"
+            exit 0
+          fi
+
+          if [ "${MEMORY_HELPERS_READY:-0}" != "1" ]; then
+            echo "Missing required memory helper scripts; cannot finalize lineage." >&2
+            exit 1
+          fi
+
+          [ -f scripts/memory_helpers.sh ] || {
+            echo "memory_helpers.sh missing; cannot finalize lineage." >&2
+            exit 1
+          }
+
+          if [ "${{ github.event.pull_request.merged }}" = "true" ]; then
+            FINAL_STATE="merged"
+          else
+            FINAL_STATE="closed"
+          fi
+
+          source scripts/memory_helpers.sh
+          memory_ensure_branch
+
+          while IFS= read -r issue_number; do
+            [ -n "${issue_number}" ] || continue
+
+            ISSUE_URL="${{ github.server_url }}/${REPOSITORY}/issues/${issue_number}"
+            memory_finalize_task \
+              --issue-number "${issue_number}" \
+              --issue-url "${ISSUE_URL}" \
+              --final-state "${FINAL_STATE}" \
+              --workflow "${WORKFLOW_NAME}" \
+              --run-id "${RUN_ID}" \
+              --run-attempt "${RUN_ATTEMPT}" \
+              --actor "${ACTOR}" \
+              --pr-number "${PR_NUMBER}" \
+              --pr-url "${PR_URL}"
+          done <<< "${LINEAGE_FINALIZE_ISSUE_NUMBERS}"
+
+      - name: Send PR merged Telegram alert
+        if: github.event.pull_request.merged == true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: SILENT
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-}" ]; then
+            echo "Telegram not configured; skipping PR merged alert."
+            exit 0
+          fi
+
+          # Inline-fetch tg_helpers.sh for alert level support
+          wf_source="shubhodeep1/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            script_ref="${{ github.sha }}"
+          else
+            script_ref="stable"
+          fi
+          mkdir -p scripts
+
+          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
+          SERVER_HOST="${SERVER_HOST#http://}"
+          SERVER_HOST="${SERVER_HOST%/}"
+          WF_REMOTE_URL="https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${wf_source}"
+
+          support_stage_root="${RUNNER_TEMP}/codex-issue-pr-status-alert-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          support_primary_dir="${support_stage_root}/primary"
+          mkdir -p "${support_stage_root}"
+
+          alert_support_root=""
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            alert_support_root="${GITHUB_WORKSPACE}"
+          elif git clone --quiet --no-tags --depth 1 --branch "${script_ref}" "${WF_REMOTE_URL}" "${support_primary_dir}" 2>/dev/null; then
+            alert_support_root="${support_primary_dir}"
+          elif rm -rf "${support_primary_dir}" && git clone --quiet --no-tags --depth 1 --branch "main" "${WF_REMOTE_URL}" "${support_primary_dir}" 2>/dev/null; then
+            echo "::warning::Support checkout ref ${script_ref} is unavailable; using main."
+            alert_support_root="${support_primary_dir}"
+          fi
+
+          if [ -n "${alert_support_root}" ] && [ -s "${alert_support_root}/scripts/tg_helpers.sh" ]; then
+            if [ "$(realpath -m "${alert_support_root}/scripts/tg_helpers.sh")" != "$(realpath -m "scripts/tg_helpers.sh")" ]; then
+              cp "${alert_support_root}/scripts/tg_helpers.sh" "scripts/tg_helpers.sh"
+            fi
+            source scripts/tg_helpers.sh
+          fi
+
+          # Reuse the earlier orchestrator issue classifier on the common path.
+          # Fall back to per-issue body lookup only when that classification is
+          # incomplete (for example, a per-issue REST fallback lookup failed and
+          # the label/close step conservatively treated the issue as tracking).
+          IS_ORCHESTRATED="false"
+          if [ -n "${MANAGED_ISSUES:-}" ]; then
+            IS_ORCHESTRATED="true"
+          elif [ "${ORCHESTRATOR_CLASSIFICATION_COMPLETE:-false}" != "true" ] && [ -n "${LINKED_ISSUE_NUMBERS:-}" ]; then
+            echo "::warning::Reused orchestrator classification is incomplete; falling back to per-issue body lookup for PR merged alert suppression."
+            while IFS= read -r issue_number; do
+              [ -n "${issue_number}" ] || continue
+              ISSUE_IS_MANAGED="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '
+                ((.labels // []) | map(.name) | index("ai:orchestrator-tracking")) == null
+                and (
+                  ((.labels // []) | map(.name) | index("ai:orchestrator-managed")) != null
+                  or ((.body // "") | contains("Managed by: AI Orchestrator"))
+                )
+              ' || echo "")"
+              if [ "${ISSUE_IS_MANAGED}" = "true" ]; then
+                IS_ORCHESTRATED="true"
+                break
+              fi
+            done <<< "${LINKED_ISSUE_NUMBERS}"
+          fi
+
+          if [ "${IS_ORCHESTRATED}" = "true" ]; then
+            echo "Orchestrator-managed issue — skipping PR merged alert (poller handles completion)."
+            exit 0
+          fi
+
+          # Untracked send — PR merged alerts are never deleted
+          MSG="PR #${PR_NUMBER} merged: ${PR_TITLE}"
+          MSG+=$'\n'
+          MSG+="PR: ${PR_URL}"
+          if [ -n "${LINKED_ISSUE_NUMBERS:-}" ]; then
+            FIRST_ISSUE="$(echo "${LINKED_ISSUE_NUMBERS}" | head -n1)"
+            if [ -n "${FIRST_ISSUE}" ]; then
+              MSG+=$'\n'
+              MSG+="Issue: ${{ github.server_url }}/${REPOSITORY}/issues/${FIRST_ISSUE}"
+            fi
+          fi
+          if declare -F tg_send_msg >/dev/null 2>&1; then
+            tg_send_msg "${MSG}" "DEBUG" >/dev/null
+          else
+            curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+              -d "chat_id=${TG_ADMIN_CHAT_ID}" \
+              -d "disable_web_page_preview=true" \
+              --data-urlencode "text=${MSG}" >/dev/null 2>&1 || echo "::warning::Telegram send failed"
+          fi
+
+      - name: Cleanup tracked Telegram messages
+        if: always() && github.event.pull_request.merged == true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-}" ]; then
+            echo "Telegram not configured; skipping TG cleanup."
+            exit 0
+          fi
+
+          # Fetch tg_helpers.sh
+          wf_source="shubhodeep1/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            script_ref="${{ github.sha }}"
+          else
+            script_ref="stable"
+          fi
+          mkdir -p scripts
+
+          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
+          SERVER_HOST="${SERVER_HOST#http://}"
+          SERVER_HOST="${SERVER_HOST%/}"
+          WF_REMOTE_URL="https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${wf_source}"
+
+          support_stage_root="${RUNNER_TEMP}/codex-issue-pr-status-cleanup-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          support_primary_dir="${support_stage_root}/primary"
+          mkdir -p "${support_stage_root}"
+
+          cleanup_support_root=""
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            cleanup_support_root="${GITHUB_WORKSPACE}"
+          elif git clone --quiet --no-tags --depth 1 --branch "${script_ref}" "${WF_REMOTE_URL}" "${support_primary_dir}" 2>/dev/null; then
+            cleanup_support_root="${support_primary_dir}"
+          elif rm -rf "${support_primary_dir}" && git clone --quiet --no-tags --depth 1 --branch "main" "${WF_REMOTE_URL}" "${support_primary_dir}" 2>/dev/null; then
+            echo "::warning::Support checkout ref ${script_ref} is unavailable; using main."
+            cleanup_support_root="${support_primary_dir}"
+          fi
+
+          if [ -n "${cleanup_support_root}" ] && [ -f "${cleanup_support_root}/scripts/tg_helpers.sh" ]; then
+            if [ "$(realpath -m "${cleanup_support_root}/scripts/tg_helpers.sh")" != "$(realpath -m "scripts/tg_helpers.sh")" ]; then
+              cp "${cleanup_support_root}/scripts/tg_helpers.sh" "scripts/tg_helpers.sh"
+            fi
+          else
+            echo "::warning::Could not fetch tg_helpers.sh; skipping TG cleanup."
+            exit 0
+          fi
+          [ -s "scripts/tg_helpers.sh" ] || { echo "::warning::tg_helpers.sh is empty; skipping TG cleanup."; exit 0; }
+          export GITHUB_REPOSITORY="${REPOSITORY}"
+          source scripts/tg_helpers.sh
+          if ! declare -F tg_cleanup_msgs >/dev/null 2>&1; then
+            echo "::warning::tg_cleanup_msgs helper missing; skipping TG cleanup."
+            exit 0
+          fi
+
+          # Cleanup messages tracked on the PR
+          echo "Cleaning up TG messages for PR #${PR_NUMBER}..."
+          tg_cleanup_msgs "${PR_NUMBER}"
+
+          # Cleanup messages tracked on linked issues
+          if [ -n "${LINKED_ISSUE_NUMBERS:-}" ]; then
+            while IFS= read -r issue_number; do
+              [ -n "${issue_number}" ] || continue
+              echo "Cleaning up TG messages for issue #${issue_number}..."
+              tg_cleanup_msgs "${issue_number}"
+            done <<< "${LINKED_ISSUE_NUMBERS}"
+          fi
+
+  activation-verify:
+    # Port P4 (docs/plans/replace-claude-sessions-with-cli-engine-plan.md,
+    # Phase 8c): after a PR merges into the default branch, grade the merged
+    # work LIVE or DORMANT with the ACTIVATION_VERIFY role, post the verdict,
+    # open one issue for code gaps and record operator steps in the
+    # ai:operator-step issue (scripts/activation_verify.sh). Integration
+    # branches are skipped; the poller verifies a project when it completes.
+    # Consumer workflow-sync PRs (same-repository auto/update-workflows-* or
+    # ai-sync/stable heads) are skipped too: they only refresh upstream-managed
+    # wrappers (the script repeats the check as ACTIVATION_VERIFY ...
+    # reason=workflow_sync_pr). A PR labelled ai:skip-activation-verify is
+    # skipped as well (reason=skip_label); a PR whose every changed file
+    # matches ACTIVATION_VERIFY_EXEMPT_GLOBS (plans, raw design drops) is
+    # skipped by the script (reason=exempt_paths). Never fails the workflow.
+    needs: sync-issue-status
+    if: always() && github.event.pull_request.merged == true && github.event.pull_request.base.ref == github.event.repository.default_branch && !startsWith(github.event.pull_request.head.ref, 'orchestrator/project-') && !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.event.pull_request.head.ref, 'auto/update-workflows-') || github.event.pull_request.head.ref == 'ai-sync/stable')) && !contains(github.event.pull_request.labels.*.name, 'ai:skip-activation-verify') && vars.ACTIVATION_VERIFY_ENABLED != 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    continue-on-error: true
+    steps:
+      - name: Resolve trusted activation support commit
+        id: resolve_support
+        env:
+          WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          CALLER_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          support_workflow_repository="$(jq -r '.workflow_repository // ""' <<< "${WORKFLOW_JOB_JSON}")"
+          support_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${WORKFLOW_JOB_JSON}")"
+          source_ref='^shubhodeep1/coding-workflows/\.github/workflows/issue_pr_status\.yml@refs/heads/[^[:space:]]+$'
+          stable_ref='^shubhodeep1/coding-workflows/\.github/workflows/issue_pr_status\.yml@refs/tags/stable$'
+          consumer_pin='^shubhodeep1/coding-workflows/\.github/workflows/issue_pr_status\.yml@[0-9a-f]{40}$'
+          if [ "${support_workflow_repository}" != "shubhodeep1/coding-workflows" ] ||
+             { [ "${CALLER_REPOSITORY}" = "shubhodeep1/coding-workflows" ] && [[ ! "${support_workflow_ref}" =~ ${source_ref} ]]; } ||
+             { [ "${CALLER_REPOSITORY}" != "shubhodeep1/coding-workflows" ] &&
+               [[ ! "${support_workflow_ref}" =~ ${stable_ref} ]] && [[ ! "${support_workflow_ref}" =~ ${consumer_pin} ]]; }; then
+            echo "::error::Activation support workflow identity is unapproved."
+            exit 1
+          fi
+          if [ "${CALLER_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then
+            # Runs pinned to the protected promote-candidate branch (promote
+            # cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md) take
+            # support code from its tip; a look-alike ref, an unprotected
+            # branch or a failed read fall through to protected main.
+            support_sha=""
+            if [[ "${support_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/issue_pr_status\.yml@refs/heads/promote-candidate$ ]]; then
+              # One branches read, only on this path.
+              promote_candidate_json="$(gh api repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                support_sha="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
+            if [ -z "${support_sha}" ]; then
+              if ! support_main_json="$(gh api repos/shubhodeep1/coding-workflows/branches/main)" ||
+                 ! jq -e '.protected == true' <<< "${support_main_json}" >/dev/null; then
+                echo "::error::Activation support main branch is not confirmed protected."
+                exit 1
+              fi
+              support_sha="$(jq -r '.commit.sha // ""' <<< "${support_main_json}")"
+            fi
+          elif [[ "${support_workflow_ref}" =~ ${consumer_pin} ]]; then
+            support_sha="${support_workflow_ref##*@}"
+          else
+            if ! support_tag_json="$(gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable)"; then
+              echo "::error::Activation support stable tag is unavailable."
+              exit 1
+            fi
+            support_tag_type="$(jq -r '.object.type // ""' <<< "${support_tag_json}")"
+            support_sha="$(jq -r '.object.sha // ""' <<< "${support_tag_json}")"
+            if [ "${support_tag_type}" = "tag" ] && [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+              if ! support_tag_json="$(gh api "repos/shubhodeep1/coding-workflows/git/tags/${support_sha}")"; then
+                echo "::error::Activation support annotated tag is unavailable."
+                exit 1
+              fi
+              support_tag_type="$(jq -r '.object.type // ""' <<< "${support_tag_json}")"
+              support_sha="$(jq -r '.object.sha // ""' <<< "${support_tag_json}")"
+            fi
+            if [ "${support_tag_type}" != "commit" ]; then
+              echo "::error::Activation support stable tag is not a commit."
+              exit 1
+            fi
+          fi
+          if [[ ! "${support_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Activation support did not resolve to a commit SHA."
+            exit 1
+          fi
+          echo "support_sha=${support_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout trusted activation support
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ steps.resolve_support.outputs.support_sha }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify trusted activation support
+        env:
+          SUPPORT_SHA: ${{ steps.resolve_support.outputs.support_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${SUPPORT_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
+             [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${SUPPORT_SHA}" ] ||
+             [ ! -f .codex-workflow-src/scripts/activation_verify.sh ]; then
+            echo "::error::Activation support checkout is not the approved commit."
+            exit 1
+          fi
+
+      - name: Checkout merged code
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          token: ${{ secrets.GH_PAT }}
+          path: target
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Install Codex CLI
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
+        with:
+          codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+
+      # The ACTIVATION_VERIFY role runs on Claude unless AI_ENGINE_ACTIVATION_VERIFY
+      # or AI_ENGINE say codex (scripts/ai_engine.sh, from the trusted support
+      # checkout only). The CLI and the pool credential are fetched only for
+      # Claude. This job adds no permissions: a caller that does not grant
+      # id-token: write gets no pool credential, and the verifier then runs the
+      # unchanged isolated codex command (exit 75), so these steps never fail it.
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_ACTIVATION_VERIFY: ${{ vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}
+          # The merged PR is the work item: its ai:codex label keeps the role on codex.
+          AI_ENGINE_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -uo pipefail
+          engine="codex"
+          engine_helper="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/ai_engine.sh"
+          if [ -f "${engine_helper}" ] && [ ! -L "${engine_helper}" ]; then
+            # shellcheck source=/dev/null
+            if source "${engine_helper}"; then
+              engine="$(ai_engine_for_role ACTIVATION_VERIFY || echo codex)"
+            else
+              echo "::warning::Failed to source the trusted ai_engine.sh; activation verification stays on codex." >&2
+            fi
+          fi
+          [ "${engine}" = "claude" ] || engine="codex"
+          echo "engine=${engine}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/install-claude
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        id: claude_pool
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/claude-pool-token
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      - name: Verify activation
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+          REPOSITORY: ${{ github.repository }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          PR_COMMITS: ${{ github.event.pull_request.commits }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body || '' }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          # Merges whose every changed file matches are not verified (plans, raw
+          # design drops); a mixed PR is verified on its other files only.
+          ACTIVATION_VERIFY_EXEMPT_GLOBS: ${{ vars.ACTIVATION_VERIFY_EXEMPT_GLOBS || 'docs/plans/**' }}
+          LINKED_ISSUE: ${{ needs.sync-issue-status.outputs.linked_issue }}
+          ACTIVATION_VERIFY_MODEL: ${{ vars.ACTIVATION_VERIFY_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+          ACTIVATION_VERIFY_REASONING: ${{ vars.THINKING_LEVEL_ACTIVATION_VERIFY || 'high' }}
+          # Codex version baked into the isolated verifier image (scripts/codex_isolated_exec.sh).
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          # A caller without id-token: write (the consumer wrapper before its sync)
+          # gets no pool credential (oidc_unavailable); the documented behaviour is
+          # isolated codex, not the capacity policy's refusal (exit 76).
+          AI_ENGINE_ACTIVATION_VERIFY: ${{ steps.claude_pool.outputs.reason == 'oidc_unavailable' && 'codex' || vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}
+          AI_ENGINE_LABELS: ${{ steps.claude_pool.outputs.reason == 'oidc_unavailable' && '["ai:codex"]' || toJSON(github.event.pull_request.labels.*.name) }}
+          SUPPORT_INSTRUCTIONS_FILE: ${{ github.workspace }}/.codex-workflow-src/unattended_system_instructions.md
+        run: |
+          SUPPORT_DIR="${GITHUB_WORKSPACE}/.codex-workflow-src" \
+          TARGET_DIR="${GITHUB_WORKSPACE}/target" \
+          RUNTIME_DIR="${RUNNER_TEMP}/activation-verify" \
+            bash "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/activation_verify.sh" pr

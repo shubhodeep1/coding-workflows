@@ -1,0 +1,52 @@
+name: Promote candidate follower
+
+# Keeps the `promote-candidate` branch equal to the `main` tip between promote
+# cycles (Phase 2 of docs/plans/pin-promote-cycle-to-candidate-plan.md). The
+# internal-*.yml wrappers call their reusable workflows at
+# `@promote-candidate`. While the `promote-cycle-frozen` tag exists the branch
+# stays on the cycle's candidate; otherwise scripts/promote_candidate_follow.sh
+# fast-forwards it (force=false) and creates it when it is missing. The script
+# never creates branch protection: the owner adds the promote-candidate ruleset
+# (no deletion, no force-push, updates only from the pipeline account), and an
+# unprotected branch gets one CRITICAL Telegram alert per UTC day.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: promote-candidate-follow-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  follow:
+    # Only the source repository, and only from main: a dispatch from another
+    # branch would otherwise run unreviewed code with GH_PAT.
+    if: github.repository == 'shubhodeep1/coding-workflows' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Follow main with the promote-candidate branch
+        env:
+          # Branch writes must come from the pipeline account the ruleset allows.
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PROMOTE_CYCLE_PIN_ENABLED: ${{ vars.PROMOTE_CYCLE_PIN_ENABLED || 'true' }}
+          PROMOTE_CYCLE_FREEZE_MAX_SECS: ${{ vars.PROMOTE_CYCLE_FREEZE_MAX_SECS || '172800' }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
+        run: bash scripts/promote_candidate_follow.sh

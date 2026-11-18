@@ -1,0 +1,1024 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Resolve support helpers from this script's own directory unless the
+# workflow passed an absolute SUPPORT_SCRIPTS_DIR: a relative default resolves
+# against the PR checkout, whose copies of the sandbox and engine helpers are
+# untrusted (finding review-smoke-host-opencode).
+_self_dir="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ "${SUPPORT_SCRIPTS_DIR:-}" != /* ]]; then
+	echo "::warning::review_synthesise_smoke: SUPPORT_SCRIPTS_DIR is unset or not absolute; using this script's own directory." >&2
+	SUPPORT_SCRIPTS_DIR="${_self_dir}"
+fi
+if [ -z "${SUPPORT_ROOT_DIR:-}" ]; then
+	if [ "$(basename "${SUPPORT_SCRIPTS_DIR}")" = "scripts" ]; then
+		SUPPORT_ROOT_DIR="$(dirname "${SUPPORT_SCRIPTS_DIR}")"
+	else
+		SUPPORT_ROOT_DIR="${SUPPORT_SCRIPTS_DIR}"
+	fi
+fi
+SUPPORT_PROMPTS_DIR="${SUPPORT_PROMPTS_DIR:-${SUPPORT_ROOT_DIR}/prompts}"
+RUNTIME_DIR="${RUNTIME_DIR:-/tmp/review-synthesise-smoke-${RANDOM}}"
+mkdir -p "${RUNTIME_DIR}"
+# Preserve the step's original stdout so workflow-command annotations can be
+# emitted without being swallowed by command substitutions.
+exec 3>&1
+
+behavioural_smoke_log_ok()
+{
+	printf 'BEHAVIOURAL_SMOKE_SYNTHESISED count=%s round=%s language=%s path=%s\n' \
+		"$1" "$2" "$3" "$4"
+}
+
+behavioural_smoke_log_fail()
+{
+	printf 'BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=%s round=%s path=%s\n' \
+		"$1" "$2" "$3"
+}
+
+behavioural_smoke_emit_warning()
+{
+	local message="$1"
+
+	message="${message//%/%25}"
+	message="${message//$'\r'/%0D}"
+	message="${message//$'\n'/%0A}"
+	(printf '::warning::%s\n' "${message}" >&3) 2>/dev/null || true
+}
+
+behavioural_smoke_has_requirements_files()
+{
+	compgen -G 'requirements*.txt' >/dev/null 2>&1
+}
+
+detect_behavioural_smoke_language()
+{
+	local requested_language=""
+
+	if [ -n "${BEHAVIOURAL_SMOKE_LANG:-}" ]; then
+		requested_language="$(printf '%s' "${BEHAVIOURAL_SMOKE_LANG}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+		case "${requested_language}" in
+			shell|python|javascript)
+				printf '%s\n' "${requested_language}"
+				return 0
+				;;
+			*)
+				if [ -n "${requested_language}" ]; then
+					behavioural_smoke_emit_warning "Invalid BEHAVIOURAL_SMOKE_LANG '${requested_language}'; falling back to repo auto-detection."
+				fi
+				;;
+		esac
+	fi
+
+	if [ -f "pyproject.toml" ] || behavioural_smoke_has_requirements_files; then
+		printf '%s\n' 'python'
+		return 0
+	fi
+
+	if [ -f "package.json" ]; then
+		printf '%s\n' 'javascript'
+		return 0
+	fi
+
+	printf '%s\n' 'shell'
+}
+
+count_remaining_issues()
+{
+	local judge_artifact="$1"
+	local expected_round="$2"
+	local expected_head_sha="$3"
+
+	PYTHONDONTWRITEBYTECODE=1 python3 - "${judge_artifact}" "${expected_round}" "${expected_head_sha}" <<'PY'
+import json
+import re
+import sys
+
+judge_artifact, expected_round_raw, expected_head_sha = sys.argv[1:4]
+expected_round = int(expected_round_raw)
+
+with open(judge_artifact, 'r', encoding='utf-8') as handle:
+	payload = json.load(handle)
+
+if not isinstance(payload, dict):
+	sys.exit(1)
+if payload.get('round') != expected_round:
+	sys.exit(1)
+if payload.get('head_sha') != expected_head_sha:
+	sys.exit(1)
+remaining = payload.get('remaining_issues')
+if not isinstance(remaining, list):
+	sys.exit(1)
+
+for issue in remaining:
+	if not isinstance(issue, dict):
+		sys.exit(1)
+	required = {
+		'id',
+		'file',
+		'line_start',
+		'line_end',
+		'symptom',
+		'evidence_quote',
+		'severity',
+	}
+	if not required.issubset(issue.keys()):
+		sys.exit(1)
+	line_start = issue.get('line_start')
+	line_end = issue.get('line_end')
+	if type(line_start) is not int or type(line_end) is not int:
+		sys.exit(1)
+	if line_start < 1 or line_end < line_start:
+		sys.exit(1)
+	severity = issue.get('severity')
+	if severity not in {'must-fix', 'nice-to-have'}:
+		sys.exit(1)
+	for key in ('id', 'file', 'symptom', 'evidence_quote'):
+		value = issue.get(key)
+		if not isinstance(value, str):
+			sys.exit(1)
+		if not re.sub(r'\s+', ' ', value).strip():
+			sys.exit(1)
+
+print(len(remaining))
+PY
+}
+
+extract_and_write_synth_bundle()
+{
+	local src="$1"
+	local judge_artifact="$2"
+	local synth_dir="$3"
+	local manifest_path="$4"
+	local expected_round="$5"
+	local expected_head_sha="$6"
+	local language_hint="$7"
+
+	PYTHONDONTWRITEBYTECODE=1 python3 - \
+		"${src}" \
+		"${judge_artifact}" \
+		"${synth_dir}" \
+		"${manifest_path}" \
+		"${expected_round}" \
+		"${expected_head_sha}" \
+		"${language_hint}" <<'PY'
+import json
+import os
+import re
+import shlex
+import sys
+from json import JSONDecoder, JSONDecodeError
+from pathlib import Path
+
+src, judge_artifact, synth_dir, manifest_path, expected_round_raw, expected_head_sha, language_hint = sys.argv[1:8]
+expected_round = int(expected_round_raw)
+
+
+def squish(value, limit=None):
+	text = re.sub(r'\s+', ' ', str(value)).strip()
+	if limit is not None and len(text) > limit:
+		text = text[: max(limit - 3, 0)].rstrip() + '...'
+	return text
+
+
+def load_raw(path: str) -> str:
+	try:
+		return Path(path).read_text(encoding='utf-8', errors='replace')
+	except OSError:
+		return ''
+
+
+def load_candidates(text: str):
+	candidates = []
+	stripped = text.strip()
+	if stripped:
+		candidates.append(stripped)
+	cleaned = re.sub(r'```(?:json)?\s*', '', text)
+	cleaned = re.sub(r'```\s*$', '', cleaned, flags=re.MULTILINE).strip()
+	if cleaned and cleaned != stripped:
+		candidates.append(cleaned)
+	decoder = JSONDecoder()
+	for opener in ('[', '{'):
+		index = -1
+		while True:
+			index = text.find(opener, index + 1)
+			if index == -1:
+				break
+			try:
+				candidate, _ = decoder.raw_decode(text, index)
+			except JSONDecodeError:
+				continue
+			candidates.append(candidate)
+	return candidates
+
+
+def strip_outer_code_fence(text: str) -> str:
+	stripped = text.strip()
+	lines = stripped.splitlines()
+	if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].strip() == "```":
+		return "\n".join(lines[1:-1]).strip("\n")
+	return text
+
+
+# Pipeline credential names a generated body must never reference.  The
+# generated wrapper refuses to run its body while any credential-shaped
+# variable (CREDENTIAL_NAME_POLICY) is set (finding
+# smoke-synth-credentialed-test-exec).
+SANDBOX_CREDENTIAL_NAMES = (
+	'GH_TOKEN',
+	'GITHUB_TOKEN',
+	'GH_PAT',
+	'OPENROUTER_API_KEY',
+	'TG_BOT_SECRET',
+	'CHECK_TRIAGE_ISSUES_TOKEN',
+	'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
+	'ACTIONS_ID_TOKEN_REQUEST_URL',
+	'ACTIONS_RUNTIME_TOKEN',
+	'CLAUDE_CODE_OAUTH_TOKEN',
+	'ANTHROPIC_API_KEY',
+)
+CREDENTIAL_REFERENCE_RE = re.compile(
+	r'(?<![A-Za-z0-9_])(?:' + '|'.join(SANDBOX_CREDENTIAL_NAMES) + r')(?![A-Za-z0-9_])'
+)
+NETWORK_DEVICE_RE = re.compile(r'/dev/(?:tcp|udp)/')
+NETWORK_CLIENT_TOKENS = {
+	'curl',
+	'wget',
+	'nc',
+	'ncat',
+	'netcat',
+	'socat',
+	'ssh',
+	'scp',
+	'sftp',
+	'telnet',
+	'ftp',
+	'rsync',
+}
+
+
+def normalize_content(text: str) -> str:
+	text = text.replace("\r\n", "\n").replace("\r", "\n")
+	text = strip_outer_code_fence(text)
+	lines = text.splitlines()
+	while lines and not lines[0].strip():
+		lines.pop(0)
+	if lines and lines[0].startswith("#!"):
+		lines = lines[1:]
+	text = "\n".join(lines).strip()
+	if not text:
+		raise ValueError("empty_content")
+	# Validate backslash-continued shell lines as one logical command so
+	# dangerous dispatchers cannot hide behind line continuations.
+	validation_text = re.sub(r'\\\n[ \t]*', ' ', text)
+	for raw_line in validation_text.splitlines():
+		stripped = raw_line.strip()
+		if "`" in stripped or "$(" in stripped or "<(" in stripped or ">(" in stripped:
+			raise ValueError("body_unsafe_shell_construct")
+		if CREDENTIAL_REFERENCE_RE.search(stripped):
+			raise ValueError("body_credential_reference")
+		if NETWORK_DEVICE_RE.search(stripped):
+			raise ValueError("body_network_client")
+		lexer = shlex.shlex(stripped, posix=True, punctuation_chars=";&|(){}><")
+		lexer.whitespace_split = True
+		# Keep '#' literal so shlex does not hide trailing separators/commands
+		# that bash would still execute when '#' appears mid-word.
+		lexer.commenters = ""
+		tokens = list(lexer)
+		expect_command = True
+		passthrough_command = ""
+		passthrough_option_value = False
+		pending_redirection_target = False
+		separator_tokens = {";", "&", "&&", "||", "|", "|&", "(", ")", "{", "}", "if", "then", "do", "else", "elif", "while", "until", "!"}
+		redirection_tokens = {">", ">>", "<", "<<", "<<<", "<>", "<&", ">&", ">|", "&>", "&>>"}
+		passthrough_tokens = {"command", "builtin", "env", "nohup", "nice", "timeout", "setsid", "time"}
+		passthrough_value_tokens = {
+			"env": {"-u", "-C", "--unset", "--chdir"},
+			"nice": {"-n", "--adjustment"},
+			"time": {"-f", "--format", "-o", "--output"},
+			"timeout": {"-s", "--signal", "-k", "--kill-after"},
+		}
+		dangerous_command_tokens = {
+			"coproc",
+			".",
+			"bash",
+			"csh",
+			"dash",
+			"eval",
+			"exec",
+			"ksh",
+			"perl",
+			"php",
+			"ruby",
+			"sh",
+			"source",
+			"sudo",
+			"tcsh",
+			"xargs",
+			"zsh",
+		}
+		for index, token in enumerate(tokens):
+			next_token = tokens[index + 1] if index + 1 < len(tokens) else ""
+			token_basename = os.path.basename(token)
+			if pending_redirection_target:
+				pending_redirection_target = False
+				continue
+			if token in separator_tokens:
+				expect_command = True
+				passthrough_command = ""
+				passthrough_option_value = False
+				continue
+			if token in redirection_tokens:
+				pending_redirection_target = True
+				continue
+			if token.isdigit() and next_token in redirection_tokens:
+				continue
+			if expect_command and passthrough_option_value:
+				passthrough_option_value = False
+				continue
+			if expect_command and re.match(r"[A-Za-z_][A-Za-z0-9_]*=.*", token):
+				continue
+			if expect_command and token_basename in passthrough_tokens:
+				passthrough_command = token_basename
+				continue
+			if expect_command and passthrough_command:
+				if passthrough_command == "env" and (
+					token == "-S"
+					or token.startswith("-S")
+					or token == "--split-string"
+					or token.startswith("--split-string=")
+				):
+					raise ValueError("body_unsafe_shell_construct")
+				if token.startswith("-"):
+					if token in passthrough_value_tokens.get(passthrough_command, set()):
+						passthrough_option_value = True
+					continue
+				if passthrough_command == "nice" and re.match(r"-?\d+$", token):
+					continue
+				if passthrough_command == "timeout" and re.match(r"\d+(?:\.\d+)?[smhd]?$", token):
+					continue
+				if token_basename in passthrough_tokens:
+					passthrough_command = token_basename
+					continue
+			if expect_command and token.startswith("$"):
+				raise ValueError("body_unsafe_shell_construct")
+			if expect_command and token_basename in dangerous_command_tokens:
+				raise ValueError("body_unsafe_shell_construct")
+			if expect_command and token_basename in NETWORK_CLIENT_TOKENS:
+				raise ValueError("body_network_client")
+			expect_command = False
+			passthrough_command = ""
+			passthrough_option_value = False
+	return text + "\n"
+
+
+def normalize_issue(issue):
+	if not isinstance(issue, dict):
+		return None
+	required = {
+		'id',
+		'file',
+		'line_start',
+		'line_end',
+		'symptom',
+		'evidence_quote',
+		'severity',
+	}
+	if not required.issubset(issue.keys()):
+		return None
+	line_start = issue.get('line_start')
+	line_end = issue.get('line_end')
+	if type(line_start) is not int or type(line_end) is not int:
+		return None
+	if line_start < 1 or line_end < line_start:
+		return None
+	severity = issue.get('severity')
+	if severity not in {'must-fix', 'nice-to-have'}:
+		return None
+	issue_id = issue.get('id')
+	issue_file = issue.get('file')
+	symptom = issue.get('symptom')
+	evidence_quote = issue.get('evidence_quote')
+	if not all(isinstance(value, str) for value in (issue_id, issue_file, symptom, evidence_quote)):
+		return None
+	issue_id = squish(issue_id)
+	issue_file = squish(issue_file)
+	symptom = squish(symptom, 200)
+	evidence_quote = squish(evidence_quote, 200)
+	if not issue_id or not issue_file or not symptom or not evidence_quote:
+		return None
+	return {
+		'id': issue_id,
+		'file': issue_file,
+		'line_start': line_start,
+		'line_end': line_end,
+		'symptom': symptom,
+		'evidence_quote': evidence_quote,
+		'severity': severity,
+	}
+
+
+def load_judge_payload(path: str):
+	with open(path, 'r', encoding='utf-8') as handle:
+		payload = json.load(handle)
+	if not isinstance(payload, dict):
+		return None
+	if payload.get('round') != expected_round:
+		return None
+	if payload.get('head_sha') != expected_head_sha:
+		return None
+	remaining = payload.get('remaining_issues')
+	if not isinstance(remaining, list):
+		return None
+	normalized = []
+	for issue in remaining:
+		normalized_issue = normalize_issue(issue)
+		if normalized_issue is None:
+			return None
+		normalized.append(normalized_issue)
+	return {
+		'round': expected_round,
+		'head_sha': expected_head_sha,
+		'remaining_issues': normalized,
+	}
+
+
+def normalize_generated_items(candidate, issue_count: int):
+	if isinstance(candidate, str):
+		candidate = json.loads(candidate)
+	if isinstance(candidate, dict):
+		for key in ('files', 'tests', 'items'):
+			if key in candidate:
+				candidate = candidate[key]
+				break
+		else:
+			return None
+	if not isinstance(candidate, list):
+		return None
+	if len(candidate) != issue_count:
+		return None
+	normalized = []
+	for item in candidate:
+		if not isinstance(item, dict):
+			return None
+		path_value = item.get('path')
+		content = item.get('content')
+		expected_to_fail_until_fixed = item.get('expected_to_fail_until_fixed')
+		if not isinstance(path_value, str) or not squish(path_value, 200):
+			return None
+		if not isinstance(content, str):
+			return None
+		try:
+			content = normalize_content(content)
+		except Exception:
+			return None
+		if type(expected_to_fail_until_fixed) is not bool:
+			return None
+		normalized.append(
+			{
+				'path': squish(path_value, 200),
+				'content': content,
+				'expected_to_fail_until_fixed': expected_to_fail_until_fixed,
+			}
+		)
+	return normalized
+
+
+def slugify(value: str) -> str:
+	text = re.sub(r'[^A-Za-z0-9]+', '_', value).strip('_').lower()
+	text = re.sub(r'_+', '_', text)
+	if not text:
+		text = 'issue'
+	text = text[:64].rstrip('_')
+	return text or 'issue'
+
+
+def unique_filename(round_value: int, issue_id: str, seen: set[str]) -> tuple[str, str]:
+	base_slug = slugify(issue_id)
+	slug = base_slug
+	index = 2
+	filename = f'synth_round_{round_value}_{slug}.sh'
+	while filename in seen:
+		slug = f'{base_slug}_{index}'
+		slug = slug[:64].rstrip('_') or f'issue_{index}'
+		filename = f'synth_round_{round_value}_{slug}.sh'
+		index += 1
+	seen.add(filename)
+	return slug, filename
+
+
+def delimiter_for(content: str, slug: str) -> str:
+	base = re.sub(r'[^A-Za-z0-9_]+', '_', slug.upper()) or 'ISSUE'
+	delimiter = f'__BEHAVIOURAL_SMOKE_{base}__'
+	index = 2
+	while delimiter in content:
+		delimiter = f'__BEHAVIOURAL_SMOKE_{base}_{index}__'
+		index += 1
+	return delimiter
+
+
+def build_wrapper(issue, generated_item, round_value: int, slug: str) -> str:
+	delimiter = delimiter_for(generated_item['content'], slug)
+	issue_id = shlex.quote(issue['id'])
+	round_shell = shlex.quote(str(round_value))
+	tap_label = shlex.quote(squish(f"behavioural smoke {issue['id']}", 180))
+	expected_flag = shlex.quote('true' if generated_item['expected_to_fail_until_fixed'] else 'false')
+	lines = [
+		'#!/usr/bin/env bash',
+		'set -euo pipefail',
+		'',
+		f'ISSUE_ID={issue_id}',
+		f'ROUND={round_shell}',
+		f'TAP_LABEL={tap_label}',
+		f'EXPECTED_TO_FAIL_UNTIL_FIXED={expected_flag}',
+		'',
+		'echo "1..1"',
+		'',
+		'# Run the model-written body only inside the validation driver sandbox',
+		'# (no network, no credentials); anywhere else it is reported, not run.',
+		'# The env flag alone can be set by a host test, so the gate also needs',
+		'# the sandbox mount path, a loopback-only network and no pipeline',
+		'# credentials; any failed check fails closed (finding',
+		'# smoke-synth-credentialed-test-exec).',
+		'_synth_sandbox_detail=""',
+		'if [ "${BEHAVIOURAL_SMOKE_SANDBOXED:-}" != "1" ]; then',
+		'	_synth_sandbox_detail="env"',
+		'elif [ "${BASH_SOURCE[0]:-}" != "/synth/test.sh" ]; then',
+		'	_synth_sandbox_detail="path"',
+		'elif [ ! -d /sys/class/net ]; then',
+		'	_synth_sandbox_detail="network"',
+		'else',
+		'	for _synth_iface in /sys/class/net/*; do',
+		'		if [ ! -e "${_synth_iface}" ] && [ ! -L "${_synth_iface}" ]; then',
+		'			continue',
+		'		fi',
+		'		if [ "${_synth_iface##*/}" != "lo" ]; then',
+		'			_synth_sandbox_detail="network"',
+		'			break',
+		'		fi',
+		'	done',
+		'	if [ -z "${_synth_sandbox_detail}" ]; then',
+		'		# Any non-empty credential-shaped variable blocks the run; the names',
+		'		# follow the harness scrub in validate_process.sh.  GPG_KEY is the',
+		'		# public CPython release-signing key ID the sandbox image sets.',
+		'		while IFS= read -r _synth_cred_name; do',
+		'			case "${_synth_cred_name}" in',
+		'				VALIDATION_TEST_*|TEST_*|BEHAVIOURAL_SMOKE_SANDBOXED|GPG_KEY)',
+		'					continue',
+		'					;;',
+		'			esac',
+		'			# CREDENTIAL_NAME_POLICY (keep identical to validate_process.sh)',
+		'			if [[ "${_synth_cred_name}" =~ ^(GH_|GITHUB_TOKEN$|OPENROUTER_|TG_BOT_|CHECK_TRIAGE_|ACTIONS_ID_TOKEN_|ACTIONS_RUNTIME_|ACTIONS_CACHE_|ACTIONS_RESULTS_|CLAUDE_|ANTHROPIC_|GIT_CONFIG_|GIT_ASKPASS$|SSH_ASKPASS$|SSH_AUTH_SOCK$) ]] \\',
+		'				|| [[ "${_synth_cred_name}" =~ (_TOKEN|_SECRET|_KEY|_API_KEY|_PAT|_PRIVATE_KEY|_PASSWORD|_PASSWD|_CREDENTIAL|_CREDENTIALS|_COOKIE)$ ]]; then',
+		'				if [ -n "${!_synth_cred_name:-}" ]; then',
+		'					_synth_sandbox_detail="credentials"',
+		'					break',
+		'				fi',
+		'			fi',
+		'		done < <(compgen -e)',
+		'	fi',
+		'fi',
+		'if [ -n "${_synth_sandbox_detail}" ]; then',
+		'	echo "# BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE issue=${ISSUE_ID} round=${ROUND} reason=not_sandboxed detail=${_synth_sandbox_detail}"',
+		'	echo "ok 1 - ${TAP_LABEL}"',
+		'	exit 0',
+		'fi',
+		'',
+		'_synth_output_file=""',
+		'if ! _synth_output_file="$(mktemp "${TMPDIR:-/tmp}/behavioural_smoke.XXXXXX" 2>/dev/null)"; then',
+		'	echo "# BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE issue=${ISSUE_ID} round=${ROUND} reason=mktemp_failed"',
+		'	echo "ok 1 - ${TAP_LABEL}"',
+		'	exit 0',
+		'fi',
+		'cleanup_behavioural_smoke()',
+		'{',
+		'	rm -f "${_synth_output_file}" >/dev/null 2>&1 || true',
+		'}',
+		'trap cleanup_behavioural_smoke EXIT INT TERM',
+		'',
+		'set +e',
+		f"bash >\"${{_synth_output_file}}\" 2>&1 <<'{delimiter}'",
+		generated_item['content'].rstrip('\n'),
+		delimiter,
+		'_synth_rc=$?',
+		'set -e',
+		'',
+		'if [ -f "${_synth_output_file}" ]; then',
+		'	while IFS= read -r _synth_line || [ -n "${_synth_line}" ]; do',
+		'		echo "# ${_synth_line}"',
+		'	done < "${_synth_output_file}"',
+		'fi',
+		'',
+		'case "${_synth_rc}" in',
+		'	0)',
+		'		echo "# BEHAVIOURAL_SMOKE_PRESENT_PASSED issue=${ISSUE_ID} round=${ROUND}"',
+		'		;;',
+		'	1)',
+		'		echo "# BEHAVIOURAL_SMOKE_PRESENT_FAILED issue=${ISSUE_ID} round=${ROUND}"',
+		'		;;',
+		'	*)',
+		'		echo "# BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE issue=${ISSUE_ID} round=${ROUND} exit=${_synth_rc}"',
+		'		;;',
+		'esac',
+		'echo "# expected_to_fail_until_fixed=${EXPECTED_TO_FAIL_UNTIL_FIXED}"',
+		'echo "ok 1 - ${TAP_LABEL}"',
+		'exit 0',
+		'',
+	]
+	return '\n'.join(lines)
+
+
+judge_payload = load_judge_payload(judge_artifact)
+if judge_payload is None:
+	sys.exit(1)
+
+issues = judge_payload['remaining_issues']
+raw = load_raw(src)
+
+validated_items = None
+for candidate in load_candidates(raw):
+	try:
+		validated_items = normalize_generated_items(candidate, len(issues))
+	except Exception:
+		validated_items = None
+	if validated_items is not None:
+		break
+
+if validated_items is None:
+	print('Behavioural smoke synthesis skipped: could not validate synthesis output', file=sys.stderr)
+	sys.exit(1)
+
+synth_dir_path = Path(synth_dir)
+manifest_path_obj = Path(manifest_path)
+synth_dir_path.mkdir(parents=True, exist_ok=True)
+manifest_path_obj.parent.mkdir(parents=True, exist_ok=True)
+
+seen_filenames: set[str] = set()
+manifest_rows = []
+for issue, generated_item in zip(issues, validated_items):
+	slug, filename = unique_filename(expected_round, issue['id'], seen_filenames)
+	wrapper_path = synth_dir_path / filename
+	wrapper_path.write_text(build_wrapper(issue, generated_item, expected_round, slug), encoding='utf-8')
+	os.chmod(wrapper_path, 0o755)
+	manifest_rows.append(
+		{
+			'issue_id': issue['id'],
+			'file': issue['file'],
+			'line_start': issue['line_start'],
+			'line_end': issue['line_end'],
+			'severity': issue['severity'],
+			'slug': slug,
+			'cache_relpath': wrapper_path.as_posix(),
+			'target_relpath': f'validation/tests/{filename}',
+			'suggested_path': generated_item['path'],
+			'expected_to_fail_until_fixed': generated_item['expected_to_fail_until_fixed'],
+		}
+	)
+
+manifest = {
+	'round': judge_payload['round'],
+	'head_sha': judge_payload['head_sha'],
+	'language': language_hint,
+	'source_artifact': Path(judge_artifact).as_posix(),
+	'target_manifest_relpath': f'validation/tests/synth_round_{expected_round}_manifest.json',
+	'files': manifest_rows,
+}
+
+with open(manifest_path_obj, 'w', encoding='utf-8') as handle:
+	json.dump(manifest, handle, ensure_ascii=True, indent=2)
+	handle.write('\n')
+
+print(str(len(manifest_rows)))
+PY
+}
+
+PROMPT_TEMPLATE="${SUPPORT_PROMPTS_DIR}/behavioural-smoke-synthesise.txt"
+PR_NUMBER="${PR_NUMBER:-}"
+CURRENT_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
+if [ -z "${CURRENT_HEAD_SHA}" ]; then
+	CURRENT_HEAD_SHA="${HEAD_SHA:-}"
+fi
+
+if [ -z "${PR_NUMBER}" ]; then
+	behavioural_smoke_log_fail "missing_pr_number" "0" ".ai/review_runtime/pr-unknown/round-unknown/synth/synth_round_unknown_manifest.json"
+	exit 0
+fi
+
+if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+	behavioural_smoke_log_fail "invalid_pr_number" "0" ".ai/review_runtime/pr-invalid/round-unknown/synth/synth_round_unknown_manifest.json"
+	exit 0
+fi
+
+ROUND_NUMBER_BASE="${ROUND_NUMBER:-}"
+if [[ "${ROUND_NUMBER_BASE}" =~ ^[0-9]+$ ]]; then
+	CURRENT_ROUND="$((ROUND_NUMBER_BASE + 1))"
+elif [[ "${AUTOFIX_ITERATION:-}" =~ ^[0-9]+$ ]]; then
+	CURRENT_ROUND="${AUTOFIX_ITERATION}"
+else
+	CURRENT_ROUND="1"
+fi
+
+ARTIFACT_DIR=".ai/review_runtime/pr-${PR_NUMBER}/round-${CURRENT_ROUND}"
+JUDGE_ARTIFACT="${ARTIFACT_DIR}/judge_interim.json"
+SYNTH_DIR="${ARTIFACT_DIR}/synth"
+MANIFEST_PATH="${SYNTH_DIR}/synth_round_${CURRENT_ROUND}_manifest.json"
+
+if [ -z "${CURRENT_HEAD_SHA}" ]; then
+	behavioural_smoke_log_fail "missing_head_sha" "${CURRENT_ROUND}" "${MANIFEST_PATH}"
+	exit 0
+fi
+
+if [ ! -s "${JUDGE_ARTIFACT}" ]; then
+	behavioural_smoke_log_fail "missing_judge_artifact" "${CURRENT_ROUND}" "${MANIFEST_PATH}"
+	exit 0
+fi
+
+if [ ! -f "${PROMPT_TEMPLATE}" ]; then
+	behavioural_smoke_log_fail "missing_prompt" "${CURRENT_ROUND}" "${MANIFEST_PATH}"
+	exit 0
+fi
+
+LANGUAGE_HINT="$(detect_behavioural_smoke_language)"
+PROMPT_FILE="${RUNTIME_DIR}/behavioural_smoke_prompt.txt"
+RAW_OUTPUT_FILE="${RUNTIME_DIR}/behavioural_smoke_raw.txt"
+STDERR_FILE="${RUNTIME_DIR}/behavioural_smoke_stderr.txt"
+VALIDATION_ENV_FILE="${VALIDATE_ENV_FILE:-validation/validate.env}"
+BEHAVIOURAL_SMOKE_MODEL="${BEHAVIOURAL_SMOKE_MODEL:-openai/gpt-6-luna}"
+BEHAVIOURAL_SMOKE_TIMEOUT_DEFAULT=120
+BEHAVIOURAL_SMOKE_TIMEOUT_MAX=3600
+BEHAVIOURAL_SMOKE_TIMEOUT_S="${BEHAVIOURAL_SMOKE_TIMEOUT_S:-${BEHAVIOURAL_SMOKE_TIMEOUT_DEFAULT}}"
+
+if ! [[ "${BEHAVIOURAL_SMOKE_TIMEOUT_S}" =~ ^[0-9]+$ ]]; then
+	BEHAVIOURAL_SMOKE_TIMEOUT_S="${BEHAVIOURAL_SMOKE_TIMEOUT_DEFAULT}"
+else
+	BEHAVIOURAL_SMOKE_TIMEOUT_CANONICAL="${BEHAVIOURAL_SMOKE_TIMEOUT_S#"${BEHAVIOURAL_SMOKE_TIMEOUT_S%%[!0]*}"}"
+	BEHAVIOURAL_SMOKE_TIMEOUT_CANONICAL="${BEHAVIOURAL_SMOKE_TIMEOUT_CANONICAL:-0}"
+	if [ "${BEHAVIOURAL_SMOKE_TIMEOUT_CANONICAL}" = "0" ] \
+		|| [ "${#BEHAVIOURAL_SMOKE_TIMEOUT_CANONICAL}" -gt "${#BEHAVIOURAL_SMOKE_TIMEOUT_MAX}" ]; then
+		BEHAVIOURAL_SMOKE_TIMEOUT_S="${BEHAVIOURAL_SMOKE_TIMEOUT_DEFAULT}"
+	else
+		# shellcheck disable=SC2071  # same-length digit strings; string compare avoids integer overflow
+		if [ "${#BEHAVIOURAL_SMOKE_TIMEOUT_CANONICAL}" -eq "${#BEHAVIOURAL_SMOKE_TIMEOUT_MAX}" ] && [ "${BEHAVIOURAL_SMOKE_TIMEOUT_CANONICAL}" \> "${BEHAVIOURAL_SMOKE_TIMEOUT_MAX}" ]; then
+			BEHAVIOURAL_SMOKE_TIMEOUT_S="${BEHAVIOURAL_SMOKE_TIMEOUT_DEFAULT}"
+		else
+			BEHAVIOURAL_SMOKE_TIMEOUT_S="${BEHAVIOURAL_SMOKE_TIMEOUT_CANONICAL}"
+		fi
+	fi
+fi
+
+if ! CURRENT_ISSUES_COUNT="$(count_remaining_issues "${JUDGE_ARTIFACT}" "${CURRENT_ROUND}" "${CURRENT_HEAD_SHA}" 2>/dev/null)"; then
+	behavioural_smoke_log_fail "invalid_judge_artifact" "${CURRENT_ROUND}" "${MANIFEST_PATH}"
+	exit 0
+fi
+
+{
+	if [ -f ./pre_assembled_static.txt ]; then
+		cat ./pre_assembled_static.txt
+		echo
+	fi
+	if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/static_readme_trimmed.txt" ]; then
+		echo "=== BEGIN UNTRUSTED PR README.MD (trimmed) ==="
+		while IFS= read -r review_readme_line || [ -n "${review_readme_line}" ]; do
+			printf 'UNTRUSTED_DATA: %s\n' "${review_readme_line}"
+		done < "${RUNTIME_DIR}/static_readme_trimmed.txt"
+		echo "=== END UNTRUSTED PR README.MD (trimmed) ==="
+		echo
+	fi
+	echo "=== BEHAVIOURAL SMOKE SYNTHESIS TASK ==="
+	echo
+	if [ -x "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" ]; then
+		(
+			cd "${SUPPORT_ROOT_DIR}"
+			bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${PROMPT_TEMPLATE}"
+		)
+	else
+		cat "${PROMPT_TEMPLATE}"
+	fi
+	echo
+	echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_BEHAVIOURAL_SMOKE:-20}"
+	echo
+	echo "=== ROUND CONTEXT ==="
+	echo "round: ${CURRENT_ROUND}"
+	echo "head_sha: ${CURRENT_HEAD_SHA}"
+	echo "language_hint: ${LANGUAGE_HINT}"
+	echo
+	echo "=== JUDGE INTERIM ARTIFACT ==="
+	cat "${JUDGE_ARTIFACT}"
+	echo
+	echo "=== VALIDATION ENV CONTEXT ==="
+	if [ -f "${VALIDATION_ENV_FILE}" ]; then
+		cat "${VALIDATION_ENV_FILE}"
+	else
+		echo 'No validation/validate.env file available.'
+	fi
+} > "${PROMPT_FILE}"
+
+rm -rf "${SYNTH_DIR}"
+
+if [ "${CURRENT_ISSUES_COUNT}" = "0" ]; then
+	printf '[]\n' > "${RAW_OUTPUT_FILE}"
+	if synth_count="$(extract_and_write_synth_bundle "${RAW_OUTPUT_FILE}" "${JUDGE_ARTIFACT}" "${SYNTH_DIR}" "${MANIFEST_PATH}" "${CURRENT_ROUND}" "${CURRENT_HEAD_SHA}" "${LANGUAGE_HINT}")" \
+		&& [ -s "${MANIFEST_PATH}" ]; then
+		behavioural_smoke_log_ok "${synth_count}" "${CURRENT_ROUND}" "${LANGUAGE_HINT}" "${MANIFEST_PATH}"
+		exit 0
+	fi
+	rm -rf "${SYNTH_DIR}"
+	behavioural_smoke_log_fail "json_parse_failed" "${CURRENT_ROUND}" "${MANIFEST_PATH}"
+	exit 0
+fi
+
+OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh}"
+OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR}/write_opencode_config.sh}"
+if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then
+	behavioural_smoke_log_fail "missing_opencode_helpers" "${CURRENT_ROUND}" "${MANIFEST_PATH}"
+	exit 0
+fi
+if [ ! -f "${OPENCODE_CONFIG_WRITER_PATH}" ] || [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
+	opencode_emit_failure_alert review_synthesise_smoke reviewer "${BEHAVIOURAL_SMOKE_MODEL}" 1 config_writer_missing || true
+	behavioural_smoke_log_fail "config_writer_missing" "${CURRENT_ROUND}" "${MANIFEST_PATH}"
+	exit 0
+fi
+
+BEHAVIOURAL_SMOKE_OPENCODE_CONFIG="${RUNTIME_DIR}/behavioural_smoke_opencode.json"
+BEHAVIOURAL_SMOKE_OPENCODE_WORKSPACE="$(pwd)"
+if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" \
+	--role reviewer \
+	--model "${BEHAVIOURAL_SMOKE_MODEL}" \
+	--project-path "${BEHAVIOURAL_SMOKE_OPENCODE_WORKSPACE}" \
+	--config-path "${BEHAVIOURAL_SMOKE_OPENCODE_CONFIG}" \
+	--serena off; then
+	opencode_emit_failure_alert review_synthesise_smoke reviewer "${BEHAVIOURAL_SMOKE_MODEL}" 1 config_generation || true
+	behavioural_smoke_log_fail "config_generation" "${CURRENT_ROUND}" "${MANIFEST_PATH}"
+	exit 0
+fi
+if ! opencode_require_bootstrap review_synthesise_smoke reviewer "${BEHAVIOURAL_SMOKE_MODEL}" \
+	"${BEHAVIOURAL_SMOKE_OPENCODE_CONFIG}" "${OPENCODE_VERSION:-1.18.23}" "${OPENCODE_CONFIG_WRITER_PATH}"; then
+	behavioural_smoke_log_fail "opencode_bootstrap" "${CURRENT_ROUND}" "${MANIFEST_PATH}"
+	exit 0
+fi
+
+# ── Engine selection (role BEHAVIOURAL_SMOKE, plan item 3d) ──────────────
+# The synthesiser reads PR-derived diffs and findings, so every engine runs
+# only in the network-isolated review sandbox (review_untrusted_sandbox.sh,
+# read-only, credential-free relay), like the consolidator; host claude_run
+# refuses review roles. Order: Claude in a fresh sandbox; on exit 75 (Claude
+# unavailable) or 2 (outdated helper) OpenCode in a fresh sandbox. A codex
+# selection (AI_ENGINE_BEHAVIOURAL_SMOKE=codex, AI_ENGINE=codex, the ai:codex
+# label, no pool credential) starts with sandboxed OpenCode. Host OpenCode is
+# never used: when the sandbox cannot be prepared the run is refused with
+# rc 77, a REVIEW_UTILITY_ISOLATION line and the advisory
+# BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=isolation_unavailable. Every input
+# has a default here because review_autofix.yml does not export one
+# (unattended §8).
+behavioural_smoke_sandbox_sh="${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh"
+behavioural_smoke_sandbox_root=""
+behavioural_smoke_sandbox_unavailable=false
+behavioural_smoke_sandbox_cleanup()
+{
+	[ -n "${behavioural_smoke_sandbox_root:-}" ] || return 0
+	if ! REVIEW_SANDBOX_ROOT="${behavioural_smoke_sandbox_root}" timeout --signal=TERM --kill-after=10s -- 30s \
+		bash "${behavioural_smoke_sandbox_sh}" cleanup >/dev/null 2>&1; then
+		echo "::warning::behavioural smoke: review sandbox cleanup failed." >&2
+	fi
+	behavioural_smoke_sandbox_root=""
+}
+trap behavioural_smoke_sandbox_cleanup EXIT
+behavioural_smoke_engine_resolve()
+{
+	local engine_script="${SUPPORT_SCRIPTS_DIR}/ai_engine.sh" resolved_engine accounts
+	if [ ! -f "${engine_script}" ] || [ -L "${engine_script}" ]; then
+		printf 'codex\n'
+		return 0
+	fi
+	resolved_engine="$(AI_ENGINE_MODEL_HINT="${BEHAVIOURAL_SMOKE_MODEL}" AI_ENGINE_EFFORT_HINT=low \
+		bash -c 'source "$0" >/dev/null 2>&1 || exit 2; ai_engine_for_role BEHAVIOURAL_SMOKE' "${engine_script}" || true)"
+	if [ "${resolved_engine}" != "claude" ]; then
+		printf 'codex\n'
+		return 0
+	fi
+	# Without a pool credential the sandboxed Claude run can only exit 75
+	# (no_credential) before any model call; skip the image build and start
+	# with sandboxed OpenCode.
+	accounts="$(bash -c 'source "$0" >/dev/null 2>&1 || exit 2; ai_engine_accounts' "${engine_script}" 2>/dev/null || true)"
+	if [ -z "${accounts}" ]; then
+		echo "AI_ENGINE_FALLBACK role=BEHAVIOURAL_SMOKE reason=no_credential" >&2
+		printf 'codex\n'
+		return 0
+	fi
+	printf 'claude\n'
+}
+# One sandboxed attempt on <engine> (claude|codex); sets
+# behavioural_smoke_sandbox_unavailable=true when the sandbox could not be prepared.
+behavioural_smoke_sandbox_attempt()
+{
+	local sandbox_engine="$1" attempt_rc=0
+	behavioural_smoke_sandbox_unavailable=false
+	if [ ! -f "${behavioural_smoke_sandbox_sh}" ] || [ -L "${behavioural_smoke_sandbox_sh}" ]; then
+		behavioural_smoke_sandbox_unavailable=true
+		return 1
+	fi
+	if ! behavioural_smoke_sandbox_root="$(timeout --signal=TERM --kill-after=10s -- "${BEHAVIOURAL_SMOKE_TIMEOUT_S}" \
+		bash "${behavioural_smoke_sandbox_sh}" prepare-ephemeral "${sandbox_engine}" 2>>"${STDERR_FILE}")" || [ -z "${behavioural_smoke_sandbox_root}" ]; then
+		behavioural_smoke_sandbox_root=""
+		behavioural_smoke_sandbox_unavailable=true
+		return 1
+	fi
+	REVIEW_SANDBOX_ROOT="${behavioural_smoke_sandbox_root}" timeout --signal=TERM --kill-after=30s -- "${BEHAVIOURAL_SMOKE_TIMEOUT_S}" \
+		bash "${behavioural_smoke_sandbox_sh}" run "${PROMPT_FILE}" "${RAW_OUTPUT_FILE}" \
+		"${BEHAVIOURAL_SMOKE_MODEL}" low "${BEHAVIOURAL_SMOKE_OPENCODE_CONFIG}" \
+		"${sandbox_engine}" BEHAVIOURAL_SMOKE read \
+		< "${PROMPT_FILE}" >/dev/null 2>>"${STDERR_FILE}" || attempt_rc=$?
+	behavioural_smoke_sandbox_cleanup
+	return "${attempt_rc}"
+}
+
+: > "${RAW_OUTPUT_FILE}"
+: > "${STDERR_FILE}"
+behavioural_smoke_engine_state="sandbox_opencode"
+if [ "$(behavioural_smoke_engine_resolve)" = "claude" ]; then
+	behavioural_smoke_engine_state="claude"
+fi
+behavioural_smoke_isolation_refused_rc=77
+behavioural_smoke_isolation_refuse()
+{
+	echo "::error::REVIEW_UTILITY_ISOLATION role=BEHAVIOURAL_SMOKE engine=$1 outcome=refused reason=$2" >&2
+	: > "${RAW_OUTPUT_FILE}"
+	behavioural_smoke_engine_state="refused"
+	cmd_rc="${behavioural_smoke_isolation_refused_rc}"
+}
+cmd_rc=0
+if [ "${behavioural_smoke_engine_state}" = "claude" ]; then
+	behavioural_smoke_sandbox_attempt claude || cmd_rc=$?
+	if [ "${behavioural_smoke_sandbox_unavailable}" = "true" ]; then
+		behavioural_smoke_isolation_refuse claude sandbox_unavailable
+	elif [ "${cmd_rc}" -eq 75 ] || [ "${cmd_rc}" -eq 2 ]; then
+		grep -E '^(AI_ENGINE_[A-Z_]+|CLAUDE_POOL) ' "${STDERR_FILE}" >&2 || true
+		if [ "${cmd_rc}" -eq 2 ]; then
+			echo "AI_ENGINE_FALLBACK role=BEHAVIOURAL_SMOKE reason=sandbox_helper_outdated" >&2
+		fi
+		behavioural_smoke_engine_state="sandbox_opencode"
+		: > "${RAW_OUTPUT_FILE}"
+		cmd_rc=0
+	fi
+fi
+if [ "${behavioural_smoke_engine_state}" = "sandbox_opencode" ]; then
+	behavioural_smoke_sandbox_attempt codex || cmd_rc=$?
+	if [ "${behavioural_smoke_sandbox_unavailable}" = "true" ]; then
+		behavioural_smoke_isolation_refuse codex sandbox_unavailable
+	elif [ "${cmd_rc}" -eq 2 ]; then
+		behavioural_smoke_isolation_refuse codex sandbox_helper_outdated
+	fi
+fi
+
+behavioural_smoke_clean_output="${RAW_OUTPUT_FILE}.ansi-clean"
+if opencode_strip_ansi < "${RAW_OUTPUT_FILE}" > "${behavioural_smoke_clean_output}"; then
+	mv "${behavioural_smoke_clean_output}" "${RAW_OUTPUT_FILE}"
+else
+	rm -f "${behavioural_smoke_clean_output}"
+fi
+behavioural_smoke_clean_stderr="${STDERR_FILE}.ansi-clean"
+if opencode_strip_ansi < "${STDERR_FILE}" > "${behavioural_smoke_clean_stderr}"; then
+	mv "${behavioural_smoke_clean_stderr}" "${STDERR_FILE}"
+else
+	rm -f "${behavioural_smoke_clean_stderr}"
+fi
+if [ "${behavioural_smoke_engine_state}" = "refused" ]; then
+	opencode_emit_failure_alert review_synthesise_smoke reviewer "${BEHAVIOURAL_SMOKE_MODEL}" "${cmd_rc}" isolation_unavailable || true
+elif [ "${cmd_rc}" -ne 0 ]; then
+	opencode_emit_failure_alert review_synthesise_smoke reviewer "${BEHAVIOURAL_SMOKE_MODEL}" "${cmd_rc}" invocation_failed || true
+fi
+
+if synth_count="$(extract_and_write_synth_bundle "${RAW_OUTPUT_FILE}" "${JUDGE_ARTIFACT}" "${SYNTH_DIR}" "${MANIFEST_PATH}" "${CURRENT_ROUND}" "${CURRENT_HEAD_SHA}" "${LANGUAGE_HINT}")" \
+	&& [ -s "${MANIFEST_PATH}" ]; then
+	behavioural_smoke_log_ok "${synth_count}" "${CURRENT_ROUND}" "${LANGUAGE_HINT}" "${MANIFEST_PATH}"
+	exit 0
+fi
+
+if synth_count="$(extract_and_write_synth_bundle "${STDERR_FILE}" "${JUDGE_ARTIFACT}" "${SYNTH_DIR}" "${MANIFEST_PATH}" "${CURRENT_ROUND}" "${CURRENT_HEAD_SHA}" "${LANGUAGE_HINT}")" \
+	&& [ -s "${MANIFEST_PATH}" ]; then
+	behavioural_smoke_log_ok "${synth_count}" "${CURRENT_ROUND}" "${LANGUAGE_HINT}" "${MANIFEST_PATH}"
+	exit 0
+fi
+
+if [ -s "${STDERR_FILE}" ]; then
+	{
+		echo 'BEHAVIOURAL_SMOKE_SYNTHESIS_STDERR_BEGIN'
+		tail -n 80 "${STDERR_FILE}" || true
+		echo 'BEHAVIOURAL_SMOKE_SYNTHESIS_STDERR_END'
+	} >&2
+fi
+
+rm -rf "${SYNTH_DIR}"
+failure_reason="json_parse_failed"
+if [ "${cmd_rc}" -eq "${behavioural_smoke_isolation_refused_rc}" ] && [ "${behavioural_smoke_engine_state}" = "refused" ]; then
+	failure_reason="isolation_unavailable"
+elif [ "${cmd_rc}" -eq 124 ]; then
+	failure_reason="timeout"
+elif [ "${cmd_rc}" -eq 137 ]; then
+	failure_reason="killed"
+elif [ "${cmd_rc}" -ne 0 ]; then
+	failure_reason="llm_failed"
+fi
+
+behavioural_smoke_log_fail "${failure_reason}" "${CURRENT_ROUND}" "${MANIFEST_PATH}"
+exit 0

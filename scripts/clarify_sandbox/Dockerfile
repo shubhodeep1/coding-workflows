@@ -1,0 +1,18 @@
+# Fixed build context: no repository files or secrets are sent to docker build.
+# python3-yaml: the heal editor's syntax validator (validate_changed_files_syntax.sh)
+# checks edited YAML in this image; without it every workflow edit failed (#6982).
+FROM node:22.16.0-bookworm-slim
+ARG CODEX_VERSION=v0.114.0
+# jq: the heal route's pre-push gate runs in this image, and shell-script tests
+# call jq.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-yaml ca-certificates git jq \
+    && rm -rf /var/lib/apt/lists/*
+RUN npm install -g "@openai/codex@${CODEX_VERSION}" \
+    "@openai/codex-linux-x64@npm:@openai/codex@${CODEX_VERSION#v}-linux-x64" \
+    --no-audit --no-fund
+# Claude engine (scripts/ai_engine.sh): installed only when the clarify Claude
+# branch passes a version; the codex image is unchanged without it.
+ARG CLAUDE_CLI_VERSION=
+RUN if [ -n "${CLAUDE_CLI_VERSION}" ]; then \
+      npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}" --no-audit --no-fund; \
+    fi

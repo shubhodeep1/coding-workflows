@@ -1,0 +1,704 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+import yaml
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+HELPER = REPO_ROOT / "scripts" / "run_workspace_hook.sh"
+IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
+VALIDATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "validate.yml"
+
+
+def _workflow_doc(path: Path) -> dict[str, object]:
+	doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+	if not isinstance(doc, dict):
+		raise AssertionError(f"Workflow did not parse into a mapping: {path}")
+	return doc
+
+
+def _steps(path: Path) -> list[dict[str, object]]:
+	jobs = _workflow_doc(path).get("jobs")
+	if not isinstance(jobs, dict):
+		raise AssertionError(f"Workflow jobs mapping missing in {path}")
+	for job in jobs.values():
+		if not isinstance(job, dict):
+			continue
+		steps = job.get("steps")
+		if isinstance(steps, list):
+			return [step for step in steps if isinstance(step, dict)]
+	raise AssertionError(f"Workflow steps missing in {path}")
+
+
+def _step(path: Path, step_name: str) -> dict[str, object]:
+	for step in _steps(path):
+		if str(step.get("name", "")).strip() == step_name:
+			return step
+	raise AssertionError(f"Step not found in {path}: {step_name}")
+
+
+def _step_run_text(path: Path, step_name: str) -> str:
+	run = _step(path, step_name).get("run")
+	if not isinstance(run, str):
+		raise AssertionError(f"Step does not define a run block: {step_name}")
+	return run
+
+
+def _step_index(path: Path, step_name: str) -> int:
+	for index, step in enumerate(_steps(path)):
+		if str(step.get("name", "")).strip() == step_name:
+			return index
+	raise AssertionError(f"Step not found in {path}: {step_name}")
+
+
+def _prepare_case(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
+	repo_root = tmp_path / "repo"
+	helper_copy = repo_root / "scripts" / HELPER.name
+	workspace_path = tmp_path / "workspace"
+	runner_temp = tmp_path / "runner-temp"
+	helper_copy.parent.mkdir(parents=True)
+	workspace_path.mkdir(parents=True)
+	runner_temp.mkdir(parents=True)
+	shutil.copy2(HELPER, helper_copy)
+	helper_copy.chmod(0o755)
+	fake_docker_dir = tmp_path / "fake-bin"
+	fake_docker_dir.mkdir()
+	fake_docker = fake_docker_dir / "docker"
+	fake_docker.write_text(
+		"#!/usr/bin/env python3\n"
+		"import json, os, pathlib, shutil, subprocess, sys, tarfile\n"
+		"if sys.argv[1] in ('image', 'pull'): raise SystemExit(0)\n"
+		"args = sys.argv[1:]\n"
+		"mount = args[args.index('--mount') + 1]\n"
+		"source = pathlib.Path(mount.split(',')[1].split('=', 1)[1])\n"
+		"work = source.parent / 'fake-work'\n"
+		"shutil.copytree(source, work)\n"
+		"(source.parent.parent / 'docker_invocation.json').write_text(json.dumps({'args': args, 'env': sorted(os.environ)}))\n"
+		"envs = dict(arg.split('=', 1) for i, arg in enumerate(args) if args[i-1:i] == ['--env'])\n"
+		"hook = envs['VALIDATE_HOOK_NAME']\n"
+		"phase = envs.get('WORKSPACE_HOOK_PHASE', 'validate')\n"
+		"env = {'HOME': '/tmp', 'PATH': os.environ['PATH'], 'VALIDATE_HOOK_NAME': hook, 'WORKSPACE_HOOK_PHASE': phase}\n"
+		"rc = subprocess.run(['bash', f'.github/ai/workspace_hooks/{phase}/{hook}.sh'], cwd=work, env=env, stdout=sys.stderr).returncode\n"
+		"if rc: raise SystemExit(rc)\n"
+		"with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as archive: archive.add(work, arcname='.')\n",
+		encoding="utf-8",
+	)
+	fake_docker.chmod(0o755)
+	return repo_root, helper_copy, workspace_path, runner_temp
+
+
+AFTER_CREATE_HOOK = (
+	"#!/usr/bin/env bash\n"
+	"mkdir -p implement/hook-output/after_create\n"
+	"printf 'ran\\n' >> implement/hook-output/after_create/ran.txt\n"
+)
+
+
+def _write_hook(repo_root: Path, phase: str, hook: str, content: str) -> Path:
+	hook_path = repo_root / ".github" / "ai" / "workspace_hooks" / phase / f"{hook}.sh"
+	hook_path.parent.mkdir(parents=True, exist_ok=True)
+	hook_path.write_text(content, encoding="utf-8")
+	return hook_path
+
+
+def _run_helper(
+	repo_root: Path,
+	helper_path: Path,
+	workspace_path: Path,
+	runner_temp: Path,
+	phase: str,
+	hook: str,
+	**env_overrides: str,
+) -> subprocess.CompletedProcess[str]:
+	env = os.environ.copy()
+	env.update(
+		{
+			"RUNNER_TEMP": str(runner_temp),
+			"WORKSPACE_PATH": str(workspace_path),
+		}
+	)
+	# Every phase now runs through the (fake) Docker sandbox.
+	env["PATH"] = f"{runner_temp.parent / 'fake-bin'}:{env['PATH']}"
+	env.update(env_overrides)
+	if "PATH" in env_overrides:
+		env["PATH"] = f"{runner_temp.parent / 'fake-bin'}:{env_overrides['PATH']}"
+	return subprocess.run(
+		["bash", str(helper_path), phase, hook],
+		cwd=str(repo_root),
+		env=env,
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+
+
+def test_helper_script_exists_and_is_executable() -> None:
+	assert HELPER.exists()
+	assert HELPER.stat().st_mode & 0o111
+
+
+def test_missing_and_empty_hooks_are_noop(tmp_path: Path) -> None:
+	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
+	result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "implement", "before_run")
+	assert result.returncode == 0, result.stderr
+	assert not (runner_temp / "workspace-hooks" / "implement-before_run.log").exists()
+
+	_write_hook(repo_root, "implement", "before_run", "")
+	result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "implement", "before_run")
+	assert result.returncode == 0, result.stderr
+	assert not (runner_temp / "workspace-hooks" / "implement-before_run.log").exists()
+
+
+def test_after_create_runs_when_created_now_true(tmp_path: Path) -> None:
+	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
+	marker = runner_temp / "workspace-hooks" / "output" / "implement" / "after_create" / "ran.txt"
+	_write_hook(
+		repo_root,
+		"implement",
+		"after_create",
+		AFTER_CREATE_HOOK,
+	)
+
+	result = _run_helper(
+		repo_root,
+		helper_path,
+		workspace_path,
+		runner_temp,
+		"implement",
+		"after_create",
+		CREATED_NOW="true",
+	)
+	assert result.returncode == 0, result.stderr
+	assert marker.read_text(encoding="utf-8") == "ran\n"
+	assert not (workspace_path / "implement").exists()
+
+
+def test_after_create_runs_once_per_workspace_lifetime(tmp_path: Path) -> None:
+	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
+	marker = runner_temp / "workspace-hooks" / "output" / "implement" / "after_create" / "ran.txt"
+	_write_hook(
+		repo_root,
+		"implement",
+		"after_create",
+		AFTER_CREATE_HOOK,
+	)
+
+	first = _run_helper(
+		repo_root,
+		helper_path,
+		workspace_path,
+		runner_temp,
+		"implement",
+		"after_create",
+		CREATED_NOW="true",
+	)
+	second = _run_helper(
+		repo_root,
+		helper_path,
+		workspace_path,
+		runner_temp,
+		"implement",
+		"after_create",
+		CREATED_NOW="false",
+	)
+
+	assert first.returncode == 0, first.stderr
+	assert second.returncode == 0, second.stderr
+	assert marker.read_text(encoding="utf-8") == "ran\n"
+	assert not (workspace_path / "implement").exists()
+
+
+def test_after_create_treats_unset_created_now_as_true(tmp_path: Path) -> None:
+	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
+	marker = runner_temp / "workspace-hooks" / "output" / "implement" / "after_create" / "ran.txt"
+	_write_hook(
+		repo_root,
+		"implement",
+		"after_create",
+		AFTER_CREATE_HOOK,
+	)
+
+	result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "implement", "after_create")
+	assert result.returncode == 0, result.stderr
+	assert marker.read_text(encoding="utf-8") == "ran\n"
+	assert not (workspace_path / "implement").exists()
+
+
+def test_after_create_skips_when_created_now_false(tmp_path: Path) -> None:
+	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
+	marker = runner_temp / "workspace-hooks" / "output" / "implement" / "after_create" / "ran.txt"
+	_write_hook(
+		repo_root,
+		"implement",
+		"after_create",
+		AFTER_CREATE_HOOK,
+	)
+
+	result = _run_helper(
+		repo_root,
+		helper_path,
+		workspace_path,
+		runner_temp,
+		"implement",
+		"after_create",
+		CREATED_NOW="false",
+	)
+	assert result.returncode == 0, result.stderr
+	assert not marker.exists()
+
+
+def test_hook_executes_in_workspace_path(tmp_path: Path) -> None:
+	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
+	_write_hook(
+		workspace_path,
+		"validate",
+		"before_run",
+		"#!/usr/bin/env bash\nmkdir -p validation/hook-output/before_run\npwd -P > validation/hook-output/before_run/hook_pwd.txt\n",
+	)
+
+	result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "validate", "before_run")
+	assert result.returncode == 0, result.stderr
+	# The fake Docker runner uses the screened copy as its cwd; production
+	# mounts the same copy at /workspace rather than the host workspace.
+	assert (workspace_path / "validation/hook-output/before_run/hook_pwd.txt").read_text(encoding="utf-8").strip().endswith("/fake-work")
+
+
+def test_before_run_failure_is_fatal_and_emits_bounded_tail(tmp_path: Path) -> None:
+	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
+	_write_hook(
+		repo_root,
+		"implement",
+		"before_run",
+		"#!/usr/bin/env bash\n"
+		"printf 'BEGIN-MARKER\\n'\n"
+		"python3 - <<'PY'\n"
+		"print('x' * 12000)\n"
+		"PY\n"
+		"printf 'END-MARKER\\n'\n"
+		"exit 1\n",
+	)
+
+	result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "implement", "before_run")
+	log_file = runner_temp / "workspace-hooks" / "implement-before_run.log"
+	assert result.returncode == 1
+	assert log_file.exists()
+	log_text = log_file.read_text(encoding="utf-8")
+	assert "BEGIN-MARKER" in log_text
+	assert "END-MARKER" in log_text
+	assert "END-MARKER" in result.stderr
+	assert "BEGIN-MARKER" not in result.stderr
+
+
+def test_before_run_sigkill_timeout_reports_timeout(tmp_path: Path) -> None:
+	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
+	timeout_dir = tmp_path / "bin"
+	timeout_dir.mkdir()
+	fake_timeout = timeout_dir / "timeout"
+	fake_timeout.write_text(
+		"#!/usr/bin/env bash\n"
+		"sleep 2\n"
+		"printf 'simulated timeout\\n'\n"
+		"exit 137\n",
+		encoding="utf-8",
+	)
+	fake_timeout.chmod(0o755)
+	_write_hook(repo_root, "implement", "before_run", "#!/usr/bin/env bash\nexit 0\n")
+
+	result = _run_helper(
+		repo_root,
+		helper_path,
+		workspace_path,
+		runner_temp,
+		"implement",
+		"before_run",
+		PATH=f"{timeout_dir}:{os.environ['PATH']}",
+		WORKSPACE_HOOK_TIMEOUT_SECONDS="1",
+	)
+	assert result.returncode == 137
+	assert "timed out after 1 seconds" in result.stderr
+	assert "failed with exit code 137" not in result.stderr
+
+
+def test_nonfatal_hooks_log_and_continue(tmp_path: Path) -> None:
+	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
+	for hook_name in ("after_run", "before_remove"):
+		_write_hook(
+			workspace_path,
+			"validate",
+			hook_name,
+			f"#!/usr/bin/env bash\nprintf 'nonfatal-{hook_name}\\n'\nexit 1\n",
+		)
+		result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "validate", hook_name)
+		assert result.returncode == 0
+		assert f"Workspace hook validate/{hook_name} failed with exit code 1" in result.stderr
+		assert f"nonfatal-{hook_name}" in result.stderr
+		assert (runner_temp / "workspace-hooks" / f"validate-{hook_name}.log").exists()
+
+
+def test_validate_hook_has_no_credentials_or_git_and_writes_back(tmp_path: Path) -> None:
+	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
+	(workspace_path / ".git").mkdir()
+	(workspace_path / ".git" / "config").write_text("secret", encoding="utf-8")
+	(workspace_path / ".env").write_text("secret", encoding="utf-8")
+	output_dir = workspace_path / "validation" / "hook-output" / "before_run"
+	output_dir.mkdir(parents=True)
+	(output_dir / "existing.txt").write_text("old", encoding="utf-8")
+	(output_dir / "removed.txt").write_text("obsolete", encoding="utf-8")
+	_write_hook(workspace_path, "validate", "before_run", "#!/usr/bin/env bash\n"
+		"[ -z \"${GH_TOKEN:-}\" ] && [ -z \"${GIT_DIR:-}\" ] && [ ! -e .git/config ] && [ ! -e .env ] || exit 9\n"
+		"printf 'new' > validation/hook-output/before_run/existing.txt\n"
+		"printf 'added' > validation/hook-output/before_run/added.txt\n"
+		"rm validation/hook-output/before_run/removed.txt\n")
+	result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "validate", "before_run",
+		GH_TOKEN="sensitive-test-token", GIT_DIR="/sensitive/host/git")
+	assert result.returncode == 0, result.stderr
+	assert (output_dir / "existing.txt").read_text(encoding="utf-8") == "new"
+	assert (output_dir / "added.txt").read_text(encoding="utf-8") == "added"
+	assert not (output_dir / "removed.txt").exists()
+	assert not (output_dir / "added.txt").stat().st_mode & 0o111
+	args = json.loads((runner_temp / "docker_invocation.json").read_text(encoding="utf-8"))
+	assert args["args"][args["args"].index("--network") + 1] == "none"
+	assert "--cap-drop" in args["args"] and "--read-only" in args["args"]
+	assert "--tmpfs" in args["args"] and any("/workspace:" in arg for arg in args["args"])
+	assert "dst=/source,readonly" in str(args["args"])
+	assert "GH_TOKEN" not in args["env"] and "GIT_DIR" not in args["env"]
+	assert "sensitive-test-token" not in str(args)
+
+
+def test_validate_hook_rejects_disallowed_mutations_without_partial_replay(tmp_path: Path) -> None:
+	cases = (
+		("replace_script", "printf 'attacker' > scripts/validate_process.sh", "scripts/validate_process.sh"),
+		("create_script", "mkdir -p scripts; printf 'attacker' > scripts/new_helper.sh", "scripts/new_helper.sh"),
+		("change_hook", "printf 'attacker' > .github/ai/workspace_hooks/validate/after_run.sh", ".github/ai/workspace_hooks/validate/after_run.sh"),
+		("change_harness", "printf 'attacker' > validation/harness.txt", "validation/harness.txt"),
+		("change_config", "printf 'attacker' > pytest.ini", "pytest.ini"),
+		("delete_script", "rm scripts/validate_process.sh", "scripts/validate_process.sh"),
+		("mode_only", "chmod +x scripts/validate_process.sh", "scripts/validate_process.sh"),
+		("executable_data", "chmod +x validation/hook-output/before_run/safe.txt", "validation/hook-output/before_run/safe.txt"),
+		("wrong_hook", "mkdir -p validation/hook-output/after_run; printf 'attacker' > validation/hook-output/after_run/other.txt", "validation/hook-output/after_run/other.txt"),
+		("nested_output", "mkdir -p validation/hook-output/before_run/nested; printf 'attacker' > validation/hook-output/before_run/nested/other.txt", "validation/hook-output/before_run/nested/other.txt"),
+	)
+	for label, command, attacked_file in cases:
+		case_path = tmp_path / label
+		case_path.mkdir()
+		repo_root, helper_path, workspace_path, runner_temp = _prepare_case(case_path)
+		if label in ("replace_script", "delete_script", "mode_only"):
+			protected = workspace_path / attacked_file
+			protected.parent.mkdir(parents=True, exist_ok=True)
+			protected.write_text("original", encoding="utf-8")
+		elif label == "change_hook":
+			protected = _write_hook(workspace_path, "validate", "after_run", "original")
+		elif label in ("change_harness", "change_config"):
+			protected = workspace_path / attacked_file
+			protected.parent.mkdir(parents=True, exist_ok=True)
+			protected.write_text("original", encoding="utf-8")
+		else:
+			protected = workspace_path / attacked_file
+		output_dir = workspace_path / "validation" / "hook-output" / "before_run"
+		output_dir.mkdir(parents=True)
+		(output_dir / "safe.txt").write_text("original", encoding="utf-8")
+		_write_hook(workspace_path, "validate", "before_run", "#!/usr/bin/env bash\n"
+			"printf 'updated' > validation/hook-output/before_run/safe.txt\n"
+			"printf 'new' > validation/hook-output/before_run/new.txt\n"
+			f"{command}\n")
+		result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "validate", "before_run")
+		assert result.returncode == 125, (label, result.stderr)
+		assert (output_dir / "safe.txt").read_text(encoding="utf-8") == "original"
+		assert not (output_dir / "new.txt").exists()
+		if protected.exists():
+			assert protected.read_text(encoding="utf-8") == "original"
+			assert not protected.stat().st_mode & 0o111
+		else:
+			assert label in ("create_script", "wrong_hook", "nested_output")
+
+
+def test_validate_hook_rejects_executable_data_and_unsafe_host_target(tmp_path: Path) -> None:
+	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
+	_write_hook(workspace_path, "validate", "after_run", "#!/usr/bin/env bash\n"
+		"mkdir -p validation/hook-output/after_run\n"
+		"printf 'untrusted' > validation/hook-output/after_run/data.txt\n"
+		"chmod +x validation/hook-output/after_run/data.txt\n")
+	result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "validate", "after_run")
+	assert result.returncode == 125, result.stderr
+	assert not (workspace_path / "validation/hook-output/after_run/data.txt").exists()
+	# A pre-existing symlink at the destination cannot redirect output replay.
+	output_dir = workspace_path / "validation/hook-output/after_run"
+	output_dir.mkdir(parents=True)
+	(output_dir / "data.txt").symlink_to(tmp_path / "outside.txt")
+	_write_hook(workspace_path, "validate", "after_run", "#!/usr/bin/env bash\n"
+		"mkdir -p validation/hook-output/after_run\n"
+		"printf 'untrusted' > validation/hook-output/after_run/data.txt\n")
+	result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "validate", "after_run")
+	assert result.returncode == 125, result.stderr
+	assert not (tmp_path / "outside.txt").exists()
+	# A symlinked parent must not redirect even a newly created allowed file.
+	(output_dir / "data.txt").unlink()
+	output_dir.rmdir()
+	outside_dir = tmp_path / "outside"
+	outside_dir.mkdir()
+	output_dir.symlink_to(outside_dir, target_is_directory=True)
+	result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "validate", "after_run")
+	assert result.returncode == 125, result.stderr
+	assert not (outside_dir / "data.txt").exists()
+
+
+def test_validate_hook_rejects_symlink_result_and_missing_sandbox(tmp_path: Path) -> None:
+	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
+	_write_hook(workspace_path, "validate", "after_run", "#!/usr/bin/env bash\nln -s /etc/passwd escaped\n")
+	result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "validate", "after_run")
+	assert result.returncode == 125
+	assert not (workspace_path / "escaped").exists()
+	assert "archive contains unsafe entry" in result.stderr
+	# A missing/failed container is an isolation failure even for nonfatal hooks.
+	(runner_temp.parent / "fake-bin" / "docker").write_text("#!/usr/bin/env bash\nexit 125\n", encoding="utf-8")
+	result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "validate", "after_run")
+	assert result.returncode == 125
+	assert "::error::" in result.stderr
+
+
+def test_implement_hook_has_no_credentials_or_git(tmp_path: Path) -> None:
+	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
+	(workspace_path / ".git").mkdir()
+	(workspace_path / ".git" / "config").write_text(
+		"[remote \"origin\"]\n\turl = https://x-access-token:secret@github.com/o/r\n", encoding="utf-8"
+	)
+	(workspace_path / "src.txt").write_text("source", encoding="utf-8")
+	before = {p.relative_to(workspace_path): p.read_bytes() for p in workspace_path.rglob("*") if p.is_file()}
+	_write_hook(repo_root, "implement", "before_run", "#!/usr/bin/env bash\n"
+		"[ -z \"${GH_TOKEN:-}\" ] && [ -z \"${GIT_DIR:-}\" ] && [ ! -e .git/config ] || exit 9\n"
+		"mkdir -p implement/hook-output/before_run\n"
+		"printf 'ok' > implement/hook-output/before_run/status.txt\n")
+	result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "implement", "before_run",
+		GH_TOKEN="secret", GIT_DIR=str(workspace_path / ".git"))
+	assert result.returncode == 0, result.stderr
+	assert (runner_temp / "workspace-hooks/output/implement/before_run/status.txt").read_text(encoding="utf-8") == "ok"
+	after = {p.relative_to(workspace_path): p.read_bytes() for p in workspace_path.rglob("*") if p.is_file()}
+	assert after == before
+	invocation = json.loads((runner_temp / "docker_invocation.json").read_text(encoding="utf-8"))
+	args = invocation["args"]
+	assert args[args.index("--network") + 1] == "none"
+	assert "--read-only" in args and "--cap-drop" in args
+	assert "GH_TOKEN" not in invocation["env"] and "GIT_DIR" not in invocation["env"]
+	assert "secret" not in str(invocation)
+	assert "WORKSPACE_HOOK_PHASE=implement" in args
+	env_args = [args[i + 1] for i, arg in enumerate(args[:-1]) if arg == "--env"]
+	assert not any(v.split("=", 1)[0] in ("GH_TOKEN", "GIT_DIR") for v in env_args)
+
+
+def test_implement_hook_runs_trusted_copy_not_workspace_copy(tmp_path: Path) -> None:
+	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
+	_write_hook(repo_root, "implement", "after_run", "#!/usr/bin/env bash\n"
+		"mkdir -p implement/hook-output/after_run\nprintf 'trusted' > implement/hook-output/after_run/a.txt\n")
+	_write_hook(workspace_path, "implement", "after_run", "#!/usr/bin/env bash\n"
+		"mkdir -p implement/hook-output/after_run\nprintf 'agent' > implement/hook-output/after_run/b.txt\n")
+	result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "implement", "after_run")
+	assert result.returncode == 0, result.stderr
+	output = runner_temp / "workspace-hooks/output/implement/after_run"
+	assert (output / "a.txt").read_text(encoding="utf-8") == "trusted"
+	assert not (output / "b.txt").exists()
+
+
+def test_implement_hook_rejects_workspace_mutation(tmp_path: Path) -> None:
+	for hook_name, expected_rc, marker in (("before_run", 125, "::error::"), ("after_run", 0, "::warning::")):
+		case_path = tmp_path / hook_name
+		case_path.mkdir()
+		repo_root, helper_path, workspace_path, runner_temp = _prepare_case(case_path)
+		target = workspace_path / "scripts" / "x.sh"
+		target.parent.mkdir(parents=True)
+		target.write_text("original", encoding="utf-8")
+		_write_hook(repo_root, "implement", hook_name, "#!/usr/bin/env bash\n"
+			f"mkdir -p implement/hook-output/{hook_name}\n"
+			f"printf 'data' > implement/hook-output/{hook_name}/ok.txt\n"
+			"printf 'attacker' > scripts/x.sh\n")
+		result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "implement", hook_name)
+		assert result.returncode == expected_rc, (hook_name, result.stderr)
+		assert marker in result.stderr
+		assert target.read_text(encoding="utf-8") == "original"
+		assert not (runner_temp / "workspace-hooks/output/implement" / hook_name / "ok.txt").exists()
+
+
+def test_implement_hook_never_runs_on_host_when_sandbox_missing(tmp_path: Path) -> None:
+	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
+	host_marker = tmp_path / "host-marker.txt"
+	_write_hook(repo_root, "implement", "before_run", f"#!/usr/bin/env bash\nprintf 'host' > '{host_marker}'\n")
+	(runner_temp.parent / "fake-bin" / "docker").write_text("#!/usr/bin/env bash\nexit 125\n", encoding="utf-8")
+	result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "implement", "before_run")
+	assert result.returncode == 125
+	assert "::error::" in result.stderr
+	assert not host_marker.exists()
+
+
+def test_implement_hook_staging_rejects_symlinks(tmp_path: Path) -> None:
+	stage_block = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+	start = stage_block.index('_staged_support_hooks_src=".github/ai/workspace_hooks/implement"')
+	end = stage_block.index('echo "IMPLEMENT_STAGED_SUPPORT_RUN_DIR=', start)
+	for name in ("regular_hook", "hook", "hook_directory", "parent_directory"):
+		case_path = tmp_path / name
+		case_path.mkdir()
+		repo_root, _, _, runner_temp = _prepare_case(case_path)
+		hooks_parent = repo_root / ".github/ai/workspace_hooks"
+		hooks_parent.parent.mkdir(parents=True)
+		if name == "parent_directory":
+			hooks_parent.symlink_to(case_path / "missing", target_is_directory=True)
+		else:
+			hooks_parent.mkdir()
+			if name == "hook_directory":
+				(hooks_parent / "implement").symlink_to(case_path / "missing", target_is_directory=True)
+			else:
+				(hooks_parent / "implement").mkdir()
+				if name == "regular_hook":
+					(hooks_parent / "implement/before_run.sh").write_text("exit 0\n", encoding="utf-8")
+				else:
+					(hooks_parent / "implement/before_run.sh").symlink_to(case_path / "missing")
+		result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + stage_block[start:end]],
+			cwd=repo_root, env={**os.environ, "RUNTIME_DIR": str(runner_temp)}, capture_output=True, text=True, check=False)
+		if name == "regular_hook":
+			assert result.returncode == 0, result.stderr
+			assert (runner_temp / "staged_support_run/.github/ai/workspace_hooks/implement/before_run.sh").read_text() == "exit 0\n"
+			continue
+		assert result.returncode == 125, (name, result.stderr)
+		assert "::error::Implement workspace hook staging refused symlink" in result.stderr
+		assert not (runner_temp / "staged_support_run/.github").exists()
+
+
+def test_implement_hook_symlink_hook_file_refused(tmp_path: Path) -> None:
+	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
+	secret = tmp_path / "secret.sh"
+	secret.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+	hook_path = repo_root / ".github/ai/workspace_hooks/implement/before_run.sh"
+	hook_path.parent.mkdir(parents=True)
+	hook_path.symlink_to(secret)
+	result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "implement", "before_run")
+	assert result.returncode == 125, result.stderr
+	assert not (runner_temp / "docker_invocation.json").exists()
+	# A symlinked parent directory is refused as well.
+	hook_path.unlink()
+	hook_path.parent.rmdir()
+	outside = tmp_path / "outside-hooks"
+	outside.mkdir()
+	(outside / "before_run.sh").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+	hook_path.parent.symlink_to(outside, target_is_directory=True)
+	result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, "implement", "before_run")
+	assert result.returncode == 125, result.stderr
+	assert not (runner_temp / "docker_invocation.json").exists()
+
+
+def test_host_python_ignores_workspace_modules(tmp_path: Path) -> None:
+	# The helper's cwd is the branch-authored workspace in implement; a
+	# root-level json.py there must never be imported by the host Python.
+	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
+	host_marker = tmp_path / "shadow-imported.txt"
+	shadow = f"open({str(host_marker)!r}, 'w').write('x')\n"
+	for directory in (repo_root, workspace_path):
+		(directory / "json.py").write_text(shadow, encoding="utf-8")
+	_write_hook(repo_root, "implement", "before_run", "#!/usr/bin/env bash\n"
+		"mkdir -p implement/hook-output/before_run\n"
+		"printf 'ok' > implement/hook-output/before_run/status.txt\n")
+	result = subprocess.run(
+		["bash", str(helper_path), "implement", "before_run"],
+		cwd=str(workspace_path),
+		env={**os.environ, "RUNNER_TEMP": str(runner_temp), "WORKSPACE_PATH": str(workspace_path),
+			"PATH": f"{runner_temp.parent / 'fake-bin'}:{os.environ['PATH']}"},
+		text=True,
+		capture_output=True,
+		check=False,
+	)
+	assert result.returncode == 0, result.stderr
+	assert not host_marker.exists()
+	assert (runner_temp / "workspace-hooks/output/implement/before_run/status.txt").read_text(encoding="utf-8") == "ok"
+
+
+def test_phase_dotdot_rejected(tmp_path: Path) -> None:
+	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
+	for phase in ("..", ".", ".hidden"):
+		result = _run_helper(repo_root, helper_path, workspace_path, runner_temp, phase, "before_run")
+		assert result.returncode == 1, (phase, result.stderr)
+		assert "unsupported phase" in result.stderr
+
+
+def test_implement_workflow_stages_and_orders_workspace_hooks() -> None:
+	stage_block = _step_run_text(IMPLEMENT_WORKFLOW, "Stage workflow support files")
+	assert "run_workspace_hook.sh" in stage_block
+	assert _step(IMPLEMENT_WORKFLOW, "Run Codex implementation").get("id") == "implement_run"
+	for hook_step in ("Run workspace after_create hook", "Run workspace before_run hook", "Run workspace after_run hook", "Run workspace before_remove hook"):
+		assert '"${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:?trusted support copy missing}/run_workspace_hook.sh"' in _step_run_text(IMPLEMENT_WORKFLOW, hook_step)
+	assert _step(IMPLEMENT_WORKFLOW, "Run workspace after_run hook").get("if") == "always() && env.SKIP_IMPLEMENT != 'true' && env.HEAL_ROUTE != 'true' && steps.implement_run.outcome != 'skipped' && env.IMPLEMENT_STAGED_SUPPORT_RUN_DIR != ''"
+	assert _step(IMPLEMENT_WORKFLOW, "Run workspace before_remove hook").get("if") == "always() && env.SKIP_IMPLEMENT != 'true' && env.IMPLEMENT_STAGED_SUPPORT_RUN_DIR != ''"
+	assert _step_index(IMPLEMENT_WORKFLOW, "Activate workspace shell context") < _step_index(IMPLEMENT_WORKFLOW, "Run workspace after_create hook") < _step_index(IMPLEMENT_WORKFLOW, "Detect preexisting Serena project config")
+	assert _step_index(IMPLEMENT_WORKFLOW, "Retrieve implementation memory context") < _step_index(IMPLEMENT_WORKFLOW, "Run workspace before_run hook") < _step_index(IMPLEMENT_WORKFLOW, "Run Codex implementation")
+	assert _step_index(IMPLEMENT_WORKFLOW, "Run Codex implementation") < _step_index(IMPLEMENT_WORKFLOW, "Run workspace after_run hook") < _step_index(IMPLEMENT_WORKFLOW, "Write run summary")
+	assert _step_index(IMPLEMENT_WORKFLOW, "Emit Serena stats") < _step_index(IMPLEMENT_WORKFLOW, "Run workspace before_remove hook") < _step_index(IMPLEMENT_WORKFLOW, "Cleanup temporary artifacts")
+
+
+def test_implement_hooks_never_fall_back_to_checkout_helper(tmp_path: Path) -> None:
+	repo_root, helper_path = _prepare_case(tmp_path)[:2]
+	marker_path = tmp_path / "host-hook-marker"
+	helper_path.write_text('#!/usr/bin/env bash\nprintf compromised > "${HOST_HOOK_MARKER}"\n', encoding="utf-8")
+	hook_environment = {**os.environ, "HOST_HOOK_MARKER": str(marker_path)}
+	hook_environment.pop("IMPLEMENT_STAGED_SUPPORT_RUN_DIR", None)
+	for hook_step in ("Run workspace after_create hook", "Run workspace before_run hook", "Run workspace after_run hook", "Run workspace before_remove hook"):
+		result = subprocess.run(["bash", "-c", _step_run_text(IMPLEMENT_WORKFLOW, hook_step)],
+			cwd=repo_root, env=hook_environment, capture_output=True, text=True, check=False)
+		assert result.returncode != 0, (hook_step, result.stderr)
+		assert "trusted support copy missing" in result.stderr
+		assert not marker_path.exists(), hook_step
+
+
+def test_validate_workflow_stages_and_orders_workspace_hooks() -> None:
+	fetch_block = _step_run_text(VALIDATE_WORKFLOW, "Fetch workflow support files")
+	assert "run_workspace_hook.sh" in fetch_block
+	assert "VALIDATE_HOOK_HELPER=" in fetch_block
+	assert _step(VALIDATE_WORKFLOW, "Run validation process").get("if") == "always() && steps.workspace_after_create_hook.outcome != 'failure' && steps.workspace_before_run_hook.outcome != 'failure' && steps.authorized_target.outcome == 'success' && steps.runtime.outcome == 'success' && steps.support_staging.outcome == 'success'"
+	assert _step(VALIDATE_WORKFLOW, "Run workspace before_remove hook").get("if") == "always() && env.VALIDATE_HOOK_HELPER != ''"
+	assert _step_index(VALIDATE_WORKFLOW, "Activate workspace shell context") < _step_index(VALIDATE_WORKFLOW, "Run workspace after_create hook") < _step_index(VALIDATE_WORKFLOW, "Initialize Serena runtime state")
+	assert _step_index(VALIDATE_WORKFLOW, "Build semble index") < _step_index(VALIDATE_WORKFLOW, "Run workspace before_run hook") < _step_index(VALIDATE_WORKFLOW, "Run validation process")
+	assert _step_index(VALIDATE_WORKFLOW, "Run validation process") < _step_index(VALIDATE_WORKFLOW, "Run workspace after_run hook") < _step_index(VALIDATE_WORKFLOW, "Collect validation status")
+	assert _step_index(VALIDATE_WORKFLOW, "Force orchestrate poll after validation finalization") < _step_index(VALIDATE_WORKFLOW, "Run workspace before_remove hook") < _step_index(VALIDATE_WORKFLOW, "Enforce validation outcome")
+
+
+def _run_tmp_path_case(case_fn) -> None:
+	with TemporaryDirectory() as tmp_dir:
+		case_fn(Path(tmp_dir))
+
+
+def main() -> int:
+	test_helper_script_exists_and_is_executable()
+	for case_fn in (
+		test_missing_and_empty_hooks_are_noop,
+		test_after_create_runs_when_created_now_true,
+		test_after_create_runs_once_per_workspace_lifetime,
+		test_after_create_treats_unset_created_now_as_true,
+		test_after_create_skips_when_created_now_false,
+		test_hook_executes_in_workspace_path,
+		test_before_run_failure_is_fatal_and_emits_bounded_tail,
+		test_before_run_sigkill_timeout_reports_timeout,
+		test_nonfatal_hooks_log_and_continue,
+		test_validate_hook_has_no_credentials_or_git_and_writes_back,
+		test_validate_hook_rejects_disallowed_mutations_without_partial_replay,
+		test_validate_hook_rejects_executable_data_and_unsafe_host_target,
+		test_validate_hook_rejects_symlink_result_and_missing_sandbox,
+		test_implement_hook_has_no_credentials_or_git,
+		test_implement_hook_runs_trusted_copy_not_workspace_copy,
+		test_implement_hook_rejects_workspace_mutation,
+		test_implement_hook_never_runs_on_host_when_sandbox_missing,
+		test_implement_hook_staging_rejects_symlinks,
+		test_implement_hook_symlink_hook_file_refused,
+		test_phase_dotdot_rejected,
+		test_host_python_ignores_workspace_modules,
+	):
+		_run_tmp_path_case(case_fn)
+	test_implement_workflow_stages_and_orders_workspace_hooks()
+	_run_tmp_path_case(test_implement_hooks_never_fall_back_to_checkout_helper)
+	test_validate_workflow_stages_and_orders_workspace_hooks()
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

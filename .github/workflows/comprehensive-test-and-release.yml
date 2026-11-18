@@ -1,0 +1,476 @@
+name: Workflow Log Analysis And Improvement
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase_timeout:
+        description: Max minutes of inactivity before a phase is considered stalled.
+        required: false
+        default: 30
+        type: number
+      lookback_days_fallback:
+        description: Lookback days used when the last collection timestamp is missing or invalid.
+        required: false
+        default: 7
+        type: number
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write
+  actions: write
+  issues: write
+
+concurrency:
+  group: comprehensive-test-and-release-${{ github.repository }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  phase2-collect-and-analyze-logs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    outputs:
+      report_file: ${{ steps.phase2.outputs.report_file }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Dispatch, monitor, and persist analysis state
+        id: phase2
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          PHASE_TIMEOUT: ${{ inputs.phase_timeout }}
+          LOOKBACK_DAYS_FALLBACK: ${{ inputs.lookback_days_fallback }}
+        run: |
+          set -euo pipefail
+
+          WORKFLOW_FILE="workflow-log-analysis.yml"
+          TIMESTAMP_FILE="analysis/last_collection_timestamp.txt"
+          TARGET_BRANCH="${GITHUB_REF_NAME}"
+          POLL_INTERVAL=20
+          RATE_LIMIT_BACKOFF=0
+          . ./scripts/comprehensive_test_and_release_gh_api.sh
+
+          sanitize_single_line()
+          {
+            printf '%s' "$1" | tr '\r\n' '  ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //' -e 's/ $//'
+          }
+
+          is_positive_integer()
+          {
+            [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -gt 0 ]
+          }
+
+          is_iso_utc_timestamp()
+          {
+            [[ "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
+          }
+
+          PHASE_TIMEOUT_STR="$(sanitize_single_line "${PHASE_TIMEOUT}")"
+          LOOKBACK_DAYS_STR="$(sanitize_single_line "${LOOKBACK_DAYS_FALLBACK}")"
+
+          if ! is_positive_integer "${PHASE_TIMEOUT_STR}"; then
+            echo "::error::phase_timeout must be a positive integer."
+            exit 1
+          fi
+          INACTIVITY_LIMIT=$((PHASE_TIMEOUT_STR * 60))
+
+          if ! is_positive_integer "${LOOKBACK_DAYS_STR}"; then
+            echo "::error::lookback_days_fallback must be a positive integer."
+            exit 1
+          fi
+
+          LAST_COLLECTION_TS=""
+          if [ -f "${TIMESTAMP_FILE}" ]; then
+            LAST_COLLECTION_TS="$(head -n1 "${TIMESTAMP_FILE}" | tr -d '\r\n')"
+          fi
+
+          SINCE_ARG=""
+          if is_iso_utc_timestamp "${LAST_COLLECTION_TS}"; then
+            SINCE_ARG="${LAST_COLLECTION_TS}"
+          fi
+
+          BEFORE_RUNS_JSON=""
+          for attempt in 1 2 3; do
+            if list_dispatch_runs; then
+              BEFORE_RUNS_JSON="${GH_API_SAFE_OUTPUT}"
+            else
+              BEFORE_RUNS_JSON=""
+            fi
+            if [ -n "${BEFORE_RUNS_JSON}" ]; then
+              break
+            fi
+            if [ "${attempt}" -lt 3 ]; then
+              sleep 2
+            fi
+          done
+          if [ -z "${BEFORE_RUNS_JSON}" ]; then
+            echo "::error::Unable to list existing workflow_dispatch runs for ${WORKFLOW_FILE} before dispatch after 3 attempts."
+            exit 1
+          fi
+
+          if ! BEFORE_IDS_JSON="$(echo "${BEFORE_RUNS_JSON}" | jq -c '[.workflow_runs[]?.id]' 2>&1)"; then
+            echo "::error::Failed to parse workflow runs payload while preparing ${WORKFLOW_FILE} dispatch baseline: ${BEFORE_IDS_JSON}"
+            exit 1
+          fi
+          if ! echo "${BEFORE_IDS_JSON}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+            echo "::error::Invalid workflow runs payload while preparing ${WORKFLOW_FILE} dispatch baseline (expected array of run IDs)."
+            exit 1
+          fi
+
+          RUN_ARGS=("${WORKFLOW_FILE}" "--repo" "${GITHUB_REPOSITORY}" "--ref" "${GITHUB_REF_NAME}" "-f" "codex_mode=true")
+          if [ -n "${SINCE_ARG}" ]; then
+            RUN_ARGS+=("-f" "since=${SINCE_ARG}")
+          else
+            RUN_ARGS+=("-f" "lookback_days=${LOOKBACK_DAYS_STR}")
+          fi
+
+          COLLECTION_WINDOW_START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          gh workflow run "${RUN_ARGS[@]}"
+
+          RUN_ID=""
+          for _attempt in $(seq 1 30); do
+            if list_dispatch_runs; then
+              RUNS_JSON="${GH_API_SAFE_OUTPUT}"
+            else
+              RUNS_JSON=""
+            fi
+            if [ -z "${RUNS_JSON}" ]; then
+              sleep 2
+              continue
+            fi
+
+            NEW_RUNS_JSON="$(echo "${RUNS_JSON}" | jq -c --argjson before "${BEFORE_IDS_JSON}" --arg branch "${GITHUB_REF_NAME}" '
+              [
+                .workflow_runs[]
+                | select((.id as $id | ($before | index($id) | not)))
+                | select((.event // "") == "workflow_dispatch")
+                | select((.head_branch // "") == $branch)
+              ]
+              | sort_by(.created_at)
+            ' 2>/dev/null || echo '[]')"
+            NEW_COUNT="$(echo "${NEW_RUNS_JSON}" | jq -r 'length' 2>/dev/null || echo '0')"
+
+            if [ "${NEW_COUNT}" = "1" ]; then
+              RUN_ID="$(echo "${NEW_RUNS_JSON}" | jq -r '.[0].id // ""')"
+              break
+            fi
+
+            if [ "${NEW_COUNT}" != "0" ]; then
+              echo "::error::Ambiguous run selection for ${WORKFLOW_FILE}."
+              exit 1
+            fi
+
+            sleep 2
+          done
+
+          if ! [[ "${RUN_ID}" =~ ^[0-9]+$ ]] || [ "${RUN_ID}" -lt 1 ]; then
+            echo "::error::Unable to resolve a positive numeric run id for ${WORKFLOW_FILE}."
+            exit 1
+          fi
+
+          LAST_ACTIVITY="$(date +%s)"
+          PREV_STATE=""
+
+          while true; do
+            NOW="$(date +%s)"
+            IDLE=$((NOW - LAST_ACTIVITY))
+
+            if gh_api_safe "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}"; then
+              RUN_JSON="${GH_API_SAFE_OUTPUT}"
+            else
+              RUN_JSON=""
+            fi
+            if [ -z "${RUN_JSON}" ]; then
+              if [ "${IDLE}" -ge "${INACTIVITY_LIMIT}" ]; then
+                echo "::error::Phase 2 stalled while polling run ${RUN_ID}."
+                exit 1
+              fi
+              sleep "${POLL_INTERVAL}"
+              continue
+            fi
+
+            RUN_STATUS="$(echo "${RUN_JSON}" | jq -r '.status // "unknown"' 2>/dev/null || echo 'unknown')"
+            RUN_CONCLUSION="$(echo "${RUN_JSON}" | jq -r '.conclusion // "null"' 2>/dev/null || echo 'null')"
+            RUN_UPDATED="$(echo "${RUN_JSON}" | jq -r '.updated_at // ""' 2>/dev/null || echo '')"
+
+            CUR_STATE="status=${RUN_STATUS};conclusion=${RUN_CONCLUSION};updated=${RUN_UPDATED}"
+            if [ "${CUR_STATE}" != "${PREV_STATE}" ]; then
+              LAST_ACTIVITY="${NOW}"
+              IDLE=0
+              PREV_STATE="${CUR_STATE}"
+            fi
+
+            if [ "${RUN_STATUS}" = "completed" ]; then
+              if [ "${RUN_CONCLUSION}" != "success" ]; then
+                echo "::error::Phase 2 run ${RUN_ID} concluded with '${RUN_CONCLUSION}'."
+                exit 1
+              fi
+              break
+            fi
+
+            if [ "${IDLE}" -ge "${INACTIVITY_LIMIT}" ]; then
+              echo "::error::Phase 2 inactivity timeout reached (${PHASE_TIMEOUT_STR} minutes)."
+              exit 1
+            fi
+
+            sleep "${POLL_INTERVAL}"
+          done
+
+          git fetch origin "${TARGET_BRANCH}" --depth=1
+          git checkout "${TARGET_BRANCH}" 2>/dev/null || git checkout -b "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}"
+          git pull --rebase origin "${TARGET_BRANCH}"
+
+          REPORT_FILE="$(find analysis -maxdepth 1 -type f -name 'workflow-optimization-*.md' | LC_ALL=C sort -V | tail -n1 || true)"
+          REPORT_FILE="${REPORT_FILE#./}"
+          if [ -z "${REPORT_FILE}" ] && [ -f "analysis/recommendation-processing-report.md" ]; then
+            REPORT_FILE="analysis/recommendation-processing-report.md"
+          fi
+          if [ -z "${REPORT_FILE}" ]; then
+            echo "::error::No workflow analysis report found under analysis/ (expected a dated workflow-optimization report or analysis/recommendation-processing-report.md)."
+            exit 1
+          fi
+
+          mkdir -p analysis
+          NEW_TIMESTAMP="${COLLECTION_WINDOW_START}"
+          if ! is_iso_utc_timestamp "${NEW_TIMESTAMP}"; then
+            NEW_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          fi
+          CURRENT_TIMESTAMP=""
+          if [ -f "${TIMESTAMP_FILE}" ]; then
+            CURRENT_TIMESTAMP="$(head -n1 "${TIMESTAMP_FILE}" | tr -d '\r\n')"
+          fi
+
+          if [ "${CURRENT_TIMESTAMP}" != "${NEW_TIMESTAMP}" ]; then
+            printf '%s\n' "${NEW_TIMESTAMP}" > "${TIMESTAMP_FILE}"
+
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add "${TIMESTAMP_FILE}"
+
+            if ! git diff --cached --quiet; then
+              git commit -m "chore: update workflow log analysis collection timestamp"
+              git pull --rebase origin "${TARGET_BRANCH}"
+              git push origin "HEAD:${TARGET_BRANCH}"
+            fi
+          fi
+
+          echo "report_file=${REPORT_FILE}" >> "${GITHUB_OUTPUT}"
+
+  phase3-dispatch-orchestrator:
+    needs: phase2-collect-and-analyze-logs
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    outputs:
+      tracking_issue: ${{ steps.phase3.outputs.tracking_issue }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Dispatch orchestrator and resolve tracking issue
+        id: phase3
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          PHASE_TIMEOUT: ${{ inputs.phase_timeout }}
+          REPORT_FILE_INPUT: ${{ needs.phase2-collect-and-analyze-logs.outputs.report_file }}
+        run: |
+          set -euo pipefail
+
+          WORKFLOW_FILE="internal-orchestrate.yml"
+          POLL_INTERVAL=20
+          RATE_LIMIT_BACKOFF=0
+          . ./scripts/comprehensive_test_and_release_gh_api.sh
+
+          sanitize_single_line()
+          {
+            printf '%s' "$1" | tr '\r\n' '  ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //' -e 's/ $//'
+          }
+
+          is_positive_integer()
+          {
+            [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -gt 0 ]
+          }
+
+          list_tracking_issue_numbers()
+          {
+            local issues_json
+            TRACKING_ISSUE_NUMBERS_JSON='[]'
+            if gh_api_safe "repos/${GITHUB_REPOSITORY}/issues?state=open&labels=ai:orchestrator-tracking&per_page=100&sort=created&direction=desc"; then
+              issues_json="${GH_API_SAFE_OUTPUT}"
+            else
+              issues_json=""
+            fi
+            if [ -z "${issues_json}" ]; then
+              return 0
+            fi
+
+            TRACKING_ISSUE_NUMBERS_JSON="$(echo "${issues_json}" | jq -c '[.[] | select(has("pull_request") | not) | .number] | sort' 2>/dev/null || echo '[]')"
+          }
+
+          PHASE_TIMEOUT_STR="$(sanitize_single_line "${PHASE_TIMEOUT}")"
+          if ! is_positive_integer "${PHASE_TIMEOUT_STR}"; then
+            echo "::error::phase_timeout must be a positive integer."
+            exit 1
+          fi
+          INACTIVITY_LIMIT=$((PHASE_TIMEOUT_STR * 60))
+
+          REPORT_FILE="$(sanitize_single_line "${REPORT_FILE_INPUT}")"
+
+          if [ -z "${REPORT_FILE}" ]; then
+            echo "::error::Phase 3 requires a resolved analysis report path from phase 2."
+            exit 1
+          fi
+
+          REPORT_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/${REPORT_FILE}"
+          SOURCE_RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          PROJECT_DESCRIPTION="Workflow log analysis improvement follow-up for ${GITHUB_REPOSITORY}."
+          PROJECT_DESCRIPTION+=" Use workflow analysis report ${REPORT_URL}."
+          PROJECT_DESCRIPTION+=" Source run ${SOURCE_RUN_URL}."
+
+          list_tracking_issue_numbers
+          BEFORE_TRACKING_JSON="${TRACKING_ISSUE_NUMBERS_JSON}"
+          if ! echo "${BEFORE_TRACKING_JSON}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+            BEFORE_TRACKING_JSON='[]'
+          fi
+
+          BEFORE_RUNS_JSON=""
+          for attempt in 1 2 3; do
+            if list_dispatch_runs; then
+              BEFORE_RUNS_JSON="${GH_API_SAFE_OUTPUT}"
+            else
+              BEFORE_RUNS_JSON=""
+            fi
+            if [ -n "${BEFORE_RUNS_JSON}" ]; then
+              break
+            fi
+            if [ "${attempt}" -lt 3 ]; then
+              sleep 2
+            fi
+          done
+          if [ -z "${BEFORE_RUNS_JSON}" ]; then
+            echo "::error::Unable to list existing workflow_dispatch runs for ${WORKFLOW_FILE} before dispatch after 3 attempts."
+            exit 1
+          fi
+
+          if ! BEFORE_IDS_JSON="$(echo "${BEFORE_RUNS_JSON}" | jq -c '[.workflow_runs[]?.id]' 2>&1)"; then
+            echo "::error::Failed to parse workflow runs payload while preparing ${WORKFLOW_FILE} dispatch baseline: ${BEFORE_IDS_JSON}"
+            exit 1
+          fi
+          if ! echo "${BEFORE_IDS_JSON}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+            echo "::error::Invalid workflow runs payload while preparing ${WORKFLOW_FILE} dispatch baseline (expected array of run IDs)."
+            exit 1
+          fi
+
+          gh workflow run "${WORKFLOW_FILE}" --repo "${GITHUB_REPOSITORY}" --ref "${GITHUB_REF_NAME}" -f "project_description=${PROJECT_DESCRIPTION}"
+
+          ORCH_RUN_ID=""
+          for _attempt in $(seq 1 30); do
+            if list_dispatch_runs; then
+              RUNS_JSON="${GH_API_SAFE_OUTPUT}"
+            else
+              RUNS_JSON=""
+            fi
+            if [ -z "${RUNS_JSON}" ]; then
+              sleep 2
+              continue
+            fi
+
+            NEW_RUNS_JSON="$(echo "${RUNS_JSON}" | jq -c --argjson before "${BEFORE_IDS_JSON}" --arg branch "${GITHUB_REF_NAME}" '
+              [
+                .workflow_runs[]
+                | select((.id as $id | ($before | index($id) | not)))
+                | select((.event // "") == "workflow_dispatch")
+                | select((.head_branch // "") == $branch)
+              ]
+              | sort_by(.created_at)
+            ' 2>/dev/null || echo '[]')"
+            NEW_COUNT="$(echo "${NEW_RUNS_JSON}" | jq -r 'length' 2>/dev/null || echo '0')"
+
+            if [ "${NEW_COUNT}" = "1" ]; then
+              ORCH_RUN_ID="$(echo "${NEW_RUNS_JSON}" | jq -r '.[0].id // ""')"
+              break
+            fi
+
+            if [ "${NEW_COUNT}" != "0" ]; then
+              echo "::error::Ambiguous run selection for ${WORKFLOW_FILE}."
+              exit 1
+            fi
+
+            sleep 2
+          done
+
+          if ! [[ "${ORCH_RUN_ID}" =~ ^[0-9]+$ ]] || [ "${ORCH_RUN_ID}" -lt 1 ]; then
+            echo "::error::Unable to resolve a positive numeric run id for ${WORKFLOW_FILE}."
+            exit 1
+          fi
+
+          LAST_ACTIVITY="$(date +%s)"
+          PREV_STATE=""
+          TRACKING_ISSUE_NUMBER=""
+
+          while true; do
+            NOW="$(date +%s)"
+            IDLE=$((NOW - LAST_ACTIVITY))
+
+            if gh_api_safe "repos/${GITHUB_REPOSITORY}/actions/runs/${ORCH_RUN_ID}"; then
+              RUN_JSON="${GH_API_SAFE_OUTPUT}"
+            else
+              RUN_JSON=""
+            fi
+            RUN_STATUS="unknown"
+            RUN_CONCLUSION="null"
+            RUN_UPDATED=""
+            if [ -n "${RUN_JSON}" ]; then
+              RUN_STATUS="$(echo "${RUN_JSON}" | jq -r '.status // "unknown"' 2>/dev/null || echo 'unknown')"
+              RUN_CONCLUSION="$(echo "${RUN_JSON}" | jq -r '.conclusion // "null"' 2>/dev/null || echo 'null')"
+              RUN_UPDATED="$(echo "${RUN_JSON}" | jq -r '.updated_at // ""' 2>/dev/null || echo '')"
+            fi
+
+            list_tracking_issue_numbers
+            CURRENT_TRACKING_JSON="${TRACKING_ISSUE_NUMBERS_JSON}"
+            NEW_TRACKING_JSON="$(jq -cn --argjson before "${BEFORE_TRACKING_JSON}" --argjson current "${CURRENT_TRACKING_JSON}" '[ $current[] | select($before | index(.) | not) ]')"
+            NEW_TRACKING_COUNT="$(echo "${NEW_TRACKING_JSON}" | jq -r 'length' 2>/dev/null || echo '0')"
+
+            if [ "${NEW_TRACKING_COUNT}" = "1" ]; then
+              TRACKING_ISSUE_NUMBER="$(echo "${NEW_TRACKING_JSON}" | jq -r '.[0]')"
+              if ! [[ "${TRACKING_ISSUE_NUMBER}" =~ ^[0-9]+$ ]] || [ "${TRACKING_ISSUE_NUMBER}" -lt 1 ]; then
+                echo "::error::Resolved tracking issue must be a positive integer."
+                exit 1
+              fi
+            elif [ "${NEW_TRACKING_COUNT}" != "0" ]; then
+              echo "::error::Detected multiple new orchestrator tracking issues; refusing ambiguous tagging."
+              exit 1
+            fi
+
+            CUR_STATE="run=${RUN_STATUS};conclusion=${RUN_CONCLUSION};updated=${RUN_UPDATED};new_tracking=${NEW_TRACKING_COUNT};tracking=${CURRENT_TRACKING_JSON}"
+            if [ "${CUR_STATE}" != "${PREV_STATE}" ]; then
+              LAST_ACTIVITY="${NOW}"
+              IDLE=0
+              PREV_STATE="${CUR_STATE}"
+            fi
+
+            if [ -n "${TRACKING_ISSUE_NUMBER}" ]; then
+              break
+            fi
+
+            if [ "${RUN_STATUS}" = "completed" ] && [ "${RUN_CONCLUSION}" != "success" ]; then
+              echo "::error::Orchestrator dispatch run ${ORCH_RUN_ID} concluded with '${RUN_CONCLUSION}' before tracking issue detection."
+              exit 1
+            fi
+
+            if [ "${IDLE}" -ge "${INACTIVITY_LIMIT}" ]; then
+              echo "::error::Phase 3 inactivity timeout reached (${PHASE_TIMEOUT_STR} minutes)."
+              exit 1
+            fi
+
+            sleep "${POLL_INTERVAL}"
+          done
+
+          echo "tracking_issue=${TRACKING_ISSUE_NUMBER}" >> "${GITHUB_OUTPUT}"

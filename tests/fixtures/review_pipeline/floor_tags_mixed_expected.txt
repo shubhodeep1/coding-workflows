@@ -1,0 +1,4 @@
+src/cache.py:22	FLOOR_HIGH_CONFIDENCE	review_delta	Retry guard is weak and requests can stall.
+src/db.py:45	FLOOR_CRITICAL_KEYWORD:MONGO	review_gamma	This path can trigger E11000 because there is no idempotency key and missing index coverage.
+src/service.py:100	FLOOR_MULTI_REVIEWER,FLOOR_CRITICAL_KEYWORD:SECURITY,FLOOR_HIGH_CONFIDENCE	review_alpha	SQL injection in query builder.
+src/service.py:103	FLOOR_MULTI_REVIEWER,FLOOR_CRITICAL_KEYWORD:SECURITY	review_beta	Unsanitised payload allows SQL injection during lookup.
