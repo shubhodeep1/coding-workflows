@@ -1,6 +1,8 @@
 <!-- agents: section="Workflow architecture" -->
 Red-base plan auto-approval hold (Refs #9421, stuck-backlog plan Phase 2): `plan.yml`'s "Auto-approve clear plan" step sources `scripts/plan_base_ci_gate.sh` right before the `/approved [auto-approved-by-plan]` post. This is after every other gate (heal counterfactual, automation-path gate including the Q108 grant write, and the test-only heal marker). The helper is used only when it is a regular, non-symlinked file that sources cleanly and defines `red_base_approval_hold_check`; otherwise the step behaves as before. "Stage workflow support files" installs the helper from the pinned workflow source (`.codex-workflow-src`, then `.codex-workflow-src-main`) in an optional loop; when neither has it, the step prints a `::notice::` and removes any checkout copy, so a consumer's own file at that path is never sourced.
 
+The staging loop also writes `PLAN_BASE_CI_GATE_STAGED=true` (installed) or `false` (unavailable) to `$GITHUB_ENV`. The auto-approve step sources the helper only when that flag is `true`. Without this, the merged-PR reroute in "Close superseded CI-repair issue (merged PR)" could break the rule: its forced `git checkout -f -B <base>` can restore a copy tracked by the base branch after staging removed it, and that copy would then be sourced into a step that has secrets.
+
 `red_base_approval_hold_check <repo> <default_branch> <issue> <labels_json> [heal_route]` runs these checks in order:
 1. Kill switch `RED_BASE_APPROVAL_HOLD_ENABLED`, default `true`. Unset, empty, `true`, `1`, `yes` or `on` keep the hold on; `false`, `0`, `no` or `off` turn it off. Any other value turns it off with a `::warning::`.
 2. Exemption for `ai:workflow-heal` issues and for the heal route (`heal_cf_route=true`).

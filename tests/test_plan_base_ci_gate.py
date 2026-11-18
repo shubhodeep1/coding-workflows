@@ -102,7 +102,8 @@ GREEN_RUNS = _runs((9001, "failure", "2026-11-17T01:00:00Z"), (9002, "success", 
 
 def _run_step(*, runs: dict | None = None, runs_fail: bool = False, heal: list | None = None,
 	heal_fail: bool = False, comments: list | None = None, issue: dict | None = None,
-	copy_helper: bool = True, symlink_helper: bool = False, extra_env: dict | None = None) -> dict:
+	copy_helper: bool = True, symlink_helper: bool = False, staged: bool = True,
+	extra_env: dict | None = None) -> dict:
 	"""Run the shipped auto_approve step against a fake gh."""
 	with tempfile.TemporaryDirectory() as workdir:
 		tmp = Path(workdir)
@@ -126,8 +127,10 @@ def _run_step(*, runs: dict | None = None, runs_fail: bool = False, heal: list |
 		for name in ("BASH_ENV", "ENV", "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED", "ALLOW_WORKFLOW_EDITS",
 			"HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED", "HEAL_ROUTE", "PLAN_COMMENT_ID", "RED_BASE_APPROVAL_HOLD_ENABLED",
 			"RED_BASE_HOLD_WORKFLOWS", "ENFORCE_FILES_TOUCHED", "ALLOW_OUT_OF_SCOPE_FILES",
-			"PLAN_FILES_TOUCHED_GATE_ENABLED"):
+			"PLAN_FILES_TOUCHED_GATE_ENABLED", "PLAN_BASE_CI_GATE_STAGED"):
 			env.pop(name, None)
+		if staged:
+			env["PLAN_BASE_CI_GATE_STAGED"] = "true"
 		env.update({
 			"GITHUB_OUTPUT": str(output),
 			"GITHUB_STEP_SUMMARY": str(summary),
@@ -302,7 +305,9 @@ def test_unreadable_status_fails_open() -> None:
 
 
 def test_missing_or_symlinked_helper_skips_the_check() -> None:
-	for kwargs in ({"copy_helper": False}, {"symlink_helper": True}):
+	# staged=False: a regular checkout copy (e.g. restored by the merged-PR
+	# reroute's forced checkout) that the staging step did not install.
+	for kwargs in ({"copy_helper": False}, {"symlink_helper": True}, {"staged": False}):
 		result = _run_step(runs=RED_RUNS, heal=[_heal_issue()], **kwargs)
 		assert result["approvals"] == [APPROVAL_POST], kwargs
 		assert "RED_BASE_APPROVAL_HOLD" not in result["stdout"]
@@ -323,6 +328,7 @@ def test_auto_approve_step_wiring() -> None:
 	hold = run.index("red_base_approval_hold_check \"${PLAN_STEP_REPO}\"")
 	assert run.index("if [ -n \"${heal_to_marker}\" ]; then") < hold < run.index("sleep 3")
 	assert "[ ! -L scripts/plan_base_ci_gate.sh ]" in run
+	assert 'if [ "${PLAN_BASE_CI_GATE_STAGED:-false}" = "true" ]' in run
 	assert 'echo "auto_approve_hold_reason=base_ci_red" >> "$GITHUB_OUTPUT"' in run
 
 
@@ -338,6 +344,48 @@ def test_helper_is_staged_from_the_workflow_source() -> None:
 	assert 'install -m 0755 "${src}" "scripts/${f}"' in loop
 	assert '_fetched_scripts+=("${f}")' in loop
 	assert run.index("for f in plan_base_ci_gate.sh; do") < run.index('if [ "${{ github.repository }}" != "${wf_source}" ]; then')
+
+
+def _run_staging_loop(*, src: str | None, main: str | None, checkout: str | None) -> dict:
+	"""Execute the shipped staging loop in a temp workspace."""
+	run = _step("Stage workflow support files")["run"]
+	loop_start = run.index("for f in plan_base_ci_gate.sh; do")
+	loop = run[loop_start:run.index("\ndone", loop_start) + len("\ndone")]
+	with tempfile.TemporaryDirectory() as workdir:
+		tmp = Path(workdir)
+		(tmp / "scripts").mkdir()
+		for root, content in ((".codex-workflow-src", src), (".codex-workflow-src-main", main), (None, checkout)):
+			if content is None:
+				continue
+			target = (tmp / root / "scripts" if root else tmp / "scripts")
+			target.mkdir(parents=True, exist_ok=True)
+			(target / "plan_base_ci_gate.sh").write_text(content, encoding="utf-8")
+		env = dict(os.environ, GITHUB_ENV=str(tmp / "github_env"), SCRIPT_REF="stable")
+		env.pop("BASH_ENV", None)
+		result = subprocess.run(["bash", "-c", "set -euo pipefail\n_fetched_scripts=()\n" + loop
+			+ '\nprintf "fetched=%s\\n" "${_fetched_scripts[*]:-}"'], cwd=tmp, env=env, text=True,
+			capture_output=True, check=True)
+		helper = tmp / "scripts" / "plan_base_ci_gate.sh"
+		github_env = tmp / "github_env"
+		return {
+			"stdout": result.stdout,
+			"helper": helper.read_text(encoding="utf-8") if helper.exists() else None,
+			"github_env": github_env.read_text(encoding="utf-8") if github_env.exists() else "",
+		}
+
+
+def test_staging_loop_installs_the_pipeline_copy_or_removes_the_checkout_copy() -> None:
+	missing = _run_staging_loop(src=None, main=None, checkout="caller copy")
+	assert missing["helper"] is None
+	assert "PLAN_BASE_CI_GATE_STAGED=false" in missing["github_env"]
+	assert "fetched=\n" in missing["stdout"]
+	pinned = _run_staging_loop(src="pinned copy", main="main copy", checkout="caller copy")
+	assert pinned["helper"] == "pinned copy"
+	assert "PLAN_BASE_CI_GATE_STAGED=true" in pinned["github_env"]
+	assert "fetched=plan_base_ci_gate.sh" in pinned["stdout"]
+	fallback = _run_staging_loop(src=None, main="main copy", checkout=None)
+	assert fallback["helper"] == "main copy"
+	assert "PLAN_BASE_CI_GATE_STAGED=true" in fallback["github_env"]
 
 
 def test_telegram_uses_debug_only_for_base_ci_red() -> None:

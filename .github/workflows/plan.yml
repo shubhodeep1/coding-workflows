@@ -758,10 +758,15 @@ jobs:
             if [ ! -f "${src}" ]; then
               echo "::notice::Optional red-base approval hold helper ${f} unavailable on ${SCRIPT_REF}; plan auto-approval is not held on a red base."
               rm -f "scripts/${f}"
+              echo "PLAN_BASE_CI_GATE_STAGED=false" >> "$GITHUB_ENV"
               continue
             fi
             install -m 0755 "${src}" "scripts/${f}"
             _fetched_scripts+=("${f}")
+            # auto_approve sources the helper only when this flag is true, so a
+            # copy a later checkout restores (the merged-PR reroute's forced
+            # checkout of a base branch that tracks the path) is never sourced.
+            echo "PLAN_BASE_CI_GATE_STAGED=true" >> "$GITHUB_ENV"
           done
 
           # Stage codex_model_catalog.json so scripts/write_codex_config.sh
@@ -3739,8 +3744,11 @@ jobs:
               # inherit the red base, so the approval is held and the awaiting-approval
               # path runs. Every read fails open; a missing, symlinked or unsourceable
               # helper skips the check (legacy behaviour). Heal issues are exempt.
-              # RED_BASE_APPROVAL_HOLD_ENABLED=false turns it off.
-              if [ -f scripts/plan_base_ci_gate.sh ] && [ ! -L scripts/plan_base_ci_gate.sh ] \
+              # RED_BASE_APPROVAL_HOLD_ENABLED=false turns it off. The helper is
+              # sourced only when "Stage workflow support files" installed the
+              # pipeline copy (PLAN_BASE_CI_GATE_STAGED=true), never a checkout copy.
+              if [ "${PLAN_BASE_CI_GATE_STAGED:-false}" = "true" ] \
+                && [ -f scripts/plan_base_ci_gate.sh ] && [ ! -L scripts/plan_base_ci_gate.sh ] \
                 && { source scripts/plan_base_ci_gate.sh >/dev/null 2>&1; } \
                 && type red_base_approval_hold_check >/dev/null 2>&1; then
                 red_base_labels_json="$(printf '%s' "${CURRENT_ISSUE_JSON}" | jq -c '[.labels[]?.name // empty]' 2>/dev/null)" || red_base_labels_json="[]"
