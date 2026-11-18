@@ -2496,6 +2496,16 @@ rb_judge_merge_retry_transient() {
       echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=auto_merge_enabled"
       return 0
     fi
+    # Security follow-up guard (#9671): a clean audit of the base branch's
+    # head can land during the delay, so a site that ran the guard re-runs
+    # it before each retried merge, on the payload that site passed it (no
+    # extra PR read). Anything but `allow` stops the retries; the site's
+    # failure branch then runs.
+    if [ -n "${RB_JUDGE_FOLLOWUP_GUARD_RESULT:-}" ] \
+      && ! rb_judge_followup_merge_guard "${_rb_retry_path}" "${RB_JUDGE_FOLLOWUP_GUARD_PAYLOAD:-}"; then
+      echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=security_followup_guard"
+      return 1
+    fi
     if [ "${_rb_retry_mode}" = "auto" ]; then
       gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_AUTO_FILE}" && return 0
     fi
@@ -2520,12 +2530,16 @@ rb_judge_merge_retry_transient() {
 # the raw repository variable: only an explicit `false` turns the guard off;
 # unset keeps it on (the step's SINGLE_ISSUE_SECURITY_PASS_ENABLED defaults
 # to `false` for the judge's own security pass and is not forwarded).
+# RB_JUDGE_FOLLOWUP_GUARD_PAYLOAD keeps the last payload, so the transient
+# merge retry (rb_judge_merge_retry_transient) can re-run the guard on it.
 RB_JUDGE_FOLLOWUP_GUARD_RESULT=""
+RB_JUDGE_FOLLOWUP_GUARD_PAYLOAD=""
 rb_judge_followup_merge_guard() {
   local rb_judge_fg_path="${1:-merge}" rb_judge_fg_payload="${2:-}"
   local rb_judge_fg_script="${SUPPORT_SCRIPTS_DIR:-scripts}/review_single_issue_security_pass.sh"
   local rb_judge_fg_file="" rb_judge_fg_output=""
   RB_JUDGE_FOLLOWUP_GUARD_RESULT="unavailable"
+  RB_JUDGE_FOLLOWUP_GUARD_PAYLOAD="${rb_judge_fg_payload}"
   # Non-empty check first: `jq -e` on empty input exits 0 on some jq versions.
   if [ -f "${rb_judge_fg_script}" ] && [ -n "${rb_judge_fg_payload}" ] \
     && printf '%s' "${rb_judge_fg_payload}" | jq -e 'type == "object" and ((.base.ref // "") | type == "string" and length > 0)' >/dev/null 2>&1 \

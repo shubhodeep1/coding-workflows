@@ -1567,3 +1567,130 @@ def test_followup_guard_sits_after_the_gates_and_before_the_status() -> None:
 		assert after.index("rb_judge_merge_err_open") < status
 	# The helper is defined once, after the merge-error helpers.
 	assert text.index("# END rb-judge merge error capture (#7659)") < text.index(FG_BEGIN) < text.index('case "${RB_ACTION}" in\n  merge)')
+
+
+# The transient merge retry re-runs the guard before each retried merge (#9671):
+# a clean audit can land during the retry delay.
+
+FG_SEQ_STUB = """#!/usr/bin/env bash
+n=$(cat "${FG_STUB_COUNT}" 2>/dev/null || echo 0)
+echo $((n + 1)) > "${FG_STUB_COUNT}"
+IFS=, read -r -a results <<< "${FG_STUB_RESULTS}"
+r="${results[$n]:-${results[${#results[@]}-1]}}"
+echo "SINGLE_ISSUE_SECURITY_PASS mode=followup_guard stub=1 call=$((n + 1))"
+echo "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=${r}"
+"""
+
+
+def _run_fg_site_with_retry(path: str, guard_results: list[str], responses: list[dict]) -> dict:
+	with tempfile.TemporaryDirectory(prefix="test_rb_judge_followup_guard_retry_") as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir()
+		gh_log = tmp / "gh_calls.jsonl"
+		responses_file = tmp / "responses.json"
+		responses_file.write_text(json.dumps(responses), encoding="utf-8")
+		gh_shim = bin_dir / "gh"
+		gh_shim.write_text(
+			"#!/usr/bin/env python3\n"
+			"import json, os, sys\n"
+			"log = os.environ['GH_CALL_LOG']\n"
+			"n = sum(1 for _ in open(log, encoding='utf-8')) if os.path.exists(log) else 0\n"
+			"with open(log, 'a', encoding='utf-8') as fh:\n"
+			"\tfh.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+			"rs = json.load(open(os.environ['GH_STUB_RESPONSES'], encoding='utf-8'))\n"
+			"r = rs[n] if n < len(rs) else rs[-1]\n"
+			"sys.stdout.write(r.get('stdout', ''))\n"
+			"sys.stderr.write(r.get('stderr', ''))\n"
+			"sys.exit(r.get('code', 0))\n",
+			encoding="utf-8",
+		)
+		gh_shim.chmod(0o755)
+		sleep_shim = bin_dir / "sleep"
+		sleep_shim.write_text("#!/usr/bin/env bash\n:\n", encoding="utf-8")
+		sleep_shim.chmod(0o755)
+		support = tmp / "support"
+		support.mkdir()
+		stub = support / "review_single_issue_security_pass.sh"
+		stub.write_text(FG_SEQ_STUB, encoding="utf-8")
+		stub.chmod(0o755)
+		scratch = tmp / "scratch"
+		scratch.mkdir()
+		github_output = tmp / "github_output.txt"
+		github_output.write_text("", encoding="utf-8")
+		harness = tmp / "harness.sh"
+		harness.write_text(
+			"set -euo pipefail\n"
+			"review_head_gate_post_status() { :; }\n"
+			+ _merge_err_helpers()
+			+ "\n"
+			+ _fg_helper_block()
+			+ "\n"
+			+ '_pr_json="${FG_PAYLOAD_JSON}"\n_rb_terminal_pr_json="${FG_PAYLOAD_JSON}"\n'
+			+ "if false; then :\n"
+			+ _fg_site_snippet(path)
+			+ "fi\n"
+			+ 'echo "RB_MERGE_STATUS=${RB_MERGE_STATUS:-}"\n'
+			+ 'echo "MERGE_CONFIRMED=${MERGE_CONFIRMED:-}"\n',
+			encoding="utf-8",
+		)
+		env = {
+			"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			"GH_CALL_LOG": str(gh_log),
+			"GH_STUB_RESPONSES": str(responses_file),
+			"GITHUB_OUTPUT": str(github_output),
+			"TMPDIR": str(scratch),
+			"PR_NUMBER": "42",
+			"REPOSITORY": "o/r",
+			"RB_JUDGED_HEAD_SHA": JUDGED,
+			"ENABLE_AUTO_MERGE": "true",
+			"SUPPORT_SCRIPTS_DIR": str(support),
+			"DEFAULT_BRANCH": "main",
+			"FG_PAYLOAD_JSON": FG_PAYLOAD,
+			"FG_STUB_RESULTS": ",".join(guard_results),
+			"FG_STUB_COUNT": str(tmp / "stub_count"),
+		}
+		proc = subprocess.run(["bash", str(harness)], env=env, text=True, capture_output=True, timeout=60)
+		calls = [json.loads(line) for line in gh_log.read_text(encoding="utf-8").splitlines() if line.strip()] if gh_log.exists() else []
+		count_file = tmp / "stub_count"
+		return {
+			"proc": proc,
+			"calls": calls,
+			"outputs": github_output.read_text(encoding="utf-8").splitlines(),
+			"guard_calls": int(count_file.read_text(encoding="utf-8").strip()) if count_file.exists() else 0,
+			"leftovers": sorted(p.name for p in scratch.iterdir()),
+		}
+
+
+@needs_jq
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+@pytest.mark.parametrize("retry_result", ["refuse", "unverifiable"])
+def test_followup_guard_rerun_before_transient_retry_stops_merge(path: str, retry_result: str) -> None:
+	run = _run_fg_site_with_retry(path, ["allow", retry_result], _first_failure(path) + [_pr_state(), _ok()])
+	proc = run["proc"]
+	assert proc.returncode == 0, proc.stderr
+	assert run["guard_calls"] == 2
+	expected = _expected_calls(path)
+	# The initial attempts and the retry's PR-state read; no retried merge.
+	assert run["calls"][: len(expected)] == expected
+	assert len(run["calls"]) == len(expected) + 1 and run["calls"][-1][0] == "api"
+	assert _retry_lines(proc.stdout)[-1] == f"RB_JUDGE_MERGE_RETRY pr=42 head={JUDGED} path={path} attempt=1/3 outcome=security_followup_guard"
+	assert f"RB_JUDGE_SECURITY_FOLLOWUP_GUARD pr=42 head={JUDGED} path={path} result={retry_result} action=skip_merge" in proc.stdout.splitlines()
+	if path == "sync":
+		assert "judge_skip_reason=sync_merge_failed" in run["outputs"]
+	else:
+		assert "RB_MERGE_STATUS=merge_failed" in proc.stdout.splitlines()
+	assert run["leftovers"] == []
+
+
+@needs_jq
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_followup_guard_rerun_allow_lets_transient_retry_merge(path: str) -> None:
+	run = _run_fg_site_with_retry(path, ["allow"], _first_failure(path) + [_pr_state(), _ok()])
+	proc = run["proc"]
+	assert proc.returncode == 0, proc.stderr
+	assert run["guard_calls"] == 2
+	assert run["calls"][-1] == _expected_calls(path)[0]
+	assert "RB_JUDGE_SECURITY_FOLLOWUP_GUARD" not in proc.stdout
+	_assert_merge_succeeded(path, "\n".join(run["outputs"]), proc.stdout)
+	assert run["leftovers"] == []
