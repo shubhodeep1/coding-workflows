@@ -1138,8 +1138,15 @@ def test_wrapper_builds_the_pr_tree_from_git_with_tracked_dotfiles_and_filtered_
 		assert (capture / name).is_file(), name
 	assert (capture / "tests" / "test_a.py").read_text(encoding="utf-8") == "# unstaged edit\n"
 	assert (capture / "old.txt").read_text(encoding="utf-8") == "staged then edited\n"
-	for name in ("gone.txt", ".env", "credentials.json", "ignored.txt", ".github/ai/dropped.json", ".git"):
+	for name in ("gone.txt", ".env", "credentials.json", "ignored.txt", ".github/ai/dropped.json"):
 		assert not os.path.lexists(capture / name), name
+	# /source carries a fresh one-commit repository of its own files (as the old
+	# snapshot did), never the checkout's .git or its objects.
+	assert _git(capture, "rev-list", "--count", "HEAD") == "1"
+	assert not (capture / ".git" / "objects" / "info" / "alternates").exists()
+	synthetic_files = set(_git(capture, "ls-files").splitlines())
+	assert {".gitattributes", "staged_new.py", "untracked_ok.py"} <= synthetic_files
+	assert not {".env", "credentials.json", "gone.txt"} & synthetic_files
 	# The real index and the checkout's .git are only read.
 	assert _git_state(root) == before
 
