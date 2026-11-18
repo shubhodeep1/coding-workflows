@@ -89,8 +89,12 @@ GITHUB_COMMENT_BODY_CAP = 65536
 # ~108 bytes (`<!-- ORCHESTRATOR_STATE_V2 part=NN/NN manifest=<64> -->`),
 # closer line is ~26 bytes including the leading newline.  Adding a
 # generous safety margin so we never edge-case-trip the API even if
-# part numbers grow into 4 digits.
-DEFAULT_FRAMING_HEADROOM = 256
+# part numbers grow into 4 digits.  A further 512 bytes leave room for the
+# signature line the `gh` shim appends when AI_COMMENT_SIGNING_SECRET is set
+# (scripts/comment_signature.py, at most ~335 characters); without it a full
+# part is over the cap once signed, so it stays on GH_PAT and keeps starting
+# the issue_comment wrappers.
+DEFAULT_FRAMING_HEADROOM = 768
 DEFAULT_CHUNK_SIZE = GITHUB_COMMENT_BODY_CAP - DEFAULT_FRAMING_HEADROOM
 
 # Upper bound on the number of chunks the extractor will track for a
