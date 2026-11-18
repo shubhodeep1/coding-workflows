@@ -39,6 +39,10 @@ FAKE_GH = textwrap.dedent(
 			subprocess.run(["git", "-C", os.environ["FAKE_ORIGIN"], "update-ref", "refs/pull/7/merge", target], check=True)
 		print(os.environ.get("FAKE_GH_MERGEABLE", "true"))
 		sys.exit(0)
+	if ".head.sha" in jq:
+		# The sync-only check's re-read of the live PR head.
+		print(os.environ.get("FAKE_GH_HEAD_SHA") or os.environ.get("GITHUB_SHA", ""))
+		sys.exit(0)
 	if ".base.ref" in jq:
 		# One field per line: base ref, default branch, changed_files.
 		print(os.environ.get("FAKE_GH_BASE_REF", "main"))
@@ -327,6 +331,20 @@ def test_sync_only_stale_merge_ref_is_accepted(world, tmp_path: Path) -> None:
 		f"repos/o/r/compare/{world['old_base']}...main",
 	]
 	assert _api_paths(calls, "/files") == ["repos/o/r/pulls/7/files?per_page=100&page=1"]
+	# The live head is re-read once, after the file listing.
+	head_reads = [i for i, c in enumerate(calls) if any(".head.sha" in arg for arg in c)]
+	files_reads = [i for i, c in enumerate(calls) if len(c) > 1 and "/files" in c[1]]
+	assert len(head_reads) == 1 and head_reads[0] > files_reads[-1]
+
+
+def test_sync_only_head_moved_during_the_listing_fails_closed(world, tmp_path: Path) -> None:
+	env = _sync_env(tmp_path)
+	env["FAKE_GH_HEAD_SHA"] = "ee" * 20
+	result, tested, _ = world["run"](env=env)
+	assert result.returncode == 1, result.stdout + result.stderr
+	assert "outcome=stale reason=not_refreshed" in result.stdout and "detail=api_error" in result.stdout
+	assert "stale_accepted" not in result.stdout
+	assert tested == world["old_merge"]
 
 
 def test_sync_only_accepts_resolver_commits_and_pages_the_pr_files(world, tmp_path: Path) -> None:
@@ -412,7 +430,7 @@ def test_sync_only_tokenless_job_reads_the_public_api(world, tmp_path: Path) -> 
 	"""tests-sandbox-python passes no token: the extra reads go to the public endpoint too."""
 	env = _sync_env(tmp_path)
 	pull = tmp_path / "pull.json"
-	pull.write_text(json.dumps({"base": {"ref": INTEGRATION, "repo": {"default_branch": "main"}}, "changed_files": 1, "mergeable": True}), encoding="utf-8")
+	pull.write_text(json.dumps({"base": {"ref": INTEGRATION, "repo": {"default_branch": "main"}}, "head": {"sha": world["head"]}, "changed_files": 1, "mergeable": True}), encoding="utf-8")
 	curl_dir = tmp_path / "fake-curl"
 	curl_dir.mkdir()
 	# A stand-in curl: `pulls/7` comes from pull.json; every other path is

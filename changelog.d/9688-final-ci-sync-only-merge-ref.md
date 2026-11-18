@@ -8,11 +8,11 @@ Final-CI jobs can wait about an hour for a runner. By then an integration branch
 | Commits between the tested base and the tip | at most 250 |
 | Files changed in that range | fewer than 300 |
 | Files in the PR | at most 3000 |
-| Extra GitHub reads | up to 3 (the file listing at 100 per page), only on the stale path |
+| Extra GitHub reads | 2 compare reads, 1 per 100 PR files and 1 PR head read: 4 for a PR of up to 100 files, at most 33, only on the stale path |
 | Switch | `CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED` (default `true`) |
 
 What this means for operators: a final CI job that logs `CI_FINAL_MERGE_REF ... outcome=stale_accepted` tested a merge one or more integration syncs behind the tip, and those syncs touch none of the PR's files. A job that still fails `outcome=stale` now says why in `detail=`: `not_ahead`, `truncated`, `foreign_commit`, `file_overlap` or `api_error`. A PR into the default branch never takes the new path.
 
 ### For contributors
 
-The first `pulls/<n>` read also returns the default branch and `changed_files`, with no extra call. New helpers: `ci_final_merge_ref_api_get` and `ci_final_merge_ref_sync_only`. A sync merge counts only when its second parent is a default-branch commit. Tests: `tests/test_ci_final_merge_ref_fresh.py`.
+The first `pulls/<n>` read also returns the default branch and `changed_files`, with no extra call. New helpers: `ci_final_merge_ref_api_get` and `ci_final_merge_ref_sync_only`. A sync merge counts only when its second parent is a default-branch commit. The check uses the tip from the last lookup only (a failed lookup is `api_error`), and re-reads the PR head after the file listing so a head that moved meanwhile fails closed. Tests: `tests/test_ci_final_merge_ref_fresh.py`.

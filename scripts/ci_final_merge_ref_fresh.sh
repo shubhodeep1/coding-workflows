@@ -44,7 +44,10 @@
 #     `[ai-merge-resolve]` (`foreign_commit`);
 #   - no file changed in the range (name or previous name) is in the PR's file
 #     list (`file_overlap`); a PR with more than 3000 files, or a listing that
-#     does not match `changed_files`, is `truncated`.
+#     does not match `changed_files`, is `truncated`;
+#   - the PR head is still GITHUB_SHA after the file listing (`api_error`),
+#     and the tip is the one the last lookup returned (`api_error` when that
+#     lookup failed; no earlier tip is used).
 # On accept the job keeps the checked-out merge, logs `outcome=stale_accepted
 # reason=sync_only_no_overlap ... commits=<k> files=<m>`, adds one line to
 # $GITHUB_STEP_SUMMARY and exits 0. Switch off: today's stale exit, unchanged.
@@ -69,10 +72,12 @@
 # cannot reuse that read), plus one `GET pulls/<n>` per refresh attempt, only
 # when the merge ref is stale. The sync-only check adds nothing on the fresh,
 # refreshed, conflict, skipped and switch-off paths; on the final stale path it
-# adds up to 3 endpoint reads, in this order and stopping at the first failed
+# reads 4 endpoints, in this order and stopping at the first failed
 # condition: `GET compare/<tested_base>...<tip>`, `GET
-# compare/<tested_base>...<default branch>`, then `GET pulls/<n>/files` at 100
-# per page (one GET for up to 100 files, at most 30 for 3000).
+# compare/<tested_base>...<default branch>`, `GET pulls/<n>/files` at 100 per
+# page (one GET per 100 PR files, at most 30 for 3000), then one `GET
+# pulls/<n>` to confirm the head is still GITHUB_SHA. That is 2 compare reads
+# plus 1 per 100 PR files plus 1: 4 for a PR of up to 100 files, at most 33.
 # Log: `CI_FINAL_MERGE_REF pr=<n> head=<sha> outcome=fresh|refreshed|stale|stale_accepted|conflict|skipped reason=<token> [base=<ref>] [tested_base=<sha>] [tip=<sha>] [commits=<k>] [files=<m>] [detail=not_ahead|truncated|foreign_commit|file_overlap|api_error]`.
 
 set -uo pipefail
@@ -220,6 +225,12 @@ ci_final_merge_ref_sync_only()
 	[[ "${sync_verdict}" =~ ^[0-9]+$ ]] || sync_reject api_error
 	[ "${sync_verdict}" -eq 0 ] || sync_reject file_overlap
 
+	# GET 4: the live PR head after the listing. `pulls/<n>/files` lists the
+	# live head's files; a head that moved since the checkout (same file count,
+	# other files) would have been checked against the wrong set.
+	sync_live_head="$(ci_final_merge_ref_pull '.head.sha // ""' 2>/dev/null)" || sync_reject api_error
+	[ "${sync_live_head}" = "${GITHUB_SHA}" ] || sync_reject api_error
+
 	sync_counts="$(jq -r '"\(.total_commits) \(.files | length)"' "${sync_tmp}/range.json" 2>/dev/null)" || sync_reject api_error
 	[[ "${sync_counts}" =~ ^[0-9]+\ [0-9]+$ ]] || sync_reject api_error
 	echo "ok ${sync_tested_base} ${sync_counts}"
@@ -342,9 +353,10 @@ ci_final_merge_ref_main()
 	sync_switch="$(printf '%s' "${CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
 	case "${sync_switch}" in
 		true|1|yes|on)
-			# The newest valid tip seen during this step.
-			sync_last_tip="${seen_tips% }"
-			sync_last_tip="${sync_last_tip##* }"
+			# The tip from the last lookup only: when that lookup failed, an
+			# older tip from seen_tips could hide newer base commits, so an
+			# invalid value fails closed (api_error) inside the check.
+			sync_last_tip="${tip:-}"
 			sync_result="$(ci_final_merge_ref_sync_only "${base_ref}" "${sync_last_tip}" "${sync_default_branch}" "${sync_pr_changed_files}")"
 			sync_rc=$?
 			if [ "${sync_rc}" -eq 0 ] && [[ "${sync_result}" =~ ^ok\ ([0-9a-f]{40})\ ([0-9]+)\ ([0-9]+)$ ]]; then
