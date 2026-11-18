@@ -21,6 +21,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "ci_final_merge_ref_fresh.sh"
+INTEGRATION = "orchestrator/project-8291"
 
 FAKE_GH = textwrap.dedent(
 	r'''
@@ -39,7 +40,27 @@ FAKE_GH = textwrap.dedent(
 		print(os.environ.get("FAKE_GH_MERGEABLE", "true"))
 		sys.exit(0)
 	if ".base.ref" in jq:
+		# One field per line: base ref, default branch, changed_files.
 		print(os.environ.get("FAKE_GH_BASE_REF", "main"))
+		print(os.environ.get("FAKE_GH_DEFAULT_BRANCH", "main"))
+		print(os.environ.get("FAKE_GH_CHANGED_FILES", "1"))
+		sys.exit(0)
+	path = args[1] if len(args) > 1 else ""
+	source = ""
+	page_slice = None
+	if "/compare/" in path:
+		default = os.environ.get("FAKE_GH_DEFAULT_BRANCH", "main")
+		source = os.environ.get("FAKE_GH_COMPARE_DEFAULT" if path.endswith("..." + default) else "FAKE_GH_COMPARE_RANGE", "")
+	elif "/pulls/7/files" in path:
+		source = os.environ.get("FAKE_GH_PR_FILES", "")
+		page = int(path.split("page=")[-1]) if "&page=" in path else 1
+		page_slice = (100 * (page - 1), 100 * page)
+	if source and os.path.isfile(source):
+		with open(source, encoding="utf-8") as fh:
+			body = json.load(fh)
+		if page_slice is not None and isinstance(body, list):
+			body = body[page_slice[0]:page_slice[1]]
+		print(json.dumps(body))
 		sys.exit(0)
 	sys.exit(1)
 	'''
@@ -78,6 +99,8 @@ def world(tmp_path: Path):
 	_git(work, "reset", "-q", "--hard", new_base)
 	_git(work, "push", "-q", str(origin), "main", "head")
 	_git(work, "push", "-q", str(origin), f"{old_merge}:refs/pull/7/merge", f"{new_merge}:refs/heads/keep-new-merge")
+	# An integration branch at the same tip as main (the #9602 shape).
+	_git(work, "push", "-q", str(origin), f"{new_base}:refs/heads/{INTEGRATION}")
 
 	bin_dir = tmp_path / "bin"
 	bin_dir.mkdir()
@@ -121,6 +144,7 @@ def test_current_merge_ref_passes_without_refresh(world) -> None:
 	assert f"outcome=fresh reason=base_tip base=main tested_base={world['new_base']}" in result.stdout
 	assert tested == world["new_merge"]
 	assert len(calls) == 1  # the base-branch read only
+	assert not any("compare" in arg or "/files" in arg for call in calls for arg in call)
 
 
 def test_stale_merge_ref_is_refreshed_and_checked_out(world) -> None:
@@ -218,3 +242,209 @@ def test_every_final_ci_checkout_is_followed_by_the_check() -> None:
 			assert "inputs.pr_number" in check["env"]["FINAL_CI_PR_NUMBER"]
 			assert check["env"]["CI_FINAL_MERGE_REF_FRESH_ENABLED"] == "${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}"
 	assert seen == 10
+
+
+# --- Sync-only acceptance (#9688) --------------------------------------------
+# The stale world: refs/pull/7/merge merges the head into old_base while the
+# integration branch is at new_base. Compare and file listings are synthetic
+# JSON served by the fake gh; their SHAs only have to be consistent.
+
+MAIN_1 = "d1" * 20
+MAIN_2 = "d2" * 20
+SYNC_MERGE = "5a" * 20
+RESOLVE = "5b" * 20
+OUTSIDER = "f0" * 20
+
+
+def _commit(sha: str, message: str, parents: list[str]) -> dict:
+	return {"sha": sha, "parents": [{"sha": p} for p in parents], "commit": {"message": message}}
+
+
+def _sync_range() -> list[dict]:
+	"""The #9602 shape: main commits brought in by one sync merge."""
+	return [
+		_commit(MAIN_1, "fix: base fix", ["00" * 20]),
+		_commit(MAIN_2, "feat: more main", [MAIN_1]),
+		_commit(SYNC_MERGE, f"chore: sync main into {INTEGRATION}", ["ab" * 20, MAIN_2]),
+	]
+
+
+def _sync_env(
+	tmp_path: Path,
+	*,
+	commits: list[dict] | None = None,
+	files: list[dict] | None = None,
+	status: str = "ahead",
+	total: int | None = None,
+	default_commits: list[dict] | None = None,
+	pr_files: list[dict] | None = None,
+	changed_files: int | None = None,
+	missing: str = "",
+) -> dict:
+	commits = _sync_range() if commits is None else commits
+	files = [{"filename": "a.txt"}] if files is None else files
+	default_commits = [_commit(MAIN_1, "fix: base fix", ["00" * 20]), _commit(MAIN_2, "feat: more main", [MAIN_1])] if default_commits is None else default_commits
+	pr_files = [{"filename": "b.txt"}] if pr_files is None else pr_files
+	out = tmp_path / "sync-api"
+	out.mkdir(exist_ok=True)
+	docs = {
+		"range": {"status": status, "total_commits": len(commits) if total is None else total, "commits": commits, "files": files},
+		"default": {"status": "diverged", "total_commits": len(default_commits), "commits": default_commits},
+		"files": pr_files,
+	}
+	for name, doc in docs.items():
+		if name != missing:
+			(out / f"{name}.json").write_text(json.dumps(doc), encoding="utf-8")
+	return {
+		"FAKE_GH_BASE_REF": INTEGRATION,
+		"FAKE_GH_COMPARE_RANGE": str(out / "range.json"),
+		"FAKE_GH_COMPARE_DEFAULT": str(out / "default.json"),
+		"FAKE_GH_PR_FILES": str(out / "files.json"),
+		"FAKE_GH_CHANGED_FILES": str(len(pr_files) if changed_files is None else changed_files),
+	}
+
+
+def _api_paths(calls: list[list[str]], needle: str) -> list[str]:
+	return [c[1] for c in calls if len(c) > 1 and needle in c[1]]
+
+
+def test_sync_only_stale_merge_ref_is_accepted(world, tmp_path: Path) -> None:
+	summary = tmp_path / "summary.md"
+	env = _sync_env(tmp_path)
+	env["GITHUB_STEP_SUMMARY"] = str(summary)
+	result, tested, calls = world["run"](env=env)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert (
+		f"outcome=stale_accepted reason=sync_only_no_overlap base={INTEGRATION} "
+		f"tested_base={world['old_base']} tip={world['new_base']} commits=3 files=1"
+	) in result.stdout
+	assert "::error::" not in result.stdout
+	assert tested == world["old_merge"]  # the checked-out merge is kept
+	assert "outcome=stale_accepted" in summary.read_text(encoding="utf-8")
+	assert len(summary.read_text(encoding="utf-8").splitlines()) == 1
+	assert _api_paths(calls, "/compare/") == [
+		f"repos/o/r/compare/{world['old_base']}...{world['new_base']}",
+		f"repos/o/r/compare/{world['old_base']}...main",
+	]
+	assert _api_paths(calls, "/files") == ["repos/o/r/pulls/7/files?per_page=100&page=1"]
+
+
+def test_sync_only_accepts_resolver_commits_and_pages_the_pr_files(world, tmp_path: Path) -> None:
+	commits = _sync_range() + [_commit(RESOLVE, "[ai-merge-resolve] merge origin/main", [SYNC_MERGE])]
+	pr_files = [{"filename": f"src/f{i}.py"} for i in range(150)]
+	result, tested, calls = world["run"](env=_sync_env(tmp_path, commits=commits, pr_files=pr_files))
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "outcome=stale_accepted reason=sync_only_no_overlap" in result.stdout and "commits=4" in result.stdout
+	assert _api_paths(calls, "/files") == [
+		"repos/o/r/pulls/7/files?per_page=100&page=1",
+		"repos/o/r/pulls/7/files?per_page=100&page=2",
+	]
+	assert tested == world["old_merge"]
+
+
+@pytest.mark.parametrize(
+	("case", "detail"),
+	[
+		({"files": [{"filename": "b.txt"}]}, "file_overlap"),
+		({"files": [{"filename": "c.txt", "previous_filename": "b.txt"}]}, "file_overlap"),
+		({"commits": _sync_range() + [_commit(OUTSIDER, "feat: pushed straight to the integration branch", [SYNC_MERGE])]}, "foreign_commit"),
+		({"commits": _sync_range()[:2] + [_commit(SYNC_MERGE, "Merge branch 'main'", ["ab" * 20, MAIN_2])]}, "foreign_commit"),
+		({"commits": _sync_range()[:2] + [_commit(SYNC_MERGE, f"chore: sync main into {INTEGRATION}", ["ab" * 20, OUTSIDER])]}, "foreign_commit"),
+		({"status": "diverged"}, "not_ahead"),
+		({"total": 251}, "truncated"),
+		({"files": [{"filename": f"x{i}.txt"} for i in range(300)]}, "truncated"),
+		({"changed_files": 3001}, "truncated"),
+		({"changed_files": 2}, "truncated"),
+		({"missing": "range"}, "api_error"),
+		({"missing": "default"}, "api_error"),
+		({"missing": "files"}, "api_error"),
+	],
+)
+def test_sync_only_rejections_keep_the_stale_exit(world, tmp_path: Path, case: dict, detail: str) -> None:
+	result, tested, calls = world["run"](env=_sync_env(tmp_path, **case))
+	assert result.returncode == 1, result.stdout + result.stderr
+	assert "::error::CI_FINAL_MERGE_REF:" in result.stdout and "not a defect in the PR" in result.stdout
+	assert (
+		f"outcome=stale reason=not_refreshed base={INTEGRATION} tested_base={world['old_base']} "
+		f"tip={world['new_base']} detail={detail}"
+	) in result.stdout
+	assert "stale_accepted" not in result.stdout
+	assert tested == world["old_merge"]
+	if detail == "foreign_commit":
+		assert _api_paths(calls, "/files") == []  # no file listing for a foreign commit
+	if case.get("changed_files") == 3001:
+		assert _api_paths(calls, "/files") == []
+
+
+def test_sync_only_never_applies_to_a_default_branch_base(world, tmp_path: Path) -> None:
+	env = _sync_env(tmp_path)
+	env["FAKE_GH_BASE_REF"] = "main"
+	result, tested, calls = world["run"](env=env)
+	assert result.returncode == 1
+	assert f"outcome=stale reason=not_refreshed base=main tested_base={world['old_base']} tip={world['new_base']} detail=foreign_commit" in result.stdout
+	assert _api_paths(calls, "/compare/") == [] and _api_paths(calls, "/files") == []
+
+
+def test_sync_only_unreadable_default_branch_fails_closed(world, tmp_path: Path) -> None:
+	env = _sync_env(tmp_path)
+	env["FAKE_GH_DEFAULT_BRANCH"] = ""
+	result, _, calls = world["run"](env=env)
+	assert result.returncode == 1
+	assert "detail=api_error" in result.stdout
+	assert _api_paths(calls, "/compare/") == []
+
+
+def test_sync_only_switch_off_keeps_todays_exit(world, tmp_path: Path) -> None:
+	env = _sync_env(tmp_path)
+	env["CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED"] = "false"
+	result, tested, calls = world["run"](env=env)
+	assert result.returncode == 1
+	line = next(out_line for out_line in result.stdout.splitlines() if out_line.startswith("CI_FINAL_MERGE_REF pr="))
+	assert line.endswith(
+		f"outcome=stale reason=not_refreshed base={INTEGRATION} tested_base={world['old_base']} tip={world['new_base']}"
+	)
+	assert "detail=" not in result.stdout
+	assert _api_paths(calls, "/compare/") == [] and _api_paths(calls, "/files") == []
+	assert tested == world["old_merge"]
+
+
+def test_sync_only_tokenless_job_reads_the_public_api(world, tmp_path: Path) -> None:
+	"""tests-sandbox-python passes no token: the extra reads go to the public endpoint too."""
+	env = _sync_env(tmp_path)
+	pull = tmp_path / "pull.json"
+	pull.write_text(json.dumps({"base": {"ref": INTEGRATION, "repo": {"default_branch": "main"}}, "changed_files": 1, "mergeable": True}), encoding="utf-8")
+	curl_dir = tmp_path / "fake-curl"
+	curl_dir.mkdir()
+	# A stand-in curl: `pulls/7` comes from pull.json; every other path is
+	# routed through the fake gh's compare/files answers.
+	(curl_dir / "curl").write_text(textwrap.dedent(
+		f'''\
+		#!/usr/bin/env python3
+		import subprocess, sys
+		url = sys.argv[-1]
+		prefix = "https://api.example.test/"
+		if not url.startswith(prefix):
+			sys.exit(22)
+		path = url[len(prefix):]
+		with open({str(tmp_path / "curl.log")!r}, "a", encoding="utf-8") as log:
+			log.write(path + "\\n")
+		if path == "repos/o/r/pulls/7":
+			sys.stdout.write(open({str(pull)!r}, encoding="utf-8").read())
+			sys.exit(0)
+		sys.exit(subprocess.run(["gh", "api", path]).returncode)
+		'''
+	), encoding="utf-8")
+	(curl_dir / "curl").chmod(0o755)
+	env.update({
+		"GH_TOKEN": "",
+		"CI_FINAL_MERGE_REF_API_URL": "https://api.example.test",
+		"PATH": f"{curl_dir}:{tmp_path / 'bin'}:{os.environ.get('PATH', '')}",
+	})
+	result, tested, _ = world["run"](env=env)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "outcome=stale_accepted reason=sync_only_no_overlap" in result.stdout
+	paths = (tmp_path / "curl.log").read_text(encoding="utf-8").splitlines()
+	assert f"repos/o/r/compare/{world['old_base']}...{world['new_base']}" in paths
+	assert f"repos/o/r/compare/{world['old_base']}...main" in paths
+	assert "repos/o/r/pulls/7/files?per_page=100&page=1" in paths
+	assert tested == world["old_merge"]
