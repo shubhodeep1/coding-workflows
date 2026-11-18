@@ -1,0 +1,20 @@
+{
+  "discovered_at": "2026-11-18T23:56:27Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=scripts/ci_final_merge_ref_fresh.sh:181-183; cited_path=scripts/ci_final_merge_ref_fresh.sh; files_touched=README.md, agents.d/9670-unblock-chain-depth-cap.md, changelog.d/9670-unblock-chain-depth-cap.md, scripts/unblock_actions.py, scripts/unblock_judge.sh, scripts/unblock_ledger.py, tests/test_unblock_judge.py.",
+  "phase": "review_autofix",
+  "pr_number": 9685,
+  "record_id": "lesson_20261118235627_6fdf70bbd1",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/ci_final_merge_ref_fresh.sh",
+    "README.md",
+    "agents.d/9670-unblock-chain-depth-cap.md",
+    "changelog.d/9670-unblock-chain-depth-cap.md",
+    "scripts/unblock_actions.py",
+    "scripts/unblock_judge.sh",
+    "scripts/unblock_ledger.py",
+    "tests/test_unblock_judge.py"
+  ]
+}
