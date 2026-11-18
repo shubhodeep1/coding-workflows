@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:364-375 | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The structural change to the `static-checks` job triggers a mandatory contract check (`tests/test_agents_fragment_contract.py`) that requires an agents fragment for workflow changes, while the task instructions explicitly forbid providing one.\n  WHY: The pre-push CI gate `tests/test_agents_fragment_contract.py` fails and blocks the PR merge. The source severity was BLOCKER, mapped here to critical. anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash rejected it as having no causal path from this diff.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Done when a PR that breaks parity fails quick / static-checks and the existing tests pass.\"\n  expected_change_site: The CI suite must accept the structural changes without triggering unrelated infrastructure failures (specifically the 5 pre-push gate test failures).\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR causes 5 pre-push gate test failures: `tests/test_agents_fragment_contract.py`, `tests/test_files_touched_scope_guard.py`, `tests/test_gh_api_write_guard.py`, `tests/test_pr_watch_guard.py`, and `tests/test_workflow_checkout_integration_ref_audit.py`. So the \"existing tests pass\" requirement is not met. The source severity was BLOCKER. anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash rejected it.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING (not a finding): file: tests/test_ci_pr_quick.py, location: test_static_checks_runs_inventory_parity, line 98 (assert index > names.index(\"CI test wiring guard\"))\n  PROBLEM: If the \"CI test wiring guard\" step is renamed, names.index raises a bare ValueError instead of a failure message that names the missing step.\n  WHY: suggested minimal fix: add assert \"CI test wiring guard\" in names, \"static-checks lost its CI test wiring guard step\" before the index comparison; estimated lines changed: 1; HARDENING_RISK_SCORE: 1\n- REJECTED pass-1 items: the google_gemini-3_1-flash-lite BLOCKER (5 test failures) and its matching TASK_GAP (agents fragment) are not grounded. tests/test_agents_fragment_contract.py::test_instructions_point_at_fragments (lines 74-82) reads only CLAUDE.md and prompt files. The ci.yml checks in tests/test_gh_api_write_guard.py (line 1134) and tests/test_pr_watch_guard.py (line 311) are substring-presence assertions. tests/test_workflow_checkout_integration_ref_audit.py only lists ci.yml in an exemption dict (line 31). tests/test_files_touched_scope_guard.py only uses \".github/workflows/ci.yml\" as a string fixture (lines 1318-1323). The gate also reported 38 inherited failures, and the PR head shows failed_count: 0 (4 related items).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:Structural change to the `static-checks` job (lines 364-375) | severity=BLOCKER | confidence=4\n  PROBLEM: The structural change triggers a mandatory contract check (`tests/test_agents_fragment_contract.py`) that requires an agents fragment for workflow changes, while the task instructions explicitly forbid providing one.\n  WHY: The pre-push CI gate `tests/test_agents_fragment_contract.py` fails and blocks the PR merge.\n- TASK_GAP:\n  Requirement: \"Done when a PR that breaks parity fails quick / static-checks and the existing tests pass.\"\n  Expected change site: The CI suite must accept the structural changes without triggering unrelated infrastructure failures (specifically the 5 pre-push gate test failures).\n  Evidence of absence: The PR causes 5 pre-push gate test failures: `tests/test_agents_fragment_contract.py`, `tests/test_files_touched_scope_guard.py`, `tests/test_gh_api_write_guard.py`, `tests/test_pr_watch_guard.py`, and `tests/test_workflow_checkout_integration_ref_audit.py`, meaning the \"existing tests pass\" requirement for task completion is not met.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n- HARDENING (not a finding): file: tests/test_ci_pr_quick.py, location: test_static_checks_runs_inventory_parity, lines 90-98\n  PROBLEM: The test calls `names.index(\"CI test wiring guard\")` without first checking that the step exists, so a missing step raises an opaque ValueError.\n  WHY: suggested minimal fix: add `assert \"CI test wiring guard\" in names, \"CI test wiring guard step not found\"` before the index call; estimated lines changed: 1; HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- NOTE (not a finding): The 5 pre-push gate \"failures caused by this change\" have no causal path from the 6-line addition. The 38 inherited failures on the merge-base suggest a sandbox-state artifact, so no fix is warranted. The agents-fragment TASK_GAP is refuted because the issue body states \"No *_ENABLED switch, README row or agents fragment\".\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- NOTE (not a finding): The gemini BLOCKER (\"5 test failures caused by this change\") and the agents-fragment TASK_GAP are refuted. There is no causal path from this diff. tests/test_agents_fragment_contract.py:74-80 only checks CLAUDE.md \u00a730 prose and prompt references. The gate listed 38 failures inherited from the merge-base, and PR-head check-runs show failed_count=0 across 21 checks. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3f4b8c780e10958a7257da241aa392af9db1f3895b3b121e1b40ab56c8c08741",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9717,
+    "run_id": "44274690182",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44274690182",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118112018_96518edadb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9717,
+    "run_id": "44274690182"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T11:20:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
