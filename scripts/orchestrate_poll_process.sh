@@ -350,7 +350,7 @@ _security_audit_tracker_release_pipeline_labels() {
   elif [ "${_sat_marker}" != "true" ]; then
     _sat_outcome="marker_missing"
     _sat_removed="none"
-  elif gh_retry gh issue edit "${_sat_issue}" --repo "${GITHUB_REPOSITORY}" "${_sat_args[@]}" >/dev/null 2>&1; then
+  elif gh_retry gh issue edit "${_sat_issue}" --repo "${GITHUB_REPOSITORY}" "${_sat_args[@]}" >/dev/null 2>&1 </dev/null; then
     _sat_outcome="labels_removed"
   else
     _sat_outcome="label_remove_failed"
@@ -25250,7 +25250,10 @@ run_unblock_scan() {
   # work item, so it never reaches the unblock judge. Its block/phase labels
   # are released (only with the tracker body marker from the GraphQL batch
   # above; no new read) and it leaves search.json before selection. A failed
-  # project keeps today's project path. A filter failure skips this tick.
+  # project stays in search.json with its labels: scripts/unblock_scan.py
+  # select then skips it as security_audit_tracker (dropping it here would make
+  # select re-add it as a label-less failed project and judge it). A filter
+  # failure skips this tick.
   if _security_audit_tracker_exclude_enabled; then
     local _scan_sat_item _scan_sat_labels _scan_sat_marker _scan_sat_items="[]"
     while IFS= read -r _scan_sat_item; do

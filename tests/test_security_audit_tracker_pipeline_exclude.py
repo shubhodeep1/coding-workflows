@@ -23,7 +23,6 @@ import textwrap
 from pathlib import Path
 
 import pytest
-import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 SCAN_SCRIPT = ROOT / "scripts" / "unblock_scan.py"
@@ -132,9 +131,20 @@ def test_unblock_scan_ordinary_issues_and_failed_projects_are_unaffected(monkeyp
 	only_ordinary = _select([_item(42, ["ai:blocked"])], {"42": _details("ai:blocked")})
 	assert only_ordinary["dispatch"] == [{"item": 42, "kind": "issue"}]
 	assert "security_audit_tracker" not in only_ordinary["skipped"]
-	# A failed project keeps today's project path even with the label.
-	failed = _select([_item(77, ["ai:security-audit", "ai:orchestrator-tracking"])], {"77": _details("ai:orchestrator-tracking")}, failed=[77])
+	# A failed project without the label keeps today's project path.
+	failed = _select([_item(77, ["ai:orchestrator-tracking"])], {"77": _details("ai:orchestrator-tracking")}, failed=[77])
 	assert failed["dispatch"] == [{"item": 77, "kind": "project"}]
+
+
+def test_unblock_scan_skips_a_failed_project_that_is_a_tracker(monkeypatch: pytest.MonkeyPatch) -> None:
+	# The project path can give a close verdict, and the tracker is never closed.
+	monkeypatch.delenv(FLAG, raising=False)
+	search = [_item(77, ["ai:security-audit", "ai:orchestrator-tracking", "ai:blocked"])]
+	result = _select(search, {"77": _details("ai:blocked")}, failed=[77])
+	assert result["dispatch"] == []
+	assert result["skipped"].get("security_audit_tracker") == 1
+	monkeypatch.setenv(FLAG, "false")
+	assert _select(search, {"77": _details("ai:blocked")}, failed=[77])["dispatch"] == [{"item": 77, "kind": "project"}]
 
 
 @pytest.mark.parametrize("value", ["", "true", "TRUE", "True"])
@@ -145,14 +155,20 @@ def test_flag_on_values(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, value: 
 	assert "rc=0" in result.stdout and "::warning::" not in result.stdout, result.stderr
 
 
-def test_flag_off_restores_current_behaviour(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_flag_off_restores_current_behaviour(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	search = [_item(3576, ["ai:security-audit", "ai:blocked"])]
 	details = {"3576": _details("ai:blocked")}
+	monkeypatch.setattr(scan, "_SECURITY_AUDIT_EXCLUDE_WARNED", False)
 	for value in ("false", "FALSE", "bogus"):
 		monkeypatch.setenv(FLAG, value)
 		result = _select(search, details)
 		assert result["dispatch"] == [{"item": 3576, "kind": "issue"}], value
 		assert "security_audit_tracker" not in result["skipped"]
+	# Python reader: an unknown value warns once on stderr; `false` never warns.
+	_select(search, details)
+	captured = capsys.readouterr()
+	assert captured.err.count(f"::warning::{FLAG}=bogus is not true/false; tracker exclusion is off") == 1
+	assert "::warning::" not in captured.out
 	# Shell reader: unset is on; false is off; an unknown value is off with one warning.
 	unset, _ = _bash(tmp_path, "_security_audit_tracker_exclude_enabled; echo rc=$?\n", flag=None)
 	assert "rc=0" in unset.stdout, unset.stderr
@@ -268,6 +284,7 @@ def test_unblock_scan_filters_tracker_before_selection_without_new_reads() -> No
 
 
 def test_poll_workflow_passes_the_switch_to_the_poller_steps() -> None:
+	yaml = pytest.importorskip("yaml")
 	workflow = yaml.safe_load(POLL_WORKFLOW.read_text(encoding="utf-8"))
 	steps = {step.get("name"): step for job in workflow["jobs"].values() for step in job.get("steps", [])}
 	for name in (
@@ -277,3 +294,138 @@ def test_poll_workflow_passes_the_switch_to_the_poller_steps() -> None:
 		"Run unblock scan without active projects",
 	):
 		assert steps[name]["env"][FLAG] == "${{ vars.SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED || 'true' }}", name
+
+
+# ---------------------------------------------------------------- shell paths, executed
+
+OLD = "2020-01-01T00:00:00Z"
+TRACKER_BODY = "<!-- ai:security-audit-tracker:v1 -->\n## AI Security Audit Tracker\n"
+
+
+def _run_unblock_scan(tmp_path: Path, flag: str | None) -> tuple[subprocess.CompletedProcess, list[str]]:
+	"""Runs the real run_unblock_scan with a stubbed gh: 3576 is the tracker,
+	42 an ordinary blocked issue, 77 a failed project that also carries the tracker label."""
+	search = [
+		{"number": 3576, "labels": ["ai:blocked", "ai:security-audit", "ai:planning"], "pull_request": False, "created_at": OLD, "updated_at": OLD},
+		{"number": 42, "labels": ["ai:blocked"], "pull_request": False, "created_at": OLD, "updated_at": OLD},
+		{"number": 77, "labels": ["ai:blocked", "ai:security-audit", "ai:orchestrator-tracking"], "pull_request": False, "created_at": OLD, "updated_at": OLD},
+	]
+
+	def node(body: str) -> dict:
+		return {
+			"body": body,
+			"author": {"login": "owner"},
+			"authorAssociation": "OWNER",
+			"timelineItems": {"nodes": [{"createdAt": OLD, "label": {"name": "ai:blocked"}}]},
+			"comments": {"totalCount": 0, "nodes": []},
+		}
+
+	graphql = {"data": {"repository": {"i3576": node(TRACKER_BODY), "i42": node("Ordinary work item."), "i77": node(TRACKER_BODY)}}}
+	(tmp_path / "search.json").write_text(json.dumps(search))
+	(tmp_path / "graphql.json").write_text(json.dumps(graphql))
+	(tmp_path / "failed.txt").write_text("77\n")
+	log = tmp_path / "calls.log"
+	log.write_text("")
+	funcs = tmp_path / "scan.sh"
+	funcs.write_text(_prelude() + "\n" + _function_text("run_unblock_scan") + "\n", encoding="utf-8")
+	script = textwrap.dedent(
+		f"""
+		set -uo pipefail
+		source "{funcs}"
+		export GITHUB_REPOSITORY="owner/repo" RUNNER_TEMP="{tmp_path}"
+		UNBLOCK_FAILED_PROJECTS_FILE="{tmp_path}/failed.txt"
+		NEEDS_HUMAN_PARKED_ITEMS_FILE="{tmp_path}/parked-none"
+		gh() {{
+			printf '%s\\n' "gh $*" >> "{log}"
+			case "$1 $2" in
+				"api --method") cat "{tmp_path}/search.json" ;;
+				"api graphql") cat "{tmp_path}/graphql.json" ;;
+				"issue edit"|"workflow run") return 0 ;;
+				*) return 1 ;;
+			esac
+		}}
+		gh_retry() {{ "$@"; }}
+		_safe_gh_jq() {{ echo '[]'; }}
+		needs_human_digest_prune() {{ return 0; }}
+		close_orphan_fixup_chains_sweep() {{ return 0; }}
+		unblock_trusted_login() {{ UNBLOCK_TRUSTED_LOGIN="{BOT}"; }}
+		run_unblock_scan
+		echo "rc=$?"
+		"""
+	)
+	result = subprocess.run(["bash", "-c", script], cwd=ROOT, env=_clean_env(flag), capture_output=True, text=True)
+	assert "rc=0" in result.stdout, result.stdout + result.stderr
+	return result, [line for line in log.read_text().splitlines() if line.startswith(("gh issue", "gh workflow"))]
+
+
+def test_run_unblock_scan_executes_tracker_skip_and_still_dispatches_ordinary_issue(tmp_path: Path) -> None:
+	result, calls = _run_unblock_scan(tmp_path, None)
+	assert calls == [
+		"gh issue edit 3576 --repo owner/repo --remove-label ai:blocked --remove-label ai:planning",
+		"gh workflow run unblock_judge_dispatch.yml --repo owner/repo -f item=42",
+	], result.stdout
+	assert "UNBLOCK_SCAN item=3576 kind=issue outcome=skip reason=security_audit_tracker" in result.stdout
+	assert "STALL_RECOVERY_SKIP issue=3576 reason=security_audit_tracker source=unblock_scan removed=ai:blocked,ai:planning outcome=labels_removed" in result.stdout
+	assert "UNBLOCK_SCAN item=42 kind=issue outcome=dispatched" in result.stdout
+	# The failed project stays in search.json for select, which skips it: never judged.
+	assert "item=77" not in result.stdout
+	assert '"security_audit_tracker":1' in result.stdout
+
+
+def test_run_unblock_scan_flag_off_keeps_today_path(tmp_path: Path) -> None:
+	result, calls = _run_unblock_scan(tmp_path, "false")
+	assert not any(line.startswith("gh issue edit") for line in calls), calls
+	assert "reason=security_audit_tracker" not in result.stdout and "STALL_RECOVERY_SKIP" not in result.stdout
+	assert any(line.startswith("gh workflow run") for line in calls)
+
+
+def _run_standalone(tmp_path: Path, flag: str | None) -> tuple[subprocess.CompletedProcess, list[str]]:
+	"""Runs the real run_standalone_stall_recovery loop up to the security-dependency
+	check (stubbed to hold), which an ordinary issue reaches and the tracker must not."""
+	details = {
+		"3576": {"labels": ["ai:security-audit", "ai:blocked", "ai:clarification"], "comments_available": True, "comments": [], "body": TRACKER_BODY, "author_login": "github-actions[bot]", "author_association": "NONE"},
+		"42": {"labels": ["ai:planning"], "comments_available": True, "comments": [], "body": "Ordinary work item.", "author_login": "owner", "author_association": "OWNER"},
+	}
+	(tmp_path / "details.json").write_text(json.dumps(details))
+	log = tmp_path / "calls.log"
+	log.write_text("")
+	funcs = tmp_path / "standalone.sh"
+	funcs.write_text(_prelude() + "\n" + _function_text("run_standalone_stall_recovery") + "\n", encoding="utf-8")
+	script = textwrap.dedent(
+		f"""
+		set -uo pipefail
+		source "{funcs}"
+		export GITHUB_REPOSITORY="owner/repo"
+		RUNTIME_DIR="{tmp_path}"
+		ENABLE_STANDALONE_STALL_RECOVERY="true"
+		_fetch_standalone_pipeline_label_issues_graphql() {{ echo '{{"issues":[{{"number":3576}},{{"number":42}}],"fallback_labels":[]}}'; }}
+		_fetch_standalone_marker_issues_graphql() {{ echo '{{}}'; }}
+		build_active_issue_set() {{ echo ''; }}
+		_fetch_candidate_issue_details_graphql() {{ cat "{tmp_path}/details.json"; }}
+		gh() {{ printf '%s\\n' "gh $*" >> "{log}"; return 0; }}
+		gh_retry() {{ "$@"; }}
+		get_issue_labels_json() {{ echo '[]'; }}
+		python3() {{ echo '{{"status":"held","reason":"dependency open"}}'; }}
+		_post_security_dependency_held_advisory() {{ return 0; }}
+		run_standalone_stall_recovery
+		echo "rc=$?"
+		"""
+	)
+	result = subprocess.run(["bash", "-c", script], cwd=ROOT, env=_clean_env(flag), capture_output=True, text=True)
+	assert "rc=0" in result.stdout, result.stdout + result.stderr
+	return result, [line for line in log.read_text().splitlines() if line]
+
+
+def test_run_standalone_stall_recovery_skips_tracker_and_keeps_ordinary_issue(tmp_path: Path) -> None:
+	result, calls = _run_standalone(tmp_path, None)
+	assert calls == ["gh issue edit 3576 --repo owner/repo --remove-label ai:blocked --remove-label ai:clarification"]
+	assert "STALL_RECOVERY_SKIP issue=3576 reason=security_audit_tracker source=standalone_stall removed=ai:blocked,ai:clarification outcome=labels_removed" in result.stdout
+	assert "STALL_SKIP issue=3576" not in result.stdout
+	assert "STALL_SKIP issue=42 reason=security_dependency_held detail=open action=none" in result.stdout
+
+
+def test_run_standalone_stall_recovery_flag_off_keeps_today_path(tmp_path: Path) -> None:
+	result, calls = _run_standalone(tmp_path, "false")
+	assert calls == [] and "STALL_RECOVERY_SKIP" not in result.stdout
+	assert "STALL_SKIP issue=3576 reason=security_dependency_held" in result.stdout
+	assert "STALL_SKIP issue=42 reason=security_dependency_held" in result.stdout

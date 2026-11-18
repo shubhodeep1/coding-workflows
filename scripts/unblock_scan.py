@@ -57,9 +57,12 @@ Two terminal states are not judged again while nothing material changed:
     holds failing check names the scan cannot see), nor failed projects, nor
     the kill switch NEEDS_HUMAN_DIGEST_ENABLED=false (the judge then closes it).
 An issue labelled `ai:security-audit` (the long-lived security-audit tracker,
-issue #9730) is not a work item and is skipped as `security_audit_tracker`
-unless it is a failed project; SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED
-(unset, empty or `true` in any case is on; anything else is off) turns it off.
+issue #9730) is not a work item and is skipped as `security_audit_tracker`,
+also when it is in the failed-project set, so the judge can never close it;
+SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED (unset, empty or `true` in any
+case is on; `false` is off; any other value is off with one stderr warning)
+turns it off. A failed project the search did not return carries no labels
+here, so it keeps the project path.
 An item is picked when all hold:
   - it has been blocked for at least --min-blocked-minutes (the newest
     `labeled` event of a block label it still carries; for a failed project
@@ -151,9 +154,24 @@ def _time(value: object) -> dt.datetime | None:
 	return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.timezone.utc)
 
 
+_SECURITY_AUDIT_EXCLUDE_WARNED = False
+
+
 def _security_audit_exclude_enabled() -> bool:
-	"""Issue #9730 switch; same rule as the poller's shell reader (no trimming, no warning here)."""
-	return os.environ.get("SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED", "").lower() in ("", "true")
+	"""Issue #9730 switch; same rule as the poller's shell reader (no trimming).
+
+	An unrecognised value turns the exclusion off and warns once per process on
+	stderr (stdout carries the selection JSON).
+	"""
+	global _SECURITY_AUDIT_EXCLUDE_WARNED
+	raw = os.environ.get("SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED", "")
+	value = raw.lower()
+	if value in ("", "true"):
+		return True
+	if value != "false" and not _SECURITY_AUDIT_EXCLUDE_WARNED:
+		_SECURITY_AUDIT_EXCLUDE_WARNED = True
+		print(f"::warning::SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED={raw} is not true/false; tracker exclusion is off", file=sys.stderr)
+	return False
 
 
 def _label_names(item: dict) -> set[str]:
@@ -346,7 +364,9 @@ def select(
 			continue
 		seen.add(number)
 		labels = _label_names(item)
-		if SECURITY_AUDIT_LABEL in labels and number not in failed and _security_audit_exclude_enabled():
+		# Issue #9730: no failed-project exemption. A tracker must never reach the
+		# judge, whose project path can give it a close verdict.
+		if SECURITY_AUDIT_LABEL in labels and _security_audit_exclude_enabled():
 			skip("security_audit_tracker")
 			continue
 		if CLOSED_LABEL in labels and number not in failed:
