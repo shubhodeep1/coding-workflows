@@ -5,13 +5,32 @@
   "entry_id": "processed_command_9733_6989045943_approved",
   "issue_number": 9733,
   "metadata": {
+    "branch": "ai/issue-9733",
+    "changed_files": [
+      ".github/workflows/check_failure_triage.yml",
+      ".github/workflows/ci.yml",
+      ".github/workflows/workflow-failure-heal-intake.yml",
+      "README.md",
+      "agents.d/9733-red-main-heal-dedupe.md",
+      "changelog.d/9733-red-main-heal-dedupe.md",
+      "scripts/check_failure_triage.sh",
+      "scripts/workflow_failure_heal.py",
+      "scripts/workflow_failure_heal_intake.sh",
+      "tests/test_check_failure_triage_target_files_guard.py",
+      "tests/test_workflow_failure_heal.py"
+    ],
+    "issue_number": 9733,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9733",
+    "pr_number": 9744,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9744",
+    "run_attempt": "1",
+    "run_id": "44379606022",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/44379606022"
   },
   "run_attempt": 1,
   "run_id": "44379606022",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-18T19:33:36Z",
+  "status": "completed",
+  "timestamp": "2026-11-18T21:04:40Z",
   "workflow": "implement"
 }
