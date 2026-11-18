@@ -140,10 +140,11 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/check_triage_resolution.py` — Close an ai:check-triage issue once its linked PR merged and the failure is verified fixed on the default branch; otherwise post the failing job's traceback (issue #7095).
 - `scripts/check_integration_pr_readiness.py` — Check whether an orchestrator integration PR is ready to merge based on the tracking issue's sub-issue checkbox state.
 - `scripts/check_resolver_diff.sh` — Validate the output of the AI conflict-resolver step before committing.
+- `scripts/check_workflow_analysis_report.py` — Structure check (required headings, per-repo subsections, minimum size) and data-gap line for the workflow log analysis report (project #9116, P2).
 - `scripts/check_workflow_script_refs.py` — Verify every script referenced by a workflow file exists in scripts/.
 - `scripts/ci_budget_watch.py` — CI early warning on pushes to main: opens one `ai:ci-budget` issue when a workflow file nears the 480,000-byte guard or a CI job nears its timeout.
 - `scripts/ci_cancelled_rerun.py` — Scheduled sweep helper: re-run failed jobs once for cancelled, startup-failed, or runner-shutdown-failed CI on a current PR head.
-- `scripts/ci_docs_only_paths.sh` — The list of paths no test job or CI step reads; a PR whose changed files are all on it gets a final CI run with `docs_only=true` (static checks and lint only, test jobs skipped; #9566).
+- `scripts/ci_docs_only_paths.sh` — The list of paths no test job or CI step reads; a PR whose changed files are all on it gets a final CI run with `docs_only=true` (static checks and lint only, test jobs skipped; #9566). `classify` decides whether a PR's changed files are all docs-only and `verify` re-checks that in `ci.yml`'s `lint` job (log prefix `CI_DOCS_ONLY_GATE`, Refs #9528).
 - `scripts/ci_final_merge_ref_fresh.sh` — Final-CI step after each `refs/pull/<n>/merge` checkout: refreshes a merge ref GitHub has not recomputed since the base moved, or fails the job, so a final run never tests an old base (final-CI self-heal).
 - `scripts/ci_sync_quick.sh` — Sync-quick final CI for merge-base freshness updates: `classify` says whether every overlap path is a CI-wiring file, `full-ci-green` whether the approved head passed a full final CI run; ci.yml's `tests-sync-quick` re-checks both (#9642).
 - `scripts/clarify_base_image_preseed.sh` — Seed the clarify sandbox's Docker Official Image base from a mirror before the build (CLARIFY_BASE_IMAGE_PRESEED log prefix).
@@ -152,12 +153,12 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/clarify_informal_detect.py` — Score clarify issue bodies for advisory informal-issue signals.
 - `scripts/clarify_isolated_run.sh` — Launch the read-only, credential-free clarification container.
 - `scripts/clarify_openrouter_broker.py` — Restrict clarification model traffic through a host Unix socket.
-- `scripts/comment_signature.py` — Signed job-token pipeline comments (opt-in via `AI_COMMENT_SIGNING_SECRET`): signs comments posted with the job token so they start no `issue_comment` wrapper, and verifies the signature on read so readers trust them like `GH_PAT` comments (run-volume plan item 15, #9643).
 - `scripts/dependency_registry_proxy.py` — Restrict network-isolated dependency installs to allowlisted HTTPS registries via a host Unix socket.
 - `scripts/clarify_sandbox/Dockerfile` — Pinned Codex container for isolated clarification.
 - `scripts/claude_anthropic_relay.py` — Host-side Anthropic relay and in-container bridge that keep the Claude OAuth token out of sandboxed runs.
 - `scripts/claude_engine.py` — Claude engine decisions: role resolution, the P5 settings, transcript extraction and classification, probe parsing, account order.
 - `scripts/claude_pool_token.sh` — Fetch the Claude account pool from claude-pool-broker with the job's OIDC token, probe each account, and write the ordered pool (run by `.github/actions/claude-pool-token`).
+- `scripts/chatgpt_pool_token.sh` — Fetch one ChatGPT account `auth.json` (refresh token stripped) or the per-account status from claude-pool-broker with the job's OIDC token (run by `.github/actions/chatgpt-pool-token`).
 - `scripts/claude_pool_health_alert.sh` — Send the hourly Telegram WARNING naming every Claude pool account at or above the usage gate, from the pool action's `probes` output (run by `orchestrate_poll.yml`).
 - `scripts/claude_pool_daily_usage.sh` — Once-a-day Telegram report of every Claude pool account's 5-hour and 7-day usage in one message: `slot` decides whether this poll tick is due, `send` posts the pool action's `probes` (run by `orchestrate_poll.yml`, coding-workflows only).
 - `scripts/claude_settings.json.tmpl` — P5 permission policy template rendered into the Claude engine's `--settings` file.
@@ -171,6 +172,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/codex_thread_reuse.sh` — Shell helper for codex thread reuse.
 - `scripts/collect_pr_check_runs_context.py` — Collect PR check-run context for review_autofix.
 - `scripts/collect_workflow_logs.py` — Collect GitHub Actions run/job telemetry for core AI workflow families.
+- `scripts/comment_signature.py` — Signed job-token comments: with `AI_COMMENT_SIGNING_SECRET` set, signs pipeline comments that cannot start a wrapper, posts them with the job token and verifies signed comments on read (embedded in `scripts/gh_helpers.sh` as the `gh` shim; rollback via `AI_COMMENT_SIGNING_POST=false`).
 - `scripts/compare_issue_timeline_parity.sh` — Shell helper for compare issue timeline parity.
 - `scripts/comprehensive_test_and_release_gh_api.sh` — Shell helper for comprehensive test and release gh api.
 - `scripts/consolidate_soft_error_reports.py` — Consolidate per-phase soft-error reports into one deterministic markdown file.
@@ -308,11 +310,11 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_consolidate.sh` — Shell helper for review consolidate.
 - `scripts/review_enable_auto_merge.sh` — Shell helper for review enable auto merge.
 - `scripts/review_freshness_ci_failed.sh` — Marks a freshness-update head whose CI failed (`ai:freshness-ci-failed:v1`) and dispatches the PR's review workflow so it gets a normal review and autofix run.
+- `scripts/review_final_ci_failed.sh` — Marks a PR head whose final CI run failed (`ai:final-ci-failed:v1`) and dispatches the PR's review workflow so the autofix can fix it (run by the `final-ci-failed` job of `ci.yml`, Refs #9528).
+- `scripts/review_final_ci_sweep.sh` — Review-sweep safety net that hands review-passed heads without a final CI run to `_pr_ensure_final_ci` (run by `review_autofix_sweep.yml`, Refs #9528).
 - `scripts/review_head_gate.sh` — Publishes SHA-bound review statuses and withdraws stale PR auto-merge on synchronize.
 - `scripts/review_workflow_sync_skip.sh` — review-gate check that skips the reviewer panel for an `ai-sync/stable` consumer sync PR whose changed paths are all in the signed sync allowlist.
 - `scripts/review_filter_uninteresting_files.sh` — Shell helper for review filter uninteresting files.
-- `scripts/review_final_ci_failed.sh` — Sends a PR whose final CI run (full suite, dispatched once per head after review) failed back to review/autofix: posts one `ai:final-ci-failed:v1` marker comment per head and dispatches the PR's review workflow; runs from ci.yml's `final-ci-failed` job (cut-ci-runner-time Phase 4, #9535).
-- `scripts/review_final_ci_sweep.sh` — Review sweep safety net: each tick hands open-PR heads whose `ai-review/head-gate` is success but which have no final CI run to `_pr_ensure_final_ci` (cut-ci-runner-time Phase 4, #9535).
 - `scripts/review_sweep_head_gate.sh` — Sourced by the review sweep's enumerate step: reads every open PR's `ai-review/head-gate` state in one GraphQL call per 100 PRs into the snapshot (`head_gate_state`, fail-open), and gives the final-CI state of a head so the sweep skips re-reviewing an approved head whose final CI failed (PR #9649).
 - `scripts/review_floor_rules.sh` — Shell helper for review floor rules.
 - `scripts/review_issue_ledger.sh` — Shell helper for review issue ledger.
