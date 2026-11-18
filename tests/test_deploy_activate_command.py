@@ -226,5 +226,19 @@ def test_one_session_keeps_its_log_updates_in_one_pull_request(command: Path) ->
 		"merge that branch into your working branch before your first log commit",
 		"closing it yourself is ask-first (CLAUDE.md §23.C)",
 		"**commit and push the log** to the session's one log PR (below)",
+		"look for an earlier session's open log PR",
+		"look for it before emitting any step",
+		"plus at most the agents-file ID records",
+		"If that merge conflicts, run `git merge --abort`, stop, and tell me before you commit or open any PR.",
 	):
 		assert required in section, (command, required)
+	tool_access = text.split("\n## Tool Access\n", 1)[1].split("\n## ", 1)[0]
+	tool_access = " ".join(tool_access.split())
+	for required in (
+		"The one exception is the session's log PR, below.",
+		"**The session's log PR**",
+		"`gh pr create --draft`",
+		"`gh pr ready`",
+		"never merge or close any PR with it.",
+	):
+		assert required in tool_access, (command, required)
