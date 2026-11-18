@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ci_final_merge_ref_fresh.sh:181-183 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The fail-closed guard exits 1 after 6 refresh attempts because `refs/pull/9655/merge` still merged into 426469c0 while `main` had moved to 8e01eaf2 or 88de9d5a. This failed `lint` and `tests-system-python` shards 10, 13, 14, 15, 17, 20 and 22.\n  WHY: GitHub did not recompute the merge ref, and no edit to the PR's files clears it. The reviewer recommends no edit, because changing the guard would weaken a fail-closed check. The source rated it NIT, mapped here to low. The reviewer could not open the file, so the citation comes from the CI log tail.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/ci_final_merge_ref_fresh.sh:181-183 | severity=low (source: NIT) | confidence=4\n  PROBLEM: The fail-closed guard exits 1 after 6 refresh attempts because `refs/pull/9655/merge` still merged into 426469c0 while `main` had moved to 8e01eaf2 or 88de9d5a. This failed `lint` and `tests-system-python` shards 10, 13, 14, 15, 17, 20 and 22.\n  WHY: GitHub did not recompute the merge ref, and the guard exits 1 before any tests run. The reviewer recommends no edit, because changing the guard would weaken a fail-closed check. The review sweep has to update the head again.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===",
+  "fingerprint": "8b8cd257c0fbd3a46aef7420233ed5039421fbf5a589c87a6ae6d637879fcd20",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9655,
+    "run_id": "44232604381",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "github-actions[bot]",
+    "run_attempt": 1,
+    "run_id": "44232604381",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118060027_96d9582193",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9655,
+    "run_id": "44232604381"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T06:00:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
