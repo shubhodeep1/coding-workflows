@@ -19,6 +19,9 @@
 # that error-level CI step does not fail on.
 
 set -euo pipefail
+# Signed job-token comments (run-volume plan item 15): route this script's
+# gh comment calls through the shim even when no earlier step loaded it.
+[ -z "${BASH_SOURCE[0]:-}" ] || AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" >/dev/null 2>&1 || true
 
 # --- ORCH_POLL_CYCLE_SUMMARY helpers (begin) ---
 # Per-cycle timing summary (analysis/workflow-optimization-2026-10-08.md,
@@ -3740,6 +3743,49 @@ record_poll_progress_if_advanced() {
   return 0
 }
 
+# Unchanged-state write skip.
+#
+# A large state is several comments (tracking #8291: 12 parts of a 567 KB
+# state), and every post_state_comment call posted all of them, including
+# calls whose state was identical to the chain already on the issue. The
+# poller records the content hash (sha256 of the key-sorted, compact JSON) of
+# the chain it read at the start of a tracking issue and of every chain it
+# wrote since, in one file per tracking issue under RUNTIME_DIR, so writes made
+# in subshells update it too. A write whose state has the same hash posts
+# nothing: the newest complete chain on the issue already holds that content,
+# and readers pick the newest complete chain by author and manifest, so they
+# read the same state either way. No API call is made to decide.
+# Fail open: without RUNTIME_DIR, a hash, or the record file, the write posts.
+# ORCH_STATE_SKIP_UNCHANGED=false turns the skip off (default: on).
+# Logs: STATE_WRITE tracking_issue=<n> outcome=skip reason=unchanged
+_state_persisted_sha_file() {
+  [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ] || return 1
+  [[ "${TRACKING_NUM:-}" =~ ^[1-9][0-9]*$ ]] || return 1
+  printf '%s/state_persisted_sha_%s' "${RUNTIME_DIR}" "${TRACKING_NUM}"
+}
+
+# _state_content_sha: reads state JSON on stdin, prints its content hash or nothing.
+_state_content_sha() {
+  local sha
+  sha="$(jq -cS . 2>/dev/null | sha256sum 2>/dev/null | cut -c1-64)" || sha=""
+  # jq prints nothing for empty input; that hash is not a state's.
+  [ "${sha}" = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" ] && sha=""
+  [[ "${sha}" =~ ^[0-9a-f]{64}$ ]] && printf '%s' "${sha}"
+  return 0
+}
+
+# record_state_persisted_sha <sha|"">: an empty sha clears the record.
+record_state_persisted_sha() {
+  local sha_file
+  sha_file="$(_state_persisted_sha_file)" || return 0
+  if [[ "${1:-}" =~ ^[0-9a-f]{64}$ ]]; then
+    printf '%s\n' "$1" > "${sha_file}" 2>/dev/null || rm -f "${sha_file}"
+  else
+    rm -f "${sha_file}"
+  fi
+  return 0
+}
+
 post_state_comment() {
   # Persist orchestrator state as a V2 chunked-comment chain so a snapshot
   # bigger than GitHub's 65,536-byte comment-body cap still lands.  The
@@ -3765,6 +3811,22 @@ post_state_comment() {
     echo "::error::scripts/orchestrate_state_v2.py is missing from the staged scripts tree; V2 state persistence cannot run for issue #${TRACKING_NUM}. Update the workflow's 'Stage workflow support files' loop to include this helper." >&2
     return 1
   fi
+  local state_content_sha="" persisted_sha_file skip_unchanged
+  skip_unchanged="$(printf '%s' "${ORCH_STATE_SKIP_UNCHANGED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  case "${skip_unchanged}" in
+    false|0|no|off) ;;
+    *)
+      state_content_sha="$(_state_content_sha < "${STATE_FILE}" 2>/dev/null)" || state_content_sha=""
+      if [ -n "${state_content_sha}" ] \
+        && persisted_sha_file="$(_state_persisted_sha_file)" \
+        && [ "$(cat "${persisted_sha_file}" 2>/dev/null)" = "${state_content_sha}" ]; then
+        echo "STATE_WRITE tracking_issue=${TRACKING_NUM} outcome=skip reason=unchanged"
+        _mirror_task_state_files_from_state
+        record_poll_progress_if_advanced || true
+        return 0
+      fi
+      ;;
+  esac
   local pack_dir manifest_json total raw_bytes chunk_files chunk_file idx chunk_count
   pack_dir="$(mktemp -d "${TMPDIR:-/tmp}/orchstate_v2_pack.XXXXXX")"
   if ! manifest_json="$(python3 scripts/orchestrate_state_v2.py pack \
@@ -3823,6 +3885,8 @@ post_state_comment() {
     return 1
   fi
   rm -rf "${pack_dir}"
+  # Empty when the skip is off or the hash failed: clears the record.
+  record_state_persisted_sha "${state_content_sha}" 2>/dev/null || true
   prune_state_comment_chains || true
   _mirror_task_state_files_from_state
   record_poll_progress_if_advanced || true
@@ -12769,6 +12833,26 @@ elif [ -f "scripts/orchestrate_stall_retired_conflict.sh" ]; then
   source scripts/orchestrate_stall_retired_conflict.sh
 fi
 unset _OPP_RETIRED_CONFLICT_DIR
+# Smoke-fixture project backstop (closes release-gate fixture projects whose
+# gate run has completed). Resolved like the retired-conflict helpers above;
+# when it is missing (an older staging list), the stub keeps every project on
+# the normal path.
+_OPP_SMOKE_REAP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "scripts")"
+if [ -f "${_OPP_SMOKE_REAP_DIR}/orchestrate_poll_smoke_fixture_reap.sh" ]; then
+  # shellcheck disable=SC1091
+  source "${_OPP_SMOKE_REAP_DIR}/orchestrate_poll_smoke_fixture_reap.sh"
+elif [ -f "scripts/orchestrate_poll_smoke_fixture_reap.sh" ]; then
+  # shellcheck disable=SC1091
+  source scripts/orchestrate_poll_smoke_fixture_reap.sh
+fi
+unset _OPP_SMOKE_REAP_DIR
+if ! type smoke_fixture_reap_if_gate_done >/dev/null 2>&1; then
+  smoke_fixture_reap_if_gate_done()
+  {
+    echo "SMOKE_FIXTURE_REAP tracking_issue=${1:-} gate_run=none outcome=skip reason=helper_unavailable"
+    return 1
+  }
+fi
 if ! type _stall_retired_host_only_conflict_check >/dev/null 2>&1; then
   _stall_retired_host_only_conflict_check() {
     echo "STALL_RETIRED_CONFLICT_REISSUE issue=${1:-} pr=${2:-} outcome=skip reason=helper_unavailable retired_paths=none"
@@ -26667,7 +26751,9 @@ STALL_EOF
           merge_base_ref="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .base.ref?) then .base.ref else empty end' 2>/dev/null | tail -n1)"
           # One observed head feeds the checks, the freshness gate and the
           # bound merge (two-argument checks call keeps the legacy
-          # block-on-any filter).
+          # block-on-any filter). Reset so a merge-lease wait below is read
+          # from this PR's gate, never from an earlier PR's.
+          PR_BASE_FRESHNESS_OUTCOME=""
           if [ "${merge_state}" = "open" ] && [ "${merge_mergeable}" = "true" ] \
             && [[ "${merge_head_sha}" =~ ^[0-9a-f]{40}$ ]] \
             && _pr_checks_completed "${merge_pr}" "${merge_head_sha}" \
@@ -26686,6 +26772,12 @@ STALL_EOF
             STALL_RECOVERY_SHOULD_INCREMENT="true"
             took_action="true"
           fi
+        elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+          # Waiting for the merge lease (scripts/pr_checks_lib.sh) is not a
+          # failed merge: the lease tick re-dispatches the PR when the lease
+          # is granted, so the recovery budget is not spent.
+          echo "  [standalone-stall] Issue #${issue_num}: PR #${merge_pr} waits for the merge lease (PR #${MERGE_LEASE_BLOCKER:-?}); not counting a recovery attempt."
+          STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_skipped_merge_lease_wait"
         else
           tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted merge retry for ready-to-merge issue (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "DEBUG"
           STALL_RECOVERY_SHOULD_INCREMENT="true"
@@ -28360,14 +28452,28 @@ FEATURE_SWEEP_DONE="false"
 # Smoke-gate fixture projects in this tick; tg_notify stays silent for them
 # whatever TRACKING_NUM currently names (Q42: A).
 SMOKE_FIXTURE_TRACKING_NUMS=""
+# Fixture projects the smoke-fixture backstop closed (or must retry) this tick;
+# they are dropped from TRACKING_ISSUES below so the loop does not drive them.
+SMOKE_FIXTURE_REAPED_NUMS_JSON='[]'
 for ((smoke_idx=0; smoke_idx<COUNT; smoke_idx++)); do
   smoke_candidate_num="$(echo "${TRACKING_ISSUES}" | jq -r ".[${smoke_idx}].number")"
   [[ "${smoke_candidate_num}" =~ ^[1-9][0-9]*$ ]] || continue
-  if tracking_issue_is_smoke_fixture "$(echo "${TRACKING_ISSUES}" | jq -r ".[${smoke_idx}].title // \"\"")" "$(echo "${TRACKING_ISSUES}" | jq -c ".[${smoke_idx}].labels // []")"; then
+  smoke_candidate_title="$(echo "${TRACKING_ISSUES}" | jq -r ".[${smoke_idx}].title // \"\"")"
+  smoke_candidate_labels="$(echo "${TRACKING_ISSUES}" | jq -c ".[${smoke_idx}].labels // []")"
+  if tracking_issue_is_smoke_fixture "${smoke_candidate_title}" "${smoke_candidate_labels}"; then
     SMOKE_FIXTURE_TRACKING_NUMS+=" ${smoke_candidate_num}"
     echo "SMOKE_FIXTURE_PROJECT tracking_issue=${smoke_candidate_num} alerts=silenced"
+    if smoke_fixture_reap_if_gate_done "${smoke_candidate_num}" "${smoke_candidate_title}" "${smoke_candidate_labels}"; then
+      SMOKE_FIXTURE_REAPED_NUMS_JSON="$(jq -c --argjson n "${smoke_candidate_num}" '. + [$n]' <<<"${SMOKE_FIXTURE_REAPED_NUMS_JSON}")"
+    fi
   fi
 done
+if [ "${SMOKE_FIXTURE_REAPED_NUMS_JSON}" != "[]" ]; then
+  if smoke_fixture_remaining="$(jq -c --argjson drop "${SMOKE_FIXTURE_REAPED_NUMS_JSON}" 'map(select((.number as $n | $drop | index($n)) | not))' <<<"${TRACKING_ISSUES}")"; then
+    TRACKING_ISSUES="${smoke_fixture_remaining}"
+    COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
+  fi
+fi
 if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then
   prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
 fi
@@ -28440,10 +28546,18 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   STATE_JSON=""
   STATE_COMMENT_COUNT=0
   STATE_FALLBACK_USED="false"
+  # The unchanged-state skip compares later writes with the chain read here.
+  record_state_persisted_sha "" 2>/dev/null || true
   if extract_latest_valid_orchestrator_state "${COMMENTS}"; then
     STATE_JSON="${EXTRACTED_STATE_JSON}"
     STATE_COMMENT_COUNT="${EXTRACTED_STATE_COMMENT_COUNT}"
     STATE_FALLBACK_USED="${EXTRACTED_STATE_FALLBACK_USED}"
+    # Not after a fallback (the healing write below must post), and only from
+    # a verified full read: a partial thread can hide a newer chain.
+    if [ "${STATE_FALLBACK_USED}" != "true" ] && [ "${COMMENTS_FETCH_OK:-false}" = "true" ] \
+      && [ "${COMMENTS_FOR_TRACKING_NUM:-}" = "${TRACKING_NUM}" ]; then
+      record_state_persisted_sha "$(printf '%s' "${STATE_JSON}" | _state_content_sha 2>/dev/null)" 2>/dev/null || true
+    fi
   else
     STATE_COMMENT_COUNT="${EXTRACTED_STATE_COMMENT_COUNT:-0}"
   fi
