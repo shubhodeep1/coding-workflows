@@ -4776,7 +4776,9 @@ agents file's `## DigitalOcean resources` table. The order is fixed:
 
 1. Add the repository to the GitHub App `shubhodeep1-runner-scaler`. This is a
    browser step.
-2. Add it to `RUNNER_SCALER_REPOS`.
+2. Add it to `RUNNER_SCALER_REPOS`, and check that the redeploy's
+   `RUNNER_SCALER outcome=started` line shows `dry_run=false`: in dry run the
+   service creates no droplets and raises no queue alert.
 3. Only then set `PIPELINE_RUNS_ON=do-runner` on it.
 
 The same order applies to an existing consumer that opts in later.

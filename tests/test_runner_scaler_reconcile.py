@@ -422,3 +422,13 @@ def test_create_without_response_keeps_the_runner_and_never_double_creates() -> 
 	h.scaler.reconcile()
 	assert h.outcomes("create_lost")
 	assert any(call[0] == "delete_runner" for call in h.github.calls)  # its runner became an orphan
+
+
+def test_ambiguous_create_holds_its_cap_slot_for_the_rest_of_the_pass() -> None:
+	h = Harness(max_droplets=1)
+	h.queue(1)
+	h.queue(2, repo=OTHER_REPO)
+	h.do.fail["create"] = ApiError(0, "TimeoutError")
+	h.scaler.reconcile()
+	# The timed-out create may exist: the other repository must not reuse its slot.
+	assert len([call for call in h.do.calls if call[0] == "create"]) == 1

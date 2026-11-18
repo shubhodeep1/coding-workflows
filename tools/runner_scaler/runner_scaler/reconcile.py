@@ -484,7 +484,14 @@ class Scaler:
 				self.log("skipped", reason="breaker_open", repo=repo, wanted=want)
 				want = 0
 			while want > 0 and capacity > 0 and (allowed is None or allowed > 0):
+				tracked_before = len(self.created)
 				if not self._create(repo, now):
+					if len(self.created) > tracked_before:
+						# Ambiguous create (no response): the droplet may exist, so it
+						# holds a cap slot and the half-open trial for the rest of the pass.
+						capacity -= 1
+						if allowed is not None:
+							allowed -= 1
 					break
 				want -= 1
 				capacity -= 1
