@@ -2424,11 +2424,18 @@ def test_guard_handler_parks_remediation_no_code_with_one_comment() -> None:
 	assert json.loads(base64.b64decode(match.group("paths"))) == ["README.md", "tests/test_route.py"]
 	assert log.count("issue comment") == 1
 	assert "--add-label ai:scope-blocked" in log and "--remove-label ai:implementing" in log
+	# The marker comment lands before the label, so the `issues: labeled` heal
+	# reporter can already read reason=remediation-no-code and skip.
+	assert log.index("issue comment") < log.index("--add-label ai:scope-blocked")
+	assert "labels this issue `ai:scope-blocked` right after posting this comment" in comment
 
 
 def test_guard_handler_out_of_scope_comment_keeps_allowlist_block() -> None:
-	code, out, comment, _log = _run_guard_handler("out-of-scope", "app/x.py", "1", "frontend/")
+	code, out, comment, log = _run_guard_handler("out-of-scope", "app/x.py", "1", "frontend/")
 	assert code == 1, out
+	# Other scope reasons keep label-then-comment, so the comment reports the read-back latch.
+	assert log.index("--add-label ai:scope-blocked") < log.index("issue comment")
+	assert "confirmed labeled `ai:scope-blocked`" in comment
 	assert comment.splitlines()[0] == "🚨 **files_touched scope guard rejected this implementation run.**"
 	assert "Declared `files_touched` allowlist:\n\n```\nfrontend/\n```\n" in comment
 	assert "guard=scope reason=out-of-scope" in comment.splitlines()[-1]

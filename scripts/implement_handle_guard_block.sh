@@ -220,6 +220,61 @@ if [ -n "${SVB_REASON:-}" ]; then
     SCOPE_TG_COUNT_LABEL="non-code staged paths"
     SCOPE_TG_TRAILER="The alert behind this remediation is not fixed. Decide in the issue whether it needs a code change."
   fi
+  # Builds and posts the one rejection comment; its last line is the
+  # ai:guard-rejection:v1 marker.
+  scope_post_guard_comment() {
+    {
+      echo "${SCOPE_HEADER}"
+      echo
+      echo "- ${SCOPE_COUNT_LABEL}: **${SVB_COUNT}**"
+      echo "- Workflow run: ${RUN_URL}"
+      echo
+      echo "${SCOPE_COMMIT_STATE} ${SCOPE_LATCH_STATUS_LINE}"
+      echo
+      echo "${SCOPE_DETAIL_HEADING}"
+      echo
+      echo '```'
+      printf '%s\n' "${SVB_FILES}" | sed '/^$/d'
+      echo '```'
+      echo
+      if [ -n "${SCOPE_ALLOWLIST_HEADING}" ]; then
+        echo "${SCOPE_ALLOWLIST_HEADING}"
+        echo
+        echo '```'
+        printf '%s\n' "${SVB_ALLOWLIST}" | sed '/^$/d'
+        echo '```'
+        echo
+      fi
+      echo "${SCOPE_REDISPATCH_HINT}"
+      if [ "${SVB_REASON}" = "scope-lock-label" ]; then
+        guard_rejection_marker scope-lock "${SVB_REASON}" "${SVB_FILES}" "${SVB_COUNT}" || true
+      elif [ "${SVB_REASON}" = "out-of-scope" ]; then
+        guard_rejection_marker scope "${SVB_REASON}" "${SVB_FILES}" "${SVB_COUNT}" || true
+      elif [ "${SVB_REASON}" = "automation-path" ]; then
+        guard_rejection_marker automation-path "${SVB_REASON}" "${SVB_FILES}" "${SVB_COUNT}" || true
+      elif [ "${SVB_REASON}" = "remediation-no-code" ]; then
+        # guard=scope with a reason other than out-of-scope: the unblock ledger
+        # never offers override_guard for it, and the heal reporter reads this
+        # reason to skip the heal dispatch (a deliberate park, not a defect).
+        guard_rejection_marker scope "${SVB_REASON}" "${SVB_FILES}" "${SVB_COUNT}" || true
+      fi
+    } > "${GUARD_COMMENT_FILE}"
+    gh issue comment "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+      --body-file "${GUARD_COMMENT_FILE}" 2>/dev/null || true
+  }
+  # remediation-no-code: post the comment (with its reason=remediation-no-code
+  # marker) BEFORE adding ai:scope-blocked. The label fires `issues: labeled`
+  # into scripts/workflow_failure_heal_report.sh, which skips this deliberate
+  # park only when it can already read that marker; labelling first let a
+  # fast reporter read the comments before the marker existed and dispatch a
+  # heal. The comment therefore cannot carry the label read-back below; the
+  # read-back still logs ::error and reaches Telegram when the latch fails.
+  SCOPE_COMMENT_POSTED_BEFORE_LABEL=false
+  if [ "${SVB_REASON}" = "remediation-no-code" ]; then
+    SCOPE_LATCH_STATUS_LINE="The workflow labels this issue \`ai:scope-blocked\` right after posting this comment; while the label is present, the \`Validate approval phase\` step refuses redispatches of issue #${ISSUE_NUMBER}. If the label is missing, reapply it before redispatch."
+    scope_post_guard_comment
+    SCOPE_COMMENT_POSTED_BEFORE_LABEL=true
+  fi
   SCOPE_BLOCK_LABEL_DESCRIPTION='Implementation blocked: staged files fell outside files_touched scope; human review required'
   if [ "${GUARD_BLOCK_GH_RETRY_READY}" = "true" ]; then
     guard_block_ensure_label 'ai:scope-blocked' 'b60205' "${SCOPE_BLOCK_LABEL_DESCRIPTION}" true \
@@ -267,44 +322,9 @@ if [ -n "${SVB_REASON:-}" ]; then
     SCOPE_LATCH_STATUS_LINE="The workflow attempted to label this issue \`ai:scope-blocked\`, but verification failed, so the latch state is unknown. Re-check the issue labels manually before assuming the \`Validate approval phase\` redispatch block is active."
     SCOPE_TG_LATCH_LINE="Could not verify ai:scope-blocked; the latch state is unknown and must be checked manually."
   fi
-  {
-    echo "${SCOPE_HEADER}"
-    echo
-    echo "- ${SCOPE_COUNT_LABEL}: **${SVB_COUNT}**"
-    echo "- Workflow run: ${RUN_URL}"
-    echo
-    echo "${SCOPE_COMMIT_STATE} ${SCOPE_LATCH_STATUS_LINE}"
-    echo
-    echo "${SCOPE_DETAIL_HEADING}"
-    echo
-    echo '```'
-    printf '%s\n' "${SVB_FILES}" | sed '/^$/d'
-    echo '```'
-    echo
-    if [ -n "${SCOPE_ALLOWLIST_HEADING}" ]; then
-      echo "${SCOPE_ALLOWLIST_HEADING}"
-      echo
-      echo '```'
-      printf '%s\n' "${SVB_ALLOWLIST}" | sed '/^$/d'
-      echo '```'
-      echo
-    fi
-    echo "${SCOPE_REDISPATCH_HINT}"
-    if [ "${SVB_REASON}" = "scope-lock-label" ]; then
-      guard_rejection_marker scope-lock "${SVB_REASON}" "${SVB_FILES}" "${SVB_COUNT}" || true
-    elif [ "${SVB_REASON}" = "out-of-scope" ]; then
-      guard_rejection_marker scope "${SVB_REASON}" "${SVB_FILES}" "${SVB_COUNT}" || true
-    elif [ "${SVB_REASON}" = "automation-path" ]; then
-      guard_rejection_marker automation-path "${SVB_REASON}" "${SVB_FILES}" "${SVB_COUNT}" || true
-    elif [ "${SVB_REASON}" = "remediation-no-code" ]; then
-      # guard=scope with a reason other than out-of-scope: the unblock ledger
-      # never offers override_guard for it, and the heal reporter reads this
-      # reason to skip the heal dispatch (a deliberate park, not a defect).
-      guard_rejection_marker scope "${SVB_REASON}" "${SVB_FILES}" "${SVB_COUNT}" || true
-    fi
-  } > "${GUARD_COMMENT_FILE}"
-  gh issue comment "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
-    --body-file "${GUARD_COMMENT_FILE}" 2>/dev/null || true
+  if [ "${SCOPE_COMMENT_POSTED_BEFORE_LABEL}" != true ]; then
+    scope_post_guard_comment
+  fi
   if [ -n "${TG_BOT_SECRET:-}" ] && [ -n "${TG_ADMIN_CHAT_ID:-}" ]; then
     TG_MSG="$(printf '%s\n' \
       "${SCOPE_TG_TITLE}" \
