@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Fix the ci.yml failure on main that predates PR #9495\" and \"For each failure, fix the root cause.\"\n  expected_change_site: `.github/workflows/ci.yml` or `tests/test_ci_job_split_contract.py`\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff changes only `tests/test_summarize_reviewer_consensus_sandbox_pin.py`; no root-cause fix at `.github/workflows/ci.yml` or `tests/test_ci_job_split_contract.py`. The PR description records an inherited failure in `tests/test_ci_job_split_contract.py` and marks that acceptance target unmet. (severity MAJOR)\n- requirement: \"Use Refs #9472 and Refs #9495, not auto-close keywords.\"\n  expected_change_site: PR description\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR description does not reference #9472 or #9495. (severity NIT)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Fix the ci.yml failure on main that predates PR #9495\" and \"For each failure, fix the root cause.\"\n  Expected change site: `.github/workflows/ci.yml` or `tests/test_ci_job_split_contract.py`, depending on the diagnosed cause.\n  Evidence of absence: The PR diff changes only `tests/test_summarize_reviewer_consensus_sandbox_pin.py`; it contains no root-cause fix at either expected site. The PR description records an inherited failure in `tests/test_ci_job_split_contract.py` and marks that acceptance target unmet.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- Requirement: \"Use Refs #9472 and Refs #9495, not auto-close keywords.\"\n  Expected change site: PR description.\n  Evidence of absence: The PR description does not reference #9472 or #9495.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "cde8349bb1ab1de5545b735cbccafc0d8ae9360b315ca2c66be4021e812c4392",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9694,
+    "run_id": "44252188486",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44252188486",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118084830_95ce8732d5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9694,
+    "run_id": "44252188486"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T08:48:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
