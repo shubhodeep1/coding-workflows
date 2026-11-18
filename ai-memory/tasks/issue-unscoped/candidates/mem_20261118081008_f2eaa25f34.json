@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_reject_verify.py:868-883 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: main() catches only Exception, so the unittest.SkipTest raised by the new _skip_unless_gawk() is reported as FAIL and the runner returns 1, with no SkipTest branch.\n  WHY: A direct run of the file without gawk shows skipped parser tests as failures, unlike the four sibling runners. Severity differs between reviewers (NIT, MAJOR); the highest is used and mapped here to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The files' own main() runners count it as SKIP, not FAIL.\"\n  expected_change_site: tests/test_review_reject_verify.py, main() (lines 868-883)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: main() in tests/test_review_reject_verify.py catches only Exception, with no unittest.SkipTest branch, no skipped counter and no updated summary line, while the four sibling test files gained the branch.\n- requirement: \"I checked for other awk regexes of the same shape (an interval followed by an optional group) across scripts/ and .github/workflows/, and this was the only one.\"\n  expected_change_site: scripts/orchestrate_poll_process.sh:2202\n  confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: scripts/orchestrate_poll_process.sh:2202-2203 uses grep -Eq '^[[:xdigit:]]{40}([[:xdigit:]]{24})?$' of the same shape. It is grep -E, not awk, so mawk handles it and there is no runtime bug. Reviewers list it only as a possible over-broad reading of the claim.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_review_reject_verify.py:868-883 (main(), except Exception at line 878) | severity=NIT | confidence=5\n  PROBLEM: _skip_unless_gawk() added to _run_parser (line 122) raises unittest.SkipTest, but this file's main() has no SkipTest branch, unlike the four sibling files.\n  WHY: SkipTest subclasses Exception, so a direct run without gawk prints FAIL for every parser test and returns 1. pytest and hosts with gawk are unaffected.\n- TASK_GAP: Requirement: \"the files' own main() runners count it as SKIP, not FAIL.\" | Expected change site: tests/test_review_reject_verify.py, main() | Evidence of absence: the runner at lines 868-883 catches only Exception, with no SkipTest branch and no skipped counter. | SEVERITY: NIT | ISSUE_CONFIDENCE: 5\n- TASK_GAP: Requirement: \"I checked for other awk regexes of the same shape ... and this was the only one.\" | Expected change site: scripts/orchestrate_poll_process.sh:2202 | Evidence of absence: line 2202 uses the same pattern in grep -E, not awk, so this is not a runtime bug and the claim holds. | SEVERITY: NIT | ISSUE_CONFIDENCE: 2\n- HARDENING_SUGGESTIONS: add SkipTest handling to main() in tests/test_review_reject_verify.py, lines 868-883 (skipped counter, except unittest.SkipTest branch printing SKIP, updated summary line, about 5 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_reject_verify.py:main() (no line range given) | confidence=5\n  PROBLEM: main() catches only Exception, so the SkipTest from _skip_unless_gawk() is reported as FAIL rather than SKIP.\n  WHY: On a host without gawk, skipped tests count as failures and the runner exits non-zero.\n- TASK_GAP: Requirement: The files' own main() runners count it as SKIP, not FAIL. | Expected change site: tests/test_review_reject_verify.py, main() | Evidence of absence: main() lacks the except unittest.SkipTest branch the other four updated test files have. | SEVERITY: BLOCKER | ISSUE_CONFIDENCE: 5\n- TASK_GAP: Requirement: \"I checked for other awk regexes of the same shape ... and this was the only one.\" | Expected change site: scripts/orchestrate_poll_process.sh:2202-2203 | Evidence of absence: lines 2202-2203 use a similar regex shape that was not addressed. The reviewer notes it works under mawk and calls it a missed unification opportunity. | SEVERITY: NIT | ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_reject_verify.py:868-883 | severity=MAJOR | confidence=5\n  PROBLEM: main() catches only Exception, so the SkipTest from _skip_unless_gawk() is printed as FAIL and counted as failed, and the runner returns 1.\n  WHY: Running the file directly without gawk exits 1 and shows the affected tests as failures. The other four files gained except unittest.SkipTest and this one did not.\n- TASK_GAP: Requirement: \"The files' own main() runners count it as SKIP, not FAIL.\" | Expected change site: tests/test_review_reject_verify.py, main() (around lines 868-883), adding an except unittest.SkipTest branch, a skipped counter and a totals-line update | Evidence of absence: the diff leaves main() untouched, while tests/test_review_issue_ledger.py, tests/test_review_parse_consolidator.py, tests/test_review_pipeline_integration.py and tests/test_implement_post_codex_recovery.py all gained the branch. | SEVERITY: MAJOR | ISSUE_CONFIDENCE: 5\n- TASK_GAP: Requirement: \"I checked for other awk regexes of the same shape ... and this was the only one.\" | Expected change site: scripts/orchestrate_poll_process.sh:2202 | Evidence of absence: the diff does not touch lines 2200-2204. The pattern there is grep -E, so mawk handles it and there is no runtime panic. It is a missed-unification observation, not a regression. | SEVERITY: NIT | ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \"The files' own main() runners count it as SKIP, not FAIL.\" | Expected change site: tests/test_review_reject_verify.py, main() | Evidence of absence: _run_parser() raises SkipTest when gawk is absent, but main() at lines 868-883 catches only Exception and counts the result as failed, so direct execution without gawk reports skipped tests as failures and exits nonzero. | SEVERITY: NIT | ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "8c82809deb15df84a19f11e7f6021904856d03c6b16b3f15a645e302d6d53d28",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9704,
+    "run_id": "44245914358",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44245914358",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118081008_f2eaa25f34",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9704,
+    "run_id": "44245914358"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T08:10:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
