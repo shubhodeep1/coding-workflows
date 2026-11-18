@@ -1,0 +1,25 @@
+{
+  "discovered_at": "2026-11-18T06:18:06Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=.github/workflows/ci_pr_quick.yml:1; cited_path=.github/workflows/ci_pr_quick.yml; files_touched=.github/workflows/lint-pr-body-auto-close.yml, README.md, agents.d/pr-body-lint-job-rename.md, agents.md, changelog.d/pr-body-lint-job-rename.md, scripts/orchestrate_poll_process.sh, scripts/persist_orchestrator.py, scripts/pr_checks_lib.sh, tests/test_lint_pr_body_auto_close.py, tests/test_orchestrate_final_merge_required_checks_gate.py, tests/test_pr_base_freshness_gate.py, tests/test_pr_checks_lib_required_filter.py.",
+  "phase": "review_autofix",
+  "pr_number": 9693,
+  "record_id": "lesson_20261118061806_ba6cff1db2",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/ci_pr_quick.yml",
+    ".github/workflows/lint-pr-body-auto-close.yml",
+    "README.md",
+    "agents.d/pr-body-lint-job-rename.md",
+    "agents.md",
+    "changelog.d/pr-body-lint-job-rename.md",
+    "scripts/orchestrate_poll_process.sh",
+    "scripts/persist_orchestrator.py",
+    "scripts/pr_checks_lib.sh",
+    "tests/test_lint_pr_body_auto_close.py",
+    "tests/test_orchestrate_final_merge_required_checks_gate.py",
+    "tests/test_pr_base_freshness_gate.py",
+    "tests/test_pr_checks_lib_required_filter.py"
+  ]
+}
