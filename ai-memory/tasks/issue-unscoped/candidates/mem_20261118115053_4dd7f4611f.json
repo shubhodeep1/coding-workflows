@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_sweep_round_cap.py:(import yaml; wf = yaml.safe_load(...) in test_workflow_passes_the_cap_knobs_with_defaults) | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test `test_workflow_passes_the_cap_knobs_with_defaults` depends on PyYAML, which is not available in the CI test execution environment.\n  WHY: This causes a ModuleNotFoundError during test execution, failing the entire PR suite; the source labelled it SEVERITY: BLOCKER, mapped here to critical.\n- scripts/review_sweep_round_cap.sh:205-216 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The escalation posts a comment before adding `ai:needs-human`, and the comment marker is not checked before posting, so a persistently failing label request after `gh_api_retry` exhausts its attempts leads to a duplicate comment on every sweep tick.\n  WHY: A capped PR with a failing label request receives a duplicate cap comment each tick, contrary to the one-comment behavior; the source labelled it SEVERITY: MAJOR, mapped here to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_sweep_round_cap.py:(import yaml; wf = yaml.safe_load(...)) | severity=critical | confidence=5\n  PROBLEM: The test `test_workflow_passes_the_cap_knobs_with_defaults` depends on PyYAML, which is not available in the CI test execution environment.\n  WHY: This causes a ModuleNotFoundError during test execution, resulting in a CI failure for the entire PR suite. (Source severity: BLOCKER.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_sweep_round_cap.sh:205-216 | severity=high | confidence=4\n  PROBLEM: The escalation posts a comment before adding `ai:needs-human`. If the label request still fails after `gh_api_retry` exhausts its attempts, the next sweep tick sees no label and posts another comment. The comment marker is not checked before posting.\n  WHY: A capped PR with a persistently failing label request receives a duplicate cap comment on every sweep tick, contrary to the one-comment behavior. (Source severity: MAJOR.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a942ec0c9912ba33f4970b1c8e7df95eb54197342c2dcd58b18ca3802791d5f7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9683,
+    "run_id": "44277163358",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44277163358",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118115053_4dd7f4611f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9683,
+    "run_id": "44277163358"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T11:50:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
