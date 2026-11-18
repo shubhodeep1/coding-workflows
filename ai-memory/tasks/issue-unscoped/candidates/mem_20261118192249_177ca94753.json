@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: .github/workflows/ci.yml, selection and placement of the moved steps in orchestrate-poll (groups 0 and 1; guards at ci.yml:3819-3820, 3927-3928, 3939-3940)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The workflow comments at .github/workflows/ci.yml:3811-3818 and ~3922-3924 say the run's step timings could not be read, the pick is an estimate from test and subprocess counts, and group 0's headroom is unmeasured. The changelog fragment changelog.d/9496-ci-hooks-merge-train-semble-preseed-to-poll.md:2 repeats the disclaimer. No hunk shows the moved steps were the slowest or that the destination had the most headroom. Severity disagreement: MAJOR (gemini, minimax, luna) vs NIT (sonnet, glm). Sonnet and glm treat it as advisory, because the post-merge budget-watch job on main is the designed check.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, placement of the moved steps in `orchestrate-poll`.\n  Evidence of absence: The workflow comments, the changelog fragment and the test comments say the step timings could not be read and group 0's headroom is unmeasured. The PR states the limitation openly, and budget-watch on main is the post-merge check. Advisory only.\n  SEVERITY: NIT | ISSUE_CONFIDENCE: 2\n- No other findings. The reviewer checked the strategy.job-index guards in ci.yml (lines 3106, 3820, 3979 for group 0; 3728, 3928, 3940 for group 1) against the tests. It did not run pytest.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml, selection criteria for moved steps.\n  Evidence of absence: The workflow comments at lines 3816-3818 in .github/workflows/ci.yml say the step timings could not be read and the selection is an estimate. The implementation does not verify that the steps are the slowest or that the target job has the most headroom.\n  SEVERITY: MAJOR | ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml, selection and placement of the moved steps in orchestrate-poll (groups 0 and 1)\n  Evidence of absence: The comment block at .github/workflows/ci.yml:3811-3818 says the run's step timings could not be read, so the pick is an estimate and group 0's headroom is unmeasured. The three steps at ci.yml:3819, 3927 and 3939 were not picked from step timings. changelog.d/9496-ci-hooks-merge-train-semble-preseed-to-poll.md:2 echoes the disclaimer. No hunk supplies timing evidence or a measured headroom comparison.\n  SEVERITY: MAJOR | ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, selection and placement of the steps moved into `orchestrate-poll`.\n  Evidence of absence: The diff says the step timings could not be read, the selection is an estimate, and group 0's headroom is unmeasured. It does not establish that the steps were the slowest or that the destination had the most headroom.\n  SEVERITY: MAJOR | ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml \u2014 the placement of the three moved steps in orchestrate-poll groups 0 and 1 (guards at ci.yml:3819-3820, 3927-3928, 3939-3940).\n  Evidence of absence: The comments at ci.yml:~3816-3818 and ~3922-3924 say the run 43544291165 step timings could not be read, the pick is an estimate, and group 0's headroom is unmeasured. The PR documents this openly, with budget-watch on main as the post-merge check. It was deferred in prior editor rounds. Recorded for completeness only.\n  SEVERITY: NIT | ISSUE_CONFIDENCE: 2\n- No other findings. The three strategy.job-index == 1 guards (ci.yml:3728, 3928, 3940) sit in orchestrate-poll on the steps GROUP_PINNED_STEPS pins to group 1. The helpers load_poll_job, poll_job_step and poll_group_count exist (test_ci_poll_test_sharding.py:78, 82, 96).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "90e37befcd2ddf472e133c38b1d0de123f7c125dd7357d3224c31a3d8ed92d8c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9515,
+    "run_id": "44352909224",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44352909224",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118192249_177ca94753",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9515,
+    "run_id": "44352909224"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T19:22:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
