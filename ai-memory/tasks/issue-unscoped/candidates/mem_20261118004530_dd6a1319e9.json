@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: `.github/workflows/ci.yml` step selection for `tests-heal-plan-and-validation` (comment lines 1043-1060) and destination-job rationale (lines 1050-1055); `tests/test_ci_poll_test_sharding.py` `MovedHeal9420StepsContractTest`\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: `.github/workflows/ci.yml` lines 1043-1060 state the step list had no durations and the four steps were chosen from planning-sandbox estimates, not measured per-step timings of run 43314513853; the destination is justified by a historical total (15m32s) and \"followed only by steps moving out\", not a measured headroom comparison across eligible jobs; the contract test pins the destination without comparing headroom; the limitation is disclosed in the workflow comment, changelog fragment and test-registry comment; the \"unchanged / keep names / no timeout raise / no new required job\" parts are delivered. Severity disagreement: reviewers rated it NIT to MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: `.github/workflows/ci.yml`, the choice of moved steps (comment at lines 1043-1060) and the destination job.\nEvidence of absence: The \"unchanged\", \"keep names\", \"no timeout raise\" and \"no new required job names\" parts are delivered. The \"slowest steps by measured timings\" and \"most headroom by measured comparison\" parts are not. The workflow comment, the changelog fragment and the test-registry comment all say the step list came without durations, so both picks are estimates. The destination's last recorded total (15m32s) is close to the source's 15m35s. The per-step data is not in the repository. The PR discloses the limitation, and the next `budget-watch` run on `main` opens an issue if any job nears its timeout.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: Move the slowest steps (identified by run's step timings) from the `tests-heal-plan-and-validation` CI job into the CI job with the most headroom, without raising `timeout-minutes` and without creating new job names.\nExpected change site: `.github/workflows/ci.yml` step selection for `tests-heal-plan-and-validation`.\nEvidence of absence: The PR diff uses planning-sandbox estimates and job total figures to select steps and the destination job, as noted in the comments at lines 1043-1060 and 1069-1076. Actual per-step duration data for run 43314513853 is not available in the repository, and no comparative analysis of the headroom of other 20-minute CI jobs is provided.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\nExpected change site: `.github/workflows/ci.yml` step-selection rationale at lines 1043-1050 and `changelog.d/9420-ci-heal-job-steps-to-hooks-job.md` lead paragraph.\nEvidence of absence: The workflow comment says the step list came back without durations and the four steps were picked from planning-sandbox relative weights (lines 1046-1050), not measured timings of run 43314513853. The PR records this in three places. The \"most headroom\" rationale at lines 1050-1052 is a heuristic, not a measured comparison across eligible jobs, and `MovedHeal9420StepsContractTest` pins the destination without comparing headroom.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \u201cMove its slowest steps (see the run's step timings)\u201d\nExpected change site: `.github/workflows/ci.yml`, the step selection for `tests-heal-plan-and-validation`.\nEvidence of absence: `.github/workflows/ci.yml` lines 1045-1049 state that run 43314513853\u2019s step list had no durations and that the selection is based on planning-sandbox estimates, not measured timings.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n\nTASK_GAP:\nRequirement: Move the steps \u201cinto the CI job with the most headroom.\u201d\nExpected change site: `.github/workflows/ci.yml`, the destination-job selection rationale; `tests/test_ci_poll_test_sharding.py`, the destination contract.\nEvidence of absence: `.github/workflows/ci.yml` lines 1050-1055 justify `tests-hooks-and-orchestrator` using its historical total and the fact that steps moved out, but provide no comparison establishing it had the most headroom. The contract test pins that destination without checking a headroom comparison.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: `.github/workflows/ci.yml` step-selection comment (lines 1043-1060) and destination-job rationale (lines 1050-1055); `tests/test_ci_poll_test_sharding.py` `MovedHeal9420StepsContractTest`.\nEvidence of absence: `ci.yml:1044-1046` states the step list had no durations, so the four steps were picked from planning-sandbox estimates, and `ci.yml:1050-1052` justifies the destination by a historical total (15m32s, #9391) plus \"followed only by steps moving out\", not a measured headroom comparison; no hunk implements timing-based selection. Mitigating: the limitation is disclosed in three places, per-step durations are not in the repository, prior passes deferred this gap with `budget-watch` as the backstop. The \"unchanged / keep names / no timeout raised / no new required job\" parts ARE delivered and pinned by the contract test.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2d7929e8c81fe00f6cb42be795b3c48c058c751e9d128e657c99514c56b35064",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9430,
+    "run_id": "44188017516",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44188017516",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118004530_dd6a1319e9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9430,
+    "run_id": "44188017516"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T00:45:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
