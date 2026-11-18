@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/check_failure_triage.sh:531-537 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: In `triage_release_download_rerun_gate`, the `rd_workflow_id` check uses regex `^[0-9]+$` on a value extracted with `jq -r`, which could be null or empty.\n  WHY: The reviewer rated it NIT and says it is safer to ensure the value is a valid integer.\n- scripts/orchestrate_poll_process.sh:3594-3606 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The unchanged-state write skip logic relies on `cat \"${persisted_sha_file}\"`, so an empty or missing file could produce an incorrect skip decision.\n  WHY: The reviewer rated it MAJOR; it says skip logic should be robust against empty files when `state_content_sha` is non-empty.\n- scripts/orchestrate_poll_process.sh:3600-3607 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: In `post_state_comment`, with `skip_unchanged` set, `_mirror_task_state_files_from_state` and `record_poll_progress_if_advanced` are still called before returning 0.\n  WHY: The reviewer rated it NIT; it says the logic is correct but these calls might run prematurely if `post_state_comment` fails later.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Check-failure triage re-runs a check that failed on a GitHub release-download 5xx instead of filing an issue... A re-run logs RELEASE_DOWNLOAD_RERUN...\"\n  expected_change_site: README.md (env/repository variables table, entry for CHECK_FAILURE_TRIAGE_RELEASE_DOWNLOAD_RERUN_ENABLED)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: changelog.d/9120-release-download-rerun.md describes the feature, but the README.md variables table does not include `CHECK_FAILURE_TRIAGE_RELEASE_DOWNLOAD_RERUN_ENABLED`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/check_failure_triage.sh:531-537 | severity=low | confidence=4\n  PROBLEM: In `triage_release_download_rerun_gate`, the `rd_workflow_id` check uses regex `^[0-9]+$` on a value extracted with `jq -r`, which could be null or empty.\n  WHY: The reviewer rated it NIT and says it is safer to ensure the value is a valid integer.\n- scripts/orchestrate_poll_process.sh:3594-3606 | severity=high | confidence=4\n  PROBLEM: The unchanged-state write skip logic relies on `cat \"${persisted_sha_file}\"`, so an empty or missing file could produce an incorrect skip decision.\n  WHY: The reviewer rated it MAJOR; it says skip logic should be robust against empty files when `state_content_sha` is non-empty.\n- scripts/orchestrate_poll_process.sh:3600-3607 | severity=low | confidence=3\n  PROBLEM: In `post_state_comment`, with `skip_unchanged` set, `_mirror_task_state_files_from_state` and `record_poll_progress_if_advanced` are still called before returning 0.\n  WHY: The reviewer rated it NIT; it says the logic is correct but these calls might run prematurely if `post_state_comment` fails later.\n- TASK_GAP:\n  Requirement: \"Check-failure triage re-runs a check that failed on a GitHub release-download 5xx instead of filing an issue... A re-run logs RELEASE_DOWNLOAD_RERUN...\"\n  Expected change site: changelog.d/9120-release-download-rerun.md\n  Evidence of absence: The changelog entry correctly describes the feature. However, the README.md table for environment variables/repository variables is not updated to include `CHECK_FAILURE_TRIAGE_RELEASE_DOWNLOAD_RERUN_ENABLED`.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bdadbdecbbc25fe5df14886e43562c5aadd6a17a2cad01aa6af097addf54d167",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9726,
+    "run_id": "44345243203",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44345243203",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118184326_50f016c53c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9726,
+    "run_id": "44345243203"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T18:43:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
