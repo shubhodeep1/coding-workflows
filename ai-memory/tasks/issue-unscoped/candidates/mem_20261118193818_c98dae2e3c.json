@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_post_editor_summary.sh:541-544 | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new label clearing logic (`review_blocked_stale_clear_after_clean`) is called unconditionally if `clean_marker_suffix` is set, without checking if the environment (such as test runners) is prepared for the new GitHub API calls.\n  WHY: This is causing failures in contract tests like `tests/test_review_autofix_provider_outage_contract.py` that rely on specific script execution paths and do not anticipate these new API interactions; the script should ensure the environment is fully capable (e.g., has necessary env vars, auth) or skip these calls in restricted test environments.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_autofix_step_post_editor_summary.sh:541-544 | confidence=4\n  PROBLEM: The new label clearing logic (`review_blocked_stale_clear_after_clean`) is called unconditionally if `clean_marker_suffix` is set, without checking if the environment (such as test runners) is prepared for the new GitHub API calls.\n  WHY: This is causing failures in contract tests like `tests/test_review_autofix_provider_outage_contract.py` that rely on specific script execution paths and do not anticipate these new API interactions; the script should ensure the environment is fully capable (e.g., has necessary env vars, auth) or skip these calls in restricted test environments.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "88480fb3819c249aa79bc296b2f69d07fbfd93d88ed24c5338bf8c39914c4088",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9719,
+    "run_id": "44361369795",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44361369795",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118193818_c98dae2e3c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9719,
+    "run_id": "44361369795"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T19:38:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
