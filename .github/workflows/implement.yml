@@ -2714,7 +2714,8 @@ jobs:
               "::error::IMPLEMENT_PLAN_NOT_FOUND reason=\($reason) approval_id=\($approval_comment_id | clean) approval_created_at=\(if $approval_at == null then "none" else ($approval_at | clean) end) comments_total=\($all | length) plan_candidates=\($cands | length)",
               ($cands | .[-20:] | .[] |
                 "::warning::IMPLEMENT_PLAN_CANDIDATE id=\(.id | clean) created_at=\(.created_at | clean) login=\(.user.login // "none" | clean) type=\(.user.type // "none" | clean) association=\(.author_association // "none" | clean) heading=\(heading) marker=\(marker) after_approval=\(if $approval_at == null then "unknown" else (.created_at > $approval_at) end) trusted=\(trusted)")
-            ' "${ISSUE_COMMENTS_FILE}" || true
+            ' "${ISSUE_COMMENTS_FILE}" \
+              || echo "::warning::IMPLEMENT_PLAN_DIAGNOSTICS_UNAVAILABLE reason=jq_failed"
             exit 1
           fi
 
