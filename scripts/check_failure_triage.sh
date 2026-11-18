@@ -1728,6 +1728,11 @@ else
 				base_keyed_existing="$(printf '%s' "${OPEN_TRIAGE}" | jq -r --arg fp "fp=${base_keyed_fp}" '[.[] | select((.body // "") | contains($fp)) | .number] | first // empty' 2>/dev/null || echo '')"
 				if [ -n "${base_keyed_existing}" ]; then
 					log "skip reason=base_triage_tracked base=${BASE_REF} issue=${base_keyed_existing} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+					# A stale per-PR issue recorded for supersede above is not
+					# replaced (nothing is filed here), so it stays open; say so.
+					if [ -n "${SUPERSEDE_OLD_ISSUE}" ]; then
+						log "op=supersede outcome=skip reason=base_triage_tracked old=${SUPERSEDE_OLD_ISSUE}"
+					fi
 					if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
 						triage_report_routing_unverified
 					fi

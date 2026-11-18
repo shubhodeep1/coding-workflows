@@ -105,6 +105,18 @@ class BaseKeyedFingerprintTests(unittest.TestCase):
 		self.assertNotIn("17", BASE_FP)  # sanity: the key carries no PR number
 		self.assertEqual(hashlib.sha256(b"owner/repo|base=main|check=CI").hexdigest(), BASE_FP)
 
+	def test_base_keyed_skip_logs_the_supersede_candidate_it_leaves_open(self) -> None:
+		harness = _harness()
+		proc, outputs, metadata, _calls = _collect(
+			base=FAILING_BASE, open_issues=[harness._stale_triage_issue(), _open_issue(501, BASE_FP)],
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE op=supersede outcome=candidate old=99", proc.stdout)
+		self.assertIn("CHECK_TRIAGE skip reason=base_triage_tracked base=main issue=501 pr=17 check=CI", proc.stdout)
+		self.assertIn("CHECK_TRIAGE op=supersede outcome=skip reason=base_triage_tracked old=99", proc.stdout)
+		self.assertNotIn("ready", outputs)
+		self.assertEqual(metadata, {})
+
 	def test_base_keyed_skip_reports_unverified_route(self) -> None:
 		proc, _outputs, _metadata, _calls = _collect(
 			base=FAILING_BASE, open_issues=[_open_issue(501, BASE_FP)],

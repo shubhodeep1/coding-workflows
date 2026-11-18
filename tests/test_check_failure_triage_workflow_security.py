@@ -3026,6 +3026,9 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 		self.assertEqual(lineage_cap.count("triage_report_routing_unverified"), 1)
 		self.assertIn('"${PR_NUMBER}" "${ROUTING_LINE}" "${ROUTING_TARGET_BRANCH}" "${BASE_KEYED_REF}" <<\'PY\'', script_text)
 		self.assertLess(script_text.index("# --- PR-head routing gate"), script_text.index("# --- Collect failing check-run context"))
+		# Issue #9674: the open-issue cap runs after the PR-head routing gate, so
+		# an unverified route is still reported when the cap files nothing.
+		self.assertLess(script_text.index("# --- PR-head routing gate"), script_text.index("# --- Open-issue cap (issue #9674)"))
 		triage_env = _workflow()["jobs"]["triage"]["env"]
 		self.assertEqual(
 			triage_env["CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED"],

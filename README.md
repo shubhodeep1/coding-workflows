@@ -2018,6 +2018,11 @@ the way to a fix PR without human action.
   unchanged. The heal-issue skip (`CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED`) runs
   first. With `CHECK_TRIAGE_BRANCH_GUARD_ENABLED=true` the branch guard blocks a
   base-keyed issue, because it carries no branch line.
+  Because runs for different PRs are not serialized, the post step lists open
+  `ai:check-triage` issues once more just before filing a base-keyed issue (one
+  read, base-keyed filings only) and files nothing when one already carries the
+  fingerprint (`CHECK_TRIAGE skip reason=base_triage_tracked … stage=post`); a
+  failed read files as before (`base_keyed recheck=read_failed outcome=file`).
 - **Open-issue cap (Refs #9674):** once `CHECK_FAILURE_TRIAGE_MAX_OPEN_ISSUES`
   (default 5, `0` = no cap) `ai:check-triage` issues are open, the collect stage
   files nothing, logs `CHECK_TRIAGE skip reason=open_issue_cap open=<n> cap=<cap>

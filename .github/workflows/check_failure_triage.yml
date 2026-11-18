@@ -789,6 +789,11 @@ jobs:
               printf 'CHECK_TRIAGE op=post stage=metadata_invalid pr=%s\n' "${PR_NUMBER}"
               exit 1
             fi
+            # The title and the body's line-5 base marker must name the same ref.
+            if [ "$(sed -n '5p' "${body_file}")" != "<!-- check-failure-triage:base=${triage_post_base_ref} -->" ]; then
+              printf 'CHECK_TRIAGE op=post stage=metadata_invalid pr=%s\n' "${PR_NUMBER}"
+              exit 1
+            fi
             triage_post_title="CI failure: ${triage_post_check_name} on ${triage_post_base_ref} (first seen on PR #${PR_NUMBER})"
           fi
           # Issue #8671: a recorded stale issue is superseded only when this
@@ -814,6 +819,34 @@ jobs:
           if [ -z "${GH_TOKEN:-}" ]; then
             printf 'CHECK_TRIAGE op=post stage=token_missing pr=%s\n' "${PR_NUMBER}"
             exit 1
+          fi
+          # Issue #9674: every PR into a failing default branch shares the
+          # base-keyed fingerprint, but the concurrency group is per PR and
+          # check, so runs for different PRs are not serialized, and the
+          # collect stage's open-triage listing is minutes old by now (the
+          # diagnosis ran in between). API audit (§14): that collect-stage
+          # listing is the only read of open ai:check-triage issues on this
+          # path and it cannot be reused here because it predates the other
+          # runs' filings. This one extra read runs only for base-keyed
+          # filings, right before the create; a match files nothing. A failed
+          # read files as before (fail open).
+          if [ -n "${triage_post_base_ref}" ]; then
+            triage_post_open_listing=""
+            if triage_post_open_pages="$(gh_retry gh api --paginate --method GET "repos/${GITHUB_REPOSITORY}/issues" \
+              -f state=open -f labels=ai:check-triage -F per_page=100 \
+              --jq 'if type == "array" then [.[] | select(.pull_request | not) | {number, body: (.body // "")}] else error("not_an_array") end' 2>/dev/null)" &&
+              [ -n "${triage_post_open_pages//[[:space:]]/}" ] &&
+              triage_post_open_listing="$(printf '%s' "${triage_post_open_pages}" | jq -cs 'add // [] | if type == "array" then . else error("not_an_array") end' 2>/dev/null)"; then
+              triage_post_base_existing="$(printf '%s' "${triage_post_open_listing}" | jq -r --arg fp "fp=${triage_post_fp}" '[.[] | select((.body // "") | contains($fp)) | .number] | first // empty' 2>/dev/null || true)"
+              if [[ "${triage_post_base_existing}" =~ ^[1-9][0-9]*$ ]]; then
+                printf 'CHECK_TRIAGE skip reason=base_triage_tracked base=%s issue=%s pr=%s check=%s stage=post\n' \
+                  "${triage_post_base_ref}" "${triage_post_base_existing}" "${PR_NUMBER}" "${triage_post_check_name}"
+                printf 'CHECK_TRIAGE op=post stage=base_triage_tracked pr=%s\n' "${PR_NUMBER}"
+                exit 0
+              fi
+            else
+              printf 'CHECK_TRIAGE base_keyed recheck=read_failed outcome=file pr=%s\n' "${PR_NUMBER}"
+            fi
           fi
           triage_post_create_stderr_file="${RUNTIME_DIR}/triage_post_create_stderr.txt"
           if ! triage_issue_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
