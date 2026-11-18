@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: `.github/workflows/ci.yml`, the choice of which steps move and where they go (`.github/workflows/ci.yml:3820` merge-train to group 0, `:3928` Semble to group 1, `:3940` pre-seed to group 1)\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The step timings for run 43544291165 were unreadable, so the picks come from test and subprocess counts and the headroom of groups 0 and 1 was not measured, workflow comments at lines 3816-3818, 3923-3924 and 3935-3936 say so, the structural parts (same names and bodies, no timeout-minutes change) are met, and the PR diff does not establish that the selected steps were the slowest or that their destination has the most headroom. Severity disagreement: reviewers rated it NIT (anthropic_claude-sonnet-5_5, minimax_minimax-m3) and MAJOR (openai_gpt-6-luna), so the highest, MAJOR, applies.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: `.github/workflows/ci.yml`, the choice of which steps move and where they go.\nEvidence of absence: The structural requirement is met. The three steps moved unchanged, with the same names, and no `timeout-minutes` or job names changed. The measurement part cannot be shown from the repository. The step timings for run 43544291165 are unreadable, so the picks come from test and subprocess counts, and the headroom of `orchestrate-poll` groups 0 and 1 was not measured. The workflow comments, the changelog fragment and the test comments all say so. The post-merge `budget-watch` job is named as the check, and earlier rounds deferred this item for the same reason.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: `.github/workflows/ci.yml`, the choice of which steps move and where they go (`.github/workflows/ci.yml:3820` merge-train to group 0, `:3928` Semble to group 1, `:3940` pre-seed to group 1).\nEvidence of absence: The step timings for run 43544291165 could not be read in the sandbox, so the three steps and their destination groups were picked from test and subprocess counts, and group 0's and group 1's headroom was not measured. The structural parts of the requirement are met. The measurement part is documented in `.github/workflows/ci.yml:3811-3818`, the changelog fragment `changelog.d/9496-ci-hooks-merge-train-semble-preseed-to-poll.md:2`, and the test comments at `tests/test_ci_poll_test_sharding.py:4024-4034` and `:4487-4490`, with the post-merge `budget-watch` job named as the check.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\nExpected change site: `.github/workflows/ci.yml`, the selection of steps to move and their destination job or matrix groups.\nEvidence of absence: The workflow comments at lines 3816-3818, 3923-3924, and 3935-3936 state the step timings were unavailable and placements were estimated from test and subprocess counts; group 0's headroom is explicitly unmeasured. The PR diff therefore does not establish that the selected steps were the slowest or that their destination has the most headroom.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bf9ec50bd4fd07fedf8761dddb665089b25f55c7f10051305320d156e7fa4f2e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9515,
+    "run_id": "44324449902",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44324449902",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118163900_50f5b28ef0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9515,
+    "run_id": "44324449902"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T16:39:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
