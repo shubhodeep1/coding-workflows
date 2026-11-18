@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/deploy-activate.md and workflow-templates/.claude/commands/deploy-activate.md:(new closed-without-merging sentence in the \"One log PR per session\" bullet) | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new closed-without-merging clause contradicts the preceding \u00a721.A restart clause. The restart runs `git checkout -B <branch> origin/<default>` first, which drops the log commits from the branch, so the instruction to rebase them onto the default branch has nothing to rebase.\n  WHY: The recorded `[x]` step state can be lost, and a later session may re-run steps with side effects. The source labelled this MAJOR, which is mapped to high here.\n- scripts/ci_final_merge_ref_fresh.sh:log line `CI_FINAL_MERGE_REF pr=9675 ... outcome=stale reason=not_refreshed` | severity=low | confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: 37 check-runs failed on head 2c70eaddcc30 at the merge-ref freshness step. `refs/pull/9675/merge` still merges into the old base while `main` has moved.\n  WHY: This is a stale-base condition and not a defect in the PR. The script says so itself. The source labelled it NIT, which is mapped to low here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/ci_final_merge_ref_fresh.sh:log line `CI_FINAL_MERGE_REF pr=9675 ... outcome=stale reason=not_refreshed tested_base=fc5f8284... tip=2f851921...` | severity=NIT | confidence=1\n  PROBLEM: 37 check-runs failed on head 2c70eaddcc30. The `tests-system-python (N)` legs failed at the merge-ref freshness step, and `lint` failed only because its needed jobs failed. `refs/pull/9675/merge` still merges into the old base while `main` has moved.\n  WHY: This is a stale-base condition and not a defect in the PR. The script's own message says \"this is not a defect in the PR\". No changed file maps to it, and it should clear when a later final CI run tests a refreshed merge ref.\n- All other checklist sections reported NONE. The reviewer checked the last run's additions and found no issues. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/commands/deploy-activate.md and workflow-templates/.claude/commands/deploy-activate.md:(new closed-without-merging sentence in the \"One log PR per session\" bullet) | severity=MAJOR | confidence=4\n  PROBLEM: The new closed-without-merging clause contradicts the preceding \u00a721.A restart clause. The restart runs `git checkout -B <branch> origin/<default>` first, which drops the log commits from the branch, so the instruction to rebase them onto the default branch has nothing to rebase.\n  WHY: When a session's draft `chore: activation log updates` PR is closed without merging, the next session follows the \u00a721.A procedure and the log commits become unreachable from the branch. The `[x]` step state is lost, and a later session may re-run steps with side effects. The new test only checks that the substring is present, so it passes despite the contradiction.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d1d5a0b972debc8c52d709374a1d2ce510c7737a079d6ef9f1a8f4687ba00b6e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9675,
+    "run_id": "44384788659",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "github-actions[bot]",
+    "run_attempt": 1,
+    "run_id": "44384788659",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118223357_839a0bc672",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9675,
+    "run_id": "44384788659"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T22:33:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
