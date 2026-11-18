@@ -5815,4 +5815,6 @@ def test_judge_sends_the_chain_title_to_the_ledger_and_the_planner() -> None:
 	script = (ROOT / "scripts" / "unblock_judge.sh").read_text(encoding="utf-8")
 	assert '[ "${pr_trusted}" = "true" ] && [[ "${head_ref}" =~ ^ai/issue-([1-9][0-9]*)$ ]]' in script
 	assert "chain_title: (if $chain_title == \"\" then null else $chain_title end)" in script
-	assert "decide_args+=(--chain-title " in script and '(.chain_title // .title // "")' in script
+	assert 'decide_args+=("--chain-title=$(' in script and '(.chain_title // .title // "")' in script
+	# The source-issue read is retried and truncated by codepoints, not bytes.
+	assert "chain_title=\"$(gh_retry gh api " in script and "--jq '(.title // \"\") | .[0:400]'" in script

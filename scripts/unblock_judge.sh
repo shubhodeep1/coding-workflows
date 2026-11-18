@@ -111,8 +111,8 @@
 # A `heal_report` op (harness routing): one actions/runs listing and one
 # repository_dispatch to shubhodeep1/coding-workflows; a `hold_request` op:
 # one comment on the tracking issue.
-# CONSIST-001: the identity, item, item re-check, item comments and cited-run
-# reads go through gh_retry, so after a transient error (5xx, connection
+# CONSIST-001: the identity, item, item re-check, item comments, cited-run
+# and chain-title (a trusted PR's `ai/issue-<n>` issue) reads go through gh_retry, so after a transient error (5xx, connection
 # reset) one of them may be attempted up to GH_RETRY_MAX_ATTEMPTS times in
 # total, with capped rate-limit waits. Permanent errors and every write still
 # make one attempt.
@@ -127,6 +127,7 @@
 #      UNBLOCK_JUDGE item= kind= stop= fixup= op=fixup_delivered outcome=warn reason=wait_update_failed
 #      UNBLOCK_JUDGE item= op=heal_report issue= label= outcome=sent|failed|skip reason=
 #      UNBLOCK_JUDGE item= op=hold_request issue= outcome=posted|failed|skip reason=
+#      UNBLOCK_JUDGE item= op=chain_title issue= outcome=unavailable reason=read_failed
 #      UNBLOCK_TARGET_REPO_GUARD item= verdict= outcome=consumer|harness|mixed|disabled paths=
 # Project-failed fallback skips: project_state_unverified, project_not_failed,
 # project_state_recheck_unavailable, project_resumed.
@@ -1798,10 +1799,13 @@ unblock_main()
 		# prefixes, so the title of the issue it implements is read from its
 		# `ai/issue-<n>` head branch (never from the author-controlled body).
 		# §15: no earlier call returns that issue (item.json is the PR), so
-		# this is one GET per judged trusted PR; a failed read sends no title
-		# and the PR's own title is used as before.
+		# this is one GET per judged trusted PR (through gh_retry, CONSIST-001);
+		# a failed read sends no title, is logged, and the PR's own title is
+		# used as before. The title is cut to 400 codepoints inside jq, so a
+		# multibyte character is never split.
 		if [ "${pr_trusted}" = "true" ] && [[ "${head_ref}" =~ ^ai/issue-([1-9][0-9]*)$ ]]; then
-			chain_title="$(gh api "repos/${REPOSITORY}/issues/${BASH_REMATCH[1]}" --jq '.title // ""' 2>/dev/null | head -n 1 | cut -c1-400 || true)"
+			chain_title="$(gh_retry gh api "repos/${REPOSITORY}/issues/${BASH_REMATCH[1]}" --jq '(.title // "") | .[0:400]' 2>/dev/null | head -n 1 || true)"
+			[ -n "${chain_title}" ] || unblock_log "item=${ITEM} op=chain_title issue=${BASH_REMATCH[1]} outcome=unavailable reason=read_failed"
 		fi
 	fi
 
@@ -2258,7 +2262,9 @@ Still waiting for an operator; last checked ${now}.
 	unblock_wait_enabled || decide_args+=(--wait-disabled)
 	# Chain depth cap (unblock_ledger.py MAX_CHAIN_DEPTH): the depth is read
 	# from the title of the issue a trusted PR implements, else the item's own.
-	decide_args+=(--chain-title "$(jq -r '(.chain_title // .title // "") | tostring' "${RUNTIME_DIR}/context.json" 2>/dev/null | head -n 1 || true)")
+	# One argv element (`--chain-title=<value>`), so a title that starts with
+	# `-` is never parsed by argparse as an option.
+	decide_args+=("--chain-title=$(jq -r '(.chain_title // .title // "") | tostring' "${RUNTIME_DIR}/context.json" 2>/dev/null | head -n 1 || true)")
 	# An ai:security issue never gets accept_with_followup on its menu (#6541);
 	# unblock_actions.py refuses it again if this flag is ever missing.
 	if [ "${ITEM_KIND}" = "issue" ] && jq -e 'index("ai:security") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1; then
