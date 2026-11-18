@@ -638,6 +638,14 @@ jobs:
       REVIEW_PHASE_HANDOFF_BUDGET_MINUTES: 15
       EDITOR_RETRY_BUDGET_MINUTES: 25
       # Phase 4b queued grace (P4, Refs #8291): see stable_e2e_step_verify_bait_removed.sh.
+      # Stuck states P4 (Refs #8291): Phase 4b's EDITOR_RETRY_BUDGET_MINUTES
+      # counts from the first poll that sees the pinned retry run leave the
+      # queue (in_progress/completed). Until then the run gets its own
+      # queued cap, E2E_RETRY_QUEUED_GRACE_MINUTES, and fails as
+      # retry_queued_timeout when still queued at that cap. Both deadlines
+      # stay within the job ceiling, so the serial budget above is
+      # unchanged. Any value that is not truthy restores the legacy
+      # queued-poll extension. The script defaults both values as well.
       E2E_PHASE4B_QUEUED_GRACE_ENABLED: ${{ vars.E2E_PHASE4B_QUEUED_GRACE_ENABLED || 'true' }}
       E2E_RETRY_QUEUED_GRACE_MINUTES: ${{ vars.E2E_RETRY_QUEUED_GRACE_MINUTES || '30' }}
       PHASE7_WAIT_BUDGET_MINUTES: 10
