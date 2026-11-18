@@ -142,6 +142,9 @@ at_prepare()
 		exit 1
 	fi
 	_at_log "prepare $(jq -r '"records=\(.records) invalid=\(.invalid) groups=\(.groups) tracked=\(.tracked) capped=\(.capped) model_groups=\(.model_groups) list_calls=\(.list_calls) evidence_gets=\(.evidence_gets)"' <<< "${summary}")"
+	if [ "$(jq -r '.lists_ok' <<< "${summary}")" = "false" ]; then
+		echo "::warning::Alert triage could not list tracking issues/PRs; all groups deferred."
+	fi
 	if [ "$(jq -r '.groups + .invalid' <<< "${summary}")" = "0" ]; then
 		_at_log "skip reason=no_records"
 	fi

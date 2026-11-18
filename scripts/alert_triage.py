@@ -501,6 +501,7 @@ def prepare(*, inbox_dir: Path, repo_root: Path, config_path: Path, self_repo: s
 		"tracked": sum(1 for group in groups.values() if group["tracked"]),
 		"capped": sum(1 for group in groups.values() if group["capped"]),
 		"model_groups": len(model_groups),
+		"lists_ok": lists_ok,
 	})
 	return result
 
@@ -683,9 +684,19 @@ def decide_group(group: dict[str, Any], diagnosis: dict[str, Any] | None, outcom
 		decision.update(route="escalate", reason="parse_failed")
 		return decision
 	classification = diagnosis["classification"]
+	files_blocked = bool(set(diagnosis.get("files") or []) & self_files)
 	if classification in ("healable", "pipeline_blocked"):
-		host_blocked = bool(set(diagnosis.get("files") or []) & self_files) or bool(group.get("from_self_workflow")) or bool(group.get("stalled"))
+		host_blocked = files_blocked or bool(group.get("from_self_workflow")) or bool(group.get("stalled"))
 		classification = "pipeline_blocked" if host_blocked else "healable"
+	elif classification in ("noise", "environmental") and (files_blocked or group.get("stalled")):
+		# The host criteria that do not depend on the alert's origin also
+		# override a noise/environmental verdict (plan: the host decides
+		# pipeline_blocked), so model output steered by untrusted alert text
+		# cannot mark a stalled heal issue's group, or a diagnosis naming
+		# pipeline_self_files, done. An alert that merely came from a pipeline
+		# workflow keeps the noise/environmental row: most consumer alerts
+		# come from those workflows, and benign ones must not self-fix.
+		classification = "pipeline_blocked"
 	decision["classification"] = classification
 	if classification in ("noise", "environmental"):
 		decision.update(route="done", reason=classification)

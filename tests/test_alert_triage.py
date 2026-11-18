@@ -252,8 +252,12 @@ SELF_FILES = {".github/workflows/implement.yml", "scripts/ai_engine.sh"}
 	("healable", {"from_self_workflow": True, "mapped_paths": [".github/workflows/implement.yml"]}, [], ("pipeline_blocked", "self_fix_dispatch", "pipeline_blocked")),
 	# The host, not the model, decides pipeline_blocked.
 	("pipeline_blocked", {}, ["scripts/x.sh"], ("healable", "heal_dispatch", "healable")),
-	# A noise verdict keeps its row even from a pipeline workflow.
+	# A noise verdict keeps its row when the alert only came from a pipeline workflow.
 	("noise", {"from_self_workflow": True}, [], ("noise", "done", "noise")),
+	# A stalled heal issue or a diagnosis naming pipeline files overrides noise/environmental.
+	("noise", {"stalled": True}, [], ("pipeline_blocked", "self_fix_dispatch", "pipeline_blocked")),
+	("environmental", {}, ["scripts/ai_engine.sh"], ("pipeline_blocked", "self_fix_dispatch", "pipeline_blocked")),
+	("environmental", {"from_self_workflow": True}, [], ("environmental", "done", "environmental")),
 ])
 def test_decide_rows(classification, group_overrides, files, expected) -> None:
 	decision = at.decide_group(_group(**group_overrides), {"classification": classification, "files": files}, "ok", self_files=SELF_FILES, self_fix_enabled=True, self_fix_present=True)
@@ -510,7 +514,7 @@ def test_failed_list_call_defers_groups_instead_of_treating_them_as_untracked(tm
 	result = _prepare(tmp_path, gh)
 	group = _groups(tmp_path)[0]
 	assert group["tracking_unavailable"] is True and group["needs_model"] is False
-	assert result["model_groups"] == 0 and result["evidence_gets"] == 0
+	assert result["model_groups"] == 0 and result["evidence_gets"] == 0 and result["lists_ok"] is False
 	decisions = at.decide(tmp_path / "work", inbox, self_fix_enabled=False, self_fix_present=False, run_url="u")
 	assert (decisions["groups"][0]["route"], decisions["groups"][0]["reason"]) == ("deferred", "tracking_unavailable")
 	counts = at.apply(tmp_path / "work", inbox, dry_run=False, run_id="9", now=NOW)
