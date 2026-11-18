@@ -1392,7 +1392,11 @@ enforce it:
    request cannot edit the check that judges it, and the pull request's files
    are only read as git objects. The verdict is the commit status
    `coding-workflows/workflow-integrity` on the pull request head (push runs
-   only fail the job, so they never overwrite a pull request's verdict). Log
+   only fail the job, so they never overwrite a pull request's verdict).
+   GitHub evaluates the push trigger's `paths:` filter on at most the first
+   300 changed files of a push, so a larger push can start no push run even
+   when it changes a wrapper; the unfiltered pull request run still judges
+   it. Log
    prefix: `WORKFLOW_INTEGRITY outcome=pass|skip|fail|error reason=<token>`.
 2. **No opt-out.** `ALLOW_WORKFLOW_EDITS=false` (and `allow_workflow_edits:
    false` in the updater wrapper) no longer stops wrapper updates; the sync
