@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9682,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9682\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9700\",\"pr_number\":9700,\"branch\":\"ai/issue-9682\",\"run_id\":\"44233566761\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/44233566761\",\"changed_files\":[\".github/workflows/plan.yml\",\"agents.d/stuck-backlog-phase2-red-base-hold.md\",\"changelog.d/stuck-backlog-phase2-red-base-hold.md\",\"scripts/plan_base_ci_gate.sh\",\"tests/inventory_exemptions.txt\",\"tests/test_plan_base_ci_gate.py\"]}",
+  "fingerprint": "9b3b8a95cc256166ee4150dbcc31e38a44ce3fabf6afd5ac04d2c1e107e80c92",
+  "lineage": {
+    "issue_number": 9682,
+    "parent_ids": [],
+    "pr_number": 9700,
+    "run_id": "44233566761",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44233566761",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9700"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261118051133_c03477ee66",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9682,
+    "level": "run",
+    "pr_number": 9700,
+    "run_id": "44233566761"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9682: https://github.com/shubhodeep1/coding-workflows/pull/9700",
+  "timestamps": {
+    "created_at": "2026-11-18T05:11:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
