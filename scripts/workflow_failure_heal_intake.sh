@@ -822,11 +822,13 @@ _heal_occurrence_login()
 # counter with HEAL_OCCURRENCE_REPOST_AFTER (15) or more newer comments after
 # it is posted again as a new comment and the old one is deleted; the counter
 # then stays inside that window.
-# §15 audit: the heal issue list carries no comments. A caller that already
-# read this issue's comments in this run passes that file as the 4th argument
-# (the heal-scope recovery path); otherwise this adds one paginated comments
-# GET per repeat report, then one PATCH (or the one POST there was before, and
-# one DELETE on a re-post). The account login reuses an earlier /user result.
+# §15 audit: the heal issue list carries no comments. A caller that read
+# this issue's comments just before (projection `{id, author, created_at,
+# body}`) may pass that file as the 4th argument; no caller does today: the
+# heal-scope recovery read predates the diagnosis and lacks `created_at`, so
+# merging into it would widen the race below and lose `first=`. So this adds
+# one paginated comments GET per repeat report, then one PATCH (or the one
+# POST there was before, and one DELETE on a re-post). The account login reuses an earlier /user result.
 # Fail open: with the switch off, an unknown login, or a failed list or merge,
 # the report is posted as its own comment exactly as before; a failed edit
 # posts the merged body as a new comment, which the next repeat then edits.
@@ -4832,8 +4834,9 @@ if [ "${HEAL_SCOPE_RECOVERY_ACTIVE}" = "true" ] && [ -z "${NEW_ISSUE_URL}" ]; th
 		# A scan replay is not a new occurrence (#7333).
 		RECOVERY_OCCURRENCE_STATE="skipped_reconstructed"
 	elif python3 "${HEAL_PY}" compose-occurrence --payload-json "$(_compose_payload_file)" --intake-run-url "${RUN_URL}" > "${RECOVERY_OCCURRENCE_FILE}" \
-		&& _heal_record_occurrence "${HEAL_SCOPE_RECOVERY_REPO}" "${HEAL_SCOPE_RECOVERY_ISSUE}" "${RECOVERY_OCCURRENCE_FILE}" \
-			"${RUNTIME_DIR}/heal_scope_recovery_comments.json"; then
+		&& _heal_record_occurrence "${HEAL_SCOPE_RECOVERY_REPO}" "${HEAL_SCOPE_RECOVERY_ISSUE}" "${RECOVERY_OCCURRENCE_FILE}"; then
+		# No cached comments: the recovery read predates the diagnosis (minutes)
+		# and carries no `created_at`, so the counter merge reads them afresh.
 		RECOVERY_OCCURRENCE_STATE="posted"
 	fi
 	log "heal_scope_recovery outcome=no_replacement reason=classification_$(printf '%s' "${CLASSIFICATION}" | tr -cd 'a-z-' | tr '-' '_') issue=${HEAL_SCOPE_RECOVERY_ISSUE} repo=${HEAL_SCOPE_RECOVERY_REPO} occurrence=${RECOVERY_OCCURRENCE_STATE} fp=${FP}"

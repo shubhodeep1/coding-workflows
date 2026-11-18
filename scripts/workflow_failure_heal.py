@@ -5997,7 +5997,7 @@ def budget_decision(
 
 	``report_issue`` (``owner/repo#N``, optional) is the issue whose own
 	clarify / plan / implement run failed. When it is itself an OPEN listed
-	heal issue and no fingerprint or source duplicate exists, the report is a
+	heal issue and no fingerprint, source or cause duplicate exists, the report is a
 	duplicate of that issue (``match: heal_source``): a heal issue's own failed
 	run never opens a heal issue for the heal issue (#9200 was filed for
 	#9190, #9192 for #9189, #9238 for #9234). The report is not diagnosed, so
@@ -6107,7 +6107,10 @@ def budget_decision(
 			"open_count": len(open_issues),
 			"today_count": created_today,
 		}
-	if heal_source_record is not None:
+	# A cause match keeps its precedence: when the heal issue's own run fails
+	# with the issue's own cause, `match: cause` keeps the
+	# heal_issue_failed_itself escalation; another issue's cause records there.
+	if heal_source_record is not None and cause_duplicate is None:
 		heal_source_markers = parse_heal_markers(heal_source_record.get("body"))
 		return {
 			"action": "duplicate",

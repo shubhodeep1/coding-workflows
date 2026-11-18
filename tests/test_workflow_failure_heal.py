@@ -8751,6 +8751,22 @@ def test_heal_scope_recovery_no_replacement_records_occurrence() -> None:
 	assert occurrence and f"{heal.MARKER_PREFIX}occurrence" in occurrence[-1]["body"]
 
 
+def test_heal_scope_recovery_no_replacement_counter_reads_comments_afresh() -> None:
+	# The recovery comments read predates the diagnosis and carries no
+	# `created_at`; the counter merge reads the comments again, so the first
+	# counter starts at the legacy count plus one with `first=` the oldest.
+	diagnosis = "## Classification\ntransient\n\n## Summary\nA registry timeout.\n"
+	path = f"repos/{SELF_REPO}/issues/31/comments"
+	legacy = [dict(_occ_comment(5, _occ_report(5, 100)), created_at="2026-01-05T00:00:00Z"), dict(_occ_comment(6, _occ_report(5, 101)), created_at="2026-01-02T00:00:00Z")]
+	result, state, _ = _run_recovery([_markerless_heal_issue()], diagnosis=diagnosis, comments={path: legacy})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "heal_scope_recovery outcome=no_replacement reason=classification_transient issue=31" in result.stdout
+	counter = heal.parse_occurrence_counter([c for c in state["comments_posted"] if c["path"] == path][-1]["body"])
+	assert counter is not None and counter["count"] == 3 and counter["first"] == "2026-01-02T00:00:00Z"
+	assert [call for call in state["calls"] if any("{id, author: (.user.login" in part for part in call)]
+	assert "heal_scope_recovery_comments.json" not in INTAKE_SCRIPT.read_text(encoding="utf-8").split("A scan replay is not a new occurrence", 1)[1].split("RECOVERY_OCCURRENCE_STATE=\"posted\"", 1)[0]
+
+
 def test_heal_scope_recovery_wiring_is_default_on() -> None:
 	workflow = (REPO_ROOT / ".github/workflows/workflow-failure-heal-intake.yml").read_text(encoding="utf-8")
 	assert "HEAL_SCOPE_RECOVERY_ENABLED: ${{ vars.HEAL_SCOPE_RECOVERY_ENABLED || 'true' }}" in workflow
@@ -13407,6 +13423,16 @@ def test_budget_decision_records_a_heal_issues_own_failure_on_itself() -> None:
 	both = issues + [dict(_heal_issue(50, state="open", fp=fp), repository=SELF_REPO)]
 	fp_dup = heal.budget_decision(both, fp=fp, now=now, preferred_repo=SELF_REPO, report_issue=f"{SELF_REPO}#42")
 	assert fp_dup["match"] == "fingerprint" and fp_dup["existing_issue"] == 50
+	# A cause match wins too: the heal issue's own cause stays `match: cause`
+	# (so heal_issue_failed_itself still escalates), another issue's cause
+	# records the report there.
+	own_cause = [dict(_p5_cause_issue(42, fp=other), repository=SELF_REPO)]
+	own = heal.budget_decision(own_cause, fp=fp, now=P5_NOW, preferred_repo=SELF_REPO, report_issue=f"{SELF_REPO}#42", cause=P5_CAUSE)
+	assert own["match"] == "cause" and own["existing_issue"] == 42
+	elsewhere = [dict(_heal_issue(42, state="open", fp=other, created=P5_NOW - timedelta(days=1)), repository=SELF_REPO), dict(_p5_cause_issue(60, fp="4" * 64), repository=SELF_REPO)]
+	moved = heal.budget_decision(elsewhere, fp=fp, now=P5_NOW, preferred_repo=SELF_REPO, report_issue=f"{SELF_REPO}#42", cause=P5_CAUSE)
+	assert moved["match"] == "cause" and moved["existing_issue"] == 60
+	assert heal.budget_decision(elsewhere, fp=fp, now=P5_NOW, preferred_repo=SELF_REPO, report_issue=f"{SELF_REPO}#42")["match"] == "heal_source"
 
 
 def test_skip_reason_covers_every_release_gate_fixture_title() -> None:
