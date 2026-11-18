@@ -1855,3 +1855,16 @@ def test_prune_gate_baseline_keeps_a_twinned_docs_file_the_change_deleted(tmp_pa
 	ruw.prune_gate_baseline(tree, manifest)
 	assert (tree / ".claude" / "docs" / "x.md").is_file()
 	assert not (tree / ".claude" / "docs" / "y.md").exists()
+
+
+def test_wrapper_baseline_prune_failure_logs_the_reason_and_is_unverified(tmp_path):
+	worktree = _worktree(tmp_path)
+	env, _ = _wrapper_env(tmp_path)
+	shim = tmp_path / "bin" / "python3"
+	real = os.readlink(shim)
+	shim.unlink()
+	shim.write_text(f'#!/bin/sh\n[ "$2" != prune-gate-baseline ] || rm -f "$4.admitted_commands.json"\nexec "{real}" "$@"\n', encoding="utf-8")
+	shim.chmod(0o755)
+	proc, out = _run_wrapper(tmp_path, worktree, MODULE_PATH, env)
+	assert "PREPUSH_TEST_GATE phase=wrapper outcome=warning reason=baseline_filter_detail detail=admitted_inventory_missing" in proc.stderr, proc.stderr
+	assert json.loads((out / "result.json").read_text(encoding="utf-8"))["reason"] == "baseline_filter_failed"
