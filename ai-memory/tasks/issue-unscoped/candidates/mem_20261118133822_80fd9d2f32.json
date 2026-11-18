@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/implement_handle_guard_block.sh:262-263 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: In `scope_post_guard_comment`, `gh issue comment ... 2>/dev/null || true` silently swallows a failed marker-comment POST. For `remediation-no-code` the handler still adds `ai:scope-blocked`, so the heal reporter finds no marker and dispatches a heal for the parked issue.\n  WHY: The failure is silent and leaves no log line explaining why the heal skip did not trigger. All four reviewers rated it NIT, which maps to low. The swallowing is inherited from the original handler and is rare. Confidence ranges from 2 to 4, and the highest is used. openai_gpt-6-luna also notes that the comment is marked as posted (lines 275-276) before the label is applied.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/implement_handle_guard_block.sh:262-263 | severity=NIT | confidence=2\n  PROBLEM: If the marker comment fails to post for `remediation-no-code`, the label is still added. The reporter then finds no marker and dispatches a heal for the parked issue, and nothing in the log says why.\n  WHY: The swallowing is inherited from the original handler's `2>/dev/null || true`. The failure is rare and ends in the pre-PR behaviour. A warning would be a small diagnostic gain only.\n- HARDENING_SUGGESTIONS: replace the `|| true` with `|| echo \"::warning::Could not post the guard rejection comment on #${ISSUE_NUMBER}.\"` (about 1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/implement_handle_guard_block.sh:scope_post_guard_comment (gh issue comment invocation) | severity=NIT | confidence=3\n  PROBLEM: The diff moves the comment POST before the label add for `remediation-no-code`. If the POST fails, `2>/dev/null || true` swallows it with no `::warning::`, and the label is added anyway. The heal reporter then finds no marker and dispatches a heal for the parked remediation.\n  WHY: A transient gh CLI failure (network blip, 5xx, rate limit) during the POST is swallowed. `workflow_failure_heal_report.sh` then dispatches a heal instead of skipping, and the job log gives no sign that the marker POST failed.\n- HARDENING_SUGGESTIONS: surface the failure with a `::warning::` line (\"Marker comment POST failed for issue #${ISSUE_NUMBER}; heal reporter may dispatch a heal for the deliberate park.\") and still return 0 (about 4 lines). HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/implement_handle_guard_block.sh:262-263, 275-276 | severity=NIT | confidence=4\n  PROBLEM: A failed rejection-comment POST is silently ignored, and the handler still marks the comment as posted before applying ai:scope-blocked.\n  WHY: The remediation marker is absent from the issue comments, so workflow_failure_heal_report.sh does not recognize the deliberate park and dispatches a heal when the label is applied.\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/implement_handle_guard_block.sh:262-263 (also 265-277, 295-299) | severity=NIT | confidence=4\n  PROBLEM: For `remediation-no-code`, a marker comment POST failure is silently swallowed. The handler still adds `ai:scope-blocked`. The `issues: labeled` reporter finds no `reason=remediation-no-code` marker and dispatches a heal for a deliberately parked issue, with no `::warning::` in the handler log.\n  WHY: A POST failure (transient API error, token scope) leaves the label present and the marker absent. The reporter then dispatches an unnecessary heal, and the only trace is the reporter's own dispatch log, which reads as a normal report.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a77c8009ebf410f59330b90ab7af63ab70e7f86870d59f3cd1e58e851a8d9fe5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9699,
+    "run_id": "44297128465",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44297128465",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118133822_80fd9d2f32",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9699,
+    "run_id": "44297128465"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T13:38:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
