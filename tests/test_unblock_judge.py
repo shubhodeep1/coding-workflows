@@ -5794,16 +5794,33 @@ def test_terminal_gate_verdict_judges_as_usual_without_a_note(tmp_path: Path, st
 	assert not any(comment["body"].endswith(TRIAGE_SUPERSEDED_MARKER) for comment in state["comments"])
 
 
-def test_expired_superseded_note_judges_as_usual(tmp_path: Path) -> None:
+def test_expired_superseded_note_parks_the_item_instead_of_resuming(tmp_path: Path) -> None:
+	# #9659: the issue is never resumed with /answer or /approved; once the note
+	# outlives UNBLOCK_JUDGE_WAIT_MAX_DAYS a person decides via the digest.
 	comments = [
 		_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z"),
 		_comment("Planning found the fix already on the planning ref.\n\n" + TRIAGE_SUPERSEDED_MARKER + "\n", BOT, "2026-10-04T10:00:00Z"),
 	]
 	result, state = _judge_triage_superseded(tmp_path, comments=comments, FAKE_TRIAGE_STATUS="unverified",
 		MOCK_UNBLOCK_JUDGE_NOW="2026-10-19T10:00:00Z")
-	assert "op=triage_superseded outcome=skip reason=note_expired" in result.stdout, result.stdout + result.stderr
-	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout
+	assert "op=triage_superseded outcome=parked reason=note_expired" in result.stdout, result.stdout + result.stderr
+	assert "outcome=acted" not in result.stdout
+	assert not any(comment["body"].startswith(("/answer", "/approved")) for comment in state["comments"])
 	assert not any(comment["body"].endswith(TRIAGE_SUPERSEDED_MARKER) for comment in state["comments"])
+	assert [label for _, label in state["labels_added"]] == ["ai:needs-human"]
+	assert any(fields.get("body", "").startswith("<!-- ai:needs-human:v1 -->") for fields in state["created"])
+
+
+def test_expired_superseded_note_holds_when_the_park_is_unavailable(tmp_path: Path) -> None:
+	comments = [
+		_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z"),
+		_comment("Planning found the fix already on the planning ref.\n\n" + TRIAGE_SUPERSEDED_MARKER + "\n", BOT, "2026-10-04T10:00:00Z"),
+	]
+	result, state = _judge_triage_superseded(tmp_path, comments=comments, FAKE_TRIAGE_STATUS="unverified",
+		MOCK_UNBLOCK_JUDGE_NOW="2026-10-19T10:00:00Z", NEEDS_HUMAN_DIGEST_ENABLED="false")
+	assert "op=triage_superseded outcome=held reason=park_failed" in result.stdout, result.stdout + result.stderr
+	assert "outcome=acted" not in result.stdout
+	assert state["comments"] == []
 
 
 def test_an_untrusted_superseded_marker_does_not_suppress_the_note(tmp_path: Path) -> None:
