@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_post_editor_summary.sh:517-518 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The awk on line 517 removes the `::warning::  stderr: ` prefix from gh_retry's final stderr line but does not decode the `%25`/`%0A`/`%0D` escapes added by `_gh_actions_escape` (`scripts/gh_helpers.sh:1096-1103`), so the line 518 `::warning::Could not remove stale ai:review-blocked from PR #N: ...` message can show literal percent-encoded sequences.\n  WHY: This affects log readability only: the step still exits 0 and the `REVIEW_BLOCKED_STALE_CLEAR outcome=error reason=delete_failed` line is unchanged; the reviewers compare it with the decode at `scripts/orchestrate_poll_process.sh:15189-15191` (#8505). Every flagging reviewer rated it SEVERITY: NIT, so it is mapped to low. anthropic_claude-sonnet-5_5 explicitly rejected this finding: the runner decodes `%25`/`%0D`/`%0A` in workflow-command messages, decoding first would split the annotation, and the cited precedent writes to a different sink (the JSON state file).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_autofix_step_post_editor_summary.sh:517 | severity=NIT | confidence=4\n  PROBLEM: The error message extraction logic does not decode percent-encoding.\n  WHY: gh_retry wraps the error in `::warning::  stderr: ...` and percent-encodes `%`, newlines (`%0A`) and carriage returns (`%0D`); the awk strips the prefix but leaves the encoded characters, so the CI warning is unreadable for complex errors. Hardening fix: `if (sub(/^::warning::[ \\t]*stderr: /, \"\", l)) { gsub(/%0[AD]/, \"\\n\", l); gsub(/%25/, \"%\", l) }` (HARDENING_RISK_SCORE: 1).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_autofix_step_post_editor_summary.sh:517 | severity=NIT | confidence=4\n  PROBLEM: The prefix strip leaves behind the excerpt that `_gh_actions_escape` percent-encoded (`scripts/gh_helpers.sh:1085-1103`; emitted at `scripts/gh_helpers.sh:2204, 2221, 2236`). The matching decode already exists at `scripts/orchestrate_poll_process.sh:15185-15191` (issue #8505).\n  WHY: A DELETE failure whose stderr contains `%` or a multi-line JSON body is logged with literal `%0A`/`%25`. The step still exits 0 and the structured line is unaffected. The `FAKE_GH_STALE_FUNC` `delete_mode=\"fail\"` stub is single-line with no `%`, so it cannot catch this.\n- scripts/review_autofix_step_post_editor_summary.sh:518 | severity=NIT | confidence=4\n  PROBLEM: This is the same defect seen from the error path. The `//::/: :` neutralisation blocks `::` injection but leaves `%0A`/`%0D`/`%25` untouched.\n  WHY: Operators see percent-encoded text whenever the error spans more than one line or contains `%`. That conflicts with the repo tests (`tests/test_gh_retry_final_stderr_redaction.py:54`, `tests/test_orchestrate_poll_process.py:27884,27913,27938`, `tests/test_review_autofix_review_pipeline_contract.py:10093`), which treat these as live tokens.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_autofix_step_post_editor_summary.sh:517 | severity=NIT | confidence=4\n  PROBLEM: The code strips the `::warning::  stderr: ` prefix but does not decode the excerpt's `%25`, `%0A`, and `%0D` escapes.\n  WHY: gh_retry escapes percent signs and line breaks, so the warning at line 518 shows escaped sequences instead of the original diagnostic. The precedent at `scripts/orchestrate_poll_process.sh:15189-15191` decodes these values.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_autofix_step_post_editor_summary.sh:517 | severity=NIT | confidence=4\n  PROBLEM: The prefix strip in `review_blocked_stale_clear_after_clean` removes the `::warning::<ws>stderr: ` wrapper but does not decode the percent-encoding that `_gh_actions_escape` applies (scripts/gh_helpers.sh:1096-1103, emitted at scripts/gh_helpers.sh:2236). The same strip-then-decode pattern exists at scripts/orchestrate_poll_process.sh:15189-15191 (#8505).\n  WHY: Nothing crashes: the `delete_failed` log line and the exit 0 still happen, and the `//::/: :` guard still holds. Only log fidelity suffers, because the line 518 warning shows literal `%25`/`%0A`. Suggested fix: add the decode inside the awk END block and extend the FAKE_GH_STALE_FUNC fail-mode assertion in tests/test_review_autofix_clean_same_head_gate.py (HARDENING_RISK_SCORE: 1).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "99a3c3f703f8a2be3d72b16d9a7e52429dd231adbbaed0847aa4ac9aa0f743e8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9719,
+    "run_id": "44331359593",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44331359593",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118173106_8cbcedad83",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9719,
+    "run_id": "44331359593"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T17:31:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
