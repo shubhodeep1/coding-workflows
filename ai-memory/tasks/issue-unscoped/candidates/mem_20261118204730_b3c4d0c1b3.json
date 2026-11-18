@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ci_final_merge_ref_fresh.sh:373-380 (log lines 442, 447) | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: After a failed live-tip re-read, `tip` keeps its stale pre-loop value (equal to the pin), so the `merged_locally` and `merge_conflict` log lines print `tip=<pin>` instead of `tip=none`.\n  WHY: The effect is log accuracy only, with no change to the outcome, but it can mislead log analysis. All reviewers rated it NIT, and the suggested fix is to set `tip=\"\"` before `break`.\n- scripts/ci_final_merge_ref_fresh.sh:52-59 (header comment) and agents.d/9690-final-ci-local-merge.md:4 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The documented `mergeable=false` routes cover only the tip having moved past the pin, and omit the new route where the tip re-read fails and the job defers to the local merge into the pin.\n  WHY: The executed contract is broader than the documented one, which may mislead operators. All reviewers rated it NIT. The cited line ranges differ slightly (52-56, 55-57, 55-59, 38-40).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The documented contract must describe all decision paths taken by the script, including when `mergeable=false` occurs and the live tip cannot be re-read.\n  expected_change_site: Header comment in scripts/ci_final_merge_ref_fresh.sh and agents.d/9690-final-ci-local-merge.md\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The header comment and the agents.d fragment describe only the \"tip moved past the pin\" route and omit the deferral to the local merge when the re-read fails.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/ci_final_merge_ref_fresh.sh:373-380, 442, 447 | severity=NIT | confidence=3\n  PROBLEM: After a failed tip re-read, `tip` holds the pre-pin value, which equals the pin, so the `merged_locally` and `merge_conflict` log lines print an unconfirmed `tip=`.\n  WHY: No functional failure. It only affects log accuracy.\n- HARDENING: Header comment (about lines 52-56) and the `mergeable: false` bullet in agents.d/9690-final-ci-local-merge.md omit the failed-re-read route. Suggested fix: add \"or when the tip cannot be re-read\" to each sentence.\n- HARDENING: Set `tip=\"\"` before `break` in the else branch at lines 373-380. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/ci_final_merge_ref_fresh.sh:374-380 | severity=NIT | confidence=4\n  PROBLEM: The header comment (lines 38-40) and agents.d/9690-final-ci-local-merge.md do not describe the path taken when `mergeable=false` and the live tip re-read fails.\n  WHY: The code defers correctly, but the documentation is inaccurate for this edge case and may mislead operators.\n- scripts/ci_final_merge_ref_fresh.sh:378, 442, 447 | severity=NIT | confidence=4\n  PROBLEM: After a failed re-read, `tip=${tip:-none}` still contains the stale cached pin value.\n  WHY: The log reports `tip=<pin_sha>` instead of `tip=none`, which may mislead automated log analysis.\n- TASK_GAP:\n  Requirement: \"The documented contract must describe all decision paths taken by the script, including when `mergeable=false` occurs and the live tip cannot be re-read.\"\n  Expected change site: Header comment in scripts/ci_final_merge_ref_fresh.sh and agents.d/9690-final-ci-local-merge.md.\n  Evidence of absence: The header comment and the fragment describe only the \"tip moved past the pin\" route and omit the deferral to local merge when the re-read fails.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- HARDENING: scripts/ci_final_merge_ref_fresh.sh:55-59 and agents.d/9690-final-ci-local-merge.md:4. The documented `mergeable=false` paths omit the failed-reread deferral to the local merge. Suggested fix: mention the failed-reread case in both. HARDENING_RISK_SCORE: 1\n- HARDENING: scripts/ci_final_merge_ref_fresh.sh:373-380, 442, 447. After a failed reread, `tip` retains the previously observed value, which is logged as the current tip. Suggested fix: clear `tip` in the failed-reread branch. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/ci_final_merge_ref_fresh.sh:55-57 vs 373-380 | severity=NIT | confidence=4\n  PROBLEM: The header comment documents only two routes from the `mergeable=false` branch and omits the third route, where a failed live-tip re-read sets `deferred_to_pin=true` and merges into the pin locally. The same gap exists in agents.d/9690-final-ci-local-merge.md.\n  WHY: No runtime failure, but the executed contract is broader than the documented one.\n- HARDENING: scripts/ci_final_merge_ref_fresh.sh:373-380 with log lines 442 and 447. After a failed re-read, `tip` keeps its stale pre-loop value, so the logs render `tip=<pin>`. Suggested fix: set `tip=\"\"` before `break`. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fe674604e6b6e93bfac0774b4d049e30c35a57932371cb2881a1746555797617",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9727,
+    "run_id": "44374715516",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44374715516",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118204730_b3c4d0c1b3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9727,
+    "run_id": "44374715516"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T20:47:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
