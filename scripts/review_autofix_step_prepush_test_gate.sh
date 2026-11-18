@@ -730,7 +730,11 @@ review_prepush_test_gate_repair()
 	fi
 	# #9519 / PR #9562: a done-check-only repair turn (pr_caused=0) erased the
 	# PR's whole change. Restore it; an unreadable status skips this guard.
-	if repair_status_line="$(review_prepush_test_gate_py status "${result}" 2>/dev/null)" && [ -n "${repair_status_line}" ]; then
+	# `status` prints "unverified 0 0" when load() falls back to {} for a
+	# missing or corrupt result, so require a parseable JSON object first; a
+	# genuine status=unverified result still reaches the guard.
+	if PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c 'import json,sys; sys.exit(0 if isinstance(json.load(open(sys.argv[1], encoding="utf-8")), dict) else 1)' "${result}" 2>/dev/null \
+		&& repair_status_line="$(review_prepush_test_gate_py status "${result}" 2>/dev/null)" && [ -n "${repair_status_line}" ]; then
 		read -r _ repair_pr_caused _ <<< "${repair_status_line}" || repair_pr_caused=""
 		case "${repair_pr_caused}" in
 			''|*[!0-9]*) ;;
