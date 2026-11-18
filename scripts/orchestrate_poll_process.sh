@@ -2601,6 +2601,115 @@ _orch_squash_merge_bound()
 	return 1
 }
 
+# Issue #9732 (unblock fix-up for #9520): off switch for the required-checks
+# chain in run_standalone_stall_recovery's attempt_merge arm. Unset, empty or
+# "true" (any case) keeps the new chain on; "false" turns it off; any other
+# value also turns it off and logs a warning (unlike the heal flags, which
+# treat an invalid value as true). Default lives here, not only in the
+# workflow env, so a helper staged ahead of its YAML stays on (§8).
+_stall_merge_required_checks_enabled()
+{
+	local flag_norm=""
+	# sed, not xargs: xargs fails on an unmatched quote in the flag value.
+	flag_norm="$(printf '%s' "${STALL_MERGE_REQUIRED_CHECKS_ENABLED-}" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" || flag_norm=""
+	case "${flag_norm}" in
+		""|true)
+			return 0
+			;;
+		false)
+			return 1
+			;;
+		*)
+			echo "::warning::STALL_MERGE_REQUIRED_CHECKS_ENABLED has invalid value; treating as false"
+			return 1
+			;;
+	esac
+}
+
+# Issue #9732: the standalone attempt_merge chain under the review auto-merge
+# rule. Since #9528 Phase 4 ci.yml has no pull_request trigger, so the named
+# CI check (lint) exists on a head only after a final-CI dispatch; the wait
+# helper (scripts/pr_checks_lib.sh) makes that dispatch when
+# REVIEW_FINAL_CI_WORKFLOW is set. Stops at the first refusal so the recorded
+# reason is always the first one.
+#
+#   _standalone_attempt_merge_required_checks <issue> <pr> <state> <mergeable> <head_sha> <base_ref> [head_ref]
+#   Sets STALL_MERGE_REFUSAL_REASON (empty when the merge was accepted):
+#     state_not_open|not_mergeable|bad_head_sha|base_not_fresh|
+#     checks_incomplete|merge_call_failed
+#   Sets STALL_MERGE_CHECKS_IN_FLIGHT=true only when the wait timed out
+#   because final CI is in flight (dispatched now, a CI run pending, or the
+#   CI check pending), so the caller does not count the miss.
+#   Leaves PR_BASE_FRESHNESS_OUTCOME (for example lease_wait) for the caller.
+#   Returns 0 only when _orch_squash_merge_bound returned 0.
+_standalone_attempt_merge_required_checks()
+{
+	local issue="$1"
+	local pr="$2"
+	local state="${3:-}"
+	local mergeable="${4:-}"
+	local head_sha="${5:-}"
+	local base_ref="${6:-}"
+	local head_ref="${7:-}"
+	local wait_rc=0
+	STALL_MERGE_REFUSAL_REASON=""
+	STALL_MERGE_CHECKS_IN_FLIGHT="false"
+	PR_BASE_FRESHNESS_OUTCOME=""
+	if [ "${state}" != "open" ]; then
+		STALL_MERGE_REFUSAL_REASON="state_not_open"
+		return 1
+	fi
+	if [ "${mergeable}" != "true" ]; then
+		STALL_MERGE_REFUSAL_REASON="not_mergeable"
+		return 1
+	fi
+	if ! [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+		STALL_MERGE_REFUSAL_REASON="bad_head_sha"
+		return 1
+	fi
+	if ! _pr_base_fresh_for_merge "${pr}" "${head_sha}" "${base_ref}"; then
+		STALL_MERGE_REFUSAL_REASON="base_not_fresh"
+		return 1
+	fi
+	# Fail closed when the shared wait helper is not loaded, as noop gate
+	# D_helper does: never merge without the review auto-merge rule.
+	if ! command -v _pr_wait_for_required_checks >/dev/null 2>&1; then
+		echo "::warning::Standalone attempt_merge for issue #${issue}: _pr_wait_for_required_checks is not loaded; refusing to merge PR #${pr}."
+		STALL_MERGE_REFUSAL_REASON="checks_incomplete"
+		return 1
+	fi
+	# §14: the PR JSON (state, mergeable, head, refs) is the one
+	# _resolve_issue_implementation_pr already read; the wait does the
+	# check-runs, branch-protection and actions/runs reads that no earlier
+	# call in the arm makes. A zero-minute budget evaluates once and never
+	# sleeps (same call shape as noop-suspicious gate D). Reset the shared
+	# globals so an earlier issue's values in this tick are never read.
+	PR_CHECKS_WAIT_OUTCOME=""
+	PR_CHECKS_LAST_TOTAL=""
+	PR_CHECKS_RUNS_READ=""
+	PR_CHECKS_RUNS_PENDING=""
+	PR_CHECKS_LAST_CI_STATE=""
+	PR_FINAL_CI_OUTCOME=""
+	PR_FINAL_CI_REASON=""
+	PR_CHECKS_HEAD_REF="${head_ref}" _pr_wait_for_required_checks "${pr}" "${head_sha}" "${base_ref}" 0 || wait_rc=$?
+	if [ "${wait_rc}" -ne 0 ]; then
+		STALL_MERGE_REFUSAL_REASON="checks_incomplete"
+		if [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "timeout" ]; then
+			if [ "${PR_FINAL_CI_OUTCOME:-}" = "dispatched" ] \
+				|| { [[ "${PR_CHECKS_RUNS_PENDING:-}" =~ ^[0-9]+$ ]] && [ "${PR_CHECKS_RUNS_PENDING}" -gt 0 ]; } \
+				|| [ "${PR_CHECKS_LAST_CI_STATE:-}" = "pending" ]; then
+				STALL_MERGE_CHECKS_IN_FLIGHT="true"
+			fi
+		fi
+		return 1
+	fi
+	if ! _orch_squash_merge_bound "${pr}" "${head_sha}" auto; then
+		STALL_MERGE_REFUSAL_REASON="merge_call_failed"
+		return 1
+	fi
+	return 0
+}
+
 ENABLE_VALIDATION_RAW="${ENABLE_VALIDATION:-true}"
 ENABLE_VALIDATION="false"
 if is_truthy "${ENABLE_VALIDATION_RAW}"; then
@@ -26729,6 +26838,11 @@ STALL_EOF
         ;;
       attempt_merge)
         local merge_pr
+        # Issue #9732: "true" when the required-checks chain ran for this
+        # issue (STALL_MERGE_REQUIRED_CHECKS_ENABLED on and a PR resolved).
+        local merge_required_checks_on="false"
+        STALL_MERGE_REFUSAL_REASON=""
+        STALL_MERGE_CHECKS_IN_FLIGHT="false"
         # Same implementation-PR discipline as retrigger_review: merging is
         # the most destructive mis-target of all, so never resolve the merge
         # candidate from a bare mention-only cross-reference (issue #3816 /
@@ -26749,12 +26863,25 @@ STALL_EOF
           local merge_head_sha merge_base_ref
           merge_head_sha="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)"
           merge_base_ref="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .base.ref?) then .base.ref else empty end' 2>/dev/null | tail -n1)"
+          local merge_head_ref
+          # Same PR JSON, no extra API call: lets the final-CI dispatch skip
+          # its own pulls/<pr> read.
+          merge_head_ref="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .head.ref?) then .head.ref else empty end' 2>/dev/null | tail -n1)"
           # One observed head feeds the checks, the freshness gate and the
           # bound merge (two-argument checks call keeps the legacy
           # block-on-any filter). Reset so a merge-lease wait below is read
           # from this PR's gate, never from an earlier PR's.
           PR_BASE_FRESHNESS_OUTCOME=""
-          if [ "${merge_state}" = "open" ] && [ "${merge_mergeable}" = "true" ] \
+          if _stall_merge_required_checks_enabled; then
+            # Issue #9732: the review auto-merge rule. The wait helper
+            # dispatches the missing final CI (lint) once, the merge runs
+            # only on rc 0 and the first refusal is recorded instead of
+            # being swallowed. With the flag off the legacy chain below
+            # runs unchanged.
+            merge_required_checks_on="true"
+            _standalone_attempt_merge_required_checks "${issue_num}" "${merge_pr}" "${merge_state}" "${merge_mergeable}" \
+              "${merge_head_sha}" "${merge_base_ref}" "${merge_head_ref}" || true
+          elif [ "${merge_state}" = "open" ] && [ "${merge_mergeable}" = "true" ] \
             && [[ "${merge_head_sha}" =~ ^[0-9a-f]{40}$ ]] \
             && _pr_checks_completed "${merge_pr}" "${merge_head_sha}" \
             && _pr_base_fresh_for_merge "${merge_pr}" "${merge_head_sha}" "${merge_base_ref}"; then
@@ -26776,8 +26903,25 @@ STALL_EOF
           # Waiting for the merge lease (scripts/pr_checks_lib.sh) is not a
           # failed merge: the lease tick re-dispatches the PR when the lease
           # is granted, so the recovery budget is not spent.
+          if [ "${merge_required_checks_on}" = "true" ]; then
+            echo "STALL_MERGE_REFUSAL issue=${issue_num} pr=${merge_pr} head=${merge_head_sha:-unknown} reason=${STALL_MERGE_REFUSAL_REASON:-base_not_fresh}"
+          fi
           echo "  [standalone-stall] Issue #${issue_num}: PR #${merge_pr} waits for the merge lease (PR #${MERGE_LEASE_BLOCKER:-?}); not counting a recovery attempt."
           STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_skipped_merge_lease_wait"
+        elif [ "${merge_required_checks_on}" = "true" ] && [ -n "${STALL_MERGE_REFUSAL_REASON:-}" ]; then
+          # Issue #9732: record the first refusal. A wait that timed out
+          # because final CI is in flight is not a failed merge (the next
+          # tick re-checks the head), so the recovery budget is not spent;
+          # every other refusal counts so the ladder can still escalate.
+          STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_refused_${STALL_MERGE_REFUSAL_REASON}"
+          echo "STALL_MERGE_REFUSAL issue=${issue_num} pr=${merge_pr} head=${merge_head_sha:-unknown} reason=${STALL_MERGE_REFUSAL_REASON}"
+          if [ "${STALL_MERGE_CHECKS_IN_FLIGHT:-false}" = "true" ]; then
+            echo "  [standalone-stall] Issue #${issue_num}: PR #${merge_pr} final CI is in flight on the head; not counting a recovery attempt."
+          else
+            tg_notify_issue "${issue_num}" "Standalone stall recovery: merge of PR #${merge_pr} refused (reason=${STALL_MERGE_REFUSAL_REASON}; stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "DEBUG"
+            STALL_RECOVERY_SHOULD_INCREMENT="true"
+            took_action="true"
+          fi
         else
           tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted merge retry for ready-to-merge issue (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "DEBUG"
           STALL_RECOVERY_SHOULD_INCREMENT="true"

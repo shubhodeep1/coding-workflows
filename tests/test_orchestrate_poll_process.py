@@ -32469,5 +32469,180 @@ def test_final_merge_auto_resume_ignores_other_failed_projects() -> None:
 	assert result["latest_state"]["status"] == "failed"
 
 
+
+# --- Issue #9732: standalone attempt_merge waits on the review auto-merge rule ---
+
+_STALL_MERGE_SHA = "a" * 40
+_STALL_MERGE_ORCH_POLL_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
+
+
+def _run_stall_merge_required_checks(
+	tmp_path: Path,
+	*,
+	state: str = "open",
+	mergeable: str = "true",
+	head_sha: str = _STALL_MERGE_SHA,
+	fresh_rc: int = 0,
+	wait_rc: int = 0,
+	wait_outcome: str = "ok",
+	final_ci_outcome: str = "",
+	runs_pending: str = "0",
+	ci_state: str = "success",
+	merge_rc: int = 0,
+) -> tuple[str, list[str]]:
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	helper = _extract_bash_function(source, "_standalone_attempt_merge_required_checks()\n{")
+	log = tmp_path / "calls.log"
+	log.write_text("", encoding="utf-8")
+	q = shlex.quote
+	script = (
+		"set -euo pipefail\n"
+		f"LOG={q(str(log))}\n"
+		"export REVIEW_FINAL_CI_WORKFLOW=ci.yml\n"
+		f"_pr_base_fresh_for_merge() {{ echo \"fresh $*\" >> \"$LOG\"; return {fresh_rc}; }}\n"
+		"_pr_wait_for_required_checks() {\n"
+		"  echo \"wait $* head_ref=${PR_CHECKS_HEAD_REF:-} wf=${REVIEW_FINAL_CI_WORKFLOW:-}\" >> \"$LOG\"\n"
+		f"  PR_CHECKS_WAIT_OUTCOME={q(wait_outcome)}\n"
+		f"  PR_FINAL_CI_OUTCOME={q(final_ci_outcome)}\n"
+		f"  PR_CHECKS_RUNS_PENDING={q(runs_pending)}\n"
+		f"  PR_CHECKS_LAST_CI_STATE={q(ci_state)}\n"
+		f"  return {wait_rc}\n"
+		"}\n"
+		f"_orch_squash_merge_bound() {{ echo \"merge $*\" >> \"$LOG\"; return {merge_rc}; }}\n"
+		+ helper
+		+ "rc=0\n"
+		+ "_standalone_attempt_merge_required_checks 501 416 "
+		+ " ".join(q(v) for v in (state, mergeable, head_sha, "main", "ai/issue-501"))
+		+ " || rc=$?\n"
+		+ 'echo "rc=${rc} reason=${STALL_MERGE_REFUSAL_REASON} in_flight=${STALL_MERGE_CHECKS_IN_FLIGHT}"\n'
+	)
+	res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+	assert res.returncode == 0, res.stdout + res.stderr
+	calls = [line for line in log.read_text(encoding="utf-8").splitlines() if line]
+	return res.stdout.strip().splitlines()[-1], calls
+
+
+def test_stall_merge_required_checks_flag_parsing():
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	fn = _extract_bash_function(source, "_stall_merge_required_checks_enabled()\n{")
+	script = fn + 'rc=0\n_stall_merge_required_checks_enabled || rc=$?\necho "rc=${rc}"\n'
+
+	def run(value):
+		env = {k: v for k, v in os.environ.items() if k != "STALL_MERGE_REQUIRED_CHECKS_ENABLED"}
+		if value is not None:
+			env["STALL_MERGE_REQUIRED_CHECKS_ENABLED"] = value
+		res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, check=False)
+		assert res.returncode == 0, res.stderr
+		return res.stdout
+
+	for value in (None, "", "TRUE", "true", " True "):
+		out = run(value)
+		assert out.strip().endswith("rc=0"), (value, out)
+		assert "::warning::" not in out
+	for value in ("false", "False", " FALSE "):
+		out = run(value)
+		assert out.strip().endswith("rc=1"), (value, out)
+		assert "::warning::" not in out
+	out = run("maybe")
+	assert out.strip().endswith("rc=1"), out
+	assert "::warning::STALL_MERGE_REQUIRED_CHECKS_ENABLED" in out
+
+
+def test_standalone_attempt_merge_required_checks_merges_only_on_rc0(tmp_path):
+	result, calls = _run_stall_merge_required_checks(tmp_path)
+	assert result == "rc=0 reason= in_flight=false"
+	assert calls == [
+		f"fresh 416 {_STALL_MERGE_SHA} main",
+		f"wait 416 {_STALL_MERGE_SHA} main 0 head_ref=ai/issue-501 wf=ci.yml",
+		f"merge 416 {_STALL_MERGE_SHA} auto",
+	]
+	# Wait rc != 0: never merge.
+	result, calls = _run_stall_merge_required_checks(tmp_path, wait_rc=1, wait_outcome="failed", ci_state="failure")
+	assert result == "rc=1 reason=checks_incomplete in_flight=false"
+	assert not any(call.startswith("merge ") for call in calls)
+
+
+def test_standalone_attempt_merge_required_checks_dispatch_in_flight_refuses_without_merge(tmp_path):
+	result, calls = _run_stall_merge_required_checks(
+		tmp_path, wait_rc=1, wait_outcome="timeout", final_ci_outcome="dispatched", ci_state="absent",
+	)
+	assert result == "rc=1 reason=checks_incomplete in_flight=true"
+	assert [c.split(" ", 1)[0] for c in calls] == ["fresh", "wait"]
+	# A CI run already pending on the head is in flight too.
+	result, calls = _run_stall_merge_required_checks(
+		tmp_path, wait_rc=1, wait_outcome="timeout", final_ci_outcome="exists", runs_pending="2", ci_state="absent",
+	)
+	assert result == "rc=1 reason=checks_incomplete in_flight=true"
+	# A refused dispatch (nothing in flight) is counted.
+	result, calls = _run_stall_merge_required_checks(
+		tmp_path, wait_rc=1, wait_outcome="timeout", final_ci_outcome="dispatch_failed", ci_state="absent",
+	)
+	assert result == "rc=1 reason=checks_incomplete in_flight=false"
+	# A failed head is never in flight.
+	result, calls = _run_stall_merge_required_checks(
+		tmp_path, wait_rc=1, wait_outcome="failed", final_ci_outcome="dispatched", ci_state="failure",
+	)
+	assert result == "rc=1 reason=checks_incomplete in_flight=false"
+	assert not any(call.startswith("merge ") for call in calls)
+
+
+def test_standalone_attempt_merge_required_checks_first_refusal_reasons(tmp_path):
+	for kwargs, reason in (
+		({"state": "closed", "mergeable": "false", "head_sha": "abc"}, "state_not_open"),
+		({"mergeable": "false", "head_sha": "abc"}, "not_mergeable"),
+		({"mergeable": "", "head_sha": _STALL_MERGE_SHA}, "not_mergeable"),
+		({"head_sha": "abc1234"}, "bad_head_sha"),
+	):
+		result, calls = _run_stall_merge_required_checks(tmp_path, **kwargs)
+		assert result == f"rc=1 reason={reason} in_flight=false", (kwargs, result)
+		assert calls == [], (kwargs, calls)
+	result, calls = _run_stall_merge_required_checks(tmp_path, fresh_rc=1)
+	assert result == "rc=1 reason=base_not_fresh in_flight=false"
+	assert [c.split(" ", 1)[0] for c in calls] == ["fresh"]
+	result, calls = _run_stall_merge_required_checks(tmp_path, merge_rc=1)
+	assert result == "rc=1 reason=merge_call_failed in_flight=false"
+	assert [c.split(" ", 1)[0] for c in calls] == ["fresh", "wait", "merge"]
+
+
+def test_standalone_attempt_merge_arm_gates_new_chain_and_keeps_legacy():
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	body = _extract_bash_function(source, "run_standalone_stall_recovery() {")
+	start = body.index("      attempt_merge)\n")
+	arm = body[start:body.index("\n        ;;\n", start)]
+	assert "if _stall_merge_required_checks_enabled; then" in arm
+	assert '_standalone_attempt_merge_required_checks "${issue_num}" "${merge_pr}"' in arm
+	# Flag off: the legacy chain is unchanged.
+	assert '&& _pr_checks_completed "${merge_pr}" "${merge_head_sha}" \\\n' in arm
+	assert '&& _pr_base_fresh_for_merge "${merge_pr}" "${merge_head_sha}" "${merge_base_ref}"; then' in arm
+	assert '_orch_squash_merge_bound "${merge_pr}" "${merge_head_sha}" auto || true' in arm
+	assert arm.index("_stall_merge_required_checks_enabled") < arm.index("_pr_checks_completed")
+	# Refusals are recorded; lease wait keeps its action and no increment.
+	assert "STALL_MERGE_REFUSAL issue=${issue_num} pr=${merge_pr}" in arm
+	assert 'STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_refused_${STALL_MERGE_REFUSAL_REASON}"' in arm
+	assert 'STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_skipped_merge_lease_wait"' in arm
+	lease = arm[arm.index('= "lease_wait" ]; then'):arm.index("attempt_merge_skipped_merge_lease_wait")]
+	assert "STALL_RECOVERY_SHOULD_INCREMENT" not in lease
+	refused = arm[arm.index('attempt_merge_refused_${STALL_MERGE_REFUSAL_REASON}'):]
+	refused = refused[:refused.index("\n        else\n")]
+	in_flight = refused[refused.index('"${STALL_MERGE_CHECKS_IN_FLIGHT:-false}" = "true"'):refused.index("          else\n")]
+	assert "STALL_RECOVERY_SHOULD_INCREMENT" not in in_flight
+	assert 'STALL_RECOVERY_SHOULD_INCREMENT="true"' in refused
+	# The head ref comes from the PR JSON already read (no extra API call).
+	assert "merge_head_ref=\"$(printf '%s' \"${merge_pr_json}\" | jq -r" in arm
+
+
+def test_orchestrate_poll_steps_carry_stall_merge_final_ci_env():
+	wf = _STALL_MERGE_ORCH_POLL_WF.read_text(encoding="utf-8")
+	lines = (
+		"          STALL_MERGE_REQUIRED_CHECKS_ENABLED: ${{ vars.STALL_MERGE_REQUIRED_CHECKS_ENABLED || 'true' }}\n",
+		"          REVIEW_FINAL_CI_WORKFLOW: ${{ github.repository == 'shubhodeep1/coding-workflows' && 'ci.yml' || '' }}\n",
+	)
+	for step in ("Process each tracking issue", "Run standalone stall recovery without active projects"):
+		start = wf.index(f"      - name: {step}\n")
+		end = wf.find("\n      - name:", start + 1)
+		block = wf[start:end if end != -1 else len(wf)]
+		for line in lines:
+			assert block.count(line) == 1, (step, line)
+
 if __name__ == "__main__":
 	raise SystemExit(main())
