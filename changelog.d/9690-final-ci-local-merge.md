@@ -7,7 +7,7 @@ On 2026-11-18 the final CI runs of PR #9690 (run 44277478295) and PR #9681 (run 
 | --- | --- |
 | Jobs that failed on a stale merge ref, run 44285991274 | 38 of 38 |
 | Fetch window for the local merge (`CI_FINAL_MERGE_REF_MERGE_DEPTH`) | 200 commits (1-1000) |
-| Extra API reads per job | 1 (`GET actions/runs/<id>`) |
+| Extra API reads per job | 0 when the event payload carries `repository.pushed_at`, else 1 (`GET actions/runs/<id>`) |
 | Local merge time on this repository | about 12 s |
 
 What this means for operators: a reviewed PR whose merge ref GitHub has not refreshed gets a real final CI verdict on the first run instead of a red `lint` that sends it back through `final-ci-failed` and the sweep's base sync. Grep `CI_FINAL_MERGE_REF` with `outcome=merged_locally` to see which jobs merged locally; every job of a run logs the same `tree=` value.
@@ -16,4 +16,5 @@ What this means for operators: a reviewed PR whose merge ref GitHub has not refr
 
 - The local merge commit has fixed author, committer, dates and message, so it is the same commit in every job that builds it. Its parents are the pinned base and the head, so `HEAD^1` and `HEAD^2` keep their meaning for the later steps.
 - origin does not have that commit. The script appends `CI_FINAL_MERGE_REF_LOCAL_MERGE=<sha>` to `GITHUB_ENV`, and the three "Fetch base commits for the shallow checkout" steps and the agents.md direct-edit check in `ci.yml` then fetch the merge's parents instead of HEAD.
-- The pin is the newest first-parent commit of the base whose committer date is not after the run's `created_at`. If it cannot be computed, the job falls back to the live tip as before and logs `pin=none pin_reason=<token>`.
+- The pin is the newest first-parent commit of the base whose committer date is not after the event payload's `repository.pushed_at` (or, without it, the run's `created_at`). If the pin cannot be computed, the job falls back to the live tip as before and logs `pin=none pin_reason=<token>`.
+- The local merge reads attributes from the empty tree, so a `.gitattributes` merge driver cannot hide a conflict that GitHub's merge would report.

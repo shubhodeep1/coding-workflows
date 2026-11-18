@@ -47,6 +47,17 @@ FAKE_GH = textwrap.dedent(
 		target = os.environ.get("FAKE_GH_REFRESH_TO", "")
 		if target:
 			subprocess.run(["git", "-C", os.environ["FAKE_ORIGIN"], "update-ref", "refs/pull/7/merge", target], check=True)
+		move_main = os.environ.get("FAKE_GH_MOVE_MAIN_TO", "")
+		if move_main:
+			subprocess.run(["git", "-C", os.environ["FAKE_ORIGIN"], "update-ref", "refs/heads/main", move_main], check=True)
+		seq = os.environ.get("FAKE_GH_MERGEABLE_SEQ", "")
+		if seq:
+			counter = os.environ["FAKE_GH_LOG"] + ".mergeable"
+			n = int(open(counter).read()) if os.path.exists(counter) else 0
+			open(counter, "w").write(str(n + 1))
+			answers = seq.split(",")
+			print(answers[min(n, len(answers) - 1)])
+			sys.exit(0)
 		print(os.environ.get("FAKE_GH_MERGEABLE", "true"))
 		sys.exit(0)
 	if ".base.ref" in jq:
@@ -225,9 +236,50 @@ def test_local_merge_conflict_fails_the_job(world) -> None:
 	result, tested, _ = world["run"](env={"GITHUB_SHA": world["conflicting"]})
 	assert result.returncode == 1
 	assert "::error::CI_FINAL_MERGE_REF: PR #7" in result.stdout and "does not merge cleanly" in result.stdout
-	assert f"outcome=conflict reason=merge_conflict base=main tested_base={world['old_base']} tip={world['new_base']}" in result.stdout
+	assert f"outcome=conflict reason=merge_conflict base=main tested_base={world['new_base']} tip={world['new_base']}" in result.stdout
 	assert tested == world["conflicting_old_merge"]
 	assert result.exported == []
+
+
+def test_merge_driver_in_gitattributes_cannot_hide_a_conflict(world, tmp_path: Path) -> None:
+	"""A union driver would merge both sides of a.txt; the local merge ignores attributes and fails."""
+	clone = tmp_path / "attrs"
+	_git(tmp_path, "clone", "-q", str(world["origin"]), str(clone))
+	_git(clone, "checkout", "-q", "--detach", world["conflicting"])
+	(clone / ".gitattributes").write_text("a.txt merge=union\n", encoding="utf-8")
+	_git(clone, "add", ".gitattributes")
+	_git(clone, "commit", "-q", "-m", "union driver", date="00:50:00")
+	union_head = _git(clone, "rev-parse", "HEAD")
+	_git(clone, "checkout", "-q", "--detach", world["old_base"])
+	_git(clone, "merge", "-q", "--no-ff", "-m", "union old merge", union_head, date="00:51:00")
+	union_old_merge = _git(clone, "rev-parse", "HEAD")
+	_git(clone, "push", "-q", "origin", f"{union_head}:refs/heads/union", f"+{union_old_merge}:refs/pull/7/merge")
+	result, tested, _ = world["run"](env={"GITHUB_SHA": union_head})
+	assert result.returncode == 1, result.stdout + result.stderr
+	assert "outcome=conflict reason=merge_conflict" in result.stdout
+	assert tested == union_old_merge
+
+
+def test_github_conflict_past_the_pin_defers_to_the_local_merge(world) -> None:
+	"""main moves to base 3 during the attempts and GitHub judges that tip; the merge into the pin is clean."""
+	result, tested, calls = world["run"](env={"FAKE_GH_MOVE_MAIN_TO": world["later_base"], "FAKE_GH_MERGEABLE_SEQ": "true,false"})
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "past this run's base" in result.stdout
+	assert f"outcome=merged_locally reason=not_refreshed base=main tested_base={world['new_base']} tip={world['later_base']}" in result.stdout
+	_assert_local_merge_of(result, tested, world, world["new_base"], world["new_merge"])
+	assert sum(1 for c in calls if ".mergeable | tostring" in c) == 2
+
+
+def test_event_payload_pushed_at_pins_without_an_api_call(world, tmp_path: Path) -> None:
+	_git(world["origin"], "update-ref", "refs/heads/main", world["later_base"])
+	for value in (f"{DAY}03:00:00Z", 1767236400):  # 03:00 UTC as ISO and as a push-event epoch
+		event = tmp_path / "event.json"
+		event.write_text(json.dumps({"repository": {"pushed_at": value}}), encoding="utf-8")
+		result, tested, calls = world["run"](env={"GITHUB_EVENT_PATH": str(event), "FAKE_GH_CREATED_AT": ""})
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert f"pin={world['new_base']} pin_source=event_pushed_at" in result.stdout
+		assert not any(".created_at" in " ".join(c) for c in calls)
+		_assert_local_merge_of(result, tested, world, world["new_base"], world["new_merge"])
 
 
 def test_head_that_moved_during_the_refresh_fails_open(world) -> None:

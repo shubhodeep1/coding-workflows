@@ -152,7 +152,8 @@ jobs:
           # other event keeps the default ref.
           ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
 
-      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # The merge ref must merge into the run's base (the base tip when the
+      # run was dispatched, the same in every job): GitHub refreshes
       # it lazily, and #9602's final run tested a base that had fixed the
       # failure two hours earlier. Refreshes a stale ref, else builds the
       # merge into the run's pinned base itself, or fails the job;
@@ -733,7 +734,8 @@ jobs:
           # step's sync need, and fails the job if it cannot.
           fetch-depth: 1
 
-      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # The merge ref must merge into the run's base (the base tip when the
+      # run was dispatched, the same in every job): GitHub refreshes
       # it lazily, and #9602's final run tested a base that had fixed the
       # failure two hours earlier. Refreshes a stale ref, else builds the
       # merge into the run's pinned base itself, or fails the job;
@@ -1379,7 +1381,8 @@ jobs:
           # other event keeps the default ref.
           ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
 
-      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # The merge ref must merge into the run's base (the base tip when the
+      # run was dispatched, the same in every job): GitHub refreshes
       # it lazily, and #9602's final run tested a base that had fixed the
       # failure two hours earlier. Refreshes a stale ref, else builds the
       # merge into the run's pinned base itself, or fails the job;
@@ -1878,7 +1881,8 @@ jobs:
           # other event keeps the default ref.
           ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
 
-      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # The merge ref must merge into the run's base (the base tip when the
+      # run was dispatched, the same in every job): GitHub refreshes
       # it lazily, and #9602's final run tested a base that had fixed the
       # failure two hours earlier. Refreshes a stale ref, else builds the
       # merge into the run's pinned base itself, or fails the job;
@@ -2501,7 +2505,8 @@ jobs:
           # its `base...HEAD` diff needs, and fails the job if it cannot.
           fetch-depth: 1
 
-      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # The merge ref must merge into the run's base (the base tip when the
+      # run was dispatched, the same in every job): GitHub refreshes
       # it lazily, and #9602's final run tested a base that had fixed the
       # failure two hours earlier. Refreshes a stale ref, else builds the
       # merge into the run's pinned base itself, or fails the job;
@@ -3300,7 +3305,8 @@ jobs:
           # other event keeps the default ref.
           ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
 
-      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # The merge ref must merge into the run's base (the base tip when the
+      # run was dispatched, the same in every job): GitHub refreshes
       # it lazily, and #9602's final run tested a base that had fixed the
       # failure two hours earlier. Refreshes a stale ref, else builds the
       # merge into the run's pinned base itself, or fails the job;
@@ -4112,7 +4118,8 @@ jobs:
           # step's sync need, and fails the job if it cannot.
           fetch-depth: 1
 
-      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # The merge ref must merge into the run's base (the base tip when the
+      # run was dispatched, the same in every job): GitHub refreshes
       # it lazily, and #9602's final run tested a base that had fixed the
       # failure two hours earlier. Refreshes a stale ref, else builds the
       # merge into the run's pinned base itself, or fails the job;
@@ -4426,7 +4433,8 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # The merge ref must merge into the run's base (the base tip when the
+      # run was dispatched, the same in every job): GitHub refreshes
       # it lazily, and #9602's final run tested a base that had fixed the
       # failure two hours earlier. Refreshes a stale ref, else builds the
       # merge into the run's pinned base itself, or fails the job;
@@ -4572,7 +4580,8 @@ jobs:
           fetch-depth: 3
           persist-credentials: false
 
-      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # The merge ref must merge into the run's base (the base tip when the
+      # run was dispatched, the same in every job): GitHub refreshes
       # it lazily, and #9602's final run tested a base that had fixed the
       # failure two hours earlier. Refreshes a stale ref, else builds the
       # merge into the run's pinned base itself, or fails the job;
@@ -4685,7 +4694,8 @@ jobs:
           fetch-depth: 2
           persist-credentials: false
 
-      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # The merge ref must merge into the run's base (the base tip when the
+      # run was dispatched, the same in every job): GitHub refreshes
       # it lazily, and #9602's final run tested a base that had fixed the
       # failure two hours earlier. Refreshes a stale ref, else builds the
       # merge into the run's pinned base itself, or fails the job;

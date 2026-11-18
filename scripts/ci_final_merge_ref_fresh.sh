@@ -13,8 +13,9 @@
 # checked-out merge commit's first parent with the base the run tests:
 #   - The run's base is pinned (final-CI local merge, 2026-11-18): the newest
 #     first-parent commit of the base branch whose committer date is not after
-#     the run's `created_at` (one `GET actions/runs/<GITHUB_RUN_ID>`), i.e. the
-#     base tip when the run was dispatched. Every job of the run, and every
+#     the event payload's `repository.pushed_at` (GITHUB_EVENT_PATH; without
+#     it, the run's `created_at` from one `GET actions/runs/<GITHUB_RUN_ID>`),
+#     i.e. the base tip when the run was dispatched. Every job of the run, and every
 #     re-run attempt, computes the same pin from the same immutable history,
 #     so all jobs test the same base even when they start an hour apart and
 #     the base moves in between. When the live tip (`git ls-remote`, no API
@@ -51,8 +52,10 @@
 #     that merges locally builds the same commit; the log carries `merge=` and
 #     `tree=`, and the fresh and refreshed lines carry `tree=` too, so a run's
 #     jobs can be compared;
-#   - GitHub reports the PR as not mergeable during the attempts
-#     (`outcome=conflict reason=not_mergeable`), or the local merge conflicts
+#   - GitHub reports the PR as not mergeable during the attempts while the
+#     tip is still the pin (`outcome=conflict reason=not_mergeable`; once the
+#     tip has moved past the pin, the local merge into the pin decides), or
+#     the local merge conflicts (`.gitattributes` merge drivers are ignored)
 #     (`outcome=conflict reason=merge_conflict`): `::error::` and exit 1;
 #   - the local merge cannot be built (`outcome=stale` with reason
 #     `merge_base_too_deep`: the merge base is more than
@@ -79,7 +82,8 @@
 # Usage: ci_final_merge_ref_fresh.sh [--depth <n>]   (fetch depth of the
 # job's checkout, default 1, 1-50; the re-fetch keeps the same depth)
 # Env: FINAL_CI_PR_NUMBER (empty = not a final-CI run, no-op), GITHUB_SHA,
-# GITHUB_REPOSITORY, GITHUB_RUN_ID (the pin), GITHUB_ENV (optional), GH_TOKEN
+# GITHUB_REPOSITORY, GITHUB_EVENT_PATH and GITHUB_RUN_ID (the pin), GITHUB_ENV
+# (optional), GH_TOKEN
 # (optional: without it, or when the token cannot read an endpoint, the PR and
 # the run are read from the public REST API unauthenticated;
 # CI_FINAL_MERGE_REF_API_URL overrides the API base for tests),
@@ -88,8 +92,8 @@
 # API budget (§15): one `GET pulls/<n>` for the base branch name (the job's
 # shallow-checkout step reads the same PR later for its own exports; the
 # check must run before that step, so it cannot reuse that read), one
-# `GET actions/runs/<id>` for the pin (no earlier step of the job reads the
-# run), plus one `GET pulls/<n>` per refresh attempt, only when the merge ref
+# `GET actions/runs/<id>` for the pin only when the event payload carries no
+# `repository.pushed_at` (no earlier step of the job reads the run), plus one `GET pulls/<n>` per refresh attempt, only when the merge ref
 # is stale and the pin is the live tip.
 # Log: `CI_FINAL_MERGE_REF pr=<n> head=<sha> outcome=fresh|refreshed|merged_locally|stale|conflict|skipped reason=<token> [base=<ref>] [tested_base=<sha>] [tip=<sha>] [attempt=<n>] [merge=<sha>] [tree=<sha>] [pin=<sha>|pin=none pin_reason=<token>]`.
 
@@ -100,6 +104,7 @@ set -uo pipefail
 CI_FINAL_MERGE_REF_LOCAL_IDENTITY_NAME="final-ci-local-merge"
 CI_FINAL_MERGE_REF_LOCAL_IDENTITY_EMAIL="final-ci-local-merge@invalid"
 CI_FINAL_MERGE_REF_LOCAL_DATE="2000-01-01T00:00:00+0000"
+CI_FINAL_MERGE_REF_EMPTY_TREE="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 ci_final_merge_ref_log()
 {
@@ -150,15 +155,35 @@ ci_final_merge_ref_compute_pin()
 	local base_ref="$1" live_tip="$2" merge_depth="$3" run_created="" run_created_epoch="" tip_epoch="" pinned=""
 	CI_FINAL_MERGE_REF_PIN=""
 	CI_FINAL_MERGE_REF_PIN_REASON=""
-	if ! [[ "${GITHUB_RUN_ID:-}" =~ ^[1-9][0-9]*$ ]]; then
-		CI_FINAL_MERGE_REF_PIN_REASON="run_id_invalid"
-		return 0
+	CI_FINAL_MERGE_REF_PIN_SOURCE=""
+	# The event payload's `repository.pushed_at` (the repository's last push of
+	# any branch when the event was created) is the same file in every job and
+	# attempt and costs no API call or token scope; every base push before the
+	# dispatch is at or before it, and none after. Without it, the run's
+	# `created_at` (one GET) bounds the same tip.
+	if [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -r "${GITHUB_EVENT_PATH}" ]; then
+		run_created="$(jq -r '.repository.pushed_at // "" | tostring' "${GITHUB_EVENT_PATH}" 2>/dev/null || true)"
 	fi
-	run_created="$(ci_final_merge_ref_api "actions/runs/${GITHUB_RUN_ID}" '.created_at // ""' || true)"
-	if ! [[ "${run_created}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
-		|| ! run_created_epoch="$(date -u -d "${run_created}" +%s 2>/dev/null)" || ! [[ "${run_created_epoch}" =~ ^[0-9]+$ ]]; then
-		CI_FINAL_MERGE_REF_PIN_REASON="run_created_unreadable"
-		return 0
+	if [[ "${run_created}" =~ ^[1-9][0-9]{8,10}$ ]]; then
+		run_created_epoch="${run_created}"
+	elif [[ "${run_created}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+		run_created_epoch="$(date -u -d "${run_created}" +%s 2>/dev/null || true)"
+	fi
+	if [[ "${run_created_epoch}" =~ ^[0-9]+$ ]]; then
+		CI_FINAL_MERGE_REF_PIN_SOURCE="event_pushed_at"
+	else
+		CI_FINAL_MERGE_REF_PIN_SOURCE="run_created_at"
+		if ! [[ "${GITHUB_RUN_ID:-}" =~ ^[1-9][0-9]*$ ]]; then
+			CI_FINAL_MERGE_REF_PIN_REASON="run_id_invalid"
+			return 0
+		fi
+		run_created="$(ci_final_merge_ref_api "actions/runs/${GITHUB_RUN_ID}" '.created_at // ""' || true)"
+		run_created_epoch=""
+		if ! [[ "${run_created}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
+			|| ! run_created_epoch="$(date -u -d "${run_created}" +%s 2>/dev/null)" || ! [[ "${run_created_epoch}" =~ ^[0-9]+$ ]]; then
+			CI_FINAL_MERGE_REF_PIN_REASON="run_created_unreadable"
+			return 0
+		fi
 	fi
 	# Cheap path: the live tip already existed when the run was created. Fetch
 	# only a missing tip, so a deeper checkout keeps its history.
@@ -209,7 +234,10 @@ ci_final_merge_ref_merge_locally()
 		CI_FINAL_MERGE_REF_LOCAL_REASON="merge_base_too_deep"
 		return 2
 	fi
-	merge_tree_out="$(git -c core.hooksPath=/dev/null merge-tree --write-tree --no-messages "${merge_into}" "${GITHUB_SHA}" 2>/dev/null)" || merge_tree_rc=$?
+	# Attributes come from the empty tree, so a `.gitattributes` merge driver
+	# (this repository sets `CHANGELOG.md merge=union`) cannot resolve a
+	# conflict that GitHub's merge would report: a doubtful merge fails.
+	merge_tree_out="$(git -c core.hooksPath=/dev/null --attr-source="${CI_FINAL_MERGE_REF_EMPTY_TREE}" merge-tree --write-tree --no-messages "${merge_into}" "${GITHUB_SHA}" 2>/dev/null)" || merge_tree_rc=$?
 	if [ "${merge_tree_rc}" -eq 1 ]; then
 		CI_FINAL_MERGE_REF_LOCAL_REASON="merge_conflict"
 		return 1
@@ -305,7 +333,7 @@ ci_final_merge_ref_main()
 	ci_final_merge_ref_compute_pin "${base_ref}" "${tip}" "${merge_depth}"
 	pin="${CI_FINAL_MERGE_REF_PIN}"
 	if [ -n "${pin}" ]; then
-		pin_note="pin=${pin}"
+		pin_note="pin=${pin} pin_source=${CI_FINAL_MERGE_REF_PIN_SOURCE}"
 	else
 		pin_note="pin=none pin_reason=${CI_FINAL_MERGE_REF_PIN_REASON:-unknown}"
 		echo "CI_FINAL_MERGE_REF: could not pin the run's base (${CI_FINAL_MERGE_REF_PIN_REASON:-unknown}); this job tests the live tip of ${base_ref}."
@@ -327,6 +355,12 @@ ci_final_merge_ref_main()
 		for (( attempt = 1; attempt <= attempts; attempt++ )); do
 			mergeable="$(ci_final_merge_ref_pull '.mergeable | tostring' || true)"
 			[ -n "${mergeable}" ] || mergeable="unknown"
+			if [ "${mergeable}" = "false" ] && [ -n "${pin}" ] && [ "${tip}" != "${pin}" ]; then
+				# GitHub judged a newer tip than the run's pin: let the local
+				# merge into the pin decide, as the run's other jobs do.
+				echo "CI_FINAL_MERGE_REF: GitHub reports a conflict with ${base_ref} at ${tip}, past this run's base ${pin}; merging into the pin locally."
+				break
+			fi
 			if [ "${mergeable}" = "false" ]; then
 				echo "::error::CI_FINAL_MERGE_REF: PR #${FINAL_CI_PR_NUMBER} no longer merges cleanly into ${base_ref} (${tip}); GitHub cannot refresh refs/pull/${FINAL_CI_PR_NUMBER}/merge. Resolve the conflict with the base; this is not a test failure."
 				ci_final_merge_ref_log conflict not_mergeable "base=${base_ref} tested_base=${first} tip=${tip} ${pin_note}"
@@ -383,7 +417,7 @@ ci_final_merge_ref_main()
 	fi
 	if [ "${local_rc}" -eq 1 ]; then
 		echo "::error::CI_FINAL_MERGE_REF: PR #${FINAL_CI_PR_NUMBER} (${GITHUB_SHA}) does not merge cleanly into ${base_ref} at ${merge_into}. Resolve the conflict with the base; this is not a test failure."
-		ci_final_merge_ref_log conflict merge_conflict "base=${base_ref} tested_base=${first:-none} tip=${merge_into} ${pin_note}"
+		ci_final_merge_ref_log conflict merge_conflict "base=${base_ref} tested_base=${merge_into} tip=${tip:-none} ${pin_note}"
 		return 1
 	fi
 	if [ "${CI_FINAL_MERGE_REF_LOCAL_REASON}" = "merge_fetch_failed" ] && [ "${CI_FINAL_MERGE_REF_FETCHED}" != "true" ]; then
