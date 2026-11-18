@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/alert_triage.py:685-691 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: In decide_group(), the host's `pipeline_blocked` override (alert from a pipeline_self_files workflow, `files` intersecting pipeline_self_files, or a stalled `ai:alert-triage` heal issue) runs only when the model returns `healable` or `pipeline_blocked`, so a `noise` or `environmental` verdict routes the group to `done` with no escalation or self-fix dispatch.\n  WHY: The plan (docs/plans/alert-triage-auto-heal-plan.md:308-318) and the linked issue say the host, not the model, decides pipeline_blocked, and alert text is untrusted and can steer the model; all four flagging reviewers rated it MAJOR (mapped to high). anthropic_claude-sonnet-5_5 explicitly disagreed and called it a deliberate, conservative design choice, citing the test_decide_rows fixture, the agents.d fragment and the plan's routing table at lines 320-328.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- Did not adopt luna's pass-1 finding on the `decide_group()` noise/environmental override: that code was not touched by the last run, and the behavior is deliberate (fixture `(\"noise\", {\"from_self_workflow\": True}, [], (\"noise\", \"done\", \"noise\"))`, the agents.d fragment, and the plan's routing table at docs/plans/alert-triage-auto-heal-plan.md lines 320-328).\n- HARDENING (not a finding): scripts/alert_triage.py and scripts/alert_triage_route.sh | the `result` dict in `prepare()` and `at_prepare()` after the `_at_log \"prepare ...\"` line\n  ISSUE: When list calls keep failing, every group is deferred every hour, nothing is escalated, and the only trace is a `route=deferred reason=tracking_unavailable` log line.\n  FIX: Add `\"lists_ok\": lists_ok` to the result and emit `::warning::` when it is false. Estimated 3-4 lines. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/alert_triage.py:decide_group() lines 685-691 | severity=MAJOR | confidence=5\n  PROBLEM: The host's pipeline_blocked override runs only if the model classifies the group as `healable` or `pipeline_blocked`.\n  WHY: If the model misclassifies the group as `noise` or `environmental`, the host override is bypassed and the group is marked `done` and suppressed, which violates the rule that the host decides pipeline_blocked.\n- HARDENING (not a finding): scripts/alert_triage_route.sh | at_prepare() after the logging line\n  ISSUE: When list calls fail repeatedly, all groups are deferred every hour with no prominent trace for an operator.\n  FIX: Check `lists_ok` and emit `::warning::`. Estimated 3-4 lines. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/alert_triage.py:lines 685-691 (the `if classification in (\"healable\", \"pipeline_blocked\")` guard around `host_blocked`) | severity=MAJOR | confidence=4\n  PROBLEM: The host's `pipeline_blocked` override is skipped when the model returns `noise` or `environmental`, so a group the plan says is pipeline_blocked is silently routed to `done`.\n  WHY: A real failure in a pipeline_self_files entry that the model misclassifies is dropped without escalation, which contradicts `docs/plans/alert-triage-auto-heal-plan.md:308-318`. The `tests/test_alert_triage.py::test_decide_rows` noise row enshrines the deviation. Suggested fix: lift `host_blocked` outside the guard and update the test.\n- HARDENING (not a finding): scripts/alert_triage_route.sh | at_prepare(), after the `prepare \u2026` summary line is logged\n  ISSUE: When list calls keep failing, every group is deferred every hour and nobody is told.\n  FIX: Include `lists_ok` in the summary and emit `::warning::` when it is false. Estimated 3-4 lines. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/alert_triage.py:decide_group(), lines 685-691 | severity=MAJOR | confidence=5\n  PROBLEM: The host's `pipeline_blocked` check runs only when the model classifies the group as `healable` or `pipeline_blocked`.\n  WHY: A group from a pipeline workflow, or one with a stalled `ai:alert-triage` issue, is routed to `done` if the model says `noise` or `environmental`, with no escalation or self-fix dispatch, contrary to the plan.\n- HARDENING (not a finding): scripts/alert_triage.py and scripts/alert_triage_route.sh | prepare() result around line 500; at_prepare() lines 144-147\n  ISSUE: When a tracking-list call fails, groups are deferred and the workflow still succeeds without an explicit warning.\n  FIX: Include `lists_ok` in the summary and emit an Actions warning when it is false. Estimated 3-4 lines. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/alert_triage.py:decide_group() lines 686-691 (with prepare() line 470 setting from_self_workflow, and apply() lines 795-807 writing done markers) | severity=MAJOR | confidence=4\n  PROBLEM: A `noise` or `environmental` verdict falls through to `decision.update(route=\"done\", ...)` even when `group[\"from_self_workflow\"]` is true or the diagnosis `files` intersect pipeline_self_files, so the group gets a done marker and a ledger occurrence with no escalation or self-fix dispatch.\n  WHY: The linked issue says the host, not the model, decides pipeline_blocked, and a hostile log line in untrusted alert text can steer the model to `noise`. The done marker is committed (apply() line 799) and the failure is silently dropped. test_decide_rows encodes this row. Suggested fix: apply the host_blocked re-check to noise/environmental.\n- HARDENING (not a finding): scripts/alert_triage.py | prepare(), after the result dict is built (around line 475); surfaced via at_prepare() in scripts/alert_triage_route.sh lines 163-177\n  ISSUE: When list calls keep failing, every group is deferred every hour, nobody is told, and newer records never enter the 30-record window.\n  FIX: Include `lists_ok` in the summary and emit `::warning::` when it is false. Estimated 3-4 lines. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5c20a3688d4311e0a3b9df7cdf2bf9b397f7e1e9306ad31fe324b9ce6cb09f93",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9679,
+    "run_id": "44339257374",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44339257374",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118175334_a48512a47e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9679,
+    "run_id": "44339257374"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T17:53:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
