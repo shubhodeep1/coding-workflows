@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/rollback_stable.sh:313-333 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: When no target is given, the candidate loop adds to `lookups` only on `release_assets_missing` and breaks once `lookups` reaches `STABLE_ROLLBACK_MAX_CANDIDATES` (default 10), before `check_target` runs on older candidates, so an older eligible release is never checked.\n  WHY: If the ten newest lower same-major releases lack the manifest assets, the run refuses with `no_eligible_target` and the operator must set the target version by hand, which contradicts the issue's rule to pick the highest eligible release automatically; all reviewers rated this NIT.\n- tests/test_agents_fragment_contract.py:test_instructions_point_at_fragments | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The pre-push test gate consistently fails on this test.\n  WHY: The new workflow files and fragments added in this PR are likely not fully integrated with the agent fragment registry contract, which causes CI to fail; the source rated this BLOCKER.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Gate the poller-dispatched promote job (promote-main-to-stable.yml:promote) with the stable rollback hold.\n  expected_change_site: .github/workflows/promote-main-to-stable.yml and scripts/orchestrate_poll_process.sh\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff does not contain `stable_hold` references in .github/workflows/promote-main-to-stable.yml or scripts/orchestrate_poll_process.sh.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/rollback_stable.sh:lines 313-315, 327-329 | severity=NIT | confidence=4\n  PROBLEM: Automatic target selection stops after inspecting ten candidate releases that lack the required manifest assets.\n  WHY: If the ten newest lower same-major releases lack the assets but an older eligible release exists, the script breaks before checking it and refuses to roll back automatically, so the operator must pick a target by hand.\n- tests/test_agents_fragment_contract.py:test_instructions_point_at_fragments | severity=BLOCKER | confidence=4\n  PROBLEM: The pre-push test gate consistently fails on this test.\n  WHY: The new workflow files and fragments added in this PR are likely not fully integrated with the agent fragment registry contract, which causes CI to fail.\n- TASK_GAP\n  Requirement: Gate the poller-dispatched promote job (promote-main-to-stable.yml:promote) with the stable rollback hold.\n  Expected change site: .github/workflows/promote-main-to-stable.yml and scripts/orchestrate_poll_process.sh\n  Evidence of absence: The PR diff does not contain `stable_hold` references in these files.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/rollback_stable.sh:blank-target candidate iteration loop (the `else` branch of target selection; specifically `if [ \"${lookups}\" -ge \"${STABLE_ROLLBACK_MAX_CANDIDATES}\" ]; then break; fi` and the `case \"${TARGET_REFUSAL}\" in release_assets_missing) lookups=$((lookups + 1)) ;; esac` handling immediately above the `done < <(git tag --list 'v*' \u2026` loop terminator) | severity=NIT | confidence=4\n  PROBLEM: `lookups` goes up only on `release_assets_missing` skips, and reaching `STABLE_ROLLBACK_MAX_CANDIDATES` (default 10) causes a plain `break` that falls through to `refuse no_eligible_target`. This breaks the issue's contract that \"A blank target picks the highest same-major release below the current one that passes every check\".\n  WHY: If the ten newest same-major releases predate the `release-manifest.v1.json` rollout, the run refuses with `no_eligible_target` even though an older release has every manifest, and the operator must set `STABLE_ROLLBACK_TARGET_VERSION` by hand. The reviewer suggests that the cap should keep scanning or report a distinct `no_eligible_target_in_window` outcome instead.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/rollback_stable.sh:313-315, 327-333 | severity=NIT | confidence=4\n  PROBLEM: When no target is given, selection stops after ten releases with missing assets, even if an older eligible release exists.\n  WHY: After ten `release_assets_missing` results, the next candidate triggers the break before `check_target` runs, and the script refuses with `no_eligible_target` even though an older release might meet the documented selection criteria.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/rollback_stable.sh:lines 313-331 (blank-target candidate loop, `lookups` cap) | severity=NIT | confidence=4\n  PROBLEM: Selection stops after `STABLE_ROLLBACK_MAX_CANDIDATES` (default 10) candidates with missing assets: `lookups` goes up only on `release_assets_missing` at line 329, and the cap check at lines 319-321 breaks the loop. This happens even when an older eligible release exists. The issue states the default as \"the highest vX.Y.Z below the current stable version that has a sync-manifest.json asset\", with no 10-release bound.\n  WHY: If the ten newest lower same-major releases all lack the assets and the eleventh has them, the run refuses with `reason=no_eligible_target` and the operator must pass `target_version` by hand. The reviewer calls this a documented API-cost tradeoff that still deviates from the issue's stated rule.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e69b6cfa49415950084c9537d9004478210d09070ba3904d0244028f3b141654",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9359,
+    "run_id": "44247941614",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44247941614",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118081607_40da45bbcc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9359,
+    "run_id": "44247941614"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T08:16:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
