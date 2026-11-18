@@ -306,3 +306,49 @@ def test_compare_identical_counts_as_up_to_date() -> None:
 		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, compare_status="identical"))
 	assert "AUTO_RELEASE_SKIPPED reason=up_to_date" in proc.stdout
 	assert not state.get("dispatches")
+
+
+def _hours_ago(hours: int) -> str:
+	from datetime import datetime, timedelta, timezone
+	return (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_wedged_queued_gate_run_does_not_hold_the_release() -> None:
+	"""Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is not in flight."""
+	wedged = {"id": 43095142301, "status": "queued", "conclusion": None, "head_sha": TIP, "head_branch": "stable",
+		"path": ".github/workflows/test-and-mark-stable.yml", "created_at": _hours_ago(25)}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[wedged]))
+	assert proc.returncode == 0, proc.stderr
+	assert f"AUTO_RELEASE_DISPATCHED sha={TIP}" in proc.stdout
+	assert "ZOMBIE_RUN_IGNORED run=43095142301 workflow=.github/workflows/test-and-mark-stable.yml age_h=25 guard=auto_release_gate" in proc.stderr
+	fresh = dict(wedged, id=7, created_at=_hours_ago(23))
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[wedged, fresh]))
+	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[wedged]), env={"ZOMBIE_RUN_MAX_QUEUED_HOURS": "0"})
+	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
+
+
+# The wedged-queued guard contract cases (issue #9473) live in
+# tests/test_zombie_queued_guard_contract.py and are collected here, since CI
+# already runs this file and ci.yml was outside that issue's file grant. A
+# name clash would hide a test, so it fails loudly.
+def _collect_zombie_queued_guard_contract_cases() -> None:
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location(
+		"zombie_queued_guard_contract_cases",
+		Path(__file__).resolve().parent / "test_zombie_queued_guard_contract.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	for case_name, case in sorted(vars(cases).items()):
+		if not case_name.startswith("test_") or not callable(case):
+			continue
+		assert case_name not in globals(), case_name
+		globals()[case_name] = case
+
+
+_collect_zombie_queued_guard_contract_cases()

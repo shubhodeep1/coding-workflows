@@ -148,6 +148,7 @@ jobs:
           PROMOTE_CYCLE_GATE_POLL_SECS: ${{ vars.PROMOTE_CYCLE_GATE_POLL_SECS || '60' }}
           APPLY_ANALYSIS_ON_MAIN_ENABLED: ${{ vars.APPLY_ANALYSIS_ON_MAIN_ENABLED || 'true' }}
           COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS: ${{ vars.COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS || 'OWNER,MEMBER,COLLABORATOR' }}
+          ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
         run: |
           set -euo pipefail
           bash scripts/promote_main_cycle.sh
