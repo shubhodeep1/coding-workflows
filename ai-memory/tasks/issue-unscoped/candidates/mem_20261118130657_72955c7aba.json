@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR title scope also covers \"red-main cascades\" and \"queue-driven re-dispatch\" beyond the runner-image pin (Refs #9421 squash of orchestrator project).\n  expected_change_site: code paths under `scripts/orchestrate_poll_process.sh` / `scripts/orchestrate_state_v2.py` and the orchestrator workflow entries for Phase 2 and Phase 3 of `docs/plans/stuck-backlog-prevention-plan.md`.\n  confidence=4\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: agents.d/changelog.d fragments and the orchestrator integration issue (#9421) explicitly scope this PR to \"Phase 1 \u2014 runner pin and canary\"; the two follow-up phases ship as separate PRs on the same orchestrator project (the previous review aggregator and editor summary already mark them TASK_GAP_DEFERRED, citing the per-phase PR plan); reviewer marked SEVERITY: NIT, \"skipped per the deferred-requirements rule; no action needed in this PR.\" (anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash explicitly checked this and found no gap: docs/plans/stuck-backlog-prevention-plan.md line 94 states \"Each phase is its own PR, independently mergeable, complete on its own and production-safe at merge.\")\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: PR title scope also covers \"red-main cascades\" and \"queue-driven re-dispatch\" beyond the runner-image pin (Refs #9421 squash of orchestrator project).\n  Expected change site: code paths under `scripts/orchestrate_poll_process.sh` / `scripts/orchestrate_state_v2.py` and the orchestrator workflow entries for Phase 2 and Phase 3 of `docs/plans/stuck-backlog-prevention-plan.md`.\n  Evidence of absence: agents.d/changelog.d fragments and the orchestrator integration issue (#9421) explicitly scope this PR to \"Phase 1 \u2014 runner pin and canary\"; the two follow-up phases ship as separate PRs on the same orchestrator project (the previous review aggregator and editor summary already mark them TASK_GAP_DEFERRED, citing the per-phase PR plan).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n  Note: skipped per the deferred-requirements rule; no action needed in this PR.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1d37d578367b5476400e08d34c94b0a23c06b559ce2078b23c755059021997cb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9442,
+    "run_id": "44281693690",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44281693690",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118130657_72955c7aba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9442,
+    "run_id": "44281693690"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T13:06:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
