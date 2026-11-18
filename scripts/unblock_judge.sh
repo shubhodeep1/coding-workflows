@@ -1740,7 +1740,7 @@ unblock_main()
 
 	# The project an item belongs to, and a PR's linked issue.
 	local tracking="" linked="" finding="" body_text pr_json="" head_sha="" head_ref="" head_repo="" binding_issue=""
-	local pr_trusted="false" pr_author="" pr_assoc="" pr_head_repo="" untrusted_project_pr="false"
+	local pr_trusted="false" pr_author="" pr_assoc="" pr_head_repo="" untrusted_project_pr="false" chain_title=""
 	body_text="$(jq -r '.body // ""' "${RUNTIME_DIR}/item.json")"
 	if [ "${ITEM_KIND}" = "issue" ]; then
 		finding="$(jq -r '(.body // "") | [match("<!-- ai:security-finding:([^>]+) -->").captures[0].string] | first // "" | gsub("^\\s+|\\s+$"; "")' "${RUNTIME_DIR}/item.json")"
@@ -1794,6 +1794,15 @@ unblock_main()
 			fi
 		fi
 		linked="$(printf '%s\n' "${body_text}" | grep -oiE '\b(refs|closes|close|closed|fixes|fix|fixed|resolves|resolve|resolved)[[:space:]]+#[0-9]+' | head -n1 | grep -oE '[0-9]+' || true)"
+		# Chain depth cap (unblock_ledger.py MAX_CHAIN_DEPTH): a PR title carries no chain
+		# prefixes, so the title of the issue it implements is read from its
+		# `ai/issue-<n>` head branch (never from the author-controlled body).
+		# §15: no earlier call returns that issue (item.json is the PR), so
+		# this is one GET per judged trusted PR; a failed read sends no title
+		# and the PR's own title is used as before.
+		if [ "${pr_trusted}" = "true" ] && [[ "${head_ref}" =~ ^ai/issue-([1-9][0-9]*)$ ]]; then
+			chain_title="$(gh api "repos/${REPOSITORY}/issues/${BASH_REMATCH[1]}" --jq '.title // ""' 2>/dev/null | head -n 1 | cut -c1-400 || true)"
+		fi
 	fi
 
 	if ! stop_json="$(unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" stop --labels-json "$(cat "${RUNTIME_DIR}/labels.json")")"; then
@@ -1825,8 +1834,8 @@ unblock_main()
 		--argjson has_plan "${has_plan}" --arg title "$(jq -r '.title // ""' "${RUNTIME_DIR}/item.json")" \
 		--arg security_body "${body_text}" \
 		--argjson pr_trusted "${pr_trusted}" --arg pr_author "${pr_author}" --arg pr_head_repo "${pr_head_repo}" --arg pr_head_sha "${head_sha}" \
-		--arg needs_human_digest "${NEEDS_HUMAN_DIGEST_ENABLED}" \
-		'{needs_human_digest: (($needs_human_digest | ascii_downcase) != "false"), repo: $repo, kind: $kind, item: $item, stop: $stop, labels: $labels[0], tracking: (if $tracking == "" then null else ($tracking | tonumber) end), linked_issue: (if $linked == "" then null else ($linked | tonumber) end), has_plan: $has_plan, title: $title, security_finding_id: (if $finding == "" then null else $finding end), security_source_body: (if $kind == "issue" and ($labels[0] | index("ai:security")) != null then $security_body else null end), pr_trusted: $pr_trusted, pr_author: $pr_author, pr_head_repo: $pr_head_repo, pr_head_sha: $pr_head_sha}' \
+		--arg needs_human_digest "${NEEDS_HUMAN_DIGEST_ENABLED}" --arg chain_title "${chain_title}" \
+		'{chain_title: (if $chain_title == "" then null else $chain_title end), needs_human_digest: (($needs_human_digest | ascii_downcase) != "false"), repo: $repo, kind: $kind, item: $item, stop: $stop, labels: $labels[0], tracking: (if $tracking == "" then null else ($tracking | tonumber) end), linked_issue: (if $linked == "" then null else ($linked | tonumber) end), has_plan: $has_plan, title: $title, security_finding_id: (if $finding == "" then null else $finding end), security_source_body: (if $kind == "issue" and ($labels[0] | index("ai:security")) != null then $security_body else null end), pr_trusted: $pr_trusted, pr_author: $pr_author, pr_head_repo: $pr_head_repo, pr_head_sha: $pr_head_sha}' \
 		> "${RUNTIME_DIR}/context.json"
 
 	# A pending fix-up comes first (Q11): wait for it, or run its follow-up.
@@ -2247,6 +2256,9 @@ Still waiting for an operator; last checked ${now}.
 		--trusted-login "${UNBLOCK_LOGIN}" --now "${now}" --kind "${ITEM_KIND}" --rejection-file "${RUNTIME_DIR}/rejection.json")
 	[ -n "${last_activity}" ] && decide_args+=(--last-activity "${last_activity}")
 	unblock_wait_enabled || decide_args+=(--wait-disabled)
+	# Chain depth cap (unblock_ledger.py MAX_CHAIN_DEPTH): the depth is read
+	# from the title of the issue a trusted PR implements, else the item's own.
+	decide_args+=(--chain-title "$(jq -r '(.chain_title // .title // "") | tostring' "${RUNTIME_DIR}/context.json" 2>/dev/null | head -n 1 || true)")
 	# An ai:security issue never gets accept_with_followup on its menu (#6541);
 	# unblock_actions.py refuses it again if this flag is ever missing.
 	if [ "${ITEM_KIND}" = "issue" ] && jq -e 'index("ai:security") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1; then

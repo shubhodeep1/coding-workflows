@@ -5738,3 +5738,81 @@ def test_pr_check_green_ignores_a_cached_verdict_for_another_item(tmp_path: Path
 	result, _, calls = _green_judge(tmp_path, ISSUE, gate)
 	assert f"hold=pr_check_green ref={GREEN_REF} outcome=holding" in result.stdout, result.stdout
 	assert len(calls) == 1 and "--dry-run" in calls[0]
+
+
+# --- Chain depth cap (re-issue / follow-up / fix-up chains) ---
+
+_CHAIN_HEAL_TITLE = "Workflow heal: Internal: AI Review & Autofix [pr:9180] failed 1x"
+_CHAIN_ONE = f"Re-issue of #9190: {_CHAIN_HEAL_TITLE}"
+_CHAIN_TWO = f"Unblock descope for #9261: {_CHAIN_ONE}"
+_CHAIN_NOW = ledger._parse_time("2026-11-18T00:00:00Z")
+
+
+def test_chain_depth_counts_the_leading_chain_prefixes() -> None:
+	for module in (ledger, actions):
+		assert module.chain_depth("T") == 0 and module.chain_depth(None) == 0 and module.chain_depth("") == 0
+		assert module.chain_depth(_CHAIN_ONE) == 1 and module.chain_depth(_CHAIN_TWO) == 2
+		assert module.chain_depth("Follow-up to #3: Unblock operator step for #2: Unblock fix-up for #1: T") == 3
+		# Only a prefix counts, and only in the exact composed form.
+		assert module.chain_depth("Fix the Re-issue of #5: handling") == 0
+		assert module.chain_depth("Re-issue of #0: T") == 0 and module.chain_depth("re-issue of #5: T") == 0
+	assert actions._CHAIN_TITLE_PREFIX_RE.pattern == ledger.CHAIN_TITLE_PREFIX_PATTERN
+	assert ledger.MAX_CHAIN_DEPTH == 2
+	assert ledger.CHAIN_VERDICTS == ("reissue", "accept_with_followup", "descope", "operator_step")
+
+
+def test_chain_cap_takes_the_splitting_verdicts_off_the_menu() -> None:
+	# #9190 -> #9261 -> #9398: at depth 2 the judge may only continue on the item.
+	free = ledger.decide(7, "blocked", FP, [], None, _CHAIN_NOW, chain_title=_CHAIN_ONE)
+	assert free["chain_depth"] == 1 and free["chain_capped"] is False
+	assert set(ledger.CHAIN_VERDICTS) <= set(free["allowed"])
+	capped = ledger.decide(7, "blocked", FP, [], None, _CHAIN_NOW, chain_title=_CHAIN_TWO)
+	assert capped["chain_depth"] == 2 and capped["chain_capped"] is True and capped["terminal"] is False
+	assert not set(ledger.CHAIN_VERDICTS) & set(capped["allowed"])
+	assert set(capped["allowed"]) == set(free["allowed"]) - set(ledger.CHAIN_VERDICTS) and "retry_budget" in capped["allowed"]
+	# No title (the default) is depth 0: today's menu.
+	assert ledger.decide(7, "blocked", FP, [], None, _CHAIN_NOW)["allowed"] == ledger.decide(7, "blocked", FP, [], None, _CHAIN_NOW, chain_title="T")["allowed"]
+	# A splitting verdict the model returns anyway is refused by validate.
+	with pytest.raises(ledger.UsageError):
+		ledger.validate({"verdict": "reissue", "reason": "r", "instructions": "again"}, capped, "acme/app")
+
+
+def test_chain_capped_item_with_nothing_left_is_terminal_and_parks() -> None:
+	# A pull request has no auto_answer / override_guard: with the wait switch
+	# off only retry_budget is left at the cap, and once that is used the menu
+	# is empty, so the item is terminal and the existing park applies.
+	used = [{"item": 7, "round": 1, "fingerprint": FP, "verdict": "retry_budget", "stop": "blocked", "created_at": "2026-11-17T23:00:00Z"}]
+	capped = ledger.decide(7, "blocked", FP, used, None, _CHAIN_NOW, kind="pr", wait_enabled=False, chain_title=_CHAIN_TWO)
+	assert capped["terminal"] is True and capped["terminal_reason"] == "menu_exhausted" and capped["allowed"] == ["close"]
+	ops = actions.plan(_verdict("close", terminal_reason="menu_exhausted"), _ctx("pr", needs_human_digest=True))
+	assert ops == [{"op": "needs_human", "issue": 7, "kind": "pr", "stop": "blocked", "reason": "menu_exhausted"}]
+	# Below the cap the same history still offers the splitting verdicts.
+	assert ledger.decide(7, "blocked", FP, used, None, _CHAIN_NOW, kind="pr", wait_enabled=False, chain_title=_CHAIN_ONE)["terminal"] is False
+
+
+def test_chain_depth_survives_the_pr_hop_through_the_issue_title() -> None:
+	# PR #9283 ("AI implementation for issue #9261") implements a re-issue:
+	# the PR title has no prefix, the issue title it implements has one.
+	pr = _ctx("pr", title="AI implementation for issue #9261", chain_title=_CHAIN_ONE)
+	assert pr["chain_title"] == _CHAIN_ONE
+	for verdict, prefix in (
+		(_verdict("descope", instructions="drop it"), "Unblock descope for #7: "),
+		(_verdict("reissue", instructions="again"), "Re-issue of #7: "),
+		(_verdict("accept_with_followup", instructions="x"), "Follow-up to #7: "),
+	):
+		created = [op for op in actions.plan(verdict, pr) if op["op"] == "create_issue"]
+		assert len(created) == 1 and created[0]["title"] == prefix + _CHAIN_ONE and ledger.chain_depth(created[0]["title"]) == 2
+	# An ordinary issue title leaves the PR title in place (today's titles).
+	plain = _ctx("pr", title="AI implementation for issue #31", chain_title="Add a cache")
+	assert actions.plan(_verdict("reissue", instructions="x"), plain)[0]["title"] == "Re-issue of #7: AI implementation for issue #31"
+	# chain_title is read for a trusted PR only, and never for an issue.
+	assert _ctx("pr", chain_title=_CHAIN_ONE, pr_trusted=False)["chain_title"] is None
+	assert _ctx(chain_title=_CHAIN_ONE)["chain_title"] is None
+	assert _ctx("pr", chain_title="  ")["chain_title"] is None and _ctx("pr", chain_title=5)["chain_title"] is None
+
+
+def test_judge_sends_the_chain_title_to_the_ledger_and_the_planner() -> None:
+	script = (ROOT / "scripts" / "unblock_judge.sh").read_text(encoding="utf-8")
+	assert '[ "${pr_trusted}" = "true" ] && [[ "${head_ref}" =~ ^ai/issue-([1-9][0-9]*)$ ]]' in script
+	assert "chain_title: (if $chain_title == \"\" then null else $chain_title end)" in script
+	assert "decide_args+=(--chain-title " in script and '(.chain_title // .title // "")' in script
