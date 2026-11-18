@@ -3182,6 +3182,10 @@ jobs:
           # Read by partial_delivery.py heal-regression (run-time trend regression rule, Refs #8434).
           WORKFLOW_HEAL_TREND_ENABLED: ${{ vars.WORKFLOW_HEAL_TREND_ENABLED || 'false' }}
           HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED: ${{ vars.HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED || 'true' }}
+          # Red-base approval hold (scripts/plan_base_ci_gate.sh, Refs #9421).
+          RED_BASE_APPROVAL_HOLD_ENABLED: ${{ vars.RED_BASE_APPROVAL_HOLD_ENABLED || 'true' }}
+          RED_BASE_HOLD_WORKFLOWS: ${{ vars.RED_BASE_HOLD_WORKFLOWS || '.github/workflows/ci.yml' }}
+          PLAN_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           # Read as ${PLAN_STEP_REPO} so the run: body carries no expression
           # (tests/test_workflow_file_size_limit.py expression guard).
           PLAN_STEP_REPO: ${{ github.repository }}
@@ -3710,6 +3714,30 @@ jobs:
                   exit 0
                 fi
               fi
+              # Red-base approval hold (Phase 2 of the stuck-backlog plan, Refs #9421).
+              # While the default branch's newest decisive push CI run failed and a
+              # trusted open ai:workflow-heal issue tracks it, a PR started now would
+              # inherit the red base, so the approval is held and the awaiting-approval
+              # path runs. Every read fails open; a missing, symlinked or unsourceable
+              # helper skips the check (legacy behaviour). Heal issues are exempt.
+              # RED_BASE_APPROVAL_HOLD_ENABLED=false turns it off.
+              if [ -f scripts/plan_base_ci_gate.sh ] && [ ! -L scripts/plan_base_ci_gate.sh ] \
+                && { source scripts/plan_base_ci_gate.sh >/dev/null 2>&1; } \
+                && type red_base_approval_hold_check >/dev/null 2>&1; then
+                red_base_labels_json="$(printf '%s' "${CURRENT_ISSUE_JSON}" | jq -c '[.labels[]?.name // empty]' 2>/dev/null)" || red_base_labels_json="[]"
+                [ -n "${red_base_labels_json}" ] || red_base_labels_json="[]"
+                if red_base_approval_hold_check "${PLAN_STEP_REPO}" "${PLAN_DEFAULT_BRANCH:-}" "${ISSUE_NUMBER}" "${red_base_labels_json}" "${heal_cf_route:-false}"; then
+                  echo "AI_PHASE_GATE_V1 phase=plan gate=auto_approve reason=base_ci_red outcome=defer issue=${ISSUE_NUMBER}"
+                  echo "auto_approve_hold_reason=base_ci_red" >> "$GITHUB_OUTPUT"
+                  {
+                    echo "### Automatic plan approval held (base CI red)"
+                    echo ""
+                    echo "The newest \`${RED_BASE_HOLD_WORKFLOW:-none}\` push run on \`${PLAN_DEFAULT_BRANCH:-}\` failed (run \`${RED_BASE_HOLD_RUN_ID:-none}\`) and workflow-heal issue #${RED_BASE_HOLD_HEAL:-none} tracks it, so no automatic \`/approved\` was posted. Stall recovery re-runs the approval checks later; a maintainer can reply \`/approved\` to start now."
+                  } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+                  red_base_approval_hold_comment "${PLAN_STEP_REPO}" "${ISSUE_NUMBER}" "${PLAN_DEFAULT_BRANCH:-}" || true
+                  exit 0
+                fi
+              fi
               # Brief pause so the plan comment is fully indexed by GitHub before
               # the auto-approval comment triggers the implement workflow. Without
               # this, the implement workflow may see stale comment state.
@@ -3735,6 +3763,7 @@ jobs:
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          PLAN_AUTO_APPROVE_HOLD_REASON: ${{ steps.auto_approve.outputs.auto_approve_hold_reason || '' }}
         run: |
           set -euo pipefail
           source scripts/tg_helpers.sh
@@ -3755,6 +3784,12 @@ jobs:
 
           if printf '%s' "${ISSUE_BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
             tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "DEBUG"
+          elif [ "${PLAN_AUTO_APPROVE_HOLD_REASON:-}" = "base_ci_red" ]; then
+            # Red-base approval hold (Refs #9421): stall recovery releases it, so
+            # no human is needed and the notice is DEBUG.
+            MSG+=$'\n'
+            MSG+="Automatic approval held: CI on the default branch is red (stall recovery re-runs the approval checks)."
+            tg_send_phase_tracked "${ISSUE_NUMBER}" "plan" "${MSG}" "DEBUG"
           else
             tg_send_phase_tracked "${ISSUE_NUMBER}" "plan" "${MSG}" "CRITICAL"
           fi
