@@ -28552,8 +28552,10 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     STATE_JSON="${EXTRACTED_STATE_JSON}"
     STATE_COMMENT_COUNT="${EXTRACTED_STATE_COMMENT_COUNT}"
     STATE_FALLBACK_USED="${EXTRACTED_STATE_FALLBACK_USED}"
-    # Not after a fallback: the healing write below must post.
-    if [ "${STATE_FALLBACK_USED}" != "true" ]; then
+    # Not after a fallback (the healing write below must post), and only from
+    # a verified full read: a partial thread can hide a newer chain.
+    if [ "${STATE_FALLBACK_USED}" != "true" ] && [ "${COMMENTS_FETCH_OK:-false}" = "true" ] \
+      && [ "${COMMENTS_FOR_TRACKING_NUM:-}" = "${TRACKING_NUM}" ]; then
       record_state_persisted_sha "$(printf '%s' "${STATE_JSON}" | _state_content_sha 2>/dev/null)" 2>/dev/null || true
     fi
   else

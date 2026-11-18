@@ -383,7 +383,8 @@ def test_poller_records_the_read_chain_only_without_fallback() -> None:
 	text = POLLER.read_text(encoding="utf-8")
 	start = text.index('  record_state_persisted_sha "" 2>/dev/null || true\n  if extract_latest_valid_orchestrator_state "${COMMENTS}"; then')
 	block = text[start:text.index("\n  else\n", start)]
-	assert 'if [ "${STATE_FALLBACK_USED}" != "true" ]; then' in block
+	assert 'if [ "${STATE_FALLBACK_USED}" != "true" ] && [ "${COMMENTS_FETCH_OK:-false}" = "true" ] \\\n' in block
+	assert '&& [ "${COMMENTS_FOR_TRACKING_NUM:-}" = "${TRACKING_NUM}" ]; then' in block
 	assert 'record_state_persisted_sha "$(printf \'%s\' "${STATE_JSON}" | _state_content_sha 2>/dev/null)"' in block
 
 
