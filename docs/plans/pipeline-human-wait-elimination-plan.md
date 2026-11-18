@@ -72,15 +72,19 @@ The decisions were clarified in the authoring session (Q1–Q8 all `A`):
 - **Alternatives considered:** only stop the judge writing steps for observable settings.
 - **Why:** existing stale entries also need clearing, and the tick already exists.
 
-### D10 — R7: accept a stale merge ref when only main syncs moved the base
-- **Chosen:** the freshness guard accepts a stale merge ref when (a) the tested base is an ancestor of the current tip, (b) every commit between them that is not on the default branch is an integration-sync merge or an `[ai-merge-resolve]` commit, and (c) none of the files changed between them is a file the PR changes. Otherwise it fails as today (Q17 A, added 2026-11-18).
-- **Alternatives considered:** pause main → integration syncs while an approved PR's final CI run is queued (Q17 B); both (Q17 C).
-- **Why:** a deterministic check in the guard itself keeps the "never test a meaningfully old base" guarantee, so runner queue time cannot livelock a PR. Pausing syncs would change orchestrator poller timing next to the approved-PR merge loop, which another session owns (D9).
-
 ### D9 — Leave the approved-PR merge loop alone
 - **Chosen:** no change to the `ai:merge-base-sync:v1` repeated update-from-main logic (Q9, assumed A).
 - **Alternatives considered:** include it here.
 - **Why:** another session is investigating it.
+
+### D10 — R7: accept a stale merge ref when only main syncs moved the base
+- **Chosen:** the freshness guard accepts a stale merge ref only when all of these hold. Otherwise it fails as today (Q17 A, added 2026-11-18).
+  - The PR's base is not the default branch, so only integration-branch PRs qualify. A stale default-branch-based PR still fails.
+  - The tested base is an ancestor of the current tip.
+  - Every commit between them that is not on the default branch is an integration-sync merge, whose second parent is a default-branch commit, or an `[ai-merge-resolve]` commit.
+  - None of the files changed between them, counting the old path of a rename, is a file the PR changes.
+- **Alternatives considered:** pause main → integration syncs while an approved PR's final CI run is queued (Q17 B); both (Q17 C).
+- **Why:** a deterministic check in the guard itself keeps a narrower guarantee: the tested base differs from the tip only by main syncs that touch none of the PR's files. Runner queue time then cannot livelock a PR. That is not the full "never test an old base" guarantee, and Risks (R7) records the residue. Pausing syncs would change orchestrator poller timing next to the approved-PR merge loop, which another session owns (D9).
 
 ## Goals
 
@@ -140,7 +144,7 @@ The decisions were clarified in the authoring session (Q1–Q8 all `A`):
   | 8a | `plan.yml` | plan runs, for new blocks |
   | 8b | `scripts/unblock_judge.sh` | the unblock judge's existing schedule, for existing blocks |
   | 9 | `.github/workflows/workflow-log-analysis.yml` `collect-logs` | the existing daily `0 6 * * *` schedule |
-  | 10 | `scripts/ci_final_merge_ref_fresh.sh`, already the step after each final-CI checkout in `ci.yml` | final-CI `workflow_dispatch` runs (no wiring change) |
+  | 10 | `scripts/ci_final_merge_ref_fresh.sh`, already the step after each final-CI checkout in `ci.yml`; the ten step `env:` blocks gain the new switch | final-CI `workflow_dispatch` runs (no new step or job) |
 
 - **Supervisor:** none. Every phase rides an existing scheduler.
 - **DB work:** none.
@@ -202,8 +206,8 @@ There are ten phases and eleven PRs (Phase 8 ships as 8a and 8b). Phase 10 was a
    - **Done:** observable steps are ticked daily, and an empty tracker is closed.
    - **Rollback:** `OPERATOR_STEP_DAILY_TICK_ENABLED=false`.
 10. **Sync-only stale merge ref accepted (R7).**
-    - **Files:** `scripts/ci_final_merge_ref_fresh.sh`, `tests/test_ci_final_merge_ref_fresh.py`, README env var table, fragments.
-    - **Done:** the #9602 shape (merge ref behind only by `chore: sync main into <base>` merges that touch none of the PR's files) logs `outcome=stale_accepted` and the job runs its tests. Any other stale merge ref still fails.
+    - **Files:** `scripts/ci_final_merge_ref_fresh.sh`, `.github/workflows/ci.yml` (the ten final-CI check steps' `env:` blocks), `tests/test_ci_final_merge_ref_fresh.py`, README env var table, fragments.
+    - **Done:** the #9602 shape logs `outcome=stale_accepted`, and the job runs its tests. That shape is an integration-branch PR whose merge ref is behind only by `chore: sync main into <base>` merges that touch none of the PR's files. Any other stale merge ref still fails, including every stale merge ref of a PR based on the default branch.
     - **Rollback:** `CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED=false`.
 
 Phases 3 and 4 both edit `scripts/review_conflict_resolve.sh`, in different functions: the soft-validation block at about :4208 and the targeted-paths block at about :3423. They can conflict textually but not logically, and either can merge first. Phases 6 and 8b both edit `scripts/unblock_judge.sh`, again in different functions (`unblock_hold_condition` and `unblock_nothing_to_implement_close`).
@@ -349,34 +353,55 @@ Phases 3 and 4 both edit `scripts/review_conflict_resolve.sh`, in different func
 
 ### Phase 10: sync-only stale merge ref accepted
 
-1. In `scripts/ci_final_merge_ref_fresh.sh`, add `ci_final_merge_ref_sync_only` and call it in the main flow where the refresh attempts have run out and the merge ref is still stale (today's `outcome=stale` exit). It runs only when `CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED` is `true` (default; same true/1/yes/on parsing as `CI_FINAL_MERGE_REF_FRESH_ENABLED`). Inputs: the PR number, `tested_base` (the merge commit's first parent), `tip` (the live base tip), the base ref and the dispatched head (`GITHUB_SHA`). It accepts only when all of these hold:
+1. In `scripts/ci_final_merge_ref_fresh.sh`, add `ci_final_merge_ref_sync_only`. Call it in the main flow where the refresh attempts have run out and the merge ref is still stale (today's `outcome=stale` exit at about :181).
+   - **Switch:** it runs only when `CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED` is `true` (default `true` in the script itself; same true/1/yes/on parsing as `CI_FINAL_MERGE_REF_FRESH_ENABLED`).
+   - **Inputs:** the PR number, `tested_base`, `tip` (the live base tip), the base ref, the default branch and the dispatched head (`GITHUB_SHA`).
+   - **`tested_base`:** the first parent of the commit actually checked out. The loop's `first` is not the right value: the refresh loop reassigns it from each re-fetched ref (about :159), and when no refresh succeeds the job still has the original checkout. Capture it once before the refresh loop, from the raw commit object (`ci_final_merge_ref_parents HEAD`, since a shallow clone hides it from `rev-parse`), into its own variable.
+   - **Default branch:** read with `git ls-remote --symref origin HEAD`, with no API call, like the tip read.
+
+   It accepts only when all of these hold, checked in this order and stopping at the first failure:
+   0. **Integration base only:** the base ref is not the default branch. For a default-branch-based PR every commit in range is a default-branch commit, so the commit-type check below would pass vacuously.
    1. **Ancestry and range:** `GET compare/<tested_base>...<tip>` reports `status=ahead`, and the listing is complete: `total_commits` is at most 250, and `files` is under GitHub's 300-file cap.
    2. **Commit types:** each listed commit is a default-branch commit, an integration-sync merge, or an `[ai-merge-resolve]` commit, judged as follows.
       - **Default-branch commits:** `GET compare/<tested_base>...<default branch>` gives the set of default-branch commits in range. Any commit in that set is fine.
-      - **Remaining commits:** each must be either a two-parent merge whose subject is exactly `chore: sync main into <base ref>`, or a commit whose subject starts with `[ai-merge-resolve]`.
-   3. **No overlap:** none of the files from (i) is in the PR's changed-file list (`GET pulls/<n>/files`, paginated, at most 3000 files; a larger PR fails).
+      - **Remaining commits:** each must be either a two-parent merge whose subject is exactly `chore: sync main into <base ref>` and whose second parent is in that default-branch set, or a commit whose subject starts with `[ai-merge-resolve]`. The subject and parent count are author-controlled, so the second-parent check keeps a crafted merge from passing as a sync.
+   3. **No overlap:** none of the files from (1) is in the PR's changed-file list (`GET pulls/<n>/files`, paginated, at most 3000 files; a larger PR fails). On both sides, the compared set holds each entry's `filename` and, for `status=renamed`, its `previous_filename`. A sync that renames a file the PR touches therefore counts as an overlap.
 
    When all hold:
    - **Checkout:** keep the checked-out merge, which still merges the dispatched head.
    - **Log:** `CI_FINAL_MERGE_REF ... outcome=stale_accepted reason=sync_only_no_overlap tested_base=<sha> tip=<sha> commits=<k> files=<m>` and exit 0.
    - **Job summary:** write one line to `$GITHUB_STEP_SUMMARY` saying the run tested base `<tested_base>`, and that the sync commits up to `<tip>` touch none of the PR's files.
 
-   On any failed condition or unreadable response, keep today's behaviour: `::error::` and exit 1 with `outcome=stale`, adding `detail=<first failed condition>` (`not_ahead`, `truncated`, `foreign_commit`, `file_overlap`, `api_error`).
-2. **API budget (§15):** document it in the header. Up to three extra GETs (two compares and the PR files listing), only on the already-failing stale path, never on the fresh path. The files listing reuses the guard's own `pulls/<n>` auth path (`GH_TOKEN` or unauthenticated, plus `CI_FINAL_MERGE_REF_API_URL` for tests).
-3. **Tests:** extend `tests/test_ci_final_merge_ref_fresh.py` (stubbed API server, as the file already does). Cases:
-   - the #9602 shape is accepted;
-   - a sync merge that touches a PR file fails with `detail=file_overlap`;
-   - a non-sync, non-default-branch commit in range fails with `detail=foreign_commit`;
-   - `status=diverged` fails with `detail=not_ahead`;
-   - a truncated compare fails;
-   - an API error fails closed as `stale`;
-   - the switch off keeps today's `stale` exit;
-   - the fresh path makes no extra calls.
-
-   Keep the existing contract tests (`tests/test_ci_job_split_contract.py`, `tests/test_ci_shallow_checkout_contract.py`) unchanged, since the step wiring in `ci.yml` does not change.
+   On any failed condition or unreadable response, keep today's behaviour: `::error::` and exit 1 with `outcome=stale`, adding `detail=<first failed condition>` (`default_base`, `not_ahead`, `truncated`, `foreign_commit`, `file_overlap`, `too_many_files`, `api_error`).
+2. **API budget (§15):** document it in the header, and only on the already-failing stale path, never on the fresh path.
+   - **Count:** two compares, plus the paginated PR files listing at 100 per page, at most 30 pages for the 3000-file cap. That is up to 32 GETs per final-CI job.
+   - **Cost per run:** each of the ten final-CI jobs that reaches the stale exit pays it.
+   - **What keeps it low:** the cheap checks run first. Condition 0 needs no call, and a failed compare check stops before the files listing. A typical PR's listing is one page.
+   - **Auth:** the reads reuse the guard's own `pulls/<n>` auth path, `GH_TOKEN` or unauthenticated, plus `CI_FINAL_MERGE_REF_API_URL` for tests. On an unauthenticated job, a rate-limit refusal fails closed as `detail=api_error`, which is today's `stale` outcome.
+3. **Tests:** extend `tests/test_ci_final_merge_ref_fresh.py`. The file has no HTTP server.
+   - **Stubbing:** it uses the real local origin and the fake `gh` (`FAKE_GH`), which today answers `pulls/7` reads by jq filter. Extend `FAKE_GH` to answer the `compare/...` and `pulls/7/files` endpoints from JSON fixtures selected by the endpoint path argument. For the token-less path, serve the same fixtures as files under the `file://` `CI_FINAL_MERGE_REF_API_URL` directory.
+   - **The origin's `HEAD`:** point it at the default branch, so `ls-remote --symref` resolves.
+   - **Cases:**
+     - the #9602 shape (integration base, sync-only range, disjoint files) is accepted;
+     - a PR based on the default branch fails with `detail=default_base`;
+     - a sync merge that touches a PR file fails with `detail=file_overlap`;
+     - a sync that renames a PR file fails with `detail=file_overlap`;
+     - a non-sync, non-default-branch commit in range fails with `detail=foreign_commit`;
+     - a merge with the sync subject whose second parent is not a default-branch commit also fails with `detail=foreign_commit`;
+     - `status=diverged` fails with `detail=not_ahead`;
+     - a truncated compare fails;
+     - an API error fails closed as `stale`;
+     - the switch off keeps today's `stale` exit;
+     - `tested_base` is the checked-out commit's first parent even when a re-fetch moved the merge ref without a checkout;
+     - the fresh path makes no extra calls.
+   - **ci.yml wiring:** in each of the ten final-CI "Verify the final-CI merge ref is current" step `env:` blocks in `.github/workflows/ci.yml`, next to `CI_FINAL_MERGE_REF_FRESH_ENABLED`, add `CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}`. The script reads the switch only from its environment, so without this the repository variable would not reach it and could not roll the change back. Extend `test_every_final_ci_checkout_is_followed_by_the_check` to assert the new entry on all ten steps. Check `wc -c` against the §24 size guard; the change is about ten lines.
+   - **Other contract tests:** keep `tests/test_ci_job_split_contract.py` and `tests/test_ci_shallow_checkout_contract.py` unchanged, since no step or job is added.
 4. **Fragments and docs:**
    - `changelog.d/<issue>-final-ci-sync-only-merge-ref.md` (`fixed`);
-   - an `agents.d/` block, plus the new `outcome=stale_accepted` value in the `CI_FINAL_MERGE_REF` log-prefix registry entry;
+   - an `agents.d/<issue>-final-ci-sync-only-merge-ref.md` block under "Workflow architecture" for the new behaviour. Do not add a second `CI_FINAL_MERGE_REF` registry bullet or `LOG_PREFIX.name=` line: the prefix is already registered.
+   - **Registry entry:** correct the existing `CI_FINAL_MERGE_REF` bullet in place (§25 allows correcting existing text). It is in `agents.d/9602-final-ci-base-sync.md` while that fragment is unfolded, or in the agents file's "Stable log prefixes (contractual)" section once it has been folded.
+     - add `stale_accepted` to the outcomes and `sync_only_no_overlap` to the reasons;
+     - add the new fields `detail=default_base|not_ahead|truncated|foreign_commit|file_overlap|too_many_files|api_error`, `commits=` and `files=`;
    - a README env var row for `CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED`.
 
 ## Files & Modules
@@ -461,9 +486,11 @@ Phases 3 and 4 both edit `scripts/review_conflict_resolve.sh`, in different func
 
 - **Phase 10:**
   - `scripts/ci_final_merge_ref_fresh.sh`
+  - `.github/workflows/ci.yml` (one `env:` entry in each of the ten final-CI check steps)
   - `tests/test_ci_final_merge_ref_fresh.py`
   - `README.md`
   - `agents.d/<issue>-final-ci-sync-only-merge-ref.md` `[new]`
+  - the existing `CI_FINAL_MERGE_REF` registry bullet (`agents.d/9602-final-ci-base-sync.md`, or the agents file once folded), corrected in place
   - `changelog.d/<issue>-final-ci-sync-only-merge-ref.md` `[new]`
 
 ## Data Model / Index Changes
@@ -492,7 +519,7 @@ None. No MongoDB collections are touched.
 - **R4 an expired counterfactual hold losing a real fix.** ACCEPTED: the user chose close-not-planned in Q6 A. The escalation at half the limit gives a person a window, and the close comment links the plan for re-filing.
 - **R5 tests passing although the work is partly missing.** Mitigation: a close needs at least one test, and the tests come from the plan's own `ACCEPTANCE:` lines first. The wave-completion judge's existing reopen path still applies, as it does for `ai:implement-success-noop` today.
 - **R6 ticking a step that is not really done.** Mitigation: tick only on the listed observable conditions. Each tick comment records its reason, and an unrecognised step text is never ticked.
-- **R7 testing a base that differs in ways that matter.** A sync merge can change files the PR does not touch but that its tests read, such as a shared helper. Mitigation: only sync merges and resolver commits are accepted, and any overlap with the PR's own files fails. The full suite still runs on the integration branch's own push CI and again on the final integration PR, so a base-only break is caught there. ACCEPTED, as a narrower risk than a PR that can never run CI.
+- **R7 testing a base that differs in ways that matter.** A sync merge can change files the PR does not touch but that its tests read, such as a shared helper. Mitigation: only integration-branch PRs qualify, only sync merges (with a default-branch second parent) and resolver commits are accepted, and any overlap with the PR's own files, renames included, fails. The full suite still runs on the integration branch's own push CI and again on the final integration PR, so a base-only break is caught there. The reverse case is also possible: the old base was already broken and a later sync fixed it, as at #9602's 07:21 UTC run. Then the accepted run fails on the base, not the PR (a false red). The PR goes back through `final-ci-failed`, and the sweep's base sync moves the head as it does today, so this is no worse than the current behaviour. ACCEPTED, as a narrower risk than a PR that can never run CI.
 - **Textual conflicts between phases 3/4 and 6/8b.** ACCEPTED: they touch different functions; the merge-conflict resolver (now with Phase 3/4 safeguards) or a rebase handles them.
 
 ## Rollout
@@ -508,7 +535,7 @@ None. No MongoDB collections are touched.
   - Phase 7: `HEAL_COUNTERFACTUAL_HOLD_EXPIRY`
   - Phase 8a: `PLAN_NOTHING_TO_IMPLEMENT`
   - Phase 9: `OPERATOR_STEP_TICK`
-  - Phase 10: `CI_FINAL_MERGE_REF ... outcome=stale_accepted`
+  - Phase 10: `CI_FINAL_MERGE_REF ... outcome=stale_accepted`, and `outcome=stale ... detail=` for refusals
 
 ## References
 
