@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/rollback_stable.sh:399-421 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The drain loop still counts runs that have already been sent a cancel POST as active, because GitHub may still report them as 'queued' or 'in_progress' after cancellation has started.\n  WHY: `still_active` can stay positive until the `drain_deadline`, so the rollback raises a `release_still_running` error and exits 1 even when the cancellation succeeds. The source gave no severity; the high value is not the reviewer's. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash rejected this finding: they say waiting for cancelled runs to actually stop is the intended fail-closed drain behaviour.\n- scripts/rollback_stable.sh:402-413 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The drain's final poll can miss a promote run that is dispatched after that workflow's run list is fetched but before the loop breaks on still_active=0. The workflow list at line 94 puts promote-main-to-stable.yml last.\n  WHY: The poller dispatches the promote workflow independently, so such a run is absent from active_ids, and the zero count ends the drain with no further lookup or cancellation. The promote can then move stable, release, and clear the hold. README.md:4812-4816 covers only dispatches made after the drain ends, not this window. The reviewer rated it MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"After a rollback, neither auto-release-stable.yml nor the promote-main-to-stable.yml cycle releases until a release is cut deliberately.\"\n  expected_change_site: .github/workflows/promote-main-to-stable.yml promote job and/or scripts/orchestrate_poll_process.sh before its poller-triggered promotion dispatch\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The hold check was added only to `scripts/promote_main_cycle.sh`, which gates the scheduled cycle. The separate `promote` job, which the poller dispatches with `target_sha` from `scripts/orchestrate_poll_process.sh`, has no hold check, and neither does the poller's dispatch, so a promotion in flight at rollback time could bypass the hold. README.md:4807-4818 documents that this path can promote and clear the hold without waiting for the hold to be released. Both reviewers rated it MAJOR. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash treated it as an accepted, documented residual: the issue's Approach exempts deliberately dispatched releases, \u00a718.E names only promote_main_cycle.sh, and the fix sites are outside the files_touched grant.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/rollback_stable.sh:399-421 (drain loop) | confidence=4\n  PROBLEM: The drain loop counts runs that have already been sent a cancel POST as still active, because GitHub may still report them as 'queued' or 'in_progress' after cancellation has started.\n  WHY: `still_active` can stay positive until the `drain_deadline`, so the rollback dispatch raises a `release_still_running` error and exits 1 even when the cancellation succeeds.\n- TASK_GAP\n  Requirement: \"After a rollback, neither `auto-release-stable.yml` nor the `promote-main-to-stable.yml` cycle releases until a release is cut deliberately.\"\n  Expected change site: .github/workflows/promote-main-to-stable.yml promote job.\n  Evidence of absence: The hold check is in `scripts/promote_main_cycle.sh`, which gates the scheduled cycle. The `promote` job itself, which the poller dispatches with `target_sha` in `scripts/orchestrate_poll_process.sh`, has no matching hold check, so a promotion in flight at rollback time could bypass the hold.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/rollback_stable.sh:402-413; the workflow list at line 94 puts promote-main-to-stable.yml last. | severity=MAJOR | confidence=4\n  PROBLEM: The drain's final poll can miss a promote run that is dispatched after that workflow's run list is fetched but before the loop breaks on still_active=0.\n  WHY: The poller dispatches the promote workflow independently, so a run dispatched in this window is absent from active_ids, and the zero count ends the drain with no further lookup or cancellation. The promote can then move stable, release, and clear the hold. README.md:4812-4816 describes a dispatch that lands after the drain ends and goes uncancelled, but this run starts before the drain ends and still escapes the final poll.\n- TASK_GAP\n  Requirement: \"After a rollback, neither auto-release-stable.yml nor the promote-main-to-stable.yml cycle releases until a release is cut deliberately.\"\n  Expected change site: .github/workflows/promote-main-to-stable.yml promote job and/or scripts/orchestrate_poll_process.sh before its poller-triggered promotion dispatch.\n  Evidence of absence: The PR adds the hold check to scripts/promote_main_cycle.sh, which gates the scheduled cycle, but adds no hold check to the separate promote job or to the poller dispatch. The poller can still dispatch that job with target_sha, and README.md:4807-4818 documents that it can promote and clear the hold without waiting for the hold to be released.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1af03f789cd42dc9778b007a029e91470d891988f410752a2d94ec82551131d4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9359,
+    "run_id": "44188033250",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44188033250",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118004852_48fae69112",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9359,
+    "run_id": "44188033250"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T00:48:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
