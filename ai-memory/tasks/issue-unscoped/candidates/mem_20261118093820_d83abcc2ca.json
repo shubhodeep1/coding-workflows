@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ci_final_merge_ref_fresh.sh:outcome=stale reason=not_refreshed exit path | severity=low | confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The `lint` and `tests-system-python` check-runs failed because `refs/pull/9655/merge` still merged into `426469c0` after 6 refresh attempts while `main` had moved on. The cause is a stale merge ref, not the PR's content. The file is not touched by this PR.\n  WHY: The guard fails closed on purpose and clears when the head is updated from `main` and a new final CI run tests the current base. The reviewer's disposition is that no edit is needed (environmental failure). The source labels the severity NIT, which is mapped to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/ci_final_merge_ref_fresh.sh:outcome=stale reason=not_refreshed exit path | severity=low (source: NIT) | confidence=1\n  PROBLEM: The `lint` and `tests-system-python` check-runs failed because `refs/pull/9655/merge` still merged into `426469c0` after 6 refresh attempts while `main` had moved on. The cause is a stale merge ref, not the PR's content. The file is not touched by this PR.\n  WHY: The guard fails closed on purpose. No edit to this PR's one changelog file can clear it, and loosening the guard would weaken a deliberate check. The reviewer's disposition is that no edit is needed. The reviewer could not read the logs of `tests-promote-stall-and-review`, `orchestrate-poll` and `tests-system-python (15)`.\n- TASK COMPLETENESS / INTENT GAPS: NONE | severity=low (source: NIT) | confidence=1\n  PROBLEM: No gap. `docs/INVENTORY.md` lines 311-312 already list `scripts/review_final_ci_failed.sh` and `scripts/review_final_ci_sweep.sh`, which arrived through the merge of `main`, so the linked issue's inventory deliverable is met.\n  WHY: The PR's only file is `changelog.d/9577-inventory-parity-heal.md`, which is inside the allowed scope and starts with a valid `<!-- changelog: fixed -->` marker. The `tests/test_prepush_affected_tests.py` and `ci.yml` files are unchanged, as the issue expects. Issue #9577 is not an `ai:orchestrator-tracking` issue, so no \u00a721 rule is broken.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===",
+  "fingerprint": "1d4ac1322eb89a17de9c9b351d114b17386396d58748cb6616b6d7a789c658f2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9655,
+    "run_id": "44251002829",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44251002829",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118093820_d83abcc2ca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9655,
+    "run_id": "44251002829"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T09:38:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
