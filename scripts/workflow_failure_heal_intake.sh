@@ -1871,7 +1871,7 @@ while IFS=$'\t' read -r run_id run_url; do
 		| map(gsub("[\\t\\n\\r]"; " ")) | @tsv' "${SELECTED_JOBS_FILE}")
 done < <(jq -r '.run_refs[] | [.run_id, .url] | @tsv' "${PAYLOAD_FILE}")
 
-# Every examined run (at most MAX_RUNS) lost its do-runner droplet: an
+# Every examined run lost its do-runner droplet: an
 # infrastructure failure the runner scaler handles, not a heal case. A run
 # dropped for any other reason (unverified, jobs unreadable) keeps the report
 # on the normal path (fail-open towards filing). That includes a claimed run of
