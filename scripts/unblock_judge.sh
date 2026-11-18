@@ -650,16 +650,19 @@ ${marker}" >/dev/null 2>&1; then
 # `<!-- ai:unblock-triage-superseded:v1 item=<n> -->`, once per issue) saying
 # the issue waits for the pull request head's check to pass, and stops the
 # run without a resume command. A note older than UNBLOCK_JUDGE_WAIT_MAX_DAYS
-# parks the item in the needs-human digest (still no resume; a failed or
-# disabled park holds and retries next run). Any other verdict (not_triage,
+# records one trusted `close` round marker (as the judge's own close of an
+# issue does, so scripts/unblock_scan.py skips the parked item) and parks the
+# item in the needs-human digest (still no resume; a failed marker write, or a
+# failed or disabled park, holds and retries next run). Any other verdict (not_triage,
 # disabled: the gate will never close the issue) or no cached verdict (gate
 # off, missing or errored) judges as usual. A failed note write holds the
 # item (no resume) and is retried next run. Returns 0 when this run must
 # stop, 1 to judge as usual.
 # UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED=false (default true)
 # restores the previous behaviour.
-# API budget: no reads; at most one comment write per issue, plus the
-# needs-human park's digest read/write once the note expires.
+# API budget: no reads; at most one note comment per issue, plus, once the
+# note expires, one close-marker comment and the needs-human park's label
+# and digest read/write.
 # Log key: UNBLOCK_JUDGE ... op=triage_superseded outcome=closed|noted|parked|held|skip reason=<token>
 unblock_triage_superseded_note()
 {
@@ -701,8 +704,42 @@ unblock_triage_superseded_note()
 			# Never resumed (#9659: `/answer` or `/approved` only loops planning):
 			# an expired hold is parked in the needs-human digest for a person.
 			# A failed or disabled park keeps holding and is retried next run.
+			# scripts/unblock_scan.py skips a parked item only when its newest
+			# trusted verdict marker is `close` (and throttles on ai:unblock
+			# markers only), so, as the judge's own close of an issue does, one
+			# trusted `close` round marker is recorded before the park; without it
+			# every poller tick would redispatch the parked item. Recorded once
+			# after the note (a rerun reuses it), never while the digest is off.
+			if [ "$(printf '%s' "${NEEDS_HUMAN_DIGEST_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" != "false" ] \
+				&& ! jq -e --arg login "${UNBLOCK_LOGIN}" --arg at "${noted_at}" --arg re "^<!-- ai:unblock:v1 item=${ITEM} stop=${ITEM_STOP} fingerprint=[0-9a-f]{12} verdict=close round=[1-9][0-9]* -->$" \
+					'any(.[]; (.user.login // "") == $login and (.created_at // "") >= $at
+						and (((.body // "") | split("\n") | map(select(test("\\S")) | rtrimstr("\r")) | last // "") | test($re)))' \
+					"${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; then
+				local triage_close_fp triage_close_round triage_close_marker
+				echo '[]' > "${RUNTIME_DIR}/failing_checks.json"
+				unblock_evidence > "${RUNTIME_DIR}/triage_superseded_evidence.json" 2>/dev/null \
+					|| echo '{"reason": "unreadable"}' > "${RUNTIME_DIR}/triage_superseded_evidence.json"
+				triage_close_fp="$(unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" fingerprint --stop "${ITEM_STOP}" --evidence-file "${RUNTIME_DIR}/triage_superseded_evidence.json" 2>/dev/null | jq -r '.fingerprint // empty' 2>/dev/null || true)"
+				triage_close_round="$(jq -r --arg login "${UNBLOCK_LOGIN}" --arg item "${ITEM}" '
+					[.[] | select((.user.login // "") == $login)
+						| ((.body // "") | split("\n") | map(select(test("\\S")) | rtrimstr("\r")) | last // "")
+						| capture("^<!-- ai:unblock:v1 item=" + $item + " stop=[a-z-]+ fingerprint=[0-9a-f]{12} verdict=[a-z_]+ round=(?<r>[1-9][0-9]*)( override=[a-z_]+)? -->$")?
+						| .r | tonumber] | (max // 0) + 1' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null || true)"
+				triage_close_marker=""
+				if [[ "${triage_close_fp}" =~ ^[0-9a-f]{12}$ ]] && [[ "${triage_close_round}" =~ ^[1-9][0-9]*$ ]]; then
+					triage_close_marker="$(unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" marker --item "${ITEM}" --stop "${ITEM_STOP}" --fingerprint "${triage_close_fp}" --verdict close --round "${triage_close_round}" 2>/dev/null | jq -r '.marker // empty' 2>/dev/null || true)"
+				fi
+				if [ -z "${triage_close_marker}" ] || ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="## Unblock judge: \`close\` (round ${triage_close_round})
+
+Reason: planning found nothing to implement and this check-triage issue's check stayed unverified past the wait lifetime, so it is parked in the needs-human digest for a person to decide (#9659). It stays open and keeps its block; no resume command is posted.
+
+${triage_close_marker}" >/dev/null 2>&1; then
+					unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=held reason=marker_failed"
+					return 0
+				fi
+			fi
 			local -a triage_park_args=(needs-human park --repo "${REPOSITORY}" --item "${ITEM}" --kind issue --stop "${ITEM_STOP}"
-				--reason "triage_superseded: the check stayed unverified past the wait lifetime" --trusted-login "${UNBLOCK_LOGIN}")
+				--reason "triage_superseded (the check stayed unverified past the wait lifetime)" --trusted-login "${UNBLOCK_LOGIN}")
 			jq -e 'index("ai:needs-human") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1 && triage_park_args+=(--item-labeled)
 			if unblock_py "${SUPPORT_DIR}/scripts/operator_step_issue.py" "${triage_park_args[@]}" > "${RUNTIME_DIR}/triage_superseded_park.json" \
 				&& jq -e '.outcome == "parked" or .outcome == "updated"' "${RUNTIME_DIR}/triage_superseded_park.json" >/dev/null 2>&1; then

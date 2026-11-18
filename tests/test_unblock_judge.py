@@ -10,6 +10,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -5809,6 +5810,28 @@ def test_expired_superseded_note_parks_the_item_instead_of_resuming(tmp_path: Pa
 	assert not any(comment["body"].endswith(TRIAGE_SUPERSEDED_MARKER) for comment in state["comments"])
 	assert [label for _, label in state["labels_added"]] == ["ai:needs-human"]
 	assert any(fields.get("body", "").startswith("<!-- ai:needs-human:v1 -->") for fields in state["created"])
+	# The park is visible to scripts/unblock_scan.py: one trusted `close` round
+	# marker, so its parked skip stops the hourly redispatch.
+	assert len(state["comments"]) == 1, state["comments"]
+	last = state["comments"][0]["body"].rstrip().splitlines()[-1]
+	assert re.fullmatch(r"<!-- ai:unblock:v1 item=7 stop=blocked fingerprint=[0-9a-f]{12} verdict=close round=1 -->", last), last
+	scan_spec = importlib.util.spec_from_file_location("unblock_scan_9659", ROOT / "scripts" / "unblock_scan.py")
+	scan = importlib.util.module_from_spec(scan_spec)
+	scan_spec.loader.exec_module(scan)
+	assert scan._latest_verdict([{"login": BOT, "body": state["comments"][0]["body"], "created_at": "2026-10-19T10:00:00Z"}], BOT) == "close"
+
+
+def test_expired_superseded_note_does_not_record_a_second_close_marker(tmp_path: Path) -> None:
+	close = ledger.marker(7, "blocked", FP, "close", 1)
+	comments = [
+		_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z"),
+		_comment("Planning found the fix already on the planning ref.\n\n" + TRIAGE_SUPERSEDED_MARKER + "\n", BOT, "2026-10-04T10:00:00Z"),
+		_comment("## Unblock judge: `close` (round 1)\n\nReason: parked.\n\n" + close, BOT, "2026-10-18T10:00:00Z"),
+	]
+	result, state = _judge_triage_superseded(tmp_path, comments=comments, FAKE_TRIAGE_STATUS="unverified",
+		MOCK_UNBLOCK_JUDGE_NOW="2026-10-19T10:00:00Z")
+	assert "op=triage_superseded outcome=parked reason=note_expired" in result.stdout, result.stdout + result.stderr
+	assert state["comments"] == []
 
 
 def test_expired_superseded_note_holds_when_the_park_is_unavailable(tmp_path: Path) -> None:
