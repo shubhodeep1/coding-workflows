@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/prepush_test_gate_run.sh:228-316 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The new `/source` tree is built with `checkout-index` and the filtered snapshot, including its synthetic `.git`, is deleted. `/source` therefore has no git repository, as `/baseline` already had none.\n  WHY: Git-dependent tests fail on both trees and are classified as inherited, which can hide a PR-caused regression. Severity was reported as MAJOR by all three reviewers. z-ai_glm-5_3-flash rejected this finding after verification, because the pre-PR `/baseline` also had no `.git`, so the classification is unchanged.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/prepush_test_gate_run.sh:281-306 | severity=high | confidence=3\n  PROBLEM: The old `/source` was the output of `review_untrusted_workspace.py snapshot` and held a synthetic `.git`. The new `/source` is plain `checkout-index` output, and the filtered snapshot with its `.git` is discarded. Neither tree is a git repository in the container, and the PR text and changelog do not say the PR-side repository is gone.\n  WHY: Git-dependent tests that used to find a repository on `/source` now fail on both trees. `classify_baseline` records them as inherited, so a PR-caused break is not counted against the change. The number of affected tests is unconfirmed.\n- HARDENING_SUGGESTION: scripts/prepush_test_gate_run.sh (after the untracked-file copy loop and `rm -rf -- \"${root}/filtered\"`, around line 306). Either add a synthetic `git init` plus an initial commit to each tree, with `core.hooksPath=/dev/null`, or document in the `agents.d` fragment that neither tree has a `.git`. Estimated lines changed: 6. HARDENING_RISK_SCORE: 2.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/prepush_test_gate_run.sh:228-316 | severity=high | confidence=3\n  PROBLEM: The new `/source` and `/baseline` trees, created with `checkout-index`, contain no `.git` directory.\n  WHY: Tests that rely on `git` commands, such as `git ls-files --error-unmatch`, fail on both trees. The gate classifies them as inherited failures, which can mask genuine PR-caused failures. The PR description and changelog do not mention that the synthetic repository capability was removed.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/prepush_test_gate_run.sh:281,288-306 | severity=high | confidence=4\n  PROBLEM: The snapshot helper creates a synthetic `.git` in its destination, which is now `/filtered`. That `.git` is neither copied into `/source` nor retained, so `/source` no longer has the synthetic Git repository the previous snapshot provided.\n  WHY: Tests run with `/source` as their working directory (lines 414-420). Tests that inspect repository Git state fail there and on `/baseline`, so baseline classification can mark the failure inherited and hide a PR-caused regression.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\nNote: z-ai_glm-5_3-flash rejected the claude-sonnet-5_5 finding at `scripts/prepush_test_gate_run.sh:281-306` after verification. The synthetic `.git` did exist in the old `/source` (`review_untrusted_workspace.py` lines 470-475), but the pre-PR `/baseline` came from `git archive` and had no `.git` either. Git-dependent test failures were therefore already classified `inherited` before this PR, and the outcome is unchanged. The removal is declared in the PR description and changelog (\".git is never copied in\"). z-ai_glm-5_3-flash found no new defect in the last-run diff.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5a6695b7f6f4897a7cf88e51716e036737f15473c0471719a10e5d35181b3093",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9721,
+    "run_id": "44351174974",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44351174974",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118191423_b6c1ffcde5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9721,
+    "run_id": "44351174974"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T19:14:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
