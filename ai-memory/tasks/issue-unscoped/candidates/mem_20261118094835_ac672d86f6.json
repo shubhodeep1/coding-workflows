@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: `.github/workflows/ci.yml`, selection of the moved steps and their destination groups in `orchestrate-poll`\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: Workflow comments (ci.yml:3784-3789, ci.yml:3811-3818, ci.yml:3920-3925/3926) and the changelog fragment (changelog.d/9496-ci-hooks-merge-train-semble-preseed-to-poll.md:2) say the source step timings for run 43544291165 could not be read, so the step picks and destination groups rest on estimates. The diff does not show the moved steps were the slowest or that groups 0 and 1 have the most headroom. Structural deliverables are present (names unchanged, no timeout change, contract test MovedHooks9496StepsContractTest), and post-merge budget-watch is the designed check. Severity disagreement: NIT (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) vs MAJOR (the other three). The highest is MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: `.github/workflows/ci.yml`, the choice of steps and their destination groups in `orchestrate-poll`.\nEvidence of absence: The structural parts are delivered. The diff cannot show that these were the slowest steps or that groups 0 and 1 have the most headroom. The step timings are GitHub runtime data that is not in the repository. Post-merge `budget-watch` is the designed check.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\nExpected change site: .github/workflows/ci.yml, step selection criteria and destination mapping.\nEvidence of absence: The workflow comments (e.g., ci.yml:3784-3789) and the changelog fragment state that the step timings for run 43544291165 could not be read. Step selection was based on estimates from test and subprocess counts. The requirement to base the change on actual run timings was not met.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: `.github/workflows/ci.yml`, placement of the moved steps in `orchestrate-poll`\nEvidence of absence: Workflow comments at `.github/workflows/ci.yml:3811-3818` and `:3920-3925` say the source step timings could not be read and the destination headroom is unmeasured. The structural deliverables are present and pinned by `MovedHooks9496StepsContractTest` in `tests/test_ci_poll_test_sharding.py`. Post-merge `budget-watch` is the designed verification.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \u201cMove its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\u201d\nExpected change site: `.github/workflows/ci.yml`, selection and placement of the moved steps in `orchestrate-poll`.\nEvidence of absence: The workflow comments state the step timings could not be read and the destination headroom is unmeasured. The steps were selected and placed using estimates, so the diff does not establish they are the slowest or that their destination groups have the most headroom.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\nExpected change site: `.github/workflows/ci.yml` \u2014 selection of the moved steps and their destination groups in `orchestrate-poll`.\nEvidence of absence: The workflow comments (ci.yml:3811-3818 and 3920-3926), the changelog fragment (changelog.d/9496-ci-hooks-merge-train-semble-preseed-to-poll.md:2) and the test comments say the step timings could not be read, so the picks rest on estimates. The structural deliverables are present. The per-step timings are GitHub runtime data unavailable in the repository. Post-merge `budget-watch` is the designed check. No code change is proposed.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d3fded0fd7f43be8eb2ecd86dfa8d71f9a8e2960888f6fd8cfaf40330fb110bb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9515,
+    "run_id": "44264796525",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44264796525",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118094835_ac672d86f6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9515,
+    "run_id": "44264796525"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T09:48:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
