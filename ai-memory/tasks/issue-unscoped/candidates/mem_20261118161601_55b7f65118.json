@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_test_and_mark_stable_step_scripts_contract.py:32-76 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: On head c3bbaf72, `.github/workflows/test-and-mark-stable.yml` is 430,394 bytes, which exceeds `MAX_WORKFLOW_BYTES = 430_000`. The assertion `assert size <= MAX_WORKFLOW_BYTES, size` in `test_workflow_keeps_fifty_thousand_bytes_of_headroom` therefore fails in `tests-system-python (7)` and `tests-promote-stall-and-review`, and the aggregating `lint` check fails with them.\n  WHY: CI stays red and the PR cannot merge. The extra bytes came from base merges of `orchestrator/project-8291` (a120ac7a, c3bbaf72), and the file is outside this PR's diff and its `files_touched` grant. \u00a724 forbids raising the guard, so the fix (moving `run:` bodies into `scripts/`) belongs on the integration branch, and the editor should record this as inherited and out of scope. Both reviewers rated it SEVERITY: MAJOR.\n- (CI check) copilot-pull-request-reviewer:n/a | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The third-party check `copilot-pull-request-reviewer` (failed[1], conclusion=failure) failed with an empty summary and an empty log.\n  WHY: Nothing links it to any file in the PR. It is listed only so every failed check is accounted for, and it should be treated as infrastructure noise, not a code defect. Both reviewers rated it SEVERITY: NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_test_and_mark_stable_step_scripts_contract.py:line 32 `MAX_WORKFLOW_BYTES = 430_000`; line 76 `assert size <= MAX_WORKFLOW_BYTES, size` in `test_workflow_keeps_fifty_thousand_bytes_of_headroom` | severity=MAJOR | confidence=5\n  PROBLEM: CI on head c3bbaf72 fails because `.github/workflows/test-and-mark-stable.yml` is 430394 bytes (`AssertionError: 430394` in the `tests-system-python (7)` and `tests-promote-stall-and-review` logs). The `lint` check fails only because it aggregates those two jobs.\n  WHY: CI stays red, so the PR cannot merge. The PR does not touch the file, which is outside the `files_touched` grant, and the bytes came in with base merge c3bbaf72 from `orchestrator/project-8291`. \u00a724 forbids raising the guard, so the fix goes on the integration branch. The editor should record this as inherited and out of scope.\n- (CI check) copilot-pull-request-reviewer:`failed[1]`, conclusion failure, empty summary and empty log | severity=NIT | confidence=2\n  PROBLEM: A third-party reviewer check failed and left no output.\n  WHY: Nothing links it to any PR file. It is listed only so every failed check is accounted for, and nothing in it can be acted on.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/test-and-mark-stable.yml (measured by tests/test_test_and_mark_stable_step_scripts_contract.py):tests/test_test_and_mark_stable_step_scripts_contract.py:32 (`MAX_WORKFLOW_BYTES = 430_000`) and :76 (`assert size <= MAX_WORKFLOW_BYTES, size` in `test_workflow_keeps_fifty_thousand_bytes_of_headroom`) | severity=MAJOR | confidence=5\n  PROBLEM: On head c3bbaf727ef2f7e5e1b8fafb7c4211f0d6f084f9 the workflow file is 430,394 bytes (`AssertionError: 430394` / `assert 430394 <= 430000`). The assertion fails in `tests-system-python (7)` and `tests-promote-stall-and-review`, and the aggregating `lint` job fails with them.\n  WHY: CI stays red and the PR cannot merge. The growth came through base merges from `orchestrator/project-8291` (a120ac7a, c3bbaf72, 430,203 to 430,394 bytes), and the file is outside the PR's changed files and its `files_touched` grant. \u00a724 forbids raising the guard, so the fix belongs on `orchestrator/project-8291`. The editor should record this as inherited from base and out of scope.\n- n/a (third-party check):copilot-pull-request-reviewer check run on head c3bbaf727ef2f7e5e1b8fafb7c4211f0d6f084f9 (failed[1], conclusion=failure, empty summary, log_tail 0 chars) | severity=NIT | confidence=2\n  PROBLEM: A third-party reviewer check failed with no summary and no log, and it cannot be mapped to any file in the PR diff.\n  WHY: No code change in this PR is shown to clear it. It is listed so the editor can treat it as infrastructure noise, not a code defect.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bd49db24532dfe7c93c5e1898a766effb535212b7ab330f1f97a47e0f5ff84ed",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9602,
+    "run_id": "44316953738",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44316953738",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118161601_55b7f65118",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9602,
+    "run_id": "44316953738"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T16:16:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
