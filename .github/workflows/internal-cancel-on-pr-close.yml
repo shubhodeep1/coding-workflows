@@ -24,7 +24,7 @@ jobs:
     # re-point them (source merged). PR #4349 was stranded on the closed
     # PR #4323's branch. See scripts/workflow_failure_heal_pr_reconcile.sh.
     if: github.event_name == 'pull_request' && github.event.action == 'closed' && vars.WORKFLOW_HEAL_PR_RECONCILE_ENABLED != 'false'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       # GitHub's job token only reads; checkout and reconciliation writes use GH_PAT.
       contents: read

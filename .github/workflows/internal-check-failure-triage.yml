@@ -78,7 +78,7 @@ jobs:
        github.event.workflow_run.conclusion == 'timed_out') &&
       github.event.workflow_run.event == 'workflow_dispatch' &&
       startsWith(github.event.workflow_run.display_title, 'CI [pr:')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read

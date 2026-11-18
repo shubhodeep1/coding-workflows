@@ -43,7 +43,7 @@ env:
 jobs:
   smoke:
     name: Claude engine smoke (${{ matrix.profile }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     strategy:
       fail-fast: false

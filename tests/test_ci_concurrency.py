@@ -41,7 +41,7 @@ CI_RERUN_SCRIPT = REPO_ROOT / "scripts" / "ci_cancelled_rerun.py"
 
 GROUP_EXPR = (
 	"${{ inputs.mode == 'quick' && format('ci-quick-{0}', github.run_id)"
-	" || github.event_name == 'workflow_dispatch' && format('ci-final-pr-{0}', inputs.pr_number)"
+	" || github.event_name == 'workflow_dispatch' && inputs.pr_number && format('ci-final-pr-{0}', inputs.pr_number)"
 	" || github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number)"
 	" || github.event_name == 'push' && format('ci-push-{0}', github.ref)"
 	" || format('ci-{0}', github.run_id) }}"
@@ -185,6 +185,14 @@ def test_quick_runs_never_cancel_here_and_never_share_a_group() -> None:
 	assert _evaluate(block["group"], quick_a) == "ci-quick-21"
 	assert _evaluate(block["group"], quick_a) != _evaluate(block["group"], quick_b)
 	assert _evaluate(block["cancel-in-progress"], quick_a) is False
+
+
+def test_canary_dispatch_without_pr_number_gets_its_own_group() -> None:
+	# A hand-run Nightly calls ci.yml (runner-image canary) with the caller's
+	# workflow_dispatch event but no pr_number; it must not share `ci-final-pr-`.
+	block = _concurrency()
+	canary = _context("workflow_dispatch", run_id=31, **{"inputs.runner_image": "ubuntu-latest"})
+	assert _evaluate(block["group"], canary) == "ci-31"
 
 
 def test_push_runs_share_one_non_cancelling_group_per_branch() -> None:

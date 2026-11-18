@@ -176,7 +176,7 @@ def test_ci_runs_the_check_on_pull_requests_except_project_final_prs() -> None:
 		"(github.event_name == 'pull_request' && !(github.event.pull_request.head.repo.full_name == github.repository"
 		" && github.base_ref == github.event.repository.default_branch"
 		" && (startsWith(github.head_ref, 'orchestrator/project-') || startsWith(github.head_ref, 'auto/forward-merge-stable-'))))"
-		" || github.event_name == 'workflow_dispatch'"
+		" || (github.event_name == 'workflow_dispatch' && !inputs.runner_image)"
 	)
 	# pull_request runs compare GitHub's merge commit (GITHUB_SHA) with its
 	# first parent; a final-CI dispatch run (cut-ci-runner-time Phase 4)

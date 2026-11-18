@@ -53,7 +53,7 @@ jobs:
     # may publish on dispatch. (Branch protection and package access remain
     # the boundary against a writer who adds a new workflow of their own.)
     if: github.repository == 'shubhodeep1/coding-workflows' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     strategy:
       fail-fast: false
