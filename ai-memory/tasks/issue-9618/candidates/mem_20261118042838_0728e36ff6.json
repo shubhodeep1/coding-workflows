@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Main already does the inventory entries and the after-failure branch update. Only the optional \"update the PR head before final CI dispatch\" change is left. What should this issue do?\nChoices:\nA) Record the remaining scope as already delivered by #9627 (inventory) and #9652 (sweep base sync after a final-CI failure), make no code change, and let the issue close. (RECOMMENDED)\nB) Add the hardening: have `_pr_ensure_final_ci` (`scripts/pr_checks_lib.sh:984`) update the branch from main before every dispatch when the head is behind. **Note:** this brings back the extra freshness-update churn and CI re-runs that #9642 removed, and every out-of-date PR gets a new head commit before its final CI.\nC) Add a narrower hardening: before dispatch, update the branch only when main changed `.github/workflows/ci.yml` (or other workflow/test-list files) after the PR's merge base, reusing `_pr_base_sync_for_fresh_ci`. Other cases stay with the existing #9652 after-failure sync.",
+  "fingerprint": "d140ad545e0f294b94e43f0be9c2551a0e86579f29dec8de3e9c29d2d83dcd0a",
+  "lineage": {
+    "issue_number": 9618,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44233190793",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44233190793",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261118042838_0728e36ff6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9618,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44233190793"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9618 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-18T04:28:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
