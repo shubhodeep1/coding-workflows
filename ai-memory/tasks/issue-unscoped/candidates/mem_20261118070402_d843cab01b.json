@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/pr-checks.yml:110-122 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The renamed `pr-body-lint` check is not required by the `main` ruleset, which requires only `lint` and `ai-review/head-gate`.\n  WHY: A PR with a forbidden auto-close keyword can merge without violating branch protection. Severity disagreement: gemini said BLOCKER and luna said MAJOR, so the highest is used (BLOCKER mapped to critical). The PR description defers the ruleset change as plan OD5, and two other reviewers (sonnet, glm) did not report it for that reason.\n- tests/test_workflow_checkout_integration_ref_audit.py:34 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The diff drops the space after the colon on the `issue_pr_status.yml` registry entry, which is an unrelated reformat.\n  WHY: There is no runtime impact. It is diff noise and inconsistent with the neighbouring `\": \"` entries.\n- .github/workflows/pr-checks.yml (header comment), agents.d/9698-fold-per-pr-checks.md | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: These files cite `docs/plans/fold-per-pr-checks-plan.md`, which does not exist in this checkout because plan PR #9690 is not merged.\n  WHY: There is no runtime impact. The reference dangles until the plan PR lands. glm also lists .github/workflows/integration-pr-readiness.yml (line 28) and tests/test_pr_checks_workflow.py (line 6) as citing it.\n- .github/workflows (CI signal, not a diff hunk); Actions run 44240967715 on head f0ab051 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The check-runs `quick / lint`, `quick / static-checks`, `quick / budget-watch` and `quick / final-ci-failed` are all `cancelled` on head f0ab051 and map to no hunk in the diff.\n  WHY: They are most likely superseded runs, so this is not a code defect. glm notes that the head has no settled CI `lint` result, which the `main` ruleset requires before merge.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_workflow_checkout_integration_ref_audit.py:34 | severity=NIT | confidence=5\n  PROBLEM: The diff removes the space after the colon on the `issue_pr_status.yml` registry entry.\n  WHY: The value is unchanged. It is diff noise that breaks the formatting convention.\n- docs/plans/fold-per-pr-checks-plan.md references (.github/workflows/pr-checks.yml, .github/workflows/integration-pr-readiness.yml, tests/test_pr_checks_workflow.py, agents.d/9698-fold-per-pr-checks.md) | severity=NIT | confidence=3\n  PROBLEM: These files cite a plan document that does not exist in this checkout because plan PR #9690 is not merged.\n  WHY: The reference is expected to resolve once #9690 lands, so no change is needed.\n- CI check-runs `quick / lint`, `quick / static-checks`, `quick / budget-watch`, `quick / final-ci-failed` on head f0ab051 | confidence=2\n  PROBLEM: All four are `cancelled` with empty summaries and log tails, and none maps to a hunk in the diff.\n  WHY: They look like superseded quick runs, so this is not a code defect.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/pr-checks.yml:110-122 | severity=BLOCKER | confidence=5\n  PROBLEM: The \u00a719 PR-body auto-close lint (now job pr-body-lint) is not required by the main branch ruleset, which requires only lint and ai-review/head-gate.\n  WHY: A PR with a forbidden auto-close keyword can reach a squash merge into main without violating branch protection. The PR author deferred this in the description, but gemini treats the deferral as a significant risk for a load-bearing security invariant.\n- tests/test_workflow_checkout_integration_ref_audit.py:34 | severity=NIT | confidence=5\n  PROBLEM: Accidental reformat (missing space after colon in a dict entry).\n  WHY: There is no runtime impact. It is diff noise and inconsistent with the neighbouring entries.\n- .github/workflows/pr-checks.yml (header comment), agents.d/9698-fold-per-pr-checks.md | severity=NIT | confidence=3\n  PROBLEM: Dangling doc link to plan PR #9690, which does not exist in the current checkout.\n  WHY: There is no runtime impact. The reference persists until #9690 merges.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/pr-checks.yml:110-122; docs/deploy-activation/activation-batch-protect-main.md:8,13 | severity=MAJOR | confidence=5\n  PROBLEM: The renamed `pr-body-lint` check is not required by the `main` ruleset, which requires only `lint` and `ai-review/head-gate`.\n  WHY: A PR with a prohibited auto-close keyword can have a failing `pr-body-lint` and still satisfy the required checks. The merge button or auto-merge can then merge it, and the squash merge can close an orchestrator tracking issue.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_workflow_checkout_integration_ref_audit.py:34 | severity=NIT | confidence=5\n  PROBLEM: The diff drops the space after the colon on the `issue_pr_status.yml` entry, an accidental reformat of an unrelated line.\n  WHY: There is no runtime failure. It is unintended diff noise and inconsistent with the neighbouring `\": \"` entries.\n- .github/workflows/pr-checks.yml:8; .github/workflows/integration-pr-readiness.yml:28; tests/test_pr_checks_workflow.py:6; agents.d/9698-fold-per-pr-checks.md:2 | severity=NIT | confidence=3\n  PROBLEM: All four sites cite `docs/plans/fold-per-pr-checks-plan.md`, which does not exist in this checkout because plan PR #9690 is not merged.\n  WHY: There is no runtime failure. It is a dangling documentation reference until the stacked plan PR lands.\n- .github/workflows (CI signal, not a diff hunk); Actions run 44240967715 on head f0ab051 | severity=NIT | confidence=2\n  PROBLEM: All four jobs of one `quick` run on the current head ended `cancelled` and map to no hunk in the diff.\n  WHY: It is most likely a superseded run cancelled by the concurrency group, but the head has no settled CI `lint` result, which the `main` ruleset and `AUTO_MERGE_REQUIRED_CI_CHECK` require before merge.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "09a37fba3f995a0a727a0a956c0fd8a6ff37e60b4564646136d368ee52a7af07",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9698,
+    "run_id": "44237799946",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44237799946",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118070402_d843cab01b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9698,
+    "run_id": "44237799946"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T07:04:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
