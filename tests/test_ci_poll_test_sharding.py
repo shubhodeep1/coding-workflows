@@ -1976,7 +1976,9 @@ class MovedHooksJobStepsContractTest(unittest.TestCase):
 
 # Steps moved out of tests-release-and-log-analysis, which took 15m01s of its
 # 20 minutes (run 40368173231, budget-watch issue #8208): step name -> module
-# paths its body names.
+# paths its body names. #8208 moved them to tests-heal-plan-and-validation; #9420
+# moved them on to tests-hooks-and-orchestrator, so "HEAL" in the constant names
+# below records where they first went, not where they run now.
 RELEASE_TO_HEAL_SOURCE_JOB_ID = "tests-release-and-log-analysis"
 # moved on to tests-hooks-and-orchestrator in budget-watch issue #9420; constant name kept
 RELEASE_TO_HEAL_TARGET_JOB_ID = "tests-hooks-and-orchestrator"
