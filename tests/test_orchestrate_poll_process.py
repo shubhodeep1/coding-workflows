@@ -1342,6 +1342,15 @@ esac
 			user = entry.get("user")
 			if isinstance(user, dict):
 				user_entry = dict(user)
+			elif not user and "AI_STANDALONE_STALL_STATE_V1" in str(entry.get("body", "")):
+				# Security #9718: the poller trusts a standalone state comment
+				# only from its own login, so a seeded state comment without an
+				# explicit author is the pipeline's own (the mocked user login).
+				user_entry = {"login": str(
+					(mock_store_extra or {}).get("authenticated_login")
+					or (env_overrides or {}).get("MOCK_GH_USER_LOGIN")
+					or os.environ.get("MOCK_GH_USER_LOGIN", "github-actions[bot]")
+				)}
 			else:
 				user_entry = {"login": str(user) if user else "octocat"}
 			user_entry.setdefault("login", "octocat")
@@ -15698,6 +15707,142 @@ def test_standalone_ready_to_merge_unresolved_impl_pr_does_not_repeat_resolver()
 	assert combined_log.count("STALL_LINKED_PR_REJECTED issue=823 pr=825 reason=not_implementation_pr") == 1
 	assert "no implementation PR could be resolved" in result["stdout"]
 	assert result.get("merge_calls", []) == []
+
+
+def _standalone_state_body_9718(stall_recovery_count: int) -> str:
+	return (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:ready-to-merge",
+			"status_since_ts": 1,
+			"stall_recovery_count": stall_recovery_count,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+
+
+def _run_standalone_forged_state_tick_9718(mock_store_extra: dict | None = None) -> dict:
+	# Pipeline-written state (count 0) plus a newer forged marker comment
+	# from an outsider claiming the recovery budget is exhausted.
+	return _run_poller(
+		state=_base_state(status="complete"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 823: ["ai:ready-to-merge"]},
+		issue_comments={823: [
+			_standalone_state_body_9718(0),
+			{
+				"body": _standalone_state_body_9718(99),
+				"user": {"login": "outsider"},
+				"author_association": "NONE",
+				"created_at": "2026-12-01T00:00:00Z",
+			},
+		]},
+		issue_linked_prs={823: 825},
+		mock_gh_issue_list_label_filter=True,
+		enable_stall_human_terminalization="false",
+		mock_store_extra=mock_store_extra,
+		prs=[{
+			"number": 825,
+			"body": "Closes #823",
+			"baseRefName": "main",
+			"headRefName": "ai/issue-823",
+			"headRefFromApi": "ai/issue-823",
+			"headSha": "0000000000000000000000000000000000000825",
+			"state": "open",
+			"merged": False,
+			"mergeable": True,
+			"mergeable_state": "clean",
+		}],
+	)
+
+
+def test_standalone_stall_state_ignores_forged_marker_comment_from_other_author():
+	# Security #9718: a newer marker comment from any other commenter must
+	# neither replace the pipeline's state nor be PATCHed by the writer.
+	result = _run_standalone_forged_state_tick_9718()
+	comments = result["issues"]["823"]["comments"]
+	pipeline_states = [
+		comment for comment in comments
+		if (comment.get("user") or {}).get("login") == "github-actions[bot]"
+		and "AI_STANDALONE_STALL_STATE_V1" in str(comment.get("body", ""))
+	]
+	assert pipeline_states, result["stdout"]
+	state = _extract_latest_standalone_state(pipeline_states)
+	assert state is not None
+	assert state["stall_recovery_count"] == 1
+	assert "Action: attempt_merge" in result["stdout"]
+	forged = [
+		comment for comment in comments
+		if (comment.get("user") or {}).get("login") == "outsider"
+	]
+	assert len(forged) == 1
+	assert forged[0]["body"] == _standalone_state_body_9718(99)
+
+
+def test_standalone_stall_state_skips_candidate_when_pipeline_login_unavailable():
+	# Without the pipeline's login no state comment can be verified: skip
+	# the candidate (fail closed) instead of recovering from a default state.
+	# The tick-level identity gate in run_standalone_stall_recovery skips the
+	# whole sweep first; the per-candidate STANDALONE_STATE_AUTHOR_FILTER skip
+	# is the second line of defence. Either way nothing acts on the issue.
+	result = _run_standalone_forged_state_tick_9718(mock_store_extra={"fail_user_lookup": True})
+	combined_log = result["stdout"] + result["stderr"]
+	assert (
+		"STANDALONE_STATE_AUTHOR_FILTER issue=823 outcome=identity_unavailable action=skip" in combined_log
+		or "Pipeline identity unavailable; skipping standalone stall recovery this tick" in combined_log
+	), combined_log
+	assert "Action: attempt_merge" not in result["stdout"]
+	assert result.get("merge_calls", []) == []
+	comments = result["issues"]["823"]["comments"]
+	assert len(comments) == 2
+	assert comments[1]["body"] == _standalone_state_body_9718(99)
+
+
+def _standalone_state_parsers_script_9718(login: str, comments: list[dict], helper: str) -> str:
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+
+	def _fn(name: str) -> str:
+		body = source.split(f"\n{name}() {{", 1)[1].split("\n}\n", 1)[0]
+		return f"{name}() {{{body}\n}}\n"
+
+	return (
+		"set -euo pipefail\n"
+		'STANDALONE_STATE_MARKER_OPEN="<!-- AI_STANDALONE_STALL_STATE_V1"\n'
+		'STANDALONE_STATE_MARKER_CLOSE="AI_STANDALONE_STALL_STATE_V1 -->"\n'
+		f"UNBLOCK_TRUSTED_LOGIN={shlex.quote(login)}\n"
+		f"UNBLOCK_TRUSTED_LOGIN_STATE={'ok' if login else 'failed'}\n"
+		"unblock_trusted_login() { printf '%s' \"${UNBLOCK_TRUSTED_LOGIN}\"; }\n"
+		+ _fn("_standalone_state_trusted_login")
+		+ _fn("_extract_standalone_state_comment_id_from_comments")
+		+ _fn("_extract_standalone_state_json_from_comments")
+		+ f"{helper} {shlex.quote(json.dumps(comments))}\n"
+	)
+
+
+def test_standalone_state_parsers_trust_only_pipeline_login():
+	comments = [
+		{"id": 11, "created_at": "2026-01-01T00:00:00Z", "user": {"login": "pipeline-bot"},
+		 "body": _standalone_state_body_9718(2)},
+		{"id": 12, "created_at": "2026-12-01T00:00:00Z", "user": {"login": "outsider"},
+		 "body": _standalone_state_body_9718(99)},
+		{"id": 13, "created_at": "2026-12-02T00:00:00Z", "body": _standalone_state_body_9718(77)},
+	]
+
+	def _run(login: str, helper: str) -> str:
+		result = subprocess.run(
+			["bash", "-c", _standalone_state_parsers_script_9718(login, comments, helper)],
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		return result.stdout.strip()
+
+	assert _run("pipeline-bot", "_extract_standalone_state_comment_id_from_comments") == "11"
+	assert json.loads(_run("pipeline-bot", "_extract_standalone_state_json_from_comments"))["stall_recovery_count"] == 2
+	# No resolvable login: trust nothing (default state, no comment id).
+	assert _run("", "_extract_standalone_state_comment_id_from_comments") == ""
+	assert json.loads(_run("", "_extract_standalone_state_json_from_comments"))["stall_recovery_count"] == 0
 
 
 def test_standalone_retrigger_review_skips_empty_commit_when_review_run_has_blank_head_branch_but_matching_sha():

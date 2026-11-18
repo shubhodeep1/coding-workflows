@@ -19177,19 +19177,46 @@ STANDALONE_STATE_MARKER_CLOSE="AI_STANDALONE_STALL_STATE_V1 -->"
 # GitHub API just to re-parse the same data, which was previously a
 # significant contributor to rate-limit pressure during standalone stall
 # recovery sweeps.
+#
+# Security (#9718): any commenter can post a body carrying the marker, so a
+# state comment counts only when its author is the pipeline's own login
+# (UNBLOCK_TRUSTED_LOGIN, the GH_PAT user that write_standalone_state_json
+# posts as), the same author filter extract_latest_valid_orchestrator_state
+# applies to ORCHESTRATOR_STATE_V1. The login is read from the global, so a
+# caller in a $(...) subshell does not repeat the `user` lookup; resolve it in
+# the parent shell first (run_standalone_stall_recovery does). An empty login
+# trusts no comment (fail closed): the parsers then return the default state
+# and no comment id.
+_standalone_state_trusted_login() {
+  if [ -z "${UNBLOCK_TRUSTED_LOGIN:-}" ] && [ "${UNBLOCK_TRUSTED_LOGIN_STATE:-unset}" = "unset" ]; then
+    unblock_trusted_login >/dev/null 2>&1 || true
+  fi
+  printf '%s' "${UNBLOCK_TRUSTED_LOGIN:-}"
+}
+
 _extract_standalone_state_comment_id_from_comments() {
   local comments_json="$1"
+  local _std_state_login
+  _std_state_login="$(_standalone_state_trusted_login)"
+  [ -n "${_std_state_login}" ] || return 0
   printf '%s' "${comments_json:-[]}" \
-    | jq -r --arg marker "${STANDALONE_STATE_MARKER_OPEN}" '(. // []) | [.[] | select((.body // "") | contains($marker))] | max_by(.created_at // "") | .id // ""' \
+    | jq -r --arg marker "${STANDALONE_STATE_MARKER_OPEN}" --arg login "${_std_state_login}" '(. // []) | [.[] | select(((.user.login // "") == $login) and ((.body // "") | contains($marker)))] | max_by(.created_at // "") | .id // ""' \
     2>/dev/null || true
 }
 
 _extract_standalone_state_json_from_comments() {
   local comments_json="$1"
   local state_raw
-  state_raw="$(printf '%s' "${comments_json:-[]}" \
-    | jq -r --arg marker "${STANDALONE_STATE_MARKER_OPEN}" '(. // []) | [.[] | select((.body // "") | contains($marker))] | max_by(.created_at // "") | .body // ""' \
-    2>/dev/null || echo "")"
+  local _std_state_login
+  # Security (#9718): only the pipeline's own state comments count; see
+  # _standalone_state_trusted_login above. Empty login: default state.
+  _std_state_login="$(_standalone_state_trusted_login)"
+  state_raw=""
+  if [ -n "${_std_state_login}" ]; then
+    state_raw="$(printf '%s' "${comments_json:-[]}" \
+      | jq -r --arg marker "${STANDALONE_STATE_MARKER_OPEN}" --arg login "${_std_state_login}" '(. // []) | [.[] | select(((.user.login // "") == $login) and ((.body // "") | contains($marker)))] | max_by(.created_at // "") | .body // ""' \
+      2>/dev/null || echo "")"
+  fi
 
   if [ -z "${state_raw}" ] || [ "${state_raw}" = "null" ]; then
     echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{}}'
@@ -25894,6 +25921,16 @@ PY
       continue
     fi
 
+    # Security (#9718): the state comment is trusted only from the pipeline's
+    # own login. Resolve it here, in this shell, so the cached value reaches
+    # the parsers' subshells. Without it no state comment can be verified, and
+    # recovering from a default state would post a fresh state comment every
+    # tick, so skip the candidate (fail closed; counters untouched).
+    unblock_trusted_login >/dev/null 2>&1 || true
+    if [ -z "${UNBLOCK_TRUSTED_LOGIN:-}" ]; then
+      echo "::warning::STANDALONE_STATE_AUTHOR_FILTER issue=${issue_num} outcome=identity_unavailable action=skip" >&2
+      continue
+    fi
     state_comment_id="$(_extract_standalone_state_comment_id_from_comments "${comments_json}")"
     state_json="$(_extract_standalone_state_json_from_comments "${comments_json}")"
 
