@@ -5,13 +5,32 @@
   "entry_id": "processed_command_9674_6968180019_approved",
   "issue_number": 9674,
   "metadata": {
+    "branch": "ai/issue-9674",
+    "changed_files": [
+      ".github/workflows/check_failure_triage.yml",
+      "README.md",
+      "agents.d/9674-triage-base-keyed-fingerprint.md",
+      "changelog.d/9674-triage-base-keyed-fingerprint.md",
+      "scripts/check_failure_triage.sh",
+      "scripts/resolve_integration_ref.sh",
+      "tests/fixtures/integration_ref_resolver_ci_triage/base_keyed_triage_issue_keeps_default.json",
+      "tests/test_check_failure_triage_base_fingerprint.py",
+      "tests/test_check_failure_triage_post_stage.py",
+      "tests/test_check_failure_triage_workflow_security.py",
+      "tests/test_resolve_integration_ref_ci_triage.py"
+    ],
+    "issue_number": 9674,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9674",
+    "pr_number": 9703,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9703",
+    "run_attempt": "1",
+    "run_id": "44231044599",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/44231044599"
   },
   "run_attempt": 1,
   "run_id": "44231044599",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-18T03:57:02Z",
+  "status": "completed",
+  "timestamp": "2026-11-18T05:32:01Z",
   "workflow": "implement"
 }
