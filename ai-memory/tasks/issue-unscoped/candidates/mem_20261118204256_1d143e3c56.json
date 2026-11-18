@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:26767-26768 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  PROBLEM: An empty or failed PR fetch leaves `merge_state` empty and is logged as `state_not_open`, so a fetch failure cannot be told apart from a closed PR.\n  WHY: The comment at 26761-26766 documents the mapping and the issue fixes the reason list at six tokens, so the reviewers rated it a NIT (low). The previous chain behaved the same way.\n- scripts/orchestrate_poll_process.sh:26780-26783 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The second head-SHA regex check duplicates the one at 26771.\n  WHY: It is not a defect and the value stays correct at runtime. The reviewer rated it a NIT (low). A second reviewer (anthropic_claude-sonnet-5_5) mentioned the duplication only as a hardening suggestion and did not report it as a finding.\n- scripts/orchestrate_poll_process.sh:26777-26778 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `_orch_squash_merge_bound` now sits in the elif chain without `|| true`, so a failed merge call is recorded as `merge_call_failed` instead of a merge retry.\n  WHY: This is intentional per the issue and the increment behaviour is unchanged, so the reviewer rated it a NIT (low) for visibility only.\n- scripts/ci_final_merge_ref_fresh.sh:check-run logs for run 44336041953 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: All 38 failed check-runs stopped at the merge-ref freshness guard (`outcome=stale reason=not_refreshed`) before any test step ran.\n  WHY: The failure is not caused by the PR diff, because `main` moved and the merge ref was not recomputed. The reviewer rated it a NIT (low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description's acceptance table names `tests/test_orchestrate_poll_process.py` as an acceptance target and leaves its status \"not run\" until a gate runs it.\n  expected_change_site: Validation evidence for `tests/test_orchestrate_poll_process.py`\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR description marks the target \"not run\", the pre-push run timed out, and the final CI logs stopped at the stale merge-ref check before tests ran. Two other reviewers (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) judged this not a code gap, and a third (minimax_minimax-m3) reported no task gaps.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:26767-26768 | severity=NIT | confidence=2\n  PROBLEM: A failed or empty PR fetch is reported as `state_not_open`.\n  WHY: It does not fail at runtime. The log and notification cannot tell a fetch failure from a closed PR, and the issue fixes the reason list at six tokens.\n- TASK_GAP (severity=NIT, confidence=1):\n  Requirement: Record the first refusal, emit one stable-prefix log line, set `attempt_merge_refused_<reason>`, add the reason to the DEBUG `tg_notify_issue` text, keep the gates, order, `lease_wait` branch and increment behaviour. Add an `agents.d` fragment, a `changelog.d` entry and a pytest with stubbed gates.\n  Expected change site: `scripts/orchestrate_poll_process.sh`, `agents.d/`, `changelog.d/`, `tests/`\n  Evidence of absence: none. All deliverables are in the diff.\n- HARDENING: scripts/orchestrate_poll_process.sh 26780-26783, the second head-SHA regex check duplicates the one at 26771. It is correct, so no fix is needed (risk score 0).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:26780-26783 | severity=NIT | confidence=3\n  PROBLEM: The standalone head-SHA regex check is redundant with the elif chain at lines 26767-26779.\n  WHY: It is not a defect and the variable is still correct at runtime.\n- scripts/orchestrate_poll_process.sh:26767-26768 (plus jq parsing at 26751-26755) | severity=NIT | confidence=3\n  PROBLEM: An empty or failed PR fetch falls into the `state_not_open` branch, so the log cannot distinguish a closed PR from a fetch failure.\n  WHY: This is a pre-existing limitation, not a regression, and the issue fixes the reason list at six tokens.\n- scripts/orchestrate_poll_process.sh:26777-26778 | severity=NIT | confidence=3\n  PROBLEM: `_orch_squash_merge_bound` is now in the elif chain without `|| true`, so a failed merge call is recorded as `merge_call_failed`.\n  WHY: This is intentional per the issue spec and the increment behaviour is preserved. It is listed for visibility only.\n- HARDENING: scripts/orchestrate_poll_process.sh 26780-26783, remove the duplicated regex block (-4 lines, risk score 1).\n- HARDENING: scripts/orchestrate_poll_process.sh 26801, 26804, 26810, the log line is emitted on three branches. No fix is needed (risk score 0).\n- No TASK_GAP entries.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP (severity=NIT, confidence=5):\n  Requirement: The PR description's acceptance table names `tests/test_orchestrate_poll_process.py` as an acceptance target and says its status stays \"not run\" until a gate runs it.\n  Expected change site: Validation evidence for `tests/test_orchestrate_poll_process.py`.\n  Evidence of absence: The PR description marks this target \"not run\"; the reported pre-push run timed out, and the supplied final CI logs stopped at the stale merge-ref check before tests ran.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/ci_final_merge_ref_fresh.sh:check-run failure logs for run 44336041953 | severity=NIT | confidence=4\n  PROBLEM: All 38 failed check-runs on the PR head stopped at the merge-ref freshness guard before any test or lint step ran.\n  WHY: This is not caused by the PR diff. The remedy is a base refresh and a new final CI run.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "def06c1eb5d1c47ac5061388c0278ab72788be0b24591e810aa61a3200e9fcd0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9720,
+    "run_id": "44362417333",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "github-actions[bot]",
+    "run_attempt": 1,
+    "run_id": "44362417333",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118204256_1d143e3c56",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9720,
+    "run_id": "44362417333"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T20:42:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
