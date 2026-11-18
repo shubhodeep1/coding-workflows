@@ -23,6 +23,10 @@ WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 
 # "tests/<file>": "why it cannot run in CI". Keep it empty when possible.
 UNWIRED_ALLOWLIST: dict[str, str] = {
+	"tests/test_check_failure_triage_release_download_rerun.py": (
+		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
+		"through tests/test_check_failure_triage_workflow_security.py, which collects them"
+	),
 	"tests/test_orchestrate_integration_staleness_clock.py": (
 		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
 		"through tests/test_orchestrate_integration_ahead_by_gate.py, which collects them"
