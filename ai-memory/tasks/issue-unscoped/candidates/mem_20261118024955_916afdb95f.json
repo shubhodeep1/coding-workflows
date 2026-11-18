@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml (orchestrate-poll pinned-step selection and guard, `Pre-push affected-test gate tests` step guard and rationale comment)\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  EVIDENCE: .github/workflows/ci.yml lines 3755\u20133763 state the run gave no step durations and the pick was estimated from test and subprocess counts, the diff does not show that this was the slowest step or that group 0 has the most headroom. Severity disagreement: anthropic_claude-sonnet-5_5 rated NIT (confidence 2) and called it a documented residual. openai_gpt-6-luna rated MAJOR (confidence 4).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml` (the step guard and its rationale comment).\n  Evidence of absence: The step was picked from test and subprocess counts, not from measured step durations. Nothing in the diff shows that group 0 has the most headroom. This is a documented residual and not a defect that can be pointed to in the diff.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: `.github/workflows/ci.yml`, the `orchestrate-poll` pinned-step selection and guard.\n  Evidence of absence: The workflow moves `Pre-push affected-test gate tests` from group 3 to group 0, but lines 3755\u20133763 state that the run provided no step durations and the target was chosen using estimated test and subprocess counts. The change therefore does not establish that this was the slowest step or that group 0 had the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0548c41c57d5044308771e9c61d0547f91efa95a8dde429235e67ae2c7bb5c82",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9641,
+    "run_id": "44210459701",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44210459701",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118024955_916afdb95f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9641,
+    "run_id": "44210459701"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T02:49:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
