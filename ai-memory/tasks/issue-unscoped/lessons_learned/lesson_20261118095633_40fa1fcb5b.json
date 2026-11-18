@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-11-18T09:56:33Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 011 as out-of-scope; anchor=scripts/ci_final_merge_ref_fresh.sh:181-183; cited_path=scripts/ci_final_merge_ref_fresh.sh; files_touched=docs/plans/pipeline-human-wait-elimination-plan.md.",
+  "phase": "review_autofix",
+  "pr_number": 9687,
+  "record_id": "lesson_20261118095633_40fa1fcb5b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/ci_final_merge_ref_fresh.sh",
+    "docs/plans/pipeline-human-wait-elimination-plan.md"
+  ]
+}
