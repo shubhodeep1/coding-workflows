@@ -2575,16 +2575,34 @@ def test_intake_reports_failures_that_are_not_lost_runners(case: str) -> None:
 	assert len(reads) == (0 if case in ("github_hosted", "rerun_lost_again") else 1)
 
 
-def test_intake_reports_when_another_run_was_not_examined() -> None:
-	# Run 500 lost its droplet, but run 501's jobs could not be read: its failure
-	# was never examined, so the report is not skipped as runner_lost.
+@pytest.mark.parametrize("case", ("bind_dropped", "loop_rejected"))
+def test_intake_reports_when_another_run_was_not_examined(case: str) -> None:
+	# Run 500 lost its droplet, but run 501's failure was never examined, so the
+	# report is not skipped as runner_lost (fail-open towards filing).
 	payload = _consumer_payload()
-	payload["run_refs"] = [*payload["run_refs"], {"repo": CONSUMER_REPO, "run_id": "501", "url": f"https://github.com/{CONSUMER_REPO}/actions/runs/501"}]
-	state = _intake_state(jobs={"500": _runner_lost_jobs()}, annotations={"9001": [{"message": RUNNER_LOST_MESSAGE}]})
+	run_501_url = f"https://github.com/{CONSUMER_REPO}/actions/runs/501"
+	payload["run_refs"] = [*payload["run_refs"], {"repo": CONSUMER_REPO, "run_id": "501", "url": run_501_url}]
+	jobs = {"500": _runner_lost_jobs()}
+	overrides: dict = {}
+	if case == "loop_rejected":
+		# Run 501's jobs are readable (so binding keeps it), but its run GET
+		# fails, so the evidence loop drops it as run_ref_rejected.
+		jobs["501"] = [{"id": 9101, "name": "review", "workflow_name": "AI Review", "conclusion": "failure", "labels": ["ubuntu-latest"], "steps": []}]
+		overrides["run_details"] = {"500": {
+			"id": 500, "repository": {"full_name": CONSUMER_REPO}, "head_sha": SHA_A, "html_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+			"status": "completed", "conclusion": "failure", "path": ".github/workflows/ai-review.yml", "pull_requests": [{"number": 42}],
+		}}
+	# For bind_dropped, run 501 has no jobs fixture: its jobs read 404s at
+	# binding and bind_report_claims drops it (run_not_in_source_repo) before
+	# the evidence loop.
+	state = _intake_state(jobs=jobs, annotations={"9001": [{"message": RUNNER_LOST_MESSAGE}]}, **overrides)
 	result, _, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert "WORKFLOW_HEAL runner_lost outcome=skipped run=500 " in result.stdout
-	assert "jobs_fetch_failed" in result.stdout
+	if case == "bind_dropped":
+		assert "runs_kept=1 runs_dropped=1" in result.stdout, result.stdout
+	else:
+		assert "run_ref_rejected run=501 reason=unverified" in result.stdout, result.stdout
 	assert "skip reason=runner_lost" not in result.stdout
 	assert "WORKFLOW_HEAL fingerprint " in result.stdout
 
