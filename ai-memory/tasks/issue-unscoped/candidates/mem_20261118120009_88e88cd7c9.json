@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/9473-ignore-wedged-queued-runs.md:12 | severity=low | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The new fragment says `SWEEP_STALE_QUEUED_MINUTES=0` does not disable the 24-hour floor, while agents.md:5187 says it restores the previous behavior exactly.\n  WHY: Operators following agents.md who set only `SWEEP_STALE_QUEUED_MINUTES=0` still have runs older than the default `ZOMBIE_RUN_MAX_QUEUED_HOURS` ignored, so the rollback behavior is unclear. The source rated this NIT, which is mapped to low here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The rollback documentation must describe the new behavior consistently. The agents.md claim that `SWEEP_STALE_QUEUED_MINUTES=0` restores the previous behaviour exactly is now incorrect because `ZOMBIE_RUN_MAX_QUEUED_HOURS` adds an independent floor (default 24).\n  expected_change_site: agents.md lines 5187 and 5226\n  confidence=5\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  EVIDENCE: agents.d/9473-ignore-wedged-queued-runs.md only appends a corrective bullet, and no diff hunk rewords the obsolete sentence at agents.md:5187 or the table row at agents.md:5226, so agents.md will hold contradictory rollback instructions after the fragment folds at release.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"the older agents.md wording\" \u2014 the agents.md:5187 claim that `SWEEP_STALE_QUEUED_MINUTES=0 restores the previous behaviour exactly` is now incorrect because ZOMBIE_RUN_MAX_QUEUED_HOURS introduces an independent floor (default 24).\n  Expected change site: agents.md line 5187\n  Evidence of absence: agents.d/9473-ignore-wedged-queued-runs.md adds the corrective bullet, but the PR does not remove or reword the obsolete sentence at agents.md:5187. Fragments can only append, so agents.md will hold both claims side by side.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Hardening: scripts/worktree_registry.sh (`_worktree_registry_load_active_run_ids` call site, ~480-484) | HARDENING_RISK_SCORE: 2\n  Issue: the `_ZOMBIE_RUN_IGNORED_SEEN` dedupe resets on every CLI invocation, so the same wedged run is re-logged on every GC tick.\n  Suggested fix: a persistent marker file to dedupe across invocations (~6 lines).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.d/9473-ignore-wedged-queued-runs.md:12; agents.md:5187 | severity=NIT | confidence=5\n  PROBLEM: The new fragment says setting `SWEEP_STALE_QUEUED_MINUTES=0` does not disable the 24-hour floor, while agents.md:5187 says it restores the previous behavior exactly.\n  WHY: Operators setting only `SWEEP_STALE_QUEUED_MINUTES=0` still have runs older than the default `ZOMBIE_RUN_MAX_QUEUED_HOURS` ignored, so the effective rollback behavior is unclear.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\n- Requirement: The PR's rollback documentation must describe the new behavior consistently. README.md:2748 and agents.d/9473-ignore-wedged-queued-runs.md:12 were updated, but the equivalent agents.md rows still state the pre-#9473 contract.\n  Expected change site: agents.md lines 5187 and 5226 (repo-variable table row: \"`0` disables the cutoff\").\n  Evidence of absence: No diff hunk touches these agents.md statements, so after the fragment folds at release agents.md will claim both that minutes=0 fully restores the old behaviour and that the 24-hour floor still applies.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Hardening: scripts/worktree_registry.sh lines 483-487 (`worktree_registry_gc` call of `_worktree_registry_load_active_run_ids`) | HARDENING_RISK_SCORE: 1\n  Issue: the per-process `ZOMBIE_RUN_IGNORED` dedupe resets on each call, so a long-lived wedged run is re-logged on every GC tick.\n  Suggested fix: a file-scoped sentinel that routes later loader stderr to /dev/null (~6 lines).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3b7bd8fd8b95f2b70ca17bbc19bca6f657a7b149577f4b7f5fd67404c5b70177",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9711,
+    "run_id": "44280818772",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44280818772",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118120009_88e88cd7c9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9711,
+    "run_id": "44280818772"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T12:00:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
