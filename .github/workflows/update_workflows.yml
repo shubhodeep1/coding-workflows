@@ -1379,8 +1379,9 @@ jobs:
           # branch already exists), 1 create or edit, 1 stale-PR list, 1 user read
           # (only when stale candidates exist and the login is not yet known),
           # one close per stale PR, 1 auto-merge enable. A rewrite-refused
-          # resend adds 1 close (the refused branch's PR) and no read: it
-          # reuses the head+base lookup and the pusher check's login.
+          # resend adds 1 close (the refused branch's PR); a refused refresh
+          # whose cached mergeable is UNKNOWN or missing adds 1 PR read.
+          # Otherwise it reuses the head+base lookup and the pusher check's login.
           BASE="${DEFAULT_BRANCH:-}"
           if [ -z "${BASE}" ]; then
             BASE="$(gh api "repos/${GITHUB_REPOSITORY}" --jq .default_branch 2>/dev/null)" || pr_fail default_branch_lookup_failed
@@ -1622,8 +1623,11 @@ jobs:
               printf '%s\n' "${UPDATER_REFRESH_PUSH_ERR}" >&2
               # Only a refusal to rewrite the branch moves the sync. A lease
               # mismatch (someone else pushed: client-side "stale info"),
-              # a network or an auth error keeps the fail-closed exit.
-              if ! printf '%s\n' "${UPDATER_REFRESH_PUSH_ERR}" | grep -Eqi 'GH013|cannot force-push|protected branch hook declined|denying non-fast-forward|\[remote rejected\].*non-fast-forward'; then
+              # a network or an auth error keeps the fail-closed exit. A bare
+              # GH013 is not matched: GitHub prints it for every ruleset
+              # violation (signatures, status checks, paths); the
+              # non_fast_forward rule adds "Cannot force-push to this branch".
+              if ! printf '%s\n' "${UPDATER_REFRESH_PUSH_ERR}" | grep -Eqi 'cannot force-push|protected branch hook declined|denying non-fast-forward|\[remote rejected\].*non-fast-forward'; then
                 pr_fail lease_mismatch_or_push_rejected
               fi
               # Under such a rule every refresh is refused, because the commit
@@ -1635,6 +1639,16 @@ jobs:
               updater_resend_mergeable=""
               if [ -n "${PR_NUMBER}" ]; then
                 updater_resend_mergeable="$(printf '%s' "${PR_LIST_JSON}" | jq -r --arg n "${PR_NUMBER}" '[.[] | select((.number | tostring) == $n)] | .[0].mergeable // ""' 2>/dev/null)" || updater_resend_mergeable=""
+              fi
+              # GitHub computes mergeable lazily, and the head+base lookup above
+              # started that computation. An UNKNOWN or missing value is read
+              # once more (1 PR read, only on this refused path, §15: the
+              # head+base lookup is the only earlier read of it). A failed or
+              # empty re-read keeps the cached value (fail open: kept_head).
+              if [ -n "${PR_NUMBER}" ] && { [ -z "${updater_resend_mergeable}" ] || [ "${updater_resend_mergeable}" = "UNKNOWN" ]; }; then
+                if updater_resend_mergeable_reread="$(gh pr view "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json mergeable --jq '.mergeable // ""' 2>/dev/null)" && [ -n "${updater_resend_mergeable_reread}" ]; then
+                  updater_resend_mergeable="${updater_resend_mergeable_reread}"
+                fi
               fi
               if [ -n "${PR_NUMBER}" ] && [ "${updater_resend_mergeable}" != "CONFLICTING" ]; then
                 echo "UPDATER_PR_RESEND outcome=kept_head branch=${BRANCH} pr=${PR_NUMBER} mergeable=${updater_resend_mergeable:-unknown}"

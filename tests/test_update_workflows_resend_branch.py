@@ -65,6 +65,25 @@ echo "error: some unrelated server-side check failed"
 exit 1
 """
 
+# GitHub prints GH013 for every ruleset violation; only the non_fast_forward
+# rule adds "Cannot force-push to this branch".
+GH013_OTHER_RULE_HOOK = """#!/usr/bin/env bash
+echo "error: GH013: Repository rule violations found for refs/heads/x."
+echo "- Commits must have verified signatures."
+exit 1
+"""
+
+# Answers `gh pr view ... --json mergeable` (the refused path's re-read of an
+# UNKNOWN value) and hands every other call to the fixture's fake gh.
+GH_PR_VIEW_WRAPPER = """#!/usr/bin/env bash
+if [ "$1 $2" = "pr view" ]; then
+  printf '%s\\n' "$*" >> "${{FAKE_GH_LOG}}"
+  echo '{mergeable}'
+  exit 0
+fi
+exec '{real_gh}' "$@"
+"""
+
 GIT_WRAPPER = """#!/usr/bin/env bash
 # Run the side effect once, right before the first `git push`.
 if [ "$1" = "push" ] && [ ! -e '{marker}' ]; then
@@ -131,9 +150,9 @@ def fx(tmp_path: Path) -> Fixture:
 def test_only_a_rewrite_refusal_selects_the_resend() -> None:
 	run = _run_text()
 	assert "UPDATER_RESEND_MAX=5" in run
-	assert "GH013|cannot force-push|protected branch hook declined|denying non-fast-forward|\\[remote rejected\\].*non-fast-forward" in run
+	assert "grep -Eqi 'cannot force-push|protected branch hook declined|denying non-fast-forward|\\[remote rejected\\].*non-fast-forward'" in run
 	refresh = run.index('git push --force-with-lease="refs/heads/${BRANCH}:${REMOTE_SHA}"')
-	classify = run.index("grep -Eqi 'GH013", refresh)
+	classify = run.index("grep -Eqi 'cannot force-push", refresh)
 	fallback = run.index("pr_fail lease_mismatch_or_push_rejected", classify)
 	resend_push = run.index('git push --force-with-lease="refs/heads/${BRANCH}:" origin', classify)
 	assert refresh < classify < fallback < resend_push
@@ -388,3 +407,43 @@ def test_refused_refresh_without_an_open_pr_resends(fx: Fixture) -> None:
 	assert _remote_sha(fx.origin, f"refs/heads/{BRANCH}-r2") != ""
 	assert f"UPDATER_PR_RESEND outcome=opened from={BRANCH} branch={BRANCH}-r2 pr=77 old_pr=none old_pr_closed=none" in result.stdout
 	assert not _calls(fx, "pr close")
+
+
+@needs_jq
+def test_other_ruleset_violation_is_not_a_rewrite_refusal(fx: Fixture) -> None:
+	# A GH013 refusal for another rule (signatures here) must not keep the head
+	# as if the refresh had landed, nor resend to a branch that rule refuses too.
+	old_sha = _seed_updater_branch(fx, BRANCH)
+	_install_hook(fx, GH013_OTHER_RULE_HOOK)
+	fx.pr_list.write_text(json.dumps([_open_pr(5, BRANCH, mergeable="MERGEABLE")]), encoding="utf-8")
+	result = fx.run()
+	assert result.returncode != 0
+	assert "reason=lease_mismatch_or_push_rejected" in result.stdout
+	assert _remote_sha(fx.origin, f"refs/heads/{BRANCH}") == old_sha
+	assert _remote_sha(fx.origin, f"refs/heads/{BRANCH}-r2") == ""
+	assert "UPDATER_PR_RESEND" not in result.stdout
+	assert not _calls(fx, "pr create") and not _calls(fx, "pr close")
+
+
+@pytest.mark.parametrize(("reread", "resent"), [("CONFLICTING", True), ("MERGEABLE", False)])
+@needs_jq
+def test_unknown_mergeable_is_read_once_more(fx: Fixture, reread: str, resent: bool) -> None:
+	_seed_updater_branch(fx, BRANCH)
+	_install_hook(fx, GH013_HOOK)
+	fx.pr_list.write_text(json.dumps([_open_pr(5, BRANCH, mergeable="UNKNOWN")]), encoding="utf-8")
+	gh = fx.bin / "gh"
+	real_gh = fx.bin / "gh-fixture"
+	gh.rename(real_gh)
+	gh.write_text(GH_PR_VIEW_WRAPPER.format(mergeable=reread, real_gh=real_gh), encoding="utf-8")
+	gh.chmod(gh.stat().st_mode | stat.S_IXUSR)
+	result = fx.run()
+	assert result.returncode == 0, result.stdout + result.stderr
+	views = _calls(fx, "pr view")
+	assert len(views) == 1 and views[0].startswith("pr view 5 ") and "--json mergeable" in views[0]
+	if resent:
+		assert fx.outputs()["branch"] == f"{BRANCH}-r2"
+		assert len(_calls(fx, "pr close 5 ")) == 1
+	else:
+		assert fx.outputs()["branch"] == BRANCH
+		assert f"UPDATER_PR_RESEND outcome=kept_head branch={BRANCH} pr=5 mergeable=MERGEABLE" in result.stdout
+		assert not _calls(fx, "pr create") and not _calls(fx, "pr close")

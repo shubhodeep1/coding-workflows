@@ -8,7 +8,7 @@ Some consumer rulesets put `non_fast_forward` on every branch (`~ALL`). There, t
 | New branches per run | at most 1 |
 | Highest suffix | `-r5` (then `reason=resend_cap_reached`) |
 | Branches deleted | none |
-| Extra GitHub API calls on a resend | 1 (`gh pr close`) |
+| Extra GitHub API calls on a refused refresh | at most 2 (`gh pr view` when `mergeable` is `UNKNOWN` or missing, `gh pr close` on a resend) |
 | New log prefix | `UPDATER_PR_RESEND` |
 
 What this means for consumer repos: after the next `@stable` sync, a stuck sync pull request in a repository with a no-force-push ruleset is replaced by a fresh one on the next daily run, with no ruleset change and no human step. Old sync branches stay in place, because these rulesets also block deletion.

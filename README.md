@@ -1336,9 +1336,11 @@ rewrite:** some consumer rulesets put `non_fast_forward` on every branch
 `auto/update-workflows-<sha12>` branch is refused (`GH013 ... Cannot
 force-push to this branch`) and a stale or conflicted sync pull request used to
 stay stuck until the next release. When the refresh push is refused for that
-reason (`GH013`, `Cannot force-push`, `protected branch hook declined`, or a
-remote `non-fast-forward` rejection), it looks at the open pull request's
-`mergeable` state (from the lookup it already makes). A pull request that is
+reason (`Cannot force-push`, `protected branch hook declined`, or a remote
+`non-fast-forward` rejection; a bare `GH013`, which GitHub prints for every
+ruleset violation, does not count), it looks at the open pull request's
+`mergeable` state (from the lookup it already makes, read once more when it is
+`UNKNOWN` or missing). A pull request that is
 not `CONFLICTING` keeps its head, which carries the same release, and the
 `verify` job checks that head again (`UPDATER_PR_RESEND outcome=kept_head`):
 under such a ruleset every refresh is refused, so moving a healthy pull request
