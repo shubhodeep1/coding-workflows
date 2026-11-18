@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:1379-1381 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The README's description of the push-trigger integrity check omits GitHub's 300-changed-file limit on `paths:` filter evaluation, which the template header and changelog already document.\n  WHY: A push that changes more than 300 files, where none of the first 300 match the filter, creates no push run, so the README overstates the behavior. The unfiltered pull request run still carries the verdict, so this is a documentation gap only. All four reviewers rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- README.md:1379-1381 | severity=low | confidence=3\n  PROBLEM: The README does not mention the 300-changed-file limit on GitHub's `paths:` filter. The template header (lines 25-26) and the changelog already document it.\n  WHY: A push that changes more than 300 files, where none of the first 300 match the filter, creates no push run. The unfiltered `pull_request_target` run still carries the verdict, so this is a documentation gap only.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- README.md:1379-1381 | severity=low | confidence=4\n  PROBLEM: The README description of the push check lacks mention of GitHub's 300-file path-filter evaluation limit, potentially misleading operators.\n  WHY: On a push with more than 300 files, if none of the first 300 match the filter, no push-time check happens. The unfiltered pull-request run remains the status source of truth.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- README.md:1379-1381 | severity=low | confidence=4\n  PROBLEM: The README says the push check runs when a push changes a file under `.github/workflows/`, but omits the path-filter limit documented in `workflow-templates/ai-workflow-integrity.yml:25-26`.\n  WHY: A push with more than 300 changed files can be filtered out when none of the first 300 matches, so the push check does not always run as the README describes. The unfiltered pull-request check is unaffected.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- README.md:1379-1380 | severity=low | confidence=4\n  PROBLEM: The README's push-trigger description omits the boundary documented in workflow-templates/ai-workflow-integrity.yml:24-29 and changelog.d/9705-integrity-push-paths.md. GitHub evaluates a `paths:` filter against at most the first 300 changed files of a push.\n  WHY: This is not a runtime failure. The README states an unconditional guarantee that the platform limits, and the unfiltered pull request run still judges the branch, so this is documentation accuracy only.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6b051f7a59d3e7c9585d88bea25e2b662bcf9eee5b20a2edc568973fc752ae9c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9705,
+    "run_id": "44321800929",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44321800929",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118155744_37e3f7ea1a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9705,
+    "run_id": "44321800929"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T15:57:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
