@@ -16,4 +16,4 @@ What this means for operators: a PR labelled `ai:needs-human` with a comment end
 
 ### For contributors
 
-The cap counts dispatched runs from every dispatcher but only the sweep enforces it, so the poller, the security pass and the merge train can still dispatch a capped PR. `tests/test_review_sweep_round_cap.py` and `tests/test_review_gate_generated_chore_skip.py` cover both changes and are wired into the `tests-release-and-log-analysis` CI job's existing step.
+The cap counts dispatched runs from every dispatcher but only the sweep enforces it, so the poller, the security pass and the merge train can still dispatch a capped PR. `tests/test_review_sweep_round_cap.py` and `tests/test_review_gate_generated_chore_skip.py` cover both changes; the `tests-system-python` catch-all job runs them, so `ci.yml` is unchanged.
