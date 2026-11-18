@@ -364,6 +364,12 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_wires_every_test_file.py
 
+      # Runs the inventory parity gate on every PR push (R1a, Refs #9650).
+      - name: Inventory parity (quick)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/inventory_parity.py
+
       - name: YAML lint
         run: |
           set -euo pipefail
