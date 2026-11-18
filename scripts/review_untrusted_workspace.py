@@ -428,6 +428,13 @@ def snapshot(host, workspace, manifest, host_git_dir=None, skip_oversized=False,
 			# ("new result conflicts with host path").
 			oversized += 1
 			continue
+		if gate_asset and not stat.S_ISREG(info.st_mode):
+			# A tracked gitlink (submodule) is a directory here; git archive
+			# leaves only an empty directory, which prune-gate-baseline removes.
+			continue
+		if include_tracked_assets and stat.S_ISREG(info.st_mode) and info.st_size > MAX_FILE:
+			# read_regular() fails the whole tree below; log the counts first.
+			print(f"REVIEW_ISOLATION_SNAPSHOT gate_files={len(baseline)} gate_bytes={total + info.st_size} asset_files={asset_files} limit_exceeded=1", file=sys.stderr)
 		data, mode = read_regular(path)
 		total += len(data)
 		if len(baseline) >= MAX_FILES or total > MAX_TOTAL:
@@ -480,6 +487,15 @@ def prune_gate_baseline(tree, manifest, keep=()):
 	if tree.is_symlink() or not tree.is_dir():
 		raise ValueError("gate baseline tree missing")
 	commands = load_admitted_commands(manifest)
+	trusted_checkout = os.environ.get("GITHUB_WORKSPACE")
+	if trusted_checkout:
+		# Also evaluate the trusted inventory against the merge-base tree, so a
+		# twinned .claude/commands|docs file the change deleted stays in the
+		# baseline and a test that needs it is blamed on the change.
+		trusted = Path(trusted_checkout) / ".codex-workflow-src"
+		commands |= template_command_inventory(trusted) & template_command_inventory(tree)
+		commands |= (template_command_inventory(trusted, twin_dir=DOCS_TWIN_DIR, live_prefix=".claude/docs/") &
+			template_command_inventory(tree, twin_dir=DOCS_TWIN_DIR, live_prefix=".claude/docs/"))
 	keep_names = frozenset(keep)
 	pruned = 0
 	kept = 0

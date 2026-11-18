@@ -1813,3 +1813,45 @@ def test_prune_gate_baseline_applies_the_snapshot_filter(tmp_path):
 	missing = subprocess.run([sys.executable, str(RUW_PATH), "prune-gate-baseline", str(tree), str(manifest)], capture_output=True, text=True, env=_ruw_env(), timeout=60)
 	assert missing.returncode == 1 and "reason=admitted_inventory_missing" in missing.stderr
 	assert str(tree) not in missing.stderr
+
+
+def test_snapshot_with_tracked_assets_skips_a_tracked_gitlink(tmp_path, monkeypatch, capsys):
+	host = _repo(tmp_path, {"lib/a.py": "X = 1\n", "assets/logo.png": "png"}, name="host")
+	head = _git(host, "rev-parse", "HEAD")
+	_git(host, "update-index", "--add", "--cacheinfo", f"160000,{head},vendor/lib")
+	(host / "vendor" / "lib").mkdir(parents=True)
+	(host / "vendor" / "lib" / "inner.png").write_text("x", encoding="utf-8")
+	monkeypatch.delenv("GITHUB_WORKSPACE", raising=False)
+	workspace = tmp_path / "ws"
+	workspace.mkdir()
+	ruw.snapshot(host, workspace, tmp_path / "m.json", include_tracked_assets=True)
+	assert (workspace / "assets" / "logo.png").is_file()
+	assert not (workspace / "vendor").exists()
+	assert "gate_files=2 " in capsys.readouterr().err
+
+
+def test_snapshot_with_tracked_assets_logs_counts_before_a_max_file_reject(tmp_path, monkeypatch, capsys):
+	host = _repo(tmp_path, {"lib/a.py": "X = 1\n", "assets/logo.png": "p" * 64}, name="host")
+	monkeypatch.delenv("GITHUB_WORKSPACE", raising=False)
+	monkeypatch.setattr(ruw, "MAX_FILE", 32)
+	workspace = tmp_path / "ws"
+	workspace.mkdir()
+	with pytest.raises(ValueError, match="unsafe file type or size"):
+		ruw.snapshot(host, workspace, tmp_path / "m.json", include_tracked_assets=True)
+	assert "REVIEW_ISOLATION_SNAPSHOT gate_files=0 gate_bytes=64 asset_files=0 limit_exceeded=1" in capsys.readouterr().err
+
+
+def test_prune_gate_baseline_keeps_a_twinned_docs_file_the_change_deleted(tmp_path, monkeypatch):
+	trusted = tmp_path / "trusted"
+	(trusted / ".codex-workflow-src" / "workflow-templates" / ".claude" / "docs").mkdir(parents=True)
+	(trusted / ".codex-workflow-src" / "workflow-templates" / ".claude" / "docs" / "x.md").write_text("x\n", encoding="utf-8")
+	tree = tmp_path / "baseline"
+	for name in ("workflow-templates/.claude/docs/x.md", ".claude/docs/x.md", ".claude/docs/y.md"):
+		(tree / name).parent.mkdir(parents=True, exist_ok=True)
+		(tree / name).write_text("x\n", encoding="utf-8")
+	manifest = tmp_path / "manifest.json"
+	ruw.admitted_commands_path(manifest).write_text("[]", encoding="utf-8")
+	monkeypatch.setenv("GITHUB_WORKSPACE", str(trusted))
+	ruw.prune_gate_baseline(tree, manifest)
+	assert (tree / ".claude" / "docs" / "x.md").is_file()
+	assert not (tree / ".claude" / "docs" / "y.md").exists()

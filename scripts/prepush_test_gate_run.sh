@@ -270,6 +270,10 @@ done
 # PR tree may not hold (credential-shaped paths, dot paths, symlinks) is not in
 # the baseline either. Runs before any node_modules mount point is created.
 if ! PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" prune-gate-baseline "${root}/baseline" "${root}/manifest.json" "${overlays[@]}" >/dev/null 2>"${root}/prune.err"; then
+	# Only the fixed reason code is logged, never raw stderr.
+	prune_reason="$(grep -E '^::error::Review isolation gate baseline prune rejected ' "${root}/prune.err" 2>/dev/null | grep -Eo ' reason=[a-z_]+$' | head -n 1 | cut -d= -f2)" || prune_reason=""
+	[[ "${prune_reason}" =~ ^(admitted_inventory_missing|baseline_missing|unknown)$ ]] || prune_reason="unknown"
+	gate_log "outcome=warning reason=baseline_filter_detail detail=${prune_reason}"
 	synthetic_result baseline_filter_failed
 	exit 0
 fi
