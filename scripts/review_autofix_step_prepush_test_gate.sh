@@ -795,6 +795,17 @@ review_prepush_test_gate_repair()
 		rpg_repair="reverted (syntax)"
 		return 0
 	fi
+	# The validator rewrites files in place (strip_full_file_fence on changed
+	# YAML/JSON), so re-read the tree for the passing-change guard below; the
+	# PREPUSH_REPAIR_CHANGES line above keeps the pre-validator read. A failed
+	# read leaves the guard off (issue #9519 fail-safe).
+	if [ -n "${validator}" ]; then
+		if rpg_post_repair_changed="$(review_prepush_test_gate_changed_checked)"; then
+			rpg_post_repair_ok=true
+		else
+			rpg_post_repair_ok=false rpg_post_repair_changed=""
+		fi
+	fi
 	# A repair that leaves no change at all undid the editor's work instead of
 	# fixing it. For lint-only failures that edit usually restores code the PR
 	# base already had (PR #8747: three E101 lines a reviewer asked to restore),

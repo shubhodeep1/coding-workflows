@@ -408,6 +408,24 @@ def test_review_loop_repair_that_erases_a_passing_change_keeps_the_editor_edit(t
 	assert diag[0]["truncated"] == "0"
 
 
+def test_review_loop_repair_erased_by_the_syntax_validator_keeps_the_editor_edit(tmp_path):
+	# The syntax validator rewrites files in place (full-file fence strip), so
+	# a repair whose only change it undoes leaves a clean tree; the guard must
+	# decide from a read taken after the validator.
+	repo, env = _setup(tmp_path, [PASS_UNMET, PASS])
+	_seed_unmet_done_check(tmp_path, env)
+	(_work(tmp_path) / "edit.sh").write_text("printf 'X = 9\\n' > lib/a.py\n", encoding="utf-8")
+	validator = tmp_path / "support" / "scripts" / "validate_changed_files_syntax.sh"
+	validator.write_text("#!/usr/bin/env bash\nprintf 'X = 1\\n' > lib/a.py\nexit 0\n", encoding="utf-8")
+	validator.chmod(0o755)
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert (repo / "lib" / "a.py").read_text(encoding="utf-8") == "X = 2\n"
+	assert "outcome=repair_reverted reason=passing_change_erased" in proc.stderr
+	diag = _repair_diag(proc.stderr)
+	assert len(diag) == 1 and diag[0]["after"] == "1"
+
+
 def test_review_loop_repair_that_keeps_a_change_is_kept(tmp_path):
 	repo, env = _setup(tmp_path, [PASS_UNMET, PASS])
 	_seed_unmet_done_check(tmp_path, env)
