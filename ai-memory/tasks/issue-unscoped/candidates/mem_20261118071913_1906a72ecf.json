@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/chatgpt_codex_relay.py:212-220 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The forbidden-header guards use the `in` operator (e.g., `'Transfer-Encoding' in self.headers`), which the reviewer says is case-sensitive and works on raw header names, so lowercase headers such as `transfer-encoding: chunked` could get past the guard.\n  WHY: The reviewer says chunked or compressed bodies could then reach the sensitive body-handling logic and be forwarded to the provider, which breaks the module's safety contract. The source severity was BLOCKER, mapped here to critical. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash both rejected this explicitly: `self.headers` is an `http.client.HTTPMessage`, a subclass of `email.message.Message`, whose `__contains__` compares names case-insensitively.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Run the review panel's GPT slot on a ChatGPT account via claude-pool-broker.\n  expected_change_site: .github/ai/chatgpt_pool.json\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer says the deliverable requires `reviewer_slot_enabled: true` in `.github/ai/chatgpt_pool.json`, but the file added in the PR diff ships with `reviewer_slot_enabled: false`. The reviewer also says this is a sandbox-excluded path and the previous autofix run did not stage the file. anthropic_claude-sonnet-5_5 notes the slot ships switched off and treats the file as present, with no gap. z-ai_glm-5_3-flash confirms the file is present in the working tree and reports no gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION: scripts/chatgpt_codex_relay.py, read_credentials, the fstat check (around line 114)\n  PROBLEM: An auth.json that is a hard link to another inode (st_nlink > 1) is still accepted. The impact is low because the file lives in a 0700 directory under RUNNER_TEMP that only the runner user writes.\n  WHY: Suggested minimal fix: add `or info.st_nlink != 1` to the existing condition (estimated lines changed: 1). HARDENING_RISK_SCORE: 1\n- NOTE: The reviewer rejected the pass-1 case-sensitivity finding on Relay.do_POST lines 212, 213 and 220. `Message.__contains__` lowercases header names, and the presence check now also refuses empty-valued headers.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/chatgpt_codex_relay.py:212-220 | severity=BLOCKER | confidence=5\n  PROBLEM: The forbidden-header guards use the `in` operator (e.g., `'Transfer-Encoding' in self.headers`), which is case-sensitive and operates on raw header names.\n  WHY: An attacker can get past the guard with lowercase header names (e.g., `transfer-encoding: chunked`), so forbidden requests (e.g., chunked or compressed bodies) reach the sensitive body-handling logic and are forwarded to the provider, which violates the module's safety contract.\n- TASK_GAP\n  Requirement: Run the review panel's GPT slot on a ChatGPT account via claude-pool-broker.\n  Expected change site: .github/ai/chatgpt_pool.json\n  Evidence of absence: The deliverable requires configuring `reviewer_slot_enabled: true` in `.github/ai/chatgpt_pool.json`, but the added file in the PR diff ships with `reviewer_slot_enabled: false`. As noted in the AI autofix editor summary, this is a sandbox-excluded path and the file was not staged in the previous autofix run.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- NOTE: The reviewer rejected the pass-1 case-sensitivity finding at scripts/chatgpt_codex_relay.py:212-220. `email.message.Message.__contains__` lowercases both the lookup key and the stored keys, and the change from a truthy `.get()` to an `in` presence check is strictly safer. HARDENING_SUGGESTIONS: NONE (the reviewer omitted the `st_nlink != 1` suggestion as defense-in-depth only). HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a06e198ad18604fd488354cb30fe8a2b68f5bf5c41889a07e8851797846e52f5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8971,
+    "run_id": "44231221381",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44231221381",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118071913_1906a72ecf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8971,
+    "run_id": "44231221381"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T07:19:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
