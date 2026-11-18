@@ -61,12 +61,18 @@ if args[1:2] == ["graphql"]:
 	if (root / "graphql_fails").exists():
 		sys.exit(1)
 	gate = fixture("gate.json", {})
+	# Head commit dates; by default older than every round in the fixtures.
+	commit_dates = fixture("commit_dates.json", {})
 	nodes = []
 	for pr in fixture("pulls.json", []):
 		state = gate.get(str(pr["number"]), "PENDING")
 		status = None if state == "ABSENT" else {"context": {"state": state}}
+		commit = {"oid": pr["head"]["sha"], "status": status}
+		committed = commit_dates.get(str(pr["number"]), "2026-11-01T00:00:00Z")
+		if committed is not None:
+			commit["committedDate"] = committed
 		nodes.append({"number": pr["number"], "headRefOid": pr["head"]["sha"],
-			"commits": {"nodes": [{"commit": {"oid": pr["head"]["sha"], "status": status}}]}})
+			"commits": {"nodes": [{"commit": commit}]}})
 	out({"data": {"repository": {"pullRequests": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": nodes}}}})
 endpoint = next((a for a in args[1:] if a.startswith("repos/")), "")
 if endpoint.endswith("/labels"):
@@ -156,7 +162,8 @@ def _page(*runs: dict) -> dict:
 
 
 def _setup(tmp_path: Path, *, prs: list[dict] | None = None, rounds: list[dict] | None = None, active: list[dict] | None = None,
-		helper: bool = True, flags: tuple[str, ...] = (), gate: dict[str, str] | None = None) -> Path:
+		helper: bool = True, flags: tuple[str, ...] = (), gate: dict[str, str] | None = None,
+		commit_dates: dict[str, str | None] | None = None) -> Path:
 	bin_dir = tmp_path / "bin"
 	bin_dir.mkdir()
 	gh = bin_dir / "gh"
@@ -170,6 +177,8 @@ def _setup(tmp_path: Path, *, prs: list[dict] | None = None, rounds: list[dict] 
 		(tmp_path / "active.json").write_text(json.dumps(active), encoding="utf-8")
 	if gate is not None:
 		(tmp_path / "gate.json").write_text(json.dumps(gate), encoding="utf-8")
+	if commit_dates is not None:
+		(tmp_path / "commit_dates.json").write_text(json.dumps(commit_dates), encoding="utf-8")
 	for flag in flags:
 		(tmp_path / flag).write_text("", encoding="utf-8")
 	# The head-gate helper is always staged (it supplies head_gate_state, which
@@ -374,19 +383,73 @@ def test_cap_off_or_unreadable_dispatches_as_before(tmp_path: Path, kwargs: dict
 		assert not any("event=workflow_dispatch" in line for line in _lines(tmp_path, "calls.log"))
 
 
-@pytest.mark.parametrize("flag, reason, labelled", [
-	("label_fails", "label_write", False),
-	("comment_fails", "comment_write", True),
+@pytest.mark.parametrize("flag, reason, commented", [
+	("label_fails", "label_write", True),
+	("comment_fails", "comment_write", False),
 ])
-def test_failed_escalation_write_still_skips_the_dispatch(tmp_path: Path, flag: str, reason: str, labelled: bool) -> None:
+def test_failed_escalation_write_still_skips_the_dispatch(tmp_path: Path, flag: str, reason: str, commented: bool) -> None:
 	result = _run_sweep(tmp_path, prs=[_pr(5)], rounds=_rounds(**{"5": 12}), flags=(flag,))
 	assert result.returncode == 0, result.stderr
 	assert _dispatched(tmp_path) == []
 	assert f"REVIEW_SWEEP_ROUND_CAP outcome=escalate_failed reason={reason} pr=#5" in result.stdout
 	assert "AUTOFIX_SWEEP_SKIP pr=#5 reason=review_round_cap" in result.stdout
-	# The label goes first, so a failed label write posts no comment.
-	assert bool(_lines(tmp_path, "labels.log")) is labelled
-	assert not _lines(tmp_path, "comments.log")
+	# The comment goes first: a failed comment write adds no label, so the
+	# next tick (which sees no label) retries both.
+	assert bool(_lines(tmp_path, "comments.log")) is commented
+	assert not _lines(tmp_path, "labels.log")
+
+
+@pytest.mark.parametrize("committed, capped", [
+	# The head was pushed after every round: the rounds were an earlier head's.
+	("2026-11-17T14:00:00Z", False),
+	# The same instant in the committer offset is still after the rounds.
+	("2026-11-17T06:00:00-08:00", False),
+	# 05:00-08:00 is 13:00Z, before the rounds at 13:23Z: they count.
+	("2026-11-17T05:00:00-08:00", True),
+	# No commit date: nothing proves the rounds were this head's.
+	(None, False),
+])
+def test_only_rounds_since_the_current_head_count(tmp_path: Path, committed: str | None, capped: bool) -> None:
+	result = _run_sweep(tmp_path, prs=[_pr(5)], rounds=_rounds(**{"5": 40}), commit_dates={"5": committed})
+	assert result.returncode == 0, result.stderr
+	assert ("reason=review_round_cap" in result.stdout) is capped, result.stdout
+	assert (_dispatched(tmp_path) == []) is capped
+	assert bool(_lines(tmp_path, "labels.log")) is capped
+
+
+def test_counts_with_a_snapshot_start_at_each_head_commit(tmp_path: Path) -> None:
+	runs = [
+		_round(5, created_at="2026-11-17T12:00:00Z"), _round(5, created_at="2026-11-17T14:00:00Z"),
+		_round(6), _round(7),
+	]
+	snapshot = [{"number": 5, "head_committed_at": "2026-11-17T13:00:00Z"}, {"number": 6},
+		{"number": 7, "head_committed_at": "2026-11-17"}]
+	result = _run_counts(tmp_path, "o/r", "main", "72", json.dumps(snapshot), rounds=[_page(*runs)])
+	assert result.returncode == 0, result.stderr
+	# PR 5: only the run after its head commit; PRs 6 and 7: no usable date, left out.
+	assert json.loads(result.stdout) == {"5": 1}
+
+
+def test_counts_reject_a_snapshot_that_is_not_an_array(tmp_path: Path) -> None:
+	result = _run_counts(tmp_path, "o/r", "main", "72", '{"5": 1}', rounds=[_page(_round(5))])
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == ""
+	assert "REVIEW_SWEEP_ROUND_CAP outcome=read_failed reason=invalid_input" in result.stderr
+
+
+@pytest.mark.parametrize("args", [
+	("o/r", "5", "x", "10", "48"),
+	("o/r", "5", "12", "0", "48"),
+	("o/r", "5", "12", "10", "48 hours"),
+])
+def test_escalate_rejects_non_numeric_arguments(tmp_path: Path, args: tuple[str, ...]) -> None:
+	bin_dir = _setup(tmp_path, helper=False)
+	script = f'source "{HELPER}"; review_sweep_round_cap_escalate "$@" "[]" false'
+	result = subprocess.run(["bash", "-c", script, "escalate", *args], env=_env(tmp_path, bin_dir),
+		capture_output=True, text=True, cwd=tmp_path, check=False)
+	assert result.returncode == 0, result.stderr
+	assert "REVIEW_SWEEP_ROUND_CAP outcome=escalate_failed reason=invalid_input" in result.stdout
+	assert not _lines(tmp_path, "labels.log") and not _lines(tmp_path, "comments.log")
 
 
 def test_pr_with_an_active_review_run_is_not_escalated(tmp_path: Path) -> None:
