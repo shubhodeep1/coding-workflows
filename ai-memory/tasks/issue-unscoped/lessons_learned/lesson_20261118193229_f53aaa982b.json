@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-11-18T19:32:29Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 018 as out-of-scope; anchor=.github/workflows/ci.yml:1; cited_path=scripts/ci_final_merge_ref_fresh.sh; files_touched=docs/plans/digitalocean-runners-for-consumer-pipelines-plan.md.",
+  "phase": "review_autofix",
+  "pr_number": 9722,
+  "record_id": "lesson_20261118193229_f53aaa982b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/ci_final_merge_ref_fresh.sh",
+    ".github/workflows/ci.yml",
+    "docs/plans/digitalocean-runners-for-consumer-pipelines-plan.md"
+  ]
+}
