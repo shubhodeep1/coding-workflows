@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"README.md:337 (orchestrate_poll env table) and README.md:2611 (defaults table) ... list only the MAX_JUDGE_REPLAY exception. They do not mention the second exception this PR adds: a judge escalate_human is kept, and the issue gets ai:needs-human, when the issue's own implementation PR is closed or merged.\"\n  expected_change_site: README.md\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: README.md still only lists the MAX_JUDGE_REPLAY exception; it was not updated by the PR as it was outside the plan's files_touched grant. (source SEVERITY: NIT; anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash all explicitly declined to re-report this gap as deferred/out of scope)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"README.md:337 (orchestrate_poll env table) and README.md:2611 (defaults table) ... list only the MAX_JUDGE_REPLAY exception. They do not mention the second exception this PR adds: a judge escalate_human is kept, and the issue gets ai:needs-human, when the issue's own implementation PR is closed or merged.\"\n  Expected change site: README.md\n  Evidence of absence: README.md still only lists the MAX_JUDGE_REPLAY exception; it was not updated by the PR as it was outside the plan's files_touched grant.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d3b2582b11f1170c802eac6957c97ec7be6ef6e2b27045daf5ce98939f245829",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9502,
+    "run_id": "44348794346",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44348794346",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118185313_24e144d302",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9502,
+    "run_id": "44348794346"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T18:53:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
