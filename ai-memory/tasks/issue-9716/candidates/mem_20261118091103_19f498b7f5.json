@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The trust rule needs a trusted author login, and the \"Post editor summary comment\" step has none in its env (the gate exposes `needs.gate.outputs.fingerprint_cap_marker_author_login` at line 385, but this step doesn't receive it). The \u00a727 rule (`review_autofix.yml` gains no lines) rules out passing it through the workflow. The \u00a715 rule (the DELETE is the only extra REST call) rules out the script calling `gh api user`. Which rule may give way?\nChoices:\n- A: Add one env line to the \"Post editor summary comment\" step: `AUTOFIX_CAP_MARKER_AUTHOR_LOGIN: ${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}`. This relaxes \u00a727 by one line, and the script fails closed (keeps the label, logs `outcome=kept reason=marker_author_unavailable`) when it is empty. (RECOMMENDED)\n- B: Keep the workflow unchanged. Only when `ai:review-blocked` is present, the script calls `gh api user` once to get the author. This relaxes \u00a715 to at most two extra calls on that path.\n- C: Keep both rules. Trust only `vars.AUTOFIX_BOT_LOGIN` / signed `github-actions[bot]` comments already visible to the step, and skip the clear when neither can be confirmed.\nQ2: Where should the label check and the cap-marker search read from? The step reads no comments or labels itself today, though the job's `review_collect_pr_metadata.sh` writes PR comments to `PR_ISSUE_COMMENTS_FILE` at the start of the run.\nChoices:\n- A: Reuse the comments in `PR_ISSUE_COMMENTS_FILE` and the labels from the same metadata snapshot. A cap marker always predates this run, so the snapshot is enough. Fall back to one labels/comments read only if the file is missing or unreadable. (RECOMMENDED)\n- B: Always do one fresh paginated comments read (with labels from it or the PR read) when the step runs, accepting one more GET.\nQ3: The cap marker writes `support=` only when `REVIEW_SUPPORT_SHA` was a valid SHA (`review_autofix.yml:1886`). If the newest trusted cap marker is on the same head as the clean marker but has no `support=` field, what should happen?\nChoices:\n- A: Treat the missing support as different support and remove the label. This matches the gate's rule at line 1835, where a marker without `support=` does not count for a run with a known support SHA. (RECOMMENDED)\n- B: Treat it as unknown and keep the label (`reason=cap_support_missing`).",
+  "fingerprint": "1679dab0a3f2568c78b822d20667285b05113c9e92ff047ca1904f08f656bc93",
+  "lineage": {
+    "issue_number": 9716,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44272764683",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44272764683",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261118091103_19f498b7f5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9716,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44272764683"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9716 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-18T09:11:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
