@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-18T05:49:01Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=scripts/ci_final_merge_ref_fresh.sh:1; cited_path=scripts/ci_final_merge_ref_fresh.sh; files_touched=changelog.d/9519-plan-prompt-files-touched-scope.md, prompts/_templates/mode-plan.txt, prompts/mode-plan.txt, scripts/run_plan_codex.sh, tests/test_plan_codex_step_extraction.py.",
+  "phase": "review_autofix",
+  "pr_number": 9548,
+  "record_id": "lesson_20261118054901_47114f8796",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/ci_final_merge_ref_fresh.sh",
+    "changelog.d/9519-plan-prompt-files-touched-scope.md",
+    "prompts/_templates/mode-plan.txt",
+    "prompts/mode-plan.txt",
+    "scripts/run_plan_codex.sh",
+    "tests/test_plan_codex_step_extraction.py"
+  ]
+}
