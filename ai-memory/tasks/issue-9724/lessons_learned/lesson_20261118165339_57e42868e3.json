@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-18T16:53:39Z",
+  "issue_number": 9724,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 006 as out-of-scope; anchor=.github/workflows/implement.yml:2707-2718; cited_path=Source issue #9718 comment that triggers re-planning; files_touched=.github/workflows/implement.yml, agents.d/9724-implement-plan-extract-diagnostics.md, changelog.d/9724-implement-plan-extract-diagnostics.md, tests/test_implement_extract_plan_diagnostics.py.",
+  "phase": "review_autofix",
+  "pr_number": 9729,
+  "record_id": "lesson_20261118165339_57e42868e3",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "Source issue #9718 comment that triggers re-planning",
+    ".github/workflows/implement.yml",
+    "agents.d/9724-implement-plan-extract-diagnostics.md",
+    "changelog.d/9724-implement-plan-extract-diagnostics.md",
+    "tests/test_implement_extract_plan_diagnostics.py"
+  ]
+}
