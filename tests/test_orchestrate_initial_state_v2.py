@@ -57,7 +57,7 @@ def _large_state() -> dict:
 	}
 
 
-def _run_post(state: dict, work: Path) -> tuple[subprocess.CompletedProcess, list[dict]]:
+def _run_post(state: dict, work: Path, compress: str = "false") -> tuple[subprocess.CompletedProcess, list[dict]]:
 	state_file = work / "state.json"
 	state_file.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
 	posted = work / "posted"
@@ -79,6 +79,7 @@ def _run_post(state: dict, work: Path) -> tuple[subprocess.CompletedProcess, lis
 		export RUNTIME_DIR="{work}"
 		export STATE_FILE="{state_file}"
 		export TRACKING_ISSUE_NUMBER=8291
+		export ORCH_STATE_COMPRESS="{compress}"
 		cd "{ROOT}"
 		""") + _post_block() + "\n"
 	script = work / "post.sh"
@@ -115,6 +116,20 @@ def test_large_initial_state_posts_as_v2_chunks_the_poller_can_read() -> None:
 			assert comment["body"].startswith("<!-- ORCHESTRATOR_STATE_V2 part=")
 		assert f"parts={len(comments)}" in result.stdout
 		assert _extract(comments, work) == state
+
+
+def test_large_initial_state_compressed_posts_fewer_chunks_the_poller_can_read() -> None:
+	state = _large_state()
+	with tempfile.TemporaryDirectory() as tmp:
+		plain_dir, compressed_dir = Path(tmp) / "plain", Path(tmp) / "compressed"
+		plain_dir.mkdir()
+		compressed_dir.mkdir()
+		_, plain = _run_post(state, plain_dir)
+		result, comments = _run_post(state, compressed_dir, compress="true")
+		assert result.returncode == 0, result.stderr
+		assert len(comments) < len(plain)
+		assert "compressed=true" in result.stdout
+		assert _extract(comments, compressed_dir) == state
 
 
 def test_small_initial_state_posts_one_v2_chunk() -> None:

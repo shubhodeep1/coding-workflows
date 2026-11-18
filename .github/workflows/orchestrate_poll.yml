@@ -1397,6 +1397,18 @@ jobs:
           fi
           rm -f -- "${alert_file}" "${items_file}"
 
+      # ChatGPT account pool status for the alert below (ChatGPT trial plan
+      # Phase 4, Refs #8969): GET /v1/chatgpt/status, metadata only, never a
+      # token. Skipped when CHATGPT_POOL_HEALTH_ALERT_ENABLED is 'false'.
+      - name: Read ChatGPT pool status
+        id: chatgpt_pool_status
+        if: (((steps.ai_engine.outputs.any_claude == 'true' && steps.find_tracking.outputs.capacity_wait != 'true') || (steps.find_tracking.outputs.capacity_wait == 'true' && steps.pool_window.outputs.in_window == 'true'))) && vars.CHATGPT_POOL_HEALTH_ALERT_ENABLED != 'false'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/chatgpt-pool-token
+        with:
+          mode: status
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
       - name: Alert on Claude pool accounts at the usage gate
         if: (steps.ai_engine.outputs.any_claude == 'true' && steps.find_tracking.outputs.capacity_wait != 'true') || (steps.find_tracking.outputs.capacity_wait == 'true' && steps.pool_window.outputs.in_window == 'true')
         continue-on-error: true
@@ -1409,6 +1421,9 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          CHATGPT_POOL_STATUS: ${{ steps.chatgpt_pool_status.outputs.status || '' }}
+          CHATGPT_POOL_HEALTH_ALERT_ENABLED: ${{ vars.CHATGPT_POOL_HEALTH_ALERT_ENABLED || 'true' }}
+          CHATGPT_POOL_ALERT_STALE_HOURS: ${{ vars.CHATGPT_POOL_ALERT_STALE_HOURS || '12' }}
         run: bash .codex-workflow-src/scripts/claude_pool_health_alert.sh
 
       # Daily Claude pool usage report: decides whether the
@@ -1551,6 +1566,10 @@ jobs:
           ORCH_TASK_FILES_ENABLED: ${{ vars.ORCH_TASK_FILES_ENABLED || 'false' }}
           ORCH_STATE_PRUNE_ENABLED: ${{ vars.ORCH_STATE_PRUNE_ENABLED || 'true' }}
           ORCH_STATE_PRUNE_MAX_DELETES: ${{ vars.ORCH_STATE_PRUNE_MAX_DELETES || '50' }}
+          ORCH_STATE_SKIP_UNCHANGED: ${{ vars.ORCH_STATE_SKIP_UNCHANGED || 'true' }}
+          # zlib-compress new ORCHESTRATOR_STATE_V2 chains (readers accept both
+          # forms). Off until every consumer pin can read compressed chains.
+          ORCH_STATE_COMPRESS: ${{ vars.ORCH_STATE_COMPRESS || 'false' }}
           ENABLE_CLEAN_WAVE_JUDGE_SKIP: ${{ vars.ENABLE_CLEAN_WAVE_JUDGE_SKIP || 'true' }}
           MAX_REVIEW_BLOCKED_RETRIES: ${{ vars.MAX_REVIEW_BLOCKED_RETRIES || '2' }}
           RB_JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.RB_JUDGE_ISOLATION_MAX_FAILURES || '3' }}
@@ -1789,6 +1808,10 @@ jobs:
           ORCH_TASK_FILES_ENABLED: ${{ vars.ORCH_TASK_FILES_ENABLED || 'false' }}
           ORCH_STATE_PRUNE_ENABLED: ${{ vars.ORCH_STATE_PRUNE_ENABLED || 'true' }}
           ORCH_STATE_PRUNE_MAX_DELETES: ${{ vars.ORCH_STATE_PRUNE_MAX_DELETES || '50' }}
+          ORCH_STATE_SKIP_UNCHANGED: ${{ vars.ORCH_STATE_SKIP_UNCHANGED || 'true' }}
+          # zlib-compress new ORCHESTRATOR_STATE_V2 chains (readers accept both
+          # forms). Off until every consumer pin can read compressed chains.
+          ORCH_STATE_COMPRESS: ${{ vars.ORCH_STATE_COMPRESS || 'false' }}
           ENABLE_CLEAN_WAVE_JUDGE_SKIP: ${{ vars.ENABLE_CLEAN_WAVE_JUDGE_SKIP || 'true' }}
           MAX_REVIEW_BLOCKED_RETRIES: ${{ vars.MAX_REVIEW_BLOCKED_RETRIES || '2' }}
           RB_JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.RB_JUDGE_ISOLATION_MAX_FAILURES || '3' }}
@@ -2437,6 +2460,17 @@ jobs:
         with:
           config_path: .github/ai/claude_engine.json
 
+      # ChatGPT account pool status for the report's "ChatGPT accounts"
+      # section (ChatGPT trial plan Phase 4, Refs #8969); never a token.
+      - name: Read ChatGPT pool status
+        id: chatgpt_pool_status
+        if: steps.pool_daily_recheck.outcome == 'success' && steps.pool_daily_recheck.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: ./.github/actions/chatgpt-pool-token
+        with:
+          mode: status
+          config_path: .github/ai/claude_engine.json
+
       - name: Send Claude pool daily usage report
         id: pool_daily_send
         if: steps.pool_daily_recheck.outcome == 'success' && steps.pool_daily_recheck.outputs.cache-hit != 'true'
@@ -2448,6 +2482,9 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          CHATGPT_POOL_STATUS: ${{ steps.chatgpt_pool_status.outputs.status || '' }}
+          CHATGPT_POOL_STATUS_REASON: ${{ steps.chatgpt_pool_status.outputs.reason || 'not_read' }}
+          CHATGPT_POOL_ALERT_STALE_HOURS: ${{ vars.CHATGPT_POOL_ALERT_STALE_HOURS || '12' }}
         run: bash scripts/claude_pool_daily_usage.sh send
 
       - name: Write today's Claude pool daily usage marker

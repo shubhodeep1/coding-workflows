@@ -485,14 +485,12 @@ single_pass_delta_source()
 		}'
 }
 
-# Input: PR head ref. Output: JSON array of {number, marker, markers} for the
+# Input: PR head ref. Output: JSON array of {number, marker, body} for the
 # open pipeline-authored ai:security issues whose `Integration branch:` line is
 # that ref; `marker` is the body's first line when it is an
-# `<!-- ai:security-finding:<id> -->` marker, otherwise "". `markers` is the
-# body's leading marker block: the run of `<!-- ai:security-finding:<id> -->`
-# lines from line 1 (one line in a legacy per-finding body, one per finding in
-# a stuck-states P5b consolidated body); a marker further down never counts. The PR payload and
-# cached PR comments lack issue state, and LINKED_ISSUES_JSON lists issues the
+# `<!-- ai:security-finding:<id> -->` marker, otherwise "". `body` is the issue
+# body; single_pass_open_followup_ids reads its leading marker block. The PR
+# payload and cached PR comments lack issue state, and LINKED_ISSUES_JSON lists issues the
 # PR closes, not audit follow-ups. One paginated issues listing (one API call
 # per page), shared by the gate's follow-up count and the report's clean-audit
 # retirement. An incomplete or malformed listing returns 1.
@@ -522,9 +520,7 @@ single_pass_followup_issues()
 			| gsub("^\\s+|\\s+$"; "") | . == $ref))
 		| {number: (.number // null),
 		   marker: (.body | split("\n")[0] | if test("^<!-- ai:security-finding:[^<>\\r\\n]+ -->$") then . else "" end),
-		   markers: (.body | split("\n")
-			| (map(gsub("\\s+$"; "") | test("^<!-- ai:security-finding:[^<>]+ -->$")) | index(false)) as $block_end
-			| .[0:($block_end // length)] | map(gsub("\\s+$"; "")))}]
+		   body: .body}]
 	' "${followup_file}" 2>/dev/null)" || [ -z "${followup_list}" ]; then
 		rm -f "${followup_file}"
 		return 1
@@ -534,17 +530,23 @@ single_pass_followup_issues()
 }
 
 # Input: PR head ref and JSON array of finding IDs. Output: JSON array of the
-# IDs covered by matching open follow-ups: an issue covers every ID in its
-# leading marker block (`markers`, see single_pass_followup_issues).
+# IDs covered by matching open follow-ups. An issue covers every ID in its
+# leading marker block: the run of `<!-- ai:security-finding:<id> -->` lines
+# from line 1 (one line in a legacy per-finding body, one per finding in a
+# stuck-states P5b consolidated body). A marker further down never counts. The PR
+# state comes from the shared issues listing (single_pass_followup_issues).
 # Gate-mode current-head findings (through single_pass_open_followups) and
-# report-mode delta carry-forward call this. One shared issues listing; a
-# failed or malformed listing returns 1 so the caller fails closed.
+# report-mode delta carry-forward call this. A failed or malformed listing
+# returns 1 so the caller fails closed.
 single_pass_open_followup_ids()
 {
 	local followup_ref="$1" expected_ids="$2" followup_issues followup_covered
 	followup_issues="$(single_pass_followup_issues "${followup_ref}")" || return 1
 	if ! followup_covered="$(jq -c --argjson ids "${expected_ids}" '
-		[.[].markers[]?] as $issue_markers
+		[.[]
+		| .body | split("\n")
+		| (map(gsub("\\s+$"; "") | test("^<!-- ai:security-finding:[^<>]+ -->$")) | index(false)) as $block_end
+		| .[0:($block_end // length)] | map(gsub("\\s+$"; ""))] | flatten as $issue_markers
 		| [$ids[] | select(. as $id | any($issue_markers[]; . == ("<!-- ai:security-finding:" + $id + " -->")))]
 	' <<< "${followup_issues}" 2>/dev/null)"; then
 		return 1
