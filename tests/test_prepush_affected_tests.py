@@ -1866,5 +1866,6 @@ def test_wrapper_baseline_prune_failure_logs_the_reason_and_is_unverified(tmp_pa
 	shim.write_text(f'#!/bin/sh\n[ "$2" != prune-gate-baseline ] || rm -f "$4.admitted_commands.json"\nexec "{real}" "$@"\n', encoding="utf-8")
 	shim.chmod(0o755)
 	proc, out = _run_wrapper(tmp_path, worktree, MODULE_PATH, env)
+	assert proc.returncode == 0, proc.stderr
 	assert "PREPUSH_TEST_GATE phase=wrapper outcome=warning reason=baseline_filter_detail detail=admitted_inventory_missing" in proc.stderr, proc.stderr
 	assert json.loads((out / "result.json").read_text(encoding="utf-8"))["reason"] == "baseline_filter_failed"
