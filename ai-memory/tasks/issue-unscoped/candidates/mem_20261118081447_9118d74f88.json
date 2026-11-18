@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_unblock_scan.py:716-724 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: test_bulk_override_never_covers_canonical_deletions reads raw .github/workflows/implement.yml and asserts preflight-guard strings that the PR moved to scripts/implement_step_preflight_destructive_guard.sh, so the implement.yml parameter fails.\n  WHY: The test fails and breaks CI (ci.yml:3627 runs it). Severity disagreement: gemini rated BLOCKER, the others MAJOR, so the highest is used. The fix is to use expanded_implement_text() for the implement.yml path.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Switch tests that read moved bodies to the expanded-text helper (linked issue #9678: \"switch tests that read moved bodies to `expanded_review_autofix_text()`\"; for implement.yml, the PR's `expanded_implement_text()`)\n  expected_change_site: tests/test_unblock_scan.py, `test_bulk_override_never_covers_canonical_deletions` (lines 716-724) and the import block near line 25\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The PR diff has no hunk in tests/test_unblock_scan.py, the test still reads raw implement.yml at line 718, and its assertions (719-724) now match only scripts/implement_step_preflight_destructive_guard.sh. The PR converted the other raw readers.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_unblock_scan.py:716-724 | severity=MAJOR | confidence=5\n  PROBLEM: The test reads raw implement.yml and asserts strings (UNBLOCK_BULK_DELETE_OVERRIDE condition, unblock_protected_deletions=, etc.) that moved into scripts/implement_step_preflight_destructive_guard.sh.\n  WHY: The implement.yml parameter fails at the first assert (line 719). The fix is to import expanded_implement_text and use it for the implement.yml path.\n- TASK_GAP: Requirement: switch tests that read moved bodies to the expanded-text helper (expanded_implement_text() for implement.yml)\n  Expected change site: tests/test_unblock_scan.py, test_bulk_override_never_covers_canonical_deletions (lines 716-724)\n  Evidence of absence: The PR changes no hunk in tests/test_unblock_scan.py, though it switched the other raw readers.\n  severity=MAJOR | confidence=5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_unblock_scan.py:718 | severity=BLOCKER | confidence=5\n  PROBLEM: The test reads raw .github/workflows/implement.yml and matches strings that were moved to a script.\n  WHY: The test fails and breaks the CI suite.\n- TASK_GAP: Requirement: Switch tests that read moved bodies to expanded_implement_text()\n  Expected change site: tests/test_unblock_scan.py, test_bulk_override_never_covers_canonical_deletions\n  Evidence of absence: The test still reads raw implement.yml.\n  severity=BLOCKER | confidence=5\n- Hardening: .github/workflows/implement.yml:4408-4414 and 4436-4442 (HARDENING_RISK_SCORE: 1)\n  PROBLEM: The script paths are sourced directly; optionally require that the resolved path starts with ${RUNTIME_DIR}/staged_support_run/.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: \"switch tests that read moved bodies to `expanded_review_autofix_text()`\" (issue #9678; expanded_implement_text() for implement.yml)\n  Expected change site: tests/test_unblock_scan.py, test_bulk_override_never_covers_canonical_deletions at lines 716-724 (and the import block)\n  Evidence of absence: No hunk in tests/test_unblock_scan.py. Line 718 still reads raw implement.yml, and the six assertions (719-724) match only the moved scripts. The test is CI-wired at ci.yml:3627.\n  severity=MAJOR | confidence=5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_unblock_scan.py:716-724 | severity=MAJOR | confidence=5\n  PROBLEM: The parametrized test reads implement.yml directly and asserts preflight-guard strings moved to scripts/implement_step_preflight_destructive_guard.sh.\n  WHY: The implement.yml case fails. CI runs it at ci.yml:3627.\n- TASK_GAP: Requirement: \"Switch tests that read moved bodies\" to the expanded-text helper\n  Expected change site: tests/test_unblock_scan.py, test_bulk_override_never_covers_canonical_deletions\n  Evidence of absence: The PR does not modify tests/test_unblock_scan.py. It adds expanded_implement_text() but does not use it here.\n  severity=MAJOR | confidence=5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_unblock_scan.py:716-724 | severity=MAJOR | confidence=5\n  PROBLEM: The test reads raw implement.yml at line 718 and asserts six strings from the preflight destructive-commit guard body. The PR moved that body to scripts/implement_step_preflight_destructive_guard.sh (lines 135-194).\n  WHY: The implement.yml parameter fails its first assert and breaks the CI-wired run (ci.yml:3627). The scripts/implement_commit_changes.sh parameter still passes.\n- TASK_GAP: Requirement: Linked issue #9678: \"switch tests that read moved bodies to `expanded_review_autofix_text()`\" (expanded_implement_text() for implement.yml)\n  Expected change site: tests/test_unblock_scan.py, test_bulk_override_never_covers_canonical_deletions (lines 716-724)\n  Evidence of absence: The PR has no hunk in tests/test_unblock_scan.py. It converted the other raw readers, but this test's assertions now match only scripts/implement_step_preflight_destructive_guard.sh:135-194.\n  severity=MAJOR | confidence=5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b746cde7c731f962735bff52308c0391f447c3844918c08284b13967c7c6a666",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9701,
+    "run_id": "44243629190",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44243629190",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118081447_9118d74f88",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9701,
+    "run_id": "44243629190"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T08:14:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
