@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:26751,26767-26768 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: A failed or empty PR fetch (empty `merge_state`) is recorded as `state_not_open`, so the log and effective action report a PR state when the real cause is a fetch failure.\n  WHY: Operators reading `attempt_merge_refused_state_not_open` could misdiagnose a transient API error as a closed PR. The reviewer rated it NIT and said it does not fail at runtime.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:26751,26767-26768 | severity=low (source: NIT) | confidence=2\n  PROBLEM: A failed or empty PR fetch (empty `merge_state`) is recorded as `state_not_open`, so the log and effective action report a PR state when the real cause is a fetch failure.\n  WHY: Operators reading `attempt_merge_refused_state_not_open` could misdiagnose a transient API error as a closed PR. The mapping is documented in the comment at lines 26761-26766.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8a35ed36b8a4fb7f21d41c4e3400e3a3c907c3eca19b5b1b902a2fe603838f7e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9720,
+    "run_id": "44313559177",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44313559177",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118152645_bba74b58e1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9720,
+    "run_id": "44313559177"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T15:26:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
