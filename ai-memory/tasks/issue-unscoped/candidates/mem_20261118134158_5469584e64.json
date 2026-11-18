@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_intake.sh:2496 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: _heal_scope_recovery_evaluate removes --report-issue but does not check whether the report being recovered originally had one.\n  WHY: A recovery re-run for a heal-of-heal duplicate could return open and lead to redundant issue creation (reviewer rated MAJOR; other reviewers found no defect here).\n- scripts/workflow_failure_heal_intake.sh:869 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: _heal_record_occurrence uses read-modify-write without explicit locks on the occurrence comment.\n  WHY: Two intakes handling the same issue at the same moment can lose one report's entry and one count. This is documented in the script comments (reviewer rated MAJOR).\n- scripts/workflow_failure_heal_intake.sh:862 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: If the occurrence edit (PATCH) fails, the code falls back to posting a new comment.\n  WHY: Repeated failures could temporarily increase issue comment volume. This is documented fallback behavior (reviewer rated NIT).\n- scripts/workflow_failure_heal_intake.sh:2498-2503 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new `--report-issue)` arm is consistent with the surrounding arms and the reviewer found no runtime defect.\n  WHY: Reviewer rated it NIT and verified it against the test.\n- scripts/workflow_failure_heal_intake.sh:2263-2268 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The updated comment says escalation happens for the issue's own fingerprint or its own cause, and the reviewer found it matches the behavior with no defect.\n  WHY: Reviewer rated it NIT and verified it against budget_decision.\n- scripts/workflow_failure_heal_intake.sh:793-895 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `_heal_record_occurrence` read-modify-write is unlocked, but this is already documented and the last-run diff does not change it.\n  WHY: Reviewer rated it NIT and found no new race.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal_intake.sh:2496 | severity=MAJOR | confidence=3\n  PROBLEM: _heal_scope_recovery_evaluate removes --report-issue but does not check whether the report being recovered originally had one.\n  WHY: A recovery re-run for a heal-of-heal duplicate could return open and lead to redundant issue creation.\n- scripts/workflow_failure_heal_intake.sh:869 | severity=MAJOR | confidence=4\n  PROBLEM: _heal_record_occurrence uses read-modify-write without explicit locks on the occurrence comment.\n  WHY: Two intakes handling the same issue at the same moment can lose one report's entry and one count.\n- scripts/workflow_failure_heal_intake.sh:862 | severity=NIT | confidence=4\n  PROBLEM: If the occurrence edit (PATCH) fails, the code falls back to posting a new comment.\n  WHY: Repeated failures could temporarily increase issue comment volume. This is documented fallback behavior.\n- TASK_GAP (reviewer rated NIT, confidence=5; the reviewer found it implemented and tested, so no gap)\n  Requirement: Record repeat heal reports in one comment (edit-in-place).\n  Expected change site: scripts/workflow_failure_heal_intake.sh and scripts/workflow_failure_heal.py\n  Evidence of absence: None. The requirement is implemented and verified by tests.\n- TASK_GAP (reviewer rated NIT, confidence=5; the reviewer found it implemented and tested, so no gap)\n  Requirement: A heal issue's own failed run no longer opens another heal issue.\n  Expected change site: scripts/workflow_failure_heal.py budget_decision and scripts/workflow_failure_heal_intake.sh\n  Evidence of absence: None. The requirement is implemented and verified by tests.\n- TASK_GAP (reviewer rated NIT, confidence=5; the reviewer found it implemented and tested, so no gap)\n  Requirement: Skip gate for release-gate fixtures [E2E Orchestrate Smoke ...].\n  Expected change site: scripts/workflow_failure_heal.py _SMOKE_TITLE_RE\n  Evidence of absence: None. The requirement is implemented and verified by tests.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal_intake.sh:2498-2503 | severity=NIT | confidence=2\n  PROBLEM: The new `--report-issue)` arm is consistent with the surrounding arms. The reviewer found no runtime defect.\n  WHY: It matches the early-return on `match: heal_source` and is verified by `test_heal_scope_recovery_budget_rerun_drops_the_report_issue`.\n- scripts/workflow_failure_heal_intake.sh:2263-2268 | severity=NIT | confidence=2\n  PROBLEM: The updated comment matches the actual behavior in `budget_decision`. The reviewer found no defect.\n  WHY: The comment agrees with the tests and the README/agents.d wording.\n- scripts/workflow_failure_heal_intake.sh:793-895 | severity=NIT | confidence=2\n  PROBLEM: The `_heal_record_occurrence` read-modify-write is unlocked, but this is already documented. The last-run diff does not change it.\n  WHY: The reviewer found no new race.\n- TASK_GAP (reviewer rated NIT, confidence=2; the reviewer judged it covered)\n  Requirement: \"A heal issue's own failed run no longer opens another heal issue\". The recovery re-run must not carry `--report-issue` and silently become a `match: heal_source` duplicate.\n  Expected change site: `scripts/workflow_failure_heal_intake.sh` `_heal_scope_recovery_evaluate` recovery-args loop.\n  Evidence of absence: The diff adds the `--report-issue)` arm at lines 2498-2503, and the static-source test confirms the wiring. The test asserts source structure only, not a behavioral run. Covered.\n- TASK_GAP (reviewer rated NIT, confidence=2; the reviewer judged it covered)\n  Requirement: The README and agents.d fragment must reflect the unlocked read-modify-write and that the comment's first line is unchanged.\n  Expected change site: `agents.d/9200-heal-occurrence-in-place.md` and `README.md`.\n  Evidence of absence: Both files carry the relevant wording. Covered.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "21182208540fcdc03941f8d2f83be9573440576abcd75657cdabe198988fbee6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9680,
+    "run_id": "44277567320",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44277567320",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118134158_5469584e64",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9680,
+    "run_id": "44277567320"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T13:41:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
