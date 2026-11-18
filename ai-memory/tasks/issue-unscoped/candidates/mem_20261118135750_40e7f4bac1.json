@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"\u00a715: no new API call; both guards read the existing `OPEN_TRIAGE` listing.\"\n  expected_change_site: `.github/workflows/check_failure_triage.yml`, step \"Post check-failure triage issue.\"\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The post step adds a separate paginated `gh api` request at lines 833-839 rather than relying only on the existing `OPEN_TRIAGE` listing. This violates the stated no-new-API-call constraint. (source SEVERITY: MAJOR)\n- requirement: \"the post step logs ... `op=post stage=base_triage_tracked pr=<n>` `op=supersede outcome=skip reason=base_triage_tracked old=<n> pr=<n> stage=post` (when it drops a recorded supersede candidate)\"\n  expected_change_site: agents.d/9674-triage-base-keyed-fingerprint.md, \"Stable log prefixes (contractual)\" bullet for CHECK_TRIAGE\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The bullet has `op=post stage=base_triage_tracked pr=<n>`, then a single space, then `op=supersede outcome=skip ...`. Every other entry in that comma-separated list is delimited by \", \", so a consumer splitting on the documented delimiter reads the second code span as part of the first. The runtime log lines are emitted correctly, so this is a documentation consistency gap, not a runtime defect. (source SEVERITY: NIT)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING: agents.d/9674-triage-base-keyed-fingerprint.md: the \"Stable log prefixes (contractual)\" CHECK_TRIAGE bullet, in the text \"`op=post stage=base_triage_tracked pr=<n>` `op=supersede outcome=skip reason=base_triage_tracked old=<n> pr=<n> stage=post`\"\n  PROBLEM: the last run put the new entry right after the previous code span with only a space, where every other entry in that list is separated by \", \".\n  WHY: The two log lines read as one entry in the contractual registry; fix: put \", \" between the two code spans (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n- HARDENING: agents.d/9674-triage-base-keyed-fingerprint.md: Line 5, \"Stable log prefixes (contractual)\" bullet\n  PROBLEM: `op=supersede outcome=skip reason=base_triage_tracked old=<n> pr=<n> stage=post` follows `op=post stage=base_triage_tracked pr=<n>` with only a single space and no comma separator.\n  WHY: This makes log-prefix extraction brittle; fix: insert a comma and a space between the two entries (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"the post step logs ... `op=post stage=base_triage_tracked pr=<n>` `op=supersede outcome=skip reason=base_triage_tracked old=<n> pr=<n> stage=post` (when it drops a recorded supersede candidate)\"\n  Expected change site: agents.d/9674-triage-base-keyed-fingerprint.md, \"Stable log prefixes (contractual)\" bullet for CHECK_TRIAGE\n  Evidence of absence: the two code spans are separated by a single space, not the \", \" used between every other entry. A downstream consumer splitting the list on the documented delimiter reads the second span as a continuation of the first. Runtime log lines are emitted correctly, so this is a documentation consistency gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- HARDENING: agents.d/9674-triage-base-keyed-fingerprint.md: \"Stable log prefixes (contractual)\" bullet, between `op=post stage=base_triage_tracked pr=<n>` and `op=supersede outcome=skip reason=base_triage_tracked old=<n> pr=<n> stage=post`\n  PROBLEM: The comma-space delimiter is missing between two entries in a comma-separated list.\n  WHY: An extractor that splits on the documented delimiter misses the second entry; fix: insert \", \" between the two code spans (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"\u00a715: no new API call; both guards read the existing `OPEN_TRIAGE` listing.\"\n  Expected change site: `.github/workflows/check_failure_triage.yml`, step \"Post check-failure triage issue.\"\n  Evidence of absence: The post step adds a separate paginated `gh api` request at lines 833-839 rather than relying only on the existing `OPEN_TRIAGE` listing. This violates the stated no-new-API-call constraint.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING: agents.d/9674-triage-base-keyed-fingerprint.md: line 5, the `Stable log prefixes (contractual)` bullet for `CHECK_TRIAGE`\n  PROBLEM: the new `op=supersede outcome=skip reason=base_triage_tracked old=<n> pr=<n> stage=post` entry follows `op=post stage=base_triage_tracked pr=<n>` with a single space instead of the `, ` delimiter used between every other entry.\n  WHY: A reader or registry extractor splitting on `, ` would miss the new entry or attach it to the previous one; fix: insert a comma after `op=post stage=base_triage_tracked pr=<n>` (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "609abe878312bcbca683b175663ca6656cbf8f149a0f1060cff43d29df21c36a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9703,
+    "run_id": "44299976620",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44299976620",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118135750_40e7f4bac1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9703,
+    "run_id": "44299976620"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T13:57:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
