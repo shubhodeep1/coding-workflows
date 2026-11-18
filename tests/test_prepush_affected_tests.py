@@ -1144,6 +1144,27 @@ def test_wrapper_builds_the_pr_tree_from_git_with_tracked_dotfiles_and_filtered_
 	assert _git_state(root) == before
 
 
+def test_wrapper_baseline_keeps_export_ignored_files(tmp_path):
+	# export-ignore already at the merge-base: git archive would drop tests/
+	# from /baseline only, so a failure there could never be classified as inherited.
+	root = _repo(tmp_path, {"lib/a.py": "X = 1\n", "tests/test_a.py": "# lib/a.py\n",
+		".gitattributes": "tests/** export-ignore\n"}, name="worktree")
+	_commit(root, {"lib/a.py": "X = 2\n"})
+	capture = tmp_path / "captured_baseline"
+	env, _ = _wrapper_env(tmp_path)
+	fake = tmp_path / "bin" / "docker"
+	fake.write_text(fake.read_text(encoding="utf-8").replace(
+		'\tprintf \'{"schema"',
+		f'\tcp -a "${{results%/results}}/baseline" "{capture}"\n\tprintf \'{{"schema"',
+	), encoding="utf-8")
+	proc, out = _run_wrapper(tmp_path, root, MODULE_PATH, env)
+	assert proc.returncode == 0, proc.stderr
+	assert json.loads((out / "result.json").read_text(encoding="utf-8"))["status"] == "pass", proc.stderr
+	assert (capture / "tests" / "test_a.py").read_text(encoding="utf-8") == "# lib/a.py\n"
+	assert (capture / "lib" / "a.py").read_text(encoding="utf-8") == "X = 1\n"
+	assert not os.path.lexists(capture / ".git")
+
+
 def test_wrapper_pr_tree_ignores_global_filters_and_export_ignore(tmp_path):
 	root = _repo(tmp_path, {"lib/a.py": "X = 1\n", "tests/test_a.py": "# lib/a.py\n"}, name="worktree")
 	# A clean filter would change the blob, a smudge filter leaves a marker.

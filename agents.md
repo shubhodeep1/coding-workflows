@@ -5508,24 +5508,15 @@ post-sync repair) are follow-ups; until they land no pipeline runs the gate.
   to both CLAUDE.md copies together.
 - **Container wrapper.** `scripts/prepush_test_gate_run.sh --worktree --module
   --image --base --out-dir [--timeout-minutes] [--deps-root]...` refuses a
-  module inside the worktree (`reason=module_untrusted`), exports the
-  merge-base with `git archive` (`/baseline`), builds the PR tree (`/source`)
-  from git too, runs `docker run --network none --read-only --cap-drop ALL --security-opt
+  module inside the worktree (`reason=module_untrusted`), builds the merge-base
+  tree (`/baseline`) and the PR tree (`/source`) from git (see "Trees built
+  from git" below), runs `docker run --network none --read-only --cap-drop ALL --security-opt
   no-new-privileges` with no runner environment (module, baseline and
   dependency roots read-only), and copies back only `result.json` and
-  `summary.md` (regular files, 1 MiB). `/source` holds every path in the real
-  index (HEAD plus staged additions, minus staged deletions) with its worktree
-  content, written by `checkout-index` from a temporary index and object
-  directory in the private run root, with global and system Git config and
-  the git-lfs driver left out; the real index and `.git` are only read, `.git` is never copied, and a
-  PR's `export-ignore` does not hide a file. Untracked, non-ignored files are
-  copied in only when `review_untrusted_workspace.py snapshot` (the review
-  sandbox's credential filter) admits them, so an untracked `.env*`, key or
-  credential file never enters the container. The changed-file list is the worktree
+  `summary.md` (regular files, 1 MiB). The changed-file list is the worktree
   against the merge-base (uncommitted tracked edits included); an untracked
-  `Makefile` or `.ai/validate.yml`, which the filter leaves out, is copied
-  into `/source`; a tree-build failure gives `source_export_failed`; a
-  non-zero container exit discards the result
+  `Makefile` or `.ai/validate.yml`, which the credential filter leaves out, is
+  copied into `/source`; a non-zero container exit discards the result
   (`container_rc_<n>`), since the gate itself exits 0 for every outcome. It always exits 0; wrapper failures
   write a synthetic `unverified` result (`docker_unavailable`,
   `snapshot_failed`, `container_survived`, ...). Unused until P3.
