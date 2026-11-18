@@ -1,0 +1,4 @@
+<!-- changelog: fixed -->
+- **The dispatch watcher now cancels a child run whose completion watch timed out.** `scripts/dispatch_and_watch_workflow_run.sh` no longer leaves a timed-out child queued or running behind it.
+
+Follow-up to #9532: in release run 43590943288 dispatched children stayed queued for hours with no runner after their watch gave up. On the completion-timeout path the watcher now prints a `watch diagnosis` warning that says whether the run was `status=queued` the whole time (no runner was assigned) or reached `in_progress` (the run was slow), then posts a cancel for the watched run. `DISPATCH_WATCH_CANCEL_ON_TIMEOUT` (default `true`; `false` turns it off, any other value is treated as `false` with a warning) is the same switch the release gate's dispatch steps already use. A failed cancel is only a warning. Exit codes, `GITHUB_OUTPUT` keys, timeouts and the existing `::error::... timed out` line are unchanged. It takes effect at release.

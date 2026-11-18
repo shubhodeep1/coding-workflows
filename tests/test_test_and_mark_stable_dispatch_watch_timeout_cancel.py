@@ -361,7 +361,9 @@ def test_real_watcher_against_queued_stub_times_out_and_cancels_once() -> None:
 	assert "::error::validate run #4242 timed out" in out, out
 	assert "::warning::Timed-out child run #4242: jobs=3 queued_without_runner=2" in out, out
 	cancels = [c for c in calls if "/cancel" in c]
-	assert cancels == ["api -X POST repos/owner/repo/actions/runs/4242/cancel"], calls
+	# Since #9706 the watcher cancels the timed-out run itself, and the
+	# workflow block then posts its own cancel: the watcher's comes first.
+	assert cancels == ["api -X POST repos/owner/repo/actions/runs/4242/cancel"] * 2, calls
 
 
 def test_real_watcher_with_switch_off_issues_no_cancel() -> None:

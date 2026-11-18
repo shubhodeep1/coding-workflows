@@ -309,6 +309,10 @@ echo "Watching run #${NEW_ID}"
 COMPLETION_DEADLINE=$((DISPATCH_STARTED_AT + COMPLETION_TIMEOUT_SECS))
 STATUS=""
 CONCLUSION=""
+# Status-read counters for the completion-timeout diagnosis below (#9706).
+WATCH_STATUS_READS=0
+WATCH_QUEUED_READS=0
+WATCH_SAW_IN_PROGRESS=0
 while [ "$(date +%s)" -lt "${COMPLETION_DEADLINE}" ]; do
 	RUN_JSON="$(gh_api_safe_quiet_print "repos/${TARGET_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' || echo "")"
 	if [ -n "${RUN_JSON}" ]; then
@@ -317,6 +321,14 @@ while [ "$(date +%s)" -lt "${COMPLETION_DEADLINE}" ]; do
 	else
 		STATUS=""
 		CONCLUSION=""
+	fi
+	if [ -n "${STATUS}" ]; then
+		WATCH_STATUS_READS=$((WATCH_STATUS_READS + 1))
+		if [ "${STATUS}" = "queued" ]; then
+			WATCH_QUEUED_READS=$((WATCH_QUEUED_READS + 1))
+		elif [ "${STATUS}" = "in_progress" ]; then
+			WATCH_SAW_IN_PROGRESS=1
+		fi
 	fi
 	if [ -n "${STATUS_LOG_PREFIX}" ]; then
 		echo "  ${STATUS_LOG_PREFIX} status=${STATUS} conclusion=${CONCLUSION}"
@@ -334,6 +346,43 @@ while [ "$(date +%s)" -lt "${COMPLETION_DEADLINE}" ]; do
 	fi
 	sleep "${COMPLETION_POLL_INTERVAL_SECS}"
 done
+
+# Completion watch timed out (#9706, follow-up to #9532). In release run
+# 43590943288 dispatched children stayed queued for hours with no runner; the
+# watcher gave up but nothing cancelled them, so an orphaned child later
+# created issues the gate's cleanup could not see. Say whether the run never
+# got a runner or was just slow, then cancel it (unless
+# DISPATCH_WATCH_CANCEL_ON_TIMEOUT=false). Do not lengthen the timeouts as a
+# fix. The `::error::... timed out` line below must stay the last line printed:
+# the workflow steps' timeout block extracts the run id from it.
+if [ "${WATCH_SAW_IN_PROGRESS}" = "1" ]; then
+	echo "::warning::${DISPLAY_NAME} run #${NEW_ID} watch diagnosis: status=in_progress (a runner was assigned; the run was slow); status_reads=${WATCH_STATUS_READS}"
+elif [ "${WATCH_STATUS_READS}" -gt 0 ] && [ "${WATCH_QUEUED_READS}" -eq "${WATCH_STATUS_READS}" ]; then
+	echo "::warning::${DISPLAY_NAME} run #${NEW_ID} watch diagnosis: status=queued the whole time (no runner was assigned); status_reads=${WATCH_STATUS_READS}"
+else
+	echo "::warning::${DISPLAY_NAME} run #${NEW_ID} watch diagnosis: last status=${STATUS:-unknown} (could not tell queued from in_progress); status_reads=${WATCH_STATUS_READS}"
+fi
+
+WATCH_CANCEL_SWITCH="$(printf '%s' "${DISPATCH_WATCH_CANCEL_ON_TIMEOUT:-true}" | tr '[:upper:]' '[:lower:]')"
+case "${WATCH_CANCEL_SWITCH}" in
+	true)
+		if [[ "${NEW_ID}" =~ ^[0-9]+$ ]]; then
+			if gh_api_safe_quiet -X POST "repos/${TARGET_REPO}/actions/runs/${NEW_ID}/cancel"; then
+				echo "Cancel requested for watched run #${NEW_ID} (completion watch timeout)"
+			else
+				echo "::warning::Could not cancel watched run #${NEW_ID} after the completion watch timeout"
+			fi
+		fi
+		;;
+	false)
+		echo "Cancel of watched run #${NEW_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT=false)"
+		;;
+	*)
+		# The value itself is never printed.
+		echo "::warning::DISPATCH_WATCH_CANCEL_ON_TIMEOUT is neither true nor false; treating it as false"
+		echo "Cancel of watched run #${NEW_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT unrecognised)"
+		;;
+esac
 
 echo "::error::${DISPLAY_NAME} run #${NEW_ID} timed out"
 exit 1
