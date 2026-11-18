@@ -1634,8 +1634,10 @@ jobs:
               # is rebuilt on the current default branch. Move only a PR that
               # GitHub reports as conflicting (the stuck case); otherwise keep
               # its head, which carries the same release, and let the verify
-              # job re-check it. Reuses the head+base lookup (§15); UNKNOWN
-              # keeps the head and the next run looks again.
+              # job re-check it. Reads the head+base lookup first (§15); an
+              # UNKNOWN or missing value is re-read once below, and only a
+              # value still unknown after that keeps the head (the next run
+              # looks again).
               updater_resend_mergeable=""
               if [ -n "${PR_NUMBER}" ]; then
                 updater_resend_mergeable="$(printf '%s' "${PR_LIST_JSON}" | jq -r --arg n "${PR_NUMBER}" '[.[] | select((.number | tostring) == $n)] | .[0].mergeable // ""' 2>/dev/null)" || updater_resend_mergeable=""
