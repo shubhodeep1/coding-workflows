@@ -1335,8 +1335,13 @@ jobs:
       # (#7387). These six steps need only the checkout, Python 3.12 and the
       # job's pip set: no Node, no git history and no prepared .claude/ live
       # copies; this job's extra base history is harmless to them. Names and
-      # bodies unchanged; each step runs once per CI run. If budget-watch flags
-      # this job next, measure step timings before moving anything again.
+      # bodies unchanged; each step runs once per CI run. Why this job: every
+      # single-leg test job has been flagged near 15 of its 20 minutes, and this
+      # one lost its largest step to orchestrate-poll after its last flag
+      # (#9391). The never-flagged tests-system-python (24 shards) and
+      # tests-sandbox-python (3 image families) are matrix jobs, where an
+      # unguarded step would run once per leg. If budget-watch flags this job
+      # next, measure step timings before moving anything again.
       - name: Merge probe unit tests
         run: |
           set -euo pipefail
@@ -1359,8 +1364,9 @@ jobs:
       # Moved from tests-release-and-log-analysis, which took 15m01s of its 20
       # minutes on main (run 40368173231, budget-watch issue #8208). The run's
       # step timings could not be read, so these steps were chosen by their
-      # subprocess and test counts; the savings are an estimate. This job has
-      # had no steps moved in since #7690. Names and bodies unchanged.
+      # subprocess and test counts; the savings are an estimate. When #8208
+      # moved these steps, tests-heal-plan-and-validation had had no steps moved
+      # in since #7690. Names and bodies unchanged.
       #
       # The paragraph above describes tests-heal-plan-and-validation, where these
       # three steps ran until budget-watch issue #9420 (re-issued as #9684) moved
