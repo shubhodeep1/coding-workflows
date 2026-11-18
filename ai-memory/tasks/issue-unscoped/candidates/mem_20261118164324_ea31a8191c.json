@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_failure_heal.py:2578-2589 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: test_intake_reports_when_another_run_was_not_examined uses a kind=issue payload, so run 501 is dropped at binding (run_not_in_source_repo) before the evidence loop and the test cannot reach its named scenario.\n  WHY: Only run 500 enters the loop, so the runner_lost skip fires and the assertions on jobs_fetch_failed, the absence of skip reason=runner_lost, and the fingerprint line all fail. Severity is MAJOR in all sources, mapped to high.\n- scripts/workflow_failure_heal_intake.sh:1874-1889 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The runner_lost skip gate (RUNNER_LOST_EXAMINED_RUNS) counts only runs that entered the evidence loop, not runs dropped at report binding.\n  WHY: If one run is runner-lost and another is dropped at binding because its jobs read failed, the whole report is skipped as runner_lost and the real failure is suppressed, contrary to the fail-open-towards-filing contract. Confidence is 4 from gemini and z-ai and 5 from openai, so the merged value is 5.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A run dropped as `run_ref_rejected`, `jobs_fetch_failed` or `jobs_fetch_invalid` had its real failure suppressed whenever another run in the report lost its runner. Now such a report takes the normal reporting path, which matches the change's own fail-open-towards-filing contract.\"\n  expected_change_site: tests/test_workflow_failure_heal.py around test_intake_reports_when_another_run_was_not_examined\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: test_intake_reports_when_another_run_was_not_examined (lines 2578-2589) uses a kind=\"issue\" fixture via _consumer_payload() (lines 2291-2303). Run 501 is dropped at bind (scripts/workflow_failure_heal_intake.sh:705-741, scripts/workflow_failure_heal.py:3513-3529), so the regression test for the fail-open fix is not actually delivered.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_workflow_failure_heal.py:2578-2589 | severity=MAJOR | confidence=4\n  PROBLEM: The test cannot reach the scenario it names. Run 501 is dropped at bind (run_not_in_source_repo) for kind=issue, so the evidence loop only sees run 500.\n  WHY: The runner_lost skip fires and exits 0, so the jobs_fetch_failed, \"skip reason=runner_lost\" not in stdout, and fingerprint assertions fail. The test needs a kind that skips bind-time dropping, or a run that fails verification in the loop.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal_intake.sh:1874-1889 | severity=MAJOR | confidence=4\n  PROBLEM: The runner_lost skip logic does not distinguish infrastructure-only runner failures from cases where other runs were dropped during intake.\n  WHY: Runs dropped at binding are not counted in RUNNER_LOST_EXAMINED_RUNS, so the report is skipped and potentially valid evidence is suppressed.\n- tests/test_workflow_failure_heal.py:2578-2589 | severity=MAJOR | confidence=4\n  PROBLEM: test_intake_reports_when_another_run_was_not_examined does not exercise the intended runner_lost skip behavior.\n  WHY: Run 501 is dropped at binding, outside the loop, so the script skips the report and the test assertions fail.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_workflow_failure_heal.py:2578-2589 | severity=MAJOR | confidence=5\n  PROBLEM: The test uses _consumer_payload() (kind=issue). Run 501 is dropped at bind (scripts/workflow_failure_heal_intake.sh:705-717, scripts/workflow_failure_heal.py:3513-3529) and only run 500 reaches the evidence loop (scripts/workflow_failure_heal_intake.sh:1724-1872).\n  WHY: The runner_lost skip fires (1==1) before jobs_fetch_failed or the fingerprint step, so three of the four assertions fail and the regression is not guarded.\n- TASK_GAP: tests/test_workflow_failure_heal.py around test_intake_reports_when_another_run_was_not_examined | severity=MAJOR | confidence=5\n  Requirement: \"A run dropped as `run_ref_rejected`, `jobs_fetch_failed` or `jobs_fetch_invalid` had its real failure suppressed whenever another run in the report lost its runner. Now such a report takes the normal reporting path, which matches the change's own fail-open-towards-filing contract.\"\n  Expected change site: tests/test_workflow_failure_heal.py around test_intake_reports_when_another_run_was_not_examined\n  Evidence of absence: The kind=\"issue\" fixture (lines 2291-2303) causes run 501 to be dropped at bind, so the regression test for the fail-open fix is not actually delivered.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal_intake.sh:708-717, 1878-1884; tests/test_workflow_failure_heal.py:2582-2589 | severity=MAJOR | confidence=5\n  PROBLEM: The runner-lost skip gate counts only refs that survive binding, so an unreadable run does not prevent the report from being skipped as runner_lost. The added regression test also cannot reach its asserted scenario, because run 501 has no jobs fixture and is dropped at binding.\n  WHY: With run 500 lost and another claimed run's jobs read failing at binding, RUN_COUNT and RUNNER_LOST_RUN_COUNT are both 1 and the report is skipped instead of failing open. In the test, jobs_fetch_failed is never logged and the assertions at lines 2587-2589 fail.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_workflow_failure_heal.py:2578-2589 | severity=MAJOR | confidence=4\n  PROBLEM: The test cannot reach its named scenario. Run 501 is dropped at binding (scripts/workflow_failure_heal_intake.sh:708-717; scripts/workflow_failure_heal.py:3513-3518, _cmd_bind_report at 10599-10606), so the loop at line 1724 only iterates run 500.\n  WHY: The runner_lost skip at lines 1880-1885 fires, so the assertions at lines 2587-2589 fail (jobs_fetch_failed absent, skip line present, fingerprint not reached).\n- scripts/workflow_failure_heal_intake.sh:1874-1885 | severity=MAJOR | confidence=4\n  PROBLEM: RUNNER_LOST_EXAMINED_RUNS=\"${RUN_COUNT}\" misses runs dropped at report binding (lines 733-744), although the added comment says unreadable-jobs runs keep the report on the normal path.\n  WHY: A report claiming a lost run A and a run B whose jobs GET 404s at binding is skipped as runner_lost, and B's real defect is never filed. The reviewer suggests counting runs_dropped from BIND_RESULT_FILE into the examined total.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9cde001c3e70dcf4575f2bdecb21d48f95657b599f4904440c185b1558f26bd3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9723,
+    "run_id": "44324511632",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44324511632",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118164324_ea31a8191c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9723,
+    "run_id": "44324511632"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T16:43:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
