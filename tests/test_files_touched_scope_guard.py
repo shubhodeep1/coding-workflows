@@ -40,6 +40,7 @@ IMPLEMENT_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
 IMPLEMENT_GUARD_HANDLER = REPO_ROOT / "scripts" / "implement_handle_guard_block.sh"
 GUARD_SCRIPT = REPO_ROOT / "scripts" / "files_touched_scope_guard.py"
 LABEL_CONTRACT = REPO_ROOT / ".github" / "ai" / "label_contract.v1.json"
+LABEL_HELPERS = REPO_ROOT / "scripts" / "label_helpers.sh"
 
 
 def _source_text(path: Path) -> str:
@@ -47,7 +48,6 @@ def _source_text(path: Path) -> str:
 	if path == IMPLEMENT:
 		return expanded_implement_text()
 	return path.read_text(encoding="utf-8")
-LABEL_HELPERS = REPO_ROOT / "scripts" / "label_helpers.sh"
 
 
 def _body(*entries: str) -> str:
