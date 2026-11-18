@@ -47,12 +47,17 @@
 #     does not match `changed_files`, is `truncated`;
 #   - the PR head is still GITHUB_SHA after the file listing (`api_error`),
 #     and the tip is the one the last lookup returned (`api_error` when that
-#     lookup failed; no earlier tip is used).
+#     lookup failed; no earlier tip is used);
+#   - after all of those reads, the base tip read again with `git ls-remote`
+#     (no API call) is still that tip: a base commit that landed during the
+#     reads is outside the checked range, so a moved or unreadable tip is
+#     `api_error` (fail-closed).
 # On accept the job keeps the checked-out merge, logs `outcome=stale_accepted
 # reason=sync_only_no_overlap ... commits=<k> files=<m>`, adds one line to
 # $GITHUB_STEP_SUMMARY and exits 0. Switch off: today's stale exit, unchanged.
 # Fail-open: not a final-CI run, the switch off, an unreadable base branch,
-# tip or commit, a merge ref that could not be re-fetched at all (e.g. a
+# tip or commit before the refresh (the sync-only check's own tip re-read
+# above fails closed instead), a merge ref that could not be re-fetched at all (e.g. a
 # private repository and a checkout without persisted credentials), or a head
 # that moved (the run is superseded anyway) logs and exits 0, so the job tests
 # what it checked out, as before this check.

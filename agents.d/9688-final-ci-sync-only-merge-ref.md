@@ -6,7 +6,8 @@
   - `compare/<tested_base>...<tip>` is `ahead`, with at most 250 commits, all listed, and fewer than 300 files;
   - every commit in that range is in `compare/<tested_base>...<default branch>`, or is a two-parent merge titled exactly `chore: sync <default branch> into <base>` whose second parent is in that set, or has a subject starting `[ai-merge-resolve]`;
   - no `filename` / `previous_filename` in the range is in the PR's file list (`pulls/<n>/files`, 100 per page, at most 30 pages; more than 3000 files, or a count that differs from `changed_files`, is `truncated`);
-  - a `pulls/<n>` re-read after the listing still reports `GITHUB_SHA` as the head, and the tip is the one the last `ls-remote` returned (no fallback to an earlier tip); otherwise `api_error`.
+  - a `pulls/<n>` re-read after the listing still reports `GITHUB_SHA` as the head, and the tip is the one the last `ls-remote` returned (no fallback to an earlier tip); otherwise `api_error`;
+  - after all of those reads, a second `git ls-remote` of the base (no API call) returns that same tip. A base commit that landed during the reads is outside the checked range, so a tip that moved or cannot be read is `api_error` (fail-closed), not an API outage.
 - Reads on the stale path: 2 compares, 1 per 100 PR files, 1 head re-read (4 for up to 100 files, at most 33).
 - The default branch and `changed_files` come from the step's existing first `pulls/<n>` read, so the fresh path makes no extra call. Any failed condition or unreadable response keeps the `::error::` and exit 1 and adds `detail=`.
 - Tests: `tests/test_ci_final_merge_ref_fresh.py` (fake `gh` answers compare and file-list reads; accept, each rejection, switch off, base equal to the default branch, pagination, token-less reads).
