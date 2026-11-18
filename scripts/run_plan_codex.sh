@@ -77,7 +77,7 @@ Create a structured implementation plan that includes:
    or a directory such as `scripts/`: the plan approval gate reads every `.github/`,
    `.claude/`, `scripts/`, `prompts/` and `workflow-templates/` token in this section, and a
    bare directory holds the plan for a human. Explain why a file changes in a later section.
-   Keep the section to those bullets: no prose paragraphs, and no placeholder path such as `scripts/<helper>`, which the gate reads as the bare directory `scripts/`.
+   Keep the section to those bullets: no prose paragraphs, and no placeholder path such as `scripts/<helper>`, which the gate reads as the bare directory `scripts/`. When the issue body has a `files_touched:` list, the gate also holds a plan that names a file off that list, so name one only when the plan cannot work without it, and never list a file you only might change. A new fragment the list does not name goes in `changelog.d/<this issue number>-<slug>.md` or `agents.d/<this issue number>-<slug>.md`, which are always in scope.
 2. Functions or modules to implement
 3. Data structures affected
 4. API or interface changes
@@ -296,6 +296,13 @@ EOF
   cat "${RUNTIME_DIR}/memory_context.txt"
   echo
   echo "=== PLANNING CONTEXT ==="
+  # Issues #9519 / #9520: item 1 tells the planner to name new fragments
+  # `changelog.d/<this issue number>-<slug>.md`, and the scope guard exempts
+  # only the exact number, so the planner must see it. Host-set, digits only;
+  # unset or malformed leaves the context unchanged.
+  if [[ "${ISSUE_NUMBER:-}" =~ ^[1-9][0-9]*$ ]]; then
+    printf 'Issue number: %s\n\n' "${ISSUE_NUMBER}"
+  fi
   cat "${PLANNING_CONTEXT_FILE}"
 } > "${CODEX_PROMPT_FILE}"
 
