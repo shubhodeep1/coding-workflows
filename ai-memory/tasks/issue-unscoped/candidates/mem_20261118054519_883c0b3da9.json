@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/rollback-stable.yml:56-76 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The workflow accepts a dispatch from `refs/heads/stable` (scripts/rollback_stable.sh:195-196), but it checks out the dispatch ref without specifying `ref` (lines 56-61), so the stable tree may not yet contain this PR's `scripts/rollback_stable.sh` (run at line 76).\n  WHY: If someone dispatches from stable before the change has been promoted, the workflow checks out the stable tree and cannot find `scripts/rollback_stable.sh`, so the rollback does not run; dispatching from main works. The source severity was NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"After a rollback, neither auto-release-stable.yml nor the promote-main-to-stable.yml cycle releases until a release is cut deliberately.\" (issue #9342, Goal section); also \"It holds automatic re-releases until the next real release.\"\n  expected_change_site: `.github/workflows/promote-main-to-stable.yml`, the poller-dispatched `promote` job (and/or its dispatch logic in `scripts/orchestrate_poll_process.sh` before its promotion dispatch)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The hold does not gate the poller-dispatched `promote` job in .github/workflows/promote-main-to-stable.yml (lines 155-162 and 208-258), and the PR diff touches `scripts/promote_main_cycle.sh` (the scheduled `cycle` job) but does NOT touch `.github/workflows/promote-main-to-stable.yml` or `scripts/orchestrate_poll_process.sh`; the poller can still dispatch that job with `target_sha` (`scripts/orchestrate_poll_process.sh:15864`), which fast-forwards `stable`, runs the release gate, publishes tags and clears the hold; the issue's Approach exemption lists \"manual or automation test-and-mark-stable.yml / mark-stable.yml\" but not the poller-dispatched promote job; the gap is documented as a residual in README.md (lines 4811-4818 / README.md:4774-4785) and agents.d/9342-stable-rollback.md (line 5), with an operator workaround (remove `ai:comprehensive-test-pending` label); severity MAJOR per all three reviewers; gemini says a follow-up issue is required.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"It holds automatic re-releases until the next real release.\"\n  Expected change site: .github/workflows/promote-main-to-stable.yml (promote job)\n  Evidence of absence: The hold does not gate the poller-dispatched `promote` job in .github/workflows/promote-main-to-stable.yml (lines 155-162 and 208-258). This is a known, documented residual (agents.d/9342-stable-rollback.md, README.md:4774-4785) with an operator workaround (remove `ai:comprehensive-test-pending` label). A follow-up issue is required to cover those files in a new implementation plan.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"After a rollback, neither auto-release-stable.yml nor the promote-main-to-stable.yml cycle releases until a release is cut deliberately.\" (issue #9342, Goal section)\n  Expected change site: `.github/workflows/promote-main-to-stable.yml`, the poller-dispatched `promote` job (and its dispatch logic in `scripts/orchestrate_poll_process.sh`)\n  Evidence of absence: The PR diff touches `scripts/promote_main_cycle.sh` (the scheduled `cycle` job) but does NOT touch `.github/workflows/promote-main-to-stable.yml` or `scripts/orchestrate_poll_process.sh`. The README (lines 4811-4818) and `agents.d/9342-stable-rollback.md` (line 5) document this as a residual. The issue's Approach exemption (\"manual or automation test-and-mark-stable.yml / mark-stable.yml\") does not list the poller-dispatched promote job. An in-flight comprehensive cycle can still ship the regression after a rollback: the poller dispatches the ungated `promote` job, the release gate publishes tags, and the hold-clear step runs.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/rollback-stable.yml:Lines 56-61 check out the dispatch ref without specifying `ref`; line 76 runs `scripts/rollback_stable.sh`. | severity=NIT | confidence=4\n  PROBLEM: The workflow accepts a dispatch from `refs/heads/stable` (scripts/rollback_stable.sh:195-196), but that branch may not yet contain this PR's helper.\n  WHY: If someone dispatches from stable before the change has been promoted, the workflow checks out the stable tree and cannot find `scripts/rollback_stable.sh`, so the rollback does not run. Dispatching from main works.\n- TASK_GAP\n  Requirement: \"After a rollback, neither `auto-release-stable.yml` nor the `promote-main-to-stable.yml` cycle releases until a release is cut deliberately.\"\n  Expected change site: `.github/workflows/promote-main-to-stable.yml`, the poller-dispatched `promote` job, and/or `scripts/orchestrate_poll_process.sh` before its promotion dispatch.\n  Evidence of absence: The PR gates the scheduled cycle through `scripts/promote_main_cycle.sh`, but adds no hold check to the `promote` job or poller dispatch. The poller can still dispatch that job with `target_sha` (`scripts/orchestrate_poll_process.sh:15864`); the README also documents that this path is not gated and can release and clear the hold.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8c2bcce86babe78432d958d34ab4cc92a8bc1694dcb52660823048f5114f5b1c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9359,
+    "run_id": "44230428239",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44230428239",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118054519_883c0b3da9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9359,
+    "run_id": "44230428239"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T05:45:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
