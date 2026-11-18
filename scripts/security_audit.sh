@@ -3621,13 +3621,18 @@ for idx, finding in enumerate(findings):
 	index_lines.append(f"{body_path}\t{title}\t{file_key}\t0\n")
 
 followup_index_path.write_text("".join(index_lines), encoding="utf-8")
+# Two findings that repeat one open follow-up carry the same id. The count
+# is the number of distinct ids, because the single-issue security pass
+# (review_single_issue_security_pass.sh report) accepts the ids only when the
+# array has exactly `findings=` unique entries.
+surviving_finding_ids = list(dict.fromkeys(finding["finding_id"] for finding in findings))
 finding_ids_b64 = base64.b64encode(
-	json.dumps(list(dict.fromkeys(finding["finding_id"] for finding in findings)), ensure_ascii=True).encode("ascii")
+	json.dumps(surviving_finding_ids, ensure_ascii=True).encode("ascii")
 ).decode("ascii")
 followup_summary_env_path.write_text(
 	"\n".join(
 		[
-			f"SURVIVING_FINDINGS_COUNT={shlex.quote(str(len(findings)))}",
+			f"SURVIVING_FINDINGS_COUNT={shlex.quote(str(len(surviving_finding_ids)))}",
 			f"SURVIVING_FINDING_IDS_B64={shlex.quote(finding_ids_b64)}",
 			f"FOLLOWUP_CREATE_COUNT={shlex.quote(str(len(planned_followups)))}",
 		]

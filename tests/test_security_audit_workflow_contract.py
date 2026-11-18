@@ -4827,5 +4827,33 @@ def test_security_audit_does_not_refile_the_same_file_and_category_under_a_new_i
 	assert "SECURITY_AUDIT_SIMILAR_FINDING_LINE_WINDOW: ${{ vars.SECURITY_AUDIT_SIMILAR_FINDING_LINE_WINDOW || '25' }}" in workflow
 
 
+def test_two_findings_repeating_one_open_followup_report_matching_ids_and_count() -> None:
+	"""Two findings that both repeat one open follow-up take the same id.
+
+	The single-issue security pass accepts `finding_ids_b64` only when it has
+	exactly `findings=` unique entries, so the count is the number of
+	distinct ids, not the number of findings.
+	"""
+	category = "A05:2021-Security Misconfiguration"
+	open_same = _similar_followup_issue(41, "env-indirection-secret-leak", state="open", line=20, category=category)
+	first = _finding_payload("env-indirect-expansion-secret-leak", category=category)
+	second = _finding_payload("env-indirection-leak-again", category=category)
+	second["line"] = 5
+	state = _security_audit_tracker_state()
+	state["api_responses"] = [[[open_same]]]
+	state["next_issue_number"] = 9500
+	proc, final_state = _run_security_audit(state, codex_output=json.dumps([first, second], ensure_ascii=True))
+	assert proc.returncode == 0, proc.stderr
+	summary = re.search(r"findings=(\d+) followups_created=(\d+) finding_ids_b64=(\S+)", proc.stdout)
+	assert summary is not None, proc.stdout
+	reported_ids = json.loads(base64.b64decode(summary.group(3)))
+	assert reported_ids == ["env-indirection-secret-leak"]
+	assert int(summary.group(1)) == len(reported_ids) == len(set(reported_ids))
+	assert summary.group(2) == "0"
+	assert final_state.get("issue_create_bodies", []) == []
+	comment = "\n".join(final_state.get("issue_comment_bodies", []))
+	assert "repeat an open follow-up (same file and category, within 25 lines): 2" in comment
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())
