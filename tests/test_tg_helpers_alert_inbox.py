@@ -20,6 +20,7 @@ import re
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -619,14 +620,21 @@ def test_captured_at_ignores_a_short_date_reading(tmp_path: Path) -> None:
 	shim.write_text(
 		"#!/bin/sh\n"
 		'case "$*" in *%3N*) echo "2026-11-18T01:02:03.12Z"; exit 0 ;; esac\n'
+		# The whole-seconds fallback (no -d) gets a fixed old reading, so a
+		# capture that skipped EPOCHREALTIME is not close to now.
+		'case "$*" in *"-d @"*) ;; *%Y-%m-%dT%H:%M:%S*) echo "2001-01-01T00:00:00"; exit 0 ;; esac\n'
 		f'exec "{real_date}" "$@"\n', encoding="utf-8")
 	shim.chmod(0o755)
+	before = datetime.now(timezone.utc)
 	_send(env, "ERROR")
 	record = _record(_kinds(_calls(state), "dispatch")[0])
 	assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z", record["captured_at"])
+	captured = datetime.strptime(record["captured_at"], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+	assert abs((captured - before).total_seconds()) < 5, record["captured_at"]
 	(state / "calls.jsonl").unlink()
 	env2 = dict(env)
 	env2["T_MSG"] = "deploy broke"
 	_run(env2, 'unset EPOCHREALTIME\nalert_inbox_capture ERROR "$T_MSG" true || true')
 	record = _record(_kinds(_calls(state), "dispatch")[0])
 	assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.000Z", record["captured_at"])
+	assert record["captured_at"] == "2001-01-01T00:00:00.000Z"
