@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_prepush_affected_tests.py:1867-1875 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `test_wrapper_baseline_prune_failure_logs_the_reason_and_is_unverified` never checks that the wrapper exits successfully (`proc.returncode == 0`) before it inspects the output.\n  WHY: If `scripts/prepush_test_gate_run.sh` fails for some other runtime reason, the test can still pass on the stderr/output content and hide a regression in the wrapper. The source rated this NIT, mapped here to low. anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna and z-ai_glm-5_3-flash raised the same gap only as hardening suggestions, not as findings.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION tests/test_prepush_affected_tests.py:test_wrapper_baseline_prune_failure_logs_the_reason_and_is_unverified, right after `proc, out = _run_wrapper(tmp_path, worktree, MODULE_PATH, env)`\n  PROBLEM: This test never checks the wrapper's exit code, unlike the sibling wrapper tests (for example test_wrapper_runs_an_isolated_container_and_copies_back_only_results at line 759).\n  WHY: If the prune-failure branch (prepush_test_gate_run.sh:272-278) ever exits non-zero instead of `exit 0`, the test still passes. Fix: add `assert proc.returncode == 0, proc.stderr` before the stderr assertion (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_prepush_affected_tests.py:1867-1875 | severity=NIT | confidence=4\n  PROBLEM: The test fails to assert the wrapper's successful exit code (`proc.returncode == 0`) before inspecting the output.\n  WHY: If the wrapper script `scripts/prepush_test_gate_run.sh` fails unexpectedly due to other runtime errors, the test might still pass by validating the stderr/output content, thereby masking regressions in the wrapper itself.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- HARDENING_SUGGESTION tests/test_prepush_affected_tests.py:1868 (test_wrapper_baseline_prune_failure_logs_the_reason_and_is_unverified, after `proc, out = _run_wrapper(...)`)\n  PROBLEM: Every other wrapper test in this file (test_wrapper_runs_an_isolated_container_and_copies_back_only_results:759, test_wrapper_refuses_a_module_inside_the_worktree:794, test_wrapper_without_docker_reports_unverified_and_exits_zero:804, and the three new tests) asserts `proc.returncode == 0`, but this one does not.\n  WHY: The prune-failure branch has `exit 0` at `scripts/prepush_test_gate_run.sh:278`, and that exit code is a contract other code relies on. Without the assertion, a regression that drops or breaks that `exit 0` would pass. Fix: add `assert proc.returncode == 0, proc.stderr` immediately after the `_run_wrapper(...)` call (1 line). HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n- HARDENING_SUGGESTION tests/test_prepush_affected_tests.py:after line 1868 (test_wrapper_baseline_prune_failure_logs_the_reason_and_is_unverified)\n  PROBLEM: The test does not assert the wrapper's exit code.\n  WHY: It would pass even if this failure path began exiting non-zero. Fix: add `assert proc.returncode == 0, proc.stderr` (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING_SUGGESTION tests/test_prepush_affected_tests.py:~1868 (test_wrapper_baseline_prune_failure_logs_the_reason_and_is_unverified, after `proc, out = _run_wrapper(tmp_path, worktree, MODULE_PATH, env)`)\n  PROBLEM: Unlike every other wrapper test in this file (e.g. test_wrapper_runs_an_isolated_container_and_copies_back_only_results line 759, test_wrapper_over_max_files_with_tracked_assets_is_snapshot_failed), this one never asserts the wrapper's exit code.\n  WHY: Adding `assert proc.returncode == 0, proc.stderr` before the stderr assertion would lock in the rule that the prune-failure branch never fails the job (`exit 0` in scripts/prepush_test_gate_run.sh:278). Optionally, also assert `\"run \" not in log.read_text()` to prove the gate stops before running tests. Estimated 1 line changed, or 2 with the docker-log assert. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a10b7d5198fb059cb525db6ac1e68dd7cc6dcec16752383e5115fc770872db81",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9691,
+    "run_id": "44287634553",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44287634553",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118134200_0d4783b8f6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9691,
+    "run_id": "44287634553"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T13:42:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
