@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:\"Verify the final-CI merge ref is current\" step (`run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1`), no line cited, not part of this PR's diff | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The PR's head commit dce84e915bbf4f7694af9d3f34fd78e2aa713a86 shows 37 failed check-runs, all ending with `CI_FINAL_MERGE_REF ... outcome=stale reason=not_refreshed tested_base=ab6cdcb8... tip=fc5f8284...`, so none of the six moved steps ran on this head.\n  WHY: GitHub did not recompute `refs/pull/9702/merge` against the new main tip, so the freshness guard stopped each job before tests ran; no PR hunk causes this, the branch needs updating to current main, and no code edit is needed (source severity NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: `.github/workflows/ci.yml`, the selection of which six steps to move from `tests-heal-plan-and-validation` to `tests-hooks-and-orchestrator`\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The PR uses an estimate based on subprocess counts, not measured step timings from the failing run (43314513853), as the comments at .github/workflows/ci.yml lines 1330-1344 note. `.github/workflows/ci.yml:1332-1334` and the unchanged test-file comment at `tests/test_ci_poll_test_sharding.py:4444-4445` say the run's step timings could not be read and the pick is an estimate. The last run diff only added comment justifications and did not change the moved-step set. The justification at lines 1338-1343 does not establish that these are the slowest steps or that `tests-hooks-and-orchestrator` has the most headroom. Severity disagreement: NIT (gemini, minimax: a deferred residual accepted in prior autofix rounds 6973232859, 6975190599 and 6978680067) vs MAJOR (openai). anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash deliberately did not re-raise it as an accepted documented residual.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:\"Verify the final-CI merge ref is current\" step (`run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1`), not part of this PR's diff | severity=NIT | confidence=5\n  PROBLEM: The PR's head commit dce84e915bbf4f7694af9d3f34fd78e2aa713a86 shows 37 failed check-runs. Every log tail ends with `CI_FINAL_MERGE_REF ... outcome=stale reason=not_refreshed tested_base=ab6cdcb8... tip=fc5f8284...`. `lint` fails only because the jobs it depends on failed, and none of the six moved steps ran.\n  WHY: GitHub did not recompute `refs/pull/9702/merge` against the new tip of main, so the freshness guard stopped each job before any tests ran. No PR hunk causes this. The branch needs updating to current main so a fresh final-CI run can run `tests-hooks-and-orchestrator` and `tests-heal-plan-and-validation`. No code edit is needed.\n- TASK COMPLETENESS: NONE. The reviewer did not re-raise the \"slowest steps / step timings\" gap because it is an accepted documented residual: autofix rounds 6973232859, 6975190599 and 6978680067, `ci.yml` lines 1332-1334 and 1343-1344, and `changelog.d/9420-ci-heal-job-steps-to-hooks-job.md`.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP | severity=NIT | confidence=5\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The PR uses an estimate based on subprocess counts instead of measured step timings from the failing run (43314513853), as noted in the comments in .github/workflows/ci.yml lines 1330-1344. This is a deferred residual because timing data is unavailable in the sandbox, and it does not block this PR.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP | severity=NIT | confidence=5\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, the selection of which six steps to move from `tests-heal-plan-and-validation` to `tests-hooks-and-orchestrator`.\n  Evidence of absence: `.github/workflows/ci.yml:1332-1334` and `tests/test_ci_poll_test_sharding.py:4444-4445` state that the step timings could not be read and the pick is an estimate. The last run diff only added comment justifications. This is a known residual that prior autofix rounds (6973232859, 6975190599, 6978680067) and the cross-pollination consensus (anthropic, z-ai) deferred.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP | severity=MAJOR | confidence=5\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, the selection of steps moved from `tests-heal-plan-and-validation` and their placement in `tests-hooks-and-orchestrator`.\n  Evidence of absence: `.github/workflows/ci.yml:1332-1334` states that run 43314513853's step timings could not be read and the six steps were selected by estimate, not measurement. The justification at lines 1338-1343 does not establish that these are the slowest steps or that `tests-hooks-and-orchestrator` has the most headroom.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3a5d3bbc86488dc5fb0b9167c533e901873a5391eb06c9f5585177364a2eae63",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9702,
+    "run_id": "44307896625",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44307896625",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118144910_945fd0737c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9702,
+    "run_id": "44307896625"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T14:49:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
