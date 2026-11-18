@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:22810 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The diagnostic notice now uses `${head_ref:-unknown}` in the `echo` instead of `${head_ref}`, but the change does not check that `head_ref` is set on every path that reaches this notice; this is a minor inconsistency with the logging format used elsewhere in the file.\n  WHY: The reviewer says this is not a functional failure, only a risk of incomplete logs; the source severity was NIT, recorded here as low.\n- scripts/orchestrate_poll_process.sh:22485-22504 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The merged-state handling depends on `invoke_stall_judge` setting `pr_state`; if the `linked_pr_json` fetch fails (empty string or malformed JSON), `pr_state` stays empty, so the `[ \"${pr_state}\" = \"merged\" ]` check correctly fails but the diagnostic logging may be less informative.\n  WHY: The diagnostic log may be ambiguous when the fetch fails; the source severity was NIT, recorded here as low.\n- scripts/orchestrate_poll_process.sh:19183, 19213 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_extract_standalone_state_comment_id_from_comments` and `_extract_standalone_state_json_from_comments` now filter `jq` results by `user.login`, resolved through `_standalone_state_trusted_login`, which addresses security finding #9718.\n  WHY: The reviewer states that the fix is correct, follows the repository's established pattern for verifying pipeline state comments, and that \"No issue found\"; the source severity was NIT, recorded here as low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update README.md to document the second exception for ENABLE_STALL_HUMAN_TERMINALIZATION (escalate_human is kept, issue gets ai:needs-human, when the issue's own implementation PR is closed or merged).\n  expected_change_site: README.md (orchestrate_poll env table and defaults table)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: This PR does not modify README.md. The reviewer notes that the merge-blocker judge explicitly deferred this to a later PR because README.md is outside the plan's `files_touched` grant, and calls it a known, tracked deferral. anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash each state that this is not a gap for the same reason.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_orchestrate_poll_process.py:test_standalone_stall_state_skips_candidate_when_pipeline_login_unavailable (comment starting \"The tick-level identity gate in run_standalone_stall_recovery skips the whole sweep first\") | HARDENING_SUGGESTION | HARDENING_RISK_SCORE: 0\n  PROBLEM: The comment still makes the unconditional claim that the last run corrected in the agents fragment. The sweep-wide skip only fires when tracking_issues.json has entries (scripts/orchestrate_poll_process.sh:25575-25591).\n  WHY: The test itself is unaffected because the assertion accepts either log line. Suggested fix: reword the comment to say the managed-set identity check skips the sweep only when a tracking issue exists, and that otherwise the per-candidate STANDALONE_STATE_AUTHOR_FILTER skip applies (estimated lines changed: 2).\n- All checklist categories, including TASK COMPLETENESS / INTENT GAPS: NONE. The reviewer states that the README item is not a gap against #9482 because it was deferred as outside `files_touched`.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:22810 | severity=NIT | confidence=2\n  PROBLEM: `${head_ref}` was replaced with `${head_ref:-unknown}` in the `echo` without checking that `head_ref` is populated on every path; this is a minor inconsistency with the logging format.\n  WHY: Not a functional failure, but potential for incomplete logs.\n- scripts/orchestrate_poll_process.sh:22485-22504 | severity=NIT | confidence=2\n  PROBLEM: If the `linked_pr_json` fetch fails (empty or malformed), `pr_state` stays empty; the merged check correctly fails, but the diagnostic logging may be less informative.\n  WHY: Diagnostic log might be ambiguous if fetch fails.\n- scripts/orchestrate_poll_process.sh:19183, 19213 | severity=NIT | confidence=5\n  PROBLEM: The state-comment extractors now filter `jq` results by `user.login` through `_standalone_state_trusted_login`, which addresses security finding #9718.\n  WHY: The fix is correctly implemented and follows the repository's security pattern. No issue found.\n- TASK_GAP | severity=NIT | confidence=5\n  Requirement: Update README.md to document the second exception for ENABLE_STALL_HUMAN_TERMINALIZATION (escalate_human is kept, issue gets ai:needs-human, when the issue's own implementation PR is closed or merged).\n  Expected change site: README.md (orchestrate_poll env table and defaults table).\n  Evidence of absence: README.md is not modified by this PR. (Note: The merge-blocker judge explicitly deferred this requirement to a later PR as it is outside the plan's `files_touched` grant; this is a known, tracked deferral).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_orchestrate_poll_process.py:test_standalone_stall_state_skips_candidate_when_pipeline_login_unavailable (comment block starting \"The tick-level identity gate in run_standalone_stall_recovery skips the whole sweep first\") | HARDENING_SUGGESTION | HARDENING_RISK_SCORE: 0\n  PROBLEM: The comment repeats the unconditional claim that the last run just corrected in the agents fragment. The tick-level skip happens only when tracking_issues.json has entries (scripts/orchestrate_poll_process.sh:25575-25591).\n  WHY: The assertion already accepts either log line, so behaviour is unaffected. Suggested fix: reword the comment to say the managed-set identity gate skips the sweep only when a tracking issue exists, and that the per-candidate skip covers the no-tracking-issues case (estimated lines changed: 2).\n- All checklist categories, including TASK COMPLETENESS / INTENT GAPS: NONE. The reviewer states that the README.md row update is explicitly deferred as outside the `files_touched` grant and is not a gap.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a7a4aca300a92a8720294dc34ba0f8aedc4bf1ce80105c2594944cc6c65df3a7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9502,
+    "run_id": "44315722328",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44315722328",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118155735_88c7fbe35d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9502,
+    "run_id": "44315722328"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T15:57:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
