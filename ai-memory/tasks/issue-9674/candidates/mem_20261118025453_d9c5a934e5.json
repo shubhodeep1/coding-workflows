@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: B\nQ3: A\n\nRATIONALE:\nQ1: `skip reason=base_failure_tracked` already has a fixed meaning. It is logged at `scripts/check_failure_triage.sh:1681` with `heal_issue=`, it goes with the `base_failure_tracked=<n>` output that gates the heal-issue note step (`.github/workflows/check_failure_triage.yml:660`), and the 9215 docs and changelog fragments describe it, and `tests/test_check_failure_triage_workflow_security.py` (around lines 2217\u20132367) tests it. Reusing that reason for a different event would mix two meanings under one key. Option C would also make the note step post on triage issues, which this issue does not ask for. So use a new reason, `skip reason=base_triage_tracked base=<BASE_REF> issue=<N> pr=<PR> check=<check>`. It logs only and never writes the `base_failure_tracked` output. Add it to the stable log prefixes registry through the `agents.d/` fragment, as the issue's step 4 already plans. Like the other skip exits, it should call `triage_report_routing_unverified` when PR-head routing is enabled.\nQ2: Leave the heal-issue skip (lines 1637\u20131698) exactly as it is, and apply base-keying to everything that falls through, `failed_jobs_differ` included. The job comparison only runs when a heal issue is open, so making it an exception would be inconsistent: the same PR would fold into the base issue when no heal issue exists. The issue's Risks section explicitly accepts folding a PR's different failure into the base issue while the base is failing. A per-PR issue gives no fix advantage either, because it is also implemented off the default branch, so it would only add the duplicate pipeline run this change is meant to remove. The `base_tracked outcome=file reason=failed_jobs_differ` log line stays as it is.\nQ3: In the script, the dedup and supersede check (lines 1448\u20131472) runs before the base gate. Matching the base-keyed fingerprint after the base gate is a new lookup against `OPEN_TRIAGE` that does no supersede evaluation, so a base-keyed match just exits with the Q1 skip. A supersede replacement files one issue and closes one, so the open count stays the same. Capping it would leave a stale-head issue open, which is the problem #8671's supersede fixed, so it is exempt. Goal 4 says historical mode is unchanged, so it is exempt too. In normal mode the cap applies to every other new filing, per-PR and base-keyed alike. It counts open `ai:check-triage` issues from `OPEN_TRIAGE`; `0` means no cap.",
+  "fingerprint": "7cc02c43aa89f8c6283ca6b39e22f5a9596cb3ba80e56e10095216dc78e0eefd",
+  "lineage": {
+    "issue_number": 9674,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44220195072",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44220195072",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9674"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261118025453_d9c5a934e5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9674,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44220195072"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9674",
+  "timestamps": {
+    "created_at": "2026-11-18T02:54:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
