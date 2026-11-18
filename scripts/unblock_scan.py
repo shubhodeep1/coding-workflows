@@ -56,6 +56,10 @@ Two terminal states are not judged again while nothing material changed:
     as `terminal_unchanged`. Pull requests are not covered (their fingerprint
     holds failing check names the scan cannot see), nor failed projects, nor
     the kill switch NEEDS_HUMAN_DIGEST_ENABLED=false (the judge then closes it).
+An issue labelled `ai:security-audit` (the long-lived security-audit tracker,
+issue #9730) is not a work item and is skipped as `security_audit_tracker`
+unless it is a failed project; SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED
+(unset, empty or `true` in any case is on; anything else is off) turns it off.
 An item is picked when all hold:
   - it has been blocked for at least --min-blocked-minutes (the newest
     `labeled` event of a block label it still carries; for a failed project
@@ -101,6 +105,7 @@ CLOSED_LABEL = "ai:unblock-closed"
 MARKER_PREFIXES = ("<!-- ai:unblock:v1 ", "<!-- ai:unblock-wait:v1 ")
 STATE_PREFIX = "<!-- ORCHESTRATOR_STATE_V"
 NEEDS_HUMAN_LABEL = "ai:needs-human"
+SECURITY_AUDIT_LABEL = "ai:security-audit"
 VERDICT_PREFIX = "<!-- ai:unblock:v1 "
 VERDICT_RE = re.compile(r" verdict=([a-z_]+) ")
 RUN_NAME_RE = re.compile(r"^Unblock judge #([1-9][0-9]*)$")
@@ -144,6 +149,11 @@ def _time(value: object) -> dt.datetime | None:
 	except ValueError:
 		return None
 	return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.timezone.utc)
+
+
+def _security_audit_exclude_enabled() -> bool:
+	"""Issue #9730 switch; same rule as the poller's shell reader (no trimming, no warning here)."""
+	return os.environ.get("SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED", "").lower() in ("", "true")
 
 
 def _label_names(item: dict) -> set[str]:
@@ -336,6 +346,9 @@ def select(
 			continue
 		seen.add(number)
 		labels = _label_names(item)
+		if SECURITY_AUDIT_LABEL in labels and number not in failed and _security_audit_exclude_enabled():
+			skip("security_audit_tracker")
+			continue
 		if CLOSED_LABEL in labels and number not in failed:
 			skip("closed_by_judge")
 			continue
