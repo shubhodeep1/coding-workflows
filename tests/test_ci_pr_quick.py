@@ -95,6 +95,7 @@ def test_static_checks_runs_inventory_parity() -> None:
 	index = matches[0]
 	assert steps[index]["name"] == "Inventory parity (quick)"
 	assert "if" not in steps[index]
+	assert "CI test wiring guard" in names, "static-checks lost its CI test wiring guard step"
 	assert index > names.index("CI test wiring guard")
 
 
