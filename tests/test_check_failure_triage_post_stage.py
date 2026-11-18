@@ -269,6 +269,34 @@ class PostStageBehaviourTests(unittest.TestCase):
 		self.assertIn("CHECK_TRIAGE created issue=https://github.com/owner/repo/issues/99 fp=", proc.stdout)
 		self.assertIn("CHECK_TRIAGE op=post stage=created pr=17", proc.stdout)
 		self.assertLess(proc.stdout.index("CHECK_TRIAGE created issue="), proc.stdout.index("stage=created"))
+		self.assertIn("--title CI failure: CI / lint on PR #17 --body-file", self.calls.read_text())
+
+	# Issue #9674: base-keyed metadata names the failing base branch in the title.
+	def test_base_keyed_metadata_titles_the_issue_after_the_base_branch(self) -> None:
+		self._write_metadata({"fingerprint": FINGERPRINT, "generation": 1, "root": FINGERPRINT, "base_keyed_ref": "main"})
+		proc = self._run()
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE op=post stage=created pr=17", proc.stdout)
+		self.assertIn("--title CI failure: CI / lint on main (first seen on PR #17) --body-file", self.calls.read_text())
+
+	def test_empty_or_non_string_base_keyed_ref_keeps_the_per_pr_title(self) -> None:
+		for value in ("", None, 7):
+			with self.subTest(value=value):
+				if self.calls.exists():
+					self.calls.unlink()
+				self._write_metadata({"fingerprint": FINGERPRINT, "generation": 1, "root": FINGERPRINT, "base_keyed_ref": value})
+				proc = self._run()
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertIn("--title CI failure: CI / lint on PR #17 --body-file", self.calls.read_text())
+
+	def test_invalid_base_keyed_ref_reports_metadata_invalid(self) -> None:
+		for value in ("ma..in", "main; rm -rf /", "x" * 201):
+			with self.subTest(value=value):
+				self._write_metadata({"fingerprint": FINGERPRINT, "generation": 1, "root": FINGERPRINT, "base_keyed_ref": value})
+				proc = self._run()
+				self.assertNotEqual(proc.returncode, 0)
+				self.assertIn("CHECK_TRIAGE op=post stage=metadata_invalid pr=17", proc.stdout)
+				self.assertFalse(self.calls.exists())
 
 
 if __name__ == "__main__":
