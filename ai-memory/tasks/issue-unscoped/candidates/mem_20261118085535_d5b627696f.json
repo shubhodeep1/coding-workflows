@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ai_label_precreation_contract.py:whole file | severity=high | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: Two consecutive pre-push test gate runs classify this file's three tests as \"caused by this change\", but the failure cannot be mapped to any diff hunk by static inspection, so its cause is unverified.\n  WHY: If the classification is real, the label pre-creation contract test fails on every CI run of this branch and blocks the merge gate (source severity MAJOR, mapped here to high).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_ai_label_precreation_contract.py:whole file | severity=high | confidence=2\n  PROBLEM: Two consecutive pre-push test gate runs classify this file's three tests as \"caused by this change\", but the failure cannot be mapped to any diff hunk by static inspection, so its cause is unverified.\n  WHY: If the classification is real, the label pre-creation contract test fails on every CI run of this branch and blocks the merge gate (source severity MAJOR, mapped here to high).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9dc40cb94ae3231b2b4f48b3a723c3a55d70cac8d8a27a3facb54f812bb67de5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9692,
+    "run_id": "44253099697",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44253099697",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118085535_d5b627696f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9692,
+    "run_id": "44253099697"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T08:55:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
