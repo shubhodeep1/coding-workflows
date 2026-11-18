@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: .github/workflows/ci.yml, the selection of the six steps moved out of `tests-heal-plan-and-validation` (the 15m35s job from run 43314513853) into `tests-hooks-and-orchestrator` (lines 1330-1572), pinned by MovedHeal9420StepsContractTest in tests/test_ci_poll_test_sharding.py\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: Neither the PR diff nor the last-run diff contains step timing data for run 43314513853, the provenance comment at .github/workflows/ci.yml lines 1330-1344 and the changelog fragment say the timings could not be read so the step choice and the choice of tests-hooks-and-orchestrator are estimates from planning-sandbox timings and test and subprocess counts, the last-run comment edit at `.github/workflows/ci.yml` lines 1335\u20131341 justifies the target job but not the \"slowest steps\" half, `MovedHeal9420StepsContractTest` (tests/test_ci_poll_test_sharding.py lines 4441\u20134545) pins only step names and module paths and does not show that the six chosen steps are the slowest, other constraints (names and bodies unchanged, `timeout-minutes: 20` on both jobs, no new required jobs) are met; severity disagreement: NIT (anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite) vs MAJOR (minimax_minimax-m3, openai_gpt-6-luna); anthropic_claude-sonnet-5_5 calls it a documented residual, not a new defect\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml, in which steps were moved from tests-heal-plan-and-validation and into which job (lines 1330-1572), pinned by MovedHeal9420StepsContractTest in tests/test_ci_poll_test_sharding.py.\n  Evidence of absence: Neither the PR diff nor the last-run diff contains step timing data for run 43314513853. The provenance comment at lines 1330-1344 and the changelog fragment say the timings could not be read, so the step choice and the target job are estimates. Names and bodies are unchanged, timeout-minutes is not raised, and no job was added. Previous editor passes deferred this gap. Both never-flagged jobs are matrix jobs (lines 4076 and 4388). The reviewer calls it a documented residual, not a new defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml, in the selection of steps moved from tests-heal-plan-and-validation to tests-hooks-and-orchestrator.\n  Evidence of absence: The workflow comment says the step timings for run 43314513853 could not be read, so the selection is an estimate. The PR diff has no timing data or comparison showing that the six steps are the slowest or that the target job has the most headroom. The limitation is acknowledged, but the requirement remains technically unfulfilled.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, the selection of the six steps moved out of `tests-heal-plan-and-validation` (the 15m35s job from run 43314513853); the supporting evidence is expected to live in the provenance comment immediately above the moved block.\n  Evidence of absence: The comment edit at `.github/workflows/ci.yml` lines 1335\u20131341 justifies the target job (`tests-hooks-and-orchestrator`), which covers the \"most headroom\" half. It does not cover the \"slowest steps\" half: the comment still says the timings could not be read. No timing table, run URL or per-step duration appears in the diff. `MovedHeal9420StepsContractTest` (tests/test_ci_poll_test_sharding.py lines 4441\u20134545) pins only step names and module paths. Placement, name preservation, `timeout-minutes: 20` and the no-new-required-jobs constraint are met.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, the selection of steps moved from `tests-heal-plan-and-validation` and their target job.\n  Evidence of absence: The workflow comment says the run's step timings could not be read and that the six steps and the target job were chosen by estimate. The PR diff has no timing data or comparison showing these were the slowest steps or that `tests-hooks-and-orchestrator` had the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- Residual note (not re-flagged per prior-round acceptance): the \"see the run's step timings\" sub-requirement is met only by estimate. Timings for run 43314513853 were unreadable, which the provenance comment (ci.yml:1330-1344) and the changelog fragment disclose. Verification: the six moved steps are at the end of `tests-hooks-and-orchestrator` (lines 1345-1568), before `tests-heal-plan-and-validation:` (line 1570). Both jobs keep `timeout-minutes: 20` (lines 713-715, 1575-1577). No issues found in the last-run diff.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "596f3078838db758bad9a4032e36573067030d24661ff972348577fc06ca131d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9702,
+    "run_id": "44285441593",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44285441593",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118123158_689676f6ae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9702,
+    "run_id": "44285441593"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T12:31:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
