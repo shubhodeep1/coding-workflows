@@ -2457,7 +2457,9 @@ rb_judge_merge_err_is_transient() {
 #     on the judged head: the failed call may have landed server-side;
 #   - returns 1 when the PR is closed or its head moved off the judged head;
 #   - otherwise repeats the same head-bound attempts (unreadable PR state
-#     also repeats them: --match-head-commit still binds the head).
+#     also repeats them: --match-head-commit still binds the head). A site
+#     that ran the security follow-up guard (#9671) skips the attempt when
+#     the read gave no base ref: the base is not bound, so it reads again.
 # At most 3 retries. Each prints one RB_JUDGE_MERGE_RETRY line. The retried
 # attempts overwrite the stderr files, so a final failure reports the last
 # error through rb_judge_merge_err_report as before.
@@ -2498,9 +2500,17 @@ rb_judge_merge_retry_transient() {
       echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=auto_merge_enabled"
       return 0
     fi
+    # A site that ran the guard never retries a merge on a base it could not
+    # read (#9671): the merge binds only the head, so a retarget during the
+    # delay would go unseen. The next attempt reads again; after the last
+    # one the site's failure branch runs.
+    if [ -n "${RB_JUDGE_FOLLOWUP_GUARD_RESULT:-}" ] && [ -z "${_rb_retry_base}" ]; then
+      echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 note=base_unverified action=skip_attempt"
+      continue
+    fi
     # A PR retargeted during the delay (#9671): the guard re-run evaluates the
-    # live base, not the one in the site's payload. An unreadable base keeps
-    # the payload as it is; a failed rewrite empties it, so the guard fails closed.
+    # live base, not the one in the site's payload. A failed rewrite empties
+    # the payload, so the guard fails closed.
     if [ -n "${RB_JUDGE_FOLLOWUP_GUARD_RESULT:-}" ] && [ -n "${_rb_retry_base}" ] \
       && [ "${_rb_retry_base}" != "$(printf '%s' "${RB_JUDGE_FOLLOWUP_GUARD_PAYLOAD:-}" | jq -r '.base.ref // ""' 2>/dev/null)" ]; then
       RB_JUDGE_FOLLOWUP_GUARD_PAYLOAD="$(printf '%s' "${RB_JUDGE_FOLLOWUP_GUARD_PAYLOAD:-}" | jq -c --arg base "${_rb_retry_base}" '.base.ref = $base' 2>/dev/null)" || RB_JUDGE_FOLLOWUP_GUARD_PAYLOAD=""

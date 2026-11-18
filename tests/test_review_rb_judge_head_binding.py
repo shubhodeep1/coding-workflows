@@ -1583,6 +1583,11 @@ echo "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=${r}"
 """
 
 
+def _fg_pr_state(base: str = "ai/issue-7") -> dict:
+	"""The retry's PR read with a readable base ref (the payload's, by default)."""
+	return {"code": 0, "stdout": f"open\tfalse\tfalse\t{JUDGED}\t{base}\n"}
+
+
 def _run_fg_site_with_retry(path: str, guard_results: list[str], responses: list[dict], payload: str = FG_PAYLOAD) -> dict:
 	with tempfile.TemporaryDirectory(prefix="test_rb_judge_followup_guard_retry_") as td:
 		tmp = Path(td)
@@ -1669,7 +1674,7 @@ def _run_fg_site_with_retry(path: str, guard_results: list[str], responses: list
 @pytest.mark.parametrize("path", MERGE_SITE_ORDER)
 @pytest.mark.parametrize("retry_result", ["refuse", "unverifiable"])
 def test_followup_guard_rerun_before_transient_retry_stops_merge(path: str, retry_result: str) -> None:
-	run = _run_fg_site_with_retry(path, ["allow", retry_result], _first_failure(path) + [_pr_state(), _ok()])
+	run = _run_fg_site_with_retry(path, ["allow", retry_result], _first_failure(path) + [_fg_pr_state(), _ok()])
 	proc = run["proc"]
 	assert proc.returncode == 0, proc.stderr
 	assert run["guard_calls"] == 2
@@ -1689,7 +1694,7 @@ def test_followup_guard_rerun_before_transient_retry_stops_merge(path: str, retr
 @needs_jq
 @pytest.mark.parametrize("path", MERGE_SITE_ORDER)
 def test_followup_guard_rerun_allow_lets_transient_retry_merge(path: str) -> None:
-	run = _run_fg_site_with_retry(path, ["allow"], _first_failure(path) + [_pr_state(), _ok()])
+	run = _run_fg_site_with_retry(path, ["allow"], _first_failure(path) + [_fg_pr_state(), _ok()])
 	proc = run["proc"]
 	assert proc.returncode == 0, proc.stderr
 	assert run["guard_calls"] == 2
@@ -1715,9 +1720,51 @@ def test_followup_guard_rerun_uses_the_retry_reads_live_base(path: str) -> None:
 
 @needs_jq
 @pytest.mark.parametrize("path", MERGE_SITE_ORDER)
-def test_followup_guard_rerun_keeps_payload_when_base_unreadable_or_unchanged(path: str) -> None:
-	for state in (_pr_state(), {"code": 0, "stdout": f"open\tfalse\tfalse\t{JUDGED}\tai/issue-7\n"}):
-		run = _run_fg_site_with_retry(path, ["allow"], _first_failure(path) + [state, _ok()])
-		assert run["proc"].returncode == 0, run["proc"].stderr
-		assert run["payloads"] == [json.loads(FG_PAYLOAD)] * 2
-		_assert_merge_succeeded(path, "\n".join(run["outputs"]), run["proc"].stdout)
+def test_followup_guard_rerun_keeps_payload_when_base_unchanged(path: str) -> None:
+	run = _run_fg_site_with_retry(path, ["allow"], _first_failure(path) + [_fg_pr_state(), _ok()])
+	assert run["proc"].returncode == 0, run["proc"].stderr
+	assert run["payloads"] == [json.loads(FG_PAYLOAD)] * 2
+	_assert_merge_succeeded(path, "\n".join(run["outputs"]), run["proc"].stdout)
+
+
+FG_UNREADABLE_READS = [
+	{"code": 1, "stderr": "gh: Server Error (HTTP 500)"},
+	_pr_state(),
+	{"code": 1, "stdout": '{"message":"Server Error"}\n', "stderr": "gh: Server Error (HTTP 500)"},
+]
+
+
+@needs_jq
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_followup_guard_unreadable_retry_base_skips_every_retried_merge(path: str) -> None:
+	"""No base from the retry's read: the merge, bound only to the head, is not
+	retried on the saved base (#9671); the site's failure branch runs."""
+	run = _run_fg_site_with_retry(path, ["allow"], _first_failure(path) + FG_UNREADABLE_READS)
+	proc = run["proc"]
+	assert proc.returncode == 0, proc.stderr
+	expected = _expected_calls(path)
+	assert run["calls"][: len(expected)] == expected
+	assert [call[0] for call in run["calls"][len(expected):]] == ["api"] * 3
+	assert _fg_merge_calls(run["calls"][len(expected):]) == []
+	assert run["guard_calls"] == 1
+	skips = [line for line in _retry_lines(proc.stdout) if "note=base_unverified" in line]
+	assert skips == [f"RB_JUDGE_MERGE_RETRY pr=42 head={JUDGED} path={path} attempt={n}/3 note=base_unverified action=skip_attempt" for n in (1, 2, 3)]
+	if path == "sync":
+		assert "judge_skip_reason=sync_merge_failed" in run["outputs"]
+	else:
+		assert "RB_MERGE_STATUS=merge_failed" in proc.stdout.splitlines()
+	assert run["leftovers"] == []
+
+
+@needs_jq
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_followup_guard_unreadable_retry_base_reads_again_then_merges(path: str) -> None:
+	run = _run_fg_site_with_retry(path, ["allow"], _first_failure(path) + [FG_UNREADABLE_READS[0], _fg_pr_state(), _ok()])
+	proc = run["proc"]
+	assert proc.returncode == 0, proc.stderr
+	assert run["guard_calls"] == 2
+	assert run["payloads"] == [json.loads(FG_PAYLOAD)] * 2
+	assert run["calls"][-1] == _expected_calls(path)[0]
+	assert sum("note=base_unverified" in line for line in _retry_lines(proc.stdout)) == 1
+	_assert_merge_succeeded(path, "\n".join(run["outputs"]), proc.stdout)
+	assert run["leftovers"] == []
