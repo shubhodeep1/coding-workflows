@@ -27,7 +27,11 @@
 #           snapshot variable) is used if set. With a snapshot, a PR's runs
 #           count only from its current head's `head_committed_at`
 #           (scripts/review_sweep_head_gate.sh, same GraphQL read, no extra
-#           call) and a PR without that field is left out (no cap). Without
+#           call) and a PR without that field is left out (no cap). The
+#           count starts at the commit's committer date, not at the push, so
+#           a commit made well before it was pushed keeps the rounds
+#           dispatched in between. When no row has the field the listing is
+#           skipped (`read_failed reason=head_date_unavailable`). Without
 #           this, the cheap same-head dispatches an approved head drew while
 #           it waited for CI or a merge (about 48 a day) counted against the
 #           next push, which was then escalated before any round on it.
@@ -77,7 +81,7 @@
 #
 # Logs (stderr for the counts, stdout for the escalation):
 #   REVIEW_SWEEP_ROUND_CAP outcome=counted window_hours=<n> runs=<n> prs=<n> truncated=<true|false>
-#   REVIEW_SWEEP_ROUND_CAP outcome=read_failed reason=<invalid_input|cutoff|listing|parse> window_hours=<n>
+#   REVIEW_SWEEP_ROUND_CAP outcome=read_failed reason=<invalid_input|head_date_unavailable|cutoff|listing|parse> window_hours=<n>
 #   REVIEW_SWEEP_ROUND_CAP outcome=<escalated|already_escalated|dry_run> pr=#<n> rounds=<n> max=<n> window_hours=<n>
 #   REVIEW_SWEEP_ROUND_CAP outcome=escalate_failed reason=<invalid_input|comment_write|label_write> pr=#<n> ...
 
@@ -109,6 +113,12 @@ review_sweep_round_counts()
 			return 0
 		fi
 		cap_scoped=true
+		# No row has a usable head date (the head-gate read failed open): the
+		# scoped filter would drop every run, so skip the listing (§14).
+		if [ "${cap_since}" = "{}" ]; then
+			echo "REVIEW_SWEEP_ROUND_CAP outcome=read_failed reason=head_date_unavailable window_hours=${cap_window_hours}" >&2
+			return 0
+		fi
 	fi
 	cap_cutoff="$(date -u -d "-${cap_window_hours} hours" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
 	if [ -z "${cap_cutoff}" ]; then
@@ -196,7 +206,13 @@ ${REVIEW_SWEEP_ROUND_CAP_MARKER}"
 		echo "::warning::REVIEW_SWEEP_ROUND_CAP outcome=escalate_failed reason=comment_write ${cap_fields}"
 		return 0
 	fi
-	if ! gh api "repos/${cap_repo}/issues/${cap_pr}/labels" -f "labels[]=${REVIEW_SWEEP_ROUND_CAP_LABEL}" >/dev/null 2>&1; then
+	# Adding a label is idempotent, so it may go through the caller's retry
+	# wrapper; a transient failure here would otherwise repeat the comment.
+	local -a cap_label_api=(gh api)
+	if type gh_api_retry >/dev/null 2>&1; then
+		cap_label_api=(gh_api_retry --idempotent)
+	fi
+	if ! "${cap_label_api[@]}" "repos/${cap_repo}/issues/${cap_pr}/labels" -f "labels[]=${REVIEW_SWEEP_ROUND_CAP_LABEL}" >/dev/null 2>&1; then
 		echo "::warning::REVIEW_SWEEP_ROUND_CAP outcome=escalate_failed reason=label_write ${cap_fields}"
 		return 0
 	fi

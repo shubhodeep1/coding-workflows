@@ -378,8 +378,8 @@ def test_cap_off_or_unreadable_dispatches_as_before(tmp_path: Path, kwargs: dict
 	assert "reason=review_round_cap" not in result.stdout
 	assert "skipped_round_cap=0" in result.stdout
 	assert not _lines(tmp_path, "labels.log") and not _lines(tmp_path, "comments.log")
-	if kwargs.get("env") or kwargs.get("helper") is False:
-		# No listing at all when the cap is off or the helper is missing.
+	if kwargs.get("env") or kwargs.get("helper") is False or kwargs.get("flags") == ("graphql_fails",):
+		# No listing at all when the cap is off, the helper is missing or no head date is known.
 		assert not any("event=workflow_dispatch" in line for line in _lines(tmp_path, "calls.log"))
 
 
@@ -428,6 +428,16 @@ def test_counts_with_a_snapshot_start_at_each_head_commit(tmp_path: Path) -> Non
 	assert result.returncode == 0, result.stderr
 	# PR 5: only the run after its head commit; PRs 6 and 7: no usable date, left out.
 	assert json.loads(result.stdout) == {"5": 1}
+
+
+def test_counts_skip_the_listing_when_no_row_has_a_head_date(tmp_path: Path) -> None:
+	# The head-gate read failed open: no row can be counted, so no listing.
+	snapshot = [{"number": 5}, {"number": 6, "head_committed_at": None}]
+	result = _run_counts(tmp_path, "o/r", "main", "72", json.dumps(snapshot), rounds=[_page(_round(5))])
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == ""
+	assert "REVIEW_SWEEP_ROUND_CAP outcome=read_failed reason=head_date_unavailable window_hours=72" in result.stderr
+	assert not _lines(tmp_path, "calls.log")
 
 
 def test_counts_reject_a_snapshot_that_is_not_an_array(tmp_path: Path) -> None:
