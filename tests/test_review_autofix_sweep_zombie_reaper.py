@@ -283,7 +283,7 @@ class SweepZombieReaperTest(unittest.TestCase):
 		self.assertEqual(text.count("gh_api_retry --idempotent --optional -X POST"), 2)
 
 	def test_switch_off_parity(self) -> None:
-		for value in ("false", "0", "no", "off", "FALSE"):
+		for value in ("false", "0", "no", "off", "FALSE", "disabled", "ture"):
 			with self.subTest(value=value):
 				self.reset()
 				listings = {("internal-review.yml", "queued"): [run(701, 30)]}

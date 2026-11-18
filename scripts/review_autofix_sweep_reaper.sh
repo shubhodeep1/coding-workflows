@@ -26,8 +26,8 @@
 # sweep, so at most 20 POSTs.
 #
 # Env (defaults live here, §8):
-#   ZOMBIE_RUN_REAPER_ENABLED   (default false, opt-in; false/0/no/off: no output,
-#                                no call. Off by default because GitHub refuses
+#   ZOMBIE_RUN_REAPER_ENABLED   (default false, opt-in; only 1/true/yes/on enable
+#                                it, any other value: no output, no call. Off by default because GitHub refuses
 #                                cancel and force-cancel (409) for runs wedged in
 #                                `queued` with no jobs, run 43095142301)
 #   ZOMBIE_RUN_MAX_QUEUED_HOURS (default 24; must be a positive integer, else
@@ -57,8 +57,10 @@ review_autofix_sweep_reap_zombie_runs()
 	local reaper_total=0 reaper_attempted=0 reaper_cancelled=0 reaper_force_cancelled=0 reaper_failed=0 reaper_deferred=0
 
 	reaper_enabled="$(printf '%s' "${ZOMBIE_RUN_REAPER_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')"
+	# Allow-list: only 1/true/yes/on enable it; a typo stays off (opt-in).
 	case "${reaper_enabled}" in
-		false|0|no|off) return 0 ;;
+		1|true|yes|on) ;;
+		*) return 0 ;;
 	esac
 
 	reaper_hours="${ZOMBIE_RUN_MAX_QUEUED_HOURS:-24}"

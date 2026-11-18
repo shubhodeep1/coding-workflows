@@ -637,6 +637,7 @@ jobs:
       PREPUSH_GATE_STEP_STALL_MINUTES: 35
       REVIEW_PHASE_HANDOFF_BUDGET_MINUTES: 15
       EDITOR_RETRY_BUDGET_MINUTES: 25
+      # Phase 4b queued grace (P4, Refs #8291): see stable_e2e_step_verify_bait_removed.sh.
       # Stuck states P4 (Refs #8291): Phase 4b's EDITOR_RETRY_BUDGET_MINUTES
       # counts from the first poll that sees the pinned retry run leave the
       # queue (in_progress/completed). Until then the run gets its own
