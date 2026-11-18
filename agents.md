@@ -1060,7 +1060,9 @@ exits keep their existing handling (75 and 2 fail closed in implement and
 validate). An explicit `Integration branch:` line still wins. An issue with
 no `ai:check-triage` label whose only triage marker is a
 `check-failure-triage:pr=<n>` line (the unblock judge's CI-failure reissue,
-#7032) is not routed and keeps the default branch.
+#7032) is routed to the base branch of its owning PR when that PR merged into
+a non-default branch of this repository (#9170); otherwise it keeps the
+default branch.
 Clarify alone keeps the default branch on a `reason=pr_not_open` refusal
 (the PR merged or closed), so the check-triage resolution gate (#7095) can
 close the issue with evidence; the refusal is logged as a `::notice::`. While
