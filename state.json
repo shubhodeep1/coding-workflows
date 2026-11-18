@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-18T00:55:38Z",
+  "tick_at": "2026-11-18T01:50:27Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,12 +11,12 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 6
+    "tracking_issues": 5
   },
   "tracking_issues": [
     {
       "current_wave": 19,
-      "integration_ahead_by": "219",
+      "integration_ahead_by": "221",
       "issue_counts": {
         "closed": 0,
         "done": 1,
@@ -57,28 +57,8 @@
       "wave_complete": false
     },
     {
-      "current_wave": 0,
-      "issue_counts": {
-        "closed": 0,
-        "done": 0,
-        "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 0,
-        "not_created": 0,
-        "ready_to_merge": 0,
-        "review_blocked": 0,
-        "skipped": 0
-      },
-      "number": 9169,
-      "project_complete": false,
-      "status": "in-progress",
-      "title": "[Orchestrator] Run CI-failure re-issues on the branch that holds the failing code, and give the implement sandbox a Solidity compiler",
-      "total_waves": 0,
-      "wave_complete": false
-    },
-    {
       "current_wave": 2,
-      "integration_ahead_by": "36",
+      "integration_ahead_by": "38",
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -99,7 +79,7 @@
     },
     {
       "current_wave": 1,
-      "integration_ahead_by": "26",
+      "integration_ahead_by": "27",
       "issue_counts": {
         "closed": 0,
         "done": 0,
