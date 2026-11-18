@@ -142,3 +142,42 @@ else
   echo "No previous AI autofix run on PR head" > "${LAST_RUN_CHANGED_FILES_FILE}"
   echo "FIRST_RUN_NO_PREVIOUS_AI_CHANGES" > "${LAST_RUN_DIFF_STAT_FILE}"
 fi
+
+# Final-CI repair delta review (docs/plans/final-ci-failure-ci-fix-plan.md
+# Phase 3): when the gate verified this head as a repair commit on an
+# approved head (REVIEW_DIFF_BASE_SHA, the gate output review_diff_base_sha),
+# the repair commit is the previous AI run, so LAST_RUN_DIFF (the reviewers'
+# primary focus and the editor's oscillation guard) and its file list and
+# stat cover REVIEW_DIFF_BASE_SHA..HEAD instead of the newest [ai-autofix]
+# commit. PR_DIFF_FILE and PR_CHANGED_FILES_FILE keep the whole PR, so the
+# risk tier, materiality check and panel are unchanged (Q8: A). Anything
+# unexpected (not 40-hex, not a strict ancestor of HEAD, a git failure, an
+# empty delta) leaves LAST_RUN_DIFF as above.
+# Log: REVIEW_DIFF_CONTEXT range=delta base=<sha> | range=merge_base [reason=<token>].
+review_diff_context_range="merge_base"
+if [ -n "${REVIEW_DIFF_BASE_SHA:-}" ]; then
+  review_diff_context_reason=""
+  if ! [[ "${REVIEW_DIFF_BASE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+    review_diff_context_reason="invalid_base"
+  elif [ "$(git rev-parse HEAD 2>/dev/null || true)" = "${REVIEW_DIFF_BASE_SHA}" ] \
+    || ! git merge-base --is-ancestor "${REVIEW_DIFF_BASE_SHA}" HEAD 2>/dev/null; then
+    review_diff_context_reason="not_an_ancestor"
+  elif ! git diff "${REVIEW_DIFF_BASE_SHA}..HEAD" > "${LAST_RUN_DIFF_FILE}.delta" 2>/dev/null; then
+    review_diff_context_reason="diff_failed"
+  elif [ ! -s "${LAST_RUN_DIFF_FILE}.delta" ]; then
+    review_diff_context_reason="empty_delta"
+  else
+    mv -f "${LAST_RUN_DIFF_FILE}.delta" "${LAST_RUN_DIFF_FILE}"
+    git diff --name-only "${REVIEW_DIFF_BASE_SHA}..HEAD" > "${LAST_RUN_CHANGED_FILES_FILE}" || true
+    git diff --stat "${REVIEW_DIFF_BASE_SHA}..HEAD" > "${LAST_RUN_DIFF_STAT_FILE}" || true
+    review_diff_context_range="delta"
+  fi
+  rm -f "${LAST_RUN_DIFF_FILE}.delta"
+  if [ "${review_diff_context_range}" = "delta" ]; then
+    echo "REVIEW_DIFF_CONTEXT range=delta base=${REVIEW_DIFF_BASE_SHA}"
+  else
+    echo "REVIEW_DIFF_CONTEXT range=merge_base reason=${review_diff_context_reason}"
+  fi
+else
+  echo "REVIEW_DIFF_CONTEXT range=merge_base"
+fi
