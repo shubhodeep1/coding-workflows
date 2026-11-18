@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_prepush_test_gate.sh:815 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The condition `[ \"${rpg_pre_repair_status}\" = pass ] && [ \"${rpg_pre_repair_failures}\" = 0 ]` uses `rpg_pre_repair_failures` which might be the string `unknown` (as set in line 763).\n  WHY: If the status is `pass` but the failure count read fails and results in `unknown`, the guard does not trigger; the reviewer calls this safe (it falls back to the current behaviour) but logically imprecise. The source severity was NIT, mapped here to low, the lowest allowed value.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_autofix_step_prepush_test_gate.sh:815 | severity=NIT | confidence=3\n  PROBLEM: The condition `[ \"${rpg_pre_repair_status}\" = pass ] && [ \"${rpg_pre_repair_failures}\" = 0 ]` uses `rpg_pre_repair_failures` which might be the string `unknown` (as set in line 763).\n  WHY: If the status is `pass` but the failure count read fails and results in `unknown`, the condition `0` will not match, so the guard does not trigger when it should; this is safe (it falls back to the current behaviour) but logically imprecise when a repair turn runs against a passing result.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cf50249e655e986eedd410a89770c5291e4f382614735d24f432440d14376e01",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9562,
+    "run_id": "44219394891",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44219394891",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118072910_c6788758ac",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9562,
+    "run_id": "44219394891"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T07:29:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
