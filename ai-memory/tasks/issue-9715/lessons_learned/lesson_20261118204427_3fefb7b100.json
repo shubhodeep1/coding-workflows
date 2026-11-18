@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-18T20:44:27Z",
+  "issue_number": 9715,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 006 as out-of-scope; anchor=scripts/ci_final_merge_ref_fresh.sh:1; cited_path=scripts/ci_final_merge_ref_fresh.sh; files_touched=agents.d/9715-standalone-stall-merge-refusal.md, changelog.d/9715-standalone-stall-merge-refusal.md, scripts/orchestrate_poll_process.sh, tests/test_standalone_stall_attempt_merge_refusal.py.",
+  "phase": "review_autofix",
+  "pr_number": 9720,
+  "record_id": "lesson_20261118204427_3fefb7b100",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/ci_final_merge_ref_fresh.sh",
+    "agents.d/9715-standalone-stall-merge-refusal.md",
+    "changelog.d/9715-standalone-stall-merge-refusal.md",
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_standalone_stall_attempt_merge_refusal.py"
+  ]
+}
