@@ -394,7 +394,8 @@ def test_only_known_workflows_have_a_job_named_lint():
 	import re
 	lint_job_workflows = sorted(
 		wf.name for wf in (REPO_ROOT / ".github/workflows").glob("*.y*ml")
-		if re.search(r"^  lint:", wf.read_text(encoding="utf-8").partition("\njobs:\n")[2], flags=re.M)
+		# A job-level `name: lint` under another job id reports the same check-run name.
+		if re.search(r"^  lint:|^    name:\s*[\"']?lint[\"']?\s*$", wf.read_text(encoding="utf-8").partition("\njobs:\n")[2], flags=re.M)
 	)
 	assert lint_job_workflows == ["ci.yml", "lint-plan-archival.yml"], lint_job_workflows
 
