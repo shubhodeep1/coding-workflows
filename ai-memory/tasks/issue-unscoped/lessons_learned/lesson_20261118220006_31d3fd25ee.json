@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-11-18T22:00:06Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=scripts/ci_final_merge_ref_fresh.sh:1-1; cited_path=scripts/ci_final_merge_ref_fresh.sh, .github/workflows/ci.yml, tests/test_ci_final_merge_ref_fresh.py, changelog.d/, agents.d/, README.md; files_touched=docs/plans/pipeline-human-wait-elimination-plan.md.",
+  "phase": "review_autofix",
+  "pr_number": 9687,
+  "record_id": "lesson_20261118220006_31d3fd25ee",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/ci_final_merge_ref_fresh.sh, .github/workflows/ci.yml, tests/test_ci_final_merge_ref_fresh.py, changelog.d/, agents.d/, README.md",
+    "scripts/ci_final_merge_ref_fresh.sh",
+    "docs/plans/pipeline-human-wait-elimination-plan.md"
+  ]
+}
