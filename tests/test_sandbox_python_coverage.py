@@ -457,6 +457,7 @@ class SandboxJobWiringTest(unittest.TestCase):
 			[step.get("name") for step in job["steps"]],
 			[
 				"Checkout repository",
+				"Verify the final-CI merge ref is current",
 				"Setup Python",
 				"Install Python CI dependencies",
 				"Sandbox Python coverage guard",
