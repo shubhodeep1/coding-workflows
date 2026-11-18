@@ -53,7 +53,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/cancel_on_pr_close.yml` — GitHub Actions workflow: AI Cancel Runs on PR Close.
 - `.github/workflows/check_failure_triage.yml` — GitHub Actions workflow: AI Check Failure Triage (Reusable).
 - `.github/workflows/ci.yml` — GitHub Actions workflow: CI.
-- `.github/workflows/ci_pr_quick.yml` — GitHub Actions workflow: CI quick (per-push `static-checks` in `quick` mode for every PR; the full suite runs once per head after review through ci.yml's workflow_dispatch final run; cut-ci-runner-time Phase 4, #9563).
+- `.github/workflows/ci_pr_quick.yml` — GitHub Actions workflow: CI quick (runs `ci.yml`'s `static-checks` job in mode `quick` on every PR push as `quick / ...` checks; never reports `lint`), while the full `ci.yml` suite runs once per PR head after review (cut-ci-runner-time Phase 4, #9563).
 - `.github/workflows/clarify.yml` — GitHub Actions workflow: AI Clarify (Reusable).
 - `.github/workflows/claude-engine-smoke.yml` — GitHub Actions workflow: Claude engine smoke (dispatch-only self-test of the Claude engine plumbing).
 - `.github/workflows/comprehensive-test-and-release.yml` — GitHub Actions workflow: Workflow Log Analysis And Improvement.
@@ -312,8 +312,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_conflict_resolve.sh` — create the [ai-merge-resolve] commit for review_autofix.yml.
 - `scripts/review_consolidate.sh` — Shell helper for review consolidate.
 - `scripts/review_enable_auto_merge.sh` — Shell helper for review enable auto merge.
-- `scripts/review_final_ci_failed.sh` — Body of ci.yml's `final-ci-failed` job: sends a PR whose final CI run (full suite, dispatched once per head after review) failed back to review/autofix by posting one head-bound `ai:final-ci-failed:v1` marker per head and dispatching the PR's review workflow once (log prefix `REVIEW_FINAL_CI_FAILED`; cut-ci-runner-time Phase 4, #9535).
-- `scripts/review_final_ci_sweep.sh` — Review sweep safety net: each tick hands open PR heads with a successful `ai-review/head-gate` but no final CI run to `_pr_ensure_final_ci` (cut-ci-runner-time Phase 4, #9535).
+- `scripts/review_final_ci_failed.sh` — `final-ci-failed` job in `ci.yml`: sends a PR whose final CI run (full suite, dispatched once per head after review) failed back to review/autofix: posts one head-bound `ai:final-ci-failed:v1` marker comment per head and dispatches the PR's review workflow once (`FINAL_CI_FAILED_REDISPATCH_ENABLED`; log prefix `REVIEW_FINAL_CI_FAILED`; cut-ci-runner-time Phase 4, #9535).
+- `scripts/review_final_ci_sweep.sh` — review sweep step "Ensure the final CI run on reviewed PR heads": safety net that each tick hands open-PR heads whose `ai-review/head-gate` is success but which have no final CI run to `_pr_ensure_final_ci` (`FINAL_CI_SWEEP_MAX_PER_TICK`; cut-ci-runner-time Phase 4, #9535).
 - `scripts/review_freshness_ci_failed.sh` — Marks a freshness-update head whose CI failed (`ai:freshness-ci-failed:v1`) and dispatches the PR's review workflow so it gets a normal review and autofix run.
 - `scripts/review_head_gate.sh` — Publishes SHA-bound review statuses and withdraws stale PR auto-merge on synchronize.
 - `scripts/review_workflow_sync_skip.sh` — review-gate check that skips the reviewer panel for an `ai-sync/stable` consumer sync PR whose changed paths are all in the signed sync allowlist.
