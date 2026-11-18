@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_agents_fragment_contract.py:system-wide | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new agents fragment `agents.d/9713-updater-resend-branch.md` causes `tests/test_agents_fragment_contract.py` to fail.\n  WHY: CI enforces strict structural contracts for fragments, so the fragment is likely missing metadata or violating the format, blocking release assembly (reviewer severity BLOCKER).\n- tests/test_changelog_fragment_contract.py:system-wide | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new changelog fragment `changelog.d/9713-updater-resend-branch.md` causes `tests/test_changelog_fragment_contract.py` to fail.\n  WHY: CI enforces strict contracts for changelog fragments, and the failure blocks release assembly (reviewer severity BLOCKER).\n- tests/test_session_start_extract_repo_slug.py:system-wide | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The changes in this PR cause a failure in `tests/test_session_start_extract_repo_slug.py`.\n  WHY: The CI failure blocks the PR from merging, which prevents delivery of the updater resend mechanism (reviewer severity BLOCKER).\n- tests/test_workflow_checkout_integration_ref_audit.py:system-wide | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The changes in this PR cause a failure in `tests/test_workflow_checkout_integration_ref_audit.py`.\n  WHY: The CI failure blocks the PR from merging, which prevents delivery of the updater resend mechanism (reviewer severity BLOCKER).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_agents_fragment_contract.py:system-wide CI test failure | severity=BLOCKER | confidence=4\n  PROBLEM: The new agents fragment `agents.d/9713-updater-resend-branch.md` causes `tests/test_agents_fragment_contract.py` to fail.\n  WHY: CI enforces strict structural contracts for fragments. The failure suggests the fragment is either missing required metadata or violating the expected format, blocking the release assembly.\n- tests/test_changelog_fragment_contract.py:system-wide CI test failure | severity=BLOCKER | confidence=4\n  PROBLEM: The new changelog fragment `changelog.d/9713-updater-resend-branch.md` causes `tests/test_changelog_fragment_contract.py` to fail.\n  WHY: Similar to the agents fragment, the CI environment enforces strict contracts for changelog fragments; this failure blocks the release assembly.\n- tests/test_session_start_extract_repo_slug.py:system-wide CI test failure | severity=BLOCKER | confidence=4\n  PROBLEM: The new changes introduced in this PR cause a failure in `tests/test_session_start_extract_repo_slug.py`.\n  WHY: The CI failure blocks the PR from merging, preventing the delivery of the updater resend mechanism.\n- tests/test_workflow_checkout_integration_ref_audit.py:system-wide CI test failure | severity=BLOCKER | confidence=4\n  PROBLEM: The new changes introduced in this PR cause a failure in `tests/test_workflow_checkout_integration_ref_audit.py`.\n  WHY: The CI failure blocks the PR from merging, preventing the delivery of the updater resend mechanism.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5c7bb2a4e23aec689021a9717739e79237be5be54242df863dfdc01969fb8fa5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9713,
+    "run_id": "44305018508",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44305018508",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118141649_43d88232d8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9713,
+    "run_id": "44305018508"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-18T14:16:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
