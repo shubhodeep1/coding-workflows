@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-18T15:00:29Z",
+  "issue_number": 9135,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=scripts/workflow_log_analysis_publish_report.sh:1; cited_path=scripts/workflow_log_analysis_publish_report.sh; files_touched=.github/workflows/workflow-log-analysis.yml, agents.d/9135-wla-report-pr-token-check.md, changelog.d/9135-wla-report-pr-token-check.md, tests/test_workflow_log_analysis_report_pr.py.",
+  "phase": "review_autofix",
+  "pr_number": 9707,
+  "record_id": "lesson_20261118150029_bc7e9362c4",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/workflow_log_analysis_publish_report.sh",
+    ".github/workflows/workflow-log-analysis.yml",
+    "agents.d/9135-wla-report-pr-token-check.md",
+    "changelog.d/9135-wla-report-pr-token-check.md",
+    "tests/test_workflow_log_analysis_report_pr.py"
+  ]
+}
