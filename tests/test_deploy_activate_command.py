@@ -229,6 +229,7 @@ def test_one_session_keeps_its_log_updates_in_one_pull_request(command: Path) ->
 		"look for an earlier session's open log PR",
 		"look for it before emitting any step",
 		"plus at most the agents-file ID records",
+		"whose head branch is not your working branch",
 		"If that merge conflicts, run `git merge --abort`, stop, and tell me before you commit or open any PR.",
 	):
 		assert required in section, (command, required)
