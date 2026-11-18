@@ -143,6 +143,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/check_triage_resolution.py` — Close an ai:check-triage issue once its linked PR merged and the failure is verified fixed on the default branch; otherwise post the failing job's traceback (issue #7095).
 - `scripts/check_integration_pr_readiness.py` — Check whether an orchestrator integration PR is ready to merge based on the tracking issue's sub-issue checkbox state.
 - `scripts/check_resolver_diff.sh` — Validate the output of the AI conflict-resolver step before committing.
+- `scripts/check_workflow_analysis_report.py` — Structure check (required headings, per-repo subsections, minimum size) and data-gap line for the workflow log analysis report (project #9116, P2).
 - `scripts/check_workflow_script_refs.py` — Verify every script referenced by a workflow file exists in scripts/.
 - `scripts/ci_budget_watch.py` — CI early warning on pushes to main: opens one `ai:ci-budget` issue when a workflow file nears the 480,000-byte guard or a CI job nears its timeout.
 - `scripts/ci_cancelled_rerun.py` — Scheduled sweep helper: re-run failed jobs once for cancelled, startup-failed, or runner-shutdown-failed CI on a current PR head.
@@ -310,12 +311,12 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_conflict_resolve.sh` — create the [ai-merge-resolve] commit for review_autofix.yml.
 - `scripts/review_consolidate.sh` — Shell helper for review consolidate.
 - `scripts/review_enable_auto_merge.sh` — Shell helper for review enable auto merge.
+- `scripts/review_final_ci_failed.sh` — Body of ci.yml's `final-ci-failed` job: sends a PR whose final CI run (full suite, dispatched once per head after review) failed back to review/autofix by posting one head-bound `ai:final-ci-failed:v1` marker per head and dispatching the PR's review workflow once (log prefix `REVIEW_FINAL_CI_FAILED`; cut-ci-runner-time Phase 4, #9535).
+- `scripts/review_final_ci_sweep.sh` — Review sweep safety net: each tick hands open PR heads with a successful `ai-review/head-gate` but no final CI run to `_pr_ensure_final_ci` (cut-ci-runner-time Phase 4, #9535).
 - `scripts/review_freshness_ci_failed.sh` — Marks a freshness-update head whose CI failed (`ai:freshness-ci-failed:v1`) and dispatches the PR's review workflow so it gets a normal review and autofix run.
 - `scripts/review_head_gate.sh` — Publishes SHA-bound review statuses and withdraws stale PR auto-merge on synchronize.
 - `scripts/review_workflow_sync_skip.sh` — review-gate check that skips the reviewer panel for an `ai-sync/stable` consumer sync PR whose changed paths are all in the signed sync allowlist.
 - `scripts/review_filter_uninteresting_files.sh` — Shell helper for review filter uninteresting files.
-- `scripts/review_final_ci_failed.sh` — Body of ci.yml's `final-ci-failed` job: sends a PR whose final CI run (full suite, dispatched once per head after review) failed back to review/autofix by posting one head-bound `ai:final-ci-failed:v1` marker per head and dispatching the PR's review workflow once (log prefix `REVIEW_FINAL_CI_FAILED`; cut-ci-runner-time Phase 4, #9535).
-- `scripts/review_final_ci_sweep.sh` — Review sweep safety net: each tick hands open PR heads with a successful `ai-review/head-gate` but no final CI run to `_pr_ensure_final_ci` (cut-ci-runner-time Phase 4, #9535).
 - `scripts/review_sweep_head_gate.sh` — Sourced by the review sweep's enumerate step: reads every open PR's `ai-review/head-gate` state in one GraphQL call per 100 PRs into the snapshot (`head_gate_state`, fail-open), and gives the final-CI state of a head so the sweep skips re-reviewing an approved head whose final CI failed (PR #9649).
 - `scripts/review_floor_rules.sh` — Shell helper for review floor rules.
 - `scripts/review_issue_ledger.sh` — Shell helper for review issue ledger.
