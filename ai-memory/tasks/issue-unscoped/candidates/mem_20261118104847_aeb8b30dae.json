@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ci_final_merge_ref_fresh.sh:181-183 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: All 38 failed check-runs on head 97c398744c66 stop at the guard with outcome=stale reason=not_refreshed, because refs/pull/9402/merge still merges into base b9d9db22 while main has advanced. No test ran on the head.\n  WHY: Final CI never validated the head against the current base. This is a stale-branch state, not a defect in the changed files. Updating the branch from main and rerunning final CI should clear it. Severity disagreement: BLOCKER (openai_gpt-6-luna) vs NIT (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash); the highest is used.\n- scripts/render_prompt.py:196 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The except (OSError, UnicodeDecodeError) handler is redundant, because the nested try-except already catches and handles UnicodeDecodeError.\n  WHY: It causes no runtime failure, since the inner handler swallows the exception. The `UnicodeDecodeError` half of the tuple is dead code. (Severity NIT in the source.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update the inventory in docs/INVENTORY.md to include scripts/ci_sync_quick.sh and scripts/comment_signature.py (noted as deferred in reviewer history)\n  expected_change_site: docs/INVENTORY.md\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff has no changes to docs/INVENTORY.md, so the two scripts are still missing from it. Other reviewers treat this as deferred and outside the plan grant's files_touched.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/ci_final_merge_ref_fresh.sh:182 | severity=NIT | confidence=2\n  PROBLEM: Every failed check-run on head 97c398744c66 (38, including `lint`) stops at this guard with outcome=stale reason=not_refreshed. refs/pull/9402/merge still merges into b9d9db22, while main is at efee99ef or 3a7244ef.\n  WHY: The final CI run never tested the head. No change to the PR's files can clear this; updating the branch from main and rerunning final CI should. The last run's changes (scripts/render_prompt.py, tests/test_render_prompt_foundation.py, changelog.d/9261-prompt-invalid-utf8.md) have no defect.\n- Other sections: NONE. The reviewer found all six steps of issue #9398 present. It treated the scripts/render_prompt.sh strict read and the docs/INVENTORY.md entries as deferred items, not gaps. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/render_prompt.py:196 | severity=NIT | confidence=4\n  PROBLEM: The except (OSError, UnicodeDecodeError) handler is redundant because the nested try-except already catches and handles UnicodeDecodeError.\n  WHY: It causes no runtime failure; the inner handler swallows the exception.\n- TASK_GAP:\n  Requirement: \"Update the inventory in docs/INVENTORY.md to include scripts/ci_sync_quick.sh and scripts/comment_signature.py\" (Note: Task found deferred in reviewer history, but it is a required deliverable for a clean inventory.)\n  Expected change site: docs/INVENTORY.md\n  Evidence of absence: The PR diff contains no changes to docs/INVENTORY.md; the file is not updated to include the two scripts mentioned as missing in reviewer comments [40] and [52].\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/ci_final_merge_ref_fresh.sh:181-183 | severity=BLOCKER | confidence=5\n  PROBLEM: Final CI for this PR is blocked because its merge ref still uses base b9d9db22 while main has advanced. The check-run logs show the guard exiting with outcome=stale reason=not_refreshed.\n  WHY: The guard exits before the test jobs run, so the PR has no final CI validation against the current base. This is a stale-branch validation blocker, not a defect in the changed prompt code. The fix is to refresh the PR branch and rerun final CI.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/ci_final_merge_ref_fresh.sh:181 | severity=NIT | confidence=5\n  PROBLEM: All 38 failed check-runs on PR head 97c398744c66 stop at the gate `bash scripts/ci_final_merge_ref_fresh.sh --depth 1` with outcome=stale reason=not_refreshed tested_base=b9d9db22... tip=efee99ef/3a7244ef. refs/pull/9402/merge still merges the head into the old base, so no test ran on the head.\n  WHY: This is branch/base freshness state, not a defect in any changed file. It was already accounted for in earlier rounds (PR comment entries [50]-[52]). A branch update from main followed by a new final-CI run clears it. The guard exits 1 before any test runs.\n- Other sections: NONE. The reviewer verified the render_prompt.py load_prompt change at lines 178-200 and the test at tests/test_render_prompt_foundation.py:313-335. It found the `UnicodeDecodeError` half of the outer except tuple at scripts/render_prompt.py:197 dead but already accepted in prior rounds, so it did not re-flag it. It found all six deliverables of issue #9398 present. It treated the scripts/render_prompt.sh strict read and the docs/INVENTORY.md entries as deferred, outside the plan grant's files_touched.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "512613e7f1cc30712d9577fcc3413312b52cf992d40bbcb62f4a775486aacf4a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9402,
+    "run_id": "44262943956",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "github-actions[bot]",
+    "run_attempt": 1,
+    "run_id": "44262943956",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261118104847_aeb8b30dae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9402,
+    "run_id": "44262943956"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-18T10:48:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
