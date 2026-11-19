@@ -5,13 +5,24 @@
   "entry_id": "processed_command_9797_7010380215_approved",
   "issue_number": 9797,
   "metadata": {
+    "branch": "ai/issue-9797",
+    "changed_files": [
+      ".github/workflows/test-and-mark-stable.yml",
+      "changelog.d/9797-clarify-negative-test-output-guard.md",
+      "tests/test_test_and_mark_stable_clarify_negative_outputs.py"
+    ],
+    "issue_number": 9797,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9797",
+    "pr_number": 9800,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9800",
+    "run_attempt": "1",
+    "run_id": "44532830049",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/44532830049"
   },
   "run_attempt": 1,
   "run_id": "44532830049",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-19T13:24:51Z",
+  "status": "completed",
+  "timestamp": "2026-11-19T13:39:57Z",
   "workflow": "implement"
 }
