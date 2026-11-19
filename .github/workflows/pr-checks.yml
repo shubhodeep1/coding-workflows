@@ -356,7 +356,13 @@ jobs:
           ' /tmp/plan-archival-lint/diff.bin /tmp/plan-archival-lint/added.txt "${GITHUB_OUTPUT}" \
             || plan_archival_enum_rc=$?
           if [ "${plan_archival_enum_rc}" -ne 0 ]; then
-            echo "::error title=Plan-archival completeness lint (not the PR-body lint)::[lint_plan_archival] outcome=enumerate_failed exit_code=${plan_archival_enum_rc} The files this PR adds could not be listed (exit code 3: a file added under docs/completed/ has a line break in its name or a name that is not valid UTF-8; rename it). This is not a CLAUDE.md §19 violation."
+            # Rename advice only for the parser's own exit 3; any other code
+            # (an unhandled error, a missing python3) is not a naming problem.
+            plan_archival_enum_reason="the diff of the merge commit could not be parsed"
+            if [ "${plan_archival_enum_rc}" -eq 3 ]; then
+              plan_archival_enum_reason="a file added under docs/completed/ has a line break in its name or a name that is not valid UTF-8; rename it"
+            fi
+            echo "::error title=Plan-archival completeness lint (not the PR-body lint)::[lint_plan_archival] outcome=enumerate_failed exit_code=${plan_archival_enum_rc} The files this PR adds could not be listed (${plan_archival_enum_reason}). This is not a CLAUDE.md §19 violation."
             exit 1
           fi
 
