@@ -2359,7 +2359,8 @@ def test_remediation_guard_runs_after_scope_guard_and_before_commit() -> None:
 	step = implement[implement.index("        id: commit_changes\n"):]
 	step = step[: step.index("      - name: ")]
 	assert "REMEDIATION_NO_CODE_GUARD_ENABLED: ${{ vars.REMEDIATION_NO_CODE_GUARD_ENABLED || 'true' }}" in step
-	assert "PRIOR_PR_BASELINE_BRANCH: ${{ steps.baseline_refctx.outputs.branch }}" in step
+	# A failed baseline checkout falls back to the default ref, so the skip must not apply.
+	assert "PRIOR_PR_BASELINE_BRANCH: ${{ steps.checkout_baseline.outcome == 'success' && steps.baseline_refctx.outputs.branch || '' }}" in step
 
 
 _HANDLER_GH_STUB = r"""#!/usr/bin/env bash
