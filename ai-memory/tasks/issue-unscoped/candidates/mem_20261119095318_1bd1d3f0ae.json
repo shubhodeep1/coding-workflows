@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Several merged workflow changes touched both `.github/workflows/internal-*.yml` and corresponding files under `workflow-templates/`. When modifying workflow behavior, check whether the template must stay in sync and add focused regression tests for the relevant contract.",
+  "fingerprint": "4d427814590ae426e00b1141eaa5b398050323f5c20d018abe06e63e2562e1e8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44499543690",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44499543690",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9481",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9533",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9659",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9736",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9765",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9506",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9567",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9666",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9748",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9770"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261119095318_1bd1d3f0ae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow behavior changes may need matching updates to internal workflows and published workflow templates.",
+  "timestamps": {
+    "created_at": "2026-11-19T09:53:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
