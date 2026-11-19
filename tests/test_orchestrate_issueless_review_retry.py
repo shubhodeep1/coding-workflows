@@ -76,12 +76,12 @@ def _now_iso(days_ago: float = 0.0) -> str:
 	return (datetime.now(timezone.utc) - timedelta(days=days_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _failure_body(head: str = HEAD_A, reason: str = "reviewers_failed", support: str | None = OLD_SUPPORT) -> str:
+def _failure_body(head: str = HEAD_A, reason: str = "reviewers_failed", support: str | None = OLD_SUPPORT, fp: str = "abcdef0123") -> str:
 	support_field = f" support={support}" if support else ""
 	return (
 		"**AI review/autofix produced no output — will retry**\n\n"
 		"The reviewer stage failed, so the editor never ran.\n\n"
-		f"<!-- review-autofix-failure:v1 head={head} reason={reason} fp=abcdef0123 degraded=0 run=77{support_field} -->"
+		f"<!-- review-autofix-failure:v1 head={head} reason={reason} fp={fp} degraded=0 run=77{support_field} -->"
 	)
 
 
@@ -303,7 +303,7 @@ def test_issueless_retry_map_entry_shape_and_open_head_validation() -> None:
 	assert entry["oid"] == HEAD_A and entry["ref"] == "feature/1" and entry["draft"] is False
 	assert entry["cross"] == "false" and entry["owner"] == "o" and entry["labels"] == ["bug"]
 	assert entry["closing_total"] == 1 and entry["closing_seen"] == 1 and entry["linked_pipeline"] is True
-	assert entry["comments"][0] == {"a": LOGIN, "fail": {"head": HEAD_A, "reason": "reviewers_failed", "support": OLD_SUPPORT}, "retry": None}
+	assert entry["comments"][0] == {"a": LOGIN, "fail": {"head": HEAD_A, "reason": "reviewers_failed", "support": OLD_SUPPORT, "fp": "abcdef0123"}, "retry": None}
 	assert entry["comments"][1] == {"a": "someone", "fail": None, "retry": None}
 	assert entry["comments"][2] == {"a": LOGIN, "fail": None, "retry": {"head": HEAD_A, "support": OLD_SUPPORT}}
 	assert run["entries"][4]["cross"] == "unknown" and run["entries"][4]["owner"] == ""
@@ -370,6 +370,51 @@ def test_issueless_retry_eligibility_gates() -> None:
 	for reason in ("provider_unavailable", "sandbox_prepare_failed"):
 		ok = _single(_run_cycle([_row(50)], [_node(50, [(LOGIN, _failure_body(reason=reason))])]))
 		assert ok["outcome"] == "retriggered", reason
+
+
+def test_issueless_retry_repeated_reviewer_failure_is_not_retried() -> None:
+	# Issue #9533: two newest trusted reviewers_failed markers on this head
+	# with one fp under the still-pinned support SHA mean a deterministic
+	# crash; do not queue another review.
+	fp_x = "c" * 64
+	fp_y = "d" * 64
+	repeated = _run_cycle([_row(61)], [_node(61, [(LOGIN, _failure_body(fp=fp_x, support=PINNED)), (LOGIN, _failure_body(fp=fp_x, support=PINNED))])])
+	line = _single(repeated)
+	assert line["outcome"] == "skipped" and line["reason"] == "repeated_reviewer_failure"
+	assert line["head"] == HEAD_A
+	assert repeated["dispatches"] == [] and repeated["posts"] == []
+	# A different fp, a prior marker on another head or support, an untrusted
+	# prior marker or a single failure keeps today's decision (wait for a
+	# newer support release).
+	for comments in (
+		[(LOGIN, _failure_body(fp=fp_y, support=PINNED)), (LOGIN, _failure_body(fp=fp_x, support=PINNED))],
+		[(LOGIN, _failure_body(head=HEAD_B, fp=fp_x, support=PINNED)), (LOGIN, _failure_body(fp=fp_x, support=PINNED))],
+		[(LOGIN, _failure_body(fp=fp_x, support=OLD_SUPPORT)), (LOGIN, _failure_body(fp=fp_x, support=PINNED))],
+		[("outsider", _failure_body(fp=fp_x, support=PINNED)), (LOGIN, _failure_body(fp=fp_x, support=PINNED))],
+		[(LOGIN, _failure_body(fp=fp_x, support=PINNED))],
+	):
+		run = _run_cycle([_row(62)], [_node(62, comments)])
+		assert _single(run)["outcome"] == "waiting_for_release", comments
+		assert run["dispatches"] == []
+	# A newer pinned support SHA still re-dispatches a repeated crash: the
+	# gate counts per support version, so the new support gets a fresh count.
+	newer = _run_cycle([_row(64)], [_node(64, [(LOGIN, _failure_body(fp=fp_x)), (LOGIN, _failure_body(fp=fp_x))])])
+	assert _single(newer)["outcome"] == "retriggered"
+	assert newer["dispatches"] == ["64 feature/64"]
+	# Another reason with a repeated fp is out of scope for this rule.
+	other = _run_cycle([_row(63)], [_node(63, [(LOGIN, _failure_body(reason="sandbox_prepare_failed", fp=fp_x, support=PINNED)), (LOGIN, _failure_body(reason="sandbox_prepare_failed", fp=fp_x, support=PINNED))])])
+	assert _single(other)["outcome"] == "waiting_for_release"
+	# REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED=false turns the rule off.
+	saved = os.environ.get("REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED")
+	os.environ["REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED"] = "false"
+	try:
+		disabled = _run_cycle([_row(65)], [_node(65, [(LOGIN, _failure_body(fp=fp_x, support=PINNED)), (LOGIN, _failure_body(fp=fp_x, support=PINNED))])])
+	finally:
+		if saved is None:
+			os.environ.pop("REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED", None)
+		else:
+			os.environ["REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED"] = saved
+	assert _single(disabled)["outcome"] == "waiting_for_release"
 
 
 def test_issueless_retry_cycle_cap() -> None:
