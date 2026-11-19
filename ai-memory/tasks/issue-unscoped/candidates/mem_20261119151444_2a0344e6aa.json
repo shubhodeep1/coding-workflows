@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stable_e2e_step_verify_cancel_on_close.sh:160-165 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: A failed `gh api` status read in the closed-PR wait loop leaves `EXISTING_STATUS` empty, so `phase7_wait_deadline` resets the deadline to the plain budget floor and the post-loop `phase7_run_is_queued \"\"` check is false, giving `status=timeout` instead of `queued_timeout`.\n  WHY: One transient read error during a long queue wait ends the wait early and mislabels runner starvation. Reviewers rated it NIT (low). The Gemini reviewer gave no severity and confidence 3.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/stable_e2e_step_verify_cancel_on_close.sh: closed-PR wait loop (`EXISTING_RUN_JSON=$(gh api ...) || EXISTING_RUN_JSON=\"\"`, `phase7_wait_deadline \"${PHASE7_WAIT_START}\" \"${EXISTING_STATUS}\"`, post-loop `phase7_run_is_queued \"${EXISTING_STATUS}\"`) | severity=NIT | confidence=4\n  PROBLEM: A failed `gh api` read sets `EXISTING_STATUS` to an empty string. `phase7_wait_deadline` then resets the deadline to `wait_start + budget`, and the post-loop `phase7_run_is_queued \"\"` is false.\n  WHY: After more than 10 minutes queued, one transient read failure makes the step write `status=timeout` instead of `queued_timeout`. The open-PR loop is not affected.\n- HARDENING: tests/test_test_and_mark_stable_gh_api_error_body_capture.py, matcher regex `\\|\\|\\s*(echo|true)\\b[^)]*\\)` in `test_no_gh_api_capture_puts_its_fallback_inside_the_substitution` does not flag `|| printf`. Suggested fix: add `printf` to the alternation. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/stable_e2e_step_verify_cancel_on_close.sh:160-165 | confidence=3\n  PROBLEM: A transient API read failure in the closed-PR wait loop resets the deadline calculation, potentially causing a premature timeout.\n  WHY: An empty `EXISTING_STATUS` makes `phase7_wait_deadline` fall back to the plain budget floor, which may already be past. The result is `status=timeout` instead of waiting or timing out on the queue cap.\n- HARDENING: scripts/stable_e2e_step_verify_cancel_on_close.sh:160-165. Only call `phase7_wait_deadline` when `EXISTING_STATUS` is non-empty. HARDENING_RISK_SCORE: 1\n- HARDENING: tests/test_test_and_mark_stable_gh_api_error_body_capture.py:140. Add `printf` to the regex `re.search(r\"\\|\\|\\s*(echo|true)\\b[^)]*\\)\", command)`. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- HARDENING: tests/test_test_and_mark_stable_gh_api_error_body_capture.py:140, regex `\\|\\|\\s*(echo|true)\\b[^)]*\\)` misses `|| printf` and other stdout-writing fallbacks. Suggested fix: add `printf` to the alternation. HARDENING_RISK_SCORE: 1\n- Reported no findings in any review category. It noted the sonnet finding on scripts/stable_e2e_step_verify_cancel_on_close.sh:65-71,155-166 as out of scope for this pass. It found no task gaps.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/stable_e2e_step_verify_cancel_on_close.sh:160-165 | severity=NIT | confidence=4\n  PROBLEM: A failed run-status read replaces `EXISTING_STATUS` with an empty string, and the deadline is recomputed from the start plus `PHASE7_WAIT_BUDGET_MINUTES` instead of preserving the queue-cap deadline.\n  WHY: If the run stays queued past the regular budget and a read fails, the loop exits and the empty status bypasses the `queued_timeout` check at line 167. The step reports `timeout`.\n- HARDENING: tests/test_test_and_mark_stable_gh_api_error_body_capture.py:140. Include `printf` in the fallback-command matcher. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/stable_e2e_step_verify_cancel_on_close.sh:161-165 (with `phase7_wait_deadline` lines 60-79) | severity=NIT | confidence=3\n  PROBLEM: A transient `gh api` failure sets `EXISTING_STATUS` to `\"\"`, and `phase7_wait_deadline` resets the deadline to `wait_start + PHASE7_WAIT_BUDGET_MINUTES`. The post-loop `phase7_run_is_queued \"\"` returns 1, so the step emits `status=timeout` instead of `status=queued_timeout`.\n  WHY: This is the run-44490333814 scenario plus one transient 502 or rate-limit error. It ends the wait early and mislabels runner starvation as a slow run. The open-PR loop is not affected.\n- HARDENING: tests/test_test_and_mark_stable_gh_api_error_body_capture.py:140. Add `printf` to the alternation, keeping the allowlist condition unchanged. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8fdee3f995acf1fbf10771705c9d19c22ff93fe63781b405904f8e4380c083eb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9794,
+    "run_id": "44542160283",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44542160283",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261119151444_2a0344e6aa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9794,
+    "run_id": "44542160283"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-19T15:14:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
