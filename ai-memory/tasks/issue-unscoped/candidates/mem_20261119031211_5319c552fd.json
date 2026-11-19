@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_actions.py:175-176 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The regex `_CHAIN_TITLE_PREFIX_RE` is a module-level constant that duplicates the pattern in `scripts/unblock_ledger.py`.\n  WHY: If the two patterns drift apart, the judge will misidentify the chain depth and cap it wrongly. A test enforces that they match, but there is no single source of truth. The reviewer rated this a NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_actions.py:175-176 | severity=low | confidence=4\n  PROBLEM: The regex `_CHAIN_TITLE_PREFIX_RE` is a module-level constant that duplicates the pattern in `scripts/unblock_ledger.py`.\n  WHY: If the two patterns drift apart, the judge will misidentify the chain depth and cap it wrongly. A test enforces that they match, but there is no single source of truth. The reviewer rated this a NIT.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "93f11d1457b0180a327d7e95d7282dc97684d0a642369020aae9aab43b9650a8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9685,
+    "run_id": "44430397475",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44430397475",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261119031211_5319c552fd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9685,
+    "run_id": "44430397475"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-19T03:12:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
