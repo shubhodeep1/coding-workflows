@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stuck-backlog Phase 3: [issue:N] run linkage and Actions queue backpressure.
 
-Clarify, plan and implement wrapper runs run on the default branch, so the
+Clarify, clarify-respond, plan and implement wrapper runs run on the default branch, so the
 poller could not link a queued run to its issue through ``head_branch`` and
 stall recovery re-dispatched the issue into an already jammed queue. These
 tests pin:
@@ -53,6 +53,8 @@ WRAPPERS = {
 	"workflow-templates/ai-clarify.yml": "AI Clarify",
 	"workflow-templates/ai-plan.yml": "AI Plan",
 	"workflow-templates/ai-implement.yml": "AI Implement",
+	".github/workflows/internal-orchestrate-clarify-respond.yml": "Internal: AI Orchestrate Clarify Respond",
+	"workflow-templates/ai-orchestrate-clarify-respond.yml": "AI Orchestrate Clarify Respond",
 }
 
 
@@ -119,6 +121,22 @@ build_active_issue_set
 def test_tagged_queued_plan_run_is_active(tmp_path: Path) -> None:
 	runs = [_run(run_id=1, name="Internal: AI Plan", title="Internal: AI Plan [issue:42]")]
 	assert _active_set(tmp_path, runs) == {"42"}
+
+
+def test_tagged_queued_clarify_respond_run_is_active(tmp_path: Path) -> None:
+	# Clarify-respond wrappers (#9765) also run on the default branch from an
+	# issue comment, so only the [issue:N] title links their queued runs.
+	path = ".github/workflows/internal-orchestrate-clarify-respond.yml"
+	runs = [
+		dict(_run(run_id=1, name="Internal: AI Orchestrate Clarify Respond",
+			title="Internal: AI Orchestrate Clarify Respond [issue:42]"), path=path),
+		dict(_run(run_id=2, name="AI Orchestrate Clarify Respond",
+			title="AI Orchestrate Clarify Respond [issue:43]"),
+			path=".github/workflows/ai-orchestrate-clarify-respond.yml"),
+	]
+	active = _active_set(tmp_path, runs)
+	assert "42" in active
+	assert "43" in active
 
 
 def test_tagged_in_progress_consumer_run_is_active(tmp_path: Path) -> None:
