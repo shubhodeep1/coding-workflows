@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_test_and_mark_stable_clarify_negative_outputs.py:setUp | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The test runs its fake gh/date/sleep as executables from a temp directory, but the pre-push gate container mounts the temp dir noexec, so the test cannot pass there.\n  WHY: Exec of the stub fails with \"Permission denied\" in the gate sandbox, so every test in the file errors instead of asserting; real GitHub runners are unaffected (reviewer rated SEVERITY: NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_test_and_mark_stable_clarify_negative_outputs.py:setUp | severity=low | confidence=3\n  PROBLEM: The test runs its fake gh/date/sleep as executables from a temp directory, but the pre-push gate container mounts the temp dir noexec, so the test cannot pass there.\n  WHY: Exec of the stub fails with \"Permission denied\" in the gate sandbox, so every test in the file errors instead of asserting; real GitHub runners are unaffected (reviewer rated SEVERITY: NIT).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1829b14febf66b9038aec94f72af3d229dc8d982b67e5f90d010603b5b0f7b7d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9806,
+    "run_id": "44635077922",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44635077922",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261119234125_a98da50738",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9806,
+    "run_id": "44635077922"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-19T23:41:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
