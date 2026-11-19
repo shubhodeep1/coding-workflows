@@ -28495,6 +28495,17 @@ def test_poller_sandbox_bounds_agents_md_copy():
 		small_src.write_bytes(small_payload)
 		_copy_sandbox_agents_md(small_src, small_dst)
 		assert small_dst.read_bytes() == small_payload
+		# Synthetic oversized inputs exercise the cut whatever the live size is.
+		big_payload = ("line é " * 40 + "\n").encode("utf-8") * 3000
+		assert len(big_payload) > _SANDBOX_AGENTS_MD_MAX_BYTES
+		small_src.write_bytes(big_payload)
+		_copy_sandbox_agents_md(small_src, small_dst)
+		big_copy = small_dst.read_bytes()
+		assert big_copy.endswith(marker)
+		assert len(big_copy) <= _SANDBOX_AGENTS_MD_MAX_BYTES + len(marker)
+		big_body = big_copy[: -len(marker)]
+		assert big_body.endswith(b"\n") and big_payload.startswith(big_body)
+		assert big_body.decode("utf-8")
 		no_newline_src = Path(tmp) / "no_newline_agents.md"
 		no_newline_dst = Path(tmp) / "no_newline_agents_copy.md"
 		no_newline_src.write_bytes(b"x" * (_SANDBOX_AGENTS_MD_MAX_BYTES + 1))
