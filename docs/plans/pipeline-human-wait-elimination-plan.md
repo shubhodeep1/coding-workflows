@@ -77,7 +77,7 @@ The decisions were clarified in the authoring session (Q1–Q8 all `A`):
 - **Alternatives considered:** include it here.
 - **Why:** another session is investigating it.
 
-### D10 — R7: accept a stale merge ref when only main syncs moved the base
+### D10 — R7: accept a stale merge ref when only default-branch syncs and resolver commits moved the base
 - **Chosen:** the freshness guard accepts a stale merge ref only when all of these hold. Otherwise it fails as today (Q17 A, added 2026-11-18).
   - The PR's base is not the default branch, so only integration-branch PRs qualify. A stale default-branch-based PR still fails.
   - The tested base is an ancestor of the current tip.
@@ -205,7 +205,7 @@ There are ten phases and eleven PRs (Phase 8 ships as 8a and 8b). Phase 10 was a
    - **Files:** `scripts/operator_step_issue.py`, `.github/workflows/workflow-log-analysis.yml`, tests.
    - **Done:** observable steps are ticked daily, and an empty tracker is closed.
    - **Rollback:** `OPERATOR_STEP_DAILY_TICK_ENABLED=false`.
-10. **Sync-only stale merge ref accepted (R7).**
+10. **Stale merge ref accepted when only syncs and resolver commits moved the base (R7).**
     - **Files:** `scripts/ci_final_merge_ref_fresh.sh`, `.github/workflows/ci.yml` (the ten final-CI check steps' `env:` blocks), `tests/test_ci_final_merge_ref_fresh.py`, README env var table, fragments.
     - **Done:** the #9602 shape logs `outcome=stale_accepted`, and the job runs its tests. That shape is an integration-branch PR whose merge ref is behind only by `chore: sync <default branch> into <base>` merges and `[ai-merge-resolve]` commits (merge or not), none of which touches the PR's files. Any other stale merge ref still fails, including every stale merge ref of a PR based on the default branch.
     - **Rollback:** `CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED=false`.
@@ -351,21 +351,21 @@ Phases 3 and 4 both edit `scripts/review_conflict_resolve.sh`, in different func
 4. Tests: extend `tests/test_operator_step_issue.py` with each condition, the tracker close, the switch off, and the trusted-login override. Add a workflow contract assertion that the step is daily-only.
 5. Fragments plus a README env var row.
 
-### Phase 10: sync-only stale merge ref accepted
+### Phase 10: stale merge ref accepted when only syncs and resolver commits moved the base
 
 1. In `scripts/ci_final_merge_ref_fresh.sh`, add `ci_final_merge_ref_sync_only`. Call it in the main flow where the refresh attempts have run out and the merge ref is still stale (today's `outcome=stale` exit at about :181).
-   - **Switch:** it runs only when `CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED` is `true` (default `true` in the script itself; same true/1/yes/on parsing as `CI_FINAL_MERGE_REF_FRESH_ENABLED`).
+   - **Switch:** it runs only when `CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED` is `true` (default `true` in the script itself; same true/1/yes/on parsing as `CI_FINAL_MERGE_REF_FRESH_ENABLED`). In this switch, in `ci_final_merge_ref_sync_only` and in the `sync_only_no_overlap` reason, "sync only" is shorthand for "only default-branch syncs and `[ai-merge-resolve]` commits". These names are final as written here, because renaming them after Phase 10 ships would be a breaking change.
    - **Inputs:** the PR number, `tested_base`, `tip` (the live base tip), the base ref, the default branch and the dispatched head (`GITHUB_SHA`).
    - **`tested_base`:** the first parent of the commit actually checked out. The loop's `first` is not the right value: the refresh loop reassigns it from each re-fetched ref (about :159), and when no refresh succeeds the job still has the original checkout. Capture it once before the refresh loop, from the raw commit object (`ci_final_merge_ref_parents HEAD`, since a shallow clone hides it from `rev-parse`), into its own variable.
-   - **Default branch:** read with `git ls-remote --symref origin HEAD`, with no API call, like the tip read.
+   - **Default branch:** read with `git ls-remote --symref origin HEAD`, with no API call, like the tip read. Its symref line is `ref: refs/heads/<name>`, a tab, then `HEAD`. Keep only `<name>`, the short name, as `scripts/load_workflow_overlay.py` does (`ref: refs/heads/(.+)\tHEAD`). Condition 0 compares that short name with the short `base.ref` from `pulls/<n>`, and condition 2 builds the sync subject from it. An unreadable or empty name fails as `detail=api_error`.
 
    It accepts only when all of these hold, checked in this order and stopping at the first failure:
    0. **Integration base only:** the base ref is not the default branch. For a default-branch-based PR every commit in range is a default-branch commit, so the commit-type check below would pass vacuously.
    1. **Ancestry and range:** `GET compare/<tested_base>...<tip>` reports `status=ahead`, and the listing is complete: `total_commits` is at most 250, the `commits` array holds exactly `total_commits` entries (the check `scripts/workflow_failure_heal.py` uses, `total_commits > len(commits)`, means a cut page), and `files` is under GitHub's 300-file cap. The same `commits` count check applies to the second compare in (2). Either shortfall fails as `detail=truncated`, so commits are never classified from a partial page.
    2. **Commit types:** each listed commit is a default-branch commit, an integration-sync merge, or an `[ai-merge-resolve]` commit, judged as follows.
       - **Default-branch commits:** `GET compare/<tested_base>...<default branch>` gives the set of default-branch commits in range. Any commit in that set is fine. This listing must be complete too (`total_commits` at most 250); a truncated one fails as `detail=truncated` rather than classifying commits against a partial set.
-      - **Remaining commits:** each must be either a two-parent merge whose subject is exactly `chore: sync <default branch> into <base ref>` (the subject `scripts/orchestrate_poll_process.sh` writes, with `<default branch>` from the `ls-remote --symref` read above, not a literal `main`) and whose second parent is in that default-branch set, or a commit whose subject starts with `[ai-merge-resolve]`, merge or not (D10 records that this admits resolver-authored content). The subject and parent count are author-controlled, so the second-parent check keeps a crafted merge from passing as a sync.
-   3. **No overlap:** none of the files from (1) is in the PR's changed-file list (`GET pulls/<n>/files`, paginated, at most 3000 files; a larger PR fails). On both sides, the compared set holds each entry's `filename` and, for `status=renamed`, its `previous_filename`. A sync that renames a file the PR touches therefore counts as an overlap.
+      - **Remaining commits:** each must be either a two-parent merge whose subject (the first line of the compare API's `commits[].commit.message`) is exactly `chore: sync <default branch> into <base ref>` (the subject `scripts/orchestrate_poll_process.sh` writes, with `<default branch>` from the `ls-remote --symref` read above, not a literal `main`) and whose second parent is in that default-branch set, or a commit whose subject starts with `[ai-merge-resolve]`, merge or not (D10 records that this admits resolver-authored content). The subject and parent count are author-controlled, so the second-parent check keeps a crafted merge from passing as a sync.
+   3. **No overlap:** none of the files from (1) is in the PR's changed-file list (`GET pulls/<n>/files`, paginated, at most 3000 files; a larger PR fails). That listing returns no total, so the total is `changed_files` from `pulls/<n>`, read in the guard's existing `pulls/<n>` call by widening its jq filter (no extra call). `changed_files` above 3000 fails as `detail=too_many_files` before any listing page is fetched. A listing whose entry count differs from `changed_files` fails as `detail=truncated`, so the overlap check never runs on a cut list. On both sides, the compared set holds each entry's `filename` and, for `status=renamed`, its `previous_filename`. A sync that renames a file the PR touches therefore counts as an overlap.
 
    When all hold:
    - **Checkout:** keep the checked-out merge, which still merges the dispatched head.
@@ -379,7 +379,7 @@ Phases 3 and 4 both edit `scripts/review_conflict_resolve.sh`, in different func
    - **What keeps it low:** the cheap checks run first. Condition 0 needs no call, and a failed compare check stops before the files listing. A typical PR's listing is one page.
    - **Auth:** the reads reuse the guard's own `pulls/<n>` auth path, `GH_TOKEN` or unauthenticated, plus `CI_FINAL_MERGE_REF_API_URL` for tests. On an unauthenticated job, a rate-limit refusal fails closed as `detail=api_error`, which is today's `stale` outcome.
 3. **Tests:** extend `tests/test_ci_final_merge_ref_fresh.py`. The file has no HTTP server.
-   - **Stubbing:** it uses the real local origin and the fake `gh` (`FAKE_GH`), which today answers `pulls/7` reads by jq filter. Extend `FAKE_GH` to answer the `compare/...` and `pulls/7/files` endpoints from JSON fixtures selected by the endpoint path argument. For the token-less path, serve the same fixtures as files under the `file://` `CI_FINAL_MERGE_REF_API_URL` directory.
+   - **Stubbing:** it uses the real local origin and the fake `gh` (`FAKE_GH`), which today answers `pulls/7` reads by jq filter. Extend `FAKE_GH` to answer the `compare/...` and `pulls/7/files` endpoints from JSON fixtures selected by the endpoint path argument. For the token-less path, serve the PR read and the two compares as files under the `file://` `CI_FINAL_MERGE_REF_API_URL` directory. The existing token-less test keeps `pulls/7` as a file (the script reads exactly `.../pulls/7`), so that tree cannot also hold `pulls/7/files`. The token-less case therefore expects the files listing to fail closed as `detail=api_error`, and the accept path is tested through `FAKE_GH`, which uses the same checks.
    - **The origin's `HEAD`:** point it at the default branch, so `ls-remote --symref` resolves.
    - **Cases:**
      - the #9602 shape (integration base, sync-only range, disjoint files) is accepted;
@@ -393,6 +393,9 @@ Phases 3 and 4 both edit `scripts/review_conflict_resolve.sh`, in different func
      - a truncated second compare (`<tested_base>...<default branch>`) fails with `detail=truncated`;
      - a sync merge in an origin whose default branch is not `main` (subject `chore: sync <that branch> into <base>`, branch read via `ls-remote --symref`) is accepted;
      - a non-merge `[ai-merge-resolve]` commit in range that touches none of the PR's files is accepted;
+     - a PR whose `changed_files` is over 3000 fails with `detail=too_many_files` and fetches no listing page;
+     - a files listing with fewer entries than `changed_files` fails with `detail=truncated`;
+     - the token-less tree from Stubbing fails closed with `detail=api_error` at the files listing;
      - an API error fails closed as `stale`;
      - the switch off keeps today's `stale` exit;
      - `tested_base` is the checked-out commit's first parent even when a re-fetch moved the merge ref without a checkout;
