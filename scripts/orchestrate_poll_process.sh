@@ -23469,7 +23469,7 @@ _linked_pr_is_capacity_waiting()
   ' >/dev/null 2>&1
 }
 
-# _stall_pr_ai_hold_reason <pr_json> — owner hold on a PR (issue #9746).
+# _stall_pr_ai_hold_reason <pr_json> — owner hold on a PR (PR #9750).
 # Prints `draft` when the PR is a draft, `skip_ai_title` when its title holds
 # the `[skip ai]` marker (the same substring match as the review gate in
 # scripts/review_autofix_step_evaluate_gate.sh), and nothing otherwise.
