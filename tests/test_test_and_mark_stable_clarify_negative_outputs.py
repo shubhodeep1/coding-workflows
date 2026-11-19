@@ -34,12 +34,12 @@ RATE_LIMIT_BODY = (
 	'}\n'
 )
 
-# Fake `gh`: the clarify.yml runs read fails STUB_RUNS_FAIL_COUNT times (-1:
-# always) the way gh reports a failed request (error body on stdout, message
-# on stderr, exit 1), then returns STUB_RUNS_PAYLOAD through the real jq. The
+# Fake `gh`: each clarify.yml / plan.yml runs read fails STUB_RUNS_FAIL_COUNT
+# times per workflow (-1: always) the way gh reports a failed request (error
+# body on stdout, message on stderr, exit 1), then returns STUB_RUNS_PAYLOAD through the real jq. The
 # issue POST prints STUB_ISSUE_OUT verbatim.
 STUB_GH = r'''#!/usr/bin/env python3
-import json, os, subprocess, sys
+import json, os, re, subprocess, sys
 args = sys.argv[1:]
 log_path = os.environ["STUB_GH_LOG"]
 with open(log_path, "a", encoding="utf-8") as log:
@@ -48,9 +48,10 @@ if len(args) < 2 or args[0] != "api":
 	sys.exit(1)
 path = args[1]
 jq_filter = args[args.index("--jq") + 1] if "--jq" in args else None
-if "/actions/workflows/clarify.yml/runs?" in path:
+runs_match = re.search(r"/actions/workflows/(clarify|plan)\.yml/runs\?", path)
+if runs_match:
 	with open(log_path, encoding="utf-8") as log:
-		reads = sum(1 for line in log if "/actions/workflows/clarify.yml/runs?" in json.loads(line)[1])
+		reads = sum(1 for line in log if runs_match.group(0) in json.loads(line)[1])
 	fail_count = int(os.environ.get("STUB_RUNS_FAIL_COUNT", "0"))
 	if fail_count < 0 or reads <= fail_count:
 		sys.stdout.write(os.environ["STUB_RATE_LIMIT_BODY"])
@@ -141,6 +142,11 @@ class ClarifyNegativeOutputsTest(unittest.TestCase):
 		if not self.gh_log.exists():
 			return 0
 		return sum(1 for line in self.gh_log.read_text(encoding="utf-8").splitlines() if "clarify.yml/runs?" in line)
+
+	def _plan_reads(self) -> int:
+		if not self.gh_log.exists():
+			return 0
+		return sum(1 for line in self.gh_log.read_text(encoding="utf-8").splitlines() if "plan.yml/runs?" in line)
 
 	def test_create_step_rate_limited_pre_read_writes_numeric_outputs(self) -> None:
 		result = self._run("create", STUB_RUNS_FAIL_COUNT="-1", STUB_ISSUE_OUT="9782\n")
@@ -268,8 +274,9 @@ class ClarifyNegativeOutputsTest(unittest.TestCase):
 
 	def test_alt_capture_step_rate_limited_or_unanchored_emits_no_run_id(self) -> None:
 		# The empty-baseline case returns an older run (id 42) on a successful
-		# read, so it fails if the skip guard is removed and the poll anchors
-		# at `id > 0`. The rate-limited case fails every read.
+		# clarify.yml or plan.yml read, so it fails if either skip guard is
+		# removed and the poll anchors at `id > 0`. The rate-limited case fails
+		# every read.
 		older_run = '{"workflow_runs": [{"id": 42, "created_at": "2026-11-19T09:16:00Z"}]}'
 		cases = (
 			("100", {"STUB_RUNS_FAIL_COUNT": "-1"}),
@@ -296,6 +303,8 @@ class ClarifyNegativeOutputsTest(unittest.TestCase):
 				if pre_clarify == "":
 					self.assertIn("alt-model clarify baseline run id unavailable", result.stdout)
 					self.assertEqual(self._runs_reads(), 0)
+					self.assertIn("alt-model plan baseline run id unavailable", result.stdout)
+					self.assertEqual(self._plan_reads(), 0)
 
 
 if __name__ == "__main__":
