@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9792,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9792\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9795\",\"pr_number\":9795,\"branch\":\"ai/issue-9792\",\"run_id\":\"44507877616\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/44507877616\",\"changed_files\":[\"changelog.d/9792-unblock-scan-skip-e2e-items.md\",\"scripts/orchestrate_poll_process.sh\",\"scripts/unblock_scan.py\",\"tests/test_unblock_scan.py\"]}",
+  "fingerprint": "1ae88dfbe04e6a1585b08e7f2fce9094a51e6360904f0916a3ca73c76273b17d",
+  "lineage": {
+    "issue_number": 9792,
+    "parent_ids": [],
+    "pr_number": 9795,
+    "run_id": "44507877616",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44507877616",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9795"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261119110237_5fe10282d3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9792,
+    "level": "run",
+    "pr_number": 9795,
+    "run_id": "44507877616"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9792: https://github.com/shubhodeep1/coding-workflows/pull/9795",
+  "timestamps": {
+    "created_at": "2026-11-19T11:02:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
