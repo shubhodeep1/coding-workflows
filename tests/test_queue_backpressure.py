@@ -226,17 +226,13 @@ def test_workflow_wiring() -> None:
 	assert "PERSIST_QUEUE_PAUSE_ENABLED: ${{ vars.PERSIST_QUEUE_PAUSE_ENABLED || 'true' }}" in text
 	assert "PERSIST_INHERITED_ROUNDS_EXEMPT: ${{ vars.PERSIST_INHERITED_ROUNDS_EXEMPT || 'true' }}" in text
 	assert 'echo "QUEUE_BACKPRESSURE_STATE_FILE=${RUNNER_TEMP}/queue-backpressure-state/state.json"' in text
+	# Phase 3c reuses the Phase 3b restore/save pair (pinned by
+	# test_workflow_restores_and_saves_marker): exactly one restore and one save.
 	key = "key: queue-backpressure-state-v1-${{ github.run_id }}-${{ github.run_attempt }}"
 	assert text.count(key) == 2
-	assert "restore-keys: queue-backpressure-state-v1-\n" in text
-	restore = text.index("- name: Restore queue backpressure marker")
-	save = text.index("- name: Save queue backpressure marker")
-	assert text.index("- name: Create runtime workspace") < restore < save < text.index("- name: Record poll run end")
-	assert "uses: actions/cache/restore@v4" in text[restore:restore + 400]
-	save_block = text[save:save + 400]
-	assert "uses: actions/cache/save@v4" in save_block
-	assert "if: always() && steps.queue_backpressure_marker.outputs.exists == 'true'" in save_block
-	assert "continue-on-error: true" in save_block
+	assert text.count("id: queue_backpressure_restore\n") == 1
+	assert "Restore queue backpressure marker" not in text
+	assert "Save queue backpressure marker" not in text
 
 
 def _q(value: str) -> str:
