@@ -677,9 +677,6 @@ Every comment posted with `GH_PAT` starts `internal-implement.yml`, `internal-cl
 
 What this means for operators: create `AI_COMMENT_SIGNING_SECRET` in coding-workflows. The weekly `Propagate consumer secrets` run (or a dispatch of it) copies the same value to every consumer, and the consumers pick up the new template lines on their next `@stable` sync. To roll back, set the repository variable `AI_COMMENT_SIGNING_POST=false`: new comments go out with `GH_PAT` again, and comments already signed keep verifying. Do not delete the secret to roll back, because every signed comment, orchestrator state included, would then read as untrusted.
 
-- **Check-failure triage re-runs a check that failed on a GitHub release-download 5xx instead of filing an issue.** On 2026-11-08 GitHub's release-download servers returned HTTP 504 for two hours; Foundry setup, Slither and the CodeQL bundle download failed before running any PR code, and one consumer PR got 7 `ai:check-triage` issues and 3 CRITICAL "human input required" pages. The collect stage of `scripts/check_failure_triage.sh` now re-runs the failed jobs of a first-attempt workflow run once (`POST rerun-failed-jobs`) when the annotations of every failed job (at most 3) show a `github.com` release download that returned 502/503/504, and files no issue. A failure that comes back on attempt 2 is triaged as before, and any read or re-run failure falls back to filing. The base-branch gate reuses the gate's run read. Log prefix `RELEASE_DOWNLOAD_RERUN`; repository variable `CHECK_FAILURE_TRIAGE_RELEASE_DOWNLOAD_RERUN_ENABLED` (default `true`, `false` turns it off). Refs #9120.
-- **A blocked `ai:check-triage` issue alerts at WARNING, not CRITICAL.** `plan.yml`'s `Handle blocked planning output` step reads the label from the issue metadata it already has, sends the Telegram alert at `WARNING` with "(CI triage; the unblock judge will re-check)" in its first line, and adds a paragraph to the blocked comment saying the unblock judge closes the issue once the check passes. The comment's first line and `Reason:` line are unchanged, and every other blocked issue keeps CRITICAL. Refs #9120.
-
 ### For contributors
 
 The signer is embedded in `scripts/gh_helpers.sh` and written to `RUNNER_TEMP` on activation, so it travels wherever the helpers are staged. `tests/test_comment_signature.py` fails when the embedded copy and `scripts/comment_signature.py` differ. Inside Actions the first activation adds the shim to `GITHUB_PATH`, so later steps and Python scripts run from a step go through it. `tests/conftest.py` strips the signing variables for the test session. Comment calls made with `curl` and steps before the first `gh_helpers.sh` source in a job keep the PAT.
@@ -2154,36 +2151,6 @@ The orchestrator poller (`ai-orchestrate-poll.yml`, `internal-orchestrate-poll.y
 | Idle consumer runs that did no work (`digital_pa`, 2026-11-14) | 583 of 624 |
 
 What this means for operators and consumer repos: a project that makes progress still gets its next poll at once (the follow-up poll after progress is unchanged), and merge-train releases still run on every poll tick and every PR close. A closed PR with merge conflicts can keep orphaned runs for up to an hour instead of five minutes. The Claude pool-health Telegram note, which only a poll in the first minutes of the hour sends, now arrives in fewer hours. A PR whose head branch is itself named `main` or `master` is no longer triaged. Consumers receive all of this on their next `@stable` sync.
-
-- **CI triage no longer opens one issue per pull request for a failure `main` already has and a heal issue already tracks, and a planning block that only waits on another open PR now pages at WARNING.**
-
-When the `ubuntu-latest` runners moved to Ubuntu 26.04, CI on `main` broke and heal issue #9215 was filed for it. Check-failure triage then filed a separate issue for each open PR whose CI failed the same way (#9224, #9228, #9230, #9231, #9232). Each one reached planning, found that PR #9246 already delivers the fix, and sent a CRITICAL "Planning blocked: human input required" page. Now `scripts/check_failure_triage.sh` checks for an open `ai:workflow-heal` issue first. If the newest CI run on the default branch failed, such an issue tracks that same workflow file on that branch, and every job that failed on the PR also failed in that run, triage files no issue (`CHECK_TRIAGE skip reason=base_failure_tracked`) and the new "Note PR failure on its base-branch heal issue" step adds one comment to the heal issue naming the PR, once per PR head and run. Separately, `plan.yml` now treats the planner's `work is delivered by open PR #<N>; resume once it is merged` block as a wait while the unblock judge and its wait verdict are enabled (`UNBLOCK_JUDGE_ENABLED` and `UNBLOCK_JUDGE_WAIT_ENABLED`, both default `true`): the issue comment says the unblock judge resumes it after that PR merges, and the Telegram page is WARNING instead of CRITICAL. Every other block reason keeps the old comment and the CRITICAL page.
-
-| The numbers that matter | Value |
-| --- | --- |
-| Per-PR triage issues filed for the #9215 breakage | 5 |
-| CRITICAL pages they produced on 2026-11-11 | 5 |
-| Extra API reads per triage run | 1 when the default branch failed the same workflow, plus 2 jobs reads (PR run and main's run) when a heal issue matches, plus one read of the heal issue's comments before the note is posted |
-| Kill switch | `CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED` (default `true`; repository variable, forwarded by `check_failure_triage.yml`) |
-
-What this means for operators: a red `main` produces one heal issue and comments on it, not an issue and a CRITICAL page for every open PR. A planning block that is only waiting for another PR to merge no longer asks you for input. On the `stable` line, heal issues do not carry the `<!-- workflow-failure-heal:workflow=<path> -->` header yet (it comes with #8812 on `main`), so the per-PR skip finds no matching heal issue and triage files as before; the planning-block change applies now.
-
-### For contributors
-
-The skip applies only to a `workflow_run` triage (not a `check_run` event), only when the PR's base is the repository's default branch, and only when the base run's conclusion is `failure` and every job that failed in the PR's run also failed in that base run (a PR job main runs green, or an unreadable jobs list, files the per-PR issue as before). A heal issue matches when its author is OWNER/MEMBER/COLLABORATOR, its fourth line is `<!-- workflow-failure-heal:source=<repo>#run -->`, one of its first seven lines is `<!-- workflow-failure-heal:workflow=<path> -->`, and it has the exact line ``- **Target branch:** `<base>` ``. A PR whose base is an orchestrator integration branch is still triaged per PR. The existing run read now returns the workflow id and `.path` together, and the existing base-run read also returns main's run id, so the new calls are the heal-issue listing and, when a heal issue matches, the two jobs listings.
-
-- **The orchestrator poller no longer re-posts a state that has not changed.** A write whose content matches the state already on the tracking issue now posts nothing.
-
-A large project's state is several comments, and every state write posted all of them. On 2026-11-17 tracking issue #8291, a 567 KB state split into 12 parts, received a full 12-part write whose content was identical to the previous one, and other runs wrote all 12 parts several times an hour. `post_state_comment` in `scripts/orchestrate_poll_process.sh` now compares the state's content hash with the chain it read for the tracking issue and the last chain it wrote, and skips the write when they match. Readers see the same newest chain either way. Deciding costs no API call.
-
-| The numbers that matter | Value |
-| --- | --- |
-| #8291 state size | 567 KB, 12 comment parts per write |
-| Comments saved per skipped #8291 write | 12 |
-| New repository variable | `ORCH_STATE_SKIP_UNCHANGED`, default `true` |
-| New log line | `STATE_WRITE tracking_issue=<n> outcome=skip reason=unchanged` |
-
-What this means for operators: nothing to configure. Set `ORCH_STATE_SKIP_UNCHANGED=false` to post every write again. Writes that change the state, including writes of a single field, still post the full chain.
 
 ### For contributors
 
@@ -4675,49 +4642,6 @@ What this means for consumer repos: after the next `@stable` sync, clarify, plan
 - When the release gate's Phase 4 review wait times out, the new step "Phase 4d: Review-timeout run inventory" lists the review runs on the smoke branch and the jobs of each unfinished run. A job that is `queued` with `runner=none` means no runner picked it up; a run with no jobs means a workflow-level concurrency group held it. The step only reads and never changes the job result. Release run 43283656910 most likely failed for a transient reason (runner starvation or a wedged queued job), so re-run the release gate. Refs #9418
 
 - When the release gate gives up waiting for a child run it dispatched, it now cancels that run. In release run 43590943288 the `validation-refresh`, `validate` and `orchestrate` children stayed queued for 3 to 4.7 hours with no runner, the watches timed out, and the children ran hours later anyway: the orchestrate child then created a smoke tracking issue and Wave 1 issues that the gate's cleanup could not see. Every dispatch step of `test-and-mark-stable.yml` that waits for its child to complete ("Dispatch & watch — validation-refresh", "Dispatch internal-orchestrate.yml with multi-issue project", "Dispatch internal-validate.yml standalone", "Dispatch & watch — update_workflows (allow_workflow_edits=false)", "Dispatch & watch — internal-memory-maintenance") now reads the timed-out child's jobs once, prints a `::warning::` with the number of jobs and how many are queued with no runner (`unknown` when the jobs read fails or returns no jobs list), and cancels the child. Both calls only warn when they fail, and the step still fails with the watcher's exit code. Set the `DISPATCH_WATCH_CANCEL_ON_TIMEOUT` repository variable to `false` to skip the cancel (the three jobs that own these steps map it into their environment, defaulting to `true`). Unset, empty or `true` (any letter case) cancels; any value other than `true` or `false` also skips the cancel and logs a `::warning::` that does not print the value, following the repository's boolean-variable convention. The cause of that run was most likely runner starvation, so re-run the release gate once the runner queue clears. Refs #9532.
-
-- **Approved PRs now take turns updating from their base branch.** Before this, an approved PR could be updated from its base up to six times without merging, because every other merge made its CI run stale.
-
-Each base branch now has one merge lease. Only the PR holding it may update its branch from the base and run CI on the combined tree. Other approved PRs that need an update wait under `ai:merge-lease-wait` instead of each starting a CI run that the next merge makes stale. A PR that needs no update still merges at once, unless it changes a file the lease holder changes. The merge-train release step, on every poll tick and every PR close, frees a lease whose holder closed or expired and hands it to the next waiter. Priority labels come first, then the lowest PR number.
-
-| The numbers that matter | Value |
-| --- | --- |
-| Most updates seen on one approved PR before this change | 6 (#9367) |
-| Lease expiry without renewal (`MERGE_LEASE_TTL_MINUTES`) | 240 minutes |
-| Longest total hold (`MERGE_LEASE_MAX_HOLD_MINUTES`) | 720 minutes |
-| Release step cadence | every poll tick (15 min) and every PR close |
-| New jobs or workflows | 0 |
-
-What this means for operators: expect fewer `Branch updated from main before merging` comments and fewer CI runs per merged PR. Waiting PRs show `ai:merge-lease-wait`. `MERGE_LEASE_ENABLED=false` turns the lease off. A lease read or write failure logs `MERGE_LEASE ... outcome=unavailable`, and the merge then behaves as it did before.
-
-- **Check-failure triage no longer files fix issues for failures another path already handles.** A failure on a commit that is no longer the PR head, and a failed final CI run while the final-CI hand-back is on, are now skipped.
-
-Six triage issues from 2026-11-16 and 11-17 became fix PRs on other PRs' branches (#9597, #9598, #9601, #9603, #9614, #9621). Five came from two cases. Issues #9580, #9581 and #9582 were filed against failing commits that the PR had already moved past, as three near-duplicates within three minutes. Issues #9608, #9618 and #9662 came from failed `CI [pr:<n>]` final runs, which this repository's final-CI hand-back on `main` already sends back to review and autofix; the `stable` line creates no such runs, so for consumers only the stale-head skip applies. `scripts/check_failure_triage.sh` now skips both before any base, run or issue read and before diagnosis, logging `CHECK_TRIAGE skip reason=head_advanced` or `reason=final_ci_repair_owns`.
-
-| The numbers that matter | Value |
-| --- | --- |
-| Fix PRs from the six measured issues these rules would have prevented | 5 of 6 (plus open issue #9662) |
-| Extra API calls | 0 |
-| Switches (repo variables) | `CHECK_TRIAGE_SKIP_HEAD_ADVANCED_ENABLED`, `CHECK_TRIAGE_SKIP_FINAL_CI_ENABLED` (both default `true`) |
-
-What this means for operators: fewer `ai:check-triage` issues and fix PRs racing a PR's own review loop. A failing PR head that is still current is triaged as before. Turning the final-CI hand-back off (`FINAL_CI_FAILED_REDISPATCH_ENABLED=false`) brings final CI runs back to triage. Consumers get it on the next `@stable` sync.
-
-### For contributors
-
-The lease record is a commit on `refs/merge-lease/<base>`, changed only by fast-forward PATCH, so two writers that read the same record cannot both win. Code: `_merge_lease_gate` in `scripts/pr_checks_lib.sh` and `_mt_merge_lease_tick` in `scripts/review_merge_train.sh`. Tests: `tests/test_merge_lease.py`. On `main`, #9660 also shipped a final-CI merge resume; it depends on this repository's final CI and is not part of the stable line.
-
-- **Signed job-token comments now cover orchestrator state and the review pipeline's comments.** With `AI_COMMENT_SIGNING_SECRET` set, most new pipeline comments were still posted with `GH_PAT` and kept starting the four `issue_comment` wrappers.
-
-Part of it was temporary: runs queued before the secret existed run with it empty. Two gaps were bugs. Full orchestrator state parts were packed so close to GitHub's 65,536-character comment cap that the signature line pushed them over, so only the last part of each state was signed; `scripts/orchestrate_state_v2.py` now leaves room for it. Scripts that post comments in a step where no earlier step had loaded the `gh` shim, such as the single-issue security pass in review_autofix's `deterministic-skip-merge` job, called the real `gh`; every comment-posting script now installs the shim itself.
-
-| The numbers that matter | Value |
-| --- | --- |
-| New comments that should have been signed but went out with `GH_PAT`, 10:30 to 12:47 UTC on 2026-11-17 (backlog runs included) | 96 of 128 |
-| Orchestrator state parts kept on the PAT for size | 59 |
-| State framing headroom | 256 → 768 bytes |
-| Scripts that now install the shim themselves | 17 bash, 5 Python (stable line; `main` also has 2 bash scripts that stable does not) |
-
-What this means for operators: nothing to configure. Comment-driven wrapper runs drop further once this reaches `promote-candidate` (this repository) and the next `@stable` release (consumers). Large orchestrator states can take one more comment part than before.
 
 ### For contributors
 
