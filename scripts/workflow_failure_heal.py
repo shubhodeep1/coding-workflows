@@ -488,6 +488,13 @@ RUNNER_LOST_ANNOTATION_RE = re.compile(
 	r"The self-hosted runner: .* lost communication with the server|The runner has received a shutdown signal"
 )
 RUNNER_LOST_MAX_JOBS = 10
+# GitHub adds this failure annotation next to a runner-shutdown one; it is the
+# only other failure-level annotation a lost-runner job may carry (same rule as
+# scripts/ci_cancelled_rerun.py SHUTDOWN_COMPANION_MESSAGE).
+RUNNER_LOST_COMPANION_MESSAGE = "The operation was canceled."
+# An Actions job's check_run_url ends in /check-runs/<job id>; a job whose URL
+# names another id is not a candidate, so its run is reported as usual.
+RUNNER_LOST_CHECK_RUN_URL_RE = re.compile(r"/check-runs/([1-9][0-9]*)\Z")
 SIGNATURE_LINE_LIMIT = 5
 # Ownership facts carried by an autofix_failure report (self-repo routing).
 CHANGED_FILES_MAX_ENTRIES = 200
@@ -9667,7 +9674,16 @@ def _runner_lost_failed_jobs(jobs_doc: Any) -> list[dict[str, Any]]:
 
 def _runner_lost_job_on_do_runner(job: dict[str, Any]) -> bool:
 	labels = job.get("labels")
-	return isinstance(labels, list) and RUNNER_LOST_LABEL in labels and isinstance(job.get("id"), int)
+	if not (isinstance(labels, list) and RUNNER_LOST_LABEL in labels and isinstance(job.get("id"), int)):
+		return False
+	# The intake reads check-runs/<job id>/annotations: that is only valid while
+	# the job's check-run id is its job id. A check_run_url that names another
+	# id makes the job no candidate (fail-open towards filing).
+	check_run_url = job.get("check_run_url")
+	if check_run_url is None:
+		return True
+	url_match = RUNNER_LOST_CHECK_RUN_URL_RE.search(check_run_url) if isinstance(check_run_url, str) else None
+	return bool(url_match) and int(url_match.group(1)) == job["id"]
 
 
 def runner_lost_candidate_job_ids(jobs_doc: Any, *, limit: int = RUNNER_LOST_MAX_JOBS) -> list[int]:
@@ -9689,10 +9705,14 @@ def runner_lost_failure(jobs_doc: Any, annotations_by_job: dict[int, Any]) -> bo
 	"""True when every failed job of the run lost its ``do-runner`` droplet.
 
 	Each failed job must be a candidate of :func:`runner_lost_candidate_job_ids`
-	and have an annotation (``annotations_by_job[<job id>]``, a check-run
-	annotations list) whose ``message`` matches RUNNER_LOST_ANNOTATION_RE. A
-	missing or malformed annotations list counts as no evidence, so the run is
-	reported as usual (fail-open towards filing).
+	and have a failure-level annotation (``annotations_by_job[<job id>]``, a
+	check-run annotations list) whose ``message`` starts with the
+	RUNNER_LOST_ANNOTATION_RE wording. Every other failure-level annotation of
+	the job must be the same wording or RUNNER_LOST_COMPANION_MESSAGE: any other
+	one (a failed step's exit code, a test error, which a job's own steps can
+	write) means the job also failed for real, as in
+	scripts/ci_cancelled_rerun.py. A missing or malformed annotations list counts
+	as no evidence, so the run is reported as usual (fail-open towards filing).
 	"""
 	candidates = runner_lost_candidate_job_ids(jobs_doc)
 	if not candidates:
@@ -9701,7 +9721,12 @@ def runner_lost_failure(jobs_doc: Any, annotations_by_job: dict[int, Any]) -> bo
 		annotations = annotations_by_job.get(job_id)
 		if not isinstance(annotations, list):
 			return False
-		if not any(isinstance(item, dict) and RUNNER_LOST_ANNOTATION_RE.search(str(item.get("message") or "")) for item in annotations):
+		if not all(isinstance(item, dict) and isinstance(item.get("annotation_level"), str) and isinstance(item.get("message"), str) for item in annotations):
+			return False
+		failure_messages = [item["message"].strip() for item in annotations if item["annotation_level"] == "failure"]
+		if not any(RUNNER_LOST_ANNOTATION_RE.match(message) for message in failure_messages):
+			return False
+		if not all(RUNNER_LOST_ANNOTATION_RE.match(message) or message == RUNNER_LOST_COMPANION_MESSAGE for message in failure_messages):
 			return False
 	return True
 

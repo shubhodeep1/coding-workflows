@@ -1815,7 +1815,10 @@ while IFS=$'\t' read -r run_id run_url; do
 		mkdir -p "${run_lost_dir}"
 		while IFS= read -r lost_job_id; do
 			[[ "${lost_job_id}" =~ ^[0-9]+$ ]] || continue
-			gh_api_json_to_file "${run_lost_dir}/${lost_job_id}.json" gh api --method GET "repos/${SOURCE_REPO}/check-runs/${lost_job_id}/annotations" -F per_page=100 2>/dev/null \
+			# One attempt per read, so the bound above is a request count: a failed
+			# read already reports the run. An Actions job's check-run id is its job
+			# id; runner-lost-candidates drops a job whose check_run_url says otherwise.
+			GH_RETRY_MAX_ATTEMPTS=1 gh_api_json_to_file "${run_lost_dir}/${lost_job_id}.json" gh api --method GET "repos/${SOURCE_REPO}/check-runs/${lost_job_id}/annotations" -F per_page=100 2>/dev/null \
 				|| rm -f "${run_lost_dir}/${lost_job_id}.json"
 		done <<< "${runner_lost_job_ids}"
 		if [ "$(python3 "${HEAL_PY}" runner-lost --jobs-json "${JOBS_FILE}" --annotations-dir "${run_lost_dir}" 2>/dev/null || echo false)" = "true" ]; then
