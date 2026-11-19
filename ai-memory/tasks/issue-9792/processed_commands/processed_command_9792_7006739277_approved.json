@@ -5,13 +5,25 @@
   "entry_id": "processed_command_9792_7006739277_approved",
   "issue_number": 9792,
   "metadata": {
+    "branch": "ai/issue-9792",
+    "changed_files": [
+      "changelog.d/9792-unblock-scan-skip-e2e-items.md",
+      "scripts/orchestrate_poll_process.sh",
+      "scripts/unblock_scan.py",
+      "tests/test_unblock_scan.py"
+    ],
+    "issue_number": 9792,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9792",
+    "pr_number": 9795,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9795",
+    "run_attempt": "1",
+    "run_id": "44507877616",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/44507877616"
   },
   "run_attempt": 1,
   "run_id": "44507877616",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-19T10:46:28Z",
+  "status": "completed",
+  "timestamp": "2026-11-19T11:03:16Z",
   "workflow": "implement"
 }
