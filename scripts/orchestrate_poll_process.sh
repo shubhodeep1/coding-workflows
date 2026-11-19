@@ -25602,7 +25602,7 @@ run_unblock_scan() {
   if ! search_items="$(gh_retry gh api --method GET "search/issues" \
     -f q="repo:${GITHUB_REPOSITORY} is:open label:${labels_q}" \
     -f sort=updated -f order=asc -f per_page=30 \
-    --jq '[.items[]? | {number, labels: [.labels[]?.name], pull_request: (.pull_request != null), created_at, updated_at}]' 2>/dev/null)"; then
+    --jq '[.items[]? | {number, title, labels: [.labels[]?.name], pull_request: (.pull_request != null), created_at, updated_at}]' 2>/dev/null)"; then
     echo "UNBLOCK_SCAN outcome=skip reason=search_failed"
     return 0
   fi
