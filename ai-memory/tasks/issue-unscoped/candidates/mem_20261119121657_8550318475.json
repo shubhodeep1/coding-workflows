@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate_poll.yml:1443,1680,1839 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The new off switch UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED is read from the process environment by scripts/unblock_scan.py, but the workflow does not map it from vars.*, so a repository variable has no effect.\n  WHY: Only the env: block carries repository variables into the poller step, so operators cannot turn the skip off from repository settings. Severity is NIT for both reviewers; confidence is 2 and 3. The reviewers note the workflow is outside the plan grant's files_touched.\n- scripts/orchestrate_poll_process.sh:25648-25660,25671-25682 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The GraphQL details query and the jq projection to details.json never carry `title`, so the details-title fallback in `_item_title` (scripts/unblock_scan.py:178-187) is unreachable in production.\n  WHY: The skip still works through the search projection (line 25605), but the documented and tested fallback is dead code in the shipped wiring. Severity is NIT for glm-5_3-flash; minimax-m3 raised the same root cause as a MAJOR task gap (see task gaps).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"If the search payload does not carry the title, read it from details[number]['title'] when present; a missing title means do not skip.\"\n  expected_change_site: scripts/orchestrate_poll_process.sh (run_unblock_scan GraphQL details fragment and jq projection around lines 25644-25682)\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: scripts/orchestrate_poll_process.sh:25644-25660 GraphQL details query selects no title, the jq projection at 25671-25682 never extracts title, so the details-fallback in scripts/unblock_scan.py:_item_title (187-196) is unreachable in production. minimax-m3 rated this MAJOR.\n- requirement: \"Put the skip behind the env var UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED, default true; only the value 'false' turns it off.\"\n  expected_change_site: .github/workflows/orchestrate_poll.yml env: blocks for the poller step (near UNBLOCK_JUDGE_* at lines 1443/1453-1456, 1680/1690-1693, 1839/1847-1850); README.md variables table\n  confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: orchestrate_poll.yml does not map UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED from vars, and README.md has no row for it, so the repository-variable opt-out does not reach the Python process. Both reviewers rated this NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/orchestrate_poll.yml:1443,1680,1839 | severity=low | confidence=2\n  PROBLEM: The new off switch is read from the process environment by scripts/unblock_scan.py, but the workflow does not map it from vars.*, so setting a repository variable has no effect.\n  WHY: Only the env: block carries repository variables into the poller step. The default is still correct, and the mapping would go beyond the granted scope, so this is advisory only (source severity NIT).\n- HARDENING: scripts/unblock_scan.py `E2E_TEST_TITLE_RE.search` in select() \u2014 the regex is unanchored as the issue specifies, so no change is needed. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- requirement: \"If the search payload does not carry the title, read it from details[number]['title'] when present; a missing title means do not skip.\"\n  expected_change_site: scripts/orchestrate_poll_process.sh (run_unblock_scan GraphQL details fragment and jq projection around lines 25644-25682)\n  evidence of absence: scripts/unblock_scan.py:_item_title reads info.get(\"title\") (lines 187-196), but the GraphQL details query in scripts/orchestrate_poll_process.sh:25644-25660 never selects title and the jq projection at lines 25671-25682 never extracts it, so the details-fallback branch is unreachable in production wiring.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\nTASK_GAP:\n- requirement: \"Put the skip behind the env var UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED, default true; only the value 'false' turns it off.\"\n  expected_change_site: .github/workflows/orchestrate_poll.yml env: blocks (around lines 1453-1456, 1690-1693, 1847-1850) and the README.md variables table (around lines 112-119)\n  evidence of absence: the workflow does not pass UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED through vars and README.md has no row for it, so the off switch is not reachable from the variables surface.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- requirement: \"Put the skip behind the env var UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED\" so setting it to false turns the skip off.\n  expected_change_site: .github/workflows/orchestrate_poll.yml (both poller invocations' environment mappings); README.md variable reference\n  evidence of absence: The active-poll and idle-scan environment mappings do not expose the variable and README.md has no entry, so a repository Actions variable leaves the Python process's variable unset and the default-on skip stays enabled.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:25648-25660,25671-25682 | severity=low | confidence=4\n  PROBLEM: The details-title fallback is unreachable in production wiring: the GraphQL query requests no `title` and the jq projection does not map it, so `_item_title`'s details fallback (scripts/unblock_scan.py:178-187) can never fire for the production caller (`run_unblock_scan`, invocations at orchestrate_poll_process.sh:25739 and 25768).\n  WHY: The skip still works through the search projection (line 25605), but the documented and tested fallback is dead code in the shipped wiring (source severity NIT).\n- .github/workflows/orchestrate_poll.yml:1443,1680,1839 | severity=low | confidence=3\n  PROBLEM: No Actions surface maps UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED into the poller step's environment, and the README variables table has no row for it.\n  WHY: Setting the repository variable has no effect, so the changelog's \"turn it off\" path is not reachable from repository settings. The files are outside the issue's files_touched grant (source severity NIT).\n- HARDENING: scripts/orchestrate_poll_process.sh GraphQL fragments (25648-25660) and details jq projection (25671-25682) \u2014 add `title` to both `... on Issue` and `... on PullRequest` fragments and `title: (.value.title // null)` to the projection (~3 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c3235290f9f8f0bdd9b2914fd8053e80d893b5bfc456643f0878b075c8f8674f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9795,
+    "run_id": "44511118214",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44511118214",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261119121657_8550318475",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9795,
+    "run_id": "44511118214"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-19T12:16:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
