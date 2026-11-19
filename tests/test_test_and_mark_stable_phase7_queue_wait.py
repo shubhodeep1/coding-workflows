@@ -192,16 +192,16 @@ def test_failed_status_read_keeps_the_queue_cap() -> None:
 	assert START + 1200 - 1 <= end <= START + 1200 + 35, end
 
 
-def test_queue_cap_default_is_thirty_minutes() -> None:
+def test_queue_cap_default_is_sixty_minutes() -> None:
 	proc, out, end = _open_pr_wait([(START, "pending", "null")])
 	assert "status=queued_timeout" in out.splitlines(), out
-	assert "never left the queue within 30m (status=pending)" in proc.stdout
-	assert START + 1800 - 1 <= end <= START + 1800 + 35, end
+	assert "never left the queue within 60m (status=pending)" in proc.stdout
+	assert START + 3600 - 1 <= end <= START + 3600 + 35, end
 
 
 def test_job_time_left_caps_the_queued_wait() -> None:
 	# The job started at START with 10 minutes and a 6-minute finalization
-	# reserve, so Phase 7 must stop by START + 240 s despite the 30m cap.
+	# reserve, so Phase 7 must stop by START + 240 s despite the 60m cap.
 	env = {"E2E_JOB_STARTED_EPOCH": str(START), "E2E_JOB_TIMEOUT_MINUTES": "10", "E2E_FINALIZATION_RESERVE_MINUTES": "6"}
 	for wait in (_open_pr_wait, _closed_pr_wait):
 		proc, out, end = wait([(START, "queued", "null")], **env)
@@ -228,7 +228,7 @@ def test_no_run_keeps_the_old_budget() -> None:
 def test_new_queue_cap_is_a_validated_job_budget() -> None:
 	text = expanded_test_and_mark_stable_text()
 	job = _slice_between(text, "  e2e-smoke-test:\n", "  validate-scripts:\n")
-	assert "\n      PHASE7_QUEUE_WAIT_CAP_MINUTES: 30\n" in job
+	assert "\n      PHASE7_QUEUE_WAIT_CAP_MINUTES: 60\n" in job
 	prerequisites = _slice_between(job, "- name: Validate prerequisites", 'echo "Target repo:')
 	loop = prerequisites[prerequisites.index("for timeout_value in"):prerequisites.index("done")]
 	assert '"${PHASE7_QUEUE_WAIT_CAP_MINUTES}"' in loop

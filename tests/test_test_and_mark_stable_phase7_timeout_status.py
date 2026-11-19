@@ -129,14 +129,14 @@ def test_running_run_past_budget_writes_timeout() -> None:
 
 def test_pending_run_past_queue_cap_writes_queued_timeout() -> None:
 	"""A run that never leaves `pending` (run 40794181365) is reported as
-	queued_timeout once PHASE7_QUEUE_WAIT_CAP_MINUTES (default 30) runs out."""
+	queued_timeout once PHASE7_QUEUE_WAIT_CAP_MINUTES (default 60) runs out."""
 	proc, out = _run_wait([{"id": 200, "event": "pull_request", "status": "pending", "conclusion": None}])
 	assert proc.returncode == 1, (proc.stdout, proc.stderr)
 	lines = out.splitlines()
 	assert "status=queued_timeout" in lines, out
 	assert "cancel_run_id=200" in lines, out
 	assert "status=timeout" not in lines, out
-	assert "::error::cancel-on-close run #200 never left the queue within 30m (status=pending)" in proc.stdout
+	assert "::error::cancel-on-close run #200 never left the queue within 60m (status=pending)" in proc.stdout
 	assert "REACHED_CONCLUSION_CHECK" not in proc.stdout
 
 

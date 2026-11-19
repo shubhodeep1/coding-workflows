@@ -6,7 +6,7 @@ In release gate run 44490333814, the `e2e-smoke-test` job failed at "Phase 7: Cl
 | The numbers that matter | Value |
 | --- | --- |
 | In-progress budget (`PHASE7_WAIT_BUDGET_MINUTES`) | 10 minutes, unchanged |
-| Longest queued wait (`PHASE7_QUEUE_WAIT_CAP_MINUTES`, new) | 30 minutes |
+| Longest queued wait (`PHASE7_QUEUE_WAIT_CAP_MINUTES`, new) | 60 minutes |
 | New Phase 7 `status` value | `queued_timeout` |
 | `test-and-mark-stable.yml` size | 429,964 → 405,454 bytes |
 

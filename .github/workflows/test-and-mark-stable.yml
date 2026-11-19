@@ -641,7 +641,7 @@ jobs:
       # Longest Phase 7 waits for the cancel run to leave the queue, from the
       # start of its wait; PHASE7_WAIT_BUDGET_MINUTES starts once it runs
       # (#9794, run 44490333814). Both stop before the finalization reserve.
-      PHASE7_QUEUE_WAIT_CAP_MINUTES: 30
+      PHASE7_QUEUE_WAIT_CAP_MINUTES: 60
       E2E_FINALIZATION_RESERVE_MINUTES: 20
       POLL_INTERVAL: 10
       # Wrapper-workflow filename used by the smoke gate to dispatch

@@ -57,7 +57,7 @@ phase7_wait_deadline() {
   local wait_start="$1" run_status="${2:-}" now budget_secs queue_secs floor job_cap
   now=$(date +%s)
   budget_secs=$(( PHASE7_WAIT_BUDGET_MINUTES * 60 ))
-  queue_secs=$(( ${PHASE7_QUEUE_WAIT_CAP_MINUTES:-30} * 60 ))
+  queue_secs=$(( ${PHASE7_QUEUE_WAIT_CAP_MINUTES:-60} * 60 ))
   floor=$(( wait_start + budget_secs ))
   if [ -n "${run_status}" ] && ! phase7_run_is_queued "${run_status}" && [ -z "${PHASE7_RUN_STARTED_AT:-}" ]; then
     PHASE7_RUN_STARTED_AT="${now}"
@@ -80,9 +80,9 @@ phase7_wait_deadline() {
   fi
 }
 # ── end Phase 7 wait deadline helpers ──
-if ! [[ "${PHASE7_QUEUE_WAIT_CAP_MINUTES:-30}" =~ ^[0-9]+$ ]]; then
-  echo "::warning::PHASE7_QUEUE_WAIT_CAP_MINUTES is not a whole number; using 30."
-  PHASE7_QUEUE_WAIT_CAP_MINUTES=30
+if ! [[ "${PHASE7_QUEUE_WAIT_CAP_MINUTES:-60}" =~ ^[0-9]+$ ]]; then
+  echo "::warning::PHASE7_QUEUE_WAIT_CAP_MINUTES is not a whole number; using 60."
+  PHASE7_QUEUE_WAIT_CAP_MINUTES=60
 fi
 PHASE7_RUN_STARTED_AT=""
 
@@ -154,7 +154,7 @@ if [ "${PR_STATE}" = "closed" ]; then
   phase7_wait_deadline "${PHASE7_WAIT_START}" "${EXISTING_STATUS}"
   WAIT_DEADLINE="${PHASE7_WAIT_DEADLINE}"
   while [ "${EXISTING_STATUS}" != "completed" ] && [ "$(date +%s)" -lt "${WAIT_DEADLINE}" ]; do
-    # Poll a queued run every 15 s: the queue cap allows up to 30m of
+    # Poll a queued run every 15 s: the queue cap allows up to 60m of
     # waiting, often while API limits are tight (run 44490333814).
     if phase7_run_is_queued "${EXISTING_STATUS}"; then
       sleep 15
