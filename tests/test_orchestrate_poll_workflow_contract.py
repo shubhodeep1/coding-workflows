@@ -463,7 +463,12 @@ def test_standalone_recovery_sweep_runs_without_tracking_issues() -> None:
 	block = (
 		STANDALONE_SWEEP_POLLER_GUARD
 		+ '\n  prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"'
-		+ "\n  run_standalone_stall_recovery\n  exit 0\nfi"
+		+ "\n  run_standalone_stall_recovery"
+		# Issue #9481: the triage-only close sweep gates stuck ai:check-triage issues.
+		+ "\n  # Issue #9481: gate stuck ai:check-triage issues (any phase) on idle ticks"
+		+ "\n  # too; this step forwards the full poller's env, so the kill switches apply."
+		+ '\n  close_merged_issues_sweep triage_only || echo "CLOSE_MERGED_SWEEP outcome=skip reason=error mode=triage_only rc=$?"'
+		+ "\n  exit 0\nfi"
 	)
 	assert poller.count(block) == 1
 	assert poller.index('if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then') < poller.index(block)
@@ -500,6 +505,22 @@ def test_validation_harness_hold_env_is_wired_into_both_poller_steps() -> None:
 	assert '_validation_harness_int_config VALIDATION_HARNESS_HOLD_MAX_DAYS 14 1 365' in poller
 	assert '_validation_harness_int_config VALIDATION_HARNESS_MAX_RESUMES_PER_FP 2 0 100' in poller
 	assert '_validation_harness_int_config VALIDATION_HARNESS_MAX_RESUMES 4 0 100' in poller
+	yaml.safe_load(wf)
+
+
+def test_final_merge_auto_resume_switch_is_wired_into_both_poller_steps() -> None:
+	"""Issue #8984: the auto-resume switch defaults on in every full-poller step."""
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	line = "FINAL_MERGE_AUTO_RESUME_ENABLED: ${{ vars.FINAL_MERGE_AUTO_RESUME_ENABLED || 'true' }}"
+	assert wf.count(line) == 2
+	for step_name in ("Process each tracking issue", STANDALONE_SWEEP_STEP):
+		assert line in _step_block(wf, step_name), step_name
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	assert 'if is_truthy "${FINAL_MERGE_AUTO_RESUME_ENABLED:-true}"; then' in poller
+	assert '.final_merge_failure_kind = "final_merge_exhausted"' in poller
+	agents_text = _agents_text_with_fragments()
+	assert "- `FINAL_MERGE_AUTO_RESUME`" in agents_text
+	assert "LOG_PREFIX.name=FINAL_MERGE_AUTO_RESUME" in agents_text
 	yaml.safe_load(wf)
 
 
@@ -702,6 +723,7 @@ def main() -> int:
 	test_standalone_recovery_sweep_runs_without_tracking_issues()
 	test_engine_and_claude_steps_run_on_idle_ticks_when_needed()
 	test_validation_harness_hold_env_is_wired_into_both_poller_steps()
+	test_final_merge_auto_resume_switch_is_wired_into_both_poller_steps()
 	test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow()
 	test_find_tracking_step_maps_standalone_recovery_switch()
 	test_standalone_stall_probe_log_prefix_is_registered()

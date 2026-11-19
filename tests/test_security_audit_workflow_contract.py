@@ -872,11 +872,17 @@ def test_security_audit_reusable_concurrency_group_differs_from_consumer_wrapper
 	template = yaml.safe_load(
 		(REPO_ROOT / "workflow-templates" / "ai-security-audit.yml").read_text(encoding="utf-8")
 	)
+	# Both groups are per PR (`-pr-<n>`, `-default` without a PR) so audits for
+	# different PRs never cancel each other while queued; the prefixes still
+	# differ for every input, including an unsynced consumer wrapper that keeps
+	# the old repo-wide `security-audit-${{ github.repository }}` group.
+	per_pr = "${{ inputs.pr_number != '' && format('pr-{0}', inputs.pr_number) || 'default' }}"
 	template_group = template["concurrency"]["group"]
-	assert template_group == "security-audit-${{ github.repository }}"
+	assert template_group == "security-audit-${{ github.repository }}-" + per_pr
 	reusable_group = reusable["concurrency"]["group"]
-	assert reusable_group == "security-audit-reusable-${{ github.repository }}"
+	assert reusable_group == "security-audit-reusable-${{ github.repository }}-" + per_pr
 	assert reusable_group != template_group
+	assert not reusable_group.startswith("security-audit-${{")
 
 
 def test_security_audit_script_uses_read_only_codex_and_retry_wrappers() -> None:

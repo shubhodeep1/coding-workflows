@@ -410,6 +410,14 @@ NON_RETRYABLE_FAILURE_REASONS = frozenset(
 		"review_editor_sandbox_path_excluded",
 	}
 )
+# Failure reasons whose trusted marker rides on a run that ends `success` by
+# design: the sandbox-excluded escalation (#8321) leaves the step's exit status
+# unchanged. The provenance gate accepts such a completed `success` run only
+# when the trusted account's canonical failure marker names that run, the
+# report head and one of these reasons; without it, every identical-failure
+# cap report for the reason was rejected as `no_verified_runs` and never
+# reached the non-retryable diagnosis (PR #9112, intake run 42583232747).
+SUCCESS_RUN_FAILURE_MARKER_REASONS = frozenset({"review_editor_sandbox_path_excluded"})
 # A non-retryable cap is re-armed once per verified review-support commit not
 # yet recorded (``support=``) on a trusted marker for the head, so a resolver
 # fix on main reaches a capped head without a manual rerun (#6911). Bounded
@@ -571,6 +579,17 @@ _SIGNATURE_PATTERNS: tuple[re.Pattern[str], ...] = (
 	re.compile(r"\b[A-Z][A-Z0-9_]*_FAILED\b"),
 	re.compile(r"\bTraceback \(most recent call last\)|^\s*\w+Error:", re.MULTILINE),
 	re.compile(r"\bfatal:|\berror:|\bERROR\b|\bFAILED\b|\bexit code\b|\bexited with\b", re.IGNORECASE),
+	# Issue #9533, checked last so existing signatures keep their value: a
+	# normalised bash diagnostic (`render_prompt.sh: line 306: 1abc: invalid
+	# variable name`) names no "error", so without this bucket every such
+	# reviewer crash hashed to the constant "no-error-lines". The message
+	# must be error-shaped (the same words as _BASH_DIAGNOSTIC_MSG_RE).
+	re.compile(
+		r"^(?:\S*/)?(?:[A-Za-z0-9_.-]+\.sh|bash|sh|environment): line [0-9]+: .*(?:invalid|unbound variable|command not found"
+		r"|syntax error|bad substitution|no such file or directory|permission denied|ambiguous redirect|expression expected"
+		r"|too many arguments|readonly variable|not a valid identifier|bad array subscript|division by 0|unexpected|error|fail)",
+		re.IGNORECASE,
+	),
 )
 # GitHub opens every `run:` step with a `##[group]Run <first line>` header that
 # echoes the whole script, one ANSI-cyan line per source line, before the
@@ -623,6 +642,22 @@ _SOFT_LOG_PATTERNS = re.compile(
 	r"##\[(?:warning|error)\]|\bCLAUDE_POOL run\b.*\boutcome=(?!success\b)|\bAI_ENGINE_FALLBACK\b|\bexited with code\b",
 	re.IGNORECASE,
 )
+# A Python traceback header matches _SOFT_LOG_PATTERNS, but its frames
+# (`  File "...", line N, in ...`) and its exception line (`ValueError: ...`)
+# do not, so filter_log also keeps the lines after each header (see
+# _traceback_context_indices). Without them heal issues #9190 / #9200 carried
+# two bare headers and were filed as inconclusive.
+_TRACEBACK_HEADER_RE = re.compile(r"Traceback \(most recent call last\)")
+_TRACEBACK_CHAIN_RE = re.compile(
+	r"^(?:The above exception was the direct cause of the following exception"
+	r"|During handling of the above exception, another exception occurred):?\s*$"
+)
+# Lines kept after one header (the innermost ones when a traceback is longer),
+# and how far one traceback is scanned before it is treated as ended (past it,
+# a traceback with no exception line yet is walked on with the same line rules,
+# so its exception line and any continuation lines and chain marker are kept).
+_TRACEBACK_CONTEXT_MAX_LINES = 30
+_TRACEBACK_SCAN_MAX_LINES = 400
 
 
 # ---------------------------------------------------------------------------
@@ -1883,6 +1918,7 @@ def build_autofix_failure_payload(
 	changed_files: Iterable[str] | None = None,
 	failure_marker_author: str | None = None,
 	repeated_failure_reason: str | None = None,
+	run_head_sha: str | None = None,
 ) -> dict[str, Any]:
 	"""Build the dispatch payload for a failed review/autofix run on a PR.
 
@@ -1905,6 +1941,15 @@ def build_autofix_failure_payload(
 	report repeats (the gate's trusted ``fingerprint_cap_reason`` or the
 	trusted head markers). It is sent only for ``identical_failure_cap``
 	reports and only when it is a well-formed reason token.
+
+	``run_head_sha`` is the failed run's own head, read by the reporter from
+	the ``pull_request`` event payload (issue #9250). When it is 40 hex it
+	replaces the PR's current head in ``head_sha`` and in the failure-marker
+	lookup, so a run whose PR head moved while it ran still verifies. It is
+	untrusted: the intake checks it against ``actions/runs/{id}.head_sha``
+	(``verify_run``) and requires it to be the PR head or one of its ancestors
+	(``bind_report_claims`` with ``--head-ancestor``). ``head_branch`` stays
+	the PR's.
 	"""
 	now = now or _utc_now()
 	body = sanitize_text(pr.get("body"))
@@ -1912,6 +1957,9 @@ def build_autofix_failure_payload(
 	run_number = _positive_int(run_id)
 	head_sha = str(pr.get("head", {}).get("sha") or "").lower() if isinstance(pr.get("head"), dict) else ""
 	head_branch = str(pr.get("head", {}).get("ref") or "") if isinstance(pr.get("head"), dict) else ""
+	reported_run_head = str(run_head_sha or "").strip().lower()
+	if is_valid_sha(reported_run_head):
+		head_sha = reported_run_head
 	payload: dict[str, Any] = {
 		"schema_version": SCHEMA_VERSION,
 		"source_repo": repo,
@@ -3664,6 +3712,92 @@ def _strip_step_env_values(text: str) -> str:
 	return "\n".join(kept)
 
 
+def _traceback_context_indices(lines: list[str]) -> set[int]:
+	"""Indices of the frame and exception lines that follow each traceback header.
+
+	A traceback runs from its header through indented lines (frames, source
+	lines, carets) and blank lines to its first unindented line, the exception
+	line. After that, indented continuation lines, blank lines and a chain
+	marker ("The above exception was the direct cause ...", "During handling
+	of the above exception ...") still belong to it; the next unindented line
+	or the next header ends it, and a chained traceback's header starts its
+	own block. Each block keeps at most _TRACEBACK_CONTEXT_MAX_LINES lines, the
+	last ones, since the innermost frames and the exception are printed last.
+	When more continuation lines follow the exception line than that cut
+	holds (a pydantic ValidationError lists every error indented), the cut
+	keeps the exception line and the innermost frames before it plus the
+	last lines of the block, so the exception type and message are not lost.
+	A traceback still without its exception line after
+	_TRACEBACK_SCAN_MAX_LINES lines is walked on with the same line rules, so
+	its exception line and the continuation lines and chain marker after it
+	are kept.
+	The Actions timestamp prefix is ignored. The header lines themselves are
+	not returned (_SOFT_LOG_PATTERNS keeps them).
+	"""
+	kept: set[int] = set()
+	total = len(lines)
+	index = 0
+	while index < total:
+		if not _TRACEBACK_HEADER_RE.search(lines[index]):
+			index += 1
+			continue
+		block: list[int] = []
+		exception_seen = False
+		exception_pos: int | None = None
+		cursor = index + 1
+		scan_end = min(total, cursor + _TRACEBACK_SCAN_MAX_LINES)
+		while cursor < scan_end:
+			content = _LOG_TIMESTAMP_RE.sub("", lines[cursor])
+			if _TRACEBACK_HEADER_RE.search(content):
+				break
+			if not content.strip() or content[:1].isspace() or _TRACEBACK_CHAIN_RE.match(content.strip()):
+				block.append(cursor)
+			elif not exception_seen:
+				exception_pos = len(block)
+				block.append(cursor)
+				exception_seen = True
+			else:
+				break
+			cursor += 1
+		# Past the scan window with no exception line yet (mutual recursion
+		# prints hundreds of uncollapsed frames): walk on over the remaining
+		# frames to the exception line so it and the innermost frames are kept.
+		# cursor only moves forward and index = cursor below, so this is linear.
+		# The walk classifies lines as the window scan does, so the
+		# continuation lines and chain marker after that exception line are
+		# kept too (a chained traceback's link is not lost). The walk also runs
+		# when the window ends with the block still open after the exception
+		# line (that line last in the window), so a chain marker or
+		# continuation line just past the window is not dropped.
+		if cursor == scan_end:
+			while cursor < total:
+				content = _LOG_TIMESTAMP_RE.sub("", lines[cursor])
+				if _TRACEBACK_HEADER_RE.search(content):
+					break
+				if not content.strip() or content[:1].isspace() or _TRACEBACK_CHAIN_RE.match(content.strip()):
+					block.append(cursor)
+				elif not exception_seen:
+					exception_pos = len(block)
+					block.append(cursor)
+					exception_seen = True
+				else:
+					break
+				cursor += 1
+		while block and not _LOG_TIMESTAMP_RE.sub("", lines[block[-1]]).strip():
+			block.pop()
+		if exception_pos is not None and len(block) - exception_pos > _TRACEBACK_CONTEXT_MAX_LINES:
+			# The last-N cut would drop the exception line: keep it with the
+			# innermost frames before it (half the cap) and fill the rest with
+			# the block's last lines (continuation lines, chain marker).
+			exception_head = block[max(0, exception_pos + 1 - _TRACEBACK_CONTEXT_MAX_LINES // 2):exception_pos + 1]
+			kept.update(exception_head)
+			kept.update(block[len(block) - (_TRACEBACK_CONTEXT_MAX_LINES - len(exception_head)):])
+		else:
+			kept.update(block[-_TRACEBACK_CONTEXT_MAX_LINES:])
+		index = cursor
+	return kept
+
+
 def filter_log(text: str, *, max_lines: int = 400, max_bytes: int = 60_000) -> str:
 	"""Keep the high-signal lines plus the tail of a job log, bounded.
 
@@ -3673,14 +3807,17 @@ def filter_log(text: str, *, max_lines: int = 400, max_bytes: int = 60_000) -> s
 	redacted (an unterminated header is dropped), and credential shapes are
 	masked with ``redact_secrets`` on the whole text before the tail and byte
 	cut, so a cut can never leave a token without its recognisable prefix.
+	A Python traceback keeps its frame and exception lines too, up to
+	_TRACEBACK_CONTEXT_MAX_LINES per traceback (_traceback_context_indices).
 	The output feeds the diagnosis prompt and the heal issue evidence.
 	"""
 	lines = redact_secrets(sanitize_text(_strip_step_env_values(_drop_step_script_lines(text)))).split("\n")
 	kept: list[str] = []
 	seen: set[int] = set()
 	tail_start = max(0, len(lines) - max_lines)
+	traceback_indices = _traceback_context_indices(lines)
 	for index, line in enumerate(lines):
-		if index >= tail_start or _SOFT_LOG_PATTERNS.search(line):
+		if index >= tail_start or index in traceback_indices or _SOFT_LOG_PATTERNS.search(line):
 			if index not in seen:
 				seen.add(index)
 				kept.append(line)
@@ -3860,9 +3997,35 @@ _SUMMARISER_EMPTY_STDOUT_RE = re.compile(r"summariser \((?P<prefix>[A-Za-z0-9_.-
 _SELF_NAMED_SCRIPT_LINE_RE = re.compile(r"^(?:::error::|##\[error\])?\s*(?P<name>[a-z][a-z0-9]*_[a-z0-9_]*(?:\.(?:sh|py))?): (?P<rest>\S.*)$")
 _SELF_NAMED_SCRIPT_FAILURE_RE = re.compile(r"\b(?:[a-z0-9_]+_(?:failed|error)|fail(?:ed|ure)?|error|invalid|missing|denied|exhausted|exception|fatal)\b|\brc=[1-9][0-9]*\b", re.IGNORECASE)
 REVIEWER_FAILURE_HELPER_LINES_MAX = 10
+# Issue #9533: a bash diagnostic printed by the reviewer step's own shell, e.g.
+# `/home/runner/.../scripts/render_prompt.sh: line 306: 1abc: invalid variable
+# name`. The directory is dropped so the fingerprint stays stable across
+# runner paths; see _normalise_bash_diagnostic.
+# Only a shell script name (or bash's own `bash` / `sh` / `environment`) and an
+# error-shaped message count. reviewer_failure_evidence keeps one only from the
+# step's own stderr and never from a `  | `-indented line (the model CLI's
+# stderr that review_run_reviewers.sh re-emits), so model output in a slot log
+# or that indented tail never feeds the fingerprint.
+_BASH_DIAGNOSTIC_LINE_RE = re.compile(r"^(?:\S*/)?(?P<script>[A-Za-z0-9_.-]+\.sh|bash|sh|environment): line (?P<line>[0-9]+): (?P<msg>\S.*)$")
+_BASH_DIAGNOSTIC_MSG_RE = re.compile(
+	r"invalid|unbound variable|command not found|syntax error|bad substitution|no such file or directory|permission denied"
+	r"|ambiguous redirect|expression expected|too many arguments|readonly variable|not a valid identifier|bad array subscript"
+	r"|division by 0|unexpected|error|fail",
+	re.IGNORECASE,
+)
+# A plain `ERROR: <message>` / `ERROR <message>` line.
+_PLAIN_ERROR_LINE_RE = re.compile(r"^ERROR:?\s+(?P<msg>\S.*)$")
 
 
-def reviewer_failure_evidence(log_texts: Iterable[str]) -> str:
+def _normalise_bash_diagnostic(line: str) -> str:
+	"""Return ``<script>: line <n>: <msg>`` for a bash diagnostic line, else ``""``."""
+	match = _BASH_DIAGNOSTIC_LINE_RE.match(line.strip())
+	if not match or not _BASH_DIAGNOSTIC_MSG_RE.search(match.group("msg")):
+		return ""
+	return f"{match.group('script')}: line {match.group('line')}: {match.group('msg').strip()}"
+
+
+def reviewer_failure_evidence(log_texts: Iterable[str], stage_stderr_texts: Iterable[str] = ()) -> str:
 	"""Summarise why the reviewer step failed, from the per-slot and summariser logs.
 
 	Emits one ``reviewer_slot_exit`` line per failed slot (its last recorded
@@ -3874,16 +4037,30 @@ def reviewer_failure_evidence(log_texts: Iterable[str]) -> str:
 	prefixed with its own name (a slot's stderr is indented ``  | `` in its
 	log). The text feeds the failure fingerprint and the heal report, so it
 	keeps only stable fields: no timestamps, attempt counts or run ids.
+
+	``stage_stderr_texts`` (issue #9533) is the reviewer step's own stderr. It
+	is read after the logs, the same way, and is the only source of the kept
+	bash diagnostics and the one plain ``ERROR: <msg>`` line, and only from its
+	non-indented lines: slot logs carry raw model-CLI stderr and review prose,
+	and review_run_reviewers.sh re-emits the model CLI's stderr tail to the
+	step's stderr indented ``  | ``. Neither may become the headline or the
+	fingerprint.
 	"""
 	slot_codes: dict[str, str] = {}
 	summariser_code = ""
 	summariser_empty_stdout_prefixes: set[str] = set()
 	helper_lines: list[str] = []
-	for text in log_texts:
+	plain_error_kept = False
+	sources = [(text, False) for text in log_texts] + [(text, True) for text in stage_stderr_texts]
+	for text, from_stage_stderr in sources:
 		for raw_line in sanitize_text(text).split("\n"):
 			line = raw_line.strip()
-			if line.startswith("| "):
+			slot_stderr_indented = line.startswith("| ")
+			if slot_stderr_indented:
 				line = line[2:].strip()
+			# Issue #9533: only a non-indented line of the step's own stderr
+			# may supply a bash diagnostic or the plain ERROR line.
+			own_stage_line = from_stage_stderr and not slot_stderr_indented
 			slot_match = _REVIEWER_SLOT_EXIT_RE.search(line)
 			if slot_match:
 				slot_codes[single_line(slot_match.group("slot"), 100)] = slot_match.group("rc")
@@ -3896,6 +4073,26 @@ def reviewer_failure_evidence(log_texts: Iterable[str]) -> str:
 			if empty_stdout_match:
 				summariser_code = "0"
 				summariser_empty_stdout_prefixes.add(empty_stdout_match.group("prefix"))
+				continue
+			bash_diagnostic = _normalise_bash_diagnostic(line) if own_stage_line else ""
+			if bash_diagnostic:
+				# Issue #9533: keep the shell's own crash line (directory
+				# stripped) so the fingerprint and the headline name the cause.
+				if len(helper_lines) < REVIEWER_FAILURE_HELPER_LINES_MAX:
+					bash_diagnostic = single_line(redact_secrets(bash_diagnostic), 300)
+					if bash_diagnostic not in helper_lines:
+						helper_lines.append(bash_diagnostic)
+				continue
+			plain_error = _PLAIN_ERROR_LINE_RE.match(line) if own_stage_line else None
+			if plain_error:
+				# Issue #9533 (spec item 3): keep the first plain `ERROR: <msg>`
+				# line of the step's own stderr too, so failure-headline (which
+				# reads this evidence) names it. One line only, redacted, and
+				# never from a slot log, so review text cannot feed the
+				# fingerprint.
+				if not plain_error_kept and len(helper_lines) < REVIEWER_FAILURE_HELPER_LINES_MAX:
+					helper_lines.append(single_line(redact_secrets("ERROR: " + plain_error.group("msg").strip()), 300))
+					plain_error_kept = True
 				continue
 			helper_match = _SELF_NAMED_SCRIPT_LINE_RE.match(line)
 			if helper_match and (_CRASH_ERROR_LINE_RE.match(line) or _SELF_NAMED_SCRIPT_FAILURE_RE.search(helper_match.group("rest"))) and len(helper_lines) < REVIEWER_FAILURE_HELPER_LINES_MAX:
@@ -4719,7 +4916,13 @@ def failure_headline(texts: Iterable[str], limit: int = FAILURE_HEADLINE_LIMIT) 
 	are skipped. A ``  - item`` list printed right under the error (for
 	example the out-of-scope paths ``check_resolver_diff.sh`` names) is folded
 	into the line, up to three items. The result is one redacted line.
+
+	Issue #9533: when no text has such a line, the first bash diagnostic
+	(``<script>: line <n>: <msg>``, directory stripped) or plain ``ERROR:``
+	line is returned instead, so a shell crash that never printed
+	``::error::`` is still named.
 	"""
+	texts = list(texts)
 	for text in texts:
 		lines = sanitize_text(text).split("\n")
 		for index, raw in enumerate(lines):
@@ -4739,6 +4942,17 @@ def failure_headline(texts: Iterable[str], limit: int = FAILURE_HEADLINE_LIMIT) 
 			if details:
 				message = message.rstrip(":") + ": " + ", ".join(details)
 			return single_line(redact_secrets(message), limit)
+	for text in texts:
+		for raw in sanitize_text(text).split("\n"):
+			line = raw.strip()
+			if line.startswith("| "):
+				line = line[2:].strip()
+			fallback = _normalise_bash_diagnostic(line)
+			if not fallback:
+				plain = _PLAIN_ERROR_LINE_RE.match(line)
+				fallback = plain.group("msg").strip() if plain else ""
+			if fallback and not _GENERIC_ERROR_RE.match(fallback):
+				return single_line(redact_secrets(fallback), limit)
 	return ""
 
 
@@ -4895,6 +5109,25 @@ def _run_workflow_file(run: dict[str, Any]) -> str | None:
 	return path[len(prefix):]
 
 
+def _trusted_success_run_failure_marker(comments: list[dict[str, Any]] | None, *, run_id: str, trusted_login: str, head_sha: str) -> bool:
+	"""True when a trusted canonical failure marker records a green-run failure for ``run_id`` on ``head_sha``.
+
+	Only the trailing standalone marker of a comment by ``trusted_login`` counts,
+	and only for a reason in SUCCESS_RUN_FAILURE_MARKER_REASONS.
+	"""
+	author = str(trusted_login or "").strip().lower()
+	head = str(head_sha or "").strip().lower()
+	if not author or not is_valid_sha(head) or not run_id:
+		return False
+	for comment in comments or []:
+		if not isinstance(comment, dict) or _comment_author(comment) != author:
+			continue
+		fields = _marker_fields(_canonical_failure_marker(sanitize_text(comment.get("body"))))
+		if fields.get("run") == run_id and fields.get("head", "").lower() == head and fields.get("reason") in SUCCESS_RUN_FAILURE_MARKER_REASONS:
+			return True
+	return False
+
+
 def verify_run_provenance(
 	payload: dict[str, Any], *, runs: dict[str, Any], comments: list[dict[str, Any]] | None,
 	trusted_login: str, self_repo: str, default_branch: str = "",
@@ -4906,6 +5139,11 @@ def verify_run_provenance(
 	invalid ``default_branch`` rejects every CI run (fail closed). A scheduled
 	self-check run (``SCHEDULED_CHECK_WORKFLOW_FILES``) is accepted only when
 	GitHub reports it on ``default_branch``, under the same fail-closed rule.
+
+	An ``autofix_failure`` report may cite a completed ``success`` run only
+	when a trusted canonical failure marker names that run and the report head
+	with a SUCCESS_RUN_FAILURE_MARKER_REASONS reason; the run must still pass
+	the workflow-path and PR-link checks.
 	"""
 	kind = payload.get("source_kind")
 	refs = payload.get("run_refs") or []
@@ -4946,7 +5184,10 @@ def verify_run_provenance(
 		elif str(run.get("id")) != run_id:
 			reason = "run_id_mismatch"
 		elif run.get("status") == "completed":
-			if run.get("conclusion") not in REPORTABLE_CONCLUSIONS:
+			if run.get("conclusion") not in REPORTABLE_CONCLUSIONS and not (
+				kind == "autofix_failure" and run.get("conclusion") == "success"
+				and _trusted_success_run_failure_marker(comments, run_id=run_id, trusted_login=trusted_login, head_sha=report_head)
+			):
 				reason = "not_failed"
 		else:
 			pending = (kind == "phase_failure" and position == 0) or (kind == "autofix_failure" and run_id == reporter_id)
@@ -9258,6 +9499,7 @@ def _cmd_build_autofix_payload(args: argparse.Namespace) -> int:
 		changed_files=_read_path_list(args.changed_files_file),
 		failure_marker_author=args.failure_marker_author or None,
 		repeated_failure_reason=args.repeated_failure_reason or None,
+		run_head_sha=args.run_head_sha or None,
 	)
 	validate_payload(payload)
 	if len(json.dumps(payload).encode("utf-8")) > MAX_PAYLOAD_BYTES:
@@ -9488,7 +9730,13 @@ def _cmd_reviewer_failure_evidence(args: argparse.Namespace) -> int:
 			texts.append(Path(path).read_text(encoding="utf-8", errors="replace"))
 		except OSError:
 			continue
-	sys.stdout.write(reviewer_failure_evidence(texts))
+	stage_texts: list[str] = []
+	for path in getattr(args, "stage_stderr_file", None) or []:
+		try:
+			stage_texts.append(Path(path).read_text(encoding="utf-8", errors="replace"))
+		except OSError:
+			continue
+	sys.stdout.write(reviewer_failure_evidence(texts, stage_texts))
 	return 0
 
 
@@ -10388,6 +10636,13 @@ def heal_stale_decision(issue: Any, comments: Any, runs: Any, *, pipeline_login:
 		if run.get("event") != "push" or run.get("status") != "completed" or run.get("head_branch") != branch:
 			continue
 		if created <= anchor:
+			continue
+		# A cancelled run reports no result, green or red: since push CI
+		# coalesces per branch (ci.yml `ci-push-<ref>`, run-volume plan D14),
+		# a push replaced while it waited ends `cancelled`. Heal issues are
+		# only opened for `failure` / `timed_out`, and a failure that comes
+		# back posts an occurrence comment, which moves the anchor.
+		if run.get("conclusion") == "cancelled":
 			continue
 		window.append((created, run))
 	# One page (the newest HEAL_STALE_GREEN_RUNS+10 runs) is read. A page that
@@ -11466,6 +11721,11 @@ def build_parser() -> argparse.ArgumentParser:
 		default="",
 		help="for identical_failure_cap reports: the failure reason the cap repeats",
 	)
+	p.add_argument(
+		"--run-head-sha",
+		default="",
+		help="the failed run's own head SHA (pull_request event payload); replaces the PR head in head_sha and the marker lookup when it is 40 hex",
+	)
 	p.set_defaults(func=_cmd_build_autofix_payload)
 
 	p = sub.add_parser("build-phase-payload", help="Build the payload for a failed clarify / plan / implement run on an issue")
@@ -11659,6 +11919,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 	p = sub.add_parser("reviewer-failure-evidence", help="Summarise a failed reviewer step (slot / summariser exit codes, self-named script errors) from its logs")
 	p.add_argument("--log-file", action="append", default=[], help="reviewer slot or summariser log; repeatable, unreadable files are skipped")
+	p.add_argument("--stage-stderr-file", action="append", default=[], help="the reviewer step's own stderr (issue #9533): the only source of the kept bash diagnostics and plain ERROR line (non-indented lines only); repeatable, unreadable files are skipped")
 	p.set_defaults(func=_cmd_reviewer_failure_evidence)
 
 	p = sub.add_parser(

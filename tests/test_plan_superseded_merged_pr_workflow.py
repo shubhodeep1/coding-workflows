@@ -417,7 +417,111 @@ def test_pr_not_open_plans_on_default_base(tmp_path):
 	assert "SKIP_PLAN" not in github_env
 	assert "PLAN_REROUTED_REF" not in github_env
 	assert "outcome=plan reason=merged_check_not_passed" in proc.stdout
+	assert "gate=none gate_rc=not_run" in proc.stdout
 	assert not any(call[:2] == ["issue", "close"] for call in calls)
+
+
+# Stand-in for scripts/check_triage_resolution.py: records its argv and prints
+# the verdict the test asks for, so the wiring is tested without the gate's
+# own API reads (tests/test_check_triage_resolution.py covers those).
+STUB_TRIAGE_GATE = r'''import json, os, sys
+with open(os.environ["STUB_GATE_LOG"], "a", encoding="utf-8") as handle:
+	handle.write(json.dumps(sys.argv[1:]) + "\n")
+if os.environ.get("STUB_GATE_STDERR"):
+	sys.stderr.write(os.environ["STUB_GATE_STDERR"] + "\n")
+if os.environ.get("STUB_GATE_STATUS") != "__crash__":
+	print(json.dumps({"status": os.environ.get("STUB_GATE_STATUS", ""), "issue": 7185}))
+sys.exit(int(os.environ.get("STUB_GATE_RC", "0")))
+'''
+
+
+def _run_with_stub_gate(tmp_path, status, rc="0", stderr=""):
+	work = tmp_path / "work"
+	(work / ".codex-workflow-src" / "scripts").mkdir(parents=True)
+	(work / ".codex-workflow-src" / "scripts" / "check_triage_resolution.py").write_text(STUB_TRIAGE_GATE, encoding="utf-8")
+	gate_log = tmp_path / "gate.log"
+	proc, calls, github_env = _run_step(tmp_path, run_conclusion="failure", cwd=work,
+		env_extra={**PR_NOT_OPEN_ENV, "PLAN_DEFAULT_BRANCH": "main", "PLAN_SUPERSEDE_RESOLVED_REF": "main",
+			"STUB_GATE_LOG": str(gate_log), "STUB_GATE_STATUS": status, "STUB_GATE_RC": rc,
+			"STUB_GATE_STDERR": stderr})
+	gate_calls = [json.loads(line) for line in gate_log.read_text().splitlines()] if gate_log.exists() else []
+	return proc, calls, github_env, gate_calls
+
+
+@pytest.mark.parametrize("status", ["resolved", "already_resolved"])
+def test_merged_red_head_green_default_branch_skips_planning(tmp_path, status):
+	# Consumer fun-token-multi-chain #765: the PR merged with the check red on
+	# its final head, main ran it green afterwards, and planning still ran.
+	proc, calls, github_env, gate_calls = _run_with_stub_gate(tmp_path, status)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "SKIP_PLAN=true" in github_env
+	assert f"outcome=resolved reason=default_branch_green gate={status}" in proc.stdout
+	assert len(gate_calls) == 1
+	args = gate_calls[0]
+	assert args[0] == "gate"
+	assert args[args.index("--repo") + 1] == REPO and args[args.index("--issue-number") + 1] == "7185"
+	assert args[args.index("--default-branch") + 1] == "main"
+	assert "--dry-run" not in args
+	# The gate itself writes the evidence comment and the close.
+	assert not any(call[:2] == ["issue", "close"] for call in calls)
+	# The step drops the ai:planning label this job added.
+	edit = next(call for call in calls if call[:2] == ["issue", "edit"])
+	assert edit[edit.index("--remove-label") + 1] == "ai:planning"
+	assert f"gate={status} gate_rc=0 label=applied" in proc.stdout
+
+
+def test_merged_red_head_green_label_failure_is_reported(tmp_path):
+	work = tmp_path / "work"
+	(work / ".codex-workflow-src" / "scripts").mkdir(parents=True)
+	(work / ".codex-workflow-src" / "scripts" / "check_triage_resolution.py").write_text(STUB_TRIAGE_GATE, encoding="utf-8")
+	proc, _, github_env = _run_step(tmp_path, run_conclusion="failure", cwd=work,
+		env_extra={**PR_NOT_OPEN_ENV, "PLAN_DEFAULT_BRANCH": "main", "PLAN_SUPERSEDE_RESOLVED_REF": "main",
+			"STUB_GATE_LOG": str(tmp_path / "gate.log"), "STUB_GATE_STATUS": "resolved", "STUB_GATE_RC": "0",
+			"FAKE_EDIT_FAIL": "1"})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "SKIP_PLAN=true" in github_env
+	assert "outcome=resolved reason=default_branch_green gate=resolved gate_rc=0 label=failed" in proc.stdout
+	assert "::warning::Check-triage issue #7185 was closed but ai:planning could not be removed." in proc.stdout + proc.stderr
+
+
+def test_merged_red_head_unverified_gate_still_plans(tmp_path):
+	proc, _, github_env, gate_calls = _run_with_stub_gate(tmp_path, "unverified")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "SKIP_PLAN" not in github_env
+	assert "outcome=plan reason=merged_check_not_passed gate=unverified gate_rc=0" in proc.stdout
+	assert len(gate_calls) == 1
+
+
+def test_merged_red_head_gate_close_failure_skips_planning(tmp_path):
+	proc, _, github_env, _ = _run_with_stub_gate(tmp_path, "write_failed", rc="3")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "SKIP_PLAN=true" in github_env
+	assert "outcome=skip reason=resolved_close_failed gate=write_failed gate_rc=3" in proc.stdout
+
+
+def test_merged_red_head_gate_error_plans(tmp_path):
+	proc, _, github_env, _ = _run_with_stub_gate(tmp_path, "resolved", rc="1")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "SKIP_PLAN" not in github_env
+	assert "outcome=plan reason=merged_check_not_passed gate=resolved gate_rc=1" in proc.stdout
+	# No stderr from the gate: the warning is still printed.
+	assert "::warning::Check-triage resolution gate exited 1" in proc.stdout + proc.stderr
+
+
+def test_merged_red_head_gate_crash_plans_and_keeps_stderr(tmp_path):
+	proc, _, github_env, _ = _run_with_stub_gate(tmp_path, "__crash__", rc="1",
+		stderr="CHECK_TRIAGE_RESOLVED issue=7185 outcome=error reason=api_failed ::set-output")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "SKIP_PLAN" not in github_env
+	assert "outcome=plan reason=merged_check_not_passed gate=none gate_rc=1" in proc.stdout
+	out = proc.stdout + proc.stderr
+	assert "::warning::Check-triage resolution gate exited 1" in out
+	assert "| CHECK_TRIAGE_RESOLVED issue=7185 outcome=error reason=api_failed : :set-output" in out
+
+
+def test_step_passes_the_resolution_gate_switch():
+	block = "\n".join(_step_block(STEP_NAME))
+	assert "CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}" in block
 
 
 def _assert_plan_blocked_handoff(calls, pr="6976"):
