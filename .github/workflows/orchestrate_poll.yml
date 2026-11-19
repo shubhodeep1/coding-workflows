@@ -51,6 +51,12 @@ env:
   PERSIST_MAX_ROUNDS: ${{ vars.PERSIST_MAX_ROUNDS || '5' }}
   PERSIST_MAX_HOURS: ${{ vars.PERSIST_MAX_HOURS || '48' }}
   PERSIST_REPLAN_AFTER_FAILED_ROUNDS: ${{ vars.PERSIST_REPLAN_AFTER_FAILED_ROUNDS || '3' }}
+  # Persistence budget queue pause and inherited-round exemption (stuck-backlog
+  # Phase 3c): default on, also defaulted in scripts/persist_budget.py and
+  # scripts/orchestrate_poll_process.sh. 'false' restores the earlier
+  # max_hours / max_rounds behaviour.
+  PERSIST_QUEUE_PAUSE_ENABLED: ${{ vars.PERSIST_QUEUE_PAUSE_ENABLED || 'true' }}
+  PERSIST_INHERITED_ROUNDS_EXEMPT: ${{ vars.PERSIST_INHERITED_ROUNDS_EXEMPT || 'true' }}
   # Orchestrator context (issue #8427, P7): default off; see scripts/persist_orchestrator.py.
   PERSIST_ORCH_CONTEXT_ENABLED: ${{ vars.PERSIST_ORCH_CONTEXT_ENABLED || 'false' }}
   # Grouping repeated failures (issue #8427, P8): default off; see scripts/persist_orchestrator.py.
@@ -135,6 +141,11 @@ jobs:
             echo "SEMBLE_BIN="
             echo "SEMBLE_INDEX_AVAILABLE=false"
             echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"
+            # Queue backpressure marker (stuck-backlog Phase 3c), outside the
+            # checkout so it is never committed. Must equal the per-step
+            # QUEUE_BACKPRESSURE_STATE_FILE env of the poller steps; the Phase 3b
+            # "Restore/Save queue backpressure state" steps carry it between ticks.
+            echo "QUEUE_BACKPRESSURE_STATE_FILE=${RUNNER_TEMP}/queue-backpressure-state/state.json"
           } >> "$GITHUB_ENV"
 
       - name: Record GH_PAT budget at poll start

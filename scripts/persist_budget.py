@@ -18,10 +18,16 @@ Checks, in order:
 	2. newest entry is a `governor` escalation (outcome blocked)
 		-> ignore already_decided
 	3. oldest entry (after the newest governor escalation, if any) older
-		than PERSIST_MAX_HOURS                            -> escalate max_hours
+		than PERSIST_MAX_HOURS, after subtracting the time the Actions queue
+		was under backpressure (the overlap of --paused-intervals-file with
+		[oldest, now]; an open interval ends at now; only while
+		PERSIST_QUEUE_PAUSE_ENABLED is true)             -> escalate max_hours
 		(a newest `governor` re-plan entry otherwise -> ignore already_decided)
 	4. rounds on the current approach >= PERSIST_MAX_ROUNDS, unless the issue
-		is labelled ai:ready-to-merge (max_rounds), or
+		is labelled ai:ready-to-merge (max_rounds; while
+		PERSIST_INHERITED_ROUNDS_EXEMPT is true, a round whose gate shows
+		pr_caused == 0 and an integer inherited > 0 failed only on inherited
+		base failures and is left out of this count), or
 		the newest PERSIST_REPLAN_AFTER_FAILED_ROUNDS rounds all failed
 		(failed_rounds), or the newest 2 rounds both failed with no progress
 		between them (no_progress)                       -> replan, or escalate
@@ -49,19 +55,38 @@ Switches (each defaulted here, unattended instructions section 8):
 	PERSIST_MAX_ROUNDS                  default 5, clamped to 1..50
 	PERSIST_MAX_HOURS                   default 48, clamped to 1..720
 	PERSIST_REPLAN_AFTER_FAILED_ROUNDS  default 3, clamped to 1..20
+	PERSIST_QUEUE_PAUSE_ENABLED         default true (1/true/yes/on). Off:
+			max_hours ignores queue pauses and record-pause writes nothing.
+	PERSIST_INHERITED_ROUNDS_EXEMPT     default true (1/true/yes/on). Off:
+			every round counts toward max_rounds, as before.
 
 CLI (always exits 0; makes no API call):
 	decide (--journal-json F | --comments-file F --trusted-login L) --labels JSON
-		[--now TS] [--caps-json JSON] --out F
+		[--now TS] [--caps-json JSON] [--paused-intervals-file F] --out F
+	record-pause --state-file F --active true|false [--now TS]
+
+`--paused-intervals-file` holds a JSON list (or an object with an `intervals`
+list) of `[on_ts, off_ts|null]` pairs; a missing or bad file, and any
+malformed pair, means no pause. `record-pause` keeps the queue backpressure
+marker `{"active": bool, "intervals": [...]}` (a legacy one-line value
+true|false|on|off|1|0 reads as that state with no intervals): it opens an
+interval at now when the queue turns active, closes the open one when it
+turns inactive, drops closed intervals older than 2 * PERSIST_MAX_HOURS,
+keeps the newest PAUSE_INTERVALS_CAP (200), and writes atomically. It runs
+whatever PERSIST_BUDGET_ENABLED says, so the pause history exists when the
+governor is switched on.
 
 The decision JSON `{action, reason, basis, approaches, rounds, failed_streak,
-summary}` is written to --out; nothing is written on error. `summary` is built
+rounds_exempt_inherited, summary}` is written to --out; nothing is written on
+error. `rounds_exempt_inherited` counts the rounds left out of max_rounds
+(0 when the switch is off or before the rounds check). `summary` is built
 only from host-computed fields (counts, stage/outcome tokens, 12-hex failure
 keys, caps) and never from journal `note` text, because the poller posts it in
 a `/answer` comment that plan.yml reads as answers.
 
 Log lines (stderr, tokens only):
 	PERSIST governor outcome=<skipped|error> reason=<token>
+	(record-pause: reason=active_invalid, now_invalid, pause_state_unwritable)
 The poller logs the decision itself (`outcome=<action> reason=<r> issue=<n>`).
 """
 
@@ -72,7 +97,8 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timezone
+import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -105,6 +131,10 @@ CAP_SPECS = {
 	"max_hours": ("PERSIST_MAX_HOURS", 48, 1, 720),
 	"replan_after": ("PERSIST_REPLAN_AFTER_FAILED_ROUNDS", 3, 1, 20),
 }
+# Newest queue-pause intervals kept in the backpressure marker.
+PAUSE_INTERVALS_CAP = 200
+TRUTHY = ("1", "true", "yes", "on")
+LEGACY_MARKER_FALSE = ("false", "off", "0")
 
 
 def log(outcome: str, reason: str, issue: Any = None) -> None:
@@ -138,6 +168,21 @@ def enabled() -> bool:
 	return _flag("PERSIST_BUDGET_ENABLED")
 
 
+def _flag_default_on(name: str) -> bool:
+	"""Unset or empty means on; otherwise the poller's _is_truthy set
+	(1/true/yes/on, case-insensitive) so bash and Python agree."""
+	text = os.environ.get(name, "").strip().lower()
+	return True if not text else text in TRUTHY
+
+
+def queue_pause_enabled() -> bool:
+	return _flag_default_on("PERSIST_QUEUE_PAUSE_ENABLED")
+
+
+def inherited_exempt_enabled() -> bool:
+	return _flag_default_on("PERSIST_INHERITED_ROUNDS_EXEMPT")
+
+
 def caps(overrides: Any = None) -> dict:
 	"""Caps from the environment (defaults here), then optional overrides,
 	every value clamped to its range."""
@@ -156,6 +201,69 @@ def parse_ts(value: Any) -> datetime | None:
 		return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
 	except ValueError:
 		return None
+
+
+def _ts_text(value: datetime) -> str:
+	return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def normalise_intervals(raw: Any) -> list[list]:
+	"""Valid `[on_ts, off_ts|null]` pairs from a list or `{"intervals": [...]}`.
+	A malformed pair, or one that closes before it opens, is dropped."""
+	if isinstance(raw, dict):
+		raw = raw.get("intervals")
+	out = []
+	for item in raw if isinstance(raw, list) else []:
+		if not isinstance(item, list) or len(item) != 2:
+			continue
+		on_dt = parse_ts(item[0])
+		if on_dt is None:
+			continue
+		if item[1] is None:
+			out.append([item[0], None])
+			continue
+		off_dt = parse_ts(item[1])
+		if off_dt is None or off_dt < on_dt:
+			continue
+		out.append([item[0], item[1]])
+	return out
+
+
+def load_paused_intervals(path: Any) -> list[list]:
+	"""Intervals from a file; a missing, unreadable or bad file is no pause."""
+	if not path:
+		return []
+	try:
+		data = json.loads(Path(path).read_text(encoding="utf-8"))
+	except (OSError, ValueError, TypeError):
+		return []
+	return normalise_intervals(data)
+
+
+def paused_seconds(intervals: Any, start: datetime | None, now: datetime) -> float:
+	"""Seconds of [start, now] covered by the intervals (an open interval
+	ends at now), with overlapping intervals merged so no second counts twice."""
+	if start is None or now <= start:
+		return 0.0
+	spans = []
+	for on_text, off_text in normalise_intervals(intervals):
+		on = max(parse_ts(on_text), start)
+		off = min(parse_ts(off_text) if off_text else now, now)
+		if off > on:
+			spans.append((on, off))
+	spans.sort()
+	total = 0.0
+	cur_on = cur_off = None
+	for on, off in spans:
+		if cur_off is None or on > cur_off:
+			if cur_off is not None:
+				total += (cur_off - cur_on).total_seconds()
+			cur_on, cur_off = on, off
+		elif off > cur_off:
+			cur_off = off
+	if cur_off is not None:
+		total += (cur_off - cur_on).total_seconds()
+	return min(total, (now - start).total_seconds())
 
 
 def _labels(raw: Any) -> list[str]:
@@ -238,6 +346,18 @@ def _pr_caused(entry: dict) -> int | None:
 	return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
+def inherited_only(entry: dict) -> bool:
+	"""The round's gate failures were all inherited from the base branch:
+	pr_caused is exactly 0 and inherited is an integer above 0."""
+	inherited = _gate(entry).get("inherited")
+	return (
+		_pr_caused(entry) == 0
+		and isinstance(inherited, int)
+		and not isinstance(inherited, bool)
+		and inherited > 0
+	)
+
+
 def progressed(prev: dict, cur: dict) -> bool:
 	if (prev.get("failure_key") or "") != (cur.get("failure_key") or ""):
 		return True
@@ -272,7 +392,7 @@ def _tok(value: Any) -> str:
 	return TOKEN_RE.sub("_", str(value))[:40]
 
 
-def summary(entries: list[dict], decision: dict, limits: dict, start: int = 0) -> str:
+def summary(entries: list[dict], decision: dict, limits: dict, start: int = 0, exempt: int = 0) -> str:
 	"""One paragraph of host-computed fields only (never `note` text)."""
 	approach = current_approach(entries)
 	items = rounds(_ordered(entries)[start:], approach)
@@ -283,16 +403,20 @@ def summary(entries: list[dict], decision: dict, limits: dict, start: int = 0) -
 		if isinstance(key, str) and HEX12_RE.match(key) and key not in keys:
 			keys.append(key)
 	key_text = ", ".join(f"`{k}`" for k in keys[-5:]) or "none"
+	exempt_text = ""
+	if isinstance(exempt, int) and exempt > 0:
+		exempt_text = f"Rounds left out of the round limit (only inherited base failures): {exempt}. "
 	return (
 		f"Decision: {_tok(decision.get('action'))} ({_tok(decision.get('reason'))}). "
 		f"Approaches tried: {approaches(entries)} of {limits['max_approaches']}. "
 		f"Rounds on the current approach: {len(items)} of {limits['max_rounds']} "
 		f"(newest: {recent}; failed in a row: {trailing_failed(items)}, re-plan after {limits['replan_after']}). "
+		f"{exempt_text}"
 		f"Distinct failure keys: {key_text}. Time limit: {limits['max_hours']} hours."
 	)
 
 
-def _result(entries: list[dict], action: str, reason: str, limits: dict, start: int = 0) -> dict:
+def _result(entries: list[dict], action: str, reason: str, limits: dict, start: int = 0, exempt: int = 0) -> dict:
 	approach = current_approach(entries)
 	items = rounds(_ordered(entries)[start:], approach)
 	decision = {
@@ -302,12 +426,13 @@ def _result(entries: list[dict], action: str, reason: str, limits: dict, start: 
 		"approaches": approaches(entries),
 		"rounds": len(items),
 		"failed_streak": trailing_failed(items),
+		"rounds_exempt_inherited": exempt,
 	}
-	decision["summary"] = summary(entries, decision, limits, start)
+	decision["summary"] = summary(entries, decision, limits, start, exempt)
 	return decision
 
 
-def decide(entries: Any, now: datetime, labels: Any, limits: dict | None = None) -> dict:
+def decide(entries: Any, now: datetime, labels: Any, limits: dict | None = None, paused: Any = None) -> dict:
 	limits = limits or caps()
 	ordered = _ordered(entries)
 	reason = ignored(labels)
@@ -330,8 +455,15 @@ def decide(entries: Any, now: datetime, labels: Any, limits: dict | None = None)
 		if entry.get("stage") == "governor" and entry.get("outcome") == "blocked":
 			start = index + 1
 	oldest = parse_ts(ordered[start]["ts"])
-	if oldest is not None and (now - oldest).total_seconds() > limits["max_hours"] * 3600:
-		return _result(ordered, "escalate", "max_hours", limits, start)
+	if oldest is not None:
+		elapsed = (now - oldest).total_seconds()
+		# Time spent waiting in a jammed Actions queue is not the issue's
+		# fault: subtract the queue-backpressure pause overlap (stuck-backlog
+		# Phase 3c). No intervals, or the switch off, keeps the legacy check.
+		if paused and queue_pause_enabled():
+			elapsed -= paused_seconds(paused, oldest, now)
+		if elapsed > limits["max_hours"] * 3600:
+			return _result(ordered, "escalate", "max_hours", limits, start)
 	if newest_governor:
 		return _result(ordered, "ignore", "already_decided", limits, start)
 	can_replan = approaches(ordered) < limits["max_approaches"]
@@ -340,11 +472,17 @@ def decide(entries: Any, now: datetime, labels: Any, limits: dict | None = None)
 	# already counted (escalations are journalled with `--approach inherit`).
 	history = ordered[start:]
 	items = rounds(history, current_approach(ordered))
+	# Rounds that failed only on inherited base failures (gate pr_caused == 0,
+	# inherited > 0) are not the PR's churn, so they stay out of max_rounds
+	# while PERSIST_INHERITED_ROUNDS_EXEMPT is on. failed_rounds and
+	# no_progress still see every round.
+	counted = [e for e in items if not inherited_only(e)] if inherited_exempt_enabled() else items
+	exempt = len(items) - len(counted)
 	trigger = ""
-	# max_rounds counts every round, whatever its outcome (review rounds are
-	# journalled `ok` because each one is an autofix commit); only a PR that
-	# passed review and waits to merge is never pulled back.
-	if len(items) >= limits["max_rounds"] and MERGING_LABEL not in _labels(labels):
+	# max_rounds counts every other round, whatever its outcome (review rounds
+	# are journalled `ok` because each one is an autofix commit); only a PR
+	# that passed review and waits to merge is never pulled back.
+	if len(counted) >= limits["max_rounds"] and MERGING_LABEL not in _labels(labels):
 		trigger = "max_rounds"
 	elif trailing_failed(items) >= limits["replan_after"]:
 		trigger = "failed_rounds"
@@ -362,11 +500,89 @@ def decide(entries: Any, now: datetime, labels: Any, limits: dict | None = None)
 		if can_replan and open_pr_label(labels):
 			# plan.yml skips planning while the issue's PR is open, so a
 			# re-plan here could never run; hand it to a person instead.
-			return _result(ordered, "escalate", f"open_pr:{trigger}", limits, start)
+			return _result(ordered, "escalate", f"open_pr:{trigger}", limits, start, exempt)
 		if can_replan:
-			return _result(ordered, "replan", trigger, limits, start)
-		return _result(ordered, "escalate", f"max_approaches:{trigger}", limits, start)
-	return _result(ordered, "continue", "within_budget", limits, start)
+			return _result(ordered, "replan", trigger, limits, start, exempt)
+		return _result(ordered, "escalate", f"max_approaches:{trigger}", limits, start, exempt)
+	return _result(ordered, "continue", "within_budget", limits, start, exempt)
+
+
+def read_pause_marker(path: Any) -> dict:
+	"""The queue backpressure marker. A legacy one-line value reads as that
+	state with no intervals; a missing, unreadable or corrupt file reads as
+	inactive with no intervals (the next write replaces it)."""
+	empty = {"active": False, "intervals": []}
+	try:
+		text = Path(path).read_text(encoding="utf-8").strip()
+	except (OSError, ValueError, TypeError):
+		return empty
+	if text.lower() in TRUTHY:
+		return {"active": True, "intervals": []}
+	if text.lower() in LEGACY_MARKER_FALSE:
+		return empty
+	try:
+		data = json.loads(text)
+	except ValueError:
+		return empty
+	if not isinstance(data, dict):
+		return empty
+	return {"active": data.get("active") is True, "intervals": normalise_intervals(data.get("intervals"))}
+
+
+def record_pause(marker: dict, active: bool, now: datetime, max_hours: int) -> dict:
+	"""Open an interval at now when active and none is open; close every open
+	interval at now when inactive; prune and cap."""
+	intervals = [list(item) for item in normalise_intervals(marker)]
+	now_text = _ts_text(now)
+	if active:
+		if not any(item[1] is None for item in intervals):
+			intervals.append([now_text, None])
+	else:
+		for item in intervals:
+			if item[1] is None:
+				# A clock-skewed future start closes as a zero-length interval.
+				item[1] = now_text if parse_ts(item[0]) <= now else item[0]
+	cutoff = now - timedelta(hours=2 * max_hours)
+	intervals = [item for item in intervals if item[1] is None or parse_ts(item[1]) >= cutoff]
+	intervals.sort(key=lambda item: item[0])
+	return {"active": bool(active), "intervals": intervals[-PAUSE_INTERVALS_CAP:]}
+
+
+def _write_atomic(path: Path, text: str) -> None:
+	path.parent.mkdir(parents=True, exist_ok=True)
+	fd, tmp_name = tempfile.mkstemp(prefix=".queue-pause.", dir=str(path.parent))
+	try:
+		with os.fdopen(fd, "w", encoding="utf-8") as handle:
+			handle.write(text)
+		os.replace(tmp_name, path)
+	except BaseException:
+		try:
+			os.unlink(tmp_name)
+		except OSError:
+			pass
+		raise
+
+
+def cmd_record_pause(args: argparse.Namespace) -> None:
+	if not queue_pause_enabled():
+		return
+	active_text = (args.active or "").strip().lower()
+	if active_text not in ("true", "false"):
+		log("error", "active_invalid")
+		return
+	if args.now:
+		now = parse_ts(args.now)
+		if now is None:
+			log("error", "now_invalid")
+			return
+	else:
+		now = datetime.now(timezone.utc).replace(microsecond=0)
+	state_file = Path(args.state_file)
+	marker = record_pause(read_pause_marker(state_file), active_text == "true", now, caps()["max_hours"])
+	try:
+		_write_atomic(state_file, json.dumps(marker, sort_keys=True))
+	except OSError:
+		log("error", "pause_state_unwritable")
 
 
 def _load_entries(args: argparse.Namespace) -> list[dict] | None:
@@ -415,7 +631,8 @@ def cmd_decide(args: argparse.Namespace) -> None:
 	if entries is None:
 		log("error", "journal_unreadable")
 		return
-	decision = decide(entries, now, labels, caps(overrides))
+	paused = load_paused_intervals(args.paused_intervals_file) if args.paused_intervals_file else None
+	decision = decide(entries, now, labels, caps(overrides), paused)
 	try:
 		Path(args.out).write_text(json.dumps(decision, sort_keys=True), encoding="utf-8")
 	except OSError:
@@ -432,7 +649,12 @@ def build_parser() -> argparse.ArgumentParser:
 	dec.add_argument("--labels", default="[]")
 	dec.add_argument("--now", default="")
 	dec.add_argument("--caps-json", default="")
+	dec.add_argument("--paused-intervals-file", default="")
 	dec.add_argument("--out", required=True)
+	rec = sub.add_parser("record-pause")
+	rec.add_argument("--state-file", required=True)
+	rec.add_argument("--active", required=True)
+	rec.add_argument("--now", default="")
 	return parser
 
 
@@ -441,6 +663,14 @@ def main(argv: list[str] | None = None) -> int:
 		args = build_parser().parse_args(argv)
 	except SystemExit:
 		log("error", "usage")
+		return 0
+	if args.cmd == "record-pause":
+		# Not behind PERSIST_BUDGET_ENABLED: the pause history must already
+		# exist when the governor is switched on.
+		try:
+			cmd_record_pause(args)
+		except Exception as exc:  # noqa: BLE001 - fail open, never block the tick
+			log("error", "exception_" + type(exc).__name__)
 		return 0
 	if not enabled():
 		log("skipped", "disabled")

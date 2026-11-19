@@ -23,6 +23,14 @@ import persist_budget as pb  # noqa: E402
 NOW = datetime(2026, 10, 31, 12, 0, 0, tzinfo=timezone.utc)
 CAPS = {"max_approaches": 3, "max_rounds": 5, "max_hours": 48, "replan_after": 3}
 CAP_ENV = ("PERSIST_MAX_APPROACHES", "PERSIST_MAX_ROUNDS", "PERSIST_MAX_HOURS", "PERSIST_REPLAN_AFTER_FAILED_ROUNDS")
+SWITCH_ENV = ("PERSIST_QUEUE_PAUSE_ENABLED", "PERSIST_INHERITED_ROUNDS_EXEMPT")
+
+
+@pytest.fixture(autouse=True)
+def _default_switches(monkeypatch):
+	"""Every test starts from the script defaults (both switches unset = on)."""
+	for name in SWITCH_ENV:
+		monkeypatch.delenv(name, raising=False)
 
 
 def _ts(minutes_ago: int) -> str:
@@ -207,7 +215,7 @@ CASES = [
 def test_decide_table(case_id, entries, labels, caps, action, reason) -> None:
 	decision = pb.decide(entries, NOW, labels, dict(caps))
 	assert (decision["action"], decision["reason"]) == (action, reason), case_id
-	assert set(decision) == {"action", "reason", "basis", "approaches", "rounds", "failed_streak", "summary"}
+	assert set(decision) == {"action", "reason", "basis", "approaches", "rounds", "failed_streak", "rounds_exempt_inherited", "summary"}
 
 
 def test_basis_ignores_governor_entries() -> None:
@@ -333,3 +341,218 @@ def test_cli_unreadable_journal_is_an_error() -> None:
 		assert proc.returncode == 0
 		assert "PERSIST governor outcome=error reason=journal_unreadable" in proc.stderr
 		assert not out.exists()
+
+
+# --- stuck-backlog Phase 3c: queue pause and inherited-round exemption ---
+
+
+def _ts_hours_ago(hours: float) -> str:
+	return (NOW - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+START = NOW - timedelta(hours=10)
+
+
+@pytest.mark.parametrize(
+	("intervals", "expected"),
+	[
+		([], 0),
+		([[_ts_hours_ago(20), _ts_hours_ago(15)]], 0),
+		([[_ts_hours_ago(12), _ts_hours_ago(8)]], 2 * 3600),
+		([[_ts_hours_ago(6), _ts_hours_ago(4)]], 2 * 3600),
+		([[_ts_hours_ago(20), None]], 10 * 3600),
+		([[_ts_hours_ago(3), None]], 3 * 3600),
+		([[_ts_hours_ago(6), _ts_hours_ago(3)], [_ts_hours_ago(5), _ts_hours_ago(2)]], 4 * 3600),
+		([[_ts_hours_ago(6), _ts_hours_ago(3)], [_ts_hours_ago(6), _ts_hours_ago(3)]], 3 * 3600),
+		([["junk", None], [_ts_hours_ago(2), _ts_hours_ago(4)], [_ts_hours_ago(2)], "x"], 0),
+	],
+	ids=["none", "before_window", "partial", "inside", "full_open", "open", "merged", "duplicate", "malformed"],
+)
+def test_paused_seconds_overlap(intervals, expected) -> None:
+	assert pb.paused_seconds(intervals, START, NOW) == expected
+	assert pb.paused_seconds({"intervals": intervals}, START, NOW) == expected
+
+
+def test_load_paused_intervals_bad_input_is_no_pause(tmp_path: Path) -> None:
+	assert pb.load_paused_intervals(tmp_path / "missing.json") == []
+	assert pb.load_paused_intervals("") == []
+	bad = tmp_path / "bad.json"
+	bad.write_text("{not json", encoding="utf-8")
+	assert pb.load_paused_intervals(bad) == []
+	bad.write_text("true", encoding="utf-8")
+	assert pb.load_paused_intervals(bad) == []
+	good = tmp_path / "good.json"
+	good.write_text(json.dumps({"active": True, "intervals": [[_ts_hours_ago(3), None], ["bad", None]]}), encoding="utf-8")
+	assert pb.load_paused_intervals(good) == [[_ts_hours_ago(3), None]]
+
+
+def _stale_entries() -> list[dict]:
+	return [_entry("plan", "ok", 1, 50 * 60), _entry("implement", "ok", minutes_ago=10)]
+
+
+def test_max_hours_not_reached_because_of_pause(monkeypatch) -> None:
+	entries = _stale_entries()
+	assert pb.decide(entries, NOW, [], dict(CAPS))["reason"] == "max_hours"
+	paused = [[_ts_hours_ago(40), _ts_hours_ago(35)]]
+	decision = pb.decide(entries, NOW, [], dict(CAPS), paused)
+	assert (decision["action"], decision["reason"]) == ("continue", "within_budget")
+	# Not enough pause: 50 h - 1 h is still past 48 h.
+	assert pb.decide(entries, NOW, [], dict(CAPS), [[_ts_hours_ago(40), _ts_hours_ago(39)]])["reason"] == "max_hours"
+	# Kill switch restores today's behaviour.
+	monkeypatch.setenv("PERSIST_QUEUE_PAUSE_ENABLED", "false")
+	assert pb.decide(entries, NOW, [], dict(CAPS), paused)["reason"] == "max_hours"
+
+
+def _inherited_round(minutes_ago: int, **gate) -> dict:
+	# A different failure key each round is progress, so no_progress stays quiet.
+	return _entry("review", "fail", minutes_ago=minutes_ago, failure_key=KEYS[(minutes_ago // 10) % 5], gate=gate)
+
+
+def test_inherited_only_rounds_left_out_of_max_rounds(monkeypatch) -> None:
+	caps = dict(CAPS, replan_after=20)
+	entries = [_plan(), *[_inherited_round(300 - 10 * i, status="fail", pr_caused=0, inherited=2) for i in range(5)]]
+	decision = pb.decide(entries, NOW, [], caps)
+	assert (decision["action"], decision["reason"]) == ("continue", "within_budget")
+	assert decision["rounds"] == 5 and decision["rounds_exempt_inherited"] == 5
+	assert "Rounds left out of the round limit (only inherited base failures): 5." in decision["summary"]
+	monkeypatch.setenv("PERSIST_INHERITED_ROUNDS_EXEMPT", "false")
+	decision = pb.decide(entries, NOW, [], caps)
+	assert (decision["action"], decision["reason"]) == ("replan", "max_rounds")
+	assert decision["rounds_exempt_inherited"] == 0
+	assert "Rounds left out" not in decision["summary"]
+
+
+@pytest.mark.parametrize(
+	"gate",
+	[
+		{"status": "fail", "pr_caused": 1, "inherited": 2},
+		{"status": "fail", "pr_caused": 0, "inherited": 0},
+		{"status": "fail", "pr_caused": None, "inherited": 3},
+		{"status": "fail", "pr_caused": 0},
+		{},
+	],
+	ids=["pr_caused", "inherited_zero", "pr_caused_unknown", "inherited_missing", "no_gate"],
+)
+def test_non_inherited_rounds_still_counted(gate) -> None:
+	entries = [_plan(), *[_inherited_round(300 - 10 * i, **gate) for i in range(5)]]
+	decision = pb.decide(entries, NOW, [], dict(CAPS, replan_after=20))
+	assert (decision["action"], decision["reason"]) == ("replan", "max_rounds")
+	assert decision["rounds_exempt_inherited"] == 0
+
+
+def test_inherited_rounds_keep_failed_rounds_trigger() -> None:
+	entries = [_plan(), *[_inherited_round(300 - 10 * i, status="fail", pr_caused=0, inherited=1) for i in range(3)]]
+	decision = pb.decide(entries, NOW, [], dict(CAPS))
+	assert (decision["action"], decision["reason"]) == ("replan", "failed_rounds")
+	assert decision["rounds_exempt_inherited"] == 3
+
+
+def test_autofix_churn_without_inherited_failures_still_escalates() -> None:
+	entries = [_plan(), *[_entry("review", "ok", minutes_ago=300 - i) for i in range(5)]]
+	decision = pb.decide(entries, NOW, ["ai:done"], dict(CAPS))
+	assert (decision["action"], decision["reason"]) == ("escalate", "open_pr:max_rounds")
+	assert decision["rounds_exempt_inherited"] == 0
+
+
+def test_switch_defaults_and_values(monkeypatch) -> None:
+	assert pb.queue_pause_enabled() is True and pb.inherited_exempt_enabled() is True
+	for value, expected in (("", True), ("TRUE", True), ("on", True), ("1", True), ("false", False), ("0", False), ("junk", False)):
+		monkeypatch.setenv("PERSIST_QUEUE_PAUSE_ENABLED", value)
+		monkeypatch.setenv("PERSIST_INHERITED_ROUNDS_EXEMPT", value)
+		assert pb.queue_pause_enabled() is expected
+		assert pb.inherited_exempt_enabled() is expected
+
+
+def test_cli_paused_intervals_file() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		journal = tmp_path / "journal.json"
+		journal.write_text(json.dumps(_stale_entries()), encoding="utf-8")
+		paused = tmp_path / "paused.json"
+		paused.write_text(json.dumps([[_ts_hours_ago(40), _ts_hours_ago(35)]]), encoding="utf-8")
+		base = ["--journal-json", str(journal), "--labels", "[]", "--now", NOW.strftime("%Y-%m-%dT%H:%M:%SZ")]
+		proc, out = _run_cli(tmp_path, [*base, "--paused-intervals-file", str(paused)])
+		assert proc.returncode == 0, proc.stderr
+		assert json.loads(out.read_text(encoding="utf-8"))["reason"] == "within_budget"
+		for bad in (str(tmp_path / "missing.json"), str(journal)):
+			proc, out = _run_cli(tmp_path, [*base, "--paused-intervals-file", bad])
+			assert proc.returncode == 0, proc.stderr
+			assert json.loads(out.read_text(encoding="utf-8"))["reason"] == "max_hours"
+
+
+def _record(tmp_path: Path, state: Path, active: str, now: str, extra_env: dict | None = None) -> subprocess.CompletedProcess:
+	env = {k: v for k, v in os.environ.items() if not k.startswith("PERSIST_")}
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	env.update(extra_env or {})
+	return subprocess.run(
+		[sys.executable, "-B", str(SCRIPT), "record-pause", "--state-file", str(state), "--active", active, "--now", now],
+		env=env, capture_output=True, text=True, timeout=60, check=False, cwd=tmp_path,
+	)
+
+
+def test_record_pause_marker_transitions(tmp_path: Path) -> None:
+	state = tmp_path / "sub" / "state.json"
+	t0, t1, t2, t3 = (_ts_hours_ago(h) for h in (5, 4, 3, 2))
+
+	def load() -> dict:
+		return json.loads(state.read_text(encoding="utf-8"))
+
+	# Missing marker, inactive: written as inactive with no intervals.
+	assert _record(tmp_path, state, "false", t0).returncode == 0
+	assert load() == {"active": False, "intervals": []}
+	# Turns active: opens an interval; staying active leaves it unchanged.
+	_record(tmp_path, state, "true", t0)
+	_record(tmp_path, state, "true", t1)
+	assert load() == {"active": True, "intervals": [[t0, None]]}
+	# Turns inactive: closes it; staying inactive leaves it unchanged.
+	_record(tmp_path, state, "false", t2)
+	_record(tmp_path, state, "false", t3)
+	assert load() == {"active": False, "intervals": [[t0, t2]]}
+	# Legacy one-line markers.
+	state.write_text("true\n", encoding="utf-8")
+	_record(tmp_path, state, "true", t3)
+	assert load() == {"active": True, "intervals": [[t3, None]]}
+	state.write_text("off", encoding="utf-8")
+	_record(tmp_path, state, "false", t3)
+	assert load() == {"active": False, "intervals": []}
+	# A corrupt marker is rewritten from scratch.
+	state.write_text("{corrupt", encoding="utf-8")
+	_record(tmp_path, state, "true", t3)
+	assert load() == {"active": True, "intervals": [[t3, None]]}
+	# Pruning at 2 * PERSIST_MAX_HOURS (here 2 * 2 h): closed intervals older
+	# than the cutoff go, open intervals never do.
+	old_open = _ts_hours_ago(30)
+	state.write_text(json.dumps({"active": True, "intervals": [[_ts_hours_ago(10), _ts_hours_ago(9)], [_ts_hours_ago(3), _ts_hours_ago(2)], [old_open, None]]}), encoding="utf-8")
+	_record(tmp_path, state, "true", NOW.strftime("%Y-%m-%dT%H:%M:%SZ"), {"PERSIST_MAX_HOURS": "2"})
+	assert load()["intervals"] == [[old_open, None], [_ts_hours_ago(3), _ts_hours_ago(2)]]
+	# The newest 200 intervals are kept.
+	many = [[_ts_hours_ago(1 + i / 100), _ts_hours_ago(1 + i / 100)] for i in range(250)]
+	state.write_text(json.dumps({"active": False, "intervals": many}), encoding="utf-8")
+	_record(tmp_path, state, "false", NOW.strftime("%Y-%m-%dT%H:%M:%SZ"))
+	kept = load()["intervals"]
+	assert len(kept) == pb.PAUSE_INTERVALS_CAP == 200
+	assert kept[-1] == sorted(many)[-1]
+	# Switch off: no-op, the marker is untouched.
+	before = state.read_text(encoding="utf-8")
+	_record(tmp_path, state, "true", t3, {"PERSIST_QUEUE_PAUSE_ENABLED": "false"})
+	assert state.read_text(encoding="utf-8") == before
+	# Bad input is logged and writes nothing.
+	proc = _record(tmp_path, state, "maybe", t3)
+	assert proc.returncode == 0 and "reason=active_invalid" in proc.stderr
+	assert state.read_text(encoding="utf-8") == before
+
+
+def test_record_pause_runs_with_governor_off(tmp_path: Path) -> None:
+	state = tmp_path / "state.json"
+	proc = _record(tmp_path, state, "true", _ts_hours_ago(1), {"PERSIST_BUDGET_ENABLED": "false"})
+	assert proc.returncode == 0, proc.stderr
+	assert "reason=disabled" not in proc.stderr
+	assert json.loads(state.read_text(encoding="utf-8"))["active"] is True
+
+
+def test_record_pause_unwritable_logs(tmp_path: Path) -> None:
+	blocker = tmp_path / "file"
+	blocker.write_text("x", encoding="utf-8")
+	proc = _record(tmp_path, blocker / "state.json", "true", _ts_hours_ago(1))
+	assert proc.returncode == 0
+	assert "PERSIST governor outcome=error reason=pause_state_unwritable" in proc.stderr
