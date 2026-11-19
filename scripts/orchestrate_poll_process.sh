@@ -35999,6 +35999,14 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 		echo "STANDALONE_CONFLICT_STUCK pr=${S_PR} outcome=skip reason=claude_capacity_wait"
 		continue
 	fi
+	# Owner hold (draft or `[skip ai]` title, PR #9750): no update-branch,
+	# no review dispatch, no attempt marker. Poller run 44450042608 dispatched
+	# on held drafts #9573/#9502/#9497. Reads the payload fetched above.
+	_conflict_sweep_hold_reason="$(_stall_pr_ai_hold_reason "${S_PR_JSON}")"
+	if [ -n "${_conflict_sweep_hold_reason}" ]; then
+		echo "STANDALONE_CONFLICT_STUCK pr=${S_PR} outcome=skip reason=pr_ai_hold detail=${_conflict_sweep_hold_reason}"
+		continue
+	fi
 
 	S_MERGEABLE_STATE="$(echo "${S_PR_JSON}" | jq -r '.mergeable_state // ""')"
 	if [ -z "${S_MERGEABLE_STATE}" ] || [ "${S_MERGEABLE_STATE}" = "unknown" ]; then
