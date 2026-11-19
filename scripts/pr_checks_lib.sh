@@ -2423,6 +2423,12 @@ _merge_lease_pr_eligible()
 	# applies to a holder).
 	if [ "${elig_rc}" -ne 0 ] && [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "failed" ] \
 		&& [ "${PR_CHECKS_LAST_REASON:-}" = "ok" ] && [ "${PR_CHECKS_RUNS_UNRUN:-0}" -gt 0 ]; then
+		# The runs were read on this path: report them so the tick's idle
+		# test does not read actions/runs again (section 14 budget).
+		if [ "${PR_CHECKS_RUNS_READ:-}" = "true" ]; then
+			MERGE_LEASE_CI_ACTIVE="false"
+			[ "${PR_CHECKS_RUNS_PENDING:-0}" -eq 0 ] || MERGE_LEASE_CI_ACTIVE="true"
+		fi
 		return 0
 	fi
 	if [ "${elig_rc}" -ne 0 ] && [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "failed" ]; then

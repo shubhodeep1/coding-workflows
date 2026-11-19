@@ -1615,9 +1615,11 @@ _mt_now_ms()
 #   `skip=<pr>:<head>` (the release write); entries whose PR is no longer open
 #   on the base with that head are pruned from $1 (no API call). A labelled
 #   waiter held back by an entry logs outcome=skipped
-#   reason=skip_head_unchanged and keeps its label; when no other waiter is
-#   eligible, the skip-held waiters are considered in queue order (the gate's
-#   lone-caller rule), so a labelled waiter is never stranded.
+#   reason=skip_head_unchanged and keeps its label. The tick never grants it
+#   on that head (D4); when the queue holds no other waiter, the skip-held
+#   waiters are unlabelled instead, so the sweep dispatches them again and the
+#   update-mode gate decides (its lone-caller rule), and no labelled waiter is
+#   stranded.
 # - Grant-time eligibility: up to 10 candidates per base per tick, in queue
 #   order; an ineligible one is unlabelled and logs outcome=skipped
 #   reason=draft|skip_ai|no_head_gate|final_ci_failed (event=skipped). When
@@ -1643,7 +1645,7 @@ _mt_merge_lease_tick()
 	# Phase 2 helpers; tick_p2: on for this base.
 	local tick_p2_lib=0 tick_p2=0 tick_login="" tick_login_tried=0 tick_open_heads tick_holder_row tick_holder_head tick_holder_title
 	local tick_holder_draft tick_since tick_idle_s tick_ci_active tick_skip_head tick_excluded tick_skipped_any tick_cand_n tick_skip_pr
-	local tick_first_row tick_skip_why tick_skip_held tick_queue_skips
+	local tick_first_row tick_skip_why tick_skip_held tick_queue_skips tick_skip_held_prs tick_queue_empty
 	local tick_max_candidates=10
 	if declare -F _merge_lease_pr_eligible >/dev/null 2>&1 && declare -F _merge_lease_revoke_enabled >/dev/null 2>&1 \
 		&& declare -F _merge_lease_idle_seconds >/dev/null 2>&1; then
@@ -1772,6 +1774,8 @@ _mt_merge_lease_tick()
 		tick_skipped_any=0
 		tick_cand_n=0
 		tick_skip_held=0
+		tick_skip_held_prs=""
+		tick_queue_empty=0
 		tick_queue_skips="${MERGE_LEASE_SKIPS:-}"
 		if [ "${tick_p2}" = 1 ] && [ -n "${MERGE_LEASE_SKIPS:-}" ]; then
 			# Labelled waiters held back by a skip entry keep their label.
@@ -1779,6 +1783,7 @@ _mt_merge_lease_tick()
 				[[ "${tick_skip_pr}" =~ ^[1-9][0-9]*$ ]] || continue
 				tick_skipped_any=1
 				tick_skip_held=1
+				tick_skip_held_prs="${tick_skip_held_prs:+${tick_skip_held_prs} }${tick_skip_pr}"
 				_mt_log "MERGE_LEASE pr=${tick_skip_pr} base=${tick_base} mode=tick outcome=skipped reason=skip_head_unchanged"
 				[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric skipped "${tick_base}" "${tick_skip_pr}" tick skip_head_unchanged "" "${tick_waiters}" - || true
 			done < <(jq -r --arg l "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" --arg s "${MERGE_LEASE_SKIPS}" \
@@ -1789,15 +1794,9 @@ _mt_merge_lease_tick()
 		while :; do
 			if [ "${tick_p2}" = 1 ]; then
 				tick_first="$(_merge_lease_queue_first "${tick_base_prs}" "" "${tick_queue_skips}" "${tick_excluded}")"
-				if [ -z "${tick_first}" ] && [ "${tick_skip_held}" = 1 ] && [ -n "${tick_queue_skips}" ]; then
-					# Only skip-held waiters are left: as in the update-mode gate,
-					# a skip entry never lets a PR jump ahead, but with nobody else
-					# eligible the first of them is considered. It keeps its label
-					# and the sweep skips labelled PRs, so it would otherwise never
-					# be dispatched again (its held write drops its own entry).
-					tick_queue_skips=""
-					continue
-				fi
+				# Empty: every waiter in the queue was checked or skip-held (not
+				# the 10-candidate cap).
+				[ -n "${tick_first}" ] || tick_queue_empty=1
 			else
 				tick_first="$(_merge_lease_queue_first "${tick_base_prs}" "")"
 			fi
@@ -1820,6 +1819,16 @@ _mt_merge_lease_tick()
 			[ "${tick_cand_n}" -lt "${tick_max_candidates}" ] || break
 		done
 		if [ -z "${tick_first}" ]; then
+			if [ "${tick_p2}" = 1 ] && [ "${tick_queue_empty}" = 1 ] && [ "${tick_skip_held}" = 1 ]; then
+				# D4: a skip entry blocks a re-grant on the same head, so the tick
+				# never grants a skip-held waiter. With no other waiter left it
+				# would keep its label, and the sweep skips labelled PRs, so it
+				# is unlabelled: the sweep dispatches it again and the update-mode
+				# gate (lone-caller rule) decides. Its skip entry stays.
+				for tick_skip_pr in ${tick_skip_held_prs}; do
+					_merge_lease_unlabel_wait "${tick_skip_pr}"
+				done
+			fi
 			if [ "${tick_skipped_any}" = 0 ]; then
 				_mt_log "MERGE_LEASE pr=- base=${tick_base} mode=tick outcome=no_waiter reason=lease_free"
 				[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric no_waiter "${tick_base}" "" tick lease_free "" 0 - || true

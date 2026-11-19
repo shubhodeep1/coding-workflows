@@ -1020,19 +1020,29 @@ class LeaseSkipList(unittest.TestCase):
 		self.assertLess(rec.index("updated="), rec.index("skip="))
 		self.assertLess(rec.index("skip="), rec.index("paths:"))
 
-	def test_lone_skip_held_waiter_is_granted_when_nobody_else_is_eligible(self) -> None:
-		# The sweep skips labelled PRs, so a skip-held waiter left alone would
-		# never be dispatched again; like the gate's lone caller it is granted.
+	def test_lone_skip_held_waiter_is_unlabelled_not_granted(self) -> None:
+		# D4: a skip entry blocks a re-grant on the same head. The sweep skips
+		# labelled PRs, so a skip-held waiter left alone is unlabelled instead;
+		# the update-mode gate (lone-caller rule) then decides.
 		st = {"pulls": [_pull(5), _pull(6)], "labels": {"5": [WAIT], "6": [WAIT]}, "files": {"5": ["a"]}}
 		_seed_lease(st, _record(3, state="released", paths="", skips=[f"5:{_sha(5)}"]))
 		_gates_ok(st, 5)
 		_head_gate(st, _sha(6), "failure")
 		h, out = _p2_tick(st)
 		self.assertIn("pr=6 base=main mode=tick outcome=skipped reason=no_head_gate", out)
-		self.assertIn("pr=5 base=main mode=tick outcome=granted", out)
-		rec = h.record()
-		self.assertIn("pr=5", rec)
-		self.assertEqual(_skips(rec), [], "the held write drops the grantee's own entry")
+		self.assertNotIn("outcome=granted", out)
+		self.assertIn("MERGE_LEASE pr=- base=main mode=tick outcome=no_waiter reason=no_eligible_waiter\n", out)
+		self.assertNotIn(WAIT, h.state["labels"]["5"], "the skip-held waiter is handed back to the sweep")
+		self.assertEqual(h.state["refs"][REF], "c" * 40, "no lease write")
+		self.assertEqual(_skips(h.record()), [f"5:{_sha(5)}"])
+		self.assertNotIn("dispatched", h.state)
+
+	def test_idle_holder_with_cancelled_ci_reads_the_runs_once(self) -> None:
+		runs = {_sha(4): [{"id": 12, "name": "CI", "status": "completed", "conclusion": "cancelled", "event": "pull_request"}]}
+		h = _Harness(LeaseRevocation()._holder(updated=OLD, extra={"runs": runs}))
+		res = h.train_fn('_mt_merge_lease_tick "${PRS_JSONL}" ""', {"PRS_JSONL": _p2_jsonl(h.state["pulls"], {})})
+		self.assertIn("outcome=released reason=revoked_idle", res.stdout + res.stderr)
+		self.assertLessEqual(sum("actions/runs" in c for c in h.calls), 1, h.calls)
 
 	def test_skip_clears_once_the_head_changes(self) -> None:
 		new_head = "e" * 40
