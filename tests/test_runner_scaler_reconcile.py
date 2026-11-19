@@ -444,3 +444,23 @@ def test_ambiguous_create_is_booting_supply_for_the_queue_alert() -> None:
 	h.scaler.reconcile()
 	# The timed-out create may be booting: no queued_without_supply page for it.
 	assert f"queued_without_supply:{REPO}" not in h.alerter.keys()
+
+
+def test_ambiguous_create_covering_the_only_job_is_not_a_cap_alert() -> None:
+	h = Harness(max_droplets=1)
+	h.queue(1)
+	h.do.fail["create"] = ApiError(0, "TimeoutError")
+	h.scaler.reconcile()
+	# The timed-out create holds the only slot but covers the only job.
+	assert "cap_reached" not in h.alerter.keys()
+	assert not any(line.get("reason") == "cap_reached" for line in h.outcomes("skipped"))
+
+
+def test_waiting_job_is_not_demand_until_it_is_queued_again() -> None:
+	h = Harness()
+	h.scaler.handle_event("workflow_job", job_event("waiting", 1))
+	h.scaler.reconcile()
+	assert not h.do.droplets
+	h.queue(1)  # the environment protection rule cleared
+	h.scaler.reconcile()
+	assert len(h.do.droplets) == 1

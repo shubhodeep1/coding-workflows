@@ -174,6 +174,10 @@ class Scaler:
 					self.queued[repo].setdefault(job_id, _epoch(job.get("created_at")) or now)
 					self.webhook_seen[job_id] = now
 			elif action in ("in_progress", "waiting", "completed"):
+				# `waiting` is a job held by an environment protection rule (GitHub
+				# changelog 2022-11-22), not one waiting for a runner: it is not demand
+				# yet. It stays out of `started`, so the `queued` event GitHub sends once
+				# the rule clears adds it back.
 				self.queued[repo].pop(job_id, None)
 				self.webhook_seen.pop(job_id, None)
 				if action != "waiting":
@@ -504,6 +508,9 @@ class Scaler:
 						# It is booting supply (as the next pass counts it), so the
 						# queued_without_supply check below must not page for it.
 						booting[repo] += 1
+						# It covers one job, so the cap_reached check below only counts
+						# jobs the cap really leaves without a droplet.
+						want -= 1
 					break
 				want -= 1
 				capacity -= 1
