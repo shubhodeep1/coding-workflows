@@ -1,7 +1,7 @@
 <!-- changelog: fixed -->
 - **Check-failure triage no longer files fix issues for failures another path already handles.** A failure on a commit that is no longer the PR head, and a failed final CI run while the final-CI hand-back is on, are now skipped.
 
-Six triage issues from 2026-11-16 and 11-17 became fix PRs on other PRs' branches (#9597, #9598, #9601, #9603, #9614, #9621). Five came from two cases. Issues #9580, #9581 and #9582 were filed against failing commits that the PR had already moved past, as three near-duplicates within three minutes. Issues #9608, #9618 and #9662 came from failed `CI [pr:<n>]` final runs, which `ci.yml`'s `final-ci-failed` job on `main` already sends back to review and autofix; the `stable` line creates no such runs, so for consumers only the stale-head skip applies. `scripts/check_failure_triage.sh` now skips both before any base, run or issue read and before diagnosis, logging `CHECK_TRIAGE skip reason=head_advanced` or `reason=final_ci_repair_owns`.
+Six triage issues from 2026-11-16 and 11-17 became fix PRs on other PRs' branches (#9597, #9598, #9601, #9603, #9614, #9621). Five came from two cases. Issues #9580, #9581 and #9582 were filed against failing commits that the PR had already moved past, as three near-duplicates within three minutes. Issues #9608, #9618 and #9662 came from failed `CI [pr:<n>]` final runs, which `ci.yml`'s `final-ci-failed` job already sends back to review and autofix. `scripts/check_failure_triage.sh` now skips both before any base, run or issue read and before diagnosis, logging `CHECK_TRIAGE skip reason=head_advanced` or `reason=final_ci_repair_owns`.
 
 | The numbers that matter | Value |
 | --- | --- |
