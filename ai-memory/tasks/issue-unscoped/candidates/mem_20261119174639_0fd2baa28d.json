@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stable_e2e_step_verify_cancel_on_close.sh:72-80 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: In `phase7_wait_deadline` the deadline is clamped to `job_cap` and then raised back to `floor` (start + budget), so the wait can run past the job-time cap into the finalization reserve.\n  WHY: The job's hard timeout can then cut off finalization and cleanup. Severity disagreement: three reviewers rated it MAJOR (mapped to high) and z-ai_glm-5_3-flash rated it NIT, calling it a documented, test-pinned trade-off that improves on the pre-PR behavior. The highest severity is used. Gemini cited lines 94-96.\n- scripts/stable_e2e_step_verify_cancel_on_close.sh:156-157 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The comment on the queued-run poll says the queue cap allows up to 30m of waiting, but the default `PHASE7_QUEUE_WAIT_CAP_MINUTES` is 60.\n  WHY: It is a comment-only inaccuracy that misleads operators. Two other reviewers (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) checked the working tree, found line 157 already says \"60m\", and judged the finding stale.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/stable_e2e_step_verify_cancel_on_close.sh:94-96 | severity=MAJOR | confidence=4\n  PROBLEM: The logic in `phase7_wait_deadline` allows the floor (based on the budget) to override the job-time cap.\n  WHY: If `floor` exceeds `job_cap`, the wait extends into the finalization reserve, and a hard job timeout can terminate the final steps prematurely.\n- scripts/stable_e2e_step_verify_cancel_on_close.sh:156 | severity=NIT | confidence=5\n  PROBLEM: The comment says the queue cap allows up to 30m of waiting, but the actual default is 60m and it is configurable.\n  WHY: It is a documentation-only issue, but it misleads operators troubleshooting runner starvation.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/stable_e2e_step_verify_cancel_on_close.sh:72-80 (phase7_wait_deadline, lines 56-81) | severity=MAJOR | confidence=4\n  PROBLEM: The function's comments promise both that every deadline stops E2E_FINALIZATION_RESERVE_MINUTES before the job timeout and that it is never earlier than the old start + budget. The code resolves the conflict in favour of the floor, and `test_job_cap_never_shortens_the_old_budget` (tests/test_test_and_mark_stable_phase7_queue_wait.py:201-208) codifies that.\n  WHY: Phase 7 can wait past the finalization reserve and be cut off, with cleanup, by the job's hard timeout when it starts late. This is the same shape as the original release-gate failure (#9794).\n- scripts/stable_e2e_step_verify_cancel_on_close.sh (comment on the queued-poll sleep branch, \"# Poll a queued run every 15 s: the queue cap allows up to 30m of\") | severity=NIT | confidence=5\n  PROBLEM: The comment hard-codes \"30m\", but the default `PHASE7_QUEUE_WAIT_CAP_MINUTES` was raised to 60 (commit 74daa82).\n  WHY: There is no runtime defect, but the comment misstates the worst-case queued wait and goes stale again if the cap is changed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/stable_e2e_step_verify_cancel_on_close.sh:72-80; tests/test_test_and_mark_stable_phase7_queue_wait.py:212-217 | severity=MAJOR | confidence=4\n  PROBLEM: The deadline is clamped to `job_cap` and then raised to `floor`, so `floor` can override the job-time cap.\n  WHY: When Phase 7 starts with less than `PHASE7_WAIT_BUDGET_MINUTES` before the job cap, the wait runs past the finalization reserve, and the job timeout can cut off later finalization or cleanup.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/stable_e2e_step_verify_cancel_on_close.sh:72-80 (clamp at 74-76, floor re-raise at 78-80; open-PR loop initial DEADLINE at line 419) | severity=NIT | confidence=3\n  PROBLEM: When a Phase 7 wait starts late, the floor assignment at lines 78-80 raises `PHASE7_WAIT_DEADLINE` back above the job-time cap, so the deadline can overrun the finalization reserve. The open-PR loop's initial DEADLINE behaves the same way on its first iteration.\n  WHY: Phase 7 waits into the reserve and the job's hard timeout can kill finalization and cleanup. The reviewer calls this a deliberate, documented trade-off pinned by tests and an improvement on the pre-PR code, which had no job cap.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3e4fb9241b7930ff4894793eb262bc78225367e237a1899bdbd938dce940fc99",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9794,
+    "run_id": "44567624760",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44567624760",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261119174639_0fd2baa28d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9794,
+    "run_id": "44567624760"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-19T17:46:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
