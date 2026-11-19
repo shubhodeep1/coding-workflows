@@ -130,8 +130,9 @@ Today the lint verdicts are carried by jobs named `lint`. The folded job must no
 - **Rejected — keep the id `lint`.** It keeps the duplicate `lint` that can satisfy the ruleset's `lint` requirement before CI finishes (PR #9570).
 - **If B:** read `pr-checks` for `pr-body-lint` in Implementation steps 1 and 6 and in Tests.
 
-### OD2 — Fold the plan-archival lint (open)
+### OD2 — Fold the plan-archival lint (answered: A)
 
+- **Answer:** A, implemented by PR #9709. `lint-plan-archival.yml` is removed and its steps are the plan-archival step group of the `pr-body-lint` job in `.github/workflows/pr-checks.yml`.
 - **Recommended: A — fold it.** It removes `lint-plan-archival.yml` and with it the last job outside CI named `lint`, which today can satisfy the ruleset's `lint` requirement on a PR that changes `docs/completed/**` (the defect PR #9570 showed for the PR-body lint's `lint`). A failed plan-archival lint then blocks through `pr-body-lint`, which Phase 1 adds to the gate default (OD1).
 - **B — leave it.** Fewer files change (`.claude/commands/audit-plans.md`, `.claude/commands/implement-plan-ai.md` and their `workflow-templates/.claude/commands/` copies cite the file), and its runs are rare because of the path filter. The duplicate `lint` stays.
 - **If B:** drop the plan-archival steps from step 1 and the plan-archival rows from Names that change; the guard test in step 7 keeps `lint-plan-archival.yml` in its allowlist.
