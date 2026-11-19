@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.76,
+  "details": "Across merged changes, changelog.d files frequently accompany implementation or test changes, while some workflow changes also add an agents.d note. When planning a repository change, check neighboring conventions and include these supporting files when appropriate.",
+  "fingerprint": "acafbd36ce5138649204162f5201d2b9f466d497d14a2a161aa7558485908d3a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44465458278",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44465458278",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9135",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9481",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9533",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9631",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9682",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9506",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9567",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9694",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9700",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9707"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261119053448_3e825b0343",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Changes commonly include a matching changelog.d entry, and workflow-focused changes may also include an agents.d note.",
+  "timestamps": {
+    "created_at": "2026-11-19T05:34:48Z",
+    "promoted_at": "2026-11-19T05:35:33Z",
+    "superseded_at": null
+  }
+}
