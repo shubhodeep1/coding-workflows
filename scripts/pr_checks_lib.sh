@@ -2396,6 +2396,9 @@ _merge_lease_pr_eligible()
 			if [ -n "${elig_since}" ]; then
 				[[ "${elig_since}" =~ ^[0-9]+$ ]] || return 0
 				elig_idle="$(_merge_lease_idle_seconds)"
+				# MERGE_LEASE_IDLE_MINUTES=0 turns off only the idle test (plan
+				# 2.3): the head-gate grace then uses the 60-minute default.
+				[ "${elig_idle}" -gt 0 ] || elig_idle=3600
 				elig_now="$(date -u +%s)"
 				if [ "$((10#${elig_since}))" -gt 0 ] && [ "${elig_idle}" -gt 0 ] && [ $((elig_now - 10#${elig_since})) -ge "${elig_idle}" ]; then
 					MERGE_LEASE_INELIGIBLE_REASON="no_head_gate"
@@ -2410,9 +2413,18 @@ _merge_lease_pr_eligible()
 	PR_CHECKS_RUNS_READ=""
 	PR_CHECKS_RUNS_PENDING=0
 	PR_CHECKS_LAST_PENDING=0
+	PR_CHECKS_RUNS_UNRUN=0
 	PR_CHECKS_WAIT_OUTCOME=""
 	PR_CHECKS_REPOSITORY="${elig_repo}" REVIEW_FINAL_CI_WORKFLOW="" FINAL_CI_MERGE_RESUME_ENABLED=false \
 		_pr_wait_for_required_checks "${elig_pr}" "${elig_head}" "${elig_base}" 0 || elig_rc=$?
+	# Plan D3 revokes only for a CI run that concluded with failure: runs that
+	# were all cancelled or hit startup_failure (reason=ci_run_cancelled) are
+	# not a failure, so they stay eligible (fail-open; the idle test still
+	# applies to a holder).
+	if [ "${elig_rc}" -ne 0 ] && [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "failed" ] \
+		&& [ "${PR_CHECKS_LAST_REASON:-}" = "ok" ] && [ "${PR_CHECKS_RUNS_UNRUN:-0}" -gt 0 ]; then
+		return 0
+	fi
 	if [ "${elig_rc}" -ne 0 ] && [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "failed" ]; then
 		MERGE_LEASE_INELIGIBLE_REASON="final_ci_failed"
 		return 1

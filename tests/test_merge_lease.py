@@ -852,10 +852,22 @@ class LeaseRevocation(unittest.TestCase):
 		self.assertEqual(h.state["refs"][REF], "c" * 40)
 
 	def test_idle_minutes_zero_turns_the_idle_test_off(self) -> None:
-		for gate in ("success", None):
-			h, out = _p2_tick(self._holder(gate=gate, updated=OLD), env={"MERGE_LEASE_IDLE_MINUTES": "0"})
-			self.assertIn("outcome=held reason=holder_open", out)
-			self.assertEqual(h.state["refs"][REF], "c" * 40)
+		h, out = _p2_tick(self._holder(updated=OLD), env={"MERGE_LEASE_IDLE_MINUTES": "0"})
+		self.assertIn("outcome=held reason=holder_open", out)
+		self.assertEqual(h.state["refs"][REF], "c" * 40)
+
+	def test_idle_minutes_zero_keeps_the_no_head_gate_revocation(self) -> None:
+		# 0 turns off only the idle test: a holder without a pipeline head-gate
+		# is still revoked once the default 60-minute grace has passed.
+		h, out = _p2_tick(self._holder(gate=None, updated=OLD), env={"MERGE_LEASE_IDLE_MINUTES": "0"})
+		self._assert_revoked(h, out, "revoked_no_head_gate")
+
+	def test_cancelled_ci_run_is_not_a_final_ci_failure(self) -> None:
+		runs = {_sha(4): [{"id": 12, "name": "CI", "status": "completed", "conclusion": "cancelled", "event": "pull_request"}]}
+		h, out = _p2_tick(self._holder(extra={"runs": runs}))
+		self.assertNotIn("revoked_final_ci_failed", out)
+		self.assertIn("outcome=held reason=holder_open", out)
+		self.assertEqual(h.state["refs"][REF], "c" * 40)
 
 	def test_eligible_holder_keeps_the_lease_without_a_write(self) -> None:
 		h, out = _p2_tick(self._holder())
@@ -1007,6 +1019,20 @@ class LeaseSkipList(unittest.TestCase):
 		self.assertEqual(_skips(rec), [f"5:{_sha(5)}"])
 		self.assertLess(rec.index("updated="), rec.index("skip="))
 		self.assertLess(rec.index("skip="), rec.index("paths:"))
+
+	def test_lone_skip_held_waiter_is_granted_when_nobody_else_is_eligible(self) -> None:
+		# The sweep skips labelled PRs, so a skip-held waiter left alone would
+		# never be dispatched again; like the gate's lone caller it is granted.
+		st = {"pulls": [_pull(5), _pull(6)], "labels": {"5": [WAIT], "6": [WAIT]}, "files": {"5": ["a"]}}
+		_seed_lease(st, _record(3, state="released", paths="", skips=[f"5:{_sha(5)}"]))
+		_gates_ok(st, 5)
+		_head_gate(st, _sha(6), "failure")
+		h, out = _p2_tick(st)
+		self.assertIn("pr=6 base=main mode=tick outcome=skipped reason=no_head_gate", out)
+		self.assertIn("pr=5 base=main mode=tick outcome=granted", out)
+		rec = h.record()
+		self.assertIn("pr=5", rec)
+		self.assertEqual(_skips(rec), [], "the held write drops the grantee's own entry")
 
 	def test_skip_clears_once_the_head_changes(self) -> None:
 		new_head = "e" * 40

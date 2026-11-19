@@ -1615,7 +1615,9 @@ _mt_now_ms()
 #   `skip=<pr>:<head>` (the release write); entries whose PR is no longer open
 #   on the base with that head are pruned from $1 (no API call). A labelled
 #   waiter held back by an entry logs outcome=skipped
-#   reason=skip_head_unchanged and keeps its label.
+#   reason=skip_head_unchanged and keeps its label; when no other waiter is
+#   eligible, the skip-held waiters are considered in queue order (the gate's
+#   lone-caller rule), so a labelled waiter is never stranded.
 # - Grant-time eligibility: up to 10 candidates per base per tick, in queue
 #   order; an ineligible one is unlabelled and logs outcome=skipped
 #   reason=draft|skip_ai|no_head_gate|final_ci_failed (event=skipped). When
@@ -1641,7 +1643,7 @@ _mt_merge_lease_tick()
 	# Phase 2 helpers; tick_p2: on for this base.
 	local tick_p2_lib=0 tick_p2=0 tick_login="" tick_login_tried=0 tick_open_heads tick_holder_row tick_holder_head tick_holder_title
 	local tick_holder_draft tick_since tick_idle_s tick_ci_active tick_skip_head tick_excluded tick_skipped_any tick_cand_n tick_skip_pr
-	local tick_first_row tick_skip_why
+	local tick_first_row tick_skip_why tick_skip_held tick_queue_skips
 	local tick_max_candidates=10
 	if declare -F _merge_lease_pr_eligible >/dev/null 2>&1 && declare -F _merge_lease_revoke_enabled >/dev/null 2>&1 \
 		&& declare -F _merge_lease_idle_seconds >/dev/null 2>&1; then
@@ -1705,7 +1707,8 @@ _mt_merge_lease_tick()
 			tick_holder_head=""
 			tick_holder_row=""
 			if [ "${tick_p2}" = 1 ]; then
-				tick_holder_row="$(printf '%s\n' "${tick_prs_json}" | jq -c --argjson n "${MERGE_LEASE_PR}" 'select(type == "object" and .number == $n)' 2>/dev/null | head -n1)" || tick_holder_row=""
+				# Same base only: a holder retargeted elsewhere keeps the closed-check path.
+				tick_holder_row="$(printf '%s\n' "${tick_prs_json}" | jq -c --argjson n "${MERGE_LEASE_PR}" --arg b "${tick_base}" 'select(type == "object" and .number == $n and .base == $b)' 2>/dev/null | head -n1)" || tick_holder_row=""
 				tick_holder_head="$(jq -r '.head_sha // ""' <<< "${tick_holder_row:-null}" 2>/dev/null)" || tick_holder_head=""
 			fi
 			if [ "${MERGE_LEASE_EXPIRES}" -le "$(date -u +%s)" ]; then
@@ -1768,11 +1771,14 @@ _mt_merge_lease_tick()
 		tick_excluded=""
 		tick_skipped_any=0
 		tick_cand_n=0
+		tick_skip_held=0
+		tick_queue_skips="${MERGE_LEASE_SKIPS:-}"
 		if [ "${tick_p2}" = 1 ] && [ -n "${MERGE_LEASE_SKIPS:-}" ]; then
 			# Labelled waiters held back by a skip entry keep their label.
 			while IFS= read -r tick_skip_pr; do
 				[[ "${tick_skip_pr}" =~ ^[1-9][0-9]*$ ]] || continue
 				tick_skipped_any=1
+				tick_skip_held=1
 				_mt_log "MERGE_LEASE pr=${tick_skip_pr} base=${tick_base} mode=tick outcome=skipped reason=skip_head_unchanged"
 				[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric skipped "${tick_base}" "${tick_skip_pr}" tick skip_head_unchanged "" "${tick_waiters}" - || true
 			done < <(jq -r --arg l "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" --arg s "${MERGE_LEASE_SKIPS}" \
@@ -1782,7 +1788,16 @@ _mt_merge_lease_tick()
 		fi
 		while :; do
 			if [ "${tick_p2}" = 1 ]; then
-				tick_first="$(_merge_lease_queue_first "${tick_base_prs}" "" "${MERGE_LEASE_SKIPS:-}" "${tick_excluded}")"
+				tick_first="$(_merge_lease_queue_first "${tick_base_prs}" "" "${tick_queue_skips}" "${tick_excluded}")"
+				if [ -z "${tick_first}" ] && [ "${tick_skip_held}" = 1 ] && [ -n "${tick_queue_skips}" ]; then
+					# Only skip-held waiters are left: as in the update-mode gate,
+					# a skip entry never lets a PR jump ahead, but with nobody else
+					# eligible the first of them is considered. It keeps its label
+					# and the sweep skips labelled PRs, so it would otherwise never
+					# be dispatched again (its held write drops its own entry).
+					tick_queue_skips=""
+					continue
+				fi
 			else
 				tick_first="$(_merge_lease_queue_first "${tick_base_prs}" "")"
 			fi
