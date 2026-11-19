@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/stuck-backlog-phase3c-persist-queue-pause.md:5 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The changelog line still says the queue backpressure marker (`{\"active\", \"intervals\"}`) and its `actions/cache` carry-over in `orchestrate_poll.yml` are new in Phase 3c, but both come from Phase 3b; only recording `intervals` through `persist_budget.py record-pause` is new. anthropic_claude-sonnet-5_5 also says the line wrongly claims an interval closes \"when the queue drains\", when it actually closes only once depth falls below `ACTIONS_QUEUE_BACKPRESSURE_LOW`.\n  WHY: Runtime is unaffected, but the release notes now contradict the corrected agents.d/stuck-backlog-phase3c-persist-queue-pause.md fragment and would lead operators to expect a new cache step or marker; all reviewers rated it NIT (mapped to low), and minimax_minimax-m3 filed it under its TASK COMPLETENESS / INTENT GAPS heading even though it uses the standard issue shape.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/stuck-backlog-phase3c-persist-queue-pause.md:Line 5 | severity=NIT | confidence=4\n  PROBLEM: After the last autofix run deleted the Phase 3c \"Restore queue backpressure marker\", \"Check queue backpressure marker\" and \"Save queue backpressure marker\" steps, the marker is carried only by the Phase 3b \"Restore queue backpressure state\" and \"Save queue backpressure state\" steps (.github/workflows/orchestrate_poll.yml lines 1414-1421 and 1955-1961). The changelog still says this PR adds the marker and its cache carry-over, yet the marker format and the `intervals` carry-forward already exist (`queue_backpressure_holds_dispatch` in scripts/orchestrate_poll_process.sh lines 18568-18569 and 18624). It also says an interval closes \"when the queue drains\", but `record-pause` follows `QUEUE_BACKPRESSURE_ACTIVE`, which turns off only below `ACTIONS_QUEUE_BACKPRESSURE_LOW` (lines 18585-18591).\n  WHY: Nothing breaks at runtime, but the release notes contradict the agents fragment, tell consumer-repo operators that this PR adds a cache entry to the poll job, and misstate when a pause interval ends.\n  HARDENING: Reword line 5 to say the poller records queue-pause intervals in the existing Phase 3b marker, carried by the existing \"Restore/Save queue backpressure state\" steps. An interval opens when depth >= ACTIONS_QUEUE_BACKPRESSURE_HIGH and closes when depth < ACTIONS_QUEUE_BACKPRESSURE_LOW. Estimated lines changed: 1. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/stuck-backlog-phase3c-persist-queue-pause.md:5 | severity=NIT | confidence=3\n  PROBLEM: The changelog wrongly says the queue backpressure marker and the `actions/cache` carry-over are new in Phase 3c.\n  WHY: This documentation error suggests the PR added cache steps or a marker that already existed in Phase 3b; the agents fragment was corrected but the changelog was not.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/stuck-backlog-phase3c-persist-queue-pause.md:line 5 (\"What changed:\" first bullet) | severity=NIT | confidence=3\n  PROBLEM: Filed under the TASK COMPLETENESS / INTENT GAPS heading. The changelog still describes the queue backpressure marker (`{\"active\", \"intervals\"}`) and its `actions/cache` carry-over in `orchestrate_poll.yml` as new in Phase 3c. The corrected agents.d/stuck-backlog-phase3c-persist-queue-pause.md says the marker and the `Restore queue backpressure state` / `Save queue backpressure state` cache pair are reused from Phase 3b, and that only the `intervals` recording through `persist_budget.py record-pause` is new.\n  WHY: Nothing breaks and the duplicate restore/save steps are gone, but the release notes give maintainers the wrong picture of what Phase 3c added; they may miscount workflow bytes or assume a new cache entry was added.\n  HARDENING: Reword line 5 to say the poller records queue-pause intervals in the existing Phase 3b marker, carried by the existing Restore/Save queue backpressure state cache pair. Estimated lines changed: 1. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/stuck-backlog-phase3c-persist-queue-pause.md:Line 5 | severity=NIT | confidence=4\n  PROBLEM: The changelog presents the queue marker and its cache carry-over as newly added, but this PR reuses the existing Phase 3b marker and restore/save steps.\n  WHY: Runtime behavior is unaffected, but the release note misstates what this release adds; the new behavior is recording pause intervals in that marker.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/stuck-backlog-phase3c-persist-queue-pause.md:Line 5, first clause | severity=NIT | confidence=4\n  PROBLEM: The changelog still presents the marker and its `actions/cache` carry-over as new in Phase 3c, but they come from Phase 3b (the \"Restore/Save queue backpressure state\" pair at orchestrate_poll.yml:1414 and :1955 existed before this PR). Only the `intervals` recording through `persist_budget.py record-pause` is new. agents.d/stuck-backlog-phase3c-persist-queue-pause.md:3 was corrected; the changelog was not.\n  WHY: Nothing breaks at runtime; this documentation-only mismatch would lead operators to expect a new cache step or marker in `orchestrate_poll.yml`.\n  HARDENING: Reword the clause to say the poller records queue-pause intervals in the existing Phase 3b marker (`QUEUE_BACKPRESSURE_STATE_FILE`), carried by the existing \"Restore/Save queue backpressure state\" cache steps. Estimated lines changed: 1. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "feb3ba542f77ce99c6038c348b61ca965cd3a7475c52e14ee9e1f5e8601a5c4f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9774,
+    "run_id": "44543277947",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44543277947",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261119150726_1c07f6c9b0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9774,
+    "run_id": "44543277947"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-19T15:07:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
