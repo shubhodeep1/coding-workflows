@@ -104,6 +104,50 @@ _SANDBOX_FILES = (
 	"ai_pipeline.md",
 )
 
+# Issue #9776: the review-blocked judge inlines the whole agents file into its
+# prompt and skips the model when the prompt passes codex's 1048576-character
+# stdin cap. The release-folded agents.md on `stable` is close to that size by
+# itself, so the sandbox copy is cut to this many characters to keep judge-path
+# prompts well under the cap. The repository's own agents.md is never changed.
+_SANDBOX_AGENTS_MD_MAX_CHARS = 262144
+# Characters of poller stdout shown in a failing review-blocked assertion.
+_POLLER_STDOUT_TAIL_CHARS = 4000
+
+
+def _copy_sandbox_file_bounded(src: Path, dst: Path) -> None:
+	"""Copy a sandbox file; an oversized ``agents.md`` is cut at a newline.
+
+	The cut copy keeps the leading text up to the last newline that fits and
+	ends with one marker line, and is never longer than
+	``_SANDBOX_AGENTS_MD_MAX_CHARS`` characters. Every other file, and an
+	``agents.md`` under the limit, is copied unchanged with ``shutil.copy2``.
+	"""
+	if src.name == "agents.md":
+		text = src.read_text(encoding="utf-8")
+		if len(text) > _SANDBOX_AGENTS_MD_MAX_CHARS:
+			marker = (
+				f"<!-- test sandbox: agents.md truncated to "
+				f"{_SANDBOX_AGENTS_MD_MAX_CHARS} characters (issue #9776) -->\n"
+			)
+			limit = _SANDBOX_AGENTS_MD_MAX_CHARS - len(marker)
+			cut = text.rfind("\n", 0, limit)
+			head = text[: cut + 1] if cut >= 0 else ""
+			dst.write_text(head + marker, encoding="utf-8")
+			return
+	shutil.copy2(src, dst)
+
+
+def _poller_stdout_tail(result: dict) -> str:
+	"""Return the last ``_POLLER_STDOUT_TAIL_CHARS`` characters of poller stdout."""
+	stdout = str(result.get("stdout", ""))
+	return "poller stdout tail:\n" + stdout[-_POLLER_STDOUT_TAIL_CHARS:]
+
+
+def _assert_in_poller_stdout(needle: str, result: dict) -> None:
+	"""Assert ``needle`` is in the poller stdout; on a miss show the stdout tail."""
+	if needle not in result["stdout"]:
+		raise AssertionError(f"missing {needle!r} in poller stdout\n{_poller_stdout_tail(result)}")
+
 
 def _git_test_env() -> dict[str, str]:
 	"""Return a subprocess env without repo-scoped git/worktree overrides."""
@@ -144,7 +188,7 @@ def _make_poller_sandbox(
 		if src.exists():
 			dst = target / rel
 			dst.parent.mkdir(parents=True, exist_ok=True)
-			shutil.copy2(src, dst)
+			_copy_sandbox_file_bounded(src, dst)
 	subprocess.run(
 		["git", "init", "--quiet", str(target)],
 		check=True,
@@ -11480,7 +11524,7 @@ def test_review_blocked_merged_followup_retargets_to_integration_branch():
 
 
 	followup_prs = [pr for pr in result["prs"] if int(pr.get("number", 0)) != 901]
-	assert any(pr.get("baseRefName") == "orchestrator/project-192" for pr in followup_prs)
+	assert any(pr.get("baseRefName") == "orchestrator/project-192" for pr in followup_prs), _poller_stdout_tail(result)
 	assert not any(
 		pr.get("headRefName", "").startswith("fix/10-followup-") and pr.get("baseRefName") == "main"
 		for pr in followup_prs
@@ -11627,8 +11671,8 @@ def test_review_blocked_merged_followup_refuses_default_base_when_active_integra
 	)
 
 
-	assert len(result["prs"]) == 1
-	assert "Aborting follow-up PR creation to avoid targeting main" in (result["stdout"] + result["stderr"])
+	assert len(result["prs"]) == 1, _poller_stdout_tail(result)
+	assert "Aborting follow-up PR creation to avoid targeting main" in (result["stdout"] + result["stderr"]), _poller_stdout_tail(result)
 
 
 def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_context():
@@ -11704,7 +11748,7 @@ def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_c
 
 
 	followup_prs = [pr for pr in result["prs"] if int(pr.get("number", 0)) != 901]
-	assert any(pr.get("baseRefName") == "main" for pr in followup_prs)
+	assert any(pr.get("baseRefName") == "main" for pr in followup_prs), _poller_stdout_tail(result)
 
 
 def _review_blocked_fix_scope_case(
@@ -11761,8 +11805,8 @@ def _review_blocked_fix_scope_case(
 
 def test_review_blocked_fix_scope_accepts_pr_file():
 	result = _review_blocked_fix_scope_case(touch="sandbox_fix.txt", files=["sandbox_fix.txt"])
-	assert "REVIEW_BLOCKED_FIX_TARGET_VERIFIED issue=10 pr=901 head_sha=" in result["stdout"]
-	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_TARGET_VERIFIED issue=10 pr=901 head_sha=", result)
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901", result)
 	assert result.get("git_push_calls", [])
 	assert any("HEAD:ai/issue-10" in call for call in result["git_push_calls"])
 	assert "ai:review-blocked" not in result["issues"]["10"]["labels"]
@@ -11772,6 +11816,56 @@ def test_review_blocked_fix_scope_accepts_pr_file():
 	assert "LOG_PREFIX.name=REVIEW_BLOCKED_FIX_TARGET_VERIFIED" in agents_text
 	assert "LOG_PREFIX.name=REVIEW_BLOCKED_FIX_TARGET_REJECTED" in agents_text
 	assert "LOG_PREFIX.name=REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED" in agents_text
+
+
+def test_review_blocked_judge_prompt_fits_stdin_cap_with_repo_agents_md():
+	# Issue #9776: with the repository's agents.md copied whole, the judge
+	# prompt passed the 1048576-character cap and every fix test failed silently.
+	result = _review_blocked_fix_scope_case(touch="sandbox_fix.txt", files=["sandbox_fix.txt"])
+	tail = _poller_stdout_tail(result)
+	match = re.search(
+		r"Review-blocked judge prompt size: \d+ bytes \((\d+) characters;", result["stdout"],
+	)
+	assert match, tail
+	assert int(match.group(1)) < 1048576, tail
+	assert "exceeds codex's 1048576-character stdin cap" not in result["stdout"], tail
+
+
+def test_make_poller_sandbox_bounds_agents_md_copy():
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		src_dir = root / "src"
+		dst_dir = root / "dst"
+		src_dir.mkdir()
+		dst_dir.mkdir()
+		big = src_dir / "agents.md"
+		source_text = ("x" * 99 + "\n") * 12000
+		big.write_text(source_text, encoding="utf-8")
+		big_dst = dst_dir / "agents.md"
+		_copy_sandbox_file_bounded(big, big_dst)
+		copied = big_dst.read_text(encoding="utf-8")
+		assert len(copied) <= _SANDBOX_AGENTS_MD_MAX_CHARS
+		marker = (
+			f"<!-- test sandbox: agents.md truncated to "
+			f"{_SANDBOX_AGENTS_MD_MAX_CHARS} characters (issue #9776) -->\n"
+		)
+		assert copied.endswith(marker)
+		head = copied[: -len(marker)]
+		assert head and head.endswith("\n")
+		assert source_text.startswith(head)
+		# Small agents.md and other files are copied byte for byte.
+		small_dir = root / "small"
+		small_dir.mkdir()
+		small = small_dir / "agents.md"
+		small.write_bytes(b"# small\n\xc3\xa9\n")
+		small_dst = dst_dir / "small_agents.md"
+		_copy_sandbox_file_bounded(small, small_dst)
+		assert small_dst.read_bytes() == small.read_bytes()
+		other = src_dir / "ai_pipeline.md"
+		other.write_text(source_text, encoding="utf-8")
+		other_dst = dst_dir / "ai_pipeline.md"
+		_copy_sandbox_file_bounded(other, other_dst)
+		assert other_dst.read_bytes() == other.read_bytes()
 
 
 # The file's own runner calls tests without arguments, so cases loop here.
@@ -11859,7 +11953,7 @@ def test_review_blocked_fix_target_rejects_head_move_during_judge():
 			pr_api_sequence={901: [dict(open_pr) for _ in range(6)] + [{**open_pr, **changed_pr}]},
 		)
 		try:
-			assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
+			_assert_in_poller_stdout(f"issue=10 pr=901 reason={reason}", result)
 			assert result.get("git_push_calls", []) == []
 			assert result.get("review_blocked_fix_commit_calls", []) == []
 			assert result["latest_state"]["review_blocked_retries"].get("10", 0) == 0
@@ -11996,7 +12090,7 @@ def test_review_blocked_rejects_fork_head_on_merged_followup():
 
 def test_review_blocked_fix_scope_rejects_unrelated_file():
 	result = _review_blocked_fix_scope_case(touch="sandbox_fix.txt", files=["other.txt"])
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope rejected=1 paths=sandbox_fix.txt" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope rejected=1 paths=sandbox_fix.txt", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
@@ -12012,7 +12106,7 @@ def test_review_blocked_fix_scope_rejects_empty_staged_set():
 		touch=".github/prompts/excluded.txt", files=[".github/prompts/excluded.txt"],
 		sandbox_origin_url="https://github.com/test-harness/coding-workflows.git",
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=no_staged_changes" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=no_staged_changes", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
@@ -12024,7 +12118,7 @@ def test_review_blocked_fix_scope_rejects_workflow_edit_opt_out():
 		touch="scripts/excluded.sh", files=["scripts/excluded.sh"],
 		env_overrides={"ALLOW_WORKFLOW_EDITS": "false"},
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=workflow_edits_disabled rejected=1 paths=scripts/excluded.sh" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=workflow_edits_disabled rejected=1 paths=scripts/excluded.sh", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
@@ -12132,7 +12226,7 @@ def test_review_blocked_fix_scope_reports_all_workflow_edit_opt_out_paths():
 		touch="scripts/a.sh", files=["scripts/a.sh", "scripts/b.sh"],
 		env_overrides={"ALLOW_WORKFLOW_EDITS": "false", "MOCK_CODEX_TOUCH_FILE": "scripts/a.sh\nscripts/b.sh"},
 	)
-	assert "reason=workflow_edits_disabled rejected=2 paths=scripts/a.sh,scripts/b.sh" in result["stdout"]
+	_assert_in_poller_stdout("reason=workflow_edits_disabled rejected=2 paths=scripts/a.sh,scripts/b.sh", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
@@ -12352,7 +12446,7 @@ def test_review_blocked_fix_scope_rejects_merged_followup():
 		codex_json={"action": "fix", "justification": "apply fixes", "fix_description": "patched"},
 		codex_touch_file="sandbox_fix.txt", mock_git_push_success=True,
 	)
-	assert "reason=out_of_scope" in result["stdout"]
+	_assert_in_poller_stdout("reason=out_of_scope", result)
 	assert result.get("git_push_calls", []) == []
 	assert len(result["prs"]) == 1
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
@@ -12432,8 +12526,8 @@ def test_review_blocked_followup_refusal_increments_retry_counter():
 	)
 
 
-	assert len(result["prs"]) == 1
-	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+	assert len(result["prs"]) == 1, _poller_stdout_tail(result)
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1, _poller_stdout_tail(result)
 
 
 def test_sync_superseded_sets_state_once_and_skips_future_sync_attempts():
