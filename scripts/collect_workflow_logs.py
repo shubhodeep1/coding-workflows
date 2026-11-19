@@ -69,10 +69,16 @@ LOG_EXPORT_CATEGORIES = ("errors", "slow", "recent")
 LOG_EXCERPT_MAX_CHARS = 4000
 SLOW_RUNS_PER_REPO = 10
 DEFAULT_SUCCESS_SAMPLE_RATE = 0.07
+# Upper bound on the slots select_notable_runs_for_logs() reserves for sampled
+# successful runs when notable runs would otherwise fill --max-log-runs.
+SUCCESS_SAMPLE_MAX_RESERVE_FRACTION = 0.1
 LOG_ARCHIVE_FETCH_RETRIES = 3
 LOG_ARCHIVE_FETCH_BACKOFF_SECONDS = 1.0
 MISSING_LOG_ARCHIVE_MARKER = "partial_data:missing_log_archive"
 DIAGNOSTIC_FAILURE_REASON_MAX_CHARS = 512
+# Bound for coverage.repositories_failed[].message (P3). The text is gh/API
+# error output, so it is sanitized and capped before it enters the report.
+COVERAGE_MESSAGE_MAX_CHARS = 300
 WORKFLOW_VALIDATION_ANNOTATIONS_STATUS = "unavailable_from_existing_payloads"
 RETRY_MARKERS = (
     "rate limit",
@@ -1225,6 +1231,7 @@ def build_report(
     errors: list[dict[str, str]],
     *,
     success_sample_rate: float = DEFAULT_SUCCESS_SAMPLE_RATE,
+    coverage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     durations = [int(item.get("duration_seconds", 0)) for item in runs]
     success_count = sum(1 for item in runs if (item.get("conclusion") or "").lower() == "success")
@@ -1240,7 +1247,7 @@ def build_report(
     avg_duration = float(sum(durations) / len(durations)) if durations else 0.0
     sampled_success_count = sum(1 for item in runs if item.get("_success_sampled"))
 
-    return {
+    report: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": _format_iso8601(datetime.now(timezone.utc)),
         "scope": {
@@ -1264,6 +1271,11 @@ def build_report(
         },
         "errors": errors,
     }
+    # Additive (P3): collection coverage is present only when main() supplies
+    # it, so existing callers and readers see an unchanged report shape.
+    if coverage is not None:
+        report["coverage"] = coverage
+    return report
 
 
 def _sort_runs_by_created_desc(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1357,7 +1369,7 @@ def select_notable_runs_for_logs(
         reverse=True,
     )
 
-    ordered: list[dict[str, Any]] = []
+    notable_ordered: list[dict[str, Any]] = []
     seen: set[tuple[str, int]] = set()
     for bucket in (failed_runs, retried_runs, slow_runs):
         for run in bucket:
@@ -1365,34 +1377,54 @@ def select_notable_runs_for_logs(
             if identity in seen:
                 continue
             seen.add(identity)
-            ordered.append(run)
-            if len(ordered) >= max_log_runs:
-                return ordered
+            notable_ordered.append(run)
+
+    # Eligible successful runs outside every notable bucket, in eligible order.
+    success_runs = [
+        run for run in eligible
+        if (run.get("conclusion") or "").lower() == "success" and _run_identity(run) not in seen
+    ]
+
+    # Success reserve (analysis/workflow-optimization-2026-10-08.md, Executive
+    # Summary #4 / Top action #2): with notable runs filling the cap first, the
+    # report showed 124/1,000 runs with parsed telemetry, a 7% configured
+    # success sample and 0 sampled successes, so no success baseline existed.
+    # Hold back a bounded number of slots for sampled successes. With a single
+    # slot (max_log_runs == 1) a failure keeps it, as before.
+    success_reserve = 0
+    if success_sample_rate > 0 and success_runs and max_log_runs >= 2:
+        success_reserve = min(
+            math.ceil(len(success_runs) * success_sample_rate),
+            max(1, math.floor(max_log_runs * SUCCESS_SAMPLE_MAX_RESERVE_FRACTION)),
+        )
+    ordered = notable_ordered[: max_log_runs - success_reserve]
+    notable_head_count = len(ordered)
 
     # Random sampling of successful runs for baseline visibility
-    if success_sample_rate > 0 and len(ordered) < max_log_runs:
-        success_runs = [
-            run for run in eligible
-            if (run.get("conclusion") or "").lower() == "success" and _run_identity(run) not in seen
-        ]
-        if success_runs:
-            sample_count = max(1, math.ceil(len(success_runs) * success_sample_rate))
-            remaining_slots = max_log_runs - len(ordered)
-            sample_count = min(sample_count, remaining_slots)
-            seed = _deterministic_seed(eligible)
-            rng = random.Random(seed)
-            sampled = rng.sample(success_runs, min(sample_count, len(success_runs)))
-            sampled = _sort_runs_by_created_desc(sampled)
-            for run in sampled:
-                identity = _run_identity(run)
-                if identity in seen:
-                    continue
-                seen.add(identity)
-                run["_success_sampled"] = True
-                ordered.append(run)
-                if len(ordered) >= max_log_runs:
-                    break
+    sampled_selected: list[dict[str, Any]] = []
+    if success_sample_rate > 0 and success_runs and len(ordered) < max_log_runs:
+        sample_count = max(1, math.ceil(len(success_runs) * success_sample_rate))
+        remaining_slots = max_log_runs - len(ordered)
+        sample_count = min(sample_count, remaining_slots)
+        seed = _deterministic_seed(eligible)
+        rng = random.Random(seed)
+        sampled = rng.sample(success_runs, min(sample_count, len(success_runs)))
+        sampled = _sort_runs_by_created_desc(sampled)
+        for run in sampled:
+            identity = _run_identity(run)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            run["_success_sampled"] = True
+            sampled_selected.append(run)
+            if len(ordered) + len(sampled_selected) >= max_log_runs:
+                break
 
+    # Give reserve slots the sample did not use back to the remaining notable
+    # runs, in bucket order (failed, retried, slow).
+    free_slots = max(0, max_log_runs - notable_head_count - len(sampled_selected))
+    ordered.extend(notable_ordered[notable_head_count : notable_head_count + free_slots])
+    ordered.extend(sampled_selected)
     return ordered
 
 
@@ -2037,6 +2069,11 @@ def main(argv: list[str] | None = None) -> int:
     successful_repo_queries = 0
     log_archive_cache: dict[tuple[str, int], bytes | Exception] | None = {} if args.log_output_dir else None
     pat_budget_listing_incomplete = False
+    # Collection coverage (P3): failed repos (no run listing at all) and
+    # truncated repos (partial listing) stay disjoint.
+    coverage_failed: list[dict[str, str]] = []
+    coverage_truncated: list[str] = []
+    coverage_page_limit_reached = False
 
     for repo in repositories:
         repo_cache = cached_repositories.get(repo) if isinstance(cached_repositories, dict) else None
@@ -2057,6 +2094,14 @@ def main(argv: list[str] | None = None) -> int:
         if not isinstance(cached_etag, str) or not cached_etag.strip():
             cached_etag = None
 
+        budget_repo_incomplete = False
+        # Drift-duplicate skipping can leave a page-limited listing up to a
+        # page short of the cap; a single page cannot drift. --max-runs is exact.
+        page_cap = min(1000, args.per_page * args.max_pages)
+        page_snapshot_cap = max(1, page_cap - args.per_page) if args.max_pages > 1 else page_cap
+        snapshot_cap = page_snapshot_cap
+        if args.max_runs > 0:
+            snapshot_cap = min(snapshot_cap, args.max_runs)
         try:
             if pat_budget_day_utc is not None:
                 # The unfiltered created search can hit GitHub's 1,000-run
@@ -2075,9 +2120,14 @@ def main(argv: list[str] | None = None) -> int:
                             )
                         except Exception as exc:  # noqa: BLE001
                             pat_budget_listing_incomplete = True
+                            budget_repo_incomplete = True
                             errors.append({"repository": repo, "scope": "runs", "message": str(exc)})
                             continue
                         budget_listing_successes += 1
+                        if budget_capped or budget_meta.get("page_limit_reached"):
+                            budget_repo_incomplete = True
+                        if budget_meta.get("page_limit_reached"):
+                            coverage_page_limit_reached = True
                         pat_budget_listing_incomplete |= bool(budget_capped or budget_meta.get("page_limit_reached"))
                         for budget_run in budget_runs:
                             budget_runs_by_id[_to_int(budget_run.get("id"), 0)] = budget_run
@@ -2102,7 +2152,16 @@ def main(argv: list[str] | None = None) -> int:
                     # were added lack "event"; reusing them would mark every
                     # trusted run origin_unknown for as long as the ETag
                     # matches. Refetch once without the ETag instead.
-                    if cached_runs_snapshot and all("event" in item for item in cached_runs_snapshot):
+                    # P3: a snapshot that is big enough to have hit --max-runs
+                    # or the page limit may be a partial listing cached before
+                    # truncated ETags were dropped; a 304 carries no truncation
+                    # flags, so refetch it to recompute coverage.
+                    snapshot_may_be_partial = len(cached_runs_snapshot) >= snapshot_cap
+                    if (
+                        cached_runs_snapshot
+                        and not snapshot_may_be_partial
+                        and all("event" in item for item in cached_runs_snapshot)
+                    ):
                         runs = [dict(item) for item in cached_runs_snapshot]
                     else:
                         runs, capped, run_meta = list_runs_for_repo(
@@ -2116,6 +2175,13 @@ def main(argv: list[str] | None = None) -> int:
                         )
             successful_repo_queries += 1
             pat_budget_listing_incomplete |= bool(capped or run_meta.get("page_limit_reached"))
+            if run_meta.get("page_limit_reached"):
+                coverage_page_limit_reached = True
+            repo_truncated = bool(capped or run_meta.get("page_limit_reached"))
+            if budget_repo_incomplete:
+                repo_truncated = True
+            if repo_truncated and repo not in coverage_truncated:
+                coverage_truncated.append(repo)
             if capped:
                 errors.append(
                     {
@@ -2131,6 +2197,12 @@ def main(argv: list[str] | None = None) -> int:
                     "repository": repo,
                     "scope": "runs",
                     "message": str(exc),
+                }
+            )
+            coverage_failed.append(
+                {
+                    "repository": repo,
+                    "message": _sanitize_diagnostic_text(str(exc))[:COVERAGE_MESSAGE_MAX_CHARS],
                 }
             )
             continue
@@ -2232,8 +2304,19 @@ def main(argv: list[str] | None = None) -> int:
             run_rows.append(row)
             collected_rows_for_repo.append(dict(row))
 
+        # P3: never keep the ETag of a truncated listing. A later 304 would
+        # restore the partial snapshot without its truncation flags, so the
+        # coverage report would show the repo as complete; refetch instead.
+        # A listing at or above the page-based cap would be refetched after
+        # any 304, so its ETag would only add a wasted conditional request.
+        # (A listing of --max-runs runs is already capped, so truncated.)
+        # A PAT-budget run stores only the instrumented-workflow subset and
+        # has no ETag of its own, so no ETag describes its snapshot.
+        etag_unusable = repo_truncated or pat_budget_day_utc is not None or len(runs) >= page_snapshot_cap
         repo_cache_updated = {
-            "runs_etag": run_meta.get("etag") if isinstance(run_meta.get("etag"), str) else cached_etag,
+            "runs_etag": None
+            if etag_unusable
+            else (run_meta.get("etag") if isinstance(run_meta.get("etag"), str) else cached_etag),
             "runs_window_start": _format_iso8601(effective_since),
             "jobs_seen_set": jobs_seen_set,
             "cancelled_jobs_seen_set": cancelled_jobs_seen_set,
@@ -2386,7 +2469,18 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     errors = _dedupe_errors(errors)
-    report = build_report(repositories, run_rows, errors, success_sample_rate=success_sample_rate)
+    report = build_report(
+        repositories,
+        run_rows,
+        errors,
+        success_sample_rate=success_sample_rate,
+        coverage={
+            "repositories_requested": list(dict.fromkeys(repositories)),
+            "repositories_failed": coverage_failed,
+            "repositories_truncated": coverage_truncated,
+            "page_limit_reached": coverage_page_limit_reached,
+        },
+    )
     _write_json_atomic(Path(args.output), report)
     if args.log_output_dir:
         _write_json_atomic(Path(args.log_output_dir) / "summary.json", report)
