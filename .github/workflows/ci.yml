@@ -155,9 +155,11 @@ jobs:
           # other event keeps the default ref.
           ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
 
-      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # The merge ref must merge into the run's base (the base tip when the
+      # run was dispatched, the same in every job): GitHub refreshes
       # it lazily, and #9602's final run tested a base that had fixed the
-      # failure two hours earlier. Refreshes a stale ref or fails the job;
+      # failure two hours earlier. Refreshes a stale ref, else builds the
+      # merge into the run's pinned base itself, or fails the job;
       # contract in scripts/ci_final_merge_ref_fresh.sh.
       - name: Verify the final-CI merge ref is current
         if: github.event_name == 'workflow_dispatch'
@@ -414,6 +416,7 @@ jobs:
         run: |
           set -euo pipefail
           head_commit="${GITHUB_SHA}"
+          head_fetch=("${head_commit}")
           if [ -n "${FINAL_CI_PR_NUMBER:-}" ]; then
             # Final-CI dispatch run (cut-ci-runner-time Phase 4): HEAD is the
             # PR's merge ref, and the pull_request skips above are applied from
@@ -433,8 +436,14 @@ jobs:
               esac
             fi
             head_commit="$(git rev-parse HEAD)"
+            head_fetch=("${head_commit}")
+            if [ "${CI_FINAL_MERGE_REF_LOCAL_MERGE:-}" = "${head_commit}" ]; then
+              # Built locally by scripts/ci_final_merge_ref_fresh.sh: origin
+              # has only its parents.
+              head_fetch=("$(git rev-parse "${head_commit}^1")" "${GITHUB_SHA}")
+            fi
           fi
-          git fetch --no-tags --depth=2 origin "${head_commit}"
+          git fetch --no-tags --depth=2 origin "${head_fetch[@]}"
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_agents_md_direct_edits.py \
             --base "$(git rev-parse "${head_commit}^1")" --head "${head_commit}"
 
@@ -884,9 +893,11 @@ jobs:
           # step's sync need, and fails the job if it cannot.
           fetch-depth: 1
 
-      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # The merge ref must merge into the run's base (the base tip when the
+      # run was dispatched, the same in every job): GitHub refreshes
       # it lazily, and #9602's final run tested a base that had fixed the
-      # failure two hours earlier. Refreshes a stale ref or fails the job;
+      # failure two hours earlier. Refreshes a stale ref, else builds the
+      # merge into the run's pinned base itself, or fails the job;
       # contract in scripts/ci_final_merge_ref_fresh.sh.
       - name: Verify the final-CI merge ref is current
         if: github.event_name == 'workflow_dispatch'
@@ -930,6 +941,7 @@ jobs:
           }
           event="${GITHUB_EVENT_NAME:-}"
           head_commit="${GITHUB_SHA}"
+          head_fetch=("${head_commit}")
           final_ci=false
           if [ "${event}" = "workflow_dispatch" ] && [ -n "${FINAL_CI_PR_NUMBER:-}" ]; then
             # Final-CI dispatch run (Phase 4): the checkout is the PR's merge
@@ -943,6 +955,12 @@ jobs:
             final_ci=true
             event="pull_request"
             head_commit="$(git rev-parse HEAD)"
+            head_fetch=("${head_commit}")
+            if [ "${CI_FINAL_MERGE_REF_LOCAL_MERGE:-}" = "${head_commit}" ]; then
+              # scripts/ci_final_merge_ref_fresh.sh built this merge locally;
+              # origin has only its parents, which carry the same history.
+              head_fetch=("$(git rev-parse "${head_commit}^1")" "${GITHUB_SHA}")
+            fi
           fi
           case "${GITHUB_REF:-}" in
             refs/heads/orchestrator/project-*) project_push=true ;;
@@ -955,7 +973,7 @@ jobs:
             exit 0
           fi
           main_refspec="+refs/heads/main:refs/remotes/origin/main"
-          if ! shallow_fetch --depth=200 origin "${head_commit}" "${main_refspec}"; then
+          if ! shallow_fetch --depth=200 origin "${head_fetch[@]}" "${main_refspec}"; then
             echo "::error::Shallow checkout: could not fetch history for ${head_commit} and main from origin."
             exit 1
           fi
@@ -1011,7 +1029,7 @@ jobs:
           if ! history_ready; then
             if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
               echo "Shallow checkout: the merge-base is deeper than the 200-commit window; unshallowing ${head_commit} and main."
-              if ! shallow_fetch --unshallow origin "${head_commit}" "${main_refspec}"; then
+              if ! shallow_fetch --unshallow origin "${head_fetch[@]}" "${main_refspec}"; then
                 echo "::error::Shallow checkout: could not unshallow ${head_commit} and main from origin."
                 exit 1
               fi
@@ -1522,9 +1540,11 @@ jobs:
           # other event keeps the default ref.
           ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
 
-      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # The merge ref must merge into the run's base (the base tip when the
+      # run was dispatched, the same in every job): GitHub refreshes
       # it lazily, and #9602's final run tested a base that had fixed the
-      # failure two hours earlier. Refreshes a stale ref or fails the job;
+      # failure two hours earlier. Refreshes a stale ref, else builds the
+      # merge into the run's pinned base itself, or fails the job;
       # contract in scripts/ci_final_merge_ref_fresh.sh.
       - name: Verify the final-CI merge ref is current
         if: github.event_name == 'workflow_dispatch'
@@ -2020,9 +2040,11 @@ jobs:
           # other event keeps the default ref.
           ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
 
-      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # The merge ref must merge into the run's base (the base tip when the
+      # run was dispatched, the same in every job): GitHub refreshes
       # it lazily, and #9602's final run tested a base that had fixed the
-      # failure two hours earlier. Refreshes a stale ref or fails the job;
+      # failure two hours earlier. Refreshes a stale ref, else builds the
+      # merge into the run's pinned base itself, or fails the job;
       # contract in scripts/ci_final_merge_ref_fresh.sh.
       - name: Verify the final-CI merge ref is current
         if: github.event_name == 'workflow_dispatch'
@@ -2642,9 +2664,11 @@ jobs:
           # its `base...HEAD` diff needs, and fails the job if it cannot.
           fetch-depth: 1
 
-      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # The merge ref must merge into the run's base (the base tip when the
+      # run was dispatched, the same in every job): GitHub refreshes
       # it lazily, and #9602's final run tested a base that had fixed the
-      # failure two hours earlier. Refreshes a stale ref or fails the job;
+      # failure two hours earlier. Refreshes a stale ref, else builds the
+      # merge into the run's pinned base itself, or fails the job;
       # contract in scripts/ci_final_merge_ref_fresh.sh.
       - name: Verify the final-CI merge ref is current
         if: github.event_name == 'workflow_dispatch'
@@ -2688,6 +2712,7 @@ jobs:
           }
           event="${GITHUB_EVENT_NAME:-}"
           head_commit="${GITHUB_SHA}"
+          head_fetch=("${head_commit}")
           final_ci=false
           if [ "${event}" = "workflow_dispatch" ] && [ -n "${FINAL_CI_PR_NUMBER:-}" ]; then
             # Final-CI dispatch run (Phase 4): the checkout is the PR's merge
@@ -2701,6 +2726,12 @@ jobs:
             final_ci=true
             event="pull_request"
             head_commit="$(git rev-parse HEAD)"
+            head_fetch=("${head_commit}")
+            if [ "${CI_FINAL_MERGE_REF_LOCAL_MERGE:-}" = "${head_commit}" ]; then
+              # scripts/ci_final_merge_ref_fresh.sh built this merge locally;
+              # origin has only its parents, which carry the same history.
+              head_fetch=("$(git rev-parse "${head_commit}^1")" "${GITHUB_SHA}")
+            fi
           fi
           case "${GITHUB_REF:-}" in
             refs/heads/orchestrator/project-*) project_push=true ;;
@@ -2713,7 +2744,7 @@ jobs:
             exit 0
           fi
           main_refspec="+refs/heads/main:refs/remotes/origin/main"
-          if ! shallow_fetch --depth=200 origin "${head_commit}" "${main_refspec}"; then
+          if ! shallow_fetch --depth=200 origin "${head_fetch[@]}" "${main_refspec}"; then
             echo "::error::Shallow checkout: could not fetch history for ${head_commit} and main from origin."
             exit 1
           fi
@@ -2769,7 +2800,7 @@ jobs:
           if ! history_ready; then
             if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
               echo "Shallow checkout: the merge-base is deeper than the 200-commit window; unshallowing ${head_commit} and main."
-              if ! shallow_fetch --unshallow origin "${head_commit}" "${main_refspec}"; then
+              if ! shallow_fetch --unshallow origin "${head_fetch[@]}" "${main_refspec}"; then
                 echo "::error::Shallow checkout: could not unshallow ${head_commit} and main from origin."
                 exit 1
               fi
@@ -3433,9 +3464,11 @@ jobs:
           # other event keeps the default ref.
           ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
 
-      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # The merge ref must merge into the run's base (the base tip when the
+      # run was dispatched, the same in every job): GitHub refreshes
       # it lazily, and #9602's final run tested a base that had fixed the
-      # failure two hours earlier. Refreshes a stale ref or fails the job;
+      # failure two hours earlier. Refreshes a stale ref, else builds the
+      # merge into the run's pinned base itself, or fails the job;
       # contract in scripts/ci_final_merge_ref_fresh.sh.
       - name: Verify the final-CI merge ref is current
         if: github.event_name == 'workflow_dispatch'
@@ -4244,9 +4277,11 @@ jobs:
           # step's sync need, and fails the job if it cannot.
           fetch-depth: 1
 
-      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # The merge ref must merge into the run's base (the base tip when the
+      # run was dispatched, the same in every job): GitHub refreshes
       # it lazily, and #9602's final run tested a base that had fixed the
-      # failure two hours earlier. Refreshes a stale ref or fails the job;
+      # failure two hours earlier. Refreshes a stale ref, else builds the
+      # merge into the run's pinned base itself, or fails the job;
       # contract in scripts/ci_final_merge_ref_fresh.sh.
       - name: Verify the final-CI merge ref is current
         if: github.event_name == 'workflow_dispatch'
@@ -4290,6 +4325,7 @@ jobs:
           }
           event="${GITHUB_EVENT_NAME:-}"
           head_commit="${GITHUB_SHA}"
+          head_fetch=("${head_commit}")
           final_ci=false
           if [ "${event}" = "workflow_dispatch" ] && [ -n "${FINAL_CI_PR_NUMBER:-}" ]; then
             # Final-CI dispatch run (Phase 4): the checkout is the PR's merge
@@ -4303,6 +4339,12 @@ jobs:
             final_ci=true
             event="pull_request"
             head_commit="$(git rev-parse HEAD)"
+            head_fetch=("${head_commit}")
+            if [ "${CI_FINAL_MERGE_REF_LOCAL_MERGE:-}" = "${head_commit}" ]; then
+              # scripts/ci_final_merge_ref_fresh.sh built this merge locally;
+              # origin has only its parents, which carry the same history.
+              head_fetch=("$(git rev-parse "${head_commit}^1")" "${GITHUB_SHA}")
+            fi
           fi
           case "${GITHUB_REF:-}" in
             refs/heads/orchestrator/project-*) project_push=true ;;
@@ -4315,7 +4357,7 @@ jobs:
             exit 0
           fi
           main_refspec="+refs/heads/main:refs/remotes/origin/main"
-          if ! shallow_fetch --depth=200 origin "${head_commit}" "${main_refspec}"; then
+          if ! shallow_fetch --depth=200 origin "${head_fetch[@]}" "${main_refspec}"; then
             echo "::error::Shallow checkout: could not fetch history for ${head_commit} and main from origin."
             exit 1
           fi
@@ -4371,7 +4413,7 @@ jobs:
           if ! history_ready; then
             if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
               echo "Shallow checkout: the merge-base is deeper than the 200-commit window; unshallowing ${head_commit} and main."
-              if ! shallow_fetch --unshallow origin "${head_commit}" "${main_refspec}"; then
+              if ! shallow_fetch --unshallow origin "${head_fetch[@]}" "${main_refspec}"; then
                 echo "::error::Shallow checkout: could not unshallow ${head_commit} and main from origin."
                 exit 1
               fi
@@ -4550,9 +4592,11 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # The merge ref must merge into the run's base (the base tip when the
+      # run was dispatched, the same in every job): GitHub refreshes
       # it lazily, and #9602's final run tested a base that had fixed the
-      # failure two hours earlier. Refreshes a stale ref or fails the job;
+      # failure two hours earlier. Refreshes a stale ref, else builds the
+      # merge into the run's pinned base itself, or fails the job;
       # contract in scripts/ci_final_merge_ref_fresh.sh.
       - name: Verify the final-CI merge ref is current
         if: github.event_name == 'workflow_dispatch'
@@ -4695,9 +4739,11 @@ jobs:
           fetch-depth: 3
           persist-credentials: false
 
-      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # The merge ref must merge into the run's base (the base tip when the
+      # run was dispatched, the same in every job): GitHub refreshes
       # it lazily, and #9602's final run tested a base that had fixed the
-      # failure two hours earlier. Refreshes a stale ref or fails the job;
+      # failure two hours earlier. Refreshes a stale ref, else builds the
+      # merge into the run's pinned base itself, or fails the job;
       # contract in scripts/ci_final_merge_ref_fresh.sh.
       - name: Verify the final-CI merge ref is current
         if: github.event_name == 'workflow_dispatch'
@@ -4809,9 +4855,11 @@ jobs:
           fetch-depth: 2
           persist-credentials: false
 
-      # The merge ref must merge into the base's current tip: GitHub refreshes
+      # The merge ref must merge into the run's base (the base tip when the
+      # run was dispatched, the same in every job): GitHub refreshes
       # it lazily, and #9602's final run tested a base that had fixed the
-      # failure two hours earlier. Refreshes a stale ref or fails the job;
+      # failure two hours earlier. Refreshes a stale ref, else builds the
+      # merge into the run's pinned base itself, or fails the job;
       # contract in scripts/ci_final_merge_ref_fresh.sh.
       - name: Verify the final-CI merge ref is current
         if: inputs.docs_only == 'true'
