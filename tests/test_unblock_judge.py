@@ -5388,8 +5388,10 @@ def test_nothing_to_implement_close_keeps_the_resume_otherwise(tmp_path: Path, c
 	elif case == "disabled":
 		env["UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED"] = " False "
 	else:
+		# #9808: orchestrator items close by default; the off switch keeps the resume.
 		item = dict(ISSUE, body="- Tracking issue: #40", labels=ISSUE["labels"] + [{"name": "ai:orchestrator-managed"}])
 		env["FAKE_GH_PROJECT_COMMENTS"] = _project_comments_for_item(7)
+		env["UNBLOCK_ORCHESTRATOR_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED"] = "false"
 	result, state = _judge(tmp_path, item, comments=comments, issues=MERGED_FIXUP, **env)
 	assert "op=nothing_to_implement" not in result.stdout, result.stdout
 	assert "fixup=50 outcome=followup" in result.stdout, result.stdout + result.stderr
@@ -5409,6 +5411,77 @@ def test_nothing_to_implement_close_failure_keeps_the_wait_and_posts_the_marker_
 	assert "fixup=50 op=nothing_to_implement outcome=closed" in result.stdout, result.stdout + result.stderr
 	assert not any(comment["body"].endswith(NOTHING_TO_IMPLEMENT_MARKER) for comment in state["comments"])
 	assert _closed_completed(state)
+
+
+# #9808: an orchestrator sub-issue whose planning stop was "nothing to
+# implement" has its work on the integration branch already, so it is closed
+# as completed with ai:closed (the poller counts it done) instead of resumed.
+ORCHESTRATOR_NOTHING_TO_IMPLEMENT_ITEM = dict(ISSUE, body="- Tracking issue: #40", labels=ISSUE["labels"] + [{"name": "ai:orchestrator-managed"}])
+
+
+def _orchestrator_nothing_to_implement_env(**extra) -> dict:
+	return {"FAKE_GH_PROJECT_COMMENTS": _project_comments_for_item(7), **extra}
+
+
+def test_orchestrator_nothing_to_implement_issue_closes_after_fixup(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, ORCHESTRATOR_NOTHING_TO_IMPLEMENT_ITEM, comments=_nothing_to_implement_comments(), issues=MERGED_FIXUP,
+		**_orchestrator_nothing_to_implement_env())
+	assert "fixup=50 tracking=40 op=nothing_to_implement_orchestrator outcome=closed" in result.stdout, result.stdout + result.stderr
+	assert "fixup=50 outcome=followup" not in result.stdout
+	assert not any(comment["body"].startswith(("/answer", "/approved")) for comment in state["comments"]), state["comments"]
+	body = state["comments"][-1]["body"]
+	assert body.endswith(NOTHING_TO_IMPLEMENT_MARKER)
+	assert "fix-up #50 merged" in body and "orchestrator project #40" in body and "`ai:closed`" in body
+	assert state["labels_added"] == [["repos/o/r/issues/7/labels", "ai:closed"]]
+	assert _closed_completed(state)
+	assert state["patched"][-1][0] == "repos/o/r/issues/comments/123"
+	assert state["patched"][-1][1]["body"].endswith("<!-- ai:unblock-wait:v1 item=7 fixup=50 done -->")
+
+
+def test_orchestrator_nothing_to_implement_issue_closes_without_a_fixup(tmp_path: Path) -> None:
+	comments = [_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z")]
+	result, state = _judge(tmp_path, ORCHESTRATOR_NOTHING_TO_IMPLEMENT_ITEM, comments=comments,
+		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "pin the version"},
+		**_orchestrator_nothing_to_implement_env())
+	assert "fixup=none tracking=40 op=nothing_to_implement_orchestrator outcome=closed" in result.stdout, result.stdout + result.stderr
+	body = state["comments"][-1]["body"]
+	assert body.endswith("<!-- ai:unblock-nothing-to-implement:v1 item=7 fixup=none -->")
+	assert "fix-up #" not in body and "orchestrator project #40" in body
+	assert not any("ai:unblock:v1" in comment["body"] for comment in state["comments"]), state["comments"]
+	assert not any(comment["body"].startswith(("/answer", "/approved")) for comment in state["comments"]), state["comments"]
+	assert state["labels_added"] == [["repos/o/r/issues/7/labels", "ai:closed"]]
+	assert _closed_completed(state)
+
+
+@pytest.mark.parametrize("case", ["newer_plan", "flag_false", "invalid_flag"])
+def test_orchestrator_nothing_to_implement_close_keeps_the_resume_otherwise(tmp_path: Path, case: str) -> None:
+	env, comments = _orchestrator_nothing_to_implement_env(), _nothing_to_implement_comments()
+	if case == "newer_plan":
+		plan = _comment("Implementation Plan\n\n1. Do the thing.", BOT, "2026-10-04T10:00:00Z")
+		comments = _nothing_to_implement_comments(extra=[plan])
+	elif case == "flag_false":
+		env["UNBLOCK_ORCHESTRATOR_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED"] = " FALSE "
+	else:
+		env["UNBLOCK_ORCHESTRATOR_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED"] = "maybe"
+	result, state = _judge(tmp_path, ORCHESTRATOR_NOTHING_TO_IMPLEMENT_ITEM, comments=comments, issues=MERGED_FIXUP, **env)
+	assert "outcome=closed" not in result.stdout, result.stdout
+	assert "fixup=50 outcome=followup" in result.stdout, result.stdout + result.stderr
+	resume = "/approved" if case == "newer_plan" else "/answer"
+	assert any(comment["body"].startswith(resume) for comment in state["comments"]), state["comments"]
+	assert not _closed_completed(state)
+	if case == "invalid_flag":
+		assert "::warning::[unblock_judge] invalid UNBLOCK_ORCHESTRATOR_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED=maybe" in result.stdout + result.stderr
+		assert "op=nothing_to_implement_orchestrator outcome=skip reason=invalid_flag" in result.stdout, result.stdout
+	else:
+		assert "op=nothing_to_implement" not in result.stdout, result.stdout
+
+
+def test_orchestrator_nothing_to_implement_close_failure_keeps_the_wait(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, ORCHESTRATOR_NOTHING_TO_IMPLEMENT_ITEM, comments=_nothing_to_implement_comments(), issues=MERGED_FIXUP,
+		**_orchestrator_nothing_to_implement_env(FAKE_GH_FAIL_CLOSE="1"))
+	assert "fixup=50 tracking=40 op=nothing_to_implement_orchestrator outcome=skip reason=close_failed" in result.stdout, result.stdout + result.stderr
+	assert not any(comment["body"].startswith("/answer") for comment in state["comments"])
+	assert not any("ai:unblock-wait:v1 item=7 fixup=50 done" in fields.get("body", "") for _, fields in state["patched"])
 
 
 # #8530: a heal issue whose fix-up merged into the default branch and changed
