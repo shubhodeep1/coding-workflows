@@ -301,6 +301,33 @@ def test_stall_guards_hold_uncapped_actions() -> None:
 	assert text.count("reason=queue_backpressure phase=${phase} action=${action}") == 3
 
 
+def test_early_conflict_and_autofix_stall_dispatches_are_held() -> None:
+	# The open-linked-PR conflict resolver / changes-requested autofix
+	# dispatches return or continue before the stall guards above, so each
+	# carries its own hold right before the dispatch call.
+	text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	sites = (
+		("dispatch_conflict_resolver", "${STALL_CONFLICT_PR_NUM}",
+			'_dispatch_review_for_conflicts "${STALL_CONFLICT_PR_NUM}" "${STALL_CONFLICT_HEAD_REF}" || _std_conflict_rc=$?'),
+		("dispatch_conflict_resolver", "${_lpr_num}",
+			'_dispatch_review_for_conflicts "${_lpr_num}" "${_opr_head_ref}" || _opr_dispatch_rc=$?'),
+		("dispatch_autofix", "${_lpr_num}",
+			'_dispatch_review_for_conflicts "${_lpr_num}" "${_opr_head_ref}" || _opr_autofix_rc=$?'),
+	)
+	for token, pr_var, dispatch in sites:
+		assert text.count(dispatch) == 1, dispatch
+		at = text.index(dispatch)
+		guard = f'if queue_backpressure_holds_dispatch "none" "{token}" "${{issue_num}}"; then'
+		guard_at = text.rfind(guard, 0, at)
+		assert guard_at != -1, dispatch
+		between = text[guard_at:at]
+		assert (f"STALL_SKIP issue=${{issue_num}} reason=queue_backpressure pr={pr_var} "
+			"phase=${phase} action=${action}") in between, dispatch
+		assert "continue" in between or "return 1" in between, dispatch
+		# No other dispatch sits between the guard and its call site.
+		assert "_dispatch_review_for_conflicts" not in between, dispatch
+
+
 # --- loader keeps total_count --------------------------------------------------
 
 

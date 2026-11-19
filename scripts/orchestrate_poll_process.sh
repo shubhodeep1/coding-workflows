@@ -26418,6 +26418,16 @@ PY
           fi
           _std_next_count=$(( _std_override_count + 1 ))
         fi
+        # Queue backpressure (stuck-backlog Phase 3): this early resolver
+        # dispatch runs before the stall guards below, so hold it here. A hold
+        # mutates neither conflict_override_count nor the stall budget.
+        if queue_backpressure_holds_dispatch "none" "dispatch_conflict_resolver" "${issue_num}"; then
+          echo "STALL_SKIP issue=${issue_num} reason=queue_backpressure pr=${STALL_CONFLICT_PR_NUM} phase=${phase} action=${action}"
+          if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+            write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+          fi
+          continue
+        fi
         local _std_conflict_rc=0
         _dispatch_review_for_conflicts "${STALL_CONFLICT_PR_NUM}" "${STALL_CONFLICT_HEAD_REF}" || _std_conflict_rc=$?
         case "${_std_conflict_rc}" in
@@ -27683,6 +27693,12 @@ recover_stalled_issue() {
             STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
             return "${_opr_reissue_rc}"
           fi
+          # Queue backpressure (stuck-backlog Phase 3): this resolver dispatch
+          # returns before the stall guards below, so hold it here.
+          if queue_backpressure_holds_dispatch "none" "dispatch_conflict_resolver" "${issue_num}"; then
+            echo "STALL_SKIP issue=${issue_num} reason=queue_backpressure pr=${_lpr_num} phase=${phase} action=${action}"
+            return 1
+          fi
           local _opr_dispatch_rc=0
           _dispatch_review_for_conflicts "${_lpr_num}" "${_opr_head_ref}" || _opr_dispatch_rc=$?
           if [ "${_opr_dispatch_rc}" -eq 0 ]; then
@@ -27711,6 +27727,12 @@ recover_stalled_issue() {
           _opr_review_comments="0"
         fi
         if [ "${_opr_review_comments}" -gt 0 ] && [ -n "${_opr_head_ref}" ]; then
+          # Queue backpressure (stuck-backlog Phase 3): same early-return hold
+          # for the changes-requested autofix dispatch.
+          if queue_backpressure_holds_dispatch "none" "dispatch_autofix" "${issue_num}"; then
+            echo "STALL_SKIP issue=${issue_num} reason=queue_backpressure pr=${_lpr_num} phase=${phase} action=${action}"
+            return 1
+          fi
           local _opr_autofix_rc=0
           _dispatch_review_for_conflicts "${_lpr_num}" "${_opr_head_ref}" || _opr_autofix_rc=$?
           if [ "${_opr_autofix_rc}" -eq 0 ]; then
