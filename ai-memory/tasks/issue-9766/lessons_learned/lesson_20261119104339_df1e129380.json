@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-19T10:43:39Z",
+  "issue_number": 9766,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=scripts/ci_final_merge_ref_fresh.sh:181-182; cited_path=scripts/ci_final_merge_ref_fresh.sh; files_touched=.github/workflows/orchestrate_poll.yml, agents.d/stuck-backlog-phase2b-poller-red-base-gate.md, changelog.d/stuck-backlog-phase2b-poller-red-base-gate.md, scripts/orchestrate_poll_process.sh, tests/test_plan_base_ci_gate.py.",
+  "phase": "review_autofix",
+  "pr_number": 9772,
+  "record_id": "lesson_20261119104339_df1e129380",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/ci_final_merge_ref_fresh.sh",
+    ".github/workflows/orchestrate_poll.yml",
+    "agents.d/stuck-backlog-phase2b-poller-red-base-gate.md",
+    "changelog.d/stuck-backlog-phase2b-poller-red-base-gate.md",
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_plan_base_ci_gate.py"
+  ]
+}
