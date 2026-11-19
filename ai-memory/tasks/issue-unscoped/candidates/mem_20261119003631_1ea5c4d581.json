@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/pr-checks.yml:341-344 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The heuristic used to identify unlistable files in the `enumerate` step is slightly misaligned with the lint script's actual parsing behavior (`str.splitlines()` splits on more than `\\n` and `\\r`).\n  WHY: A comment or general implementation should acknowledge the discrepancy to stop future authors adding partially compatible file-name handlers. Reported as NIT. Other reviewers verified the new `path.splitlines() != [path]` clause matches the consumer.\n- .github/workflows/pr-checks.yml:359 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The `outcome=enumerate_failed` annotation prints the real `exit_code=${plan_archival_enum_rc}` but hardcodes the \"exit code 3: ... rename it\" explanation, so a non-3 exit code gets misleading rename advice.\n  WHY: The step still fails closed, but the operator is sent to rename a file that has no naming problem. Suggested fix is to branch the text on the code (about 4 lines). Reported as NIT, hardening suggestion.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Update ... the pending agents fragments of #9698 and #9693 (one sentence each)\" to replace references to the removed workflow path and name.\n  expected_change_site: the pending PR #9693 fragment under `agents.d/` (a `agents.d/9693-*.md` file)\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: the PR diff updates `agents.d/9698-fold-per-pr-checks.md` and adds `agents.d/9709-fold-plan-archival-check.md` but has no change to a #9693 fragment, and `agents.d/` has no file matching `9693*`. Severity NIT. Disputed: anthropic_claude-sonnet-5_5 and minimax_minimax-m3 found the #9693 fragment is `agents.d/pr-body-lint-job-rename.md`, which already carries the updated sentence.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/pr-checks.yml:341-344 | severity=low | confidence=4\n  PROBLEM: The heuristic used to identify unlistable files in the `enumerate` step is slightly misaligned with the lint script's actual parsing behavior.\n  WHY: `unlistable` checks `\\n` and `\\r`, but `str.splitlines()` also splits on other Unicode separators (e.g. U+2028, U+0085). A comment should acknowledge the discrepancy. Source severity: NIT.\n- TASK_GAP:\n  Requirement: Update the pending agents fragments for PRs #9698 and #9693 to replace references to the removed workflow path and name.\n  Expected change site: The pending PR #9693 fragment under `agents.d/`\n  Evidence of absence: The PR diff updates `agents.d/9698-fold-per-pr-checks.md` and adds `agents.d/9709-fold-plan-archival-check.md`, but contains no change to a PR #9693 fragment. The current `agents.d/` directory has no file matching `9693*`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/pr-checks.yml:359 | severity=low | confidence=4\n  PROBLEM: The annotation interpolates the real exit code (`exit_code=${plan_archival_enum_rc}`) but hardcodes the reason \"(exit code 3: a file added under docs/completed/ has a line break in its name or a name that is not valid UTF-8; rename it)\". An unhandled exception in the python block exits 1, and a missing `python3` exits 127.\n  WHY: The annotation can send the operator to rename a file that has no naming problem. The step still fails closed (`exit 1`, line 360). Fix: branch the text on the code, about 4 lines. Source severity: NIT.\n- HARDENING_SUGGESTIONS: .github/workflows/pr-checks.yml line 359 \u2014 make the explanatory parenthetical conditional on `${plan_archival_enum_rc}` (rename advice for 3, generic parse-failure text otherwise); estimated lines changed: 4. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: \"Update ... the pending agents fragments of #9698 and #9693 (one sentence each)\" to replace references to the removed workflow path and name.\n  Expected change site: The pending PR #9693 fragment under agents.d/.\n  Evidence of absence: The PR diff updates agents.d/9698-fold-per-pr-checks.md but contains no change to a #9693 fragment. The current agents.d/ directory has no file matching 9693*.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- HARDENING_SUGGESTIONS: .github/workflows/pr-checks.yml line 359 \u2014 the annotation attributes every nonzero Python enumeration exit to exit code 3 and a filename containing a line break or invalid UTF-8. Fix: show the filename guidance only when plan_archival_enum_rc is 3; estimated lines changed: 4. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP:\n  Requirement: \"Readers of the removed path and name: ... and the pending agents fragments of #9698 and #9693 (one sentence each).\"\n  Expected change site: a pending `agents.d/9693-*.md` fragment under `agents.d/`.\n  Evidence of absence: `pr_changed_files.txt` lists no file matching `agents.d/9693*`. The PR DIFF and LAST RUN DIFF have hunks only for `agents.d/9698-fold-per-pr-checks.md`, `agents.d/9709-fold-plan-archival-check.md` and `agents.d/pr-body-lint-job-rename.md`. The working tree `agents.d/` has no fragment numbered 9693. Either the claimed sentence edit is missing or the description overstates what was changed.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8face8722c12d8e589305b9b10ef6e1c002fd305a9639658c28749e98de47846",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9709,
+    "run_id": "44415506419",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "github-actions[bot]",
+    "run_attempt": 1,
+    "run_id": "44415506419",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261119003631_1ea5c4d581",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9709,
+    "run_id": "44415506419"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-19T00:36:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
