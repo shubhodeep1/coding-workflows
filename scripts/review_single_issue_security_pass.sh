@@ -28,7 +28,9 @@
 #               branch, which merges unaudited whenever it touches no PR
 #               file. Chains of updates are walked back at most
 #               SINGLE_PASS_INHERIT_MAX_HOPS (10) verified updates; any
-#               failed check audits the head as before.
+#               failed check audits the head as before. The stricter
+#               base-sync carry (issue #9533, see single_pass_base_sync_carry)
+#               runs first; a merge it proves impure is audited, not inherited.
 #             - `status=pending` for the current head, younger than
 #               SECURITY_PASS_PENDING_STALE_HOURS: hold=true, nothing else,
 #               unless the marker is at least
@@ -155,7 +157,10 @@
 # and the concurrency throttle before a dispatch), then one dispatch
 # and up to SECURITY_PASS_PENDING_MARKER_ATTEMPTS pending-marker POSTs (default 3,
 # valid range 1-10; backoff base defaults to 5s, range 0-30s), or one label
-# write. A rejected delta dispatch adds one dispatch (the legacy retry).
+# write. A rejected delta dispatch adds one dispatch (the legacy retry). A head
+# with no clean marker may add the base-sync carry's one commits/<head> and one
+# compare read (issue #9533; only when a trusted merge-base-sync marker names
+# the head).
 # report: one PR read to bind the audit inputs, one /user
 # identity read, one paginated comments read, one comment and at most one dispatch,
 # plus one paginated open ai:security listing when a delta audit left
@@ -682,6 +687,140 @@ single_pass_marker_age_hours()
 	printf '%s\n' "${marker_hours:-999999}"
 }
 
+# Base-sync carry (issue #9533). The pipeline's freshness update merges the
+# base into an already-audited head and records <!-- ai:merge-base-sync:v1
+# pr= from=<approved head> sync= base=<base parent> merge=<update commit> -->
+# (scripts/pr_checks_lib.sh). The update commit carries the clean audit of
+# from= only when all of these hold; anything unverifiable returns 1 and the
+# head is audited as before:
+#   - review_head_gate_freshness_sync (scripts/review_head_gate.sh, the one
+#     marker parser) accepts the head: newest trusted marker with merge=<head>,
+#     parents [from, base parent], a verified web-flow merge, base parent on
+#     the base branch;
+#   - the newest trusted security-pass marker for from= is status=clean
+#     (single_pass_markers, the same author filter as the gate);
+#   - locally, head^1 == from and head^2 == base parent, from and the base
+#     parent have exactly one merge base, and the PR's changed files
+#     (base parent..head) equal the audited ones (merge base..from);
+#   - over those files, the -U0 diffs merge base..from and base parent..head
+#     have the same `git patch-id --verbatim` (stable ordering, whitespace
+#     kept: an indentation-only change is a mismatch; a git without
+#     --verbatim yields no id and fails closed), so the merge changed none of the
+#     PR's own lines and added nothing the base side did not already contain.
+# Sets single_pass_carry_from on success. Logs outcome=carry_skipped
+# reason=<token> otherwise and leaves the token in
+# single_pass_carry_skip_reason, so single_pass_gate can tell a merge proven
+# impure (no freshness-sync inheritance either) from one it could not check.
+# API budget: the helper's one commits/<head> and one compare read, only when
+# a trusted marker is bound to this head.
+single_pass_carry_skip()
+{
+	single_pass_carry_skip_reason="$2"
+	single_pass_log "mode=gate pr=${PR_NUMBER:-} head=$1 outcome=carry_skipped reason=$2"
+	return 1
+}
+
+single_pass_base_sync_carry()
+{
+	local comments_file="$1" head_sha="$2" base_ref="$3" head_ref="$4" markers_tsv="$5"
+	local carry_dir carry_tmp carry_result carry_rc carry_from carry_base_parent carry_sha carry_mb carry_from_status
+	local carry_pr_files carry_audited_files carry_patch_audited carry_patch_head
+	local -a carry_paths=()
+	single_pass_carry_from=""
+	single_pass_carry_skip_reason=""
+	if [ "${SECURITY_PASS_BASE_SYNC_CARRY_ENABLED:-true}" = "false" ]; then
+		single_pass_carry_skip "${head_sha}" disabled
+		return 1
+	fi
+	# Same trusted support copy as single_pass_inherited_clean when staged;
+	# otherwise the helpers next to this script.
+	if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/review_head_gate.sh" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" ]; then
+		carry_dir="${SUPPORT_SCRIPTS_DIR}"
+	else
+		carry_dir="$(cd "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || carry_dir=""
+	fi
+	if [ -z "${carry_dir}" ] || [ ! -f "${carry_dir}/review_head_gate.sh" ]; then
+		single_pass_carry_skip "${head_sha}" helper_missing
+		return 1
+	fi
+	carry_tmp="$(mktemp -d)" || { single_pass_carry_skip "${head_sha}" tmp_unavailable; return 1; }
+	if ! jq '[.[]? | select(type == "object") | {author_login: (.user.login // ""), body: (.body // "")}]' "${comments_file}" > "${carry_tmp}/comments.json" 2>/dev/null; then
+		rm -rf "${carry_tmp}"
+		single_pass_carry_skip "${head_sha}" comments_unreadable
+		return 1
+	fi
+	# The shared verifier runs in a subshell so sourcing its helpers cannot
+	# change this gate's own functions (gh_retry) or shell options.
+	carry_result="$(
+		# shellcheck source=/dev/null
+		source "${carry_dir}/gh_helpers.sh" >/dev/null 2>&1 || true
+		type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+		# shellcheck source=/dev/null
+		source "${carry_dir}/review_head_gate.sh" >/dev/null 2>&1 || exit 3
+		set +e
+		review_head_gate_freshness_sync "${REPOSITORY}" "${PR_NUMBER}" "${head_sha}" "${base_ref}" "${SECURITY_PASS_AUTHOR_LOGIN}" "${carry_tmp}/comments.json" > "${carry_tmp}/helper.log" 2>/dev/null
+		printf '%s %s %s\n' "$?" "${REVIEW_HEAD_GATE_FRESHNESS_FROM:-}" "${REVIEW_HEAD_GATE_FRESHNESS_BASE_PARENT:-}"
+	)" || carry_result=""
+	[ -s "${carry_tmp}/helper.log" ] && cat "${carry_tmp}/helper.log"
+	read -r carry_rc carry_from carry_base_parent <<< "${carry_result}"
+	if [ "${carry_rc:-}" != "0" ] || ! [[ "${carry_from:-}" =~ ^[0-9a-f]{40}$ ]] || ! [[ "${carry_base_parent:-}" =~ ^[0-9a-f]{40}$ ]]; then
+		rm -rf "${carry_tmp}"
+		single_pass_carry_skip "${head_sha}" "$([ -n "${carry_result}" ] && echo freshness_unverified || echo helper_missing)"
+		return 1
+	fi
+	carry_from_status="$(printf '%s\n' "${markers_tsv}" | awk -F'\t' -v h="${carry_from}" '$4 == h' | tail -n 1 | cut -f3)"
+	if [ "${carry_from_status}" != "clean" ]; then
+		rm -rf "${carry_tmp}"
+		single_pass_carry_skip "${head_sha}" from_not_clean
+		return 1
+	fi
+	for carry_sha in "${head_sha}" "${carry_from}" "${carry_base_parent}"; do
+		if ! git cat-file -e "${carry_sha}^{commit}" 2>/dev/null; then
+			if [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ] \
+				&& git check-ref-format --branch "${head_ref}" >/dev/null 2>&1; then
+				git fetch --no-tags --unshallow origin "+refs/heads/${head_ref}:refs/remotes/origin/${head_ref}" >/dev/null 2>&1 || true
+			fi
+			if ! git cat-file -e "${carry_sha}^{commit}" 2>/dev/null; then
+				rm -rf "${carry_tmp}"
+				single_pass_carry_skip "${head_sha}" git_objects_unavailable
+				return 1
+			fi
+		fi
+	done
+	if [ "$(git rev-parse --verify -q "${head_sha}^1" 2>/dev/null)" != "${carry_from}" ] \
+		|| [ "$(git rev-parse --verify -q "${head_sha}^2" 2>/dev/null)" != "${carry_base_parent}" ] \
+		|| git rev-parse --verify -q "${head_sha}^3" >/dev/null 2>&1; then
+		rm -rf "${carry_tmp}"
+		single_pass_carry_skip "${head_sha}" parents_mismatch
+		return 1
+	fi
+	carry_mb="$(git merge-base --all "${carry_from}" "${carry_base_parent}" 2>/dev/null)" || carry_mb=""
+	if ! [[ "${carry_mb}" =~ ^[0-9a-f]{40}$ ]]; then
+		rm -rf "${carry_tmp}"
+		single_pass_carry_skip "${head_sha}" merge_base_ambiguous
+		return 1
+	fi
+	carry_pr_files="${carry_tmp}/pr_files"
+	carry_audited_files="${carry_tmp}/audited_files"
+	if ! git diff --name-only -z --no-renames "${carry_base_parent}" "${head_sha}" 2>/dev/null | sort -z > "${carry_pr_files}" \
+		|| ! git diff --name-only -z --no-renames "${carry_mb}" "${carry_from}" 2>/dev/null | sort -z > "${carry_audited_files}" \
+		|| [ ! -s "${carry_pr_files}" ] || ! cmp -s "${carry_pr_files}" "${carry_audited_files}"; then
+		rm -rf "${carry_tmp}"
+		single_pass_carry_skip "${head_sha}" changed_files_differ
+		return 1
+	fi
+	mapfile -d '' -t carry_paths < "${carry_pr_files}"
+	carry_patch_audited="$(GIT_LITERAL_PATHSPECS=1 git diff --no-ext-diff --no-textconv --no-renames --binary -U0 "${carry_mb}" "${carry_from}" -- "${carry_paths[@]}" 2>/dev/null | git patch-id --verbatim 2>/dev/null | awk '{ print $1 }')" || carry_patch_audited=""
+	carry_patch_head="$(GIT_LITERAL_PATHSPECS=1 git diff --no-ext-diff --no-textconv --no-renames --binary -U0 "${carry_base_parent}" "${head_sha}" -- "${carry_paths[@]}" 2>/dev/null | git patch-id --verbatim 2>/dev/null | awk '{ print $1 }')" || carry_patch_head=""
+	rm -rf "${carry_tmp}"
+	if ! [[ "${carry_patch_audited}" =~ ^[0-9a-f]{40}$ ]] || [ "${carry_patch_audited}" != "${carry_patch_head}" ]; then
+		single_pass_carry_skip "${head_sha}" patch_mismatch
+		return 1
+	fi
+	single_pass_carry_from="${carry_from}"
+	return 0
+}
+
 # Walk verified merge-base freshness updates back from <head> to an approved
 # head with a trusted clean marker (see the header). Prints the clean head and
 # the number of updates walked as "<sha> <hops>" and returns 0; returns 1 when
@@ -845,14 +984,31 @@ single_pass_gate()
 	# A verified freshness update of a clean head needs no audit of its own
 	# (see the header). Only a head with no marker at all is considered, so
 	# an audit already pending, found or failed on this head still decides.
+	# Issue #9533: the base-sync carry (one verified update of a clean head
+	# whose merge is pure over the PR's files) decides first; the multi-hop
+	# inheritance walk is the fallback. A carry that proved the merge impure
+	# (parents, changed files or patch-id differ) audits the head, and one
+	# whose shared verifier already refused this head skips the walk, which
+	# would repeat that same check and its reads.
 	if [ -z "${latest}" ]; then
 		local inherited=""
-		if inherited="$(single_pass_inherited_clean "${comments}" "${markers}" "${head_sha}" "${default_branch}")"; then
-			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=clean reason=freshness_sync_inherited from=${inherited%% *} hops=${inherited##* }"
+		if single_pass_base_sync_carry "${comments}" "${head_sha}" "${default_branch}" "${head_ref}" "${markers}"; then
+			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=clean reason=base_sync_carry from=${single_pass_carry_from}"
 			single_pass_state clean
 			single_pass_output false
 			return 0
 		fi
+		case "${single_pass_carry_skip_reason:-}" in
+			freshness_unverified|parents_mismatch|changed_files_differ|patch_mismatch) ;;
+			*)
+				if inherited="$(single_pass_inherited_clean "${comments}" "${markers}" "${head_sha}" "${default_branch}")"; then
+					single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=clean reason=freshness_sync_inherited from=${inherited%% *} hops=${inherited##* }"
+					single_pass_state clean
+					single_pass_output false
+					return 0
+				fi
+				;;
+		esac
 	fi
 	if [ "${latest_status}" = "pending" ] && [ "${latest_head}" = "${head_sha}" ]; then
 		age_hours=0
@@ -874,6 +1030,18 @@ single_pass_gate()
 			single_pass_output true audit_pending
 			return 0
 		fi
+	fi
+	# Issue #9533: a stale pending marker on the pipeline's own base sync of a
+	# clean head can still be carried (a head with no marker was decided
+	# above). It is evaluated after the fresh-pending hold, so an audit still
+	# pending on this head decides. A findings or failed result for this head
+	# is never overridden; any unverifiable check falls through.
+	if [ "${latest_status}" = "pending" ] \
+		&& single_pass_base_sync_carry "${comments}" "${head_sha}" "${default_branch}" "${head_ref}" "${markers}"; then
+		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=clean reason=base_sync_carry from=${single_pass_carry_from}"
+		single_pass_state clean
+		single_pass_output false
+		return 0
 	fi
 	if [ "${latest_status}" = "findings" ] && [ "${latest_head}" = "${head_sha}" ] && [ "${cycles_used}" -lt "${effective_max}" ]; then
 		# The follow-up fixes merge into this branch and change the head; the
