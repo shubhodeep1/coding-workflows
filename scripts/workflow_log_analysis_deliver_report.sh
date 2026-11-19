@@ -25,11 +25,28 @@
 #   DEFAULT_BRANCH         repository default branch (optional; when set and
 #                          different from GITHUB_REF_NAME, fail closed)
 #   GITHUB_REF_TYPE / GITHUB_REF_NAME / GITHUB_REPOSITORY / GITHUB_RUN_ID
+#   WLA_DELIVER_SECTIONS_ONLY      `true` turns on the sections-only mode
+#                                  (issue #9503; default `false`)
+#   WLA_DELIVER_SECTIONS_BRANCH    run branch the section jobs re-created
+#                                  (sections-only mode; REPORT_BRANCH must
+#                                  then be empty)
+#   WLA_DELIVER_SECTIONS_BASE_SHA  target-branch tip that run branch forks
+#                                  from (sections-only mode; 40 hex chars)
+#
+# Sections-only mode (issue #9503, project #9116 P1b): commit_report already
+# delivered the report (pushed or pr_merged), and the deep-audit and
+# API-redundancy jobs re-created the run branch from the target tip to carry
+# their sections. The report is on the target branch by design, so there is
+# no collision rename, and the run branch is diffed against the recorded
+# base (which must be an ancestor of both the target and the run branch):
+# only REPORT_FILE may change, as a regular file.
 #
 # GitHub API calls: 1 paginated `GET pulls?state=open&base=<base>` (fails
 # open: only the base branch is checked for collisions), 1 `gh pr create`,
 # and 1 `gh pr list --head` only when the create fails. Collision checks
 # against other open report branches use one `git fetch`, not the API.
+# Sections-only mode skips the listing: 1 `gh pr create`, plus 1
+# `gh pr list --head` only when the create fails.
 #
 # All git work on the run branch happens in a temporary worktree, so the
 # trusted checkout this script and the PR-body lint run from never switches
@@ -51,6 +68,13 @@ WLA_DELIVER_BRANCH_RE='^auto/workflow-log-analysis-report-[0-9]+-[0-9]+$'
 WLA_DELIVER_DOC_RE='^analysis/workflow-optimization-[0-9]{4}-[0-9]{2}-[0-9]{2}(-[0-9]+)?\.md$'
 WLA_DELIVER_RULESET_RE='GH006|GH013|protected branch|push declined|repository rule'
 WLA_DELIVER_MAX_PURGED_LISTED=50
+WLA_DELIVER_SECTIONS_FETCH_DEPTH=200
+WLA_DELIVER_SECTIONS_ONLY="${WLA_DELIVER_SECTIONS_ONLY:-false}"
+wla_sections_only="false"
+if [ "${WLA_DELIVER_SECTIONS_ONLY}" = "true" ]; then
+	wla_sections_only="true"
+fi
+wla_sections_base=""
 
 wla_deliver_redact()
 {
@@ -85,9 +109,23 @@ if [ -n "${DEFAULT_BRANCH:-}" ] && [ "${DEFAULT_BRANCH}" != "${TARGET_BRANCH}" ]
 	echo "Report delivery runs only on the default branch (ref '${TARGET_BRANCH}' is not the default branch)."
 	wla_deliver_fail run_context_invalid
 fi
+if [ "${wla_sections_only}" = "true" ]; then
+	# The two modes are exclusive: a full-report run branch is never a
+	# sections-only one.
+	if [ -n "${REPORT_BRANCH:-}" ]; then
+		wla_deliver_fail report_branch_invalid
+	fi
+	REPORT_BRANCH="${WLA_DELIVER_SECTIONS_BRANCH:-}"
+fi
 REPORT_BRANCH="${REPORT_BRANCH:-}"
 if ! [[ "${REPORT_BRANCH}" =~ ${WLA_DELIVER_BRANCH_RE} ]]; then
 	wla_deliver_fail report_branch_invalid
+fi
+if [ "${wla_sections_only}" = "true" ]; then
+	wla_sections_base="${WLA_DELIVER_SECTIONS_BASE_SHA:-}"
+	if ! [[ "${wla_sections_base}" =~ ^[0-9a-f]{40}$ ]]; then
+		wla_deliver_fail section_base_invalid "branch=${REPORT_BRANCH}"
+	fi
 fi
 REPORT_FILE="${REPORT_FILE:-}"
 if ! [[ "${REPORT_FILE}" =~ ${WLA_DELIVER_DOC_RE} ]]; then
@@ -127,7 +165,10 @@ other_branches=()
 declare -A seen_branches=()
 pr_list_raw="${work_tmp}/open-prs.raw"
 pr_list_json="${work_tmp}/open-prs.json"
-if "${gh_list_cmd[@]}" api --paginate "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=${TARGET_BRANCH}&per_page=100" \
+if [ "${wla_sections_only}" = "true" ]; then
+	# The listing only feeds the collision rename, which this mode skips.
+	echo "INFO: sections-only delivery: no collision check against other report pull requests."
+elif "${gh_list_cmd[@]}" api --paginate "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=${TARGET_BRANCH}&per_page=100" \
 	>"${pr_list_raw}" 2>"${work_tmp}/open-prs.err" \
 	&& jq -s 'add // [] | if type == "array" then . else error("not an array") end' "${pr_list_raw}" >"${pr_list_json}" 2>/dev/null; then
 	while IFS= read -r head_ref; do
@@ -143,7 +184,9 @@ else
 	wla_deliver_redact "${work_tmp}/open-prs.err"
 	echo "::warning::${WLA_DELIVER_PREFIX} outcome=degraded reason=pr_list_failed"
 fi
-echo "INFO: ${#other_branches[@]} other open report pull request branch(es) to check for collisions."
+if [ "${wla_sections_only}" != "true" ]; then
+	echo "INFO: ${#other_branches[@]} other open report pull request branch(es) to check for collisions."
+fi
 
 # --- 4. Fetch the base, the run branch and other report branches -----------
 wla_deliver_spec()
@@ -155,7 +198,24 @@ for head_ref in ${other_branches[@]+"${other_branches[@]}"}; do
 	fetch_specs+=("$(wla_deliver_spec "${head_ref}")")
 done
 fetch_log="${work_tmp}/fetch.log"
-if ! git fetch --no-tags --depth=1 origin "${fetch_specs[@]}" >"${fetch_log}" 2>&1; then
+if [ "${wla_sections_only}" = "true" ]; then
+	# Deep enough to reach the recorded base from the run branch tip and
+	# from the current target tip. --depth counts from each fetched tip. A
+	# combined fetch does not deepen the fetch-depth: 1 checkout's target tip
+	# when that ref is already up to date, so the target is then deepened on
+	# its own: --depth first, --deepen (relative to the shallow boundary) as
+	# the fallback, since git versions differ in which one moves it.
+	if ! git fetch --no-tags "--depth=${WLA_DELIVER_SECTIONS_FETCH_DEPTH}" origin "${fetch_specs[0]}" "${fetch_specs[1]}" >"${fetch_log}" 2>&1; then
+		wla_deliver_redact "${fetch_log}"
+		wla_deliver_fail fetch_failed "branch=${REPORT_BRANCH}"
+	fi
+	for wla_sections_deepen_flag in "--depth=${WLA_DELIVER_SECTIONS_FETCH_DEPTH}" "--deepen=${WLA_DELIVER_SECTIONS_FETCH_DEPTH}"; do
+		if git merge-base --is-ancestor "${wla_sections_base}" "refs/remotes/origin/${TARGET_BRANCH}" 2>/dev/null; then
+			break
+		fi
+		git fetch --no-tags "${wla_sections_deepen_flag}" origin "${fetch_specs[0]}" >>"${fetch_log}" 2>&1 || true
+	done
+elif ! git fetch --no-tags --depth=1 origin "${fetch_specs[@]}" >"${fetch_log}" 2>&1; then
 	wla_deliver_redact "${fetch_log}"
 	# One missing branch (a PR merged since the listing) fails the whole
 	# fetch. The base and the run branch are required; others are optional.
@@ -171,6 +231,22 @@ fi
 run_ref="refs/remotes/origin/${REPORT_BRANCH}"
 if ! git rev-parse --verify -q "${run_ref}^{commit}" >/dev/null; then
 	wla_deliver_fail fetch_failed "branch=${REPORT_BRANCH}"
+fi
+if [ "${wla_sections_only}" = "true" ]; then
+	# The base must sit on both the target and the run branch, so the PR's
+	# merge base is the base and the PR diff is exactly the diff checked below.
+	# The reason key stays section_base_invalid; this line tells a base the
+	# fetch did not bring in apart from a base that is not an ancestor.
+	if ! git cat-file -e "${wla_sections_base}^{commit}" 2>/dev/null; then
+		echo "Recorded section base ${wla_sections_base} is not in the delivery checkout after a ${WLA_DELIVER_SECTIONS_FETCH_DEPTH}-commit fetch."
+	fi
+	if ! git merge-base --is-ancestor "${wla_sections_base}" "refs/remotes/origin/${TARGET_BRANCH}" 2>/dev/null \
+		|| ! git merge-base --is-ancestor "${wla_sections_base}" "${run_ref}" 2>/dev/null; then
+		# The fetch log (credentials masked) tells a failed deepen fetch apart
+		# from a base that is genuinely not an ancestor.
+		wla_deliver_redact "${fetch_log}"
+		wla_deliver_fail section_base_invalid "branch=${REPORT_BRANCH}"
+	fi
 fi
 collision_refs=()
 for head_ref in "${TARGET_BRANCH}" ${other_branches[@]+"${other_branches[@]}"}; do
@@ -188,13 +264,27 @@ fi
 # The run branch is written after LLM-driven steps: it may only change
 # analysis docs (the report, its renames and purged docs). Compare it with
 # the trusted checkout it forks from; an uncomputable diff also fails closed.
+# Sections-only mode diffs against the recorded target tip instead, so
+# commits that landed on the target since this checkout do not show up.
 changed_paths_file="${work_tmp}/changed-paths.txt"
-if ! git diff --no-renames --name-only HEAD "${run_ref}" >"${changed_paths_file}" 2>/dev/null; then
+wla_diff_base="HEAD"
+if [ "${wla_sections_only}" = "true" ]; then
+	wla_diff_base="${wla_sections_base}"
+fi
+if ! git diff --no-renames --name-only "${wla_diff_base}" "${run_ref}" >"${changed_paths_file}" 2>/dev/null; then
 	wla_deliver_fail unexpected_paths "branch=${REPORT_BRANCH}"
+fi
+if [ "${wla_sections_only}" = "true" ] && ! [ -s "${changed_paths_file}" ]; then
+	wla_deliver_fail no_section_changes "branch=${REPORT_BRANCH}"
 fi
 while IFS= read -r changed_path; do
 	if ! [[ "${changed_path}" =~ ${WLA_DELIVER_DOC_RE} ]]; then
 		echo "Run branch changes a path outside the analysis docs: ${changed_path}"
+		wla_deliver_fail unexpected_paths "branch=${REPORT_BRANCH}"
+	fi
+	# Sections are appended to the report: no other doc may change.
+	if [ "${wla_sections_only}" = "true" ] && [ "${changed_path}" != "${REPORT_FILE}" ]; then
+		echo "Sections-only run branch changes a doc other than the report: ${changed_path}"
 		wla_deliver_fail unexpected_paths "branch=${REPORT_BRANCH}"
 	fi
 	# A matching name is not enough: only a regular file (or a deletion of a
@@ -202,6 +292,10 @@ while IFS= read -r changed_path; do
 	changed_mode="$(git ls-tree --full-tree "${run_ref}" -- "${changed_path}" | awk '{print $1}')" || changed_mode="unreadable"
 	if [ -n "${changed_mode}" ] && [ "${changed_mode}" != "100644" ]; then
 		echo "Run branch changes '${changed_path}' to a non-regular file (mode ${changed_mode})."
+		wla_deliver_fail unexpected_paths "branch=${REPORT_BRANCH}"
+	fi
+	if [ "${wla_sections_only}" = "true" ] && [ -z "${changed_mode}" ]; then
+		echo "Sections-only run branch deletes '${changed_path}'."
 		wla_deliver_fail unexpected_paths "branch=${REPORT_BRANCH}"
 	fi
 done <"${changed_paths_file}"
@@ -229,7 +323,9 @@ wla_deliver_path_taken()
 	return 1
 }
 renamed_from=""
-if wla_deliver_path_taken "${REPORT_FILE}"; then
+# Sections-only mode: the report is on the target branch by design, so
+# finding its path there must not create a -2 copy.
+if [ "${wla_sections_only}" != "true" ] && wla_deliver_path_taken "${REPORT_FILE}"; then
 	[[ "${REPORT_FILE}" =~ ^(analysis/workflow-optimization-[0-9]{4}-[0-9]{2}-[0-9]{2})(-[0-9]+)?\.md$ ]]
 	report_base="${BASH_REMATCH[1]}"
 	next_suffix=2
@@ -305,6 +401,18 @@ body_file="${work_tmp}/body.md"
 	echo ""
 	echo "The default branch requires status checks and has no bypass actors, so the workflow opens this pull request instead of pushing the report directly. CI and the review workflow merge it."
 } >"${body_file}"
+if [ "${wla_sections_only}" = "true" ]; then
+	# The purge landed with the report (push mode) or did not run (PR mode).
+	{
+		echo "Workflow log analysis report sections from run ${run_url}."
+		echo ""
+		echo "- Report: \`${REPORT_FILE}\` (already on \`${TARGET_BRANCH}\`)"
+		echo "- Deep audit section: $(wla_deliver_section_status "${AUDIT_STATUS:-}" "${DEEP_AUDIT_RESULT:-}")"
+		echo "- API redundancy section: $(wla_deliver_section_status "${API_REDUNDANCY_STATUS:-}" "${API_REDUNDANCY_RESULT:-}")"
+		echo ""
+		echo "The default branch requires status checks and has no bypass actors, so the workflow opens this pull request instead of pushing the report directly. CI and the review workflow merge it."
+	} >"${body_file}"
+fi
 if ! python3 "${SCRIPT_DIR}/lint_pr_body_auto_close.py" --pr-body-file "${body_file}" --repo "${GITHUB_REPOSITORY}"; then
 	wla_deliver_fail pr_body_lint_failed "branch=${REPORT_BRANCH}"
 fi
@@ -337,6 +445,9 @@ fi
 
 # --- 8. Open the PR (one create; list fallback covers reruns) --------------
 pr_title="chore: add workflow log analysis report ($(basename "${REPORT_FILE}"))"
+if [ "${wla_sections_only}" = "true" ]; then
+	pr_title="chore: add workflow log analysis report sections ($(basename "${REPORT_FILE}"))"
+fi
 create_err="${work_tmp}/create.err"
 pr_number=""
 if create_out="$(gh pr create --repo "${GITHUB_REPOSITORY}" --base "${TARGET_BRANCH}" --head "${REPORT_BRANCH}" --title "${pr_title}" --body-file "${body_file}" 2>"${create_err}")"; then
