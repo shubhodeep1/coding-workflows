@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ci_final_merge_ref_fresh.sh:182 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: All 30 failed check-runs on head 771719800d76 stop at the merge-ref freshness gate before any test runs. The gate reports \"CI_FINAL_MERGE_REF pr=9773 ... outcome=stale reason=not_refreshed ... tested_base=487acb290d67 tip=9906fed8a055\": after six refresh attempts the merge ref still merges into the old base, while orchestrator/project-9421 has moved on.\n  WHY: Both reviewers call this stale-base infrastructure, not a defect in the PR diff, and both say the editor must not attempt a code fix. Both rated it NIT, which is outside the allowed enum, so it is mapped to low here; there was no disagreement. The PR's acceptance tests (tests/test_queue_backpressure.py, tests/test_orchestrate_poll_workflow_contract.py, tests/test_poll_issue_run_linkage.py, tests/test_orchestrator_concurrency_caps.py, tests/test_workflow_file_size_limit.py) have not run in CI, and the pre-push gate reports them as \"unverified\" (container_rc_137).\n- .github/workflows/nightly-validation-selftest.yml:506-511 | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: Informational, not a defect: the change adds `checks: read` to the canary `permissions:` block and updates the comment (lines 499-502) and `agents.d/stuck-backlog-phase1-runner-pin.md:2` to match.\n  WHY: ci.yml's `final-ci-failed` job declares `checks: read` (ci.yml:4923), so the canary grant now equals the union that `test_canary_grants_exactly_what_ci_jobs_request` (tests/test_runner_image_pin_contract.py:207-225) recomputes. The source rated it NIT, mapped to low here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/ci_final_merge_ref_fresh.sh:line 182, ci_final_merge_ref_log stale not_refreshed \"base=${base_ref} tested_base=${first:-none} tip=${tip:-none}\" | severity=NIT | confidence=4\n  PROBLEM: 30 check-runs on head 771719800d76 failed (lint, orchestrate-poll (0), the tests-system-python legs, tests-sandbox-python, tests-release-and-log-analysis). Every log tail ends at the merge-ref freshness gate: \"CI_FINAL_MERGE_REF pr=9773 ... outcome=stale reason=not_refreshed ... tested_base=487acb290d67 tip=9906fed8a055\". No test from the PR or the base ran.\n  WHY: After six refresh attempts refs/pull/9773/merge still merged into 487acb290d67, while orchestrator/project-9421 had moved to 9906fed8a055. This is a stale base, not a defect in the diff, so the editor should not attempt a code fix. The PR's acceptance tests have not run in CI, and the pre-push gate reports them as \"unverified\" (container_rc_137).\n- TASK COMPLETENESS / INTENT GAPS: NONE. Every deliverable in issue #9767 has a matching hunk. QUEUED_RUN_ZOMBIE_MINUTES is not passed to the unblock-scan step, but the previous editor already rejected that as a gap because that path never calls build_active_issue_set.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/nightly-validation-selftest.yml:506-511 (canary `permissions:` block, added `checks: read`) | severity=NIT | confidence=5\n  PROBLEM: None in the change itself; the entry confirms the fix is correct and required. ci.yml's `final-ci-failed` job declares `checks: read` (ci.yml:4923), and the comment (lines 499-502) plus `agents.d/stuck-backlog-phase1-runner-pin.md:2` were updated to match.\n  WHY: It does not fail at runtime; the entry is informational. The canary grant now equals the union that `test_canary_grants_exactly_what_ci_jobs_request` (tests/test_runner_image_pin_contract.py:207-225) recomputes.\n- scripts/ci_final_merge_ref_fresh.sh:gate error in failing job logs `CI_FINAL_MERGE_REF pr=9773 head=771719800d76450b65543fcab27c9795f351af9b outcome=stale reason=not_refreshed base=orchestrator/project-9421 tested_base=487acb290d67e0cf35b6abd0c9a7ed659a9e2470 tip=9906fed8a0554334ce847a2b9e8bb849ba298a3b` | severity=NIT | confidence=5\n  PROBLEM: All 30 failed check-runs stop at the merge-ref freshness gate before validating the PR: after 6 refresh attempts the merge ref still merges head 7717198 into old base 487acb2, while the integration branch is at 9906fed8.\n  WHY: This is infrastructure staleness only. No code change in this PR can or should fix it, and the editor must not attempt a code fix.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a799219ea749af28d5779dc02c77e0cf3b6f18e9c767ef398eeff5a012eea6d9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9773,
+    "run_id": "44492740010",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44492740010",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261119102917_0283c84f08",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9773,
+    "run_id": "44492740010"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-19T10:29:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
