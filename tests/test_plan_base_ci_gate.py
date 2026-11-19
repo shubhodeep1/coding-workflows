@@ -515,6 +515,189 @@ def test_helper_comment_rejects_invalid_state() -> None:
 	assert "invalid input" in result.stdout
 
 
+
+# --- poller stall-recovery gate (Refs #9421, Phase 2 step 4; issue #9766) ---
+
+
+POLLER = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
+POLL_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
+POLLER_GATE_SIGNATURES = ("_red_base_gate_load_helper()\n{", "_red_base_gate_default_branch()\n{", "_plan_red_base_gate()\n{")
+POLLER_DETAILS = {
+	"501": {"labels": [{"name": "ai:orchestrator-managed"}, {"name": "ai:awaiting-approval"}]},
+	"502": {"labels": ["ai:awaiting-approval"]},
+	"503": {"labels": [{"name": "ai:workflow-heal"}]},
+	"504": {"labels": [{"name": "ai:awaiting-approval"}]},
+	"505": {"labels": []},
+}
+POLLER_GATE_FN = ('gate() { if _plan_red_base_gate "$1" "${DETAILS}" "${2:-}" ai:awaiting-approval; then '
+	'echo "rc[$1]=0"; else echo "rc[$1]=1"; fi; }\n')
+
+
+def _extract_bash_function(script: str, signature: str) -> str:
+	start = script.index(signature)
+	end = script.index("\n}\n", start) + len("\n}\n")
+	return script[start:end]
+
+
+def _run_poller_gate(snippet: str, *, runs: dict | None = None, heal: list | None = None, helper_mode: str = "copy",
+	staged: bool = True, runs_fail: bool = False, heal_fail: bool = False, env: dict | None = None) -> dict:
+	"""Run the poller's red-base gate functions against the fake gh."""
+	poller = POLLER.read_text(encoding="utf-8")
+	functions = "\n".join(_extract_bash_function(poller, signature) for signature in POLLER_GATE_SIGNATURES)
+	with tempfile.TemporaryDirectory() as workdir:
+		tmp = Path(workdir)
+		scripts = tmp / "scripts"
+		scripts.mkdir()
+		(scripts / "poller_fns.sh").write_text('declare -gA RED_BASE_HEALTH_CACHE=()\n_RED_BASE_GATE_HELPER_STATE=""\n'
+			+ functions, encoding="utf-8")
+		helper = scripts / "plan_base_ci_gate.sh"
+		if helper_mode == "copy":
+			shutil.copy(HELPER, helper)
+		elif helper_mode == "symlink":
+			helper.symlink_to(HELPER)
+		elif helper_mode == "nofunc":
+			helper.write_text("_red_base_hold_flag_on() { return 0; }\n", encoding="utf-8")
+		call_log = tmp / "calls"
+		script = ("set -euo pipefail\n" + GH_STUB + f'source "{scripts / "poller_fns.sh"}"\n' + POLLER_GATE_FN + snippet
+			+ '\necho "cache=${#RED_BASE_HEALTH_CACHE[@]}"\n')
+		run_env = os.environ.copy()
+		for name in ("BASH_ENV", "ENV", "RED_BASE_APPROVAL_HOLD_ENABLED", "RED_BASE_HOLD_WORKFLOWS", "PLAN_BASE_CI_GATE_STAGED"):
+			run_env.pop(name, None)
+		run_env.update({
+			"CALL_LOG": str(call_log),
+			"POST_LOG": str(tmp / "posts"),
+			"RUNS_RESPONSE": json.dumps(runs if runs is not None else RED_RUNS),
+			"RUNS_FAIL": str(runs_fail).lower(),
+			"HEAL_RESPONSE": json.dumps(heal if heal is not None else [_heal_issue()]),
+			"HEAL_FAIL": str(heal_fail).lower(),
+			"DETAILS": json.dumps(POLLER_DETAILS),
+			"GITHUB_REPOSITORY": "owner/repo",
+			"CWS_DEFAULT_BRANCH": "main",
+		})
+		if staged:
+			run_env["PLAN_BASE_CI_GATE_STAGED"] = "true"
+		if env:
+			run_env.update(env)
+		result = subprocess.run(["bash", "-c", script], env=run_env, text=True, capture_output=True, check=True)
+		calls = call_log.read_text(encoding="utf-8").splitlines() if call_log.exists() else []
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			"calls": calls,
+			"runs_calls": [call for call in calls if "/actions/workflows/" in call],
+			"heal_calls": [call for call in calls if "labels=ai:workflow-heal" in call],
+		}
+
+
+def test_poller_red_base_gate_holds_on_red() -> None:
+	managed = _run_poller_gate("gate 501 orchestrator/project-1", heal=[_heal_issue(branch="orchestrator/project-1")])
+	assert "rc[501]=1" in managed["stdout"], managed
+	assert ("RED_BASE_APPROVAL_HOLD outcome=held issue=501 heal=777 workflow=.github/workflows/ci.yml run=9002 "
+		"status=red reason=base_ci_red") in managed["stdout"]
+	assert ("AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=base_ci_red outcome=hold issue=501 "
+		"heal=777 branch=orchestrator/project-1") in managed["stdout"]
+	assert "STALL_SKIP issue=501 reason=base_ci_red_hold phase=ai:awaiting-approval action=none" in managed["stdout"]
+	assert managed["runs_calls"] == ["api repos/owner/repo/actions/workflows/ci.yml/runs?branch=orchestrator%2Fproject-1"
+		"&event=push&status=completed&per_page=10"]
+	# An unmanaged issue tracks the default branch even when a branch is passed.
+	unmanaged = _run_poller_gate("gate 502 orchestrator/project-1")
+	assert "rc[502]=1" in unmanaged["stdout"], unmanaged
+	assert "STALL_SKIP issue=502 reason=base_ci_red_hold" in unmanaged["stdout"]
+	assert unmanaged["runs_calls"] == ["api repos/owner/repo/actions/workflows/ci.yml/runs?branch=main"
+		"&event=push&status=completed&per_page=10"]
+	# No comment read or post from the poller gate.
+	assert all("/comments" not in call for call in managed["calls"] + unmanaged["calls"])
+
+
+def test_poller_red_base_gate_passes_on_green() -> None:
+	result = _run_poller_gate("gate 502", runs=GREEN_RUNS)
+	assert "rc[502]=0" in result["stdout"], result
+	assert ("RED_BASE_APPROVAL_HOLD outcome=pass issue=502 heal=none workflow=none run=none status=green "
+		"reason=base_green") in result["stdout"]
+	assert "STALL_SKIP" not in result["stdout"]
+	assert "AI_PHASE_GATE_V1" not in result["stdout"]
+	assert result["heal_calls"] == []
+
+
+def test_poller_red_base_gate_kill_switch() -> None:
+	for value in ("false", "0", "off"):
+		result = _run_poller_gate("gate 502\ngate 504", env={"RED_BASE_APPROVAL_HOLD_ENABLED": value})
+		assert "rc[502]=0" in result["stdout"] and "rc[504]=0" in result["stdout"], (value, result)
+		assert "RED_BASE_APPROVAL_HOLD outcome=skipped issue=502" in result["stdout"]
+		assert "reason=disabled" in result["stdout"]
+		assert result["calls"] == []
+		assert "cache=0" in result["stdout"]
+	heal = _run_poller_gate("gate 503\ngate 503")
+	assert heal["stdout"].count("rc[503]=0") == 2, heal
+	assert "reason=heal_issue_exempt" in heal["stdout"]
+	assert "STALL_SKIP" not in heal["stdout"]
+	assert heal["runs_calls"] == [] and "cache=0" in heal["stdout"]
+
+
+def test_poller_red_base_gate_read_failure_fails_open() -> None:
+	runs_failed = _run_poller_gate("gate 502", runs_fail=True)
+	assert "rc[502]=0" in runs_failed["stdout"], runs_failed
+	assert "status=unknown reason=runs_lookup_failed" in runs_failed["stdout"]
+	assert runs_failed["heal_calls"] == []
+	heal_failed = _run_poller_gate("gate 502", heal_fail=True)
+	assert "rc[502]=0" in heal_failed["stdout"], heal_failed
+	assert "status=unknown reason=heal_lookup_failed" in heal_failed["stdout"]
+	assert "STALL_SKIP" not in heal_failed["stdout"]
+	for kwargs in ({"helper_mode": "missing"}, {"helper_mode": "symlink"}, {"staged": False}, {"helper_mode": "nofunc"}):
+		result = _run_poller_gate("gate 502\ngate 504", **kwargs)
+		assert "rc[502]=0" in result["stdout"] and "rc[504]=0" in result["stdout"], (kwargs, result)
+		assert "RED_BASE_APPROVAL_HOLD" not in result["stdout"]
+		assert result["stdout"].count("::notice::red-base approval hold helper unavailable") == 1
+		assert result["calls"] == []
+
+
+def test_poller_red_base_gate_cache_reused_within_tick() -> None:
+	heal = [_heal_issue(), _heal_issue(number=778, branch="orchestrator/project-1")]
+	result = _run_poller_gate("gate 502\ngate 504\ngate 505\ngate 501 orchestrator/project-1", heal=heal)
+	for issue in ("502", "504", "505"):
+		assert f"rc[{issue}]=1" in result["stdout"], result
+		assert f"RED_BASE_APPROVAL_HOLD outcome=held issue={issue} heal=777" in result["stdout"]
+		assert f"STALL_SKIP issue={issue} reason=base_ci_red_hold" in result["stdout"]
+	assert "RED_BASE_APPROVAL_HOLD outcome=held issue=501 heal=778" in result["stdout"]
+	assert [call.split("branch=")[1].split("&")[0] for call in result["runs_calls"]] == ["main", "orchestrator%2Fproject-1"]
+	assert len(result["heal_calls"]) == 2
+	assert "cache=2" in result["stdout"]
+	failed = _run_poller_gate("gate 502\ngate 504", runs_fail=True)
+	assert len(failed["runs_calls"]) == 1, failed
+	assert failed["stdout"].count("reason=runs_lookup_failed") == 2
+	assert "rc[502]=0" in failed["stdout"] and "rc[504]=0" in failed["stdout"]
+
+
+def test_poller_red_base_gate_wiring() -> None:
+	poller = POLLER.read_text(encoding="utf-8")
+	assert "declare -gA RED_BASE_HEALTH_CACHE=()" in poller
+	gate = _extract_bash_function(poller, "_plan_auto_approval_gate()\n{")
+	assert 'local integration_branch="${5:-}"' in gate
+	red_check = ('if ! _plan_red_base_gate "${issue_num}" "${details_map_json}" "${integration_branch}" "${phase}"; then\n'
+		"    return 1\n  fi")
+	assert red_check in gate
+	assert gate.index(red_check) < gate.index("unblock_trusted_login")
+	assert '"${_managed_staged_support_comments}" "${phase}" "${_managed_gate_integration_branch}"; then' in poller
+	assert '"${_managed_rti_gate_comments}" "${phase}" "${_managed_rti_gate_integration_branch}"; then' in poller
+	assert poller.count("jq -r '.integration_branch // \"\"' \"${STATE_FILE:-}\"") == 2
+	assert poller.count('_plan_auto_approval_gate "${issue_num}"') == 4
+	for default in ('RED_BASE_APPROVAL_HOLD_ENABLED="${RED_BASE_APPROVAL_HOLD_ENABLED-true}"',
+		'RED_BASE_HOLD_WORKFLOWS="${RED_BASE_HOLD_WORKFLOWS:-.github/workflows/ci.yml}"',
+		'PLAN_BASE_CI_GATE_STAGED="${PLAN_BASE_CI_GATE_STAGED:-false}"'):
+		assert default in poller, default
+	helper_check = _extract_bash_function(poller, "_red_base_gate_load_helper()\n{")
+	assert '[ "${PLAN_BASE_CI_GATE_STAGED:-false}" = "true" ]' in helper_check
+	assert '[ ! -L "${helper_path}" ]' in helper_check
+	workflow = POLL_WF.read_text(encoding="utf-8")
+	loop_start = workflow.index("for f in plan_base_ci_gate.sh; do")
+	loop = workflow[loop_start:workflow.index("\n          done", loop_start)]
+	assert 'rm -f "scripts/${f}"' in loop
+	assert 'echo "PLAN_BASE_CI_GATE_STAGED=false" >> "$GITHUB_ENV"' in loop
+	assert 'echo "PLAN_BASE_CI_GATE_STAGED=true" >> "$GITHUB_ENV"' in loop
+	assert 'install -m 0755 "${src}" "scripts/${f}"' in loop
+	assert workflow.count("RED_BASE_APPROVAL_HOLD_ENABLED: ${{ vars.RED_BASE_APPROVAL_HOLD_ENABLED || 'true' }}") == 5
+	assert workflow.count("RED_BASE_HOLD_WORKFLOWS: ${{ vars.RED_BASE_HOLD_WORKFLOWS || '.github/workflows/ci.yml' }}") == 5
+
 if __name__ == "__main__":
 	import pytest
 
