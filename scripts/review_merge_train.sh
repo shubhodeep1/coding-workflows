@@ -1606,7 +1606,7 @@ _mt_merge_lease_tick()
 	local tick_refs_json tick_prefix tick_ref tick_base tick_rc tick_reason tick_base_prs tick_first tick_first_head tick_paths
 	# Metrics (MERGE_LEASE_METRIC, observability only): skipped when the staged
 	# library predates _merge_lease_metric; never change a decision below.
-	local tick_metric_ok=0 tick_waiters=""
+	local tick_metric_ok=0 tick_waiters="" tick_grant_ts=""
 	declare -F _merge_lease_metric >/dev/null 2>&1 && tick_metric_ok=1
 	[ "${MT_PR_CHECKS_LIB_LOADED}" = "true" ] || return 0
 	_merge_lease_enabled || return 0
@@ -1669,7 +1669,7 @@ _mt_merge_lease_tick()
 		tick_first="$(_merge_lease_queue_first "${tick_base_prs}" "")"
 		if [ -z "${tick_first}" ]; then
 			_mt_log "MERGE_LEASE pr=- base=${tick_base} mode=tick outcome=no_waiter reason=lease_free"
-			[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric no_waiter "${tick_base}" "" tick lease_free "" 0 || true
+			[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric no_waiter "${tick_base}" "" tick lease_free "" 0 - || true
 			continue
 		fi
 		tick_first_head="$(jq -r --argjson n "${tick_first}" '[ .[] | select(.number == $n) | .head_sha // "" ][0] // ""' <<< "${tick_base_prs}" 2>/dev/null)"
@@ -1678,18 +1678,20 @@ _mt_merge_lease_tick()
 		_merge_lease_write "${tick_base}" held "${tick_first}" "${tick_first_head}" "${tick_paths:-*}" || tick_rc=$?
 		if [ "${tick_rc}" -ne 0 ]; then
 			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=$([ "${tick_rc}" -eq 3 ] && echo lost_race || echo write_failed) reason=grant"
-			[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric "$([ "${tick_rc}" -eq 3 ] && echo lost_race || echo write_failed)" "${tick_base}" "${tick_first}" tick grant "" "${tick_waiters}" || true
+			[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric "$([ "${tick_rc}" -eq 3 ] && echo lost_race || echo write_failed)" "${tick_base}" "${tick_first}" tick grant "" "${tick_waiters}" - || true
 			continue
 		fi
+		# Grant time for the metric: the write above, not after unlabel/dispatch.
+		tick_grant_ts="$(date -u +%s 2>/dev/null)" || tick_grant_ts=""
 		# Unlabel before the dispatch: if the dispatch fails, the sweep (which
 		# skips labelled waiters) picks the PR up again within 30 minutes.
 		_merge_lease_unlabel_wait "${tick_first}"
 		if _mt_dispatch_review "${tick_first}" "$(jq -r --argjson n "${tick_first}" '[ .[] | select(.number == $n) | .head // "" ][0] // ""' <<< "${tick_base_prs}" 2>/dev/null)"; then
 			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=first_in_queue"
-			[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric granted "${tick_base}" "${tick_first}" tick first_in_queue 0 "${tick_waiters}" "${tick_first}" || true
+			[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric granted "${tick_base}" "${tick_first}" tick first_in_queue 0 "${tick_waiters}" "${tick_first}" "${tick_grant_ts}" || true
 		else
 			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=dispatch_failed_sweep_retries"
-			[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric granted "${tick_base}" "${tick_first}" tick dispatch_failed_sweep_retries 0 "${tick_waiters}" "${tick_first}" || true
+			[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric granted "${tick_base}" "${tick_first}" tick dispatch_failed_sweep_retries 0 "${tick_waiters}" "${tick_first}" "${tick_grant_ts}" || true
 		fi
 	done < <(jq -r --arg p "refs/${tick_prefix}" '.[] | select(type == "object" and ((.ref // "") | startswith($p))) | .ref' <<< "${tick_refs_json}" 2>/dev/null)
 	return 0

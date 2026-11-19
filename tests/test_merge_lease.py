@@ -562,6 +562,34 @@ class LeaseGateMetrics(unittest.TestCase):
 		self.assertEqual(rc, 1, out)
 		self.assertEqual([(r["event"], r["reason"]) for r in _metrics(out)], [("retry", "lost_race"), ("wait", "held")])
 
+	def test_own_expired_hold_reacquired_is_a_new_hold(self) -> None:
+		st = {"pulls": [_pull(8)], "files": {"8": ["shared.py"]}}
+		_seed_lease(st, _record(8, expires=int(time.time()) - 5, acquired=int(time.time()) - 600))
+		h = _Harness(st)
+		rc, out = _gate(h, 8, "update")
+		self.assertEqual(rc, 0, out)
+		# The MERGE_LEASE line and the gate outcome are unchanged.
+		self.assertIn("outcome=renewed", out)
+		self.assertIn("rc=0 outcome=renewed reason=renewed", out)
+		row = _metrics(out)[0]
+		self.assertEqual((row["event"], row["reason"], row["hold_s"], row["holder"]), ("acquired", "acquired", "0", "8"))
+
+	def test_invalid_input_has_no_holder_even_after_an_earlier_read(self) -> None:
+		st = {"pulls": [_pull(4)]}
+		_seed_lease(st, _record(4))
+		h = _Harness(st)
+		res = h.lib(f'_merge_lease_read main || true; _merge_lease_gate 7 "" {HEAD} update; echo "rc=$?"')
+		self.assertIn("rc=0", res.stdout, res.stderr)
+		row = _metrics(res.stdout)[0]
+		self.assertEqual((row["event"], row["reason"], row["holder"]), ("unavailable", "invalid_input", "-"))
+
+	def test_helper_uses_a_passed_decision_timestamp(self) -> None:
+		h = _Harness({})
+		res = h.lib('_merge_lease_metric granted main 5 tick first_in_queue 0 1 5 1234567890')
+		self.assertEqual(_metrics(res.stdout)[0]["ts"], "1234567890")
+		res = h.lib('_merge_lease_metric granted main 5 tick first_in_queue 0 1 5 "x1"')
+		self.assertRegex(_metrics(res.stdout)[0]["ts"], r"^\d+$")
+
 	def test_disabled_lease_emits_no_metric(self) -> None:
 		h = _Harness({})
 		_, out = _gate(h, 7, "update", {"MERGE_LEASE_ENABLED": "false"})
@@ -641,6 +669,16 @@ class TickMetrics(unittest.TestCase):
 		self.assertIn("pr=5", h.record())
 		self.assertIn("MERGE_LEASE pr=4 base=main mode=tick outcome=released reason=holder_closed\n", out)
 
+	def test_grant_timestamp_is_taken_before_unlabel_and_dispatch(self) -> None:
+		pulls = [_pull(5)]
+		labels = {"5": ["ai:merge-lease-wait"]}
+		st = {"pulls": pulls, "labels": labels, "files": {"5": ["a"]}, "closed": [4]}
+		_seed_lease(st, _record(4))
+		_, out = self._tick(st, pulls, labels, prelude="_mt_dispatch_review() { sleep 2; return 0; }\n")
+		rows = _metrics(out)
+		self.assertEqual([r["event"] for r in rows], ["released", "granted"], out)
+		self.assertLessEqual(int(rows[1]["ts"]) - int(rows[0]["ts"]), 1, out)
+
 	def test_held_reports_queue_depth(self) -> None:
 		pulls = [_pull(4), _pull(5)]
 		labels = {"5": ["ai:merge-lease-wait"]}
@@ -658,6 +696,7 @@ class TickMetrics(unittest.TestCase):
 		_, out = self._tick(st, pulls, {})
 		row = _metrics(out)[0]
 		self.assertEqual((row["event"], row["pr"], row["reason"], row["waiters"]), ("no_waiter", "-", "lease_free", "0"))
+		self.assertEqual(row["holder"], "-", "a free lease has no holder, not the released record's pr")
 
 	def test_expired_holder(self) -> None:
 		pulls = [_pull(4)]
@@ -667,6 +706,7 @@ class TickMetrics(unittest.TestCase):
 		rows = _metrics(out)
 		self.assertEqual((rows[0]["event"], rows[0]["reason"]), ("released", "expired"), out)
 		self.assertEqual(rows[1]["event"], "no_waiter")
+		self.assertEqual(rows[1]["holder"], "-")
 
 	def test_library_without_the_metric_helper_still_releases_and_grants(self) -> None:
 		pulls = [_pull(5)]

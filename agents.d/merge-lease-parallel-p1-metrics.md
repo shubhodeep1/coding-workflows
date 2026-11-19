@@ -5,7 +5,9 @@
   - `event` and `reason` are limited to `[a-z_]`; numbers are digits only. Anything else prints as `-`. No path, label or record text is printed.
   - `hold_s` is the time since the record's `acquired=` (`-` when the record has none), and `0` for `acquired` and `granted`.
   - `waiters` (tick only) is the number of open non-draft PRs on the base that carry `MERGE_LEASE_WAIT_LABEL`, counted from the open-PR list already read.
-  - A PR's wait time runs from its first `event=wait` `ts` to its `event=acquired` or `event=granted` `ts`.
+  - A PR's wait time runs from its first `event=wait` `ts` to its `event=acquired` or `event=granted` `ts`. The `granted` `ts` is the moment the lease write succeeded, taken before the wait label is removed and the review is dispatched.
+  - A PR that renews its own expired hold gets a new `acquired=`, so it logs `event=acquired hold_s=0`; its `MERGE_LEASE` line still says `outcome=renewed`.
+  - `holder` is `-` when the lease is free (`no_waiter`), after a failed tick grant, and for `invalid_input` (no record read).
   - No GitHub API call is added. The helper always returns 0. The tick calls it only when `declare -F _merge_lease_metric` finds it.
   - Kill switch: `MERGE_LEASE_METRICS_ENABLED`, default `true` in the helper (`true`/`1`/`yes`/`on`).
 LOG_PREFIX.name=MERGE_LEASE_METRIC

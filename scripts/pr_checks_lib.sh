@@ -2298,17 +2298,19 @@ _merge_lease_metric_hold_seconds()
 	printf '%s' "$((metric_now - metric_acquired))"
 }
 
-# _merge_lease_metric <event> <base> <pr> <mode> <reason> [<hold_s>] [<waiters>] [<holder>]
+# _merge_lease_metric <event> <base> <pr> <mode> <reason> [<hold_s>] [<waiters>] [<holder>] [<ts>]
 # Prints one MERGE_LEASE_METRIC line (stdout, like _merge_lease_log). Holder
-# defaults to MERGE_LEASE_PR. Numbers that are not digits and tokens outside
-# [a-z_] print as `-`; no path, label or record text is printed. Makes no gh
-# call, sets no MERGE_LEASE_* global and always returns 0 (fail-open).
+# defaults to MERGE_LEASE_PR (pass `-` for "no holder"; an empty argument still
+# falls back). ts defaults to now; a caller passes the decision's epoch when
+# the line is printed after later API calls (the tick's grant). Numbers that
+# are not digits and tokens outside [a-z_] print as `-`; no path, label or
+# record text is printed. Makes no gh call, sets no MERGE_LEASE_* global and always returns 0 (fail-open).
 _merge_lease_metric()
 {
 	{
 		_merge_lease_metrics_enabled || return 0
 		local metric_event="${1:-}" metric_base="${2:-}" metric_pr="${3:-}" metric_mode="${4:-}" metric_reason="${5:-}"
-		local metric_hold="${6:-}" metric_waiters="${7:-}" metric_holder="${8:-${MERGE_LEASE_PR:-}}" metric_ts=""
+		local metric_hold="${6:-}" metric_waiters="${7:-}" metric_holder="${8:-${MERGE_LEASE_PR:-}}" metric_ts="${9:-}"
 		[[ "${metric_event}" =~ ^[a-z_]+$ ]] || metric_event="-"
 		[[ "${metric_mode}" =~ ^[a-z_]+$ ]] || metric_mode="-"
 		[[ "${metric_reason}" =~ ^[a-z_]+$ ]] || metric_reason="-"
@@ -2317,7 +2319,7 @@ _merge_lease_metric()
 		[[ "${metric_holder}" =~ ^[0-9]+$ ]] || metric_holder="-"
 		[[ "${metric_hold}" =~ ^[0-9]+$ ]] || metric_hold="-"
 		[[ "${metric_waiters}" =~ ^[0-9]+$ ]] || metric_waiters="-"
-		metric_ts="$(date -u +%s)" || metric_ts=""
+		[[ "${metric_ts}" =~ ^[0-9]+$ ]] || { metric_ts="$(date -u +%s)" || metric_ts=""; }
 		[[ "${metric_ts}" =~ ^[0-9]+$ ]] || metric_ts="-"
 		echo "MERGE_LEASE_METRIC event=${metric_event} base=${metric_base} pr=${metric_pr} mode=${metric_mode} reason=${metric_reason} holder=${metric_holder} hold_s=${metric_hold} waiters=${metric_waiters} ts=${metric_ts}" || true
 	} 2>/dev/null
@@ -2359,7 +2361,8 @@ _merge_lease_gate()
 		MERGE_LEASE_OUTCOME="unavailable"
 		MERGE_LEASE_REASON="invalid_input"
 		_merge_lease_log "${lease_pr}" "${lease_base}" "${lease_mode}" unavailable invalid_input
-		_merge_lease_metric unavailable "${lease_base}" "${lease_pr}" "${lease_mode}" invalid_input || true
+		# No record was read in this call: holder `-`, not a stale MERGE_LEASE_PR.
+		_merge_lease_metric unavailable "${lease_base}" "${lease_pr}" "${lease_mode}" invalid_input "" "" - || true
 		return 0
 	fi
 	for lease_attempt in 1 2; do
@@ -2459,7 +2462,10 @@ _merge_lease_gate()
 				MERGE_LEASE_STATE="held"
 				MERGE_LEASE_REASON="${MERGE_LEASE_OUTCOME}"
 				_merge_lease_log "${lease_pr}" "${lease_base}" update "${MERGE_LEASE_OUTCOME}" "ttl_s=$(_merge_lease_ttl_seconds)"
-				if [ "${MERGE_LEASE_OUTCOME}" = "renewed" ]; then
+				# Our own record past expiry leaves lease_keep_acquired empty, so the
+				# write stamped acquired=now: for the metric that is a new hold
+				# (event=acquired hold_s=0). The MERGE_LEASE line keeps `renewed`.
+				if [ "${MERGE_LEASE_OUTCOME}" = "renewed" ] && [ -n "${lease_keep_acquired}" ]; then
 					_merge_lease_metric renewed "${lease_base}" "${lease_pr}" update renewed "$(_merge_lease_metric_hold_seconds "${lease_keep_acquired}" 2>/dev/null)" || true
 				else
 					_merge_lease_metric acquired "${lease_base}" "${lease_pr}" update acquired 0 || true

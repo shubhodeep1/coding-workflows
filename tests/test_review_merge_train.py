@@ -3311,6 +3311,9 @@ def test_merge_lease_tick_metrics_are_additive_and_guarded():
 		'_mt_warn "MERGE_LEASE base=${tick_base} mode=tick outcome=unavailable reason=read_failed"',
 	):
 		assert fmt in body, fmt
+	# The grant metric's ts is taken right after the lease write, before the
+	# unlabel and the dispatch, so dispatch latency is not counted as wait.
+	assert body.index('tick_grant_ts="$(date -u +%s') < body.index('_merge_lease_unlabel_wait "${tick_first}"')
 	# No new GitHub call: the tick's gh reads are the matching-refs listing and
 	# the live holder-state read, as before the metrics.
 	assert body.count("gh_retry _safe_gh_jq") == 2
