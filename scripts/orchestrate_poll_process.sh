@@ -18561,6 +18561,39 @@ queue_backpressure_holds_uncapped_stall_action() {
   return 1
 }
 
+# queue_backpressure_sample_state (stuck-backlog Phase 3c). Refreshes
+# QUEUE_BACKPRESSURE_ACTIVE in the calling shell through
+# queue_backpressure_holds_dispatch (one source of truth for the threshold),
+# discarding its outcome=held stdout line; the once-per-shell outcome=on|off
+# summary still goes to stderr. No API call; an unknown depth reads as false.
+queue_backpressure_sample_state() {
+  queue_backpressure_holds_dispatch "none" "persist_budget_sample" "tick" >/dev/null || true
+  return 0
+}
+
+# queue_backpressure_record_pause_interval (stuck-backlog Phase 3c). Once per
+# poller process, after the runs loader set ACTIONS_QUEUED_TOTAL, opens or
+# closes a queue-pause interval in the QUEUE_BACKPRESSURE_STATE_FILE marker
+# (scripts/persist_budget.py record-pause; orchestrate_poll.yml restores and
+# saves the marker through actions/cache). persist_budget_govern_issue
+# subtracts those intervals from the max_hours window. Does nothing when
+# PERSIST_QUEUE_PAUSE_ENABLED is off, the marker path is unset, the helper is
+# missing, or the queue depth is unknown (the marker is left unchanged).
+# No API call. Always returns 0.
+declare -g _QUEUE_BACKPRESSURE_PAUSE_RECORDED='false'
+queue_backpressure_record_pause_interval() {
+  [ "${_QUEUE_BACKPRESSURE_PAUSE_RECORDED:-false}" = "true" ] && return 0
+  _QUEUE_BACKPRESSURE_PAUSE_RECORDED='true'
+  _is_truthy "${PERSIST_QUEUE_PAUSE_ENABLED:-true}" || return 0
+  [ -n "${QUEUE_BACKPRESSURE_STATE_FILE:-}" ] || return 0
+  [ -f scripts/persist_budget.py ] || return 0
+  [[ "${ACTIONS_QUEUED_TOTAL:-}" =~ ^[0-9]+$ ]] || return 0
+  queue_backpressure_sample_state
+  PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_budget.py record-pause \
+    --state-file "${QUEUE_BACKPRESSURE_STATE_FILE}" --active "${QUEUE_BACKPRESSURE_ACTIVE:-false}" || true
+  return 0
+}
+
 phase_cap_can_dispatch() {
   local state="$1"
   local action="$2"
@@ -21748,6 +21781,12 @@ PERSIST_POSTMERGE_EOF
 # (one identity read per tick, shared with persist_journal_stall_context);
 # writes: replan 1 label edit (only when needed) + 1 comment, escalate 1
 # label edit + 1 comment, plus the journal append. Always returns 0.
+# Queue pause (stuck-backlog Phase 3c, PERSIST_QUEUE_PAUSE_ENABLED, default
+# true): while the Actions queue is under backpressure the issue is skipped
+# first (`outcome=skipped reason=queue_backpressure_pause`, before the tick cap
+# and the comments read, so the skip adds no API call); otherwise the
+# QUEUE_BACKPRESSURE_STATE_FILE intervals go to decide through
+# --paused-intervals-file so queued time does not count toward max_hours.
 PERSIST_BUDGET_TICK_DECISIONS="${PERSIST_BUDGET_TICK_DECISIONS:-0}"
 PERSIST_BUDGET_TICK_CAP=5
 PERSIST_BUDGET_LAST_ACTION=""
@@ -21756,9 +21795,19 @@ persist_budget_govern_issue() {
   local pbg_issue="$1" pbg_comments="${2:-}" pbg_labels="${3:-[]}" pbg_prior="${4:-}" pbg_scope="${5:-standalone}"
   local pbg_base pbg_comments_file pbg_out pbg_note pbg_action pbg_reason pbg_basis pbg_summary pbg_body
   local pbg_rc pbg_journal_outcome pbg_lead pbg_label pbg_edit_args
+  local pbg_paused="" pbg_queue_pause="false"
+  local -a pbg_decide_args
   PERSIST_BUDGET_LAST_ACTION=""
   PERSIST_BUDGET_LAST_BASIS=""
   [[ "${pbg_issue}" =~ ^[1-9][0-9]*$ ]] || return 0
+  if _is_truthy "${PERSIST_QUEUE_PAUSE_ENABLED:-true}"; then
+    pbg_queue_pause="true"
+    queue_backpressure_sample_state
+    if [ "${QUEUE_BACKPRESSURE_ACTIVE:-false}" = "true" ]; then
+      echo "PERSIST governor outcome=skipped reason=queue_backpressure_pause issue=${pbg_issue}" >&2
+      return 0
+    fi
+  fi
   [[ "${PERSIST_BUDGET_TICK_DECISIONS}" =~ ^[0-9]+$ ]] || PERSIST_BUDGET_TICK_DECISIONS=0
   if [ "${PERSIST_BUDGET_TICK_DECISIONS}" -ge "${PERSIST_BUDGET_TICK_CAP}" ]; then
     echo "PERSIST governor outcome=deferred reason=tick_cap issue=${pbg_issue}" >&2
@@ -21798,8 +21847,19 @@ persist_budget_govern_issue() {
     return 0
   }
   : > "${pbg_out}" 2>/dev/null || true
-  PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_budget.py decide --comments-file "${pbg_comments_file}" \
-    --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE}" --labels "${pbg_labels}" --out "${pbg_out}" || true
+  pbg_decide_args=(decide --comments-file "${pbg_comments_file}" \
+    --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE}" --labels "${pbg_labels}" --out "${pbg_out}")
+  if [ "${pbg_queue_pause}" = "true" ] && [ -n "${QUEUE_BACKPRESSURE_STATE_FILE:-}" ] && [ -f "${QUEUE_BACKPRESSURE_STATE_FILE}" ] && [ -r "${QUEUE_BACKPRESSURE_STATE_FILE}" ]; then
+    pbg_paused="${pbg_base}/persist_budget_paused.${pbg_issue}.json"
+    # A legacy one-line or corrupt marker yields [] or a jq failure: no pause.
+    if jq -c 'if type == "object" and (.intervals | type) == "array" then .intervals else [] end' \
+      "${QUEUE_BACKPRESSURE_STATE_FILE}" > "${pbg_paused}" 2>/dev/null; then
+      pbg_decide_args+=(--paused-intervals-file "${pbg_paused}")
+    fi
+  fi
+  PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_budget.py "${pbg_decide_args[@]}" || true
+  # Only decide reads the scratch intervals, so every later return path is clean.
+  [ -n "${pbg_paused}" ] && rm -f "${pbg_paused}"
   pbg_action="$(jq -r '.action // ""' "${pbg_out}" 2>/dev/null || true)"
   pbg_reason="$(jq -j '.reason // ""' "${pbg_out}" 2>/dev/null | tr -c 'A-Za-z0-9_.:-' '_' | cut -c1-60 || true)"
   pbg_basis="$(jq -r '.basis // ""' "${pbg_out}" 2>/dev/null | tr -d '\n' || true)"
@@ -28654,6 +28714,8 @@ fi
 # dispatches honour .github/ai/concurrency_caps.yml too.
 if _is_truthy "${STANDALONE_RECOVERY_SWEEP_ONLY:-false}"; then
   prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
+  # Queue-pause interval for the persistence budget (stuck-backlog Phase 3c).
+  queue_backpressure_record_pause_interval || true
   run_standalone_stall_recovery
   exit 0
 fi
@@ -28707,6 +28769,8 @@ if [ "${SMOKE_FIXTURE_REAPED_NUMS_JSON}" != "[]" ]; then
 fi
 if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then
   prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
+  # Queue-pause interval for the persistence budget (stuck-backlog Phase 3c).
+  queue_backpressure_record_pause_interval || true
 fi
 write_state_snapshot_actions_runs_export || true
 

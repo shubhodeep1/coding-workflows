@@ -51,6 +51,12 @@ env:
   PERSIST_MAX_ROUNDS: ${{ vars.PERSIST_MAX_ROUNDS || '5' }}
   PERSIST_MAX_HOURS: ${{ vars.PERSIST_MAX_HOURS || '48' }}
   PERSIST_REPLAN_AFTER_FAILED_ROUNDS: ${{ vars.PERSIST_REPLAN_AFTER_FAILED_ROUNDS || '3' }}
+  # Persistence budget queue pause and inherited-round exemption (stuck-backlog
+  # Phase 3c): default on, also defaulted in scripts/persist_budget.py and
+  # scripts/orchestrate_poll_process.sh. 'false' restores the earlier
+  # max_hours / max_rounds behaviour.
+  PERSIST_QUEUE_PAUSE_ENABLED: ${{ vars.PERSIST_QUEUE_PAUSE_ENABLED || 'true' }}
+  PERSIST_INHERITED_ROUNDS_EXEMPT: ${{ vars.PERSIST_INHERITED_ROUNDS_EXEMPT || 'true' }}
   # Orchestrator context (issue #8427, P7): default off; see scripts/persist_orchestrator.py.
   PERSIST_ORCH_CONTEXT_ENABLED: ${{ vars.PERSIST_ORCH_CONTEXT_ENABLED || 'false' }}
   # Grouping repeated failures (issue #8427, P8): default off; see scripts/persist_orchestrator.py.
@@ -135,7 +141,22 @@ jobs:
             echo "SEMBLE_BIN="
             echo "SEMBLE_INDEX_AVAILABLE=false"
             echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"
+            # Queue backpressure marker (stuck-backlog Phase 3c), outside the
+            # checkout so it is never committed.
+            echo "QUEUE_BACKPRESSURE_STATE_FILE=${RUNNER_TEMP}/queue-backpressure-state/state.json"
           } >> "$GITHUB_ENV"
+
+      # Queue backpressure marker (stuck-backlog Phase 3c): the newest copy
+      # from an earlier tick. One key per run (cache entries cannot be
+      # overwritten); restore-keys picks the newest. A miss means no pause.
+      - name: Restore queue backpressure marker
+        id: queue_backpressure_restore
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/queue-backpressure-state
+          key: queue-backpressure-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: queue-backpressure-state-v1-
 
       - name: Record GH_PAT budget at poll start
         env:
@@ -2207,6 +2228,27 @@ jobs:
               echo "| Tracking issues processed | 0 |"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # hashFiles() cannot see RUNNER_TEMP, so a guard step checks the marker.
+      - name: Check queue backpressure marker
+        id: queue_backpressure_marker
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          if [ -n "${QUEUE_BACKPRESSURE_STATE_FILE:-}" ] && [ -f "${QUEUE_BACKPRESSURE_STATE_FILE}" ]; then
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Save queue backpressure marker
+        if: always() && steps.queue_backpressure_marker.outputs.exists == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/queue-backpressure-state
+          key: queue-backpressure-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Record poll run end
         if: always()
