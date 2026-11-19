@@ -186,7 +186,8 @@ def test_ci_runs_the_check_on_pull_requests_except_project_final_prs() -> None:
 	assert 'head_commit="${GITHUB_SHA}"' in run
 	assert 'head_commit="$(git rev-parse HEAD)"' in run
 	assert 'orchestrator/project-*|auto/forward-merge-stable-*)' in run
-	assert 'git fetch --no-tags --depth=2 origin "${head_commit}"' in run
+	assert 'git fetch --no-tags --depth=2 origin "${head_fetch[@]}"' in run
+	assert "CI_FINAL_MERGE_REF_LOCAL_MERGE" in run
 	assert 'scripts/check_agents_md_direct_edits.py' in run
 	assert '--base "$(git rev-parse "${head_commit}^1")" --head "${head_commit}"' in run
 	assert step["env"]["FINAL_CI_PR_NUMBER"] == "${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}"

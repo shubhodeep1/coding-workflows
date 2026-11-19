@@ -44,6 +44,8 @@ pr_labels=""
 pr_additions=""
 pr_deletions=""
 pr_changed_files=""
+# Login of the PR's author, from the same PR read (generated chore skip).
+pr_author_login=""
 pr_mergeable=""
 pr_mergeable_state=""
 pr_head_sha_gate=""
@@ -91,7 +93,7 @@ if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
   _pr_gate_rc=0
   _pr_gate_err="$(mktemp "${RUNNER_TEMP:-/tmp}/pr_gate_err.XXXXXX")"
   _pr_gate="$(gh_api_retry "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-    --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), base_sha: (.base.sha // ""), head_repo: (.head.repo.full_name // ""), head_sha: (.head.sha // ""), auto_merge_enabled: (if has("auto_merge") then (.auto_merge != null) else null end), updated_at: (.updated_at // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' 2>"${_pr_gate_err}")" || _pr_gate_rc=$?
+    --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), base_sha: (.base.sha // ""), head_repo: (.head.repo.full_name // ""), head_sha: (.head.sha // ""), auto_merge_enabled: (if has("auto_merge") then (.auto_merge != null) else null end), updated_at: (.updated_at // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // ""), author: (.user.login // "")}' 2>"${_pr_gate_err}")" || _pr_gate_rc=$?
   cat "${_pr_gate_err}" >&2 2>/dev/null || true
   _pr_gate_not_found=false
   if grep -q 'GH_API_RETRY outcome=permanent .*status=404 ' "${_pr_gate_err}" 2>/dev/null; then _pr_gate_not_found=true; fi
@@ -119,6 +121,7 @@ if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
     pr_additions="$(printf '%s' "${_pr_gate}" | jq -r '.additions // 0' 2>/dev/null || echo "")"
     pr_deletions="$(printf '%s' "${_pr_gate}" | jq -r '.deletions // 0' 2>/dev/null || echo "")"
     pr_changed_files="$(printf '%s' "${_pr_gate}" | jq -r '.changed_files | if type == "number" and . == floor then tostring else "" end' 2>/dev/null || echo "")"
+    pr_author_login="$(printf '%s' "${_pr_gate}" | jq -r '.author // ""' 2>/dev/null || echo "")"
     pr_mergeable="$(printf '%s' "${_pr_gate}" | jq -r '.mergeable // ""' 2>/dev/null || echo "")"
     pr_mergeable_state="$(printf '%s' "${_pr_gate}" | jq -r '.mergeable_state // ""' 2>/dev/null || echo "")"
     if [ -z "$(printf '%s' "${pr_title_cached}" | tr -d '[:space:]')" ]; then
@@ -930,6 +933,14 @@ FORCE_RB_JUDGE_CONFLICT_SKIP="false"
 case "${FINGERPRINT_CAP_MAX}" in
   ''|*[!0-9]*|0) FINGERPRINT_CAP_MAX=3 ;;
 esac
+# Issue #9533: a reviewer-stage crash (reason=reviewers_failed) that repeats
+# with the same fingerprint on the same head is deterministic, so it trips the
+# cap at REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED (default 2)
+# instead of the global default. Every other reason keeps FINGERPRINT_CAP_MAX.
+FINGERPRINT_CAP_REVIEWERS_FAILED_MAX="${REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED:-2}"
+case "${FINGERPRINT_CAP_REVIEWERS_FAILED_MAX}" in
+  ''|*[!0-9]*|0) FINGERPRINT_CAP_REVIEWERS_FAILED_MAX=2 ;;
+esac
 if [ "${SHOULD_RUN}" = "true" ] \
   && [ "${pr_base_retargeted}" != "true" ] \
   && { [ "${REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED:-true}" != "false" ] || [ "${FORCE_RB_JUDGE:-false}" = "true" ]; } \
@@ -1019,6 +1030,9 @@ if [ "${SHOULD_RUN}" = "true" ] \
         FINGERPRINT_CAP_COUNT="${fingerprint_cap_count}"
         FINGERPRINT_CAP_FP="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "fp" { print $2 }' | tail -n 1)"
         FINGERPRINT_CAP_REASON="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "reason" { print $2 }' | tail -n 1)"
+        if [ "${FINGERPRINT_CAP_REASON}" = "reviewers_failed" ]; then
+          FINGERPRINT_CAP_MAX="${FINGERPRINT_CAP_REVIEWERS_FAILED_MAX}"
+        fi
         if [ "$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "cap_applied" { print $2 }' | tail -n 1)" = "true" ]; then
           FINGERPRINT_CAP_ALREADY_APPLIED="true"
           echo "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} count=${FINGERPRINT_CAP_COUNT}"
@@ -1229,7 +1243,17 @@ if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
     pr_files_json=""
     FILES_SKIP_SUPPRESSED="false"
     PROTECTED_SKIP_SUPPRESSED="false"
-    if [ "${SMALL_DIFF}" = "true" ] || [ "${AUTOFIX_SKIP_DOC_ONLY:-true}" != "false" ]; then
+    # A generator's head ref (see "Generated chore PRs" below) needs the
+    # file list too, whatever the size and doc-only settings are.
+    generated_chore_ref_kind=""
+    if [ "${AUTOFIX_SKIP_GENERATED_CHORE:-true}" != "false" ]; then
+      if [[ "${pr_head_ref}" =~ ^auto/validation-selftest-status-[0-9]+-[0-9]+$ ]]; then
+        generated_chore_ref_kind="validation_selftest_status"
+      elif [[ "${pr_head_ref}" =~ ^auto/workflow-log-analysis-report-[0-9]+-[0-9]+$ ]]; then
+        generated_chore_ref_kind="workflow_log_analysis_report"
+      fi
+    fi
+    if [ "${SMALL_DIFF}" = "true" ] || [ "${AUTOFIX_SKIP_DOC_ONLY:-true}" != "false" ] || [ -n "${generated_chore_ref_kind}" ]; then
       # Shared, cached read (gate_fetch_pr_files above).
       gate_fetch_pr_files
       # Missing, malformed, partial, or capped API evidence never
@@ -1315,6 +1339,70 @@ if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
     elif [ "${SMALL_DIFF}" = "true" ]; then
       candidate_skip="true"
       candidate_skip_reason="small_diff"
+    fi
+
+    # Generated chore PRs: the nightly validation self-test status
+    # (nightly-validation-selftest.yml) and the workflow log analysis report
+    # (scripts/workflow_log_analysis_deliver_report.sh) reach the default
+    # branch through a pull request only because that branch requires status
+    # checks. The status file is `*.json`, so the protected-path rule kept a
+    # two-line generated change on the full reviewer path (PR #9570: ten
+    # dispatched review rounds in 26 hours, one of them a 59-minute
+    # codex-agent job), and the report took the docs-only skip but then
+    # waited on security-audit cycles of a generated document (PR #9636).
+    # A PR qualifies only when all of these hold; anything else, including a
+    # hand-written PR with the same title, is reviewed as before:
+    #   - same-repository head into the default branch;
+    #   - the head ref is the generator's own branch name;
+    #   - the validated /files list holds nothing but the generator's file(s),
+    #     with no rename;
+    #   - the PR's author is the pipeline login (the GH_PAT identity);
+    #   - the PR does not carry ai:security-pass-failed (a PR audited before
+    #     this exemption existed keeps that hold and its review-blocked judge).
+    # The skip then needs neither the protected-path exemption nor the
+    # single-issue security pass. `[force-review]` / the force-review label,
+    # a merge conflict, a failed freshness or final CI marker and the
+    # materiality check still send it to review. No extra API call: the
+    # author comes from the PR read above, the file list and the pipeline
+    # login from the cached reads this block already makes for a candidate.
+    # AUTOFIX_SKIP_GENERATED_CHORE=false turns the exemption off.
+    GENERATED_CHORE="false"
+    generated_chore_kind=""
+    if [ -n "${generated_chore_ref_kind}" ] \
+      && [ "${FILES_SKIP_SUPPRESSED}" != "true" ] && [ -n "${file_count}" ] \
+      && [ -n "${DEFAULT_BRANCH:-}" ] && [ "${pr_base_ref}" = "${DEFAULT_BRANCH}" ] \
+      && [ -n "${pr_head_repo}" ] && [ "${pr_head_repo}" = "${REPOSITORY}" ] \
+      && [[ ",${pr_labels}," != *,ai:security-pass-failed,* ]]; then
+      if [ "${generated_chore_ref_kind}" = "validation_selftest_status" ]; then
+        if printf '%s' "${pr_files_json}" | jq -e '
+          length == 1 and .[0].filename == "analysis/validation-selftest-status.json"
+          and (.[0].status == "modified" or .[0].status == "added")
+          and .[0].previous_filename == null' >/dev/null 2>&1; then
+          generated_chore_kind="validation_selftest_status"
+        fi
+      elif [ "${generated_chore_ref_kind}" = "workflow_log_analysis_report" ]; then
+        if printf '%s' "${pr_files_json}" | jq -e '
+          length > 0 and all(.[];
+            (.filename | test("^analysis/workflow-optimization-[0-9]{4}-[0-9]{2}-[0-9]{2}(-[0-9]+)?\\.md$"))
+            and (.status == "added" or .status == "modified" or .status == "removed")
+            and .previous_filename == null)' >/dev/null 2>&1; then
+          generated_chore_kind="workflow_log_analysis_report"
+        fi
+      fi
+      if [ -n "${generated_chore_kind}" ]; then
+        gate_fetch_marker_comments
+        if [ -z "${gate_marker_author_login}" ]; then
+          echo "AUTOFIX_GATE_GENERATED_CHORE pr=${PR_NUMBER} kind=${generated_chore_kind} outcome=review reason=pipeline_login_unavailable"
+        elif [ -z "${pr_author_login}" ] || [ "${pr_author_login}" != "${gate_marker_author_login}" ]; then
+          echo "AUTOFIX_GATE_GENERATED_CHORE pr=${PR_NUMBER} kind=${generated_chore_kind} outcome=review reason=author_not_pipeline"
+        else
+          GENERATED_CHORE="true"
+          candidate_skip="true"
+          candidate_skip_reason="generated_chore"
+          PROTECTED_SKIP_SUPPRESSED="false"
+          echo "AUTOFIX_GATE_GENERATED_CHORE pr=${PR_NUMBER} kind=${generated_chore_kind} outcome=skip_candidate files=${file_count}"
+        fi
+      fi
     fi
 
     if [ "${candidate_skip}" = "true" ] && [ "${PROTECTED_SKIP_SUPPRESSED}" = "true" ]; then
@@ -1554,8 +1642,10 @@ PY
     # ai:security-pass-failed stays on codex-agent for the review-blocked
     # judge. Otherwise the skip job does not run the pass, so the PR is
     # kept on the codex-agent path as before.
+    # A generated chore PR (above) carries no code to audit: it neither
+    # needs the pass nor is held on the codex-agent path for it.
     SECURITY_PASS_SKIP_SUPPRESSED="false"
-    if [ "${candidate_skip}" = "true" ] && [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-false}" != "false" ] \
+    if [ "${candidate_skip}" = "true" ] && [ "${GENERATED_CHORE}" != "true" ] && [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-false}" != "false" ] \
       && [ -n "${DEFAULT_BRANCH:-}" ] && [ "${pr_base_ref}" = "${DEFAULT_BRANCH}" ] \
       && [ "${pr_head_repo}" = "${REPOSITORY}" ] \
       && ! [[ "${pr_head_ref}" =~ ${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-} ]] \
