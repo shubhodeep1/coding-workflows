@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nI've written the plan for issue #9784 below. It's a one-file change. Planning ran against `main` at `d03c0db09e845eae063540d4b39afb2e1082488e`; the integration branch mismatch value was `unknown`, not `true`.\n\n## Plan: rewrite `tests/e2e_smoke_canary.txt` to the three-line spec\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: test tests/test_e2e_editor_smoke_canary.py\nACCEPTANCE: post-merge none: this is a test fixture data file, so no workflow behaviour changes after merge.\n\n## Functions or modules to implement\nNone. This only changes data.\n\nThe file on the planning ref currently holds two lines, each ending in LF:\n```\nstatus: ok\ndecompose-run: 41445772297\n```\n\nReplace the whole content with exactly:\n```\nstatus: ok\nrun_id: alt-44490333814\nupdated-by: ai-pipeline\n```\n\n- Use LF line endings and end the last line with one newline, the same as the current file.\n- Don't add a BOM and don't leave trailing spaces.\n\n## Data structures affected\nOnly the canary text file.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 End the file with a trailing newline\n- Chosen: end the last line with a single LF.\n- Alternatives considered: no newline after the last line.\n- Why: the current file ends its last line with a newline, and text files in this repo use LF. The issue says \"exactly these three lines\", and three newline-terminated lines is the usual reading of that.\n\n## Security considerations\nNo trust boundary, endpoint, secret or money handling is involved. The new value contains no credential.\n\n## Risks and edge cases\n- `tests/test_e2e_editor_smoke_canary.py` compares the canary byte for byte against `tests/e2e_smoke_canary_spec.txt`. It only runs in Phase 4b, when the `E2E_CANARY_FILE` environment variable is set, so normal CI isn't affected.\n- Other tests mention the canary path, but none checks this file's content in normal CI. A trailing-newline mismatch would only matter to an external checker.\n\n## Testing considerations\nCheck that the file's bytes equal `status: ok\\nrun_id: alt-44490333814\\nupdated-by: ai-pipeline\\n`, and that `git diff --stat` shows only this file changed.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies a content replacement in one existing file and forbids touching anything else. That is the complete change, so there is nothing to widen or cut.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- AI_ACCEPTANCE_V1 {\"checks\":[],\"errors\":[],\"post_merge\":null,\"post_merge_none\":\"this is a test fixture data file, so no workflow behaviour changes after merge.\",\"schema\":\"acceptance.v1\",\"source\":\"plan\",\"state\":\"valid\",\"tests\":[{\"name\":\"\",\"path\":\"tests/test_e2e_editor_smoke_canary.py\",\"red_on_base\":false}]} -->\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "c3ff90c275bfa20f8b9b137412f12a674712811e9c8ed5dcc9cb6134013eda6e",
+  "lineage": {
+    "issue_number": 9784,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44496692456",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44496692456",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9784"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261119094148_308aeed468",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9784,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44496692456"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9784",
+  "timestamps": {
+    "created_at": "2026-11-19T09:41:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
