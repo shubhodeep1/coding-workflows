@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -156,30 +157,26 @@ def _failed_body(run_id: str, repo: str = TEST_REPO) -> str:
 def _execute(script: str, env_extra: dict[str, str], fake_date: bool = False) -> tuple[int, dict[str, str], list[list[str]], str]:
 	with tempfile.TemporaryDirectory() as tmp:
 		tmp_path = Path(tmp)
-		bin_dir = tmp_path / "bin"
-		bin_dir.mkdir()
-		gh = bin_dir / "gh"
-		gh.write_text(STUB_GH, encoding="utf-8")
-		gh.chmod(0o755)
-		sleep = bin_dir / "sleep"
-		sleep.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-		sleep.chmod(0o755)
+		# The fakes are shell functions, not PATH executables: the pre-push
+		# gate container mounts the temp dir noexec. The gh stub is a Python
+		# file read by the interpreter, which noexec does not block.
+		stub_gh = tmp_path / "stub_gh.py"
+		stub_gh.write_text(STUB_GH, encoding="utf-8")
+		fakes = 'gh() { "$STUB_PYTHON" "$STUB_GH_PY" "$@"; }\nsleep() { :; }\n'
 		if fake_date:
 			# First `date +%s` sets the deadline at 4500; every later read is past it.
-			date = bin_dir / "date"
-			date.write_text(
-				f'#!/bin/sh\nif [ "$1" != "+%s" ]; then exec {REAL_DATE} "$@"; fi\n'
-				'if [ -f "$STUB_DATE_MARK" ]; then echo 999999; else : > "$STUB_DATE_MARK"; echo 0; fi\n',
-				encoding="utf-8",
+			fakes += (
+				f'date() {{ if [ "${{1:-}}" != "+%s" ]; then {REAL_DATE} "$@"; return; fi\n'
+				'if [ -f "$STUB_DATE_MARK" ]; then echo 999999; else : > "$STUB_DATE_MARK"; echo 0; fi; }\n'
 			)
-			date.chmod(0o755)
 		log_file = tmp_path / "gh.log"
 		log_file.touch()
 		output_file = tmp_path / "github_output"
 		output_file.touch()
 		env = dict(os.environ)
 		env.update({
-			"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+			"STUB_PYTHON": sys.executable,
+			"STUB_GH_PY": str(stub_gh),
 			"TEST_REPO": TEST_REPO,
 			"ISSUE_NUMBER": ISSUE_NUMBER,
 			"POLL_INTERVAL": "0",
@@ -188,7 +185,7 @@ def _execute(script: str, env_extra: dict[str, str], fake_date: bool = False) ->
 			"STUB_DATE_MARK": str(tmp_path / "date_mark"),
 		})
 		env.update(env_extra)
-		proc = subprocess.run(["bash", "-c", script], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=120)
+		proc = subprocess.run(["bash", "-c", fakes + script], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=120)
 		outputs: dict[str, str] = {}
 		for line in output_file.read_text(encoding="utf-8").splitlines():
 			key, _, value = line.partition("=")

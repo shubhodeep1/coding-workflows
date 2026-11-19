@@ -711,3 +711,25 @@ def _collect_orchestrate_poll_cycle_summary_cases() -> None:
 
 
 _collect_orchestrate_poll_cycle_summary_cases()
+
+
+# The issue-less review retry pass cases (#9487) live in
+# tests/test_orchestrate_issueless_review_retry.py and are collected here for
+# the same reason: ci.yml was outside that issue's file grant.
+def _collect_issueless_review_retry_cases() -> None:
+	spec = importlib.util.spec_from_file_location(
+		"orchestrate_issueless_review_retry_cases",
+		Path(__file__).resolve().parent / "test_orchestrate_issueless_review_retry.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	assert collected >= 12, f"only {collected} issue-less review retry cases collected"
+
+
+_collect_issueless_review_retry_cases()
