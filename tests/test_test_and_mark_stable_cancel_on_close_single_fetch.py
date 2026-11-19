@@ -66,7 +66,7 @@ def test_closed_pr_wait_loop_fetches_existing_run_once_per_iteration() -> None:
 	fetch_fragment = 'gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}"'
 
 	assert loop.count(fetch_fragment) == 1
-	assert 'EXISTING_RUN_JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" 2>/dev/null || echo "")' in loop
+	assert 'EXISTING_RUN_JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" 2>/dev/null) || EXISTING_RUN_JSON=""' in loop
 	assert "--jq '.status // \"\"'" not in loop
 	assert "--jq '.conclusion // \"\"'" not in loop
 
@@ -74,7 +74,7 @@ def test_closed_pr_wait_loop_fetches_existing_run_once_per_iteration() -> None:
 def test_closed_pr_wait_loop_derives_status_and_conclusion_from_shared_payload() -> None:
 	wf = _read_workflow()
 	loop = _existing_run_wait_loop(_closed_pr_existing_run_branch(wf))
-	fetch_stmt = 'EXISTING_RUN_JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" 2>/dev/null || echo "")'
+	fetch_stmt = 'EXISTING_RUN_JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" 2>/dev/null) || EXISTING_RUN_JSON=""'
 	status_stmt = "EXISTING_STATUS=$(printf '%s' \"${EXISTING_RUN_JSON}\" | jq -r '.status // \"\"' 2>/dev/null || echo \"\")"
 	conclusion_stmt = "EXISTING_CONCLUSION=$(printf '%s' \"${EXISTING_RUN_JSON}\" | jq -r '.conclusion // \"\"' 2>/dev/null || echo \"\")"
 
