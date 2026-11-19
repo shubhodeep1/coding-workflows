@@ -104,6 +104,58 @@ _SANDBOX_FILES = (
 	"ai_pipeline.md",
 )
 
+# Issue #9776: the review-blocked fix tests failed with empty assert messages
+# when the judge was skipped, because the poller exits 0 and its stdout never
+# reached the AssertionError. Failing review-blocked assertions now carry the
+# tail of the poller's stdout. The sandbox `agents.md` copy itself is bounded
+# by `_copy_sandbox_agents_md` (issue #9753) below.
+# Characters of poller stdout shown in a failing review-blocked assertion.
+_POLLER_STDOUT_TAIL_CHARS = 4000
+
+
+def _poller_stdout_tail(result: dict) -> str:
+	"""Return the last ``_POLLER_STDOUT_TAIL_CHARS`` characters of poller stdout."""
+	stdout = str(result.get("stdout", ""))
+	return "poller stdout tail:\n" + stdout[-_POLLER_STDOUT_TAIL_CHARS:]
+
+
+def _assert_in_poller_stdout(needle: str, result: dict) -> None:
+	"""Assert ``needle`` is in the poller stdout; on a miss show the stdout tail."""
+	if needle not in result["stdout"]:
+		raise AssertionError(f"missing {needle!r} in poller stdout\n{_poller_stdout_tail(result)}")
+
+
+# Byte budget for the sandbox copy of `agents.md` (issue #9753). The
+# review-blocked judge always inlines `agents.md` into its prompt (#8269),
+# and the poller skips the judge when that prompt exceeds codex's
+# 1,048,576-character stdin cap. A 994,036-byte live `agents.md` pushed the
+# fixture prompt to 1,056,119 bytes, so every review-blocked `fix` test was
+# skipped before the judge ran. Bounding the sandbox copy keeps the
+# fixtures independent of how large the live document grows; the other
+# prompt inputs are about 62 KB today, which leaves ample headroom.
+_SANDBOX_AGENTS_MD_MAX_BYTES = 524_288
+_SANDBOX_AGENTS_MD_TRUNCATION_MARKER = (
+	b"\n<!-- poller test sandbox: agents.md truncated to bound judge prompt size -->\n"
+)
+
+
+def _copy_sandbox_agents_md(src: Path, dst: Path) -> None:
+	"""Copy ``src`` to ``dst``, cutting it to `_SANDBOX_AGENTS_MD_MAX_BYTES`.
+
+	A file at or under the budget is copied byte-for-byte. A larger file is
+	cut at the last newline at or before the budget (so no line or UTF-8
+	character is split) and the truncation marker is appended. Only the
+	sandbox copy is bounded; the repo-root `agents.md` the LOG_PREFIX
+	assertions read is untouched.
+	"""
+	data = src.read_bytes()
+	if len(data) <= _SANDBOX_AGENTS_MD_MAX_BYTES:
+		dst.write_bytes(data)
+		return
+	cut = data.rfind(b"\n", 0, _SANDBOX_AGENTS_MD_MAX_BYTES)
+	prefix = data[: cut + 1] if cut >= 0 else b""
+	dst.write_bytes(prefix + _SANDBOX_AGENTS_MD_TRUNCATION_MARKER)
+
 
 def _git_test_env() -> dict[str, str]:
 	"""Return a subprocess env without repo-scoped git/worktree overrides."""
@@ -144,7 +196,10 @@ def _make_poller_sandbox(
 		if src.exists():
 			dst = target / rel
 			dst.parent.mkdir(parents=True, exist_ok=True)
-			shutil.copy2(src, dst)
+			if rel == "agents.md":
+				_copy_sandbox_agents_md(src, dst)
+			else:
+				shutil.copy2(src, dst)
 	subprocess.run(
 		["git", "init", "--quiet", str(target)],
 		check=True,
@@ -11674,7 +11729,7 @@ def test_review_blocked_merged_followup_retargets_to_integration_branch():
 
 
 	followup_prs = [pr for pr in result["prs"] if int(pr.get("number", 0)) != 901]
-	assert any(pr.get("baseRefName") == "orchestrator/project-192" for pr in followup_prs)
+	assert any(pr.get("baseRefName") == "orchestrator/project-192" for pr in followup_prs), _poller_stdout_tail(result)
 	assert not any(
 		pr.get("headRefName", "").startswith("fix/10-followup-") and pr.get("baseRefName") == "main"
 		for pr in followup_prs
@@ -11716,8 +11771,8 @@ def test_review_blocked_judge_caps_minified_pr_diff_by_bytes():
 	assert "[NOTE: PR diff is " in prompt
 	assert "after the 1000-line cap; truncated to a prefix within 2000 bytes" in prompt
 	assert "x" * 2001 not in prompt
-	assert "Review-blocked judge prompt size: " in result["stdout"]
-	assert "JUDGE_PR_DIFF_MAX_BYTES=2000" in result["stdout"]
+	_assert_in_poller_stdout("Review-blocked judge prompt size: ", result)
+	_assert_in_poller_stdout("JUDGE_PR_DIFF_MAX_BYTES=2000", result)
 
 
 def test_review_blocked_judge_skips_codex_when_prompt_exceeds_character_cap():
@@ -11821,8 +11876,11 @@ def test_review_blocked_merged_followup_refuses_default_base_when_active_integra
 	)
 
 
-	assert len(result["prs"]) == 1
-	assert "Aborting follow-up PR creation to avoid targeting main" in (result["stdout"] + result["stderr"])
+	assert len(result["prs"]) == 1, _poller_stdout_tail(result)
+	# The needle may be on either stream, so a miss shows both tails.
+	assert "Aborting follow-up PR creation to avoid targeting main" in (result["stdout"] + result["stderr"]), (
+		_poller_stdout_tail(result) + "\npoller stderr tail:\n" + str(result.get("stderr", ""))[-_POLLER_STDOUT_TAIL_CHARS:]
+	)
 
 
 def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_context():
@@ -11898,7 +11956,7 @@ def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_c
 
 
 	followup_prs = [pr for pr in result["prs"] if int(pr.get("number", 0)) != 901]
-	assert any(pr.get("baseRefName") == "main" for pr in followup_prs)
+	assert any(pr.get("baseRefName") == "main" for pr in followup_prs), _poller_stdout_tail(result)
 
 
 def _review_blocked_fix_scope_case(
@@ -11955,8 +12013,8 @@ def _review_blocked_fix_scope_case(
 
 def test_review_blocked_fix_scope_accepts_pr_file():
 	result = _review_blocked_fix_scope_case(touch="sandbox_fix.txt", files=["sandbox_fix.txt"])
-	assert "REVIEW_BLOCKED_FIX_TARGET_VERIFIED issue=10 pr=901 head_sha=" in result["stdout"]
-	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_TARGET_VERIFIED issue=10 pr=901 head_sha=", result)
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901", result)
 	assert result.get("git_push_calls", [])
 	assert any("HEAD:ai/issue-10" in call for call in result["git_push_calls"])
 	assert "ai:review-blocked" not in result["issues"]["10"]["labels"]
@@ -11966,6 +12024,47 @@ def test_review_blocked_fix_scope_accepts_pr_file():
 	assert "LOG_PREFIX.name=REVIEW_BLOCKED_FIX_TARGET_VERIFIED" in agents_text
 	assert "LOG_PREFIX.name=REVIEW_BLOCKED_FIX_TARGET_REJECTED" in agents_text
 	assert "LOG_PREFIX.name=REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED" in agents_text
+
+
+def test_review_blocked_judge_prompt_fits_stdin_cap_with_repo_agents_md():
+	# Issue #9776: with the repository's agents.md copied whole, the judge
+	# prompt passed the 1048576-character cap and every fix test failed silently.
+	result = _review_blocked_fix_scope_case(touch="sandbox_fix.txt", files=["sandbox_fix.txt"])
+	tail = _poller_stdout_tail(result)
+	match = re.search(
+		r"Review-blocked judge prompt size: \d+ bytes \((\d+) characters;", result["stdout"],
+	)
+	assert match, tail
+	assert int(match.group(1)) < 1048576, tail
+	assert "exceeds codex's 1048576-character stdin cap" not in result["stdout"], tail
+
+
+def test_make_poller_sandbox_bounds_agents_md_copy():
+	# Issue #9776: `_make_poller_sandbox` must route `agents.md` through the
+	# bounded copy (`_copy_sandbox_agents_md`, issue #9753) so the inline judge
+	# prompt stays under codex's 1048576-character stdin cap, while every other
+	# sandbox file is copied byte for byte.
+	marker = _SANDBOX_AGENTS_MD_TRUNCATION_MARKER
+	with tempfile.TemporaryDirectory() as tmp:
+		sandbox = Path(tmp) / "sandbox"
+		sandbox.mkdir()
+		_make_poller_sandbox(sandbox)
+		for rel in _SANDBOX_FILES:
+			src = REPO_ROOT / rel
+			if not src.exists():
+				continue
+			copied = (sandbox / rel).read_bytes()
+			real = src.read_bytes()
+			if rel != "agents.md":
+				assert copied == real, rel
+				continue
+			assert len(copied) <= _SANDBOX_AGENTS_MD_MAX_BYTES + len(marker), len(copied)
+			assert len(copied.decode("utf-8")) < 1048576
+			if len(real) > _SANDBOX_AGENTS_MD_MAX_BYTES:
+				assert copied.endswith(marker)
+				assert real.startswith(copied[: -len(marker)])
+			else:
+				assert copied == real
 
 
 # The file's own runner calls tests without arguments, so cases loop here.
@@ -11984,10 +12083,10 @@ def test_review_blocked_fix_target_rejects_untrusted_pr():
 			touch="sandbox_fix.txt", files=["sandbox_fix.txt"], pr_overrides=pr_overrides,
 		)
 		try:
-			assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
+			_assert_in_poller_stdout(f"issue=10 pr=901 reason={reason}", result)
 			assert result.get("git_push_calls", []) == []
 			assert result.get("review_blocked_fix_commit_calls", []) == []
-			assert "Judge decision for #10" not in result["stdout"]
+			assert "Judge decision for #10" not in result["stdout"], _poller_stdout_tail(result)
 		except AssertionError as exc:
 			failures.append((reason, str(exc)))
 	assert not failures, failures
@@ -11998,7 +12097,7 @@ def test_review_blocked_fix_target_rejects_failed_fetch_without_local_fallback()
 		touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
 		missing_git_branch_fetches=["ai/issue-10"],
 	)
-	assert "REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=fetch_failed" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=fetch_failed", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 
@@ -12008,7 +12107,7 @@ def test_review_blocked_fix_target_rejects_fetched_tip_mismatch():
 		touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
 		pr_overrides={"headSha": "f" * 40},
 	)
-	assert "REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=head_sha_mismatch" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=head_sha_mismatch", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 
@@ -12024,7 +12123,7 @@ def test_review_blocked_fix_target_rejects_ref_change_before_checkout():
 		touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
 		pr_api_sequence={901: [dict(open_pr) for _ in range(5)] + [{**open_pr, "headRefFromApi": "feature/other"}]},
 	)
-	assert "REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=head_ref_changed" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=head_ref_changed", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 
@@ -12053,7 +12152,7 @@ def test_review_blocked_fix_target_rejects_head_move_during_judge():
 			pr_api_sequence={901: [dict(open_pr) for _ in range(6)] + [{**open_pr, **changed_pr}]},
 		)
 		try:
-			assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
+			_assert_in_poller_stdout(f"issue=10 pr=901 reason={reason}", result)
 			assert result.get("git_push_calls", []) == []
 			assert result.get("review_blocked_fix_commit_calls", []) == []
 			assert result["latest_state"]["review_blocked_retries"].get("10", 0) == 0
@@ -12096,7 +12195,7 @@ def test_review_blocked_merged_fix_target_rejects_unrelated_followup():
 			codex_touch_file="sandbox_fix.txt", mock_git_push_success=True,
 		)
 		try:
-			assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
+			_assert_in_poller_stdout(f"issue=10 pr=901 reason={reason}", result)
 			assert result.get("git_push_calls", []) == []
 			assert result.get("review_blocked_fix_commit_calls", []) == []
 			assert len(result["prs"]) == 1
@@ -12118,14 +12217,14 @@ def test_review_blocked_rejects_unverified_open_pr_head():
 			head_repo=head_repo, head_sha=head_sha, head_ref_from_api=head_ref,
 			missing_git_branch_fetches=missing_fetches,
 		)
-		assert f"REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=10 pr=901 reason={reason}" in result["stdout"]
+		_assert_in_poller_stdout(f"REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=10 pr=901 reason={reason}", result)
 		assert result.get("git_push_calls", []) == []
 		assert result.get("review_blocked_fix_commit_calls", []) == []
 		assert not any("ai/issue-10" in call for call in result.get("git_worktree_add_calls", []))
 		assert "ai:review-blocked" in result["issues"]["10"]["labels"]
-		assert "reusing local HEAD as PR branch base" not in result["stdout"]
+		assert "reusing local HEAD as PR branch base" not in result["stdout"], _poller_stdout_tail(result)
 		assert result["latest_state"]["review_blocked_retries"].get("10", 0) == 0
-		assert "Judge decision for #10" not in result["stdout"]
+		assert "Judge decision for #10" not in result["stdout"], _poller_stdout_tail(result)
 
 
 def test_review_blocked_rejects_changed_pr_head_ref_before_judge():
@@ -12135,10 +12234,10 @@ def test_review_blocked_rejects_changed_pr_head_ref_before_judge():
 	)
 	# The #6325 fix-target check runs first and rejects the non-implementation
 	# head before #6388's ref comparison; either way the judge never runs.
-	assert "REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=not_implementation_pr" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=not_implementation_pr", result)
 	assert result["latest_state"]["review_blocked_retries"].get("10", 0) == 0
 	assert result.get("git_push_calls", []) == []
-	assert "Judge decision for #10" not in result["stdout"]
+	assert "Judge decision for #10" not in result["stdout"], _poller_stdout_tail(result)
 
 
 def test_review_blocked_rejects_fork_before_any_judge_action():
@@ -12148,8 +12247,8 @@ def test_review_blocked_rejects_fork_before_any_judge_action():
 			head_repo="attacker/repo", codex_action=action,
 			env_overrides={"MAX_REVIEW_BLOCKED_RETRIES": "0"},
 		)
-		assert "REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=10 pr=901 reason=cross_repository" in result["stdout"]
-		assert "Judge decision for #10" not in result["stdout"]
+		_assert_in_poller_stdout("REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=10 pr=901 reason=cross_repository", result)
+		assert "Judge decision for #10" not in result["stdout"], _poller_stdout_tail(result)
 		assert result["latest_state"]["review_blocked_retries"].get("10", 0) == 0
 		assert "ai:review-blocked" in result["issues"]["10"]["labels"]
 		assert result.get("git_push_calls", []) == []
@@ -12183,14 +12282,14 @@ def test_review_blocked_rejects_fork_head_on_merged_followup():
 		codex_json={"action": "fix", "justification": "apply fixes", "fix_description": "patched"},
 		codex_touch_file="sandbox_fix.txt", mock_git_push_success=True,
 	)
-	assert "REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=10 pr=901 reason=cross_repository" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=10 pr=901 reason=cross_repository", result)
 	assert result.get("git_push_calls", []) == []
 	assert not any("fix/10-followup-" in str(call) for call in result.get("git_worktree_add_calls", []))
 
 
 def test_review_blocked_fix_scope_rejects_unrelated_file():
 	result = _review_blocked_fix_scope_case(touch="sandbox_fix.txt", files=["other.txt"])
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope rejected=1 paths=sandbox_fix.txt" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope rejected=1 paths=sandbox_fix.txt", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
@@ -12206,7 +12305,7 @@ def test_review_blocked_fix_scope_rejects_empty_staged_set():
 		touch=".github/prompts/excluded.txt", files=[".github/prompts/excluded.txt"],
 		sandbox_origin_url="https://github.com/test-harness/coding-workflows.git",
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=no_staged_changes" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=no_staged_changes", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
@@ -12218,7 +12317,7 @@ def test_review_blocked_fix_scope_rejects_workflow_edit_opt_out():
 		touch="scripts/excluded.sh", files=["scripts/excluded.sh"],
 		env_overrides={"ALLOW_WORKFLOW_EDITS": "false"},
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=workflow_edits_disabled rejected=1 paths=scripts/excluded.sh" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=workflow_edits_disabled rejected=1 paths=scripts/excluded.sh", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
@@ -12238,7 +12337,7 @@ def test_review_blocked_fix_scope_rejects_workflow_edit_opt_out_automation_asset
 			touch=path, files=[path], env_overrides={"ALLOW_WORKFLOW_EDITS": "false"},
 		)
 		try:
-			assert f"reason=workflow_edits_disabled rejected=1 paths={path}" in result["stdout"]
+			_assert_in_poller_stdout(f"reason=workflow_edits_disabled rejected=1 paths={path}", result)
 			assert result.get("git_push_calls", []) == []
 			assert result.get("review_blocked_fix_commit_calls", []) == []
 			assert result["latest_state"]["review_blocked_retries"].get("10") == 1
@@ -12255,7 +12354,7 @@ def test_review_blocked_fix_scope_rejects_mixed_workflow_edit_opt_out():
 			"MOCK_CODEX_TOUCH_FILE": "sandbox_fix.txt\nworkflow-templates/ai-plan.yml",
 		},
 	)
-	assert "reason=workflow_edits_disabled rejected=1 paths=workflow-templates/ai-plan.yml" in result["stdout"]
+	_assert_in_poller_stdout("reason=workflow_edits_disabled rejected=1 paths=workflow-templates/ai-plan.yml", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
@@ -12266,8 +12365,8 @@ def test_review_blocked_fix_scope_rejects_template_pr_file_by_default():
 	result = _review_blocked_fix_scope_case(
 		touch="workflow-templates/ai-review.yml", files=["workflow-templates/ai-review.yml"],
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=workflow-templates/ai-review.yml" in result["stdout"]
-	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED" not in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=workflow-templates/ai-review.yml", result)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED" not in result["stdout"], _poller_stdout_tail(result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
@@ -12279,7 +12378,7 @@ def test_review_blocked_fix_scope_rejects_template_outside_pr():
 	result = _review_blocked_fix_scope_case(
 		touch="workflow-templates/ai-review.yml", files=["sandbox_fix.txt"],
 	)
-	assert "reason=protected_path_forbidden rejected=1 paths=workflow-templates/ai-review.yml" in result["stdout"]
+	_assert_in_poller_stdout("reason=protected_path_forbidden rejected=1 paths=workflow-templates/ai-review.yml", result)
 	assert result.get("git_push_calls", []) == []
 
 
@@ -12301,7 +12400,7 @@ def test_review_blocked_fix_scope_rejects_protected_pr_file_with_default_env():
 	result = _review_blocked_fix_scope_case(
 		touch=".github/workflows/ci.yml", files=[".github/workflows/ci.yml"],
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=.github/workflows/ci.yml" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=.github/workflows/ci.yml", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert not any("pulls/901/files" in path for path in result.get("api_calls", []))
@@ -12326,7 +12425,7 @@ def test_review_blocked_fix_scope_reports_all_workflow_edit_opt_out_paths():
 		touch="scripts/a.sh", files=["scripts/a.sh", "scripts/b.sh"],
 		env_overrides={"ALLOW_WORKFLOW_EDITS": "false", "MOCK_CODEX_TOUCH_FILE": "scripts/a.sh\nscripts/b.sh"},
 	)
-	assert "reason=workflow_edits_disabled rejected=2 paths=scripts/a.sh,scripts/b.sh" in result["stdout"]
+	_assert_in_poller_stdout("reason=workflow_edits_disabled rejected=2 paths=scripts/a.sh,scripts/b.sh", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
@@ -12338,7 +12437,7 @@ def test_review_blocked_fix_scope_rejects_non_protected_judge_citation():
 		touch="docs/new.md", files=["other.txt"],
 		remaining=[{"file": "docs/new.md"}],
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"]["10"] == 1
@@ -12349,7 +12448,7 @@ def test_review_blocked_fix_scope_rejects_fix_description_citation():
 	result = _review_blocked_fix_scope_case(
 		touch="docs/new.md", files=["other.txt"], description="Updated `docs/new.md`",
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"]["10"] == 1
@@ -12360,7 +12459,7 @@ def test_review_blocked_fix_scope_rejects_extensionless_citation():
 	result = _review_blocked_fix_scope_case(
 		touch="Makefile", files=["other.txt"], description="Updated `Makefile`",
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"]["10"] == 1
@@ -12372,7 +12471,7 @@ def test_review_blocked_fix_scope_rejects_injected_auth_citations():
 		touch="src/auth.py", files=["other.txt"],
 		remaining=[{"file": "src/auth.py"}], description="Updated `src/auth.py`",
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope rejected=1 paths=src/auth.py" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope rejected=1 paths=src/auth.py", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 
@@ -12382,7 +12481,7 @@ def test_review_blocked_fix_scope_accepts_cited_pr_file_without_citation_authori
 		touch="docs/new.md", files=["docs/new.md"],
 		remaining=[{"file": "docs/new.md"}],
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901 staged=1 pr_files=1 judge_cited=0" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901 staged=1 pr_files=1 judge_cited=0", result)
 	assert result.get("git_push_calls", [])
 
 
@@ -12391,7 +12490,7 @@ def test_review_blocked_fix_scope_rejects_protected_judge_citation():
 		touch="scripts/evil.sh", files=["other.txt"],
 		remaining=[{"file": "scripts/evil.sh"}],
 	)
-	assert "reason=protected_path_forbidden" in result["stdout"]
+	_assert_in_poller_stdout("reason=protected_path_forbidden", result)
 	assert result.get("git_push_calls", []) == []
 
 
@@ -12400,7 +12499,7 @@ def test_review_blocked_fix_scope_protected_reason_wins_for_mixed_rejections():
 		touch="docs/new.md", files=["other.txt"],
 		env_overrides={"MOCK_CODEX_TOUCH_FILE": "docs/new.md\nscripts/evil.sh"},
 	)
-	assert "reason=protected_path_forbidden rejected=1 paths=scripts/evil.sh" in result["stdout"]
+	_assert_in_poller_stdout("reason=protected_path_forbidden rejected=1 paths=scripts/evil.sh", result)
 	assert result.get("git_push_calls", []) == []
 
 
@@ -12409,7 +12508,7 @@ def test_review_blocked_fix_scope_rejects_uncited_unrelated_workflow():
 		touch=".github/workflows/unrelated.yml", files=["sandbox_fix.txt"],
 		env_overrides={"ALLOW_WORKFLOW_EDITS": "true"},
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=.github/workflows/unrelated.yml" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=.github/workflows/unrelated.yml", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
@@ -12423,7 +12522,7 @@ def test_review_blocked_fix_scope_rejects_uncited_unrelated_script():
 		touch="scripts/unrelated.sh", files=["sandbox_fix.txt"],
 		env_overrides={"ALLOW_WORKFLOW_EDITS": "true"},
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=scripts/unrelated.sh" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=scripts/unrelated.sh", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
@@ -12440,7 +12539,7 @@ def test_review_blocked_fix_scope_rejects_unrelated_action_and_claude_hook():
 			"MOCK_CODEX_TOUCH_FILE": ".github/actions/x/action.yml\n.claude/hooks/x.py",
 		},
 	)
-	assert "reason=protected_path_forbidden rejected=2" in result["stdout"]
+	_assert_in_poller_stdout("reason=protected_path_forbidden rejected=2", result)
 	assert any(
 		".github/actions/x/action.yml" in line and ".claude/hooks/x.py" in line
 		for line in result["stdout"].splitlines() if "REVIEW_BLOCKED_FIX_SCOPE_REJECTED" in line
@@ -12459,7 +12558,7 @@ def test_review_blocked_fix_scope_rejects_mixed_in_scope_and_unrelated_workflow(
 			"MOCK_CODEX_TOUCH_FILE": "sandbox_fix.txt\n.github/workflows/unrelated.yml",
 		},
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=.github/workflows/unrelated.yml" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=.github/workflows/unrelated.yml", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
@@ -12467,7 +12566,7 @@ def test_review_blocked_fix_scope_rejects_mixed_in_scope_and_unrelated_workflow(
 
 def test_review_blocked_fix_scope_rejects_protected_pr_file():
 	result = _review_blocked_fix_scope_case(touch="scripts/foo.sh", files=["scripts/foo.sh"])
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=scripts/foo.sh" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=scripts/foo.sh", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
@@ -12480,7 +12579,7 @@ def test_review_blocked_fix_scope_accepts_renamed_pr_source():
 		touch="docs/old.md",
 		files=[{"filename": "docs/new.md", "previous_filename": "docs/old.md"}],
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901", result)
 	assert result.get("git_push_calls", [])
 
 
@@ -12489,7 +12588,7 @@ def test_review_blocked_fix_scope_rejects_renamed_protected_pr_source():
 		touch="scripts/old.sh",
 		files=[{"filename": "scripts/new.sh", "previous_filename": "scripts/old.sh"}],
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=scripts/old.sh" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=scripts/old.sh", result)
 	assert result.get("git_push_calls", []) == []
 
 
@@ -12497,7 +12596,7 @@ def test_review_blocked_fix_scope_rejects_capped_pr_listing():
 	result = _review_blocked_fix_scope_case(
 		touch="sandbox_fix.txt", files=[f"docs/file-{n}.md" for n in range(3000)],
 	)
-	assert "reason=pr_files_unavailable" in result["stdout"]
+	_assert_in_poller_stdout("reason=pr_files_unavailable", result)
 	assert result.get("git_push_calls", []) == []
 
 
@@ -12505,7 +12604,7 @@ def test_review_blocked_fix_scope_rejects_incomplete_pr_listing():
 	result = _review_blocked_fix_scope_case(
 		touch="sandbox_fix.txt", files=["sandbox_fix.txt"], pr_changed_file_count=2,
 	)
-	assert "reason=pr_files_unavailable rejected=1 paths=sandbox_fix.txt" in result["stdout"]
+	_assert_in_poller_stdout("reason=pr_files_unavailable rejected=1 paths=sandbox_fix.txt", result)
 	assert result.get("git_push_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
 
@@ -12515,13 +12614,13 @@ def test_review_blocked_fix_scope_ignores_invalid_citations():
 		touch="escape.txt", files=["other.txt"],
 		remaining=[{"file": "../escape.txt"}, {"file": ".git/config"}],
 	)
-	assert "reason=out_of_scope" in result["stdout"]
+	_assert_in_poller_stdout("reason=out_of_scope", result)
 	assert result.get("git_push_calls", []) == []
 
 
 def test_review_blocked_fix_scope_fails_closed_on_pr_listing_failure():
 	result = _review_blocked_fix_scope_case(touch="sandbox_fix.txt", files=["sandbox_fix.txt"], pr_files_fail=True)
-	assert "reason=pr_files_unavailable rejected=1 paths=sandbox_fix.txt" in result["stdout"]
+	_assert_in_poller_stdout("reason=pr_files_unavailable rejected=1 paths=sandbox_fix.txt", result)
 	assert result.get("git_push_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
 
@@ -12546,7 +12645,7 @@ def test_review_blocked_fix_scope_rejects_merged_followup():
 		codex_json={"action": "fix", "justification": "apply fixes", "fix_description": "patched"},
 		codex_touch_file="sandbox_fix.txt", mock_git_push_success=True,
 	)
-	assert "reason=out_of_scope" in result["stdout"]
+	_assert_in_poller_stdout("reason=out_of_scope", result)
 	assert result.get("git_push_calls", []) == []
 	assert len(result["prs"]) == 1
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
@@ -12626,8 +12725,8 @@ def test_review_blocked_followup_refusal_increments_retry_counter():
 	)
 
 
-	assert len(result["prs"]) == 1
-	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+	assert len(result["prs"]) == 1, _poller_stdout_tail(result)
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1, _poller_stdout_tail(result)
 
 
 def test_sync_superseded_sets_state_once_and_skips_future_sync_attempts():
@@ -19804,6 +19903,468 @@ def test_close_merged_sweep_check_triage_contract():
 	assert '_pr_json_base_is_target_merge "${issue_num}" "${_stall_nt_pr_json}" "${_STALL_STANDALONE_DEFAULT_BRANCH}" "${_stall_nt_declared}" "${_stall_nt_managed}"; then' in script
 
 
+# ---------------------------------------------------------------------------
+# Issue #9481: stuck ai:check-triage issues. A fix PR merged into the marker
+# PR's orchestrator project base, triage-rule diagnostics, the check-triage
+# gate pass in close_merged_issues_sweep, the source-PR-closed close, and the
+# stall judge keeping escalate_human for a closed linked PR.
+# ---------------------------------------------------------------------------
+
+
+def _triage_project_marker_pr(merged: bool = True, base: str = "orchestrator/project-192") -> dict:
+	pr = _triage_marker_pr()
+	pr.update({"state": "closed" if merged else "open", "merged": merged, "baseRefName": base})
+	if merged:
+		pr["merged_at"] = "2026-11-10T00:00:00Z"
+	return pr
+
+
+def _run_triage_project_sweep(*, tracking_labels: list[str], marker_pr: dict) -> dict:
+	return _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=tracking_labels,
+		issue_labels={10: ["ai:check-triage", "ai:ready-to-merge"]},
+		issue_bodies={10: _triage_issue_body()},
+		issue_authors={10: {"login": _TRIAGE_PIPELINE_LOGIN, "association": "NONE"}},
+		issue_linked_prs={10: 971},
+		prs=[_triage_fix_pr(base="orchestrator/project-192"), marker_pr],
+		mock_gh_issue_list_label_filter=True,
+	)
+
+
+def test_close_merged_sweep_accepts_check_triage_fix_merged_into_marker_pr_project_base():
+	"""fun-token-multi-chain #846 shape: marker PR #852's source merged into
+	orchestrator/project-768, and the fix PR targets that project branch."""
+	result = _run_triage_project_sweep(tracking_labels=["ai:orchestrator-tracking"], marker_pr=_triage_project_marker_pr())
+	assert 10 in result.get("closed_issues", []), result["stdout"]
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 origin=ready_label candidate_pr=971 accepted reason=check_triage_marker_pr_base"
+	) in result["stdout"]
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 triage_rule=ok marker_pr=970 head=ai/issue-9 marker_merged=true "
+		"marker_base=orchestrator/project-192"
+	) in result["stdout"]
+
+	# The project issue lacks ai:orchestrator-tracking: a lookalike branch.
+	untracked = _run_triage_project_sweep(tracking_labels=[], marker_pr=_triage_project_marker_pr())
+	assert 10 not in untracked.get("closed_issues", []), untracked["stdout"]
+	assert "triage_rule=skip reason=project_untracked marker_pr=970 marker_base=orchestrator/project-192" in untracked["stdout"]
+	assert "candidate_pr=971 rejected=non_target_base base=orchestrator/project-192" in untracked["stdout"]
+
+	# The marker PR has not merged: its base is not where the fix belongs.
+	unmerged = _run_triage_project_sweep(
+		tracking_labels=["ai:orchestrator-tracking"], marker_pr=_triage_project_marker_pr(merged=False),
+	)
+	assert 10 not in unmerged.get("closed_issues", []), unmerged["stdout"]
+	assert "marker_merged=false marker_base=none" in unmerged["stdout"]
+	assert "candidate_pr=971 rejected=non_target_base" in unmerged["stdout"]
+
+
+def test_close_merged_sweep_logs_check_triage_rule_skip_reasons():
+	"""fun-token-multi-chain #808 shape: the rule rejected silently; every
+	early return now names its reason."""
+	author = _run_triage_sweep(["ai:check-triage", "ai:done"], author="someone-else")
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 triage_rule=skip reason=author_mismatch author=someone-else login=github-actions[bot]"
+	) in author["stdout"]
+	duplicate = _run_triage_sweep(
+		["ai:check-triage", "ai:done"], body=_triage_issue_body(extra="<!-- check-failure-triage:pr=970 -->\n"),
+	)
+	assert "CLOSE_MERGED_SWEEP issue=10 triage_rule=skip reason=marker" in duplicate["stdout"]
+	fork_fix = _triage_fix_pr()
+	fork_fix["headRepoFullName"] = "attacker/repo"
+	fork = _run_triage_sweep(["ai:check-triage", "ai:done"], fix_pr=fork_fix)
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 candidate_pr=971 triage_rule=skip reason=candidate_unbound head=ai/issue-10 head_repo=attacker/repo"
+	) in fork["stdout"]
+	foreign = _run_triage_sweep(["ai:check-triage", "ai:done"], marker_pr=_triage_marker_pr(head_repo="attacker/repo"))
+	assert "CLOSE_MERGED_SWEEP issue=10 triage_rule=skip reason=marker_pr_cross_repo marker_pr=970" in foreign["stdout"]
+	# A case-only difference in the repository name still binds (Gap 2).
+	cased_fix = _triage_fix_pr()
+	cased_fix["headRepoFullName"] = "Owner/Repo"
+	cased = _run_triage_sweep(["ai:check-triage", "ai:done"], fix_pr=cased_fix)
+	assert 10 in cased.get("closed_issues", []), cased["stdout"]
+	assert "accepted reason=check_triage_pr_branch" in cased["stdout"]
+
+
+def _close_sweep_gate_harness(tmp_path: Path, *, verdict: dict, timeline: list, prs: dict[int, dict] | None = None,
+		env: dict[str, str] | None = None, close_fails: bool = False, issue: dict | None = None,
+		runs: list | None = None) -> tuple[int, str, str]:
+	"""Run _close_sweep_check_triage_gate with a stub gate script and stub gh."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	gate_start = script.index('_CT_GATE_SKIP=""\n_CT_GATE_RC=0\n')
+	gate_end = script.index("\n# ---------------------------------------------------------------\n# Unblock judge", gate_start)
+	active_start = script.index("issue_has_active_workflow() {")
+	active_end = script.index("\n}\n", active_start) + 2
+	ref_start = script.index("_close_sweep_log_ref() {")
+	ref_end = script.index("\n# A branch name alone does not identify", ref_start)
+	(tmp_path / "scripts").mkdir()
+	(tmp_path / "scripts" / "workflow_failure_heal.py").write_text("", encoding="utf-8")
+	(tmp_path / "scripts" / "check_triage_resolution.py").write_text(
+		"import json, os, sys\n"
+		"open(os.environ['STUB_GATE_ARGS'], 'w').write(json.dumps(sys.argv[1:]))\n"
+		"print(os.environ['STUB_VERDICT'])\n",
+		encoding="utf-8",
+	)
+	pr_dir = tmp_path / "prs"
+	pr_dir.mkdir()
+	for number, payload in (prs or {}).items():
+		(pr_dir / f"{number}.json").write_text(json.dumps(payload), encoding="utf-8")
+	calls = tmp_path / "gh_calls.txt"
+	driver = tmp_path / "driver.sh"
+	driver.write_text(
+		"set -euo pipefail\n"
+		'gh_retry() { "$@"; }\n'
+		'gh() { printf "%s\\n" "$*" >> "${STUB_CALLS}"; '
+		'if [ "$1" = api ]; then printf "%s\\n" "${STUB_ISSUE_JSON}"; return 0; fi; '
+		'if [ "$1 $2" = "issue close" ] && [ "${STUB_CLOSE_FAIL:-}" = "1" ]; then return 1; fi; return 0; }\n'
+		'_fetch_pr_json() { cat "${STUB_PR_DIR}/$1.json" 2>/dev/null || echo "{}"; }\n'
+		"ensure_label_exists() { :; }\n"
+		'_load_actions_runs_cached() { printf "%s" "${STUB_RUNS}"; }\n'
+		+ script[active_start:active_end] + "\n"
+		+ script[ref_start:ref_end] + "\n" + script[gate_start:gate_end] + "\n"
+		'rc=0; _close_sweep_check_triage_gate 10 "${STUB_TIMELINE}" main || rc=$?\n'
+		'echo "RC=${rc}"\n',
+		encoding="utf-8",
+	)
+	run_env = {
+		**os.environ,
+		"GITHUB_REPOSITORY": "owner/repo",
+		"RUNTIME_DIR": str(tmp_path),
+		"STUB_VERDICT": json.dumps(verdict),
+		"STUB_GATE_ARGS": str(tmp_path / "gate_args.json"),
+		"STUB_TIMELINE": json.dumps(timeline),
+		"STUB_PR_DIR": str(pr_dir),
+		"STUB_CALLS": str(calls),
+		"STUB_CLOSE_FAIL": "1" if close_fails else "",
+		"STUB_ISSUE_JSON": json.dumps(issue if issue is not None else {"number": 10}),
+		"STUB_RUNS": json.dumps({"workflow_runs": runs or []}),
+	}
+	run_env.pop("CHECK_TRIAGE_RESOLVED_GATE_ENABLED", None)
+	run_env.pop("ACTIVE_WORKFLOW_ISSUES", None)
+	run_env.update(env or {})
+	proc = subprocess.run(["bash", str(driver)], cwd=tmp_path, env=run_env, capture_output=True, text=True, check=True)
+	rc = int(proc.stdout.strip().splitlines()[-1].split("=", 1)[1])
+	return rc, proc.stdout, calls.read_text(encoding="utf-8") if calls.exists() else ""
+
+
+def _open_cross_ref(number: int, state: str | None = "open") -> dict:
+	issue = {"number": number, "pull_request": {"url": f"https://api.github.com/repos/owner/repo/pulls/{number}"}, "merged": False}
+	if state is not None:
+		issue["state"] = state
+	return {"event": "cross-referenced", "source": {"issue": issue}}
+
+
+def _open_fix_pr(number: int = 221, head: str = "ai/issue-10", head_repo: str = "owner/repo") -> dict:
+	return {"number": number, "state": "open", "merged": False, "head": {"ref": head, "repo": {"full_name": head_repo}}}
+
+
+def test_close_merged_sweep_runs_check_triage_gate_for_issue_without_fix_pr():
+	"""fun-token-multi-chain #828 / #820 shape: no fix PR at all (never
+	started, or ai:blocked + ai:needs-human). The sweep now runs the gate."""
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, calls = _close_sweep_gate_harness(
+			Path(tmp), verdict={"status": "resolved", "reason": "verified", "pr": 795, "pr_state": "merged"}, timeline=[],
+		)
+		assert rc == 0, out
+		assert "CLOSE_MERGED_SWEEP issue=10 triage_gate=resolved reason=verified rc=0 pr_state=merged" in out
+		assert "issue close" not in calls  # the gate itself closed the issue
+		args = json.loads((Path(tmp) / "gate_args.json").read_text(encoding="utf-8"))
+		assert args[:1] == ["gate"] and "--default-branch" in args and args[args.index("--default-branch") + 1] == "main"
+		# The rotating sweep pass never downloads job logs or posts tracebacks.
+		assert "--no-traceback" in args
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, _ = _close_sweep_gate_harness(
+			Path(tmp), verdict={"status": "unverified", "reason": "default_run_not_success", "pr": 795, "pr_state": "merged"}, timeline=[],
+		)
+		assert rc == 1 and "triage_gate=unverified reason=default_run_not_success rc=0" in out
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, calls = _close_sweep_gate_harness(
+			Path(tmp), verdict={"status": "resolved"}, timeline=[], env={"CHECK_TRIAGE_RESOLVED_GATE_ENABLED": "false"},
+		)
+		assert rc == 1 and "CLOSE_MERGED_SWEEP issue=10 triage_gate=skip reason=disabled" in out
+		assert calls == ""
+
+	# End to end: the sweep gates a blocked triage issue with no fix PR, in a
+	# rotation window bounded by CHECK_TRIAGE_GATE_SWEEP_MAX_PER_TICK.
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:check-triage", "ai:blocked", "ai:needs-human"], 11: ["ai:check-triage"]},
+		issue_bodies={10: _triage_issue_body(), 11: _triage_issue_body()},
+		mock_gh_issue_list_label_filter=True,
+		env_overrides={"CHECK_TRIAGE_GATE_SWEEP_MAX_PER_TICK": "1", "GITHUB_RUN_NUMBER": "3"},
+	)
+	assert "CLOSE_MERGED_SWEEP triage_gate_window size=1 total=2 offset=1" in result["stdout"], result["stdout"]
+	assert "CLOSE_MERGED_SWEEP issue=11 triage_gate=" in result["stdout"]
+	assert "CLOSE_MERGED_SWEEP issue=10 triage_gate=" not in result["stdout"]
+	disabled = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:check-triage", "ai:blocked"]},
+		issue_bodies={10: _triage_issue_body()},
+		mock_gh_issue_list_label_filter=True,
+		env_overrides={"CHECK_TRIAGE_GATE_SWEEP_MAX_PER_TICK": "0"},
+	)
+	assert "triage_gate" not in disabled["stdout"]
+
+
+def test_close_merged_sweep_closes_triage_issue_when_source_pr_closed_unmerged():
+	"""btc_sweeper #207 shape: source PR #85 closed without merging."""
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
+	closed = {"status": "unverified", "reason": "pr_not_merged", "pr": 85, "pr_state": "closed"}
+	merged_elsewhere = {"event": "cross-referenced", "source": {"issue": {
+		"number": 300, "state": "closed", "merged": True, "pull_request": {"url": "https://api.github.com/repos/owner/repo/pulls/300"},
+	}}}
+	source = {85: {"number": 85, "state": "closed", "merged": False, "head": {"ref": "claude/feature", "repo": {"full_name": "owner/repo"}}}}
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, calls = _close_sweep_gate_harness(Path(tmp), verdict=closed, timeline=[merged_elsewhere], prs=source)
+		assert rc == 0, out
+		assert "CLOSE_MERGED_SWEEP issue=10 triage_rule=closed reason=source_pr_closed_unmerged pr=85" in out
+		assert "issue edit 10 --repo owner/repo --add-label ai:closed" in calls
+		lines = calls.splitlines()
+		close_index = next(i for i, line in enumerate(lines) if line.startswith("issue close 10"))
+		assert "--reason not planned" in lines[close_index]
+		# The marker comment is posted only after the close succeeded.
+		comment_index = next(i for i, line in enumerate(lines) if line.startswith("issue comment 10"))
+		assert close_index < comment_index
+		assert "<!-- ai:check-triage-source-closed:v1 issue=10 pr=85 -->" in "\n".join(lines[comment_index:])
+
+	# A closed orchestrator integration PR may have shipped through a re-issue.
+	with tempfile.TemporaryDirectory() as tmp:
+		integration = {85: {**source[85], "head": {"ref": "orchestrator/project-739", "repo": {"full_name": "owner/repo"}}}}
+		rc, out, calls = _close_sweep_gate_harness(Path(tmp), verdict=closed, timeline=[], prs=integration)
+		assert rc == 1, out
+		assert "triage_rule=skip reason=source_pr_integration_head pr=85 head=orchestrator/project-739" in out
+		assert "issue close" not in calls
+	# An unreadable source PR fails closed.
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, calls = _close_sweep_gate_harness(Path(tmp), verdict=closed, timeline=[])
+		assert rc == 1 and "triage_rule=skip reason=source_pr_state_unreadable pr=85" in out
+		assert "issue close" not in calls
+
+	# An open, same-repository fix PR bound to the issue holds it open.
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, calls = _close_sweep_gate_harness(
+			Path(tmp), verdict=closed, timeline=[_open_cross_ref(221)], prs={221: _open_fix_pr(), **source},
+		)
+		assert rc == 1, out
+		assert "CLOSE_MERGED_SWEEP issue=10 triage_rule=skip reason=source_pr_closed_unmerged_fix_pr_open fix_pr=221" in out
+		assert "issue close" not in calls
+	# A fork-headed PR named ai/issue-10, or an unrelated open PR, does not hold it.
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, _ = _close_sweep_gate_harness(
+			Path(tmp), verdict=closed, timeline=[_open_cross_ref(221), _open_cross_ref(222)],
+			prs={221: _open_fix_pr(head_repo="attacker/repo"), 222: _open_fix_pr(number=222, head="claude/other"), **source},
+		)
+		assert rc == 0 and "reason=source_pr_closed_unmerged pr=85" in out
+	# An unreadable cross-referenced PR fails closed.
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, calls = _close_sweep_gate_harness(Path(tmp), verdict=closed, timeline=[_open_cross_ref(223, state=None)], prs=source)
+		assert rc == 1 and "triage_rule=skip reason=source_pr_state_unreadable pr=85" in out
+		assert "issue close" not in calls
+	# A failed close keeps the issue open with a logged reason.
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, calls = _close_sweep_gate_harness(Path(tmp), verdict=closed, timeline=[], close_fails=True, prs=source)
+		assert rc == 1 and "triage_rule=skip reason=close_failed pr=85" in out
+		assert "issue comment" not in calls and "ai:check-triage-source-closed" not in calls
+	# Issue #9481: the fresh source-PR read wins over the gate's earlier
+	# verdict; a PR reopened or merged since then is not closed against.
+	for changed in ({"state": "open"}, {"merged": True}):
+		with tempfile.TemporaryDirectory() as tmp:
+			rc, out, calls = _close_sweep_gate_harness(
+				Path(tmp), verdict=closed, timeline=[], prs={85: {**source[85], **changed}},
+			)
+			assert rc == 1 and "triage_rule=skip reason=source_pr_state_changed pr=85" in out, out
+			assert "issue close" not in calls and "issue edit" not in calls
+	# An active pipeline run for the issue that has not opened its PR yet
+	# holds it open (AD-1 option B); an active run for another issue does not.
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, calls = _close_sweep_gate_harness(
+			Path(tmp), verdict=closed, timeline=[], prs=source, env={"ACTIVE_WORKFLOW_ISSUES": "7\n10"},
+		)
+		assert rc == 1 and "triage_rule=skip reason=source_pr_closed_unmerged_run_active pr=85" in out, out
+		assert "issue close" not in calls and "issue edit" not in calls
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, _ = _close_sweep_gate_harness(
+			Path(tmp), verdict=closed, timeline=[], prs=source, env={"ACTIVE_WORKFLOW_ISSUES": "7\n100"},
+		)
+		assert rc == 0 and "reason=source_pr_closed_unmerged pr=85" in out, out
+	# An issue_comment-triggered run reports the default branch as its head, so
+	# ACTIVE_WORKFLOW_ISSUES misses it: the in-flight phase label holds the issue.
+	for phase in ("ai:planning", "ai:implementing"):
+		with tempfile.TemporaryDirectory() as tmp:
+			rc, out, calls = _close_sweep_gate_harness(
+				Path(tmp), verdict=closed, timeline=[], prs=source, env={"ACTIVE_WORKFLOW_ISSUES": ""},
+				issue={"number": 10, "labels": [{"name": "ai:check-triage"}, {"name": phase}]},
+			)
+			assert rc == 1 and "triage_rule=skip reason=source_pr_closed_unmerged_phase_active pr=85" in out, out
+			assert "issue close" not in calls and "issue edit" not in calls
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, _ = _close_sweep_gate_harness(
+			Path(tmp), verdict=closed, timeline=[], prs=source,
+			issue={"number": 10, "labels": [{"name": "ai:check-triage"}, {"name": "ai:blocked"}]},
+		)
+		assert rc == 0 and "reason=source_pr_closed_unmerged pr=85" in out, out
+	# An in-flight clarify run for the issue (issue_comment /reclarify reports
+	# the default branch as its head) holds it; an idle ai:clarification issue,
+	# a completed clarify run or another issue's run does not.
+	titled = {"number": 10, "title": "CI failure: tests on PR #85", "labels": [{"name": "ai:check-triage"}, {"name": "ai:clarification"}]}
+	clarify_run = {"name": "AI Clarify", "path": ".github/workflows/ai-clarify.yml", "event": "issue_comment",
+		"status": "in_progress", "display_title": titled["title"], "head_branch": "main"}
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, calls = _close_sweep_gate_harness(Path(tmp), verdict=closed, timeline=[], prs=source, issue=titled, runs=[clarify_run])
+		assert rc == 1 and "triage_rule=skip reason=source_pr_closed_unmerged_clarify_active pr=85" in out, out
+		assert "issue close" not in calls and "issue edit" not in calls
+	for other_runs in ([], [{**clarify_run, "status": "completed"}], [{**clarify_run, "display_title": "another issue"}]):
+		with tempfile.TemporaryDirectory() as tmp:
+			rc, out, _ = _close_sweep_gate_harness(Path(tmp), verdict=closed, timeline=[], prs=source, issue=titled, runs=other_runs)
+			assert rc == 0 and "reason=source_pr_closed_unmerged pr=85" in out, out
+	# An open source PR keeps today's path.
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, calls = _close_sweep_gate_harness(
+			Path(tmp), verdict={**closed, "pr_state": "open"}, timeline=[],
+		)
+		assert rc == 1 and "triage_rule=" not in out and "issue close" not in calls
+
+
+def test_close_merged_sweep_check_triage_gate_wiring_contract():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = script.index("close_merged_issues_sweep() {")
+	body = script[start:script.index("\nreconcile_managed_issue_labels() {", start)]
+	# No new list call: the gate pass reuses the three existing lists.
+	assert body.count("gh_retry gh issue list") == 3
+	assert '_sweep_gate_cap="${CHECK_TRIAGE_GATE_SWEEP_MAX_PER_TICK:-10}"' in body
+	gate = body.index('_close_sweep_check_triage_gate "${issue_num}" "${timeline_json}" "${_sweep_default_branch}"')
+	assert body.index("pr_fetch_failed — skipping this cycle.") < gate
+	assert gate < body.index('if [ "${origin}" = "ready_label" ] || [ "${origin}" = "check_triage" ]; then')
+	assert gate < body.index("leaving open and alerting")
+	# Partial deliveries (#7657) are deliberately not gated and say so.
+	partial = body.index('echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_gate=skip reason=partial_delivery"')
+	assert partial < gate
+	# The triage-branch resolver runs only for ai:check-triage issues.
+	assert '[ "${_sweep_cand_bound}" = "true" ] && [ "${_sweep_is_triage}" = "true" ] && [ "${_sweep_triage_parsed}" != "true" ]' in body
+	# The stall path keeps its log contract through the shared core.
+	assert '_check_triage_gate_invoke "${issue_num}" "${_STALL_STANDALONE_DEFAULT_BRANCH}" "STALL_CHECK_TRIAGE_GATE"' in script
+	# Idle ticks (no tracking issue) run the triage-only sweep after standalone
+	# recovery; that mode makes only the ai:check-triage list call and reads
+	# timelines only inside the gate window.
+	idle = script.index('if _is_truthy "${STANDALONE_RECOVERY_SWEEP_ONLY:-false}"; then')
+	idle_block = script[idle:script.index("  exit 0\nfi\n", idle)]
+	assert idle_block.index("run_standalone_stall_recovery") < idle_block.index("close_merged_issues_sweep triage_only || echo ")
+	assert '_sweep_mode="${1:-full}"' in body
+	# The gate kill switch and a zero cap stop the idle-tick pass before any list call.
+	assert body.index('echo "CLOSE_MERGED_SWEEP outcome=skip reason=triage_only_disabled"') < body.index('--label "ai:check-triage"')
+	assert body.index('if [ "${_sweep_mode}" != "triage_only" ]; then') < body.index('--label "ai:merged"')
+	assert body.index('--label "ai:ready-to-merge"') < body.index('--label "ai:check-triage"')
+	assert body.index('if [ "${_sweep_mode}" = "triage_only" ] && [[ "${_sweep_gate_window}" != *" ${issue_num} "* ]]; then') \
+		< body.index("_issue_timeline_with_cross_refs_json")
+
+
+def _run_target_merge_marker_base(tmp_path: Path) -> None:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = script.index("_TARGET_MERGE_REASON=\"\"\n_pr_json_base_is_target_merge() {")
+	end = script.index("\n# _close_sweep_check_triage_branch", start)
+	helper = tmp_path / "helper.sh"
+	helper.write_text(script[start:end] + "\n", encoding="utf-8")
+
+	def run(*extra: str) -> str:
+		proc = subprocess.run(
+			["bash", "-c", 'source "$1"; shift; if _pr_json_base_is_target_merge 10 "$@"; then echo "yes:${_TARGET_MERGE_REASON}"; else echo no; fi',
+				"_", str(helper), json.dumps({"base": {"ref": "orchestrator/project-768"}}), "main", "", "false", *extra],
+			check=True, capture_output=True, text=True,
+		)
+		return proc.stdout.strip()
+
+	assert run() == "no"
+	assert run("ai/issue-9") == "no"
+	assert run("ai/issue-9", "orchestrator/project-768") == "yes:check_triage_marker_pr_base"
+	assert run("", "orchestrator/project-768") == "yes:check_triage_marker_pr_base"
+	assert run("", "orchestrator/project-769") == "no"
+	assert run("orchestrator/project-768", "orchestrator/project-768") == "yes:check_triage_pr_branch"
+
+
+def test_close_sweep_check_triage_branch_logs_invalid_issue_number():
+	"""Issue #9481: the non-numeric guard logs its reason without the raw value."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = script.index('_CLOSE_SWEEP_TRIAGE_BRANCH=""\n_CLOSE_SWEEP_TRIAGE_MARKER_BASE=""\n')
+	end = script.index("\n  return 0\n}\n", script.index("_close_sweep_check_triage_branch() {", start)) + len("\n  return 0\n}\n")
+	with tempfile.TemporaryDirectory() as tmp:
+		helper = Path(tmp) / "helper.sh"
+		helper.write_text(script[start:end], encoding="utf-8")
+		proc = subprocess.run(
+			["bash", "-c", 'source "$1"; rc=0; _close_sweep_check_triage_branch "1;x" "[]" "" "" || rc=$?; echo "RC=${rc}"', "_", str(helper)],
+			check=True, capture_output=True, text=True, cwd=tmp,
+		)
+	assert proc.stdout.splitlines() == ["CLOSE_MERGED_SWEEP issue=invalid triage_rule=skip reason=issue_num_invalid", "RC=1"], proc.stdout
+
+
+def test_pr_json_base_is_target_merge_accepts_marker_pr_base():
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
+	with tempfile.TemporaryDirectory() as tmp:
+		_run_target_merge_marker_base(Path(tmp))
+
+
+def test_stall_judge_keeps_escalation_when_linked_pr_merged_into_non_target_base():
+	"""binance-blessings #507: the judge chose escalate_human, but the linked
+	PR #510 had merged into claude/busy-babbage-grn9nj and the effective action
+	became attempt_merge."""
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	target_start = script.index("_TARGET_MERGE_REASON=\"\"\n_pr_json_base_is_target_merge() {")
+	target_end = script.index("\n# _close_sweep_check_triage_branch", target_start)
+	keep_start = script.index('_STALL_STANDALONE_DEFAULT_BRANCH=""\n# Set once the lookup ran')
+	keep_end = script.index("\n_reconcile_standalone_merged_pr_issue() {", keep_start)
+	with tempfile.TemporaryDirectory() as tmp:
+		helper = Path(tmp) / "helper.sh"
+		helper.write_text(script[target_start:target_end] + "\n" + script[keep_start:keep_end] + "\n", encoding="utf-8")
+
+		def run(pr: dict, managed: str = "false", default: str = "main", declared: str = "") -> str:
+			proc = subprocess.run(
+				["bash", "-c", 'set -euo pipefail; gh_retry() { return 1; }; source "$1"; '
+					'if _stall_judge_linked_pr_keeps_escalation 507 "$2" "$3" "$4"; then echo "keep:${_STALL_KEEP_ESCALATION_REASON}:${_STALL_KEEP_ESCALATION_BASE}"; else echo no; fi',
+					"_", str(helper), json.dumps(pr), managed, declared],
+				check=True, capture_output=True, text=True, env={**os.environ, "CWS_DEFAULT_BRANCH": default},
+			)
+			return proc.stdout.strip()
+
+		merged = {"number": 510, "state": "closed", "merged": True, "base": {"ref": "claude/busy-babbage-grn9nj"}}
+		assert run(merged) == "keep:merged_non_target_base:claude/busy-babbage-grn9nj"
+		assert run({**merged, "base": {"ref": "main"}}) == "no"
+		assert run({**merged, "base": {"ref": "orchestrator/project-5"}}, managed="true") == "no"
+		assert run({**merged, "base": {"ref": "orchestrator/project-5"}}) == "keep:merged_non_target_base:orchestrator/project-5"
+		assert run({"number": 85, "state": "closed", "merged": False, "base": {"ref": "main"}}) == "keep:closed_unmerged:main"
+		assert run({"number": 510, "state": "open", "merged": False, "base": {"ref": "x"}}) == "no"
+		assert run({}) == "no"
+		# Unknown default branch keeps the old behaviour.
+		assert run(merged, default="") == "no"
+		# The issue's declared integration branch counts as a target, and a
+		# declared branch disables the managed any-project fallback.
+		project6 = {**merged, "base": {"ref": "orchestrator/project-6"}}
+		assert run(project6, declared="orchestrator/project-6") == "no"
+		assert run({**merged, "base": {"ref": "orchestrator/project-5"}}, managed="true", declared="orchestrator/project-6") == (
+			"keep:merged_non_target_base:orchestrator/project-5"
+		)
+
+	start = script.index("invoke_stall_judge() {")
+	body = script[start:script.index("\n}\n", start)]
+	normalize = body.index('effective_action="$(normalize_stall_recovery_action')
+	keep = body.index('_stall_judge_linked_pr_keeps_escalation "${issue_num}" "${linked_pr_json}"')
+	assert normalize < keep < body.index("**Decision (effective):** ${effective_action}")
+	assert '[ "${judge_action}" = "escalate_human" ] && [ "${effective_action}" = "attempt_merge" ]' in body
+	assert '"${_keep_escalation_managed}" "${_keep_escalation_declared}"; then' in body
+	assert "extract-integration-branch" in body[normalize:keep]
+	assert "STALL_RECOVERY issue=${issue_num} reason=judge_escalate_kept linked_pr=${_STALL_KEEP_ESCALATION_REASON}" in body
+
 def test_reconciliation_uses_implementation_pr_masked_by_later_mention():
 	genuine_pr = {
 		"number": 951,
@@ -26710,8 +27271,10 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 		'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh '
 		'workflow_failure_heal.py workflow_failure_heal_autofix_report.sh '
 		'ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl provider_outage.py ai_engine_fallback_report.sh '
-		'implement_step_prepush_test_gate.sh prepush_test_gate_run.sh validate_changed_files_syntax.sh ci_docs_only_paths.sh ci_sync_quick.sh"'
+		'implement_step_prepush_test_gate.sh prepush_test_gate_run.sh validate_changed_files_syntax.sh chatgpt_codex_relay.py"'
 	) in stage_helper_body
+	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} ci_docs_only_paths.sh"' in stage_helper_body
+	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} ci_sync_quick.sh"' in stage_helper_body
 	assert "for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do" in stage_helper_body
 	assert 'src=".codex-workflow-src/scripts/${f}"' in stage_helper_body
 	assert "Bootstrapped ${f} from main snapshot (branch copy ignored)." not in stage_helper_body
@@ -27963,6 +28526,53 @@ def test_custom_runner_tests_need_no_pytest_arguments():
 		except TypeError:
 			required_arguments.append(name)
 	assert not required_arguments, required_arguments
+
+
+def test_poller_sandbox_bounds_agents_md_copy():
+	"""Issue #9753: the sandbox `agents.md` copy stays under a byte budget so
+	the inline review-blocked judge prompt cannot exceed codex's stdin cap
+	whatever size the live `agents.md` reaches."""
+	assert _SANDBOX_AGENTS_MD_MAX_BYTES + 200_000 < 1_048_576
+	marker = _SANDBOX_AGENTS_MD_TRUNCATION_MARKER
+	real_path = REPO_ROOT / "agents.md"
+	with tempfile.TemporaryDirectory() as tmp:
+		sandbox = Path(tmp) / "sandbox"
+		sandbox.mkdir()
+		_make_poller_sandbox(sandbox)
+		copy_path = sandbox / "agents.md"
+		if real_path.exists():
+			real = real_path.read_bytes()
+			copied = copy_path.read_bytes()
+			assert len(copied) <= _SANDBOX_AGENTS_MD_MAX_BYTES + len(marker), len(copied)
+			if len(real) > _SANDBOX_AGENTS_MD_MAX_BYTES:
+				assert copied.endswith(marker)
+				body = copied[: -len(marker)]
+				assert body.endswith(b"\n")
+				assert real.startswith(body)
+				assert len(body) > 0
+				body.decode("utf-8")
+			else:
+				assert copied == real
+		small_src = Path(tmp) / "small_agents.md"
+		small_dst = Path(tmp) / "small_agents_copy.md"
+		small_payload = "# Agents\n\nshort é content\n".encode("utf-8")
+		small_src.write_bytes(small_payload)
+		_copy_sandbox_agents_md(small_src, small_dst)
+		assert small_dst.read_bytes() == small_payload
+		# Synthetic oversized inputs exercise the cut whatever the live size is.
+		big_payload = ("line é " * 40 + "\n").encode("utf-8") * 3000
+		assert len(big_payload) > _SANDBOX_AGENTS_MD_MAX_BYTES
+		small_src.write_bytes(big_payload)
+		_copy_sandbox_agents_md(small_src, small_dst)
+		big_copy = small_dst.read_bytes()
+		assert big_copy.endswith(marker)
+		assert len(big_copy) <= _SANDBOX_AGENTS_MD_MAX_BYTES + len(marker)
+		big_body = big_copy[: -len(marker)]
+		assert big_body.endswith(b"\n") and big_payload.startswith(big_body)
+		assert big_body.decode("utf-8")
+		small_src.write_bytes(b"x" * (_SANDBOX_AGENTS_MD_MAX_BYTES + 1))
+		_copy_sandbox_agents_md(small_src, small_dst)
+		assert small_dst.read_bytes() == marker
 
 
 def _extract_bash_function(script: str, signature: str) -> str:
