@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/internal-orchestrate-clarify-respond.yml:2-5 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The kept `[E2E ` exception makes a clarify-respond run on a smoke issue carry the smoke issue title, so the release gate's `capture_run_id \"Clarif\"` lookup can capture it instead of the clarify run.\n  WHY: Severity disagreement: gemini rated it MAJOR and glm rated it NIT, so the highest is used. `find_latest_scoped_run_field` matches the name regex `Clarif` case-insensitively and requires `display_title == title`, so the newer clarify-respond run can shadow the clarify run and make the gate check the wrong run. anthropic_claude-sonnet-5_5 examined this in pass 1 and dropped it as not a regression.\n- workflow-templates/ai-orchestrate-clarify-respond.yml:4-7 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The same `[E2E ` exception in the template makes the run title ambiguous for the release gate.\n  WHY: Severity disagreement: gemini rated it MAJOR and glm rated it NIT, so the highest is used. The gate may capture this run instead of the intended clarify run.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add a top-level `run-name` on the line after `name:`\" and \"Touch no other lines.\"\n  expected_change_site: .github/workflows/internal-orchestrate-clarify-respond.yml and workflow-templates/ai-orchestrate-clarify-respond.yml\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: Both diffs put three explanatory comment lines between `name:` and `run-name:`, so `run-name` is not on the next line and extra lines were touched. The deviation is cosmetic (severity NIT). glm verified that the six Phase 3 wrappers have the same shape (internal-clarify.yml:1-5) and that the contract test pins the string, not its position.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nTASK_GAP:\nRequirement: \"Add a top-level `run-name` on the line after `name:` in both files \u2026 Touch no other lines.\"\nExpected change site: `.github/workflows/internal-orchestrate-clarify-respond.yml` and `workflow-templates/ai-orchestrate-clarify-respond.yml`.\nEvidence of absence: Both diffs put a three-line explanatory comment between `name:` and `run-name:`. The `run-name` is therefore not literally on the next line, and extra lines were added. The deviation is cosmetic.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/internal-orchestrate-clarify-respond.yml:2-5 | severity=MAJOR | confidence=4\n  PROBLEM: The [E2E ] exception for smoke issue titles makes a clarify-respond run for a smoke issue carry the smoke issue title.\n  WHY: `find_latest_scoped_run_field` uses case-insensitive name regex matching, so the release gate (test-and-mark-stable.yml, capture_run_id \"Clarif\") can capture this newer clarify-respond run instead of the clarify run and check the wrong run.\n- workflow-templates/ai-orchestrate-clarify-respond.yml:4-7 | severity=MAJOR | confidence=4\n  PROBLEM: Same issue as above; the smoke issue title exception makes the run title ambiguous for the release gate.\n  WHY: The gate may capture this run instead of the intended clarify run.\nTASK_GAP:\nRequirement: Add a top-level run-name on the line after name:\nExpected change site: .github/workflows/internal-orchestrate-clarify-respond.yml and workflow-templates/ai-orchestrate-clarify-respond.yml\nEvidence of absence: The implementation inserts three explanatory comment lines between name: and run-name:, violating the requirement to place it on the line after name:.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\nTASK_GAP:\nRequirement: \u201cAdd a top-level `run-name` on the line after `name:`\u201d and \u201cTouch no other lines.\u201d\nExpected change site: `.github/workflows/internal-orchestrate-clarify-respond.yml` and `workflow-templates/ai-orchestrate-clarify-respond.yml`.\nEvidence of absence: Both workflow diffs add three explanatory comment lines between `name:` and `run-name:`, so the run-name is not on the line immediately after `name:` and the changes touch lines beyond the requested run-name addition.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/internal-orchestrate-clarify-respond.yml:2-5 (same pattern in workflow-templates/ai-orchestrate-clarify-respond.yml lines 4-7) | severity=NIT | confidence=3\n  PROBLEM: The kept `[E2E ` exception makes a clarify-respond run on a smoke issue carry the smoke issue title as its display_title, so the stable gate's `capture_run_id \"Clarif\"` (test-and-mark-stable.yml:1052, 1100, 1120) can resolve to it through `find_latest_scoped_run_field` (scripts/comprehensive_test_and_release_gh_api.sh:240-250).\n  WHY: When a release-gate smoke issue goes through clarification, the gate's Phase 1 poll can capture the clarify-respond run instead of the clarify run, which degrades verification to the inactivity timeout or a false gate failure. The \"no regression\" claim in agents.d/9765-clarify-respond-run-name.md is overstated for this reader pair.\nTASK_GAP:\nRequirement: \"Add a top-level `run-name` on the line after `name:`\" and \"Touch no other lines.\"\nExpected change site: .github/workflows/internal-orchestrate-clarify-respond.yml (lines 1-5) and workflow-templates/ai-orchestrate-clarify-respond.yml (lines 1-7)\nEvidence of absence: Both diffs insert three explanatory comment lines between `name:` and `run-name:`, so the run-name is not on the line after `name:` and extra lines were touched. Mitigating fact (verified): the six Phase 3 wrappers the issue says to mirror have the identical shape (internal-clarify.yml:1-5), and the contract test pins the run-name string, not its position.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "eb202ecd3af69ae65ec7659d28aa12444e5a3e5777923d38788a0e0953079420",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9770,
+    "run_id": "44469558933",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44469558933",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261119070907_faca27ed1b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9770,
+    "run_id": "44469558933"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-19T07:09:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
