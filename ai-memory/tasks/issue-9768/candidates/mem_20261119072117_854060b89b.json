@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9768,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9768\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9774\",\"pr_number\":9774,\"branch\":\"ai/issue-9768\",\"run_id\":\"44470966264\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/44470966264\",\"changed_files\":[\".github/workflows/orchestrate_poll.yml\",\"agents.d/stuck-backlog-phase3c-persist-queue-pause.md\",\"changelog.d/stuck-backlog-phase3c-persist-queue-pause.md\",\"scripts/orchestrate_poll_process.sh\",\"scripts/persist_budget.py\",\"tests/test_persist_budget.py\",\"tests/test_queue_backpressure.py\"]}",
+  "fingerprint": "47c07585d118ced18c20b4389729f709e22351471a7f488353a0b17eff65d0bf",
+  "lineage": {
+    "issue_number": 9768,
+    "parent_ids": [],
+    "pr_number": 9774,
+    "run_id": "44470966264",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44470966264",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9774"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261119072117_854060b89b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9768,
+    "level": "run",
+    "pr_number": 9774,
+    "run_id": "44470966264"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9768: https://github.com/shubhodeep1/coding-workflows/pull/9774",
+  "timestamps": {
+    "created_at": "2026-11-19T07:21:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
