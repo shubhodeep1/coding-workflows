@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_sweep_round_cap.sh:198-216 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The escalation posts the cap comment before applying the `ai:needs-human` label, so if the label write fails, every later tick posts another cap comment. Minimax adds that the label is never ensured to exist first, which makes a 422 on the label write likely.\n  WHY: A failed label write leaves the PR unlabelled, so the next sweep tick repeats the comment and creates noise. Gemini rated it NIT and Minimax rated it a hardening suggestion with risk score 1.\n- scripts/review_sweep_round_cap.sh:167-172 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: When the listing fails (non-zero rc), the script exits early and prints nothing, so the caller treats the PR as not capped for that tick.\n  WHY: This fail-open behavior is intentional, but frequent transient API failures could make round counting flaky. Gemini rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A PR whose head is not approved and that has SWEEP_REVIEW_MAX_ROUNDS (default 10) or more rounds in the last SWEEP_REVIEW_ROUND_WINDOW_HOURS (default 48) is not dispatched.\"\n  expected_change_site: scripts/review_sweep_round_cap.sh, review_sweep_round_counts (line 164 count filter); the PR description\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: scripts/review_sweep_round_cap.sh:164 counts a run only when `created_at` is at or after the current head commit's committer date, so rounds from earlier heads inside the window are dropped and a new head restarts the count. README.md, agents.d/9683-review-round-cap-and-generated-chore-skip.md:8 and changelog.d/9683-review-round-cap-and-generated-chore-skip.md:4 document this narrower rule, so only the PR description is out of step. Severity disagreement: Gemini rated it NIT, Minimax NIT, and OpenAI MAJOR. Gemini treated the design as intended and complete. Minimax says the code must not change.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_sweep_round_cap.sh:198-216 | severity=NIT | confidence=4\n  PROBLEM: The escalation function posts a comment before applying the label.\n  WHY: If the label write fails, the next sweep tick sees no label and posts the cap comment again, creating duplicate comments.\n- scripts/review_sweep_round_cap.sh:167-172 | severity=NIT | confidence=3\n  PROBLEM: When the listing fails (non-zero rc), the script exits early and prints nothing.\n  WHY: This fail-open behavior is intentional, but transient API failures could make round counting flaky.\n- TASK_GAP: Requirement: \"A PR whose head is not approved and that has SWEEP_REVIEW_MAX_ROUNDS (default 10) or more rounds in the last SWEEP_REVIEW_ROUND_WINDOW_HOURS (default 48) is not dispatched.\"\n  Expected change site: scripts/review_sweep_round_cap.sh\n  Evidence of absence: Reviewers concluded the \"per-PR rolling-window cap across head changes\" was deliberately interpreted as restarting on a head commit change, and the changelog and README document this. The delivery is complete against the intended design.\n  SEVERITY: NIT | ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: \"A PR whose head is **not approved** (`head_gate_state` present and not `success`) and that has `SWEEP_REVIEW_MAX_ROUNDS` (default 10) or more rounds in the last `SWEEP_REVIEW_ROUND_WINDOW_HOURS` (default 48) is not dispatched.\" (PR DESCRIPTION, section 1)\n  Expected change site: the counting rule in scripts/review_sweep_round_cap.sh (`review_sweep_round_counts`) versus the PR DESCRIPTION's section-1 bullet\n  Evidence of absence: scripts/review_sweep_round_cap.sh:164 keeps a run only when `$created >= $since[.]`, where `$since` is the PR's current head commit committer date (scripts/review_sweep_round_cap.sh:107-109, 115). README.md, agents.d/9683-review-round-cap-and-generated-chore-skip.md:8 and changelog.d/9683-review-round-cap-and-generated-chore-skip.md:4 document the narrower rule, and only the PR description still states the wider window. Documentation-only: the code must not change.\n  SEVERITY: NIT | ISSUE_CONFIDENCE: 4\n- scripts/review_sweep_round_cap.sh:215 (comment write at :205) | HARDENING_SUGGESTION | risk score 1\n  PROBLEM: The escalation POSTs `ai:needs-human` without ensuring the label exists first, whereas other writers call `ensure_label_exists` (scripts/orchestrate_poll_process.sh:774, :24696, :32533; scripts/label_helpers.sh:180).\n  WHY: If the label is absent, GitHub answers 422 and the write fails as `reason=label_write`. Because the comment is posted first, every later tick posts another cap comment while the PR never gets the label.\n  Suggested minimal fix: source `scripts/label_helpers.sh` guarded by `type ensure_label_exists`, and call `ensure_label_exists \"${REVIEW_SWEEP_ROUND_CAP_LABEL}\" \"${cap_repo}\"` before the label POST (about 4 lines).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \"A PR whose head is not approved and that has SWEEP_REVIEW_MAX_ROUNDS (default 10) or more rounds in the last SWEEP_REVIEW_ROUND_WINDOW_HOURS (default 48) is not dispatched.\"\n  Expected change site: scripts/review_sweep_round_cap.sh, review_sweep_round_counts\n  Evidence of absence: At line 164 the count includes a run only if its created_at is at or after the PR's current head commit date, so runs from earlier heads within the window are omitted and advancing the head restarts the cap. The PR description specifies a rolling-window cap but does not limit the count to runs since the current head commit.\n  SEVERITY: MAJOR | ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c737bea29c3a3d70afb6f6f549380fc6c65022d4ed184d70965fcb145b132f37",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9683,
+    "run_id": "44432729574",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44432729574",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261119032903_d941f55ddf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9683,
+    "run_id": "44432729574"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-19T03:29:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
