@@ -137,7 +137,7 @@ def test_no_gh_api_capture_puts_its_fallback_inside_the_substitution():
 			while lines[j].rstrip().endswith("\\") and j + 1 < len(lines):
 				j += 1
 			command = "\n".join(lines[i:j + 1])
-			match = re.search(r"\|\|\s*(echo|true)\b[^)]*\)", command)
+			match = re.search(r"\|\|\s*(echo|true|printf)\b[^)]*\)", command)
 			assigned = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)=", command)
 			allowed = match and match.group(1) == "true" and assigned and assigned.group(1) in validated_true_captures
 			if match and not allowed:

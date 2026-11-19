@@ -97,7 +97,7 @@ def _run(body: str, plan: list[tuple[int, str, str]], **env_overrides: str) -> t
 				'sleep() { echo $(( $(cat "$CLOCK") + $1 )) > "$CLOCK"; }',
 				PLAN_STATUS,
 				'phase7_list_cancel_runs() { phase7_plan_status; if [ "${PLAN_S}" = "none" ]; then PHASE7_CANCEL_RUNS_JSON=\'{"workflow_runs":[]}\'; else PHASE7_CANCEL_RUNS_JSON="{\\"workflow_runs\\":[$(phase7_plan_json)]}"; fi; return 0; }',
-				'gh() { phase7_plan_status; phase7_plan_json; }',
+				'gh() { phase7_plan_status; if [ "${PLAN_S}" = "fail" ]; then return 1; fi; phase7_plan_json; }',
 				"PR_NUMBER=42",
 				"PR_CLOSED_AT=2026-10-20T00:00:00Z",
 				"PRE_RUN_ID=100",
@@ -177,6 +177,19 @@ def test_queue_cap_ends_a_wait_on_a_run_that_never_starts() -> None:
 		assert "cancel_run_id=200" in lines, (wait.__name__, out)
 		assert "never left the queue within 5m (status=queued)" in proc.stdout, wait.__name__
 		assert START + 300 - 1 <= end <= START + 300 + 35, (wait.__name__, end)
+
+
+def test_failed_status_read_keeps_the_queue_cap() -> None:
+	# The closed-PR loop reads the run directly; from +700 s (past the
+	# 1-minute budget) every read fails. The last known status (queued) must
+	# keep the queue-cap deadline and the queued_timeout verdict.
+	plan = [(START, "queued", "null"), (START + 700, "fail", "null")]
+	proc, out, end = _closed_pr_wait(plan, PHASE7_QUEUE_WAIT_CAP_MINUTES="20")
+	assert proc.returncode == 1, (proc.stdout, proc.stderr)
+	lines = out.splitlines()
+	assert "status=queued_timeout" in lines, out
+	assert "status=timeout" not in lines, out
+	assert START + 1200 - 1 <= end <= START + 1200 + 35, end
 
 
 def test_queue_cap_default_is_thirty_minutes() -> None:

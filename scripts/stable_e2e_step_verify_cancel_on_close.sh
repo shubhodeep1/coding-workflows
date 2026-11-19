@@ -150,6 +150,7 @@ if [ "${PR_STATE}" = "closed" ]; then
   # The budget starts once the run leaves the queue (see the deadline
   # helpers above).
   PHASE7_WAIT_START=$(date +%s)
+  PHASE7_KNOWN_EXISTING_STATUS="${EXISTING_STATUS}"
   phase7_wait_deadline "${PHASE7_WAIT_START}" "${EXISTING_STATUS}"
   WAIT_DEADLINE="${PHASE7_WAIT_DEADLINE}"
   while [ "${EXISTING_STATUS}" != "completed" ] && [ "$(date +%s)" -lt "${WAIT_DEADLINE}" ]; do
@@ -161,6 +162,12 @@ if [ "${PR_STATE}" = "closed" ]; then
     EXISTING_STATUS=$(printf '%s' "${EXISTING_RUN_JSON}" | jq -r '.status // ""' 2>/dev/null || echo "")
     EXISTING_CONCLUSION=$(printf '%s' "${EXISTING_RUN_JSON}" | jq -r '.conclusion // ""' 2>/dev/null || echo "")
     echo "  cancel-on-close run #${EXISTING_RUN_ID}: status=${EXISTING_STATUS:-?}, conclusion=${EXISTING_CONCLUSION:-?}"
+    # A failed read must not reset the deadline to the plain budget or hide
+    # a still-queued run from the queued_timeout check: keep the last status.
+    if [ -z "${EXISTING_STATUS}" ]; then
+      EXISTING_STATUS="${PHASE7_KNOWN_EXISTING_STATUS:-}"
+    fi
+    PHASE7_KNOWN_EXISTING_STATUS="${EXISTING_STATUS}"
     phase7_wait_deadline "${PHASE7_WAIT_START}" "${EXISTING_STATUS}"
     WAIT_DEADLINE="${PHASE7_WAIT_DEADLINE}"
   done
