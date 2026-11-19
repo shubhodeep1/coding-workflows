@@ -1,0 +1,26 @@
+{
+  "discovered_at": "2026-11-19T00:20:25Z",
+  "issue_number": 9736,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 009 as out-of-scope; anchor=.github/workflows/internal-orchestrate-clarify-respond.yml:1-5; cited_path=.github/workflows/internal-orchestrate-clarify-respond.yml, workflow-templates/ai-orchestrate-clarify-respond.yml; files_touched=.github/workflows/internal-clarify.yml, .github/workflows/internal-plan.yml, .github/workflows/internal-implement.yml, workflow-templates/ai-clarify.yml, workflow-templates/ai-plan.yml, workflow-templates/ai-implement.yml, scripts/orchestrate_poll_process.sh, scripts/workflow_failure_heal.py, tests/test_poll_issue_run_linkage.py, tests/**, changelog.d/*, agents.d/*.",
+  "phase": "review_autofix",
+  "pr_number": 9748,
+  "record_id": "lesson_20261119002025_fce0a62624",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/internal-orchestrate-clarify-respond.yml, workflow-templates/ai-orchestrate-clarify-respond.yml",
+    ".github/workflows/internal-orchestrate-clarify-respond.yml",
+    ".github/workflows/internal-clarify.yml",
+    ".github/workflows/internal-plan.yml",
+    ".github/workflows/internal-implement.yml",
+    "workflow-templates/ai-clarify.yml",
+    "workflow-templates/ai-plan.yml",
+    "workflow-templates/ai-implement.yml",
+    "scripts/orchestrate_poll_process.sh",
+    "scripts/workflow_failure_heal.py",
+    "tests/test_poll_issue_run_linkage.py",
+    "tests/**",
+    "changelog.d/*",
+    "agents.d/*"
+  ]
+}
