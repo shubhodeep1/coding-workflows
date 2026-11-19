@@ -62,7 +62,7 @@ def test_app_spec_builds_from_stable_with_health_check_and_secret_placeholders()
 	assert envs["RUNNER_SCALER_DRY_RUN"]["value"] == "true"  # first deploy is a dry run (rollout R3)
 	assert envs["RUNNER_SCALER_REPOS"]["value"] == ""
 	assert envs["RUNNER_SCALER_VPC_UUID"]["value"] == ""  # set at rollout to the dedicated runner VPC
-	for secret in ("RUNNER_SCALER_DO_TOKEN", "RUNNER_SCALER_GH_APP_PRIVATE_KEY", "RUNNER_SCALER_WEBHOOK_SECRET", "TG_BOT_SECRET"):
+	for secret in ("RUNNER_SCALER_DO_TOKEN", "RUNNER_SCALER_GH_APP_ID", "RUNNER_SCALER_GH_APP_PRIVATE_KEY", "RUNNER_SCALER_WEBHOOK_SECRET", "TG_BOT_SECRET"):
 		assert envs[secret]["type"] == "SECRET" and "value" not in envs[secret]
 
 

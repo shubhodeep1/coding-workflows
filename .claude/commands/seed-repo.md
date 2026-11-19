@@ -55,7 +55,7 @@ Remaining checklist (user):
 2. Secrets (GH_PAT, CHECK_TRIAGE_ISSUES_TOKEN, OPENROUTER_API_KEY, TG_BOT_SECRET) are copied into <owner/repo> by the library's `Propagate consumer secrets` workflow when the registration PR merges; add a secret by hand only if that run fails, logs `status=skipped_empty` for it (the library secret is unset), or the repo was seeded with `no-register`.
 3. Grant the library's release GH_PAT repo scope on <owner/repo> (for @stable dispatch).
 4. [Enable "Allow auto-merge" if keeping ENABLE_AUTO_MERGE=true.]
-5. [DigitalOcean runners, when pending: add <owner/repo> to the GitHub App `shubhodeep1-runner-scaler` and tell the session, which then adds it to `RUNNER_SCALER_REPOS` and sets `PIPELINE_RUNS_ON=do-runner`, in that order.]
+5. [DigitalOcean runners, when pending: add <owner/repo> to the GitHub App `shubhodeep1-runner-scaler` and tell the session, which then adds it to `RUNNER_SCALER_REPOS` and sets `PIPELINE_RUNS_ON=do-runner`, in that order. When pending scaler dry run, the target is already in `RUNNER_SCALER_REPOS` but `PIPELINE_RUNS_ON` stays unset: turning dry run off is a fleet-wide app spec change (`RUNNER_SCALER_DRY_RUN=false`, ask-first), and the variable is set only once a later `RUNNER_SCALER outcome=started` line shows `dry_run=false`.]
 ```
 
 ## Tool Access

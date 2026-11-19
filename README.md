@@ -4763,6 +4763,7 @@ Offline `do-runner-*` runners with no droplet are deleted, at most 10 per pass.
   - `breaker_open`;
   - `queued_without_supply:<repo>`: a job queued longer than `RUNNER_SCALER_QUEUE_ALERT_MINUTES` with no droplet booting for it;
   - `cap_reached`;
+  - `destroy_failed`: a droplet delete failed; it is retried every pass and counts against the cap;
   - `do_api_error`;
   - `rerun_given_up:<repo>`.
 - **Health.** `GET /healthz` fails when no pass has completed within 3

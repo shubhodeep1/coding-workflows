@@ -6,7 +6,7 @@ The service is Phase 2 of `docs/plans/digitalocean-runners-for-consumer-pipeline
 Failures stay bounded:
 - a circuit breaker stops creating droplets after repeated boot failures, then allows one trial droplet after a cooldown;
 - a job whose droplet was lost is re-run once, only at `run_attempt` 1, as soon as GitHub accepts it after the run completes;
-- Telegram alerts go out once per incident: breaker open, jobs queued without supply, cap reached, DigitalOcean API errors, a lost-runner re-run given up.
+- Telegram alerts go out once per incident: breaker open, jobs queued without supply, cap reached, a droplet delete failed, DigitalOcean API errors, a lost-runner re-run given up.
 
 Nothing runs until the App Platform app is created from `tools/runner_scaler/app.yaml`, and its first deploy is a dry run.
 

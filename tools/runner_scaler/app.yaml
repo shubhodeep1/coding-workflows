@@ -50,6 +50,7 @@ services:
         type: SECRET
       - key: RUNNER_SCALER_GH_APP_ID
         scope: RUN_TIME
+        type: SECRET
       - key: RUNNER_SCALER_GH_APP_PRIVATE_KEY
         scope: RUN_TIME
         type: SECRET
