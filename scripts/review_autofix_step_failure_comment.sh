@@ -60,6 +60,15 @@ Every Claude pool account is at its usage gate, so this review waits instead of 
 EOF
 )"
 fi
+# Repeated reviewer failure (issue #9533): the post-editor-summary step saw
+# this head fail twice with one reviewers_failed fingerprint, so it posted no
+# "will retry" comment. Say so here, next to the first error and the marker.
+if [ "${AUTOFIX_REVIEWERS_FAILED_REPEATED:-false}" = "true" ]; then
+  repeated_fp_short="$(printf '%s' "${AUTOFIX_REVIEWERS_FAILED_REPEATED_FP:-}" | tr -cd '0-9a-f' | cut -c1-16)"
+  repeated_count="${AUTOFIX_REVIEWERS_FAILED_REPEATED_COUNT:-2}"
+  [[ "${repeated_count}" =~ ^[0-9]{1,6}$ ]] || repeated_count=2
+  BODY+=$'\n\n'"**Repeated reviewer failure:** this head failed ${repeated_count} times with fingerprint \`${repeated_fp_short:-unknown}\` (reason \`reviewers_failed\`), so the review is not retried. A new push, or a fix to the failing support script followed by a re-run, starts a fresh count."
+fi
 # Name what failed ("Assemble failure evidence"): the failed step and
 # its first specific error line, so the cause is readable from the PR.
 if [ -n "${AUTOFIX_FAILED_STEP:-}" ] || [ -n "${AUTOFIX_FAILURE_FIRST_ERROR:-}" ]; then

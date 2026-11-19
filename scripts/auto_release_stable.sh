@@ -24,7 +24,49 @@
 #                                                 times; a human must look (a
 #                                                 cancelled gate is retried and
 #                                                 never counts as an attempt)
+#   AUTO_RELEASE_SKIPPED reason=runner_queue_deep the last stable gate failed
+#                                                 recently and the Actions
+#                                                 queue is deep; a new cycle
+#                                                 would wait on the same queue
 #   AUTO_RELEASE_DISPATCHED sha=<tip>
+#
+# Runner-queue back-off: every gate cycle files five to nine fixture issues and
+# PRs and starts their clarify / plan / implement / review runs. Between
+# 2026-11-10 and 2026-11-17 the gate ran 16 times and passed twice; the failed
+# cycles (43445515854, 43590943288, 43708007145, 43878140217, 43934729786) all
+# timed out waiting for child runs that sat in the queue, and each retry added
+# its own fixtures to that queue. The gate's own jobs can start promptly while
+# its child runs wait, so the signal is the queue itself: before a dispatch,
+# when the newest completed stable gate run (cancelled runs aside) failed or
+# timed out less than AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS ago, the script
+# reads the number of queued runs in this repository and skips while it is at
+# or above AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS. The skipped tick spends no
+# attempt. Once the failure is older than the window, one cycle is dispatched
+# whatever the queue, so a deep queue delays a release (a hotfix on a new tip
+# included) by at most the window (rounded up to the next 6-hour tick) and
+# never holds it for good; if that cycle
+# fails too, the window starts again. Only `queued` runs of this repository are
+# counted: `pending` runs wait for a concurrency group, not a runner, and other
+# repositories' queues are not readable from here.
+# Fail-open: an unreadable queue count dispatches as before
+# (AUTO_RELEASE_QUEUE_CHECK outcome=read_failed).
+#
+# Fixture cleanup before a retry: when a completed gate run in the listing
+# (any branch, so the promote cycle's gate_only runs count too) did not
+# succeed, open issues and PRs it left behind (title starting `[E2E ` and
+# naming that run as `(run <id>)` or `E2E Orchestrate Smoke <id>`, written by
+# this token's login) are closed before the back-off and the dispatch, so a
+# retry never stacks its fixtures on the previous cycle's and a tick that
+# waits for the queue still takes them out of it. A fixture issue's pipeline
+# PR (`AI implementation for issue #<N>`, label e2e-smoke-test) is closed by
+# the review sweep's smoke-PR backstop on its next tick once the issue is
+# closed. Orchestrator projects (ai:orchestrator-tracking /
+# ai:orchestrator-managed) are left to
+# scripts/orchestrate_poll_smoke_fixture_reap.sh, which closes a project with
+# its children. Nothing is deleted and no comment is posted (eleven workflows
+# start on issue_comment); the log line is the record. Each search reads one
+# page of 100. Fail-open: any failed read or close is logged
+# (AUTO_RELEASE_FIXTURE_CLEANUP) and the dispatch decision goes ahead.
 #
 # Retry budget: a gate that failed on the current tip is re-dispatched on the
 # next tick until AUTO_RELEASE_STABLE_MAX_ATTEMPTS completed runs on that tip
@@ -37,7 +79,13 @@
 #
 # API calls per run (§15): 2 ref reads (+1 to dereference an annotated tag),
 # 1 compare, 3 workflow-runs lists (the release gate, promote-main-to-stable,
-# and the legacy mark-stable path), at most 1 dispatch.
+# and the legacy mark-stable path), at most 1 dispatch. Only when the newest
+# completed stable gate run failed inside the back-off window: +1 queued-runs
+# count. Only when a completed gate run in the listing did not succeed: +1 user
+# read and +2 searches (open `[E2E` issues, open `[E2E` PRs; the search API
+# needs the type), then 1 PATCH per closed fixture (at most
+# AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX). The gate-run listing already
+# fetched answers "is that run completed", so no run is read again.
 #
 # Environment (all optional unless stated):
 #   GITHUB_REPOSITORY (required)        owner/repo
@@ -48,6 +96,18 @@
 #   AUTO_RELEASE_STABLE_WORKFLOW_FILE   default test-and-mark-stable.yml
 #   AUTO_RELEASE_STABLE_MAX_ATTEMPTS    default 3 (failed gate runs per tip
 #                                       before the tip is held)
+#   AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS default 100 (queued runs in the
+#                                       repository at or above which a retry
+#                                       after a recent failed gate waits;
+#                                       0 disables the back-off)
+#   AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS
+#                                       default 24 (how long after a failed
+#                                       gate the back-off applies; after it
+#                                       one cycle runs whatever the queue)
+#   AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_ENABLED
+#                                       default true
+#   AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX
+#                                       default 30 (fixtures closed per tick)
 #   GITHUB_OUTPUT                       receives dispatched=/sha=
 
 set -euo pipefail
@@ -77,6 +137,10 @@ AUTO_RELEASE_STABLE_BRANCH="${AUTO_RELEASE_STABLE_BRANCH:-stable}"
 AUTO_RELEASE_STABLE_TAG="${AUTO_RELEASE_STABLE_TAG:-stable}"
 AUTO_RELEASE_STABLE_WORKFLOW_FILE="${AUTO_RELEASE_STABLE_WORKFLOW_FILE:-test-and-mark-stable.yml}"
 AUTO_RELEASE_STABLE_MAX_ATTEMPTS="${AUTO_RELEASE_STABLE_MAX_ATTEMPTS:-3}"
+AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS="${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS:-100}"
+AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS="${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS:-24}"
+AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_ENABLED="${AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_ENABLED:-true}"
+AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX="${AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX:-30}"
 
 for required_env in GITHUB_REPOSITORY GH_TOKEN; do
 	if [ -z "${!required_env:-}" ]; then
@@ -88,6 +152,25 @@ if ! [[ "${AUTO_RELEASE_STABLE_MAX_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${AUTO_RELEAS
 	echo "::error::AUTO_RELEASE_STABLE_MAX_ATTEMPTS must be a positive integer (got '${AUTO_RELEASE_STABLE_MAX_ATTEMPTS}')."
 	exit 1
 fi
+
+# A malformed knob falls back to its default with a warning: the back-off and
+# the cleanup are additions to the dispatch decision and must not stop it.
+# The digit caps keep the 10# arithmetic below far from overflow.
+if ! [[ "${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS}" =~ ^[0-9]{1,6}$ ]]; then
+	echo "::warning::AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS is not a non-negative integer of at most 6 digits; using 100."
+	AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS=100
+fi
+AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS=$((10#${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS}))
+if ! [[ "${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}" =~ ^[0-9]{1,5}$ ]]; then
+	echo "::warning::AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS is not a non-negative integer of at most 5 digits; using 24."
+	AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS=24
+fi
+AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS=$((10#${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}))
+if ! [[ "${AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX}" =~ ^[0-9]{1,3}$ ]]; then
+	echo "::warning::AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX is not a non-negative integer of at most 3 digits; using 30."
+	AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX=30
+fi
+AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX=$((10#${AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX}))
 
 emit_output()
 {
@@ -219,6 +302,103 @@ if [ "${failed_attempts_on_tip}" -ge "${AUTO_RELEASE_STABLE_MAX_ATTEMPTS}" ]; th
 fi
 if [ "${failed_attempts_on_tip}" -gt 0 ]; then
 	echo "Retrying ${AUTO_RELEASE_STABLE_WORKFLOW_FILE} on ${AUTO_RELEASE_STABLE_BRANCH}@${branch_tip}: ${failed_attempts_on_tip} failed attempt(s) so far, budget ${AUTO_RELEASE_STABLE_MAX_ATTEMPTS}."
+fi
+
+# Fixture cleanup before a retry (see the header). Runs before the back-off
+# below, so a tick that waits for the queue still takes the previous cycle's
+# fixtures out of it. Never fails or blocks the dispatch decision.
+auto_release_cleanup_previous_fixtures()
+{
+	local done_run_ids fixture_login fixture_kind fixture_query fixture_search_json fixture_page fixture_rows=""
+	local fixture_number fixture_type fixture_run fixture_closed=0 fixture_failed=0 fixture_skipped=0
+	# Completed gate runs that did not succeed, from the listing already read.
+	done_run_ids="$(printf '%s' "${runs_json}" | jq -r '[.workflow_runs[]? | select(.status == "completed" and (.conclusion // "") != "success") | .id | select(type == "number") | tostring] | join(" ")' 2>/dev/null || true)"
+	if [ -z "${done_run_ids}" ]; then
+		return 0
+	fi
+	# Only fixtures this token's login wrote: the gate files them with the
+	# same token, and the qualifier keeps other people's `E2E` issues out of
+	# the one page each search reads.
+	fixture_login="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null || true)"
+	if ! [[ "${fixture_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+		echo "::warning::AUTO_RELEASE_FIXTURE_CLEANUP outcome=read_failed lookup=user"
+		return 0
+	fi
+	for fixture_kind in issue pull-request; do
+		fixture_query="repo:${GITHUB_REPOSITORY} is:${fixture_kind} is:open in:title \"[E2E\" author:${fixture_login} -label:ai:orchestrator-tracking -label:ai:orchestrator-managed"
+		if ! fixture_search_json="$(gh_retry gh api -X GET search/issues -f q="${fixture_query}" -f per_page=100 2>/dev/null)" \
+			|| ! fixture_page="$(printf '%s' "${fixture_search_json}" | jq -r --arg login "${fixture_login}" 'if (.items | type) != "array" then error("no items") else .items[] end | select((.title // "") | startswith("[E2E ")) | select((.user.login // "") == $login) | select([.labels[]?.name] | (index("ai:orchestrator-tracking") == null and index("ai:orchestrator-managed") == null)) | [(.number | tostring), (if .pull_request then "pr" else "issue" end), ((.title // "") | (capture("\\(run (?<id>[1-9][0-9]{4,19})\\)") // capture("E2E Orchestrate Smoke (?<id>[1-9][0-9]{4,19})") // {id: "-"}) | .id)] | @tsv' 2>/dev/null)"; then
+			echo "::warning::AUTO_RELEASE_FIXTURE_CLEANUP outcome=read_failed lookup=search kind=${fixture_kind}"
+			return 0
+		fi
+		if [ -n "${fixture_page}" ]; then
+			fixture_rows+="${fixture_page}"$'\n'
+		fi
+	done
+	while IFS=$'\t' read -r fixture_number fixture_type fixture_run; do
+		[[ "${fixture_number}" =~ ^[1-9][0-9]*$ ]] || continue
+		[[ "${fixture_run}" =~ ^[1-9][0-9]*$ ]] || continue
+		# Only a fixture of a gate run this listing shows as finished and not
+		# successful; a running gate still owns its fixtures.
+		case " ${done_run_ids} " in
+			*" ${fixture_run} "*) ;;
+			*) continue ;;
+		esac
+		if [ "$((fixture_closed + fixture_failed))" -ge "${AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX}" ]; then
+			fixture_skipped=$((fixture_skipped + 1))
+			continue
+		fi
+		# No comment is posted: eleven workflows start on issue_comment, and
+		# this runs when the queue is already deep. The log line is the record.
+		if [ "${fixture_type}" = "pr" ]; then
+			if ! gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${fixture_number}" -f state=closed >/dev/null 2>&1; then
+				fixture_failed=$((fixture_failed + 1))
+				echo "::warning::AUTO_RELEASE_FIXTURE_CLEANUP outcome=close_failed number=${fixture_number} type=${fixture_type} gate_run=${fixture_run}"
+				continue
+			fi
+		elif ! gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/${fixture_number}" -f state=closed -f state_reason=not_planned >/dev/null 2>&1; then
+			fixture_failed=$((fixture_failed + 1))
+			echo "::warning::AUTO_RELEASE_FIXTURE_CLEANUP outcome=close_failed number=${fixture_number} type=${fixture_type} gate_run=${fixture_run}"
+			continue
+		fi
+		fixture_closed=$((fixture_closed + 1))
+		echo "AUTO_RELEASE_FIXTURE_CLEANUP outcome=closed number=${fixture_number} type=${fixture_type} gate_run=${fixture_run}"
+	done <<< "${fixture_rows}"
+	echo "AUTO_RELEASE_FIXTURE_CLEANUP outcome=done closed=${fixture_closed} failed=${fixture_failed} skipped=${fixture_skipped}"
+	return 0
+}
+if is_truthy "${AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_ENABLED}"; then
+	auto_release_cleanup_previous_fixtures || true
+fi
+
+# Runner-queue back-off (see the header). The newest completed stable gate run
+# that was not cancelled decides: a cancelled gate proved nothing either way.
+last_gate_run="$(printf '%s' "${runs_json}" | jq -r --arg branch "${AUTO_RELEASE_STABLE_BRANCH}" '[.workflow_runs[]? | select(.status == "completed" and .head_branch == $branch and (.conclusion // "") != "cancelled" and (.conclusion // "") != "skipped")] | sort_by(.created_at) | last | if . == null then "" else "\(.id)\t\(.conclusion // "-")\t\((.updated_at // "") | (try fromdateiso8601 catch 0))" end' 2>/dev/null || true)"
+IFS=$'\t' read -r last_gate_run_id last_gate_conclusion last_gate_ended_epoch <<< "${last_gate_run}" || true
+if [ "${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS}" -gt 0 ] && [[ "${last_gate_run_id:-}" =~ ^[1-9][0-9]*$ ]] \
+	&& { [ "${last_gate_conclusion:-}" = "failure" ] || [ "${last_gate_conclusion:-}" = "timed_out" ]; }; then
+	now_epoch="$(date -u +%s)"
+	[[ "${last_gate_ended_epoch:-}" =~ ^[0-9]+$ ]] || last_gate_ended_epoch=0
+	last_gate_age_hours=$(( (now_epoch - last_gate_ended_epoch) / 3600 ))
+	if [ "${last_gate_ended_epoch}" -eq 0 ] || [ "${last_gate_age_hours}" -lt 0 ]; then
+		# No readable end time: the failure cannot be dated, so do not hold a
+		# release on it.
+		echo "AUTO_RELEASE_QUEUE_CHECK outcome=not_recent last_run=${last_gate_run_id} last_age_hours=unknown window_hours=${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}"
+	elif [ "${last_gate_age_hours}" -ge "${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}" ]; then
+		# The failure is older than the window: one cycle may test the queue again.
+		echo "AUTO_RELEASE_QUEUE_CHECK outcome=not_recent last_run=${last_gate_run_id} last_age_hours=${last_gate_age_hours} window_hours=${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}"
+	else
+		queued_runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs?status=queued&per_page=1" 2>/dev/null || true)"
+		queued_runs="$(printf '%s' "${queued_runs_json}" | jq -r 'if (.total_count | type) == "number" then .total_count else empty end' 2>/dev/null || true)"
+		if ! [[ "${queued_runs}" =~ ^[0-9]+$ ]]; then
+			echo "::warning::AUTO_RELEASE_QUEUE_CHECK outcome=read_failed lookup=queued_runs last_run=${last_gate_run_id} — dispatching without the runner-queue back-off."
+		elif [ "${queued_runs}" -ge "${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS}" ]; then
+			echo "::warning::${AUTO_RELEASE_STABLE_WORKFLOW_FILE} run ${last_gate_run_id} ended '${last_gate_conclusion}' ${last_gate_age_hours} hour(s) ago and ${queued_runs} run(s) are queued now (limit ${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS}); not starting another gate cycle until the queue drains or the failure is ${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS} hour(s) old."
+			skip_release runner_queue_deep "sha=${branch_tip} queued=${queued_runs} max=${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS} last_run=${last_gate_run_id} last_age_hours=${last_gate_age_hours} window_hours=${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}"
+		else
+			echo "AUTO_RELEASE_QUEUE_CHECK outcome=clear queued=${queued_runs} max=${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS} last_run=${last_gate_run_id} last_age_hours=${last_gate_age_hours}"
+		fi
+	fi
 fi
 
 echo "Dispatching ${AUTO_RELEASE_STABLE_WORKFLOW_FILE} on ${AUTO_RELEASE_STABLE_BRANCH} (tip ${branch_tip}, tag at ${tag_commit:-none})."
