@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Signed job-token comments (run-volume plan item 15): route this script's
+# gh comment calls through the shim even when no earlier step loaded it.
+[ -z "${BASH_SOURCE[0]:-}" ] || AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" >/dev/null 2>&1 || true
 # review_merge_train.sh — serialize ai/issue-* PRs that edit the same files.
 #
 # Problem this solves: when several ai/issue-* PRs open against one base
@@ -134,6 +137,18 @@ elif [ -f "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" ]; then
 	source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" 2>/dev/null || true
 fi
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+# Merge lease and final-CI merge resume (scripts/pr_checks_lib.sh), used by
+# the release step only. Best-effort: an older support checkout without the
+# library skips both, and the release behaves as before.
+MT_PR_CHECKS_LIB_LOADED=false
+if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/pr_checks_lib.sh" ]; then
+	# shellcheck disable=SC1091
+	source "${SUPPORT_SCRIPTS_DIR}/pr_checks_lib.sh" 2>/dev/null && MT_PR_CHECKS_LIB_LOADED=true
+elif [ -f "$(dirname "${BASH_SOURCE[0]}")/pr_checks_lib.sh" ]; then
+	# shellcheck disable=SC1091
+	source "$(dirname "${BASH_SOURCE[0]}")/pr_checks_lib.sh" 2>/dev/null && MT_PR_CHECKS_LIB_LOADED=true
+fi
+type _merge_lease_gate >/dev/null 2>&1 || MT_PR_CHECKS_LIB_LOADED=false
 
 MT_SUBCOMMAND="${1:-}"
 MT_ENABLED="${MERGE_TRAIN_ENABLED:-true}"
@@ -1564,6 +1579,236 @@ _mt_now_ms()
 	fi
 }
 
+# Merge-lease tick (scripts/pr_checks_lib.sh "Merge lease"). For each lease
+# ref (one `git/matching-refs` call), frees a held lease whose holder is no
+# longer open (from the open-PR list this pass already read) or whose expiry
+# passed, then reserves a free lease for the first waiter in queue order
+# (priority label, then lowest PR number), removes that waiter's
+# MERGE_LEASE_WAIT_LABEL and re-dispatches its review. The reservation makes
+# the waiter the holder, so its merge path updates the branch at once.
+#
+# Input: $1 the _mt_list_open_prs output (one JSON object per line), $2 the
+# base filter ("" = every base).
+# API calls: 1 matching-refs read; per lease ref one commit read; a release
+# write is 1 commit POST + 1 ref PATCH; a grant adds 1 paginated files read,
+# the write, 1 label DELETE and 1 workflow dispatch. No call when the library
+# is unavailable or MERGE_LEASE_ENABLED is off.
+# Fail-open: every failure logs and returns 0; a lease left held expires
+# after MERGE_LEASE_TTL_MINUTES.
+# Log: MERGE_LEASE pr=<n> base=<ref> mode=tick outcome=held|released|granted|
+# no_waiter|write_failed|lost_race reason=<token>
+_mt_merge_lease_tick()
+{
+	local tick_prs_json="$1" tick_base_filter="$2"
+	local tick_refs_json tick_prefix tick_ref tick_base tick_rc tick_reason tick_base_prs tick_first tick_first_head tick_paths
+	[ "${MT_PR_CHECKS_LIB_LOADED}" = "true" ] || return 0
+	_merge_lease_enabled || return 0
+	tick_prefix="$(_merge_lease_ref_name "")"
+	if ! tick_refs_json="$(gh_retry _safe_gh_jq "repos/${MT_REPO}/git/matching-refs/${tick_prefix%/}" 2>/dev/null)" \
+		|| ! jq -e 'type == "array"' >/dev/null 2>&1 <<< "${tick_refs_json}"; then
+		_mt_warn "MERGE_LEASE mode=tick outcome=unavailable reason=refs_list_failed (no lease freed or granted this tick)"
+		return 0
+	fi
+	while IFS= read -r tick_ref; do
+		[ -n "${tick_ref}" ] || continue
+		tick_base="${tick_ref#refs/"${tick_prefix}"}"
+		_merge_lease_valid_base "${tick_base}" || continue
+		if [ -n "${tick_base_filter}" ] && [ "${tick_base}" != "${tick_base_filter}" ]; then
+			continue
+		fi
+		tick_rc=0
+		_merge_lease_read "${tick_base}" || tick_rc=$?
+		if [ "${tick_rc}" -ne 0 ]; then
+			_mt_warn "MERGE_LEASE base=${tick_base} mode=tick outcome=unavailable reason=read_failed"
+			continue
+		fi
+		if [ "${MERGE_LEASE_STATE}" = "held" ]; then
+			tick_reason=""
+			if [ "${MERGE_LEASE_EXPIRES}" -le "$(date -u +%s)" ]; then
+				tick_reason="expired"
+			elif ! printf '%s\n' "${tick_prs_json}" | jq -e --argjson n "${MERGE_LEASE_PR}" 'select(type == "object" and .number == $n)' >/dev/null 2>&1; then
+				# The open-PR list was read at the start of this pass; confirm
+				# with a live read so a holder opened since is never freed.
+				if [ "$(gh_retry _safe_gh_jq "repos/${MT_REPO}/pulls/${MERGE_LEASE_PR}" --jq '.state // ""' 2>/dev/null | tail -n1)" = "closed" ]; then
+					tick_reason="holder_closed"
+				fi
+			fi
+			if [ -z "${tick_reason}" ]; then
+				_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=held reason=holder_open"
+				continue
+			fi
+			tick_rc=0
+			_merge_lease_write "${tick_base}" released "${MERGE_LEASE_PR}" "${MERGE_LEASE_HEAD}" "" || tick_rc=$?
+			if [ "${tick_rc}" -ne 0 ]; then
+				_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=$([ "${tick_rc}" -eq 3 ] && echo lost_race || echo write_failed) reason=${tick_reason}"
+				continue
+			fi
+			_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=released reason=${tick_reason}"
+			MERGE_LEASE_STATE="released"
+		fi
+		tick_base_prs="$(printf '%s\n' "${tick_prs_json}" | jq -sc --arg b "${tick_base}" '[ .[] | select(type == "object" and .base == $b) ]' 2>/dev/null || echo '[]')"
+		tick_first="$(_merge_lease_queue_first "${tick_base_prs}" "")"
+		if [ -z "${tick_first}" ]; then
+			_mt_log "MERGE_LEASE pr=- base=${tick_base} mode=tick outcome=no_waiter reason=lease_free"
+			continue
+		fi
+		tick_first_head="$(jq -r --argjson n "${tick_first}" '[ .[] | select(.number == $n) | .head_sha // "" ][0] // ""' <<< "${tick_base_prs}" 2>/dev/null)"
+		tick_paths="$(_merge_lease_pr_paths "${tick_first}" 2>/dev/null || true)"
+		tick_rc=0
+		_merge_lease_write "${tick_base}" held "${tick_first}" "${tick_first_head}" "${tick_paths:-*}" || tick_rc=$?
+		if [ "${tick_rc}" -ne 0 ]; then
+			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=$([ "${tick_rc}" -eq 3 ] && echo lost_race || echo write_failed) reason=grant"
+			continue
+		fi
+		# Unlabel before the dispatch: if the dispatch fails, the sweep (which
+		# skips labelled waiters) picks the PR up again within 30 minutes.
+		_merge_lease_unlabel_wait "${tick_first}"
+		if _mt_dispatch_review "${tick_first}" "$(jq -r --argjson n "${tick_first}" '[ .[] | select(.number == $n) | .head // "" ][0] // ""' <<< "${tick_base_prs}" 2>/dev/null)"; then
+			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=first_in_queue"
+		else
+			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=dispatch_failed_sweep_retries"
+		fi
+	done < <(jq -r --arg p "refs/${tick_prefix}" '.[] | select(type == "object" and ((.ref // "") | startswith($p))) | .ref' <<< "${tick_refs_json}" 2>/dev/null)
+	return 0
+}
+
+# Final-CI merge resume (scripts/pr_checks_lib.sh "Final-CI merge resume").
+# For each open PR labelled FINAL_CI_MERGE_PENDING_LABEL: when its head still
+# carries the pipeline's `pending` FINAL_CI_MERGE_PENDING_CONTEXT status and a
+# pipeline-posted `ai-review/head-gate` success, its required checks are
+# green now (_pr_wait_for_required_checks with a 0-minute budget: one read,
+# no final-CI dispatch, no new marker), and the base is fresh and the merge
+# lease allows it (_pr_base_fresh_for_merge), this enables head-bound
+# auto-merge (squash), marks the status success, labels the linked issues
+# ai:ready-to-merge and removes the PR label. A head without the marker (the
+# branch moved), a fork or draft, an integration or forward-merge head, or a
+# failed required check removes the label: the normal review path owns it.
+#
+# Input: as _mt_merge_lease_tick.
+# API calls per labelled PR: 1 statuses read, the checks read(s) of
+# _pr_wait_for_required_checks, the freshness reads, and on success 1 merge
+# call, 1 status POST, 1 GraphQL closing-issues read, 1 label POST per issue
+# and 1 label DELETE. Plus one cached `GET user`.
+# Fail-open: never merges on an unreadable state; logs and leaves the label.
+# Log: FINAL_CI_MERGE_RESUME pr=<n> head=<sha> outcome=auto_merge_enabled|
+# waiting|deferred|dropped|failed reason=<token>
+_mt_final_ci_merge_resume()
+{
+	local resume_prs_json="$1" resume_base_filter="$2"
+	local resume_label="${FINAL_CI_MERGE_PENDING_LABEL:-ai:final-ci-merge-pending}"
+	local resume_context="${FINAL_CI_MERGE_PENDING_CONTEXT:-ai-review/final-ci-merge-pending}"
+	local resume_line resume_num resume_head_ref resume_sha resume_head_repo resume_base resume_draft resume_statuses
+	local resume_marker resume_gate resume_issue resume_issues resume_block_candidate
+	local resume_owner="${MT_REPO%%/*}" resume_name="${MT_REPO#*/}"
+	local resume_auto_merge_on="true" resume_labels resume_block_label
+	[ "${MT_PR_CHECKS_LIB_LOADED}" = "true" ] || return 0
+	case "$(printf '%s' "${FINAL_CI_MERGE_RESUME_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		true|1|yes|on) ;;
+		*) return 0 ;;
+	esac
+	# ENABLE_AUTO_MERGE is the review path's kill switch; an operator who
+	# turns it off after a head was marked must not get a merge from here.
+	[ "${ENABLE_AUTO_MERGE:-true}" = "true" ] || resume_auto_merge_on="false"
+	while IFS= read -r resume_line; do
+		[ -n "${resume_line}" ] || continue
+		resume_num="$(jq -r '.number' <<< "${resume_line}")"
+		resume_head_ref="$(jq -r '.head // ""' <<< "${resume_line}")"
+		resume_sha="$(jq -r '.head_sha // ""' <<< "${resume_line}")"
+		resume_head_repo="$(jq -r '.head_repo // ""' <<< "${resume_line}")"
+		resume_base="$(jq -r '.base // ""' <<< "${resume_line}")"
+		resume_draft="$(jq -r '.draft // false' <<< "${resume_line}")"
+		[[ "${resume_num}" =~ ^[1-9][0-9]*$ ]] || continue
+		if [ -n "${resume_base_filter}" ] && [ "${resume_base}" != "${resume_base_filter}" ]; then
+			continue
+		fi
+		if ! _mt_resolve_automation_login; then
+			_mt_warn "FINAL_CI_MERGE_RESUME outcome=failed reason=login_unavailable (nothing resumed this tick)"
+			return 0
+		fi
+		if [ "${resume_head_repo}" != "${MT_REPO}" ] || [ "${resume_draft}" = "true" ] || ! [[ "${resume_sha}" =~ ^[0-9a-f]{40}$ ]] \
+			|| [[ "${resume_head_ref}" =~ ^auto/forward-merge-stable- ]] \
+			|| printf '%s\n' "${resume_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}"; then
+			_mt_final_ci_pending_unlabel "${resume_num}" "${resume_label}"
+			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha:-?} outcome=dropped reason=not_eligible"
+			continue
+		fi
+		# A hold placed after the head was marked wins: drop the label and
+		# leave the PR to the review path (auto-merge off, a human hold, a
+		# review block, the merge train queue, a failed security pass).
+		resume_labels="$(jq -r '(.labels // []) | join(",")' <<< "${resume_line}" 2>/dev/null || true)"
+		resume_block_label=""
+		for resume_block_candidate in ai:needs-human ai:review-blocked ai:merge-queued ai:security-pass-failed "${MT_LABEL}"; do
+			if printf ',%s,' "${resume_labels}" | grep -Fq ",${resume_block_candidate},"; then
+				resume_block_label="${resume_block_candidate}"
+				break
+			fi
+		done
+		if [ "${resume_auto_merge_on}" != "true" ] || [ -n "${resume_block_label}" ]; then
+			_mt_final_ci_pending_unlabel "${resume_num}" "${resume_label}"
+			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=dropped reason=$([ "${resume_auto_merge_on}" != "true" ] && echo auto_merge_disabled || echo "blocked_by_${resume_block_label}")"
+			continue
+		fi
+		if ! resume_statuses="$(gh_retry _safe_gh_jq "repos/${MT_REPO}/commits/${resume_sha}/statuses?per_page=100" 2>/dev/null)" \
+			|| ! jq -e 'type == "array"' >/dev/null 2>&1 <<< "${resume_statuses}"; then
+			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=waiting reason=statuses_unavailable"
+			continue
+		fi
+		# Newest first: the latest status per context decides.
+		resume_marker="$(jq -r --arg c "${resume_context}" '[ .[] | select(.context == $c) ][0] | if . == null then "" else "\(.state) \((.creator.login // "") | ascii_downcase)" end' <<< "${resume_statuses}" 2>/dev/null)"
+		resume_gate="$(jq -r '[ .[] | select(.context == "ai-review/head-gate") ][0] | if . == null then "" else "\(.state) \((.creator.login // "") | ascii_downcase)" end' <<< "${resume_statuses}" 2>/dev/null)"
+		if [ "${resume_marker}" != "pending ${MT_AUTOMATION_LOGIN}" ]; then
+			_mt_final_ci_pending_unlabel "${resume_num}" "${resume_label}"
+			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=dropped reason=no_marker_on_head"
+			continue
+		fi
+		if [ "${resume_gate}" != "success ${MT_AUTOMATION_LOGIN}" ]; then
+			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=waiting reason=head_gate_not_success"
+			continue
+		fi
+		if ! PR_CHECKS_REPOSITORY="${MT_REPO}" REVIEW_FINAL_CI_WORKFLOW="" _pr_wait_for_required_checks "${resume_num}" "${resume_sha}" "${resume_base}" 0; then
+			if [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "failed" ]; then
+				_mt_final_ci_pending_unlabel "${resume_num}" "${resume_label}"
+				_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=dropped reason=required_checks_failed"
+			else
+				_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=waiting reason=required_checks_${PR_CHECKS_WAIT_OUTCOME:-unknown}"
+			fi
+			continue
+		fi
+		# Resume only on a named required CI check that exists and passed: a
+		# base whose wait would read "no check-runs" as green is left to the
+		# review path, which polls a grace period first.
+		if [ "${PR_CHECKS_LAST_CI_STATE:-}" != "success" ]; then
+			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=waiting reason=no_named_ci_success ci_check=${PR_CHECKS_LAST_CI_NAME:-none}"
+			continue
+		fi
+		if ! PR_CHECKS_REPOSITORY="${MT_REPO}" REVIEW_FINAL_CI_WORKFLOW="" _pr_base_fresh_for_merge "${resume_num}" "${resume_sha}" "${resume_base}"; then
+			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=deferred reason=${PR_BASE_FRESHNESS_OUTCOME:-unknown}"
+			continue
+		fi
+		if ! gh_retry gh pr merge "${resume_num}" --repo "${MT_REPO}" --squash --auto --match-head-commit "${resume_sha}" >/dev/null 2>&1; then
+			_mt_warn "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=failed reason=auto_merge_refused"
+			continue
+		fi
+		gh_retry _safe_gh_jq -X POST "repos/${MT_REPO}/statuses/${resume_sha}" -f state=success -f "context=${resume_context}" \
+			-f "description=Final CI passed; head-bound auto-merge enabled by the poll tick" >/dev/null 2>&1 || true
+		_mt_final_ci_pending_unlabel "${resume_num}" "${resume_label}"
+		resume_issues="$(gh_retry gh api graphql -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){closingIssuesReferences(first:10){nodes{number}}}}}' \
+			-f "o=${resume_owner}" -f "r=${resume_name}" -F "n=${resume_num}" --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' 2>/dev/null || true)"
+		while IFS= read -r resume_issue; do
+			[[ "${resume_issue}" =~ ^[1-9][0-9]*$ ]] || continue
+			GH_RETRY_IDEMPOTENT=true gh_retry _safe_gh_jq -X POST "repos/${MT_REPO}/issues/${resume_issue}/labels" -f "labels[]=ai:ready-to-merge" >/dev/null 2>&1 \
+				|| _mt_warn "FINAL_CI_MERGE_RESUME pr=${resume_num} issue=${resume_issue} outcome=label_failed"
+		done <<< "${resume_issues}"
+		_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=auto_merge_enabled reason=final_ci_green"
+	done < <(printf '%s\n' "${resume_prs_json}" | jq -c --arg l "${resume_label}" 'select(type == "object" and ((.labels // []) | index($l)) != null)' 2>/dev/null)
+	return 0
+}
+
+_mt_final_ci_pending_unlabel()
+{
+	gh_retry _safe_gh_jq -X DELETE "repos/${MT_REPO}/issues/$1/labels/$(printf '%s' "$2" | jq -sRr @uri)" >/dev/null 2>&1 || true
+}
+
 _mt_release() {
 	local base_filter="${BASE_BRANCH:-}" prs_json line num head base labels files blockers inflight_review_branches="" released=0 examined=0
 	local release_queue_comment_id release_comment_body release_label_restored
@@ -1707,6 +1952,10 @@ _mt_release() {
 			fi
 		fi
 	done < <(printf '%s\n' "${prs_json}")
+	# Lease hand-off first (a closed holder frees its lease), then the
+	# final-CI resume, whose merge-mode lease check then sees the freed lease.
+	_mt_merge_lease_tick "${prs_json}" "${base_filter}" || true
+	_mt_final_ci_merge_resume "${prs_json}" "${base_filter}" || true
 	if [ -n "${release_oldest_created_epoch}" ]; then
 		release_oldest_age=$((release_now_epoch - release_oldest_created_epoch))
 		# Clock skew: a future-dated PR reports 0, never a negative age.

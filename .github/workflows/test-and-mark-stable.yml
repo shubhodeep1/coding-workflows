@@ -116,7 +116,7 @@ run-name: ${{ inputs.gate_cycle_id != '' && format('Test & Mark Stable Release [
           when a long single step should extend the wait past the
           inactivity window). The wait loop clamps overrides above
           90 minutes so a typo cannot mask a genuine hang until the
-          300-minute smoke-test job timeout kills the run.
+          360-minute smoke-test job timeout kills the run.
         required: false
         type: number
         default: 75
@@ -133,6 +133,12 @@ run-name: ${{ inputs.gate_cycle_id != '' && format('Test & Mark Stable Release [
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Signed job-token comments (run-volume plan item 15, D16; see
+  # scripts/comment_signature.py). The opt-in secret and the job token sit
+  # next to each step's GH_PAT, never here, so a step without the PAT never
+  # sees them. Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false
+  # posts with GH_PAT again while signed comments already posted still verify.
+  AI_COMMENT_SIGNING_POST: ${{ vars.AI_COMMENT_SIGNING_POST || 'true' }}
 
 permissions:
   contents: write
@@ -481,6 +487,8 @@ jobs:
         if: ${{ !inputs.dry_run && !inputs.gate_only }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           RELEASE_TAG_PREFLIGHT_ENABLED: ${{ vars.RELEASE_TAG_PREFLIGHT_ENABLED || 'true' }}
           STABLE_RELEASE_ENABLED: ${{ vars.STABLE_RELEASE_ENABLED || 'true' }}
           RELEASE_TAGGING_ENABLED: ${{ vars.RELEASE_TAGGING_ENABLED || 'true' }}
@@ -574,7 +582,10 @@ jobs:
     # The conservative serial-budget check in Validate prerequisites must stay
     # aligned with this hard runner limit. Defaults reserve 20 minutes for deep
     # verification, analysers, aggregation, and unconditional cleanup.
-    timeout-minutes: 300
+    # 360 is GitHub's maximum for a hosted-runner job and cannot go higher;
+    # it was raised from 300 so Phase 4 can wait out a hosted-runner queue
+    # for the review run (Refs #9480).
+    timeout-minutes: 360
     concurrency:
       group: e2e-smoke-test-${{ inputs.test_repo || github.repository }}
       cancel-in-progress: true
@@ -582,6 +593,8 @@ jobs:
       test_passed: ${{ steps.verify.outputs.passed }}
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+      AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
       PHASE_TIMEOUT: ${{ inputs.phase_timeout || 30 }}
       PLAN_PHASE_TIMEOUT: ${{ inputs.plan_timeout || inputs.phase_timeout || 60 }}
@@ -610,17 +623,17 @@ jobs:
       # above 90m so a typo cannot suppress stall detection until the
       # e2e-smoke-test job timeout kills the run.
       REVIEW_STEP_TIMEOUT: ${{ inputs.review_step_timeout || inputs.review_timeout || inputs.phase_timeout || 75 }}
-      E2E_JOB_TIMEOUT_MINUTES: 300
+      E2E_JOB_TIMEOUT_MINUTES: 360
       # Phase 3b inactivity limit while the watched Implement run's current
       # step is "Pre-push affected-test gate" (issue #8244). That one step
       # ran 31 minutes in run 40610855593 (two gate runs plus a repair turn);
       # implement.yml gives it timeout-minutes: 60 and
       # scripts/implement_step_prepush_test_gate.sh sizes it to 3300 s. The
-      # default is 35, not 60: 60 would push the conservative serial budget
-      # below past the 300-minute job timeout, which #8244 forbids raising.
-      # To give the gate its full 55 minutes, raise this value and
-      # E2E_JOB_TIMEOUT_MINUTES (plus the job's timeout-minutes) together in
-      # one PR; the budget check fails closed if only this one is raised.
+      # default is 35, not 60: #8244 sized it to fit the conservative serial
+      # budget below inside the then-300-minute job timeout. The job is now
+      # at GitHub's 360-minute hosted-runner maximum (#9480), which cannot go
+      # higher, so any extra gate budget must fit inside that limit; the
+      # budget check fails closed if this value is raised past it.
       PREPUSH_GATE_STEP_STALL_MINUTES: 35
       REVIEW_PHASE_HANDOFF_BUDGET_MINUTES: 15
       EDITOR_RETRY_BUDGET_MINUTES: 25
@@ -650,6 +663,17 @@ jobs:
         uses: actions/checkout@v5
         with:
           ref: main
+
+      - name: Activate signed job-token comments
+        # Run-volume plan item 15 (D16): with AI_COMMENT_SIGNING_SECRET set,
+        # later steps' comment reads see signed job-token comments as the
+        # PAT wrote them (scripts/comment_signature.py). No-op without it.
+        env:
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+        shell: bash
+        run: |
+          [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
+          source scripts/gh_helpers.sh
 
       # Phase 4 and Phase 4b run step bodies moved to scripts/ (#7991,
       # workflow file size guard). They are read from this run's own commit,
@@ -2237,6 +2261,74 @@ jobs:
             exit 1
           fi
           source "${STABLE_E2E_STEP_SCRIPT}"
+
+      # ── Phase 4d: Review-timeout run inventory (#9418) ──
+      # Release run 43283656910 timed out in Phase 4 while review runs
+      # 43300092840 (gate job queued, no runner) and 43300108598 (pending,
+      # no jobs) never started a step, and the log could not tell runner
+      # starvation from a concurrency hold. stable_e2e_step_wait_review.sh
+      # writes status=timeout before exit 1; this step then lists the review
+      # runs on the smoke branch and the jobs of each unfinished run: a job
+      # queued with runner=none means no runner, a run with no jobs means a
+      # workflow-level concurrency hold. Inline because scripts/ is outside
+      # the #9418 heal scope. One runs call plus at most 5 jobs calls (§14);
+      # read-only, fail-soft, prints ids, enums and timestamps only.
+      - name: "Phase 4d: Review-timeout run inventory"
+        id: review-timeout-inventory
+        if: failure() && steps.wait-review.outputs.status == 'timeout'
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
+          ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
+          BAIT_SHA: ${{ steps.inject-bait.outputs.bait_sha }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          if ! [[ "${ISSUE_NUMBER:-}" =~ ^[0-9]+$ ]] \
+            || ! [[ "${REVIEW_WORKFLOW_FILE:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*\.yml$ ]] \
+            || ! [[ "${TEST_REPO:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "  Skipped review-timeout inventory (missing or invalid inputs)"
+            exit 0
+          fi
+          timeout_inv_tok() { if [[ "${1:-}" =~ ^[A-Za-z0-9_:.-]+$ ]]; then printf '%s' "$1"; else printf '?'; fi; }
+          TIMEOUT_INV_BRANCH="ai/issue-${ISSUE_NUMBER}"
+          TIMEOUT_INV_PR="unknown"
+          [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]] && TIMEOUT_INV_PR="#${PR_NUMBER}"
+          TIMEOUT_INV_BAIT="none"
+          [[ "${BAIT_SHA:-}" =~ ^[0-9a-f]{7,40}$ ]] && TIMEOUT_INV_BAIT="${BAIT_SHA:0:7}"
+          echo "  Review runs on ${TIMEOUT_INV_BRANCH} (PR ${TIMEOUT_INV_PR}, bait=${TIMEOUT_INV_BAIT}):"
+          if ! TIMEOUT_INV_RUNS="$(_safe_gh_jq "repos/${TEST_REPO}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?branch=${TIMEOUT_INV_BRANCH}&per_page=20" \
+            --jq '.workflow_runs[]? | "\(.id) \(.event) \(.status) \(.conclusion // "null") \((.head_sha // "")[0:7]) \(.created_at) \(.updated_at)"')"; then
+            echo "  (review run inventory fetch failed)"
+            exit 0
+          fi
+          [ -n "${TIMEOUT_INV_RUNS}" ] || echo "  (no review runs on ${TIMEOUT_INV_BRANCH})"
+          TIMEOUT_INV_JOB_FETCHES=0
+          while read -r TIMEOUT_INV_RUN_ID TIMEOUT_INV_RUN_EVENT TIMEOUT_INV_RUN_STATUS TIMEOUT_INV_RUN_CONCL TIMEOUT_INV_RUN_SHA TIMEOUT_INV_RUN_CREATED TIMEOUT_INV_RUN_UPDATED _; do
+            [[ "${TIMEOUT_INV_RUN_ID:-}" =~ ^[0-9]+$ ]] || continue
+            echo "  run ${TIMEOUT_INV_RUN_ID} event=$(timeout_inv_tok "${TIMEOUT_INV_RUN_EVENT:-}") status=$(timeout_inv_tok "${TIMEOUT_INV_RUN_STATUS:-}") conclusion=$(timeout_inv_tok "${TIMEOUT_INV_RUN_CONCL:-}") head_sha=$(timeout_inv_tok "${TIMEOUT_INV_RUN_SHA:-}") created=$(timeout_inv_tok "${TIMEOUT_INV_RUN_CREATED:-}") updated=$(timeout_inv_tok "${TIMEOUT_INV_RUN_UPDATED:-}")"
+            [ "${TIMEOUT_INV_RUN_STATUS:-}" != "completed" ] || continue
+            if [ "${TIMEOUT_INV_JOB_FETCHES}" -ge 5 ]; then
+              echo "    (job lookup skipped: cap of 5 reached)"
+              continue
+            fi
+            TIMEOUT_INV_JOB_FETCHES=$((TIMEOUT_INV_JOB_FETCHES + 1))
+            if ! TIMEOUT_INV_JOBS="$(_safe_gh_jq "repos/${TEST_REPO}/actions/runs/${TIMEOUT_INV_RUN_ID}/jobs?per_page=30" \
+              --jq '.jobs[]? | "\(.status) \(.conclusion // "null") \(.created_at // "null") \(.started_at // "null") \(.runner_name // "none" | gsub("[^A-Za-z0-9_.-]"; "_")) \(.name // "" | gsub("[^A-Za-z0-9_.-]"; "_") | .[0:80])"')"; then
+              echo "    (job fetch failed for run ${TIMEOUT_INV_RUN_ID})"
+              continue
+            fi
+            if [ -z "${TIMEOUT_INV_JOBS}" ]; then
+              echo "    (no jobs yet: run is held before job creation, e.g. a workflow-level concurrency group)"
+              continue
+            fi
+            while read -r TIMEOUT_INV_JOB_STATUS TIMEOUT_INV_JOB_CONCL TIMEOUT_INV_JOB_CREATED TIMEOUT_INV_JOB_STARTED TIMEOUT_INV_JOB_RUNNER TIMEOUT_INV_JOB_NAME _; do
+              [ -n "${TIMEOUT_INV_JOB_STATUS:-}" ] || continue
+              echo "    job $(timeout_inv_tok "${TIMEOUT_INV_JOB_NAME:-}") status=$(timeout_inv_tok "${TIMEOUT_INV_JOB_STATUS}") conclusion=$(timeout_inv_tok "${TIMEOUT_INV_JOB_CONCL:-}") created=$(timeout_inv_tok "${TIMEOUT_INV_JOB_CREATED:-}") started=$(timeout_inv_tok "${TIMEOUT_INV_JOB_STARTED:-}") runner=$(timeout_inv_tok "${TIMEOUT_INV_JOB_RUNNER:-}")"
+            done <<< "${TIMEOUT_INV_JOBS}"
+          done <<< "${TIMEOUT_INV_RUNS}"
+          echo "  hint: job status=queued with runner=none -> no runner (starvation); run with no jobs -> concurrency hold"
 
       # Per-phase soft-error analysis: review_autofix.
       # Wait cap is bumped to 300s here because the previous single
@@ -3881,8 +3973,54 @@ jobs:
             echo "  Closed tracking issue #${TRACKING_NUMBER}"
           fi
 
-          # Delete test branch
           BRANCH="ai/issue-${ISSUE_NUMBER}"
+
+          # Cancel the Phase 3c workflow_dispatch review run (#9418).
+          # Release run 43283656910: the Phase 3c "Bug B fallback" review
+          # dispatch (run 43300092840) sat `queued` 48 minutes after this
+          # step closed PR #9416, still holding review-gate-notice-<repo>-<pr>.
+          # Closing a PR cancels its pull_request runs but not
+          # workflow_dispatch runs, so cancel them here by event and branch
+          # (the smoke issue branch is unique to this run). One list call per
+          # cleanup (CLAUDE.md §14): the PR read above carries no run data.
+          # `gh --jq` has no --arg, so jq prints event and head_branch and
+          # bash re-checks them against BRANCH. Every call is fail-soft.
+          if [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] \
+            && [[ "${REVIEW_WORKFLOW_FILE:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*\.yml$ ]]; then
+            # A failed listing must not read as "no active runs": warn and
+            # skip the "No active" line so a leaked run stays visible.
+            CLEANUP_DISPATCH_LIST_FAILED=0
+            if ! CLEANUP_DISPATCH_REVIEW_RUN_IDS="$(_safe_gh_jq "repos/${TEST_REPO}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?event=workflow_dispatch&branch=${BRANCH}&per_page=20" \
+              --jq '.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending" or .status == "requested") | "\(.id) \(.status) \(.event) \(.head_branch)"')"; then
+              echo "Warning: could not list dispatch review runs on ${BRANCH}; an active dispatch review run may be left uncancelled"
+              CLEANUP_DISPATCH_REVIEW_RUN_IDS=""
+              CLEANUP_DISPATCH_LIST_FAILED=1
+            fi
+            CLEANUP_DISPATCH_MATCHED=0
+            while read -r CLEANUP_DISPATCH_RUN_ID CLEANUP_DISPATCH_RUN_STATUS CLEANUP_DISPATCH_RUN_EVENT CLEANUP_DISPATCH_RUN_BRANCH _; do
+              [ -n "${CLEANUP_DISPATCH_RUN_ID:-}" ] || continue
+              [[ "${CLEANUP_DISPATCH_RUN_ID}" =~ ^[0-9]+$ ]] || continue
+              [ "${CLEANUP_DISPATCH_RUN_EVENT:-}" = "workflow_dispatch" ] || continue
+              [ "${CLEANUP_DISPATCH_RUN_BRANCH:-}" = "${BRANCH}" ] || continue
+              case "${CLEANUP_DISPATCH_RUN_STATUS:-}" in
+                queued|in_progress|waiting|pending|requested) ;;
+                *) continue ;;
+              esac
+              CLEANUP_DISPATCH_MATCHED=$((CLEANUP_DISPATCH_MATCHED + 1))
+              if gh api -X POST "repos/${TEST_REPO}/actions/runs/${CLEANUP_DISPATCH_RUN_ID}/cancel" >/dev/null 2>&1; then
+                echo "  Cancelled dispatch review run ${CLEANUP_DISPATCH_RUN_ID} (status=${CLEANUP_DISPATCH_RUN_STATUS})"
+              else
+                echo "Warning: could not cancel dispatch review run ${CLEANUP_DISPATCH_RUN_ID}"
+              fi
+            done <<< "${CLEANUP_DISPATCH_REVIEW_RUN_IDS}"
+            if [ "${CLEANUP_DISPATCH_LIST_FAILED}" -eq 0 ] && [ "${CLEANUP_DISPATCH_MATCHED}" -eq 0 ]; then
+              echo "  No active dispatch review runs on ${BRANCH}"
+            fi
+          else
+            echo "  Skipped dispatch review-run cancel (missing or invalid inputs)"
+          fi
+
+          # Delete test branch
           gh api "repos/${TEST_REPO}/git/refs/heads/${BRANCH}" -X DELETE \
             >/dev/null 2>&1 || echo "  Branch ${BRANCH} already deleted or does not exist"
           echo "  Deleted branch ${BRANCH}"
@@ -4328,6 +4466,8 @@ jobs:
     timeout-minutes: 280
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+      AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
     steps:
       - name: Validate prerequisites
@@ -4349,6 +4489,17 @@ jobs:
           ref: main
           fetch-depth: 1
 
+      - name: Activate signed job-token comments
+        # Run-volume plan item 15 (D16): with AI_COMMENT_SIGNING_SECRET set,
+        # later steps' comment reads see signed job-token comments as the
+        # PAT wrote them (scripts/comment_signature.py). No-op without it.
+        env:
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+        shell: bash
+        run: |
+          [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
+          source scripts/gh_helpers.sh
+
       - name: Dispatch & snapshot — workflow-log-analysis
         id: dispatch_log_analysis
         # Rate-limit shaping: the script below opens with a brief 4s
@@ -4367,11 +4518,31 @@ jobs:
         timeout-minutes: 265
         env:
           WF_FILE: workflow-log-analysis.yml
+          # Plan P4: with the switch on (default) and TEST_REPO being this
+          # repository, the gate analyses the full repo roster since the last
+          # report (clamped to 7 days) instead of repos_override=TEST_REPO
+          # over one day. Set the repo variable to false to roll back.
+          WORKFLOW_LOG_ANALYSIS_GATE_ALL_REPOS: ${{ vars.WORKFLOW_LOG_ANALYSIS_GATE_ALL_REPOS || 'true' }}
         run: |
           set -euo pipefail
           # Surface audit failures via step outputs + notify instead of
           # failing this job — workflow-log-analysis is observability-only.
           sleep 4
+          # Another repository's copy of the workflow may not declare
+          # since_last_report (an unknown input fails the dispatch) and would
+          # read that repository's roster, so it keeps the single-repo scope.
+          wla_gate_all_repos="$(printf '%s' "${WORKFLOW_LOG_ANALYSIS_GATE_ALL_REPOS:-true}" | tr '[:upper:]' '[:lower:]')"
+          case "${wla_gate_all_repos}" in
+            false|0|no|off)
+              wla_gate_scope_fields=(--field "repos_override=${TEST_REPO}") ;;
+            *)
+              if [ "${TEST_REPO}" != "${GITHUB_REPOSITORY:-}" ]; then
+                echo "::notice::TEST_REPO differs from this repository; workflow-log-analysis keeps repos_override=TEST_REPO."
+                wla_gate_scope_fields=(--field "repos_override=${TEST_REPO}")
+              else
+                wla_gate_scope_fields=(--field since_last_report=true)
+              fi ;;
+          esac
           bash ./scripts/dispatch_and_watch_workflow_run.sh \
             --repo "${TEST_REPO}" \
             --workflow "${WF_FILE}" \
@@ -4382,7 +4553,7 @@ jobs:
             --dispatch-fail-open \
             --registration-fail-open \
             --field lookback_days=1 \
-            --field "repos_override=${TEST_REPO}" \
+            "${wla_gate_scope_fields[@]}" \
             --field alert_msg_level=SILENT
 
       - name: "Soft-error analyser (workflow-log-analysis)"
@@ -4455,7 +4626,12 @@ jobs:
     timeout-minutes: 165
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+      AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
+      # Operator switch for the #9532 timeout cancel in this job's dispatch steps;
+      # set the repo variable to false to skip the cancel (the shell default stays true).
+      DISPATCH_WATCH_CANCEL_ON_TIMEOUT: ${{ vars.DISPATCH_WATCH_CANCEL_ON_TIMEOUT || 'true' }}
     steps:
       - name: Validate prerequisites
         run: |
@@ -4475,6 +4651,17 @@ jobs:
         with:
           ref: main
           fetch-depth: 1
+
+      - name: Activate signed job-token comments
+        # Run-volume plan item 15 (D16): with AI_COMMENT_SIGNING_SECRET set,
+        # later steps' comment reads see signed job-token comments as the
+        # PAT wrote them (scripts/comment_signature.py). No-op without it.
+        env:
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+        shell: bash
+        run: |
+          [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
+          source scripts/gh_helpers.sh
 
       # Generic helper: dispatch a workflow_dispatch workflow by file name
       # and capture the resulting run id, then wait for completion. Each
@@ -4522,6 +4709,8 @@ jobs:
           # + 1800s queue allowance = 5520s. Run 39694107256 gave up after
           # 2400s on a run that was still in_progress; run 40831286935 gave
           # up 5s before a run that had queued 20m22s finished success.
+          DW_TIMEOUT_LOG="$(mktemp)"
+          DW_TIMEOUT_RC=0
           bash ./scripts/dispatch_and_watch_workflow_run.sh \
             --repo "${TEST_REPO}" \
             --workflow "${WF_FILE}" \
@@ -4534,7 +4723,42 @@ jobs:
             --dispatch-backoff-base-secs 2 \
             --field "branch_name=${BRANCH_NAME}" \
             --field alert_msg_level=SILENT \
-            --field discovery_dry_run=true
+            --field discovery_dry_run=true \
+            | tee "${DW_TIMEOUT_LOG}" || DW_TIMEOUT_RC=$?
+          # Dispatch-watch timeout: cancel the timed-out child run (#9532).
+          # Run 43590943288: three children stayed queued for hours with no runner,
+          # and the orphaned orchestrate child later created a tracking issue the
+          # cleanup could not see. Do not lengthen the watch timeouts as a fix.
+          # The step still fails with the watcher's exit code.
+          if [ "${DW_TIMEOUT_RC}" -ne 0 ]; then
+            DW_TIMEOUT_RUN_ID="$(sed -n 's/^::error::.* run #\([0-9][0-9]*\) timed out$/\1/p' "${DW_TIMEOUT_LOG}" | tail -n 1)"
+            if [[ "${DW_TIMEOUT_RUN_ID}" =~ ^[0-9]+$ ]]; then
+              DW_TIMEOUT_JOBS="$(timeout 20 gh api "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/jobs?per_page=100" 2>/dev/null | jq -r '(.jobs | arrays) as $j | "\($j | length) \([$j[] | select(.status == "queued" and ((.runner_name // "") == ""))] | length)"' 2>/dev/null || true)"
+              if ! [[ "${DW_TIMEOUT_JOBS}" =~ ^[0-9]+\ [0-9]+$ ]]; then
+                DW_TIMEOUT_JOBS="unknown unknown"
+              fi
+              echo "::warning::Timed-out child run #${DW_TIMEOUT_RUN_ID}: jobs=${DW_TIMEOUT_JOBS% *} queued_without_runner=${DW_TIMEOUT_JOBS#* }"
+              DW_TIMEOUT_CANCEL="$(printf '%s' "${DISPATCH_WATCH_CANCEL_ON_TIMEOUT:-true}" | tr '[:upper:]' '[:lower:]')"
+              # Repo boolean convention: unset, empty or true cancels; false skips;
+              # any other value also skips and warns without printing the value.
+              if [ "${DW_TIMEOUT_CANCEL}" != "true" ]; then
+                if [ "${DW_TIMEOUT_CANCEL}" != "false" ]; then
+                  echo "::warning::DISPATCH_WATCH_CANCEL_ON_TIMEOUT is neither true nor false; treating it as false"
+                  echo "Cancel of timed-out child run #${DW_TIMEOUT_RUN_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT unrecognised)"
+                else
+                  echo "Cancel of timed-out child run #${DW_TIMEOUT_RUN_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT=false)"
+                fi
+              elif timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/cancel" >/dev/null 2>&1; then
+                echo "Cancel requested for timed-out child run #${DW_TIMEOUT_RUN_ID}"
+              else
+                echo "::warning::Could not cancel timed-out child run #${DW_TIMEOUT_RUN_ID}"
+              fi
+            fi
+            rm -f "${DW_TIMEOUT_LOG}"
+            exit "${DW_TIMEOUT_RC}"
+          fi
+          rm -f "${DW_TIMEOUT_LOG}"
+          # End dispatch-watch timeout handling.
 
       - name: "Soft-error analyser (validation-refresh)"
         if: always() && steps.dispatch_validation_refresh.outputs.run_id != ''
@@ -4565,6 +4789,8 @@ jobs:
           # Retry transient GitHub API failures — see the validation-refresh
           # dispatch above for context (release v1.13.8 was blocked here by
           # a single HTTP 500 from /dispatches in run #26328466709).
+          DW_TIMEOUT_LOG="$(mktemp)"
+          DW_TIMEOUT_RC=0
           bash ./scripts/dispatch_and_watch_workflow_run.sh \
             --repo "${TEST_REPO}" \
             --workflow "${WF_FILE}" \
@@ -4577,7 +4803,42 @@ jobs:
             --dispatch-backoff-base-secs 2 \
             --allowed-conclusions success,skipped \
             --field allow_workflow_edits=false \
-            --field alert_msg_level=SILENT
+            --field alert_msg_level=SILENT \
+            | tee "${DW_TIMEOUT_LOG}" || DW_TIMEOUT_RC=$?
+          # Dispatch-watch timeout: cancel the timed-out child run (#9532).
+          # Run 43590943288: three children stayed queued for hours with no runner,
+          # and the orphaned orchestrate child later created a tracking issue the
+          # cleanup could not see. Do not lengthen the watch timeouts as a fix.
+          # The step still fails with the watcher's exit code.
+          if [ "${DW_TIMEOUT_RC}" -ne 0 ]; then
+            DW_TIMEOUT_RUN_ID="$(sed -n 's/^::error::.* run #\([0-9][0-9]*\) timed out$/\1/p' "${DW_TIMEOUT_LOG}" | tail -n 1)"
+            if [[ "${DW_TIMEOUT_RUN_ID}" =~ ^[0-9]+$ ]]; then
+              DW_TIMEOUT_JOBS="$(timeout 20 gh api "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/jobs?per_page=100" 2>/dev/null | jq -r '(.jobs | arrays) as $j | "\($j | length) \([$j[] | select(.status == "queued" and ((.runner_name // "") == ""))] | length)"' 2>/dev/null || true)"
+              if ! [[ "${DW_TIMEOUT_JOBS}" =~ ^[0-9]+\ [0-9]+$ ]]; then
+                DW_TIMEOUT_JOBS="unknown unknown"
+              fi
+              echo "::warning::Timed-out child run #${DW_TIMEOUT_RUN_ID}: jobs=${DW_TIMEOUT_JOBS% *} queued_without_runner=${DW_TIMEOUT_JOBS#* }"
+              DW_TIMEOUT_CANCEL="$(printf '%s' "${DISPATCH_WATCH_CANCEL_ON_TIMEOUT:-true}" | tr '[:upper:]' '[:lower:]')"
+              # Repo boolean convention: unset, empty or true cancels; false skips;
+              # any other value also skips and warns without printing the value.
+              if [ "${DW_TIMEOUT_CANCEL}" != "true" ]; then
+                if [ "${DW_TIMEOUT_CANCEL}" != "false" ]; then
+                  echo "::warning::DISPATCH_WATCH_CANCEL_ON_TIMEOUT is neither true nor false; treating it as false"
+                  echo "Cancel of timed-out child run #${DW_TIMEOUT_RUN_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT unrecognised)"
+                else
+                  echo "Cancel of timed-out child run #${DW_TIMEOUT_RUN_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT=false)"
+                fi
+              elif timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/cancel" >/dev/null 2>&1; then
+                echo "Cancel requested for timed-out child run #${DW_TIMEOUT_RUN_ID}"
+              else
+                echo "::warning::Could not cancel timed-out child run #${DW_TIMEOUT_RUN_ID}"
+              fi
+            fi
+            rm -f "${DW_TIMEOUT_LOG}"
+            exit "${DW_TIMEOUT_RC}"
+          fi
+          rm -f "${DW_TIMEOUT_LOG}"
+          # End dispatch-watch timeout handling.
 
       - name: "Soft-error analyser (update_workflows)"
         if: always() && steps.dispatch_update_workflows.outputs.run_id != ''
@@ -4608,6 +4869,8 @@ jobs:
           # Retry transient GitHub API failures — see the validation-refresh
           # dispatch above for context (release v1.13.8 was blocked by a
           # single HTTP 500 from /dispatches in run #26328466709).
+          DW_TIMEOUT_LOG="$(mktemp)"
+          DW_TIMEOUT_RC=0
           bash ./scripts/dispatch_and_watch_workflow_run.sh \
             --repo "${TEST_REPO}" \
             --workflow "${WF_FILE}" \
@@ -4617,7 +4880,42 @@ jobs:
             --completion-timeout-secs 2400 \
             --completion-poll-interval-secs 15 \
             --dispatch-max-attempts 5 \
-            --dispatch-backoff-base-secs 2
+            --dispatch-backoff-base-secs 2 \
+            | tee "${DW_TIMEOUT_LOG}" || DW_TIMEOUT_RC=$?
+          # Dispatch-watch timeout: cancel the timed-out child run (#9532).
+          # Run 43590943288: three children stayed queued for hours with no runner,
+          # and the orphaned orchestrate child later created a tracking issue the
+          # cleanup could not see. Do not lengthen the watch timeouts as a fix.
+          # The step still fails with the watcher's exit code.
+          if [ "${DW_TIMEOUT_RC}" -ne 0 ]; then
+            DW_TIMEOUT_RUN_ID="$(sed -n 's/^::error::.* run #\([0-9][0-9]*\) timed out$/\1/p' "${DW_TIMEOUT_LOG}" | tail -n 1)"
+            if [[ "${DW_TIMEOUT_RUN_ID}" =~ ^[0-9]+$ ]]; then
+              DW_TIMEOUT_JOBS="$(timeout 20 gh api "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/jobs?per_page=100" 2>/dev/null | jq -r '(.jobs | arrays) as $j | "\($j | length) \([$j[] | select(.status == "queued" and ((.runner_name // "") == ""))] | length)"' 2>/dev/null || true)"
+              if ! [[ "${DW_TIMEOUT_JOBS}" =~ ^[0-9]+\ [0-9]+$ ]]; then
+                DW_TIMEOUT_JOBS="unknown unknown"
+              fi
+              echo "::warning::Timed-out child run #${DW_TIMEOUT_RUN_ID}: jobs=${DW_TIMEOUT_JOBS% *} queued_without_runner=${DW_TIMEOUT_JOBS#* }"
+              DW_TIMEOUT_CANCEL="$(printf '%s' "${DISPATCH_WATCH_CANCEL_ON_TIMEOUT:-true}" | tr '[:upper:]' '[:lower:]')"
+              # Repo boolean convention: unset, empty or true cancels; false skips;
+              # any other value also skips and warns without printing the value.
+              if [ "${DW_TIMEOUT_CANCEL}" != "true" ]; then
+                if [ "${DW_TIMEOUT_CANCEL}" != "false" ]; then
+                  echo "::warning::DISPATCH_WATCH_CANCEL_ON_TIMEOUT is neither true nor false; treating it as false"
+                  echo "Cancel of timed-out child run #${DW_TIMEOUT_RUN_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT unrecognised)"
+                else
+                  echo "Cancel of timed-out child run #${DW_TIMEOUT_RUN_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT=false)"
+                fi
+              elif timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/cancel" >/dev/null 2>&1; then
+                echo "Cancel requested for timed-out child run #${DW_TIMEOUT_RUN_ID}"
+              else
+                echo "::warning::Could not cancel timed-out child run #${DW_TIMEOUT_RUN_ID}"
+              fi
+            fi
+            rm -f "${DW_TIMEOUT_LOG}"
+            exit "${DW_TIMEOUT_RC}"
+          fi
+          rm -f "${DW_TIMEOUT_LOG}"
+          # End dispatch-watch timeout handling.
 
       - name: "Soft-error analyser (memory_maintenance)"
         if: always() && steps.dispatch_memory_maintenance.outputs.run_id != ''
@@ -4644,7 +4942,12 @@ jobs:
     timeout-minutes: 60
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+      AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
+      # Operator switch for the #9532 timeout cancel in this job's dispatch steps;
+      # set the repo variable to false to skip the cancel (the shell default stays true).
+      DISPATCH_WATCH_CANCEL_ON_TIMEOUT: ${{ vars.DISPATCH_WATCH_CANCEL_ON_TIMEOUT || 'true' }}
     outputs:
       tracking_issue: ${{ steps.dispatch.outputs.tracking_issue }}
       child_issues: ${{ steps.dispatch.outputs.child_issues }}
@@ -4666,6 +4969,17 @@ jobs:
         with:
           ref: main
           fetch-depth: 1
+
+      - name: Activate signed job-token comments
+        # Run-volume plan item 15 (D16): with AI_COMMENT_SIGNING_SECRET set,
+        # later steps' comment reads see signed job-token comments as the
+        # PAT wrote them (scripts/comment_signature.py). No-op without it.
+        env:
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+        shell: bash
+        run: |
+          [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
+          source scripts/gh_helpers.sh
 
       - name: Dispatch internal-orchestrate.yml with multi-issue project
         id: dispatch
@@ -4705,6 +5019,8 @@ jobs:
           # and may drop the smoke marker, so the label is what lets the
           # scheduled poller (tracking_issue_is_smoke_fixture) keep this
           # fixture project's Telegram alerts silent.
+          DW_TIMEOUT_LOG="$(mktemp)"
+          DW_TIMEOUT_RC=0
           bash ./scripts/dispatch_and_watch_workflow_run.sh \
             --repo "${TEST_REPO}" \
             --workflow "${WF_FILE}" \
@@ -4715,7 +5031,42 @@ jobs:
             --completion-poll-interval-secs 20 \
             --status-log-prefix "orchestrate-bootstrap" \
             --field "project_description=${PROJECT_DESC}" \
-            --field "tracking_labels=e2e-smoke-test"
+            --field "tracking_labels=e2e-smoke-test" \
+            | tee "${DW_TIMEOUT_LOG}" || DW_TIMEOUT_RC=$?
+          # Dispatch-watch timeout: cancel the timed-out child run (#9532).
+          # Run 43590943288: three children stayed queued for hours with no runner,
+          # and the orphaned orchestrate child later created a tracking issue the
+          # cleanup could not see. Do not lengthen the watch timeouts as a fix.
+          # The step still fails with the watcher's exit code.
+          if [ "${DW_TIMEOUT_RC}" -ne 0 ]; then
+            DW_TIMEOUT_RUN_ID="$(sed -n 's/^::error::.* run #\([0-9][0-9]*\) timed out$/\1/p' "${DW_TIMEOUT_LOG}" | tail -n 1)"
+            if [[ "${DW_TIMEOUT_RUN_ID}" =~ ^[0-9]+$ ]]; then
+              DW_TIMEOUT_JOBS="$(timeout 20 gh api "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/jobs?per_page=100" 2>/dev/null | jq -r '(.jobs | arrays) as $j | "\($j | length) \([$j[] | select(.status == "queued" and ((.runner_name // "") == ""))] | length)"' 2>/dev/null || true)"
+              if ! [[ "${DW_TIMEOUT_JOBS}" =~ ^[0-9]+\ [0-9]+$ ]]; then
+                DW_TIMEOUT_JOBS="unknown unknown"
+              fi
+              echo "::warning::Timed-out child run #${DW_TIMEOUT_RUN_ID}: jobs=${DW_TIMEOUT_JOBS% *} queued_without_runner=${DW_TIMEOUT_JOBS#* }"
+              DW_TIMEOUT_CANCEL="$(printf '%s' "${DISPATCH_WATCH_CANCEL_ON_TIMEOUT:-true}" | tr '[:upper:]' '[:lower:]')"
+              # Repo boolean convention: unset, empty or true cancels; false skips;
+              # any other value also skips and warns without printing the value.
+              if [ "${DW_TIMEOUT_CANCEL}" != "true" ]; then
+                if [ "${DW_TIMEOUT_CANCEL}" != "false" ]; then
+                  echo "::warning::DISPATCH_WATCH_CANCEL_ON_TIMEOUT is neither true nor false; treating it as false"
+                  echo "Cancel of timed-out child run #${DW_TIMEOUT_RUN_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT unrecognised)"
+                else
+                  echo "Cancel of timed-out child run #${DW_TIMEOUT_RUN_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT=false)"
+                fi
+              elif timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/cancel" >/dev/null 2>&1; then
+                echo "Cancel requested for timed-out child run #${DW_TIMEOUT_RUN_ID}"
+              else
+                echo "::warning::Could not cancel timed-out child run #${DW_TIMEOUT_RUN_ID}"
+              fi
+            fi
+            rm -f "${DW_TIMEOUT_LOG}"
+            exit "${DW_TIMEOUT_RC}"
+          fi
+          rm -f "${DW_TIMEOUT_LOG}"
+          # End dispatch-watch timeout handling.
 
           # Locate the tracking issue (created by the orchestrator).
           # The orchestrator titles it `[Orchestrator] <project_title>`
@@ -4878,7 +5229,25 @@ jobs:
           TRACKING_NUMBER: ${{ steps.dispatch.outputs.tracking_issue }}
           CHILDREN: ${{ steps.dispatch.outputs.child_issues }}
           RUN_ID: ${{ github.run_id }}
+          DISPATCHED_RUN_ID: ${{ steps.dispatch.outputs.dispatched_run_id }}
         run: |
+          # Phase 0: a bootstrap still queued when the watcher timed out would
+          # create the project after this cleanup (gates 43445515854,
+          # 43590943288, 43708007145). Cancel it, then pick up a tracking issue
+          # it already created. The poller's smoke-fixture backstop
+          # (scripts/orchestrate_poll_smoke_fixture_reap.sh) covers what this
+          # misses, including a job killed before this step runs.
+          if [ -f ./scripts/stable_orchestrate_cancel_dispatched_run.sh ]; then
+            SMOKE_CANCEL_OUT="$(bash ./scripts/stable_orchestrate_cancel_dispatched_run.sh || true)"
+            SMOKE_TRACKING_FOUND="$(printf '%s\n' "${SMOKE_CANCEL_OUT}" | sed -n 's/^tracking_issue=//p' | tail -n 1)"
+            if [ -z "${TRACKING_NUMBER}" ] && [[ "${SMOKE_TRACKING_FOUND}" =~ ^[1-9][0-9]*$ ]]; then
+              TRACKING_NUMBER="${SMOKE_TRACKING_FOUND}"
+              SMOKE_CHILDREN_FOUND="$(printf '%s\n' "${SMOKE_CANCEL_OUT}" | sed -n 's/^child_issues=//p' | tail -n 1)"
+              if [[ "${SMOKE_CHILDREN_FOUND}" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]]; then
+                CHILDREN="${CHILDREN:+${CHILDREN},}${SMOKE_CHILDREN_FOUND}"
+              fi
+            fi
+          fi
           # Defence in depth: never abort cleanup on a single failed close.
           # The orchestrator can leave behind issues even when the
           # decompose dispatch fails part-way (children created but
@@ -4985,7 +5354,12 @@ jobs:
     timeout-minutes: 45
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+      AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
+      # Operator switch for the #9532 timeout cancel in this job's dispatch steps;
+      # set the repo variable to false to skip the cancel (the shell default stays true).
+      DISPATCH_WATCH_CANCEL_ON_TIMEOUT: ${{ vars.DISPATCH_WATCH_CANCEL_ON_TIMEOUT || 'true' }}
     steps:
       - name: Validate prerequisites
         run: |
@@ -5003,6 +5377,17 @@ jobs:
           ref: main
           fetch-depth: 1
 
+      - name: Activate signed job-token comments
+        # Run-volume plan item 15 (D16): with AI_COMMENT_SIGNING_SECRET set,
+        # later steps' comment reads see signed job-token comments as the
+        # PAT wrote them (scripts/comment_signature.py). No-op without it.
+        env:
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+        shell: bash
+        run: |
+          [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
+          source scripts/gh_helpers.sh
+
       - name: Dispatch internal-validate.yml standalone
         id: dispatch
         # 1800s watcher wait + one 20s poll + gh retry backoff headroom.
@@ -5018,6 +5403,8 @@ jobs:
           # single pass/fail Telegram message, so the dispatched validate
           # run must not send its own per-phase alerts (same contract as
           # the workflow-log-analysis and orphan-workflows dispatches).
+          DW_TIMEOUT_LOG="$(mktemp)"
+          DW_TIMEOUT_RC=0
           bash ./scripts/dispatch_and_watch_workflow_run.sh \
             --repo "${TEST_REPO}" \
             --workflow "${WF_FILE}" \
@@ -5030,7 +5417,42 @@ jobs:
             --field tracking_issue=0 \
             --field compose_file=docker-compose.yml \
             --field validation_timeout=10 \
-            --field alert_msg_level=SILENT
+            --field alert_msg_level=SILENT \
+            | tee "${DW_TIMEOUT_LOG}" || DW_TIMEOUT_RC=$?
+          # Dispatch-watch timeout: cancel the timed-out child run (#9532).
+          # Run 43590943288: three children stayed queued for hours with no runner,
+          # and the orphaned orchestrate child later created a tracking issue the
+          # cleanup could not see. Do not lengthen the watch timeouts as a fix.
+          # The step still fails with the watcher's exit code.
+          if [ "${DW_TIMEOUT_RC}" -ne 0 ]; then
+            DW_TIMEOUT_RUN_ID="$(sed -n 's/^::error::.* run #\([0-9][0-9]*\) timed out$/\1/p' "${DW_TIMEOUT_LOG}" | tail -n 1)"
+            if [[ "${DW_TIMEOUT_RUN_ID}" =~ ^[0-9]+$ ]]; then
+              DW_TIMEOUT_JOBS="$(timeout 20 gh api "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/jobs?per_page=100" 2>/dev/null | jq -r '(.jobs | arrays) as $j | "\($j | length) \([$j[] | select(.status == "queued" and ((.runner_name // "") == ""))] | length)"' 2>/dev/null || true)"
+              if ! [[ "${DW_TIMEOUT_JOBS}" =~ ^[0-9]+\ [0-9]+$ ]]; then
+                DW_TIMEOUT_JOBS="unknown unknown"
+              fi
+              echo "::warning::Timed-out child run #${DW_TIMEOUT_RUN_ID}: jobs=${DW_TIMEOUT_JOBS% *} queued_without_runner=${DW_TIMEOUT_JOBS#* }"
+              DW_TIMEOUT_CANCEL="$(printf '%s' "${DISPATCH_WATCH_CANCEL_ON_TIMEOUT:-true}" | tr '[:upper:]' '[:lower:]')"
+              # Repo boolean convention: unset, empty or true cancels; false skips;
+              # any other value also skips and warns without printing the value.
+              if [ "${DW_TIMEOUT_CANCEL}" != "true" ]; then
+                if [ "${DW_TIMEOUT_CANCEL}" != "false" ]; then
+                  echo "::warning::DISPATCH_WATCH_CANCEL_ON_TIMEOUT is neither true nor false; treating it as false"
+                  echo "Cancel of timed-out child run #${DW_TIMEOUT_RUN_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT unrecognised)"
+                else
+                  echo "Cancel of timed-out child run #${DW_TIMEOUT_RUN_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT=false)"
+                fi
+              elif timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/cancel" >/dev/null 2>&1; then
+                echo "Cancel requested for timed-out child run #${DW_TIMEOUT_RUN_ID}"
+              else
+                echo "::warning::Could not cancel timed-out child run #${DW_TIMEOUT_RUN_ID}"
+              fi
+            fi
+            rm -f "${DW_TIMEOUT_LOG}"
+            exit "${DW_TIMEOUT_RC}"
+          fi
+          rm -f "${DW_TIMEOUT_LOG}"
+          # End dispatch-watch timeout handling.
 
       - name: "Soft-error analyser (validate-standalone)"
         if: always() && steps.dispatch.outputs.run_id != ''
@@ -5058,6 +5480,8 @@ jobs:
     timeout-minutes: 30
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+      AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
     steps:
       - name: Validate prerequisites
@@ -5075,6 +5499,17 @@ jobs:
         with:
           ref: main
           fetch-depth: 1
+
+      - name: Activate signed job-token comments
+        # Run-volume plan item 15 (D16): with AI_COMMENT_SIGNING_SECRET set,
+        # later steps' comment reads see signed job-token comments as the
+        # PAT wrote them (scripts/comment_signature.py). No-op without it.
+        env:
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+        shell: bash
+        run: |
+          [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
+          source scripts/gh_helpers.sh
 
       - name: Create unsolvable issue
         id: create
@@ -5280,6 +5715,8 @@ jobs:
     timeout-minutes: 90
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+      AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
       # Override propagated to the implement run via the issue body's
       # "Note: this run uses `<provider>/<model>` …" line, which the
@@ -5320,6 +5757,17 @@ jobs:
         with:
           ref: main
           fetch-depth: 1
+
+      - name: Activate signed job-token comments
+        # Run-volume plan item 15 (D16): with AI_COMMENT_SIGNING_SECRET set,
+        # later steps' comment reads see signed job-token comments as the
+        # PAT wrote them (scripts/comment_signature.py). No-op without it.
+        env:
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+        shell: bash
+        run: |
+          [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
+          source scripts/gh_helpers.sh
 
       - name: Validate prerequisites
         run: |
@@ -6011,6 +6459,8 @@ jobs:
       - name: Require CI / lint success on the tested commit
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           GATE_REPO: ${{ github.repository }}
           RELEASE_CI_GATE_WAIT_SECS: ${{ vars.RELEASE_CI_GATE_WAIT_SECS || '1800' }}
           RELEASE_CI_GATE_POLL_SECS: ${{ vars.RELEASE_CI_GATE_POLL_SECS || '30' }}
@@ -6357,6 +6807,8 @@ jobs:
         if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
         run: |
           set -euo pipefail
@@ -6422,6 +6874,8 @@ jobs:
         if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.resolve-version.outputs.version }}
           SYNC_MANIFEST_PATH: ${{ steps.sync_manifest.outputs.path }}
         run: |
@@ -6565,6 +7019,8 @@ jobs:
       - name: Dispatch forward-merge-stable-to-main
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           # --repo "${GITHUB_REPOSITORY}" is required: this job has no
@@ -6814,6 +7270,8 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           CHAT_ID="${TG_CHAT_ID:-}"

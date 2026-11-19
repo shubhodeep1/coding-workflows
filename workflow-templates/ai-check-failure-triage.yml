@@ -13,9 +13,15 @@ on:
   # GitHub Actions CI (see the triage-workflow-run job). The wildcard listens
   # to every workflow; the job skips the pipeline's own workflow paths and
   # anything that is not a failed pull-request run.
+  # Only `pull_request` runs are triaged (see triage-workflow-run below), and
+  # those run on the PR's head branch. Crons, issue/comment wrappers and push
+  # runs run on the default branch, so ignoring it here stops each of those
+  # from creating a skipped triage run (about half of a consumer's runs). A PR
+  # whose head branch is itself named main or master is not triaged.
   workflow_run:
     workflows: ["*"]
     types: [completed]
+    branches-ignore: [main, master]
 permissions:
   contents: read
   issues: write

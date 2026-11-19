@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The poller queues one follow-up run of itself after a tick that moved a project forward (Q99).
 
-GitHub runs internal-orchestrate-poll.yml's */5 cron every 25-60 minutes, so
+GitHub ran internal-orchestrate-poll.yml's */5 cron (now */15) every 25-60 minutes, so
 a project that could take its next step right away waited for the next cron
 run. scripts/orchestrate_poll_process.sh now records each tracking issue
 whose persisted progress fields changed in this tick

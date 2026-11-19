@@ -37,6 +37,12 @@
 #                                                           stable); cannot fast-forward,
 #                                                           so no cycle
 #   PROMOTE_CYCLE_SKIPPED reason=insufficient_docs          fewer than PROMOTE_CYCLE_MIN_DOCS docs
+#   PROMOTE_CYCLE_SKIPPED reason=scan_capped_behind_markers available=<n> required=<m>
+#                                                           the dispatcher's doc scan was
+#                                                           capped behind dispatch markers
+#                                                           with fewer than
+#                                                           PROMOTE_CYCLE_MIN_DOCS docs
+#                                                           (also a ::warning::)
 #   PROMOTE_CYCLE_SKIPPED reason=guard_unavailable          an API guard failed; fail closed
 #   PROMOTE_CYCLE_SKIPPED reason=gate_busy                  another test-and-mark-stable run (a
 #                                                           stable release, any branch) stayed
@@ -795,9 +801,24 @@ if [ "${failed_attempts_on_tip}" -gt 0 ]; then
 fi
 
 # 6. Enough analysis docs for a proving AND a verifying run.
-candidate_count="$(APPLY_ANALYSIS_LIST_ONLY=true GITHUB_OUTPUT="" bash "${APPLY_ANALYSIS_DISPATCHER}" | sed -n 's/^APPLY_ANALYSIS_CANDIDATES count=\([0-9]*\).*/\1/p')"
-[[ "${candidate_count}" =~ ^[0-9]+$ ]] || candidate_count=0
+#    PROMOTE_CYCLE_MIN_DOCS is forwarded so the dispatcher's bounded scan
+#    (plan P6 step 3) prints at least that many docs when they exist. A line
+#    ending in ` capped_behind_markers=true` means the scan stopped behind
+#    dispatch markers before it examined every doc.
+candidates_line="$(PROMOTE_CYCLE_MIN_DOCS="${PROMOTE_CYCLE_MIN_DOCS}" APPLY_ANALYSIS_LIST_ONLY=true GITHUB_OUTPUT="" bash "${APPLY_ANALYSIS_DISPATCHER}" | sed -n '/^APPLY_ANALYSIS_CANDIDATES /p' | tail -n 1)"
+candidate_count=0
+if [[ "${candidates_line}" =~ ^APPLY_ANALYSIS_CANDIDATES\ count=([0-9]+) ]]; then
+	candidate_count="${BASH_REMATCH[1]}"
+fi
+candidates_capped=false
+if [[ "${candidates_line}" == *" capped_behind_markers=true" ]]; then
+	candidates_capped=true
+fi
 if [ "${candidate_count}" -lt "${PROMOTE_CYCLE_MIN_DOCS}" ]; then
+	if [ "${candidates_capped}" = "true" ]; then
+		echo "::warning::PROMOTE_CYCLE_SKIPPED reason=scan_capped_behind_markers available=${candidate_count} required=${PROMOTE_CYCLE_MIN_DOCS}"
+		skip_cycle scan_capped_behind_markers "available=${candidate_count} required=${PROMOTE_CYCLE_MIN_DOCS}"
+	fi
 	skip_cycle insufficient_docs "available=${candidate_count} required=${PROMOTE_CYCLE_MIN_DOCS}"
 fi
 

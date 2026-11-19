@@ -120,9 +120,26 @@ def test_workflow_run_dedup_reuses_open_issue_per_pr_and_workflow() -> None:
 	assert 'log "skip reason=duplicate_open_issue' in script
 
 
+def test_consumer_wrapper_ignores_default_branch_runs_it_never_triages() -> None:
+	"""Default-branch runs (crons, comment wrappers, pushes) must not start a run.
+
+	The workflow_run job triages only `pull_request` runs, which run on the PR
+	head branch, so the trigger drops the default branch at the event filter
+	instead of creating one skipped triage run per consumer run.
+	"""
+	data = _load(CONSUMER)
+	trigger = _on(data)["workflow_run"]
+	assert trigger.get("branches-ignore") == ["main", "master"], trigger
+	assert "branches" not in trigger, trigger
+	condition = data["jobs"]["triage-workflow-run"]["if"]
+	assert "github.event.workflow_run.event == 'pull_request'" in condition
+	assert not _evaluate(condition, "workflow_run", _run_event("Tests", event="schedule"))
+	assert not _evaluate(condition, "workflow_run", _run_event("Tests", event="push"))
+
+
 def test_consumer_wrapper_listens_to_every_workflow_but_its_own() -> None:
 	data = _load(CONSUMER)
-	assert _on(data)["workflow_run"] == {"workflows": ["*"], "types": ["completed"]}
+	assert _on(data)["workflow_run"] == {"workflows": ["*"], "types": ["completed"], "branches-ignore": ["main", "master"]}
 	condition = data["jobs"]["triage-workflow-run"]["if"]
 	assert _evaluate(condition, "workflow_run", _run_event("Tests"))
 	assert _evaluate(condition, "workflow_run", _run_event("AI Integration Tests"))
@@ -160,12 +177,17 @@ def test_heal_intake_takes_ci_only_for_pushes_to_the_default_branch() -> None:
 
 
 def test_ci_runs_on_orchestrator_integration_prs_and_pushes() -> None:
-	"""Q45 / issue #7283: pull-request CI runs for every base, so sub-issue
-	PRs into `orchestrator/project-*` and fix PRs routed to a failing PR's
-	head branch get CI before they merge. Pushes to main, stable and the
-	integration branches give triage's base gate a result."""
+	"""Q45 / issue #7283: every PR, for every base, gets CI before it merges,
+	so sub-issue PRs into `orchestrator/project-*` and fix PRs routed to a
+	failing PR's head branch are covered. Since cut-ci-runner-time Phase 4
+	that is `CI quick` (ci_pr_quick.yml, every base) on each push plus one
+	full ci.yml run per reviewed head (workflow_dispatch). Pushes to main,
+	stable and the integration branches give triage's base gate a result."""
 	on = _on(_load(CI))
-	assert on["pull_request"]["branches"] == ["**"], on["pull_request"]
+	assert "pull_request" not in on, on
+	assert "workflow_dispatch" in on, on
+	quick_on = _on(_load(CI.parent / "ci_pr_quick.yml"))
+	assert quick_on["pull_request"]["branches"] == ["**"], quick_on["pull_request"]
 	assert on["push"]["branches"] == ["main", "stable", "orchestrator/project-*"], on["push"]
 	# The base gate reads the newest completed CI push run on the PR's base.
 	script = TRIAGE_SCRIPT.read_text(encoding="utf-8")

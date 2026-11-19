@@ -47,6 +47,17 @@ jobs:
     # success on non-orchestrator branches, which keeps the trust
     # boundary out of workflow expressions and avoids actionlint's
     # untrusted-inline-script warning path.
+    #
+    # A label change re-runs the check only for the override label, the one
+    # label the script reads (run-volume plan item 10). Any other label is
+    # added or removed on the same head SHA, so the status already posted for
+    # that SHA still stands, and the job is skipped without taking a runner.
+    # Tracking-issue checkbox changes do not reach this workflow at all: the
+    # orchestrator poller refreshes the status itself
+    # (TRACKING_BODY_READINESS_REFRESH in scripts/orchestrate_poll_process.sh).
+    if: >-
+      ${{ (github.event.action != 'labeled' && github.event.action != 'unlabeled')
+      || github.event.label.name == 'ai:override-incomplete-merge' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5

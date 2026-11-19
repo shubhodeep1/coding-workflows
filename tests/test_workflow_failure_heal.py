@@ -1963,6 +1963,17 @@ if args[:1] == ["api"]:
 			fail("HTTP 500")
 		names = state.get("labeled_events", {}).get(path, [])
 		out("".join(name + "\n" for name in names))
+	if "/issues/comments/" in path and path.split("/")[-1].isdigit() and method == "DELETE":
+		state.setdefault("comments_deleted", []).append(path)
+		if state.get("comment_delete_fail"):
+			fail("HTTP 500")
+		out("")
+	if "/issues/comments/" in path and path.split("/")[-1].isdigit() and method == "PATCH":
+		body_arg = rest[rest.index("-F") + 1]
+		state.setdefault("comments_edited", []).append({"path": path, "body": Path(body_arg[len("body=@"):]).read_text()})
+		if state.get("comment_edit_fail"):
+			fail("HTTP 500")
+		out("{}")
 	if path.startswith("repos/") and "/issues/" in path and path.endswith("/comments") and "-F" in rest:
 		body_arg = rest[rest.index("-F") + 1]
 		if body_arg.startswith("body=@"):
@@ -4480,6 +4491,42 @@ def test_gate_stops_a_head_with_three_identical_failure_markers() -> None:
 		assert sum(1 for call in state["calls"] if "user" in call) == 1
 
 
+def test_gate_stops_a_head_after_two_identical_reviewers_failed_markers() -> None:
+	# Issue #9533: a reviewer-stage crash that repeats with one fingerprint on
+	# one head is deterministic; the cap trips at 2 for that reason only.
+	fp = _cap_fp("reviewers_failed")
+	two = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), reason="reviewers_failed") for run in (101, 102)]
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-reviewers-") as tmp_name:
+		result, outputs, _state = _run_gate(Path(tmp_name), comments=two)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"AUTOFIX_FINGERPRINT_CAP_TRIPPED pr=4259 head={SHA_A} fp={fp} reason=reviewers_failed count=2 max=2 already_applied=false" in result.stdout
+		assert outputs["should_run"] == "false" and outputs["skip_reason"] == "fingerprint_cap"
+		assert outputs["fingerprint_cap"] == "true" and outputs["fingerprint_cap_max"] == "2"
+	# One failure still retries.
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-reviewers-one-") as tmp_name:
+		result, outputs, _state = _run_gate(Path(tmp_name), comments=two[:1])
+		assert outputs["fingerprint_cap"] == "false" and outputs["should_run"] == "true", result.stdout
+		assert f"AUTOFIX_FINGERPRINT cap=not_tripped pr=4259 head={SHA_A} fp={fp} reason=reviewers_failed count=1 max=2" in result.stdout
+	# A different fingerprint or another head resets the count.
+	other_fp = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run="101", reason="reviewers_failed", fp="e" * 64), two[1]]
+	other_head = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run="101", reason="reviewers_failed", head="f" * 40), two[1]]
+	for name, comments in (("fp", other_fp), ("head", other_head)):
+		with tempfile.TemporaryDirectory(prefix=f"heal-gate-cap-reviewers-{name}-") as tmp_name:
+			result, outputs, _state = _run_gate(Path(tmp_name), comments=comments)
+			assert outputs["fingerprint_cap"] == "false" and outputs["should_run"] == "true", (name, result.stdout)
+	# Other reasons keep the global threshold of 3; the reason-scoped value is configurable.
+	editor_two = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run)) for run in (101, 102)]
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-editor-two-") as tmp_name:
+		_result, outputs, _state = _run_gate(Path(tmp_name), comments=editor_two)
+		assert outputs["fingerprint_cap"] == "false" and outputs["fingerprint_cap_max"] == "3"
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-reviewers-max3-") as tmp_name:
+		_result, outputs, _state = _run_gate(Path(tmp_name), comments=two, extra_env={"REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED": "3"})
+		assert outputs["fingerprint_cap"] == "false" and outputs["fingerprint_cap_max"] == "3"
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-reviewers-bad-") as tmp_name:
+		_result, outputs, _state = _run_gate(Path(tmp_name), comments=two, extra_env={"REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED": "x"})
+		assert outputs["fingerprint_cap"] == "true" and outputs["fingerprint_cap_max"] == "2"
+
+
 def test_gate_cap_already_applied_threshold_bypass_and_fail_open() -> None:
 	fp = _cap_fp()
 	three = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run)) for run in (101, 102, 103)]
@@ -5717,6 +5764,77 @@ def test_failure_headline_names_the_first_specific_error() -> None:
 	assert headline == "Conflict resolver edited files outside the conflicted set: workflow-templates/CLAUDE.md"
 	assert heal.failure_headline(["no errors here\n", "##[error]Process completed with exit code 2."]) == ""
 	assert heal.failure_headline([]) == ""
+
+
+RENDER_PROMPT_CRASH = "/home/runner/work/_temp/support/scripts/render_prompt.sh: line 306: 1abc: invalid variable name\n"
+
+
+def test_failure_headline_falls_back_to_a_bash_diagnostic_line() -> None:
+	# Issue #9533: the reviewer step crashed in its own shell and printed no
+	# ::error:: line; the headline names the crash, directory stripped.
+	assert heal.failure_headline(["starting\n", RENDER_PROMPT_CRASH]) == "render_prompt.sh: line 306: 1abc: invalid variable name"
+	assert heal.failure_headline(["ERROR: reviewer prompt missing\n"]) == "reviewer prompt missing"
+	# A specific ::error:: line anywhere still wins over the fallback.
+	assert heal.failure_headline([RENDER_PROMPT_CRASH, "::error::Reviewer slot crashed\n"]) == "Reviewer slot crashed"
+	# Review text that only looks like a location is not a diagnostic.
+	assert heal.failure_headline(["src/app.py: line 12: consider renaming\n"]) == ""
+
+
+def test_reviewer_failure_evidence_keeps_the_bash_diagnostic_line() -> None:
+	evidence = heal.reviewer_failure_evidence([], [RENDER_PROMPT_CRASH, "  | other/path/render_prompt.sh: line 307: 2abc: invalid variable name\n"])
+	assert evidence.splitlines() == ["reviewers_failed=true", "render_prompt.sh: line 306: 1abc: invalid variable name"]
+	assert heal.failure_headline([evidence]) == "render_prompt.sh: line 306: 1abc: invalid variable name"
+	assert "line 12" not in heal.reviewer_failure_evidence(["review.sh: line 12: looks fine\n"])
+	# Spec item 3: the first plain `ERROR:` line of the step's own stderr also
+	# reaches the evidence the headline reads; later ones are dropped and
+	# secrets are redacted.
+	plain = heal.reviewer_failure_evidence([], ["starting\n", "ERROR: reviewer prompt missing\n", "ERROR: second failure\n"])
+	assert plain.splitlines() == ["reviewers_failed=true", "ERROR: reviewer prompt missing"]
+	assert heal.failure_headline([plain]) == "reviewer prompt missing"
+	assert "ghp_secret" not in heal.reviewer_failure_evidence([], ["ERROR: token ghp_secretvalue123 rejected\n"])
+	# A slot log's ERROR line (model-CLI stderr or review prose) is never kept,
+	# so it can neither name the failure nor feed the fingerprint; the stage
+	# stderr's bash diagnostic still names the crash.
+	slot_noise = "  | ERROR 2026-11-16 request abcxyz rejected\nERROR: missing regression test for X\n"
+	assert heal.reviewer_failure_evidence([slot_noise]) == "reviewers_failed=true\n"
+	mixed = heal.reviewer_failure_evidence([slot_noise], ["starting\n", RENDER_PROMPT_CRASH])
+	assert mixed.splitlines() == ["reviewers_failed=true", "render_prompt.sh: line 306: 1abc: invalid variable name"]
+	assert heal.failure_headline([mixed]) == "render_prompt.sh: line 306: 1abc: invalid variable name"
+	# A diagnostic-shaped slot-log line (raw model-CLI stderr) is never kept.
+	assert heal.reviewer_failure_evidence(["bash: line 3: foo: command not found\n", RENDER_PROMPT_CRASH]) == "reviewers_failed=true\n"
+	# review_run_reviewers.sh re-emits the model CLI's stderr tail to the
+	# step's stderr indented `  | `: neither its ERROR line nor its diagnostic
+	# is kept, so the crash line still names the failure.
+	indented = heal.reviewer_failure_evidence([], [
+		"  | ERROR 2026-11-16 request abcxyz rejected\n",
+		"  | bash: line 3: foo: command not found\n",
+		RENDER_PROMPT_CRASH,
+	])
+	assert indented.splitlines() == ["reviewers_failed=true", "render_prompt.sh: line 306: 1abc: invalid variable name"]
+	# A kept bash diagnostic is redacted like the plain ERROR line.
+	assert "ghp_secret" not in heal.reviewer_failure_evidence([], ["deploy.sh: line 12: invalid token ghp_secretvalue123\n"])
+
+
+def test_reviewer_crash_fingerprint_carries_the_bash_diagnostic() -> None:
+	# Issue #9533 (spec item 3): the fingerprint names the cause, so two
+	# different shell crashes do not collapse to one "no-error-lines" fp and
+	# trip the 2-strike reviewers_failed cap together.
+	crash = heal.reviewer_failure_evidence([], [RENDER_PROMPT_CRASH])
+	other = heal.reviewer_failure_evidence([], ["/x/scripts/review_run_reviewers.sh: line 88: SLOT_ID: unbound variable\n"])
+	assert heal.error_signature(crash) != "no-error-lines"
+	fp_crash = heal.autofix_failure_fingerprint(failure_reason="reviewers_failed", evidence_text=crash)["fp"]
+	fp_other = heal.autofix_failure_fingerprint(failure_reason="reviewers_failed", evidence_text=other)["fp"]
+	assert fp_crash != fp_other
+	# The same crash under another runner path keeps one fingerprint.
+	moved = heal.reviewer_failure_evidence([], [RENDER_PROMPT_CRASH.replace("/home/runner/work/_temp/support", "/opt/elsewhere")])
+	assert heal.autofix_failure_fingerprint(failure_reason="reviewers_failed", evidence_text=moved)["fp"] == fp_crash
+	# Review text shaped like a location is not a crash and stays out.
+	assert heal.error_signature("src/review.sh: line 12: looks fine\n") == "no-error-lines"
+	# A diagnostic whose message only says "errors" / "fail" still names itself.
+	assert heal.error_signature("x.sh: line 3: network errors detected\n") != "no-error-lines"
+	assert heal.error_signature("x.sh: line 5: upload failing\n") != "no-error-lines"
+	# An earlier bucket still wins, so existing signatures keep their value.
+	assert heal.error_signature("::error::boom\n" + RENDER_PROMPT_CRASH) == heal.error_signature("::error::boom\n")
 
 
 def test_failure_headline_redacts_credentials_and_stays_one_line() -> None:
@@ -8483,7 +8601,9 @@ def _run_recovery(heal_issues: list[dict], *, extra_env: dict | None = None, com
 
 
 def _recovery_calls(state: dict, fragment: str) -> list:
-	return [call for call in state.get("calls", []) if any(fragment in part for part in call)]
+	# The occurrence counter's own comments read (_heal_record_occurrence,
+	# projection `{id, author: (.user.login ...`) is not a recovery call.
+	return [call for call in state.get("calls", []) if any(fragment in part for part in call) and not any("{id, author: (.user.login" in part for part in call)]
 
 
 def test_heal_scope_recovery_check_statuses() -> None:
@@ -8736,6 +8856,22 @@ def test_heal_scope_recovery_no_replacement_records_occurrence() -> None:
 	assert "issues_created" not in state and "issues_closed" not in state
 	occurrence = [c for c in state["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/31/comments"]
 	assert occurrence and f"{heal.MARKER_PREFIX}occurrence" in occurrence[-1]["body"]
+
+
+def test_heal_scope_recovery_no_replacement_counter_reads_comments_afresh() -> None:
+	# The recovery comments read predates the diagnosis and carries no
+	# `created_at`; the counter merge reads the comments again, so the first
+	# counter starts at the legacy count plus one with `first=` the oldest.
+	diagnosis = "## Classification\ntransient\n\n## Summary\nA registry timeout.\n"
+	path = f"repos/{SELF_REPO}/issues/31/comments"
+	legacy = [dict(_occ_comment(5, _occ_report(5, 100)), created_at="2026-01-05T00:00:00Z"), dict(_occ_comment(6, _occ_report(5, 101)), created_at="2026-01-02T00:00:00Z")]
+	result, state, _ = _run_recovery([_markerless_heal_issue()], diagnosis=diagnosis, comments={path: legacy})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "heal_scope_recovery outcome=no_replacement reason=classification_transient issue=31" in result.stdout
+	counter = heal.parse_occurrence_counter([c for c in state["comments_posted"] if c["path"] == path][-1]["body"])
+	assert counter is not None and counter["count"] == 3 and counter["first"] == "2026-01-02T00:00:00Z"
+	assert [call for call in state["calls"] if any("{id, author: (.user.login" in part for part in call)]
+	assert "heal_scope_recovery_comments.json" not in INTAKE_SCRIPT.read_text(encoding="utf-8").split("A scan replay is not a new occurrence", 1)[1].split("RECOVERY_OCCURRENCE_STATE=\"posted\"", 1)[0]
 
 
 def test_heal_scope_recovery_wiring_is_default_on() -> None:
@@ -10526,8 +10662,20 @@ def test_heal_stale_keeps_with_too_few_or_failed_runs() -> None:
 	runs = _stale_runs(6)
 	runs["workflow_runs"][2]["conclusion"] = "failure"
 	assert _stale_decide(runs=runs)["reason"] == "run_not_green"
+	# A cancelled run (a push replaced while it waited, run-volume plan D14)
+	# counts neither way: the other five green runs close the issue.
 	runs["workflow_runs"][2]["conclusion"] = "cancelled"
-	assert _stale_decide(runs=runs)["decision"] == "keep"
+	result = _stale_decide(runs=runs)
+	assert result["decision"] == "close" and result["green_runs"] == 5
+	assert result["first_green"]["id"] == 4000 and result["newest_green"]["id"] == 4005
+	# ...but it does not stand in for a green run either.
+	runs = _stale_runs(5)
+	runs["workflow_runs"][4]["conclusion"] = "cancelled"
+	result = _stale_decide(runs=runs)
+	assert result["reason"] == "too_few_green_runs" and result["green_runs"] == 4
+	# A failure beside a cancelled run still keeps the issue.
+	runs["workflow_runs"][1]["conclusion"] = "failure"
+	assert _stale_decide(runs=runs)["reason"] == "run_not_green"
 	# Runs at or before the anchor, other branches and other events do not count.
 	old = _stale_runs(5)
 	old["workflow_runs"][0]["created_at"] = "2025-12-31T00:00:00Z"
@@ -13259,3 +13407,282 @@ def test_code_ref_switch_defaults_and_workflow_wiring() -> None:
 	assert workflow.count(CODE_REF_ENV_LINE) == 2
 	assert intake_job.split("\n  intake:\n", 1)[1].count(CODE_REF_ENV_LINE) == 1
 	assert scan_job.split("\n  heal-verify:\n", 1)[0].count(CODE_REF_ENV_LINE) == 1
+
+
+# ---------------------------------------------------------------------------
+# Occurrence counter comment (edited in place), heal-of-heal dedupe, fixtures
+# ---------------------------------------------------------------------------
+
+_OCC_LOGIN = "workflow-bot"
+_OCC_MARKER = "<!-- workflow-failure-heal:occurrence -->"
+
+
+def _occ_report(source: int, run: int, head: str = SHA_A) -> str:
+	return (
+		f"{_OCC_MARKER}\nAnother occurrence of this failure was reported:\n\n"
+		f"- **Source pull request:** https://github.com/{CONSUMER_REPO}/pull/{source} ({CONSUMER_REPO}#{source})\n"
+		f"- **Head SHA:** `{head}`\n"
+		f"- **Failed run:** https://github.com/{CONSUMER_REPO}/actions/runs/{run}\n"
+	)
+
+
+def _occ_comment(comment_id: int, body: str, login: str = _OCC_LOGIN) -> dict:
+	return {"id": comment_id, "body": body, "user": {"login": login}, "created_at": "2026-01-02T00:00:00Z"}
+
+
+def test_merge_occurrence_comment_counts_and_keeps_the_newest_reports() -> None:
+	t0 = datetime(2026, 11, 18, 10, 0, 0, tzinfo=timezone.utc)
+	# First counter on an issue: two legacy comments already there count; a
+	# stranger's marker comment and a non-occurrence comment do not.
+	legacy = [_occ_comment(1, _occ_report(5, 100)), _occ_comment(2, _occ_report(5, 101)), _occ_comment(3, _occ_report(5, 102), login="mallory"), _occ_comment(4, "plain note")]
+	first = heal.merge_occurrence_comment(legacy, _occ_report(6, 200), trusted_login=_OCC_LOGIN, now=t0)
+	assert first["comment_id"] is None and first["count"] == 3
+	assert first["body"].startswith(_OCC_MARKER + "\n<!-- workflow-failure-heal:occurrence-count:v1 count=3 first=2026-01-02T00:00:00Z last=2026-11-18T10:00:00Z -->\n")
+	assert "reported again **3** times" in first["body"] and "actions/runs/200" in first["body"]
+	parsed = heal.parse_occurrence_counter(first["body"])
+	assert parsed["count"] == 3 and [entry["n"] for entry in parsed["entries"]] == [3]
+	# Later repeats edit that comment: the count grows, `first=` stays,
+	# `last=` moves, and only the newest entries are kept, newest first.
+	body, comments = first["body"], legacy + [_occ_comment(9, first["body"])]
+	for step in range(1, 15):
+		merged = heal.merge_occurrence_comment(comments, _occ_report(6, 200 + step), trusted_login=_OCC_LOGIN, now=t0 + timedelta(hours=step))
+		assert merged["comment_id"] == 9 and merged["count"] == 3 + step and merged["newer_comments"] == 0
+		body = merged["body"]
+		comments[-1] = _occ_comment(9, body)
+	parsed = heal.parse_occurrence_counter(body)
+	# `first=` is the oldest legacy occurrence comment (Jan 2), not the first merge.
+	assert parsed["count"] == 17 and parsed["first"] == "2026-01-02T00:00:00Z" and parsed["last"] == "2026-11-19T00:00:00Z"
+	assert [entry["n"] for entry in parsed["entries"]] == list(range(17, 7, -1)) and heal.OCCURRENCE_KEEP_ENTRIES == 10
+	assert "actions/runs/214" in body and "actions/runs/204" not in body
+	assert heal.occurrence_last_reported(body) == t0 + timedelta(hours=14)
+	# Comments of any author after the counter are counted for the re-post rule.
+	buried = comments + [_occ_comment(100 + index, "note", login="someone") for index in range(4)]
+	assert heal.merge_occurrence_comment(buried, _occ_report(6, 300), trusted_login=_OCC_LOGIN, now=t0)["newer_comments"] == 4
+	assert heal.occurrence_last_reported(_occ_report(5, 1)) is None and heal.parse_occurrence_counter("x") is None
+	# A counter written by someone else is never the edit target.
+	foreign = heal.merge_occurrence_comment([_occ_comment(9, body, login="mallory")], _occ_report(6, 300), trusted_login=_OCC_LOGIN, now=t0)
+	assert foreign["comment_id"] is None and foreign["count"] == 1
+	with pytest.raises(ValueError):
+		heal.merge_occurrence_comment([], "not an occurrence", trusted_login=_OCC_LOGIN)
+
+
+def test_merge_occurrence_comment_stays_under_the_comment_size_limit() -> None:
+	t0 = datetime(2026, 11, 18, tzinfo=timezone.utc)
+	comments: list = []
+	for step in range(4):
+		big = _occ_report(7, 400 + step) + "\n" + ("x" * 30000)
+		merged = heal.merge_occurrence_comment(comments, big, trusted_login=_OCC_LOGIN, now=t0 + timedelta(minutes=step))
+		comments = [_occ_comment(11, merged["body"])]
+		assert len(merged["body"]) <= heal.OCCURRENCE_COMMENT_MAX_CHARS
+	parsed = heal.parse_occurrence_counter(merged["body"])
+	assert parsed["count"] == 4 and [entry["n"] for entry in parsed["entries"]] == [4]
+	huge = heal.merge_occurrence_comment([], _occ_report(7, 500) + "y" * 100000, trusted_login=_OCC_LOGIN, now=t0)
+	assert len(huge["body"]) <= heal.OCCURRENCE_COMMENT_MAX_CHARS and "report shortened to fit one comment" in huge["body"]
+	assert heal.parse_occurrence_counter(huge["body"])["count"] == 1
+
+
+def test_recovery_occurrence_runs_reads_counter_entries_without_mixing_them() -> None:
+	t0 = datetime(2026, 11, 18, tzinfo=timezone.utc)
+	# Entry 1: PR 5 at SHA_A with run 100. Entry 2 (newest): PR 6 at SHA_B with run 200.
+	one = heal.merge_occurrence_comment([], _occ_report(5, 100, SHA_A), trusted_login=_OCC_LOGIN, now=t0)
+	two = heal.merge_occurrence_comment([_occ_comment(9, one["body"])], _occ_report(6, 200, SHA_B), trusted_login=_OCC_LOGIN, now=t0)
+	comments = [_occ_comment(9, two["body"])]
+	runs = heal._recovery_occurrence_runs(comments, pipeline_login=_OCC_LOGIN, source_repo=CONSUMER_REPO, source_number=5, head_sha=SHA_A)
+	assert [ref["run_id"] for ref in runs] == ["100"]
+	runs = heal._recovery_occurrence_runs(comments, pipeline_login=_OCC_LOGIN, source_repo=CONSUMER_REPO, source_number=6, head_sha=SHA_B)
+	assert [ref["run_id"] for ref in runs] == ["200"]
+	# PR 5 never failed at SHA_B: the lines of two entries are not combined.
+	assert heal._recovery_occurrence_runs(comments, pipeline_login=_OCC_LOGIN, source_repo=CONSUMER_REPO, source_number=5, head_sha=SHA_B) == []
+	assert heal._recovery_occurrence_runs(comments, pipeline_login="someone-else", source_repo=CONSUMER_REPO, source_number=5, head_sha=SHA_A) == []
+	# A legacy single-report comment still reads as before.
+	legacy = [_occ_comment(3, _occ_report(5, 100, SHA_A))]
+	assert [ref["run_id"] for ref in heal._recovery_occurrence_runs(legacy, pipeline_login=_OCC_LOGIN, source_repo=CONSUMER_REPO, source_number=5, head_sha=SHA_A)] == ["100"]
+
+
+def test_heal_stale_counter_comment_moves_the_anchor_to_its_last_report() -> None:
+	# The counter comment was created on Jan 1 and last edited on Jan 3: the
+	# anchor is the `last=` time, not the comment's created_at.
+	merged = heal.merge_occurrence_comment([], "<!-- workflow-failure-heal:occurrence -->\nSeen again.", trusted_login=_STALE_LOGIN, now=datetime(2026, 1, 3, 12, tzinfo=timezone.utc))
+	trusted = _stale_comment(merged["body"], created_at="2026-01-01T02:00:00Z")
+	result = _stale_decide(comments=[_stale_hold(), trusted])
+	assert result["anchor"] == "2026-01-03T12:00:00Z"
+	assert result["reason"] == "too_few_green_runs" and result["green_runs"] == 3
+	forged = _stale_comment(merged["body"], login="outsider", association="NONE", created_at="2026-01-01T02:00:00Z")
+	assert _stale_decide(comments=[_stale_hold(), forged])["decision"] == "close"
+
+
+def test_budget_decision_records_a_heal_issues_own_failure_on_itself() -> None:
+	now = datetime(2026, 9, 20, 12, tzinfo=timezone.utc)
+	fp, other = "1" * 64, "2" * 64
+	issues = [dict(_heal_issue(42, state="open", fp=other, gen=2, root="3" * 64), repository=SELF_REPO)]
+	decision = heal.budget_decision(issues, fp=fp, now=now, preferred_repo=SELF_REPO, report_issue=f"{SELF_REPO}#42", source_gen=2, source_root="3" * 64, source_issue=f"{SELF_REPO}#42", trusted_author="workflow-bot")
+	assert decision["action"] == "duplicate" and decision["match"] == "heal_source"
+	assert decision["existing_issue"] == 42 and decision["existing_repo"] == SELF_REPO and decision["gen"] == 2
+	# Not passed (switch off), another repository, a closed heal issue or an
+	# ordinary issue: the decision is what it was before.
+	assert heal.budget_decision(issues, fp=fp, now=now, preferred_repo=SELF_REPO)["action"] == "open"
+	assert heal.budget_decision(issues, fp=fp, now=now, preferred_repo=SELF_REPO, report_issue=f"{CONSUMER_REPO}#42")["action"] == "open"
+	assert heal.budget_decision(issues, fp=fp, now=now, preferred_repo=SELF_REPO, report_issue=f"{SELF_REPO}#43")["action"] == "open"
+	assert heal.budget_decision(issues, fp=fp, now=now, preferred_repo=SELF_REPO, report_issue="garbage")["action"] == "open"
+	closed = [dict(_heal_issue(42, state="closed", fp=other), repository=SELF_REPO)]
+	assert heal.budget_decision(closed, fp=fp, now=now, preferred_repo=SELF_REPO, report_issue=f"{SELF_REPO}#42")["action"] == "open"
+	# A fingerprint duplicate still wins over the heal-source match.
+	both = issues + [dict(_heal_issue(50, state="open", fp=fp), repository=SELF_REPO)]
+	fp_dup = heal.budget_decision(both, fp=fp, now=now, preferred_repo=SELF_REPO, report_issue=f"{SELF_REPO}#42")
+	assert fp_dup["match"] == "fingerprint" and fp_dup["existing_issue"] == 50
+	# A cause match wins too: the heal issue's own cause stays `match: cause`
+	# (so heal_issue_failed_itself still escalates), another issue's cause
+	# records the report there.
+	own_cause = [dict(_p5_cause_issue(42, fp=other), repository=SELF_REPO)]
+	own = heal.budget_decision(own_cause, fp=fp, now=P5_NOW, preferred_repo=SELF_REPO, report_issue=f"{SELF_REPO}#42", cause=P5_CAUSE)
+	assert own["match"] == "cause" and own["existing_issue"] == 42
+	elsewhere = [dict(_heal_issue(42, state="open", fp=other, created=P5_NOW - timedelta(days=1)), repository=SELF_REPO), dict(_p5_cause_issue(60, fp="4" * 64), repository=SELF_REPO)]
+	moved = heal.budget_decision(elsewhere, fp=fp, now=P5_NOW, preferred_repo=SELF_REPO, report_issue=f"{SELF_REPO}#42", cause=P5_CAUSE)
+	assert moved["match"] == "cause" and moved["existing_issue"] == 60
+	assert heal.budget_decision(elsewhere, fp=fp, now=P5_NOW, preferred_repo=SELF_REPO, report_issue=f"{SELF_REPO}#42")["match"] == "heal_source"
+
+
+def test_skip_reason_covers_every_release_gate_fixture_title() -> None:
+	base = heal.validate_payload(heal.build_issue_payload(repo=CONSUMER_REPO, kind="issue", label="ai:needs-human", issue=_issue(), comments=[], runs=[], wrapper_sha=None, reporter_run_url=None))
+	for title in (
+		"[E2E Smoke Test] canary",
+		"[E2E Orchestrate Smoke 42930970244] Retry: update tests/e2e_smoke_canary.txt",
+		"[e2e orchestrate smoke 1] tracking",
+		"[E2E Clarify Negative Test 77] vague request",
+	):
+		assert heal.skip_reason(dict(base, issue_title=title), registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO) == "smoke_test_fixture", title
+	for title in ("Fix the E2E smoke test", "[E2E tests] flaky suite", "E2E Orchestrate Smoke without brackets"):
+		assert heal.skip_reason(dict(base, issue_title=title), registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO) == "", title
+
+
+def _occ_intake_duplicate(extra_state: dict | None = None, extra_env: dict | None = None) -> tuple[subprocess.CompletedProcess[str], dict]:
+	signature = heal.error_signature(heal.filter_log(JOB_LOG))
+	fp = heal.fingerprint("AI Implement", "Run codex", signature)
+	state = _intake_state(heal_issues=[_heal_issue(31, state="open", fp=fp)])
+	state.update(extra_state or {})
+	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=extra_env)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL duplicate existing_issue=31" in result.stdout
+	return result, state_after
+
+
+def test_intake_first_repeat_posts_the_counter_comment() -> None:
+	result, state = _occ_intake_duplicate()
+	posted = [c for c in state["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/31/comments"]
+	assert len(posted) == 1 and "comments_edited" not in state
+	counter = heal.parse_occurrence_counter(posted[0]["body"])
+	assert counter is not None and counter["count"] == 1 and len(counter["entries"]) == 1
+	assert "Another occurrence of this failure was reported:" in counter["entries"][0]["text"]
+	assert f"WORKFLOW_HEAL occurrence_update outcome=created issue=31 repo={SELF_REPO} count=1" in result.stdout
+
+
+def test_intake_later_repeat_edits_the_counter_comment_in_place() -> None:
+	existing = heal.merge_occurrence_comment([], _occ_report(5, 100), trusted_login=_OCC_LOGIN, now=datetime(2026, 11, 1, tzinfo=timezone.utc))
+	comments = {f"repos/{SELF_REPO}/issues/31/comments": [_occ_comment(77, existing["body"])]}
+	result, state = _occ_intake_duplicate({"comments": comments})
+	# No new comment anywhere on the heal issue: one edit of comment 77.
+	assert not [c for c in state.get("comments_posted", []) if c["path"] == f"repos/{SELF_REPO}/issues/31/comments"]
+	edited = state["comments_edited"]
+	assert [c["path"] for c in edited] == [f"repos/{SELF_REPO}/issues/comments/77"]
+	counter = heal.parse_occurrence_counter(edited[0]["body"])
+	assert counter["count"] == 2 and counter["first"] == "2026-11-01T00:00:00Z" and [entry["n"] for entry in counter["entries"]] == [2, 1]
+	assert f"WORKFLOW_HEAL occurrence_update outcome=edited issue=31 repo={SELF_REPO} comment=77 count=2" in result.stdout
+	# A counter written by another account is left alone; a new one is posted.
+	comments = {f"repos/{SELF_REPO}/issues/31/comments": [_occ_comment(77, existing["body"], login="mallory")]}
+	result, state = _occ_intake_duplicate({"comments": comments})
+	assert "comments_edited" not in state
+	assert heal.parse_occurrence_counter([c for c in state["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/31/comments"][0]["body"])["count"] == 1
+
+
+def test_intake_reposts_a_counter_buried_under_newer_comments() -> None:
+	# The poller's stale auto-close reads an issue's newest 20 comments only,
+	# so a counter with 15 or more newer comments after it is posted again
+	# and the old one deleted.
+	existing = heal.merge_occurrence_comment([], _occ_report(5, 100), trusted_login=_OCC_LOGIN, now=datetime(2026, 11, 1, tzinfo=timezone.utc))
+	path = f"repos/{SELF_REPO}/issues/31/comments"
+	for newer, reposted in ((14, False), (15, True)):
+		thread = [_occ_comment(77, existing["body"])] + [_occ_comment(200 + index, "hold notice", login="someone") for index in range(newer)]
+		result, state = _occ_intake_duplicate({"comments": {path: thread}})
+		posted = [c for c in state.get("comments_posted", []) if c["path"] == path]
+		if not reposted:
+			assert not posted and [c["path"] for c in state["comments_edited"]] == [f"repos/{SELF_REPO}/issues/comments/77"]
+			continue
+		assert len(posted) == 1 and heal.parse_occurrence_counter(posted[0]["body"])["count"] == 2
+		assert "comments_edited" not in state and state["comments_deleted"] == [f"repos/{SELF_REPO}/issues/comments/77"]
+		assert f"WORKFLOW_HEAL occurrence_update outcome=reposted issue=31 repo={SELF_REPO} replaced=77 newer_comments=15 count=2" in result.stdout
+	# A failed delete is logged; the report is still recorded.
+	thread = [_occ_comment(77, existing["body"])] + [_occ_comment(200 + index, "hold notice", login="someone") for index in range(15)]
+	result, state = _occ_intake_duplicate({"comments": {path: thread}, "comment_delete_fail": True})
+	assert "warn occurrence_old_counter_delete_failed issue=31" in result.stdout and "occurrence_update outcome=reposted" in result.stdout
+
+
+def test_intake_occurrence_counter_fails_open() -> None:
+	existing = heal.merge_occurrence_comment([], _occ_report(5, 100), trusted_login=_OCC_LOGIN, now=datetime(2026, 11, 1, tzinfo=timezone.utc))
+	comments = {f"repos/{SELF_REPO}/issues/31/comments": [_occ_comment(77, existing["body"])]}
+	# A failed edit posts the merged body as a new comment.
+	result, state = _occ_intake_duplicate({"comments": comments, "comment_edit_fail": True})
+	posted = [c for c in state["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/31/comments"]
+	assert len(posted) == 1 and heal.parse_occurrence_counter(posted[0]["body"])["count"] == 2
+	assert "occurrence_update outcome=fallback reason=edit_failed issue=31" in result.stdout
+	# A failed comments read posts the report as its own comment, as before.
+	result, state = _occ_intake_duplicate({"comments": comments, "comment_read_fail": True})
+	posted = [c for c in state["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/31/comments"]
+	assert len(posted) == 1 and heal.parse_occurrence_counter(posted[0]["body"]) is None and posted[0]["body"].startswith(_OCC_MARKER)
+	assert "occurrence_update outcome=fallback reason=merge_unavailable issue=31" in result.stdout
+	# The account login cannot be read: the legacy comment, no comments read.
+	result, state = _occ_intake_duplicate({"comments": comments, "user_fetch_fail": True})
+	posted = [c for c in state["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/31/comments"]
+	assert len(posted) == 1 and heal.parse_occurrence_counter(posted[0]["body"]) is None and "comments_edited" not in state
+	assert "occurrence_update outcome=fallback reason=login_unavailable issue=31" in result.stdout
+	# Switch off, or any value that is not true / false: the legacy comment, no comments read.
+	for value in ("false", "maybe"):
+		result, state = _occ_intake_duplicate({"comments": comments}, extra_env={"HEAL_OCCURRENCE_IN_PLACE_ENABLED": value})
+		posted = [c for c in state["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/31/comments"]
+		assert len(posted) == 1 and heal.parse_occurrence_counter(posted[0]["body"]) is None
+		assert "comments_edited" not in state and "occurrence_update outcome=" not in result.stdout
+		assert not [call for call in state["calls"] if any("{id, author: (.user.login" in part for part in call)]
+		assert ("occurrence_update outcome=skip reason=invalid_switch" in result.stderr) == (value == "maybe")
+
+
+def test_intake_heal_issues_own_failure_is_recorded_on_itself_not_filed() -> None:
+	# Heal issue #42 was filed for another failure (different fingerprint);
+	# its own plan run now fails. #9200 was filed for #9190 this way.
+	other_fp = "9" * 64
+	heal_issue = _sourced_heal_issue(42, state="open", fp=other_fp, source=f"{SELF_REPO}#6208")
+	payload = _phase_payload(repo=SELF_REPO, issue=_issue(body=heal_issue["body"], labels=["ai:planning", heal.HEAL_LABEL]))
+	result, state, _ = _run_intake(payload, _plan_intake_state(repo=SELF_REPO, heal_issues=[heal_issue]), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "issues_created" not in state
+	assert f"WORKFLOW_HEAL duplicate existing_issue=42 existing_repo={SELF_REPO}" in result.stdout and "match=heal_source" in result.stdout
+	# Recorded only: an unrelated failure (for example a runner outage) is not
+	# escalated; only a run failing with the issue's own fingerprint is.
+	assert "escalate reason=heal_issue_failed_itself" not in result.stdout
+	assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] not in state.get("issue_edits", [])
+	posted = [c for c in state["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/42/comments"]
+	assert len(posted) == 1 and heal.parse_occurrence_counter(posted[0]["body"])["count"] == 1
+	# No model call for it.
+	assert not any("codex" in " ".join(call) for call in state["calls"])
+	# Switch off: the report continues the lineage as before (a new heal issue).
+	result, state, _ = _run_intake(payload, _plan_intake_state(repo=SELF_REPO, heal_issues=[heal_issue]), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"HEAL_SOURCE_DEDUPE_ENABLED": "false"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "match=heal_source" not in result.stdout and _composed_issues(state)
+
+
+def test_intake_workflow_wires_the_occurrence_and_heal_source_switches() -> None:
+	workflow = INTAKE_WORKFLOW.read_text(encoding="utf-8")
+	for line in (
+		"HEAL_OCCURRENCE_IN_PLACE_ENABLED: ${{ vars.HEAL_OCCURRENCE_IN_PLACE_ENABLED || 'true' }}",
+		"HEAL_SOURCE_DEDUPE_ENABLED: ${{ vars.HEAL_SOURCE_DEDUPE_ENABLED || 'true' }}",
+	):
+		assert workflow.count(line) == 2, line
+
+
+def test_heal_scope_recovery_budget_rerun_drops_the_report_issue() -> None:
+	# The recovery re-run keeps only the caps that bind the lineage: another
+	# open heal issue whose own run failed must not make the replacement a
+	# `match: heal_source` duplicate.
+	script = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	recovery = script.split("\n_heal_scope_recovery_evaluate()\n{", 1)[1].split("\n}\n", 1)[0]
+	loop = recovery.split("local recovery_budget_args=()", 1)[1].split("done", 1)[0]
+	report_arm = loop.split("--report-issue)", 1)[1].split(";;", 1)[0]
+	assert "recovery_arg_index=$((recovery_arg_index + 2))" in report_arm and "continue" in report_arm
