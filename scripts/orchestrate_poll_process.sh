@@ -2917,6 +2917,15 @@ fi
 # human /approved (see _plan_auto_approval_gate).
 AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-true}"
 
+# Issue #9766: red-base hold in the stall-recovery plan gate (see
+# _plan_red_base_gate). The kill switch keeps an explicitly empty value
+# (empty = on, the helper's own meaning); PLAN_BASE_CI_GATE_STAGED is set by
+# orchestrate_poll.yml's staging step only when the pipeline copy of
+# scripts/plan_base_ci_gate.sh was installed.
+RED_BASE_APPROVAL_HOLD_ENABLED="${RED_BASE_APPROVAL_HOLD_ENABLED-true}"
+RED_BASE_HOLD_WORKFLOWS="${RED_BASE_HOLD_WORKFLOWS:-.github/workflows/ci.yml}"
+PLAN_BASE_CI_GATE_STAGED="${PLAN_BASE_CI_GATE_STAGED:-false}"
+
 # Issue #8249: heal-route counterfactual gate for stall-recovery
 # auto-approval (see _plan_heal_counterfactual_check). On by default; `false`
 # turns it off, any other value is treated as `true` with a warning.
@@ -20443,6 +20452,138 @@ _heal_stale_close_check()
   return 0
 }
 
+# Issue #9766 (Refs #9421, Phase 2 step 4 of
+# docs/plans/stuck-backlog-prevention-plan.md): red-base hold in the poller's
+# plan auto-approval gate. plan.yml holds `/approved [auto-approved-by-plan]`
+# while the tracked base's newest decisive push CI run failed and a trusted
+# ai:workflow-heal issue tracks it; without this check stall recovery's
+# auto_approve / retrigger_implement arms would approve the same plan anyway.
+# _plan_auto_approval_gate runs _plan_red_base_gate first; a red base holds
+# (return 1), so the callers return before any recovery attempt is counted.
+# The check reuses red_base_approval_hold_check from scripts/plan_base_ci_gate.sh,
+# sourced under plan.yml's trust rule (staged by orchestrate_poll.yml,
+# regular non-symlink file, sources cleanly, defines the functions); otherwise
+# the legacy behaviour (no hold) stays. Every read fails open.
+#
+# RED_BASE_HEALTH_CACHE: per-process (one poller step in one tick) result cache
+# keyed by branch; value is `status|reason|red|heal|workflow|run_id` (the six
+# RED_BASE_HOLD_* globals the helper sets). The helper's reads run inside
+# command substitutions, so the result, not the raw reads, is cached (§14:
+# at most one runs read per configured workflow plus one heal listing per
+# branch per poller step; read failures are cached too, so a failed read is
+# not repeated per issue). disabled / heal_issue_exempt / input_invalid
+# results are per-issue and never cached.
+declare -gA RED_BASE_HEALTH_CACHE=()
+# loaded | unavailable | empty (not tried yet in this process).
+_RED_BASE_GATE_HELPER_STATE=""
+
+# _red_base_gate_load_helper: returns 0 when the staged helper is usable.
+# Decided once per process; an unusable helper prints one ::notice:: line.
+_red_base_gate_load_helper()
+{
+  local helper_path=""
+  case "${_RED_BASE_GATE_HELPER_STATE:-}" in
+    loaded) return 0 ;;
+    unavailable) return 1 ;;
+  esac
+  helper_path="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/plan_base_ci_gate.sh"
+  # shellcheck disable=SC1090 # path resolved at runtime next to this script.
+  if [ "${PLAN_BASE_CI_GATE_STAGED:-false}" = "true" ] \
+    && [ -f "${helper_path}" ] && [ ! -L "${helper_path}" ] \
+    && { source "${helper_path}" >/dev/null 2>&1; } \
+    && type red_base_approval_hold_check _red_base_hold_flag_on _red_base_hold_log >/dev/null 2>&1; then
+    _RED_BASE_GATE_HELPER_STATE="loaded"
+    return 0
+  fi
+  _RED_BASE_GATE_HELPER_STATE="unavailable"
+  echo "::notice::red-base approval hold helper unavailable; poller plan auto-approval is not held on a red base."
+  return 1
+}
+
+# _red_base_gate_default_branch: resolves the repository default branch into
+# the shared _STALL_STANDALONE_DEFAULT_BRANCH cache (also used by
+# _reconcile_standalone_merged_pr_issue). Called in the main shell, not in a
+# command substitution, so the memo persists. A failed read leaves it empty;
+# the helper then reports input_invalid and does not hold (fail open).
+# §14 audit: CWS_DEFAULT_BRANCH and the shared memo are checked first; no
+# batched call (_fetch_candidate_issue_details_graphql,
+# _fetch_linked_pr_status_graphql) carries the repository default branch, so
+# at most one repos/<repo> read per poller process remains, shared with the
+# standalone reconcile and never retried after a failure.
+_red_base_gate_default_branch()
+{
+  if [ -z "${_STALL_STANDALONE_DEFAULT_BRANCH:-}" ] && [ "${_STALL_STANDALONE_DEFAULT_BRANCH_TRIED:-false}" != "true" ]; then
+    _STALL_STANDALONE_DEFAULT_BRANCH_TRIED=true
+    _STALL_STANDALONE_DEFAULT_BRANCH="${CWS_DEFAULT_BRANCH:-}"
+    if [ -z "${_STALL_STANDALONE_DEFAULT_BRANCH}" ]; then
+      _STALL_STANDALONE_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY:-}" --jq '.default_branch' 2>/dev/null || echo "")"
+    fi
+    _STALL_STANDALONE_DEFAULT_BRANCH="$(printf '%s' "${_STALL_STANDALONE_DEFAULT_BRANCH}" | tr -d '\r\n')"
+    [ "${_STALL_STANDALONE_DEFAULT_BRANCH}" = "null" ] && _STALL_STANDALONE_DEFAULT_BRANCH=""
+  fi
+  return 0
+}
+
+# _plan_red_base_gate <issue_num> <details_map_json> [integration_branch] [phase]
+# Checks the tracked base branch: the integration branch for an
+# ai:orchestrator-managed issue when the caller passes one, otherwise the
+# default branch. Returns 0 to allow, 1 to hold (after logging).
+_plan_red_base_gate()
+{
+  local issue_num="$1"
+  local details_map_json="${2:-}"
+  local rbg_integration_branch="${3:-}"
+  local rbg_phase="${4:-}"
+  local rbg_labels_json="[]"
+  local rbg_branch=""
+  local rbg_cacheable="false"
+  local rbg_log_branch=""
+
+  _red_base_gate_load_helper || return 0
+  rbg_labels_json="$(printf '%s' "${details_map_json:-{\}}" | jq -c --arg n "${issue_num}" '
+      [(.[$n] // {}) | .labels[]? | if type == "object" then (.name // "") else . end | strings]
+    ' 2>/dev/null)" || rbg_labels_json="[]"
+  [ -n "${rbg_labels_json}" ] || rbg_labels_json="[]"
+  if [ -n "${rbg_integration_branch}" ] \
+    && printf '%s' "${rbg_labels_json}" | jq -e 'any(.[]?; . == "ai:orchestrator-managed")' >/dev/null 2>&1; then
+    rbg_branch="${rbg_integration_branch}"
+  else
+    _red_base_gate_default_branch
+    rbg_branch="${_STALL_STANDALONE_DEFAULT_BRANCH:-}"
+  fi
+  if [[ "${rbg_branch}" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] && [[ "${rbg_branch}" != *..* ]] \
+    && _red_base_hold_flag_on >/dev/null 2>&1 \
+    && ! printf '%s' "${rbg_labels_json}" | jq -e 'any(.[]?; . == "ai:workflow-heal")' >/dev/null 2>&1; then
+    rbg_cacheable="true"
+  fi
+  if [ "${rbg_cacheable}" = "true" ] && [ -n "${RED_BASE_HEALTH_CACHE[${rbg_branch}]+set}" ]; then
+    IFS='|' read -r RED_BASE_HOLD_STATUS RED_BASE_HOLD_REASON RED_BASE_HOLD_RED RED_BASE_HOLD_HEAL \
+      RED_BASE_HOLD_WORKFLOW RED_BASE_HOLD_RUN_ID <<< "${RED_BASE_HEALTH_CACHE[${rbg_branch}]}" || true
+    if [ "${RED_BASE_HOLD_RED:-false}" = "true" ]; then
+      _red_base_hold_log held "${issue_num}"
+    else
+      _red_base_hold_log pass "${issue_num}"
+    fi
+  else
+    red_base_approval_hold_check "${GITHUB_REPOSITORY:-}" "${rbg_branch}" "${issue_num}" "${rbg_labels_json}" false || true
+    if [ "${rbg_cacheable}" = "true" ]; then
+      case "${RED_BASE_HOLD_REASON:-}" in
+        ''|disabled|heal_issue_exempt|input_invalid) ;;
+        *)
+          RED_BASE_HEALTH_CACHE["${rbg_branch}"]="${RED_BASE_HOLD_STATUS:-unknown}|${RED_BASE_HOLD_REASON:-unknown}|${RED_BASE_HOLD_RED:-false}|${RED_BASE_HOLD_HEAL:-none}|${RED_BASE_HOLD_WORKFLOW:-none}|${RED_BASE_HOLD_RUN_ID:-none}"
+          ;;
+      esac
+    fi
+  fi
+  if [ "${RED_BASE_HOLD_RED:-false}" = "true" ]; then
+    rbg_log_branch="$(printf '%s' "${rbg_branch}" | tr -cd 'A-Za-z0-9._/-' | cut -c1-200)"
+    echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=base_ci_red outcome=hold issue=${issue_num} heal=${RED_BASE_HOLD_HEAL:-none} branch=${rbg_log_branch:-none}"
+    echo "STALL_SKIP issue=${issue_num} reason=base_ci_red_hold phase=${rbg_phase:-unknown} action=none"
+    return 1
+  fi
+  return 0
+}
+
 # Issue #6769: hold automatic /approved posts from stall recovery for plans
 # that list automation paths (.github/, .claude/, scripts/, prompts/,
 # workflow-templates/). The plan is the newest comment carrying the
@@ -20461,7 +20602,11 @@ _heal_stale_close_check()
 # ai:planning and an /answer comment carrying the
 # ai:automation-path-replan:v1 marker is posted. Once that marker is on the
 # issue, a later hold gets the ordinary hold notice for a human.
-# Args: <issue_num> <details_map_json> <comments_json> <phase>
+# Issue #9766: the red-base check (_plan_red_base_gate) runs first; a red
+# tracked base (integration branch for managed issues when passed, else the
+# default branch) holds before any issue-body write or comment, and does not
+# increment the recovery count.
+# Args: <issue_num> <details_map_json> <comments_json> <phase> [integration_branch]
 # Returns 0 to approve, 1 to hold (after logging).
 _plan_auto_approval_gate()
 {
@@ -20469,6 +20614,7 @@ _plan_auto_approval_gate()
   local details_map_json="$2"
   local comments_json="$3"
   local phase="$4"
+  local integration_branch="${5:-}"
   local guard_py=""
   local gate_login=""
   local gate_plan_file=""
@@ -20489,6 +20635,15 @@ _plan_auto_approval_gate()
   local gate_replan_since=""
   local gate_replan_recent=""
   local gate_replan_landed="false"
+
+  # Issue #9766: red-base hold first; a hold is not a recovery attempt.
+  # Fail open (no hold) when the red-base gate is not defined in this shell,
+  # e.g. when this function is sourced on its own; a missing function would
+  # otherwise exit 127 and be read as a hold.
+  declare -F _plan_red_base_gate >/dev/null 2>&1 || _plan_red_base_gate() { return 0; }
+  if ! _plan_red_base_gate "${issue_num}" "${details_map_json}" "${integration_branch}" "${phase}"; then
+    return 1
+  fi
 
   guard_py="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/files_touched_scope_guard.py"
   if [ ! -f "${guard_py}" ]; then
@@ -20938,8 +21093,13 @@ STALL_EOF
       esac
       # A held plan is not a recovery attempt; like the staged-support
       # skip above, return before STALL_RECOVERY_SHOULD_INCREMENT is set.
+      # Issue #9766: pass the project's integration branch (local state read)
+      # so the red-base check tracks it for managed issues.
+      local _managed_gate_integration_branch=""
+      _managed_gate_integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE:-}" 2>/dev/null || echo "")"
+      [ "${_managed_gate_integration_branch}" = "null" ] && _managed_gate_integration_branch=""
       if ! _plan_auto_approval_gate "${issue_num}" "${_current_wave_details_json:-}" \
-        "${_managed_staged_support_comments}" "${phase}"; then
+        "${_managed_staged_support_comments}" "${phase}" "${_managed_gate_integration_branch}"; then
         return 1
       fi
       echo "  Auto-approving plan for issue #${issue_num}..."
@@ -20977,8 +21137,12 @@ STALL_EOF
         # choice cannot skip the plan auto-approval gate.
         local _managed_rti_gate_comments='[]'
         _managed_rti_gate_comments="$(_plan_auto_approval_gate_comments "${issue_num}" "${_current_wave_details_json:-}")"
+        # Issue #9766: integration branch for the red-base check (local state read).
+        local _managed_rti_gate_integration_branch=""
+        _managed_rti_gate_integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE:-}" 2>/dev/null || echo "")"
+        [ "${_managed_rti_gate_integration_branch}" = "null" ] && _managed_rti_gate_integration_branch=""
         if ! _plan_auto_approval_gate "${issue_num}" "${_current_wave_details_json:-}" \
-          "${_managed_rti_gate_comments}" "${phase}"; then
+          "${_managed_rti_gate_comments}" "${phase}" "${_managed_rti_gate_integration_branch}"; then
           return 1
         fi
       fi
