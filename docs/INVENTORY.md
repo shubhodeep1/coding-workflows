@@ -52,7 +52,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/cancel_on_pr_close.yml` — GitHub Actions workflow: AI Cancel Runs on PR Close.
 - `.github/workflows/check_failure_triage.yml` — GitHub Actions workflow: AI Check Failure Triage (Reusable).
 - `.github/workflows/ci.yml` — GitHub Actions workflow: CI.
-- `.github/workflows/ci_pr_quick.yml` — GitHub Actions workflow: CI quick; per-push static checks for every PR (`static-checks` in mode `quick`), while the full `ci.yml` suite runs once per PR head after review (cut-ci-runner-time Phase 4, #9563).
+- `.github/workflows/ci_pr_quick.yml` — GitHub Actions workflow: CI quick. Per-push static checks for every PR (cut-ci-runner-time Phase 4): calls ci.yml's `static-checks` job in `quick` mode, with check-runs named `quick / <job>` and never `lint`; the full suite runs once per PR head through ci.yml's `workflow_dispatch` final CI run.
 - `.github/workflows/clarify.yml` — GitHub Actions workflow: AI Clarify (Reusable).
 - `.github/workflows/claude-engine-smoke.yml` — GitHub Actions workflow: Claude engine smoke (dispatch-only self-test of the Claude engine plumbing).
 - `.github/workflows/comprehensive-test-and-release.yml` — GitHub Actions workflow: Workflow Log Analysis And Improvement.

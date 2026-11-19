@@ -73,6 +73,13 @@
 # UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED (default true; #8470): once a
 # fix-up is done, a standalone issue whose planning stop was "nothing to
 # implement" is closed as completed instead of resumed; `false` resumes it.
+# UNBLOCK_ORCHESTRATOR_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED (default true; #9808):
+# an orchestrator-managed issue (tracking issue set) whose planning stop was
+# "nothing to implement" is closed as completed with `ai:closed` too, after a
+# done fix-up or on the main path without one, so the poller counts it done;
+# unset, empty or `true` (any case) keeps it on, `false` resumes it, and any
+# other value resumes it with a warning. Read from the script's environment
+# only; unblock_judge.yml does not forward it.
 # UNBLOCK_FIXUP_DELIVERED_CLOSE_ENABLED (default true; #8530): once a fix-up
 # merged into the default branch and changed every file a standalone
 # pipeline-authored ai:workflow-heal issue lists under `## Affected files`,
@@ -123,6 +130,7 @@
 #      UNBLOCK_JUDGE item= op=ci_owner outcome= reason=|pr=
 #      UNBLOCK_JUDGE item= op=heal_already_fixed outcome=closed|judge|skip sibling= pr= status=|reason=
 #      UNBLOCK_JUDGE item= kind= stop= fixup= op=nothing_to_implement outcome=closed|skip reason=comment_failed|label_failed|close_failed
+#      UNBLOCK_JUDGE item= kind= stop= fixup= tracking= op=nothing_to_implement_orchestrator outcome=closed|skip reason=comment_failed|label_failed|close_failed|invalid_flag
 #      UNBLOCK_JUDGE item= kind= stop= fixup= op=fixup_delivered outcome=closed|resume|skip reason=|pr=
 #      UNBLOCK_JUDGE item= kind= stop= fixup= op=fixup_delivered outcome=warn reason=wait_update_failed
 #      UNBLOCK_JUDGE item= op=heal_report issue= label= outcome=sent|failed|skip reason=
@@ -593,52 +601,129 @@ unblock_nothing_to_implement_blocked()
 	' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1
 }
 
-# unblock_nothing_to_implement_close <fixup> <done text> (#8470): when the
-# newest trusted "Planning blocked" comment on a standalone issue gives the
-# nothing-to-implement reason, the issue is closed as completed once its
-# fix-up is done, instead of getting `/answer`: planning would only reach the
-# same block again (#8470 blocked twice, before and after fix-up #8471).
-# Orchestrator items (a tracking issue) resume as before. Returns 0 when this
-# run must stop (closed, or a write failed: the fix-up wait stays open so the
-# next run retries, and the trusted marker is posted once only); 1 to resume
-# as usual; it sets UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT to `closed` after a
-# close. UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED=false (default true)
-# restores the resume.
-# API budget: at most three writes (comment, label, close), no reads; the
-# caller then marks the fix-up wait `done` (one more write, not retried).
-unblock_nothing_to_implement_close()
+# unblock_nothing_to_implement_write <fixup token> <comment text> <op> <log extra>
+# (#8470, shared with #9808): posts the comment (the text, a blank line, then
+# the `<!-- ai:unblock-nothing-to-implement:v1 item=<n> fixup=<token> -->`
+# marker; skipped when this login already posted that marker), adds
+# `ai:closed` and closes the issue as completed. A failed write logs
+# `op=<op> outcome=skip reason=comment_failed|label_failed|close_failed`;
+# success sets UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT to `closed` and logs
+# `op=<op> outcome=closed`. <log extra> (may be empty) goes after `fixup=` in
+# the log line. Always returns 0 (this run must stop).
+# API budget: at most three writes (comment, label, close), no reads.
+unblock_nothing_to_implement_write()
 {
-	local fixup="$1" done_text="$2" tracking_issue="$3" marker
-	UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT=""
-	if [ "$(printf '%s' "${UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "false" ]; then
-		return 1
-	fi
-	[ "${ITEM_KIND}" = "issue" ] && [ "${ITEM_STOP}" = "blocked" ] && [ -z "${tracking_issue}" ] || return 1
-	# A trusted implementation plan (the has_plan rule in unblock_main) posted
-	# after that block means planning moved on, so the stale block never closes
-	# the issue: it resumes as usual (`/approved`).
-	unblock_nothing_to_implement_blocked || return 1
+	local fixup="$1" close_text="$2" log_op="$3" log_extra="${4:-}" marker log_head
+	log_head="item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup}${log_extra:+ ${log_extra}} op=${log_op}"
 	marker="<!-- ai:unblock-nothing-to-implement:v1 item=${ITEM} fixup=${fixup} -->"
 	if jq -e --arg login "${UNBLOCK_LOGIN}" --arg marker "${marker}" \
 		'any(.[]; (.user.login // "") == $login and ((.body // "") | sub("\\s+$"; "") | endswith($marker)))' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; then
 		:
-	elif ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="Closing as completed: planning found nothing to implement for this issue (\`${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}\`), and fix-up #${fixup} ${done_text}. A resume command would only stop planning again, so the unblock judge closed the issue instead. Reopen it and reply with \`/reclarify\` if work is still missing.
+	elif ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="${close_text}
 
 ${marker}" >/dev/null 2>&1; then
-		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup} op=nothing_to_implement outcome=skip reason=comment_failed"
+		unblock_log "${log_head} outcome=skip reason=comment_failed"
 		return 0
 	fi
 	if ! gh api -X POST "repos/${REPOSITORY}/issues/${ITEM}/labels" -f "labels[]=ai:closed" >/dev/null 2>&1; then
-		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup} op=nothing_to_implement outcome=skip reason=label_failed"
+		unblock_log "${log_head} outcome=skip reason=label_failed"
 		return 0
 	fi
 	if ! gh api -X PATCH "repos/${REPOSITORY}/issues/${ITEM}" -f state=closed -f state_reason=completed >/dev/null 2>&1; then
-		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup} op=nothing_to_implement outcome=skip reason=close_failed"
+		unblock_log "${log_head} outcome=skip reason=close_failed"
 		return 0
 	fi
 	UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT="closed"
-	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup} op=nothing_to_implement outcome=closed"
+	unblock_log "${log_head} outcome=closed"
 	return 0
+}
+
+# unblock_nothing_to_implement_close <fixup> <done text> <tracking> (#8470): when the
+# newest trusted "Planning blocked" comment on a standalone issue gives the
+# nothing-to-implement reason, the issue is closed as completed once its
+# fix-up is done, instead of getting `/answer`: planning would only reach the
+# same block again (#8470 blocked twice, before and after fix-up #8471).
+# Orchestrator items (a tracking issue) go to
+# unblock_nothing_to_implement_orchestrator_close (#9808). Returns 0 when this
+# run must stop (closed, or a write failed: the fix-up wait stays open so the
+# next run retries, and the trusted marker is posted once only); 1 to resume
+# as usual; it sets UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT to `closed` after a
+# close. UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED=false (default true)
+# restores the resume for standalone issues.
+# API budget: at most three writes (comment, label, close), no reads; the
+# caller then marks the fix-up wait `done` (one more write, not retried).
+unblock_nothing_to_implement_close()
+{
+	local fixup="$1" done_text="$2" tracking_issue="$3"
+	UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT=""
+	if [ -n "${tracking_issue}" ]; then
+		unblock_nothing_to_implement_orchestrator_close "${fixup}" "${done_text}" "${tracking_issue}"
+		return $?
+	fi
+	if [ "$(printf '%s' "${UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "false" ]; then
+		return 1
+	fi
+	[ "${ITEM_KIND}" = "issue" ] && [ "${ITEM_STOP}" = "blocked" ] || return 1
+	# A trusted implementation plan (the has_plan rule in unblock_main) posted
+	# after that block means planning moved on, so the stale block never closes
+	# the issue: it resumes as usual (`/approved`).
+	unblock_nothing_to_implement_blocked || return 1
+	unblock_nothing_to_implement_write "${fixup}" "Closing as completed: planning found nothing to implement for this issue (\`${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}\`), and fix-up #${fixup} ${done_text}. A resume command would only stop planning again, so the unblock judge closed the issue instead. Reopen it and reply with \`/reclarify\` if work is still missing." \
+		"nothing_to_implement" ""
+}
+
+# unblock_orchestrator_nothing_to_implement_close_enabled (#9808): 0 when
+# UNBLOCK_ORCHESTRATOR_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED is unset, empty or
+# `true` (any case, whitespace ignored); 1 for `false` (quiet) and for any
+# other value (a warning plus an `outcome=skip reason=invalid_flag` log).
+unblock_orchestrator_nothing_to_implement_close_enabled()
+{
+	local raw="${UNBLOCK_ORCHESTRATOR_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED:-}" flag shown
+	flag="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+	case "${flag}" in
+		""|true) return 0 ;;
+		false) return 1 ;;
+	esac
+	shown="$(printf '%s' "${raw}" | tr -cd 'A-Za-z0-9_-' | cut -c1-40)"
+	echo "::warning::[unblock_judge] invalid UNBLOCK_ORCHESTRATOR_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED=${shown}; orchestrator nothing-to-implement close disabled" >&2
+	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=nothing_to_implement_orchestrator outcome=skip reason=invalid_flag"
+	return 1
+}
+
+# unblock_nothing_to_implement_orchestrator_close <fixup or ""> <done text or ""> <tracking>
+# (#9808): an orchestrator-managed issue whose newest trusted "Planning
+# blocked" comment gives the nothing-to-implement reason (and no newer trusted
+# implementation plan) has its work on the project's integration branch
+# already, so resuming it only loops planning (#9769). It is closed as
+# completed with `ai:closed` (the shared write helper and marker; fixup token
+# `none` without a fix-up), and the orchestrator poller then counts the
+# sub-issue done. Called from unblock_nothing_to_implement_close once a fix-up
+# is done, and on unblock_main's main path without one (no round, no model
+# call). Same return contract as unblock_nothing_to_implement_close: 0 when
+# this run must stop, 1 to keep today's resume.
+# UNBLOCK_ORCHESTRATOR_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED=false (default true)
+# restores the resume. The flag is checked after the structural conditions so
+# an invalid value only warns on runs it would have changed.
+# API budget: at most three writes (comment, label, close), no reads.
+unblock_nothing_to_implement_orchestrator_close()
+{
+	local fixup="${1:-}" done_text="${2:-}" tracking_issue="${3:-}" fixup_token fixup_clause
+	UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT=""
+	[ "${ITEM_KIND}" = "issue" ] && [ "${ITEM_STOP}" = "blocked" ] || return 1
+	[[ "${tracking_issue}" =~ ^[1-9][0-9]*$ ]] || return 1
+	jq -e 'index("ai:orchestrator-managed") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1 || return 1
+	unblock_nothing_to_implement_blocked || return 1
+	unblock_orchestrator_nothing_to_implement_close_enabled || return 1
+	fixup_token="none"
+	fixup_clause=""
+	if [ -n "${fixup}" ]; then
+		[[ "${fixup}" =~ ^[1-9][0-9]*$ ]] || return 1
+		fixup_token="${fixup}"
+		fixup_clause=", and fix-up #${fixup} ${done_text}"
+	fi
+	unblock_nothing_to_implement_write "${fixup_token}" "Closing as completed: planning found nothing to implement for this issue (\`${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}\`)${fixup_clause}. A resume command would only stop planning again, so the unblock judge closed the issue instead.
+This issue belongs to orchestrator project #${tracking_issue}; its work is already on that project's integration branch, so the orchestrator poller counts it done once it sees it closed with \`ai:closed\`. Reopen it and reply with \`/reclarify\` if work is still missing." \
+		"nothing_to_implement_orchestrator" "tracking=${tracking_issue}"
 }
 
 # unblock_triage_superseded_body <checked> (#9659): the superseded note. Its
@@ -2262,6 +2347,13 @@ ${step_escalation_marker}" >/dev/null 2>&1; then
 	# #9659: a check-triage issue planning found nothing to implement for waits
 	# on its check (noted once) instead of looping planning with a resume.
 	if [ "${ITEM_KIND}" = "issue" ] && [ -z "${tracking}" ] && unblock_triage_superseded_note "${tracking}"; then
+		return 0
+	fi
+
+	# #9808: an orchestrator sub-issue planning found nothing to implement for
+	# is closed as completed (its work is on the integration branch), no round
+	# and no model call, instead of looping planning with a resume.
+	if [ "${ITEM_KIND}" = "issue" ] && [ -n "${tracking}" ] && unblock_nothing_to_implement_orchestrator_close "" "" "${tracking}"; then
 		return 0
 	fi
 

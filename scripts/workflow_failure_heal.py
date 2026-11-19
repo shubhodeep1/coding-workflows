@@ -1184,11 +1184,36 @@ def evidence_pack_job_window(jobs_docs: Iterable[Any]) -> dict[str, str]:
 	return {"created": f"{min(starts)}..{max(ends)}"}
 
 
-def _issue_linked_run_matches(run: Any, *, title: str, wanted: str) -> bool:
+# Events whose runs may carry the clarify/plan/implement wrapper run-name
+# ``<workflow name> [issue:N]`` (stuck-backlog Phase 3). A pull-request run
+# takes the PR title as its display title, so it is never trusted to link.
+_ISSUE_TAGGED_RUN_EVENTS = frozenset({"issues", "issue_comment"})
+
+
+def _issue_tagged_run_title_matches(run: Any, number: Any) -> bool:
+	"""True when ``run`` is an issue-event run titled exactly ``<name> [issue:<number>]``.
+
+	The clarify, plan and implement wrappers set that run-name, so their
+	``display_title`` is no longer the issue title. ``number`` must be a
+	positive int; ``run["name"]`` a str; the event ``issues`` or ``issue_comment``.
+	"""
+	if not isinstance(run, dict):
+		return False
+	if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
+		return False
+	name = run.get("name")
+	if not isinstance(name, str) or run.get("event") not in _ISSUE_TAGGED_RUN_EVENTS:
+		return False
+	return run.get("display_title") == f"{name} [issue:{number}]"
+
+
+def _issue_linked_run_matches(run: Any, *, title: str, wanted: str, number: int | None = None) -> bool:
 	"""The run filter :func:`issue_linked_runs` and :func:`code_ref` share.
 
 	A run is an int-id dict of the repository ``wanted`` (casefolded full name)
-	whose ``display_title`` equals ``title`` exactly.
+	whose ``display_title`` equals ``title`` exactly, or, with a positive
+	``number``, equals ``<run name> [issue:<number>]`` for an ``issues`` /
+	``issue_comment`` run (the clarify/plan/implement wrapper run-name).
 	"""
 	if not isinstance(run, dict):
 		return False
@@ -1199,7 +1224,9 @@ def _issue_linked_run_matches(run: Any, *, title: str, wanted: str) -> bool:
 	full_name = repository.get("full_name") if isinstance(repository, dict) else None
 	if not isinstance(full_name, str) or full_name.casefold() != wanted:
 		return False
-	return run.get("display_title") == title
+	if run.get("display_title") == title:
+		return True
+	return number is not None and _issue_tagged_run_title_matches(run, number)
 
 
 def issue_linked_runs(*, number: Any, issue: Any, pages: Iterable[Any], repo: str) -> dict[str, Any]:
@@ -1208,7 +1235,9 @@ def issue_linked_runs(*, number: Any, issue: Any, pages: Iterable[Any], repo: st
 	``issue`` is the raw ``GET repos/<repo>/issues/<n>`` body and ``pages`` the
 	raw ``GET repos/<repo>/actions/runs?created=<window>`` pages shared by
 	every issue (all untrusted). A run is kept when its ``display_title``
-	equals the issue title exactly and it belongs to ``repo``. Runs render in
+	equals the issue title exactly, or is the wrapper run-name
+	``<workflow name> [issue:<number>]`` of an issue-event run, and it belongs
+	to ``repo``. Runs render in
 	API order (newest first), at most :data:`EVIDENCE_PACK_RUNS_PER_ISSUE`.
 	Returns ``{"ok", "text", "reason"}``: ``issue_unreadable`` (not ok) for an
 	issue that is not ``number`` or has no title; ``runs_unreadable`` when a
@@ -1239,7 +1268,7 @@ def issue_linked_runs(*, number: Any, issue: Any, pages: Iterable[Any], repo: st
 			total = count
 		for run in page["workflow_runs"]:
 			read += 1
-			if not _issue_linked_run_matches(run, title=title, wanted=wanted):
+			if not _issue_linked_run_matches(run, title=title, wanted=wanted, number=issue_number):
 				continue
 			matched.append(run)
 	lines = [f"runs started for issue #{issue_number} (title: {single_line(title, 160)})"]
@@ -1663,6 +1692,10 @@ def select_failed_runs(
 	(``AI Validate [tracking:N]``), never after the project's title, so an
 	orchestrator project's validation failure (binance-blessings#249) was
 	reported with no runs and fell back to the label-only fingerprint.
+
+	With ``tracking_issue``, an ``issues`` / ``issue_comment`` run titled exactly
+	``<run name> [issue:<tracking_issue>]`` also matches: the clarify, plan and
+	implement wrappers name their runs that way instead of after the issue.
 	"""
 	wanted = single_line(title, 500)
 	picked: list[dict[str, Any]] = []
@@ -1673,7 +1706,9 @@ def select_failed_runs(
 			continue
 		display_title = single_line(run.get("display_title"), 500)
 		tracking_match = _TRACKING_RUN_TITLE_RE.search(display_title) if tracking_issue else None
-		if display_title != wanted and not (tracking_match and int(tracking_match.group(1)) == tracking_issue):
+		if (display_title != wanted
+				and not (tracking_match and int(tracking_match.group(1)) == tracking_issue)
+				and not (tracking_issue and _issue_tagged_run_title_matches(run, tracking_issue))):
 			continue
 		created = _parse_iso(run.get("created_at"))
 		if since is not None and created is not None and created < since:
@@ -6763,12 +6798,15 @@ def _trend_target_ok(target: Any) -> bool:
 def _trend_issue_linked_runs(issues: Iterable[Any], pages: Iterable[Any], *, repo: str) -> list[dict[str, Any]]:
 	"""The runs of ``pages`` whose ``display_title`` equals one issue's title, as issue_linked_runs matches them.
 
-	``issues`` is ``(number, issue JSON)`` pairs; an issue whose ``number`` field
+	A run titled ``<run name> [issue:<number>]`` by an ``issues`` /
+	``issue_comment`` event (the clarify/plan/implement wrapper run-name) also
+	matches its issue. ``issues`` is ``(number, issue JSON)`` pairs; an issue whose ``number`` field
 	is not ``number`` or that has no title is skipped. Reads only what it is
 	given: no API call.
 	"""
 	wanted = str(repo or "").casefold()
 	titles: list[str] = []
+	tagged_numbers: list[int] = []
 	for item in issues or []:
 		try:
 			number, issue = item
@@ -6780,6 +6818,7 @@ def _trend_issue_linked_runs(issues: Iterable[Any], pages: Iterable[Any], *, rep
 				or not isinstance(issue.get("title"), str)):
 			continue
 		titles.append(issue["title"])
+		tagged_numbers.append(issue_number)
 	out: list[dict[str, Any]] = []
 	if not titles:
 		return out
@@ -6794,7 +6833,8 @@ def _trend_issue_linked_runs(issues: Iterable[Any], pages: Iterable[Any], *, rep
 			full_name = repository.get("full_name") if isinstance(repository, dict) else None
 			if not isinstance(full_name, str) or full_name.casefold() != wanted:
 				continue
-			if run.get("display_title") in titles:
+			if run.get("display_title") in titles or any(
+					_issue_tagged_run_title_matches(run, tagged_number) for tagged_number in tagged_numbers):
 				out.append(run)
 	return out
 
@@ -7895,7 +7935,7 @@ def code_ref(
 					continue
 				for run in page["workflow_runs"]:
 					position += 1
-					if not _issue_linked_run_matches(run, title=issue["title"], wanted=wanted):
+					if not _issue_linked_run_matches(run, title=issue["title"], wanted=wanted, number=number):
 						continue
 					if not code_ref_run_eligible(run, None, repo=repo, mirror_branch=mirror_branch):
 						continue

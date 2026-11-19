@@ -346,7 +346,7 @@ def test_final_ci_dispatch_run_rejects_a_malformed_pr_number(tmp_path: Path, ori
 
 
 def test_checkouts_use_the_merge_ref_in_dispatch_runs() -> None:
-	ref = "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+	ref = "${{ github.event_name == 'workflow_dispatch' && inputs.pr_number && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
 	for job_id, job in _jobs().items():
 		if job_id in ("budget-watch", "lint", "final-ci-failed"):
 			continue

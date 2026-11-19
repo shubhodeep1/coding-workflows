@@ -460,9 +460,13 @@ def test_standalone_recovery_sweep_runs_without_tracking_issues() -> None:
 	assert run.index("exit 0") < run.index("bash scripts/orchestrate_poll_process.sh")
 	# The poller mode runs recovery only and sits after the other sweep modes.
 	# Caps are primed first so idle-tick dispatches honour concurrency_caps.yml.
+	# The persistence-budget queue-pause interval is recorded right after the
+	# caps prime (stuck-backlog Phase 3c; see tests/test_queue_backpressure.py).
 	block = (
 		STANDALONE_SWEEP_POLLER_GUARD
 		+ '\n  prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"'
+		+ "\n  # Queue-pause interval for the persistence budget (stuck-backlog Phase 3c)."
+		+ "\n  queue_backpressure_record_pause_interval || true"
 		+ "\n  run_standalone_stall_recovery"
 		# Issue #9481: the triage-only close sweep gates stuck ai:check-triage issues.
 		+ "\n  # Issue #9481: gate stuck ai:check-triage issues (any phase) on idle ticks"

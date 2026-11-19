@@ -1,0 +1,4 @@
+<!-- changelog: fixed -->
+- **The poller now sees queued clarify-respond runs too.** `internal-orchestrate-clarify-respond.yml` and the consumer template `ai-orchestrate-clarify-respond.yml` now name their runs `<workflow name> [issue:N]`, like the clarify, plan and implement wrappers. These runs start from issue comments on the default branch, so before this change a queued clarify-respond run linked to its issue only through `head_branch` and looked absent, and stall recovery could re-dispatch the issue (Refs #9421, follow-up to #9748). Issues whose titles start with `[E2E ` keep the issue title as the run title, because the stable release gate finds smoke runs by that title.
+
+What this means for consumer repos: after the next `@stable` sync, clarify-respond runs show as `AI Orchestrate Clarify Respond [issue:N]` in the Actions list instead of the issue title.

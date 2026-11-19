@@ -534,7 +534,7 @@ def test_sync_job_runs_only_in_sync_quick_dispatches_and_verifies_first() -> Non
 	assert job["if"] == "inputs.mode != 'quick' && github.event_name == 'workflow_dispatch' && inputs.sync_quick == 'true'"
 	assert job["permissions"] == {"contents": "read", "actions": "read"}
 	steps = job["steps"]
-	assert steps[0]["with"]["ref"] == "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+	assert steps[0]["with"]["ref"] == "${{ github.event_name == 'workflow_dispatch' && inputs.pr_number && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
 	assert steps[0]["with"]["fetch-depth"] == 3
 	assert steps[0]["with"]["persist-credentials"] is False
 	runs = [step.get("run", "") for step in steps]

@@ -692,6 +692,9 @@ def test_ci_runs_this_suite_and_sets_the_parity_base_only_from_the_pr_event():
 	assert parity_assignments
 	assert set(parity_assignments) <= {pr_event_only, pr_event_or_final_ci}
 	assert ci.count(pr_event_or_final_ci) == 6
+	# 7 settings in total: the tests-system-python job env keeps the plain PR-event form.
+	assert len(parity_assignments) == 7
+	assert parity_assignments.count(pr_event_only) == 1
 	for gate_workflow in ("mark-stable.yml", "test-and-mark-stable.yml"):
 		assert "CLAUDE_PARITY_PR_BASE_SHA" not in (REPO_ROOT / ".github" / "workflows" / gate_workflow).read_text(encoding="utf-8")
 

@@ -55,7 +55,7 @@ ADVISORY_JOB_IF = "always() && github.event_name == 'push' && github.ref == 'ref
 # failed `lint` in a workflow_dispatch run and gates nothing, so it is neither
 # a worker job nor in `lint.needs`. Pinned in FinalCiFailedJobTest below.
 FINAL_CI_JOB_IDS = frozenset({"final-ci-failed"})
-FINAL_CI_JOB_IF = "failure() && !cancelled() && github.event_name == 'workflow_dispatch' && needs.lint.result == 'failure'"
+FINAL_CI_JOB_IF = "failure() && !cancelled() && github.event_name == 'workflow_dispatch' && !inputs.runner_image && needs.lint.result == 'failure'"
 # `lint` runs even when a needed job fails, except in quick mode, where its
 # needed test jobs are skipped (Phase 4).
 AGGREGATE_JOB_IF = "always() && inputs.mode != 'quick'"
@@ -199,7 +199,9 @@ class SystemPythonJobTest(unittest.TestCase):
 		install = steps["Install Python CI dependencies"]["run"]
 		self.assertIn("sys.base_prefix", install)
 		self.assertIn('!= "/usr"', install)
-		self.assertEqual(jobs[self.SYSTEM_PYTHON_JOB_ID]["runs-on"], "ubuntu-latest")
+		# Pinned like every other ci.yml job; the nightly runner-image canary
+		# passes runner_image: ubuntu-latest (tests/test_runner_image_pin_contract.py).
+		self.assertEqual(jobs[self.SYSTEM_PYTHON_JOB_ID]["runs-on"], "${{ inputs.runner_image || 'ubuntu-26.04' }}")
 
 	def test_system_python_shards_come_from_the_matrix(self) -> None:
 		job = _ci_jobs()[self.SYSTEM_PYTHON_JOB_ID]

@@ -51,6 +51,12 @@ env:
   PERSIST_MAX_ROUNDS: ${{ vars.PERSIST_MAX_ROUNDS || '5' }}
   PERSIST_MAX_HOURS: ${{ vars.PERSIST_MAX_HOURS || '48' }}
   PERSIST_REPLAN_AFTER_FAILED_ROUNDS: ${{ vars.PERSIST_REPLAN_AFTER_FAILED_ROUNDS || '3' }}
+  # Persistence budget queue pause and inherited-round exemption (stuck-backlog
+  # Phase 3c): default on, also defaulted in scripts/persist_budget.py and
+  # scripts/orchestrate_poll_process.sh. 'false' restores the earlier
+  # max_hours / max_rounds behaviour.
+  PERSIST_QUEUE_PAUSE_ENABLED: ${{ vars.PERSIST_QUEUE_PAUSE_ENABLED || 'true' }}
+  PERSIST_INHERITED_ROUNDS_EXEMPT: ${{ vars.PERSIST_INHERITED_ROUNDS_EXEMPT || 'true' }}
   # Orchestrator context (issue #8427, P7): default off; see scripts/persist_orchestrator.py.
   PERSIST_ORCH_CONTEXT_ENABLED: ${{ vars.PERSIST_ORCH_CONTEXT_ENABLED || 'false' }}
   # Grouping repeated failures (issue #8427, P8): default off; see scripts/persist_orchestrator.py.
@@ -102,7 +108,7 @@ env:
 
 jobs:
   poll:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     concurrency:
       # Only one poller per repo at a time; newer runs queue instead of
       # killing the active run (which may be mid-way through conflict
@@ -135,6 +141,11 @@ jobs:
             echo "SEMBLE_BIN="
             echo "SEMBLE_INDEX_AVAILABLE=false"
             echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"
+            # Queue backpressure marker (stuck-backlog Phase 3c), outside the
+            # checkout so it is never committed. Must equal the per-step
+            # QUEUE_BACKPRESSURE_STATE_FILE env of the poller steps; the Phase 3b
+            # "Restore/Save queue backpressure state" steps carry it between ticks.
+            echo "QUEUE_BACKPRESSURE_STATE_FILE=${RUNNER_TEMP}/queue-backpressure-state/state.json"
           } >> "$GITHUB_ENV"
 
       - name: Record GH_PAT budget at poll start
@@ -750,6 +761,27 @@ jobs:
             _fetched_scripts+=("${f}")
           done
 
+          # Issue #9766: red-base approval hold helper sourced by the poller's
+          # stall-recovery plan gate. Optional: when absent, the checkout copy is
+          # removed (a consumer file is never sourced into this secret-bearing
+          # job) and the gate keeps the legacy behaviour (no hold).
+          for f in plan_base_ci_gate.sh; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::notice::Optional red-base approval hold helper ${f} unavailable on ${SCRIPT_REF}; poller plan auto-approval is not held on a red base."
+              rm -f "scripts/${f}"
+              echo "PLAN_BASE_CI_GATE_STAGED=false" >> "$GITHUB_ENV"
+              continue
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
+            _fetched_scripts+=("${f}")
+            # The poller sources the helper only when this flag is true.
+            echo "PLAN_BASE_CI_GATE_STAGED=true" >> "$GITHUB_ENV"
+          done
+
           # Smoke-fixture project backstop sourced by the poller. Optional:
           # when absent, the poller's stub leaves smoke fixture projects on the
           # normal path (SMOKE_FIXTURE_REAP reason=helper_unavailable).
@@ -1033,6 +1065,8 @@ jobs:
           RECLARIFY_UNROUTED_GRACE_MINUTES: ${{ vars.RECLARIFY_UNROUTED_GRACE_MINUTES || '15' }}
           RECLARIFY_UNROUTED_MAX_AGE_HOURS: ${{ vars.RECLARIFY_UNROUTED_MAX_AGE_HOURS || '168' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
+          RED_BASE_APPROVAL_HOLD_ENABLED: ${{ vars.RED_BASE_APPROVAL_HOLD_ENABLED || 'true' }}
+          RED_BASE_HOLD_WORKFLOWS: ${{ vars.RED_BASE_HOLD_WORKFLOWS || '.github/workflows/ci.yml' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
@@ -1397,6 +1431,18 @@ jobs:
           key: claude-pool-daily-usage-v1-${{ steps.pool_daily_slot.outputs.date }}
           lookup-only: true
 
+      # Queue backpressure hysteresis marker (stuck-backlog Phase 3b). Cache
+      # keys cannot be overwritten, so each run saves under its own key and the
+      # next run restores the newest one by prefix. A miss reads as inactive.
+      - name: Restore queue backpressure state
+        id: queue_backpressure_restore
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/queue-backpressure-state
+          key: queue-backpressure-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: queue-backpressure-state-v1-
+
       - name: Process each tracking issue
         if: steps.find_tracking.outputs.has_work == 'true'
         env:
@@ -1471,6 +1517,8 @@ jobs:
           # Issue #7657: the close sweep leaves a bound partial-delivery PR's issue open.
           PARTIAL_DELIVERY_TRACKING_ENABLED: ${{ vars.PARTIAL_DELIVERY_TRACKING_ENABLED || 'true' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
+          RED_BASE_APPROVAL_HOLD_ENABLED: ${{ vars.RED_BASE_APPROVAL_HOLD_ENABLED || 'true' }}
+          RED_BASE_HOLD_WORKFLOWS: ${{ vars.RED_BASE_HOLD_WORKFLOWS || '.github/workflows/ci.yml' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
@@ -1511,6 +1559,13 @@ jobs:
           RB_JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.RB_JUDGE_ISOLATION_MAX_FAILURES || '3' }}
           JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.JUDGE_ISOLATION_MAX_FAILURES || '3' }}
           STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
+          # Queue backpressure with hysteresis (scripts/orchestrate_poll_process.sh
+          # queue_backpressure_holds_dispatch): on at depth >= HIGH, off below
+          # LOW, held in between from the cached marker. HIGH=-1 turns it off.
+          ACTIONS_QUEUE_BACKPRESSURE_HIGH: ${{ vars.ACTIONS_QUEUE_BACKPRESSURE_HIGH || '150' }}
+          ACTIONS_QUEUE_BACKPRESSURE_LOW: ${{ vars.ACTIONS_QUEUE_BACKPRESSURE_LOW || '50' }}
+          QUEUED_RUN_ZOMBIE_MINUTES: ${{ vars.QUEUED_RUN_ZOMBIE_MINUTES || '1440' }}
+          QUEUE_BACKPRESSURE_STATE_FILE: ${{ runner.temp }}/queue-backpressure-state/state.json
           # Merge-base freshness gate (scripts/pr_checks_lib.sh, Q35: A).
           MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
           MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
@@ -1706,6 +1761,8 @@ jobs:
           # Issue #7657: the close sweep leaves a bound partial-delivery PR's issue open.
           PARTIAL_DELIVERY_TRACKING_ENABLED: ${{ vars.PARTIAL_DELIVERY_TRACKING_ENABLED || 'true' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
+          RED_BASE_APPROVAL_HOLD_ENABLED: ${{ vars.RED_BASE_APPROVAL_HOLD_ENABLED || 'true' }}
+          RED_BASE_HOLD_WORKFLOWS: ${{ vars.RED_BASE_HOLD_WORKFLOWS || '.github/workflows/ci.yml' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
@@ -1740,6 +1797,13 @@ jobs:
           RB_JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.RB_JUDGE_ISOLATION_MAX_FAILURES || '3' }}
           JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.JUDGE_ISOLATION_MAX_FAILURES || '3' }}
           STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
+          # Queue backpressure with hysteresis (scripts/orchestrate_poll_process.sh
+          # queue_backpressure_holds_dispatch): on at depth >= HIGH, off below
+          # LOW, held in between from the cached marker. HIGH=-1 turns it off.
+          ACTIONS_QUEUE_BACKPRESSURE_HIGH: ${{ vars.ACTIONS_QUEUE_BACKPRESSURE_HIGH || '150' }}
+          ACTIONS_QUEUE_BACKPRESSURE_LOW: ${{ vars.ACTIONS_QUEUE_BACKPRESSURE_LOW || '50' }}
+          QUEUED_RUN_ZOMBIE_MINUTES: ${{ vars.QUEUED_RUN_ZOMBIE_MINUTES || '1440' }}
+          QUEUE_BACKPRESSURE_STATE_FILE: ${{ runner.temp }}/queue-backpressure-state/state.json
           MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
           MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
           REVIEW_RUN_MAX_RUNTIME_MINUTES: ${{ vars.REVIEW_RUN_MAX_RUNTIME_MINUTES || '250' }}
@@ -1816,6 +1880,8 @@ jobs:
           PARTIAL_DELIVERY_TRACKING_ENABLED: ${{ vars.PARTIAL_DELIVERY_TRACKING_ENABLED || 'true' }}
           STAGED_SUPPORT_LATCH_SWEEP_ONLY: "true"
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
+          RED_BASE_APPROVAL_HOLD_ENABLED: ${{ vars.RED_BASE_APPROVAL_HOLD_ENABLED || 'true' }}
+          RED_BASE_HOLD_WORKFLOWS: ${{ vars.RED_BASE_HOLD_WORKFLOWS || '.github/workflows/ci.yml' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
@@ -1851,8 +1917,14 @@ jobs:
           UNBLOCK_SCAN_SWEEP_ONLY: "true"
           # The idle-tick check after merge (#8427 P5) primes the phase caps here.
           STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
+          # Its post-merge re-plans reach the queue backpressure hold too.
+          ACTIONS_QUEUE_BACKPRESSURE_HIGH: ${{ vars.ACTIONS_QUEUE_BACKPRESSURE_HIGH || '150' }}
+          ACTIONS_QUEUE_BACKPRESSURE_LOW: ${{ vars.ACTIONS_QUEUE_BACKPRESSURE_LOW || '50' }}
+          QUEUE_BACKPRESSURE_STATE_FILE: ${{ runner.temp }}/queue-backpressure-state/state.json
           STALL_THRESHOLD_IMPLEMENTING_MINUTES: ${{ vars.STALL_THRESHOLD_IMPLEMENTING_MINUTES || '' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
+          RED_BASE_APPROVAL_HOLD_ENABLED: ${{ vars.RED_BASE_APPROVAL_HOLD_ENABLED || 'true' }}
+          RED_BASE_HOLD_WORKFLOWS: ${{ vars.RED_BASE_HOLD_WORKFLOWS || '.github/workflows/ci.yml' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
@@ -1908,6 +1980,16 @@ jobs:
 
       - name: Run worktree registry GC
         run: bash scripts/worktree_gc.sh
+
+      # Saves the marker the poller wrote this tick. When no step wrote it the
+      # save only warns about the missing path, which continue-on-error absorbs.
+      - name: Save queue backpressure state
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/queue-backpressure-state
+          key: queue-backpressure-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
 
       # Daily consumer health check (scripts/consumer_health_check.sh), this
       # repository only. The cache entry keyed on the UTC date records that
@@ -2338,7 +2420,7 @@ jobs:
   claude_pool_daily_usage:
     needs: poll
     if: ${{ !cancelled() && needs.poll.outputs.claude_pool_daily_due == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     concurrency:
       # A queued poll run can finish before this job saves the day's marker;

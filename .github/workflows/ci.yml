@@ -62,6 +62,13 @@ name: CI
   # `static-checks` with mode `quick`; every other job is skipped by `if:`.
   # The caller's check-runs are named `<caller job> / <job>`, so a quick run
   # never creates a check named `lint`.
+  # Nightly runner-image canary (Q12: A, stuck-backlog plan Phase 1): the
+  # runner-image-canary job in nightly-validation-selftest.yml calls this
+  # workflow with runner_image: ubuntu-latest, so a GitHub runner image change
+  # shows up before the ubuntu-26.04 pin moves. Push and pull_request runs
+  # have no inputs and stay on the pin. Steps guarded on github.event_name
+  # (budget-watch, the PR-only checks) do not run under the caller's
+  # schedule / workflow_dispatch event.
   workflow_call:
     inputs:
       mode:
@@ -69,6 +76,11 @@ name: CI
         required: false
         default: full
         type: string
+      runner_image:
+        description: "Runner label for every job; empty means the pinned ubuntu-26.04 (used by the nightly runner-image canary)."
+        type: string
+        required: false
+        default: ""
 
 # Dispatch runs carry their PR in the run name, like the review wrappers'
 # `[pr:N]` runs; every other event keeps GitHub's default name.
@@ -91,8 +103,12 @@ run-name: "${{ github.event_name == 'workflow_dispatch' && format('CI [pr:{0}]{1
 # cancels the PR's older final run; a quick run called with mode `quick`
 # (its event is the caller's pull_request) gets a group of its own here,
 # because its caller workflow cancels replaced quick runs itself.
+# The `inputs.pr_number &&` terms here and in the checkout refs keep the
+# nightly runner-image canary (a workflow_call with no pr_number) off the
+# final-CI arms when Nightly is dispatched by hand: it gets `ci-<run id>` and
+# the default ref instead of `ci-final-pr-` and `refs/pull//merge`.
 concurrency:
-  group: ${{ inputs.mode == 'quick' && format('ci-quick-{0}', github.run_id) || github.event_name == 'workflow_dispatch' && format('ci-final-pr-{0}', inputs.pr_number) || github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && format('ci-push-{0}', github.ref) || format('ci-{0}', github.run_id) }}
+  group: ${{ inputs.mode == 'quick' && format('ci-quick-{0}', github.run_id) || github.event_name == 'workflow_dispatch' && inputs.pr_number && format('ci-final-pr-{0}', inputs.pr_number) || github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && format('ci-push-{0}', github.ref) || format('ci-{0}', github.run_id) }}
   cancel-in-progress: ${{ inputs.mode != 'quick' && (github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request') }}
 
 env:
@@ -136,7 +152,7 @@ jobs:
     # It then took 14m21s of its 15 minutes on main (run 43139141266,
     # budget-watch issue #9362), so "Validation self-test unit tests" now runs
     # its module commands in four concurrent lanes in place (see that step).
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 15
     # The actionlint tarball cache key (#9056) reads these values through the
     # `env` context, so they are set at job level. The `Install actionlint`
@@ -153,7 +169,7 @@ jobs:
         with:
           # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
           # other event keeps the default ref.
-          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+          ref: "${{ github.event_name == 'workflow_dispatch' && inputs.pr_number && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
 
       # The merge ref must merge into the run's base (the base tip when the
       # run was dispatched, the same in every job): GitHub refreshes
@@ -334,6 +350,18 @@ jobs:
             fi
           done
 
+      # Runner-image canary only (empty input on push / pull_request skips it):
+      # runs the image's own system python3, before setup-python replaces it,
+      # because clarify/plan/review/judge call scripts/render_prompt.py on the
+      # system interpreter and that is what broke on the 26.04 image (#9200).
+      - name: Runner-image canary system python smoke
+        if: inputs.runner_image != ''
+        run: |
+          set -euo pipefail
+          command -v python3
+          python3 --version
+          python3 scripts/render_prompt.py --help >/dev/null
+
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
@@ -405,11 +433,13 @@ jobs:
       # (auto/forward-merge-stable-*) is skipped too: it carries the release
       # fold's generated agents.md text. Both skips apply only to a
       # same-repository head targeting the default branch, so a branch name
-      # alone does not exempt an ordinary PR.
+      # alone does not exempt an ordinary PR. `!inputs.runner_image` keeps it
+      # out of the nightly runner-image canary, whose call sees
+      # workflow_dispatch (with no PR) when Nightly is run by hand.
       - name: agents.md direct-edit check (CLAUDE.md §30)
         if: >-
           (github.event_name == 'pull_request' && !(github.event.pull_request.head.repo.full_name == github.repository && github.base_ref == github.event.repository.default_branch && (startsWith(github.head_ref, 'orchestrator/project-') || startsWith(github.head_ref, 'auto/forward-merge-stable-')))) ||
-          github.event_name == 'workflow_dispatch'
+          (github.event_name == 'workflow_dispatch' && !inputs.runner_image)
         env:
           FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
           GH_TOKEN: ${{ github.token }}
@@ -879,7 +909,7 @@ jobs:
     # room for a cold runner.
     # Skipped in quick mode (Phase 4): only static-checks runs there.
     if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -887,7 +917,7 @@ jobs:
         with:
           # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
           # other event keeps the default ref.
-          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+          ref: "${{ github.event_name == 'workflow_dispatch' && inputs.pr_number && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
           # Shallow: the next step fetches the base commit and the history
           # window that the parity/drift `base...HEAD` diff and the Prepare
           # step's sync need, and fails the job if it cannot.
@@ -1530,7 +1560,7 @@ jobs:
     # room for a cold runner.
     # Skipped in quick mode (Phase 4): only static-checks runs there.
     if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -1538,7 +1568,7 @@ jobs:
         with:
           # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
           # other event keeps the default ref.
-          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+          ref: "${{ github.event_name == 'workflow_dispatch' && inputs.pr_number && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
 
       # The merge ref must merge into the run's base (the base tip when the
       # run was dispatched, the same in every job): GitHub refreshes
@@ -2030,7 +2060,7 @@ jobs:
     # room for a cold runner.
     # Skipped in quick mode (Phase 4): only static-checks runs there.
     if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -2038,7 +2068,7 @@ jobs:
         with:
           # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
           # other event keeps the default ref.
-          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+          ref: "${{ github.event_name == 'workflow_dispatch' && inputs.pr_number && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
 
       # The merge ref must merge into the run's base (the base tip when the
       # run was dispatched, the same in every job): GitHub refreshes
@@ -2173,6 +2203,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_step_scripts_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_file_size_limit.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_step_scripts_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_runner_image_pin_contract.py
 
       - name: Review autofix retired Claude-fixer hand-off and validate target_ref contract tests
         run: |
@@ -2650,7 +2681,7 @@ jobs:
     # room for a cold runner.
     # Skipped in quick mode (Phase 4): only static-checks runs there.
     if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -2658,7 +2689,7 @@ jobs:
         with:
           # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
           # other event keeps the default ref.
-          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+          ref: "${{ github.event_name == 'workflow_dispatch' && inputs.pr_number && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
           # Shallow: tests/claude_template_drift.py diffs against the PR base
           # SHA, so the next step fetches that commit and the history window
           # its `base...HEAD` diff needs, and fails the job if it cannot.
@@ -3449,7 +3480,7 @@ jobs:
     # (moved from tests-hooks-and-orchestrator).
     # Skipped in quick mode (Phase 4): only static-checks runs there.
     if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     strategy:
       # Every group reports on its own; `lint` fails if any of them fails.
       fail-fast: false
@@ -3462,7 +3493,7 @@ jobs:
         with:
           # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
           # other event keeps the default ref.
-          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+          ref: "${{ github.event_name == 'workflow_dispatch' && inputs.pr_number && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
 
       # The merge ref must merge into the run's base (the base tip when the
       # run was dispatched, the same in every job): GitHub refreshes
@@ -4252,7 +4283,7 @@ jobs:
     # editing the matrix list alone (job-index / job-total feed the step).
     # Skipped in quick mode (Phase 4): only static-checks runs there.
     if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -4272,7 +4303,7 @@ jobs:
         with:
           # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
           # other event keeps the default ref.
-          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+          ref: "${{ github.event_name == 'workflow_dispatch' && inputs.pr_number && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
           # Shallow: the next step fetches the base commit and the history
           # window that the parity/drift `base...HEAD` diff and the Prepare
           # step's sync need, and fails the job if it cannot.
@@ -4575,7 +4606,7 @@ jobs:
     # network, no credential and no root.
     # Skipped in quick mode (Phase 4): only static-checks runs there.
     if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -4589,7 +4620,7 @@ jobs:
         with:
           # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
           # other event keeps the default ref.
-          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+          ref: "${{ github.event_name == 'workflow_dispatch' && inputs.pr_number && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
           fetch-depth: 1
           persist-credentials: false
 
@@ -4724,7 +4755,7 @@ jobs:
     # the CI-structure tests. Skipped in every other run; `lint` accepts that
     # skip only when sync_quick is not "true".
     if: inputs.mode != 'quick' && github.event_name == 'workflow_dispatch' && inputs.sync_quick == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -4736,7 +4767,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+          ref: "${{ github.event_name == 'workflow_dispatch' && inputs.pr_number && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
           fetch-depth: 3
           persist-credentials: false
 
@@ -4795,7 +4826,7 @@ jobs:
       - tests-system-python
       - tests-sandbox-python
       - tests-sync-quick
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -4841,7 +4872,7 @@ jobs:
     # and the quick caller's checks are named `<caller job> / ...`, never
     # `lint`.
     if: always() && inputs.mode != 'quick'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 5
     steps:
       # Docs-only final CI (run-volume plan item 4): the test jobs were skipped
@@ -4928,9 +4959,11 @@ jobs:
     # dispatches the PR's review workflow, which collects the failing
     # check-runs so the autofix can fix them. It is not in `lint.needs` and
     # gates nothing. Script and log contract: scripts/review_final_ci_failed.sh.
+    # `!inputs.runner_image` keeps it out of the nightly runner-image canary,
+    # whose call also sees workflow_dispatch when Nightly is run by hand.
     needs: lint
-    if: failure() && !cancelled() && github.event_name == 'workflow_dispatch' && needs.lint.result == 'failure'
-    runs-on: ubuntu-latest
+    if: failure() && !cancelled() && github.event_name == 'workflow_dispatch' && !inputs.runner_image && needs.lint.result == 'failure'
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 5
     permissions:
       contents: read

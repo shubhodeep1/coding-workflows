@@ -2917,6 +2917,15 @@ fi
 # human /approved (see _plan_auto_approval_gate).
 AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-true}"
 
+# Issue #9766: red-base hold in the stall-recovery plan gate (see
+# _plan_red_base_gate). The kill switch keeps an explicitly empty value
+# (empty = on, the helper's own meaning); PLAN_BASE_CI_GATE_STAGED is set by
+# orchestrate_poll.yml's staging step only when the pipeline copy of
+# scripts/plan_base_ci_gate.sh was installed.
+RED_BASE_APPROVAL_HOLD_ENABLED="${RED_BASE_APPROVAL_HOLD_ENABLED-true}"
+RED_BASE_HOLD_WORKFLOWS="${RED_BASE_HOLD_WORKFLOWS:-.github/workflows/ci.yml}"
+PLAN_BASE_CI_GATE_STAGED="${PLAN_BASE_CI_GATE_STAGED:-false}"
+
 # Issue #8249: heal-route counterfactual gate for stall-recovery
 # auto-approval (see _plan_heal_counterfactual_check). On by default; `false`
 # turns it off, any other value is treated as `true` with a warning.
@@ -18294,6 +18303,17 @@ sync_validation_fix_issues_from_comments() {
 
 declare -g _ACTIONS_RUNS_BLOB_CACHE=''
 declare -g _ACTIONS_RUNS_BLOB_READY='false'
+# Queue depth from the queued read's total_count (stuck-backlog Phase 3). The
+# cached blob holds at most 50 queued rows, so the row count cannot reach the
+# backpressure threshold. Every path that reuses the ai_memory cached rows
+# (in-TTL hit, 304 reuse, and the mktemp-failure and unconfirmed-fetch
+# fallbacks) restores it from the depth the last fresh read stamped on the
+# cached queued rows, when that stamp is under 1800s old (3600s on the 304
+# path; see _actions_queued_total_from_cached_runs). Empty means unknown: no fresh
+# stamp, or a fallback with no cache hit, leaves it empty, and the
+# backpressure hold then fails open (legacy behaviour). An in-process ready cache hit returns before the reset and keeps
+# the tick's first value.
+declare -g ACTIONS_QUEUED_TOTAL=''
 declare -g PHASE_CAPS_ENABLED='false'
 declare -g PHASE_CAPS_STATUS='missing'
 declare -g PHASE_CAPS_GLOBAL_MAX='-1'
@@ -18301,12 +18321,46 @@ declare -g PHASE_CAPS_GLOBAL_RUNNING='0'
 declare -g PHASE_CAPS_MAX_BY_STATE='{}'
 declare -g PHASE_CAPS_RUNNING_BY_STATE='{}'
 
+# Restore ACTIONS_QUEUED_TOTAL on the loader's TTL-hit and 304 paths, which
+# skip the queued read (stuck-backlog Phase 3). The fresh path stamps each
+# cached queued row with _poller_queued_total / _poller_queued_total_at (the
+# cache schema allows extra row fields), so a 304 tick in a jammed queue, where
+# the in-progress ETag rarely changes, still sees the last depth read. A
+# snapshot older than the age bound (optional third argument, default 1800s),
+# or none, leaves the depth unknown (fail open), so a queue that drained
+# without any run starting cannot hold dispatch forever. The 304 path passes
+# 3600s: a 304 means the in-progress list is unchanged since the last fresh
+# read, so no run of this repo started or finished and the queue can only have
+# shrunk through cancellation; the 3600s cap still bounds that case. Without it
+# a jam whose in-progress ETag never changes (e.g. the account's runner pool is
+# held by other repos) restored the depth on one 15-minute tick only.
+# Adds no API call. Always returns 0.
+_actions_queued_total_from_cached_runs() {
+  local aqt_runs="$1"
+  local aqt_now="$2"
+  local aqt_max_age="${3:-1800}"
+  local aqt_restored=''
+  [[ "${aqt_now}" =~ ^[0-9]+$ ]] || return 0
+  [[ "${aqt_max_age}" =~ ^[1-9][0-9]{0,6}$ ]] || aqt_max_age=1800
+  aqt_restored="$(printf '%s' "${aqt_runs}" | jq -r --argjson now "${aqt_now}" --argjson max_age "${aqt_max_age}" '
+    [ .[]? | objects
+      | select((._poller_queued_total | type) == "number" and (._poller_queued_total_at | type) == "number")
+      | select(($now - ._poller_queued_total_at) >= 0 and ($now - ._poller_queued_total_at) < $max_age)
+      | ._poller_queued_total | floor ]
+    | if length > 0 then (max | tostring) else "" end' 2>/dev/null || true)"
+  if [[ "${aqt_restored}" =~ ^[0-9]+$ ]]; then
+    ACTIONS_QUEUED_TOTAL="${aqt_restored}"
+  fi
+  return 0
+}
+
 _load_actions_runs_cached() {
   local empty_blob='{"workflow_runs":[]}'
   if [ "${_ACTIONS_RUNS_BLOB_READY}" = "true" ]; then
     printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE:-${empty_blob}}"
     return 0
   fi
+  ACTIONS_QUEUED_TOTAL=''
 
   local repo="${GITHUB_REPOSITORY:-}"
   if [ -z "${repo}" ]; then
@@ -18345,6 +18399,7 @@ _load_actions_runs_cached() {
   fi
 
   if [ "${cache_hit}" = "true" ] && [ "${cache_age_seconds}" -lt "${ACTIONS_RUNS_CACHE_TTL_SECONDS}" ]; then
+    _actions_queued_total_from_cached_runs "${cached_runs}" "${now_epoch}"
     _ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
     _ACTIONS_RUNS_BLOB_READY="true"
     printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
@@ -18363,10 +18418,14 @@ _load_actions_runs_cached() {
 	if [ -z "${response_file}" ] || [ -z "${response_body_file}" ] || [ -z "${response_err}" ]; then
 		echo "::warning::rate_limit_audit_fallback helper=_load_actions_runs_cached reason=mktemp_failed repo=${repo}" >&2
 		if [ "${cache_hit}" = "true" ]; then
+			# Reused cached rows keep their depth stamp (under 1800s old only).
+			_actions_queued_total_from_cached_runs "${cached_runs}" "${now_epoch}"
 			_ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
 		else
 			_ACTIONS_RUNS_BLOB_CACHE="${empty_blob}"
 		fi
+		# Remove whichever temp files mktemp did create (empty names are ignored).
+		rm -f "${response_file}" "${response_body_file}" "${response_err}" 2>/dev/null || true
 		_ACTIONS_RUNS_BLOB_READY="true"
 		printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
 		return 0
@@ -18418,6 +18477,8 @@ _load_actions_runs_cached() {
       else
         echo "::warning::rate_limit_audit_fallback helper=_load_actions_runs_cached reason=mktemp_failed_ttl_put_file repo=${repo}" >&2
       fi
+      # 304: in-progress list unchanged, so trust the stamp up to 3600s.
+      _actions_queued_total_from_cached_runs "${cached_runs}" "${now_epoch}" 3600
       _ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
       _ACTIONS_RUNS_BLOB_READY="true"
       rm -f "${response_file}" "${response_body_file}" "${response_err}"
@@ -18430,8 +18491,24 @@ _load_actions_runs_cached() {
 		local runs_only
 		runs_only="$(printf '%s' "${body_json}" | jq -c '.workflow_runs // []' 2>/dev/null || echo '[]')"
 		local queued_runs='[]'
-		queued_runs="$(gh_retry _safe_gh_jq "repos/${repo}/actions/runs?status=queued&per_page=50" --jq '.workflow_runs' || echo '[]')"
+		# Same queued read as before; it also projects total_count so the queue
+		# backpressure hold sees the real depth (no extra API call, §14). A bare
+		# array (older shape or a stub) still works and leaves the total unknown.
+		local queued_read_json='[]'
+		queued_read_json="$(gh_retry _safe_gh_jq "repos/${repo}/actions/runs?status=queued&per_page=50" --jq '{total_count: .total_count, workflow_runs: .workflow_runs}' || echo '[]')"
+		[ -n "${queued_read_json}" ] || queued_read_json='[]'
+		queued_runs="$(printf '%s' "${queued_read_json}" | jq -c 'if type == "object" then (.workflow_runs // []) elif type == "array" then . else [] end' 2>/dev/null || echo '[]')"
 		[ -n "${queued_runs}" ] || queued_runs='[]'
+		local queued_total_read=''
+		queued_total_read="$(printf '%s' "${queued_read_json}" | jq -r 'if type == "object" and (.total_count | type) == "number" then (.total_count | floor | tostring) else "" end' 2>/dev/null || echo '')"
+		if [[ "${queued_total_read}" =~ ^[0-9]+$ ]]; then
+			ACTIONS_QUEUED_TOTAL="${queued_total_read}"
+			# Stamp the depth on the queued rows so the cache carries it to later
+			# 304 / TTL-hit ticks (_actions_queued_total_from_cached_runs).
+			local queued_runs_stamped=''
+			queued_runs_stamped="$(printf '%s' "${queued_runs}" | jq -c --argjson total "${queued_total_read}" --argjson at "${now_epoch}" 'map(if type == "object" then . + {_poller_queued_total: $total, _poller_queued_total_at: $at} else . end)' 2>/dev/null || true)"
+			[ -z "${queued_runs_stamped}" ] || queued_runs="${queued_runs_stamped}"
+		fi
 		# Include a small completed window so stall-judge diagnostics can inspect
 		# recent review/autofix workflow outcomes (conclusions).
 		local completed_runs='[]'
@@ -18472,6 +18549,8 @@ _load_actions_runs_cached() {
   _fetch_status="$(printf '%s' "${status_line:-none}" | tr -d '\r' | cut -c1-80 || true)"
   printf '%s\n' "::warning::rate_limit_audit_fallback helper=_load_actions_runs_cached reason=fetch_unconfirmed repo=${repo} api_rc=${api_rc} status='${_fetch_status:-none}' cache_hit=${cache_hit} err='${_fetch_err_line}'" >&2
   if [ "${cache_hit}" = "true" ]; then
+    # Reused cached rows keep their depth stamp (under 1800s old only).
+    _actions_queued_total_from_cached_runs "${cached_runs}" "${now_epoch}"
     _ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
   else
     _ACTIONS_RUNS_BLOB_CACHE="${empty_blob}"
@@ -18505,6 +18584,233 @@ phase_cap_running_for_state() {
   jq -r --arg state "${state}" '.[$state] // 0' <<<"${PHASE_CAPS_RUNNING_BY_STATE:-"{}"}" 2>/dev/null || echo 0
 }
 
+# Queue backpressure (stuck-backlog Phase 3 / 3b). The Actions queue depth
+# (ACTIONS_QUEUED_TOTAL, from the per-tick loader's queued read) drives a hold
+# on every dispatch that would add runs to a jammed queue, with hysteresis:
+# on at depth >= ACTIONS_QUEUE_BACKPRESSURE_HIGH (default 150), off below
+# ACTIONS_QUEUE_BACKPRESSURE_LOW (default 50), and between the two the state
+# the previous tick left in QUEUE_BACKPRESSURE_STATE_FILE (default empty: no
+# marker, so between LOW and HIGH reads as off, the legacy stateless hold).
+# orchestrate_poll.yml restores and saves that marker through actions/cache.
+# The marker is JSON {"active": bool, "intervals": [...]}; a missing,
+# unreadable, oversized (> 64 KiB) or malformed marker reads as inactive, and
+# an existing "intervals" array is carried forward untouched.
+# Fail open: an unknown depth never holds and leaves the marker as it is (the
+# tick is not marked evaluated, so a later call after the loader runs still
+# evaluates); a non-numeric HIGH or LOW warns once (reason=invalid_threshold)
+# and HIGH < 1 (e.g. -1) disables the hold, both writing an inactive marker;
+# LOW < 1 or LOW >= HIGH falls back to the stateless hold at HIGH with one
+# ::warning:: (outcome=stateless). The state is evaluated once per shell per
+# tick (queue_backpressure_refresh_tick_state runs it right after the loader)
+# and reused by every later call. Self-contained on purpose: tests copy this
+# function out alone, so it calls no helper. Never calls the loader, so it
+# adds no API call. Returns 0 to hold; the reserved action tick_refresh only
+# evaluates and never holds. The one-line per-shell summary (outcome=on|off|
+# unknown) and the transition line go to stderr so legacy callers' stdout is
+# unchanged; the outcome=held line goes to stdout like phase_capped.
+declare -g QUEUE_BACKPRESSURE_ACTIVE='false'
+declare -g _QUEUE_BACKPRESSURE_LOGGED='false'
+declare -g _QUEUE_BACKPRESSURE_EVALUATED='false'
+declare -g _QUEUE_BACKPRESSURE_EVAL_QUEUED=''
+declare -g _QUEUE_BACKPRESSURE_STATELESS_WARNED='false'
+declare -g _QUEUE_BACKPRESSURE_WRITE_WARNED='false'
+
+queue_backpressure_holds_dispatch() {
+  local qbp_state="$1"
+  local qbp_action="$2"
+  local qbp_issue="$3"
+  local qbp_high='' qbp_low='' qbp_total='' qbp_file='' qbp_mode='hysteresis'
+  local qbp_prev='false' qbp_intervals='[]' qbp_size='' qbp_dir='' qbp_tmp='' qbp_transition=''
+
+  case "${qbp_action}" in
+    attempt_merge|escalate_human|skip)
+      return 1
+      ;;
+  esac
+
+  if [ "${_QUEUE_BACKPRESSURE_EVALUATED:-false}" != "true" ]; then
+    ACTIONS_QUEUE_BACKPRESSURE_HIGH="${ACTIONS_QUEUE_BACKPRESSURE_HIGH:-150}"
+    ACTIONS_QUEUE_BACKPRESSURE_LOW="${ACTIONS_QUEUE_BACKPRESSURE_LOW:-50}"
+    qbp_high="${ACTIONS_QUEUE_BACKPRESSURE_HIGH}"
+    qbp_low="${ACTIONS_QUEUE_BACKPRESSURE_LOW}"
+    qbp_file="${QUEUE_BACKPRESSURE_STATE_FILE:-}"
+    qbp_total="${ACTIONS_QUEUED_TOTAL:-}"
+    if ! [[ "${qbp_high}" =~ ^-?[0-9]+$ ]]; then
+      if [ "${_QUEUE_BACKPRESSURE_LOGGED:-false}" != "true" ]; then
+        _QUEUE_BACKPRESSURE_LOGGED='true'
+        echo "::warning::QUEUE_BACKPRESSURE outcome=off reason=invalid_threshold" >&2
+      fi
+      qbp_mode='off'
+    elif [ "${qbp_high}" -lt 1 ]; then
+      qbp_mode='off'
+    elif ! [[ "${qbp_low}" =~ ^-?[0-9]+$ ]]; then
+      if [ "${_QUEUE_BACKPRESSURE_LOGGED:-false}" != "true" ]; then
+        _QUEUE_BACKPRESSURE_LOGGED='true'
+        echo "::warning::QUEUE_BACKPRESSURE outcome=off reason=invalid_threshold" >&2
+      fi
+      qbp_mode='off'
+    elif ! [[ "${qbp_total}" =~ ^[0-9]+$ ]]; then
+      if [ "${_QUEUE_BACKPRESSURE_LOGGED:-false}" != "true" ]; then
+        _QUEUE_BACKPRESSURE_LOGGED='true'
+        echo "QUEUE_BACKPRESSURE outcome=unknown queued=unknown high=${qbp_high}" >&2
+      fi
+      QUEUE_BACKPRESSURE_ACTIVE='false'
+      return 1
+    elif [ "${qbp_low}" -lt 1 ] || [ "${qbp_low}" -ge "${qbp_high}" ]; then
+      if [ "${_QUEUE_BACKPRESSURE_STATELESS_WARNED:-false}" != "true" ]; then
+        _QUEUE_BACKPRESSURE_STATELESS_WARNED='true'
+        echo "::warning::QUEUE_BACKPRESSURE outcome=stateless reason=invalid_low low=${qbp_low} high=${qbp_high}" >&2
+      fi
+      qbp_mode='stateless'
+    fi
+
+    # Previous tick's state. Only a regular file of at most 64 KiB holding a
+    # single JSON object with "active": true counts as active.
+    if [ -n "${qbp_file}" ] && [ -f "${qbp_file}" ] && [ -r "${qbp_file}" ]; then
+      qbp_size="$(wc -c < "${qbp_file}" 2>/dev/null || true)"
+      qbp_size="${qbp_size//[[:space:]]/}"
+      if [[ "${qbp_size}" =~ ^[0-9]+$ ]] && [ "${qbp_size}" -le 65536 ]; then
+        if jq -se 'length == 1 and (.[0] | type) == "object" and .[0].active == true' "${qbp_file}" >/dev/null 2>&1; then
+          qbp_prev='true'
+        fi
+        qbp_intervals="$(jq -sc 'if length == 1 and (.[0] | type) == "object" and (.[0].intervals | type) == "array" then .[0].intervals else [] end' "${qbp_file}" 2>/dev/null || true)"
+        [[ "${qbp_intervals}" == \[* ]] || qbp_intervals='[]'
+      fi
+    fi
+
+    case "${qbp_mode}" in
+      off)
+        QUEUE_BACKPRESSURE_ACTIVE='false'
+        ;;
+      stateless)
+        if [ "${qbp_total}" -ge "${qbp_high}" ]; then
+          QUEUE_BACKPRESSURE_ACTIVE='true'
+        else
+          QUEUE_BACKPRESSURE_ACTIVE='false'
+        fi
+        ;;
+      *)
+        if [ "${qbp_total}" -ge "${qbp_high}" ]; then
+          QUEUE_BACKPRESSURE_ACTIVE='true'
+        elif [ "${qbp_total}" -lt "${qbp_low}" ]; then
+          QUEUE_BACKPRESSURE_ACTIVE='false'
+        else
+          QUEUE_BACKPRESSURE_ACTIVE="${qbp_prev}"
+        fi
+        ;;
+    esac
+    _QUEUE_BACKPRESSURE_EVALUATED='true'
+    _QUEUE_BACKPRESSURE_EVAL_QUEUED="${qbp_total}"
+
+    if [ "${qbp_mode}" != "off" ]; then
+      if [ "${_QUEUE_BACKPRESSURE_LOGGED:-false}" != "true" ]; then
+        _QUEUE_BACKPRESSURE_LOGGED='true'
+        if [ "${QUEUE_BACKPRESSURE_ACTIVE:-false}" = "true" ]; then
+          echo "QUEUE_BACKPRESSURE outcome=on queued=${qbp_total} high=${qbp_high}" >&2
+        else
+          echo "QUEUE_BACKPRESSURE outcome=off queued=${qbp_total} high=${qbp_high}" >&2
+        fi
+      fi
+      # Transitions are only meaningful against a persisted marker.
+      if [ -n "${qbp_file}" ] && [ "${QUEUE_BACKPRESSURE_ACTIVE}" != "${qbp_prev}" ]; then
+        if [ "${QUEUE_BACKPRESSURE_ACTIVE}" = "true" ]; then
+          qbp_transition='off_to_on'
+        else
+          qbp_transition='on_to_off'
+        fi
+        echo "QUEUE_BACKPRESSURE outcome=$([ "${QUEUE_BACKPRESSURE_ACTIVE}" = "true" ] && echo on || echo off) transition=${qbp_transition} queued=${qbp_total} high=${qbp_high} low=${qbp_low}" >&2
+      fi
+    fi
+
+    # Persist this tick's state atomically (temp file + rename). A failed
+    # write warns once and never fails the tick; the next tick reads the old
+    # marker.
+    if [ -n "${qbp_file}" ]; then
+      qbp_dir="$(dirname -- "${qbp_file}")"
+      if mkdir -p -- "${qbp_dir}" 2>/dev/null \
+        && qbp_tmp="$(mktemp "${qbp_dir}/.qbp.XXXXXX" 2>/dev/null)" \
+        && jq -cn --argjson active "${QUEUE_BACKPRESSURE_ACTIVE}" --argjson intervals "${qbp_intervals}" '{active: $active, intervals: $intervals}' > "${qbp_tmp}" 2>/dev/null \
+        && mv -f -- "${qbp_tmp}" "${qbp_file}" 2>/dev/null; then
+        :
+      else
+        if [ -n "${qbp_tmp}" ]; then
+          rm -f -- "${qbp_tmp}" 2>/dev/null || true
+        fi
+        if [ "${_QUEUE_BACKPRESSURE_WRITE_WARNED:-false}" != "true" ]; then
+          _QUEUE_BACKPRESSURE_WRITE_WARNED='true'
+          echo "::warning::QUEUE_BACKPRESSURE outcome=marker_write_failed" >&2
+        fi
+      fi
+    fi
+  fi
+
+  if [ "${qbp_action}" = "tick_refresh" ]; then
+    return 1
+  fi
+  qbp_total="${_QUEUE_BACKPRESSURE_EVAL_QUEUED:-${ACTIONS_QUEUED_TOTAL:-}}"
+  if [ "${QUEUE_BACKPRESSURE_ACTIVE:-false}" = "true" ]; then
+    echo "QUEUE_BACKPRESSURE outcome=held state=${qbp_state} action=${qbp_action} issue=${qbp_issue} queued=${qbp_total}"
+    return 0
+  fi
+  return 1
+}
+
+# Stall-recovery actions that dispatch a run but have no phase cap state
+# (phase_cap_state_for_action returns ""), so the stall guards never reach
+# phase_cap_can_dispatch for them. The guards call this when the state is
+# empty, so the queue backpressure hold also covers these re-dispatches.
+# Phase-cap accounting is unchanged. Returns 0 to hold (state=none in the
+# outcome=held line).
+queue_backpressure_holds_uncapped_stall_action() {
+  case "$1" in
+    retrigger_review|resolve_merge_conflict|close_and_reissue)
+      queue_backpressure_holds_dispatch "none" "$1" "$2"
+      return $?
+      ;;
+  esac
+  return 1
+}
+
+# queue_backpressure_sample_state (stuck-backlog Phase 3c). Refreshes
+# QUEUE_BACKPRESSURE_ACTIVE in the calling shell through
+# queue_backpressure_holds_dispatch (one source of truth for the threshold),
+# discarding its outcome=held stdout line; the once-per-shell outcome=on|off
+# summary still goes to stderr. No API call; an unknown depth reads as false.
+queue_backpressure_sample_state() {
+  queue_backpressure_holds_dispatch "none" "persist_budget_sample" "tick" >/dev/null || true
+  return 0
+}
+
+# queue_backpressure_record_pause_interval (stuck-backlog Phase 3c). Once per
+# poller process, after the runs loader set ACTIONS_QUEUED_TOTAL, opens or
+# closes a queue-pause interval in the QUEUE_BACKPRESSURE_STATE_FILE marker
+# (scripts/persist_budget.py record-pause; orchestrate_poll.yml restores and
+# saves the marker through actions/cache). persist_budget_govern_issue
+# subtracts those intervals from the max_hours window. Does nothing when
+# PERSIST_QUEUE_PAUSE_ENABLED is off, the marker path is unset, the helper is
+# missing, or the queue depth is unknown (the marker is left unchanged).
+# No API call. Always returns 0.
+declare -g _QUEUE_BACKPRESSURE_PAUSE_RECORDED='false'
+queue_backpressure_record_pause_interval() {
+  [ "${_QUEUE_BACKPRESSURE_PAUSE_RECORDED:-false}" = "true" ] && return 0
+  _QUEUE_BACKPRESSURE_PAUSE_RECORDED='true'
+  _is_truthy "${PERSIST_QUEUE_PAUSE_ENABLED:-true}" || return 0
+  [ -n "${QUEUE_BACKPRESSURE_STATE_FILE:-}" ] || return 0
+  [ -f scripts/persist_budget.py ] || return 0
+  [[ "${ACTIONS_QUEUED_TOTAL:-}" =~ ^[0-9]+$ ]] || return 0
+  queue_backpressure_sample_state
+  PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_budget.py record-pause \
+    --state-file "${QUEUE_BACKPRESSURE_STATE_FILE}" --active "${QUEUE_BACKPRESSURE_ACTIVE:-false}" || true
+  return 0
+}
+
+# Per-tick entry point (stuck-backlog Phase 3b): evaluates the hysteresis
+# state and writes the marker once, in the parent shell, right after the
+# loader primed ACTIONS_QUEUED_TOTAL. Never holds and never fails the tick.
+queue_backpressure_refresh_tick_state() {
+  queue_backpressure_holds_dispatch "none" "tick_refresh" "tick" || true
+}
+
 phase_cap_can_dispatch() {
   local state="$1"
   local action="$2"
@@ -18513,6 +18819,10 @@ phase_cap_can_dispatch() {
   local state_running
   local global_limit
   local global_running
+
+  if queue_backpressure_holds_dispatch "${state}" "${action}" "${issue_num}"; then
+    return 1
+  fi
 
   if [ "${PHASE_CAPS_ENABLED:-false}" != "true" ]; then
     return 0
@@ -18992,8 +19302,43 @@ build_active_issue_set() {
     ] | unique | .[]
   ' 2>/dev/null || true)"
 
+  # [issue:N] run-name linkage (stuck-backlog Phase 3). Clarify, plan and
+  # implement wrappers run on the default branch, so head_branch carries no
+  # issue number; their run-name is "<workflow name> [issue:N]". A run links
+  # only when its event is issues/issue_comment AND display_title equals
+  # name + " [issue:N]" exactly, so a pull-request title carrying a forged tag
+  # cannot suppress another issue's stall recovery. Untagged runs are
+  # unaffected. Tagged queued runs stay linked up to QUEUED_RUN_ZOMBIE_MINUTES
+  # (default 1440) after creation, because a backed-up queue holds them past
+  # the general stall cutoff.
+  QUEUED_RUN_ZOMBIE_MINUTES="${QUEUED_RUN_ZOMBIE_MINUTES:-1440}"
+  local tagged_zombie_minutes="${QUEUED_RUN_ZOMBIE_MINUTES}"
+  if ! [[ "${tagged_zombie_minutes}" =~ ^[1-9][0-9]{0,6}$ ]]; then
+    tagged_zombie_minutes="${STALL_THRESHOLD_MINUTES:-120}"
+  fi
+  [[ "${tagged_zombie_minutes}" =~ ^[0-9]+$ ]] || tagged_zombie_minutes=120
+  local tagged_run_jq_defs='
+    def tagged_issue_num:
+      if (((.event // "") == "issues") or ((.event // "") == "issue_comment"))
+         and ((.name | type) == "string")
+         and ((.display_title | type) == "string")
+      then
+        ((.display_title | capture("\\[issue:(?<num>[1-9][0-9]{0,9})\\]$")? | .num) // null) as $n
+        | if ($n != null) and (.display_title == (.name + " [issue:" + $n + "]")) then $n else empty end
+      else empty end;
+    def created_epoch:
+      ((.created_at // empty | tostring | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?) // null);
+  '
+  local tagged_fresh_nums
+  tagged_fresh_nums="$(printf '%s' "${fresh_runs}" | jq -r "${tagged_run_jq_defs}"' [.[]? | tagged_issue_num] | unique | .[]' 2>/dev/null || true)"
+  local tagged_queued_nums
+  tagged_queued_nums="$(printf '%s' "${all_runs}" | jq -r \
+    --argjson now "${now_epoch}" \
+    --argjson max_age "$(( tagged_zombie_minutes * 60 ))" \
+    "${tagged_run_jq_defs}"' [.[]? | select((.status // "") == "queued") | created_epoch as $c | select($c != null and ($now - $c) < $max_age) | tagged_issue_num] | unique | .[]' 2>/dev/null || true)"
+
   # Combine and deduplicate
-  printf '%s\n%s\n' "${issue_nums}" "${branch_nums}" | sort -u | grep -E '^[0-9]+$' || true
+  printf '%s\n%s\n%s\n%s\n' "${issue_nums}" "${branch_nums}" "${tagged_fresh_nums}" "${tagged_queued_nums}" | sort -u | grep -E '^[0-9]+$' || true
 }
 
 # Check if a specific issue has an active (fresh) workflow run.
@@ -20206,6 +20551,138 @@ _heal_stale_close_check()
   return 0
 }
 
+# Issue #9766 (Refs #9421, Phase 2 step 4 of
+# docs/plans/stuck-backlog-prevention-plan.md): red-base hold in the poller's
+# plan auto-approval gate. plan.yml holds `/approved [auto-approved-by-plan]`
+# while the tracked base's newest decisive push CI run failed and a trusted
+# ai:workflow-heal issue tracks it; without this check stall recovery's
+# auto_approve / retrigger_implement arms would approve the same plan anyway.
+# _plan_auto_approval_gate runs _plan_red_base_gate first; a red base holds
+# (return 1), so the callers return before any recovery attempt is counted.
+# The check reuses red_base_approval_hold_check from scripts/plan_base_ci_gate.sh,
+# sourced under plan.yml's trust rule (staged by orchestrate_poll.yml,
+# regular non-symlink file, sources cleanly, defines the functions); otherwise
+# the legacy behaviour (no hold) stays. Every read fails open.
+#
+# RED_BASE_HEALTH_CACHE: per-process (one poller step in one tick) result cache
+# keyed by branch; value is `status|reason|red|heal|workflow|run_id` (the six
+# RED_BASE_HOLD_* globals the helper sets). The helper's reads run inside
+# command substitutions, so the result, not the raw reads, is cached (§14:
+# at most one runs read per configured workflow plus one heal listing per
+# branch per poller step; read failures are cached too, so a failed read is
+# not repeated per issue). disabled / heal_issue_exempt / input_invalid
+# results are per-issue and never cached.
+declare -gA RED_BASE_HEALTH_CACHE=()
+# loaded | unavailable | empty (not tried yet in this process).
+_RED_BASE_GATE_HELPER_STATE=""
+
+# _red_base_gate_load_helper: returns 0 when the staged helper is usable.
+# Decided once per process; an unusable helper prints one ::notice:: line.
+_red_base_gate_load_helper()
+{
+  local helper_path=""
+  case "${_RED_BASE_GATE_HELPER_STATE:-}" in
+    loaded) return 0 ;;
+    unavailable) return 1 ;;
+  esac
+  helper_path="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/plan_base_ci_gate.sh"
+  # shellcheck disable=SC1090 # path resolved at runtime next to this script.
+  if [ "${PLAN_BASE_CI_GATE_STAGED:-false}" = "true" ] \
+    && [ -f "${helper_path}" ] && [ ! -L "${helper_path}" ] \
+    && { source "${helper_path}" >/dev/null 2>&1; } \
+    && type red_base_approval_hold_check _red_base_hold_flag_on _red_base_hold_log >/dev/null 2>&1; then
+    _RED_BASE_GATE_HELPER_STATE="loaded"
+    return 0
+  fi
+  _RED_BASE_GATE_HELPER_STATE="unavailable"
+  echo "::notice::red-base approval hold helper unavailable; poller plan auto-approval is not held on a red base."
+  return 1
+}
+
+# _red_base_gate_default_branch: resolves the repository default branch into
+# the shared _STALL_STANDALONE_DEFAULT_BRANCH cache (also used by
+# _reconcile_standalone_merged_pr_issue). Called in the main shell, not in a
+# command substitution, so the memo persists. A failed read leaves it empty;
+# the helper then reports input_invalid and does not hold (fail open).
+# §14 audit: CWS_DEFAULT_BRANCH and the shared memo are checked first; no
+# batched call (_fetch_candidate_issue_details_graphql,
+# _fetch_linked_pr_status_graphql) carries the repository default branch, so
+# at most one repos/<repo> read per poller process remains, shared with the
+# standalone reconcile and never retried after a failure.
+_red_base_gate_default_branch()
+{
+  if [ -z "${_STALL_STANDALONE_DEFAULT_BRANCH:-}" ] && [ "${_STALL_STANDALONE_DEFAULT_BRANCH_TRIED:-false}" != "true" ]; then
+    _STALL_STANDALONE_DEFAULT_BRANCH_TRIED=true
+    _STALL_STANDALONE_DEFAULT_BRANCH="${CWS_DEFAULT_BRANCH:-}"
+    if [ -z "${_STALL_STANDALONE_DEFAULT_BRANCH}" ]; then
+      _STALL_STANDALONE_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY:-}" --jq '.default_branch' 2>/dev/null || echo "")"
+    fi
+    _STALL_STANDALONE_DEFAULT_BRANCH="$(printf '%s' "${_STALL_STANDALONE_DEFAULT_BRANCH}" | tr -d '\r\n')"
+    [ "${_STALL_STANDALONE_DEFAULT_BRANCH}" = "null" ] && _STALL_STANDALONE_DEFAULT_BRANCH=""
+  fi
+  return 0
+}
+
+# _plan_red_base_gate <issue_num> <details_map_json> [integration_branch] [phase]
+# Checks the tracked base branch: the integration branch for an
+# ai:orchestrator-managed issue when the caller passes one, otherwise the
+# default branch. Returns 0 to allow, 1 to hold (after logging).
+_plan_red_base_gate()
+{
+  local issue_num="$1"
+  local details_map_json="${2:-}"
+  local rbg_integration_branch="${3:-}"
+  local rbg_phase="${4:-}"
+  local rbg_labels_json="[]"
+  local rbg_branch=""
+  local rbg_cacheable="false"
+  local rbg_log_branch=""
+
+  _red_base_gate_load_helper || return 0
+  rbg_labels_json="$(printf '%s' "${details_map_json:-{\}}" | jq -c --arg n "${issue_num}" '
+      [(.[$n] // {}) | .labels[]? | if type == "object" then (.name // "") else . end | strings]
+    ' 2>/dev/null)" || rbg_labels_json="[]"
+  [ -n "${rbg_labels_json}" ] || rbg_labels_json="[]"
+  if [ -n "${rbg_integration_branch}" ] \
+    && printf '%s' "${rbg_labels_json}" | jq -e 'any(.[]?; . == "ai:orchestrator-managed")' >/dev/null 2>&1; then
+    rbg_branch="${rbg_integration_branch}"
+  else
+    _red_base_gate_default_branch
+    rbg_branch="${_STALL_STANDALONE_DEFAULT_BRANCH:-}"
+  fi
+  if [[ "${rbg_branch}" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] && [[ "${rbg_branch}" != *..* ]] \
+    && _red_base_hold_flag_on >/dev/null 2>&1 \
+    && ! printf '%s' "${rbg_labels_json}" | jq -e 'any(.[]?; . == "ai:workflow-heal")' >/dev/null 2>&1; then
+    rbg_cacheable="true"
+  fi
+  if [ "${rbg_cacheable}" = "true" ] && [ -n "${RED_BASE_HEALTH_CACHE[${rbg_branch}]+set}" ]; then
+    IFS='|' read -r RED_BASE_HOLD_STATUS RED_BASE_HOLD_REASON RED_BASE_HOLD_RED RED_BASE_HOLD_HEAL \
+      RED_BASE_HOLD_WORKFLOW RED_BASE_HOLD_RUN_ID <<< "${RED_BASE_HEALTH_CACHE[${rbg_branch}]}" || true
+    if [ "${RED_BASE_HOLD_RED:-false}" = "true" ]; then
+      _red_base_hold_log held "${issue_num}"
+    else
+      _red_base_hold_log pass "${issue_num}"
+    fi
+  else
+    red_base_approval_hold_check "${GITHUB_REPOSITORY:-}" "${rbg_branch}" "${issue_num}" "${rbg_labels_json}" false || true
+    if [ "${rbg_cacheable}" = "true" ]; then
+      case "${RED_BASE_HOLD_REASON:-}" in
+        ''|disabled|heal_issue_exempt|input_invalid) ;;
+        *)
+          RED_BASE_HEALTH_CACHE["${rbg_branch}"]="${RED_BASE_HOLD_STATUS:-unknown}|${RED_BASE_HOLD_REASON:-unknown}|${RED_BASE_HOLD_RED:-false}|${RED_BASE_HOLD_HEAL:-none}|${RED_BASE_HOLD_WORKFLOW:-none}|${RED_BASE_HOLD_RUN_ID:-none}"
+          ;;
+      esac
+    fi
+  fi
+  if [ "${RED_BASE_HOLD_RED:-false}" = "true" ]; then
+    rbg_log_branch="$(printf '%s' "${rbg_branch}" | tr -cd 'A-Za-z0-9._/-' | cut -c1-200)"
+    echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=base_ci_red outcome=hold issue=${issue_num} heal=${RED_BASE_HOLD_HEAL:-none} branch=${rbg_log_branch:-none}"
+    echo "STALL_SKIP issue=${issue_num} reason=base_ci_red_hold phase=${rbg_phase:-unknown} action=none"
+    return 1
+  fi
+  return 0
+}
+
 # Issue #6769: hold automatic /approved posts from stall recovery for plans
 # that list automation paths (.github/, .claude/, scripts/, prompts/,
 # workflow-templates/). The plan is the newest comment carrying the
@@ -20224,7 +20701,11 @@ _heal_stale_close_check()
 # ai:planning and an /answer comment carrying the
 # ai:automation-path-replan:v1 marker is posted. Once that marker is on the
 # issue, a later hold gets the ordinary hold notice for a human.
-# Args: <issue_num> <details_map_json> <comments_json> <phase>
+# Issue #9766: the red-base check (_plan_red_base_gate) runs first; a red
+# tracked base (integration branch for managed issues when passed, else the
+# default branch) holds before any issue-body write or comment, and does not
+# increment the recovery count.
+# Args: <issue_num> <details_map_json> <comments_json> <phase> [integration_branch]
 # Returns 0 to approve, 1 to hold (after logging).
 _plan_auto_approval_gate()
 {
@@ -20232,6 +20713,7 @@ _plan_auto_approval_gate()
   local details_map_json="$2"
   local comments_json="$3"
   local phase="$4"
+  local integration_branch="${5:-}"
   local guard_py=""
   local gate_login=""
   local gate_plan_file=""
@@ -20252,6 +20734,15 @@ _plan_auto_approval_gate()
   local gate_replan_since=""
   local gate_replan_recent=""
   local gate_replan_landed="false"
+
+  # Issue #9766: red-base hold first; a hold is not a recovery attempt.
+  # Fail open (no hold) when the red-base gate is not defined in this shell,
+  # e.g. when this function is sourced on its own; a missing function would
+  # otherwise exit 127 and be read as a hold.
+  declare -F _plan_red_base_gate >/dev/null 2>&1 || _plan_red_base_gate() { return 0; }
+  if ! _plan_red_base_gate "${issue_num}" "${details_map_json}" "${integration_branch}" "${phase}"; then
+    return 1
+  fi
 
   guard_py="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/files_touched_scope_guard.py"
   if [ ! -f "${guard_py}" ]; then
@@ -20573,6 +21064,10 @@ execute_stall_recovery_action() {
     echo "STALL_SKIP issue=${issue_num} reason=phase_capped phase=${phase} action=${action}"
     return 1
   fi
+  if [ -z "${phase_cap_state}" ] && queue_backpressure_holds_uncapped_stall_action "${action}" "${issue_num}"; then
+    echo "STALL_SKIP issue=${issue_num} reason=queue_backpressure phase=${phase} action=${action}"
+    return 1
+  fi
 
   case "${action}" in
     retrigger_pipeline)
@@ -20697,8 +21192,13 @@ STALL_EOF
       esac
       # A held plan is not a recovery attempt; like the staged-support
       # skip above, return before STALL_RECOVERY_SHOULD_INCREMENT is set.
+      # Issue #9766: pass the project's integration branch (local state read)
+      # so the red-base check tracks it for managed issues.
+      local _managed_gate_integration_branch=""
+      _managed_gate_integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE:-}" 2>/dev/null || echo "")"
+      [ "${_managed_gate_integration_branch}" = "null" ] && _managed_gate_integration_branch=""
       if ! _plan_auto_approval_gate "${issue_num}" "${_current_wave_details_json:-}" \
-        "${_managed_staged_support_comments}" "${phase}"; then
+        "${_managed_staged_support_comments}" "${phase}" "${_managed_gate_integration_branch}"; then
         return 1
       fi
       echo "  Auto-approving plan for issue #${issue_num}..."
@@ -20736,8 +21236,12 @@ STALL_EOF
         # choice cannot skip the plan auto-approval gate.
         local _managed_rti_gate_comments='[]'
         _managed_rti_gate_comments="$(_plan_auto_approval_gate_comments "${issue_num}" "${_current_wave_details_json:-}")"
+        # Issue #9766: integration branch for the red-base check (local state read).
+        local _managed_rti_gate_integration_branch=""
+        _managed_rti_gate_integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE:-}" 2>/dev/null || echo "")"
+        [ "${_managed_rti_gate_integration_branch}" = "null" ] && _managed_rti_gate_integration_branch=""
         if ! _plan_auto_approval_gate "${issue_num}" "${_current_wave_details_json:-}" \
-          "${_managed_rti_gate_comments}" "${phase}"; then
+          "${_managed_rti_gate_comments}" "${phase}" "${_managed_rti_gate_integration_branch}"; then
           return 1
         fi
       fi
@@ -21649,6 +22153,12 @@ PERSIST_POSTMERGE_EOF
 # (one identity read per tick, shared with persist_journal_stall_context);
 # writes: replan 1 label edit (only when needed) + 1 comment, escalate 1
 # label edit + 1 comment, plus the journal append. Always returns 0.
+# Queue pause (stuck-backlog Phase 3c, PERSIST_QUEUE_PAUSE_ENABLED, default
+# true): while the Actions queue is under backpressure the issue is skipped
+# first (`outcome=skipped reason=queue_backpressure_pause`, before the tick cap
+# and the comments read, so the skip adds no API call); otherwise the
+# QUEUE_BACKPRESSURE_STATE_FILE intervals go to decide through
+# --paused-intervals-file so queued time does not count toward max_hours.
 PERSIST_BUDGET_TICK_DECISIONS="${PERSIST_BUDGET_TICK_DECISIONS:-0}"
 PERSIST_BUDGET_TICK_CAP=5
 PERSIST_BUDGET_LAST_ACTION=""
@@ -21657,9 +22167,19 @@ persist_budget_govern_issue() {
   local pbg_issue="$1" pbg_comments="${2:-}" pbg_labels="${3:-[]}" pbg_prior="${4:-}" pbg_scope="${5:-standalone}"
   local pbg_base pbg_comments_file pbg_out pbg_note pbg_action pbg_reason pbg_basis pbg_summary pbg_body
   local pbg_rc pbg_journal_outcome pbg_lead pbg_label pbg_edit_args
+  local pbg_paused="" pbg_queue_pause="false"
+  local -a pbg_decide_args
   PERSIST_BUDGET_LAST_ACTION=""
   PERSIST_BUDGET_LAST_BASIS=""
   [[ "${pbg_issue}" =~ ^[1-9][0-9]*$ ]] || return 0
+  if _is_truthy "${PERSIST_QUEUE_PAUSE_ENABLED:-true}"; then
+    pbg_queue_pause="true"
+    queue_backpressure_sample_state
+    if [ "${QUEUE_BACKPRESSURE_ACTIVE:-false}" = "true" ]; then
+      echo "PERSIST governor outcome=skipped reason=queue_backpressure_pause issue=${pbg_issue}" >&2
+      return 0
+    fi
+  fi
   [[ "${PERSIST_BUDGET_TICK_DECISIONS}" =~ ^[0-9]+$ ]] || PERSIST_BUDGET_TICK_DECISIONS=0
   if [ "${PERSIST_BUDGET_TICK_DECISIONS}" -ge "${PERSIST_BUDGET_TICK_CAP}" ]; then
     echo "PERSIST governor outcome=deferred reason=tick_cap issue=${pbg_issue}" >&2
@@ -21699,8 +22219,19 @@ persist_budget_govern_issue() {
     return 0
   }
   : > "${pbg_out}" 2>/dev/null || true
-  PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_budget.py decide --comments-file "${pbg_comments_file}" \
-    --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE}" --labels "${pbg_labels}" --out "${pbg_out}" || true
+  pbg_decide_args=(decide --comments-file "${pbg_comments_file}" \
+    --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE}" --labels "${pbg_labels}" --out "${pbg_out}")
+  if [ "${pbg_queue_pause}" = "true" ] && [ -n "${QUEUE_BACKPRESSURE_STATE_FILE:-}" ] && [ -f "${QUEUE_BACKPRESSURE_STATE_FILE}" ] && [ -r "${QUEUE_BACKPRESSURE_STATE_FILE}" ]; then
+    pbg_paused="${pbg_base}/persist_budget_paused.${pbg_issue}.json"
+    # A legacy one-line or corrupt marker yields [] or a jq failure: no pause.
+    if jq -c 'if type == "object" and (.intervals | type) == "array" then .intervals else [] end' \
+      "${QUEUE_BACKPRESSURE_STATE_FILE}" > "${pbg_paused}" 2>/dev/null; then
+      pbg_decide_args+=(--paused-intervals-file "${pbg_paused}")
+    fi
+  fi
+  PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_budget.py "${pbg_decide_args[@]}" || true
+  # Only decide reads the scratch intervals, so every later return path is clean.
+  [ -n "${pbg_paused}" ] && rm -f "${pbg_paused}"
   pbg_action="$(jq -r '.action // ""' "${pbg_out}" 2>/dev/null || true)"
   pbg_reason="$(jq -j '.reason // ""' "${pbg_out}" 2>/dev/null | tr -c 'A-Za-z0-9_.:-' '_' | cut -c1-60 || true)"
   pbg_basis="$(jq -r '.basis // ""' "${pbg_out}" 2>/dev/null | tr -d '\n' || true)"
@@ -26001,6 +26532,12 @@ _Orchestrator: released the \`ai:needs-human\` latch that the staged-support res
 }
 
 run_standalone_stall_recovery() {
+  # Per-tick queue backpressure state for the idle-tick sweep, which primes the
+  # loader just before this call (the call block there is pinned by tests).
+  # A no-op when the full poller already evaluated this tick.
+  if [ "${_QUEUE_BACKPRESSURE_EVALUATED:-false}" != "true" ] && declare -F queue_backpressure_refresh_tick_state >/dev/null 2>&1; then
+    queue_backpressure_refresh_tick_state
+  fi
   if [ "${ENABLE_STANDALONE_STALL_RECOVERY}" != "true" ]; then
     echo "Standalone stall recovery disabled by ENABLE_STANDALONE_STALL_RECOVERY=${ENABLE_STANDALONE_STALL_RECOVERY}."
     return
@@ -26781,6 +27318,16 @@ PY
           fi
           _std_next_count=$(( _std_override_count + 1 ))
         fi
+        # Queue backpressure (stuck-backlog Phase 3): this early resolver
+        # dispatch runs before the stall guards below, so hold it here. A hold
+        # mutates neither conflict_override_count nor the stall budget.
+        if queue_backpressure_holds_dispatch "none" "dispatch_conflict_resolver" "${issue_num}"; then
+          echo "STALL_SKIP issue=${issue_num} reason=queue_backpressure pr=${STALL_CONFLICT_PR_NUM} phase=${phase} action=${action}"
+          if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+            write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+          fi
+          continue
+        fi
         local _std_conflict_rc=0
         _dispatch_review_for_conflicts "${STALL_CONFLICT_PR_NUM}" "${STALL_CONFLICT_HEAD_REF}" || _std_conflict_rc=$?
         case "${_std_conflict_rc}" in
@@ -26854,6 +27401,10 @@ PY
     _std_phase_cap_state="$(phase_cap_state_for_action "${action}")"
     if [ -n "${_std_phase_cap_state}" ] && ! phase_cap_can_dispatch "${_std_phase_cap_state}" "${action}" "${issue_num}"; then
       echo "STALL_SKIP issue=${issue_num} reason=phase_capped phase=${phase} action=${action}"
+      continue
+    fi
+    if [ -z "${_std_phase_cap_state}" ] && queue_backpressure_holds_uncapped_stall_action "${action}" "${issue_num}"; then
+      echo "STALL_SKIP issue=${issue_num} reason=queue_backpressure phase=${phase} action=${action}"
       continue
     fi
 
@@ -28042,6 +28593,12 @@ recover_stalled_issue() {
             STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
             return "${_opr_reissue_rc}"
           fi
+          # Queue backpressure (stuck-backlog Phase 3): this resolver dispatch
+          # returns before the stall guards below, so hold it here.
+          if queue_backpressure_holds_dispatch "none" "dispatch_conflict_resolver" "${issue_num}"; then
+            echo "STALL_SKIP issue=${issue_num} reason=queue_backpressure pr=${_lpr_num} phase=${phase} action=${action}"
+            return 1
+          fi
           local _opr_dispatch_rc=0
           _dispatch_review_for_conflicts "${_lpr_num}" "${_opr_head_ref}" || _opr_dispatch_rc=$?
           if [ "${_opr_dispatch_rc}" -eq 0 ]; then
@@ -28070,6 +28627,12 @@ recover_stalled_issue() {
           _opr_review_comments="0"
         fi
         if [ "${_opr_review_comments}" -gt 0 ] && [ -n "${_opr_head_ref}" ]; then
+          # Queue backpressure (stuck-backlog Phase 3): same early-return hold
+          # for the changes-requested autofix dispatch.
+          if queue_backpressure_holds_dispatch "none" "dispatch_autofix" "${issue_num}"; then
+            echo "STALL_SKIP issue=${issue_num} reason=queue_backpressure pr=${_lpr_num} phase=${phase} action=${action}"
+            return 1
+          fi
           local _opr_autofix_rc=0
           _dispatch_review_for_conflicts "${_lpr_num}" "${_opr_head_ref}" || _opr_autofix_rc=$?
           if [ "${_opr_autofix_rc}" -eq 0 ]; then
@@ -28105,6 +28668,10 @@ recover_stalled_issue() {
   _recover_phase_cap_state="$(phase_cap_state_for_action "${action}")"
   if [ -n "${_recover_phase_cap_state}" ] && ! phase_cap_can_dispatch "${_recover_phase_cap_state}" "${action}" "${issue_num}"; then
     echo "STALL_SKIP issue=${issue_num} reason=phase_capped phase=${phase} action=${action}"
+    return 1
+  fi
+  if [ -z "${_recover_phase_cap_state}" ] && queue_backpressure_holds_uncapped_stall_action "${action}" "${issue_num}"; then
+    echo "STALL_SKIP issue=${issue_num} reason=queue_backpressure phase=${phase} action=${action}"
     return 1
   fi
 
@@ -28923,6 +29490,7 @@ if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then
   # re-plan dispatches only when the switch is on.
   if _is_truthy "${PERSIST_POSTMERGE_VERIFY_ENABLED:-false}"; then
     prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
+    queue_backpressure_refresh_tick_state
   fi
   run_persist_postmerge_verify || echo "PERSIST postmerge outcome=error reason=rc_$?"
   exit 0
@@ -28936,6 +29504,8 @@ fi
 # dispatches honour .github/ai/concurrency_caps.yml too.
 if _is_truthy "${STANDALONE_RECOVERY_SWEEP_ONLY:-false}"; then
   prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
+  # Queue-pause interval for the persistence budget (stuck-backlog Phase 3c).
+  queue_backpressure_record_pause_interval || true
   run_standalone_stall_recovery
   # Issue #9481: gate stuck ai:check-triage issues (any phase) on idle ticks
   # too; this step forwards the full poller's env, so the kill switches apply.
@@ -28992,6 +29562,9 @@ if [ "${SMOKE_FIXTURE_REAPED_NUMS_JSON}" != "[]" ]; then
 fi
 if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then
   prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
+  queue_backpressure_refresh_tick_state
+  # Queue-pause interval for the persistence budget (stuck-backlog Phase 3c).
+  queue_backpressure_record_pause_interval || true
 fi
 write_state_snapshot_actions_runs_export || true
 
