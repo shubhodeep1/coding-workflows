@@ -11683,7 +11683,10 @@ def test_review_blocked_merged_followup_refuses_default_base_when_active_integra
 
 
 	assert len(result["prs"]) == 1, _poller_stdout_tail(result)
-	assert "Aborting follow-up PR creation to avoid targeting main" in (result["stdout"] + result["stderr"]), _poller_stdout_tail(result)
+	# The needle may be on either stream, so a miss shows both tails.
+	assert "Aborting follow-up PR creation to avoid targeting main" in (result["stdout"] + result["stderr"]), (
+		_poller_stdout_tail(result) + "\npoller stderr tail:\n" + str(result.get("stderr", ""))[-_POLLER_STDOUT_TAIL_CHARS:]
+	)
 
 
 def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_context():
