@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Put the skip behind the env var UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED, default true; only the value 'false' turns it off (an operator-usable off switch in the poller runtime). Severity disagreement: anthropic_claude-sonnet-5_5 rated NIT (confidence 2), openai_gpt-6-luna rated MAJOR (confidence 5), z-ai_glm-5_3-flash rated MAJOR (confidence 4). Highest is MAJOR.\n  expected_change_site: .github/workflows/orchestrate_poll.yml (poller env blocks around lines ~1443-1456, ~1680-1693, ~1831-1851), mapping the flag from vars.*\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: scripts/unblock_scan.py (lines 175-184) reads the variable with the correct default, but the poller env blocks in .github/workflows/orchestrate_poll.yml do not map UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED from vars.*, so a repository variable cannot turn off the skip in production. The flag's code-level default (on) keeps shipped behavior correct. The plan grant's files_touched excludes the workflow file.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: Put the skip behind `UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED`, default true, where only the value `false` turns it off.\n  Expected change site: `.github/workflows/orchestrate_poll.yml`, only if a repository variable were meant to feed the flag.\n  Evidence of absence: the issue names only `scripts/unblock_scan.py` select() and a unit test, and its granted `files_touched` list does not include the workflow file or `README.md`. `scripts/unblock_scan.py` already reads the env var with the required default and off semantics, and unit tests cover them. A grep of `scripts/orchestrate_poll_process.sh` and `.github/workflows/orchestrate_poll.yml` finds no `UNBLOCK_ESCALATED_RECHECK` or `UNBLOCK_SKIP_E2E` mapping. With the flag unset, the skip is active. Only a repository-variable off switch is missing, outside the granted scope.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Put the skip behind the env var UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED\" as an off switch.\n  Expected change site: `.github/workflows/orchestrate_poll.yml`, in the poller execution environment blocks.\n  Evidence of absence: `scripts/unblock_scan.py` reads the variable, but the poller environment blocks around lines 1443\u20131456, 1680\u20131693, and 1831\u20131851 do not map it from `vars.*`. GitHub repository variables are not automatically exported as process environment variables, so operators cannot turn off the skip in the production poller.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:25648-25662, 25673-25685 | severity=N/A | confidence=N/A\n  PROBLEM: None found in the last-run diff. `title` is requested on both `... on Issue` and `... on PullRequest` fragments and preserved as `title: (.value.title // null)`. Null and empty titles fall through to \"do not skip\", and the `verify_item` re-selection path keeps the `title` key.\n  WHY: N/A, no defect.\n\nTASK_GAP:\n- Requirement: \"Put the skip behind the env var UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED, default true; only the value 'false' turns it off\", i.e. an operator-usable off switch for the new skip in the poller runtime.\n  Expected change site: `.github/workflows/orchestrate_poll.yml` (env blocks at lines ~1443-1456, ~1680-1693, ~1839-1851 that map every operator-tunable `UNBLOCK_*` knob).\n  Evidence of absence: `run_unblock_scan` invokes `python3 scripts/unblock_scan.py select` (scripts/orchestrate_poll_process.sh:25742, 25771) with inherited environment, and `_skip_e2e_test_items_enabled` reads the flag (scripts/unblock_scan.py:175-184). No workflow env mapping for `UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED` exists, so setting the repository variable has no effect. The plan grant's `files_touched` excludes the workflow file. This is an operability gap, not a behavioral defect.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f6859174e83532c8929c8a7b55bcf0a899cb70764d90aa4666d7928d607823a0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9795,
+    "run_id": "44525794433",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44525794433",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261119134232_3749884a9f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9795,
+    "run_id": "44525794433"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-19T13:42:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
