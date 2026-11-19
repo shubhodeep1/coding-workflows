@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -6011,6 +6012,11 @@ def test_alt_model_override_falls_back_on_malformed_body() -> None:
 
 
 def test_review_pipeline_integration_chain_module_runs_clean() -> None:
+	# The chain runs scripts/review_issue_ledger.sh and
+	# scripts/review_parse_consolidator.sh, which need gawk. Skip explicitly
+	# instead of passing on a module whose own tests all skipped.
+	if shutil.which("gawk") is None:
+		raise unittest.SkipTest("gawk is required by the review ledger/parser scripts")
 	integration_test = REPO_ROOT / "tests" / "test_review_pipeline_integration.py"
 	env = os.environ.copy()
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -6428,6 +6434,7 @@ def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0
 	failed = 0
+	skipped = 0
 	for func in test_funcs:
 		name = func.__name__
 		try:
@@ -6438,10 +6445,13 @@ def main() -> int:
 				func()
 			print(f"  PASS  {name}")
 			passed += 1
+		except unittest.SkipTest as e:
+			print(f"  SKIP  {name}: {e}")
+			skipped += 1
 		except Exception as e:
 			print(f"  FAIL  {name}: {e}")
 			failed += 1
-	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	print(f"\n{passed} passed, {failed} failed, {skipped} skipped, {passed + failed + skipped} total")
 	return 1 if failed > 0 else 0
 
 if __name__ == "__main__":
