@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-19T10:30:48Z",
+  "issue_number": 9767,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=scripts/ci_final_merge_ref_fresh.sh:181-183; cited_path=scripts/ci_final_merge_ref_fresh.sh; files_touched=.github/workflows/orchestrate_poll.yml, agents.d/stuck-backlog-phase3b-backpressure-hysteresis.md, changelog.d/stuck-backlog-phase3b-backpressure-hysteresis.md, scripts/orchestrate_poll_process.sh, tests/test_queue_backpressure.py.",
+  "phase": "review_autofix",
+  "pr_number": 9773,
+  "record_id": "lesson_20261119103048_90baa4643f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/ci_final_merge_ref_fresh.sh",
+    ".github/workflows/orchestrate_poll.yml",
+    "agents.d/stuck-backlog-phase3b-backpressure-hysteresis.md",
+    "changelog.d/stuck-backlog-phase3b-backpressure-hysteresis.md",
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_queue_backpressure.py"
+  ]
+}
