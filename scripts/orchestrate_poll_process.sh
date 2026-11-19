@@ -18485,23 +18485,43 @@ phase_cap_running_for_state() {
   jq -r --arg state "${state}" '.[$state] // 0' <<<"${PHASE_CAPS_RUNNING_BY_STATE:-"{}"}" 2>/dev/null || echo 0
 }
 
-# Queue backpressure (stuck-backlog Phase 3). When the Actions queue depth
-# (ACTIONS_QUEUED_TOTAL, from the per-tick loader's queued read) is at or above
-# ACTIONS_QUEUE_BACKPRESSURE_HIGH, hold every dispatch that would add runs to
-# the jammed queue. Stateless at HIGH: hysteresis needs a marker persisted by
-# orchestrate_poll.yml, which this phase does not edit. Fails open: an unknown
-# depth or an invalid / disabled threshold keeps the legacy behaviour. Never
-# calls the loader, so it adds no API call. Returns 0 to hold. The one-line
-# per-shell summary (outcome=on|off|unknown) goes to stderr so legacy callers'
-# stdout is unchanged; the outcome=held line goes to stdout like phase_capped.
+# Queue backpressure (stuck-backlog Phase 3 / 3b). The Actions queue depth
+# (ACTIONS_QUEUED_TOTAL, from the per-tick loader's queued read) drives a hold
+# on every dispatch that would add runs to a jammed queue, with hysteresis:
+# on at depth >= ACTIONS_QUEUE_BACKPRESSURE_HIGH (default 150), off below
+# ACTIONS_QUEUE_BACKPRESSURE_LOW (default 50), and between the two the state
+# the previous tick left in QUEUE_BACKPRESSURE_STATE_FILE (default empty: no
+# marker, so between LOW and HIGH reads as off, the legacy stateless hold).
+# orchestrate_poll.yml restores and saves that marker through actions/cache.
+# The marker is JSON {"active": bool, "intervals": [...]}; a missing,
+# unreadable, oversized (> 64 KiB) or malformed marker reads as inactive, and
+# an existing "intervals" array is carried forward untouched.
+# Fail open: an unknown depth never holds and leaves the marker as it is (the
+# tick is not marked evaluated, so a later call after the loader runs still
+# evaluates); a non-numeric HIGH or LOW warns once (reason=invalid_threshold)
+# and HIGH < 1 (e.g. -1) disables the hold, both writing an inactive marker;
+# LOW < 1 or LOW >= HIGH falls back to the stateless hold at HIGH with one
+# ::warning:: (outcome=stateless). The state is evaluated once per shell per
+# tick (queue_backpressure_refresh_tick_state runs it right after the loader)
+# and reused by every later call. Self-contained on purpose: tests copy this
+# function out alone, so it calls no helper. Never calls the loader, so it
+# adds no API call. Returns 0 to hold; the reserved action tick_refresh only
+# evaluates and never holds. The one-line per-shell summary (outcome=on|off|
+# unknown) and the transition line go to stderr so legacy callers' stdout is
+# unchanged; the outcome=held line goes to stdout like phase_capped.
 declare -g QUEUE_BACKPRESSURE_ACTIVE='false'
 declare -g _QUEUE_BACKPRESSURE_LOGGED='false'
+declare -g _QUEUE_BACKPRESSURE_EVALUATED='false'
+declare -g _QUEUE_BACKPRESSURE_EVAL_QUEUED=''
+declare -g _QUEUE_BACKPRESSURE_STATELESS_WARNED='false'
+declare -g _QUEUE_BACKPRESSURE_WRITE_WARNED='false'
 
 queue_backpressure_holds_dispatch() {
   local qbp_state="$1"
   local qbp_action="$2"
   local qbp_issue="$3"
-  local qbp_high qbp_total
+  local qbp_high='' qbp_low='' qbp_total='' qbp_file='' qbp_mode='hysteresis'
+  local qbp_prev='false' qbp_intervals='[]' qbp_size='' qbp_dir='' qbp_tmp='' qbp_transition=''
 
   case "${qbp_action}" in
     attempt_merge|escalate_human|skip)
@@ -18509,44 +18529,126 @@ queue_backpressure_holds_dispatch() {
       ;;
   esac
 
-  ACTIONS_QUEUE_BACKPRESSURE_HIGH="${ACTIONS_QUEUE_BACKPRESSURE_HIGH:-150}"
-  qbp_high="${ACTIONS_QUEUE_BACKPRESSURE_HIGH}"
-  if ! [[ "${qbp_high}" =~ ^-?[0-9]+$ ]]; then
-    if [ "${_QUEUE_BACKPRESSURE_LOGGED:-false}" != "true" ]; then
-      _QUEUE_BACKPRESSURE_LOGGED='true'
-      echo "::warning::QUEUE_BACKPRESSURE outcome=off reason=invalid_threshold" >&2
+  if [ "${_QUEUE_BACKPRESSURE_EVALUATED:-false}" != "true" ]; then
+    ACTIONS_QUEUE_BACKPRESSURE_HIGH="${ACTIONS_QUEUE_BACKPRESSURE_HIGH:-150}"
+    ACTIONS_QUEUE_BACKPRESSURE_LOW="${ACTIONS_QUEUE_BACKPRESSURE_LOW:-50}"
+    qbp_high="${ACTIONS_QUEUE_BACKPRESSURE_HIGH}"
+    qbp_low="${ACTIONS_QUEUE_BACKPRESSURE_LOW}"
+    qbp_file="${QUEUE_BACKPRESSURE_STATE_FILE:-}"
+    qbp_total="${ACTIONS_QUEUED_TOTAL:-}"
+    if ! [[ "${qbp_high}" =~ ^-?[0-9]+$ ]]; then
+      if [ "${_QUEUE_BACKPRESSURE_LOGGED:-false}" != "true" ]; then
+        _QUEUE_BACKPRESSURE_LOGGED='true'
+        echo "::warning::QUEUE_BACKPRESSURE outcome=off reason=invalid_threshold" >&2
+      fi
+      qbp_mode='off'
+    elif [ "${qbp_high}" -lt 1 ]; then
+      qbp_mode='off'
+    elif ! [[ "${qbp_low}" =~ ^-?[0-9]+$ ]]; then
+      if [ "${_QUEUE_BACKPRESSURE_LOGGED:-false}" != "true" ]; then
+        _QUEUE_BACKPRESSURE_LOGGED='true'
+        echo "::warning::QUEUE_BACKPRESSURE outcome=off reason=invalid_threshold" >&2
+      fi
+      qbp_mode='off'
+    elif ! [[ "${qbp_total}" =~ ^[0-9]+$ ]]; then
+      if [ "${_QUEUE_BACKPRESSURE_LOGGED:-false}" != "true" ]; then
+        _QUEUE_BACKPRESSURE_LOGGED='true'
+        echo "QUEUE_BACKPRESSURE outcome=unknown queued=unknown high=${qbp_high}" >&2
+      fi
+      QUEUE_BACKPRESSURE_ACTIVE='false'
+      return 1
+    elif [ "${qbp_low}" -lt 1 ] || [ "${qbp_low}" -ge "${qbp_high}" ]; then
+      if [ "${_QUEUE_BACKPRESSURE_STATELESS_WARNED:-false}" != "true" ]; then
+        _QUEUE_BACKPRESSURE_STATELESS_WARNED='true'
+        echo "::warning::QUEUE_BACKPRESSURE outcome=stateless reason=invalid_low low=${qbp_low} high=${qbp_high}" >&2
+      fi
+      qbp_mode='stateless'
     fi
-    QUEUE_BACKPRESSURE_ACTIVE='false'
-    return 1
-  fi
-  if [ "${qbp_high}" -lt 1 ]; then
-    QUEUE_BACKPRESSURE_ACTIVE='false'
-    return 1
+
+    # Previous tick's state. Only a regular file of at most 64 KiB holding a
+    # single JSON object with "active": true counts as active.
+    if [ -n "${qbp_file}" ] && [ -f "${qbp_file}" ] && [ -r "${qbp_file}" ]; then
+      qbp_size="$(wc -c < "${qbp_file}" 2>/dev/null || true)"
+      qbp_size="${qbp_size//[[:space:]]/}"
+      if [[ "${qbp_size}" =~ ^[0-9]+$ ]] && [ "${qbp_size}" -le 65536 ]; then
+        if jq -se 'length == 1 and (.[0] | type) == "object" and .[0].active == true' "${qbp_file}" >/dev/null 2>&1; then
+          qbp_prev='true'
+        fi
+        qbp_intervals="$(jq -sc 'if length == 1 and (.[0] | type) == "object" and (.[0].intervals | type) == "array" then .[0].intervals else [] end' "${qbp_file}" 2>/dev/null || true)"
+        [[ "${qbp_intervals}" == \[* ]] || qbp_intervals='[]'
+      fi
+    fi
+
+    case "${qbp_mode}" in
+      off)
+        QUEUE_BACKPRESSURE_ACTIVE='false'
+        ;;
+      stateless)
+        if [ "${qbp_total}" -ge "${qbp_high}" ]; then
+          QUEUE_BACKPRESSURE_ACTIVE='true'
+        else
+          QUEUE_BACKPRESSURE_ACTIVE='false'
+        fi
+        ;;
+      *)
+        if [ "${qbp_total}" -ge "${qbp_high}" ]; then
+          QUEUE_BACKPRESSURE_ACTIVE='true'
+        elif [ "${qbp_total}" -lt "${qbp_low}" ]; then
+          QUEUE_BACKPRESSURE_ACTIVE='false'
+        else
+          QUEUE_BACKPRESSURE_ACTIVE="${qbp_prev}"
+        fi
+        ;;
+    esac
+    _QUEUE_BACKPRESSURE_EVALUATED='true'
+    _QUEUE_BACKPRESSURE_EVAL_QUEUED="${qbp_total}"
+
+    if [ "${qbp_mode}" != "off" ]; then
+      if [ "${_QUEUE_BACKPRESSURE_LOGGED:-false}" != "true" ]; then
+        _QUEUE_BACKPRESSURE_LOGGED='true'
+        if [ "${QUEUE_BACKPRESSURE_ACTIVE:-false}" = "true" ]; then
+          echo "QUEUE_BACKPRESSURE outcome=on queued=${qbp_total} high=${qbp_high}" >&2
+        else
+          echo "QUEUE_BACKPRESSURE outcome=off queued=${qbp_total} high=${qbp_high}" >&2
+        fi
+      fi
+      # Transitions are only meaningful against a persisted marker.
+      if [ -n "${qbp_file}" ] && [ "${QUEUE_BACKPRESSURE_ACTIVE}" != "${qbp_prev}" ]; then
+        if [ "${QUEUE_BACKPRESSURE_ACTIVE}" = "true" ]; then
+          qbp_transition='off_to_on'
+        else
+          qbp_transition='on_to_off'
+        fi
+        echo "QUEUE_BACKPRESSURE outcome=$([ "${QUEUE_BACKPRESSURE_ACTIVE}" = "true" ] && echo on || echo off) transition=${qbp_transition} queued=${qbp_total} high=${qbp_high} low=${qbp_low}" >&2
+      fi
+    fi
+
+    # Persist this tick's state atomically (temp file + rename). A failed
+    # write warns once and never fails the tick; the next tick reads the old
+    # marker.
+    if [ -n "${qbp_file}" ]; then
+      qbp_dir="$(dirname -- "${qbp_file}")"
+      if mkdir -p -- "${qbp_dir}" 2>/dev/null \
+        && qbp_tmp="$(mktemp "${qbp_dir}/.qbp.XXXXXX" 2>/dev/null)" \
+        && jq -cn --argjson active "${QUEUE_BACKPRESSURE_ACTIVE}" --argjson intervals "${qbp_intervals}" '{active: $active, intervals: $intervals}' > "${qbp_tmp}" 2>/dev/null \
+        && mv -f -- "${qbp_tmp}" "${qbp_file}" 2>/dev/null; then
+        :
+      else
+        if [ -n "${qbp_tmp}" ]; then
+          rm -f -- "${qbp_tmp}" 2>/dev/null || true
+        fi
+        if [ "${_QUEUE_BACKPRESSURE_WRITE_WARNED:-false}" != "true" ]; then
+          _QUEUE_BACKPRESSURE_WRITE_WARNED='true'
+          echo "::warning::QUEUE_BACKPRESSURE outcome=marker_write_failed" >&2
+        fi
+      fi
+    fi
   fi
 
-  qbp_total="${ACTIONS_QUEUED_TOTAL:-}"
-  if ! [[ "${qbp_total}" =~ ^[0-9]+$ ]]; then
-    if [ "${_QUEUE_BACKPRESSURE_LOGGED:-false}" != "true" ]; then
-      _QUEUE_BACKPRESSURE_LOGGED='true'
-      echo "QUEUE_BACKPRESSURE outcome=unknown queued=unknown high=${qbp_high}" >&2
-    fi
-    QUEUE_BACKPRESSURE_ACTIVE='false'
+  if [ "${qbp_action}" = "tick_refresh" ]; then
     return 1
   fi
-
-  if [ "${qbp_total}" -ge "${qbp_high}" ]; then
-    QUEUE_BACKPRESSURE_ACTIVE='true'
-  else
-    QUEUE_BACKPRESSURE_ACTIVE='false'
-  fi
-  if [ "${_QUEUE_BACKPRESSURE_LOGGED:-false}" != "true" ]; then
-    _QUEUE_BACKPRESSURE_LOGGED='true'
-    if [ "${QUEUE_BACKPRESSURE_ACTIVE:-false}" = "true" ]; then
-      echo "QUEUE_BACKPRESSURE outcome=on queued=${qbp_total} high=${qbp_high}" >&2
-    else
-      echo "QUEUE_BACKPRESSURE outcome=off queued=${qbp_total} high=${qbp_high}" >&2
-    fi
-  fi
+  qbp_total="${_QUEUE_BACKPRESSURE_EVAL_QUEUED:-${ACTIONS_QUEUED_TOTAL:-}}"
   if [ "${QUEUE_BACKPRESSURE_ACTIVE:-false}" = "true" ]; then
     echo "QUEUE_BACKPRESSURE outcome=held state=${qbp_state} action=${qbp_action} issue=${qbp_issue} queued=${qbp_total}"
     return 0
@@ -18568,6 +18670,13 @@ queue_backpressure_holds_uncapped_stall_action() {
       ;;
   esac
   return 1
+}
+
+# Per-tick entry point (stuck-backlog Phase 3b): evaluates the hysteresis
+# state and writes the marker once, in the parent shell, right after the
+# loader primed ACTIONS_QUEUED_TOTAL. Never holds and never fails the tick.
+queue_backpressure_refresh_tick_state() {
+  queue_backpressure_holds_dispatch "none" "tick_refresh" "tick" || true
 }
 
 phase_cap_can_dispatch() {
@@ -25853,6 +25962,12 @@ _Orchestrator: released the \`ai:needs-human\` latch that the staged-support res
 }
 
 run_standalone_stall_recovery() {
+  # Per-tick queue backpressure state for the idle-tick sweep, which primes the
+  # loader just before this call (the call block there is pinned by tests).
+  # A no-op when the full poller already evaluated this tick.
+  if [ "${_QUEUE_BACKPRESSURE_EVALUATED:-false}" != "true" ] && declare -F queue_backpressure_refresh_tick_state >/dev/null 2>&1; then
+    queue_backpressure_refresh_tick_state
+  fi
   if [ "${ENABLE_STANDALONE_STALL_RECOVERY}" != "true" ]; then
     echo "Standalone stall recovery disabled by ENABLE_STANDALONE_STALL_RECOVERY=${ENABLE_STANDALONE_STALL_RECOVERY}."
     return
@@ -28805,6 +28920,7 @@ if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then
   # re-plan dispatches only when the switch is on.
   if _is_truthy "${PERSIST_POSTMERGE_VERIFY_ENABLED:-false}"; then
     prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
+    queue_backpressure_refresh_tick_state
   fi
   run_persist_postmerge_verify || echo "PERSIST postmerge outcome=error reason=rc_$?"
   exit 0
@@ -28871,6 +28987,7 @@ if [ "${SMOKE_FIXTURE_REAPED_NUMS_JSON}" != "[]" ]; then
 fi
 if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then
   prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
+  queue_backpressure_refresh_tick_state
 fi
 write_state_snapshot_actions_runs_export || true
 
