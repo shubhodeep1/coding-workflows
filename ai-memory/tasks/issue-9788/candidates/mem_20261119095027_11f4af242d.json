@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: test tests/test_e2e_editor_smoke_canary.py::test_canary_matches_issue_spec_byte_for_byte\nACCEPTANCE: post-merge none: this is an E2E smoke canary data file, and the Phase 4b harness in test-and-mark-stable reads it from the PR branch before merge, so no post-merge workflow applies\n\n## Functions or modules to implement\n- No code changes.\n- Replace the whole content of `tests/e2e_smoke_canary.txt` with exactly these bytes: `status: ok\\nrun_id: 44490333814\\nupdated-by: ai-pipeline\\n`. That is three lines, LF line endings, one trailing newline, no BOM and nothing else.\n- The file currently holds two lines: `status: ok` and `decompose-run: 41445772297`. The `decompose-run` line must be removed.\n- The simplest way to write it is the issue's own `printf 'status: ok\\nrun_id: 44490333814\\nupdated-by: ai-pipeline\\n' > tests/e2e_smoke_canary.txt`.\n\n## Data structures affected\n- Only the plain-text canary fixture changes.\n\n## API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Overwrite the whole file with printf\n- Chosen: overwrite the entire file with `printf`, exactly as the issue shows.\n- Alternatives considered: editing it line by line with an editor patch.\n- Why: the target bytes are fully specified. Overwriting the whole file guarantees the exact bytes, including the single trailing newline, and leaves none of the old content behind.\n\n## Security considerations\n- No trust boundary, endpoint, secret or money state is touched.\n- The run id is public run metadata, not a credential.\n\n## Potential risks or edge cases\n- The harness compares bytes exactly. A CRLF line ending, a missing trailing newline or an extra blank line would fail it.\n- `tests/e2e_smoke_canary_spec.txt` and `tests/e2e_smoke_canary_b.txt` must not be touched, because the issue says to modify only the canary file.\n- No conflict with the codebase: the file exists on HEAD `404e85cc5c14aa7ff3ee46c16e463bb98a99c710` (branch `main`).\n\n## Testing considerations\n- Check the result with `cat -A tests/e2e_smoke_canary.txt`. It should print exactly `status: ok$`, `run_id: 44490333814$`, `updated-by: ai-pipeline$`.\n- Check that `git diff --stat` shows only this one file.\n- The pytest canary test skips unless `E2E_CANARY_FILE` and `E2E_EXPECTED_RUN_ID` are set. Phase 4b of test-and-mark-stable sets them when it runs.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies a one-file content replacement and forbids touching any other file. Holding scope to exactly that file is both the complete option and the minimal one, so no expansion or reduction applies (\u00a76: correctness comes first and is fully met here).\n\nPre-execution self-check: the plan changes exactly one file to exactly the specified bytes, and nothing in it is ambiguous.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- AI_ACCEPTANCE_V1 {\"checks\":[],\"errors\":[],\"post_merge\":null,\"post_merge_none\":\"this is an E2E smoke canary data file, and the Phase 4b harness in test-and-mark-stable reads it from the PR branch before merge, so no post-merge workflow applies\",\"schema\":\"acceptance.v1\",\"source\":\"plan\",\"state\":\"valid\",\"tests\":[{\"name\":\"test_canary_matches_issue_spec_byte_for_byte\",\"path\":\"tests/test_e2e_editor_smoke_canary.py\",\"red_on_base\":false}]} -->\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "1ed9907b5a2264665469b32fcc9c09f03297df7bd6fef1ae4c829e79e5ac3d93",
+  "lineage": {
+    "issue_number": 9788,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44498515952",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44498515952",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9788"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261119095027_11f4af242d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9788,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44498515952"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9788",
+  "timestamps": {
+    "created_at": "2026-11-19T09:50:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
