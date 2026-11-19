@@ -43,12 +43,20 @@ if [ ! -s "${EDITOR_SUMMARY_FILE}" ] && [ ! -s "${COMMITTED_FILES_FILE:-/dev/nul
     echo "AUTOFIX_REVIEWERS_FAILED=true" >> "$GITHUB_ENV"
     if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ] && [ -n "${RUNTIME_DIR:-}" ]; then
       reviewers_failure_log_args=()
+      # reviewers_stage_stderr.txt (issue #9533) is the reviewer step's own
+      # stderr, teed by the workflow, so a shell crash before any slot log
+      # exists (e.g. `render_prompt.sh: line 306: ...`) is evidence too. It
+      # goes in as --stage-stderr-file, the only source of a plain ERROR line
+      # (slot logs hold raw model-CLI stderr and review prose).
       for reviewers_failure_log in "${PREVIOUS_REVIEWS_DIR:-/nonexistent}"/*.log "${RUNTIME_DIR}"/summariser_*.log; do
         [ -f "${reviewers_failure_log}" ] && reviewers_failure_log_args+=(--log-file "${reviewers_failure_log}")
       done
+      [ -f "${RUNTIME_DIR}/reviewers_stage_stderr.txt" ] && reviewers_failure_log_args+=(--stage-stderr-file "${RUNTIME_DIR}/reviewers_stage_stderr.txt")
       PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" reviewer-failure-evidence "${reviewers_failure_log_args[@]}" \
         > "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null || : > "${RUNTIME_DIR}/reviewers_failure_evidence.txt"
       echo "AUTOFIX_REVIEWERS_FAILED reason=reviewers_failed $(grep -m1 '^dominant_rc=' "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null || echo dominant_rc=unknown)"
+      reviewers_failed_headline="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" failure-headline \
+        --evidence-file "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null | sed -n 's/^first_error=//p' | head -n 1 || true)"
     fi
   elif [ "${SANDBOX_PREPARE_STEP_OUTCOME:-}" = "failure" ]; then
     # The review sandbox could not be prepared (PR #6645: Docker
@@ -99,30 +107,86 @@ if [ ! -s "${EDITOR_SUMMARY_FILE}" ] && [ ! -s "${COMMITTED_FILES_FILE:-/dev/nul
   # "Assemble failure evidence", so every failure comment of one run
   # carries one fingerprint. Empty when the helper is unavailable.
   AUTOFIX_FAILURE_MARKER_SUFFIX=""
+  autofix_failure_marker_line=""
+  autofix_failure_fp=""
   if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
-    autofix_failure_marker_line="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
+    # One helper run yields both marker= and fp= (issue #9533 compares fp=).
+    autofix_failure_fingerprint_out="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
       --failure-reason "${autofix_empty_failure_reason}" \
       --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
       --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
       --evidence-file "${RUNTIME_DIR:-}/sandbox_prepare_failure_evidence.txt" \
       --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
       --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
+      --evidence-file "${RUNTIME_DIR:-}/resolver_stage_stderr.txt" \
       --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
       --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
       --support-sha "${REVIEW_SUPPORT_SHA:-}" \
-      --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null | sed -n 's/^marker=//p' | head -n 1 || true)"
+      --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null || true)"
+    autofix_failure_marker_line="$(printf '%s\n' "${autofix_failure_fingerprint_out}" | sed -n 's/^marker=//p' | head -n 1 || true)"
+    autofix_failure_fp="$(printf '%s\n' "${autofix_failure_fingerprint_out}" | sed -n 's/^fp=//p' | head -n 1 || true)"
     if [ -n "${autofix_failure_marker_line}" ]; then
       AUTOFIX_FAILURE_MARKER_SUFFIX=$'\n\n'"${autofix_failure_marker_line}"
     fi
+  fi
+  # Repeated reviewer failure (issue #9533). The gate already counted the
+  # trusted same-head review-autofix-failure:v1 markers (GATE_FINGERPRINT_CAP_*).
+  # When this run's reviewers_failed fingerprint matches them and this marker
+  # reaches REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED (default
+  # 2), the crash is deterministic: post no "will retry" comment and leave
+  # AUTOFIX_EDITOR_EMPTY_NOOP unset, so the workflow-failure steps label
+  # ai:review-blocked and post one comment naming the fingerprint and the
+  # first error. Any missing or invalid value keeps the retry (fail open).
+  reviewers_failed_repeat_max="${REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED:-2}"
+  case "${reviewers_failed_repeat_max}" in
+    ''|*[!0-9]*|0) reviewers_failed_repeat_max=2 ;;
+  esac
+  reviewers_failed_prior_count="${GATE_FINGERPRINT_CAP_COUNT:-0}"
+  [[ "${reviewers_failed_prior_count}" =~ ^[0-9]{1,6}$ ]] || reviewers_failed_prior_count=0
+  # No fallback to this run's head: an unset gate head fails the same-head
+  # check and keeps the retry.
+  reviewers_failed_gate_head="$(printf '%s' "${GATE_HEAD_SHA_FOR_FINGERPRINT:-}" | tr 'A-F' 'a-f')"
+  reviewers_failed_this_head="$(printf '%s' "${AUTOFIX_FAILURE_HEAD_SHA:-}" | tr 'A-F' 'a-f')"
+  if [ "${autofix_empty_failure_reason}" = "reviewers_failed" ] \
+    && [ "${REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED:-true}" != "false" ] \
+    && [ "${GATE_FINGERPRINT_CAP_REASON:-}" = "reviewers_failed" ] \
+    && [[ "${autofix_failure_fp}" =~ ^[0-9a-f]{64}$ ]] \
+    && [ "${GATE_FINGERPRINT_CAP_FP:-}" = "${autofix_failure_fp}" ] \
+    && [ "${reviewers_failed_prior_count}" -ge 1 ] \
+    && [[ "${reviewers_failed_this_head}" =~ ^[0-9a-f]{40}$ ]] \
+    && [ "${reviewers_failed_gate_head}" = "${reviewers_failed_this_head}" ] \
+    && [ "$((reviewers_failed_prior_count + 1))" -ge "${reviewers_failed_repeat_max}" ]; then
+    reviewers_failed_repeat_pr="${PR_NUMBER:-}"
+    [[ "${reviewers_failed_repeat_pr}" =~ ^[0-9]+$ ]] || reviewers_failed_repeat_pr="unknown"
+    echo "AUTOFIX_REVIEWERS_FAILED_REPEATED pr=${reviewers_failed_repeat_pr} head=${reviewers_failed_this_head} fp=${autofix_failure_fp} count=$((reviewers_failed_prior_count + 1)) max=${reviewers_failed_repeat_max}"
+    {
+      echo "AUTOFIX_REVIEWERS_FAILED_REPEATED=true"
+      echo "AUTOFIX_REVIEWERS_FAILED_REPEATED_COUNT=$((reviewers_failed_prior_count + 1))"
+      echo "AUTOFIX_REVIEWERS_FAILED_REPEATED_FP=${autofix_failure_fp}"
+    } >> "$GITHUB_ENV"
+    exit 1
+  fi
+  # Issue-less PRs (issue #9487): the standalone stall poller follows only
+  # labelled issues, so for a PR whose LINKED_ISSUES_JSON (exported by the
+  # "Collect PR metadata" step) is exactly an empty array the retry comes
+  # from the poller's issue-less review retry pass. Unset, unparseable or
+  # non-empty values keep the legacy sentence.
+  issueless_retry_note="The stall poller will retry the review on a subsequent cycle."
+  if [ -n "${LINKED_ISSUES_JSON:-}" ] \
+    && printf '%s' "${LINKED_ISSUES_JSON}" | jq -e 'type == "array" and length == 0' >/dev/null 2>&1; then
+    issueless_retry_note="This PR has no linked issue, so the orchestrator poller's issue-less review retry pass re-dispatches this review once, after a newer review-support (\`@stable\`) release is pinned."
   fi
   NOOP_BODY="$(cat <<EOF
 **AI review/autofix produced no output — will retry**
 
 ${noop_explanation} No \`ai:review-blocked\` label is being applied for this run.
 
-[View workflow run](${RUN_URL}) for details. The stall poller will retry the review on a subsequent cycle.
+[View workflow run](${RUN_URL}) for details. ${issueless_retry_note}
 EOF
 )"
+  if [ -n "${reviewers_failed_headline:-}" ]; then
+    NOOP_BODY+=$'\n\n'"**First error:** \`${reviewers_failed_headline//\`/\'}\`"
+  fi
   if [ "${autofix_empty_failure_reason}" = "provider_unavailable" ]; then
     NOOP_BODY="${NOOP_BODY/produced no output — will retry/paused — model provider unavailable}"
   fi

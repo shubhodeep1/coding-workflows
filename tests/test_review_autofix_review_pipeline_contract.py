@@ -9299,6 +9299,9 @@ def test_review_editor_prompt_explains_sandbox_limits() -> None:
 	assert "edit both copies in the same run so they stay byte-identical" in block
 	assert 'new ".claude/docs/" files' in block and "cannot be created" in block
 	assert "selected .claude/docs/ reference files" in apply_fixes
+	# PR #9112 / issue #9111: the editor may create or edit .github/ai/chatgpt_pool.json.
+	assert '".github/ai/chatgpt_pool.json"' in block
+	assert ".github/ai/chatgpt_pool.json when present" in apply_fixes
 	assert "`" not in block and "$" not in block and "\\" not in block
 	spec = importlib.util.spec_from_file_location("review_untrusted_workspace_test", REPO_ROOT / "scripts/review_untrusted_workspace.py")
 	assert spec is not None and spec.loader is not None
@@ -9306,6 +9309,9 @@ def test_review_editor_prompt_explains_sandbox_limits() -> None:
 	spec.loader.exec_module(workspace_module)
 	assert not workspace_module.allowed(".claude/commands/audit-plans.md")
 	assert not workspace_module.allowed(".github/ai/other.json")
+	with mock.patch.dict(os.environ):
+		os.environ.pop("REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED", None)
+		assert workspace_module.allowed(".github/ai/chatgpt_pool.json")
 	assert not workspace_module.allowed(".claude/hooks/pr_merge_status_guard.py")
 	assert workspace_module.allowed(".github/workflows/x.yml")
 	assert workspace_module.allowed(".claude/hooks/gh_api_write_guard.py")
@@ -9516,6 +9522,123 @@ def test_review_other_sandbox_transfer_failure_evidence() -> None:
 			assert resolver_result.returncode == 7, resolver_result.stderr
 			assert resolver_result.stderr == f"::error::Conflict resolver sandbox transfer failed; refusing to accept output.{expected}\n"
 			assert resolver_result.stdout == ("transfer_rollback_failed\n" if diagnostic == "transfer_rollback_failed" else "sandbox_transfer_failed\n")
+
+
+def _load_review_workspace_module(module_name: str):
+	spec = importlib.util.spec_from_file_location(module_name, REPO_ROOT / "scripts/review_untrusted_workspace.py")
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
+
+
+def test_review_isolation_admits_chatgpt_pool_config_behind_flag() -> None:
+	"""PR #9112 / issue #9111: .github/ai/chatgpt_pool.json is admitted behind an on-by-default off switch.
+
+	No pytest fixtures: main() runs this file under plain python3 in CI.
+	"""
+	module = _load_review_workspace_module("review_workspace_chatgpt_pool_flag")
+	flag = "REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED"
+	assert module.CHATGPT_POOL_CONFIG_FLAG == flag
+	with mock.patch.dict(os.environ):
+		os.environ.pop(flag, None)
+		assert module.allowed(".github/ai/chatgpt_pool.json")
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			for value in ("", "true", "TRUE", "True"):
+				os.environ[flag] = value
+				assert module.allowed(".github/ai/chatgpt_pool.json"), value
+				# Every other .github/ai/ path stays rejected, including a case variant.
+				assert not module.allowed(".github/ai/other.json")
+				assert not module.allowed(".github/ai/WORKFLOW.md")
+				assert not module.allowed(".github/ai/ChatGPT_pool.json")
+				assert not module.allowed(".github/ai/chatgpt_pool.json/x")
+				assert module.allowed(".github/ai/claude_engine.json")
+			for value in ("false", "False", "FALSE"):
+				os.environ[flag] = value
+				assert not module.allowed(".github/ai/chatgpt_pool.json"), value
+				assert module.allowed(".github/ai/claude_engine.json")
+				assert not module.allowed(".github/ai/other.json")
+		assert stderr.getvalue() == ""
+		module._chatgpt_pool_config_flag_warned = False
+		os.environ[flag] = "maybe"
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			assert not module.allowed(".github/ai/chatgpt_pool.json")
+			assert not module.allowed(".github/ai/chatgpt_pool.json")
+		err = stderr.getvalue()
+		assert err == "::warning::REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED has an unrecognised value; .github/ai/chatgpt_pool.json stays out of the review sandbox\n"
+		assert "maybe" not in err
+		os.environ[flag] = " true "
+		with contextlib.redirect_stderr(io.StringIO()):
+			assert not module.allowed(".github/ai/chatgpt_pool.json")
+
+
+def test_review_isolation_transfers_new_chatgpt_pool_config() -> None:
+	"""PR #9112 / issue #9111: an editor-created or edited chatgpt_pool.json survives transfer unless the flag is false."""
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	flag = "REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED"
+	# ("false", True): with the switch off, an existing host file stays out of
+	# the sandbox and is never overwritten by an editor write.
+	for flag_value, existing in ((None, False), ("false", False), (None, True), ("false", True)):
+		with tempfile.TemporaryDirectory() as td:
+			root = Path(td)
+			host = root / "host"
+			source = root / "isolated" / "source"
+			source.mkdir(parents=True)
+			(host / ".github/ai").mkdir(parents=True)
+			(host / ".github/ai/claude_engine.json").write_text("{}\n")
+			if existing:
+				(host / ".github/ai/chatgpt_pool.json").write_text('{"enabled": false}\n')
+			subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+			subprocess.run(["git", "add", ".github"], cwd=host, env=_git_clean_env(), check=True)
+			manifest = root / "isolated" / "baseline.json"
+			env = {**_git_clean_env()}
+			env.pop(flag, None)
+			if flag_value is not None:
+				env[flag] = flag_value
+
+			def run(action: str) -> subprocess.CompletedProcess[str]:
+				return subprocess.run(
+					[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest)],
+					env=env, capture_output=True, text=True, check=False,
+				)
+
+			assert run("snapshot").returncode == 0
+			assert (source / ".github/ai/chatgpt_pool.json").exists() is (existing and flag_value != "false")
+			assert run("refresh").returncode == 0
+			(source / ".github/ai/chatgpt_pool.json").write_text('{"enabled": true}\n')
+			(source / ".github/ai/other.json").write_text("{}\n")
+			result = run("transfer")
+			assert result.returncode == 0, result.stderr
+			assert not (host / ".github/ai/other.json").exists()
+			if flag_value == "false" and existing:
+				assert (host / ".github/ai/chatgpt_pool.json").read_text() == '{"enabled": false}\n'
+			elif flag_value == "false":
+				assert not (host / ".github/ai/chatgpt_pool.json").exists()
+			else:
+				assert (host / ".github/ai/chatgpt_pool.json").read_text() == '{"enabled": true}\n'
+
+
+def test_review_isolation_snapshot_logs_unrecognised_chatgpt_pool_flag() -> None:
+	"""PR #9112 / issue #9111: snapshot (whose stderr reaches the Actions log) warns on a mistyped switch."""
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host = root / "host"
+		(host / ".github/ai").mkdir(parents=True)
+		(host / ".github/ai/claude_engine.json").write_text("{}\n")
+		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", ".github"], cwd=host, env=_git_clean_env(), check=True)
+		(root / "isolated" / "source").mkdir(parents=True)
+		env = {**_git_clean_env(), "REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED": "flase"}
+		result = subprocess.run(
+			[sys.executable, str(workspace_helper), "snapshot", str(host), str(root / "isolated" / "source"), str(root / "isolated" / "baseline.json")],
+			env=env, capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert "::warning::REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED has an unrecognised value" in result.stderr
+		assert "flase" not in result.stderr
 
 
 def test_review_isolation_traverses_only_allowed_github_directories() -> None:
@@ -10864,7 +10987,8 @@ def test_post_sync_test_repair_skips_every_reviewer_and_editor_step() -> None:
 	raw = WORKFLOW.read_text(encoding="utf-8")
 	pre_review = [line for line in raw.splitlines() if "env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'" in line]
 	# 19 since #8427 P3: the switch-gated done-check prepare and label steps.
-	assert len(pre_review) == 19, len(pre_review)
+	# 21 since #9052: the review findings record write and upload steps.
+	assert len(pre_review) == 21, len(pre_review)
 	for line in pre_review:
 		assert line.lstrip().startswith("if: "), line
 		assert _POST_SYNC_REPAIR_SKIP_CLAUSE in line, line
@@ -10886,7 +11010,7 @@ def test_post_sync_test_repair_skips_every_reviewer_and_editor_step() -> None:
 		"Telegram success",
 	):
 		assert _POST_SYNC_REPAIR_SKIP_CLAUSE in _step_block(name), name
-	assert raw.count(_POST_SYNC_REPAIR_SKIP_CLAUSE) == 28
+	assert raw.count(_POST_SYNC_REPAIR_SKIP_CLAUSE) == 30
 
 
 def test_post_sync_test_repair_commit_is_pushed() -> None:
@@ -10908,7 +11032,9 @@ def test_post_sync_test_repair_step_follows_the_topology_gate() -> None:
 	following = raw[topology + 1:step]
 	assert following.count("      - name: ") == 0
 	block = raw[step:reviewers]
-	assert "if: inputs.post_sync_test_repair && startsWith(env.TARGET_BRANCH, 'orchestrator/project-') && env.CAN_PUSH == 'true'" in block
+	# Widened for the final-CI repair (final-ci-failure-ci-fix plan, Phase 2).
+	assert ("if: ((inputs.post_sync_test_repair && startsWith(env.TARGET_BRANCH, 'orchestrator/project-')) "
+		"|| needs.gate.outputs.final_ci_repair == 'true') && env.CAN_PUSH == 'true'") in block
 	assert "continue-on-error: true" in block
 	assert "PREPUSH_TEST_GATE_STEP_MODE: integration" in block
 	assert "POST_SYNC_TEST_REPAIR: ${{ inputs.post_sync_test_repair }}" in block
@@ -10973,6 +11099,192 @@ def test_review_collect_pr_metadata_does_not_shadow_shared_gh_retry() -> None:
 	assert commands, "expected gh_retry_to_file call sites in the helper"
 	assert all(command == "gh" for command in commands), commands
 	assert 'source "${SCRIPT_DIR}/gh_helpers.sh"' in text
+
+
+# --- Repeated reviewer failure stops the retry loop (issue #9533) ---------
+
+_RRF_REPO_ROOT = Path(__file__).resolve().parents[1]
+_RRF_POST_SUMMARY = _RRF_REPO_ROOT / "scripts" / "review_autofix_step_post_editor_summary.sh"
+_RRF_FAILURE_COMMENT = _RRF_REPO_ROOT / "scripts" / "review_autofix_step_failure_comment.sh"
+_RRF_HEAL_PY = _RRF_REPO_ROOT / "scripts" / "workflow_failure_heal.py"
+_RRF_HEAD = "a" * 40
+_RRF_CRASH = "/home/runner/work/_temp/support/scripts/render_prompt.sh: line 306: 1abc: invalid variable name\n"
+_RRF_FAKE_GH_HELPERS = '''gh_retry() {
+  local arg
+  for arg in "$@"; do
+    case "${arg}" in body=*) printf '%s' "${arg#body=}" > "${FAKE_GH_BODY_FILE}" ;; esac
+  done
+  return 0
+}
+'''
+
+
+def _rrf_run(tmp_path: Path, script: Path, extra_env: dict[str, str]) -> tuple[subprocess.CompletedProcess[str], str, str]:
+	support_dir = tmp_path / "support"
+	support_dir.mkdir(exist_ok=True)
+	(support_dir / "gh_helpers.sh").write_text(_RRF_FAKE_GH_HELPERS, encoding="utf-8")
+	runtime_dir = tmp_path / "runtime"
+	runtime_dir.mkdir(exist_ok=True)
+	(runtime_dir / "reviewers_stage_stderr.txt").write_text("starting reviewers\n" + _RRF_CRASH, encoding="utf-8")
+	summary_file = tmp_path / "editor_summary.txt"
+	summary_file.write_text("", encoding="utf-8")
+	github_env = tmp_path / "github_env"
+	github_env.write_text("", encoding="utf-8")
+	body_file = tmp_path / "posted_body.txt"
+	body_file.unlink(missing_ok=True)
+	env = {
+		"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+		"HOME": str(tmp_path),
+		"PYTHONDONTWRITEBYTECODE": "1",
+		"FAKE_GH_BODY_FILE": str(body_file),
+		"SUPPORT_SCRIPTS_DIR": str(support_dir),
+		"RUNTIME_DIR": str(runtime_dir),
+		"EDITOR_SUMMARY_FILE": str(summary_file),
+		"COMMITTED_FILES_FILE": str(tmp_path / "missing_committed.txt"),
+		"PR_EDITOR_COMMENT_FILE": str(tmp_path / "pr_editor_comment.txt"),
+		"GITHUB_ENV": str(github_env),
+		"PR_NUMBER": "9356",
+		"REPOSITORY": "owner/repo",
+		"AUTOFIX_STEP_REPOSITORY": "owner/repo",
+		"AUTOFIX_STEP_SERVER_URL": "https://github.com",
+		"AUTOFIX_STEP_RUN_ID": "4242",
+		"GITHUB_RUN_ID": "4242",
+		"AUTOFIX_FAILURE_HEAD_SHA": _RRF_HEAD,
+		"REVIEW_SUPPORT_SHA": "1" * 40,
+		"AUTOFIX_FAILURE_HEAL_PY": str(_RRF_HEAL_PY),
+		"REVIEWERS_STEP_OUTCOME": "failure",
+		"REVIEW_FAILURE_RUN_URL": "https://github.com/owner/repo/actions/runs/4242",
+		**extra_env,
+	}
+	result = subprocess.run(["bash", str(script)], capture_output=True, text=True, env=env, timeout=120)
+	body = body_file.read_text(encoding="utf-8") if body_file.exists() else ""
+	return result, body, github_env.read_text(encoding="utf-8")
+
+
+def _rrf_first_failure_fp(tmp_path: Path) -> str:
+	result, body, github_env = _rrf_run(tmp_path, _RRF_POST_SUMMARY, {})
+	assert result.returncode == 1, result.stdout + result.stderr
+	assert "**AI review/autofix produced no output — will retry**" in body
+	assert "AUTOFIX_EDITOR_EMPTY_NOOP=true" in github_env
+	assert "AUTOFIX_REVIEWERS_FAILED_REPEATED" not in github_env
+	# Specification item 3: the crash line is named.
+	assert "**First error:** `render_prompt.sh: line 306: 1abc: invalid variable name`" in body
+	match = re.search(r"<!-- review-autofix-failure:v1 head=" + _RRF_HEAD + r" reason=reviewers_failed fp=([0-9a-f]{64}) ", body)
+	assert match, body
+	return match.group(1)
+
+
+def _rrf_gate_env(fp: str, *, head: str = _RRF_HEAD, count: str = "1", reason: str = "reviewers_failed") -> dict[str, str]:
+	return {
+		"GATE_FINGERPRINT_CAP_FP": fp,
+		"GATE_FINGERPRINT_CAP_REASON": reason,
+		"GATE_FINGERPRINT_CAP_COUNT": count,
+		"GATE_HEAD_SHA_FOR_FINGERPRINT": head,
+	}
+
+
+def test_second_same_head_same_fp_reviewers_failed_blocks_instead_of_retrying(tmp_path: Path) -> None:
+	fp = _rrf_first_failure_fp(tmp_path)
+	result, body, github_env = _rrf_run(tmp_path, _RRF_POST_SUMMARY, _rrf_gate_env(fp))
+	assert result.returncode == 1, result.stdout + result.stderr
+	assert body == "", "no 'will retry' comment on a repeated reviewer failure"
+	assert "AUTOFIX_EDITOR_EMPTY_NOOP=true" not in github_env
+	assert "AUTOFIX_REVIEWERS_FAILED=true" in github_env
+	assert "AUTOFIX_REVIEWERS_FAILED_REPEATED=true" in github_env
+	assert "AUTOFIX_REVIEWERS_FAILED_REPEATED_COUNT=2" in github_env
+	assert f"AUTOFIX_REVIEWERS_FAILED_REPEATED_FP={fp}" in github_env
+	assert f"AUTOFIX_REVIEWERS_FAILED_REPEATED pr=9356 head={_RRF_HEAD} fp={fp} count=2 max=2" in result.stdout
+
+
+@pytest.mark.parametrize("variant", ["other_fp", "other_head", "other_reason", "no_prior", "cap_disabled"])
+def test_reviewers_failed_with_a_different_fp_or_head_still_retries(tmp_path: Path, variant: str) -> None:
+	fp = _rrf_first_failure_fp(tmp_path)
+	env = {
+		"other_fp": _rrf_gate_env("e" * 64),
+		"other_head": _rrf_gate_env(fp, head="b" * 40),
+		"other_reason": _rrf_gate_env(fp, reason="editor_empty_noop"),
+		"no_prior": _rrf_gate_env(fp, count="0"),
+		"cap_disabled": {**_rrf_gate_env(fp), "REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED": "false"},
+	}[variant]
+	result, body, github_env = _rrf_run(tmp_path, _RRF_POST_SUMMARY, env)
+	assert result.returncode == 1
+	assert "**AI review/autofix produced no output — will retry**" in body, variant
+	assert "AUTOFIX_EDITOR_EMPTY_NOOP=true" in github_env
+	assert "AUTOFIX_REVIEWERS_FAILED_REPEATED" not in github_env
+
+
+def test_repeated_reviewer_failure_comment_names_fingerprint_and_first_error(tmp_path: Path) -> None:
+	fp = "c" * 64
+	result, body, _github_env = _rrf_run(tmp_path, _RRF_FAILURE_COMMENT, {
+		"AUTOFIX_REVIEWERS_FAILED_REPEATED": "true",
+		"AUTOFIX_REVIEWERS_FAILED_REPEATED_COUNT": "2",
+		"AUTOFIX_REVIEWERS_FAILED_REPEATED_FP": fp,
+		"AUTOFIX_FAILED_STEP": "Run reviewer models",
+		"AUTOFIX_FAILURE_FIRST_ERROR": "render_prompt.sh: line 306: 1abc: invalid variable name",
+		"AUTOFIX_FAILURE_MARKER": f"<!-- review-autofix-failure:v1 head={_RRF_HEAD} reason=reviewers_failed fp={fp} degraded=0 run=4242 -->",
+	})
+	assert result.returncode == 0, result.stderr
+	assert f"**Repeated reviewer failure:** this head failed 2 times with fingerprint `{fp[:16]}` (reason `reviewers_failed`), so the review is not retried." in body
+	assert "**First error:** `render_prompt.sh: line 306: 1abc: invalid variable name`" in body
+	assert body.rstrip().endswith(f"fp={fp} degraded=0 run=4242 -->")
+	plain, plain_body, _ = _rrf_run(tmp_path, _RRF_FAILURE_COMMENT, {})
+	assert plain.returncode == 0 and "Repeated reviewer failure" not in plain_body
+
+
+def test_repeated_reviewer_failure_workflow_wiring() -> None:
+	reviewers = _step_block("Run reviewer models")
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh" 2> >(tee -a "${RUNTIME_DIR:-/tmp}/reviewers_stage_stderr.txt" >&2) || reviewers_rc=$?' in reviewers
+	post_summary = _step_block("Post editor summary comment")
+	for line in (
+		"GATE_FINGERPRINT_CAP_FP: ${{ needs.gate.outputs.fingerprint_cap_fp }}",
+		"GATE_FINGERPRINT_CAP_REASON: ${{ needs.gate.outputs.fingerprint_cap_reason }}",
+		"GATE_FINGERPRINT_CAP_COUNT: ${{ needs.gate.outputs.fingerprint_cap_count }}",
+		"GATE_HEAD_SHA_FOR_FINGERPRINT: ${{ needs.gate.outputs.head_sha }}",
+		"REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED || '2' }}",
+	):
+		assert line in post_summary, line
+	assert "REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED || '2' }}" in _step_block("Evaluate review gate")
+	# The base-sync carry kill switch reaches every security-pass step.
+	workflow_text = (_RRF_REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	assert workflow_text.count("SECURITY_PASS_BASE_SYNC_CARRY_ENABLED: ${{ vars.SECURITY_PASS_BASE_SYNC_CARRY_ENABLED || 'true' }}") == 3
+
+
+_RRF_MARK_BLOCKED = _RRF_REPO_ROOT / "scripts" / "review_autofix_step_mark_review_blocked_workflow_failure.sh"
+
+
+@pytest.mark.parametrize("variant", ["fallback_issue", "issueless", "not_repeated"])
+def test_repeated_reviewer_failure_labels_fallback_issue_before_the_pr(tmp_path: Path, variant: str) -> None:
+	# Issue #9533: the PR itself is labelled only when no issue is found by
+	# closingIssuesReferences, the fallback numbers or the PR title/body.
+	support_dir = tmp_path / "support"
+	support_dir.mkdir()
+	calls_file = tmp_path / "gh_calls.txt"
+	(support_dir / "gh_helpers.sh").write_text('gh_retry() { printf \'%s\\n\' "$*" >> "${FAKE_GH_CALLS}"; return 0; }\n', encoding="utf-8")
+	pr_meta = tmp_path / "pr_meta.json"
+	pr_meta.write_text(json.dumps({"title": "t", "body": "no refs"}), encoding="utf-8")
+	env = {
+		"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+		"HOME": str(tmp_path),
+		"FAKE_GH_CALLS": str(calls_file),
+		"SUPPORT_SCRIPTS_DIR": str(support_dir),
+		"REPOSITORY": "owner/repo",
+		"PR_NUMBER": "9356",
+		"PR_META_FILE": str(pr_meta),
+		"LINKED_ISSUES_JSON": "[]",
+		"LINKED_ISSUE_FALLBACK_NUMBERS_JSON": "[77]" if variant == "fallback_issue" else "[]",
+		"AUTOFIX_REVIEWERS_FAILED_REPEATED": "false" if variant == "not_repeated" else "true",
+	}
+	result = subprocess.run(["bash", str(_RRF_MARK_BLOCKED)], capture_output=True, text=True, env=env, timeout=60, check=False)
+	assert result.returncode == 0, result.stdout + result.stderr
+	calls = calls_file.read_text(encoding="utf-8") if calls_file.exists() else ""
+	if variant == "fallback_issue":
+		assert "repos/owner/repo/issues/77/labels" in calls
+		assert "issues/9356/labels" not in calls
+	elif variant == "issueless":
+		assert "repos/owner/repo/issues/9356/labels" in calls
+	else:
+		assert "/labels" not in calls
+		assert "No linked issues found for PR #9356" in result.stdout
 
 
 if __name__ == "__main__":

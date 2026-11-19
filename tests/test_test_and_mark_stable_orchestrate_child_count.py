@@ -159,5 +159,31 @@ class ChildCountBehaviourTests(unittest.TestCase):
 		self.assertFalse(any(line.startswith("child_issues=") for line in self._lines(tmp / "output")))
 
 
+# The judge closed-tracking guard cases (issue #8953) live in
+# tests/test_orchestrate_judge_tracking_closed_guard.py and are collected here,
+# since CI already runs this file and ci.yml was outside that issue's file
+# grant. A name clash would hide a test, so it fails loudly.
+def _collect_judge_tracking_closed_guard_cases() -> None:
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location(
+		"orchestrate_judge_tracking_closed_guard_cases",
+		Path(__file__).resolve().parent / "test_orchestrate_judge_tracking_closed_guard.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	# A renamed or emptied cases module must fail loudly, not collect nothing.
+	assert collected >= 6, f"only {collected} judge tracking-closed guard cases collected"
+
+
+_collect_judge_tracking_closed_guard_cases()
+
+
 if __name__ == "__main__":
 	unittest.main()
