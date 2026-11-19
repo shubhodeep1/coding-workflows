@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Answer open decision OD2 (choice A) in docs/plans/fold-per-pr-checks-plan.md as the last piece of Phase 1 (PR description: \"open decision OD2, answered A\")\n  expected_change_site: docs/plans/fold-per-pr-checks-plan.md, OD2 decision (line 133)\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The PR diff contains no change under docs/plans/, the plan still labels OD2 \"open\" at line 133; severity NIT per all reviewers. minimax_minimax-m3 notes the plan file belongs to plan PR #9690 and is not in this branch (the previous editor recorded TASK_GAP_DEFERRED); z-ai_glm-5_3-flash and openai_gpt-6-luna state the file is present in this checkout, and glm adds the same pattern for OD1 (line 124) and OD3 (line 139). anthropic_claude-sonnet-5_5 considered this gap and judged it outside this PR (reported NONE).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: Answer open decision OD2 (choice A) in `docs/plans/fold-per-pr-checks-plan.md` as the final step of Phase 1.\n  Expected change site: `docs/plans/fold-per-pr-checks-plan.md`, line 133.\n  Evidence of absence: The PR diff does not update the plan file, and OD2 remains marked \"open\" in the plan despite the PR completing the fold.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: The plan PR #9690 (\"docs/plans/fold-per-pr-checks-plan.md\") records OD2 as answered with choice A once the stack lands. The PR description names this PR as the \"last piece of Phase 1\" of that plan and states OD2 is answered A.\n  Expected change site: docs/plans/fold-per-pr-checks-plan.md, OD2 decision block (line 133 in the plan PR source).\n  Evidence of absence: The PR diff contains no change under docs/plans/. The plan file is owned by plan PR #9690; this implementation PR is stacked on #9698 and #9693 (not on #9690), and the plan file is not present in this branch's working tree. Writing it here would either invent the plan document or conflict with the plan PR. The previous editor (run 44313563573) recorded the same observation as TASK_GAP_DEFERRED for the identical reason.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"The last piece of Phase 1\" answers open decision OD2 with choice A.\n  Expected change site: `docs/plans/fold-per-pr-checks-plan.md`, OD2 decision.\n  Evidence of absence: The PR diff implements the plan-archival fold but does not update the plan; the current plan still labels OD2 \"open\" at line 133.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\n- Requirement: The PR description states the PR answers open decision OD2 with choice A and implements the fold per docs/plans/fold-per-pr-checks-plan.md; the plan doc is the durable record of plan decisions.\n  Expected change site: docs/plans/fold-per-pr-checks-plan.md, heading \"### OD2 \u2014 Fold the plan-archival lint (open)\" at line 133.\n  Evidence of absence: docs/plans/fold-per-pr-checks-plan.md:133 still reads \"### OD2 \u2014 Fold the plan-archival lint (open)\"; no diff hunk updates the heading or records the answer, even though the file exists on this checkout. Same pattern for OD3 at line 139 and OD1 at line 124.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "67f0ecbf95239ad4ea12ac671d1458ea9a5c4ceb59b636f21fff7a09529474b2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9709,
+    "run_id": "44615880580",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44615880580",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261119214317_7e3eb6b7d4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9709,
+    "run_id": "44615880580"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-19T21:43:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
