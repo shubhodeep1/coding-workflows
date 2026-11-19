@@ -750,6 +750,27 @@ jobs:
             _fetched_scripts+=("${f}")
           done
 
+          # Issue #9766: red-base approval hold helper sourced by the poller's
+          # stall-recovery plan gate. Optional: when absent, the checkout copy is
+          # removed (a consumer file is never sourced into this secret-bearing
+          # job) and the gate keeps the legacy behaviour (no hold).
+          for f in plan_base_ci_gate.sh; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::notice::Optional red-base approval hold helper ${f} unavailable on ${SCRIPT_REF}; poller plan auto-approval is not held on a red base."
+              rm -f "scripts/${f}"
+              echo "PLAN_BASE_CI_GATE_STAGED=false" >> "$GITHUB_ENV"
+              continue
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
+            _fetched_scripts+=("${f}")
+            # The poller sources the helper only when this flag is true.
+            echo "PLAN_BASE_CI_GATE_STAGED=true" >> "$GITHUB_ENV"
+          done
+
           # Smoke-fixture project backstop sourced by the poller. Optional:
           # when absent, the poller's stub leaves smoke fixture projects on the
           # normal path (SMOKE_FIXTURE_REAP reason=helper_unavailable).
@@ -1033,6 +1054,8 @@ jobs:
           RECLARIFY_UNROUTED_GRACE_MINUTES: ${{ vars.RECLARIFY_UNROUTED_GRACE_MINUTES || '15' }}
           RECLARIFY_UNROUTED_MAX_AGE_HOURS: ${{ vars.RECLARIFY_UNROUTED_MAX_AGE_HOURS || '168' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
+          RED_BASE_APPROVAL_HOLD_ENABLED: ${{ vars.RED_BASE_APPROVAL_HOLD_ENABLED || 'true' }}
+          RED_BASE_HOLD_WORKFLOWS: ${{ vars.RED_BASE_HOLD_WORKFLOWS || '.github/workflows/ci.yml' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
@@ -1483,6 +1506,8 @@ jobs:
           # Issue #7657: the close sweep leaves a bound partial-delivery PR's issue open.
           PARTIAL_DELIVERY_TRACKING_ENABLED: ${{ vars.PARTIAL_DELIVERY_TRACKING_ENABLED || 'true' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
+          RED_BASE_APPROVAL_HOLD_ENABLED: ${{ vars.RED_BASE_APPROVAL_HOLD_ENABLED || 'true' }}
+          RED_BASE_HOLD_WORKFLOWS: ${{ vars.RED_BASE_HOLD_WORKFLOWS || '.github/workflows/ci.yml' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
@@ -1725,6 +1750,8 @@ jobs:
           # Issue #7657: the close sweep leaves a bound partial-delivery PR's issue open.
           PARTIAL_DELIVERY_TRACKING_ENABLED: ${{ vars.PARTIAL_DELIVERY_TRACKING_ENABLED || 'true' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
+          RED_BASE_APPROVAL_HOLD_ENABLED: ${{ vars.RED_BASE_APPROVAL_HOLD_ENABLED || 'true' }}
+          RED_BASE_HOLD_WORKFLOWS: ${{ vars.RED_BASE_HOLD_WORKFLOWS || '.github/workflows/ci.yml' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
@@ -1842,6 +1869,8 @@ jobs:
           PARTIAL_DELIVERY_TRACKING_ENABLED: ${{ vars.PARTIAL_DELIVERY_TRACKING_ENABLED || 'true' }}
           STAGED_SUPPORT_LATCH_SWEEP_ONLY: "true"
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
+          RED_BASE_APPROVAL_HOLD_ENABLED: ${{ vars.RED_BASE_APPROVAL_HOLD_ENABLED || 'true' }}
+          RED_BASE_HOLD_WORKFLOWS: ${{ vars.RED_BASE_HOLD_WORKFLOWS || '.github/workflows/ci.yml' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
@@ -1883,6 +1912,8 @@ jobs:
           QUEUE_BACKPRESSURE_STATE_FILE: ${{ runner.temp }}/queue-backpressure-state/state.json
           STALL_THRESHOLD_IMPLEMENTING_MINUTES: ${{ vars.STALL_THRESHOLD_IMPLEMENTING_MINUTES || '' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
+          RED_BASE_APPROVAL_HOLD_ENABLED: ${{ vars.RED_BASE_APPROVAL_HOLD_ENABLED || 'true' }}
+          RED_BASE_HOLD_WORKFLOWS: ${{ vars.RED_BASE_HOLD_WORKFLOWS || '.github/workflows/ci.yml' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
