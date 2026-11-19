@@ -164,6 +164,21 @@ def test_verify_run_binds_a_self_dispatched_review_run_by_its_marker_head() -> N
 			raise AssertionError(f"head mismatch accepted: {case}")
 
 
+def test_verify_run_binds_a_pull_request_run_by_its_own_head() -> None:
+	# Issue #9250: a pull_request run whose PR head moved while it ran has
+	# `pull_requests: []` and its own head. The reporter now sends that head,
+	# and verify_run (unchanged) binds the run only when the heads are equal.
+	run = {"id": 500, "repository": {"full_name": CONSUMER_REPO}, "event": "pull_request", "head_sha": SHA_A,
+		"display_title": "AI Review", "pull_requests": [], "conclusion": "failure", "path": ".github/workflows/ai-review.yml"}
+	assert heal.verify_run(run, repo=CONSUMER_REPO, kind="autofix_failure", head_sha=SHA_A, pr_number=4174)["run_id"] == 500
+	try:
+		heal.verify_run(run, repo=CONSUMER_REPO, kind="autofix_failure", head_sha=SHA_B, pr_number=4174)
+	except ValueError as exc:
+		assert str(exc) == "run head mismatch"
+	else:
+		raise AssertionError("a pull_request run on another head was bound")
+
+
 def test_verify_run_provenance_lists_runs_a_trusted_marker_binds_to_the_pr_head() -> None:
 	payload = heal.validate_payload(_autofix_payload())
 	assert payload["head_sha"] == SHA_B
@@ -1124,6 +1139,148 @@ def test_filter_log_keeps_runtime_lines_outside_tail() -> None:
 	assert "AI_ENGINE_FALLBACK_REPORT" not in heal.filter_log("\n".join(report), max_lines=10)
 
 
+# The chained argparse crash of scripts/render_prompt.py on Python 3.14 (plan
+# run 42929246385, heal issues #9190 / #9200): filter_log used to keep only the
+# two bare `Traceback (most recent call last):` lines, so the heal was filed as
+# inconclusive.
+CHAINED_VALUEERROR_TRACEBACK_LINES = (
+	"2026-11-11T00:15:15.5012084Z Traceback (most recent call last):",
+	'2026-11-11T00:15:15.5013904Z   File "/usr/lib/python3.14/argparse.py", line 1759, in _check_help',
+	"2026-11-11T00:15:15.5019025Z ValueError: unsupported format character '.' (0x2e) at index 237",
+	"2026-11-11T00:15:15.5020164Z The above exception was the direct cause of the following exception:",
+	"2026-11-11T00:15:15.5021014Z Traceback (most recent call last):",
+	'2026-11-11T00:15:15.5033125Z   File "/home/runner/work/coding-workflows/coding-workflows/scripts/render_prompt.py", line 1414, in <module>',
+	"2026-11-11T00:15:15.5043693Z ValueError: badly formed help string",
+	"2026-11-11T00:15:15.5227737Z ##[error]Process completed with exit code 1.",
+)
+
+
+def test_filter_log_keeps_chained_traceback_frames_and_exception_lines_outside_tail() -> None:
+	# The traceback sits before the 400-line tail, so only the signal match
+	# can keep it.
+	filler = [f"2026-11-11T00:16:00.0000000Z step output {i}" for i in range(600)]
+	log = "\n".join(list(CHAINED_VALUEERROR_TRACEBACK_LINES) + filler) + "\n"
+	filtered = heal.filter_log(log)
+	for kept_line in CHAINED_VALUEERROR_TRACEBACK_LINES:
+		assert kept_line in filtered
+	assert "ValueError: unsupported format character '.' (0x2e) at index 237" in filtered
+	assert "ValueError: badly formed help string" in filtered
+	# The block ends at the first line after the exception that is not part of
+	# the traceback, so the filler before the tail is still dropped.
+	assert "step output 0\n" not in filtered and "step output 150\n" not in filtered
+	assert "step output 599" in filtered
+
+
+def test_filter_log_keeps_the_innermost_lines_of_a_long_traceback() -> None:
+	frames = [f'  File "/srv/app/mod{i}.py", line {i}, in f{i}' for i in range(80)]
+	traceback_lines = ["Traceback (most recent call last):", *frames, "RecursionError: too deep"]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert "Traceback (most recent call last):" in filtered
+	assert "RecursionError: too deep" in filtered
+	kept_frames = [line for line in filtered if line.startswith('  File "/srv/app/')]
+	assert len(kept_frames) == heal._TRACEBACK_CONTEXT_MAX_LINES - 1
+	assert frames[-1] in kept_frames and frames[0] not in kept_frames
+	assert "later output 0" not in filtered
+
+
+def test_filter_log_keeps_the_exception_line_of_a_traceback_longer_than_the_scan_window() -> None:
+	# Mutual recursion is not collapsed by CPython, so its traceback can run
+	# past _TRACEBACK_SCAN_MAX_LINES before the exception line.
+	frames: list[str] = []
+	for i in range(heal._TRACEBACK_SCAN_MAX_LINES):
+		frames += [f'  File "/srv/app/ping.py", line {i}, in ping{i}', f"    pong{i}()"]
+	traceback_lines = ["Traceback (most recent call last):", *frames, "RecursionError: maximum recursion depth exceeded"]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert "RecursionError: maximum recursion depth exceeded" in filtered
+	assert frames[-1] in filtered and frames[0] not in filtered
+	kept_frames = [line for line in filtered if line in set(frames)]
+	assert len(kept_frames) == heal._TRACEBACK_CONTEXT_MAX_LINES - 1
+	assert "later output 0" not in filtered
+
+
+def test_filter_log_keeps_the_chain_marker_after_a_traceback_longer_than_the_scan_window() -> None:
+	# A long mutual-recursion traceback caught and re-raised: the walk past
+	# _TRACEBACK_SCAN_MAX_LINES must keep the chain marker after the first
+	# exception line, as the in-window scan does.
+	frames: list[str] = []
+	for i in range(heal._TRACEBACK_SCAN_MAX_LINES):
+		frames += [f'  File "/srv/app/ping.py", line {i}, in ping{i}', f"    pong{i}()"]
+	marker = "The above exception was the direct cause of the following exception:"
+	traceback_lines = [
+		"Traceback (most recent call last):",
+		*frames,
+		"RecursionError: maximum recursion depth exceeded",
+		"",
+		marker,
+		"",
+		"Traceback (most recent call last):",
+		'  File "/srv/app/main.py", line 9, in <module>',
+		"RuntimeError: ping failed",
+	]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert "RecursionError: maximum recursion depth exceeded" in filtered
+	assert marker in filtered
+	assert "RuntimeError: ping failed" in filtered
+	assert frames[-1] in filtered and frames[0] not in filtered
+	assert "later output 0" not in filtered
+
+
+def test_filter_log_keeps_the_chain_marker_after_an_exception_line_at_the_scan_window_edge() -> None:
+	# The exception line is the last line of the scan window, so the chain
+	# marker sits just past it and must still be kept.
+	frames = [f'  File "/srv/app/mod{i}.py", line {i}, in f{i}' for i in range(heal._TRACEBACK_SCAN_MAX_LINES - 1)]
+	marker = "The above exception was the direct cause of the following exception:"
+	traceback_lines = [
+		"Traceback (most recent call last):",
+		*frames,
+		"ValueError: inner failure",
+		marker,
+		"Traceback (most recent call last):",
+		'  File "/srv/app/main.py", line 9, in <module>',
+		"RuntimeError: outer failure",
+	]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert "ValueError: inner failure" in filtered
+	assert marker in filtered
+	assert "RuntimeError: outer failure" in filtered
+	assert "later output 0" not in filtered
+
+
+def test_filter_log_keeps_the_exception_line_before_many_continuation_lines() -> None:
+	# A pydantic ValidationError prints every error indented after the
+	# exception line, so more than _TRACEBACK_CONTEXT_MAX_LINES continuation
+	# lines can follow it; the cut must still keep the exception line.
+	frames = [f'  File "/srv/app/mod{i}.py", line {i}, in f{i}' for i in range(40)]
+	details = [f"  field_{i}\n    Field required [type=missing]" for i in range(30)]
+	exception_line = "pydantic_core._pydantic_core.ValidationError: 30 validation errors for Settings"
+	marker = "During handling of the above exception, another exception occurred:"
+	traceback_lines = [
+		"Traceback (most recent call last):",
+		*frames,
+		exception_line,
+		*"\n".join(details).split("\n"),
+		"",
+		marker,
+		"",
+		"Traceback (most recent call last):",
+		'  File "/srv/app/main.py", line 9, in <module>',
+		"RuntimeError: settings failed",
+	]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert exception_line in filtered
+	assert frames[-1] in filtered and frames[0] not in filtered
+	assert marker in filtered
+	assert "RuntimeError: settings failed" in filtered
+	first_block = set(frames) | {exception_line} | set("\n".join(details).split("\n"))
+	assert len([line for line in filtered if line in first_block]) <= heal._TRACEBACK_CONTEXT_MAX_LINES
+	assert "later output 0" not in filtered
+
+
 def test_drop_step_script_lines_drops_unstyled_echoed_script() -> None:
 	dropped = heal._drop_step_script_lines(BTC_SWEEPER_UNSTYLED_STEP_LOG)
 	assert "set -euo pipefail\n" not in dropped.split("##[group]Run set -euo pipefail", 1)[1]
@@ -1806,6 +1963,17 @@ if args[:1] == ["api"]:
 			fail("HTTP 500")
 		names = state.get("labeled_events", {}).get(path, [])
 		out("".join(name + "\n" for name in names))
+	if "/issues/comments/" in path and path.split("/")[-1].isdigit() and method == "DELETE":
+		state.setdefault("comments_deleted", []).append(path)
+		if state.get("comment_delete_fail"):
+			fail("HTTP 500")
+		out("")
+	if "/issues/comments/" in path and path.split("/")[-1].isdigit() and method == "PATCH":
+		body_arg = rest[rest.index("-F") + 1]
+		state.setdefault("comments_edited", []).append({"path": path, "body": Path(body_arg[len("body=@"):]).read_text()})
+		if state.get("comment_edit_fail"):
+			fail("HTTP 500")
+		out("{}")
 	if path.startswith("repos/") and "/issues/" in path and path.endswith("/comments") and "-F" in rest:
 		body_arg = rest[rest.index("-F") + 1]
 		if body_arg.startswith("body=@"):
@@ -2225,6 +2393,9 @@ def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[s
 					"pull_requests": [{"number": payload.get("issue_number")}],
 				} for ref in payload.get("run_refs", [])
 			}
+		# extra_run_details adds runs (e.g. the intake's own run) on top of
+		# the default fixtures without replacing them.
+		state["run_details"].update(state.pop("extra_run_details", {}))
 		state_file.write_text(json.dumps(state), encoding="utf-8")
 		payload_file = tmp / "payload_raw.json"
 		payload_file.write_text(json.dumps(payload), encoding="utf-8")
@@ -5194,6 +5365,118 @@ def test_autofix_payload_lists_the_trusted_failed_runs_first() -> None:
 	assert [ref["run_id"] for ref in plain["run_refs"]] == ["500"]
 
 
+def test_build_autofix_failure_payload_prefers_run_head_sha() -> None:
+	# Issue #9250: the failed run's own head replaces the PR's current head in
+	# head_sha and in the failure-marker lookup; head_branch stays the PR's.
+	kwargs = dict(
+		repo=CONSUMER_REPO,
+		pr=_pr(),
+		comments=[],
+		workflow_name="AI Review",
+		failure_reason="editor_empty_noop",
+		failure_evidence="::error::PR diff unavailable\n",
+		failure_streak=1,
+		run_id="500",
+		run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+		wrapper_sha=SHA_A,
+		reporter_run_url=None,
+	)
+	for run_head in (SHA_A, SHA_A.upper(), f"  {SHA_A}\n"):
+		payload = heal.validate_payload(heal.build_autofix_failure_payload(**kwargs, run_head_sha=run_head))
+		assert payload["head_sha"] == SHA_A, run_head
+		assert payload["head_branch"] == "ai/issue-4173"
+	for run_head in (None, "", "abc", "g" * 40, SHA_A + "a"):
+		payload = heal.validate_payload(heal.build_autofix_failure_payload(**kwargs, run_head_sha=run_head))
+		assert payload["head_sha"] == SHA_B, run_head
+	assert heal.build_autofix_failure_payload(**kwargs)["head_sha"] == SHA_B
+	# Markers are looked up by the run head, not by the PR head.
+	comments = [*_trusted_failure_comments(["101"], head=SHA_A), *_trusted_failure_comments(["102"], head=SHA_B)]
+	by_run_head = heal.build_autofix_failure_payload(**{**kwargs, "comments": comments}, failure_marker_author=CAP_AUTHOR, run_head_sha=SHA_A)
+	assert [ref["run_id"] for ref in by_run_head["run_refs"]] == ["101", "500"]
+	by_pr_head = heal.build_autofix_failure_payload(**{**kwargs, "comments": comments}, failure_marker_author=CAP_AUTHOR)
+	assert [ref["run_id"] for ref in by_pr_head["run_refs"]] == ["102", "500"]
+
+
+def _autofix_report_event_env(tmp: Path, env: dict[str, str], *, event_name: str, event: object | None) -> None:
+	env["GITHUB_EVENT_NAME"] = event_name
+	event_path = tmp / "event.json"
+	if event is not None:
+		event_path.write_text(json.dumps(event), encoding="utf-8")
+	env["GITHUB_EVENT_PATH"] = str(event_path)
+
+
+def test_autofix_report_sends_the_pull_request_event_head() -> None:
+	# Issue #9250: the PR head moved (SHA_B) while the pull_request run went on
+	# its own head (SHA_A); the report carries the run head, read from the event
+	# file on disk with no GitHub read.
+	event = {"pull_request": {"number": 4174, "head": {"sha": SHA_A.upper()}}}
+	for override, expected, source in ((None, SHA_A, "event"), (SHA_C.upper(), SHA_C, "override")):
+		with tempfile.TemporaryDirectory(prefix="heal-autofix-run-head-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true", "AUTOFIX_STREAK_AUTHOR_LOGIN": "workflow-bot"})
+			_autofix_report_event_env(tmp, env, event_name="pull_request", event=event)
+			if override is not None:
+				env["REPORT_RUN_HEAD_SHA"] = override
+			result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert f"run_head={expected} run_head_source={source} pr_head={SHA_B}" in result.stdout, result.stdout
+			state = _state(state_file)
+			assert len(state["dispatches"]) == 1
+			payload = heal.validate_payload(state["dispatches"][0]["body"]["client_payload"]["report"])
+			assert payload["head_sha"] == expected and payload["head_branch"] == "ai/issue-4173"
+			assert all(call[:1] != ["api"] or "/dispatches" in " ".join(call) for call in state["calls"])
+
+
+def test_autofix_report_keeps_pr_head_without_a_usable_event_head() -> None:
+	good = {"pull_request": {"number": 4174, "head": {"sha": SHA_A}}}
+	cases = [
+		("workflow_dispatch", "workflow_dispatch", good, {}),
+		("pull_request_target", "pull_request_target", good, {}),
+		("non_hex", "pull_request", {"pull_request": {"number": 4174, "head": {"sha": "z" * 40}}}, {}),
+		("short", "pull_request", {"pull_request": {"number": 4174, "head": {"sha": "abc"}}}, {}),
+		("other_pr", "pull_request", {"pull_request": {"number": 4175, "head": {"sha": SHA_A}}}, {}),
+		("not_json", "pull_request", "not an object", {}),
+		("missing_file", "pull_request", None, {}),
+		("invalid_override", "workflow_dispatch", None, {"REPORT_RUN_HEAD_SHA": "not-a-sha"}),
+		# The identical-failure cap keeps the PR (gate) head its counted markers carry.
+		("identical_failure_cap", "pull_request", good, {"AUTOFIX_FAILURE_REASON": "identical_failure_cap", "REPORT_RUN_HEAD_SHA": SHA_C}),
+	]
+	for name, event_name, event, extra in cases:
+		with tempfile.TemporaryDirectory(prefix=f"heal-autofix-run-head-{name}-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true", **extra})
+			_autofix_report_event_env(tmp, env, event_name=event_name, event=event)
+			result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert f"run_head=none run_head_source=none pr_head={SHA_B}" in result.stdout, (name, result.stdout)
+			payload = heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])
+			assert payload["head_sha"] == SHA_B, name
+	# An event path that is a directory, not a file, is ignored.
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-run-head-dir-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+		env["GITHUB_EVENT_NAME"] = "pull_request"
+		env["GITHUB_EVENT_PATH"] = str(tmp)
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert "run_head=none run_head_source=none" in result.stdout, result.stdout
+		assert heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])["head_sha"] == SHA_B
+	# A staged helper that predates --run-head-sha still reports, with the PR head.
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-run-head-old-helper-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+		_autofix_report_event_env(tmp, env, event_name="pull_request", event=good)
+		staged_helper = work / "scripts" / "workflow_failure_heal.py"
+		old_text = staged_helper.read_text(encoding="utf-8")
+		old_text = re.sub(r'\tp\.add_argument\(\n\t\t"--run-head-sha",\n(?:\t\t.*\n)*?\t\)\n', "", old_text)
+		old_text = old_text.replace("\t\trun_head_sha=args.run_head_sha or None,\n", "")
+		assert "run-head-sha" not in old_text
+		staged_helper.write_text(old_text, encoding="utf-8")
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "dispatched pr=4174 failure=editor_empty_noop" in result.stdout and "run_head=none" in result.stdout, result.stdout + result.stderr
+		assert heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])["head_sha"] == SHA_B
+
+
 def test_autofix_report_cap_links_the_failed_runs_and_counts_only_them() -> None:
 	with tempfile.TemporaryDirectory(prefix="heal-autofix-cap-runs-") as tmp_name:
 		tmp = Path(tmp_name)
@@ -5903,6 +6186,45 @@ def test_intake_verifies_report_identity_and_rejects_a_forged_repository() -> No
 
 	result, state, _ = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REPORT_IDENTITY_STATE": "malformed"})
 	assert "report_auth=rejected reason=identity_malformed" in result.stdout
+	assert _api_writes(state) == []
+
+
+def test_intake_credits_runner_queue_wait_against_a_stale_identity() -> None:
+	# 2026-11-14: six reports sat ~3h50m waiting for a runner and were all
+	# rejected identity_stale; the age limit applies at arrival (run_started_at).
+	payload = _consumer_payload(reporter_run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/{_ID_RUN_ID}")
+	own_run_path = f"repos/{SELF_REPO}/actions/runs/777"
+
+	def _iso(epoch: int) -> str:
+		return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+	def _stale_run(run_started_at: str | None) -> tuple[subprocess.CompletedProcess[str], dict]:
+		with tempfile.TemporaryDirectory(prefix="heal-identity-wait-") as tmp_name:
+			# Token minted two hours ago (iat = now - 7200 - 60).
+			token_file, jwks_file, token = _fresh_identity(Path(tmp_name), iat=int(time.time()) - 7260, nbf=int(time.time()) - 7260)
+			extra = {} if run_started_at is None else {own_run_path: {"id": 777, "run_attempt": 1, "run_started_at": run_started_at}}
+			result, state, _ = _run_intake(payload, _intake_state(extra_run_details=extra), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=_identity_env(token_file, jwks_file))
+			assert token not in result.stdout + result.stderr
+			return result, state
+
+	# The run started when the dispatch arrived, right after the token was minted.
+	result, state = _stale_run(_iso(int(time.time()) - 7230))
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL report_identity_age_credit arrival_waited_seconds=" in result.stdout
+	assert "report_auth=verified reason=bound" in result.stdout
+	assert len(_composed_issues(state)) == 1
+	# A recent start (e.g. a re-run of an old report) earns no credit.
+	result, state = _stale_run(_iso(int(time.time()) - 30))
+	assert "report_auth=rejected reason=identity_stale" in result.stdout
+	assert _api_writes(state) == []
+	# The own-run read failing keeps the rejection (fails closed).
+	result, state = _stale_run(None)
+	assert "report_identity_age_credit arrival_waited_seconds=0" in result.stdout
+	assert "report_auth=rejected reason=identity_stale" in result.stdout
+	assert _api_writes(state) == []
+	# A malformed timestamp earns no credit either.
+	result, state = _stale_run("yesterday")
+	assert "report_auth=rejected reason=identity_stale" in result.stdout
 	assert _api_writes(state) == []
 
 
@@ -6746,18 +7068,90 @@ def test_intake_phase_failure_deduplicates_on_source_issue_and_falls_back_withou
 	assert "issues_created" not in _state_after
 
 
-def test_intake_escalates_a_heal_issue_that_fails_its_own_run() -> None:
-	# A heal issue (#6413-style, in this repository) whose plan run fails with
-	# the failure it was filed for: the pipeline cannot run its own fix.
+def _run_heal_self_escalation_intake(labels: list[str] | None, *, raw_labels: object = None) -> tuple[subprocess.CompletedProcess[str], dict, str, list[str]]:
+	"""Run the intake for heal issue #42 failing its own plan run.
+
+	*labels* become the report payload's issue labels (``None`` drops the
+	payload's ``labels`` field entirely). A non-``None`` *raw_labels* is
+	written to the payload's ``labels`` field verbatim instead, so a
+	malformed value can be injected. Returns the intake result, the
+	fake-gh state, the heal fingerprint and every ``level|text`` line the
+	stubbed ``tg_send_msg`` recorded.
+	"""
 	first, _state_first, _ = _run_intake(_phase_payload(repo=SELF_REPO), _plan_intake_state(repo=SELF_REPO), diagnosis=DIAG_WORKFLOW_DEFECT)
 	fp = re.search(r"fingerprint fp=([0-9a-f]{64})", first.stdout).group(1)
 	heal_issue = _sourced_heal_issue(42, state="open", fp=fp, source=f"{SELF_REPO}#6208")
-	body = heal_issue["body"]
-	payload = _phase_payload(repo=SELF_REPO, issue=_issue(body=body, labels=["ai:planning", heal.HEAL_LABEL]))
+	payload = _phase_payload(repo=SELF_REPO, issue=_issue(body=heal_issue["body"], labels=labels or []))
+	if raw_labels is not None:
+		payload["labels"] = raw_labels
+	elif labels is None:
+		payload.pop("labels", None)
 	state = _plan_intake_state(repo=SELF_REPO, heal_issues=[heal_issue])
-	result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	tg_dir = Path(tempfile.mkdtemp(prefix="heal-tg-"))
+	try:
+		def setup(tmp: Path, work: Path) -> None:
+			(work / "scripts" / "tg_helpers.sh").write_text(
+				f'tg_send_msg() {{ printf \'%s|%s\\n\' "${{2:-}}" "$1" >> {str(tg_dir / "calls.txt")!r}; }}\n', encoding="utf-8")
+		result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=setup)
+		calls_file = tg_dir / "calls.txt"
+		calls = calls_file.read_text(encoding="utf-8").splitlines() if calls_file.exists() else []
+	finally:
+		shutil.rmtree(tg_dir, ignore_errors=True)
+	return result, state_after, fp, calls
+
+
+def _heal_self_escalation_alerts(calls: list[str]) -> list[str]:
+	return [line for line in calls if line.startswith("CRITICAL|") and "heal issue" in line and "failed its own plan run" in line]
+
+
+def test_intake_heal_self_escalation_alerts_once() -> None:
+	# Issue #9248: heal issue #9200 sent a CRITICAL alert on each of its four
+	# self-failures. Once the payload shows the escalated label, a repeat still
+	# re-adds the label, logs `escalate` and posts the occurrence, but replaces
+	# the alert with a stable `escalate_repeat ... alert=suppressed` line.
+	result, state_after, fp, calls = _run_heal_self_escalation_intake(["ai:planning", heal.HEAL_LABEL, heal.ESCALATED_LABEL])
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert f"WORKFLOW_HEAL escalate reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed" in result.stdout
+	assert f"WORKFLOW_HEAL escalate_repeat reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed alert=suppressed" in result.stdout
+	assert not [line for line in calls if line.startswith("CRITICAL|")], calls
+	assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
+	assert any(c["path"] == f"repos/{SELF_REPO}/issues/42/comments" for c in state_after["comments_posted"])
+	# Fail open: with no label list in the payload the alert is sent as before.
+	result, state_after, fp, calls = _run_heal_self_escalation_intake(None)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL escalate reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed" in result.stdout
+	assert "escalate_repeat" not in result.stdout
+	assert len(_heal_self_escalation_alerts(calls)) == 1, calls
+	assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
+	# Fail open on a malformed label list too: a bare string (not a list) and
+	# object entries are not a readable label list: validate-payload
+	# (workflow_failure_heal.py) keeps only string entries, so the escalated
+	# label never reaches the intake's jq check and the alert is still sent.
+	# A dict keyed by the label itself survives validate-payload as its keys,
+	# so the intake also requires the raw report's labels to be an array.
+	for malformed in (heal.ESCALATED_LABEL, [{"name": heal.ESCALATED_LABEL}], {"name": heal.ESCALATED_LABEL}, {heal.ESCALATED_LABEL: True}):
+		result, state_after, fp, calls = _run_heal_self_escalation_intake(None, raw_labels=malformed)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"WORKFLOW_HEAL escalate reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed" in result.stdout
+		assert "escalate_repeat" not in result.stdout, malformed
+		assert len(_heal_self_escalation_alerts(calls)) == 1, (malformed, calls)
+		# Only the dict keyed by the label would have suppressed without the
+		# raw-shape check, so only it logs the overturned suppression.
+		assert ("WORKFLOW_HEAL warn heal_self_labels_unreadable issue=42" in result.stdout) == (malformed == {heal.ESCALATED_LABEL: True}), malformed
+		assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
+
+
+def test_intake_escalates_a_heal_issue_that_fails_its_own_run() -> None:
+	# A heal issue (#6413-style, in this repository) whose plan run fails with
+	# the failure it was filed for: the pipeline cannot run its own fix. The
+	# first escalation sends exactly one CRITICAL alert (issue #9248).
+	result, state_after, fp, calls = _run_heal_self_escalation_intake(["ai:planning", heal.HEAL_LABEL])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL escalate reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed" in result.stdout
+	assert "escalate_repeat" not in result.stdout
+	assert len(_heal_self_escalation_alerts(calls)) == 1, calls
+	assert len([line for line in calls if line.startswith("CRITICAL|")]) == 1, calls
+	payload = _phase_payload(repo=SELF_REPO, issue=_issue(body=_sourced_heal_issue(42, state="open", fp=fp, source=f"{SELF_REPO}#6208")["body"], labels=["ai:planning", heal.HEAL_LABEL]))
 	assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
 	assert "issues_created" not in state_after
 	assert any(c["path"] == f"repos/{SELF_REPO}/issues/42/comments" for c in state_after["comments_posted"])
@@ -7547,6 +7941,42 @@ def test_non_retryable_route_explains_sandbox_excluded_editor_stop() -> None:
 	assert body.rstrip().endswith(f"{NR_DIAG_MARKER_PREFIX} pr=4174 head={SHA_B} reason={SANDBOX_EXCLUDED_REASON} -->")
 
 
+def test_provenance_accepts_a_green_sandbox_excluded_run_bound_by_its_trusted_marker() -> None:
+	"""PR #9112 / intake run 42583232747: the #8321 marker run and the cap run both end
+	`success`, so the cap report was rejected as no_verified_runs and never diagnosed."""
+	cap_ref = _autofix_payload()["run_refs"][0]
+	payload = heal.validate_payload(_autofix_payload(
+		failure_reason="identical_failure_cap",
+		run_refs=[{**cap_ref, "run_id": "801", "url": f"https://github.com/{CONSUMER_REPO}/actions/runs/801"}, cap_ref],
+	))
+	marker_run = _provenance_run(801, path="ai-review.yml", conclusion="success", event="pull_request")
+	cap_run = _provenance_run(500, path="ai-review.yml", conclusion="success", pull_requests=[{"number": 4174}])
+
+	def check(comment: dict, run: dict = marker_run) -> dict:
+		return heal.verify_run_provenance(payload, runs={"801": run, "500": cap_run}, comments=[comment], trusted_login=NR_LOGIN, self_repo=SELF_REPO)
+
+	trusted = _sandbox_excluded_summary_comment(head=SHA_B, author=NR_LOGIN)
+	verdict = check(trusted)
+	assert verdict["status"] == "ok" and [ref["run_id"] for ref in verdict["run_refs"]] == ["801"]
+	assert verdict["rejections"] == [{"run_id": "500", "reason": "not_failed"}] and verdict["marker_head_run_ids"] == ["801"]
+	routed = heal.non_retryable_route(dict(payload, run_refs=verdict["run_refs"]), comments=[trusted], trusted_login=NR_LOGIN)
+	assert routed["route"] is True and routed["reason"] == SANDBOX_EXCLUDED_REASON
+	# Before the fix this was the outcome for every such report; it still is
+	# whenever the marker does not bind this run, head and reason.
+	retryable_marker = heal.render_failure_marker(SHA_B, "workflow_failure", FP_HEX, False, "801", None)
+	for comment, run in (
+		(_sandbox_excluded_summary_comment(head=SHA_B, author="attacker"), marker_run),
+		(_sandbox_excluded_summary_comment(head=SHA_A, author=NR_LOGIN), marker_run),
+		(_sandbox_excluded_summary_comment(head=SHA_B, run="802", author=NR_LOGIN), marker_run),
+		(dict(trusted, body=trusted["body"] + "\n\nquoted after the marker"), marker_run),
+		({"author_login": NR_LOGIN, "body": "AI review/autofix failed\n\n" + retryable_marker}, marker_run),
+		(trusted, dict(marker_run, conclusion="cancelled")),
+	):
+		assert check(comment, run)["reason"] == "no_verified_runs", comment
+	# The green-run exemption never relaxes the workflow-path check.
+	assert check(trusted, dict(marker_run, path=".github/workflows/evil.yml"))["rejections"][0] == {"run_id": "801", "reason": "unexpected_workflow_path"}
+
+
 def test_skip_reason_and_label_suppression_for_non_retryable_diagnosis() -> None:
 	payload = _consumer_payload()
 	assert heal.skip_reason(payload, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO, non_retryable_diagnosed=True) == "non_retryable_diagnosed"
@@ -8064,7 +8494,9 @@ def _run_recovery(heal_issues: list[dict], *, extra_env: dict | None = None, com
 
 
 def _recovery_calls(state: dict, fragment: str) -> list:
-	return [call for call in state.get("calls", []) if any(fragment in part for part in call)]
+	# The occurrence counter's own comments read (_heal_record_occurrence,
+	# projection `{id, author: (.user.login ...`) is not a recovery call.
+	return [call for call in state.get("calls", []) if any(fragment in part for part in call) and not any("{id, author: (.user.login" in part for part in call)]
 
 
 def test_heal_scope_recovery_check_statuses() -> None:
@@ -8317,6 +8749,22 @@ def test_heal_scope_recovery_no_replacement_records_occurrence() -> None:
 	assert "issues_created" not in state and "issues_closed" not in state
 	occurrence = [c for c in state["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/31/comments"]
 	assert occurrence and f"{heal.MARKER_PREFIX}occurrence" in occurrence[-1]["body"]
+
+
+def test_heal_scope_recovery_no_replacement_counter_reads_comments_afresh() -> None:
+	# The recovery comments read predates the diagnosis and carries no
+	# `created_at`; the counter merge reads the comments again, so the first
+	# counter starts at the legacy count plus one with `first=` the oldest.
+	diagnosis = "## Classification\ntransient\n\n## Summary\nA registry timeout.\n"
+	path = f"repos/{SELF_REPO}/issues/31/comments"
+	legacy = [dict(_occ_comment(5, _occ_report(5, 100)), created_at="2026-01-05T00:00:00Z"), dict(_occ_comment(6, _occ_report(5, 101)), created_at="2026-01-02T00:00:00Z")]
+	result, state, _ = _run_recovery([_markerless_heal_issue()], diagnosis=diagnosis, comments={path: legacy})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "heal_scope_recovery outcome=no_replacement reason=classification_transient issue=31" in result.stdout
+	counter = heal.parse_occurrence_counter([c for c in state["comments_posted"] if c["path"] == path][-1]["body"])
+	assert counter is not None and counter["count"] == 3 and counter["first"] == "2026-01-02T00:00:00Z"
+	assert [call for call in state["calls"] if any("{id, author: (.user.login" in part for part in call)]
+	assert "heal_scope_recovery_comments.json" not in INTAKE_SCRIPT.read_text(encoding="utf-8").split("A scan replay is not a new occurrence", 1)[1].split("RECOVERY_OCCURRENCE_STATE=\"posted\"", 1)[0]
 
 
 def test_heal_scope_recovery_wiring_is_default_on() -> None:
@@ -10024,6 +10472,289 @@ def test_synced_check_issue_and_occurrence_carry_no_free_text() -> None:
 	assert heal.check_synced_check_managed_paths(payload["paths"], {_SYNCED_CHECK_WRAPPER: ["x"]}) is None
 	assert heal.check_synced_check_managed_paths(payload["paths"], {"other": ["x"]}) == "unmanaged_path"
 	assert heal.check_synced_check_managed_paths(payload["paths"], {}) == "release_unavailable"
+
+
+# ---------------------------------------------------------------------------
+# Stale auto-close of held run-sourced heal issues (issue #8808)
+# ---------------------------------------------------------------------------
+
+_STALE_LOGIN = "github-actions[bot]"
+_STALE_PLAN = "880801"
+_STALE_NOW = datetime(2026, 3, 1, tzinfo=timezone.utc)
+
+
+def _stale_run_payload() -> dict:
+	payload = _autofix_payload()
+	payload.update({"source_kind": "workflow_run", "workflow_name": "CI", "issue_number": None})
+	return payload
+
+
+def _stale_body(*, source: str = "owner/repo#run", workflow: str | None = ".github/workflows/ci.yml",
+		branch: str | None = "main", scope_runs: str | None = None) -> str:
+	lines = [f"<!-- workflow-failure-heal:fp={FP_HEX} -->", "<!-- workflow-failure-heal:gen=1 -->",
+		f"<!-- workflow-failure-heal:root={FP_HEX} -->", f"<!-- workflow-failure-heal:source={source} -->",
+		"<!-- workflow-failure-heal:classification=workflow-defect -->"]
+	if workflow:
+		lines.append(f"<!-- workflow-failure-heal:workflow={workflow} -->")
+	lines.append("")
+	if branch:
+		lines += [f"- **Target branch:** `{branch}`", ""]
+	lines.append("## Automated workflow failure heal (generation 1 of max 3)")
+	if scope_runs:
+		lines += ["", f"<!-- ai:workflow-heal-scope:v1 paths=scripts/x.sh,tests/**,changelog.d/*.md runs={scope_runs} -->"]
+	return "\n".join(lines) + "\n"
+
+
+def _stale_issue(**overrides) -> dict:
+	issue = {"number": 8352, "state": "open", "body": _stale_body(),
+		"labels": ["ai:workflow-heal", "ai:awaiting-approval"], "user": {"login": _STALE_LOGIN},
+		"author_association": "NONE", "created_at": "2026-01-01T00:00:00Z"}
+	issue.update(overrides)
+	return issue
+
+
+def _stale_comment(body: str, *, login: str = _STALE_LOGIN, association: str = "NONE",
+		created_at: str = "2026-01-01T01:00:00Z") -> dict:
+	return {"id": 1, "body": body, "user": {"login": login}, "author_association": association, "created_at": created_at}
+
+
+def _stale_hold(plan: str = _STALE_PLAN, **kwargs) -> dict:
+	return _stale_comment(f"Held.\n\n<!-- ai:heal-counterfactual-hold:v1 issue=8352 plan_comment={plan} result=UNVERIFIED source=plan -->", **kwargs)
+
+
+def _stale_runs(count: int, *, start_day: int = 2, conclusion: str = "success", event: str = "push") -> dict:
+	return {"total_count": count, "workflow_runs": [{"id": 4000 + i,
+		"html_url": f"https://github.com/owner/repo/actions/runs/{4000 + i}", "head_sha": f"{i + 1:040x}",
+		"head_branch": "main", "event": event, "status": "completed", "conclusion": conclusion,
+		"created_at": f"2026-01-{start_day + i:02d}T00:00:00Z"} for i in range(count)]}
+
+
+def _stale_decide(issue: dict | None = None, comments: list | None = None, runs: object = "default", **kwargs) -> dict:
+	params = {"pipeline_login": _STALE_LOGIN, "plan_comment": _STALE_PLAN, "workflow": "ci.yml", "branch": "main",
+		"linked_pr": None, "green_runs": 5, "min_age_hours": 24, "now": _STALE_NOW}
+	params.update(kwargs)
+	return heal.heal_stale_decision(issue if issue is not None else _stale_issue(),
+		comments if comments is not None else [_stale_hold()], _stale_runs(5) if runs == "default" else runs, **params)
+
+
+def test_heal_stale_closes_with_enough_green_runs_after_the_anchor() -> None:
+	result = _stale_decide()
+	assert result["decision"] == "close" and result["reason"] == "workflow_green"
+	assert result["green_runs"] == 5 and result["anchor"] == "2026-01-01T00:00:00Z"
+	assert result["first_green"]["id"] == 4000 and result["newest_green"]["id"] == 4004
+	assert result["marker_present"] is False
+	body = result["comment_body"]
+	assert body.rstrip().endswith("<!-- ai:heal-stale-close:v1 issue=8352 workflow=ci.yml branch=main green_runs=5 newest_run=4004 -->")
+	assert "https://github.com/owner/repo/actions/runs/4000" in body and f"{1:040x}" in body
+	assert "HEAL_STALE_AUTO_CLOSE_ENABLED" in body
+	assert not AUTO_CLOSE_RE.search(body) and "#" not in body.replace("<!--", "")
+
+
+def test_heal_stale_keeps_with_too_few_or_failed_runs() -> None:
+	assert _stale_decide(runs=_stale_runs(4))["reason"] == "too_few_green_runs"
+	runs = _stale_runs(6)
+	runs["workflow_runs"][2]["conclusion"] = "failure"
+	assert _stale_decide(runs=runs)["reason"] == "run_not_green"
+	# A cancelled run (a push replaced while it waited, run-volume plan D14)
+	# counts neither way: the other five green runs close the issue.
+	runs["workflow_runs"][2]["conclusion"] = "cancelled"
+	result = _stale_decide(runs=runs)
+	assert result["decision"] == "close" and result["green_runs"] == 5
+	assert result["first_green"]["id"] == 4000 and result["newest_green"]["id"] == 4005
+	# ...but it does not stand in for a green run either.
+	runs = _stale_runs(5)
+	runs["workflow_runs"][4]["conclusion"] = "cancelled"
+	result = _stale_decide(runs=runs)
+	assert result["reason"] == "too_few_green_runs" and result["green_runs"] == 4
+	# A failure beside a cancelled run still keeps the issue.
+	runs["workflow_runs"][1]["conclusion"] = "failure"
+	assert _stale_decide(runs=runs)["reason"] == "run_not_green"
+	# Runs at or before the anchor, other branches and other events do not count.
+	old = _stale_runs(5)
+	old["workflow_runs"][0]["created_at"] = "2025-12-31T00:00:00Z"
+	old["workflow_runs"][1]["head_branch"] = "stable"
+	old["workflow_runs"][2]["event"] = "pull_request"
+	result = _stale_decide(runs=old)
+	assert result["reason"] == "too_few_green_runs" and result["green_runs"] == 2
+	# A malformed entry could hide a failed run: the issue is kept.
+	bad = _stale_runs(5)
+	bad["workflow_runs"].append("garbage")
+	assert _stale_decide(runs=bad)["reason"] == "runs_unavailable"
+	bad = _stale_runs(5)
+	bad["workflow_runs"][1]["created_at"] = "yesterday"
+	assert _stale_decide(runs=bad)["reason"] == "runs_unavailable"
+
+
+def test_heal_stale_runs_page_cut_short_closes_only_with_enough_green_runs() -> None:
+	# One page is read. A long-held issue on a busy branch (#8352) has a page
+	# that is all after the anchor and a far larger total_count: it closes
+	# once the page alone holds green_runs green runs after the anchor.
+	cut = _stale_runs(5)
+	cut["total_count"] = 40
+	assert _stale_decide(runs=cut)["decision"] == "close"
+	missing = _stale_runs(5)
+	del missing["total_count"]
+	assert _stale_decide(runs=missing)["decision"] == "close"
+	# A failure on the page still keeps it.
+	failed = _stale_runs(15)
+	failed["total_count"] = 400
+	failed["workflow_runs"][7]["conclusion"] = "failure"
+	assert _stale_decide(runs=failed)["reason"] == "run_not_green"
+	# A cut-short page with too few runs after the anchor keeps it.
+	short = _stale_runs(5)
+	short["total_count"] = 40
+	short["workflow_runs"][0]["head_branch"] = "stable"
+	assert _stale_decide(runs=short)["reason"] == "runs_window_incomplete"
+	# A run at or before the anchor on the page proves the window is covered.
+	reaching = _stale_runs(6)
+	reaching["total_count"] = 40
+	reaching["workflow_runs"][0]["created_at"] = "2025-12-31T00:00:00Z"
+	reaching["workflow_runs"].append({**reaching["workflow_runs"][1], "id": 4999, "created_at": "2026-01-07T00:00:00Z"})
+	assert _stale_decide(runs=reaching)["decision"] == "close"
+
+
+def test_heal_stale_occurrence_comment_moves_the_anchor_only_when_trusted() -> None:
+	occurrence = "<!-- workflow-failure-heal:occurrence -->\nSeen again."
+	trusted = _stale_comment(occurrence, created_at="2026-01-03T12:00:00Z")
+	result = _stale_decide(comments=[_stale_hold(), trusted])
+	assert result["anchor"] == "2026-01-03T12:00:00Z"
+	assert result["reason"] == "too_few_green_runs" and result["green_runs"] == 3
+	forged = _stale_comment(occurrence, login="outsider", association="NONE", created_at="2026-01-03T12:00:00Z")
+	assert _stale_decide(comments=[_stale_hold(), forged])["decision"] == "close"
+
+
+def test_heal_stale_keeps_for_pr_sourced_issue_and_open_or_unknown_pr() -> None:
+	target = heal.heal_stale_target(_stale_issue(body=_stale_body(source="owner/consumer#123")))
+	assert target["reason"] == "not_run_sourced" and target["source_kind"] == "pr"
+	assert _stale_decide(linked_pr={"number": 9, "state": "OPEN", "head_ref": "ai/issue-8352"})["reason"] == "open_pr"
+	assert _stale_decide(linked_pr=heal.HEAL_STALE_LINKED_PR_UNKNOWN)["reason"] == "linked_pr_unknown"
+	assert _stale_decide(linked_pr="garbage")["reason"] == "linked_pr_unknown"
+	assert _stale_decide(linked_pr={"number": 9, "state": "MERGED"})["decision"] == "close"
+
+
+def test_heal_stale_keeps_young_issue_and_fails_open_on_bad_runs() -> None:
+	assert _stale_decide(now=datetime(2026, 1, 1, 12, tzinfo=timezone.utc))["reason"] == "too_young"
+	assert _stale_decide(runs=None)["reason"] == "runs_unavailable"
+	assert _stale_decide(runs={"message": "Not Found"})["reason"] == "runs_unavailable"
+	assert _stale_decide(runs=[1, 2])["reason"] == "runs_unavailable"
+	assert _stale_decide(issue=_stale_issue(created_at=None))["reason"] == "anchor_unavailable"
+
+
+def test_heal_stale_needs_trusted_hold_marker_for_the_current_plan() -> None:
+	assert _stale_decide(comments=[])["reason"] == "hold_marker_missing"
+	assert _stale_decide(comments=[_stale_hold(plan="111")])["reason"] == "hold_marker_missing"
+	assert _stale_decide(comments=[_stale_hold(login="outsider")])["reason"] == "hold_marker_missing"
+	assert _stale_decide(plan_comment="unknown")["reason"] == "hold_marker_missing"
+	assert _stale_decide(comments=[_stale_hold(login="maintainer", association="MEMBER")])["decision"] == "close"
+
+
+def test_heal_stale_skips_managed_and_keeps_untrusted_author() -> None:
+	managed = _stale_issue(labels=["ai:workflow-heal", "ai:awaiting-approval", "ai:orchestrator-managed"])
+	assert _stale_decide(issue=managed) == {**_stale_decide(issue=managed), "decision": "skip", "reason": "orchestrator_managed"}
+	assert _stale_decide(issue=_stale_issue(labels=["ai:workflow-heal", "ai:planning"]))["reason"] == "not_awaiting_approval"
+	assert _stale_decide(issue=_stale_issue(state="closed"))["reason"] == "not_heal_issue"
+	assert _stale_decide(issue=_stale_issue(user={"login": "outsider"}))["reason"] == "untrusted_issue_author"
+
+
+def test_heal_stale_reports_an_existing_trusted_close_marker() -> None:
+	marker = _stale_comment("<!-- ai:heal-stale-close:v1 issue=8352 workflow=ci.yml branch=main green_runs=5 newest_run=4004 -->")
+	assert _stale_decide(comments=[_stale_hold(), marker])["marker_present"] is True
+	forged = _stale_comment(marker["body"], login="outsider")
+	assert _stale_decide(comments=[_stale_hold(), forged])["marker_present"] is False
+
+
+def test_heal_stale_closes_a_held_plan_with_no_files() -> None:
+	# Modelled on #8357: the UNVERIFIED plan lists no files (the fix was merging
+	# a held sync PR). Nothing in the decision reads the plan.
+	result = _stale_decide(issue=_stale_issue(number=8357, body=_stale_body(workflow=None, branch="main")),
+		comments=[_stale_comment("Held.\n<!-- ai:heal-counterfactual-hold:v1 issue=8357 plan_comment=880801 result=UNVERIFIED source=plan -->")],
+		workflow="ci.yml")
+	assert result["decision"] == "close"
+
+
+def test_heal_stale_target_and_resolve_fallback() -> None:
+	target = heal.heal_stale_target(_stale_issue())
+	assert target == {"source_repo": "owner/repo", "source_kind": "run", "workflow": "ci.yml", "branch": "main",
+		"fallback_run": None, "reason": ""}
+	legacy = heal.heal_stale_target(_stale_issue(body=_stale_body(workflow=None, branch=None,
+		scope_runs="other/repo:7,owner/repo:40990538508")))
+	assert legacy["workflow"] is None and legacy["fallback_run"] == {"repo": "owner/repo", "run_id": "40990538508"}
+	assert legacy["reason"] == ""
+	assert heal.heal_stale_target(_stale_issue(body=_stale_body(workflow=None)))["reason"] == "workflow_unknown"
+	assert heal.heal_stale_resolve_run({"path": ".github/workflows/ci.yml", "head_branch": "main"}) == {
+		"workflow": "ci.yml", "branch": "main", "reason": ""}
+	assert heal.heal_stale_resolve_run({"path": "../x.yml", "head_branch": "main"})["reason"] == "workflow_unknown"
+	assert heal.heal_stale_resolve_run(None)["reason"] == "workflow_unknown"
+
+
+def test_heal_stale_decision_cli(tmp_path) -> None:
+	def write(name: str, value: object) -> str:
+		path = tmp_path / name
+		path.write_text(json.dumps(value), encoding="utf-8")
+		return str(path)
+
+	def run(*args: str) -> subprocess.CompletedProcess:
+		return subprocess.run([sys.executable, "-I", "-B", str(LIB_PATH), "heal-stale-decision", *args],
+			capture_output=True, text=True, check=False)
+
+	base = ["--stage", "decide", "--issue-json", write("issue.json", _stale_issue()),
+		"--comments-json", write("comments.json", [_stale_hold()]), "--pipeline-login", _STALE_LOGIN,
+		"--plan-comment", _STALE_PLAN, "--workflow", "ci.yml", "--branch", "main", "--now", "2026-03-01T00:00:00Z"]
+	closed = run(*base, "--runs-json", write("runs.json", _stale_runs(5)), "--linked-pr-json", write("pr.json", None))
+	assert closed.returncode == 0 and json.loads(closed.stdout)["decision"] == "close", closed.stderr
+	# No --linked-pr-json: unknown, kept.
+	assert json.loads(run(*base, "--runs-json", str(tmp_path / "runs.json")).stdout)["reason"] == "linked_pr_unknown"
+	(tmp_path / "bad.json").write_text("{not json", encoding="utf-8")
+	bad = run(*base, "--runs-json", str(tmp_path / "bad.json"), "--linked-pr-json", str(tmp_path / "pr.json"))
+	assert bad.returncode == 0 and json.loads(bad.stdout)["reason"] == "runs_unavailable"
+	# Invalid integers fall back to the defaults (5 runs, 24 hours).
+	lax = run(*base, "--runs-json", str(tmp_path / "runs.json"), "--linked-pr-json", str(tmp_path / "pr.json"),
+		"--green-runs", "zero", "--min-age-hours", "-1")
+	assert json.loads(lax.stdout)["decision"] == "close"
+	assert run("--stage", "decide", "--issue-json", str(tmp_path / "missing.json")).returncode == 2
+	target = run("--stage", "target", "--issue-json", str(tmp_path / "issue.json"))
+	assert target.returncode == 0 and json.loads(target.stdout)["workflow"] == "ci.yml"
+
+
+def test_compose_issue_body_adds_workflow_marker_only_for_workflow_run() -> None:
+	kwargs = {"diagnosis": "## Summary\nx", "fp": FP_HEX, "gen": 1, "root": FP_HEX, "classification": "workflow-defect",
+		"target_branch": "main", "max_depth": 3, "intake_run_url": "u", "run_summaries": []}
+	body = heal.compose_issue_body(payload=_stale_run_payload(), workflow_path=".github/workflows/ci.yml", **kwargs)
+	lines = body.split("\n")
+	assert lines[5] == "<!-- workflow-failure-heal:workflow=.github/workflows/ci.yml -->"
+	assert heal.parse_heal_markers(body)["workflow"] == ".github/workflows/ci.yml"
+	assert heal.validate_heal_issue_body_routing(body, target_branch="main", integration_branch=None) == ""
+	plain = heal.compose_issue_body(payload=_stale_run_payload(), **kwargs)
+	assert "workflow=" not in plain
+	assert heal.compose_issue_body(payload=_stale_run_payload(), workflow_path="../evil.yml", **kwargs) == plain
+	assert heal.compose_issue_body(payload=_stale_run_payload(), workflow_path=".github/workflows/x.yml -->", **kwargs) == plain
+	autofix = heal.validate_payload(_autofix_payload())
+	assert heal.compose_issue_body(payload=autofix, workflow_path=".github/workflows/ci.yml", **kwargs) == \
+		heal.compose_issue_body(payload=autofix, **kwargs)
+
+
+def test_heal_body_validator_accepts_only_one_wellformed_workflow_line() -> None:
+	kwargs = {"diagnosis": "x", "fp": FP_HEX, "gen": 1, "root": FP_HEX, "classification": "workflow-defect",
+		"target_branch": "main", "max_depth": 3, "intake_run_url": "u", "run_summaries": []}
+	body = heal.compose_issue_body(payload=_stale_run_payload(), workflow_path=".github/workflows/ci.yml", **kwargs)
+
+	def validate(candidate: str) -> str:
+		return heal.validate_heal_issue_body_routing(candidate, target_branch="main", integration_branch=None)
+
+	assert validate(body) == ""
+	marker = "<!-- workflow-failure-heal:workflow=.github/workflows/ci.yml -->"
+	assert validate(body.replace(marker, marker + "\n" + marker)) == "marker"
+	assert validate(body.replace(marker, "<!-- workflow-failure-heal:workflow=scripts/x.sh -->")) == "marker"
+	assert validate(body.replace(marker, "<!-- other -->")) == "marker"
+	assert validate(body + "<!-- workflow-failure-heal:fp=dead -->\n") == "marker"
+	# A five-line header still validates as before.
+	assert validate(heal.compose_issue_body(payload=_stale_run_payload(), **kwargs)) == ""
+
+
+def test_intake_passes_the_verified_run_path_to_compose_issue() -> None:
+	intake = (SCRIPTS_DIR / "workflow_failure_heal_intake.sh").read_text(encoding="utf-8")
+	assert '--workflow-path "${heal_workflow_path}" \\' in intake
+	assert 'if [ "${SOURCE_KIND}" = "workflow_run" ]; then' in intake.split("local heal_workflow_path", 1)[1].split("compose-issue", 1)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -11929,7 +12660,9 @@ def test_intake_cause_match_replay_posts_an_occurrence_with_no_new_reads() -> No
 	assert first.returncode == 0, first.stderr + first.stdout
 	cause = _p5_cause_from(first)
 	fp = re.search(r"WORKFLOW_HEAL fingerprint fp=([0-9a-f]{64})", first.stdout).group(1)
-	assert first_state["composed_issue"]["body"].split("\n")[5] == f"<!-- {heal.MARKER_PREFIX}cause={cause} -->"
+	# #8808: a workflow_run source puts the workflow= header line before cause=.
+	assert heal.parse_heal_markers(first_state["composed_issue"]["body"])["cause"] == cause
+	assert f"<!-- {heal.MARKER_PREFIX}cause={cause} -->" in first_state["composed_issue"]["body"].split("\n")[5:7]
 	# #8376: open, one day old, same cause, a different fingerprint (one error line fewer).
 	now = datetime.now(timezone.utc)
 	prior = _p5_open_heal(8376, fp="a" * 64, cause=cause, created=now - timedelta(days=1))
@@ -11965,7 +12698,8 @@ def test_intake_cause_match_window_and_switch_off_byte_identity() -> None:
 	result, state, _ = _run_p1_intake(_p1_state() | {"heal_issues": [stale]}, on)
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert not state.get("comments_posted")
-	assert state["composed_issue"]["body"].split("\n")[5] == f"<!-- {heal.MARKER_PREFIX}cause={cause} -->"
+	assert heal.parse_heal_markers(state["composed_issue"]["body"])["cause"] == cause
+	assert f"<!-- {heal.MARKER_PREFIX}cause={cause} -->" in state["composed_issue"]["body"].split("\n")[5:7]
 	assert "reason=cause_match" not in result.stdout
 	# A longer window matches it.
 	wide, wide_state, _ = _run_p1_intake(_p1_state() | {"heal_issues": [stale]}, {**on, "WORKFLOW_HEAL_CAUSE_GROUPING_DAYS": "5"})
@@ -12566,3 +13300,282 @@ def test_code_ref_switch_defaults_and_workflow_wiring() -> None:
 	assert workflow.count(CODE_REF_ENV_LINE) == 2
 	assert intake_job.split("\n  intake:\n", 1)[1].count(CODE_REF_ENV_LINE) == 1
 	assert scan_job.split("\n  heal-verify:\n", 1)[0].count(CODE_REF_ENV_LINE) == 1
+
+
+# ---------------------------------------------------------------------------
+# Occurrence counter comment (edited in place), heal-of-heal dedupe, fixtures
+# ---------------------------------------------------------------------------
+
+_OCC_LOGIN = "workflow-bot"
+_OCC_MARKER = "<!-- workflow-failure-heal:occurrence -->"
+
+
+def _occ_report(source: int, run: int, head: str = SHA_A) -> str:
+	return (
+		f"{_OCC_MARKER}\nAnother occurrence of this failure was reported:\n\n"
+		f"- **Source pull request:** https://github.com/{CONSUMER_REPO}/pull/{source} ({CONSUMER_REPO}#{source})\n"
+		f"- **Head SHA:** `{head}`\n"
+		f"- **Failed run:** https://github.com/{CONSUMER_REPO}/actions/runs/{run}\n"
+	)
+
+
+def _occ_comment(comment_id: int, body: str, login: str = _OCC_LOGIN) -> dict:
+	return {"id": comment_id, "body": body, "user": {"login": login}, "created_at": "2026-01-02T00:00:00Z"}
+
+
+def test_merge_occurrence_comment_counts_and_keeps_the_newest_reports() -> None:
+	t0 = datetime(2026, 11, 18, 10, 0, 0, tzinfo=timezone.utc)
+	# First counter on an issue: two legacy comments already there count; a
+	# stranger's marker comment and a non-occurrence comment do not.
+	legacy = [_occ_comment(1, _occ_report(5, 100)), _occ_comment(2, _occ_report(5, 101)), _occ_comment(3, _occ_report(5, 102), login="mallory"), _occ_comment(4, "plain note")]
+	first = heal.merge_occurrence_comment(legacy, _occ_report(6, 200), trusted_login=_OCC_LOGIN, now=t0)
+	assert first["comment_id"] is None and first["count"] == 3
+	assert first["body"].startswith(_OCC_MARKER + "\n<!-- workflow-failure-heal:occurrence-count:v1 count=3 first=2026-01-02T00:00:00Z last=2026-11-18T10:00:00Z -->\n")
+	assert "reported again **3** times" in first["body"] and "actions/runs/200" in first["body"]
+	parsed = heal.parse_occurrence_counter(first["body"])
+	assert parsed["count"] == 3 and [entry["n"] for entry in parsed["entries"]] == [3]
+	# Later repeats edit that comment: the count grows, `first=` stays,
+	# `last=` moves, and only the newest entries are kept, newest first.
+	body, comments = first["body"], legacy + [_occ_comment(9, first["body"])]
+	for step in range(1, 15):
+		merged = heal.merge_occurrence_comment(comments, _occ_report(6, 200 + step), trusted_login=_OCC_LOGIN, now=t0 + timedelta(hours=step))
+		assert merged["comment_id"] == 9 and merged["count"] == 3 + step and merged["newer_comments"] == 0
+		body = merged["body"]
+		comments[-1] = _occ_comment(9, body)
+	parsed = heal.parse_occurrence_counter(body)
+	# `first=` is the oldest legacy occurrence comment (Jan 2), not the first merge.
+	assert parsed["count"] == 17 and parsed["first"] == "2026-01-02T00:00:00Z" and parsed["last"] == "2026-11-19T00:00:00Z"
+	assert [entry["n"] for entry in parsed["entries"]] == list(range(17, 7, -1)) and heal.OCCURRENCE_KEEP_ENTRIES == 10
+	assert "actions/runs/214" in body and "actions/runs/204" not in body
+	assert heal.occurrence_last_reported(body) == t0 + timedelta(hours=14)
+	# Comments of any author after the counter are counted for the re-post rule.
+	buried = comments + [_occ_comment(100 + index, "note", login="someone") for index in range(4)]
+	assert heal.merge_occurrence_comment(buried, _occ_report(6, 300), trusted_login=_OCC_LOGIN, now=t0)["newer_comments"] == 4
+	assert heal.occurrence_last_reported(_occ_report(5, 1)) is None and heal.parse_occurrence_counter("x") is None
+	# A counter written by someone else is never the edit target.
+	foreign = heal.merge_occurrence_comment([_occ_comment(9, body, login="mallory")], _occ_report(6, 300), trusted_login=_OCC_LOGIN, now=t0)
+	assert foreign["comment_id"] is None and foreign["count"] == 1
+	with pytest.raises(ValueError):
+		heal.merge_occurrence_comment([], "not an occurrence", trusted_login=_OCC_LOGIN)
+
+
+def test_merge_occurrence_comment_stays_under_the_comment_size_limit() -> None:
+	t0 = datetime(2026, 11, 18, tzinfo=timezone.utc)
+	comments: list = []
+	for step in range(4):
+		big = _occ_report(7, 400 + step) + "\n" + ("x" * 30000)
+		merged = heal.merge_occurrence_comment(comments, big, trusted_login=_OCC_LOGIN, now=t0 + timedelta(minutes=step))
+		comments = [_occ_comment(11, merged["body"])]
+		assert len(merged["body"]) <= heal.OCCURRENCE_COMMENT_MAX_CHARS
+	parsed = heal.parse_occurrence_counter(merged["body"])
+	assert parsed["count"] == 4 and [entry["n"] for entry in parsed["entries"]] == [4]
+	huge = heal.merge_occurrence_comment([], _occ_report(7, 500) + "y" * 100000, trusted_login=_OCC_LOGIN, now=t0)
+	assert len(huge["body"]) <= heal.OCCURRENCE_COMMENT_MAX_CHARS and "report shortened to fit one comment" in huge["body"]
+	assert heal.parse_occurrence_counter(huge["body"])["count"] == 1
+
+
+def test_recovery_occurrence_runs_reads_counter_entries_without_mixing_them() -> None:
+	t0 = datetime(2026, 11, 18, tzinfo=timezone.utc)
+	# Entry 1: PR 5 at SHA_A with run 100. Entry 2 (newest): PR 6 at SHA_B with run 200.
+	one = heal.merge_occurrence_comment([], _occ_report(5, 100, SHA_A), trusted_login=_OCC_LOGIN, now=t0)
+	two = heal.merge_occurrence_comment([_occ_comment(9, one["body"])], _occ_report(6, 200, SHA_B), trusted_login=_OCC_LOGIN, now=t0)
+	comments = [_occ_comment(9, two["body"])]
+	runs = heal._recovery_occurrence_runs(comments, pipeline_login=_OCC_LOGIN, source_repo=CONSUMER_REPO, source_number=5, head_sha=SHA_A)
+	assert [ref["run_id"] for ref in runs] == ["100"]
+	runs = heal._recovery_occurrence_runs(comments, pipeline_login=_OCC_LOGIN, source_repo=CONSUMER_REPO, source_number=6, head_sha=SHA_B)
+	assert [ref["run_id"] for ref in runs] == ["200"]
+	# PR 5 never failed at SHA_B: the lines of two entries are not combined.
+	assert heal._recovery_occurrence_runs(comments, pipeline_login=_OCC_LOGIN, source_repo=CONSUMER_REPO, source_number=5, head_sha=SHA_B) == []
+	assert heal._recovery_occurrence_runs(comments, pipeline_login="someone-else", source_repo=CONSUMER_REPO, source_number=5, head_sha=SHA_A) == []
+	# A legacy single-report comment still reads as before.
+	legacy = [_occ_comment(3, _occ_report(5, 100, SHA_A))]
+	assert [ref["run_id"] for ref in heal._recovery_occurrence_runs(legacy, pipeline_login=_OCC_LOGIN, source_repo=CONSUMER_REPO, source_number=5, head_sha=SHA_A)] == ["100"]
+
+
+def test_heal_stale_counter_comment_moves_the_anchor_to_its_last_report() -> None:
+	# The counter comment was created on Jan 1 and last edited on Jan 3: the
+	# anchor is the `last=` time, not the comment's created_at.
+	merged = heal.merge_occurrence_comment([], "<!-- workflow-failure-heal:occurrence -->\nSeen again.", trusted_login=_STALE_LOGIN, now=datetime(2026, 1, 3, 12, tzinfo=timezone.utc))
+	trusted = _stale_comment(merged["body"], created_at="2026-01-01T02:00:00Z")
+	result = _stale_decide(comments=[_stale_hold(), trusted])
+	assert result["anchor"] == "2026-01-03T12:00:00Z"
+	assert result["reason"] == "too_few_green_runs" and result["green_runs"] == 3
+	forged = _stale_comment(merged["body"], login="outsider", association="NONE", created_at="2026-01-01T02:00:00Z")
+	assert _stale_decide(comments=[_stale_hold(), forged])["decision"] == "close"
+
+
+def test_budget_decision_records_a_heal_issues_own_failure_on_itself() -> None:
+	now = datetime(2026, 9, 20, 12, tzinfo=timezone.utc)
+	fp, other = "1" * 64, "2" * 64
+	issues = [dict(_heal_issue(42, state="open", fp=other, gen=2, root="3" * 64), repository=SELF_REPO)]
+	decision = heal.budget_decision(issues, fp=fp, now=now, preferred_repo=SELF_REPO, report_issue=f"{SELF_REPO}#42", source_gen=2, source_root="3" * 64, source_issue=f"{SELF_REPO}#42", trusted_author="workflow-bot")
+	assert decision["action"] == "duplicate" and decision["match"] == "heal_source"
+	assert decision["existing_issue"] == 42 and decision["existing_repo"] == SELF_REPO and decision["gen"] == 2
+	# Not passed (switch off), another repository, a closed heal issue or an
+	# ordinary issue: the decision is what it was before.
+	assert heal.budget_decision(issues, fp=fp, now=now, preferred_repo=SELF_REPO)["action"] == "open"
+	assert heal.budget_decision(issues, fp=fp, now=now, preferred_repo=SELF_REPO, report_issue=f"{CONSUMER_REPO}#42")["action"] == "open"
+	assert heal.budget_decision(issues, fp=fp, now=now, preferred_repo=SELF_REPO, report_issue=f"{SELF_REPO}#43")["action"] == "open"
+	assert heal.budget_decision(issues, fp=fp, now=now, preferred_repo=SELF_REPO, report_issue="garbage")["action"] == "open"
+	closed = [dict(_heal_issue(42, state="closed", fp=other), repository=SELF_REPO)]
+	assert heal.budget_decision(closed, fp=fp, now=now, preferred_repo=SELF_REPO, report_issue=f"{SELF_REPO}#42")["action"] == "open"
+	# A fingerprint duplicate still wins over the heal-source match.
+	both = issues + [dict(_heal_issue(50, state="open", fp=fp), repository=SELF_REPO)]
+	fp_dup = heal.budget_decision(both, fp=fp, now=now, preferred_repo=SELF_REPO, report_issue=f"{SELF_REPO}#42")
+	assert fp_dup["match"] == "fingerprint" and fp_dup["existing_issue"] == 50
+	# A cause match wins too: the heal issue's own cause stays `match: cause`
+	# (so heal_issue_failed_itself still escalates), another issue's cause
+	# records the report there.
+	own_cause = [dict(_p5_cause_issue(42, fp=other), repository=SELF_REPO)]
+	own = heal.budget_decision(own_cause, fp=fp, now=P5_NOW, preferred_repo=SELF_REPO, report_issue=f"{SELF_REPO}#42", cause=P5_CAUSE)
+	assert own["match"] == "cause" and own["existing_issue"] == 42
+	elsewhere = [dict(_heal_issue(42, state="open", fp=other, created=P5_NOW - timedelta(days=1)), repository=SELF_REPO), dict(_p5_cause_issue(60, fp="4" * 64), repository=SELF_REPO)]
+	moved = heal.budget_decision(elsewhere, fp=fp, now=P5_NOW, preferred_repo=SELF_REPO, report_issue=f"{SELF_REPO}#42", cause=P5_CAUSE)
+	assert moved["match"] == "cause" and moved["existing_issue"] == 60
+	assert heal.budget_decision(elsewhere, fp=fp, now=P5_NOW, preferred_repo=SELF_REPO, report_issue=f"{SELF_REPO}#42")["match"] == "heal_source"
+
+
+def test_skip_reason_covers_every_release_gate_fixture_title() -> None:
+	base = heal.validate_payload(heal.build_issue_payload(repo=CONSUMER_REPO, kind="issue", label="ai:needs-human", issue=_issue(), comments=[], runs=[], wrapper_sha=None, reporter_run_url=None))
+	for title in (
+		"[E2E Smoke Test] canary",
+		"[E2E Orchestrate Smoke 42930970244] Retry: update tests/e2e_smoke_canary.txt",
+		"[e2e orchestrate smoke 1] tracking",
+		"[E2E Clarify Negative Test 77] vague request",
+	):
+		assert heal.skip_reason(dict(base, issue_title=title), registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO) == "smoke_test_fixture", title
+	for title in ("Fix the E2E smoke test", "[E2E tests] flaky suite", "E2E Orchestrate Smoke without brackets"):
+		assert heal.skip_reason(dict(base, issue_title=title), registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO) == "", title
+
+
+def _occ_intake_duplicate(extra_state: dict | None = None, extra_env: dict | None = None) -> tuple[subprocess.CompletedProcess[str], dict]:
+	signature = heal.error_signature(heal.filter_log(JOB_LOG))
+	fp = heal.fingerprint("AI Implement", "Run codex", signature)
+	state = _intake_state(heal_issues=[_heal_issue(31, state="open", fp=fp)])
+	state.update(extra_state or {})
+	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=extra_env)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL duplicate existing_issue=31" in result.stdout
+	return result, state_after
+
+
+def test_intake_first_repeat_posts_the_counter_comment() -> None:
+	result, state = _occ_intake_duplicate()
+	posted = [c for c in state["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/31/comments"]
+	assert len(posted) == 1 and "comments_edited" not in state
+	counter = heal.parse_occurrence_counter(posted[0]["body"])
+	assert counter is not None and counter["count"] == 1 and len(counter["entries"]) == 1
+	assert "Another occurrence of this failure was reported:" in counter["entries"][0]["text"]
+	assert f"WORKFLOW_HEAL occurrence_update outcome=created issue=31 repo={SELF_REPO} count=1" in result.stdout
+
+
+def test_intake_later_repeat_edits_the_counter_comment_in_place() -> None:
+	existing = heal.merge_occurrence_comment([], _occ_report(5, 100), trusted_login=_OCC_LOGIN, now=datetime(2026, 11, 1, tzinfo=timezone.utc))
+	comments = {f"repos/{SELF_REPO}/issues/31/comments": [_occ_comment(77, existing["body"])]}
+	result, state = _occ_intake_duplicate({"comments": comments})
+	# No new comment anywhere on the heal issue: one edit of comment 77.
+	assert not [c for c in state.get("comments_posted", []) if c["path"] == f"repos/{SELF_REPO}/issues/31/comments"]
+	edited = state["comments_edited"]
+	assert [c["path"] for c in edited] == [f"repos/{SELF_REPO}/issues/comments/77"]
+	counter = heal.parse_occurrence_counter(edited[0]["body"])
+	assert counter["count"] == 2 and counter["first"] == "2026-11-01T00:00:00Z" and [entry["n"] for entry in counter["entries"]] == [2, 1]
+	assert f"WORKFLOW_HEAL occurrence_update outcome=edited issue=31 repo={SELF_REPO} comment=77 count=2" in result.stdout
+	# A counter written by another account is left alone; a new one is posted.
+	comments = {f"repos/{SELF_REPO}/issues/31/comments": [_occ_comment(77, existing["body"], login="mallory")]}
+	result, state = _occ_intake_duplicate({"comments": comments})
+	assert "comments_edited" not in state
+	assert heal.parse_occurrence_counter([c for c in state["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/31/comments"][0]["body"])["count"] == 1
+
+
+def test_intake_reposts_a_counter_buried_under_newer_comments() -> None:
+	# The poller's stale auto-close reads an issue's newest 20 comments only,
+	# so a counter with 15 or more newer comments after it is posted again
+	# and the old one deleted.
+	existing = heal.merge_occurrence_comment([], _occ_report(5, 100), trusted_login=_OCC_LOGIN, now=datetime(2026, 11, 1, tzinfo=timezone.utc))
+	path = f"repos/{SELF_REPO}/issues/31/comments"
+	for newer, reposted in ((14, False), (15, True)):
+		thread = [_occ_comment(77, existing["body"])] + [_occ_comment(200 + index, "hold notice", login="someone") for index in range(newer)]
+		result, state = _occ_intake_duplicate({"comments": {path: thread}})
+		posted = [c for c in state.get("comments_posted", []) if c["path"] == path]
+		if not reposted:
+			assert not posted and [c["path"] for c in state["comments_edited"]] == [f"repos/{SELF_REPO}/issues/comments/77"]
+			continue
+		assert len(posted) == 1 and heal.parse_occurrence_counter(posted[0]["body"])["count"] == 2
+		assert "comments_edited" not in state and state["comments_deleted"] == [f"repos/{SELF_REPO}/issues/comments/77"]
+		assert f"WORKFLOW_HEAL occurrence_update outcome=reposted issue=31 repo={SELF_REPO} replaced=77 newer_comments=15 count=2" in result.stdout
+	# A failed delete is logged; the report is still recorded.
+	thread = [_occ_comment(77, existing["body"])] + [_occ_comment(200 + index, "hold notice", login="someone") for index in range(15)]
+	result, state = _occ_intake_duplicate({"comments": {path: thread}, "comment_delete_fail": True})
+	assert "warn occurrence_old_counter_delete_failed issue=31" in result.stdout and "occurrence_update outcome=reposted" in result.stdout
+
+
+def test_intake_occurrence_counter_fails_open() -> None:
+	existing = heal.merge_occurrence_comment([], _occ_report(5, 100), trusted_login=_OCC_LOGIN, now=datetime(2026, 11, 1, tzinfo=timezone.utc))
+	comments = {f"repos/{SELF_REPO}/issues/31/comments": [_occ_comment(77, existing["body"])]}
+	# A failed edit posts the merged body as a new comment.
+	result, state = _occ_intake_duplicate({"comments": comments, "comment_edit_fail": True})
+	posted = [c for c in state["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/31/comments"]
+	assert len(posted) == 1 and heal.parse_occurrence_counter(posted[0]["body"])["count"] == 2
+	assert "occurrence_update outcome=fallback reason=edit_failed issue=31" in result.stdout
+	# A failed comments read posts the report as its own comment, as before.
+	result, state = _occ_intake_duplicate({"comments": comments, "comment_read_fail": True})
+	posted = [c for c in state["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/31/comments"]
+	assert len(posted) == 1 and heal.parse_occurrence_counter(posted[0]["body"]) is None and posted[0]["body"].startswith(_OCC_MARKER)
+	assert "occurrence_update outcome=fallback reason=merge_unavailable issue=31" in result.stdout
+	# The account login cannot be read: the legacy comment, no comments read.
+	result, state = _occ_intake_duplicate({"comments": comments, "user_fetch_fail": True})
+	posted = [c for c in state["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/31/comments"]
+	assert len(posted) == 1 and heal.parse_occurrence_counter(posted[0]["body"]) is None and "comments_edited" not in state
+	assert "occurrence_update outcome=fallback reason=login_unavailable issue=31" in result.stdout
+	# Switch off, or any value that is not true / false: the legacy comment, no comments read.
+	for value in ("false", "maybe"):
+		result, state = _occ_intake_duplicate({"comments": comments}, extra_env={"HEAL_OCCURRENCE_IN_PLACE_ENABLED": value})
+		posted = [c for c in state["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/31/comments"]
+		assert len(posted) == 1 and heal.parse_occurrence_counter(posted[0]["body"]) is None
+		assert "comments_edited" not in state and "occurrence_update outcome=" not in result.stdout
+		assert not [call for call in state["calls"] if any("{id, author: (.user.login" in part for part in call)]
+		assert ("occurrence_update outcome=skip reason=invalid_switch" in result.stderr) == (value == "maybe")
+
+
+def test_intake_heal_issues_own_failure_is_recorded_on_itself_not_filed() -> None:
+	# Heal issue #42 was filed for another failure (different fingerprint);
+	# its own plan run now fails. #9200 was filed for #9190 this way.
+	other_fp = "9" * 64
+	heal_issue = _sourced_heal_issue(42, state="open", fp=other_fp, source=f"{SELF_REPO}#6208")
+	payload = _phase_payload(repo=SELF_REPO, issue=_issue(body=heal_issue["body"], labels=["ai:planning", heal.HEAL_LABEL]))
+	result, state, _ = _run_intake(payload, _plan_intake_state(repo=SELF_REPO, heal_issues=[heal_issue]), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "issues_created" not in state
+	assert f"WORKFLOW_HEAL duplicate existing_issue=42 existing_repo={SELF_REPO}" in result.stdout and "match=heal_source" in result.stdout
+	# Recorded only: an unrelated failure (for example a runner outage) is not
+	# escalated; only a run failing with the issue's own fingerprint is.
+	assert "escalate reason=heal_issue_failed_itself" not in result.stdout
+	assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] not in state.get("issue_edits", [])
+	posted = [c for c in state["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/42/comments"]
+	assert len(posted) == 1 and heal.parse_occurrence_counter(posted[0]["body"])["count"] == 1
+	# No model call for it.
+	assert not any("codex" in " ".join(call) for call in state["calls"])
+	# Switch off: the report continues the lineage as before (a new heal issue).
+	result, state, _ = _run_intake(payload, _plan_intake_state(repo=SELF_REPO, heal_issues=[heal_issue]), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"HEAL_SOURCE_DEDUPE_ENABLED": "false"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "match=heal_source" not in result.stdout and _composed_issues(state)
+
+
+def test_intake_workflow_wires_the_occurrence_and_heal_source_switches() -> None:
+	workflow = INTAKE_WORKFLOW.read_text(encoding="utf-8")
+	for line in (
+		"HEAL_OCCURRENCE_IN_PLACE_ENABLED: ${{ vars.HEAL_OCCURRENCE_IN_PLACE_ENABLED || 'true' }}",
+		"HEAL_SOURCE_DEDUPE_ENABLED: ${{ vars.HEAL_SOURCE_DEDUPE_ENABLED || 'true' }}",
+	):
+		assert workflow.count(line) == 2, line
+
+
+def test_heal_scope_recovery_budget_rerun_drops_the_report_issue() -> None:
+	# The recovery re-run keeps only the caps that bind the lineage: another
+	# open heal issue whose own run failed must not make the replacement a
+	# `match: heal_source` duplicate.
+	script = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	recovery = script.split("\n_heal_scope_recovery_evaluate()\n{", 1)[1].split("\n}\n", 1)[0]
+	loop = recovery.split("local recovery_budget_args=()", 1)[1].split("done", 1)[0]
+	report_arm = loop.split("--report-issue)", 1)[1].split(";;", 1)[0]
+	assert "recovery_arg_index=$((recovery_arg_index + 2))" in report_arm and "continue" in report_arm

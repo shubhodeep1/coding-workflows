@@ -1,4 +1,9 @@
 name: Security Audit
+# The PR number in the run title lets the single-issue security pass gate
+# (scripts/review_single_issue_security_pass.sh) find the run behind its
+# pending marker and retry an audit that was cancelled without a result.
+# A called workflow's run-name is ignored; the consumer wrapper sets its own.
+run-name: "${{ inputs.pr_number != '' && format('Security Audit (PR #{0})', inputs.pr_number) || 'Security Audit' }}"
 
 "on":
   schedule:
@@ -59,8 +64,17 @@ permissions:
 # concurrency group ... between a top level workflow and 'security-audit'").
 # Keep a distinct group so this repo's own scheduled runs stay serialised
 # without contending with a wrapper's group.
+#
+# One group per PR (single-issue security pass). GitHub keeps one pending
+# run per group and cancels the older pending one, so a repo-wide group made
+# audits for different PRs cancel each other: 39 of 91 dispatched audits
+# from 2026-11-16 ended `cancelled` without a result, and each PR then waited
+# 6 hours on its pending marker. Now only a newer audit of the same PR
+# replaces a waiting one. The gate bounds how many audits run at once
+# (SECURITY_PASS_MAX_CONCURRENT_AUDITS); scheduled and project-branch runs
+# without pr_number share the `default` group as before.
 concurrency:
-  group: security-audit-reusable-${{ github.repository }}
+  group: security-audit-reusable-${{ github.repository }}-${{ inputs.pr_number != '' && format('pr-{0}', inputs.pr_number) || 'default' }}
   cancel-in-progress: false
 
 env:
@@ -297,6 +311,14 @@ jobs:
           fetch-depth: 0
 
       - name: Verify audit data and resolve scope
+        env:
+          # Delta audit for the single-issue security pass: the trusted
+          # support script names the PR's last clean-audited ancestor head.
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SECURITY_PASS_PR_NUMBER: ${{ inputs.pr_number }}
+          SECURITY_PASS_AUTHOR_LOGIN_FALLBACK: ${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}
+          SECURITY_PASS_DELTA_AUDIT_ENABLED: ${{ vars.SECURITY_PASS_DELTA_AUDIT_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           if [ "$(git -C audit-data rev-parse --show-toplevel 2>/dev/null)" != "${GITHUB_WORKSPACE}/audit-data" ] ||
@@ -318,6 +340,21 @@ jobs:
             echo "SECURITY_AUDIT_DIFF_BASE=${audit_diff_base}"
             echo "SECURITY_AUDIT_DIFF_HEAD=${AUDIT_DATA_SHA}"
           } >> "$GITHUB_ENV"
+          # A later cycle of the single-issue security pass audits only range
+          # files changed since the PR's last clean audit (security_audit.sh
+          # SECURITY_AUDIT_DIFF_SINCE). The helper prints nothing on any
+          # doubt (no clean ancestor, failed read, force-push), which keeps
+          # the full range. SECURITY_PASS_DELTA_AUDIT_ENABLED=false turns it off.
+          audit_since=""
+          if [ -n "${SECURITY_PASS_PR_NUMBER}" ] && [ "${SECURITY_PASS_DELTA_AUDIT_ENABLED}" != "false" ] \
+            && [ -f "${GITHUB_WORKSPACE}/scripts/review_single_issue_security_pass.sh" ]; then
+            audit_since="$(SECURITY_PASS_HEAD_SHA="${AUDIT_DATA_SHA}" SECURITY_PASS_AUDIT_CHECKOUT="${GITHUB_WORKSPACE}/audit-data" \
+              bash "${GITHUB_WORKSPACE}/scripts/review_single_issue_security_pass.sh" since || true)"
+          fi
+          if [[ "${audit_since}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "SECURITY_AUDIT_TARGET: delta since last clean audit ${audit_since}"
+            echo "SECURITY_AUDIT_DIFF_SINCE=${audit_since}" >> "$GITHUB_ENV"
+          fi
 
       - name: Install Codex CLI
         uses: ./.github/actions/install-codex
@@ -433,6 +470,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
           SECURITY_AUDIT_ENABLED: ${{ vars.SECURITY_AUDIT_ENABLED || 'true' }}
           SECURITY_AUDIT_CONFIDENCE_GATE: ${{ vars.SECURITY_AUDIT_CONFIDENCE_GATE || '8' }}
+          SECURITY_AUDIT_SIMILAR_FINDING_LINE_WINDOW: ${{ vars.SECURITY_AUDIT_SIMILAR_FINDING_LINE_WINDOW || '25' }}
           SECURITY_AUDIT_SKIP_IF_UNCHANGED: ${{ vars.SECURITY_AUDIT_SKIP_IF_UNCHANGED || 'true' }}
           SECURITY_AUDIT_INCREMENTAL: ${{ vars.SECURITY_AUDIT_INCREMENTAL || 'true' }}
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
@@ -491,6 +529,7 @@ jobs:
           SECURITY_PASS_AUDIT_BRANCH: ${{ env.AUDIT_BRANCH }}
           SECURITY_PASS_AUTHOR_LOGIN_FALLBACK: ${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
+          SECURITY_PASS_MAX_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_MAX_AUDIT_ATTEMPTS || '' }}
         run: |
           set -uo pipefail
           SECURITY_PASS_HEAD_SHA="${AUDIT_DATA_SHA}"
