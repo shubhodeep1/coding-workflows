@@ -152,6 +152,33 @@ class ClarifyNegativeOutputsTest(unittest.TestCase):
 		self.assertIn("::warning::Could not read the latest clarify.yml run id", result.stdout)
 		self.assertNotIn('"message":', result.stdout + result.stderr)
 
+	def test_create_step_failed_pre_read_with_empty_stdout_sets_read_failed(self) -> None:
+		# A failed read that prints nothing (e.g. a network error) must not
+		# pass as a real 0 baseline.
+		result = self._run(
+			"create",
+			STUB_RUNS_FAIL_COUNT="-1",
+			STUB_RATE_LIMIT_BODY="",
+			STUB_ISSUE_OUT="9782\n",
+		)
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		self._assert_outputs_numeric()
+		self.assertIn("pre_clarify_run_id=0", self._outputs())
+		self.assertIn("pre_clarify_run_id_read_failed=1", self._outputs())
+
+	def test_alt_create_step_failed_read_with_empty_stdout_leaves_baseline_empty(self) -> None:
+		result = self._run(
+			"create",
+			job=ALT_JOB,
+			ALT_EDITOR_MODEL="test/model",
+			STUB_RUNS_FAIL_COUNT="-1",
+			STUB_RATE_LIMIT_BODY="",
+			STUB_ISSUE_OUT="9790\n",
+		)
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		self.assertIn("pre_clarify_run_id=", self._outputs())
+		self.assertNotIn("pre_clarify_run_id=0", self._outputs())
+
 	def test_create_step_happy_path_keeps_run_id(self) -> None:
 		result = self._run(
 			"create",

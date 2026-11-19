@@ -5315,9 +5315,10 @@ jobs:
           # Capture the latest clarify.yml run id BEFORE creating the
           # issue so the post-create capture step can find the new
           # run via `id > PRE_CLARIFY_RUN_ID`.
-          PRE_CLARIFY_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/workflows/clarify.yml/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo "0")
+          PRE_CLARIFY_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/workflows/clarify.yml/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null) || PRE_CLARIFY_RUN_ID=""
           # #9797 (run 44490333814): a failed `gh api` prints its error body
-          # to stdout, so `|| echo` does not replace it. Write only digits to
+          # to stdout, and a failure with empty stdout would otherwise pass
+          # as a real 0, so a nonzero exit clears the value. Write only digits to
           # GITHUB_OUTPUT; never echo the captured value (untrusted text).
           # A 0 written here after a failed read is not a real watermark, so
           # pre_clarify_run_id_read_failed=1 tells the capture step to skip
@@ -5630,8 +5631,9 @@ jobs:
           # the issue. The post-wait capture step uses these as anchors to
           # find the new alt-model phase runs (id > pre_<phase>_run_id).
           for WF in clarify plan implement review_autofix; do
-            LATEST=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF}.yml/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo "0")
-            # #9797: a failed `gh api` prints its error body to stdout. Write
+            LATEST=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF}.yml/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null) || LATEST=""
+            # #9797: a failed `gh api` prints its error body (or nothing) to
+            # stdout; a nonzero exit clears the value either way. Write
             # digits or an empty value only; never echo the captured text.
             if ! [[ "${LATEST}" =~ ^[0-9]+$ ]]; then
               echo "::warning::Could not read the latest ${WF}.yml run id; leaving pre_${WF}_run_id empty"
