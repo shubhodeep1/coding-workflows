@@ -18197,10 +18197,13 @@ declare -g _ACTIONS_RUNS_BLOB_CACHE=''
 declare -g _ACTIONS_RUNS_BLOB_READY='false'
 # Queue depth from the queued read's total_count (stuck-backlog Phase 3). The
 # cached blob holds at most 50 queued rows, so the row count cannot reach the
-# backpressure threshold. Empty means unknown: an ai_memory cache hit, 304
-# reuse, mktemp failures and unconfirmed fetches leave it empty, and the
-# backpressure hold then fails open (legacy behaviour). An in-process ready
-# cache hit returns before the reset and keeps the tick's first value.
+# backpressure threshold. An ai_memory cache hit and a 304 reuse restore it
+# from the depth the last fresh read stamped on the cached queued rows, when
+# that stamp is under 1800s old (_actions_queued_total_from_cached_runs).
+# Empty means unknown: no fresh stamp, mktemp failures and unconfirmed fetches
+# leave it empty, and the backpressure hold then fails open (legacy
+# behaviour). An in-process ready cache hit returns before the reset and keeps
+# the tick's first value.
 declare -g ACTIONS_QUEUED_TOTAL=''
 declare -g PHASE_CAPS_ENABLED='false'
 declare -g PHASE_CAPS_STATUS='missing'
@@ -18208,6 +18211,31 @@ declare -g PHASE_CAPS_GLOBAL_MAX='-1'
 declare -g PHASE_CAPS_GLOBAL_RUNNING='0'
 declare -g PHASE_CAPS_MAX_BY_STATE='{}'
 declare -g PHASE_CAPS_RUNNING_BY_STATE='{}'
+
+# Restore ACTIONS_QUEUED_TOTAL on the loader's TTL-hit and 304 paths, which
+# skip the queued read (stuck-backlog Phase 3). The fresh path stamps each
+# cached queued row with _poller_queued_total / _poller_queued_total_at (the
+# cache schema allows extra row fields), so a 304 tick in a jammed queue, where
+# the in-progress ETag rarely changes, still sees the last depth read. A
+# snapshot older than 1800s, or none, leaves the depth unknown (fail open), so
+# a queue that drained without any run starting cannot hold dispatch forever.
+# Adds no API call. Always returns 0.
+_actions_queued_total_from_cached_runs() {
+  local aqt_runs="$1"
+  local aqt_now="$2"
+  local aqt_restored=''
+  [[ "${aqt_now}" =~ ^[0-9]+$ ]] || return 0
+  aqt_restored="$(printf '%s' "${aqt_runs}" | jq -r --argjson now "${aqt_now}" --argjson max_age 1800 '
+    [ .[]? | objects
+      | select((._poller_queued_total | type) == "number" and (._poller_queued_total_at | type) == "number")
+      | select(($now - ._poller_queued_total_at) >= 0 and ($now - ._poller_queued_total_at) < $max_age)
+      | ._poller_queued_total | floor ]
+    | if length > 0 then (max | tostring) else "" end' 2>/dev/null || true)"
+  if [[ "${aqt_restored}" =~ ^[0-9]+$ ]]; then
+    ACTIONS_QUEUED_TOTAL="${aqt_restored}"
+  fi
+  return 0
+}
 
 _load_actions_runs_cached() {
   local empty_blob='{"workflow_runs":[]}'
@@ -18254,6 +18282,7 @@ _load_actions_runs_cached() {
   fi
 
   if [ "${cache_hit}" = "true" ] && [ "${cache_age_seconds}" -lt "${ACTIONS_RUNS_CACHE_TTL_SECONDS}" ]; then
+    _actions_queued_total_from_cached_runs "${cached_runs}" "${now_epoch}"
     _ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
     _ACTIONS_RUNS_BLOB_READY="true"
     printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
@@ -18327,6 +18356,7 @@ _load_actions_runs_cached() {
       else
         echo "::warning::rate_limit_audit_fallback helper=_load_actions_runs_cached reason=mktemp_failed_ttl_put_file repo=${repo}" >&2
       fi
+      _actions_queued_total_from_cached_runs "${cached_runs}" "${now_epoch}"
       _ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
       _ACTIONS_RUNS_BLOB_READY="true"
       rm -f "${response_file}" "${response_body_file}" "${response_err}"
@@ -18351,6 +18381,11 @@ _load_actions_runs_cached() {
 		queued_total_read="$(printf '%s' "${queued_read_json}" | jq -r 'if type == "object" and (.total_count | type) == "number" then (.total_count | floor | tostring) else "" end' 2>/dev/null || echo '')"
 		if [[ "${queued_total_read}" =~ ^[0-9]+$ ]]; then
 			ACTIONS_QUEUED_TOTAL="${queued_total_read}"
+			# Stamp the depth on the queued rows so the cache carries it to later
+			# 304 / TTL-hit ticks (_actions_queued_total_from_cached_runs).
+			local queued_runs_stamped=''
+			queued_runs_stamped="$(printf '%s' "${queued_runs}" | jq -c --argjson total "${queued_total_read}" --argjson at "${now_epoch}" 'map(if type == "object" then . + {_poller_queued_total: $total, _poller_queued_total_at: $at} else . end)' 2>/dev/null || true)"
+			[ -z "${queued_runs_stamped}" ] || queued_runs="${queued_runs_stamped}"
 		fi
 		# Include a small completed window so stall-judge diagnostics can inspect
 		# recent review/autofix workflow outcomes (conclusions).

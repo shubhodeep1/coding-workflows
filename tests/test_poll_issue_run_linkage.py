@@ -369,6 +369,68 @@ def test_loader_records_queued_total_from_existing_read(tmp_path: Path) -> None:
 	assert "[1,3]" in legacy.stdout
 
 
+def _cached_loader(tmp_path: Path, *, cached_runs: list[dict], fetched_age_seconds: int, status_line: str) -> str:
+	"""Run the loader with a stub ai_memory cache hit; return the restored depth."""
+	(tmp_path / "loader.sh").write_text(
+		"declare -g _ACTIONS_RUNS_BLOB_READY='false'\ndeclare -g ACTIONS_QUEUED_TOTAL=''\n"
+		+ _extract(("_actions_queued_total_from_cached_runs", "_load_actions_runs_cached")), encoding="utf-8")
+	fetched_at = (datetime.now(timezone.utc) - timedelta(seconds=fetched_age_seconds)).replace(microsecond=0)
+	cache = {"ok": True, "hit": True, "cache": {"runs": cached_runs, "etag": "W/\"abc\"",
+		"fetched_at": fetched_at.isoformat().replace("+00:00", "Z")}}
+	(tmp_path / "scripts").mkdir(exist_ok=True)
+	(tmp_path / "scripts" / "ai_memory.py").write_text(
+		"import sys\nif sys.argv[2] == 'get':\n\tprint(" + repr(json.dumps(cache)) + ")\n", encoding="utf-8")
+	script = (
+		"set -euo pipefail\n"
+		"source ./loader.sh\n"
+		"ACTIONS_RUNS_CACHE_TTL_SECONDS=60\n"
+		"GITHUB_REPOSITORY=octo/example\n"
+		"_memory_enabled() { return 0; }\n"
+		"gh_retry() { \"$@\"; }\n"
+		f"gh() {{ printf '{status_line}\\r\\n\\r\\n'; }}\n"
+		"_safe_gh_jq() { echo 'unexpected queued read' >&2; return 1; }\n"
+		"_load_actions_runs_cached >blob.out\n"
+		"echo \"total=${ACTIONS_QUEUED_TOTAL}\"\n"
+	)
+	result = _run_bash(script, tmp_path)
+	assert result.returncode == 0, result.stderr
+	assert "unexpected queued read" not in result.stderr
+	match = re.search(r"(?m)^total=(.*)$", result.stdout)
+	assert match, result.stdout
+	return match.group(1)
+
+
+def test_loader_stamps_queued_rows_with_depth(tmp_path: Path) -> None:
+	text = _extract(("_load_actions_runs_cached",))
+	(tmp_path / "loader.sh").write_text("declare -g _ACTIONS_RUNS_BLOB_READY='false'\ndeclare -g ACTIONS_QUEUED_TOTAL=''\n" + text,
+		encoding="utf-8")
+	result = _run_bash(_loader_script('{"total_count":321,"workflow_runs":[{"id":2,"status":"queued"}]}')
+		+ "jq -c '[.workflow_runs[] | select(.id == 2) | ._poller_queued_total]' blob.out\n", tmp_path)
+	assert result.returncode == 0, result.stderr
+	assert "[321]" in result.stdout
+
+
+def _stamped(total: int, age_seconds: int) -> list[dict]:
+	at = int(datetime.now(timezone.utc).timestamp()) - age_seconds
+	return [{"id": 9, "status": "queued", "_poller_queued_total": total, "_poller_queued_total_at": at}]
+
+
+@pytest.mark.parametrize("status_line", ["HTTP/2.0 304 Not Modified", "HTTP/2.0 200 OK"])
+def test_cached_paths_restore_recent_queued_depth(tmp_path: Path, status_line: str) -> None:
+	# 304 reuse (cache past its TTL) and an in-TTL cache hit both skip the
+	# queued read, so the depth comes from the stamp on the cached rows.
+	age = 300 if "304" in status_line else 5
+	assert _cached_loader(tmp_path, cached_runs=_stamped(400, 60), fetched_age_seconds=age,
+		status_line=status_line) == "400"
+
+
+def test_cached_paths_leave_stale_or_missing_depth_unknown(tmp_path: Path) -> None:
+	assert _cached_loader(tmp_path, cached_runs=_stamped(400, 4000), fetched_age_seconds=300,
+		status_line="HTTP/2.0 304 Not Modified") == ""
+	assert _cached_loader(tmp_path, cached_runs=[{"id": 9, "status": "queued"}], fetched_age_seconds=300,
+		status_line="HTTP/2.0 304 Not Modified") == ""
+
+
 # --- wrapper run-names -------------------------------------------------------------
 
 
