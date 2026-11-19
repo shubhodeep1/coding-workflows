@@ -198,6 +198,8 @@ class _Sandbox:
 			}
 		)
 		env.pop("WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR", None)
+		# Issue #9135: a caller shell value must not trip the PR-mode PAT gate.
+		env.pop("WLA_REPORT_PR_PAT_SET", None)
 		env.update(extra)
 		return subprocess.run(
 			["bash", "-c", _step_body()], cwd=self.work, env=env, capture_output=True, text=True, check=False
@@ -647,6 +649,57 @@ def test_report_pr_rejects_malformed_report_path() -> None:
 			assert _git(box.work, "rev-parse", "HEAD", env=box.git_env) == box.base_main
 
 
+def test_report_pr_missing_pat_fails_before_any_push() -> None:
+	# Issue #9135: PR mode without GH_PAT fails closed before any push or gh
+	# call, instead of opening a PR with github.token that starts no checks.
+	with tempfile.TemporaryDirectory() as raw:
+		box = _Sandbox(Path(raw))
+		box.write_report()
+		proc = box.run(WLA_REPORT_PR_PAT_SET="false")
+		assert proc.returncode != 0, proc.stderr + proc.stdout
+		assert (
+			f"::error::WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=failed reason=token_missing branch={PR_BRANCH}"
+			in proc.stdout
+		)
+		assert "workflow-log-analysis-report" in proc.stdout
+		assert box.gh_calls() == []
+		assert box.origin_ref(f"refs/heads/{PR_BRANCH}") == ""
+		assert box.origin_ref("refs/heads/main") == box.base_main
+		assert "committed=true" not in box.output.read_text(encoding="utf-8")
+		assert _delivery_lines(proc) == []
+	# Push mode keeps the github.token fallback and still pushes the report.
+	with tempfile.TemporaryDirectory() as raw:
+		box = _Sandbox(Path(raw))
+		box.write_report()
+		proc = box.run(WLA_REPORT_PR_PAT_SET="false", WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR="false")
+		assert proc.returncode == 0, proc.stderr + proc.stdout
+		assert "reason=token_missing" not in proc.stdout
+		assert box.origin_has("refs/heads/main", REPORT)
+		assert box.gh_calls() == []
+		assert box.outputs()["delivery"] == "pushed"
+
+
+def test_report_pr_ruleset_rejection_fails_the_step() -> None:
+	# Plan P1 tests: a GH013 refusal of the run-branch push logs
+	# reason=push_rejected_by_ruleset and fails the step.
+	with tempfile.TemporaryDirectory() as raw:
+		box = _Sandbox(Path(raw))
+		hook = box.origin / "hooks" / "pre-receive"
+		hook.write_text("#!/bin/sh\necho 'error: GH013: Repository rule violations found' >&2\nexit 1\n", encoding="utf-8")
+		hook.chmod(0o755)
+		box.write_report()
+		proc = box.run()
+		assert proc.returncode != 0, proc.stderr + proc.stdout
+		assert (
+			f"::error::WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=failed reason=push_rejected_by_ruleset branch={PR_BRANCH}"
+			in proc.stdout
+		)
+		assert box.gh_calls() == []
+		assert box.origin_ref(f"refs/heads/{PR_BRANCH}") == ""
+		assert box.origin_ref("refs/heads/main") == box.base_main
+		assert "committed=true" not in box.output.read_text(encoding="utf-8")
+
+
 def test_report_pr_static_contract() -> None:
 	wf = _workflow_text()
 	step = _step_text()
@@ -655,6 +708,12 @@ def test_report_pr_static_contract() -> None:
 	assert "WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR || 'true' }}" in step
 	assert "WLA_ANALYZE_REPORT_FILE: ${{ steps.analyze.outputs.report_file }}" in step
 	assert "${{" not in _step_body()
+	# Issue #9135: PR mode requires GH_PAT; only a boolean reaches the shell.
+	assert "WLA_REPORT_PR_PAT_SET: ${{ secrets.GH_PAT != '' && 'true' || 'false' }}" in step
+	assert '[ "${WLA_REPORT_PR_PAT_SET:-true}" != "true" ]' in _step_body()
+	for line in _step_body().splitlines():
+		if "echo" in line or "printf" in line:
+			assert not re.search(r"\$\{?(GH_TOKEN|GH_PAT|AI_COMMENT_JOB_TOKEN)\b", line), line
 	# Legacy outputs still written.
 	assert 'echo "committed=true" >> "$GITHUB_OUTPUT"' in step
 	assert 'echo "report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"' in step
@@ -841,6 +900,8 @@ def main() -> int:
 	test_report_pr_renames_on_upstream_collision()
 	test_report_pr_no_changes_makes_no_gh_calls()
 	test_report_pr_rejects_malformed_report_path()
+	test_report_pr_missing_pat_fails_before_any_push()
+	test_report_pr_ruleset_rejection_fails_the_step()
 	test_report_pr_static_contract()
 	test_section_push_mode_report_pushed_creates_run_branch_for_delivery()
 	test_section_pr_merged_recreates_deleted_run_branch()

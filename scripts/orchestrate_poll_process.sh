@@ -13101,7 +13101,10 @@ _list_integration_conflict_files() {
   fi
   # On conflict, modern git prints the written tree SHA on the first
   # line followed by conflict paths. Strip the SHA line when present.
-  printf '%s\n' "${out}" | sed '/^$/d' | awk 'NR==1 && /^[[:xdigit:]]{40}([[:xdigit:]]{24})?$/ {next} {print}'
+  # Use sed BREs, not an awk `{40}(...{24})?` regex: mawk 1.3.4 (Ubuntu's
+  # default awk) panics compiling that pattern and prints nothing, which
+  # returned an empty conflict list to every caller.
+  printf '%s\n' "${out}" | sed '/^$/d' | sed '1{/^[[:xdigit:]]\{40\}$/d;/^[[:xdigit:]]\{64\}$/d;}'
   return 0
 }
 
