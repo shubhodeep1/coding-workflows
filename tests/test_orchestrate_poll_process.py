@@ -123,7 +123,8 @@ def _copy_sandbox_agents_md(src: Path, dst: Path) -> None:
 
 	A file at or under the budget is copied byte-for-byte. A larger file is
 	cut at the last newline at or before the budget (so no line or UTF-8
-	character is split) and the truncation marker is appended. Only the
+	character is split) and the truncation marker is appended. When no
+	newline falls within the budget, only the marker is written. Only the
 	sandbox copy is bounded; the repo-root `agents.md` the LOG_PREFIX
 	assertions read is untouched.
 	"""
@@ -28494,6 +28495,11 @@ def test_poller_sandbox_bounds_agents_md_copy():
 		small_src.write_bytes(small_payload)
 		_copy_sandbox_agents_md(small_src, small_dst)
 		assert small_dst.read_bytes() == small_payload
+		no_newline_src = Path(tmp) / "no_newline_agents.md"
+		no_newline_dst = Path(tmp) / "no_newline_agents_copy.md"
+		no_newline_src.write_bytes(b"x" * (_SANDBOX_AGENTS_MD_MAX_BYTES + 1))
+		_copy_sandbox_agents_md(no_newline_src, no_newline_dst)
+		assert no_newline_dst.read_bytes() == marker
 
 
 def _extract_bash_function(script: str, signature: str) -> str:
