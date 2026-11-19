@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9765,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9765\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9770\",\"pr_number\":9770,\"branch\":\"ai/issue-9765\",\"run_id\":\"44468200593\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/44468200593\",\"changed_files\":[\".github/workflows/internal-orchestrate-clarify-respond.yml\",\"agents.d/9765-clarify-respond-run-name.md\",\"changelog.d/9765-clarify-respond-run-name.md\",\"tests/test_poll_issue_run_linkage.py\",\"workflow-templates/ai-orchestrate-clarify-respond.yml\"]}",
+  "fingerprint": "8b6616b7b124d710cffb88957e9afef7dfb8901746f5b32f13a0e3702460647a",
+  "lineage": {
+    "issue_number": 9765,
+    "parent_ids": [],
+    "pr_number": 9770,
+    "run_id": "44468200593",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44468200593",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9770"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261119060517_66be71f1d7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9765,
+    "level": "run",
+    "pr_number": 9770,
+    "run_id": "44468200593"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9765: https://github.com/shubhodeep1/coding-workflows/pull/9770",
+  "timestamps": {
+    "created_at": "2026-11-19T06:05:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
