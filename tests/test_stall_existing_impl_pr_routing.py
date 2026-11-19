@@ -184,6 +184,31 @@ def test_stall_arms_route_before_posting_approved(arm: str) -> None:
 	assert "2|3) return 1 ;;" in body[route:]
 
 
+def _standalone_arm(text: str, name: str) -> str:
+	start = text.index("run_standalone_stall_recovery() {")
+	arm_start = text.index(f"\n      {name})\n", start)
+	arm_end = text.index("\n        ;;\n", arm_start)
+	return text[arm_start:arm_end]
+
+
+@pytest.mark.parametrize(("arm", "rc_var"), [("auto_approve", "_std_auto_approve_route_rc"), ("retrigger_implement", "_std_retrigger_implement_route_rc")])
+def test_standalone_stall_arms_route_before_posting_approved(arm: str, rc_var: str) -> None:
+	text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	body = _standalone_arm(text, arm)
+	route = body.index(f'_stall_route_open_impl_pr "${{issue_num}}" "${{phase}}" "${{action}}" || {rc_var}=$?')
+	# Before the plan gate and the /approved comment heredoc.
+	assert route < body.index("_plan_auto_approval_gate")
+	assert route < body.index("cat <<'STALL_EOF'\n/approved")
+	routed = body[route:]
+	assert re.search(rf'if \[ "\$\{{{rc_var}\}}" -eq 0 \]; then\n\s+STALL_RECOVERY_SHOULD_INCREMENT="true"\n\s+STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_review"\n\s+took_action="true"', routed)
+	# Only rc 1 (flag off, no open PR, inconclusive lookup) reaches /approved.
+	if arm == "auto_approve":
+		assert f'if [ "${{{rc_var}}}" -eq 1 ] && _plan_auto_approval_gate' in routed
+	else:
+		assert f'if [ "${{{rc_var}}}" -ne 1 ]; then\n          _std_rti_gate_ok="false"' in routed
+		assert routed.index('_std_rti_gate_ok="false"') < routed.index('if [ "${_std_rti_gate_ok}" = "true" ]; then')
+
+
 def test_poller_defaults_flag_on_and_workflow_forwards_it() -> None:
 	text = POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert 'UNBLOCK_EXISTING_PR_ROUTING_ENABLED="${UNBLOCK_EXISTING_PR_ROUTING_ENABLED:-true}"' in text

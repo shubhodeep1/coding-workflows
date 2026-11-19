@@ -27057,11 +27057,20 @@ STALL_EOF
         # the staged-support skip.
         # In ai:awaiting-approval, comments_json already holds the complete
         # history (_staged_support_comments_for_guard above); reuse it.
+        # #9809: an open implementation PR makes /approved a no-op; review it
+        # instead (rc 0 counts, rc 2/3 take no action, rc 1 keeps /approved).
+        local _std_auto_approve_route_rc=0
+        _stall_route_open_impl_pr "${issue_num}" "${phase}" "${action}" || _std_auto_approve_route_rc=$?
+        if [ "${_std_auto_approve_route_rc}" -eq 0 ]; then
+          STALL_RECOVERY_SHOULD_INCREMENT="true"
+          STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_review"
+          took_action="true"
+        fi
         local _std_plan_gate_comments="${comments_json:-[]}"
-        if [ "${phase}" != "ai:awaiting-approval" ]; then
+        if [ "${_std_auto_approve_route_rc}" -eq 1 ] && [ "${phase}" != "ai:awaiting-approval" ]; then
           _std_plan_gate_comments="$(_plan_auto_approval_gate_comments "${issue_num}" "${_candidate_details_json:-}")"
         fi
-        if _plan_auto_approval_gate "${issue_num}" "${_candidate_details_json:-}" \
+        if [ "${_std_auto_approve_route_rc}" -eq 1 ] && _plan_auto_approval_gate "${issue_num}" "${_candidate_details_json:-}" \
           "${_std_plan_gate_comments}" "${phase}"; then
           local _std_auto_approve_rc=0
           gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
@@ -27082,7 +27091,19 @@ STALL_EOF
         # Issue #6769: before the first approval this arm posts the same
         # /approved as auto_approve, so it passes the same plan gate.
         local _std_rti_gate_ok="true"
-        if [ "${phase}" = "ai:awaiting-approval" ]; then
+        # #9809: an open implementation PR makes /approved a no-op; review it
+        # instead (rc 0 counts, rc 2/3 take no action, rc 1 keeps /approved).
+        local _std_retrigger_implement_route_rc=0
+        _stall_route_open_impl_pr "${issue_num}" "${phase}" "${action}" || _std_retrigger_implement_route_rc=$?
+        if [ "${_std_retrigger_implement_route_rc}" -ne 1 ]; then
+          _std_rti_gate_ok="false"
+        fi
+        if [ "${_std_retrigger_implement_route_rc}" -eq 0 ]; then
+          STALL_RECOVERY_SHOULD_INCREMENT="true"
+          STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_review"
+          took_action="true"
+        fi
+        if [ "${_std_rti_gate_ok}" = "true" ] && [ "${phase}" = "ai:awaiting-approval" ]; then
           # comments_json is the complete history in this phase (see auto_approve).
           local _std_rti_gate_comments="${comments_json:-[]}"
           if ! _plan_auto_approval_gate "${issue_num}" "${_candidate_details_json:-}" \

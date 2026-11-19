@@ -1850,6 +1850,7 @@ unblock_existing_pr_routing_enabled()
 		""|true) return 0 ;;
 		false) return 1 ;;
 	esac
+	echo "::warning::UNBLOCK_EXISTING_PR_ROUTING_ENABLED is not true or false; existing-PR routing is off" >&2
 	unblock_log "item=${ITEM:-} op=impl_pr outcome=disabled reason=invalid_flag"
 	return 1
 }
@@ -1879,7 +1880,7 @@ unblock_resolve_implementation_pr()
 	# fixed, and a failed read only keeps today's reset.
 	# shellcheck disable=SC2016
 	if ! gh api graphql \
-		-f query='query($owner:String!,$name:String!,$head:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequests(headRefName:$head,states:OPEN,first:5){nodes{number state headRefName headRepository{nameWithOwner}}} issue(number:$number){timelineItems(itemTypes:[CROSS_REFERENCED_EVENT],last:50){nodes{... on CrossReferencedEvent{source{... on PullRequest{number state body headRepository{nameWithOwner} author{login} authorAssociation}}}}}}}}' \
+		-f query='query($owner:String!,$name:String!,$head:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequests(headRefName:$head,states:OPEN,first:5){nodes{number state headRefName headRepository{nameWithOwner}}} issue(number:$number){timelineItems(itemTypes:[CROSS_REFERENCED_EVENT],last:50){nodes{... on CrossReferencedEvent{source{... on PullRequest{number state body repository{nameWithOwner} headRepository{nameWithOwner} author{login} authorAssociation}}}}}}}}' \
 		-f owner="${owner}" -f name="${name}" -f head="ai/issue-${ITEM}" -F number="${ITEM}" \
 		> "${graphql_file}" 2>/dev/null; then
 		unblock_log "item=${ITEM} op=impl_pr outcome=unavailable reason=read_failed"

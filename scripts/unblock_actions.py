@@ -651,7 +651,8 @@ def implementation_pr_candidate(raw: object, item: int, repo: str, pipeline_logi
 
 	Rule 1: an open `ai/issue-<item>` head PR (checked again here, not only
 	in the query) whose head is in `repo`; the highest number wins. Rule 2:
-	exactly one open cross-referencing PR with a same-repository head, by the
+	exactly one open cross-referencing PR in `repo` (base `repository`, which
+	a missing value fails) with a same-repository head, by the
 	pipeline login or a repository member, whose body closes the issue. A
 	fork head or an outside author never qualifies; two closing PRs are
 	ambiguous. Every unreadable shape is `unreadable`.
@@ -696,6 +697,12 @@ def implementation_pr_candidate(raw: object, item: int, repo: str, pipeline_logi
 	for event in timeline:
 		source = event.get("source") if isinstance(event, dict) else None
 		if not isinstance(source, dict) or source.get("state") != "OPEN" or not same_repo(source):
+			continue
+		# The PR's own (base) repository must be `repo` too: the timeline also
+		# lists PRs from other repositories, and their numbers mean nothing here.
+		base = source.get("repository")
+		base_owner = base.get("nameWithOwner") if isinstance(base, dict) else None
+		if not isinstance(base_owner, str) or base_owner.lower() != repo.lower():
 			continue
 		number = number_of(source)
 		author = source.get("author")

@@ -6116,8 +6116,11 @@ def _impl_pr_payload(head_nodes: list | None = None, sources: list | None = None
 	}}}
 
 
-def _closing_pr(number: int, body: str = "Closes #7", login: str = "pipeline-bot", assoc: str = "NONE", head: str = "acme/app", state: str = "OPEN") -> dict:
-	return {"number": number, "state": state, "body": body, "headRepository": {"nameWithOwner": head}, "author": {"login": login}, "authorAssociation": assoc}
+def _closing_pr(number: int, body: str = "Closes #7", login: str = "pipeline-bot", assoc: str = "NONE", head: str = "acme/app", state: str = "OPEN", base: str | None = "acme/app") -> dict:
+	pr = {"number": number, "state": state, "body": body, "headRepository": {"nameWithOwner": head}, "author": {"login": login}, "authorAssociation": assoc}
+	if base is not None:
+		pr["repository"] = {"nameWithOwner": base}
+	return pr
 
 
 def test_impl_pr_subcommand_selects_only_trusted_implementation_pr(tmp_path: Path) -> None:
@@ -6139,6 +6142,10 @@ def test_impl_pr_subcommand_selects_only_trusted_implementation_pr(tmp_path: Pat
 	assert run_impl(_impl_pr_payload([], [_closing_pr(52, body="resolves https://github.com/acme/app/issues/7.")])) == {"pr": 52, "reason": "closes"}
 	# Fork head, mention only, untrusted author, a closed PR, another issue number: rejected.
 	assert run_impl(_impl_pr_payload([], [_closing_pr(53, head="evil/app")])) == {"pr": None, "reason": "none"}
+	# A PR in another repository (head branch here) or with no base repository: rejected.
+	assert run_impl(_impl_pr_payload([], [_closing_pr(58, base="other/app")])) == {"pr": None, "reason": "none"}
+	assert run_impl(_impl_pr_payload([], [_closing_pr(59, base=None)])) == {"pr": None, "reason": "none"}
+	assert run_impl(_impl_pr_payload([], [_closing_pr(60, base="ACME/App")])) == {"pr": 60, "reason": "closes"}
 	assert run_impl(_impl_pr_payload([], [_closing_pr(54, body="Related to #7")])) == {"pr": None, "reason": "none"}
 	assert run_impl(_impl_pr_payload([], [_closing_pr(55, login="mallory", assoc="CONTRIBUTOR")])) == {"pr": None, "reason": "none"}
 	assert run_impl(_impl_pr_payload([], [_closing_pr(56, state="MERGED")])) == {"pr": None, "reason": "none"}
