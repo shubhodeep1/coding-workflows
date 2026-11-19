@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9797,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9797\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9800\",\"pr_number\":9800,\"branch\":\"ai/issue-9797\",\"run_id\":\"44532830049\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/44532830049\",\"changed_files\":[\".github/workflows/test-and-mark-stable.yml\",\"changelog.d/9797-clarify-negative-test-output-guard.md\",\"tests/test_test_and_mark_stable_clarify_negative_outputs.py\"]}",
+  "fingerprint": "afc613b60663251e3090462ab56af5280b1d78bb40ea7aa3902796d61ddb7845",
+  "lineage": {
+    "issue_number": 9797,
+    "parent_ids": [],
+    "pr_number": 9800,
+    "run_id": "44532830049",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44532830049",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9800"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261119133828_266fdb1b81",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9797,
+    "level": "run",
+    "pr_number": 9800,
+    "run_id": "44532830049"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9797: https://github.com/shubhodeep1/coding-workflows/pull/9800",
+  "timestamps": {
+    "created_at": "2026-11-19T13:38:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
