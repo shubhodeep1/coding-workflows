@@ -10,6 +10,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1539,7 +1540,7 @@ def test_comment_post_stays_single_attempt_on_a_transient_error(tmp_path: Path) 
 
 
 def test_only_the_listed_reads_are_wrapped_in_gh_retry() -> None:
-	"""CONSIST-001: the helper source, the pass-through fallback and the five wrapped reads."""
+	"""CONSIST-001: the helper source, the pass-through fallback and the six wrapped reads."""
 	text = JUDGE.read_text(encoding="utf-8")
 	assert 'if [ -f "${SUPPORT_DIR}/scripts/gh_helpers.sh" ]; then' in text
 	assert 'source "${SUPPORT_DIR}/scripts/gh_helpers.sh" >/dev/null 2>&1 || true' in text
@@ -1550,8 +1551,12 @@ def test_only_the_listed_reads_are_wrapped_in_gh_retry() -> None:
 		'gh_retry gh api "repos/${REPOSITORY}/issues/${ITEM}" > "${RUNTIME_DIR}/item.json"',
 		'gh_retry gh api "repos/${REPOSITORY}/issues/${ITEM}" > "${RUNTIME_DIR}/item_recheck.json"',
 		'gh_retry gh api "repos/${REPOSITORY}/actions/runs/${candidate_id}"',
+		'gh_retry gh api "repos/${REPOSITORY}/issues/${BASH_REMATCH[1]}" --jq \'(.title // "") | .[0:400]\'',
 	):
 		assert text.count(read) == 1, read
+	# The list above is exhaustive: a seventh wrapped read must be added to it
+	# and to the CONSIST-001 header comments.
+	assert sum(1 for line in text.splitlines() if "gh_retry gh api" in line) == 6
 	for line in text.splitlines():
 		if "gh_retry" in line:
 			for write in ("-X POST", "-X PATCH", "-X DELETE", "/dispatches", "-f body="):
@@ -4023,7 +4028,7 @@ def _triage_support(tmp_path: Path) -> tuple[Path, Path]:
 	(support / "scripts" / "check_triage_resolution.py").write_text(
 		"import json, os, sys\n"
 		"open(os.environ['FAKE_TRIAGE_ARGS'], 'w').write(json.dumps(sys.argv[1:]))\n"
-		"print(json.dumps({'status': os.environ.get('FAKE_TRIAGE_STATUS', 'unverified')}))\n"
+		"print(json.dumps({'status': os.environ.get('FAKE_TRIAGE_STATUS', 'unverified'), 'issue': int(sys.argv[sys.argv.index('--issue-number') + 1])}))\n"
 		"sys.exit(int(os.environ.get('FAKE_TRIAGE_RC', '0')))\n",
 		encoding="utf-8",
 	)
@@ -5955,3 +5960,284 @@ def test_linked_pr_diff_failure_keeps_the_linked_pr_in_context_and_validation(tm
 	assert (tmp_path / "rt" / "pr_diff.txt").read_text(encoding="utf-8") == ""
 	assert result.stdout.count("op=linked_pr_check outcome=reasked pr=31") == 1
 	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout
+
+
+# --- Chain depth cap (re-issue / follow-up / fix-up chains) ---
+
+_CHAIN_HEAL_TITLE = "Workflow heal: Internal: AI Review & Autofix [pr:9180] failed 1x"
+_CHAIN_ONE = f"Re-issue of #9190: {_CHAIN_HEAL_TITLE}"
+_CHAIN_TWO = f"Unblock descope for #9261: {_CHAIN_ONE}"
+_CHAIN_NOW = ledger._parse_time("2026-11-18T00:00:00Z")
+
+
+def test_chain_depth_counts_the_leading_chain_prefixes() -> None:
+	for module in (ledger, actions):
+		assert module.chain_depth("T") == 0 and module.chain_depth(None) == 0 and module.chain_depth("") == 0
+		assert module.chain_depth(_CHAIN_ONE) == 1 and module.chain_depth(_CHAIN_TWO) == 2
+		assert module.chain_depth("Follow-up to #3: Unblock operator step for #2: Unblock fix-up for #1: T") == 3
+		# Only a prefix counts, and only in the exact composed form.
+		assert module.chain_depth("Fix the Re-issue of #5: handling") == 0
+		assert module.chain_depth("Re-issue of #0: T") == 0 and module.chain_depth("re-issue of #5: T") == 0
+	assert actions._CHAIN_TITLE_PREFIX_RE.pattern == ledger.CHAIN_TITLE_PREFIX_PATTERN
+	assert ledger.MAX_CHAIN_DEPTH == 2
+	assert ledger.CHAIN_VERDICTS == ("reissue", "accept_with_followup", "descope", "operator_step")
+
+
+def test_chain_cap_takes_the_splitting_verdicts_off_the_menu() -> None:
+	# #9190 -> #9261 -> #9398: at depth 2 the judge may only continue on the item.
+	free = ledger.decide(7, "blocked", FP, [], None, _CHAIN_NOW, chain_title=_CHAIN_ONE)
+	assert free["chain_depth"] == 1 and free["chain_capped"] is False
+	assert set(ledger.CHAIN_VERDICTS) <= set(free["allowed"])
+	capped = ledger.decide(7, "blocked", FP, [], None, _CHAIN_NOW, chain_title=_CHAIN_TWO)
+	assert capped["chain_depth"] == 2 and capped["chain_capped"] is True and capped["terminal"] is False
+	assert not set(ledger.CHAIN_VERDICTS) & set(capped["allowed"])
+	assert set(capped["allowed"]) == set(free["allowed"]) - set(ledger.CHAIN_VERDICTS) and "retry_budget" in capped["allowed"]
+	# No title (the default) is depth 0: today's menu.
+	assert ledger.decide(7, "blocked", FP, [], None, _CHAIN_NOW)["allowed"] == ledger.decide(7, "blocked", FP, [], None, _CHAIN_NOW, chain_title="T")["allowed"]
+	# A splitting verdict the model returns anyway is refused by validate.
+	with pytest.raises(ledger.UsageError):
+		ledger.validate({"verdict": "reissue", "reason": "r", "instructions": "again"}, capped, "acme/app")
+
+
+def test_chain_capped_item_with_nothing_left_is_terminal_and_parks() -> None:
+	# A pull request has no auto_answer / override_guard: with the wait switch
+	# off only retry_budget is left at the cap, and once that is used the menu
+	# is empty, so the item is terminal and the existing park applies.
+	used = [{"item": 7, "round": 1, "fingerprint": FP, "verdict": "retry_budget", "stop": "blocked", "created_at": "2026-11-17T23:00:00Z"}]
+	capped = ledger.decide(7, "blocked", FP, used, None, _CHAIN_NOW, kind="pr", wait_enabled=False, chain_title=_CHAIN_TWO)
+	assert capped["terminal"] is True and capped["terminal_reason"] == "menu_exhausted" and capped["allowed"] == ["close"]
+	ops = actions.plan(_verdict("close", terminal_reason="menu_exhausted"), _ctx("pr", needs_human_digest=True))
+	assert ops == [{"op": "needs_human", "issue": 7, "kind": "pr", "stop": "blocked", "reason": "menu_exhausted"}]
+	# Below the cap the same history still offers the splitting verdicts.
+	assert ledger.decide(7, "blocked", FP, used, None, _CHAIN_NOW, kind="pr", wait_enabled=False, chain_title=_CHAIN_ONE)["terminal"] is False
+
+
+def test_chain_depth_survives_the_pr_hop_through_the_issue_title() -> None:
+	# PR #9283 ("AI implementation for issue #9261") implements a re-issue:
+	# the PR title has no prefix, the issue title it implements has one.
+	pr = _ctx("pr", title="AI implementation for issue #9261", chain_title=_CHAIN_ONE)
+	assert pr["chain_title"] == _CHAIN_ONE
+	for verdict, prefix in (
+		(_verdict("descope", instructions="drop it"), "Unblock descope for #7: "),
+		(_verdict("reissue", instructions="again"), "Re-issue of #7: "),
+		(_verdict("accept_with_followup", instructions="x"), "Follow-up to #7: "),
+	):
+		created = [op for op in actions.plan(verdict, pr) if op["op"] == "create_issue"]
+		assert len(created) == 1 and created[0]["title"] == prefix + _CHAIN_ONE and ledger.chain_depth(created[0]["title"]) == 2
+	# An ordinary issue title leaves the PR title in place (today's titles).
+	plain = _ctx("pr", title="AI implementation for issue #31", chain_title="Add a cache")
+	assert actions.plan(_verdict("reissue", instructions="x"), plain)[0]["title"] == "Re-issue of #7: AI implementation for issue #31"
+	# chain_title is read for a trusted PR only, and never for an issue.
+	assert _ctx("pr", chain_title=_CHAIN_ONE, pr_trusted=False)["chain_title"] is None
+	assert _ctx(chain_title=_CHAIN_ONE)["chain_title"] is None
+	assert _ctx("pr", chain_title="  ")["chain_title"] is None and _ctx("pr", chain_title=5)["chain_title"] is None
+
+
+def test_judge_sends_the_chain_title_to_the_ledger_and_the_planner() -> None:
+	script = (ROOT / "scripts" / "unblock_judge.sh").read_text(encoding="utf-8")
+	assert '[ "${pr_trusted}" = "true" ] && [[ "${head_ref}" =~ ^ai/issue-([1-9][0-9]*)$ ]]' in script
+	assert "chain_title: (if $chain_title == \"\" then null else $chain_title end)" in script
+	assert 'decide_args+=("--chain-title=$(' in script and '(.chain_title // .title // "")' in script
+	# The source-issue read is retried and truncated by codepoints, not bytes.
+	assert "chain_title=\"$(gh_retry gh api " in script and "--jq '(.title // \"\") | .[0:400]'" in script
+
+
+# #9659: a standalone check-triage issue planning found nothing to implement
+# for is noted once and waits for its check, instead of looping planning.
+TRIAGE_SUPERSEDED_MARKER = "<!-- ai:unblock-triage-superseded:v1 item=7 -->"
+TRIAGE_RETRY_VERDICT = {"verdict": "retry_budget", "reason": "r", "instructions": "i"}
+TRIAGE_WAIT_MARKER = "<!-- ai:unblock-wait:v1 item=7 reason=triage_superseded -->"
+TRIAGE_NOTE_ID = 9659
+
+
+def _triage_note(created_at: str = "2026-10-04T10:00:00Z") -> dict:
+	return dict(_comment("Planning found the fix already on the planning ref.\n\n" + TRIAGE_SUPERSEDED_MARKER + "\n", BOT, created_at), id=TRIAGE_NOTE_ID)
+
+
+def _assert_note_refreshed(state: dict) -> None:
+	# The held run re-writes the note so the scan's recent_verdict throttle
+	# (keyed on updatedAt) restarts instead of re-dispatching every tick.
+	refreshes = [fields for endpoint, fields in state["patched"] if endpoint == f"repos/o/r/issues/comments/{TRIAGE_NOTE_ID}"]
+	assert len(refreshes) == 1, state["patched"]
+	lines = refreshes[0]["body"].rstrip().splitlines()
+	assert lines[-1] == TRIAGE_WAIT_MARKER and lines[-2] == TRIAGE_SUPERSEDED_MARKER, lines
+
+
+def _scan_module():
+	scan_spec = importlib.util.spec_from_file_location("unblock_scan_9659_select", ROOT / "scripts" / "unblock_scan.py")
+	scan = importlib.util.module_from_spec(scan_spec)
+	scan_spec.loader.exec_module(scan)
+	return scan
+
+
+def _judge_triage_superseded(tmp_path: Path, item: dict = TRIAGE_ISSUE, comments: list | None = None, **env):
+	support, target = _triage_support(tmp_path)
+	if comments is None:
+		comments = [_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z")]
+	return _judge(tmp_path, item, comments=comments, verdict=TRIAGE_RETRY_VERDICT,
+		SUPPORT_DIR=str(support), TARGET_DIR=str(target), FAKE_TRIAGE_ARGS=str(tmp_path / "triage_args.json"), **env)
+
+
+@pytest.mark.parametrize("status", ["resolved", "already_resolved"])
+def test_resolved_nothing_to_implement_triage_issue_is_closed_by_the_gate_without_a_note(tmp_path: Path, status: str) -> None:
+	result, state = _judge_triage_superseded(tmp_path, FAKE_TRIAGE_STATUS=status)
+	assert f"op=triage_resolution outcome=closed status={status}" in result.stdout, result.stdout + result.stderr
+	assert "op=triage_superseded" not in result.stdout
+	assert state["comments"] == []
+
+
+def test_unverified_nothing_to_implement_triage_issue_is_noted_once_without_a_resume(tmp_path: Path) -> None:
+	result, state = _judge_triage_superseded(tmp_path, FAKE_TRIAGE_STATUS="unverified")
+	assert "op=triage_superseded outcome=noted reason=posted" in result.stdout, result.stdout + result.stderr
+	assert "outcome=acted" not in result.stdout
+	assert len(state["comments"]) == 1
+	body = state["comments"][0]["body"]
+	lines = body.rstrip().splitlines()
+	assert lines[-2:] == [TRIAGE_SUPERSEDED_MARKER, TRIAGE_WAIT_MARKER], lines
+	assert "already on the planning ref" in body and "/reclarify" in body
+	assert not any(comment["body"].startswith(("/answer", "/approved")) for comment in state["comments"])
+	assert not _closed_completed(state)
+	# The poller throttles the noted item instead of re-dispatching it every tick.
+	selection = _scan_module().select(
+		[{"number": 7, "labels": [{"name": "ai:blocked"}, {"name": "ai:check-triage"}], "updated_at": "2026-10-01T00:00:00Z"}],
+		{"7": {"labeled": [{"label": "ai:blocked", "created_at": "2026-10-01T00:00:00Z"}],
+			"comments": [{"login": BOT, "body": body, "created_at": "2026-10-04T10:00:00Z"}]}},
+		[], [], BOT, dt.datetime(2026, 10, 4, 12, tzinfo=dt.timezone.utc),
+		dt.timedelta(minutes=30), dt.timedelta(hours=6), dt.timedelta(minutes=60), 1)
+	assert selection["dispatch"] == [] and selection["skipped"].get("recent_verdict") == 1, selection
+
+
+def test_triage_superseded_note_is_not_posted_again_on_a_rerun(tmp_path: Path) -> None:
+	comments = [
+		_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z"),
+		_triage_note(),
+	]
+	result, state = _judge_triage_superseded(tmp_path, comments=comments, FAKE_TRIAGE_STATUS="unverified")
+	assert "op=triage_superseded outcome=noted reason=already_noted" in result.stdout, result.stdout + result.stderr
+	assert state["comments"] == []
+	assert "outcome=acted" not in result.stdout
+	_assert_note_refreshed(state)
+
+
+@pytest.mark.parametrize("status", ["not_triage", "disabled"])
+def test_terminal_gate_verdict_judges_as_usual_without_a_note(tmp_path: Path, status: str) -> None:
+	# The gate never closes a not_triage / disabled issue, so a note would hold it forever.
+	result, state = _judge_triage_superseded(tmp_path, FAKE_TRIAGE_STATUS=status)
+	assert "op=triage_superseded outcome=skip reason=gate_terminal" in result.stdout, result.stdout + result.stderr
+	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout
+	assert not any(TRIAGE_SUPERSEDED_MARKER in comment["body"] for comment in state["comments"])
+
+
+def test_expired_superseded_note_parks_the_item_instead_of_resuming(tmp_path: Path) -> None:
+	# #9659: the issue is never resumed with /answer or /approved; once the note
+	# outlives UNBLOCK_JUDGE_WAIT_MAX_DAYS a person decides via the digest.
+	comments = [
+		_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z"),
+		_comment("Planning found the fix already on the planning ref.\n\n" + TRIAGE_SUPERSEDED_MARKER + "\n", BOT, "2026-10-04T10:00:00Z"),
+	]
+	result, state = _judge_triage_superseded(tmp_path, comments=comments, FAKE_TRIAGE_STATUS="unverified",
+		MOCK_UNBLOCK_JUDGE_NOW="2026-10-19T10:00:00Z")
+	assert "op=triage_superseded outcome=parked reason=note_expired" in result.stdout, result.stdout + result.stderr
+	assert "outcome=acted" not in result.stdout
+	assert not any(comment["body"].startswith(("/answer", "/approved")) for comment in state["comments"])
+	assert not any(TRIAGE_SUPERSEDED_MARKER in comment["body"] for comment in state["comments"])
+	assert [label for _, label in state["labels_added"]] == ["ai:needs-human"]
+	assert any(fields.get("body", "").startswith("<!-- ai:needs-human:v1 -->") for fields in state["created"])
+	# The park is visible to scripts/unblock_scan.py: one trusted `close` round
+	# marker, so its parked skip stops the hourly redispatch.
+	assert len(state["comments"]) == 1, state["comments"]
+	last = state["comments"][0]["body"].rstrip().splitlines()[-1]
+	assert re.fullmatch(r"<!-- ai:unblock:v1 item=7 stop=blocked fingerprint=[0-9a-f]{12} verdict=close round=1 -->", last), last
+	scan_spec = importlib.util.spec_from_file_location("unblock_scan_9659", ROOT / "scripts" / "unblock_scan.py")
+	scan = importlib.util.module_from_spec(scan_spec)
+	scan_spec.loader.exec_module(scan)
+	assert scan._latest_verdict([{"login": BOT, "body": state["comments"][0]["body"], "created_at": "2026-10-19T10:00:00Z"}], BOT) == "close"
+
+
+def test_expired_superseded_note_does_not_record_a_second_close_marker(tmp_path: Path) -> None:
+	close = ledger.marker(7, "blocked", FP, "close", 1)
+	comments = [
+		_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z"),
+		_comment("Planning found the fix already on the planning ref.\n\n" + TRIAGE_SUPERSEDED_MARKER + "\n", BOT, "2026-10-04T10:00:00Z"),
+		_comment("## Unblock judge: `close` (round 1)\n\nReason: parked.\n\n" + close, BOT, "2026-10-18T10:00:00Z"),
+	]
+	result, state = _judge_triage_superseded(tmp_path, comments=comments, FAKE_TRIAGE_STATUS="unverified",
+		MOCK_UNBLOCK_JUDGE_NOW="2026-10-19T10:00:00Z")
+	assert "op=triage_superseded outcome=parked reason=note_expired" in result.stdout, result.stdout + result.stderr
+	assert state["comments"] == []
+
+
+def test_expired_superseded_note_holds_when_the_park_is_unavailable(tmp_path: Path) -> None:
+	comments = [
+		_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z"),
+		_triage_note(),
+	]
+	result, state = _judge_triage_superseded(tmp_path, comments=comments, FAKE_TRIAGE_STATUS="unverified",
+		MOCK_UNBLOCK_JUDGE_NOW="2026-10-19T10:00:00Z", NEEDS_HUMAN_DIGEST_ENABLED="false")
+	assert "op=triage_superseded outcome=held reason=park_failed" in result.stdout, result.stdout + result.stderr
+	assert "outcome=acted" not in result.stdout
+	assert state["comments"] == []
+	_assert_note_refreshed(state)
+
+
+def test_an_untrusted_superseded_marker_does_not_suppress_the_note(tmp_path: Path) -> None:
+	comments = [
+		_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z"),
+		_comment("fake\n\n" + TRIAGE_SUPERSEDED_MARKER, "someone-else", "2026-10-04T10:00:00Z"),
+	]
+	result, state = _judge_triage_superseded(tmp_path, comments=comments, FAKE_TRIAGE_STATUS="unverified")
+	assert "op=triage_superseded outcome=noted reason=posted" in result.stdout, result.stdout + result.stderr
+	assert len(state["comments"]) == 1
+
+
+@pytest.mark.parametrize("case", ["disabled", "other_reason", "untrusted_block", "newer_plan", "non_triage"])
+def test_triage_superseded_note_keeps_todays_judging_otherwise(tmp_path: Path, case: str) -> None:
+	item, env = TRIAGE_ISSUE, {"FAKE_TRIAGE_STATUS": "unverified"}
+	comments = [_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z")]
+	if case == "disabled":
+		env["UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED"] = " False "
+	elif case == "other_reason":
+		comments = [_comment(NOTHING_TO_IMPLEMENT_BLOCK.replace("work is already on the planning ref; nothing to implement", "missing API key"), BOT, "2026-10-04T09:00:00Z")]
+	elif case == "untrusted_block":
+		comments = [_comment(NOTHING_TO_IMPLEMENT_BLOCK, "someone-else", "2026-10-04T09:00:00Z")]
+	elif case == "newer_plan":
+		comments.append(_comment("Implementation Plan\n\n1. Do the thing.", BOT, "2026-10-04T10:00:00Z"))
+	else:
+		item = ISSUE
+	result, state = _judge_triage_superseded(tmp_path, item=item, comments=comments, **env)
+	assert "op=triage_superseded" not in result.stdout, result.stdout
+	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout, result.stdout + result.stderr
+	assert not any(TRIAGE_SUPERSEDED_MARKER in comment["body"] for comment in state["comments"])
+
+
+def test_triage_superseded_note_skips_when_the_gate_verdict_is_unavailable(tmp_path: Path) -> None:
+	result, state = _judge_triage_superseded(tmp_path, FAKE_TRIAGE_STATUS="", FAKE_TRIAGE_RC="1")
+	assert "op=triage_superseded outcome=skip reason=gate_unavailable" in result.stdout, result.stdout + result.stderr
+	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout
+	assert not any(TRIAGE_SUPERSEDED_MARKER in comment["body"] for comment in state["comments"])
+
+
+def test_triage_superseded_note_skips_orchestrator_items(tmp_path: Path) -> None:
+	item = dict(TRIAGE_ISSUE, body="- Tracking issue: #40", labels=TRIAGE_ISSUE["labels"] + [{"name": "ai:orchestrator-managed"}])
+	result, state = _judge_triage_superseded(tmp_path, item=item, FAKE_TRIAGE_STATUS="unverified",
+		FAKE_GH_PROJECT_COMMENTS=_project_comments_for_item(7))
+	assert "op=triage_superseded" not in result.stdout, result.stdout + result.stderr
+	assert not any(TRIAGE_SUPERSEDED_MARKER in comment["body"] for comment in state["comments"])
+
+
+def test_triage_superseded_note_skips_managed_items_without_a_tracking_line(tmp_path: Path) -> None:
+	# A managed check-triage issue whose `Tracking issue:` line is missing parses
+	# no tracking reference; it is still not treated as standalone.
+	item = dict(TRIAGE_ISSUE, labels=TRIAGE_ISSUE["labels"] + [{"name": "ai:orchestrator-managed"}])
+	result, state = _judge_triage_superseded(tmp_path, item=item, FAKE_TRIAGE_STATUS="unverified")
+	assert "op=triage_superseded" not in result.stdout, result.stdout + result.stderr
+	assert not any(TRIAGE_SUPERSEDED_MARKER in comment["body"] for comment in state["comments"])
+
+
+def test_unblock_workflow_forwards_triage_nothing_to_implement_gate_switch() -> None:
+	# #9659: the kill switch reaches scripts/unblock_judge.sh from a repository variable.
+	workflow = (ROOT / ".github/workflows/unblock_judge.yml").read_text(encoding="utf-8")
+	step = workflow[workflow.index("      - name: Judge the blocked item\n"):]
+	assert "\n          UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED: ${{ vars.UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED || 'true' }}\n" in step
+	script = (ROOT / "scripts" / "unblock_judge.sh").read_text(encoding="utf-8")
+	assert '"${UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED:-true}"' in script

@@ -213,6 +213,23 @@ PROTECTED_AUTOMATION_OVERRIDE_RE = re.compile(r"^(\.github|\.claude|workflow-tem
 NO_WAIVER_STOPS = ("security-pass-failed", "validation-failed", "validate-failed", "harness-broken")
 
 MAX_ROUNDS_PER_ITEM = 2
+# Chain depth cap. `reissue`, `accept_with_followup`, `descope` and
+# `operator_step` each open a new issue that restarts clarify, plan and
+# implement, and that issue (or its PR) can block and be split again:
+# #9190 -> #9261 -> PR #9283 -> #9398 / #9670 in coding-workflows, 24 such
+# issues in one week. An item's depth is the number of chain prefixes its
+# title starts with; for a trusted PR, unblock_judge.sh passes the title of
+# the issue the PR implements. At MAX_CHAIN_DEPTH those four verdicts leave
+# the menu, so the judge can only continue on the item itself (retry_budget,
+# auto_answer, override_guard, wait); once nothing is left the item is
+# terminal (`menu_exhausted`) and is parked for a person like any other
+# exhausted item. Titles are editable, so this is a brake on the pipeline's
+# own chains, not a trust boundary: removing a prefix restores the full menu,
+# adding one only shortens it.
+MAX_CHAIN_DEPTH = 2
+CHAIN_VERDICTS = ("reissue", "accept_with_followup", "descope", "operator_step")
+CHAIN_TITLE_PREFIX_PATTERN = r"(?:Re-issue of|Follow-up to|Unblock (?:descope|operator step|fix-up) for) #[1-9][0-9]*: "
+_CHAIN_TITLE_PREFIX_RE = re.compile(CHAIN_TITLE_PREFIX_PATTERN)
 MAX_ROUNDS_PER_PROJECT = 6
 BLOCKED_AFTER_LAST_ROUND_HOURS = 24
 # Refused judge answers in a row on one block before the item is terminal
@@ -873,6 +890,18 @@ def invalid_verdict_streak(comments: object, trusted_login: str, item: int, stop
 	return streak
 
 
+def chain_depth(title: object) -> int:
+	"""How many chain prefixes the title starts with (0 for an ordinary title)."""
+	text = title if isinstance(title, str) else ""
+	depth, position = 0, 0
+	while True:
+		prefix = _CHAIN_TITLE_PREFIX_RE.match(text, position)
+		if prefix is None:
+			return depth
+		depth += 1
+		position = prefix.end()
+
+
 def decide(
 	item: int,
 	stop: str,
@@ -889,8 +918,14 @@ def decide(
 	wait_enabled: bool = True,
 	invalid_verdicts_in_row: int = 0,
 	variable_step_placeholders: list[str] | None = None,
+	chain_title: str = "",
 ) -> dict:
-	"""What the judge may still do for this item."""
+	"""What the judge may still do for this item.
+
+	``chain_title`` is the title the item's chain depth is read from (the
+	item's own title, or for a trusted PR the title of the issue it
+	implements); see "Chain depth cap" above. Empty means depth 0.
+	"""
 	if kind not in ITEM_KINDS:
 		raise UsageError(f"unknown item kind {kind!r}; expected one of {list(ITEM_KINDS)}")
 	own = [entry for entry in item_entries if entry["item"] == item]
@@ -930,6 +965,10 @@ def decide(
 		allowed = [verdict for verdict in allowed if verdict not in ISSUE_ONLY_VERDICTS]
 	if kind == "project":
 		allowed = [verdict for verdict in allowed if verdict not in NOT_FOR_PROJECT_VERDICTS]
+	item_chain_depth = chain_depth(chain_title)
+	chain_capped = item_chain_depth >= MAX_CHAIN_DEPTH
+	if chain_capped:
+		allowed = [verdict for verdict in allowed if verdict not in CHAIN_VERDICTS]
 	# A hold is not a round, so it is bounded by its own count instead.
 	holds = [hold for hold in (holds or []) if isinstance(hold, dict)]
 	holds_met = sorted({f"{hold.get('kind')}:{hold.get('ref')}" for hold in holds if hold.get("state") == "done"})
@@ -979,6 +1018,8 @@ def decide(
 		"allowed": [TERMINAL_VERDICT] if terminal_reason else options,
 		"terminal": bool(terminal_reason),
 		"terminal_reason": terminal_reason,
+		"chain_depth": item_chain_depth,
+		"chain_capped": chain_capped,
 		"holds_used": len(holds),
 		"holds_met": holds_met,
 		"invalid_verdict_streak": invalid_verdicts_in_row,
@@ -1295,6 +1336,7 @@ def build_parser() -> argparse.ArgumentParser:
 	decide_cmd.add_argument("--security-issue", action="store_true")
 	decide_cmd.add_argument("--wait-disabled", action="store_true")
 	decide_cmd.add_argument("--pending-invalid-verdicts", type=int, default=0)
+	decide_cmd.add_argument("--chain-title", default="", help="title the chain depth is read from (see MAX_CHAIN_DEPTH)")
 	validate_cmd = sub.add_parser("validate")
 	validate_cmd.add_argument("--verdict-file", required=True)
 	validate_cmd.add_argument("--decision-file", required=True)
@@ -1399,6 +1441,7 @@ def run(argv: list[str] | None = None) -> dict:
 			invalid_verdicts_in_row=invalid_verdict_streak(item_comments, args.trusted_login, item, stop, fp)
 			+ max(0, args.pending_invalid_verdicts),
 			variable_step_placeholders=variable_step_placeholders_from_comments(item_comments, args.trusted_login, item),
+			chain_title=args.chain_title,
 		)
 	if args.command == "validate":
 		return validate(
