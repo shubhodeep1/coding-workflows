@@ -463,7 +463,12 @@ def test_standalone_recovery_sweep_runs_without_tracking_issues() -> None:
 	block = (
 		STANDALONE_SWEEP_POLLER_GUARD
 		+ '\n  prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"'
-		+ "\n  run_standalone_stall_recovery\n  exit 0\nfi"
+		+ "\n  run_standalone_stall_recovery"
+		# Issue #9481: the triage-only close sweep gates stuck ai:check-triage issues.
+		+ "\n  # Issue #9481: gate stuck ai:check-triage issues (any phase) on idle ticks"
+		+ "\n  # too; this step forwards the full poller's env, so the kill switches apply."
+		+ '\n  close_merged_issues_sweep triage_only || echo "CLOSE_MERGED_SWEEP outcome=skip reason=error mode=triage_only rc=$?"'
+		+ "\n  exit 0\nfi"
 	)
 	assert poller.count(block) == 1
 	assert poller.index('if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then') < poller.index(block)
