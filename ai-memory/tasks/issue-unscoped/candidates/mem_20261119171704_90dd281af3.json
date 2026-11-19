@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:20721-20728 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `[skip ai]` title check uses a bash glob substring match that may diverge from the review gate's matching in `scripts/review_autofix_step_evaluate_gate.sh`.\n  WHY: Differences in normalization or spacing could make the gate and the poll orchestrator skip inconsistently (source severity NIT).\n- scripts/orchestrate_poll_process.sh:10385, 10523 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Complex `jq` commands in shell variables appear to cause `python_heredoc` parsing errors (`unexpected indent`) in the slop scan.\n  WHY: Incorrectly indented heredocs could produce malformed `jq` or python scripts at runtime (source severity MAJOR).\n- scripts/orchestrate_poll_process.sh:21345, 22920, 23491, 27692, 36030 | severity=high | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push gate on autofix commit 7fa4733e9245dffc70fdd206d93a912dd6740f28 recorded a shellcheck failure that was never reproduced or diagnosed, and the repair turn was skipped.\n  WHY: The gate verdict (fail) conflicts with PR CI (0 failed), and static review found no error-severity construct; the reviewer recommends re-running `shellcheck --severity=error`. anthropic_claude-sonnet-5_5 said it was not reproducible and did not report it (source severity MAJOR).\n- tests/test_orchestrate_poll_process.py:21684-21686 | severity=low | confidence=5\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The comment in `test_stall_judge_resolve_merge_conflict_skips_held_pr` says `recover_stalled_issue` re-checks the PR payload before the judge, but the fixture's cache entry exists, so the REST fallback never runs and the skip comes from the `resolve_merge_conflict` arm.\n  WHY: The test asserts the correct outcome, but the comment misattributes the cause and could mislead readers (NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The pre-push gate on autofix commit recorded a shellcheck failure that was not reproduced or addressed.\n  expected_change_site: scripts/orchestrate_poll_process.sh\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR failed the linting tier due to shellcheck issues in the modified file, and no repair was verified to fix them.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:20721-20728 | severity=NIT | confidence=2\n  PROBLEM: The `[skip ai]` title check uses a bash glob substring match that may diverge from the review gate's matching.\n  WHY: Differences in normalization or spacing could make the gate and the poll orchestrator skip inconsistently.\n- scripts/orchestrate_poll_process.sh:10385, 10523 | severity=MAJOR | confidence=3\n  PROBLEM: Complex `jq` commands in shell variables appear to cause `python_heredoc` parsing errors (`unexpected indent`).\n  WHY: Incorrectly indented heredocs could produce malformed `jq` or python scripts at runtime.\n- TASK_GAP: Requirement: The pre-push gate on autofix commit recorded a shellcheck failure that was not reproduced or addressed. | Expected change site: scripts/orchestrate_poll_process.sh | Evidence of absence: The PR failed the linting tier due to shellcheck issues in the modified file, and no repair was verified to fix them. | severity=MAJOR | confidence=3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_orchestrate_poll_process.py:21684-21686 | severity=NIT | confidence=5\n  PROBLEM: The comment says `recover_stalled_issue` re-checks the implementation-PR payload before the judge, but the linked-PR cache entry exists so the REST fallback does not run; the hold is detected later by the `resolve_merge_conflict` action.\n  WHY: The test does not verify the behavior its comment claims.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:21345, 22920, 23491, 27692, 36030 | severity=MAJOR | confidence=2\n  PROBLEM: The pre-push gate on autofix commit 7fa4733e9245dffc70fdd206d93a912dd6740f28 recorded a shellcheck failure that was never reproduced or diagnosed, and the repair turn was skipped.\n  WHY: The gate verdict conflicts with PR CI (0 failed); static review found no error-severity construct; the reviewer recommends re-running `shellcheck --severity=error`.\n- tests/test_orchestrate_poll_process.py:21684-21686 | severity=NIT | confidence=4\n  PROBLEM: The comment says `recover_stalled_issue` re-checks the PR payload before the judge, but the cache entry exists and the REST fallback at 27478 never runs; the skip comes from the `resolve_merge_conflict` arm's REST re-check at 21345-21357.\n  WHY: No runtime failure, but the comment's causal story is wrong and would mislead future readers.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9ae22b419790a0aecc5c4c79ab29a0e7bb67b0ee8e99c711f2f09e8f445a92d3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9750,
+    "run_id": "44562060542",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44562060542",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261119171704_90dd281af3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9750,
+    "run_id": "44562060542"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-19T17:17:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
