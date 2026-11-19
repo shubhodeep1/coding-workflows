@@ -120,7 +120,7 @@ fi
 # Consumer-updater PRs (update_workflows.yml pull-request delivery, #7004):
 # only the updater writes their branch and only its verify job may merge them.
 # An editor commit would land an unverified head under that job's auto-merge.
-if [[ "${TARGET_BRANCH:-}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then
+if [[ "${TARGET_BRANCH:-}" =~ ^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$ ]]; then
   echo "AUTOFIX_COMMIT_SKIPPED pr=${PR_NUMBER:-unknown} reason=updater_pr_verify_job_owns_branch"
   # Discard the withheld edits and tell the editor-changes-lost detector they
   # were withheld on purpose (otherwise every run is reported as lost edits).
