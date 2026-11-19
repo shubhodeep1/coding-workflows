@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "Many merged PRs include a `changelog.d/<issue>-*.md` file alongside implementation changes. When preparing a change, check the repository's changelog expectations and include an entry where required.",
+  "fingerprint": "fb38bae71d42b3a637ddc4a10950fc8758d20b2daae8fc3fb61c00b22a65cb9e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44499543690",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44499543690",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9481",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9533",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9659",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9736",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9765",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9506",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9567",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9666",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9748",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9770"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261119095436_7550cfe710",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Merged changes commonly include a per-issue entry under `changelog.d/`.",
+  "timestamps": {
+    "created_at": "2026-11-19T09:54:36Z",
+    "promoted_at": "2026-11-19T09:55:14Z",
+    "superseded_at": null
+  }
+}
