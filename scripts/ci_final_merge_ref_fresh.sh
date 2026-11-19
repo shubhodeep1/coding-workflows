@@ -26,6 +26,14 @@
 #     computed (run unreadable, pin deeper than that window, fetch failed)
 #     falls back to the live tip, per job, as before the pin existed; the log
 #     line then carries `pin=none pin_reason=<token>`.
+#     Known gap: the pin uses committer date as a stand-in for push time.
+#     If a commit is pushed to the base after dispatch but has an older
+#     committer date (a direct push of a commit made locally earlier),
+#     jobs that start after that push pin it, and jobs that started before
+#     pin the older tip. GitHub's merge, squash and rebase buttons, and the
+#     pipeline's own pushes, set the committer date at push time, so the
+#     gap needs such a direct push. Closing it would take a push-time signal
+#     that costs an extra API read per job (§15); the gap is left as it is.
 #   - first parent equal to the pin (or the tip, without a pin): logs
 #     `outcome=fresh` (reason `base_tip`, or `pinned_base` when the base has
 #     moved since the run was created) and exits 0;
