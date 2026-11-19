@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Pass QUEUED_RUN_ZOMBIE_MINUTES from the repository variable with default 1440 to the poller.\n  expected_change_site: .github/workflows/orchestrate_poll.yml, the environment for \u201cRun unblock scan without active projects.\u201d\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The step \"Run unblock scan without active projects\" in .github/workflows/orchestrate_poll.yml passes the backpressure HIGH/LOW thresholds and the state-file path but omits QUEUED_RUN_ZOMBIE_MINUTES. The scan calls build_active_issue_set, which uses this variable, so this invocation always uses the script default instead of the configured repository value.\n- requirement: \u201cLog `QUEUE_BACKPRESSURE outcome=on|off` when the state changes.\u201d\n  expected_change_site: `scripts/orchestrate_poll_process.sh`, `queue_backpressure_holds_dispatch`.\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: When `ACTIONS_QUEUE_BACKPRESSURE_HIGH` is below 1, lines 18574\u201318575 set the active state to false and lines 18620\u201318625 persist it, but the logging block at lines 18597\u201318615 is skipped because `qbp_mode` is `off`, so disabling backpressure while the restored marker is active changes the persisted state without logging the transition.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- NOTE: Reviewer checked the last-run diff and found it correct. The canary grant in .github/workflows/nightly-validation-selftest.yml (lines 506-511) adds \"checks: read\", which matches the union of ci.yml job permissions (final-ci-failed at ci.yml lines 4917-4921 and line 4923). tests/test_runner_image_pin_contract.py test_canary_grants_exactly_what_ci_jobs_request (lines 207-225) recomputes that union. The agents.d fragment edit does not violate \u00a725.\n- NOTE: Reviewer rejected both pass-1 task gaps:\n  - QUEUED_RUN_ZOMBIE_MINUTES is read only by build_active_issue_set (scripts/orchestrate_poll_process.sh lines 19173-19174), which is called at lines 25896, 34284 and 34475. run_unblock_scan (line 25373) and run_persist_postmerge_verify (line 21795) do not call it, and the UNBLOCK_SCAN_SWEEP_ONLY branch is at lines 28751-28763.\n  - HIGH < 1 is the documented rollback switch, which is meant to be silent. tests/test_queue_backpressure.py test_disabled_high_never_holds checks for no QUEUE_BACKPRESSURE output.\n- NOTE: Reviewer found all other issue deliverables present. HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Pass QUEUED_RUN_ZOMBIE_MINUTES from the repository variable with default 1440 to the poller.\n  Expected change site: .github/workflows/orchestrate_poll.yml, the environment for \u201cRun unblock scan without active projects.\u201d\n  Evidence of absence: The step \"Run unblock scan without active projects\" in .github/workflows/orchestrate_poll.yml passes the backpressure HIGH/LOW thresholds and the state-file path but omits QUEUED_RUN_ZOMBIE_MINUTES. The scan calls build_active_issue_set, which uses this variable, so this invocation always uses the script default instead of the configured repository value.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: Log QUEUE_BACKPRESSURE outcome=on|off when the state changes.\n  Expected change site: scripts/orchestrate_poll_process.sh, queue_backpressure_holds_dispatch.\n  Evidence of absence: When HIGH is below 1, the function sets QUEUE_BACKPRESSURE_ACTIVE=false and writes that state to the marker, but qbp_mode is set to 'off' and the state-change logging block is skipped. Consequently, disabling backpressure while a restored marker is active changes the persisted state without logging the transition.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cLog `QUEUE_BACKPRESSURE outcome=on|off` when the state changes.\u201d\n  Expected change site: `scripts/orchestrate_poll_process.sh`, `queue_backpressure_holds_dispatch`.\n  Evidence of absence: When `ACTIONS_QUEUE_BACKPRESSURE_HIGH` is below 1, lines 18574\u201318575 set the active state to false and lines 18620\u201318625 persist it, but the logging block at lines 18597\u201318615 is skipped because `qbp_mode` is `off`. Disabling backpressure while the restored marker is active therefore changes the state without logging the transition.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- NOTE: HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- NOTE: Reviewer verified the last-run diff. ci.yml's `final-ci-failed` job requests `checks: read` (ci.yml:4923), and the canary grant now equals the computed union (nightly-validation-selftest.yml:506-511; tests/test_runner_image_pin_contract.py:207-225).\n- NOTE: Pass-1 gap 1 (QUEUED_RUN_ZOMBIE_MINUTES missing from \"Run unblock scan without active projects\") was NOT CONFIRMED:\n  - `QUEUED_RUN_ZOMBIE_MINUTES` is consumed only by `build_active_issue_set` (scripts/orchestrate_poll_process.sh:19173-19174), called at lines 25896, 34284 and 34475.\n  - `run_unblock_scan` (line 25373 onward) never calls it, and the UNBLOCK_SCAN_SWEEP_ONLY tick exits at lines 28751-28759.\n  - The new test pins the passthrough (tests/test_queue_backpressure.py:340-342), and contract parity is kept (tests/test_orchestrate_poll_workflow_contract.py:451-454).\n- NOTE: Pass-1 gap 2 (no transition log when HIGH < 1) was NOT CONFIRMED. HIGH < 1 is the issue's own fail-open rule, which was silent before this PR and is documented as \"no hold, no log, inactive marker\". The hysteresis evaluation does log transitions.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "543e6314916d0a020d0bff207a5c894e67e5a1dd72ad353ed445950ff735249f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9773,
+    "run_id": "44477851668",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44477851668",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261119075839_4e0f961e99",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9773,
+    "run_id": "44477851668"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-19T07:58:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
