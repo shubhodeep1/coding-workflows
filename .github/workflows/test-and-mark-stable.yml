@@ -638,6 +638,10 @@ jobs:
       REVIEW_PHASE_HANDOFF_BUDGET_MINUTES: 15
       EDITOR_RETRY_BUDGET_MINUTES: 25
       PHASE7_WAIT_BUDGET_MINUTES: 10
+      # Longest Phase 7 waits for the cancel run to leave the queue, from the
+      # start of its wait; PHASE7_WAIT_BUDGET_MINUTES starts once it runs
+      # (#9794, run 44490333814). Both stop before the finalization reserve.
+      PHASE7_QUEUE_WAIT_CAP_MINUTES: 30
       E2E_FINALIZATION_RESERVE_MINUTES: 20
       POLL_INTERVAL: 10
       # Wrapper-workflow filename used by the smoke gate to dispatch
@@ -746,6 +750,7 @@ jobs:
             "${REVIEW_PHASE_HANDOFF_BUDGET_MINUTES}" \
             "${EDITOR_RETRY_BUDGET_MINUTES}" \
             "${PHASE7_WAIT_BUDGET_MINUTES}" \
+            "${PHASE7_QUEUE_WAIT_CAP_MINUTES}" \
             "${E2E_FINALIZATION_RESERVE_MINUTES}" \
             "${PREPUSH_GATE_STEP_STALL_MINUTES}"; do
             if ! [[ "${timeout_value}" =~ ^[0-9]+$ ]] || [ "${timeout_value}" -lt 1 ]; then

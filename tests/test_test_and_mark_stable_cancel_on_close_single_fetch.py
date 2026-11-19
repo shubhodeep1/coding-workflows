@@ -188,6 +188,14 @@ def test_no_run_diagnostic_makes_no_second_listing() -> None:
 
 
 
+def _deadline_helpers(wf: str) -> str:
+	"""The Phase 7 deadline helpers (#9794) both wait loops call."""
+	return textwrap.dedent(
+		"          "
+		+ _slice_between(wf, "# ── Phase 7 wait deadline helpers", "# ── end Phase 7 wait deadline helpers ──")
+	)
+
+
 def _wait_loop_and_no_run_block(wf: str) -> str:
 	"""The real wait loop plus the no-run diagnostic, dedented to plain bash."""
 	branch = _open_pr_close_branch(wf)
@@ -228,6 +236,8 @@ def _run_phase7_wait(tmp: str, runs_json: str, state_reply: str | None) -> tuple
 			"PR_CLOSED_AT=2026-10-20T00:00:00Z",
 			"PRE_RUN_ID=100",
 			"TEST_REPO=o/r",
+			'PHASE7_RUN_STARTED_AT=""',
+			_deadline_helpers(_read_workflow()),
 			"",
 		]
 	)

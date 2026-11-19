@@ -32,6 +32,60 @@ phase7_list_cancel_runs() {
   return 1
 }
 
+# ── Phase 7 wait deadline helpers (#9794) ──
+# PHASE7_WAIT_BUDGET_MINUTES counts from the first poll that sees the
+# cancel run out of queued/pending/waiting/requested, so time spent
+# waiting for a runner no longer uses it up: in release gate run
+# 44490333814 the cancel run was still queued when the 10m budget ran
+# out. Until a run is found the budget counts from the start of the
+# wait, as before. A run that never leaves the queue is waited on for
+# at most PHASE7_QUEUE_WAIT_CAP_MINUTES from the start of the wait.
+# Every deadline also stops E2E_FINALIZATION_RESERVE_MINUTES before
+# the job timeout, but never earlier than the old start + budget.
+phase7_run_is_queued() {
+  case "${1:-}" in
+    queued|pending|waiting|requested) return 0 ;;
+  esac
+  return 1
+}
+
+# phase7_wait_deadline <wait_start_epoch> <run_status>: sets
+# PHASE7_WAIT_DEADLINE, and PHASE7_RUN_STARTED_AT on the first
+# non-queued status. An empty status (no run yet, or a failed read)
+# never starts the budget clock.
+phase7_wait_deadline() {
+  local wait_start="$1" run_status="${2:-}" now budget_secs queue_secs floor job_cap
+  now=$(date +%s)
+  budget_secs=$(( PHASE7_WAIT_BUDGET_MINUTES * 60 ))
+  queue_secs=$(( ${PHASE7_QUEUE_WAIT_CAP_MINUTES:-30} * 60 ))
+  floor=$(( wait_start + budget_secs ))
+  if [ -n "${run_status}" ] && ! phase7_run_is_queued "${run_status}" && [ -z "${PHASE7_RUN_STARTED_AT:-}" ]; then
+    PHASE7_RUN_STARTED_AT="${now}"
+  fi
+  if [ -n "${PHASE7_RUN_STARTED_AT:-}" ]; then
+    PHASE7_WAIT_DEADLINE=$(( PHASE7_RUN_STARTED_AT + budget_secs ))
+  elif phase7_run_is_queued "${run_status}"; then
+    PHASE7_WAIT_DEADLINE=$(( wait_start + queue_secs ))
+  else
+    PHASE7_WAIT_DEADLINE="${floor}"
+  fi
+  if [[ "${E2E_JOB_STARTED_EPOCH:-}" =~ ^[0-9]+$ ]] && [[ "${E2E_JOB_TIMEOUT_MINUTES:-}" =~ ^[0-9]+$ ]]; then
+    job_cap=$(( E2E_JOB_STARTED_EPOCH + (E2E_JOB_TIMEOUT_MINUTES - ${E2E_FINALIZATION_RESERVE_MINUTES:-20}) * 60 ))
+    if [ "${PHASE7_WAIT_DEADLINE}" -gt "${job_cap}" ]; then
+      PHASE7_WAIT_DEADLINE="${job_cap}"
+    fi
+  fi
+  if [ "${PHASE7_WAIT_DEADLINE}" -lt "${floor}" ]; then
+    PHASE7_WAIT_DEADLINE="${floor}"
+  fi
+}
+# ── end Phase 7 wait deadline helpers ──
+if ! [[ "${PHASE7_QUEUE_WAIT_CAP_MINUTES:-30}" =~ ^[0-9]+$ ]]; then
+  echo "::warning::PHASE7_QUEUE_WAIT_CAP_MINUTES is not a whole number; using 30."
+  PHASE7_QUEUE_WAIT_CAP_MINUTES=30
+fi
+PHASE7_RUN_STARTED_AT=""
+
 # The PR may already be closed/merged by the time Phase 7 runs —
 # earlier phases (orchestrator auto-merge after review approval)
 # can close it asynchronously. PATCH-ing state=closed on an
@@ -93,7 +147,11 @@ if [ "${PR_STATE}" = "closed" ]; then
   # Match the open-PR poll budget so a slow/queued run
   # doesn't flake the smoke test if it would have eventually
   # succeeded.
-  WAIT_DEADLINE=$(( $(date +%s) + (PHASE7_WAIT_BUDGET_MINUTES * 60) ))
+  # The budget starts once the run leaves the queue (see the deadline
+  # helpers above).
+  PHASE7_WAIT_START=$(date +%s)
+  phase7_wait_deadline "${PHASE7_WAIT_START}" "${EXISTING_STATUS}"
+  WAIT_DEADLINE="${PHASE7_WAIT_DEADLINE}"
   while [ "${EXISTING_STATUS}" != "completed" ] && [ "$(date +%s)" -lt "${WAIT_DEADLINE}" ]; do
     sleep 5
     # Fetch once, then parse locally. A transient failure still
@@ -103,7 +161,15 @@ if [ "${PR_STATE}" = "closed" ]; then
     EXISTING_STATUS=$(printf '%s' "${EXISTING_RUN_JSON}" | jq -r '.status // ""' 2>/dev/null || echo "")
     EXISTING_CONCLUSION=$(printf '%s' "${EXISTING_RUN_JSON}" | jq -r '.conclusion // ""' 2>/dev/null || echo "")
     echo "  cancel-on-close run #${EXISTING_RUN_ID}: status=${EXISTING_STATUS:-?}, conclusion=${EXISTING_CONCLUSION:-?}"
+    phase7_wait_deadline "${PHASE7_WAIT_START}" "${EXISTING_STATUS}"
+    WAIT_DEADLINE="${PHASE7_WAIT_DEADLINE}"
   done
+  if [ -z "${PHASE7_RUN_STARTED_AT:-}" ] && phase7_run_is_queued "${EXISTING_STATUS}"; then
+    echo "::error::cancel-on-close run #${EXISTING_RUN_ID} never left the queue within $(( (WAIT_DEADLINE - PHASE7_WAIT_START) / 60 ))m (status=${EXISTING_STATUS}); no runner picked it up"
+    echo "status=queued_timeout" >> "$GITHUB_OUTPUT"
+    echo "cancel_run_id=${EXISTING_RUN_ID}" >> "$GITHUB_OUTPUT"
+    exit 1
+  fi
   if [ "${EXISTING_STATUS}" != "completed" ]; then
     echo "::error::cancel-on-close run #${EXISTING_RUN_ID} did not complete within ${PHASE7_WAIT_BUDGET_MINUTES}m (status=${EXISTING_STATUS:-?})"
     echo "status=timeout" >> "$GITHUB_OUTPUT"
@@ -351,6 +417,9 @@ while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
       break
     fi
   fi
+  # Queued time does not use the budget (deadline helpers above).
+  phase7_wait_deadline "${POLL_START}" "${STATUS:-}"
+  DEADLINE="${PHASE7_WAIT_DEADLINE}"
   ELAPSED=$(( $(date +%s) - POLL_START ))
   if [ "${ELAPSED}" -lt 30 ]; then
     PHASE7_POLL_SLEEP=3
@@ -417,7 +486,14 @@ fi
 # A run was found but never reached `completed` inside the budget
 # (for example still `pending` behind its concurrency group). This
 # used to write an empty `status=`, which the results table showed
-# as SKIPPED (run 40794181365).
+# as SKIPPED (run 40794181365). A run that never left the queue gets
+# its own status so runner starvation reads apart from a slow run.
+if [ -z "${PHASE7_RUN_STARTED_AT:-}" ] && phase7_run_is_queued "${STATUS:-}"; then
+  echo "::error::cancel-on-close run #${NEW_RUN_ID} never left the queue within $(( (DEADLINE - POLL_START) / 60 ))m (status=${STATUS}); no runner picked it up"
+  echo "status=queued_timeout" >> "$GITHUB_OUTPUT"
+  echo "cancel_run_id=${NEW_RUN_ID}" >> "$GITHUB_OUTPUT"
+  exit 1
+fi
 if [ "${STATUS:-}" != "completed" ]; then
   echo "::error::cancel-on-close run #${NEW_RUN_ID} did not complete within ${PHASE7_WAIT_BUDGET_MINUTES}m (status=${STATUS:-?})"
   echo "status=timeout" >> "$GITHUB_OUTPUT"
