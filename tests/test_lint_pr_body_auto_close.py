@@ -369,6 +369,37 @@ def _lint_workflow_step(name: str) -> str:
 	return workflow[start:] if end == -1 else workflow[start:end]
 
 
+def test_workflow_job_is_not_named_like_the_ci_aggregate():
+	"""The `main` ruleset requires a check named `lint`, meaning ci.yml's
+	aggregate job. A job id is its check-run name, so this workflow's one
+	job must not be `lint` (PR #9570: its success stood in for CI's), and
+	the pipeline's merge gate must still list the name it reports."""
+	import re
+	workflow = (REPO_ROOT / ".github/workflows/lint-pr-body-auto-close.yml").read_text(encoding="utf-8")
+	jobs_block = workflow[workflow.index("\njobs:\n") + len("\njobs:\n"):]
+	pr_body_lint_job_ids = re.findall(r"^  ([A-Za-z0-9_-]+):", jobs_block, flags=re.M)
+	assert pr_body_lint_job_ids == ["pr-body-lint"], pr_body_lint_job_ids
+	assert not re.search(r"^    name:", jobs_block, flags=re.M), "a job-level name: would change the check-run name"
+	for gate_script in ("scripts/pr_checks_lib.sh", "scripts/orchestrate_poll_process.sh"):
+		gate_text = (REPO_ROOT / gate_script).read_text(encoding="utf-8")
+		gate_default = re.search(r'ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT:?="?([^"}\n]+)["}]', gate_text)
+		assert gate_default, gate_script
+		assert "pr-body-lint" in [n.strip() for n in gate_default.group(1).lstrip("=").split(",")], gate_script
+
+
+def test_only_known_workflows_have_a_job_named_lint():
+	"""Any job with id `lint` reports the check-run the `main` ruleset
+	requires. ci.yml's is the one it means; lint-plan-archival.yml's is a
+	known remaining duplicate. A new one elsewhere fails here."""
+	import re
+	lint_job_workflows = sorted(
+		wf.name for wf in (REPO_ROOT / ".github/workflows").glob("*.y*ml")
+		# A job-level `name: lint` under another job id reports the same check-run name.
+		if re.search(r"^  lint:|^    name:\s*[\"']?lint[\"']?\s*$", wf.read_text(encoding="utf-8").partition("\njobs:\n")[2], flags=re.M)
+	)
+	assert lint_job_workflows == ["ci.yml", "lint-plan-archival.yml"], lint_job_workflows
+
+
 def test_workflow_lints_commit_messages_for_default_branch_prs():
 	workflow = (REPO_ROOT / ".github/workflows/lint-pr-body-auto-close.yml").read_text(encoding="utf-8")
 	collect = _lint_workflow_step("Write PR commit messages to file")
