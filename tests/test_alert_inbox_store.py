@@ -2,10 +2,11 @@
 
 Alert triage plan, Phase 1. The intake validates one untrusted
 alert_inbox.v1 record from $GITHUB_EVENT_PATH and writes it to the branch
-`ai/alert-inbox` with the Contents API: up to three retries on HTTP 409,
-bootstrap of a missing branch from a parentless root commit, a re-run of the
-same dispatch reported as a duplicate, and never a PATCH, DELETE or force
-update.
+`ai/alert-inbox` with the Contents API: one retry on HTTP 409, bootstrap of a
+missing branch from a parentless root commit, a re-run of the same dispatch
+reported as a duplicate, and never a PATCH, DELETE or force update.
+The single 409 retry has since been raised to up to three jittered retries;
+the conflict tests below check that bound.
 
 The fake `curl` (shared with tests/test_tg_helpers_alert_inbox.py) answers
 each endpoint from a scripted queue and logs every call.
