@@ -24,6 +24,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
 JOB = "clarify-rejects-unsolvable-test"
+ALT_JOB = "e2e-alt-model-test"
 
 RATE_LIMIT_BODY = (
 	'{\n'
@@ -82,12 +83,12 @@ STUB_SLEEP = "#!/usr/bin/env bash\nexit 0\n"
 OUTPUT_LINE_RE = re.compile(r"^[a-z_]+=[0-9]+$")
 
 
-def _step_script(step_id: str) -> str:
+def _step_script(step_id: str, job: str = JOB) -> str:
 	workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-	for step in workflow["jobs"][JOB]["steps"]:
+	for step in workflow["jobs"][job]["steps"]:
 		if step.get("id") == step_id:
 			return step["run"]
-	raise AssertionError(f"step {step_id!r} not found in job {JOB!r}")
+	raise AssertionError(f"step {step_id!r} not found in job {job!r}")
 
 
 @unittest.skipIf(shutil.which("jq") is None, "jq is required")
@@ -118,11 +119,11 @@ class ClarifyNegativeOutputsTest(unittest.TestCase):
 	def tearDown(self) -> None:
 		self._tmp.cleanup()
 
-	def _run(self, step_id: str, **extra: str) -> subprocess.CompletedProcess:
+	def _run(self, step_id: str, job: str = JOB, **extra: str) -> subprocess.CompletedProcess:
 		env = dict(self.env)
 		env.update(extra)
 		return subprocess.run(
-			["bash", "-c", _step_script(step_id)],
+			["bash", "-c", _step_script(step_id, job)],
 			env=env,
 			text=True,
 			capture_output=True,
@@ -146,6 +147,7 @@ class ClarifyNegativeOutputsTest(unittest.TestCase):
 		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 		self._assert_outputs_numeric()
 		self.assertIn("pre_clarify_run_id=0", self._outputs())
+		self.assertIn("pre_clarify_run_id_read_failed=1", self._outputs())
 		self.assertIn("issue_number=9782", self._outputs())
 		self.assertIn("::warning::Could not read the latest clarify.yml run id", result.stdout)
 		self.assertNotIn('"message":', result.stdout + result.stderr)
@@ -190,14 +192,69 @@ class ClarifyNegativeOutputsTest(unittest.TestCase):
 		self.assertEqual(self._outputs(), [])
 		self.assertIn("::warning::Could not capture clarify run id", result.stdout)
 
-	def test_capture_step_non_numeric_pre_is_treated_as_zero(self) -> None:
+	def test_capture_step_unreadable_baseline_skips_poll(self) -> None:
+		# A failed baseline read must not anchor the poll at 0, which would
+		# capture an older, unrelated clarify run for the analyser.
+		payload = '{"workflow_runs": [{"id": 42, "created_at": "2026-11-19T09:16:00Z"}]}'
+		for extra in ({"PRE": "0", "PRE_READ_FAILED": "1"}, {"PRE": "garbage"}, {"PRE": ""}):
+			with self.subTest(**extra):
+				self.output.write_text("", encoding="utf-8")
+				if self.gh_log.exists():
+					self.gh_log.unlink()
+				result = self._run("capture_clarify_run", STUB_RUNS_PAYLOAD=payload, **extra)
+				self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+				self.assertEqual(self._outputs(), [])
+				self.assertIn("baseline run id unavailable", result.stdout)
+				self.assertEqual(self._runs_reads(), 0)
+
+	def test_capture_step_real_zero_baseline_still_polls(self) -> None:
 		result = self._run(
 			"capture_clarify_run",
-			PRE="garbage",
+			PRE="0",
 			STUB_RUNS_PAYLOAD='{"workflow_runs": [{"id": 42, "created_at": "2026-11-19T09:16:00Z"}]}',
 		)
 		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 		self.assertEqual(self._outputs(), ["run_id=42"])
+
+	def test_alt_create_step_rate_limited_read_writes_single_line_outputs(self) -> None:
+		result = self._run(
+			"create",
+			job=ALT_JOB,
+			ALT_EDITOR_MODEL="test/model",
+			STUB_RUNS_FAIL_COUNT="-1",
+			STUB_ISSUE_OUT="9790\n",
+		)
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		outputs = self._outputs()
+		for line in outputs:
+			self.assertRegex(line, r"^[a-z_]+=[0-9]*$")
+		self.assertIn("pre_clarify_run_id=", outputs)
+		self.assertIn("issue_number=9790", outputs)
+		self.assertNotIn('"message":', result.stdout + result.stderr)
+
+	def test_alt_create_step_non_numeric_issue_number_fails_closed(self) -> None:
+		result = self._run("create", job=ALT_JOB, ALT_EDITOR_MODEL="test/model", STUB_ISSUE_OUT="null\n")
+		self.assertNotEqual(result.returncode, 0)
+		self.assertIn("::error::Issue creation returned a non-numeric issue number", result.stdout)
+		self.assertFalse(any(line.startswith("issue_number=") for line in self._outputs()))
+
+	def test_alt_capture_step_rate_limited_or_unanchored_emits_no_run_id(self) -> None:
+		for pre_clarify in ("100", ""):
+			with self.subTest(pre_clarify=pre_clarify):
+				self.output.write_text("", encoding="utf-8")
+				result = self._run(
+					"capture_alt_runs",
+					job=ALT_JOB,
+					ISSUE_NUMBER="9790",
+					PRE_CLARIFY=pre_clarify,
+					PRE_PLAN="",
+					PRE_IMPLEMENT="",
+					PRE_REVIEW="",
+					STUB_RUNS_FAIL_COUNT="-1",
+				)
+				self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+				self.assertEqual(self._outputs(), [])
+				self.assertNotIn('"message":', result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
