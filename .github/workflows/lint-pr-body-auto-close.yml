@@ -42,7 +42,14 @@ permissions:
   pull-requests: read
 
 jobs:
-  lint:
+  # Job id `pr-body-lint`, not `lint` (renamed 2026-11-18). The job id is the
+  # check-run name, and the `main` ruleset requires a check named `lint`,
+  # meaning the aggregate `lint` job of the full CI (.github/workflows/ci.yml).
+  # While this job shared that name, GitHub accepted its success in place of
+  # CI's (PR #9570: this check passed about six hours before CI's `lint`).
+  # A failure still blocks the pipeline's merges: `pr-body-lint` is in
+  # ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT (scripts/pr_checks_lib.sh).
+  pr-body-lint:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
