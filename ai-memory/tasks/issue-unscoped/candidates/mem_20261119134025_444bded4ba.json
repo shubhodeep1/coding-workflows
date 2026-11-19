@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CHANGELOG.md:2169 | severity=major | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The CHANGELOG line 2169 says stable heal issues do not yet carry the workflow= header and the per-PR skip does not fire. The new changelog.d/8812-stable-base-tracked-skip-live.md fragment and README.md:2850 say the header is written on stable and the skip is active.\n  WHY: Operators get contradictory guidance about whether the stable-line skip and its CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED kill switch take effect. Severity disagreement: openai_gpt-6-luna rated it NIT, the others MAJOR. Using the highest.\n- changelog.d/8812-stable-base-tracked-skip-live.md:2-4 | severity=nit | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The fragment uses backport wording (\"With #8812 backported\"). Once folded into main's CHANGELOG, where #8812 is the originating change, the wording reads as stale.\n  WHY: This is a release-note wording issue with no runtime effect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Resolve the conflicts and merge this PR so the bug fix on stable is also present on main.\"\n  expected_change_site: scripts/workflow_failure_heal.py and tests/test_workflow_failure_heal.py\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR description names scripts/workflow_failure_heal.py and tests/test_workflow_failure_heal.py as conflicted, but the PR diff has no modifications to either file. (anthropic_claude-sonnet-5_5 examined this and discarded it, because the conflicts were resolved to the main side, which already carries the change.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- CHANGELOG.md:2169 | severity=MAJOR | confidence=4\n  PROBLEM: The stable-line check-failure triage statements conflict. The text at line 2169 contradicts the backport note in changelog.d/8812-stable-base-tracked-skip-live.md.\n  WHY: Operators get contradictory statements about whether base_failure_tracked skipping is active on stable and whether the CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED kill switch is effective.\n- changelog.d/8812-stable-base-tracked-skip-live.md:2,4 | severity=NIT | confidence=3\n  PROBLEM: The fragment has backport-specific wording (\"With #8812 backported\").\n  WHY: Once folded into main's public CHANGELOG, the wording reads as stale. There is no runtime failure.\n- TASK_GAP: Requirement: \"Resolve the conflicts and merge this PR so the bug fix on stable is also present on main.\"\n  Expected change site: scripts/workflow_failure_heal.py and tests/test_workflow_failure_heal.py\n  Evidence of absence: The PR description names these files as conflicted, but the PR diff has no modifications for either, indicating the conflicts were not resolved. | severity=BLOCKER | confidence=4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- CHANGELOG.md:2169 | severity=MAJOR | confidence=5\n  PROBLEM: The sentence added in the 9215 entry says the base_failure_tracked skip cannot fire on stable because heal issues lack the workflow= marker. The new changelog.d/8812-stable-base-tracked-skip-live.md fragment in the same PR says the opposite.\n  WHY: README.md, scripts/workflow_failure_heal.py:8028-8029 and tests/test_workflow_failure_heal.py:10826-10840 confirm the header is written, so operators get opposite guidance from the 9215 entry and the 8812 fragment.\n- changelog.d/8812-stable-base-tracked-skip-live.md:2,4 | severity=NIT | confidence=3\n  PROBLEM: The fragment is written as a stable-line backport note, including the \"With #8812 backported\" sentence and the closing \"Refs #8812, Refs #9272.\" line.\n  WHY: It is not a runtime defect. The wording reads as a stale backport note once folded into main's CHANGELOG.md, and the \"On the `stable` line\" scoping limits the impact.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- CHANGELOG.md:2169; changelog.d/8812-stable-base-tracked-skip-live.md:2-6; README.md:2850 | severity=NIT | confidence=4\n  PROBLEM: The Unreleased changelog says stable heal issues do not carry the workflow marker and the per-PR skip still files issues. The new stable backport fragment and README say the marker is now written on stable and the skip is active.\n  WHY: Runtime behavior is unaffected, but operators get conflicting guidance about whether the stable-line skip is active and whether its kill switch applies.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "c75104f4a9e3b3728901e68d5d091b6b9963e95d49e11889c4e689fbbf541aa3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9755,
+    "run_id": "44519058408",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44519058408",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261119134025_444bded4ba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9755,
+    "run_id": "44519058408"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-19T13:40:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
