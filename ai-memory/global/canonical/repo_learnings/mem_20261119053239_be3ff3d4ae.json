@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "When changing GitHub Actions workflows, shell orchestration steps, or Python helpers, look for the corresponding focused test module and update it alongside the implementation. Several merged changes touched workflow behavior and added or modified tests that exercise the relevant contract.",
+  "fingerprint": "ad70e8ee097a4f71868c4e1cd756720135c0aa658f1576862854ad7541be1854",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44465458278",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44465458278",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9135",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9481",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9533",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9631",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9682",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9506",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9567",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9694",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9700",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9707"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261119053239_be3ff3d4ae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow and orchestration changes in this repository are typically covered by focused contract or behavior tests.",
+  "timestamps": {
+    "created_at": "2026-11-19T05:32:39Z",
+    "promoted_at": "2026-11-19T05:33:09Z",
+    "superseded_at": null
+  }
+}
