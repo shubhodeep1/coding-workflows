@@ -18197,9 +18197,10 @@ declare -g _ACTIONS_RUNS_BLOB_CACHE=''
 declare -g _ACTIONS_RUNS_BLOB_READY='false'
 # Queue depth from the queued read's total_count (stuck-backlog Phase 3). The
 # cached blob holds at most 50 queued rows, so the row count cannot reach the
-# backpressure threshold. Empty means unknown: cache hits, 304 reuse, mktemp
-# failures and unconfirmed fetches leave it empty, and the backpressure hold
-# then fails open (legacy behaviour).
+# backpressure threshold. Empty means unknown: an ai_memory cache hit, 304
+# reuse, mktemp failures and unconfirmed fetches leave it empty, and the
+# backpressure hold then fails open (legacy behaviour). An in-process ready
+# cache hit returns before the reset and keeps the tick's first value.
 declare -g ACTIONS_QUEUED_TOTAL=''
 declare -g PHASE_CAPS_ENABLED='false'
 declare -g PHASE_CAPS_STATUS='missing'
@@ -18490,6 +18491,22 @@ queue_backpressure_holds_dispatch() {
     echo "QUEUE_BACKPRESSURE outcome=held state=${qbp_state} action=${qbp_action} issue=${qbp_issue} queued=${qbp_total}"
     return 0
   fi
+  return 1
+}
+
+# Stall-recovery actions that dispatch a run but have no phase cap state
+# (phase_cap_state_for_action returns ""), so the stall guards never reach
+# phase_cap_can_dispatch for them. The guards call this when the state is
+# empty, so the queue backpressure hold also covers these re-dispatches.
+# Phase-cap accounting is unchanged. Returns 0 to hold (state=none in the
+# outcome=held line).
+queue_backpressure_holds_uncapped_stall_action() {
+  case "$1" in
+    retrigger_review|resolve_merge_conflict|close_and_reissue)
+      queue_backpressure_holds_dispatch "none" "$1" "$2"
+      return $?
+      ;;
+  esac
   return 1
 }
 
@@ -20598,6 +20615,10 @@ execute_stall_recovery_action() {
   phase_cap_state="$(phase_cap_state_for_action "${action}")"
   if [ -n "${phase_cap_state}" ] && ! phase_cap_can_dispatch "${phase_cap_state}" "${action}" "${issue_num}"; then
     echo "STALL_SKIP issue=${issue_num} reason=phase_capped phase=${phase} action=${action}"
+    return 1
+  fi
+  if [ -z "${phase_cap_state}" ] && queue_backpressure_holds_uncapped_stall_action "${action}" "${issue_num}"; then
+    echo "STALL_SKIP issue=${issue_num} reason=queue_backpressure phase=${phase} action=${action}"
     return 1
   fi
 
@@ -26472,6 +26493,10 @@ PY
       echo "STALL_SKIP issue=${issue_num} reason=phase_capped phase=${phase} action=${action}"
       continue
     fi
+    if [ -z "${_std_phase_cap_state}" ] && queue_backpressure_holds_uncapped_stall_action "${action}" "${issue_num}"; then
+      echo "STALL_SKIP issue=${issue_num} reason=queue_backpressure phase=${phase} action=${action}"
+      continue
+    fi
 
     took_action="false"
     STALL_RECOVERY_SHOULD_INCREMENT="false"
@@ -27721,6 +27746,10 @@ recover_stalled_issue() {
   _recover_phase_cap_state="$(phase_cap_state_for_action "${action}")"
   if [ -n "${_recover_phase_cap_state}" ] && ! phase_cap_can_dispatch "${_recover_phase_cap_state}" "${action}" "${issue_num}"; then
     echo "STALL_SKIP issue=${issue_num} reason=phase_capped phase=${phase} action=${action}"
+    return 1
+  fi
+  if [ -z "${_recover_phase_cap_state}" ] && queue_backpressure_holds_uncapped_stall_action "${action}" "${issue_num}"; then
+    echo "STALL_SKIP issue=${issue_num} reason=queue_backpressure phase=${phase} action=${action}"
     return 1
   fi
 

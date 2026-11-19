@@ -61,6 +61,8 @@ mkdir -p extracted
 	echo
 	extract_fn 'queue_backpressure_holds_dispatch'
 	echo
+	extract_fn 'queue_backpressure_holds_uncapped_stall_action'
+	echo
 	extract_fn 'phase_cap_can_dispatch'
 	echo
 	extract_fn 'phase_cap_note_dispatch'

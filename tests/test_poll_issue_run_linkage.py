@@ -42,6 +42,7 @@ ACTIVE_SET_FUNCTIONS = (
 DISPATCH_FUNCTIONS = (
 	"phase_cap_running_for_state",
 	"queue_backpressure_holds_dispatch",
+	"queue_backpressure_holds_uncapped_stall_action",
 	"phase_cap_can_dispatch",
 )
 
@@ -259,6 +260,45 @@ def test_custom_threshold(tmp_path: Path) -> None:
 	result = _dispatch(tmp_path, "create_issue", total="20", high="20")
 	assert "rc=1" in result.stdout
 	assert "QUEUE_BACKPRESSURE outcome=held" in result.stdout
+
+
+def _uncapped(tmp_path: Path, action: str, *, total: str) -> subprocess.CompletedProcess[str]:
+	(tmp_path / "dispatch.sh").write_text(_extract(DISPATCH_FUNCTIONS), encoding="utf-8")
+	script = (
+		"set -euo pipefail\nsource ./dispatch.sh\n"
+		f"ACTIONS_QUEUED_TOTAL='{total}'\nrc=0\n"
+		f"queue_backpressure_holds_uncapped_stall_action '{action}' '42' || rc=$?\n"
+		'echo "rc=${rc}"\n'
+	)
+	return _run_bash(script, tmp_path)
+
+
+@pytest.mark.parametrize("action", ["retrigger_review", "resolve_merge_conflict", "close_and_reissue"])
+def test_uncapped_stall_dispatch_is_held_at_threshold(tmp_path: Path, action: str) -> None:
+	held = _uncapped(tmp_path, action, total="150")
+	assert held.returncode == 0, held.stderr
+	assert "rc=0" in held.stdout
+	assert f"QUEUE_BACKPRESSURE outcome=held state=none action={action} issue=42 queued=150" in held.stdout
+	below = _uncapped(tmp_path, action, total="149")
+	assert "rc=1" in below.stdout
+	assert "outcome=held" not in below.stdout
+
+
+@pytest.mark.parametrize("action", ["run_stall_judge", "attempt_merge", "escalate_human", "skip"])
+def test_uncapped_hold_ignores_non_dispatching_actions(tmp_path: Path, action: str) -> None:
+	result = _uncapped(tmp_path, action, total="500")
+	assert result.returncode == 0, result.stderr
+	assert "rc=1" in result.stdout
+	assert "QUEUE_BACKPRESSURE" not in result.stdout + result.stderr
+
+
+def test_stall_guards_hold_uncapped_actions() -> None:
+	text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	for var in ("phase_cap_state", "_std_phase_cap_state", "_recover_phase_cap_state"):
+		guard = (f'if [ -z "${{{var}}}" ] && queue_backpressure_holds_uncapped_stall_action "${{action}}" "${{issue_num}}"; then\n'
+			)
+		assert text.count(guard) == 1, var
+	assert text.count("reason=queue_backpressure phase=${phase} action=${action}") == 3
 
 
 # --- loader keeps total_count --------------------------------------------------
