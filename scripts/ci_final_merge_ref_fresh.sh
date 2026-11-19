@@ -62,7 +62,7 @@
 #     `merge_base_too_deep`: the merge base is more than
 #     CI_FINAL_MERGE_REF_MERGE_DEPTH commits below the head or the base, so the
 #     head is far behind; `merge_fetch_failed`; `merge_tree_unsupported`: the
-#     runner's git predates `--attr-source` (2.40); `merge_failed`): `::error::`
+#     runner's git predates `--attr-source` (2.41); `merge_failed`): `::error::`
 #     and exit 1, as a stale ref did before. The red `lint` sends the PR back
 #     through `final-ci-failed`, and the review sweep's base sync
 #     (scripts/review_final_ci_sweep.sh) updates a head that is behind.
@@ -241,7 +241,7 @@ ci_final_merge_ref_merge_locally()
 	# conflict that GitHub's merge would report: a doubtful merge fails.
 	merge_tree_out="$(git -c core.hooksPath=/dev/null --attr-source="${CI_FINAL_MERGE_REF_EMPTY_TREE}" merge-tree --write-tree --no-messages "${merge_into}" "${GITHUB_SHA}" 2>/dev/null)" || merge_tree_rc=$?
 	if [ "${merge_tree_rc}" -eq 129 ]; then
-		# Usage error: the runner's git predates `--attr-source` (git 2.40),
+		# Usage error: the runner's git predates `--attr-source` (git 2.41),
 		# so tell an old git apart from a merge that really failed.
 		CI_FINAL_MERGE_REF_LOCAL_REASON="merge_tree_unsupported"
 		return 2
@@ -454,7 +454,7 @@ ci_final_merge_ref_main()
 		return 0
 	fi
 	if [ "${CI_FINAL_MERGE_REF_LOCAL_REASON}" = "merge_tree_unsupported" ]; then
-		echo "::error::CI_FINAL_MERGE_REF: the runner's git does not support --attr-source (git 2.40 or newer is required), so the job could not build the merge of ${GITHUB_SHA} into ${merge_into} (${base_ref}) itself. This is a runner problem, not a defect in the PR."
+		echo "::error::CI_FINAL_MERGE_REF: the runner's git does not support --attr-source (git 2.41 or newer is required), so the job could not build the merge of ${GITHUB_SHA} into ${merge_into} (${base_ref}) itself. This is a runner problem, not a defect in the PR."
 	else
 		echo "::error::CI_FINAL_MERGE_REF: refs/pull/${FINAL_CI_PR_NUMBER}/merge merges into ${first:-unknown}, not ${merge_into} (${base_ref}), and the job could not build the merge itself (${CI_FINAL_MERGE_REF_LOCAL_REASON:-unknown}). This run would test an old base, so it stops here; this is not a defect in the PR. The review sweep updates a head that is behind its base, and the next final run tests the current base."
 	fi
