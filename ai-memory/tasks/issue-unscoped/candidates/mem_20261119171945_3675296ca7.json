@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_test_and_mark_stable_clarify_negative_outputs.py:268-284 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The empty-baseline subTest (pre_clarify=\"\") in test_alt_capture_step_rate_limited_or_unanchored_emits_no_run_id passes even if the empty-baseline skip guard at .github/workflows/test-and-mark-stable.yml:5762 is removed, because the stub gh fails every read.\n  WHY: A regression removing the skip could capture an unrelated older run and still ship green; all reviewers rated it NIT (low).\n- tests/test_test_and_mark_stable_clarify_negative_outputs.py:169-180 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: test_alt_create_step_failed_read_with_empty_stdout_leaves_baseline_empty checks only pre_clarify_run_id= and not pre_plan_run_id, pre_implement_run_id, pre_review_autofix_run_id, which share the loop at .github/workflows/test-and-mark-stable.yml:5633-5643.\n  WHY: A future revert of the empty fallback for one of the other phases would not be detected. Severity not stated by the reviewer; low is inferred from the hardening-suggestion framing.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_test_and_mark_stable_clarify_negative_outputs.py:test_alt_capture_step_rate_limited_or_unanchored_emits_no_run_id (subTest pre_clarify=\"\") | severity=NIT | confidence=3\n  PROBLEM: The subtest cannot detect removal of the empty-baseline skip at workflow line 5762, because the fake gh fails every read and `self._outputs() == []` passes either way.\n  WHY: The empty-baseline skip behaviour has no effective coverage.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_test_and_mark_stable_clarify_negative_outputs.py:268-284 | hardening suggestion\n  PROBLEM: With STUB_RUNS_FAIL_COUNT=\"-1\", _outputs() is [] whether or not the skip guard at .github/workflows/test-and-mark-stable.yml:5762 fires, so removal of the guard is not caught.\n  WHY: Suggested fix is to add `self.assertEqual(self._runs_reads(), 0)` to each subtest.\n- tests/test_test_and_mark_stable_clarify_negative_outputs.py:169-180 | hardening suggestion\n  PROBLEM: The test only checks pre_clarify_run_id=, not pre_plan_run_id, pre_implement_run_id or pre_review_autofix_run_id from the shared loop at .github/workflows/test-and-mark-stable.yml:5633-5643.\n  WHY: A partial revert of the empty fallback would go undetected.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_test_and_mark_stable_clarify_negative_outputs.py:268-284 | severity=NIT | confidence=4\n  PROBLEM: The empty-baseline case does not verify that the capture step skips polling, because the fake gh fails every read and the test emits no run ID even if the skip guard is removed.\n  WHY: A regression that polls with an invalid baseline and captures an unrelated run is not detected.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_test_and_mark_stable_clarify_negative_outputs.py:268-285 | severity=NIT | confidence=4\n  PROBLEM: The unanchored subTest cannot detect a regression in the empty-baseline skip guard at .github/workflows/test-and-mark-stable.yml:5762, because STUB_RUNS_FAIL_COUNT=\"-1\" makes every read fail.\n  WHY: The test passes with or without the guard, so a future removal of the skip clause would ship green.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "72d31c75c3c6ca06ebe78e871d183c147eaf85ede984e62a09dcf8a4673e8e46",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9800,
+    "run_id": "44567451550",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44567451550",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261119171945_3675296ca7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9800,
+    "run_id": "44567451550"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-19T17:19:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
