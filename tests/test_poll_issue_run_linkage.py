@@ -424,6 +424,15 @@ def test_cached_paths_restore_recent_queued_depth(tmp_path: Path, status_line: s
 		status_line=status_line) == "400"
 
 
+def test_unconfirmed_fetch_fallback_restores_recent_queued_depth(tmp_path: Path) -> None:
+	# A failed in-progress read (no parseable body) falls back to the cached
+	# rows, so the depth stamp on them is restored as on the 304 path.
+	assert _cached_loader(tmp_path, cached_runs=_stamped(400, 60), fetched_age_seconds=300,
+		status_line="HTTP/2.0 500 Internal Server Error") == "400"
+	assert _cached_loader(tmp_path, cached_runs=_stamped(400, 4000), fetched_age_seconds=300,
+		status_line="HTTP/2.0 500 Internal Server Error") == ""
+
+
 def test_cached_paths_leave_stale_or_missing_depth_unknown(tmp_path: Path) -> None:
 	assert _cached_loader(tmp_path, cached_runs=_stamped(400, 4000), fetched_age_seconds=300,
 		status_line="HTTP/2.0 304 Not Modified") == ""

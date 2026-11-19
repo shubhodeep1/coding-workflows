@@ -18197,12 +18197,13 @@ declare -g _ACTIONS_RUNS_BLOB_CACHE=''
 declare -g _ACTIONS_RUNS_BLOB_READY='false'
 # Queue depth from the queued read's total_count (stuck-backlog Phase 3). The
 # cached blob holds at most 50 queued rows, so the row count cannot reach the
-# backpressure threshold. An ai_memory cache hit and a 304 reuse restore it
-# from the depth the last fresh read stamped on the cached queued rows, when
-# that stamp is under 1800s old (_actions_queued_total_from_cached_runs).
-# Empty means unknown: no fresh stamp, mktemp failures and unconfirmed fetches
-# leave it empty, and the backpressure hold then fails open (legacy
-# behaviour). An in-process ready cache hit returns before the reset and keeps
+# backpressure threshold. Every path that reuses the ai_memory cached rows
+# (in-TTL hit, 304 reuse, and the mktemp-failure and unconfirmed-fetch
+# fallbacks) restores it from the depth the last fresh read stamped on the
+# cached queued rows, when that stamp is under 1800s old
+# (_actions_queued_total_from_cached_runs). Empty means unknown: no fresh
+# stamp, or a fallback with no cache hit, leaves it empty, and the
+# backpressure hold then fails open (legacy behaviour). An in-process ready cache hit returns before the reset and keeps
 # the tick's first value.
 declare -g ACTIONS_QUEUED_TOTAL=''
 declare -g PHASE_CAPS_ENABLED='false'
@@ -18301,6 +18302,8 @@ _load_actions_runs_cached() {
 	if [ -z "${response_file}" ] || [ -z "${response_body_file}" ] || [ -z "${response_err}" ]; then
 		echo "::warning::rate_limit_audit_fallback helper=_load_actions_runs_cached reason=mktemp_failed repo=${repo}" >&2
 		if [ "${cache_hit}" = "true" ]; then
+			# Reused cached rows keep their depth stamp (under 1800s old only).
+			_actions_queued_total_from_cached_runs "${cached_runs}" "${now_epoch}"
 			_ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
 		else
 			_ACTIONS_RUNS_BLOB_CACHE="${empty_blob}"
@@ -18427,6 +18430,8 @@ _load_actions_runs_cached() {
   _fetch_status="$(printf '%s' "${status_line:-none}" | tr -d '\r' | cut -c1-80 || true)"
   printf '%s\n' "::warning::rate_limit_audit_fallback helper=_load_actions_runs_cached reason=fetch_unconfirmed repo=${repo} api_rc=${api_rc} status='${_fetch_status:-none}' cache_hit=${cache_hit} err='${_fetch_err_line}'" >&2
   if [ "${cache_hit}" = "true" ]; then
+    # Reused cached rows keep their depth stamp (under 1800s old only).
+    _actions_queued_total_from_cached_runs "${cached_runs}" "${now_epoch}"
     _ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
   else
     _ACTIONS_RUNS_BLOB_CACHE="${empty_blob}"
