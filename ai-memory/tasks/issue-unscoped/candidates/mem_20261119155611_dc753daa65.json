@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/9797-clarify-negative-test-output-guard.md:9 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The changelog says clarify and plan have no branch filter, but the capture query uses `branch=main` for both (test-and-mark-stable.yml:5751, 5764-5765).\n  WHY: Documentation inaccuracy only, with no runtime effect, but it could mislead someone debugging the alt-model capture step. Reviewers rated it NIT.\n- .github/workflows/test-and-mark-stable.yml:5317-5328,5631-5639 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The baseline read-failed flag is set only for non-numeric output, so a `gh api` call that exits nonzero with empty stdout gets `|| echo \"0\"` and is treated as a real 0 baseline. The alt-model baseline reads (5633, 5751-5762) have the same fallback.\n  WHY: The capture step can then poll with `id > 0` and pick an older, unrelated run instead of skipping analysis. Reviewers rated it NIT, with confidence 3 to 4. minimax also notes that the capture step at line 5760 checks only PRE_CLARIFY and PRE_PLAN, not pre_implement or pre_review.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/9797-clarify-negative-test-output-guard.md:9 | severity=NIT | confidence=5\n  PROBLEM: The changelog says clarify and plan have no branch filter, but .github/workflows/test-and-mark-stable.yml line 5751 builds the specs with `:main`.\n  WHY: The changelog misdescribes the capture query and could mislead someone debugging the alt-model capture step.\n- .github/workflows/test-and-mark-stable.yml:5318,5325-5328,5633 | severity=NIT | confidence=3\n  PROBLEM: The read-failed flag is set only for non-numeric output, so a `gh api` call that exits nonzero with empty stdout yields a numeric 0 and the flag stays unset.\n  WHY: The capture step can pick up an unrelated older clarify run. The effect is limited to a soft-error analysis, and the issue itself prescribes 0 on failure.\n- HARDENING_SUGGESTIONS: capture the exit status separately (`if ! PRE=$(gh api ...)`) at line 5318 and line 5633. About 4 lines. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/test-and-mark-stable.yml:5317-5318,5631-5634 | severity=NIT | confidence=4\n  PROBLEM: The failure flag is set only for non-numeric output, so a `gh api` call that exits nonzero with empty stdout yields 0 through `|| echo \"0\"`.\n  WHY: The capture steps accept 0 as a valid baseline and may capture an unrelated run. The alt-model reads (5633, 5751-5762) have the same behavior.\n- changelog.d/9797-clarify-negative-test-output-guard.md:9 | severity=NIT | confidence=5\n  PROBLEM: The changelog says clarify and plan have no branch filter.\n  WHY: Both queries carry `branch=main` (test-and-mark-stable.yml line 5751 and lines 5764-5765), so this is a descriptive inaccuracy.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/9797-clarify-negative-test-output-guard.md:9 | severity=NIT | confidence=5\n  PROBLEM: The changelog says clarify and plan have no branch filter, but .github/workflows/test-and-mark-stable.yml:5751 sets `:main` for both.\n  WHY: Documentation inaccuracy only. Runtime behavior is correct.\n- .github/workflows/test-and-mark-stable.yml:5325-5329,5636-5639 | severity=NIT | confidence=3\n  PROBLEM: The failure signal is emitted only for non-numeric values, so empty stdout becomes a numeric 0 via `|| echo \"0\"`. The alt-model loop sets `LATEST=\"\"` with no read-failed flag, and line 5760 checks only PRE_CLARIFY and PRE_PLAN.\n  WHY: This is a theoretical failure mode, because the incident evidence (run 44490333814) is caught by the digit check. Pre_implement and pre_review could still anchor at `id > 0`.\n- HARDENING_SUGGESTIONS: after `LATEST=\"\"`, also write `pre_<wf>_run_id_read_failed=1`. About 6 lines. HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/9797-clarify-negative-test-output-guard.md:9 | severity=NIT | confidence=5\n  PROBLEM: The changelog says clarify and plan have no branch filter, but the capture query uses `branch=main` (.github/workflows/test-and-mark-stable.yml lines 5751, 5764-5765).\n  WHY: Execution is unaffected, but the description misleads readers diagnosing which runs the alt-model capture step can select.\n- .github/workflows/test-and-mark-stable.yml:5318,5325-5328,5358,5633,5760 | severity=NIT | confidence=4\n  PROBLEM: The failure flag is set only for non-numeric output, so empty stdout with a nonzero `gh api` exit yields a valid-looking 0 baseline. The alt-model reads share the fallback.\n  WHY: With no baseline and no new run, the capture step accepts PRE=0 and can select an older run instead of skipping analysis. The regression tests do not cover the empty-stdout case.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/test-and-mark-stable.yml:5318-5328,5633-5639 | severity=NIT | confidence=4\n  PROBLEM: The read-failed signal is set only for non-numeric values, so `gh api` with empty stdout and a nonzero exit yields 0 through `|| echo \"0\"`. The same pattern is at 5633-5639 and 5751, 5760-5762.\n  WHY: A transient network error leaves a false 0 watermark, so the analyser can be pointed at an unrelated run. This is the empty-stdout subset of the incident failure and is not covered.\n- changelog.d/9797-clarify-negative-test-output-guard.md:9 | severity=NIT | confidence=5\n  PROBLEM: The changelog says clarify and plan have no branch filter, but test-and-mark-stable.yml:5751 and 5764-5767 use `branch=main`.\n  WHY: No runtime failure. The accurate statement is that `branch=main` does not disambiguate runs from other issues.\n- HARDENING_SUGGESTIONS (2 related items): at lines 5318-5328, test the substitution's exit status (`if ! PRE_CLARIFY_RUN_ID=$(gh api ...)`) before the shape check, about 6 lines. At lines 5633-5639, use `if ! LATEST=$(gh api ...); then LATEST=\"\"; fi` so the capture skip at 5760-5762 triggers, about 5 lines. HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9a9fc1fbe91358f0505b8fb965f48f0a426c3a23518617315154501e6fd34a17",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9800,
+    "run_id": "44552997870",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44552997870",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261119155611_dc753daa65",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9800,
+    "run_id": "44552997870"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-19T15:56:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
