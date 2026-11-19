@@ -117,7 +117,12 @@ def test_alt_model_create_keeps_real_run_ids():
 
 def test_no_gh_api_capture_puts_its_fallback_inside_the_substitution():
 	"""``$(gh api ... || echo X)`` keeps the error body; the fallback must be
-	assigned outside: ``V=$(gh api ...) || V=X``."""
+	assigned outside: ``V=$(gh api ...) || V=X``. ``|| true`` leaks the body
+	the same way, so it is rejected too, except for these captures whose value
+	is checked before use: PHASE7_CANCEL_WORKFLOW_STATE (``^[a-z_]+$``),
+	LATE_PR_NUMBERS (``^[1-9][0-9]*$``) and PROJECT_BRANCH_PROBE_ERR (stderr
+	matched against "HTTP 404")."""
+	validated_true_captures = {"PHASE7_CANCEL_WORKFLOW_STATE", "LATE_PR_NUMBERS", "PROJECT_BRANCH_PROBE_ERR"}
 	lines = WORKFLOW.read_text(encoding="utf-8").split("\n")
 	offenders = []
 	i = 0
@@ -127,7 +132,10 @@ def test_no_gh_api_capture_puts_its_fallback_inside_the_substitution():
 			while lines[j].rstrip().endswith("\\") and j + 1 < len(lines):
 				j += 1
 			command = "\n".join(lines[i:j + 1])
-			if re.search(r"\|\|\s*echo\b[^)]*\)", command):
+			match = re.search(r"\|\|\s*(echo|true)\b[^)]*\)", command)
+			assigned = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)=", command)
+			allowed = match and match.group(1) == "true" and assigned and assigned.group(1) in validated_true_captures
+			if match and not allowed:
 				offenders.append(i + 1)
 			i = j + 1
 		else:
