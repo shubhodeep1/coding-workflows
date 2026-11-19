@@ -362,6 +362,26 @@ def test_enumerate_step_fails_closed_on_an_unlistable_path() -> None:
 		rc, output, github_output = _run_enumerate_step(repo_dir, Path(tmp))
 		assert rc == 1, output
 		assert "outcome=enumerate_failed exit_code=3" in output, output
+		assert "has a line break in its name or a name that is not valid UTF-8; rename it" in output, output
+		assert github_output == ""
+
+
+def test_enumerate_step_failure_other_than_exit_3_gives_no_rename_advice() -> None:
+	"""Only the parser's own exit 3 means a file must be renamed. Any other
+	failure (here: added.txt cannot be written) names no file-name cause."""
+	def _adds_a_completed_plan(repo_dir: Path) -> None:
+		(repo_dir / "docs" / "completed" / "x.md").write_text("new\n", encoding="utf-8")
+
+	with tempfile.TemporaryDirectory() as tmp:
+		repo_dir = _merge_commit_repo(Path(tmp), _adds_a_completed_plan)
+		# A directory where the parser writes added.txt makes its write fail.
+		(Path(tmp) / "plan-archival-lint" / "added.txt").mkdir(parents=True)
+		rc, output, github_output = _run_enumerate_step(repo_dir, Path(tmp))
+		assert rc == 1, output
+		assert "outcome=enumerate_failed exit_code=" in output, output
+		assert "outcome=enumerate_failed exit_code=3" not in output, output
+		assert "rename it" not in output, output
+		assert "the enumerate script failed" in output, output
 		assert github_output == ""
 
 

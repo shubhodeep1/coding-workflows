@@ -358,7 +358,7 @@ jobs:
           if [ "${plan_archival_enum_rc}" -ne 0 ]; then
             # Rename advice only for the parser's own exit 3; any other code
             # (an unhandled error, a missing python3) is not a naming problem.
-            plan_archival_enum_reason="the diff of the merge commit could not be parsed"
+            plan_archival_enum_reason="the enumerate script failed: it could not parse the diff or write its output, or python3 did not start"
             if [ "${plan_archival_enum_rc}" -eq 3 ]; then
               plan_archival_enum_reason="a file added under docs/completed/ has a line break in its name or a name that is not valid UTF-8; rename it"
             fi
