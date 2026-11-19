@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_sweep_round_cap.sh:164 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The per-PR count only includes dispatched rounds created at or after the current head commit's committer date (`$created >= $since[.]`, with `$since` built at lines 105-115 from `head_committed_at`). Each autofix round commits `[ai-autofix]` onto the branch and moves the head date past earlier rounds, including the round that made the commit.\n  WHY: The count stays near 1 and never reaches `SWEEP_REVIEW_MAX_ROUNDS` (10), so the cap is inert for churn PRs such as #9134 and the sweep keeps re-dispatching every 30 minutes. Source severity was MAJOR.\n- .github/workflows/ci.yml (step `bash scripts/ci_final_merge_ref_fresh.sh --depth 1`), scripts/ci_final_merge_ref_fresh.sh | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: All 38 failed check-runs come from the stale merge-ref guard (`CI_FINAL_MERGE_REF pr=9683 ... outcome=stale reason=not_refreshed`), not from the PR diff.\n  WHY: The PR head's merge ref still merges into base `7ab9c01` while `main` is at `2f85192`. The guard's own message says this is not a defect in the PR, and a base-sync plus final-CI run would clear it. Source severity was NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A PR whose head is not approved ... and that has SWEEP_REVIEW_MAX_ROUNDS (default 10) or more rounds in the last SWEEP_REVIEW_ROUND_WINDOW_HOURS (default 48) is not dispatched\"; counts each PR's dispatched internal-review.yml runs in a time window from one paginated listing per tick\n  expected_change_site: scripts/review_sweep_round_cap.sh, the count filter that turns the listing into per-PR counts\n  confidence=4\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: scripts/review_sweep_round_cap.sh:164 also requires `$created >= $since[.]` (the head commit's committer date from scripts/review_sweep_head_gate.sh:112). This head-date scope is not in the described rule and appears only in the README row. A PR with 12 rounds in the 48-hour window whose head was committed after the 11th round is not capped.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_sweep_round_cap.sh:164 | severity=MAJOR | confidence=4\n  PROBLEM: The per-PR count is not \"dispatched rounds in the window\" but \"dispatched rounds created at or after the current head commit's committer date\". Autofix rounds commit `[ai-autofix]` onto the branch (scripts/review_commit_changes.sh:664), which advances the head and moves `head_committed_at` past the rounds already dispatched.\n  WHY: The count stays near 1 and never reaches `SWEEP_REVIEW_MAX_ROUNDS` (10), so the sweep keeps re-dispatching every 30 minutes. This is the behaviour the PR set out to stop, and PR #9134 is such a case.\n- .github/workflows/ci.yml (step `bash scripts/ci_final_merge_ref_fresh.sh --depth 1`), scripts/ci_final_merge_ref_fresh.sh | severity=NIT | confidence=4\n  PROBLEM: Every listed failure comes from the stale merge-ref guard, which is not part of this PR's diff.\n  WHY: The guard refuses to test a stale base and exits 1. Its own message says this is not a defect in the PR, and no edit in this diff can change that.\n- TASK_GAP: Requirement: \"A PR whose head is not approved (`head_gate_state` present and not `success`) and that has `SWEEP_REVIEW_MAX_ROUNDS` (default 10) or more rounds in the last `SWEEP_REVIEW_ROUND_WINDOW_HOURS` (default 48) is not dispatched\", and \"counts each PR's dispatched `internal-review.yml` runs in a time window from one paginated listing per tick\"\n  Expected change site: scripts/review_sweep_round_cap.sh, the count filter that turns the listing into per-PR counts.\n  Evidence of absence: The filter at scripts/review_sweep_round_cap.sh:164 additionally requires `$created >= $since[.]`, the head commit committer date (scripts/review_sweep_head_gate.sh:112). This scope is not in the described rule, so a PR with 12 rounds in 48 hours whose head was committed after the 11th round is not capped.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- HARDENING: scripts/review_sweep_round_cap.sh, the `outcome=counted` summary at lines 147-175\n  PROBLEM: The summary reports only `runs=`, `prs=` and `truncated=`, so an inert head-date-scoped cap looks the same as no rounds.\n  WHY: Suggested fix is to emit `scoped=<n>` on the `REVIEW_SWEEP_ROUND_CAP outcome=counted` line and list it in the agents fragment (about 3 lines).\n- HARDENING: scripts/review_sweep_round_cap.sh, line 205 (comment write) and line 215 (label write)\n  PROBLEM: The label write uses `gh_api_retry --idempotent` but the preceding comment write uses plain `gh api`, so a transient failure loses the escalation and the next tick posts the comment again.\n  WHY: Suggested fix is to record the PR number in the existing `escalate_failed reason=comment_write` line (about 1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2c07d425a039ac2aacef5107e5d5555d8d77e69b4a64f96d68b5cecdf01b82a2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9683,
+    "run_id": "44388928710",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44388928710",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261119000418_94d1235682",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9683,
+    "run_id": "44388928710"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-19T00:04:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
