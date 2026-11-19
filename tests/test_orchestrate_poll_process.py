@@ -21681,11 +21681,12 @@ def test_stall_judge_resolve_merge_conflict_dispatches_review_and_increments_onc
 
 
 def test_stall_judge_resolve_merge_conflict_skips_held_pr():
-	# PR #9750: the linked-PR caches lack the hold fields. recover_stalled_issue
-	# re-checks the implementation-PR payload before the judge, and the
-	# resolve_merge_conflict arm re-checks the REST payload, so a held PR the
-	# judge would route to conflict resolution gets no update-branch, dispatch
-	# or attempt. Mergeable, so the wave-level conflict path stays out of it.
+	# PR #9750: the linked-PR caches lack the hold fields, so the pre-judge
+	# hold check in recover_stalled_issue fails open on both cache layers (the
+	# cache entry exists, so its REST fallback is not reached) and the judge
+	# runs. The resolve_merge_conflict arm's REST re-check then skips the held
+	# PR: no update-branch, dispatch or attempt. Mergeable, so the wave-level
+	# conflict path stays out of it.
 	state = _base_state(status="in_progress")
 	issue = state["waves"][0]["issues"][0]
 	issue["status"] = "in_progress"
