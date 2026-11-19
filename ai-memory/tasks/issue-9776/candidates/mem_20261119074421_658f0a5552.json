@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Codebase findings:\n- **Every failing test reaches the review-blocked judge.** In `scripts/orchestrate_poll_process.sh`, `assemble_judge_static_context \"${RUNTIME_DIR}/judge_static_rb.txt\" inline` (:31403) always pastes the full agents file into the judge prompt (the `inline` override, :1481-1486, :1554-1561). The index view is skipped.\n- **The size check runs after the worktree is created.** It is at :31491, after worktree creation at :31266. When the prompt is over 1,048,576 characters, the poller logs `::error::Review-blocked judge prompt ... exceeds codex's 1048576-character stdin cap; skipping 2 attempts` and exits 0.\n- **That explains the test failures.** None of the judge or fix logs (`REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED`, `reason=head_moved`, `reason=no_staged_changes`) are printed, which matches the bare `assert` failures. The tests that pass all stop before the judge.\n- **The test sandbox copies agents.md as-is.** `tests/test_orchestrate_poll_process.py:100-105` (`_SANDBOX_FILES`) copies the repo's real `agents.md` with no size limit. Stable's agents.md has the release fragments folded in (backport #9751), so it is larger than main's.\n- **Main's CI shows no failure.** On main, the fragments under `agents.d/` are still pending and not yet folded in.\n- **Not confirmed.** I have not measured the size of stable's agents.md at `728d869`. The planner must check it, and read the \"Review-blocked judge prompt size:\" line from one failing test's stdout.\nQ1: What should the fix cover, given that the leading cause is now the judge prompt size rather than `git worktree add`?\nChoices:\n- A: Tests only. Port PR #9777's approach to stable: limit the size of the agents.md copy in `_make_poller_sandbox`, so the judge-path tests stay under the stdin limit. Add a regression test that fails if the sandbox's judge prompt goes over the limit. Leave the poller's production behaviour unchanged. (RECOMMENDED)\n- B: Tests plus production. Do A, and also keep the real review-blocked judge prompt (and the integration-conflict and security-pass judges, which also use `inline`) under the limit when agents.md is too large, for example by trimming or falling back. This is broader, and it touches fix-target logic the issue says must not be weakened.\n- C: Follow the issue's original plan. Treat `git worktree add` on git 2.56.1 as the suspected cause, and change how the worktree is created (`--detach` then `checkout -B`, or prune first). Only choose this if you have evidence that contradicts the size finding.\n  **Note:** incompatible with Q2:C. Under C the stderr capture is how the cause would be confirmed.\nQ2: Should the heal also make the worktree-creation failures visible, as step 1 of the issue's suggested fix proposes?\nChoices:\n- A: Yes, a small addition. At the three `git worktree add` sites (:31237, :31244, :31266), capture git's stderr under `RUNTIME_DIR`. On failure, print its last line on a single line, with `::` neutralised and URL credentials redacted, next to the existing `REVIEW_BLOCKED_FIX_TARGET_REJECTED` and `Could not prepare follow-up branch` lines. Also add the tail of the poller's stdout to the failure message of the failing review-blocked assertions. (RECOMMENDED)\n- B: Only the test-side part: add the tail of the poller's stdout to the failing assertions' messages. Leave the poller script unchanged.\n- C: No. Keep the change limited to the size fix from Q1.",
+  "fingerprint": "c6e06925892cb29a0799c699acbaa718fa7a604ff91c357f8c976c37834016f3",
+  "lineage": {
+    "issue_number": 9776,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44480750096",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44480750096",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261119074421_658f0a5552",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9776,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44480750096"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #9776 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-19T07:44:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
