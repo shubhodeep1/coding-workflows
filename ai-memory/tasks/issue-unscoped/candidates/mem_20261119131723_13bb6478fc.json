@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:11686-11687 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The assertion searches stdout plus stderr for \"Aborting follow-up PR creation to avoid targeting main\", but its failure message `_poller_stdout_tail(result)` (defined at line 116) shows only the last 4000 characters of stdout.\n  WHY: If the needle appears only in stderr, a failing run hides the relevant output, which is the diagnosability gap #9776 set out to close. All four reviewers rated it NIT, with confidence 2 to 3.\n- tests/test_orchestrate_poll_process.py:11845-11870 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: `test_make_poller_sandbox_bounds_agents_md_copy` duplicates the bound assertions of the existing `test_poller_sandbox_bounds_agents_md_copy` (line 27508).\n  WHY: Each suite run pays for one extra full sandbox build, and the two tests can drift if the bound or marker changes. Both reviewers rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_orchestrate_poll_process.py:~11686 (`_poller_stdout_tail` at line 116) | severity=NIT | confidence=2\n  PROBLEM: The needle is searched in stdout plus stderr, but the failure message shows only the last 4000 characters of stdout.\n  WHY: Nothing fails at runtime. If the needle is only printed to stderr, a failing run still hides the relevant output.\n- tests/test_orchestrate_poll_process.py:11845-11870 (next to the existing test at line 27508) | severity=NIT | confidence=2\n  PROBLEM: Both tests build a full poller sandbox and assert the same bound on the `agents.md` copy.\n  WHY: Nothing fails. It costs one extra sandbox build per run, and the two tests can drift if the bound changes and only one is updated.\n- HARDENING_SUGGESTIONS: in `_poller_stdout_tail` (line 116) and the assertion near line 11686, append `str(result.get(\"stderr\", \"\"))[-1000:]` to the tail text, or add a small stderr tail to that assertion's message (about 2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_orchestrate_poll_process.py:11686-11687 | severity=NIT | confidence=2\n  PROBLEM: `_poller_stdout_tail` only processes `stdout`, so a failure reason reported only in `stderr` is missing from the assertion message.\n  WHY: If the expected string is only in `stderr`, the `_poller_stdout_tail` output gives no clues for debugging the failure.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_process.py:~11686 (test_review_blocked_merged_followup_refuses_default_base_when_active_integration_branch_unavailable) | severity=NIT | confidence=3\n  PROBLEM: The assertion checks `result[\"stdout\"] + result[\"stderr\"]`, but its failure message `_poller_stdout_tail(result)` includes only the last 4000 characters of stdout.\n  WHY: If the needle appears only in stderr and stdout is long enough to push it out of the tail, the AssertionError message lacks the needle. This assertion is the lone holdout among the sites converted to `_assert_in_poller_stdout(...)`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_orchestrate_poll_process.py:11686 (helper at lines 116-122) | severity=NIT | confidence=3\n  PROBLEM: The assertion checks stdout plus stderr, but `_poller_stdout_tail` renders only the last 4000 characters of `result[\"stdout\"]` (line 117).\n  WHY: If the abort line is only in stderr, the failure stays unexplained. This is the same empty-message failure mode #9776 set out to fix.\n- tests/test_orchestrate_poll_process.py:11845-11870 (vs existing 27508-27538) | severity=NIT | confidence=3\n  PROBLEM: The new test builds a full poller sandbox (lines 189-219) and re-asserts the facts the existing #9753 test already asserts. Only the byte-for-byte check of the other `_SANDBOX_FILES` entries (11861-11862) and the decoded-length `< 1048576` check (11865) are new.\n  WHY: Every suite run pays for one extra sandbox build, and two overlapping tests must be updated in lockstep or they drift.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fc5f32dec1687059146a232ddba2e9e874f582fe3be0f9814d180c9e52870124",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9779,
+    "run_id": "44517970644",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44517970644",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261119131723_13bb6478fc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9779,
+    "run_id": "44517970644"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-19T13:17:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
