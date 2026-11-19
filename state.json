@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-19T09:38:06Z",
+  "tick_at": "2026-11-19T09:56:19Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,12 +11,12 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 6
+    "tracking_issues": 5
   },
   "tracking_issues": [
     {
       "current_wave": 19,
-      "integration_ahead_by": "227",
+      "integration_ahead_by": "228",
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -118,27 +118,6 @@
       "title": "[Orchestrator] Let non-conflicting approved PRs merge past the merge lease (plan docs/plans/merge-lease-parallel-merges-plan.md, phases 1-5)",
       "total_waves": 5,
       "wave_complete": false
-    },
-    {
-      "current_wave": 1,
-      "integration_ahead_by": "0",
-      "issue_counts": {
-        "closed": 2,
-        "done": 0,
-        "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 0,
-        "not_created": 0,
-        "ready_to_merge": 0,
-        "review_blocked": 0,
-        "skipped": 0
-      },
-      "number": 9785,
-      "project_complete": true,
-      "status": "failed",
-      "title": "[Orchestrator] [E2E Orchestrate Smoke 44490333814] Update two smoke canary files in parallel",
-      "total_waves": 1,
-      "wave_complete": true
     }
   ]
 }
