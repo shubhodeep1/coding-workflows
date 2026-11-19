@@ -674,10 +674,12 @@ class TickMetrics(unittest.TestCase):
 		labels = {"5": ["ai:merge-lease-wait"]}
 		st = {"pulls": pulls, "labels": labels, "files": {"5": ["a"]}, "closed": [4]}
 		_seed_lease(st, _record(4))
-		_, out = self._tick(st, pulls, labels, prelude="_mt_dispatch_review() { sleep 2; return 0; }\n")
+		_, out = self._tick(st, pulls, labels, prelude="_mt_dispatch_review() { sleep 5; return 0; }\n")
 		rows = _metrics(out)
 		self.assertEqual([r["event"] for r in rows], ["released", "granted"], out)
-		self.assertLessEqual(int(rows[1]["ts"]) - int(rows[0]["ts"]), 1, out)
+		# Whole-second clocks plus several jq/fake-gh spawns sit between the two
+		# reads; a 3 s bound under a 5 s dispatch keeps margin on a loaded runner.
+		self.assertLessEqual(int(rows[1]["ts"]) - int(rows[0]["ts"]), 3, out)
 
 	def test_held_reports_queue_depth(self) -> None:
 		pulls = [_pull(4), _pull(5)]
