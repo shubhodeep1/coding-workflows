@@ -21887,7 +21887,45 @@ def test_retrigger_review_skips_skip_ai_title_pr_without_consuming_stall_budget(
 	_assert_retrigger_review_skips_held_pr({"title": "[skip ai] parked"}, "skip_ai_title")
 
 
-def _assert_retrigger_review_skips_held_pr(pr_extra: dict, detail: str) -> None:
+def test_managed_stall_recovery_skips_stall_judge_for_draft_pr():
+	_assert_managed_held_pr_skips_stall_judge({"draft": True}, "draft")
+
+
+def test_managed_stall_recovery_skips_stall_judge_for_skip_ai_title_pr():
+	_assert_managed_held_pr_skips_stall_judge({"title": "[skip ai] parked"}, "skip_ai_title")
+
+
+def _assert_managed_held_pr_skips_stall_judge(pr_extra: dict, detail: str) -> None:
+	# Managed (orchestrator-project) issue at attempt 3: recover_stalled_issue
+	# must not call the stall judge for a held PR, even when the judge would
+	# answer retrigger_review.
+	result = _assert_retrigger_review_skips_held_pr(
+		pr_extra,
+		detail,
+		recovery_count=2,
+		mock_stall_judge_json={"action": "retrigger_review", "justification": "test", "confidence": "high"},
+	)
+	assert "Action: run_stall_judge" in result["stdout"], result["stdout"]
+	# A judge run caches its decision in the state file.
+	assert not result["latest_state"].get("judge_decision_cache"), result["latest_state"].get("judge_decision_cache")
+	assert not any(
+		"Stall Judge" in str(comment.get("body", ""))
+		for comment in result["issues"]["10"]["comments"]
+	)
+
+
+def test_managed_retrigger_review_rechecks_hold_on_rest_payload():
+	# Linked-PR cache without isDraft/title fails open in recover_stalled_issue;
+	# execute_stall_recovery_action(retrigger_review) re-checks the REST payload
+	# before its cancelled-run dispatch (poller run 44436886020, PR #9744).
+	_assert_retrigger_review_skips_held_pr(
+		{"draft": True},
+		"draft",
+		mock_store_extra={"graphql_omit_pr_hold_fields": True},
+	)
+
+
+def _assert_retrigger_review_skips_held_pr(pr_extra: dict, detail: str, recovery_count: int = 0, **extra) -> dict:
 	# execute_stall_recovery_action(retrigger_review), reached by the managed
 	# path and by the standalone stall judge: a held PR whose last review was
 	# cancelled gets no dispatch, no empty commit and no conflict routing.
@@ -21896,7 +21934,7 @@ def _assert_retrigger_review_skips_held_pr(pr_extra: dict, detail: str) -> None:
 	issue["status"] = "in_progress"
 	issue["last_seen_phase"] = "ai:done"
 	issue["status_since_ts"] = 1
-	issue["stall_recovery_count"] = 0
+	issue["stall_recovery_count"] = recovery_count
 	pr = {
 		"number": 89,
 		"body": "Closes #10",
@@ -21921,12 +21959,14 @@ def _assert_retrigger_review_skips_held_pr(pr_extra: dict, detail: str) -> None:
 			{"workflow": "internal-review.yml", "branch": "ai/issue-10", "status": "completed", "conclusion": "cancelled"},
 		],
 		mock_git_push_success=True,
+		**extra,
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
-	assert issue_entry["stall_recovery_count"] == 0
+	assert issue_entry["stall_recovery_count"] == recovery_count
 	assert result.get("git_push_calls", []) == []
 	assert result["review_dispatches"] == []
 	assert f"STALL_SKIP issue=10 reason=pr_ai_hold pr=89 detail={detail} phase=ai:done action=none" in result["stdout"]
+	return result
 
 
 def test_managed_stall_recovery_reconciles_merged_pr_with_stale_merge_train_label():

@@ -27672,6 +27672,26 @@ recover_stalled_issue() {
   esac
 
   # Cancel any zombie runs for this issue before retrying.
+  # Owner hold on the linked PR (draft / `[skip ai]` title, PR #9750):
+  # managed ai:done issues skip the stall judge and every dispatch. Reads
+  # the wave's batched GraphQL linked_pr (0 extra API calls); a missing
+  # payload fails open, and execute_stall_recovery_action retrigger_review
+  # re-checks the REST payload.
+  if [ "${phase}" = "ai:done" ] && [ "${action}" != "skip" ]; then
+    local _recover_hold_pr_json=""
+    _recover_hold_pr_json="$(printf '%s' "${_current_wave_details_json:-}" | jq -c --arg n "${issue_num}" '.[$n].linked_pr // empty' 2>/dev/null || true)"
+    local _recover_hold_reason=""
+    _recover_hold_reason="$(_stall_pr_ai_hold_reason "${_recover_hold_pr_json}")"
+    if [ -n "${_recover_hold_reason}" ]; then
+      local _recover_hold_pr_num=""
+      _recover_hold_pr_num="$(printf '%s' "${_recover_hold_pr_json}" | jq -r '.number // empty' 2>/dev/null || true)"
+      echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${_recover_hold_pr_num} detail=${_recover_hold_reason} phase=${phase} action=none"
+      STALL_RECOVERY_EFFECTIVE_ACTION="${action}_skipped_pr_ai_hold"
+      STALL_RECOVERY_SHOULD_INCREMENT="false"
+      return 1
+    fi
+  fi
+
   if [ "${action}" != "skip" ] && [ "${action}" != "attempt_merge" ] && [ "${action}" != "escalate_human" ]; then
     cancel_zombie_runs_for_issue "${issue_num}"
   fi
