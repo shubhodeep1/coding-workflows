@@ -1,0 +1,18 @@
+=== ISSUE 001 ===
+FILE: src/module.py
+LINES: 2-3
+LENS: CORRECTNESS & LOGIC
+SEVERITY: high
+FLAGGED_BY: reviewer_alpha, reviewer_beta
+CLASSIFICATION: must-fix
+EVIDENCE:
+  reviewer_alpha> "saw bug"
+  reviewer_beta> "same anchor"
+CURRENT_CODE:
+  if x == None:
+    return
+SUGGESTED_APPROACH:
+  Use is None check.
+NOTES:
+  none
+=== END ISSUE 001 ===

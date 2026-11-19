@@ -1,0 +1,13 @@
+{
+  "name": "check_triage_target_branch_main",
+  "issues": {
+    "101": {
+      "body": "<!-- check-failure-triage:fp=0000000000000000000000000000000000000000000000000000000000000000 -->\n\n## Automated CI failure triage\n\nTarget branch: main\n"
+    }
+  },
+  "branch_exists": {
+    "main": true
+  },
+  "expected_stdout": "main",
+  "expected_exit_code": 0
+}

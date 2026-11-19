@@ -1,0 +1,26 @@
+Changes made:
+- Modified scripts/example.sh to fix the null-deref reported by reviewer 1
+
+Change status:
+- edited
+
+Already satisfied (suggested but already present):
+- none
+
+Ignored suggestions (with short reason):
+- none
+
+Reviewer files processed:
+- /runtime/reviewer_1.txt checksum=aaaa used
+
+Review file issue audit:
+- /runtime/reviewer_1.txt total issues listed: 1 issues applied: 1 issues already applied: 0 issues ignored: 0
+
+PR comment audit:
+- none
+
+Regression fingerprint:
+- n/a (no prior-hunk overlap)
+
+Runtime failure path:
+- n/a (no prior-hunk overlap)

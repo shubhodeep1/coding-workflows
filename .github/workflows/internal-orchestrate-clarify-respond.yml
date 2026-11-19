@@ -1,0 +1,37 @@
+name: "Internal: AI Orchestrate Clarify Respond"
+# [issue:N] links the run to its issue for the poller's stall recovery.
+# Release-gate smoke issues ([E2E ...] titles) keep the issue title: the
+# stable gate finds their runs by display_title == issue title.
+run-name: "${{ startsWith(github.event.issue.title, '[E2E ') && github.event.issue.title || format('Internal: AI Orchestrate Clarify Respond [issue:{0}]', github.event.issue.number) }}"
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
+
+jobs:
+  respond:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.pull_request == null &&
+      !contains(toJson(github.event.issue.labels.*.name), 'ai:auto-heal-source') &&
+      (
+        (
+          github.event.comment.user.type == 'Bot' &&
+          vars.AI_PIPELINE_APPROVER_LOGIN != '' &&
+          github.event.comment.user.login == vars.AI_PIPELINE_APPROVER_LOGIN
+        ) ||
+        (
+          github.event.comment.user.type == 'User' &&
+          contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+        )
+      ) &&
+      contains(github.event.comment.body, 'Clarification required')
+    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate_clarify_respond.yml@promote-candidate
+    secrets: inherit

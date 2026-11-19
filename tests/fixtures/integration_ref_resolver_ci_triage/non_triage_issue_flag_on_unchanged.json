@@ -1,0 +1,20 @@
+{
+  "name": "non_triage_issue_flag_on_unchanged",
+  "env": {
+    "CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED": "true"
+  },
+  "issues": {
+    "101": {
+      "body": "Plain issue body\n",
+      "labels": [
+        {
+          "name": "bug"
+        }
+      ],
+      "author_association": "OWNER"
+    }
+  },
+  "branch_exists": {},
+  "expected_stdout": "",
+  "expected_exit_code": 0
+}

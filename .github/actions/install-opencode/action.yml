@@ -1,0 +1,58 @@
+name: Install OpenCode CLI
+description: Install and verify a pinned OpenCode CLI, then warm its models.dev cache.
+
+inputs:
+  opencode_version:
+    description: Pinned OpenCode CLI version.
+    required: false
+    default: 1.18.23
+  install_max_attempts:
+    description: How many times to try the npm registry fetch before failing (transient network resets).
+    required: false
+    default: "3"
+
+runs:
+  using: composite
+  steps:
+    - name: Install and verify OpenCode CLI
+      shell: bash
+      env:
+        OPENCODE_VERSION: ${{ inputs.opencode_version }}
+        OPENCODE_INSTALL_MAX_ATTEMPTS: ${{ inputs.install_max_attempts }}
+      run: |
+        set -euo pipefail
+
+        if [[ ! "${OPENCODE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "::error::install-opencode: opencode_version must be an exact numeric semantic version" >&2
+          exit 2
+        fi
+
+        if [[ ! "${OPENCODE_INSTALL_MAX_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]]; then
+          echo "::error::install-opencode: install_max_attempts must be a positive integer" >&2
+          exit 2
+        fi
+
+        # The registry fetch is the one network step here and has failed on
+        # transient resets (ECONNRESET, 2026-10-09, run 37862635273), which
+        # the heal pipeline then filed as a code defect. Retry a bounded
+        # number of times with a short backoff; every other failure in this
+        # action stays fatal on the first attempt.
+        install_attempt=1
+        until npm install -g "opencode-ai@${OPENCODE_VERSION}" --no-audit --no-fund; do
+          if [ "${install_attempt}" -ge "${OPENCODE_INSTALL_MAX_ATTEMPTS}" ]; then
+            echo "::error::install-opencode: npm install failed ${install_attempt} time(s); giving up" >&2
+            exit 1
+          fi
+          echo "::warning::install-opencode: npm install attempt ${install_attempt} failed; retrying in $((install_attempt * 10))s"
+          sleep "$((install_attempt * 10))"
+          install_attempt=$((install_attempt + 1))
+        done
+
+        installed_version="$(opencode --version)"
+        if [ "${installed_version}" != "${OPENCODE_VERSION}" ]; then
+          echo "::error::install-opencode: expected version ${OPENCODE_VERSION}, got ${installed_version}" >&2
+          exit 1
+        fi
+
+        opencode models --refresh
+        opencode run --help >/dev/null

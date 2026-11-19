@@ -1,0 +1,56 @@
+{% set app_port = manifest.get("port", 8000) -%}
+{% set app_entry = manifest.get("entry", "app.py") -%}
+{% set health_path = slots.get("health_path", "/health") -%}
+{% set mongo_db_name = slots.get("mongo_db_name", "app") -%}
+{% set mongo_image = slots.get("mongo_image", "mongo:7") -%}
+services:
+  app:
+    init: true
+    build:
+      context: ..
+      dockerfile: {{ output_root_name }}/Dockerfile.app
+    working_dir: /workspace
+    environment:
+      FLASK_APP: "{{ app_entry }}"
+      FLASK_RUN_HOST: "0.0.0.0"
+      FLASK_RUN_PORT: "{{ app_port }}"
+      APP_PORT: "{{ app_port }}"
+      APP_URL: "http://127.0.0.1:{{ app_port }}{{ health_path }}"
+      TEST_HOST_HEADER: "${TEST_HOST_HEADER:-app.local.test}"
+      MONGO_URL: "mongodb://mongo:27017/{{ mongo_db_name }}"
+    ports:
+      - "{{ app_port }}:{{ app_port }}"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - '/bin/sh -c "curl -fsS -H \"Host: ${TEST_HOST_HEADER:-app.local.test}\" \"http://127.0.0.1:{{ app_port }}{{ health_path }}\" >/dev/null"'
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  mongo:
+    init: true
+    image: "{{ mongo_image }}"
+    # The image declares VOLUME /data/db and /data/configdb. Without these
+    # tmpfs mounts Docker creates anonymous volumes and copies the image
+    # content into them, xattrs included; the validation sandbox's rootless
+    # daemon cannot set `system.posix_acl_default` there and container
+    # creation fails ("failed to copy xattrs ... invalid argument"). The test
+    # database is throwaway, so memory-backed mounts lose nothing.
+    tmpfs:
+      - /data/db
+      - /data/configdb
+    environment:
+      MONGO_INITDB_DATABASE: "{{ mongo_db_name }}"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - '/bin/sh -c "mongosh --quiet --eval \"db.runCommand({ ping: 1 }).ok\" \"mongodb://127.0.0.1:27017/{{ mongo_db_name }}\" >/dev/null"'
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s

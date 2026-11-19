@@ -1,0 +1,6 @@
+# Optional orchestrator per-state dispatch caps.
+# Remove or empty this file to restore the legacy uncapped behavior.
+# Use -1 to disable an individual cap.
+global_max_concurrent: -1
+max_concurrent_by_state:
+  ai:review-blocked: 2

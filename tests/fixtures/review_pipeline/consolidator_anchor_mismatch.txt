@@ -1,0 +1,12 @@
+=== ISSUE 005 ===
+FILE: src/module.py
+LINES: 200-210
+LENS: CORRECTNESS & LOGIC
+SEVERITY: med
+FLAGGED_BY: reviewer_alpha
+CLASSIFICATION: nice-to-have
+EVIDENCE:
+  reviewer_alpha> "line range stale"
+SUGGESTED_APPROACH:
+  refresh anchors
+=== END ISSUE 005 ===

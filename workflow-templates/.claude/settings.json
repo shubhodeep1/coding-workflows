@@ -1,0 +1,152 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -q -sS -X PUT https://api.cloudflare.com/client/v4/accounts/*)",
+      "Bash(curl -q -sS -X POST https://api.cloudflare.com/client/v4/accounts/*)",
+      "Bash(curl -q -sS -X PATCH https://api.cloudflare.com/client/v4/accounts/*)",
+      "Edit",
+      "Write",
+      "Bash(git fetch *)",
+      "Bash(git checkout *)",
+      "Bash(git switch *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git mv *)",
+      "Bash(git rm *)",
+      "Bash(git merge *)",
+      "Bash(git worktree *)",
+      "Bash(git stash *)",
+      "Bash(git status *)",
+      "Bash(git log *)",
+      "Bash(git diff *)",
+      "Bash(git show *)",
+      "Bash(git ls-remote *)",
+      "Bash(git rev-parse *)",
+      "Bash(git push -u origin claude/*)",
+      "Bash(git push origin claude/*)",
+      "Bash(git push --force-with-lease origin claude/*)",
+      "Bash(git push --force-with-lease=claude/* origin claude/*)",
+      "Bash(gh api repos/*)",
+      "Bash(gh api user *)",
+      "Bash(gh run list *)",
+      "Bash(gh run view *)",
+      "Bash(gh workflow run security-audit.yml *)",
+      "Bash(gh workflow run ai-security-audit.yml *)",
+      "Bash(gh workflow run internal-validate.yml *)",
+      "Bash(gh workflow run ai-validate.yml *)",
+      "Bash(gh workflow run review_autofix.yml *)",
+      "Bash(gh workflow run ai-review.yml *)",
+      "Bash(gh workflow run internal-review.yml *)",
+      "Bash(python3 -m pytest *)",
+      "Bash(PYTHONDONTWRITEBYTECODE=1 python3 -m pytest *)",
+      "Bash(PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_pr_body_auto_close.py *)",
+      "Bash(ruff check *)",
+      "Bash(yamllint *)",
+      "Bash(test *)",
+      "mcp__github__create_pull_request",
+      "mcp__github__update_pull_request",
+      "mcp__github__add_issue_comment",
+      "mcp__github__pull_request_read",
+      "mcp__github__issue_read",
+      "mcp__github__issue_write",
+      "mcp__github__add_issue_comment",
+      "mcp__github__update_issue_comment",
+      "mcp__github__list_pull_requests",
+      "mcp__github__list_issues",
+      "mcp__github__search_issues",
+      "mcp__github__search_pull_requests",
+      "mcp__github__get_file_contents",
+      "mcp__github__list_branches",
+      "mcp__github__list_commits",
+      "mcp__github__get_me",
+      "mcp__github__actions_get",
+      "mcp__github__actions_list",
+      "mcp__github__get_job_logs",
+      "mcp__github__actions_run_trigger",
+      "mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a",
+      "ReadNotifications",
+      "CronCreate",
+      "CronDelete",
+      "CronList",
+      "PushNotification"
+    ],
+    "ask": [
+      "Bash(git push * --delete*)",
+      "Bash(git push * -d *)",
+      "Bash(git push * -d)",
+      "Bash(git push * --prune*)",
+      "Bash(git push *:main*)",
+      "Bash(git push *:master*)",
+      "Bash(git push *refs/heads/main*)",
+      "Bash(git push *refs/heads/master*)",
+      "Bash(git push * main)",
+      "Bash(git push * main *)",
+      "Bash(git push * master)",
+      "Bash(git push * master *)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/session-start.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pr_merge_status_guard.py",
+            "timeout": 90
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/gh_api_write_guard.py",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__github__push_files|mcp__github__create_or_update_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pr_merge_status_guard.py",
+            "timeout": 90
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*__subscribe_pr_activity",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pr_watch_guard.py",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/prepush_affected_tests.py hook",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "schema_version": "write_guards.v1",
+  "phases": {
+    "implement": {
+      "allowed_globs": [
+        "**"
+      ],
+      "blocked_globs": [
+        ".git/**"
+      ],
+      "conditional_blocked_globs": [
+        {
+          "env_var": "ALLOW_WORKFLOW_EDITS",
+          "allowed_values": [
+            "true"
+          ],
+          "globs": [
+            ".github/workflows/**"
+          ]
+        }
+      ]
+    },
+    "plan": {
+      "allowed_globs": [
+        "/__write_guard_plan_no_repo_writes__/**"
+      ],
+      "blocked_globs": [
+        ".git/**"
+      ],
+      "conditional_blocked_globs": []
+    },
+    "review_editor": {
+      "allowed_globs": [
+        "**"
+      ],
+      "blocked_globs": [
+        ".git/**"
+      ],
+      "conditional_blocked_globs": [
+        {
+          "env_var": "ALLOW_WORKFLOW_EDITS",
+          "allowed_values": [
+            "true"
+          ],
+          "globs": [
+            ".github/workflows/**"
+          ]
+        }
+      ]
+    },
+    "validate_fix_harness": {
+      "allowed_globs": [
+        "validation/**",
+        "scripts/**"
+      ],
+      "blocked_globs": [
+        ".git/**",
+        ".github/**",
+        "ai-memory/**"
+      ],
+      "conditional_blocked_globs": []
+    }
+  }
+}

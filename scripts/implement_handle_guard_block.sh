@@ -1,0 +1,480 @@
+#!/usr/bin/env bash
+# Handle destructive-commit, scope-guard, and staged-support rejections after support cleanup.
+# shellcheck disable=SC2153 # DCB_*, SVB_*, and SSB_* values are workflow environment inputs.
+set -euo pipefail
+# Signed job-token comments (run-volume plan item 15): route this script's
+# gh comment calls through the shim even when no earlier step loaded it.
+[ -z "${BASH_SOURCE[0]:-}" ] || AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" >/dev/null 2>&1 || true
+
+# Retry the idempotent safety-latch writes and their verification reads on
+# transient GitHub errors through gh_retry. implement.yml stages gh_helpers.sh
+# beside this runtime copy; when it is missing or fails to source, fail open
+# to the raw gh calls below (today's behaviour) and never fail the handler.
+# Comment posts stay single raw attempts so a retry cannot duplicate them.
+GUARD_BLOCK_GH_RETRY_READY=false
+GUARD_BLOCK_GH_HELPERS_FILE="$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh"
+# shellcheck disable=SC1090
+if [ -f "${GUARD_BLOCK_GH_HELPERS_FILE}" ] && source "${GUARD_BLOCK_GH_HELPERS_FILE}" && declare -F gh_retry >/dev/null 2>&1; then
+	GUARD_BLOCK_GH_RETRY_READY=true
+else
+	echo "::warning::implement_handle_guard_block: gh_helpers.sh not available beside the handler (or failed to source); label writes and reads run without retries."
+fi
+
+# Idempotent gh writes only (issue label add/remove).
+guard_block_gh()
+{
+	if [ "${GUARD_BLOCK_GH_RETRY_READY}" = "true" ]; then
+		gh_retry "$@"
+	else
+		"$@"
+	fi
+}
+
+# Ensure a label exists. One raw create attempt first, so the normal
+# "already exists" case costs no retries (gh_retry does not treat it as
+# permanent); only unexpected failures are retried (gh_retry repeats
+# `gh label create`: it is not on its single-attempt POST-create list).
+# Retry diagnostics go to stderr (the job log). Call only when ready.
+guard_block_ensure_label()
+{
+	local label_name="$1" label_color="$2" label_description="$3" edit_existing="$4" create_err create_rc=0
+	create_err="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/guard-block-label.XXXXXX")" || return 1
+	gh label create "${label_name}" --repo "${GITHUB_REPOSITORY}" \
+		--color "${label_color}" --description "${label_description}" 2>"${create_err}" || create_rc=$?
+	if [ "${create_rc}" -eq 0 ]; then
+		rm -f "${create_err}"
+		return 0
+	fi
+	if grep -qiE 'already[ _-]*exists|already_exists' "${create_err}" 2>/dev/null; then
+		rm -f "${create_err}"
+		if [ "${edit_existing}" = "true" ]; then
+			gh_retry gh label edit "${label_name}" --repo "${GITHUB_REPOSITORY}" \
+				--color "${label_color}" --description "${label_description}" >/dev/null || return 1
+		fi
+		return 0
+	fi
+	# Keep the unexpected first-attempt error in the job log before retrying.
+	echo "::warning::implement_handle_guard_block: gh label create ${label_name} failed (rc=${create_rc}); retrying. stderr: $(head -c 500 "${create_err}" 2>/dev/null | tr '\n' ' ')" >&2
+	rm -f "${create_err}"
+	if gh_retry gh label create "${label_name}" --repo "${GITHUB_REPOSITORY}" \
+		--color "${label_color}" --description "${label_description}" >/dev/null; then
+		return 0
+	fi
+	if [ "${edit_existing}" = "true" ]; then
+		gh_retry gh label edit "${label_name}" --repo "${GITHUB_REPOSITORY}" \
+			--color "${label_color}" --description "${label_description}" >/dev/null || return 1
+		return 0
+	fi
+	return 1
+}
+
+RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+GUARD_COMMENT_FILE="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/implement-guard-comment.XXXXXX")"
+trap 'rm -f "${GUARD_COMMENT_FILE}"' EXIT
+
+# Only a complete, bounded path list from this run can authorise a later
+# unblock override. An absent marker leaves the guard human-gated.
+guard_rejection_marker()
+{
+	local guard_kind="$1" guard_reason="$2" rejected_lines="$3" expected_count="$4" rejection_json rejection_count rejection_paths
+	[[ "${ISSUE_NUMBER:-}" =~ ^[1-9][0-9]*$ && "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ && "${guard_reason}" =~ ^[a-z-]+$ ]] || return 1
+	[[ "${expected_count}" =~ ^[1-9][0-9]*$ ]] || return 1
+	rejection_json="$(printf '%s' "${rejected_lines}" | jq -R -s -c 'split("\n") | map(select(length > 0))')" || return 1
+	rejection_count="$(jq 'length' <<< "${rejection_json}")" || return 1
+	[ "${rejection_count}" -eq "${expected_count}" ] || return 1
+	rejection_paths="$(jq -c '.[:100]' <<< "${rejection_json}" | base64 | tr -d '\n')" || return 1
+	[ -n "${rejection_paths}" ] || return 1
+	printf '<!-- ai:guard-rejection:v1 item=%s guard=%s reason=%s run=%s count=%s truncated=%s paths=%s -->\n' \
+		"${ISSUE_NUMBER}" "${guard_kind}" "${guard_reason}" "${GITHUB_RUN_ID}" \
+		"$((rejection_count > 100 ? 100 : rejection_count))" "$([ "${rejection_count}" -ge 100 ] && echo true || echo false)" "${rejection_paths}"
+}
+
+# Staged-support branch. The commit helper could not safely restore or re-base
+# one or more support-ref copies onto the branch version, so halt this issue
+# rather than send the same deterministic conflict through generic re-issue.
+if [ -n "${SSB_REASON:-}" ]; then
+  if [ "${GUARD_BLOCK_GH_RETRY_READY}" = "true" ]; then
+    guard_block_ensure_label 'ai:needs-human' 'e11d48' \
+      'Escalated for human intervention; autonomous stall recovery is paused' false \
+      || true
+  else
+    gh label create 'ai:needs-human' --repo "${GITHUB_REPOSITORY}" \
+      --color 'e11d48' --description 'Escalated for human intervention; autonomous stall recovery is paused' \
+      2>/dev/null || true
+  fi
+  guard_block_gh gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+    --add-label 'ai:needs-human' --remove-label 'ai:implementing' 2>/dev/null || \
+  guard_block_gh gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+    --add-label 'ai:needs-human' || true
+  SSB_LATCH_STATUS_LINE="The workflow attempted to label this issue \`ai:needs-human\`, but the follow-up label read failed. Future redispatch is not confirmed blocked; re-check the label before redispatching."
+  SSB_TG_LATCH_LINE="Could not verify ai:needs-human; the latch state is unknown and must be checked before redispatching."
+  # No earlier staged-support call reads issue labels, so this dedicated read
+  # verifies that the best-effort writes above actually halted automation.
+  staged_support_latch_read_ok=false
+  if [ "${GUARD_BLOCK_GH_RETRY_READY}" = "true" ]; then
+    if staged_support_latched_labels="$(gh_retry gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name')"; then
+      staged_support_latch_read_ok=true
+    fi
+  elif staged_support_latched_labels="$(gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name' 2>/dev/null)"; then
+    staged_support_latch_read_ok=true
+  fi
+  if [ "${staged_support_latch_read_ok}" = true ]; then
+    if grep -qxF 'ai:needs-human' <<< "${staged_support_latched_labels}"; then
+      echo "Confirmed ai:needs-human is latched on #${ISSUE_NUMBER}; redispatch will be refused until a human removes it."
+      SSB_LATCH_STATUS_LINE="This issue is confirmed labeled \`ai:needs-human\`; autonomous recovery is paused until a human removes the label."
+      SSB_TG_LATCH_LINE="Confirmed ai:needs-human latch: autonomous recovery is paused until a human removes the label."
+    else
+      echo "::error::FAILED to latch ai:needs-human on #${ISSUE_NUMBER}; autonomous recovery is NOT paused. Apply the label manually before redispatching."
+      SSB_LATCH_STATUS_LINE="The follow-up label read did not find \`ai:needs-human\`. Autonomous recovery is not confirmed paused; apply the label manually before redispatching."
+      SSB_TG_LATCH_LINE="FAILED to confirm ai:needs-human latch: autonomous recovery is NOT paused until a human reapplies and verifies the label."
+    fi
+  else
+    echo "::warning::Could not verify ai:needs-human on #${ISSUE_NUMBER}; gh issue view failed, so the latch state is unknown."
+  fi
+  {
+    # Only a genuine git merge-file conflict is fixed by the editor-workspace
+    # restore. Missing ledgers, baselines, unsafe paths, and tool failures stay
+    # human-gated without the poller's auto-release marker.
+    if [ "${SSB_AUTO_RELEASE_SAFE:-}" = "true" ]; then
+      echo "<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->"
+    fi
+    echo "🚨 **Staged-support restore failed; implementation halted.**"
+    echo
+    echo "- Workflow run: ${RUN_URL}"
+    echo
+    echo "The commit was **not** created and **not** pushed. ${SSB_LATCH_STATUS_LINE} The listed support-ref copies could not be safely reconciled with this branch:"
+    echo
+    echo '```'
+    printf '%s\n' "${SSB_FILES}" | sed '/^$/d'
+    echo '```'
+    echo
+    echo "Apply the editor's intended changes against the branch versions, then remove \`ai:needs-human\` before redispatching."
+  } > "${GUARD_COMMENT_FILE}"
+  gh issue comment "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+    --body-file "${GUARD_COMMENT_FILE}" 2>/dev/null || true
+  if [ -n "${TG_BOT_SECRET:-}" ] && [ -n "${TG_ADMIN_CHAT_ID:-}" ]; then
+    TG_MSG="$(printf '%s\n' \
+      "🚨 CRITICAL: staged-support restore blocked implementation" \
+      "repo: ${GITHUB_REPOSITORY}" \
+      "issue: #${ISSUE_NUMBER}" \
+      "paths: ${SSB_FILES}" \
+      "run: ${RUN_URL}" \
+      "" \
+      "${SSB_TG_LATCH_LINE}" \
+      "Reconcile the editor changes with the branch versions before redispatching.")"
+    curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+      -d "chat_id=${TG_ADMIN_CHAT_ID}" \
+      -d "disable_web_page_preview=true" \
+      --data-urlencode "text=${TG_MSG}" >/dev/null 2>&1 || \
+      echo "::warning::Telegram alert send failed for staged-support rejection on issue #${ISSUE_NUMBER}"
+  else
+    echo "::warning::TG_BOT_SECRET or TG_ADMIN_CHAT_ID unset; staged-support rejection was not sent to Telegram."
+  fi
+  exit 1
+fi
+
+# Scope-block branch. When either scope guard (files_touched preflight /
+# commit-time, or the post-commit ai:scope label verifier) latched
+# scope_violation_blocked, handle it here with a distinct
+# ai:scope-blocked label + scope-specific comment/alert, then exit.
+# The destructive-deletion branch below is unchanged and runs only
+# when this was not a scope block.
+if [ -n "${SVB_REASON:-}" ]; then
+  SCOPE_HEADER="🚨 **files_touched scope guard rejected this implementation run.**"
+  SCOPE_COUNT_LABEL="Out-of-scope staged paths"
+  SCOPE_DETAIL_HEADING="Staged paths outside the issue's \`files_touched\` allowlist:"
+  SCOPE_ALLOWLIST_HEADING="Declared \`files_touched\` allowlist:"
+  SCOPE_COMMIT_STATE="The commit was **not** created and **not** pushed."
+  SCOPE_REDISPATCH_HINT="If these paths are legitimately in scope, add them to the issue's \`files_touched\` list (or rerun with \`ALLOW_OUT_OF_SCOPE_FILES=true\`) and remove \`ai:scope-blocked\`. **Note:** the orchestrator judge may still regenerate this task under a different issue number — the per-issue block does not cover judge-cycle regeneration."
+  SCOPE_TG_TITLE="🚨 CRITICAL: files_touched scope guard blocked implementation"
+  if [ "${SVB_REASON}" = "scope-lock-label" ]; then
+    SCOPE_HEADER="🚨 **Issue scope-lock rejected this implementation run.**"
+    SCOPE_COUNT_LABEL="Out-of-scope committed paths"
+    SCOPE_DETAIL_HEADING="Committed paths outside the active \`ai:scope:<glob>\` label:"
+    SCOPE_ALLOWLIST_HEADING="Active \`ai:scope:<glob>\` glob:"
+    SCOPE_COMMIT_STATE="The out-of-scope commit was created locally, rolled back before push, and **not** pushed."
+    SCOPE_REDISPATCH_HINT="If these paths are legitimately in scope, update or remove the issue's \`ai:scope:<glob>\` label, then remove \`ai:scope-blocked\` and redispatch. **Note:** the orchestrator judge may still regenerate this task under a different issue number — the per-issue block does not cover judge-cycle regeneration."
+    SCOPE_TG_TITLE="🚨 CRITICAL: ai:scope label blocked implementation"
+  elif [ "${SVB_REASON}" = "automation-path" ]; then
+    SCOPE_HEADER="🚨 **Automation-path grant guard rejected this implementation run.**"
+    SCOPE_COUNT_LABEL="Ungranted automation paths"
+    SCOPE_DETAIL_HEADING="Staged automation paths without a trusted exact grant:"
+    SCOPE_ALLOWLIST_HEADING="Granted automation paths (exact files_touched entries from a trusted author) and grant reason:"
+    SCOPE_COMMIT_STATE="The commit was **not** created and **not** pushed."
+    SCOPE_REDISPATCH_HINT="Automation paths (.github/, .claude/, scripts/, prompts/, workflow-templates/) require ALLOW_WORKFLOW_EDITS=true, an issue authored by the pipeline account or an OWNER/MEMBER/COLLABORATOR, and an exact files_touched entry for each path. ALLOW_OUT_OF_SCOPE_FILES and ENFORCE_FILES_TOUCHED cannot override this guard. After correcting the grant, remove \`ai:scope-blocked\` and redispatch."
+    SCOPE_TG_TITLE="🚨 CRITICAL: automation-path grant guard blocked implementation"
+  fi
+  SCOPE_BLOCK_LABEL_DESCRIPTION='Implementation blocked: staged files fell outside files_touched scope; human review required'
+  if [ "${GUARD_BLOCK_GH_RETRY_READY}" = "true" ]; then
+    guard_block_ensure_label 'ai:scope-blocked' 'b60205' "${SCOPE_BLOCK_LABEL_DESCRIPTION}" true \
+      || \
+      echo "::warning::Could not ensure the ai:scope-blocked label exists on ${GITHUB_REPOSITORY} — the GH_PAT may lack issues:write. The follow-up read below reports whether the issue itself ended up latched."
+  elif ! gh label create 'ai:scope-blocked' \
+    --repo "${GITHUB_REPOSITORY}" \
+    --color 'b60205' \
+    --description "${SCOPE_BLOCK_LABEL_DESCRIPTION}" \
+    2>/dev/null \
+    && ! gh label edit 'ai:scope-blocked' \
+    --repo "${GITHUB_REPOSITORY}" \
+    --color 'b60205' \
+    --description "${SCOPE_BLOCK_LABEL_DESCRIPTION}" \
+    2>/dev/null; then
+    echo "::warning::Could not ensure the ai:scope-blocked label exists on ${GITHUB_REPOSITORY} — the GH_PAT may lack issues:write. The follow-up read below reports whether the issue itself ended up latched."
+  fi
+  guard_block_gh gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+    --add-label 'ai:scope-blocked' \
+    --remove-label 'ai:implementing' 2>/dev/null || \
+  guard_block_gh gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+    --add-label 'ai:scope-blocked' || true
+  SCOPE_LATCH_STATUS_LINE="The workflow attempted to label this issue \`ai:scope-blocked\`, but the follow-up label read failed. Future redispatch is **not confirmed blocked**; re-check the label manually before redispatch."
+  SCOPE_TG_LATCH_LINE="Could not verify ai:scope-blocked latch: gh issue view failed after the write attempt, so redispatch refusal is unknown until a human rechecks the label."
+  scope_latch_read_ok=false
+  if [ "${GUARD_BLOCK_GH_RETRY_READY}" = "true" ]; then
+    if scope_latched_labels="$(gh_retry gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name')"; then
+      scope_latch_read_ok=true
+    fi
+  elif scope_latched_labels="$(gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name' 2>/dev/null)"; then
+    scope_latch_read_ok=true
+  fi
+  if [ "${scope_latch_read_ok}" = true ]; then
+    if grep -qxF 'ai:scope-blocked' <<< "${scope_latched_labels}"; then
+      echo "Confirmed ai:scope-blocked is latched on #${ISSUE_NUMBER}; redispatch will be refused until a human removes it."
+      SCOPE_LATCH_STATUS_LINE="This issue is confirmed labeled \`ai:scope-blocked\`; the \`Validate approval phase\` step will refuse future redispatches of issue #${ISSUE_NUMBER} until a human removes the label."
+      SCOPE_TG_LATCH_LINE="Confirmed ai:scope-blocked latch: future redispatch of this exact issue ID will be refused until a human removes the label."
+    else
+      echo "::error::FAILED to latch ai:scope-blocked on #${ISSUE_NUMBER}; the redispatch block is NOT in effect. Apply it manually: (gh label edit ai:scope-blocked --repo ${GITHUB_REPOSITORY} --color b60205 --description 'Implementation blocked: staged files fell outside files_touched scope; human review required' || gh label create ai:scope-blocked --repo ${GITHUB_REPOSITORY} --color b60205 --description 'Implementation blocked: staged files fell outside files_touched scope; human review required') && gh issue edit ${ISSUE_NUMBER} --repo ${GITHUB_REPOSITORY} --add-label ai:scope-blocked"
+      SCOPE_LATCH_STATUS_LINE="The workflow attempted to label this issue \`ai:scope-blocked\`, but the follow-up label read did **not** find it. Future redispatch is **not confirmed blocked**; reapply the label manually before redispatch."
+      SCOPE_TG_LATCH_LINE="FAILED to confirm ai:scope-blocked latch: redispatch refusal is NOT in effect until a human reapplies and rechecks the label."
+    fi
+  else
+    echo "::warning::Could not verify ai:scope-blocked on #${ISSUE_NUMBER}; gh issue view failed, so the latch state is unknown. Re-check manually: gh issue view ${ISSUE_NUMBER} --repo ${GITHUB_REPOSITORY} --json labels -q '.labels[].name'"
+    SCOPE_LATCH_STATUS_LINE="The workflow attempted to label this issue \`ai:scope-blocked\`, but verification failed, so the latch state is unknown. Re-check the issue labels manually before assuming the \`Validate approval phase\` redispatch block is active."
+    SCOPE_TG_LATCH_LINE="Could not verify ai:scope-blocked; the latch state is unknown and must be checked manually."
+  fi
+  {
+    echo "${SCOPE_HEADER}"
+    echo
+    echo "- ${SCOPE_COUNT_LABEL}: **${SVB_COUNT}**"
+    echo "- Workflow run: ${RUN_URL}"
+    echo
+    echo "${SCOPE_COMMIT_STATE} ${SCOPE_LATCH_STATUS_LINE}"
+    echo
+    echo "${SCOPE_DETAIL_HEADING}"
+    echo
+    echo '```'
+    printf '%s\n' "${SVB_FILES}" | sed '/^$/d'
+    echo '```'
+    echo
+    echo "${SCOPE_ALLOWLIST_HEADING}"
+    echo
+    echo '```'
+    printf '%s\n' "${SVB_ALLOWLIST}" | sed '/^$/d'
+    echo '```'
+    echo
+    echo "${SCOPE_REDISPATCH_HINT}"
+    if [ "${SVB_REASON}" = "scope-lock-label" ]; then
+      guard_rejection_marker scope-lock "${SVB_REASON}" "${SVB_FILES}" "${SVB_COUNT}" || true
+    elif [ "${SVB_REASON}" = "out-of-scope" ]; then
+      guard_rejection_marker scope "${SVB_REASON}" "${SVB_FILES}" "${SVB_COUNT}" || true
+    elif [ "${SVB_REASON}" = "automation-path" ]; then
+      guard_rejection_marker automation-path "${SVB_REASON}" "${SVB_FILES}" "${SVB_COUNT}" || true
+    fi
+  } > "${GUARD_COMMENT_FILE}"
+  gh issue comment "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+    --body-file "${GUARD_COMMENT_FILE}" 2>/dev/null || true
+  if [ -n "${TG_BOT_SECRET:-}" ] && [ -n "${TG_ADMIN_CHAT_ID:-}" ]; then
+    TG_MSG="$(printf '%s\n' \
+      "${SCOPE_TG_TITLE}" \
+      "repo: ${GITHUB_REPOSITORY}" \
+      "issue: #${ISSUE_NUMBER}" \
+      "out-of-scope paths: ${SVB_COUNT}" \
+      "run: ${RUN_URL}" \
+      "" \
+      "${SCOPE_TG_LATCH_LINE}" \
+      "The orchestrator judge may still regenerate this task under a different issue number.")"
+    curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+      -d "chat_id=${TG_ADMIN_CHAT_ID}" \
+      -d "disable_web_page_preview=true" \
+      --data-urlencode "text=${TG_MSG}" >/dev/null 2>&1 || \
+      echo "::warning::Telegram alert send failed for scope rejection on issue #${ISSUE_NUMBER}"
+  else
+    echo "::warning::TG_BOT_SECRET or TG_ADMIN_CHAT_ID unset; scope rejection was not sent to Telegram."
+  fi
+  # Preserve the non-zero exit — keep the job red and skip the
+  # downstream push/PR steps, exactly like the destructive branch.
+  exit 1
+fi
+
+REASON_HUMAN="${DCB_REASON}"
+DCB_COUNT_LABEL="Staged deletions"
+DCB_LIST_HEADING="Staged deletion list"
+DCB_REDISPATCH_HINT="If these deletions are legitimate, set the repository variable \`ALLOW_WORKFLOW_EDITS=true\` (for canonical-source deletions) or \`ALLOW_BULK_DELETE=true\` (for threshold-triggered rejections) under Settings → Secrets and variables → Actions, then remove \`ai:destructive-blocked\` from the issue if it is present and redispatch. **Note:** the orchestrator judge may still regenerate this task under a different issue number — the per-issue block does not cover judge-cycle regeneration (see PRs #917/#931 for context)."
+TG_COUNT_LINE="deletions: ${DCB_COUNT}"
+case "${DCB_REASON}" in
+  canonical-source)
+    REASON_HUMAN="canonical workflow-source file deletion"
+    ;;
+  bulk-delete)
+    if [ -n "${DCB_THRESHOLD_LABEL}" ] && [ -n "${DCB_EFFECTIVE_THRESHOLD}" ]; then
+      REASON_HUMAN="bulk deletion exceeded ${DCB_THRESHOLD_LABEL}=${DCB_EFFECTIVE_THRESHOLD}"
+    elif [ -n "${DCB_THRESHOLD_LABEL}" ]; then
+      REASON_HUMAN="bulk deletion exceeded ${DCB_THRESHOLD_LABEL}"
+    else
+      REASON_HUMAN="bulk deletion exceeded BULK_DELETE_THRESHOLD"
+    fi
+    ;;
+  unsafe-fetched-manifest)
+    REASON_HUMAN="artifact-cleanup manifest contained unsafe path(s)"
+    DCB_COUNT_LABEL="Unsafe manifest paths"
+    DCB_LIST_HEADING="Unsafe manifest path list"
+    DCB_REDISPATCH_HINT="The commit helper refused to process these manifest entries because they were not safe repo-relative cleanup paths. Inspect the runtime-fetched manifest producer or any tool that rewrote \`FETCHED_MANIFEST\`, then rerun after the manifest contains only safe relative paths. **Note:** the orchestrator judge may still regenerate this task under a different issue number — the per-issue block does not cover judge-cycle regeneration."
+    TG_COUNT_LINE="unsafe_manifest_paths: ${DCB_COUNT}"
+    ;;
+esac
+
+# Only the rejected bulk-delete list is eligible for an unblock override.
+# Comments are informational; the Actions artifact is the provenance record.
+if [ "${DCB_REASON}" = "bulk-delete" ] && [[ "${ISSUE_NUMBER}" =~ ^[1-9][0-9]*$ ]] \
+  && [[ "${GITHUB_RUN_ID}" =~ ^[1-9][0-9]*$ ]] \
+  && [[ "${GITHUB_RUN_ATTEMPT:-}" =~ ^[1-9][0-9]*$ ]]; then
+  rejection_dir="${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}/destructive_rejection"
+  if mkdir -p "${rejection_dir}" && printf '%s\n' "${DCB_DELETIONS}" | jq -Rsc \
+    --argjson issue "${ISSUE_NUMBER}" --argjson run "${GITHUB_RUN_ID}" \
+    --argjson attempt "${GITHUB_RUN_ATTEMPT}" \
+    '{schema:"destructive_rejection.v1", issue:$issue, run_id:$run, run_attempt:$attempt, reason:"bulk-delete", paths:(split("\n") | map(select(length > 0)))}' \
+    > "${rejection_dir}/destructive_rejection.json" \
+    && jq -e '.paths | length > 0' "${rejection_dir}/destructive_rejection.json" >/dev/null \
+    && [ -n "${GITHUB_OUTPUT:-}" ] \
+    && printf 'rejection_snapshot=true\n' >> "${GITHUB_OUTPUT}"; then
+    rejection_pointer="<!-- ai:destructive-rejection:v1 item=${ISSUE_NUMBER} run=${GITHUB_RUN_ID} attempt=${GITHUB_RUN_ATTEMPT} -->"
+  else
+    echo "::warning::Could not record destructive rejection snapshot; override approval will remain blocked."
+  fi
+fi
+
+# 1. Ensure the latch label exists. Color/description are
+#    hardcoded to mirror scripts/label_helpers.sh and
+#    .github/ai/label_contract.v1.json without sourcing them —
+#    that helper may be gone after consumer-repo cleanup.
+#    `gh label create` exits non-zero (and prints to stderr) when
+#    the label already exists — the normal idempotent case — so
+#    fall back to `gh label edit`; only a genuine double-failure
+#    (e.g. the GH_PAT lacks issues:write) reaches the warning.
+#    The old `2>/dev/null || true` swallowed exactly that failure;
+#    the follow-up read in step (2b) confirms the issue-level latch
+#    when GitHub accepts the verification read.
+DESTRUCTIVE_BLOCK_LABEL_DESCRIPTION='Implementation blocked for mass/destructive deletions; this issue ID now waits for human review'
+if [ "${GUARD_BLOCK_GH_RETRY_READY}" = "true" ]; then
+  guard_block_ensure_label 'ai:destructive-blocked' 'b60205' "${DESTRUCTIVE_BLOCK_LABEL_DESCRIPTION}" true \
+    || \
+    echo "::warning::Could not ensure the ai:destructive-blocked label exists on ${GITHUB_REPOSITORY} — the GH_PAT may lack issues:write. The follow-up read below reports whether the issue itself ended up latched."
+elif ! gh label create 'ai:destructive-blocked' \
+  --repo "${GITHUB_REPOSITORY}" \
+  --color 'b60205' \
+  --description 'Implementation blocked for mass/destructive deletions; this issue ID now waits for human review' \
+  2>/dev/null \
+  && ! gh label edit 'ai:destructive-blocked' \
+  --repo "${GITHUB_REPOSITORY}" \
+  --color 'b60205' \
+  --description 'Implementation blocked for mass/destructive deletions; this issue ID now waits for human review' \
+  2>/dev/null; then
+  echo "::warning::Could not ensure the ai:destructive-blocked label exists on ${GITHUB_REPOSITORY} — the GH_PAT may lack issues:write. The follow-up read below reports whether the issue itself ended up latched."
+fi
+
+# 2. Apply ai:destructive-blocked, clear ai:implementing so the
+#    issue is visibly in a halt state rather than a transient
+#    one. Best-effort — if gh is unavailable we still fire the
+#    TG alert below.
+guard_block_gh gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+  --add-label 'ai:destructive-blocked' \
+  --remove-label 'ai:implementing' 2>/dev/null || \
+guard_block_gh gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+  --add-label 'ai:destructive-blocked' || true
+
+# 2b. Verify the latch actually engaged. The best-effort edits
+#     above swallow their errors so the comment + TG alert still
+#     fire, but a silent miss means the `Validate approval phase`
+#     redispatch refusal never takes effect — the exact failure
+#     seen on a consumer repo where the label was never created.
+#     Read the post-write label set (a dedicated call: no earlier
+#     step in this handler fetches it). A successful read can prove
+#     the latch is present or missing; if the read itself fails,
+#     warn that the state is unknown instead of falsely claiming
+#     the label is absent. grep reads a here-string (not a
+#     pipeline) so set -o pipefail cannot misfire on -q's early exit.
+destructive_latch_read_ok=false
+if [ "${GUARD_BLOCK_GH_RETRY_READY}" = "true" ]; then
+  if latched_labels="$(gh_retry gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name')"; then
+    destructive_latch_read_ok=true
+  fi
+elif latched_labels="$(gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name' 2>/dev/null)"; then
+  destructive_latch_read_ok=true
+fi
+if [ "${destructive_latch_read_ok}" = true ]; then
+  if grep -qxF 'ai:destructive-blocked' <<< "${latched_labels}"; then
+    echo "Confirmed ai:destructive-blocked is latched on #${ISSUE_NUMBER}; redispatch will be refused until a human removes it."
+  else
+    echo "::error::FAILED to latch ai:destructive-blocked on #${ISSUE_NUMBER}; the redispatch block is NOT in effect. Apply it manually: (gh label edit ai:destructive-blocked --repo ${GITHUB_REPOSITORY} --color b60205 --description 'Implementation blocked for mass/destructive deletions; this issue ID now waits for human review' || gh label create ai:destructive-blocked --repo ${GITHUB_REPOSITORY} --color b60205 --description 'Implementation blocked for mass/destructive deletions; this issue ID now waits for human review') && gh issue edit ${ISSUE_NUMBER} --repo ${GITHUB_REPOSITORY} --add-label ai:destructive-blocked"
+  fi
+else
+  echo "::warning::Could not verify ai:destructive-blocked on #${ISSUE_NUMBER}; gh issue view failed, so the latch state is unknown. Re-check manually: gh issue view ${ISSUE_NUMBER} --repo ${GITHUB_REPOSITORY} --json labels -q '.labels[].name'"
+fi
+
+# 3. Post a visible issue comment describing what was rejected
+#    and what the operator needs to do. Embeds the deletion
+#    list in a fenced block so humans can audit which files
+#    the codex run tried to unlink.
+{
+  echo "🚨 **Destructive-commit guard rejected this implementation run.**"
+  echo
+  echo "- Reason: \`${DCB_REASON}\` (${REASON_HUMAN})"
+  echo "- ${DCB_COUNT_LABEL}: **${DCB_COUNT}**"
+  echo "- Workflow run: ${RUN_URL}"
+  echo
+  echo "The commit was **not** created and **not** pushed. The workflow attempted to apply \`ai:destructive-blocked\`; verify that the label is present before relying on the \`Validate approval phase\` redispatch block. Once present, future redispatches of issue #${ISSUE_NUMBER} will be refused until a human removes the label."
+  echo
+  echo "${DCB_LIST_HEADING}:"
+  echo
+  echo '```'
+  printf '%s\n' "${DCB_DELETIONS}" | sed '/^$/d'
+  echo '```'
+  echo
+  echo "${DCB_REDISPATCH_HINT}"
+  if [ -n "${rejection_pointer:-}" ]; then
+    echo
+    echo "${rejection_pointer}"
+  fi
+  guard_rejection_marker destructive "${DCB_REASON}" "${DCB_DELETIONS}" "${DCB_COUNT}" || true
+} > "${GUARD_COMMENT_FILE}"
+gh issue comment "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+  --body-file "${GUARD_COMMENT_FILE}" 2>/dev/null || true
+
+# 4. Fire a CRITICAL Telegram alert (inline — tg_helpers.sh may
+#    have been removed by consumer-repo cleanup). Build the
+#    message body via printf so every line stays within the
+#    YAML block-scalar indentation level; curl's
+#    --data-urlencode then transmits the embedded newlines.
+if [ -n "${TG_BOT_SECRET:-}" ] && [ -n "${TG_ADMIN_CHAT_ID:-}" ]; then
+  TG_MSG="$(printf '%s\n' \
+    "🚨 CRITICAL: destructive-commit guard blocked implementation" \
+    "repo: ${GITHUB_REPOSITORY}" \
+    "issue: #${ISSUE_NUMBER}" \
+    "reason: ${DCB_REASON} (${REASON_HUMAN})" \
+    "${TG_COUNT_LINE}" \
+    "run: ${RUN_URL}" \
+    "" \
+    "Issue is now ai:destructive-blocked. A human must review and remove the label before this exact issue ID can be redispatched. The orchestrator judge may still regenerate this task under a different issue number.")"
+  curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+    -d "chat_id=${TG_ADMIN_CHAT_ID}" \
+    -d "disable_web_page_preview=true" \
+    --data-urlencode "text=${TG_MSG}" >/dev/null 2>&1 || \
+    echo "::warning::Telegram alert send failed for destructive-commit rejection on issue #${ISSUE_NUMBER}"
+else
+  echo "::warning::TG_BOT_SECRET or TG_ADMIN_CHAT_ID unset; destructive-commit rejection was not sent to Telegram."
+fi
+
+# Preserve the non-zero exit from commit_changes — do NOT
+# swallow the failure here. The job should still fail so
+# operators see a red X in Actions UI, and so downstream
+# steps (Push branch, Create PR) are skipped.
+exit 1

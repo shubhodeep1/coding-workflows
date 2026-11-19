@@ -1,0 +1,927 @@
+#!/usr/bin/env python3
+"""Tests for scripts/apply_analysis_on_main.sh and its workflow wrapper.
+
+The script is executed with a mocked `gh` so the decision order (kill switch,
+in-flight guard, doc selection, dispatch, tracking-issue labelling, marker
+comment) is validated against the real shell, not a reimplementation.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import tempfile
+from pathlib import Path
+
+import yaml
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRIPT = REPO_ROOT / "scripts" / "apply_analysis_on_main.sh"
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "promote-main-to-stable.yml"
+
+MOCK_GH = r'''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+state_path = Path(os.environ["MOCK_GH_STATE"])
+state = json.loads(state_path.read_text())
+args = sys.argv[1:]
+state.setdefault("calls", []).append(args)
+def save():
+    state_path.write_text(json.dumps(state))
+def respond(payload):
+    if "--slurp" in args:
+        payload = [payload]
+    save()
+    sys.stdout.write(json.dumps(payload))
+    sys.exit(0)
+if args[:1] == ["api"]:
+    path = next(a for a in args[1:] if not a.startswith("-") and a not in ("GET",))
+    if path.startswith("search/issues"):
+        q = next(a for a in args if a.startswith("q="))
+        total = 0
+        for marker, count in state.get("search_hits", {}).items():
+            if marker in q:
+                total = count
+        if state.get("search_fails"):
+            save(); sys.stderr.write("search failed\n"); sys.exit(1)
+        respond({"total_count": total, "items": [{"number": 700 + i} for i in range(total)]})
+    if path.startswith("repos/") and "/issues/" in path and path.endswith("/comments?per_page=100"):
+        # Marker comments on a candidate issue. Trusted (bot-authored) unless
+        # the test supplies its own rows; comments_by_issue overrides per issue.
+        issue = path.split("/issues/", 1)[1].split("/", 1)[0]
+        if issue in state.get("comments_fail_issues", []):
+            save(); sys.stderr.write("gh: Server Error (HTTP 502)\n"); sys.exit(1)
+        if issue in state.get("comments_by_issue", {}):
+            respond(state["comments_by_issue"][issue])
+        default_body = "\n".join("apply-analysis-source-doc: " + m for m in state.get("search_hits", {}))
+        respond(state.get("issue_comments", [{"body": default_body, "user": {"login": "github-actions[bot]"}, "author_association": "NONE"}]))
+    if "/contents/" in path:
+        # Branch-tip existence check before dispatch (issue #7022).
+        doc = path.split("/contents/", 1)[1].split("?", 1)[0]
+        state.setdefault("contents_reads", []).append(path)
+        if state.get("contents_fail"):
+            save(); sys.stderr.write("gh: Server Error (HTTP 503)\n"); sys.exit(1)
+        if doc in state.get("gone_docs", []):
+            save(); sys.stderr.write("gh: Not Found (HTTP 404)\n"); sys.exit(1)
+        save()
+        sys.stdout.write("file\n" if "--jq" in args else json.dumps({"type": "file", "path": doc}))
+        sys.exit(0)
+    if "/actions/workflows/" in path and "/runs" in path:
+        if state.get("orchestrate_runs_fail"):
+            save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
+        respond({"workflow_runs": state.get("orchestrate_runs", [])})
+    if path.startswith("repos/") and "/issues?" in path:
+        labels = path.split("labels=")[1].split("&")[0].replace("%3A", ":").replace("%2C", ",")
+        tick = state.get("issue_list_tick", 0)
+        state["issue_list_tick"] = tick + 1
+        rows = state["open_tracking"]
+        if isinstance(rows, dict):
+            rows = rows.get(str(tick), rows["default"])
+        out = [r for r in rows if all(l in r["labels"] for l in labels.split(","))]
+        respond([{"number": r["number"], "labels": [{"name": l} for l in r["labels"]]} for r in out])
+    if path.startswith("repos/") and path.endswith("/comments"):
+        body = next(a for a in args if a.startswith("body=")).split("=", 1)[1]
+        state.setdefault("comments", []).append({"path": path, "body": body})
+        respond({"id": 1})
+    save(); sys.stderr.write("unexpected api path " + path + "\n"); sys.exit(1)
+if args[:2] == ["workflow", "run"]:
+    state.setdefault("dispatches", []).append(args[2:])
+    save(); sys.exit(0)
+if args[:2] == ["issue", "edit"]:
+    state.setdefault("label_edits", []).append(args[2:])
+    save(); sys.exit(0)
+save(); sys.stderr.write("unexpected gh call " + " ".join(args) + "\n"); sys.exit(1)
+'''
+
+
+def _run(tmp: Path, state: dict, env: dict[str, str] | None = None, docs: list[str] | None = None, report: str | None = None) -> tuple[subprocess.CompletedProcess[str], dict]:
+	repo = tmp / "repo"
+	(repo / "scripts").mkdir(parents=True)
+	(repo / "analysis").mkdir()
+	# The script cds to its own parent's parent, so install it inside the temp repo.
+	(repo / "scripts" / "apply_analysis_on_main.sh").write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+	for doc in docs or []:
+		(repo / doc).write_text("# rec\n", encoding="utf-8")
+	if report is not None:
+		(repo / "analysis" / "recommendation-processing-report.md").write_text(report, encoding="utf-8")
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	(bin_dir / "gh").write_text(MOCK_GH, encoding="utf-8")
+	(bin_dir / "gh").chmod(0o755)
+	state_file = tmp / "state.json"
+	state_file.write_text(json.dumps(state), encoding="utf-8")
+	output_file = tmp / "out.txt"
+	output_file.write_text("", encoding="utf-8")
+	run_env = os.environ.copy()
+	run_env.update(
+		{
+			"PATH": f"{bin_dir}:{run_env['PATH']}",
+			"MOCK_GH_STATE": str(state_file),
+			"GITHUB_REPOSITORY": "owner/repo",
+			"GH_TOKEN": "x",
+			"GITHUB_SHA": "a" * 40,
+			"GITHUB_RUN_ID": "42",
+			"GITHUB_REF_NAME": "main",
+			"GITHUB_OUTPUT": str(output_file),
+			"PYTHONDONTWRITEBYTECODE": "1",
+		}
+	)
+	for key in ("BASH_ENV", "ENV"):
+		run_env.pop(key, None)
+	if env:
+		run_env.update(env)
+	proc = subprocess.run(
+		["bash", str(repo / "scripts" / "apply_analysis_on_main.sh")],
+		cwd=str(repo),
+		env=run_env,
+		text=True,
+		capture_output=True,
+		timeout=120,
+	)
+	final_state = json.loads(state_file.read_text(encoding="utf-8"))
+	final_state["github_output"] = output_file.read_text(encoding="utf-8")
+	return proc, final_state
+
+
+def _tracking(number: int, *extra: str) -> dict:
+	return {"number": number, "labels": ["ai:orchestrator-tracking", *extra]}
+
+
+def test_kill_switch_skips_without_api_calls() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), {"open_tracking": []}, env={"APPLY_ANALYSIS_ON_MAIN_ENABLED": "false"}, docs=["analysis/workflow-optimization-2026-09-01.md"])
+	assert proc.returncode == 0, proc.stderr
+	assert "APPLY_ANALYSIS_SKIPPED reason=disabled" in proc.stdout
+	assert state.get("calls", []) == []
+	assert "dispatched=false" in state["github_output"]
+
+
+def test_in_flight_project_holds() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), {"open_tracking": [_tracking(7, "ai:comprehensive-test-pending")]}, docs=["analysis/workflow-optimization-2026-09-01.md"])
+	assert proc.returncode == 0, proc.stderr
+	assert "APPLY_ANALYSIS_SKIPPED reason=project_in_flight tracking_issues=7" in proc.stdout
+	assert not state.get("dispatches")
+
+
+def test_no_docs_holds() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), {"open_tracking": []})
+	assert proc.returncode == 0, proc.stderr
+	assert "APPLY_ANALYSIS_SKIPPED reason=no_docs" in proc.stdout
+	assert not state.get("dispatches")
+
+
+def test_dispatches_oldest_unprocessed_doc_bound_by_label_and_marker_inputs() -> None:
+	# The name predates newest-first selection; the test now covers skipping the
+	# newest doc (dispatched before) for the next-newest one.
+	docs = [
+		"analysis/workflow-optimization-2026-09-03.md",
+		"analysis/workflow-optimization-2026-08-30.md",
+		"analysis/workflow-optimization-2026-09-01.md",
+	]
+	state = {
+		"open_tracking": [_tracking(3)],
+		"search_hits": {"analysis/workflow-optimization-2026-09-03.md": 1},
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(
+			Path(tmp),
+			state,
+			docs=docs,
+			env={
+				"APPLY_ANALYSIS_ROLE": "verifying",
+				"APPLY_ANALYSIS_CYCLE_BASELINE_SHA": "c" * 40,
+				"APPLY_ANALYSIS_SMOKE_SHA": "b" * 40,
+				"APPLY_ANALYSIS_PROMOTE_SHA": "a" * 40,
+				"APPLY_ANALYSIS_PROVING_MERGE_SHA": "d" * 40,
+			},
+		)
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	# 09-03 (newest) was dispatched before (marker found) -> skipped with a warning; 09-01 is next.
+	assert "workflow-optimization-2026-09-03.md was dispatched to the orchestrator before" in proc.stderr
+	assert "APPLY_ANALYSIS_DISPATCHED doc=analysis/workflow-optimization-2026-09-01.md role=verifying" in proc.stdout
+	assert len(final["dispatches"]) == 1
+	dispatch = final["dispatches"][0]
+	assert dispatch[0] == "internal-orchestrate.yml"
+	assert dispatch[dispatch.index("--ref") + 1] == "main"
+	fields = {a.split("=", 1)[0]: a.split("=", 1)[1] for a in dispatch if "=" in a and not a.startswith("--")}
+	assert fields["project_description"].startswith("Apply analysis recommendations from workflow-optimization-2026-09-01.md\n")
+	assert "process ONLY the single source doc" in fields["project_description"]
+	assert "Source doc: analysis/workflow-optimization-2026-09-01.md" in fields["project_description"]
+	assert "workflow-optimization-2026-09-03.md" not in fields["project_description"]
+	assert "workflow-optimization-2026-08-30.md" not in fields["project_description"]
+	assert fields["tracking_labels"] == "ai:comprehensive-test-pending"
+	marker = fields["tracking_comment"]
+	assert "apply-analysis-source-doc: analysis/workflow-optimization-2026-09-01.md" in marker
+	assert "apply-analysis-role: verifying" in marker
+	assert "apply-analysis-cycle-baseline-sha: " + "c" * 40 in marker
+	assert "apply-analysis-smoke-sha: " + "b" * 40 in marker
+	assert "apply-analysis-promote-sha: " + "a" * 40 in marker
+	assert "apply-analysis-proving-merge-sha: " + "d" * 40 in marker
+	assert not final.get("label_edits") and not final.get("comments")
+	assert "dispatched=true" in final["github_output"]
+	assert "role=verifying" in final["github_output"]
+
+
+def test_dispatches_newest_unprocessed_doc_first_including_same_day_suffixes() -> None:
+	docs = [
+		"analysis/workflow-optimization-2026-10-08.md",
+		"analysis/workflow-optimization-2026-10-21-10.md",
+		"analysis/workflow-optimization-2026-10-21.md",
+		"analysis/workflow-optimization-2026-10-21-5.md",
+		"analysis/workflow-optimization-2026-10-09-2.md",
+	]
+	with tempfile.TemporaryDirectory() as tmp:
+		# The candidate cap (default 3, plan P6 step 3) is raised so the whole
+		# order of all five docs stays visible.
+		listed, listed_final = _run(Path(tmp), {"open_tracking": []}, docs=docs, env={"APPLY_ANALYSIS_LIST_ONLY": "true", "APPLY_ANALYSIS_MAX_CANDIDATES": "5"})
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), {"open_tracking": []}, docs=docs)
+	assert listed.returncode == 0, listed.stderr
+	assert not listed_final.get("dispatches")
+	# Version sort treats 10 as greater than 5 (string sort would not), so in
+	# reverse order -10 comes before -5, and every same-day suffixed doc comes
+	# before that day's first (unsuffixed) doc.
+	assert (
+		"APPLY_ANALYSIS_CANDIDATES count=5 docs="
+		"analysis/workflow-optimization-2026-10-21-10.md,"
+		"analysis/workflow-optimization-2026-10-21-5.md,"
+		"analysis/workflow-optimization-2026-10-21.md,"
+		"analysis/workflow-optimization-2026-10-09-2.md,"
+		"analysis/workflow-optimization-2026-10-08.md"
+	) in listed.stdout
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert "APPLY_ANALYSIS_DISPATCHED doc=analysis/workflow-optimization-2026-10-21-10.md role=proving" in proc.stdout
+	assert len(final["dispatches"]) == 1
+
+
+def test_project_description_checks_findings_first_and_keeps_guardrails() -> None:
+	# Plan P6 (Refs #9116): the project must record a verdict for every finding
+	# against the current default branch before planning implementation issues.
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), {"open_tracking": [_tracking(3)]}, docs=["analysis/workflow-optimization-2026-09-01.md"])
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	# Unescaped backticks in the unquoted heredoc would run as commands.
+	assert "command not found" not in proc.stderr
+	dispatch = final["dispatches"][0]
+	fields = {a.split("=", 1)[0]: a.split("=", 1)[1] for a in dispatch if "=" in a and not a.startswith("--")}
+	desc = fields["project_description"]
+	assert desc.startswith("Apply analysis recommendations from workflow-optimization-2026-09-01.md\n")
+	assert "before planning any implementation issue" in desc
+	assert "If no finding is `applied-candidate`" in desc
+	assert "`already-implemented`" in desc
+	assert "`rejected`" in desc
+	for guardrail in (
+		"never rename or remove existing identifiers without an alias",
+		"/db/contracts",
+		"no standalone manual scripts",
+		"never use auto-close keywords against ai:orchestrator-tracking issues",
+	):
+		assert guardrail in desc, guardrail
+	assert desc.index("before planning any implementation issue") < desc.index("never rename or remove existing identifiers")
+	assert "process ONLY the single source doc" in desc
+	assert "Source doc: analysis/workflow-optimization-2026-09-01.md (branch main at " in desc
+	assert "Never delete or modify analysis/last_collection_timestamp.txt or analysis/validation-selftest-status.json." in desc
+	assert re.search(r"(?i)\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s*:?\s*#\d+", desc) is None
+	marker = fields["tracking_comment"]
+	assert marker.startswith("<!-- apply-analysis-source-doc -->")
+	assert "apply-analysis-source-doc: analysis/workflow-optimization-2026-09-01.md\napply-analysis-role: proving" in marker
+	assert "dispatched=true" in final["github_output"]
+
+
+def test_untrusted_marker_comment_does_not_mark_a_doc_as_dispatched() -> None:
+	docs = ["analysis/workflow-optimization-2026-08-30.md", "analysis/workflow-optimization-2026-09-01.md"]
+	state = {
+		"open_tracking": [],
+		"search_hits": {"analysis/workflow-optimization-2026-09-01.md": 1},
+		# The only comment carrying the marker comes from an outside account.
+		"issue_comments": [{"body": "apply-analysis-source-doc: analysis/workflow-optimization-2026-09-01.md", "user": {"login": "stranger"}, "author_association": "NONE"}],
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, docs=docs)
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert "only in a comment from an untrusted author" in proc.stderr
+	assert "APPLY_ANALYSIS_DISPATCHED doc=analysis/workflow-optimization-2026-09-01.md" in proc.stdout
+	assert len(final["dispatches"]) == 1
+
+
+def test_in_flight_guard_can_exclude_the_completing_proving_issue() -> None:
+	docs = ["analysis/workflow-optimization-2026-08-30.md"]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(
+			Path(tmp),
+			{"open_tracking": [_tracking(7, "ai:comprehensive-test-pending")]},
+			docs=docs,
+			env={"APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE": "7"},
+		)
+	assert proc.returncode == 0, proc.stderr
+	assert len(final["dispatches"]) == 1
+
+
+def test_orchestrate_runs_lookup_failure_fails_closed() -> None:
+	docs = ["analysis/workflow-optimization-2026-08-30.md"]
+	state = {"open_tracking": [], "orchestrate_runs_fail": True}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, docs=docs)
+	assert proc.returncode == 0, proc.stderr
+	assert "APPLY_ANALYSIS_SKIPPED reason=guard_unavailable lookup=workflow-runs:internal-orchestrate.yml" in proc.stdout
+	assert not final.get("dispatches")
+
+
+def test_orchestrate_run_in_flight_holds() -> None:
+	docs = ["analysis/workflow-optimization-2026-08-30.md"]
+	state = {"open_tracking": [], "orchestrate_runs": [{"id": 5, "status": "in_progress", "conclusion": None}]}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, docs=docs)
+	assert proc.returncode == 0, proc.stderr
+	assert "APPLY_ANALYSIS_SKIPPED reason=orchestrate_run_in_flight" in proc.stdout
+	assert not final.get("dispatches")
+
+
+def test_list_only_reports_unprocessed_docs_without_dispatching() -> None:
+	docs = [
+		"analysis/workflow-optimization-2026-08-30.md",
+		"analysis/workflow-optimization-2026-09-01.md",
+		"analysis/workflow-optimization-2026-09-03.md",
+	]
+	report = "- `analysis/workflow-optimization-2026-08-30.md`\n"
+	state = {"open_tracking": [_tracking(7, "ai:comprehensive-test-pending")], "search_hits": {"analysis/workflow-optimization-2026-09-01.md": 1}}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, docs=docs, report=report, env={"APPLY_ANALYSIS_LIST_ONLY": "true"})
+	assert proc.returncode == 0, proc.stderr
+	assert "APPLY_ANALYSIS_CANDIDATES count=1 docs=analysis/workflow-optimization-2026-09-03.md" in proc.stdout
+	assert not final.get("dispatches")
+	assert "candidate_count=1" in final["github_output"]
+	# list-only never consults the in-flight or orchestrate-run guards
+	assert not any("/issues?" in " ".join(c) for c in final["calls"])
+
+
+def test_invalid_role_or_sha_is_rejected() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _ = _run(Path(tmp), {"open_tracking": []}, docs=["analysis/workflow-optimization-2026-08-30.md"], env={"APPLY_ANALYSIS_ROLE": "other"})
+	assert proc.returncode == 1
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _ = _run(Path(tmp), {"open_tracking": []}, docs=["analysis/workflow-optimization-2026-08-30.md"], env={"APPLY_ANALYSIS_SMOKE_SHA": "nope"})
+	assert proc.returncode == 1
+
+
+def test_doc_listed_in_processing_report_is_skipped_without_search() -> None:
+	docs = ["analysis/workflow-optimization-2026-08-30.md"]
+	report = "## Processed source docs\n- `analysis/workflow-optimization-2026-08-30.md`\n"
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), {"open_tracking": []}, docs=docs, report=report)
+	assert proc.returncode == 0, proc.stderr
+	assert "APPLY_ANALYSIS_SKIPPED reason=all_docs_processed" in proc.stdout
+	assert not any(call[:1] == ["api"] and "search/issues" in " ".join(call) for call in final["calls"])
+	assert not final.get("dispatches")
+
+
+def test_search_failure_fails_closed() -> None:
+	docs = ["analysis/workflow-optimization-2026-08-30.md"]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), {"open_tracking": [], "search_fails": True}, docs=docs)
+	assert proc.returncode == 0, proc.stderr
+	assert "APPLY_ANALYSIS_SKIPPED reason=guard_unavailable" in proc.stdout
+	assert not final.get("dispatches")
+
+
+def test_promote_workflow_cycle_job_runs_the_cycle_script_daily() -> None:
+	wf = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+	assert wf["on"]["schedule"] == [{"cron": "0 0 * * *"}]
+	assert "workflow_dispatch" in wf["on"]
+	assert wf["on"]["workflow_dispatch"]["inputs"]["target_sha"]["default"] == ""
+	assert "concurrency" not in wf, "workflow-level concurrency would queue promotions behind a waiting cycle"
+	cycle = wf["jobs"]["cycle"]
+	assert cycle["if"] == "github.event_name == 'schedule'"
+	assert cycle["timeout-minutes"] == 340
+	assert "concurrency" not in cycle, "job-level concurrency would queue a later scheduled tick"
+	run_step = next(s for s in cycle["steps"] if "run" in s)
+	assert "bash scripts/promote_main_cycle.sh" in run_step["run"]
+	assert run_step["env"]["PROMOTE_CYCLE_ENABLED"] == "${{ vars.PROMOTE_CYCLE_ENABLED || 'true' }}"
+	assert run_step["env"]["PROMOTE_CYCLE_GATE_WAIT_SECS"] == "${{ vars.PROMOTE_CYCLE_GATE_WAIT_SECS || '18000' }}"
+	assert run_step["env"]["PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS"] == "${{ vars.PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS || '1800' }}"
+	assert run_step["env"]["PROMOTE_CYCLE_GATE_POLL_SECS"] == "${{ vars.PROMOTE_CYCLE_GATE_POLL_SECS || '60' }}"
+	assert run_step["env"]["PROMOTE_CYCLE_MAX_ATTEMPTS"] == "${{ vars.PROMOTE_CYCLE_MAX_ATTEMPTS || '3' }}"
+	assert 18000 + 1800 < cycle["timeout-minutes"] * 60
+	assert run_step["env"]["GH_TOKEN"] == "${{ secrets.GH_PAT || github.token }}"
+	promote = wf["jobs"]["promote"]
+	assert promote["if"] == "github.event_name == 'workflow_dispatch'"
+	assert promote["concurrency"] == {"group": "promote-main-to-stable", "cancel-in-progress": False}
+	ff_step = next(s for s in promote["steps"] if s.get("id") == "ff")
+	assert ff_step["env"]["TARGET_SHA_INPUT"] == "${{ inputs.target_sha }}"
+	assert 'git merge --ff-only "${TARGET}"' in ff_step["run"]
+	assert "git merge-base --is-ancestor \"${TARGET_SHA_INPUT}\" origin/main" in ff_step["run"]
+
+
+def test_release_gate_only_mode_contract() -> None:
+	gate = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml").read_text(encoding="utf-8"))
+	assert gate["on"]["workflow_dispatch"]["inputs"]["gate_only"]["default"] is False
+	assert gate["on"]["workflow_dispatch"]["inputs"]["gate_cycle_id"]["default"] == ""
+	assert "[cycle:{0}]" in gate["run-name"]
+	release_if = gate["jobs"]["release"]["if"]
+	assert "!inputs.gate_only" in release_if
+	# skip_e2e skips every live e2e job; success() would then be false for
+	# release even though validate passed, so the gate checks results directly.
+	assert "success()" not in release_if
+	assert release_if.startswith("!cancelled() &&")
+	for needed in ("source", "resolve-version", "validate"):
+		assert f"needs.{needed}.result == 'success'" in release_if
+	assert gate["jobs"]["sync-to-main"]["if"].startswith("!cancelled() &&")
+	# The notify step must not report a skip_e2e release as FAILED.
+	notify_step = next(
+		step for job in gate["jobs"].values() for step in job.get("steps", [])
+		if step.get("name") == "Send Telegram notification"
+	)
+	assert notify_step["env"]["SKIP_E2E"] == "${{ inputs.skip_e2e }}"
+	assert '[ "$E2E" = "skipped" ] && [ "${SKIP_E2E:-}" = "true" ] && [ "${DRY_RUN:-}" != "true" ]' in notify_step["run"]
+	assert 'if [ "$e2e_ok" = "true" ] && [ "$SCRIPTS" = "success" ]' in notify_step["run"]
+	# Skipped supplemental jobs must show their own result, not a fixed check mark.
+	assert 'skipped) echo "⊘"' in notify_step["run"]
+	for result_var in ("ORPHANS", "ORCHESTRATE_DECOMPOSE", "VALIDATE_STANDALONE", "CLARIFY_REJECTS", "ALT_MODEL"):
+		assert f'$(_result_icon "${result_var}")' in notify_step["run"]
+	assert "!inputs.gate_only" in gate["jobs"]["sync-to-main"]["if"]
+	source_run = gate["jobs"]["source"]["steps"][0]["run"]
+	assert gate["jobs"]["source"]["steps"][0]["env"]["GATE_ONLY"] == "${{ inputs.gate_only }}"
+	gate_marker = 'if [ "${GATE_ONLY}" = "true" ]; then'
+	assert gate_marker in source_run
+	gate_start = source_run.index(gate_marker)
+
+	def _writes_github_output(line: str) -> bool:
+		return '>> "$GITHUB_OUTPUT"' in line or '>> "${GITHUB_OUTPUT}"' in line
+
+	# Gate-only path: the dispatched ref is written to GITHUB_OUTPUT before the
+	# path exits. Either spelling of the write is accepted (the `echo` form on
+	# main, the `printf` form introduced by PR #6555).
+	gate_exit = source_run.find("exit 0", gate_start)
+	assert gate_exit != -1, "gate-only path must end with exit 0"
+	gate_block = source_run[gate_start:gate_exit]
+	dispatched_ref_writes = ('echo "branch=${REF}"', "printf 'branch=%s\\n' \"${DISPATCH_REF_NAME}\"")
+	assert any(
+		_writes_github_output(line) and any(form in line for form in dispatched_ref_writes)
+		for line in gate_block.splitlines()
+	), "gate-only path must write the dispatched ref to GITHUB_OUTPUT before exit 0"
+
+	# Release path: the stable-ref guard exits 1 for any other ref, and only
+	# after it is `branch=stable` written.
+	# Since #6546 the guard must compare the full ref "${DISPATCH_REF}" with
+	# `refs/heads/stable`: a bare `stable` comparison against `github.ref_name`
+	# also accepts a dispatch from the `stable` tag.
+	stable_guard_marker = 'if [ "${DISPATCH_REF}" != "refs/heads/stable" ]; then'
+	guard = source_run.find(stable_guard_marker, gate_exit)
+	assert guard > gate_exit, (
+		"release path must guard with "
+		"'if [ \"${DISPATCH_REF}\" != \"refs/heads/stable\" ]; then' after the gate-only exit"
+	)
+	guard_exit = source_run.find("exit 1", guard)
+	assert guard_exit != -1, "the stable-ref guard must exit 1 for any other ref"
+	# Search for the write only after the guard's closing `fi`: a write between
+	# `exit 1` and `fi` is unreachable and must not satisfy the contract.
+	guard_fi = re.search(r"^[ \t]*fi[ \t]*$", source_run[guard_exit:], re.MULTILINE)
+	assert guard_fi is not None, "the stable-ref guard block must be closed with fi"
+	guard_end = guard_exit + guard_fi.end()
+	assert any(
+		_writes_github_output(line) and ("branch=stable" in line or ("branch=%s" in line and "stable" in line))
+		for line in source_run[guard_end:].splitlines()
+	), "release path must write branch=stable to GITHUB_OUTPUT only after the stable-ref guard"
+	assert not any(
+		_writes_github_output(line) and "branch=stable" in line
+		for line in source_run[:guard_end].splitlines()
+	), "branch=stable must not be written before or inside the stable-ref guard"
+	notify_step = next(step for step in gate["jobs"]["notify"]["steps"] if step.get("id") == "tg_send")
+	assert notify_step["env"]["GATE_ONLY"] == "${{ inputs.gate_only }}"
+	notify_run = notify_step["run"]
+	assert 'GATE_ONLY="${{' not in notify_run
+	assert '[ "$GATE_ONLY" = "true" ] && [ "$RELEASE" = "skipped" ]' in notify_run
+
+
+def test_orchestrate_workflow_accepts_tracking_bindings() -> None:
+	orchestrate = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "orchestrate.yml").read_text(encoding="utf-8"))
+	inputs = orchestrate["on"]["workflow_call"]["inputs"]
+	assert inputs["tracking_labels"]["default"] == ""
+	assert inputs["tracking_comment"]["default"] == ""
+	internal = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "internal-orchestrate.yml").read_text(encoding="utf-8"))
+	assert internal["jobs"]["orchestrate"]["with"]["tracking_labels"] == "${{ inputs.tracking_labels }}"
+	assert internal["jobs"]["orchestrate"]["with"]["tracking_comment"] == "${{ inputs.tracking_comment }}"
+	text = (REPO_ROOT / ".github" / "workflows" / "orchestrate.yml").read_text(encoding="utf-8")
+	assert "TRACKING_LABELS_INPUT: ${{ inputs.tracking_labels }}" in text
+	assert "source scripts/label_helpers.sh" in text.split("- name: Create tracking issue", 1)[1]
+	assert "TRACKING_ISSUE_COMMENT_POSTED" in text
+	# Bindings are all-or-nothing: a failed label or marker comment closes the
+	# freshly created issue and fails the run so the dispatcher can retry.
+	create_step = text.split("- name: Create tracking issue", 1)[1].split("- name: Create integration branch", 1)[0]
+	assert "TRACKING_ISSUE_BINDING_FAILED" in create_step
+	assert "gh issue close" in create_step
+	assert '--remove-label "${TRACKING_LABELS_INPUT}"' in create_step
+	assert create_step.index("TRACKING_ISSUE_BINDING_FAILED") < create_step.index("exit 1")
+
+
+def test_gate_test_jobs_check_out_the_dispatched_commit() -> None:
+	gate = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml").read_text(encoding="utf-8"))
+	for job_name in ("resolve-version", "validate-scripts", "validate"):
+		steps = gate["jobs"][job_name]["steps"]
+		checkout = next(step for step in steps if str(step.get("name", "")).startswith("Checkout repository"))
+		assert checkout["with"]["ref"] == "${{ github.sha }}", job_name
+	text = (REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml").read_text(encoding="utf-8")
+	assert "ref: ${{ needs.source.outputs.branch }}" not in text
+
+
+def test_release_job_is_serialised_and_refuses_a_stale_tip() -> None:
+	# Every stable-tag writer: the release gate and the legacy manual path.
+	for workflow in ("test-and-mark-stable.yml", "mark-stable.yml"):
+		gate = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8"))
+		release = gate["jobs"]["release"]
+		assert release["concurrency"] == {"group": "stable-release-${{ github.repository }}", "cancel-in-progress": False}, workflow
+		checkout = next(step for step in release["steps"] if step.get("name") == "Checkout source branch")
+		assert checkout["with"]["ref"] == "${{ github.sha }}", workflow
+		record = next(step for step in release["steps"] if step.get("name") == "Record the tested commit")
+		assert "RELEASE_TESTED_SHA=${DISPATCHED_SHA}" in record["run"], workflow
+		changelog = next(step for step in release["steps"] if step.get("name") == "Assemble changelog fragments")
+		assert "git rebase" not in changelog["run"], workflow
+		assert "RELEASE_STALE_TIP" in changelog["run"], workflow
+		assert 'git reset --hard "${RELEASE_TESTED_SHA}"' in changelog["run"], workflow
+		assert 'git push origin "HEAD:refs/heads/${SOURCE_BRANCH}"' in changelog["run"], workflow
+		assert 'git ls-remote origin "refs/heads/${SOURCE_BRANCH}"' in changelog["run"], workflow
+		tag_step = next(step for step in release["steps"] if step.get("name") == "Tag version and update stable pointer")
+		assert tag_step["env"]["SOURCE_BRANCH"] == "${{ needs.source.outputs.branch }}", workflow
+		run = tag_step["run"]
+		assert 'git ls-remote origin "refs/heads/${SOURCE_BRANCH}"' in run, workflow
+		assert "RELEASE_UNTESTED_HEAD" in run and "RELEASE_STALE_TIP" in run, workflow
+		assert run.index("RELEASE_STALE_TIP") < run.index('git tag -a "$VERSION"'), workflow
+
+
+# Issue #7022: the promote cycle reads docs from the checkout it pinned when
+# it started; the daily log analysis purged analysis/workflow-optimization-
+# 2026-09-09.md from main at 01:03 and the cycle still dispatched it at 02:59,
+# so the project's plan could not read it ("source doc unavailable").
+
+def test_doc_removed_on_the_branch_tip_is_skipped_for_the_next_one() -> None:
+	docs = ["analysis/workflow-optimization-2026-09-09.md", "analysis/workflow-optimization-2026-09-12.md"]
+	state = {"open_tracking": [], "gone_docs": ["analysis/workflow-optimization-2026-09-12.md"]}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, docs=docs)
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert "APPLY_ANALYSIS_DOC_GONE doc=analysis/workflow-optimization-2026-09-12.md ref=main" in proc.stdout
+	assert "APPLY_ANALYSIS_DISPATCHED doc=analysis/workflow-optimization-2026-09-09.md role=proving" in proc.stdout
+	assert final["contents_reads"] == [
+		"repos/owner/repo/contents/analysis/workflow-optimization-2026-09-12.md?ref=main",
+		"repos/owner/repo/contents/analysis/workflow-optimization-2026-09-09.md?ref=main",
+	]
+	assert len(final["dispatches"]) == 1
+
+
+def test_every_unprocessed_doc_removed_on_the_tip_dispatches_nothing() -> None:
+	doc = "analysis/workflow-optimization-2026-09-09.md"
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), {"open_tracking": [], "gone_docs": [doc]}, docs=[doc])
+	assert proc.returncode == 0, proc.stderr
+	assert "APPLY_ANALYSIS_SKIPPED reason=source_doc_removed ref=main docs=1" in proc.stdout
+	assert not final.get("dispatches")
+	assert "dispatched=false" in final["github_output"]
+
+
+def test_branch_tip_read_failure_fails_closed() -> None:
+	doc = "analysis/workflow-optimization-2026-09-09.md"
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), {"open_tracking": [], "contents_fail": True}, docs=[doc])
+	assert proc.returncode == 0, proc.stderr
+	assert f"APPLY_ANALYSIS_SKIPPED reason=guard_unavailable lookup=contents:{doc}" in proc.stdout
+	assert not final.get("dispatches")
+
+
+def test_in_flight_docs_lists_trusted_markers_on_open_tracking_issues() -> None:
+	trusted = {"user": {"login": "github-actions[bot]"}, "author_association": "NONE"}
+	state = {
+		"open_tracking": [_tracking(7021, "ai:comprehensive-test-pending"), _tracking(6902)],
+		"comments_by_issue": {
+			"7021": [
+				{**trusted, "body": "<!-- apply-analysis-source-doc -->\napply-analysis-source-doc: analysis/workflow-optimization-2026-09-09.md\napply-analysis-role: proving"},
+				{"user": {"login": "stranger"}, "author_association": "NONE", "body": "apply-analysis-source-doc: analysis/workflow-optimization-2026-10-01.md"},
+			],
+			"6902": [{**trusted, "body": "unrelated"}],
+		},
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		# The purge needs the list even while dispatching is switched off.
+		proc, final = _run(Path(tmp), state, env={"APPLY_ANALYSIS_IN_FLIGHT_DOCS": "true", "APPLY_ANALYSIS_ON_MAIN_ENABLED": "false"})
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout.splitlines() == ["analysis/workflow-optimization-2026-09-09.md"]
+	assert "APPLY_ANALYSIS_IN_FLIGHT_DOCS count=1 docs=analysis/workflow-optimization-2026-09-09.md" in proc.stderr
+	assert not final.get("dispatches")
+	assert not any(call[:2] == ["api", "-X"] or "search/issues" in " ".join(call) for call in final["calls"])
+
+
+def test_in_flight_docs_fails_when_a_comment_read_fails() -> None:
+	state = {"open_tracking": [_tracking(7021)], "comments_fail_issues": ["7021"]}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _final = _run(Path(tmp), state, env={"APPLY_ANALYSIS_IN_FLIGHT_DOCS": "true"})
+	assert proc.returncode == 2
+	assert proc.stdout == ""
+	assert "APPLY_ANALYSIS_IN_FLIGHT_DOCS outcome=unavailable" in proc.stderr
+
+
+def test_log_analysis_purge_keeps_docs_open_projects_use_and_fails_closed() -> None:
+	workflow = (REPO_ROOT / ".github" / "workflows" / "workflow-log-analysis.yml").read_text(encoding="utf-8")
+	step = workflow.split("      - name: Commit and push report\n", 1)[1].split("\n      - name: ", 1)[0]
+	assert "GH_TOKEN: ${{ secrets.GH_PAT || github.token }}" in step
+	assert "COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS: ${{ vars.COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS || 'OWNER,MEMBER,COLLABORATOR' }}" in step
+	assert 'purge_in_flight_docs="$(APPLY_ANALYSIS_IN_FLIGHT_DOCS=true bash scripts/apply_analysis_on_main.sh)"' in step
+	# The guard is listed before the loop, gates the whole purge, and is
+	# consulted before every git rm.
+	assert step.index("APPLY_ANALYSIS_IN_FLIGHT_DOCS=true") < step.index('for old_report in analysis/workflow-optimization-*.md; do')
+	assert 'if [ "${purge_guard_ok}" = "true" ] && cutoff_date=' in step
+	loop = step.split('for old_report in analysis/workflow-optimization-*.md; do', 1)[1]
+	assert loop.index('grep -qxF -- "${old_report}"') < loop.index('git rm -- "${old_report}"')
+	assert 'WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED doc=${old_report} reason=in_flight_project' in loop
+
+
+def test_in_flight_docs_fails_while_an_orchestrator_run_is_active() -> None:
+	# A just-dispatched project has no tracking issue or marker until its
+	# orchestrator run creates them, so the purge must not run meanwhile.
+	state = {"open_tracking": [], "orchestrate_runs": [{"id": 5, "status": "queued", "conclusion": None}]}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _final = _run(Path(tmp), state, env={"APPLY_ANALYSIS_IN_FLIGHT_DOCS": "true"})
+	assert proc.returncode == 2
+	assert proc.stdout == ""
+	assert "APPLY_ANALYSIS_IN_FLIGHT_DOCS outcome=unavailable reason=orchestrate_run_in_flight" in proc.stderr
+
+
+def test_in_flight_docs_fails_when_the_orchestrator_runs_read_fails() -> None:
+	state = {"open_tracking": [], "orchestrate_runs_fail": True}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _final = _run(Path(tmp), state, env={"APPLY_ANALYSIS_IN_FLIGHT_DOCS": "true"})
+	assert proc.returncode == 2
+	assert "reason=orchestrate_runs_unreadable" in proc.stderr
+
+
+def test_open_tracking_issue_list_reads_every_page() -> None:
+	state = {"open_tracking": [_tracking(7021)], "comments_by_issue": {"7021": []}}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, env={"APPLY_ANALYSIS_IN_FLIGHT_DOCS": "true"})
+	assert proc.returncode == 0, proc.stderr
+	list_calls = [call for call in final["calls"] if any("/issues?state=open" in a for a in call)]
+	assert list_calls and all("--paginate" in call and "--slurp" in call for call in list_calls)
+
+
+def test_in_flight_docs_reads_every_comment_page() -> None:
+	# A marker past the first 100 comments must still keep its doc from the purge.
+	trusted = {"user": {"login": "github-actions[bot]"}, "author_association": "NONE"}
+	doc = "analysis/workflow-optimization-2026-09-09.md"
+	state = {"open_tracking": [_tracking(7021)], "comments_by_issue": {"7021": [{**trusted, "body": "apply-analysis-source-doc: " + doc}]}}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, env={"APPLY_ANALYSIS_IN_FLIGHT_DOCS": "true"})
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout.splitlines() == [doc]
+	comment_calls = [call for call in final["calls"] if any(a.endswith("/comments?per_page=100") for a in call)]
+	assert comment_calls and all("--paginate" in call and "--slurp" in call for call in comment_calls)
+
+
+# --- pinned promote cycle (phase 3) -------------------------------------------
+
+def _pinned_dispatch_marker(role: str, pinned: str | None) -> tuple[str, str]:
+	env = {
+		"APPLY_ANALYSIS_ROLE": role,
+		"APPLY_ANALYSIS_CYCLE_BASELINE_SHA": "c" * 40,
+		"APPLY_ANALYSIS_SMOKE_SHA": "c" * 40,
+		"APPLY_ANALYSIS_PROMOTE_SHA": "c" * 40,
+	}
+	if pinned is not None:
+		env["APPLY_ANALYSIS_PINNED"] = pinned
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), {"open_tracking": [_tracking(3)]}, docs=["analysis/workflow-optimization-2026-09-01.md"], env=env)
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	dispatch = final["dispatches"][0]
+	fields = {a.split("=", 1)[0]: a.split("=", 1)[1] for a in dispatch if "=" in a and not a.startswith("--")}
+	return fields["tracking_comment"], proc.stderr
+
+
+def test_pinned_marker_line_present_only_when_pinned() -> None:
+	marker, _ = _pinned_dispatch_marker("verifying", "true")
+	assert "\napply-analysis-pinned: true\n" in marker
+	assert "promotes the pinned candidate" in marker
+	assert "`promote-candidate` branch is frozen on" in marker
+	for value in (None, "false"):
+		marker, _ = _pinned_dispatch_marker("verifying", value)
+		assert "apply-analysis-pinned" not in marker
+		assert "pinned candidate" not in marker
+	marker, stderr = _pinned_dispatch_marker("proving", "maybe")
+	assert "apply-analysis-pinned" not in marker
+	assert "APPLY_ANALYSIS_PINNED must be true or false" in stderr
+
+
+def test_pinned_proving_marker_says_its_merge_rides_the_next_cycle() -> None:
+	marker, _ = _pinned_dispatch_marker("proving", "true")
+	assert "apply-analysis-pinned: true" in marker
+	assert "rides the next cycle" in marker
+
+
+def test_pin_switches_are_forwarded_with_defaults() -> None:
+	wf = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+	run_step = next(s for s in wf["jobs"]["cycle"]["steps"] if "run" in s)
+	assert run_step["env"]["PROMOTE_CYCLE_PIN_ENABLED"] == "${{ vars.PROMOTE_CYCLE_PIN_ENABLED || 'true' }}"
+	assert run_step["env"]["PROMOTE_CYCLE_FREEZE_MAX_SECS"] == "${{ vars.PROMOTE_CYCLE_FREEZE_MAX_SECS || '172800' }}"
+	poll = (Path(__file__).resolve().parent.parent / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	hold_lines = poll.count("COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS:")
+	assert hold_lines >= 1
+	assert poll.count("PROMOTE_CYCLE_PIN_ENABLED: ${{ vars.PROMOTE_CYCLE_PIN_ENABLED || 'true' }}") == hold_lines
+
+
+# --- Bounded marker searches (plan P6 step 3, Refs #9116) --------------------
+
+
+def _dated_docs(count: int, month: str = "08") -> list[str]:
+	# Zero-padded distinct dates, so no marker is a substring of another's.
+	return [f"analysis/workflow-optimization-2026-{month}-{day:02d}.md" for day in range(1, count + 1)]
+
+
+def _searches(final: dict) -> int:
+	return sum("search/issues" in " ".join(c) for c in final["calls"])
+
+
+def _newest_first(docs: list[str]) -> list[str]:
+	return sorted(docs, reverse=True)
+
+
+def test_marker_search_bound_ten_doc_backlog_makes_three_searches_in_either_mode() -> None:
+	docs = _dated_docs(10)
+	newest = _newest_first(docs)
+	with tempfile.TemporaryDirectory() as tmp:
+		listed, listed_final = _run(Path(tmp), {"open_tracking": []}, docs=docs, env={"APPLY_ANALYSIS_LIST_ONLY": "true"})
+	assert listed.returncode == 0, listed.stderr
+	assert f"APPLY_ANALYSIS_CANDIDATES count=3 docs={','.join(newest[:3])}\n" in listed.stdout
+	assert "capped_behind_markers" not in listed.stdout
+	assert _searches(listed_final) == 3
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), {"open_tracking": []}, docs=docs)
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert _searches(final) == 3
+	assert f"APPLY_ANALYSIS_DISPATCHED doc={newest[0]} role=proving" in proc.stdout
+	assert len(final["dispatches"]) == 1
+
+
+def test_candidate_cap_raised_to_promote_cycle_min_docs() -> None:
+	docs = _dated_docs(10)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), {"open_tracking": []}, docs=docs, env={"APPLY_ANALYSIS_LIST_ONLY": "true", "PROMOTE_CYCLE_MIN_DOCS": "4"})
+	assert proc.returncode == 0, proc.stderr
+	assert "APPLY_ANALYSIS_CANDIDATES count=4 " in proc.stdout
+	assert _searches(final) == 4
+	assert "APPLY_ANALYSIS_CANDIDATE_CAP raised_to=4 reason=promote_cycle_min_docs" in proc.stderr
+	assert "APPLY_ANALYSIS_CANDIDATE_CAP" not in proc.stdout
+	# A smaller PROMOTE_CYCLE_MIN_DOCS does not lower the cap and logs nothing.
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), {"open_tracking": []}, docs=docs, env={"APPLY_ANALYSIS_LIST_ONLY": "true", "PROMOTE_CYCLE_MIN_DOCS": "2"})
+	assert "APPLY_ANALYSIS_CANDIDATES count=3 " in proc.stdout
+	assert "APPLY_ANALYSIS_CANDIDATE_CAP" not in proc.stderr + proc.stdout
+
+
+def test_twenty_five_marker_docs_cap_the_scan_behind_markers() -> None:
+	docs = _dated_docs(25)
+	state = {"open_tracking": [], "search_hits": {d: 1 for d in docs}}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, docs=docs)
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert _searches(final) == 20
+	assert "APPLY_ANALYSIS_SKIPPED reason=scan_capped_behind_markers searches=20" in proc.stdout
+	assert "all_docs_processed" not in proc.stdout
+	assert not final.get("dispatches")
+	assert "dispatched=false" in final["github_output"]
+	with tempfile.TemporaryDirectory() as tmp:
+		listed, listed_final = _run(Path(tmp), state, docs=docs, env={"APPLY_ANALYSIS_LIST_ONLY": "true"})
+	assert listed.returncode == 0, listed.stderr
+	assert "APPLY_ANALYSIS_CANDIDATES count=0 docs= capped_behind_markers=true" in listed.stdout
+	assert _searches(listed_final) == 20
+
+
+def test_exactly_twenty_marker_docs_end_as_all_docs_processed() -> None:
+	docs = _dated_docs(20)
+	state = {"open_tracking": [], "search_hits": {d: 1 for d in docs}}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, docs=docs)
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert _searches(final) == 20
+	assert "APPLY_ANALYSIS_SKIPPED reason=all_docs_processed" in proc.stdout
+	assert "scan_capped_behind_markers" not in proc.stdout
+	assert not final.get("dispatches")
+	with tempfile.TemporaryDirectory() as tmp:
+		listed, _ = _run(Path(tmp), state, docs=docs, env={"APPLY_ANALYSIS_LIST_ONLY": "true"})
+	assert "APPLY_ANALYSIS_CANDIDATES count=0 docs=\n" in listed.stdout
+
+
+def test_unprocessed_doc_ahead_of_marker_backlog_is_listed_capped_and_dispatched() -> None:
+	marker_docs = _dated_docs(25, month="08")
+	fresh = "analysis/workflow-optimization-2026-09-30.md"
+	docs = [fresh, *marker_docs]
+	state = {"open_tracking": [], "search_hits": {d: 1 for d in marker_docs}}
+	with tempfile.TemporaryDirectory() as tmp:
+		listed, listed_final = _run(Path(tmp), state, docs=docs, env={"APPLY_ANALYSIS_LIST_ONLY": "true"})
+	assert listed.returncode == 0, listed.stderr
+	assert f"APPLY_ANALYSIS_CANDIDATES count=1 docs={fresh} capped_behind_markers=true" in listed.stdout
+	assert _searches(listed_final) == 21
+	assert "candidate_count=1" in listed_final["github_output"]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, docs=docs)
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert f"APPLY_ANALYSIS_DISPATCHED doc={fresh} role=proving" in proc.stdout
+	assert len(final["dispatches"]) == 1
+
+
+def test_cap_lines_never_reach_stdout() -> None:
+	marker_docs = _dated_docs(25)
+	state = {"open_tracking": [], "search_hits": {d: 1 for d in marker_docs}}
+	env_cases = [
+		{"APPLY_ANALYSIS_LIST_ONLY": "true", "PROMOTE_CYCLE_MIN_DOCS": "4"},
+		{"PROMOTE_CYCLE_MIN_DOCS": "4"},
+	]
+	for extra in env_cases:
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, _ = _run(Path(tmp), state, docs=marker_docs, env=extra)
+		assert proc.returncode == 0, proc.stderr
+		assert "APPLY_ANALYSIS_CANDIDATE_CAP" not in proc.stdout
+		assert "::warning::" not in proc.stdout
+		assert "APPLY_ANALYSIS_CANDIDATE_CAP raised_to=4" in proc.stderr
+		assert "Stopped the analysis doc scan after 20 docs" in proc.stderr
+
+
+def test_marker_docs_ahead_within_the_cap_do_not_hide_an_unprocessed_doc() -> None:
+	marker_docs = _dated_docs(5, month="09")
+	older = "analysis/workflow-optimization-2026-08-15.md"
+	docs = [*marker_docs, older]
+	state = {"open_tracking": [], "search_hits": {d: 1 for d in marker_docs}}
+	with tempfile.TemporaryDirectory() as tmp:
+		listed, _ = _run(Path(tmp), state, docs=docs, env={"APPLY_ANALYSIS_LIST_ONLY": "true"})
+	assert f"APPLY_ANALYSIS_CANDIDATES count=1 docs={older}\n" in listed.stdout
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, docs=docs)
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert f"APPLY_ANALYSIS_DISPATCHED doc={older} role=proving" in proc.stdout
+	assert len(final["dispatches"]) == 1
+
+
+def test_list_only_reports_two_or_more_within_the_bound() -> None:
+	marker_docs = _dated_docs(3, month="09")
+	fresh = ["analysis/workflow-optimization-2026-08-20.md", "analysis/workflow-optimization-2026-08-10.md"]
+	state = {"open_tracking": [], "search_hits": {d: 1 for d in marker_docs}}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, docs=[*marker_docs, *fresh], env={"APPLY_ANALYSIS_LIST_ONLY": "true"})
+	assert proc.returncode == 0, proc.stderr
+	assert f"APPLY_ANALYSIS_CANDIDATES count=2 docs={fresh[0]},{fresh[1]}\n" in proc.stdout
+	assert "candidate_count=2" in final["github_output"]
+
+
+def test_invalid_caps_warn_and_fall_back_to_defaults() -> None:
+	docs = _dated_docs(10)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(
+			Path(tmp),
+			{"open_tracking": []},
+			docs=docs,
+			env={"APPLY_ANALYSIS_LIST_ONLY": "true", "APPLY_ANALYSIS_MAX_CANDIDATES": "0", "APPLY_ANALYSIS_MAX_MARKER_SEARCHES": "abc"},
+		)
+	assert proc.returncode == 0, proc.stderr
+	assert "::warning::APPLY_ANALYSIS_MAX_CANDIDATES must be a positive integer" in proc.stderr
+	assert "::warning::APPLY_ANALYSIS_MAX_MARKER_SEARCHES must be a positive integer" in proc.stderr
+	assert "::warning::" not in proc.stdout
+	assert "APPLY_ANALYSIS_CANDIDATES count=3 " in proc.stdout
+	assert _searches(final) == 3
+
+
+def test_leading_zero_min_docs_still_raises_the_cap_and_unusable_values_warn() -> None:
+	# The promote cycle accepts `04` (its check is ^[0-9]+$ and >= 1), so the
+	# dispatcher must raise the cap for it too instead of silently keeping 3.
+	docs = _dated_docs(10)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), {"open_tracking": []}, docs=docs, env={"APPLY_ANALYSIS_LIST_ONLY": "true", "PROMOTE_CYCLE_MIN_DOCS": "04"})
+	assert proc.returncode == 0, proc.stderr
+	assert "APPLY_ANALYSIS_CANDIDATES count=4 " in proc.stdout
+	assert "APPLY_ANALYSIS_CANDIDATE_CAP raised_to=4 reason=promote_cycle_min_docs" in proc.stderr
+	assert _searches(final) == 4
+	for value in ("0", "1234567"):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, _ = _run(Path(tmp), {"open_tracking": []}, docs=docs, env={"APPLY_ANALYSIS_LIST_ONLY": "true", "PROMOTE_CYCLE_MIN_DOCS": value})
+		assert proc.returncode == 0, proc.stderr
+		assert "APPLY_ANALYSIS_CANDIDATES count=3 " in proc.stdout
+		assert "::warning::PROMOTE_CYCLE_MIN_DOCS must be a positive integer" in proc.stderr
+		assert "::warning::" not in proc.stdout
+		assert "APPLY_ANALYSIS_CANDIDATE_CAP" not in proc.stderr + proc.stdout
+
+
+def test_long_zero_padded_min_docs_raises_the_cap_without_overflow() -> None:
+	# The promote cycle accepts any all-digit value, so a 19-digit zero-padded
+	# `4` must raise the cap too; a 20-digit non-zero value must warn, not wrap.
+	docs = _dated_docs(10)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), {"open_tracking": []}, docs=docs, env={"APPLY_ANALYSIS_LIST_ONLY": "true", "PROMOTE_CYCLE_MIN_DOCS": "0" * 18 + "4"})
+	assert proc.returncode == 0, proc.stderr
+	assert "APPLY_ANALYSIS_CANDIDATES count=4 " in proc.stdout
+	assert "APPLY_ANALYSIS_CANDIDATE_CAP raised_to=4 reason=promote_cycle_min_docs" in proc.stderr
+	assert _searches(final) == 4
+	for value in ("00", "1" * 20):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, _ = _run(Path(tmp), {"open_tracking": []}, docs=docs, env={"APPLY_ANALYSIS_LIST_ONLY": "true", "PROMOTE_CYCLE_MIN_DOCS": value})
+		assert proc.returncode == 0, proc.stderr
+		assert "APPLY_ANALYSIS_CANDIDATES count=3 " in proc.stdout
+		assert "::warning::PROMOTE_CYCLE_MIN_DOCS must be a positive integer" in proc.stderr
+		assert "APPLY_ANALYSIS_CANDIDATE_CAP" not in proc.stderr + proc.stdout

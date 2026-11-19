@@ -1,0 +1,71 @@
+{
+  "_comment": "Synthetic replay fixture for scripts/persist_postmerge_verify.py (issue #8427, P5). Built in the documented GitHub Actions REST shape; the recorded release-gate payloads for runs 40876853022 and 40932430968 are not in the repository. Runs 40876853022 and 40932430968 failed the release gate after the merge (recurred); run 40990000001 is a later green run (held).",
+  "marker": {
+    "pr": 8400,
+    "merge_sha": "1111111111111111111111111111111111111111",
+    "workflow": ".github/workflows/release-gate.yml",
+    "job": "release-gate",
+    "branch": "main",
+    "merged_at": "2026-10-20T10:00:00Z",
+    "state": "pending"
+  },
+  "runs": {
+    "total_count": 4,
+    "workflow_runs": [
+      {
+        "id": 40800000000,
+        "name": "Release gate",
+        "path": ".github/workflows/release-gate.yml",
+        "head_branch": "main",
+        "head_sha": "0000000000000000000000000000000000000000",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-10-20T09:00:00Z",
+        "html_url": "https://github.com/owner/repo/actions/runs/40800000000"
+      },
+      {
+        "id": 40876853022,
+        "name": "Release gate",
+        "path": ".github/workflows/release-gate.yml",
+        "head_branch": "main",
+        "head_sha": "1111111111111111111111111111111111111111",
+        "status": "completed",
+        "conclusion": "failure",
+        "created_at": "2026-10-20T10:05:00Z",
+        "html_url": "https://github.com/owner/repo/actions/runs/40876853022"
+      },
+      {
+        "id": 40932430968,
+        "name": "Release gate",
+        "path": ".github/workflows/release-gate.yml",
+        "head_branch": "main",
+        "head_sha": "2222222222222222222222222222222222222222",
+        "status": "completed",
+        "conclusion": "failure",
+        "created_at": "2026-10-21T08:00:00Z",
+        "html_url": "https://github.com/owner/repo/actions/runs/40932430968"
+      },
+      {
+        "id": 40990000001,
+        "name": "Release gate",
+        "path": ".github/workflows/release-gate.yml",
+        "head_branch": "main",
+        "head_sha": "3333333333333333333333333333333333333333",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-10-22T08:00:00Z",
+        "html_url": "https://github.com/owner/repo/actions/runs/40990000001"
+      }
+    ]
+  },
+  "jobs": {
+    "40876853022": {"total_count": 2, "jobs": [{"name": "build", "conclusion": "success"}, {"name": "release-gate", "conclusion": "failure"}]},
+    "40932430968": {"total_count": 2, "jobs": [{"name": "build", "conclusion": "success"}, {"name": "release-gate", "conclusion": "timed_out"}]},
+    "40990000001": {"total_count": 2, "jobs": [{"name": "build", "conclusion": "success"}, {"name": "release-gate", "conclusion": "success"}]}
+  },
+  "expected": {
+    "40876853022": "recurred",
+    "40932430968": "recurred",
+    "40990000001": "held"
+  }
+}

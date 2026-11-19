@@ -1,0 +1,888 @@
+#!/usr/bin/env python3
+"""Regression checks for BLOCKED output handling in plan/clarify workflows."""
+
+from __future__ import annotations
+
+import json
+import re
+import subprocess
+import tempfile
+import textwrap
+from pathlib import Path
+import importlib.util
+import http.client
+import http.server
+import threading
+from unittest import mock
+
+import yaml
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+PLAN_WF = REPO_ROOT / ".github" / "workflows" / "plan.yml"
+PLAN_RUNNER = REPO_ROOT / "scripts" / "run_plan_codex.sh"
+CLARIFY_WF = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
+PROMPT_PLAN = REPO_ROOT / "prompts" / "mode-plan.txt"
+PROMPT_CLARIFY = REPO_ROOT / "prompts" / "mode-clarify.txt"
+
+FENCE_SANITIZER = r"s{(^|\n)([ \t]*((?:```|~~~))[^\n]*\n.*?\n[ \t]*\3[ \t]*(?=\n|$))}{$1}gms;"
+BLOCKED_RE = re.compile(r"^\s*BLOCKED:\s*(.*\S)\s*$", re.IGNORECASE)
+SELF_CHECK_PASS_RE = re.compile(r"^\s*PLAN_SELF_CHECK:\s*PASS\s*$", re.IGNORECASE)
+SELF_CHECK_WARNING_RE = re.compile(
+	r"^\s*PLAN_SELF_CHECK:\s*WARNING:\s*(.*\S)\s*$",
+	re.IGNORECASE,
+)
+SELF_CHECK_BLOCKER_RE = re.compile(r"^\s*PLAN_SELF_CHECK:\s*BLOCKER:\s*(.*\S)\s*$", re.IGNORECASE)
+STATUS_NEEDS_CLARIFICATION_RE = re.compile(
+	r"STATUS:.*NEEDS_CLARIFICATION|^\*\*STATUS:\*\*.*NEEDS_CLARIFICATION",
+	re.IGNORECASE,
+)
+Q_LINE_RE = re.compile(r"^\s*(?:\*\*)?Q[0-9]+(?:\*\*)?:(?:\*\*)?\s+", re.IGNORECASE)
+CHOICES_RE = re.compile(r"^\s*Choices:\s*$", re.IGNORECASE)
+RECOMMENDED_CHOICE_RE = re.compile(
+	r"^\s*-\s*(?:\*\*)?[A-Za-z](?:\+[A-Za-z])*(?:\*\*)?\s*(?:—|–|[-)\.:]).*\(RECOMMENDED\)",
+	re.IGNORECASE,
+)
+
+
+def _read(path: Path) -> str:
+	return path.read_text(encoding="utf-8")
+
+
+def _sanitize_plan_output(raw_output: str) -> str:
+	with tempfile.TemporaryDirectory() as td:
+		source_path = Path(td) / "codex_output.txt"
+		source_path.write_text(raw_output, encoding="utf-8")
+		result = subprocess.run(
+			["perl", "-0pe", FENCE_SANITIZER, str(source_path)],
+			capture_output=True,
+			check=True,
+			encoding="utf-8",
+		)
+		return result.stdout
+
+
+def _blocked_reason(parsed_output: str) -> str:
+	for line in parsed_output.splitlines():
+		match = BLOCKED_RE.match(line)
+		if match:
+			return match.group(1)
+	return ""
+
+
+def _self_check_summary(parsed_output: str, *, self_check_gate_enabled: bool) -> dict[str, str | int | bool]:
+	pass_count = 0
+	warning_count = 0
+	blocker_count = 0
+	for line in parsed_output.splitlines():
+		if SELF_CHECK_PASS_RE.match(line):
+			pass_count += 1
+		elif SELF_CHECK_WARNING_RE.match(line):
+			warning_count += 1
+		elif SELF_CHECK_BLOCKER_RE.match(line):
+			blocker_count += 1
+
+	state = "missing"
+	observation = "none"
+	if blocker_count > 0:
+		state = "blocker"
+		if pass_count > 0 or warning_count > 0:
+			observation = "mixed"
+	elif warning_count > 0:
+		state = "warning"
+		if pass_count > 0:
+			observation = "mixed"
+	elif pass_count == 1:
+		state = "pass"
+	elif pass_count > 1:
+		state = "pass"
+		observation = "duplicate-pass"
+
+	reopen = self_check_gate_enabled and blocker_count > 0
+	if state == "missing" and self_check_gate_enabled:
+		observation = "missing"
+
+	return {
+		"pass_count": pass_count,
+		"warning_count": warning_count,
+		"blocker_count": blocker_count,
+		"state": state,
+		"observation": observation,
+		"reopen": reopen,
+	}
+
+
+def _has_structured_clarification_block(parsed_output: str) -> bool:
+	q_line: int | None = None
+	for line_number, line in enumerate(parsed_output.splitlines(), start=1):
+		if Q_LINE_RE.match(line):
+			q_line = line_number
+			continue
+		if q_line is None or line_number - q_line > 20:
+			continue
+		if CHOICES_RE.match(line) or RECOMMENDED_CHOICE_RE.match(line):
+			return True
+	return False
+
+
+def _has_answerable_clarification(parsed_output: str) -> bool:
+	has_status_needs_clarification = any(
+		STATUS_NEEDS_CLARIFICATION_RE.search(line) for line in parsed_output.splitlines()
+	)
+	return has_status_needs_clarification or _has_structured_clarification_block(parsed_output)
+
+
+def _needs_clarification(parsed_output: str, *, self_check_gate_enabled: bool) -> bool:
+	# Mirrors the plan.yml routing: needs_clarification is true only when
+	# something answerable exists. A self-check BLOCKER without answerable
+	# questions routes to the blocked path instead (see
+	# _self_check_blocker_routes_to_blocked).
+	del self_check_gate_enabled
+	return _has_answerable_clarification(parsed_output)
+
+
+def _self_check_blocker_routes_to_blocked(parsed_output: str, *, self_check_gate_enabled: bool) -> bool:
+	self_check_reopen = _self_check_summary(
+		parsed_output,
+		self_check_gate_enabled=self_check_gate_enabled,
+	)["reopen"]
+	return bool(self_check_reopen) and not _has_answerable_clarification(parsed_output)
+
+
+def _first_self_check_blocker_reason(parsed_output: str) -> str:
+	for line in parsed_output.splitlines():
+		match = SELF_CHECK_BLOCKER_RE.match(line)
+		if match:
+			return match.group(1)
+	return ""
+
+
+def test_prompt_contract_includes_blocked_rule() -> None:
+	plan_prompt = _read(PROMPT_PLAN)
+	clarify_prompt = _read(PROMPT_CLARIFY)
+
+	assert "emit exactly `BLOCKED: <short reason>`" in plan_prompt
+	assert "## Pre-execution self-check" in plan_prompt
+	assert "PLAN_SELF_CHECK: PASS" in plan_prompt
+	assert "PLAN_SELF_CHECK: WARNING:" in plan_prompt
+	assert "PLAN_SELF_CHECK: BLOCKER:" in plan_prompt
+	assert "STATUS: NOT_CLEAR" in plan_prompt
+	assert "emit exactly `BLOCKED: <short reason>`" in clarify_prompt
+	assert "BLOCKED: <short reason>" in clarify_prompt
+
+
+def test_plan_prompt_blocks_work_delivered_by_an_open_pr() -> None:
+	# tele-funtoken-msg-scoring#4992: a no-edit "track open PR #4991" plan was
+	# auto-approved and implement, which can only change files, blocked on it.
+	for prompt_path in (PROMPT_PLAN, REPO_ROOT / "prompts" / "_templates" / "mode-plan.txt"):
+		plan_prompt = _read(prompt_path)
+		assert "Implement only writes repository files and opens one pull request; it cannot post comments, close issues, or check or wait for another pull request, so never plan such steps." in plan_prompt
+		assert "emit `PLAN_SELF_CHECK: BLOCKER: work is delivered by open PR #<N>; resume once it is merged` and end with `STATUS: NOT_CLEAR`" in plan_prompt
+		assert "When that work is already on the planning ref, plan no edits: emit `PLAN_SELF_CHECK: BLOCKER: work is already on the planning ref; nothing to implement` and end with `STATUS: NOT_CLEAR`." in plan_prompt
+	# The live planner prompt is the runner's inline heredoc, not prompts/mode-plan.txt.
+	runner = " ".join(_read(PLAN_RUNNER).split())
+	assert "Implement only writes repository files and opens one pull request; it cannot post comments, close issues, or check or wait for another pull request, so never plan such steps." in runner
+	assert "emit `PLAN_SELF_CHECK: BLOCKER: work is delivered by open PR #<N>; resume once it is merged` and end with `STATUS: NOT_CLEAR`" in runner
+	assert "emit `PLAN_SELF_CHECK: BLOCKER: work is already on the planning ref; nothing to implement` and end with `STATUS: NOT_CLEAR`" in runner
+
+
+def test_open_pr_blocker_routes_to_blocked() -> None:
+	parsed_output = _sanitize_plan_output(
+		"Implementation Plan\n"
+		"PLAN_SELF_CHECK: BLOCKER: work is delivered by open PR #4991; resume once it is merged\n"
+		"STATUS: NOT_CLEAR\n"
+	)
+
+	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is False
+	assert _self_check_blocker_routes_to_blocked(parsed_output, self_check_gate_enabled=True) is True
+	assert _first_self_check_blocker_reason(parsed_output) == "work is delivered by open PR #4991; resume once it is merged"
+
+
+def test_plan_workflow_detects_blocked_before_needs_clarification() -> None:
+	wf = _read(PLAN_WF)
+	plan_runner = _read(PLAN_RUNNER)
+	blocked_section = wf.split('BLOCKED_REASON="$(perl -ne \'', 1)[1].split(
+		'if [ -n "${BLOCKED_REASON}" ]; then', 1
+	)[0]
+
+	assert "- name: Parse planning output" in wf
+	assert "PLAN_SELF_CHECK_ENABLED: ${{ vars.PLAN_SELF_CHECK_ENABLED || 'true' }}" in wf
+	assert "if (/^\\s*BLOCKED:\\s*(.*\\S)\\s*$/i)" in wf
+	assert "echo \"blocked=true\" >> \"$GITHUB_OUTPUT\"" in wf
+	assert "${CODEX_OUTPUT_PARSE_FILE}" in blocked_section
+	assert "${CODEX_OUTPUT_FILE}" not in blocked_section
+	assert "$in_code" not in blocked_section
+	assert "7. A pre-execution self-check result" in plan_runner
+	assert "PLAN_SELF_CHECK: PASS" in plan_runner
+	assert "PLAN_SELF_CHECK: WARNING:" in plan_runner
+	assert "PLAN_SELF_CHECK: BLOCKER:" in plan_runner
+	assert 'CODEX_OUTPUT_PARSE_FILE="${RUNTIME_DIR}/codex_output_parse.txt"' in wf
+	assert "malformed fences do not" in wf
+	assert '::error::Failed to sanitize Codex output' in wf
+	assert 'if [ ! -s "${CODEX_OUTPUT_PARSE_FILE}" ]; then' in wf
+	assert '::error::Sanitized Codex output parse file missing or empty' in wf
+	assert "SELF_CHECK_PASS_COUNT" in wf
+	assert "SELF_CHECK_WARNING_COUNT" in wf
+	assert "SELF_CHECK_BLOCKER_COUNT" in wf
+	assert "plan_self_check_state" in wf
+	assert "plan_self_check_observation" in wf
+	assert "plan_self_check_reopen_clarification" in wf
+	assert 'PARSE_SOURCE_FILE="${CODEX_OUTPUT_PARSE_FILE:-${CODEX_OUTPUT_FILE}}"' in wf
+	assert "- name: Handle blocked planning output" in wf
+	assert "steps.parse_plan.outputs.blocked == 'true'" in wf
+	assert "--add-label 'ai:blocked'" in wf
+	assert "--remove-label 'ai:planning'" in wf
+	assert "--remove-label 'ai:clarification'" in wf
+	assert 'index("ai:blocked") != null' in wf
+	assert "--remove-label 'ai:blocked'" in wf
+	assert "--status \"blocked\"" in wf
+	assert '[ "${PLAN_SELF_CHECK_GATE_ENABLED}" = "true" ] && [ "${SELF_CHECK_BLOCKER_COUNT}" -gt 0 ]' in wf
+	assert '[ "${HAS_STATUS_NEEDS_CLARIFICATION}" = "true" ] || [ "${HAS_STRUCTURED_CLARIFICATION_BLOCK}" = "true" ]' in wf
+	assert 'elif [ "${SELF_CHECK_REOPEN_CLARIFICATION}" = "true" ]; then' in wf
+	assert "SELF_CHECK_BLOCKED_REASON" in wf
+	assert "steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification == 'true'" in wf
+
+
+def test_plan_workflow_includes_ref_context_and_mismatch_rule() -> None:
+	wf = _read(PLAN_WF)
+	plan_runner = _read(PLAN_RUNNER)
+
+	assert "- name: Capture planning ref context" in wf
+	assert "git rev-parse HEAD" in wf
+	assert "git symbolic-ref --short -q HEAD" in wf
+	assert "PLANNING_REF_INTEGRATION_BRANCH_META" in wf
+	assert "PLANNING REF CONTEXT" in wf
+	# Issue #7172: the rule keys on the workflow's computed line, not on git
+	# inside the model's snapshot workspace (branch `isolated`).
+	for prompt_text in (plan_runner, _read(PROMPT_PLAN)):
+		assert "If the `Integration branch mismatch:` line in PLANNING REF CONTEXT reads\n  `true`, emit exactly `BLOCKED: integration branch mismatch`." in prompt_text
+		assert "snapshot on a local branch named `isolated`" in prompt_text
+	assert "plan_output_contradicts_ref_context" in plan_runner
+
+
+def test_clarify_workflow_detects_and_escalates_blocked_output() -> None:
+	wf = _read(CLARIFY_WF)
+
+	assert "- name: Parse Codex output" in wf
+	assert "if (/^\\s*BLOCKED:\\s*(.*\\S)\\s*$/i)" in wf
+	assert "echo \"blocked=true\" >> \"$GITHUB_OUTPUT\"" in wf
+	assert "- name: Handle blocked clarification output" in wf
+	assert "steps.parse_codex.outputs.blocked == 'true'" in wf
+	assert "--add-label 'ai:blocked'" in wf
+	assert "--remove-label 'ai:clarification'" in wf
+	assert "--remove-label 'ai:planning'" in wf
+	assert "steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'" in wf
+	assert "OUTCOME=\"blocked\"" in wf
+
+
+def test_clarify_agent_runs_only_in_isolated_container() -> None:
+	wf = _read(CLARIFY_WF)
+	runner = _read(REPO_ROOT / "scripts" / "clarify_isolated_run.sh")
+	assert 'bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"' in wf
+	assert "codex_helpers.sh clarify_isolated_run.sh clarify_base_image_preseed.sh sandbox_image.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl workflow_failure_heal.py workflow_failure_heal_evidence.sh; do" in wf
+	assert 'install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile' in wf
+	assert "--network none --read-only --cap-drop ALL --security-opt no-new-privileges" in runner
+	assert "--sandbox read-only" in runner
+	assert 'type=bind,src=${run_root}/source,dst=/source,readonly' in runner
+	assert 'type=bind,src=${run_root}/results,dst=/results' in runner
+	assert "--env CLARIFY_PROXY_KEY=isolated-placeholder" in runner
+	assert "--env OPENROUTER_API_KEY" not in runner
+	assert "--mount type=bind,src=${GITHUB_WORKSPACE}" not in runner
+	assert '".git"' in runner and '".env"' in runner and 'os.O_NOFOLLOW' in runner
+	assert 'trap cleanup EXIT' in runner and "trap 'exit 143' TERM" in runner
+	assert 'docker rm -f "${container_name}"' in runner
+	assert 'mkdir -m 0700 "${run_root}/socket"' in runner
+	assert 'os.chmod(sys.argv[2], 0o600)' in _read(REPO_ROOT / "scripts" / "clarify_openrouter_broker.py")
+	assert "--sandbox danger-full-access" not in wf.split("- name: Run Codex", 1)[1]
+	assert "if cat \"${CODEX_PROMPT_FILE}\" | codex" not in wf
+	assert 'max_attempts=3' in wf
+	assert 'CODEX_OUTPUT_FILE' in wf and 'codex_log.txt' in wf
+
+
+def test_clarify_broker_rejects_other_routes_and_streams_without_leaking_key() -> None:
+	spec = importlib.util.spec_from_file_location("clarify_broker", REPO_ROOT / "scripts" / "clarify_openrouter_broker.py")
+	assert spec and spec.loader
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	seen = []
+
+	class FakeResponse:
+		status = 200
+
+		def __init__(self):
+			self.chunks = iter([b'data: first\n\n', b'data: second\n\n'])
+
+		def getheader(self, name, default):
+			return "text/event-stream" if name == "Content-Type" else default
+
+		def read1(self, _size):
+			return next(self.chunks, b"")
+
+	class FakeUpstream:
+		def __init__(self, host, **_kwargs):
+			assert host == "openrouter.ai"
+
+		def request(self, method, path, body, headers):
+			if body == b'{"model":"openai/gpt-6-sol","fail":true}':
+				raise OSError("private-sentinel")
+			seen.append((method, path, body, headers))
+
+		def getresponse(self):
+			return FakeResponse()
+
+		def close(self):
+			pass
+
+	with tempfile.TemporaryDirectory() as td, mock.patch.object(module.http.client, "HTTPSConnection", FakeUpstream):
+		broker = module.UnixHTTPServer(str(Path(td) / "broker.sock"), module.Relay)
+		broker.mode = "broker"
+		broker.api_key = "private-sentinel"
+		broker.model = "openai/gpt-6-sol"
+		bridge = http.server.HTTPServer(("127.0.0.1", 0), module.Relay)
+		bridge.mode = "bridge"
+		bridge.socket_path = str(Path(td) / "broker.sock")
+		threads = [threading.Thread(target=server.serve_forever, daemon=True) for server in (broker, bridge)]
+		for thread in threads:
+			thread.start()
+		try:
+			connection = http.client.HTTPConnection("127.0.0.1", bridge.server_address[1], timeout=5)
+			connection.request("GET", "/api/v1/responses")
+			get_result = connection.getresponse()
+			assert get_result.status == 405
+			get_result.read()
+			connection.request("POST", "http://evil.invalid/api/v1/responses", b"{}", {"Content-Type": "application/json", "Authorization": "Bearer isolated-placeholder"})
+			bad_path_result = connection.getresponse()
+			assert bad_path_result.status == 400
+			bad_path_result.read()
+			connection.request("POST", "/api/v1/responses", b"{}", {"Content-Type": "application/json", "Authorization": "Bearer wrong"})
+			bad_auth_result = connection.getresponse()
+			assert bad_auth_result.status == 400
+			bad_auth_result.read()
+			connection.request("POST", "/api/v1/responses", b'{"model":"other/model"}', {"Content-Type": "application/json", "Authorization": "Bearer isolated-placeholder"})
+			bad_model_result = connection.getresponse()
+			assert bad_model_result.status == 400
+			bad_model_result.read()
+			connection.request("POST", "/api/v1/responses", b"{}", {"Content-Type": "application/json", "Authorization": "Bearer isolated-placeholder", "Content-Length": str(module.MAX_BODY + 1)})
+			oversized_result = connection.getresponse()
+			assert oversized_result.status == 400
+			oversized_result.read()
+			connection.close()
+			connection = http.client.HTTPConnection("127.0.0.1", bridge.server_address[1], timeout=5)
+			connection.request("POST", "/api/v1/responses", b'{"model":"openai/gpt-6-sol"}', {"Content-Type": "application/json", "Authorization": "Bearer isolated-placeholder"})
+			response = connection.getresponse()
+			assert response.status == 200
+			assert response.read() == b'data: first\n\ndata: second\n\n'
+			assert len(seen) == 1
+			assert seen[0] == ("POST", "/api/v1/responses", b'{"model":"openai/gpt-6-sol"}', {"Content-Type": "application/json", "Authorization": "Bearer private-sentinel"})
+			assert "private-sentinel" not in str(response.headers)
+			connection.request("POST", "/api/v1/responses", b'{"model":"openai/gpt-6-sol","fail":true}', {"Content-Type": "application/json", "Authorization": "Bearer isolated-placeholder"})
+			failed_response = connection.getresponse()
+			assert failed_response.status == 502
+			assert b"private-sentinel" not in failed_response.read()
+		finally:
+			connection.close()
+			for server in (bridge, broker):
+				server.shutdown()
+				server.server_close()
+			for thread in threads:
+				thread.join(timeout=5)
+
+
+def test_unterminated_fence_does_not_hide_blocked_reason() -> None:
+	parsed_output = _sanitize_plan_output(
+		"```text\nexample\nBLOCKED: integration branch mismatch\n"
+	)
+
+	assert _blocked_reason(parsed_output) == "integration branch mismatch"
+
+
+def test_unterminated_fence_reopens_clarification_for_self_check_blocker() -> None:
+	parsed_output = _sanitize_plan_output(
+		"```python\nprint('demo')\nPLAN_SELF_CHECK: BLOCKER: missing files_touched list\n"
+	)
+
+	summary_enabled = _self_check_summary(parsed_output, self_check_gate_enabled=True)
+	summary_disabled = _self_check_summary(parsed_output, self_check_gate_enabled=False)
+
+	assert summary_enabled["blocker_count"] == 1
+	assert summary_enabled["state"] == "blocker"
+	assert summary_enabled["observation"] == "none"
+	assert summary_enabled["reopen"] is True
+	assert summary_disabled["reopen"] is False
+	# The self-check gate itself still reports reopen=True — that flag
+	# (plan_self_check_reopen_clarification) is what this test's name
+	# refers to, and it is asserted above. The workflow-level routing,
+	# however, now sends a blocker with no answerable Q-ID block to the
+	# blocked path instead of reopening clarification (which would loop:
+	# orchestrator auto-answer finds no Q-ID blocks and stall recovery
+	# re-answers forever).
+	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is False
+	assert _needs_clarification(parsed_output, self_check_gate_enabled=False) is False
+	assert _self_check_blocker_routes_to_blocked(parsed_output, self_check_gate_enabled=True) is True
+	assert _self_check_blocker_routes_to_blocked(parsed_output, self_check_gate_enabled=False) is False
+	assert _first_self_check_blocker_reason(parsed_output) == "missing files_touched list"
+
+
+def test_self_check_blocker_with_q_id_block_still_reopens_clarification() -> None:
+	parsed_output = _sanitize_plan_output(
+		"Implementation Plan\n"
+		"PLAN_SELF_CHECK: BLOCKER: destructive guard is active\n"
+		"STATUS: NOT_CLEAR\n"
+		"Q1: Should the guard be cleared before implementation?\n"
+		"Choices:\n"
+		"- A - clear the guard and proceed (RECOMMENDED)\n"
+	)
+
+	assert _has_structured_clarification_block(parsed_output) is True
+	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is True
+	assert _self_check_blocker_routes_to_blocked(parsed_output, self_check_gate_enabled=True) is False
+
+
+def test_self_check_blocker_without_questions_routes_to_blocked() -> None:
+	parsed_output = _sanitize_plan_output(
+		"Implementation Plan\n"
+		"PLAN_SELF_CHECK: BLOCKER: Issue retains ai:destructive-blocked and ALLOW_BULK_DELETE is not configured\n"
+		"STATUS: NOT_CLEAR\n"
+	)
+
+	assert _has_structured_clarification_block(parsed_output) is False
+	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is False
+	assert _self_check_blocker_routes_to_blocked(parsed_output, self_check_gate_enabled=True) is True
+	assert (
+		_first_self_check_blocker_reason(parsed_output)
+		== "Issue retains ai:destructive-blocked and ALLOW_BULK_DELETE is not configured"
+	)
+
+
+def test_pass_self_check_stays_clear() -> None:
+	parsed_output = _sanitize_plan_output(
+		"Implementation Plan\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\n"
+	)
+
+	summary = _self_check_summary(parsed_output, self_check_gate_enabled=True)
+
+	assert summary["pass_count"] == 1
+	assert summary["warning_count"] == 0
+	assert summary["blocker_count"] == 0
+	assert summary["state"] == "pass"
+	assert summary["observation"] == "none"
+	assert summary["reopen"] is False
+	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is False
+
+
+def test_warning_only_self_check_remains_fail_open() -> None:
+	parsed_output = _sanitize_plan_output(
+		"Implementation Plan\nPLAN_SELF_CHECK: WARNING: confirm rollout note\nSTATUS: CLEAR\n"
+	)
+
+	summary = _self_check_summary(parsed_output, self_check_gate_enabled=True)
+
+	assert summary["pass_count"] == 0
+	assert summary["warning_count"] == 1
+	assert summary["blocker_count"] == 0
+	assert summary["state"] == "warning"
+	assert summary["observation"] == "none"
+	assert summary["reopen"] is False
+	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is False
+
+
+def test_mixed_pass_and_warning_self_check_is_observability_only() -> None:
+	parsed_output = _sanitize_plan_output(
+		"Implementation Plan\nPLAN_SELF_CHECK: PASS\nPLAN_SELF_CHECK: WARNING: confirm rollout note\nSTATUS: CLEAR\n"
+	)
+
+	summary = _self_check_summary(parsed_output, self_check_gate_enabled=True)
+
+	assert summary["pass_count"] == 1
+	assert summary["warning_count"] == 1
+	assert summary["blocker_count"] == 0
+	assert summary["state"] == "warning"
+	assert summary["observation"] == "mixed"
+	assert summary["reopen"] is False
+	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is False
+
+
+def test_duplicate_pass_self_check_is_observability_only() -> None:
+	parsed_output = _sanitize_plan_output(
+		"Implementation Plan\nPLAN_SELF_CHECK: PASS\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\n"
+	)
+
+	summary = _self_check_summary(parsed_output, self_check_gate_enabled=True)
+
+	assert summary["pass_count"] == 2
+	assert summary["warning_count"] == 0
+	assert summary["blocker_count"] == 0
+	assert summary["state"] == "pass"
+	assert summary["observation"] == "duplicate-pass"
+	assert summary["reopen"] is False
+	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is False
+
+
+def test_missing_self_check_is_observability_only() -> None:
+	parsed_output = _sanitize_plan_output("Implementation Plan\nSTATUS: CLEAR\n")
+
+	summary = _self_check_summary(parsed_output, self_check_gate_enabled=True)
+
+	assert summary["pass_count"] == 0
+	assert summary["warning_count"] == 0
+	assert summary["blocker_count"] == 0
+	assert summary["state"] == "missing"
+	assert summary["observation"] == "missing"
+	assert summary["reopen"] is False
+	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is False
+
+
+def test_unterminated_fence_does_not_hide_structured_clarification_block() -> None:
+	parsed_output = _sanitize_plan_output(
+		"```\nnotes\nQ1: Which branch should be used?\nChoices:\n- A - integration branch (RECOMMENDED)\n"
+	)
+
+	assert _has_structured_clarification_block(parsed_output) is True
+	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is True
+
+# --- Phase 5a: the clarify, clarify-respond and plan roles on Claude -------------
+
+
+ENGINE_WORKFLOWS = (
+	("clarify.yml", "CLARIFY", "Run Codex"),
+	("orchestrate_clarify_respond.yml", "CLARIFY_RESPOND", "Build prompt and run Codex"),
+	("plan.yml", "PLAN", "Run Codex planning"),
+)
+
+
+def _steps(workflow: str) -> list[dict]:
+	data = yaml.safe_load(_read(REPO_ROOT / ".github" / "workflows" / workflow))
+	return data["jobs"]["respond" if workflow == "orchestrate_clarify_respond.yml" else workflow.removesuffix(".yml")]["steps"]
+
+
+def test_engine_steps_resolve_the_role_and_guard_the_credential() -> None:
+	for workflow, role, model_step in ENGINE_WORKFLOWS:
+		steps = _steps(workflow)
+		names = [step.get("name") for step in steps]
+		resolve = names.index("Resolve AI engine")
+		install = names.index("Install Claude Code CLI")
+		credential = names.index("Resolve Claude credential")
+		assert resolve < install < credential < names.index(model_step), workflow
+		run = steps[resolve]["run"]
+		assert f'engine="$(ai_engine_for_role {role} || echo codex)"' in run, workflow
+		metadata_file = "ISSUE_PAYLOAD_FILE" if role == "CLARIFY_RESPOND" else "ISSUE_META_FILE"
+		assert f'AI_ENGINE_LABELS="$(jq -c \'[.labels[]?.name]\' "${{{metadata_file}}}")"' in run, workflow
+		assert "export AI_ENGINE_LABELS" in run, workflow
+		assert steps[resolve]["env"][f"AI_ENGINE_{role}"] == f"${{{{ vars.AI_ENGINE_{role} || '' }}}}", workflow
+		for index in (install, credential):
+			assert "steps.ai_engine.outputs.engine == 'claude'" in steps[index]["if"], workflow
+			assert steps[index]["continue-on-error"] is True, workflow
+		assert steps[credential]["uses"] == "./.codex-workflow-src/.github/actions/claude-pool-token"
+
+
+def test_clarify_runs_claude_then_the_unchanged_codex_call() -> None:
+	wf = _read(REPO_ROOT / ".github" / "workflows" / "clarify.yml")
+	args = '"${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"'
+	assert wf.count("bash scripts/clarify_isolated_run.sh ") == 2
+	assert f"bash scripts/clarify_isolated_run.sh {args} claude CLARIFY || rc=$?" in wf
+	assert f"bash scripts/clarify_isolated_run.sh {args} || rc=$?" in wf
+	assert 'if [ "${rc}" -eq 75 ]; then' in wf
+	assert "CLARIFY_ENGINE: ${{ steps.ai_engine.outputs.engine || 'codex' }}" in wf
+
+
+def test_checked_in_defaults_put_the_5a_roles_on_claude() -> None:
+	import json
+
+	config = json.loads(_read(REPO_ROOT / ".github" / "ai" / "claude_engine.json"))
+	for _, role, _ in ENGINE_WORKFLOWS:
+		assert config["role_defaults"][role]["engine"] == "claude", role
+
+
+def _clarify_loop() -> str:
+	(step,) = [step for step in _steps("clarify.yml") if step.get("name") == "Run Codex"]
+	run = step["run"]
+	start = run.index("max_attempts=3")
+	end = run.index("done", start) + len("done")
+	return run[start:end]
+
+
+def _run_clarify_loop(tmp: Path, engine: str, claude_rc: int) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+	(tmp / "scripts").mkdir()
+	(tmp / "scripts" / "clarify_isolated_run.sh").write_text(
+		f"""printf '%s\\n' "$*" >> "{tmp}/calls.log"
+if [ "${{4:-}}" = claude ]; then
+  [ {claude_rc} -eq 0 ] && printf 'claude questions\\n' > "$2"
+  exit {claude_rc}
+fi
+printf 'codex questions\\n' > "$2"
+""",
+		encoding="utf-8",
+	)
+	script = "set -euo pipefail\nsleep() { :; }\n" + _clarify_loop()
+	env = {"PATH": "/usr/bin:/bin", "CLARIFY_ENGINE": engine, "CODEX_PROMPT_FILE": str(tmp / "p.txt"), "CODEX_OUTPUT_FILE": str(tmp / "o.txt"), "RUNTIME_DIR": str(tmp)}
+	result = subprocess.run(["bash", "-c", script], cwd=tmp, env=env, capture_output=True, text=True, check=False)
+	return result, _read(tmp / "calls.log").splitlines()
+
+
+def test_clarify_loop_falls_back_to_codex_in_the_same_attempt() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		result, calls = _run_clarify_loop(Path(tmp), "claude", 75)
+		assert result.returncode == 0, result.stderr
+		assert [call.split()[3:] for call in calls] == [["claude", "CLARIFY"], []]
+		assert _read(Path(tmp) / "o.txt") == "codex questions\n"
+		assert "succeeded on attempt 1" in result.stdout
+
+
+def test_clarify_loop_on_claude_never_calls_codex() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		result, calls = _run_clarify_loop(Path(tmp), "claude", 0)
+		assert result.returncode == 0, result.stderr
+		assert calls == [f"{tmp}/p.txt {tmp}/o.txt {tmp}/codex_log.txt claude CLARIFY"]
+		assert _read(Path(tmp) / "o.txt") == "claude questions\n"
+	with tempfile.TemporaryDirectory() as tmp:
+		result, calls = _run_clarify_loop(Path(tmp), "codex", 0)
+		assert calls == [f"{tmp}/p.txt {tmp}/o.txt {tmp}/codex_log.txt"]
+
+# Clarify attempt failures name their cause on a line heal evidence keeps
+# (#8602). btc_sweeper#248 failed clarify three times with "Claude clarify
+# failed after 3 attempts." and the heal intake could not classify it: the raw
+# job log writes the loop's warnings as "##[warning]...", which the intake's
+# filter_log drops, and the runner's "CLAUDE_POOL run ... outcome= reason="
+# line matches none of its patterns. The loop now prints
+# CLARIFY_ENGINE_ATTEMPT_FAILED, which the unchanged filter keeps.
+ATTEMPT_POOL_LINE = "CLAUDE_POOL run role=CLARIFY account=TEAM1 outcome=crashed reason=no_result exit_code=1"
+ATTEMPT_STUB_RUNNER = r"""#!/usr/bin/env bash
+# Stub of scripts/clarify_isolated_run.sh: $4 is "claude" on the Claude path.
+engine="${4:-codex}"
+case "${STUB_MODE}" in
+  crash)
+    echo "some cli noise" >&2
+    echo "CLAUDE_POOL run role=CLARIFY account=TEAM1 outcome=crashed reason=no_result exit_code=1" >&2
+    exit 1
+    ;;
+  fallback)
+    if [ "${engine}" = "claude" ]; then
+      echo "CLAUDE_POOL run role=CLARIFY account=TEAM1 outcome=crashed reason=no_result exit_code=1" >&2
+      exit 75
+    fi
+    exit 1
+    ;;
+  spoof)
+    echo 'CLAUDE_POOL run reason=$(id);::error::x outcome=::warning::y' >&2
+    echo "CLAUDE_POOL run role=CLARIFY account=TEAM1 outcome=crashed reason=no_result exit_code=1" >&2
+    exit 1
+    ;;
+  spoof_only)
+    echo 'CLAUDE_POOL run reason=$(id);::error::x outcome=::warning::y' >&2
+    exit 1
+    ;;
+  glued)
+    printf 'cli line without newline' >&2
+    echo "CLAUDE_POOL run role=CLARIFY account=TEAM1 outcome=crashed reason=no_result exit_code=1" >&2
+    exit 1
+    ;;
+  empty)
+    : > "$2"
+    exit 0
+    ;;
+esac
+echo "container failed to start" >&2
+exit 1
+"""
+
+
+def _clarify_attempt_script() -> str:
+	"""The attempt loop with its failure-line helpers, which sit just above max_attempts=3."""
+	lines = _read(CLARIFY_WF).splitlines()
+	starts = [i for i, line in enumerate(lines) if line.strip().startswith("# Issue #8602: each failed attempt")]
+	# Without the helpers (before #8602) the loop alone still runs, so the
+	# behavioural checks fail on the missing line rather than on extraction.
+	start = starts[0] if starts else next(i for i, line in enumerate(lines) if line.strip() == "max_attempts=3")
+	stop = next(i for i in range(start, len(lines)) if lines[i].strip() == "- name: Semantic cache store")
+	end = max(i for i in range(start, stop) if lines[i].strip() == "done")
+	return textwrap.dedent("\n".join(lines[start : end + 1])) + "\n"
+
+
+def _run_clarify_attempts(tmp: Path, mode: str) -> subprocess.CompletedProcess[str]:
+	(tmp / "scripts").mkdir()
+	stub = tmp / "scripts" / "clarify_isolated_run.sh"
+	stub.write_text(ATTEMPT_STUB_RUNNER, encoding="utf-8")
+	stub.chmod(0o755)
+	(tmp / "p.txt").write_text("prompt\n", encoding="utf-8")
+	env = {
+		"PATH": "/usr/bin:/bin",
+		"STUB_MODE": mode,
+		"CLARIFY_ENGINE": "claude",
+		"RUNTIME_DIR": str(tmp),
+		"CODEX_PROMPT_FILE": str(tmp / "p.txt"),
+		"CODEX_OUTPUT_FILE": str(tmp / "o.txt"),
+		"GITHUB_ENV": str(tmp / "github_env"),
+	}
+	script = "set -euo pipefail\nsleep() { :; }\n" + _clarify_attempt_script()
+	return subprocess.run(["bash", "-c", script], cwd=tmp, env=env, capture_output=True, text=True, timeout=120, check=False)
+
+
+def _attempt_failed_lines(stdout: str) -> list[str]:
+	return [line for line in stdout.splitlines() if line.startswith("CLARIFY_ENGINE_ATTEMPT_FAILED ")]
+
+
+def test_clarify_attempt_loop_keeps_its_messages_and_adds_the_failure_line() -> None:
+	loop = _clarify_attempt_script()
+	assert "CLARIFY_ENGINE_ATTEMPT_FAILED" in loop
+	for field in ("pool_role=", "pool_account=", "pool_outcome=", "pool_reason=", "pool_exit_code="):
+		assert field in loop
+	assert 'echo "::warning::${clarify_engine_name} exited with code $rc on attempt ${attempt}."' in loop
+	assert 'echo "::warning::${clarify_engine_name} returned empty output on attempt ${attempt}."' in loop
+	assert 'echo "::error::${clarify_engine_name} clarify failed after ${max_attempts} attempts."' in loop
+	# Only the give-up line is an error annotation; a retry that later
+	# succeeds must not leave errors behind.
+	assert loop.count("::error::") == 1
+
+
+def test_crashed_clarify_attempts_name_the_pool_reason_in_heal_evidence() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		result = _run_clarify_attempts(Path(tmp), "crash")
+	assert result.returncode == 1, result.stdout + result.stderr
+	failed = _attempt_failed_lines(result.stdout)
+	assert len(failed) == 3, result.stdout
+	for attempt, line in enumerate(failed, start=1):
+		assert f"engine=Claude attempt={attempt} max_attempts=3 kind=nonzero_exit exit_code=1 " in line
+		assert "pool_role=CLARIFY pool_account=TEAM1 pool_outcome=crashed pool_reason=no_result pool_exit_code=1" in line
+	# The runner's stderr still reaches the job log unchanged.
+	assert result.stderr.count("some cli noise") == 3
+	assert result.stderr.count(ATTEMPT_POOL_LINE) == 3
+
+	# The raw job log as the runner writes it (run 41287557900): the echoed
+	# step script without the ANSI cyan prefix, the output with workflow
+	# commands rendered as ##[...], then a keyword-free tail that pushes the
+	# attempt lines out of filter_log's 400-line tail.
+	stamp = "2026-11-01T08:14:52.4911812Z "
+	raw = [stamp + "##[group]Run bash scripts/clarify_isolated_run.sh"]
+	raw += [stamp + line for line in _clarify_attempt_script().splitlines()[:60]]
+	raw += [stamp + "shell: /usr/bin/bash -e {0}", stamp + "##[endgroup]"]
+	raw += [stamp + re.sub(r"^::(warning|error)::", r"##[\1]", line) for line in result.stdout.splitlines()]
+	raw += [stamp + f"padding line {i}" for i in range(450)]
+	spec = importlib.util.spec_from_file_location("workflow_failure_heal_8602", REPO_ROOT / "scripts" / "workflow_failure_heal.py")
+	assert spec and spec.loader
+	heal = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(heal)
+	filtered = heal.filter_log("\n".join(raw) + "\n")
+	kept = [line for line in filtered.splitlines() if "CLARIFY_ENGINE_ATTEMPT_FAILED" in line and "pool_reason=no_result" in line]
+	assert len(kept) == 3, filtered
+
+
+def test_clarify_attempt_failure_line_edge_cases() -> None:
+	unknown = "pool_role=unknown pool_account=unknown pool_outcome=unknown pool_reason=unknown pool_exit_code=unknown"
+	cases = {
+		# Claude unavailable: the codex attempts carry no pool fields.
+		"fallback": lambda line: "engine=Codex" in line and unknown in line,
+		# The runner's own line is written last, so it wins over CLI noise.
+		"spoof": lambda line: "pool_outcome=crashed pool_reason=no_result" in line,
+		# A spoofed line cannot carry workflow commands or shell syntax.
+		"spoof_only": lambda line: not any(bad in line for bad in ("$", ";", "::", "(", ")")),
+		"empty": lambda line: "kind=empty_output exit_code=0" in line,
+		# The CLI's unterminated last stderr line shares a line with the pool line.
+		"glued": lambda line: "pool_outcome=crashed pool_reason=no_result pool_exit_code=1" in line,
+		"nopool": lambda line: "engine=Claude" in line and "exit_code=1" in line and unknown in line,
+	}
+	for mode, check in cases.items():
+		with tempfile.TemporaryDirectory() as tmp:
+			result = _run_clarify_attempts(Path(tmp), mode)
+		assert result.returncode == 1, (mode, result.stdout, result.stderr)
+		failed = _attempt_failed_lines(result.stdout)
+		assert len(failed) == 3, (mode, result.stdout)
+		for line in failed:
+			assert check(line), (mode, line)
+
+
+# Issue #9120: a blocked ai:check-triage issue alerts at WARNING, not CRITICAL,
+# and its comment says the unblock judge re-checks the failing check. The first
+# line and the Reason: line stay byte-identical (scripts/unblock_judge.sh reads both).
+CHECK_TRIAGE_BLOCKED_PARAGRAPH = (
+	"This is a CI-failure triage issue. The unblock judge re-checks the failing check and closes this "
+	"issue with evidence once it passes on the pull request's newer head or on the default branch; "
+	"no reply is needed unless the check keeps failing."
+)
+
+
+def _run_blocked_planning_step(labels: list[str] | None) -> tuple[subprocess.CompletedProcess[str], str, list[list[str]]]:
+	(step,) = [step for step in _steps("plan.yml") if step.get("name") == "Handle blocked planning output"]
+	script = step["run"]
+	for expression, value in (
+		("${{ github.repository }}", "owner/repo"),
+		("${{ github.server_url }}", "https://github.com"),
+		("${{ github.run_id }}", "1"),
+	):
+		script = script.replace(expression, value)
+	assert "${{" not in script, script
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		(tmp / "scripts").mkdir()
+		(tmp / "bin").mkdir()
+		(tmp / "scripts" / "gh_helpers.sh").write_text('gh_retry() { "$@"; }\n', encoding="utf-8")
+		(tmp / "scripts" / "label_helpers.sh").write_text("ensure_label_exists() { :; }\n", encoding="utf-8")
+		(tmp / "scripts" / "tg_helpers.sh").write_text(
+			'tg_send_tracked() { printf \'%s\\t%s\\t%s\\n\' "$1" "$3" "${2//$\'\\n\'/ }" >> "${TG_LOG}"; }\n',
+			encoding="utf-8",
+		)
+		gh = tmp / "bin" / "gh"
+		gh.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+		gh.chmod(0o755)
+		env = {
+			"PATH": f"{tmp / 'bin'}:/usr/bin:/bin",
+			"ISSUE_NUMBER": "746",
+			"ISSUE_URL": "https://github.com/owner/repo/issues/746",
+			"BLOCKED_REASON": "work is already on the planning ref; nothing to implement",
+			"PLAN_COMMENT_FILE": str(tmp / "comment.md"),
+			"TG_LOG": str(tmp / "tg.log"),
+		}
+		if labels is not None:
+			meta = tmp / "issue_meta.json"
+			meta.write_text(json.dumps({"number": 746, "labels": [{"name": name} for name in labels]}), encoding="utf-8")
+			env["ISSUE_META_FILE"] = str(meta)
+		else:
+			env["ISSUE_META_FILE"] = str(tmp / "missing_issue_meta.json")
+		result = subprocess.run(["bash", "-c", script], cwd=tmp, env=env, capture_output=True, text=True, timeout=60, check=False)
+		comment = (tmp / "comment.md").read_text(encoding="utf-8") if (tmp / "comment.md").exists() else ""
+		sends = [line.split("\t") for line in (_read(tmp / "tg.log").splitlines() if (tmp / "tg.log").exists() else [])]
+	return result, comment, sends
+
+
+def test_blocked_check_triage_issue_alerts_at_warning_with_the_judge_paragraph() -> None:
+	result, comment, sends = _run_blocked_planning_step(["ai:check-triage", "ai:planning"])
+	assert result.returncode == 0, result.stdout + result.stderr
+	lines = comment.splitlines()
+	assert lines[0] == "Planning blocked: human input required."
+	assert lines[2] == "Reason: work is already on the planning ref; nothing to implement"
+	assert lines[3] == ""
+	assert lines[4] == CHECK_TRIAGE_BLOCKED_PARAGRAPH
+	assert "Provide the required input, then reply with /answer." in comment
+	assert len(sends) == 1
+	assert sends[0][:2] == ["746", "WARNING"]
+	assert sends[0][2].startswith(
+		"Planning blocked for issue #746 (CI triage; the unblock judge will re-check): work is already on the planning ref"
+	)
+
+
+def test_blocked_issue_without_check_triage_label_keeps_critical_and_text() -> None:
+	for labels in (["ai:planning"], None):
+		result, comment, sends = _run_blocked_planning_step(labels)
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert comment == (
+			"Planning blocked: human input required.\n\n"
+			"Reason: work is already on the planning ref; nothing to implement\n\n"
+			"Auto-answer has been paused to avoid unsatisfiable clarification loops.\n"
+			"Provide the required input, then reply with /answer.\n\n"
+			"Run: https://github.com/owner/repo/actions/runs/1\n"
+		), labels
+		assert CHECK_TRIAGE_BLOCKED_PARAGRAPH not in comment
+		assert len(sends) == 1
+		assert sends[0][:2] == ["746", "CRITICAL"], labels
+		assert sends[0][2].startswith("Planning blocked for issue #746: work is already"), labels
+
+
+def main() -> int:
+	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	for test in tests:
+		test()
+	print(f"{len(tests)} passed")
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

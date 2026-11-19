@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/branch_rebuild_audit.v1.json",
+  "title": "BranchRebuildAuditV1",
+  "description": "Latest last-resort integration-branch rebuild audit snapshot for one tracking issue / integration branch pair.",
+  "$comment": "Schema evolution rule: never repurpose existing fields in-place. Add additive fields when possible; otherwise publish branch_rebuild_audit.v2.json and update readers/writers.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "repository",
+    "tracking_issue_number",
+    "integration_branch",
+    "default_branch",
+    "last_rebuild_at",
+    "trigger_reason",
+    "resolver_escalated_at",
+    "final_pr_number",
+    "final_pr_head_sha",
+    "pre_rebuild_branch_head_sha",
+    "default_branch_head_sha",
+    "replay_commits",
+    "outcome",
+    "branch_protected",
+    "failure_detail",
+    "completed_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "repository": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "tracking_issue_number": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "integration_branch": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "default_branch": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "last_rebuild_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trigger_reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "resolver_escalated_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "final_pr_number": {
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "final_pr_head_sha": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-fA-F]{7,64}$"
+    },
+    "pre_rebuild_branch_head_sha": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-fA-F]{7,64}$"
+    },
+    "default_branch_head_sha": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-fA-F]{7,64}$"
+    },
+    "replay_commits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "issue_number",
+          "pr_number",
+          "merge_commit_sha",
+          "merged_at"
+        ],
+        "properties": {
+          "issue_number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "pr_number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "merge_commit_sha": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{7,64}$"
+          },
+          "merged_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    },
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "started",
+        "success",
+        "failed",
+        "skipped_preflight",
+        "skipped_protected",
+        "skipped_missing_replay"
+      ]
+    },
+    "branch_protected": {
+      "type": ["boolean", "null"]
+    },
+    "failure_detail": {
+      "type": ["string", "null"],
+      "maxLength": 4096
+    },
+    "completed_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    }
+  }
+}

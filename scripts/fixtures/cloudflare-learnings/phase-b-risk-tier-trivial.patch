@@ -1,0 +1,7 @@
+diff --git a/src/lib/trivial.py b/src/lib/trivial.py
+index 1111111..2222222 100644
+--- a/src/lib/trivial.py
++++ b/src/lib/trivial.py
+@@ -1 +1 @@
+-print("old")
++print("new")

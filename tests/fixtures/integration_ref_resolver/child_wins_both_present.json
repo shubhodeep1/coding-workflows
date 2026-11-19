@@ -1,0 +1,17 @@
+{
+  "name": "child_wins_both_present",
+  "issues": {
+    "101": {
+      "body": "Child task body\n\n- Tracking issue: #1047\n- Integration branch: `orchestrator/project-child-wins`\n"
+    },
+    "1047": {
+      "body": "## Project: Tracking\n\n**Integration branch:** `orchestrator/project-tracking-ignored`\n"
+    }
+  },
+  "branch_exists": {
+    "orchestrator/project-child-wins": true,
+    "orchestrator/project-tracking-ignored": true
+  },
+  "expected_stdout": "orchestrator/project-child-wins",
+  "expected_exit_code": 0
+}

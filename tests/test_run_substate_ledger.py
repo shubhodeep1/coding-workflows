@@ -1,0 +1,925 @@
+#!/usr/bin/env python3
+"""Contract tests for the run-substate ledger helper, schema, and wiring.
+
+Repo CI runs tests via explicit `python3 tests/<file>.py` allowlists rather
+than pytest discovery, so this file keeps zero-arg test functions plus a small
+manual runner.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import tempfile
+import time
+import unittest
+from pathlib import Path
+
+try:
+	import jsonschema
+except ModuleNotFoundError as exc:  # pragma: no cover - direct-run fallback only.
+	jsonschema = None
+	_JSONSCHEMA_IMPORT_ERROR = exc
+else:
+	_JSONSCHEMA_IMPORT_ERROR = None
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+HELPER_SCRIPT = REPO_ROOT / "scripts" / "ledger_emit_substate.sh"
+SCHEMA_PATH = REPO_ROOT / "ai-memory" / "schemas" / "run_ledger_entry.v1.json"
+
+STATIC_WIRING_CONTRACTS = {
+	"scripts/review_run_reviewers.sh": (
+		"ledger_emit_substate.sh",
+		"emit_reviewer_substate",
+		"PreparingWorkspace",
+		"Succeeded",
+		"Stalled",
+	),
+	"scripts/review_apply_fixes.sh": (
+		"ledger_emit_substate.sh",
+		"emit_editor_substate",
+		"BuildingPrompt",
+		"Succeeded",
+		"Failed",
+	),
+	"scripts/review_conflict_resolve.sh": (
+		"ledger_emit_substate.sh",
+		"emit_conflict_resolver_substate",
+		"TimedOut",
+		"codex_stall_killed",
+	),
+	"scripts/self_heal_validation.sh": (
+		"ledger_emit_substate.sh",
+		"emit_self_heal_substate",
+		"validate_self_heal",
+		"Succeeded",
+	),
+	"scripts/review_rb_judge.sh": (
+		"ledger_emit_substate.sh",
+		"emit_review_rb_substate",
+		"review_rb_judge",
+		"review_rb_fix",
+	),
+	"scripts/validate_process.sh": (
+		"ledger_emit_substate.sh",
+		"emit_validate_substate",
+		"validate_discover",
+		"validate_diagnose",
+	),
+	".github/workflows/implement.yml": (
+		"ledger_emit_substate.sh",
+		"emit_implement_substate",
+		"implement_repair",
+		"codex_stall_killed",
+	),
+}
+
+FORBIDDEN_STDERR_SUPPRESSION = {
+	"scripts/review_run_reviewers.sh": 'bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" >/dev/null 2>&1 || true',
+	"scripts/review_apply_fixes.sh": 'bash "${ledger_substate_script}" "${args[@]}" >/dev/null 2>&1 || true',
+	"scripts/review_conflict_resolve.sh": 'bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" >/dev/null 2>&1 || true',
+	"scripts/self_heal_validation.sh": 'bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" >/dev/null 2>&1 || true',
+	"scripts/review_rb_judge.sh": 'bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" >/dev/null 2>&1 || true',
+	"scripts/validate_process.sh": 'bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" >/dev/null 2>&1 || true',
+	".github/workflows/implement.yml": 'bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" >/dev/null 2>&1 || true',
+}
+
+
+def _write_ai_memory_stub(path: Path) -> None:
+	path.write_text(
+		"""#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+
+def main() -> int:
+	if len(sys.argv) < 2 or sys.argv[1] != \"record-run-event\":
+		raise SystemExit(2)
+	payload = {\"command\": sys.argv[1]}
+	args = sys.argv[2:]
+	index = 0
+	while index < len(args):
+		key = args[index]
+		if not key.startswith(\"--\"):
+			raise SystemExit(3)
+		if index + 1 >= len(args):
+			raise SystemExit(4)
+		payload[key[2:].replace(\"-\", \"_\")] = args[index + 1]
+		index += 2
+	metadata = json.loads(payload.get(\"metadata_json\", \"{}\"))
+	payload[\"metadata\"] = metadata
+	payload.pop(\"metadata_json\", None)
+	out_path = Path(os.environ[\"LEDGER_TEST_OUTPUT\"])
+	fail_first = os.environ.get(\"LEDGER_TEST_FAIL_FIRST\") == \"1\"
+	fail_marker = Path(os.environ.get("LEDGER_TEST_FAIL_MARKER", str(out_path) + ".fail-first"))
+	if fail_first and not fail_marker.exists():
+		fail_marker.write_text(\"1\", encoding=\"utf-8\")
+		return 1
+	if out_path.exists():
+		events = json.loads(out_path.read_text(encoding=\"utf-8\"))
+	else:
+		events = []
+	events.append(payload)
+	out_path.write_text(json.dumps(events, indent=2, sort_keys=True), encoding=\"utf-8\")
+	return 0
+
+
+if __name__ == \"__main__\":
+	raise SystemExit(main())
+""",
+		encoding="utf-8",
+	)
+
+
+def _run_helper(
+	tmp_path: Path,
+	*extra_args: str,
+	extra_env: dict[str, str] | None = None,
+	allow_stderr: bool = False,
+) -> list[dict[str, object]]:
+	stub_path = tmp_path / "ai_memory_stub.py"
+	events_path = tmp_path / "events.json"
+	seen_path = tmp_path / "seen.txt"
+	_write_ai_memory_stub(stub_path)
+
+	env = os.environ.copy()
+	env.update(
+		{
+			"PYTHONDONTWRITEBYTECODE": "1",
+			"LEDGER_AI_MEMORY_SCRIPT": str(stub_path),
+			"LEDGER_TEST_OUTPUT": str(events_path),
+			"LEDGER_SUBSTATES_SEEN_FILE": str(seen_path),
+			"RUNNER_TEMP": str(tmp_path),
+			"GITHUB_ACTOR": "codex-bot",
+		}
+	)
+	if extra_env:
+		env.update(extra_env)
+
+	base_args = [
+		"bash",
+		str(HELPER_SCRIPT),
+		"--run-id",
+		"run-3070",
+		"--workflow",
+		"validate",
+		"--phase",
+		"validate_discover",
+		"--mode",
+		"discover",
+		"--repo-root",
+		str(tmp_path),
+		"--actor",
+		"codex-bot",
+	]
+	result = subprocess.run(
+		base_args + list(extra_args),
+		env=env,
+		capture_output=True,
+		text=True,
+		check=True,
+	)
+	assert result.stdout == ""
+	if not allow_stderr:
+		assert result.stderr == ""
+	if not events_path.exists():
+		return []
+	return json.loads(events_path.read_text(encoding="utf-8"))
+
+
+def _schema() -> dict[str, object]:
+	return json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+
+
+def _base_entry(*, event_type: str, status: str, metadata: dict[str, object]) -> dict[str, object]:
+	return {
+		"entry_id": f"entry-{event_type}-{status}",
+		"schema_version": "run_ledger_entry.v1",
+		"run_id": "run-3070",
+		"workflow": "validate",
+		"issue_number": 3070,
+		"pr_number": None,
+		"event_type": event_type,
+		"status": status,
+		"message": f"message for {event_type}",
+		"actor": "codex-bot",
+		"metadata": metadata,
+		"timestamp": "2026-06-03T02:00:00Z",
+	}
+
+
+def _require_jsonschema() -> None:
+	if jsonschema is None:
+		raise unittest.SkipTest(f"jsonschema unavailable: {_JSONSCHEMA_IMPORT_ERROR}")
+
+
+def test_helper_suppresses_duplicates_within_one_attempt_but_allows_new_attempt_and_lane() -> None:
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"PreparingWorkspace",
+			"--attempt",
+			"1",
+		)
+		assert len(events) == 1
+
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"PreparingWorkspace",
+			"--attempt",
+			"1",
+		)
+		assert len(events) == 1, events
+
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"PreparingWorkspace",
+			"--attempt",
+			"2",
+		)
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"PreparingWorkspace",
+			"--attempt",
+			"1",
+			"--lane",
+			"reviewer-b",
+		)
+
+		assert len(events) == 3, events
+		assert [event["metadata"].get("attempt") for event in events] == [1, 2, 1]
+		assert [event["metadata"].get("lane") for event in events] == [None, None, "reviewer-b"]
+
+
+def test_failed_emit_does_not_consume_dedupe_key() -> None:
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"PreparingWorkspace",
+			"--attempt",
+			"1",
+			extra_env={"LEDGER_TEST_FAIL_FIRST": "1"},
+			allow_stderr=True,
+		)
+		assert events == []
+
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"PreparingWorkspace",
+			"--attempt",
+			"1",
+		)
+		assert len(events) == 1
+		assert events[0]["metadata"]["run_substate"] == "PreparingWorkspace"
+
+
+def test_helper_maps_terminal_substates_and_token_payloads() -> None:
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		usage_log = tmp_path / "usage.log"
+		usage_log.write_text(
+			"INFO: openrouter usage phase=validate call=1 model=openai/gpt-5.4 prompt_tokens=8 completion_tokens=2 total_tokens=10\n",
+			encoding="utf-8",
+		)
+		tokens_used_log = tmp_path / "tokens-used.log"
+		tokens_used_log.write_text("tokens used\n1,234\n", encoding="utf-8")
+
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"Succeeded",
+			"--attempt",
+			"1",
+			"--tokens-input",
+			"11",
+			"--tokens-output",
+			"13",
+		)
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"Failed",
+			"--attempt",
+			"2",
+			"--tokens-total",
+			"5",
+		)
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"TimedOut",
+			"--attempt",
+			"3",
+			"--tokens-log-file",
+			str(usage_log),
+		)
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"Stalled",
+			"--attempt",
+			"4",
+			"--tokens-log-file",
+			str(tokens_used_log),
+		)
+		events = _run_helper(
+			tmp_path,
+			"--event-type",
+			"codex_stall_killed",
+			"--attempt",
+			"5",
+		)
+
+		by_attempt = {int(event["metadata"].get("attempt", 0)): event for event in events}
+		assert by_attempt[1]["status"] == "ok"
+		assert by_attempt[1]["metadata"]["tokens"] == {"input": 11, "output": 13, "total": 24}
+
+		assert by_attempt[2]["status"] == "error"
+		assert by_attempt[2]["metadata"]["tokens"] == {"total": 5}
+
+		assert by_attempt[3]["status"] == "timeout"
+		assert by_attempt[3]["metadata"]["tokens"] == {"input": 8, "output": 2, "total": 10}
+
+		assert by_attempt[4]["status"] == "stalled"
+		assert by_attempt[4]["metadata"]["tokens"] == {"total": 1234}
+
+		assert by_attempt[5]["event_type"] == "codex_stall_killed"
+		assert by_attempt[5]["status"] == "stalled"
+		assert "run_substate" not in by_attempt[5]["metadata"]
+
+
+def test_large_token_log_is_read_from_the_tail_and_stays_fast() -> None:
+	"""A multi-megabyte editor log must not cost the caller its job budget.
+
+	`parse_usage_from_text` probes every `{` in the document, and
+	json.JSONDecodeError's constructor counts newlines from byte 0 on each
+	failed probe, so scanning the whole file is quadratic in its length.
+	Run 34074649678 (issue #4017) lost a 3-hour implement job to two such
+	calls on a 30 MB codex log.  The helper now reads only the trailing
+	`LEDGER_TOKENS_LOG_MAX_BYTES`, which still carries the answer because
+	every parser keeps its last match.
+	"""
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		big_log = tmp_path / "codex_log_attempt_1.txt"
+		# `{`-dense filler, shaped like the diff/JSON noise a real editor log
+		# carries, followed by the trailing summary codex actually emits.
+		filler = "exec bash -lc {\"cmd\": broken, {nested {deeper\n" * 120_000
+		big_log.write_text(filler + "tokens used\n455,766\n", encoding="utf-8")
+		assert big_log.stat().st_size > 4_000_000
+
+		started = time.monotonic()
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"Succeeded",
+			"--attempt",
+			"1",
+			"--tokens-log-file",
+			str(big_log),
+		)
+		elapsed = time.monotonic() - started
+
+		assert events[-1]["metadata"]["tokens"] == {"total": 455766}
+		# Unbounded, this same log takes minutes; the bound puts it in seconds.
+		assert elapsed < 30, elapsed
+
+
+def test_token_log_tail_keeps_a_complete_first_line_when_the_seek_is_line_aligned() -> None:
+	"""A window that starts exactly after a newline must keep its first line.
+
+	Copilot review on PR #4028 (pullrequestreview-5128705403): the tail read
+	always dropped everything up to the first newline in the window, so when
+	the seek point landed exactly on a line boundary it discarded a complete
+	line.  If that line was the only usage line, token metadata was silently
+	lost.  The read now looks one byte behind the window and skips the drop
+	when that byte is a newline.
+	"""
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		window = 4096
+		usage_line = (
+			"INFO: openrouter usage phase=validate call=1 model=openai/gpt-5.4 "
+			"prompt_tokens=8 completion_tokens=2 total_tokens=10\n"
+		)
+		# The usage line is the FIRST line of the window and the rest of the
+		# window carries no token signal, so dropping it loses the tokens.
+		trailing_filler = "x" * (window - len(usage_line) - 1) + "\n"
+		assert len(usage_line + trailing_filler) == window
+		leading_junk = "junk line\n" * 100          # ends with a newline
+
+		aligned_log = tmp_path / "aligned.log"
+		aligned_log.write_text(leading_junk + usage_line + trailing_filler, encoding="utf-8")
+		assert aligned_log.stat().st_size == len(leading_junk) + window
+
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"Succeeded",
+			"--attempt",
+			"1",
+			"--tokens-log-file",
+			str(aligned_log),
+			extra_env={"LEDGER_TOKENS_LOG_MAX_BYTES": str(window)},
+		)
+		assert events[-1]["metadata"]["tokens"] == {"input": 8, "output": 2, "total": 10}
+
+		# Control: shift the boundary one byte into the junk so the window
+		# starts mid-line; the partial line is dropped and the usage line,
+		# now second in the window, is still found.
+		shifted_log = tmp_path / "shifted.log"
+		shifted_log.write_text(leading_junk + "jj" + "\n" + usage_line + trailing_filler[:-3] + "\n", encoding="utf-8")
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"Succeeded",
+			"--attempt",
+			"2",
+			"--tokens-log-file",
+			str(shifted_log),
+			extra_env={"LEDGER_TOKENS_LOG_MAX_BYTES": str(window)},
+		)
+		assert events[-1]["metadata"]["tokens"] == {"input": 8, "output": 2, "total": 10}
+
+
+def test_token_log_tail_bound_is_configurable_and_can_be_disabled() -> None:
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		log_path = tmp_path / "usage.log"
+		head_line = (
+			"INFO: openrouter usage phase=validate call=1 model=openai/gpt-5.4 "
+			"prompt_tokens=8 completion_tokens=2 total_tokens=10\n"
+		)
+		log_path.write_text(head_line + ("filler line\n" * 4000), encoding="utf-8")
+		assert log_path.stat().st_size > 40_000
+
+		# A tail smaller than the file drops the leading usage line entirely.
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"Succeeded",
+			"--attempt",
+			"1",
+			"--tokens-log-file",
+			str(log_path),
+			extra_env={"LEDGER_TOKENS_LOG_MAX_BYTES": "512"},
+		)
+		assert "tokens" not in events[-1]["metadata"]
+
+		# 0 disables the bound, so the whole file is parsed again.
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"Succeeded",
+			"--attempt",
+			"2",
+			"--tokens-log-file",
+			str(log_path),
+			extra_env={"LEDGER_TOKENS_LOG_MAX_BYTES": "0"},
+		)
+		assert events[-1]["metadata"]["tokens"] == {"input": 8, "output": 2, "total": 10}
+
+		# A file under the bound is still read whole, unchanged from before.
+		small_log = tmp_path / "small.log"
+		small_log.write_text(head_line, encoding="utf-8")
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"Succeeded",
+			"--attempt",
+			"3",
+			"--tokens-log-file",
+			str(small_log),
+		)
+		assert events[-1]["metadata"]["tokens"] == {"input": 8, "output": 2, "total": 10}
+
+
+def test_hung_record_run_event_times_out_instead_of_stalling_the_caller() -> None:
+	"""A wedged ai-memory write must fail open, not hold the job hostage."""
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		hanging_stub = tmp_path / "hanging_ai_memory.py"
+		hanging_stub.write_text(
+			"import time\n\ntime.sleep(600)\n",
+			encoding="utf-8",
+		)
+
+		started = time.monotonic()
+		result = subprocess.run(
+			[
+				"bash",
+				str(HELPER_SCRIPT),
+				"--run-id",
+				"run-4017",
+				"--workflow",
+				"implement",
+				"--phase",
+				"implement",
+				"--mode",
+				"implement",
+				"--repo-root",
+				str(tmp_path),
+				"--actor",
+				"codex-bot",
+				"--substate",
+				"Succeeded",
+				"--attempt",
+				"1",
+			],
+			env={
+				**os.environ,
+				"PYTHONDONTWRITEBYTECODE": "1",
+				"LEDGER_AI_MEMORY_SCRIPT": str(hanging_stub),
+				"LEDGER_SUBSTATES_SEEN_FILE": str(tmp_path / "seen.txt"),
+				"RUNNER_TEMP": str(tmp_path),
+				"LEDGER_EMIT_TIMEOUT_SECONDS": "3",
+			},
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		elapsed = time.monotonic() - started
+
+		assert result.returncode == 0, result.stderr
+		assert elapsed < 60, elapsed
+		assert "record-run-event failed" in result.stderr, result.stderr
+		assert "timeout" in result.stderr, result.stderr
+
+
+def test_invalid_emit_timeout_literals_keep_the_default_bound() -> None:
+	"""Only an exact `0` may remove the emit bound; a typo never should.
+
+	Copilot review on PR #4028 (discussion_r3946877779): the first cut treated
+	any value <= 0 as "disable", so `-1` silently removed the safety bound,
+	and `float()` accepts `nan` / `inf`, which reach `subprocess.run` as
+	non-finite timeouts.  All three must fall back to the documented 120 s
+	default.  Each case runs against a 600 s stub, so a disabled bound shows
+	up as a helper that is still running long after the default would have
+	fired; the cases run concurrently to keep the wall cost near one bound.
+	"""
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		hanging_stub = tmp_path / "hanging_ai_memory.py"
+		hanging_stub.write_text("import time\n\ntime.sleep(600)\n", encoding="utf-8")
+
+		procs: dict[str, subprocess.Popen[str]] = {}
+		started = time.monotonic()
+		for raw_value in ("-1", "nan", "inf"):
+			case_dir = tmp_path / f"case-{raw_value}"
+			case_dir.mkdir()
+			procs[raw_value] = subprocess.Popen(
+				[
+					"bash",
+					str(HELPER_SCRIPT),
+					"--run-id",
+					"run-4028",
+					"--workflow",
+					"implement",
+					"--phase",
+					"implement",
+					"--mode",
+					"implement",
+					"--repo-root",
+					str(case_dir),
+					"--actor",
+					"codex-bot",
+					"--substate",
+					"Succeeded",
+					"--attempt",
+					"1",
+				],
+				env={
+					**os.environ,
+					"PYTHONDONTWRITEBYTECODE": "1",
+					"LEDGER_AI_MEMORY_SCRIPT": str(hanging_stub),
+					"LEDGER_SUBSTATES_SEEN_FILE": str(case_dir / "seen.txt"),
+					"RUNNER_TEMP": str(case_dir),
+					"LEDGER_EMIT_TIMEOUT_SECONDS": raw_value,
+				},
+				stdout=subprocess.PIPE,
+				stderr=subprocess.PIPE,
+				text=True,
+			)
+
+		for raw_value, proc in procs.items():
+			try:
+				stdout, stderr = proc.communicate(timeout=240)
+			except subprocess.TimeoutExpired:
+				proc.kill()
+				raise AssertionError(f"LEDGER_EMIT_TIMEOUT_SECONDS={raw_value!r} disabled the bound")
+			assert proc.returncode == 0, (raw_value, stderr)
+			assert stdout == "", (raw_value, stdout)
+			assert "record-run-event failed (timeout:" in stderr, (raw_value, stderr)
+			assert "exceeded 120.0s" in stderr, (raw_value, stderr)
+
+		elapsed = time.monotonic() - started
+		assert 100 < elapsed < 240, elapsed
+
+
+CIRCUIT_OPENED_TIMEOUT_LINE = (
+	"::warning::ledger_emit_substate circuit opened (reason=timeout); "
+	"later substates in this job are skipped"
+)
+CIRCUIT_OPENED_AUTH_LINE = (
+	"::warning::ledger_emit_substate circuit opened (reason=auth); "
+	"later substates in this job are skipped"
+)
+
+
+def _write_circuit_stub(path: Path) -> None:
+	"""Stub that records each call, then sleeps, prints stderr and exits."""
+	path.write_text(
+		"import os\n"
+		"import sys\n"
+		"import time\n"
+		"with open(os.environ['CIRCUIT_TEST_CALLS'], 'a', encoding='utf-8') as handle:\n"
+		"\thandle.write('call\\n')\n"
+		"sleep_secs = float(os.environ.get('CIRCUIT_TEST_SLEEP', '0') or '0')\n"
+		"if sleep_secs:\n"
+		"\ttime.sleep(sleep_secs)\n"
+		"sys.stderr.write(os.environ.get('CIRCUIT_TEST_STDERR', ''))\n"
+		"raise SystemExit(int(os.environ.get('CIRCUIT_TEST_RC', '0') or '0'))\n",
+		encoding="utf-8",
+	)
+
+
+def _run_circuit_helper(
+	tmp_path: Path,
+	substate: str,
+	extra_env: dict[str, str] | None = None,
+) -> tuple[int, str, str]:
+	stub_path = tmp_path / "circuit_stub.py"
+	if not stub_path.exists():
+		_write_circuit_stub(stub_path)
+	env = {
+		key: value
+		for key, value in os.environ.items()
+		if key not in ("LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED", "LEDGER_EMIT_TIMEOUT_SECONDS")
+	}
+	env.update(
+		{
+			"PYTHONDONTWRITEBYTECODE": "1",
+			"LEDGER_AI_MEMORY_SCRIPT": str(stub_path),
+			"LEDGER_SUBSTATES_SEEN_FILE": str(tmp_path / "seen.txt"),
+			"RUNNER_TEMP": str(tmp_path),
+			"CIRCUIT_TEST_CALLS": str(tmp_path / "calls.txt"),
+		}
+	)
+	if extra_env:
+		env.update(extra_env)
+	result = subprocess.run(
+		[
+			"bash",
+			str(HELPER_SCRIPT),
+			"--run-id",
+			"run-7493",
+			"--workflow",
+			"implement",
+			"--phase",
+			"implement",
+			"--mode",
+			"implement",
+			"--repo-root",
+			str(tmp_path),
+			"--actor",
+			"codex-bot",
+			"--substate",
+			substate,
+			"--attempt",
+			"1",
+		],
+		env=env,
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+	return result.returncode, result.stdout, result.stderr
+
+
+def _circuit_call_count(tmp_path: Path) -> int:
+	calls_path = tmp_path / "calls.txt"
+	if not calls_path.exists():
+		return 0
+	return len(calls_path.read_text(encoding="utf-8").splitlines())
+
+
+def _circuit_sentinel(tmp_path: Path) -> Path:
+	return tmp_path / "seen.txt.d" / "circuit_open"
+
+
+def test_circuit_breaker_timeout_opens_circuit_and_skips_later_substates() -> None:
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		rc, stdout, stderr = _run_circuit_helper(
+			tmp_path,
+			"PreparingWorkspace",
+			extra_env={"CIRCUIT_TEST_SLEEP": "30", "LEDGER_EMIT_TIMEOUT_SECONDS": "2"},
+		)
+		assert rc == 0, stderr
+		assert stdout == "", stdout
+		assert "record-run-event failed (timeout:" in stderr, stderr
+		assert stderr.count(CIRCUIT_OPENED_TIMEOUT_LINE) == 1, stderr
+		assert stderr.count("circuit opened") == 1, stderr
+		assert _circuit_sentinel(tmp_path).is_file()
+		assert _circuit_call_count(tmp_path) == 1
+
+		started = time.monotonic()
+		rc, stdout, stderr = _run_circuit_helper(
+			tmp_path,
+			"Succeeded",
+			extra_env={"CIRCUIT_TEST_SLEEP": "30", "LEDGER_EMIT_TIMEOUT_SECONDS": "2"},
+		)
+		elapsed = time.monotonic() - started
+		assert rc == 0, stderr
+		assert stdout == "", stdout
+		assert stderr == "", stderr
+		assert _circuit_call_count(tmp_path) == 1
+		assert elapsed < 10, elapsed
+
+
+def test_circuit_breaker_auth_failure_opens_circuit() -> None:
+	auth_details = (
+		"fatal: Authentication failed for 'https://github.com/example/repo.git/'",
+		"gh: Bad credentials (HTTP 401)",
+		"remote: Permission to example/repo.git denied to bot.",
+	)
+	for index, auth_detail in enumerate(auth_details):
+		with tempfile.TemporaryDirectory() as tmp_dir:
+			tmp_path = Path(tmp_dir)
+			# Case-insensitive switch value still means on.
+			auth_env = {
+				"CIRCUIT_TEST_STDERR": auth_detail,
+				"CIRCUIT_TEST_RC": "128",
+				"LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED": "TRUE" if index == 0 else "",
+			}
+			rc, _stdout, stderr = _run_circuit_helper(tmp_path, "PreparingWorkspace", extra_env=auth_env)
+			assert rc == 0, stderr
+			assert stderr.count(CIRCUIT_OPENED_AUTH_LINE) == 1, (auth_detail, stderr)
+			assert _circuit_sentinel(tmp_path).is_file(), auth_detail
+
+			rc, _stdout, stderr = _run_circuit_helper(tmp_path, "Succeeded", extra_env=auth_env)
+			assert rc == 0, stderr
+			assert stderr == "", stderr
+			assert _circuit_call_count(tmp_path) == 1, auth_detail
+
+
+def test_circuit_breaker_ignores_unrelated_failures() -> None:
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		failure_env = {"CIRCUIT_TEST_STDERR": "some other error", "CIRCUIT_TEST_RC": "1"}
+		rc, _stdout, stderr = _run_circuit_helper(tmp_path, "PreparingWorkspace", extra_env=failure_env)
+		assert rc == 0, stderr
+		assert "record-run-event failed (1:some other error)" in stderr, stderr
+		assert "circuit opened" not in stderr, stderr
+		assert not _circuit_sentinel(tmp_path).exists()
+
+		rc, _stdout, stderr = _run_circuit_helper(tmp_path, "Succeeded", extra_env=failure_env)
+		assert rc == 0, stderr
+		assert "record-run-event failed" in stderr, stderr
+		assert _circuit_call_count(tmp_path) == 2
+
+
+def test_circuit_breaker_ignores_rate_limited_403() -> None:
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		rate_env = {
+			"CIRCUIT_TEST_STDERR": "gh: You have exceeded a secondary rate limit (HTTP 403)",
+			"CIRCUIT_TEST_RC": "1",
+		}
+		for substate in ("PreparingWorkspace", "Succeeded"):
+			rc, _stdout, stderr = _run_circuit_helper(tmp_path, substate, extra_env=rate_env)
+			assert rc == 0, stderr
+			assert "circuit opened" not in stderr, stderr
+		assert not _circuit_sentinel(tmp_path).exists()
+		assert _circuit_call_count(tmp_path) == 2
+
+
+def test_circuit_breaker_switch_off_keeps_calling_the_store() -> None:
+	for switch_value in ("false", "FALSE"):
+		with tempfile.TemporaryDirectory() as tmp_dir:
+			tmp_path = Path(tmp_dir)
+			off_env = {
+				"CIRCUIT_TEST_STDERR": "fatal: Authentication failed",
+				"CIRCUIT_TEST_RC": "128",
+				"LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED": switch_value,
+			}
+			for substate in ("PreparingWorkspace", "Succeeded"):
+				rc, _stdout, stderr = _run_circuit_helper(tmp_path, substate, extra_env=off_env)
+				assert rc == 0, stderr
+				assert "circuit opened" not in stderr, stderr
+				assert "invalid LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED" not in stderr, stderr
+			assert not _circuit_sentinel(tmp_path).exists()
+			assert _circuit_call_count(tmp_path) == 2
+
+
+def test_circuit_breaker_invalid_switch_warns_and_behaves_as_off() -> None:
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		invalid_env = {
+			"CIRCUIT_TEST_STDERR": "fatal: Authentication failed",
+			"CIRCUIT_TEST_RC": "128",
+			"LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED": "maybe",
+		}
+		for substate in ("PreparingWorkspace", "Succeeded"):
+			rc, _stdout, stderr = _run_circuit_helper(tmp_path, substate, extra_env=invalid_env)
+			assert rc == 0, stderr
+			assert "invalid LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED" in stderr, stderr
+			assert "maybe" not in stderr, stderr
+			assert "circuit opened" not in stderr, stderr
+		assert not _circuit_sentinel(tmp_path).exists()
+		assert _circuit_call_count(tmp_path) == 2
+
+
+def test_schema_accepts_legacy_and_new_substate_entries_additively() -> None:
+	_require_jsonschema()
+	validator = jsonschema.Draft202012Validator(_schema())
+	legacy_entry = _base_entry(
+		event_type="phase_started",
+		status="info",
+		metadata={"existing_key": "kept-open"},
+	)
+	new_run_substate_entry = _base_entry(
+		event_type="run_substate",
+		status="ok",
+		metadata={
+			"phase": "validate_discover",
+			"mode": "discover",
+			"run_substate": "StreamingTurn",
+			"attempt": 2,
+			"lane": "reviewer-b",
+			"model": "openai/gpt-5.4",
+			"tokens": {"input": 3, "output": 4, "total": 7, "cached_input": 1},
+			"future_key": "still-open",
+		},
+	)
+	stall_entry = _base_entry(
+		event_type="codex_stall_killed",
+		status="stalled",
+		metadata={
+			"phase": "review_rb_judge",
+			"mode": "judge",
+			"attempt": 1,
+			"tokens": {"total": 12, "provider_total": 12},
+		},
+	)
+
+	validator.validate(legacy_entry)
+	validator.validate(new_run_substate_entry)
+	validator.validate(stall_entry)
+
+
+def test_workflows_export_ledger_limits_from_repository_variables() -> None:
+	expected_ledger_mappings = (
+		"LEDGER_TOKENS_LOG_MAX_BYTES: ${{ vars.LEDGER_TOKENS_LOG_MAX_BYTES || '1048576' }}",
+		"LEDGER_EMIT_TIMEOUT_SECONDS: ${{ vars.LEDGER_EMIT_TIMEOUT_SECONDS || '120' }}",
+	)
+	for ledger_workflow_name in ("implement.yml", "review_autofix.yml", "validate.yml"):
+		ledger_workflow_text = (REPO_ROOT / ".github" / "workflows" / ledger_workflow_name).read_text(encoding="utf-8")
+		for expected_ledger_mapping in expected_ledger_mappings:
+			assert expected_ledger_mapping in ledger_workflow_text, (ledger_workflow_name, expected_ledger_mapping)
+
+
+def test_scoped_callsites_reference_the_run_substate_helper() -> None:
+	for relative_path, required_snippets in STATIC_WIRING_CONTRACTS.items():
+		text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+		for snippet in required_snippets:
+			assert snippet in text, (relative_path, snippet)
+		forbidden = FORBIDDEN_STDERR_SUPPRESSION.get(relative_path)
+		if forbidden is not None:
+			assert forbidden not in text, (relative_path, forbidden)
+
+
+def main() -> int:
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	passed = 0
+	skipped = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			func()
+			print(f"  PASS  {name}")
+			passed += 1
+		except unittest.SkipTest as exc:
+			print(f"  SKIP  {name}: {exc}")
+			skipped += 1
+		except Exception as exc:
+			print(f"  FAIL  {name}: {exc}")
+			failed += 1
+	print(f"\n{passed} passed, {skipped} skipped, {failed} failed, {passed + skipped + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

@@ -1,0 +1,25 @@
+{
+  "name": "explicit_integration_line_wins",
+  "env": {
+    "CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED": "true"
+  },
+  "issues": {
+    "101": {
+      "body": "<!-- check-failure-triage:fp=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -->\n<!-- check-failure-triage:gen=1 -->\n<!-- check-failure-triage:root=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb -->\n<!-- check-failure-triage:pr=6564 -->\n\n## Automated CI failure triage (generation 1 of max 3)\n\n- **Repository:** `owner/repo`\n- **Pull request:** https://github.com/owner/repo/pull/6564 (`ai/issue-6564`)\n- **Failing check:** `CI / lint` (conclusion: `failure`)\n\n---\n\nDiagnosis text.\n\n- Integration branch: `orchestrator/project-77`\n",
+      "labels": [
+        {
+          "name": "ai:check-triage"
+        }
+      ],
+      "author_association": "OWNER",
+      "user": {
+        "login": "owner"
+      }
+    }
+  },
+  "branch_exists": {
+    "orchestrator/project-77": true
+  },
+  "expected_stdout": "orchestrator/project-77",
+  "expected_exit_code": 0
+}

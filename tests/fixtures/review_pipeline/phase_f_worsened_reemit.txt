@@ -1,0 +1,19 @@
+=== ISSUE 201 ===
+FILE: src/module.py
+LINES: 2-4
+LENS: CORRECTNESS & LOGIC
+SEVERITY: blocker
+FLAGGED_BY: reviewer_1
+CLASSIFICATION: must-fix
+EVIDENCE:
+  reviewer_1> "The residual bug now affects the primary write path and the blast radius grew."
+CURRENT_CODE:
+```
+  return total
+```
+SUGGESTED_APPROACH:
+  Re-emit the prior residual finding because the new diff broadens the
+  affected anchor and raises the severity to blocker.
+NOTES:
+  Prior accepted-residual decision no longer applies because the evidence worsened.
+=== END ISSUE 201 ===
