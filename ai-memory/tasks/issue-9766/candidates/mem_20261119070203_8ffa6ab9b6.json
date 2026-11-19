@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9766,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9766\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9772\",\"pr_number\":9772,\"branch\":\"ai/issue-9766\",\"run_id\":\"44469721045\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/44469721045\",\"changed_files\":[\".github/workflows/orchestrate_poll.yml\",\"agents.d/stuck-backlog-phase2b-poller-red-base-gate.md\",\"changelog.d/stuck-backlog-phase2b-poller-red-base-gate.md\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_plan_base_ci_gate.py\"]}",
+  "fingerprint": "756cea769e8906714b31ffb3da81e249f42cb22c9f88807f806772f95082384f",
+  "lineage": {
+    "issue_number": 9766,
+    "parent_ids": [],
+    "pr_number": 9772,
+    "run_id": "44469721045",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44469721045",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9772"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261119070203_8ffa6ab9b6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9766,
+    "level": "run",
+    "pr_number": 9772,
+    "run_id": "44469721045"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9766: https://github.com/shubhodeep1/coding-workflows/pull/9772",
+  "timestamps": {
+    "created_at": "2026-11-19T07:02:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
