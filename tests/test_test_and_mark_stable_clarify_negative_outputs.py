@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -79,7 +80,12 @@ fi
 exec /bin/date "$@"
 '''
 
-STUB_SLEEP = "#!/usr/bin/env bash\nexit 0\n"
+# Shell-function fakes prepended to each step body (see setUp).
+STUB_FAKES = (
+	'gh() { "$STUB_PYTHON" "$STUB_GH_PY" "$@"; }\n'
+	'date() { bash "$STUB_DATE_SH" "$@"; }\n'
+	'sleep() { :; }\n'
+)
 
 OUTPUT_LINE_RE = re.compile(r"^[a-z_]+=[0-9]+$")
 
@@ -97,17 +103,21 @@ class ClarifyNegativeOutputsTest(unittest.TestCase):
 	def setUp(self) -> None:
 		self._tmp = tempfile.TemporaryDirectory()
 		self.tmp = Path(self._tmp.name)
-		bin_dir = self.tmp / "bin"
-		bin_dir.mkdir()
-		for name, body in (("gh", STUB_GH), ("date", STUB_DATE), ("sleep", STUB_SLEEP)):
-			path = bin_dir / name
-			path.write_text(body, encoding="utf-8")
-			path.chmod(0o755)
+		# The fakes are shell functions, not PATH executables: the pre-push
+		# gate container mounts the temp dir noexec. Each stub is a file read
+		# by its interpreter, which noexec does not block.
+		stub_gh = self.tmp / "stub_gh.py"
+		stub_gh.write_text(STUB_GH, encoding="utf-8")
+		stub_date = self.tmp / "stub_date.sh"
+		stub_date.write_text(STUB_DATE, encoding="utf-8")
 		self.output = self.tmp / "github_output"
 		self.output.write_text("", encoding="utf-8")
 		self.gh_log = self.tmp / "gh.log"
 		self.env = {
-			"PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+			"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+			"STUB_PYTHON": sys.executable,
+			"STUB_GH_PY": str(stub_gh),
+			"STUB_DATE_SH": str(stub_date),
 			"HOME": str(self.tmp),
 			"GITHUB_OUTPUT": str(self.output),
 			"GITHUB_RUN_ID": "1",
@@ -124,7 +134,7 @@ class ClarifyNegativeOutputsTest(unittest.TestCase):
 		env = dict(self.env)
 		env.update(extra)
 		return subprocess.run(
-			["bash", "-c", _step_script(step_id, job)],
+			["bash", "-c", STUB_FAKES + _step_script(step_id, job)],
 			env=env,
 			text=True,
 			capture_output=True,
