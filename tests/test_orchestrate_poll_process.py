@@ -104,6 +104,37 @@ _SANDBOX_FILES = (
 	"ai_pipeline.md",
 )
 
+# Byte budget for the sandbox copy of `agents.md` (issue #9753). The
+# review-blocked judge always inlines `agents.md` into its prompt (#8269),
+# and the poller skips the judge when that prompt exceeds codex's
+# 1,048,576-character stdin cap. A 994,036-byte live `agents.md` pushed the
+# fixture prompt to 1,056,119 bytes, so every review-blocked `fix` test was
+# skipped before the judge ran. Bounding the sandbox copy keeps the
+# fixtures independent of how large the live document grows; the other
+# prompt inputs are about 62 KB today, which leaves ample headroom.
+_SANDBOX_AGENTS_MD_MAX_BYTES = 524_288
+_SANDBOX_AGENTS_MD_TRUNCATION_MARKER = (
+	b"\n<!-- poller test sandbox: agents.md truncated to bound judge prompt size -->\n"
+)
+
+
+def _copy_sandbox_agents_md(src: Path, dst: Path) -> None:
+	"""Copy ``src`` to ``dst``, cutting it to `_SANDBOX_AGENTS_MD_MAX_BYTES`.
+
+	A file at or under the budget is copied byte-for-byte. A larger file is
+	cut at the last newline at or before the budget (so no line or UTF-8
+	character is split) and the truncation marker is appended. Only the
+	sandbox copy is bounded; the repo-root `agents.md` the LOG_PREFIX
+	assertions read is untouched.
+	"""
+	data = src.read_bytes()
+	if len(data) <= _SANDBOX_AGENTS_MD_MAX_BYTES:
+		dst.write_bytes(data)
+		return
+	cut = data.rfind(b"\n", 0, _SANDBOX_AGENTS_MD_MAX_BYTES)
+	prefix = data[: cut + 1] if cut >= 0 else b""
+	dst.write_bytes(prefix + _SANDBOX_AGENTS_MD_TRUNCATION_MARKER)
+
 
 def _git_test_env() -> dict[str, str]:
 	"""Return a subprocess env without repo-scoped git/worktree overrides."""
@@ -144,7 +175,10 @@ def _make_poller_sandbox(
 		if src.exists():
 			dst = target / rel
 			dst.parent.mkdir(parents=True, exist_ok=True)
-			shutil.copy2(src, dst)
+			if rel == "agents.md":
+				_copy_sandbox_agents_md(src, dst)
+			else:
+				shutil.copy2(src, dst)
 	subprocess.run(
 		["git", "init", "--quiet", str(target)],
 		check=True,
@@ -28427,6 +28461,53 @@ def test_custom_runner_tests_need_no_pytest_arguments():
 		except TypeError:
 			required_arguments.append(name)
 	assert not required_arguments, required_arguments
+
+
+def test_poller_sandbox_bounds_agents_md_copy():
+	"""Issue #9753: the sandbox `agents.md` copy stays under a byte budget so
+	the inline review-blocked judge prompt cannot exceed codex's stdin cap
+	whatever size the live `agents.md` reaches."""
+	assert _SANDBOX_AGENTS_MD_MAX_BYTES + 200_000 < 1_048_576
+	marker = _SANDBOX_AGENTS_MD_TRUNCATION_MARKER
+	real_path = REPO_ROOT / "agents.md"
+	with tempfile.TemporaryDirectory() as tmp:
+		sandbox = Path(tmp) / "sandbox"
+		sandbox.mkdir()
+		_make_poller_sandbox(sandbox)
+		copy_path = sandbox / "agents.md"
+		if real_path.exists():
+			real = real_path.read_bytes()
+			copied = copy_path.read_bytes()
+			assert len(copied) <= _SANDBOX_AGENTS_MD_MAX_BYTES + len(marker), len(copied)
+			if len(real) > _SANDBOX_AGENTS_MD_MAX_BYTES:
+				assert copied.endswith(marker)
+				body = copied[: -len(marker)]
+				assert body.endswith(b"\n")
+				assert real.startswith(body)
+				assert len(body) > 0
+				body.decode("utf-8")
+			else:
+				assert copied == real
+		small_src = Path(tmp) / "small_agents.md"
+		small_dst = Path(tmp) / "small_agents_copy.md"
+		small_payload = "# Agents\n\nshort é content\n".encode("utf-8")
+		small_src.write_bytes(small_payload)
+		_copy_sandbox_agents_md(small_src, small_dst)
+		assert small_dst.read_bytes() == small_payload
+		# Synthetic oversized inputs exercise the cut whatever the live size is.
+		big_payload = ("line é " * 40 + "\n").encode("utf-8") * 3000
+		assert len(big_payload) > _SANDBOX_AGENTS_MD_MAX_BYTES
+		small_src.write_bytes(big_payload)
+		_copy_sandbox_agents_md(small_src, small_dst)
+		big_copy = small_dst.read_bytes()
+		assert big_copy.endswith(marker)
+		assert len(big_copy) <= _SANDBOX_AGENTS_MD_MAX_BYTES + len(marker)
+		big_body = big_copy[: -len(marker)]
+		assert big_body.endswith(b"\n") and big_payload.startswith(big_body)
+		assert big_body.decode("utf-8")
+		small_src.write_bytes(b"x" * (_SANDBOX_AGENTS_MD_MAX_BYTES + 1))
+		_copy_sandbox_agents_md(small_src, small_dst)
+		assert small_dst.read_bytes() == marker
 
 
 def _extract_bash_function(script: str, signature: str) -> str:
