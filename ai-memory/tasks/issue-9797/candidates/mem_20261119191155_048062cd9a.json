@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: REFRAME\n\nRATIONALE:\nQ1: Phase 7 failed because the runner pool was saturated. Cancel-on-close run 44527274737 was found within about 6 seconds, which means its trigger fired, but it never left `queued`. This is not a code defect, and the issue's own constraints say \"Do not change the Phase 7 budget or the gate's outcome in this issue.\" GITHUB FACTS show open, unmerged PR #9794 (\"\u2026start Phase 7's budget when the cancel run leaves the\u2026\"), so the bounded queued-wait change already has a pull request. Option B would conflict with #9794 on the same lines, and option C weakens the gate, which the constraints forbid. The main code defect is already fixed in the current checkout. In `.github/workflows/test-and-mark-stable.yml`:\n- lines 5318\u20135331 accept only digits for `pre_clarify_run_id` and write `pre_clarify_run_id_read_failed=1` when the read fails;\n- lines 5336\u20135339 reject a non-numeric `NUMBER` with `::error::`;\n- lines 5359\u20135369 skip when the baseline is unreadable and clear a non-numeric `NEW_ID` inside the poll loop.\n\nPhase 7 needs no further change in this issue.\nQ2: Q2 only applies if Q1 = B. Picking a letter here could lead the planner to build a queued-wait extension that the issue forbids and that would collide with #9794. The decision is therefore replaced with an explicit statement that this issue makes no Phase 7 change.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ2:\n  strategy: reframe\n  inputs:\n    - .github/workflows/test-and-mark-stable.yml (line 637 `PHASE7_WAIT_BUDGET_MINUTES: 10`; lines 744\u2013778 job-ceiling budget check; lines 3246\u20133258 and 3470\u20133572 Phase 7 wait loops)\n    - Issue text: \"Do not change the Phase 7 budget or the gate's outcome in this issue.\"\n    - GITHUB FACTS: PR #9794 open, unmerged, base `main`, head `claude/gh-api-error-body-capture-fix`\n  steps:\n    - Do not edit `PHASE7_WAIT_BUDGET_MINUTES`, the Phase 7 wait loops, the `status=timeout` error path, or the job-ceiling check at lines 744\u2013778. Add no new Phase 7 env var.\n    - In the plan, state that Phase 7's failure in run 44490333814 is environmental: run 44527274737 stayed `queued` from 12:48:14 to 12:58:12 because no runner was free, and the bounded queued-wait change belongs to PR #9794.\n    - Add no steps that comment on, wait for, check, or close PR #9794 or this issue. If #9794 is still unmerged, the planner may keep this issue on the blocked path until it merges.\n    - Scope the rest of this issue to the main output-guard defect. Its guards are already in the checkout (lines 5318\u20135369). If the regression test `tests/test_test_and_mark_stable_clarify_negative_outputs.py` and the `changelog.d/<issue>-clarify-negative-test-output-guard.md` entry are missing, add only those, within the scope `.github/workflows/test-and-mark-stable.yml,tests/**,changelog.d/*.md`.\n    - The regression test extracts the \"Create unsolvable issue\" and \"Capture clarify run id (negative test)\" step bodies. It runs them against a fake `gh` that prints a rate-limit JSON body to stdout and exits 1. It asserts that `$GITHUB_OUTPUT` holds only single-line `key=value` entries with numeric values (`pre_clarify_run_id=0`, `pre_clarify_run_id_read_failed=1`) and that the capture step exits 0 without writing a non-numeric `run_id`.\n  replaces_acceptance_criterion: \"Q2: how the queued-wait extension for Phase 7 is bounded\" becomes \"this issue makes no Phase 7 code change; the queued-wait extension is left to PR #9794\".\n  equivalence_argument: The issue itself says Phase 7 is environmental and forbids changing its budget or outcome here. PR #9794 already covers the bounded queued-wait work, so making no Phase 7 change keeps the gate as strict as it is and avoids conflicting edits. The deterministic defect, the malformed `$GITHUB_OUTPUT` line, is already guarded and gets locked in by the regression test.\n  reversibility: If PR #9794 is closed without merging and queue starvation keeps causing Phase 7 failures, a separate issue can make the Q1 = B / Q2 = A change. That is the queued wait capped by a new env var with a default and included in the job-ceiling check at lines 744\u2013778. Nothing in this decision blocks it.",
+  "fingerprint": "174da152427e4f374ee64bf90c55e81a913af83e9a2cb21fc5f897e2b74619ee",
+  "lineage": {
+    "issue_number": 9797,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44594292350",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44594292350",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9797"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261119191155_048062cd9a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9797,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44594292350"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9797",
+  "timestamps": {
+    "created_at": "2026-11-19T19:11:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
