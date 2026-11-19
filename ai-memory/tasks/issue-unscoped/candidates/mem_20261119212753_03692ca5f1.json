@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cGate only this new code path behind UNBLOCK_ORCHESTRATOR_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED (default true; false keeps today's resume).\u201d\n  expected_change_site: `.github/workflows/unblock_judge.yml`, the `Judge the blocked item` step\u2019s `env` mapping.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The workflow maps `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` at line 191 but does not map `UNBLOCK_ORCHESTRATOR_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED`. The script therefore cannot receive the new setting through the judge workflow, so the promised off switch cannot be controlled through the repository variable configuration used by the existing switch. (reviewer severity: MAJOR)\n- requirement: \"Implementation is limited to these paths\" \u2014 the issue's `files_touched` grant lists only `scripts/unblock_judge.sh`, `tests/test_unblock_judge.py`, `agents.d/9808-\u2026`, `changelog.d/9808-\u2026` and the `tests/**` / `changelog.d/*` / `agents.d/*` globs.\n  expected_change_site: .github/workflows/nightly-validation-selftest.yml (not in the grant)\n  confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: The last-run diff modifies `.github/workflows/nightly-validation-selftest.yml` (permissions + comment) and `agents.d/stuck-backlog-phase1-runner-pin.md`, neither of which appears in the `files_touched` list of the `ai:pipeline-plan-grant:v1` block; the PR description (\"Tests and checks run\") also does not list `tests/test_runner_image_pin_contract.py`; edit is verifiably correct against the union contract (ci.yml:4974 and tests/test_runner_image_pin_contract.py:207-225), so it needs either an explicit scope justification in the PR body or reversion. (reviewer severity: NIT)\n- requirement: repo rule (changelog convention, CLAUDE.md \u00a720.A / unattended \u00a720): \"new or changed workflows \u2026 behaviour changes an operator or consumer repo would notice\" require one changelog fragment.\n  expected_change_site: changelog.d/ (a fragment covering the `runner-image-canary` permission change)\n  confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: The only changelog fragment in the PR (`changelog.d/9808-unblock-orchestrator-nothing-to-implement-close.md`) documents the unblock judge change; no fragment covers the Nightly canary grant change in `.github/workflows/nightly-validation-selftest.yml:506-511`; the agents fragment (`agents.d/stuck-backlog-phase1-runner-pin.md`) was updated, so only the changelog side is missing. (reviewer severity: NIT)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cGate only this new code path behind UNBLOCK_ORCHESTRATOR_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED (default true; false keeps today's resume).\u201d\n  Expected change site: `.github/workflows/unblock_judge.yml`, the `Judge the blocked item` step\u2019s `env` mapping.\n  Evidence of absence: The workflow maps `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` at line 191 but does not map `UNBLOCK_ORCHESTRATOR_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED`; the off switch cannot be controlled through the repository variable configuration used by the existing switch.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: \"Implementation is limited to these paths\" \u2014 the issue's `files_touched` grant lists only `scripts/unblock_judge.sh`, `tests/test_unblock_judge.py`, `agents.d/9808-\u2026`, `changelog.d/9808-\u2026` and the `tests/**` / `changelog.d/*` / `agents.d/*` globs.\n  Expected change site: .github/workflows/nightly-validation-selftest.yml (not in the grant)\n  Evidence of absence: Last-run diff modifies `.github/workflows/nightly-validation-selftest.yml` and `agents.d/stuck-backlog-phase1-runner-pin.md`, neither in `files_touched` of the `ai:pipeline-plan-grant:v1` block; PR description does not list `tests/test_runner_image_pin_contract.py`; edit is correct (ci.yml:4974 and tests/test_runner_image_pin_contract.py:207-225) but needs explicit scope justification in the PR body or reversion.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: repo rule (changelog convention, CLAUDE.md \u00a720.A / unattended \u00a720): \"new or changed workflows \u2026 behaviour changes an operator or consumer repo would notice\" require one changelog fragment.\n  Expected change site: changelog.d/ (a fragment covering the `runner-image-canary` permission change)\n  Evidence of absence: Only fragment `changelog.d/9808-unblock-orchestrator-nothing-to-implement-close.md` documents the unblock judge change; none covers the canary grant change in `.github/workflows/nightly-validation-selftest.yml:506-511`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c41cf07631768f387ef9a9f0fba217c3b78b730a1e896bff43f36b3657f2fe3e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9810,
+    "run_id": "44615514095",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44615514095",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261119212753_03692ca5f1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9810,
+    "run_id": "44615514095"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-19T21:27:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
