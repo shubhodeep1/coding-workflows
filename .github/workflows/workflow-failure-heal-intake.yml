@@ -141,6 +141,8 @@ jobs:
       # Re-issue lineage (Q147): a report whose heal issue the unblock judge
       # re-issued is recorded on the open re-issue. 'false' turns it off.
       HEAL_REISSUE_DEDUPE_ENABLED: ${{ vars.HEAL_REISSUE_DEDUPE_ENABLED || 'true' }}
+      HEAL_OCCURRENCE_IN_PLACE_ENABLED: ${{ vars.HEAL_OCCURRENCE_IN_PLACE_ENABLED || 'true' }}
+      HEAL_SOURCE_DEDUPE_ENABLED: ${{ vars.HEAL_SOURCE_DEDUPE_ENABLED || 'true' }}
       # Linked-run scope paths (#8360): for a release or promotion workflow_run
       # report, the workflows and scripts its linked runs used join the frozen
       # heal scope. 'false' turns that off and restores the previous scope.
@@ -445,6 +447,8 @@ jobs:
       HEAL_SCOPE_RECOVERY_SCAN_MAX_PER_TICK: ${{ vars.HEAL_SCOPE_RECOVERY_SCAN_MAX_PER_TICK || '1' }}
       HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS: ${{ vars.HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS || '3' }}
       HEAL_REISSUE_DEDUPE_ENABLED: ${{ vars.HEAL_REISSUE_DEDUPE_ENABLED || 'true' }}
+      HEAL_OCCURRENCE_IN_PLACE_ENABLED: ${{ vars.HEAL_OCCURRENCE_IN_PLACE_ENABLED || 'true' }}
+      HEAL_SOURCE_DEDUPE_ENABLED: ${{ vars.HEAL_SOURCE_DEDUPE_ENABLED || 'true' }}
       # Linked-run scope paths (#8360); kept in step with the intake job's env.
       WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED: ${{ vars.WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED || 'true' }}
       # Evidence pack (P1): 'true' adds the failed-run and linked-run step

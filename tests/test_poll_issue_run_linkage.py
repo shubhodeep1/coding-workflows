@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Stuck-backlog Phase 3: [issue:N] run linkage and Actions queue backpressure.
 
-Clarify, clarify-respond, plan and implement wrapper runs run on the default branch, so the
+Clarify, plan and implement wrapper runs run on the default branch, so the
 poller could not link a queued run to its issue through ``head_branch`` and
 stall recovery re-dispatched the issue into an already jammed queue. These
-tests pin:
+tests pin (clarify-respond wrapper runs, #9765, behave the same way):
 
 - the wrapper ``run-name: "<name> [issue:${{ github.event.issue.number }}]"``;
 - ``build_active_issue_set`` linking runs through that exact title;
