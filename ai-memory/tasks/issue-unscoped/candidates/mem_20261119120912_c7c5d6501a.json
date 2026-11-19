@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_test_and_mark_stable_gh_api_error_body_capture.py:128-135 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The static guard regex `\\|\\|\\s*echo\\b[^)]*\\)` in test_no_gh_api_capture_puts_its_fallback_inside_the_substitution rejects only `|| echo` inside `$(gh api \u2026)`, so the same error-body leak via `|| true` is not caught.\n  WHY: Nothing fails today. The two remaining `|| true` captures (PHASE7_CANCEL_WORKFLOW_STATE around line 3632, LATE_PR_NUMBERS around line 3934) are validated downstream, but a future `|| true` capture written to an output would pass the guard. Both reviewers rated this NIT.\n- .github/workflows/test-and-mark-stable.yml:whole file | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The workflow is about 429,964 bytes, leaving about 36 bytes of headroom under the 430,000-byte limit in tests/test_test_and_mark_stable_step_scripts_contract.py:32,74-76.\n  WHY: Any future one-line growth trips CI until a `run:` body is moved to scripts/. This is a maintenance hazard only, and no change is required in this PR. The reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_test_and_mark_stable_gh_api_error_body_capture.py:test_no_gh_api_capture_puts_its_fallback_inside_the_substitution | severity=NIT | confidence=3\n  PROBLEM: The static guard rejects only `|| echo` inside a `$(gh api \u2026)` capture, and the same error-body leak happens with `|| true`.\n  WHY: Nothing fails today. The `|| true` captures PHASE7_CANCEL_WORKFLOW_STATE (around line 3632) and LATE_PR_NUMBERS (around line 3934) are validated downstream, and a future `|| true` capture written to an output would not be caught.\n- HARDENING_SUGGESTIONS: change the pattern to `\\|\\|\\s*(echo|true)\\b[^)]*\\)`, then validate or allowlist the two existing `|| true` captures and the diagnostic ones (3-6 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n- HARDENING_SUGGESTIONS: tests/test_test_and_mark_stable_gh_api_error_body_capture.py, test_no_gh_api_capture_puts_its_fallback_inside_the_substitution. The guard regex misses `|| true`. Expand it to cover `|| true` and apply the outside-substitution assignment pattern (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- HARDENING_SUGGESTIONS: tests/test_test_and_mark_stable_gh_api_error_body_capture.py, the `re.search(r\"\\|\\|\\s*echo\\b[^)]*\\)\", command)` line. The guard misses `|| true`, and two remain at test-and-mark-stable.yml:3632 and test-and-mark-stable.yml:3934, both validated downstream. Widen the regex to `\\|\\|\\s*(?:echo|true)\\b[^)]*\\)` (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n- HARDENING_SUGGESTIONS: tests/test_test_and_mark_stable_gh_api_error_body_capture.py, line 130. The guard detects only `|| echo`, and two existing `|| true` captures are validated downstream. Extend the guard to cover `|| true` and assert that the two existing validated captures remain the only exceptions (3-6 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_test_and_mark_stable_gh_api_error_body_capture.py:~128-135 | severity=NIT | confidence=4\n  PROBLEM: The static guard only rejects `|| echo` inside `$(gh api ...)` and does not catch the `|| true` variant of the same leak class. Captures at workflow lines 3632 (PHASE7_CANCEL_WORKFLOW_STATE) and 3934 (LATE_PR_NUMBERS) pass the scan and are guarded downstream at 3633-3635 and 3936. Captures like `$(timeout 30 gh api ... || true)` at lines 1735/1741/1748/1755 never enter the scan because they lack the literal `$(gh api`.\n  WHY: No current runtime failure. A future `$(gh api ... || true)` capture without a downstream guard would leak an error body and the guard test would not catch it.\n- .github/workflows/test-and-mark-stable.yml:whole file (vs tests/test_test_and_mark_stable_step_scripts_contract.py:32 and :74-76) | severity=NIT | confidence=4\n  PROBLEM: The file sits at about 429,964 bytes, leaving about 36 bytes of headroom under the 430,000-byte contract test.\n  WHY: CI on the head SHA is green (15/15 checks), so this is only a maintenance trip-hazard and no change is required in this PR.\n- HARDENING_SUGGESTIONS: change the regex to `\\|\\|\\s*(echo|true)\\b[^)]*\\)` and, in the same change, convert the two `|| true` captures at test-and-mark-stable.yml:3632 and :3934 to the outside-substitution form (4 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "db1fe945af99bbcc8efd893b9e1c2772c0e9a9ae4ce6845a65fb192304cc7cb0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9794,
+    "run_id": "44510827856",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44510827856",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261119120912_c7c5d6501a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9794,
+    "run_id": "44510827856"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-19T12:09:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
