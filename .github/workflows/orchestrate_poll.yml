@@ -1397,6 +1397,18 @@ jobs:
           key: claude-pool-daily-usage-v1-${{ steps.pool_daily_slot.outputs.date }}
           lookup-only: true
 
+      # Queue backpressure hysteresis marker (stuck-backlog Phase 3b). Cache
+      # keys cannot be overwritten, so each run saves under its own key and the
+      # next run restores the newest one by prefix. A miss reads as inactive.
+      - name: Restore queue backpressure state
+        id: queue_backpressure_restore
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/queue-backpressure-state
+          key: queue-backpressure-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: queue-backpressure-state-v1-
+
       - name: Process each tracking issue
         if: steps.find_tracking.outputs.has_work == 'true'
         env:
@@ -1511,6 +1523,13 @@ jobs:
           RB_JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.RB_JUDGE_ISOLATION_MAX_FAILURES || '3' }}
           JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.JUDGE_ISOLATION_MAX_FAILURES || '3' }}
           STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
+          # Queue backpressure with hysteresis (scripts/orchestrate_poll_process.sh
+          # queue_backpressure_holds_dispatch): on at depth >= HIGH, off below
+          # LOW, held in between from the cached marker. HIGH=-1 turns it off.
+          ACTIONS_QUEUE_BACKPRESSURE_HIGH: ${{ vars.ACTIONS_QUEUE_BACKPRESSURE_HIGH || '150' }}
+          ACTIONS_QUEUE_BACKPRESSURE_LOW: ${{ vars.ACTIONS_QUEUE_BACKPRESSURE_LOW || '50' }}
+          QUEUED_RUN_ZOMBIE_MINUTES: ${{ vars.QUEUED_RUN_ZOMBIE_MINUTES || '1440' }}
+          QUEUE_BACKPRESSURE_STATE_FILE: ${{ runner.temp }}/queue-backpressure-state/state.json
           # Merge-base freshness gate (scripts/pr_checks_lib.sh, Q35: A).
           MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
           MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
@@ -1740,6 +1759,13 @@ jobs:
           RB_JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.RB_JUDGE_ISOLATION_MAX_FAILURES || '3' }}
           JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.JUDGE_ISOLATION_MAX_FAILURES || '3' }}
           STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
+          # Queue backpressure with hysteresis (scripts/orchestrate_poll_process.sh
+          # queue_backpressure_holds_dispatch): on at depth >= HIGH, off below
+          # LOW, held in between from the cached marker. HIGH=-1 turns it off.
+          ACTIONS_QUEUE_BACKPRESSURE_HIGH: ${{ vars.ACTIONS_QUEUE_BACKPRESSURE_HIGH || '150' }}
+          ACTIONS_QUEUE_BACKPRESSURE_LOW: ${{ vars.ACTIONS_QUEUE_BACKPRESSURE_LOW || '50' }}
+          QUEUED_RUN_ZOMBIE_MINUTES: ${{ vars.QUEUED_RUN_ZOMBIE_MINUTES || '1440' }}
+          QUEUE_BACKPRESSURE_STATE_FILE: ${{ runner.temp }}/queue-backpressure-state/state.json
           MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
           MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
           REVIEW_RUN_MAX_RUNTIME_MINUTES: ${{ vars.REVIEW_RUN_MAX_RUNTIME_MINUTES || '250' }}
@@ -1851,6 +1877,10 @@ jobs:
           UNBLOCK_SCAN_SWEEP_ONLY: "true"
           # The idle-tick check after merge (#8427 P5) primes the phase caps here.
           STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
+          # Its post-merge re-plans reach the queue backpressure hold too.
+          ACTIONS_QUEUE_BACKPRESSURE_HIGH: ${{ vars.ACTIONS_QUEUE_BACKPRESSURE_HIGH || '150' }}
+          ACTIONS_QUEUE_BACKPRESSURE_LOW: ${{ vars.ACTIONS_QUEUE_BACKPRESSURE_LOW || '50' }}
+          QUEUE_BACKPRESSURE_STATE_FILE: ${{ runner.temp }}/queue-backpressure-state/state.json
           STALL_THRESHOLD_IMPLEMENTING_MINUTES: ${{ vars.STALL_THRESHOLD_IMPLEMENTING_MINUTES || '' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
@@ -1908,6 +1938,16 @@ jobs:
 
       - name: Run worktree registry GC
         run: bash scripts/worktree_gc.sh
+
+      # Saves the marker the poller wrote this tick. When no step wrote it the
+      # save only warns about the missing path, which continue-on-error absorbs.
+      - name: Save queue backpressure state
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/queue-backpressure-state
+          key: queue-backpressure-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
 
       # Daily consumer health check (scripts/consumer_health_check.sh), this
       # repository only. The cache entry keyed on the UTC date records that
