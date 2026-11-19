@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-19T21:29:17Z",
+  "issue_number": 9808,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=changelog.d/:1-1; cited_path=.github/workflows/nightly-validation-selftest.yml; files_touched=agents.d/9808-unblock-orchestrator-nothing-to-implement-close.md, changelog.d/9808-unblock-orchestrator-nothing-to-implement-close.md, scripts/unblock_judge.sh, tests/test_unblock_judge.py.",
+  "phase": "review_autofix",
+  "pr_number": 9810,
+  "record_id": "lesson_20261119212917_9b4bdf97ea",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/nightly-validation-selftest.yml",
+    "changelog.d/",
+    "agents.d/9808-unblock-orchestrator-nothing-to-implement-close.md",
+    "changelog.d/9808-unblock-orchestrator-nothing-to-implement-close.md",
+    "scripts/unblock_judge.sh",
+    "tests/test_unblock_judge.py"
+  ]
+}
