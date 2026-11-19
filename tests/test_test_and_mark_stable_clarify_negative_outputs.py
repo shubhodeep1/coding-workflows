@@ -176,8 +176,9 @@ class ClarifyNegativeOutputsTest(unittest.TestCase):
 			STUB_ISSUE_OUT="9790\n",
 		)
 		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-		self.assertIn("pre_clarify_run_id=", self._outputs())
-		self.assertNotIn("pre_clarify_run_id=0", self._outputs())
+		for wf in ("clarify", "plan", "implement", "review_autofix"):
+			self.assertIn(f"pre_{wf}_run_id=", self._outputs())
+			self.assertNotIn(f"pre_{wf}_run_id=0", self._outputs())
 
 	def test_create_step_happy_path_keeps_run_id(self) -> None:
 		result = self._run(
@@ -266,9 +267,19 @@ class ClarifyNegativeOutputsTest(unittest.TestCase):
 		self.assertFalse(any(line.startswith("issue_number=") for line in self._outputs()))
 
 	def test_alt_capture_step_rate_limited_or_unanchored_emits_no_run_id(self) -> None:
-		for pre_clarify in ("100", ""):
+		# The empty-baseline case returns an older run (id 42) on a successful
+		# read, so it fails if the skip guard is removed and the poll anchors
+		# at `id > 0`. The rate-limited case fails every read.
+		older_run = '{"workflow_runs": [{"id": 42, "created_at": "2026-11-19T09:16:00Z"}]}'
+		cases = (
+			("100", {"STUB_RUNS_FAIL_COUNT": "-1"}),
+			("", {"STUB_RUNS_FAIL_COUNT": "0", "STUB_RUNS_PAYLOAD": older_run}),
+		)
+		for pre_clarify, stub in cases:
 			with self.subTest(pre_clarify=pre_clarify):
 				self.output.write_text("", encoding="utf-8")
+				if self.gh_log.exists():
+					self.gh_log.unlink()
 				result = self._run(
 					"capture_alt_runs",
 					job=ALT_JOB,
@@ -277,11 +288,14 @@ class ClarifyNegativeOutputsTest(unittest.TestCase):
 					PRE_PLAN="",
 					PRE_IMPLEMENT="",
 					PRE_REVIEW="",
-					STUB_RUNS_FAIL_COUNT="-1",
+					**stub,
 				)
 				self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 				self.assertEqual(self._outputs(), [])
 				self.assertNotIn('"message":', result.stdout + result.stderr)
+				if pre_clarify == "":
+					self.assertIn("alt-model clarify baseline run id unavailable", result.stdout)
+					self.assertEqual(self._runs_reads(), 0)
 
 
 if __name__ == "__main__":
