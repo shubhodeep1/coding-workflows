@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "The repository has CI checks and healing work related to inventory parity, and multiple merged changes updated docs/INVENTORY.md directly. When adding or changing tracked workflows, scripts, or other inventory-listed components, check whether the inventory documentation must also be updated.",
+  "fingerprint": "86364f8d2c814ecd84955aff6d33544d77b7d9a53ec78d6fe93ad408b7191eb2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44465458278",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44465458278",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9135",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9481",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9533",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9631",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9682",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9506",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9567",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9694",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9700",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9707"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261119053338_57f2107967",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Inventory parity is an explicit concern in CI and may require updating docs/INVENTORY.md when repository components change.",
+  "timestamps": {
+    "created_at": "2026-11-19T05:33:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
