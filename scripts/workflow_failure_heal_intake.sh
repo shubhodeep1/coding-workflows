@@ -319,6 +319,32 @@ case "${REISSUE_DEDUPE_SWITCH,,}" in
 		;;
 esac
 unset REISSUE_DEDUPE_SWITCH
+# Occurrence counter comment: on by default; "false" turns it off (every repeat
+# report is its own comment again) and any other value also turns it off with
+# a warning. See _heal_record_occurrence.
+OCCURRENCE_IN_PLACE_SWITCH="${HEAL_OCCURRENCE_IN_PLACE_ENABLED-}"
+case "${OCCURRENCE_IN_PLACE_SWITCH,,}" in
+	''|true) OCCURRENCE_IN_PLACE_ENABLED="true" ;;
+	false) OCCURRENCE_IN_PLACE_ENABLED="false" ;;
+	*)
+		OCCURRENCE_IN_PLACE_ENABLED="false"
+		echo "::warning::WORKFLOW_HEAL occurrence_update outcome=skip reason=invalid_switch" >&2
+		;;
+esac
+unset OCCURRENCE_IN_PLACE_SWITCH
+# Heal-of-heal dedupe: on by default; "false" turns it off (a heal issue's own
+# failed phase run continues the lineage as before) and any other value also
+# turns it off with a warning. See budget_decision(report_issue=...).
+HEAL_SOURCE_DEDUPE_SWITCH="${HEAL_SOURCE_DEDUPE_ENABLED-}"
+case "${HEAL_SOURCE_DEDUPE_SWITCH,,}" in
+	''|true) HEAL_SOURCE_DEDUPE_ON="true" ;;
+	false) HEAL_SOURCE_DEDUPE_ON="false" ;;
+	*)
+		HEAL_SOURCE_DEDUPE_ON="false"
+		echo "::warning::WORKFLOW_HEAL heal_source_dedupe outcome=skip reason=invalid_switch" >&2
+		;;
+esac
+unset HEAL_SOURCE_DEDUPE_SWITCH
 HEAL_LABEL="ai:workflow-heal"
 ESCALATED_LABEL="ai:workflow-heal-escalated"
 RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${SELF_REPO}/actions/runs/${GITHUB_RUN_ID:-0}"
@@ -729,6 +755,103 @@ _heal_fetch_issue_list()
 		| jq -s --arg repository "${list_repo}" 'map(. + {repository: $repository})' > "${list_out}" 2>/dev/null
 }
 
+# Login of the account this intake posts comments as (the GH_TOKEN account).
+# An earlier /user result of this run is reused (PROVENANCE_LOGIN,
+# PHASE_COMMENT_AUTHOR, HEAL_TRUSTED_AUTHOR); otherwise one /user read, kept
+# for the rest of the run. Sets HEAL_OCCURRENCE_LOGIN (empty when it cannot be
+# read); called directly, not in `$(...)`, so the value is kept.
+HEAL_OCCURRENCE_LOGIN=""
+_heal_occurrence_login()
+{
+	if [ -z "${HEAL_OCCURRENCE_LOGIN}" ]; then
+		HEAL_OCCURRENCE_LOGIN="${PROVENANCE_LOGIN:-${PHASE_COMMENT_AUTHOR:-${HEAL_TRUSTED_AUTHOR:-}}}"
+	fi
+	if [ -z "${HEAL_OCCURRENCE_LOGIN}" ]; then
+		HEAL_OCCURRENCE_LOGIN="$(gh_retry gh api --method GET user --jq '.login // empty' 2>/dev/null || true)"
+	fi
+	return 0
+}
+
+# Record one repeat report on an existing heal issue.
+#   _heal_record_occurrence <repo> <issue> <occurrence file> [<comments json>]
+# With HEAL_OCCURRENCE_IN_PLACE_ENABLED on (default) the issue keeps ONE
+# occurrence comment: the newest counter comment this account wrote is edited
+# to carry the new count and the newest reports (workflow_failure_heal.py
+# merge-occurrence); the first repeat posts that comment. An edit starts no
+# `issue_comment` wrapper run (they trigger on `created`), where every new
+# comment started four (#9200: 271 occurrence comments in two days).
+# The poller's stale auto-close reads only an issue's newest 20 comments, so a
+# counter with HEAL_OCCURRENCE_REPOST_AFTER (15) or more newer comments after
+# it is posted again as a new comment and the old one is deleted; the counter
+# then stays inside that window.
+# §15 audit: the heal issue list carries no comments. A caller that read
+# this issue's comments just before (projection `{id, author, created_at,
+# body}`) may pass that file as the 4th argument; no caller does today: the
+# heal-scope recovery read predates the diagnosis and lacks `created_at`, so
+# merging into it would widen the race below and lose `first=`. So this adds
+# one paginated comments GET per repeat report, then one PATCH (or the one
+# POST there was before, and one DELETE on a re-post). The account login reuses an earlier /user result.
+# Fail open: with the switch off, an unknown login, or a failed list or merge,
+# the report is posted as its own comment exactly as before; a failed edit
+# posts the merged body as a new comment, which the next repeat then edits.
+# Not locked: two intakes that handle the same issue at the same moment both
+# read count N, and the later write replaces the earlier one, so that report's
+# entry and one count are lost. Accepted: the reports are still in each
+# intake run's own log, and a lock would cost every repeat a second write.
+# Returns the POST / PATCH status; logs `occurrence_update outcome=...`.
+HEAL_OCCURRENCE_REPOST_AFTER=15
+_heal_record_occurrence()
+{
+	local occ_repo="$1" occ_issue="$2" occ_file="$3" occ_cached_comments="${4:-}"
+	local occ_comments="${occ_file}.comments.json" occ_merged="${occ_file}.merged.md" occ_meta="" occ_comment_id="" occ_count="" occ_newer="" occ_login=""
+	if [ "${OCCURRENCE_IN_PLACE_ENABLED}" = "true" ] && [[ "${occ_issue}" =~ ^[0-9]+$ ]]; then
+		_heal_occurrence_login
+		occ_login="${HEAL_OCCURRENCE_LOGIN}"
+	fi
+	if [ -z "${occ_login}" ]; then
+		[ "${OCCURRENCE_IN_PLACE_ENABLED}" != "true" ] || log "occurrence_update outcome=fallback reason=login_unavailable issue=${occ_issue} repo=${occ_repo}"
+		gh_retry gh api "repos/${occ_repo}/issues/${occ_issue}/comments" -F body=@"${occ_file}" >/dev/null 2>&1
+		return $?
+	fi
+	if [ -n "${occ_cached_comments}" ] && jq -e 'type == "array"' "${occ_cached_comments}" >/dev/null 2>&1; then
+		occ_comments="${occ_cached_comments}"
+	elif ! gh_retry gh api --method GET --paginate "repos/${occ_repo}/issues/${occ_issue}/comments" -F per_page=100 \
+		--jq '.[] | {id, author: (.user.login // ""), created_at, body: (.body // "")}' 2>/dev/null | jq -s '.' > "${occ_comments}" 2>/dev/null \
+		|| ! jq -e 'type == "array"' "${occ_comments}" >/dev/null 2>&1; then
+		occ_comments=""
+	fi
+	if [ -z "${occ_comments}" ] || ! occ_meta="$(python3 "${HEAL_PY}" merge-occurrence --comments-json "${occ_comments}" --occurrence-file "${occ_file}" \
+		--trusted-login "${occ_login}" --body-out "${occ_merged}" 2>/dev/null)"; then
+		log "occurrence_update outcome=fallback reason=merge_unavailable issue=${occ_issue} repo=${occ_repo}"
+		gh_retry gh api "repos/${occ_repo}/issues/${occ_issue}/comments" -F body=@"${occ_file}" >/dev/null 2>&1
+		return $?
+	fi
+	occ_comment_id="$(jq -r '.comment_id // empty' <<< "${occ_meta}" 2>/dev/null || true)"
+	occ_count="$(jq -r '.count // empty' <<< "${occ_meta}" 2>/dev/null || true)"
+	occ_newer="$(jq -r '.newer_comments // 0' <<< "${occ_meta}" 2>/dev/null || echo 0)"
+	[[ "${occ_newer}" =~ ^[0-9]+$ ]] || occ_newer=0
+	if [[ "${occ_comment_id}" =~ ^[0-9]+$ ]] && [ "${occ_newer}" -lt "${HEAL_OCCURRENCE_REPOST_AFTER}" ]; then
+		if gh_retry gh api --method PATCH "repos/${occ_repo}/issues/comments/${occ_comment_id}" -F body=@"${occ_merged}" >/dev/null 2>&1; then
+			log "occurrence_update outcome=edited issue=${occ_issue} repo=${occ_repo} comment=${occ_comment_id} count=${occ_count:-unknown}"
+			return 0
+		fi
+		log "occurrence_update outcome=fallback reason=edit_failed issue=${occ_issue} repo=${occ_repo} comment=${occ_comment_id}"
+		occ_comment_id=""
+	fi
+	if gh_retry gh api "repos/${occ_repo}/issues/${occ_issue}/comments" -F body=@"${occ_merged}" >/dev/null 2>&1; then
+		if [[ "${occ_comment_id}" =~ ^[0-9]+$ ]]; then
+			# Re-post: the buried counter is replaced by the one just posted.
+			gh_retry gh api --method DELETE "repos/${occ_repo}/issues/comments/${occ_comment_id}" >/dev/null 2>&1 \
+				|| log "warn occurrence_old_counter_delete_failed issue=${occ_issue} repo=${occ_repo} comment=${occ_comment_id}"
+			log "occurrence_update outcome=reposted issue=${occ_issue} repo=${occ_repo} replaced=${occ_comment_id} newer_comments=${occ_newer} count=${occ_count:-unknown}"
+		else
+			log "occurrence_update outcome=created issue=${occ_issue} repo=${occ_repo} count=${occ_count:-unknown}"
+		fi
+		return 0
+	fi
+	return 1
+}
+
 # HEAL_INTAKE_SCOPE_GUARD_ENABLED (#6871): on when unset, empty or "true"
 # (any letter case); any other value is off.
 _heal_intake_scope_guard_is_on()
@@ -975,8 +1098,7 @@ _synced_security_finding_intake()
 				python3 "${HEAL_PY}" compose-synced-security-occurrence --payload-json "${PAYLOAD_FILE}" --group-json "${ss_group}" \
 					--intake-run-url "${RUN_URL}" > "${ss_dir}/occurrence_${ss_index}.md" \
 					|| { log "error occurrence_compose_failed fp=${FP} source=${SOURCE_REPO}"; ss_skipped=$((ss_skipped + 1)); ss_failed=1; continue; }
-				if [[ "${ss_existing}" =~ ^[0-9]+$ ]] && gh_retry gh api "repos/${SELF_REPO}/issues/${ss_existing}/comments" \
-					-F body=@"${ss_dir}/occurrence_${ss_index}.md" >/dev/null 2>&1; then
+				if [[ "${ss_existing}" =~ ^[0-9]+$ ]] && _heal_record_occurrence "${SELF_REPO}" "${ss_existing}" "${ss_dir}/occurrence_${ss_index}.md"; then
 					log "duplicate fp=${FP} existing_issue=${ss_existing} occurrence=recorded source=${SOURCE_REPO}"
 					ss_occurrences=$((ss_occurrences + 1))
 					ss_links="${ss_links}"$'\n'"- occurrence on #${ss_existing}"
@@ -1172,8 +1294,7 @@ _synced_check_failure_intake()
 					log "error occurrence_compose_failed fp=${FP} source=${SOURCE_REPO}"
 					exit 1
 				fi
-				if [[ "${sc_existing}" =~ ^[0-9]+$ ]] && gh_retry gh api "repos/${SELF_REPO}/issues/${sc_existing}/comments" \
-					-F body=@"${sc_dir}/occurrence.md" >/dev/null 2>&1; then
+				if [[ "${sc_existing}" =~ ^[0-9]+$ ]] && _heal_record_occurrence "${SELF_REPO}" "${sc_existing}" "${sc_dir}/occurrence.md"; then
 					log "duplicate fp=${FP} existing_issue=${sc_existing} occurrence=recorded source=${SOURCE_REPO}"
 					sc_outcome="occurrence"
 					sc_link="occurrence on #${sc_existing}"
@@ -2099,6 +2220,16 @@ fi
 if { [ "${SOURCE_KIND}" = "autofix_failure" ] || [ "${SOURCE_KIND}" = "phase_failure" ]; } && [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
 	BUDGET_ARGS+=(--source-key "${SOURCE_REPO}#${ISSUE_NUMBER}" --source-head-branch "${HEAD_BRANCH}")
 fi
+# Heal-of-heal dedupe: a heal issue's own failed clarify / plan / implement run
+# is recorded on that heal issue as an occurrence, never filed as a new heal
+# issue for the heal issue. It is not diagnosed and not escalated here: only a
+# run that fails with the issue's own fingerprint (or its own cause, inside the
+# cause-grouping window) is escalated (below), and
+# stall recovery's budgets bound the retries. The budget checks the number
+# against the GitHub heal-issue list, not against the report's labels.
+if [ "${HEAL_SOURCE_DEDUPE_ON}" = "true" ] && [ "${SOURCE_KIND}" = "phase_failure" ] && [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
+	BUDGET_ARGS+=(--report-issue "${SOURCE_REPO}#${ISSUE_NUMBER}")
+fi
 # Cause grouping (P5 / D3): set only with the switch on and an eligible report.
 if [ -n "${CAUSE_KEY}" ]; then
 	BUDGET_ARGS+=(--cause "${CAUSE_KEY}" --cause-window-days "${CAUSE_GROUPING_DAYS}")
@@ -2212,6 +2343,8 @@ _heal_scope_recovery_evaluate()
 	# A cause match (P5 / D3) is another fingerprint's heal issue; this report
 	# never replaces or recovers it.
 	[ "$(jq -r '.match // ""' "${DECISION_FILE}")" != "cause" ] || return 0
+	# A heal issue's own failed run (heal-of-heal dedupe) is recorded, not replaced.
+	[ "$(jq -r '.match // ""' "${DECISION_FILE}")" != "heal_source" ] || return 0
 	local recovery_issue recovery_repo recovery_url recovery_login
 	local recovery_record="${RUNTIME_DIR}/heal_scope_recovery_issue.json"
 	local recovery_comments="${RUNTIME_DIR}/heal_scope_recovery_comments.json"
@@ -2324,6 +2457,13 @@ _heal_scope_recovery_evaluate()
 				recovery_arg_index=$((recovery_arg_index + 2))
 				continue
 				;;
+			# Heal-of-heal dedupe is not a cap either: another open heal issue
+			# whose own run failed must not turn the replacement into a
+			# `match: heal_source` duplicate.
+			--report-issue)
+				recovery_arg_index=$((recovery_arg_index + 2))
+				continue
+				;;
 		esac
 		recovery_budget_args+=("${BUDGET_ARGS[${recovery_arg_index}]}")
 		recovery_arg_index=$((recovery_arg_index + 1))
@@ -2419,7 +2559,7 @@ case "${ACTION}" in
 			_heal_cause_occurrence_args || CAUSE_OCCURRENCE_ARGS=()
 		fi
 		python3 "${HEAL_PY}" compose-occurrence --payload-json "$(_compose_payload_file)" --intake-run-url "${RUN_URL}" "${CAUSE_OCCURRENCE_ARGS[@]}" > "${OCCURRENCE_FILE}"
-		if gh_retry gh api "repos/${EXISTING_REPO}/issues/${EXISTING}/comments" -F body=@"${OCCURRENCE_FILE}" >/dev/null 2>&1; then
+		if _heal_record_occurrence "${EXISTING_REPO}" "${EXISTING}" "${OCCURRENCE_FILE}"; then
 			DUPLICATE_OCCURRENCE_STATE="posted"
 			if [ "${DUPLICATE_MATCH}" = "cause" ]; then
 				log "duplicate reason=cause_match existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP} cause=${CAUSE_KEY} shape=${CAUSE_SHAPE} source=${SOURCE_LABEL}"
@@ -4305,6 +4445,13 @@ _open_issue()
 	rm -f "${title_file}" "${body_file}"
 	local compose_payload_file
 	compose_payload_file="$(_compose_payload_file)" || compose_payload_file="${PAYLOAD_FILE}"
+	# Issue #8808: a run-sourced issue names its failing workflow file (the
+	# verified run's `.path`, no API call) for the poller's stale auto-close.
+	# compose-issue drops an invalid path; any error composes as before.
+	local heal_workflow_path=""
+	if [ "${SOURCE_KIND}" = "workflow_run" ]; then
+		heal_workflow_path="$(_heal_slurp_verified_runs '[.[] | .path | strings | select(. != "")] | first // ""' | jq -r '. // ""' 2>/dev/null)" || heal_workflow_path=""
+	fi
 	# Evidence pack (P1): passed only when it is on and has text, so a
 	# switch-off body is byte-identical. compose-issue validates it with the body.
 	local -a evidence_pack_args=()
@@ -4349,6 +4496,7 @@ _open_issue()
 		--target-branch "${target_branch}" \
 		--integration-branch "${integration_branch}" \
 		--scope-marker-file "${scope_marker_file}" \
+		--workflow-path "${heal_workflow_path}" \
 		--max-depth "${MAX_DEPTH}" \
 		--intake-run-url "${RUN_URL}" \
 		--title-out "${title_file}" \
@@ -4628,7 +4776,9 @@ if [ "${HEAL_SCOPE_RECOVERY_ACTIVE}" = "true" ] && [ -z "${NEW_ISSUE_URL}" ]; th
 		# A scan replay is not a new occurrence (#7333).
 		RECOVERY_OCCURRENCE_STATE="skipped_reconstructed"
 	elif python3 "${HEAL_PY}" compose-occurrence --payload-json "$(_compose_payload_file)" --intake-run-url "${RUN_URL}" > "${RECOVERY_OCCURRENCE_FILE}" \
-		&& gh_retry gh api "repos/${HEAL_SCOPE_RECOVERY_REPO}/issues/${HEAL_SCOPE_RECOVERY_ISSUE}/comments" -F body=@"${RECOVERY_OCCURRENCE_FILE}" >/dev/null 2>&1; then
+		&& _heal_record_occurrence "${HEAL_SCOPE_RECOVERY_REPO}" "${HEAL_SCOPE_RECOVERY_ISSUE}" "${RECOVERY_OCCURRENCE_FILE}"; then
+		# No cached comments: the recovery read predates the diagnosis (minutes)
+		# and carries no `created_at`, so the counter merge reads them afresh.
 		RECOVERY_OCCURRENCE_STATE="posted"
 	fi
 	log "heal_scope_recovery outcome=no_replacement reason=classification_$(printf '%s' "${CLASSIFICATION}" | tr -cd 'a-z-' | tr '-' '_') issue=${HEAL_SCOPE_RECOVERY_ISSUE} repo=${HEAL_SCOPE_RECOVERY_REPO} occurrence=${RECOVERY_OCCURRENCE_STATE} fp=${FP}"

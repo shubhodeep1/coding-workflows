@@ -494,7 +494,11 @@ _RUN_URL_RE = re.compile(
 	r"https://github\.com/(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/actions/runs/(?P<run_id>[0-9]+)"
 )
 _PR_RUN_NAME_RE = re.compile(r"\[pr:(?P<n>[0-9]+)\]\s*$")
-_SMOKE_TITLE_RE = re.compile(r"\[E2E Smoke Test\b", re.IGNORECASE)
+# Release-gate fixtures: `[E2E Smoke Test ...]`, `[E2E Smoke Test alt-model ...]`,
+# `[E2E Orchestrate Smoke <run>] ...` (the orchestrate smoke's tracking and wave
+# issues carry no e2e-smoke-test label; #9236 was filed for #9210) and
+# `[E2E Clarify Negative Test ...]`.
+_SMOKE_TITLE_RE = re.compile(r"\[E2E (?:Smoke Test|Orchestrate Smoke|Clarify Negative Test)\b", re.IGNORECASE)
 _SMOKE_LABELS = frozenset({"e2e-smoke-test"})
 _MARKER_RE = re.compile(r"<!--\s*" + re.escape(MARKER_PREFIX) + r"(?P<key>[a-z_]+)=(?P<value>[^\s>]+)\s*-->")
 _ORCHESTRATOR_STATE_V2_COMMENT_RE = re.compile(
@@ -698,14 +702,34 @@ def neutralize_untrusted_routing(text: str) -> tuple[str, int]:
 	return text, key_count + reissue_count + footer_count + marker_count
 
 
+# Issue #8808: optional sixth header line naming the failing workflow file of a
+# run-sourced heal issue (from the verified run's `.path`), so the poller's
+# stale auto-close finds the workflow without an extra API call.
+HEAL_WORKFLOW_PATH_RE = re.compile(r"\.github/workflows/[A-Za-z0-9_.-]{1,100}\.ya?ml")
+_HEAL_WORKFLOW_MARKER_LINE_RE = re.compile(
+	r"<!-- " + re.escape(MARKER_PREFIX) + r"workflow=(" + HEAL_WORKFLOW_PATH_RE.pattern + r") -->"
+)
+
+
+def is_valid_heal_workflow_path(value: Any) -> bool:
+	return isinstance(value, str) and bool(HEAL_WORKFLOW_PATH_RE.fullmatch(value)) and ".." not in value
+
+
 def validate_heal_issue_body_routing(body: str, *, target_branch: str | None, integration_branch: str | None) -> str:
 	"""Reject any metadata outside the intake-generated headers."""
 	lines = body.split("\n")
 	if len(lines) < 5 or any(not line.startswith(f"<!-- {MARKER_PREFIX}") or not line.endswith(" -->") for line in lines[:5]):
 		return "marker"
-	# Cause grouping (P5 / D3): an optional sixth header line, the exact
-	# `cause=<64 lowercase hex>` marker, is allowed; any other `<!--` is not.
-	header_length = 6 if len(lines) > 5 and _HEAL_CAUSE_MARKER_LINE_RE.fullmatch(lines[5]) else 5
+	# The five marker lines, plus at most one fully matched workflow= line (#8808),
+	# then (cause grouping P5 / D3) at most one exact `cause=<64 lowercase hex>`
+	# marker, in the order compose_issue_body writes them; any other `<!--` is not.
+	header_length = 5
+	if len(lines) > header_length:
+		workflow_line = _HEAL_WORKFLOW_MARKER_LINE_RE.fullmatch(lines[header_length])
+		if workflow_line and is_valid_heal_workflow_path(workflow_line.group(1)):
+			header_length += 1
+	if len(lines) > header_length and _HEAL_CAUSE_MARKER_LINE_RE.fullmatch(lines[header_length]):
+		header_length += 1
 	if "<!--" in "\n".join(lines[header_length:]):
 		return "marker"
 	if re.search(r"Re-issued from\s*#|review-blocked-reissue", body, re.IGNORECASE):
@@ -4577,14 +4601,14 @@ def _recovery_occurrence_runs(comments: list[Any], *, pipeline_login: str, sourc
 		text = comment.get("body") if isinstance(comment, dict) else None
 		if not isinstance(text, str) or _comment_author_login(comment).casefold() != login:
 			continue
-		lines = sanitize_text(text).splitlines()
-		if not lines or lines[0].strip() != f"<!-- {MARKER_PREFIX}occurrence -->":
-			continue
-		if head_line not in lines or not any(line.startswith("- **Source pull request:** ") and line.endswith(source_suffix) for line in lines):
-			continue
-		runs = extract_run_refs([line for line in lines if line.startswith("- **Failed run:** ")], repo=source_repo)
-		if runs:
-			return runs
+		# One report per legacy comment; a counter comment (edited in place)
+		# holds several, newest first. Lines never mix across reports.
+		for lines in occurrence_report_sections(text):
+			if head_line not in lines or not any(line.startswith("- **Source pull request:** ") and line.endswith(source_suffix) for line in lines):
+				continue
+			runs = extract_run_refs([line for line in lines if line.startswith("- **Failed run:** ")], repo=source_repo)
+			if runs:
+				return runs
 	return []
 
 
@@ -5779,6 +5803,7 @@ def budget_decision(
 	reissues: Iterable[dict[str, Any]] | None = None,
 	cause: str | None = None,
 	cause_window_days: int = 3,
+	report_issue: str | None = None,
 ) -> dict[str, Any]:
 	"""Decide what to do with a fingerprinted failure given the heal issue list.
 
@@ -5816,8 +5841,23 @@ def budget_decision(
 	(``match: cause``), ahead of the budget caps. A missing or unparseable
 	``created_at`` never matches. ``None`` (or anything but 64 lowercase hex)
 	leaves the decision unchanged.
+
+	``report_issue`` (``owner/repo#N``, optional) is the issue whose own
+	clarify / plan / implement run failed. When it is itself an OPEN listed
+	heal issue and no fingerprint, source or cause duplicate exists, the report is a
+	duplicate of that issue (``match: heal_source``): a heal issue's own failed
+	run never opens a heal issue for the heal issue (#9200 was filed for
+	#9190, #9192 for #9189, #9238 for #9234). The report is not diagnosed, so
+	a defect that only ever fails on heal issues gets no heal issue of its
+	own; the same defect still gets one from any report whose source is not a
+	heal issue. The intake records the occurrence and does not escalate. The
+	listing comes from GitHub (label ``ai:workflow-heal``), not from the
+	report. A closed heal issue keeps the lineage rules below.
 	"""
 	now = now or _utc_now()
+	report_issue_match = _SOURCE_KEY_RE.fullmatch(str(report_issue or ""))
+	report_issue_number = _positive_int(str(report_issue).rsplit("#", 1)[-1]) if report_issue_match else None
+	heal_source_record: dict[str, Any] | None = None
 	day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 	if not (isinstance(cause, str) and _FP_HEX_RE.fullmatch(cause)):
 		cause = None
@@ -5877,6 +5917,11 @@ def budget_decision(
 		is_linked_heal_issue = linked_heal_issue is not None and number == linked_heal_issue and issue_repository in (linked_heal_repo, "")
 		if state == "open":
 			open_issues.append(issue)
+			if report_issue_match and report_issue_number == number and (
+				issue_repository == report_issue_match.group("repo")
+				or (not issue_repository and report_issue_match.group("repo") == preferred_repo)
+			):
+				heal_source_record = issue
 			if markers.get("fp") == fp:
 				duplicate = _preferred_duplicate(duplicate, issue)
 			elif same_source:
@@ -5906,6 +5951,22 @@ def budget_decision(
 			"existing_repo": duplicate.get("repository") if is_valid_repo_slug(duplicate.get("repository")) else "",
 			"gen": _positive_int(parse_heal_markers(duplicate.get("body")).get("gen")) or 1,
 			"root": parse_heal_markers(duplicate.get("body")).get("root") or fp,
+			"open_count": len(open_issues),
+			"today_count": created_today,
+		}
+	# A cause match keeps its precedence: when the heal issue's own run fails
+	# with the issue's own cause, `match: cause` keeps the
+	# heal_issue_failed_itself escalation; another issue's cause records there.
+	if heal_source_record is not None and cause_duplicate is None:
+		heal_source_markers = parse_heal_markers(heal_source_record.get("body"))
+		return {
+			"action": "duplicate",
+			"match": "heal_source",
+			"existing_issue": _positive_int(heal_source_record.get("number")),
+			"existing_url": sanitize_text(heal_source_record.get("html_url"), 300),
+			"existing_repo": heal_source_record.get("repository") if is_valid_repo_slug(heal_source_record.get("repository")) else "",
+			"gen": _positive_int(heal_source_markers.get("gen")) or 1,
+			"root": heal_source_markers.get("root") or fp,
 			"open_count": len(open_issues),
 			"today_count": created_today,
 		}
@@ -7669,6 +7730,7 @@ def compose_issue_body(
 	intake_run_url: str,
 	run_summaries: list[dict[str, Any]],
 	integration_branch: str | None = None,
+	workflow_path: str | None = None,
 	evidence_pack: str | None = None,
 	reproduction: str | None = None,
 	trend: str | None = None,
@@ -7702,8 +7764,9 @@ def compose_issue_body(
 	diagnosis, and is neutralized and checked the same way. ``None`` or empty
 	adds nothing.
 
-	``cause`` (optional, :func:`cause_key`, 64 lowercase hex) adds the sixth
-	header line ``cause=<hex>`` (cause grouping P5 / D3); ``None``, empty or
+	``cause`` (optional, :func:`cause_key`, 64 lowercase hex) adds the header
+	line ``cause=<hex>`` (cause grouping P5 / D3), sixth, or seventh after the
+	``workflow=`` line of a workflow_run source (#8808); ``None``, empty or
 	invalid adds nothing, so a switch-off body is byte-identical.
 
 	``code_ran_from`` (optional, ``<branch>@<sha>``, code-ref routing P6) adds
@@ -7719,6 +7782,10 @@ def compose_issue_body(
 		f"<!-- {MARKER_PREFIX}source={payload['source_repo']}#{payload.get('issue_number') or 'run'} -->",
 		f"<!-- {MARKER_PREFIX}classification={classification} -->",
 	]
+	# Issue #8808: run-sourced issues name their failing workflow file; an
+	# invalid path is dropped and every other source kind is unchanged.
+	if payload.get("source_kind") == "workflow_run" and is_valid_heal_workflow_path(workflow_path):
+		parts.append(f"<!-- {MARKER_PREFIX}workflow={workflow_path} -->")
 	if isinstance(cause, str) and _FP_HEX_RE.fullmatch(cause):
 		parts.append(f"<!-- {MARKER_PREFIX}cause={cause} -->")
 	parts.append("")
@@ -7895,6 +7962,179 @@ def compose_occurrence_comment(
 			lines.append("")
 			lines.append(pack_text)
 	return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# Occurrence counter comment (one comment per heal issue, edited in place)
+# ---------------------------------------------------------------------------
+# Every repeat report used to be its own comment: heal issue #9200 collected
+# 271 of them in two days, and each PAT comment starts four `issue_comment`
+# wrapper runs. The intake now keeps ONE occurrence comment per heal issue and
+# edits it (`issue_comment` wrappers run on `created` only): a count line plus
+# the newest OCCURRENCE_KEEP_ENTRIES reports, each under its own entry marker
+# (older reports stay in their intake run's log).
+# The first line stays `<!-- workflow-failure-heal:occurrence -->`, so every
+# reader that recognises an occurrence comment by that line still does.
+#
+# Run-volume plan D18 kept edit-in-place out because readers order markers by
+# `created_at`. The two readers of occurrence comments are handled here:
+# `_recovery_occurrence_runs` reads the entries one by one (newest first), and
+# `heal_stale_decision` moves its anchor to the count line's `last=` time.
+# Untrusted text in a report (error signature, evidence pack) has `<!--`
+# neutralised by its composer, so an entry marker is always intake-written.
+OCCURRENCE_MARKER_LINE = f"<!-- {MARKER_PREFIX}occurrence -->"
+OCCURRENCE_KEEP_ENTRIES = 10
+# GitHub refuses a comment over 65,536 characters; the signing shim adds a line.
+OCCURRENCE_COMMENT_MAX_CHARS = 60000
+_OCCURRENCE_TIME_PATTERN = r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"
+_OCCURRENCE_COUNT_LINE_RE = re.compile(
+	r"<!-- " + re.escape(MARKER_PREFIX) + r"occurrence-count:v1 count=([1-9][0-9]{0,8})"
+	r" first=(" + _OCCURRENCE_TIME_PATTERN + r") last=(" + _OCCURRENCE_TIME_PATTERN + r") -->"
+)
+_OCCURRENCE_ENTRY_LINE_RE = re.compile(
+	r"<!-- " + re.escape(MARKER_PREFIX) + r"occurrence-entry:v1 n=([1-9][0-9]{0,8}) at=(" + _OCCURRENCE_TIME_PATTERN + r") -->"
+)
+
+
+def parse_occurrence_counter(body: Any) -> dict[str, Any] | None:
+	"""Parse an in-place occurrence comment; ``None`` for anything else.
+
+	Returns ``{"count", "first", "last", "entries"}`` where ``entries`` is a
+	list of ``{"n", "at", "text"}`` in body order (newest first). A legacy
+	single-report occurrence comment (no count line) is not a counter.
+	"""
+	if not isinstance(body, str):
+		return None
+	lines = sanitize_text(body).split("\n")
+	if len(lines) < 2 or lines[0].strip() != OCCURRENCE_MARKER_LINE:
+		return None
+	count_line = _OCCURRENCE_COUNT_LINE_RE.fullmatch(lines[1].strip())
+	if count_line is None:
+		return None
+	entries: list[dict[str, Any]] = []
+	current: dict[str, Any] | None = None
+	for line in lines[2:]:
+		entry_line = _OCCURRENCE_ENTRY_LINE_RE.fullmatch(line.strip())
+		if entry_line is not None:
+			current = {"n": int(entry_line.group(1)), "at": entry_line.group(2), "lines": []}
+			entries.append(current)
+		elif current is not None:
+			current["lines"].append(line)
+	return {
+		"count": int(count_line.group(1)),
+		"first": count_line.group(2),
+		"last": count_line.group(3),
+		"entries": [{"n": entry["n"], "at": entry["at"], "text": "\n".join(entry["lines"]).strip("\n")} for entry in entries],
+	}
+
+
+def occurrence_report_sections(body: Any) -> list[list[str]]:
+	"""The reports of one occurrence comment as line lists, newest first.
+
+	A legacy comment is one report (all its lines); a counter comment yields
+	one list per kept entry. Anything else yields nothing.
+	"""
+	if not isinstance(body, str):
+		return []
+	lines = sanitize_text(body).splitlines()
+	if not lines or lines[0].strip() != OCCURRENCE_MARKER_LINE:
+		return []
+	counter = parse_occurrence_counter(body)
+	if counter is None:
+		return [lines]
+	return [entry["text"].splitlines() for entry in counter["entries"]]
+
+
+def occurrence_last_reported(body: Any) -> datetime | None:
+	"""``last=`` time of a counter comment, else ``None`` (legacy or other)."""
+	counter = parse_occurrence_counter(body)
+	return _parse_iso(counter["last"]) if counter else None
+
+
+def merge_occurrence_comment(
+	comments: Iterable[Any],
+	occurrence: str,
+	*,
+	trusted_login: str,
+	now: datetime | None = None,
+	keep_entries: int = OCCURRENCE_KEEP_ENTRIES,
+	max_chars: int = OCCURRENCE_COMMENT_MAX_CHARS,
+) -> dict[str, Any]:
+	"""Fold one composed occurrence comment into the issue's counter comment.
+
+	``comments`` is the heal issue's comment list (``id``, ``body``, author
+	under ``author`` or ``user.login``), oldest first. Only comments written
+	by ``trusted_login`` (the account the intake posts as) count. Returns
+	``{"comment_id", "count", "body", "newer_comments"}``: ``comment_id`` is
+	the newest trusted counter comment to edit, or ``None`` when the body must
+	be posted as a new comment; ``newer_comments`` is how many comments of any
+	author follow that counter (0 without one), so the caller can re-post a
+	counter that fell out of the window other readers fetch. The first counter
+	on an issue starts at the number of legacy occurrence comments already
+	there plus one, and its ``first=`` is the oldest of them. A legacy comment
+	posted after a counter exists (the intake's fallback) is not counted.
+	Entries beyond ``keep_entries`` are dropped, oldest first, and
+	further ones while the body exceeds ``max_chars``; a single entry that is
+	still too long is cut.
+	"""
+	if not isinstance(occurrence, str) or not occurrence.startswith(OCCURRENCE_MARKER_LINE):
+		raise ValueError("occurrence text does not start with the occurrence marker")
+	login = trusted_login.strip().casefold() if isinstance(trusted_login, str) else ""
+	stamp = _iso(now or _utc_now())
+	target_id: int | None = None
+	counter: dict[str, Any] | None = None
+	legacy_reports = 0
+	legacy_first: datetime | None = None
+	newer_comments = 0
+	for comment in comments if isinstance(comments, (list, tuple)) else []:
+		newer_comments += 1
+		if not isinstance(comment, dict) or not login or _comment_author_login(comment).casefold() != login:
+			continue
+		parsed = parse_occurrence_counter(comment.get("body"))
+		if parsed is not None:
+			comment_id = _positive_int(comment.get("id"))
+			if comment_id is not None:
+				target_id, counter = comment_id, parsed
+				newer_comments = 0
+		elif isinstance(comment.get("body"), str) and sanitize_text(comment["body"]).split("\n", 1)[0].strip() == OCCURRENCE_MARKER_LINE:
+			legacy_reports += 1
+			legacy_created = _parse_iso(comment.get("created_at"))
+			if legacy_created is not None and (legacy_first is None or legacy_created < legacy_first):
+				legacy_first = legacy_created
+	if counter is None:
+		newer_comments = 0
+		count = legacy_reports + 1
+		first = _iso(legacy_first) if legacy_first is not None and _iso(legacy_first) <= stamp else stamp
+		entries: list[dict[str, Any]] = []
+	else:
+		count = counter["count"] + 1
+		first = counter["first"]
+		entries = list(counter["entries"])
+	report_text = sanitize_text(occurrence)[len(OCCURRENCE_MARKER_LINE):].strip("\n")
+	entries.insert(0, {"n": count, "at": stamp, "text": report_text})
+	entries = entries[:max(1, keep_entries)]
+
+	def _render(kept: list[dict[str, Any]]) -> str:
+		head = [
+			OCCURRENCE_MARKER_LINE,
+			f"<!-- {MARKER_PREFIX}occurrence-count:v1 count={count} first={first} last={stamp} -->",
+			f"This failure was reported again **{count}** time{'s' if count != 1 else ''} (first `{first}`, latest `{stamp}`). "
+			f"This comment is updated in place; the newest {len(kept)} report{'s are' if len(kept) != 1 else ' is'} kept below.",
+		]
+		for entry in kept:
+			head.extend(["", f"<!-- {MARKER_PREFIX}occurrence-entry:v1 n={entry['n']} at={entry['at']} -->", entry["text"]])
+		return "\n".join(head) + "\n"
+
+	body = _render(entries)
+	while len(body) > max_chars and len(entries) > 1:
+		entries.pop()
+		body = _render(entries)
+	if len(body) > max_chars:
+		overflow = len(body) - max_chars
+		note = "\n\n_(report shortened to fit one comment)_"
+		entries[0] = dict(entries[0], text=entries[0]["text"][:max(0, len(entries[0]["text"]) - overflow - len(note))].rstrip() + note)
+		body = _render(entries)
+	return {"comment_id": target_id, "count": count, "body": body, "newer_comments": newer_comments}
 
 
 # ---------------------------------------------------------------------------
@@ -9899,6 +10139,323 @@ def _cmd_heal_scope_recovery(args: argparse.Namespace) -> int:
 	return 0
 
 
+# --- Stale auto-close of held heal issues (issue #8808) ---------------------
+# A run-sourced heal issue held at ai:awaiting-approval by the counterfactual
+# gate is closed by the poller once its failing workflow has been green on the
+# target branch for HEAL_STALE_GREEN_RUNS completed push runs after the anchor
+# (the later of the issue's creation and its newest trusted occurrence
+# comment), and the anchor is HEAL_STALE_MIN_AGE_HOURS old. The functions are
+# pure: the poller fetches the issue, comments and runs and acts on the
+# decision. Nothing here reads the plan's file list.
+
+HEAL_STALE_DEFAULT_GREEN_RUNS = 5
+HEAL_STALE_DEFAULT_MIN_AGE_HOURS = 24
+HEAL_STALE_CLOSE_MARKER_TAG = "ai:heal-stale-close:v1"
+HEAL_COUNTERFACTUAL_HOLD_MARKER_TAG = "ai:heal-counterfactual-hold:v1"
+HEAL_ORCHESTRATOR_MANAGED_LABEL = "ai:orchestrator-managed"
+HEAL_AWAITING_APPROVAL_LABEL = "ai:awaiting-approval"
+_HEAL_STALE_TRUSTED_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
+_HEAL_STALE_WORKFLOW_FILE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}\.ya?ml$")
+_HEAL_STALE_RUN_REF_RE = re.compile(r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+):([1-9][0-9]{0,19})")
+_HEAL_STALE_RUN_URL_RE = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/[1-9][0-9]{0,19}$")
+# A missing --linked-pr-json (no cache entry) differs from JSON null (no PR).
+HEAL_STALE_LINKED_PR_UNKNOWN = object()
+
+
+def _heal_stale_labels(issue: dict[str, Any]) -> set[str]:
+	labels = issue.get("labels")
+	names: set[str] = set()
+	if isinstance(labels, list):
+		for label in labels:
+			if isinstance(label, str):
+				names.add(label)
+			elif isinstance(label, dict) and isinstance(label.get("name"), str):
+				names.add(label["name"])
+	return names
+
+
+def _heal_stale_login(item: dict[str, Any]) -> str:
+	user = item.get("user")
+	if isinstance(user, dict) and isinstance(user.get("login"), str):
+		return user["login"]
+	if isinstance(item.get("author_login"), str):
+		return item["author_login"]
+	return ""
+
+
+def _heal_stale_trusted(item: Any, pipeline_login: str) -> bool:
+	"""Same filter as the poller's hold-marker check: pipeline login, [bot], member."""
+	if not isinstance(item, dict):
+		return False
+	login = _heal_stale_login(item)
+	if pipeline_login and login == pipeline_login:
+		return True
+	if login.endswith("[bot]"):
+		return True
+	return item.get("author_association") in _HEAL_STALE_TRUSTED_ASSOCIATIONS
+
+
+def _heal_stale_parse_time(value: Any) -> datetime | None:
+	if not isinstance(value, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})", value):
+		return None
+	try:
+		parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+	except ValueError:
+		return None
+	return parsed.astimezone(timezone.utc) if parsed.tzinfo else None
+
+
+def _heal_stale_iso(value: datetime) -> str:
+	return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _heal_stale_int(value: Any, default: int, minimum: int) -> int:
+	try:
+		number = int(str(value).strip())
+	except (TypeError, ValueError):
+		return default
+	return number if number >= minimum else default
+
+
+def heal_stale_target(issue: Any) -> dict[str, Any]:
+	"""Source repo, workflow file and branch of a held heal issue, from its body.
+
+	``workflow`` is the basename of the ``workflow=`` header marker. Without it
+	(issues filed before #8808), or without a valid ``Target branch`` line,
+	``fallback_run`` names the first source-repository run of the
+	``ai:workflow-heal-scope:v1 runs=`` marker for one ``actions/runs/<id>`` read.
+	"""
+	out: dict[str, Any] = {"source_repo": None, "source_kind": None, "workflow": None, "branch": None, "fallback_run": None, "reason": ""}
+	if not isinstance(issue, dict):
+		out["reason"] = "issue_unavailable"
+		return out
+	body = issue.get("body") if isinstance(issue.get("body"), str) else ""
+	markers = parse_heal_markers(body)
+	repo, sep, kind = (markers.get("source") or "").rpartition("#")
+	if not sep or not is_valid_repo_slug(repo):
+		out["reason"] = "source_unknown"
+		return out
+	out["source_repo"] = repo
+	if kind != "run":
+		out["source_kind"] = "pr" if kind.isdigit() else "unknown"
+		out["reason"] = "not_run_sourced"
+		return out
+	out["source_kind"] = "run"
+	workflow_path = markers.get("workflow")
+	if is_valid_heal_workflow_path(workflow_path):
+		out["workflow"] = workflow_path.rsplit("/", 1)[1]
+	alias = _HEAL_TARGET_BRANCH_RE.search(body)
+	branch = (alias.group(1) or alias.group(2)).strip() if alias else ""
+	if is_valid_branch(branch):
+		out["branch"] = branch
+	if out["workflow"] is None or out["branch"] is None:
+		scope = HEAL_SCOPE_RE.search(body)
+		for ref in (scope.group(2).split(",") if scope else []):
+			match = _HEAL_STALE_RUN_REF_RE.fullmatch(ref)
+			if match and match.group(1) == repo:
+				out["fallback_run"] = {"repo": repo, "run_id": match.group(2)}
+				break
+		if out["fallback_run"] is None:
+			out["reason"] = "workflow_unknown"
+	return out
+
+
+def heal_stale_resolve_run(run: Any) -> dict[str, Any]:
+	"""Workflow file and branch of a ``GET actions/runs/<id>`` response."""
+	if not isinstance(run, dict):
+		return {"workflow": None, "branch": None, "reason": "workflow_unknown"}
+	path = run.get("path")
+	branch = run.get("head_branch")
+	workflow = path.rsplit("/", 1)[1] if is_valid_heal_workflow_path(path) else None
+	branch = branch if is_valid_branch(branch) else None
+	return {"workflow": workflow, "branch": branch, "reason": "" if workflow and branch else "workflow_unknown"}
+
+
+def _heal_stale_run_summary(run: dict[str, Any]) -> dict[str, Any]:
+	run_id = run.get("id")
+	url = run.get("html_url")
+	sha = run.get("head_sha")
+	return {
+		"id": run_id if isinstance(run_id, int) and run_id > 0 else None,
+		"url": url if isinstance(url, str) and _HEAL_STALE_RUN_URL_RE.fullmatch(url) else "",
+		"sha": sha if is_valid_sha(sha) else "",
+	}
+
+
+def render_heal_stale_close_comment(*, issue: int, workflow: str, branch: str, green_runs: int, anchor: str,
+		first_green: dict[str, Any], newest_green: dict[str, Any]) -> str:
+	"""The close comment. It carries no `#<n>` reference (CLAUDE.md §19)."""
+	def run_line(label: str, run: dict[str, Any]) -> str:
+		url = run.get("url") or "(link unavailable)"
+		sha = run.get("sha") or "unknown"
+		return f"- {label}: {url} at `{sha}`"
+
+	return "\n".join([
+		"**Automatically closed: the failing workflow is green again.**",
+		"",
+		f"`{workflow}` has concluded `success` on each of the {green_runs} newest completed push runs on `{branch}` "
+		f"created after `{anchor}` (the later of this issue's creation and its newest occurrence report).",
+		"",
+		run_line("First green run", first_green),
+		run_line("Newest green run", newest_green),
+		"",
+		"The plan was held by the heal counterfactual gate, so no change was implemented. If the failure comes "
+		"back, the heal intake files the next generation of this lineage. Set the `HEAL_STALE_AUTO_CLOSE_ENABLED` "
+		"repository variable to `false` to turn this off.",
+		"",
+		f"<!-- {HEAL_STALE_CLOSE_MARKER_TAG} issue={issue} workflow={workflow} branch={branch} green_runs={green_runs} "
+		f"newest_run={newest_green.get('id') or 0} -->",
+	])
+
+
+def heal_stale_decision(issue: Any, comments: Any, runs: Any, *, pipeline_login: str, plan_comment: str,
+		workflow: str, branch: str, linked_pr: Any = HEAL_STALE_LINKED_PR_UNKNOWN,
+		green_runs: int = HEAL_STALE_DEFAULT_GREEN_RUNS, min_age_hours: int = HEAL_STALE_DEFAULT_MIN_AGE_HOURS,
+		now: datetime | None = None) -> dict[str, Any]:
+	"""Decide ``close``, ``keep`` or ``skip`` for one held heal issue.
+
+	Every unknown or malformed input keeps the issue open.
+	"""
+	green_runs = green_runs if isinstance(green_runs, int) and green_runs >= 1 else HEAL_STALE_DEFAULT_GREEN_RUNS
+	min_age_hours = min_age_hours if isinstance(min_age_hours, int) and min_age_hours >= 0 else HEAL_STALE_DEFAULT_MIN_AGE_HOURS
+	now = now or datetime.now(timezone.utc)
+	result: dict[str, Any] = {"decision": "keep", "reason": "", "green_runs": 0, "anchor": "", "first_green": None,
+		"newest_green": None, "marker_present": False}
+
+	def done(decision: str, reason: str) -> dict[str, Any]:
+		result["decision"] = decision
+		result["reason"] = reason
+		return result
+
+	if not isinstance(issue, dict):
+		return done("keep", "issue_unavailable")
+	number = _positive_int(issue.get("number"))
+	if number is None:
+		return done("keep", "issue_unavailable")
+	labels = _heal_stale_labels(issue)
+	if str(issue.get("state") or "").lower() != "open" or HEAL_LABEL not in labels:
+		return done("skip", "not_heal_issue")
+	if HEAL_AWAITING_APPROVAL_LABEL not in labels:
+		return done("skip", "not_awaiting_approval")
+	if HEAL_ORCHESTRATOR_MANAGED_LABEL in labels:
+		return done("skip", "orchestrator_managed")
+	if not _heal_stale_trusted(issue, pipeline_login):
+		return done("keep", "untrusted_issue_author")
+	if not isinstance(workflow, str) or not _HEAL_STALE_WORKFLOW_FILE_RE.fullmatch(workflow) or ".." in workflow:
+		return done("keep", "workflow_unknown")
+	if not is_valid_branch(branch):
+		return done("keep", "workflow_unknown")
+	trusted_comments = [c for c in (comments if isinstance(comments, list) else []) if _heal_stale_trusted(c, pipeline_login)]
+	bodies = [c.get("body") if isinstance(c.get("body"), str) else "" for c in trusted_comments]
+	hold_prefix = f"<!-- {HEAL_COUNTERFACTUAL_HOLD_MARKER_TAG} issue={number} plan_comment={plan_comment} "
+	if not re.fullmatch(r"[1-9][0-9]*", plan_comment or "") or not any(hold_prefix in body for body in bodies):
+		return done("keep", "hold_marker_missing")
+	if linked_pr is HEAL_STALE_LINKED_PR_UNKNOWN or (linked_pr is not None and not isinstance(linked_pr, dict)):
+		return done("keep", "linked_pr_unknown")
+	if isinstance(linked_pr, dict) and str(linked_pr.get("state") or "").upper() == "OPEN":
+		return done("keep", "open_pr")
+	anchor = _heal_stale_parse_time(issue.get("created_at"))
+	if anchor is None:
+		return done("keep", "anchor_unavailable")
+	for comment, body in zip(trusted_comments, bodies):
+		lines = body.split("\n")
+		if not lines or lines[0].strip() != f"<!-- {MARKER_PREFIX}occurrence -->":
+			continue
+		created = _heal_stale_parse_time(comment.get("created_at"))
+		if created is not None and created > anchor:
+			anchor = created
+		# A counter comment is edited in place, so its `created_at` is the
+		# first repeat; the count line's `last=` is the newest one.
+		last_reported = occurrence_last_reported(body)
+		if last_reported is not None and last_reported > anchor:
+			anchor = last_reported
+	result["anchor"] = _heal_stale_iso(anchor)
+	if now - anchor < timedelta(hours=min_age_hours):
+		return done("keep", "too_young")
+	if not isinstance(runs, dict) or not isinstance(runs.get("workflow_runs"), list):
+		return done("keep", "runs_unavailable")
+	window: list[tuple[datetime, dict[str, Any]]] = []
+	reaches_anchor = False
+	for run in runs["workflow_runs"]:
+		# A malformed entry could hide a failed run: keep the issue (fail open).
+		if not isinstance(run, dict):
+			return done("keep", "runs_unavailable")
+		created = _heal_stale_parse_time(run.get("created_at"))
+		if created is None:
+			return done("keep", "runs_unavailable")
+		if created <= anchor:
+			reaches_anchor = True
+		if run.get("event") != "push" or run.get("status") != "completed" or run.get("head_branch") != branch:
+			continue
+		if created <= anchor:
+			continue
+		window.append((created, run))
+	# One page (the newest HEAL_STALE_GREEN_RUNS+10 runs) is read. A page that
+	# neither reaches back to the anchor nor holds every run the API counted
+	# is cut short, so it is enough only when it alone already holds
+	# green_runs runs after the anchor (all of which must be green below).
+	# Gating on full coverage would keep any long-held issue on a busy
+	# branch forever; a failure that comes back posts a trusted occurrence
+	# comment, which moves the anchor past it. Residual (accepted, issue
+	# #8808 "flake closed early"): a post-anchor failure older than the page
+	# goes unseen when the intake did not correlate it or its occurrence post
+	# failed; only a recurrence (the next lineage generation) recovers it.
+	total_count = runs.get("total_count")
+	page_complete = isinstance(total_count, int) and not isinstance(total_count, bool) \
+		and total_count <= len(runs["workflow_runs"])
+	if not reaches_anchor and not page_complete and len(window) < green_runs:
+		return done("keep", "runs_window_incomplete")
+	window.sort(key=lambda item: item[0])
+	if any(run.get("conclusion") != "success" for _, run in window):
+		return done("keep", "run_not_green")
+	result["green_runs"] = len(window)
+	if len(window) < green_runs:
+		return done("keep", "too_few_green_runs")
+	result["first_green"] = _heal_stale_run_summary(window[0][1])
+	result["newest_green"] = _heal_stale_run_summary(window[-1][1])
+	close_prefix = f"<!-- {HEAL_STALE_CLOSE_MARKER_TAG} issue={number} "
+	result["marker_present"] = any(close_prefix in body for body in bodies)
+	result["comment_body"] = render_heal_stale_close_comment(issue=number, workflow=workflow, branch=branch,
+		green_runs=len(window), anchor=result["anchor"], first_green=result["first_green"], newest_green=result["newest_green"])
+	return done("close", "workflow_green")
+
+
+def _cmd_heal_stale_decision(args: argparse.Namespace) -> int:
+	"""Exit 0 for every decision; 2 when a required input cannot be read."""
+	def read_optional(path: str) -> Any:
+		if not path:
+			return None
+		try:
+			return _load_json_file(path)
+		except (OSError, ValueError):
+			return None
+
+	try:
+		if args.stage == "resolve":
+			_write_json(heal_stale_resolve_run(read_optional(args.run_json)))
+			return 0
+		issue = _load_json_file(args.issue_json)
+		if args.stage == "target":
+			_write_json(heal_stale_target(issue))
+			return 0
+		comments = _load_json_file(args.comments_json)
+	except (OSError, ValueError) as exc:
+		sys.stderr.write(f"error: heal-stale-decision input unreadable: {type(exc).__name__}\n")
+		return 2
+	linked_pr: Any = HEAL_STALE_LINKED_PR_UNKNOWN
+	if args.linked_pr_json:
+		try:
+			linked_pr = _load_json_file(args.linked_pr_json)
+		except (OSError, ValueError):
+			linked_pr = HEAL_STALE_LINKED_PR_UNKNOWN
+	now = _heal_stale_parse_time(args.now) if args.now else None
+	_write_json(heal_stale_decision(issue, comments, read_optional(args.runs_json),
+		pipeline_login=args.pipeline_login, plan_comment=args.plan_comment, workflow=args.workflow, branch=args.branch,
+		linked_pr=linked_pr, green_runs=_heal_stale_int(args.green_runs, HEAL_STALE_DEFAULT_GREEN_RUNS, 1),
+		min_age_hours=_heal_stale_int(args.min_age_hours, HEAL_STALE_DEFAULT_MIN_AGE_HOURS, 0), now=now))
+	return 0
+
+
 def _cmd_heal_route(args: argparse.Namespace) -> int:
 	sys.stdout.write("true\n" if is_heal_route(_load_json_file(args.issue_json)) else "false\n")
 	return 0
@@ -10299,6 +10856,7 @@ def _cmd_budget(args: argparse.Namespace) -> int:
 		reissues=_load_reissues(args.reissues_json) if args.reissues_json else None,
 		cause=args.cause or None,
 		cause_window_days=min(max(args.cause_window_days, 1), 30),
+		report_issue=args.report_issue or None,
 	)
 	_write_json(decision)
 	return 0
@@ -10569,6 +11127,7 @@ def _cmd_compose_issue(args: argparse.Namespace) -> int:
 		intake_run_url=args.intake_run_url,
 		run_summaries=[item for item in run_summaries if isinstance(item, dict)],
 		integration_branch=args.integration_branch or None,
+		workflow_path=getattr(args, "workflow_path", "") or None,
 		evidence_pack=evidence_pack or None,
 		reproduction=reproduction or None,
 		trend=trend or None,
@@ -10604,6 +11163,16 @@ def _cmd_compose_issue(args: argparse.Namespace) -> int:
 			body = body.rstrip() + "\n\n" + marker + "\n"
 	Path(args.title_out).write_text(title + "\n", encoding="utf-8")
 	Path(args.body_out).write_text(body, encoding="utf-8")
+	return 0
+
+
+def _cmd_merge_occurrence(args: argparse.Namespace) -> int:
+	"""Fold an occurrence file into the issue's counter comment (see merge_occurrence_comment)."""
+	comments = _load_json_file(args.comments_json)
+	occurrence = Path(args.occurrence_file).read_text(encoding="utf-8", errors="replace")
+	merged = merge_occurrence_comment(comments if isinstance(comments, list) else [], occurrence, trusted_login=args.trusted_login)
+	Path(args.body_out).write_text(merged["body"], encoding="utf-8")
+	print(json.dumps({"comment_id": merged["comment_id"], "count": merged["count"], "newer_comments": merged["newer_comments"]}))
 	return 0
 
 
@@ -11190,6 +11759,22 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--issue-json", required=True)
 	p.set_defaults(func=_cmd_heal_route)
 
+	p = sub.add_parser("heal-stale-decision", help="Issue #8808: stale auto-close of a held run-sourced heal issue (target, resolve or decide stage)")
+	p.add_argument("--stage", required=True, choices=("target", "resolve", "decide"))
+	p.add_argument("--issue-json", default="")
+	p.add_argument("--run-json", default="")
+	p.add_argument("--comments-json", default="")
+	p.add_argument("--runs-json", default="")
+	p.add_argument("--linked-pr-json", default="", help="JSON null means no linked PR; omit when unknown")
+	p.add_argument("--pipeline-login", default="")
+	p.add_argument("--plan-comment", default="unknown")
+	p.add_argument("--workflow", default="")
+	p.add_argument("--branch", default="")
+	p.add_argument("--green-runs", default=str(HEAL_STALE_DEFAULT_GREEN_RUNS))
+	p.add_argument("--min-age-hours", default=str(HEAL_STALE_DEFAULT_MIN_AGE_HOURS))
+	p.add_argument("--now", default="")
+	p.set_defaults(func=_cmd_heal_stale_decision)
+
 	p = sub.add_parser("heal-queue", help="Heal intake report queue: print a ticket body (ticket) or decide whether a ticket's run may enter the intake (position)")
 	p.add_argument("operation", choices=("ticket", "position"))
 	p.add_argument("--run-id", default="")
@@ -11401,6 +11986,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--source-gen", type=int)
 	p.add_argument("--source-root", default="")
 	p.add_argument("--source-issue", default="", help="owner/repo#N of the issue carrying the reported lineage")
+	p.add_argument("--report-issue", default="", help="owner/repo#N of the issue whose own phase run failed (heal-of-heal dedupe)")
 	p.add_argument("--trusted-author", default="", help="authenticated intake account that created heal issues")
 	p.add_argument("--max-depth", type=int, default=DEFAULT_MAX_LINEAGE_DEPTH)
 	p.add_argument("--max-open", type=int, default=DEFAULT_MAX_OPEN_ISSUES)
@@ -11443,6 +12029,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--target-branch", default="")
 	p.add_argument("--integration-branch", default="")
 	p.add_argument("--scope-marker-file", default="")
+	p.add_argument("--workflow-path", default="", help="workflow_run: the failing run's workflow file (.github/workflows/<file>.yml); adds the workflow= header marker (#8808)")
 	p.add_argument("--evidence-pack-file", default="")
 	p.add_argument("--reproduction-file", default="")
 	p.add_argument("--reproduction-tests-file", default="")
@@ -11522,6 +12109,13 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--evidence-pack-file", default="")
 	p.add_argument("--cause-shape", default="")
 	p.set_defaults(func=_cmd_compose_occurrence)
+
+	p = sub.add_parser("merge-occurrence", help="Fold an occurrence comment into the heal issue's in-place counter comment")
+	p.add_argument("--comments-json", required=True)
+	p.add_argument("--occurrence-file", required=True)
+	p.add_argument("--trusted-login", required=True)
+	p.add_argument("--body-out", required=True)
+	p.set_defaults(func=_cmd_merge_occurrence)
 
 	p = sub.add_parser("branch-progress", help="Summarise a compare response (failing SHA ... branch) as JSON")
 	p.add_argument("--compare-json", required=True)

@@ -2240,7 +2240,7 @@ esac
 # unverified head under the verify job's auto-merge enrollment, and
 # `close_and_reissue` would make the updater skip the release as closed_by_human.
 if [ "${PR_ALREADY_MERGED:-false}" != "true" ] \
-  && [[ "${POST_REVIEW_HEAD_REF:-}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then
+  && [[ "${POST_REVIEW_HEAD_REF:-}" =~ ^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$ ]]; then
   echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${RB_JUDGED_HEAD_SHA:-unknown} action=skip reason=updater_pr_verify_job_owns_merge judge_action=${RB_ACTION}"
   echo "judge_handled=true" >> "$GITHUB_OUTPUT"
   echo "judge_action=updater_verify_hold" >> "$GITHUB_OUTPUT"
