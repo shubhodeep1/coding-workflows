@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Suggested fix 1 (filtering the \"Expected files\" list against `files_touched`) needs a file outside the enforced heal scope. How should the fix be delivered?\nChoices:\nA. Only make changes inside the scope (RECOMMENDED). In the inline `mode-implement-inline.txt` prompt in `.github/workflows/implement.yml`, add the rule \"if the issue lists `files_touched`, stay inside it plus the issue's own fragments\". Limit the \"Update the tests \u2026 listed under Expected files\" bullet to in-scope files, and tell the model to report an out-of-scope test conflict in the summary instead of editing it. Also add a contract test in `tests/` and a `changelog.d/` entry. The Expected-files list itself is not filtered. That filtering goes to a follow-up issue.\nB. Do A, and also filter the Expected-files output in `.github/workflows/implement.yml`'s \"Build implementation context\" step, after `implement_step_prepush_test_gate.sh expected-files` runs, by passing it through `files_touched_scope_guard.py`. This stays in scope but puts new shell logic in the workflow file and adds to its size (480,000-byte guard).\nC. Make the full suggested fix, including the edit to `scripts/implement_step_prepush_test_gate.sh`. An operator must first widen this heal issue's scope to cover that script. Otherwise the plan is held as `heal_scope_plan_out_of_scope` and the commit is refused.",
+  "fingerprint": "0f918c0837c0b4daefb8770c1c4b83a62ec9e4410de78fe4dccdbc4d42d7f60d",
+  "lineage": {
+    "issue_number": 9775,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44480039128",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44480039128",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261119073429_6186b4f1c4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9775,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44480039128"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9775 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-19T07:34:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
