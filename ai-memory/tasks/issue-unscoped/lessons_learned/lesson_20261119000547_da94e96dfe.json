@@ -1,0 +1,25 @@
+{
+  "discovered_at": "2026-11-19T00:05:47Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=.github/workflows/ci.yml:1; cited_path=scripts/ci_final_merge_ref_fresh.sh; files_touched=.github/workflows/review_autofix.yml, .github/workflows/review_autofix_sweep.yml, README.md, agents.d/9683-review-round-cap-and-generated-chore-skip.md, changelog.d/9683-review-round-cap-and-generated-chore-skip.md, docs/INVENTORY.md, scripts/review_autofix_step_evaluate_gate.sh, scripts/review_sweep_head_gate.sh, scripts/review_sweep_round_cap.sh, tests/test_review_gate_generated_chore_skip.py, tests/test_review_sweep_round_cap.py.",
+  "phase": "review_autofix",
+  "pr_number": 9683,
+  "record_id": "lesson_20261119000547_da94e96dfe",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/ci_final_merge_ref_fresh.sh",
+    ".github/workflows/ci.yml",
+    ".github/workflows/review_autofix.yml",
+    ".github/workflows/review_autofix_sweep.yml",
+    "README.md",
+    "agents.d/9683-review-round-cap-and-generated-chore-skip.md",
+    "changelog.d/9683-review-round-cap-and-generated-chore-skip.md",
+    "docs/INVENTORY.md",
+    "scripts/review_autofix_step_evaluate_gate.sh",
+    "scripts/review_sweep_head_gate.sh",
+    "scripts/review_sweep_round_cap.sh",
+    "tests/test_review_gate_generated_chore_skip.py",
+    "tests/test_review_sweep_round_cap.py"
+  ]
+}
