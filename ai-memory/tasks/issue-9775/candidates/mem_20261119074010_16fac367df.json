@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: Option A is the only choice that fits the enforced heal scope (`paths=.github/workflows/implement.yml,tests/**,changelog.d/*.md`) without an operator step. The inline prompt at `.github/workflows/implement.yml:3161-3162` currently tells the model to \"Update the tests and registries listed under Expected files\", and its Restrictions block (lines 3173-3176) has no `files_touched` rule. `prompts/mode-implement.txt:82-83` and `:96-99` already carry that rule, so A brings the inline prompt into line with existing wording and fixes both ranked causes 1 and 2 (the model is told to report the conflict rather than edit). Option B puts new shell logic inside a workflow file that sits under the \u00a724 size guard, and it would partly duplicate a later script-level filter. Option C needs an operator to widen the scope first, which the data-provision guard rules out, so script-side filtering of the Expected-files list goes to a follow-up.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/implement.yml lines 3153-3176: the inline `mode-implement-inline.txt` heredoc's \"Test verification\" bullets and \"Restrictions\" block. The heredoc is selected at line 3053 (`PROMPT_TEMPLATE_FILE=\"${RUNTIME_DIR}/mode-implement-inline.txt\"`).\n    - prompts/mode-implement.txt lines 82-83 (the \"Sibling-conflict discipline \u2026 stay inside that set\" rule) and lines 96-99 (the scope guard always allows the issue's own `changelog.d/`/`agents.d/` fragments). This is the wording to mirror.\n    - tests/test_implement_prompt_pinned_sha_contract.py: the existing pattern for a contract test that reads the inline heredoc out of implement.yml.\n  steps:\n    - In the inline heredoc in `.github/workflows/implement.yml`, replace the bullet at lines 3161-3162 so that it limits updates to tests and registries listed under Expected files that fall inside the issue's `files_touched` scope (plus the issue's own `changelog.d/`/`agents.d/` fragments). It must also say that when a listed or broken test falls outside that scope, the model must not edit it and must report the conflict (the path and why it needs changing) in the final summary, because the commit-time scope guard refuses out-of-scope paths.\n    - Add a Restrictions bullet after line 3176: \"If the issue body lists `files_touched:` / `files_touched (untrusted):` (machine or prose form), stay inside that set plus this issue's own `changelog.d/` and `agents.d/` fragments; the Expected files list is advisory and is not a scope.\" Indent with 2-space YAML and add only ASCII text.\n    - Add a contract test under `tests/` (for example `tests/test_implement_inline_prompt_files_touched_scope.py`, after first checking the name is not taken). It extracts the `mode-implement-inline.txt` heredoc from implement.yml and asserts that (a) the heredoc contains the `files_touched` stay-inside rule, (b) the Expected-files bullet is limited to in-scope files and tells the model to report out-of-scope conflicts instead of editing, and (c) the old unconditional sentence \"Update the tests and registries listed under Expected files together with the code\" no longer appears without the scope qualifier.\n    - Add `changelog.d/<this issue number>-inline-implement-files-touched-scope.md` with the first line `<!-- changelog: fixed -->`, describing the prompt change.\n    - Run `wc -c .github/workflows/implement.yml` and confirm the file stays under 480,000 bytes.\n    - In the PR body, list the follow-up (not done here): filter `implement_prepush_test_gate_expected_files` in `scripts/implement_step_prepush_test_gate.sh` through `files_touched_scope_guard.py`, in the same way as `implement_prepush_test_gate_narrow_allow_list`, plus a regression case in `tests/test_implement_prepush_test_gate.py`. This follow-up needs a scope that covers `scripts/`.\n    - Do not edit `scripts/implement_step_prepush_test_gate.sh`, `scripts/files_touched_scope_guard.py`, `_AUTO_HEAL_TEST_RE` or `ALLOW_OUT_OF_SCOPE_FILES`. Do not weaken the guard.\n  replaces_acceptance_criterion: Suggested fix 1, which filters the Expected-files output inside `scripts/implement_step_prepush_test_gate.sh`, and its `expected-files` regression test move to a follow-up. In this PR, the prompt-level rule and its contract test meet the requirement.\n  equivalence_argument: The failure came from an unscoped instruction to edit the listed tests (cause 1) or from editing a broken out-of-scope test in place (cause 2). An explicit `files_touched` rule plus \"report, don't edit\" in the prompt that is actually sent addresses both causes. The scope guard keeps refusing out-of-scope commits, so the security behaviour is unchanged. Filtering the list itself would only remove a misleading hint, which the new rule already overrides.\n  reversibility: The change is prompt text plus one test and one changelog fragment, so a revert of a single PR undoes it. Adding script-side filtering later needs no change here, because the two fixes are additive.\n\nAssumptions:\n- The heal-scope marker `paths=.github/workflows/implement.yml,tests/**,changelog.d/*.md` is enforced at plan and commit time, so `scripts/` is out of scope.\n\nMissing context:\n- I did not see the run 44476724894 artifact, so it is still unknown whether the rejected test was in that run's Expected files list. Option A covers both causes either way.",
+  "fingerprint": "1a1f41765829be45dfabc6ec9ac697261ed3765f0f8929c485f9697ca9caaecd",
+  "lineage": {
+    "issue_number": 9775,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44480615412",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44480615412",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9775"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261119074010_16fac367df",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9775,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44480615412"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9775",
+  "timestamps": {
+    "created_at": "2026-11-19T07:40:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
