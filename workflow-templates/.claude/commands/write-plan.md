@@ -37,6 +37,7 @@ Common questions to consider in the first batch (skip any already unambiguously 
 - **Out-of-scope explicitly** — what is NOT being planned here.
 - **Propagation** — if the change must reach consumer repos per `.github/ai/consumer_repos.json` (CLAUDE.md §14), how.
 - **GitHub API hygiene** — if the plan adds new `gh api` / MCP calls, how they batch / reuse existing calls per §15.
+- **Runner concurrency** — if the plan adds or changes workflow jobs, which existing jobs take the work and the jobs per triggering event before and after, per §33.
 - **Phase breakdown** — propose how the work splits into independently-mergeable phases (count + one-line scope per phase). The plan is implemented by the AI orchestrator (unattended pipeline), and every merge lands in production directly, so each phase MUST be production-safe at merge time, independently mergeable, and complete on its own (see [Phases & Merge Strategy](#phases--merge-strategy)). If the task genuinely cannot be split, surface that as its own Q and have the user accept a single-phase plan explicitly.
 
 Add task-specific questions as needed. Skip empty rounds — if `$ARGUMENTS` is already exhaustive and unambiguous, ask nothing and proceed straight to drafting.
@@ -74,7 +75,7 @@ Bulleted, verifiable. Each goal must be falsifiable on review.
 What this plan deliberately does NOT cover. Out-of-scope work goes here, not as a footnote.
 
 ## Constraints
-Project rules that bind this work: §6 naming immutability, §10 MongoDB rules, §14 consumer-repo registry, §15 GitHub API hygiene, security, performance, backward compatibility. Cite by section.
+Project rules that bind this work: §6 naming immutability, §10 MongoDB rules, §14 consumer-repo registry, §15 GitHub API hygiene, §33 runner concurrency, security, performance, backward compatibility. Cite by section.
 
 ## Approach
 The chosen design at a high level. If multiple designs were considered, briefly note the alternatives and why this one won.
@@ -162,6 +163,7 @@ Local file reads use `Read`. Local code search uses `Grep` / `Glob`. Git operati
 - **Honor §10 (MongoDB).** Any collection / index / contract impact MUST be enumerated in the plan with the corresponding `/db/contracts/*` update path.
 - **Honor §14 (consumer repos).** If the planned change reaches workflow templates or `.claude/` assets that propagate to consumer repos, the plan MUST state which consumers are affected and reference `.github/ai/consumer_repos.json`.
 - **Honor §15 (GitHub API hygiene).** Plans that add `gh api` / MCP calls MUST justify the new call surface and explain how it batches / reuses existing calls.
+- **Honor §33 (runner concurrency).** Plans that add or change workflow jobs MUST fold work into existing jobs where the time limits allow, give the jobs per triggering event before and after, and name the reason for every new job that runs on each PR, push, comment or schedule.
 - **Never default silently.** Per §0 + §2 — when in doubt, ask. If the answers to the first batch open new ambiguities, ask a follow-up batch until nothing is unclear.
 - **Zero open questions in the final plan.** Step 3 MUST loop until every clarification item is resolved before step 4 runs. Plan Structure, the PR Body Template, and the Output Format have no slot for unresolved items. Items that depend on future discovery are recorded as `ACCEPTED — pending <discovery>` entries under `## Risks & Mitigations`, and only after explicit user acceptance during the clarification round — they are not open questions.
 - **Slug rules.** Lowercase ASCII alphanumeric + hyphens, ≤ 60 chars, derived **automatically** from the task topic — pick the most specific, action-focused phrase that captures the task (e.g. `rate-limit-public-api`, `fix-orchestrator-stall`). Auto-pick it yourself; never ask the user to name, confirm, or choose the slug, the plan-doc filename, or the branch name. (Branch-collision handling below still applies.)

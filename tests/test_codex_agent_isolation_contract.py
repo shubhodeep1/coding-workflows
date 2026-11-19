@@ -33,7 +33,12 @@ HELPER = SCRIPTS / "codex_isolated_exec.sh"
 # entrypoints (Codex runs inside the isolated container there).
 # heal_isolated_implement.sh runs the workflow-heal editor in its own
 # credential-free `--network none --read-only --cap-drop ALL` container (#6463).
-CONTAINER_ENTRYPOINTS = {"codex_isolated_exec.sh", "clarify_isolated_run.sh", "heal_isolated_implement.sh"}
+# review_untrusted_sandbox.sh runs the ChatGPT account reviewer slot's Codex
+# CLI inside its `--network none --read-only --cap-drop ALL` review container
+# with a read-only /source and only a placeholder auth.json; the real
+# credential stays with the host relay (scripts/chatgpt_codex_relay.py,
+# Refs #8969; tests/test_review_chatgpt_reviewer_slot.py pins that branch).
+CONTAINER_ENTRYPOINTS = {"codex_isolated_exec.sh", "clarify_isolated_run.sh", "heal_isolated_implement.sh", "review_untrusted_sandbox.sh"}
 
 RAW_CODEX = re.compile(r'''(?:^|[\s;&|(]|--\s)(?<!Usage: )codex\s+(?:--ask-for-approval|-c\s|exec\b|"\$@")''')
 PY_RAW_CODEX = re.compile(r'''\[\s*"codex"\s*,''')

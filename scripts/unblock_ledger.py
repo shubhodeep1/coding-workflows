@@ -61,6 +61,10 @@ Rules enforced here:
     It is offered at most MAX_HOLDS_PER_ITEM times per item, never for a
     condition this item already saw met, and not at all when the caller
     passes `decide --wait-disabled` (UNBLOCK_JUDGE_WAIT_ENABLED=false).
+    A `placeholder_retired` wait is accepted only for a name in the decision's
+    `variable_step_placeholders`: the item's newest trusted operator_step
+    verdict comment records `Operator step kind: `variable_or_secret`.` for it
+    (issue #9484). Any other operator step is escalated to a person instead.
 
 Subcommands (one JSON line on stdout; exit 0 ok, 1 bad arguments or a refused
 verdict, 2 unreadable input):
@@ -201,6 +205,23 @@ PROTECTED_AUTOMATION_OVERRIDE_RE = re.compile(r"^(\.github|\.claude|workflow-tem
 NO_WAIVER_STOPS = ("security-pass-failed", "validation-failed", "validate-failed", "harness-broken")
 
 MAX_ROUNDS_PER_ITEM = 2
+# Chain depth cap. `reissue`, `accept_with_followup`, `descope` and
+# `operator_step` each open a new issue that restarts clarify, plan and
+# implement, and that issue (or its PR) can block and be split again:
+# #9190 -> #9261 -> PR #9283 -> #9398 / #9670 in coding-workflows, 24 such
+# issues in one week. An item's depth is the number of chain prefixes its
+# title starts with; for a trusted PR, unblock_judge.sh passes the title of
+# the issue the PR implements. At MAX_CHAIN_DEPTH those four verdicts leave
+# the menu, so the judge can only continue on the item itself (retry_budget,
+# auto_answer, override_guard, wait); once nothing is left the item is
+# terminal (`menu_exhausted`) and is parked for a person like any other
+# exhausted item. Titles are editable, so this is a brake on the pipeline's
+# own chains, not a trust boundary: removing a prefix restores the full menu,
+# adding one only shortens it.
+MAX_CHAIN_DEPTH = 2
+CHAIN_VERDICTS = ("reissue", "accept_with_followup", "descope", "operator_step")
+CHAIN_TITLE_PREFIX_PATTERN = r"(?:Re-issue of|Follow-up to|Unblock (?:descope|operator step|fix-up) for) #[1-9][0-9]*: "
+_CHAIN_TITLE_PREFIX_RE = re.compile(CHAIN_TITLE_PREFIX_PATTERN)
 MAX_ROUNDS_PER_PROJECT = 6
 BLOCKED_AFTER_LAST_ROUND_HOURS = 24
 # Refused judge answers in a row on one block before the item is terminal
@@ -320,6 +341,18 @@ SANDBOX_CHECKED_VERDICTS = ("retry_budget", "descope", "reissue", "accept_with_f
 # scripts/unblock_actions.py routes to a heal report instead of a fix-up).
 TARGET_REPOS = ("consumer", "harness")
 TARGET_REPO_VERDICTS = SANDBOX_CHECKED_VERDICTS
+
+
+# Issue #9484: an `_UNSET_OPERATOR_STEP` operator step is held for
+# (`placeholder_retired`) only when its operator instructions tell a person to
+# set a repository variable or secret with exactly that name, the one thing
+# the judge can check. Any other step is escalated to a person once instead.
+OPERATOR_STEP_KIND_VARIABLE = "variable_or_secret"
+OPERATOR_STEP_KIND_OTHER = "other"
+OPERATOR_STEP_KIND_WORD_RE = re.compile(r"\b(variables?|secrets?)\b", re.IGNORECASE)
+# Lines of the trusted operator_step verdict comment (scripts/unblock_judge.sh).
+STAYS_OFF_LINE_RE = re.compile(r"^Stays off behind `(?P<n>[A-Z][A-Z0-9_]{2,63})` until the operator step is done\.$")
+VARIABLE_STEP_KIND_LINE = f"Operator step kind: `{OPERATOR_STEP_KIND_VARIABLE}`."
 
 
 class UsageError(Exception):
@@ -756,6 +789,57 @@ def latest_automation_rejection(comments: object, trusted_login: str, item: int)
 	return {"status": "ok", "run": match.group("run"), "paths": cleaned}
 
 
+def operator_step_kind(placeholder: str, operator_instructions: str) -> str:
+	"""How an operator step ends: `variable_or_secret`, `other`, or '' for an _ENABLED off switch.
+
+	`variable_or_secret` only when the instructions name the exact placeholder
+	as a whole token and say variable or secret (case-insensitive): only such a
+	step ends by itself through the judge's variable/secret check (#9484).
+	"""
+	if not isinstance(placeholder, str) or not placeholder.endswith(OPERATOR_PLACEHOLDER_SUFFIX):
+		return ""
+	text = operator_instructions if isinstance(operator_instructions, str) else ""
+	names_it = re.search(r"(?<![A-Za-z0-9_])" + re.escape(placeholder) + r"(?![A-Za-z0-9_])", text)
+	if names_it and OPERATOR_STEP_KIND_WORD_RE.search(text):
+		return OPERATOR_STEP_KIND_VARIABLE
+	return OPERATOR_STEP_KIND_OTHER
+
+
+def variable_step_placeholders_from_comments(comments: object, trusted_login: str, item: int) -> list[str]:
+	"""The placeholder of the item's newest trusted operator_step verdict, when it is a variable step.
+
+	Looks at the newest comment by the trusted login whose last non-empty line
+	is an `ai:unblock:v1` marker for this item; returns `[NAME]` only when that
+	verdict is `operator_step` and its comment has both the "Stays off behind
+	`NAME`" line and the `variable_or_secret` kind line. Otherwise `[]`: a
+	verdict comment from before #9484 (no kind line) is never a variable step.
+	"""
+	if not isinstance(comments, list):
+		raise InputError("comments must be a JSON array")
+	newest = None
+	for comment in comments:
+		if not isinstance(comment, dict):
+			continue
+		user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
+		if (user.get("login") or comment.get("author_login") or "") != trusted_login:
+			continue
+		lines = [line.strip() for line in str(comment.get("body") or "").splitlines() if line.strip()]
+		if not lines:
+			continue
+		match = MARKER_RE.match(lines[-1])
+		if not match or int(match.group("item")) != item:
+			continue
+		created = str(comment.get("created_at") or "")
+		if newest is None or created >= newest[0]:
+			newest = (created, match.group("verdict"), lines)
+	if newest is None or newest[1] != "operator_step":
+		return []
+	names = [m.group("n") for m in (STAYS_OFF_LINE_RE.match(line) for line in newest[2]) if m]
+	if not names or not names[0].endswith(OPERATOR_PLACEHOLDER_SUFFIX) or VARIABLE_STEP_KIND_LINE not in newest[2]:
+		return []
+	return [names[0]]
+
+
 def invalid_verdict_streak(comments: object, trusted_login: str, item: int, stop: str, fp: str) -> int:
 	"""Refused judge answers in a row for this item, stop and fingerprint.
 
@@ -795,6 +879,18 @@ def invalid_verdict_streak(comments: object, trusted_login: str, item: int, stop
 	return streak
 
 
+def chain_depth(title: object) -> int:
+	"""How many chain prefixes the title starts with (0 for an ordinary title)."""
+	text = title if isinstance(title, str) else ""
+	depth, position = 0, 0
+	while True:
+		prefix = _CHAIN_TITLE_PREFIX_RE.match(text, position)
+		if prefix is None:
+			return depth
+		depth += 1
+		position = prefix.end()
+
+
 def decide(
 	item: int,
 	stop: str,
@@ -810,8 +906,15 @@ def decide(
 	holds: list[dict] | None = None,
 	wait_enabled: bool = True,
 	invalid_verdicts_in_row: int = 0,
+	variable_step_placeholders: list[str] | None = None,
+	chain_title: str = "",
 ) -> dict:
-	"""What the judge may still do for this item."""
+	"""What the judge may still do for this item.
+
+	``chain_title`` is the title the item's chain depth is read from (the
+	item's own title, or for a trusted PR the title of the issue it
+	implements); see "Chain depth cap" above. Empty means depth 0.
+	"""
 	if kind not in ITEM_KINDS:
 		raise UsageError(f"unknown item kind {kind!r}; expected one of {list(ITEM_KINDS)}")
 	own = [entry for entry in item_entries if entry["item"] == item]
@@ -851,6 +954,10 @@ def decide(
 		allowed = [verdict for verdict in allowed if verdict not in ISSUE_ONLY_VERDICTS]
 	if kind == "project":
 		allowed = [verdict for verdict in allowed if verdict not in NOT_FOR_PROJECT_VERDICTS]
+	item_chain_depth = chain_depth(chain_title)
+	chain_capped = item_chain_depth >= MAX_CHAIN_DEPTH
+	if chain_capped:
+		allowed = [verdict for verdict in allowed if verdict not in CHAIN_VERDICTS]
 	# A hold is not a round, so it is bounded by its own count instead.
 	holds = [hold for hold in (holds or []) if isinstance(hold, dict)]
 	holds_met = sorted({f"{hold.get('kind')}:{hold.get('ref')}" for hold in holds if hold.get("state") == "done"})
@@ -900,10 +1007,16 @@ def decide(
 		"allowed": [TERMINAL_VERDICT] if terminal_reason else options,
 		"terminal": bool(terminal_reason),
 		"terminal_reason": terminal_reason,
+		"chain_depth": item_chain_depth,
+		"chain_capped": chain_capped,
 		"holds_used": len(holds),
 		"holds_met": holds_met,
 		"invalid_verdict_streak": invalid_verdicts_in_row,
 		"invalid_verdict_park_after": INVALID_VERDICT_PARK_AFTER,
+		# Placeholders a `wait` on placeholder_retired may name (#9484).
+		"variable_step_placeholders": sorted(
+			{name for name in (variable_step_placeholders or []) if isinstance(name, str)}
+		),
 	}
 
 
@@ -1116,6 +1229,14 @@ def validate(
 		normalised["paths"] = cleaned
 	if name == "wait":
 		hold_kind, ref = hold_ref(verdict.get("wait_for"), decision.get("item") if type(decision.get("item")) is int else None)
+		# #9484: hold on an operator step only when a trusted operator_step
+		# verdict told a person to set that repository variable or secret; a
+		# decision without the key fails closed.
+		if hold_kind == "placeholder_retired" and ref not in (decision.get("variable_step_placeholders") or []):
+			raise UsageError(
+				f"wait placeholder_retired needs an operator step that sets a repository variable or secret named {ref}; "
+				"pick another verdict"
+			)
 		if f"{hold_kind}:{ref}" in (decision.get("holds_met") or []):
 			raise UsageError(f"wait condition {hold_kind}:{ref} was already met on this item; pick another verdict")
 		if type(decision.get("item")) is int:
@@ -1138,6 +1259,7 @@ def validate(
 			verdict.get("operator_instructions"), "operator_instructions", flag.endswith(OPERATOR_PLACEHOLDER_SUFFIX)
 		)
 		normalised["instructions"] = _clean_text(verdict.get("instructions"), "instructions", True)
+		normalised["operator_step_kind"] = operator_step_kind(flag, normalised["operator_instructions"])
 	if name in TARGET_REPO_VERDICTS:
 		target_repo = verdict.get("target_repo")
 		if target_repo is None or target_repo == "":
@@ -1191,6 +1313,7 @@ def build_parser() -> argparse.ArgumentParser:
 	decide_cmd.add_argument("--security-issue", action="store_true")
 	decide_cmd.add_argument("--wait-disabled", action="store_true")
 	decide_cmd.add_argument("--pending-invalid-verdicts", type=int, default=0)
+	decide_cmd.add_argument("--chain-title", default="", help="title the chain depth is read from (see MAX_CHAIN_DEPTH)")
 	validate_cmd = sub.add_parser("validate")
 	validate_cmd.add_argument("--verdict-file", required=True)
 	validate_cmd.add_argument("--decision-file", required=True)
@@ -1281,6 +1404,8 @@ def run(argv: list[str] | None = None) -> dict:
 			wait_enabled=not args.wait_disabled,
 			invalid_verdicts_in_row=invalid_verdict_streak(item_comments, args.trusted_login, item, stop, fp)
 			+ max(0, args.pending_invalid_verdicts),
+			variable_step_placeholders=variable_step_placeholders_from_comments(item_comments, args.trusted_login, item),
+			chain_title=args.chain_title,
 		)
 	if args.command == "validate":
 		return validate(

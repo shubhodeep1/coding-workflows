@@ -65,4 +65,7 @@ jobs:
       pr_skip_ai: false
       allow_workflow_edits: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true'))) }}
       force_rb_judge: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force_rb_judge == 'true' }}
+      # The PR's one full CI run starts when review finishes with a head
+      # (cut-ci-runner-time Phase 4; ci.yml has no pull_request trigger).
+      final_ci_workflow: ci.yml
     secrets: inherit
