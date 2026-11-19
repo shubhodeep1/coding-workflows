@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/pr-checks.yml:358-366 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: Every non-3 exit code of the enumerate step is reported as \"the diff of the merge commit could not be parsed\", including failures writing added.txt or GITHUB_OUTPUT and a missing python3.\n  WHY: The annotation misdirects investigation toward diff parsing, although exit_code=<n> stays visible; the reviewers rated it NIT.\n- changelog.d/9698-fold-per-pr-checks.md:21, changelog.d/pr-body-lint-job-rename.md:2,11,18, changelog.d/9709-fold-plan-archival-check.md:2,12 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: Changelog fragments contradict each other about whether lint-plan-archival.yml still exists and has a job named `lint`. They also disagree on whether the ORCH_FINAL_MERGE_REQUIRED_CHECKS default changes.\n  WHY: The fragments are assembled into one release entry, so the release notes will state conflicting repository states.\n- .github/workflows/pr-checks.yml:358-367 (tests/test_pr_checks_workflow.py:364,379,400) | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: No test asserts either annotation text or the generic non-3 branch. The existing tests check only the substring \"outcome=enumerate_failed exit_code=3\".\n  WHY: Reverting the two-way branch leaves every test green, so the misdiagnosis can return unnoticed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/9698-fold-per-pr-checks.md:21; changelog.d/pr-body-lint-job-rename.md:2,18 | severity=NIT | confidence=5\n  PROBLEM: Contradictory statements in changelog fragments about the existence of lint-plan-archival.yml and its job named lint.\n  WHY: The fragments are assembled into CHANGELOG.md, so the contradictory documentation will confuse operators and contributors.\n- .github/workflows/pr-checks.yml:359 | severity=NIT | confidence=4\n  PROBLEM: Any exit code that is not 0 or 3 is reported as \"the diff of the merge commit could not be parsed\".\n  WHY: The misleading diagnostic complicates troubleshooting, because it points to diff parsing rather than script or environment failures.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/9698-fold-per-pr-checks.md:21, changelog.d/pr-body-lint-job-rename.md:2,11,18, changelog.d/9709-fold-plan-archival-check.md:2,12 | severity=NIT | confidence=4\n  PROBLEM: Three fragments shipping in one release assert states that this PR makes false. They disagree on lint-plan-archival.yml (not folded and still has a job `lint`, versus removed) and on the ORCH_FINAL_MERGE_REQUIRED_CHECKS default (adds `pr-body-lint`, versus unchanged).\n  WHY: scripts/assemble_changelog.py:48 folds the fragments verbatim into one release entry, so the notes will state conflicting repository states.\n- .github/workflows/pr-checks.yml:358-367; tests/test_pr_checks_workflow.py:364,379,400 | severity=NIT | confidence=5\n  PROBLEM: No committed test exercises the new generic non-3 branch or asserts either message text. The three enumerate-step tests assert only \"outcome=enumerate_failed exit_code=3\".\n  WHY: Restoring the old single message or inverting the `-eq 3` test leaves every test green, so the misdiagnosis can return with no failing check-run.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/pr-checks.yml:358-365 (fallback at line 361) | severity=NIT | confidence=4\n  PROBLEM: Every nonzero result other than 3 is reported as \"the diff of the merge commit could not be parsed\", but the command also writes added.txt and GITHUB_OUTPUT.\n  WHY: A failure in those writes still fails closed, but the annotation directs investigation toward diff parsing rather than the failing operation.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/pr-checks.yml:358-366 | severity=NIT | confidence=4\n  PROBLEM: The default branch labels every non-3 exit as \"the diff of the merge commit could not be parsed\", but the Python command also writes added.txt and GITHUB_OUTPUT, and python3 may be missing (exit 127).\n  WHY: The prose misdirects the first investigation step toward the diff, although exit_code=<n> is still shown.\n- .github/workflows/pr-checks.yml:358-366; tests/test_pr_checks_workflow.py test_plan_archival_failure_names_itself (~line 300-315) | severity=NIT | confidence=4\n  PROBLEM: Nothing asserts that exit 3 yields the rename advice and a non-3 code yields the parse-failure advice.\n  WHY: Reverting the two-way branch passes the whole suite, so the misdiagnosis can return with no failing test.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "602e5b95567ea68a709acfc3807df11fbe6bcf490b5e129149067944287f8de1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9709,
+    "run_id": "44431000119",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44431000119",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261119010350_36af50d9ae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9709,
+    "run_id": "44431000119"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-19T01:03:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
