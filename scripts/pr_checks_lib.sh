@@ -2039,6 +2039,12 @@ _pr_final_ci_refused_base_update()
 #
 # Log: `MERGE_LEASE pr=<n> base=<ref> mode=update|merge|tick outcome=<word>
 # reason=<token> holder=<n|-> blocker=<n|->`.
+# Metrics (observability only; merge-lease-parallel Phase 1, Refs #9781):
+# `MERGE_LEASE_METRIC event=<e> base=<ref|-> pr=<n|-> mode=update|merge|tick
+# reason=<token> holder=<n|-> hold_s=<n|-> waiters=<n|-> ts=<epoch|->`, one
+# line after each gate and tick decision (_merge_lease_metric). Env:
+# MERGE_LEASE_METRICS_ENABLED (default true; true/1/yes/on). No API call;
+# a metric failure never changes a decision.
 # ---------------------------------------------------------------------------
 
 _merge_lease_enabled()
@@ -2272,6 +2278,54 @@ _merge_lease_log()
 	echo "MERGE_LEASE pr=${1:-?} base=${2:-?} mode=${3:-?} outcome=${4:-?} reason=${5:-?} holder=${MERGE_LEASE_PR:--} blocker=${MERGE_LEASE_BLOCKER:--}"
 }
 
+# Metric kill switch: MERGE_LEASE_METRICS_ENABLED (default true; true/1/yes/on).
+_merge_lease_metrics_enabled()
+{
+	case "$(printf '%s' "${MERGE_LEASE_METRICS_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		true|1|yes|on) return 0 ;;
+	esac
+	return 1
+}
+
+# Seconds since <acquired epoch>; empty when the record has no acquired= (0).
+_merge_lease_metric_hold_seconds()
+{
+	local metric_acquired="${1:-0}" metric_now
+	[[ "${metric_acquired}" =~ ^[1-9][0-9]*$ ]] || return 0
+	metric_now="$(date -u +%s 2>/dev/null)" || return 0
+	[[ "${metric_now}" =~ ^[0-9]+$ ]] || return 0
+	[ "${metric_now}" -ge "${metric_acquired}" ] || return 0
+	printf '%s' "$((metric_now - metric_acquired))"
+}
+
+# _merge_lease_metric <event> <base> <pr> <mode> <reason> [<hold_s>] [<waiters>] [<holder>] [<ts>]
+# Prints one MERGE_LEASE_METRIC line (stdout, like _merge_lease_log). Holder
+# defaults to MERGE_LEASE_PR (pass `-` for "no holder"; an empty argument still
+# falls back). ts defaults to now; a caller passes the decision's epoch when
+# the line is printed after later API calls (the tick's grant). Numbers that
+# are not digits and tokens outside [a-z_] print as `-`; no path, label or
+# record text is printed. Makes no gh call, sets no MERGE_LEASE_* global and always returns 0 (fail-open).
+_merge_lease_metric()
+{
+	{
+		_merge_lease_metrics_enabled || return 0
+		local metric_event="${1:-}" metric_base="${2:-}" metric_pr="${3:-}" metric_mode="${4:-}" metric_reason="${5:-}"
+		local metric_hold="${6:-}" metric_waiters="${7:-}" metric_holder="${8:-${MERGE_LEASE_PR:-}}" metric_ts="${9:-}"
+		[[ "${metric_event}" =~ ^[a-z_]+$ ]] || metric_event="-"
+		[[ "${metric_mode}" =~ ^[a-z_]+$ ]] || metric_mode="-"
+		[[ "${metric_reason}" =~ ^[a-z_]+$ ]] || metric_reason="-"
+		_merge_lease_valid_base "${metric_base}" || metric_base="-"
+		[[ "${metric_pr}" =~ ^[0-9]+$ ]] || metric_pr="-"
+		[[ "${metric_holder}" =~ ^[0-9]+$ ]] || metric_holder="-"
+		[[ "${metric_hold}" =~ ^[0-9]+$ ]] || metric_hold="-"
+		[[ "${metric_waiters}" =~ ^[0-9]+$ ]] || metric_waiters="-"
+		[[ "${metric_ts}" =~ ^[0-9]+$ ]] || { metric_ts="$(date -u +%s)" || metric_ts=""; }
+		[[ "${metric_ts}" =~ ^[0-9]+$ ]] || metric_ts="-"
+		echo "MERGE_LEASE_METRIC event=${metric_event} base=${metric_base} pr=${metric_pr} mode=${metric_mode} reason=${metric_reason} holder=${metric_holder} hold_s=${metric_hold} waiters=${metric_waiters} ts=${metric_ts}" || true
+	} 2>/dev/null
+	return 0
+}
+
 _merge_lease_label_wait()
 {
 	local lease_pr="$1" lease_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
@@ -2307,6 +2361,8 @@ _merge_lease_gate()
 		MERGE_LEASE_OUTCOME="unavailable"
 		MERGE_LEASE_REASON="invalid_input"
 		_merge_lease_log "${lease_pr}" "${lease_base}" "${lease_mode}" unavailable invalid_input
+		# No record was read in this call: holder `-`, not a stale MERGE_LEASE_PR.
+		_merge_lease_metric unavailable "${lease_base}" "${lease_pr}" "${lease_mode}" invalid_input "" "" - || true
 		return 0
 	fi
 	for lease_attempt in 1 2; do
@@ -2316,6 +2372,7 @@ _merge_lease_gate()
 			MERGE_LEASE_OUTCOME="unavailable"
 			MERGE_LEASE_REASON="read_failed"
 			echo "::warning::$(_merge_lease_log "${lease_pr}" "${lease_base}" "${lease_mode}" unavailable read_failed) (fail-open: proceeding as before the lease)"
+			_merge_lease_metric unavailable "${lease_base}" "${lease_pr}" "${lease_mode}" read_failed || true
 			return 0
 		fi
 		if [ "${lease_rc}" -eq 0 ] && _merge_lease_is_held && [ "${MERGE_LEASE_PR}" != "${lease_pr}" ]; then
@@ -2326,6 +2383,7 @@ _merge_lease_gate()
 						MERGE_LEASE_OUTCOME="unavailable"
 						MERGE_LEASE_REASON="pr_files_failed"
 						echo "::warning::$(_merge_lease_log "${lease_pr}" "${lease_base}" merge unavailable pr_files_failed) (fail-open)"
+						_merge_lease_metric unavailable "${lease_base}" "${lease_pr}" merge pr_files_failed || true
 						return 0
 					fi
 				fi
@@ -2333,6 +2391,7 @@ _merge_lease_gate()
 					MERGE_LEASE_OUTCOME="no_overlap"
 					MERGE_LEASE_REASON="no_shared_paths_with_holder"
 					_merge_lease_log "${lease_pr}" "${lease_base}" merge proceed no_shared_paths_with_holder
+					_merge_lease_metric proceed "${lease_base}" "${lease_pr}" merge no_shared_paths_with_holder || true
 					return 0
 				fi
 				MERGE_LEASE_REASON="holder_shares_paths"
@@ -2341,6 +2400,7 @@ _merge_lease_gate()
 			fi
 			MERGE_LEASE_OUTCOME="wait"
 			_merge_lease_log "${lease_pr}" "${lease_base}" "${lease_mode}" wait "${MERGE_LEASE_REASON}"
+			_merge_lease_metric wait "${lease_base}" "${lease_pr}" "${lease_mode}" "${MERGE_LEASE_REASON}" || true
 			_merge_lease_label_wait "${lease_pr}"
 			return 1
 		fi
@@ -2349,6 +2409,7 @@ _merge_lease_gate()
 			[ "${lease_rc}" -eq 0 ] && _merge_lease_is_held && MERGE_LEASE_OUTCOME="self"
 			MERGE_LEASE_REASON="${MERGE_LEASE_OUTCOME}"
 			_merge_lease_log "${lease_pr}" "${lease_base}" merge proceed "${MERGE_LEASE_OUTCOME}"
+			_merge_lease_metric proceed "${lease_base}" "${lease_pr}" merge "${MERGE_LEASE_OUTCOME}" || true
 			return 0
 		fi
 		# Update mode, lease free or already ours. A free lease goes to the
@@ -2366,6 +2427,7 @@ _merge_lease_gate()
 					MERGE_LEASE_OUTCOME="wait"
 					MERGE_LEASE_REASON="queued_behind"
 					_merge_lease_log "${lease_pr}" "${lease_base}" update wait queued_behind
+					_merge_lease_metric wait "${lease_base}" "${lease_pr}" update queued_behind || true
 					_merge_lease_label_wait "${lease_pr}"
 					return 1
 				fi
@@ -2382,6 +2444,7 @@ _merge_lease_gate()
 				MERGE_LEASE_OUTCOME="self"
 				MERGE_LEASE_REASON="max_hold_reached"
 				_merge_lease_log "${lease_pr}" "${lease_base}" update proceed max_hold_reached
+				_merge_lease_metric proceed "${lease_base}" "${lease_pr}" update max_hold_reached "$(_merge_lease_metric_hold_seconds "${lease_keep_acquired}" 2>/dev/null)" || true
 				return 0
 			fi
 		fi
@@ -2399,18 +2462,28 @@ _merge_lease_gate()
 				MERGE_LEASE_STATE="held"
 				MERGE_LEASE_REASON="${MERGE_LEASE_OUTCOME}"
 				_merge_lease_log "${lease_pr}" "${lease_base}" update "${MERGE_LEASE_OUTCOME}" "ttl_s=$(_merge_lease_ttl_seconds)"
+				# Our own record past expiry leaves lease_keep_acquired empty, so the
+				# write stamped acquired=now: for the metric that is a new hold
+				# (event=acquired hold_s=0). The MERGE_LEASE line keeps `renewed`.
+				if [ "${MERGE_LEASE_OUTCOME}" = "renewed" ] && [ -n "${lease_keep_acquired}" ]; then
+					_merge_lease_metric renewed "${lease_base}" "${lease_pr}" update renewed "$(_merge_lease_metric_hold_seconds "${lease_keep_acquired}" 2>/dev/null)" || true
+				else
+					_merge_lease_metric acquired "${lease_base}" "${lease_pr}" update acquired 0 || true
+				fi
 				[ "${lease_was_waiting}" = "1" ] && _merge_lease_unlabel_wait "${lease_pr}"
 				return 0
 				;;
 			3)
 				# Lost the race: decide again on the record that won.
 				_merge_lease_log "${lease_pr}" "${lease_base}" update retry lost_race
+				_merge_lease_metric retry "${lease_base}" "${lease_pr}" update lost_race || true
 				continue
 				;;
 			*)
 				MERGE_LEASE_OUTCOME="unavailable"
 				MERGE_LEASE_REASON="write_failed"
 				echo "::warning::$(_merge_lease_log "${lease_pr}" "${lease_base}" update unavailable write_failed) (fail-open: updating as before the lease; check that GitHub accepts ${MERGE_LEASE_REF_PREFIX:-refs/merge-lease/} refs)"
+				_merge_lease_metric unavailable "${lease_base}" "${lease_pr}" update write_failed || true
 				return 0
 				;;
 		esac
@@ -2418,6 +2491,7 @@ _merge_lease_gate()
 	MERGE_LEASE_OUTCOME="unavailable"
 	MERGE_LEASE_REASON="contended"
 	echo "::warning::$(_merge_lease_log "${lease_pr}" "${lease_base}" "${lease_mode}" unavailable contended) (fail-open)"
+	_merge_lease_metric unavailable "${lease_base}" "${lease_pr}" "${lease_mode}" contended || true
 	return 0
 }
 

@@ -3285,3 +3285,35 @@ def test_poll_release_step_passes_the_trusted_telegram_helper() -> None:
 	# Never the repository's own scripts/ copy.
 	assert "scripts/tg_helpers.sh" not in run.replace(".codex-workflow-src/scripts/tg_helpers.sh", "").replace(
 		".codex-workflow-src-main/scripts/tg_helpers.sh", "")
+
+
+def test_merge_lease_tick_metrics_are_additive_and_guarded():
+	"""Merge-lease Phase 1 metrics (Refs #9781): the tick emits MERGE_LEASE_METRIC
+	only behind a `declare -F` guard, so an older staged pr_checks_lib.sh without
+	the helper still releases and grants, and every existing MERGE_LEASE tick
+	line keeps its exact format."""
+	text = SCRIPT.read_text()
+	start = text.index("_mt_merge_lease_tick()\n{")
+	body = text[start:text.index("\n}\n", start)]
+	assert "declare -F _merge_lease_metric >/dev/null 2>&1 && tick_metric_ok=1" in body
+	calls = [line.strip() for line in body.splitlines() if "_merge_lease_metric " in line and "declare -F" not in line]
+	assert len(calls) == 9, calls
+	for call in calls:
+		assert call.startswith('[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric '), call
+		assert call.endswith("|| true"), call
+	for fmt in (
+		'_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=held reason=holder_open"',
+		'_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=released reason=${tick_reason}"',
+		'_mt_log "MERGE_LEASE pr=- base=${tick_base} mode=tick outcome=no_waiter reason=lease_free"',
+		'_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=first_in_queue"',
+		'_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=dispatch_failed_sweep_retries"',
+		'_mt_warn "MERGE_LEASE mode=tick outcome=unavailable reason=refs_list_failed (no lease freed or granted this tick)"',
+		'_mt_warn "MERGE_LEASE base=${tick_base} mode=tick outcome=unavailable reason=read_failed"',
+	):
+		assert fmt in body, fmt
+	# The grant metric's ts is taken right after the lease write, before the
+	# unlabel and the dispatch, so dispatch latency is not counted as wait.
+	assert body.index('tick_grant_ts="$(date -u +%s') < body.index('_merge_lease_unlabel_wait "${tick_first}"')
+	# No new GitHub call: the tick's gh reads are the matching-refs listing and
+	# the live holder-state read, as before the metrics.
+	assert body.count("gh_retry _safe_gh_jq") == 2
