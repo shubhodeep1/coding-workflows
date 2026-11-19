@@ -68,6 +68,13 @@
 # instead of a fix-up; `false` restores the old behaviour),
 # WORKFLOW_HEAL_ENABLED (default true; `false` skips the heal report and the
 # project hold request).
+# UNBLOCK_EXISTING_PR_ROUTING_ENABLED (default true; #9809): for an issue at
+# needs-human, blocked, a guard stop or implement-diagnose-failed that already
+# has an open implementation PR (unblock_resolve_implementation_pr), the reset
+# posts the judge's note on that PR, dispatches its review and clears the stop
+# label instead of posting `/approved`, which implement.yml refuses with
+# `existing_pr`; `false` keeps today's reset; any other value is treated as
+# false and logged. Also read by scripts/unblock_actions.py.
 # UNBLOCK_CREATED_ISSUES_FILE (optional, default unset): unblock_run_ops
 # appends each issue number it creates to this file.
 # UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED (default true; #8470): once a
@@ -1835,6 +1842,74 @@ unblock_resolve_ci_owner()
 	return 0
 }
 
+# Existing-PR routing (#9809). Default on: unset, empty or `true`; `false`
+# turns it off; any other value turns it off and says so.
+unblock_existing_pr_routing_enabled()
+{
+	case "$(printf '%s' "${UNBLOCK_EXISTING_PR_ROUTING_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		""|true) return 0 ;;
+		false) return 1 ;;
+	esac
+	unblock_log "item=${ITEM:-} op=impl_pr outcome=disabled reason=invalid_flag"
+	return 1
+}
+
+# The issue's own open implementation PR (#9809): merges `implementation_pr`
+# into context.json so unblock_actions.py reset_ops sends the reset there
+# instead of posting `/approved`. Fails open: an unreadable or ambiguous read
+# leaves context.json unchanged and today's reset runs.
+# §14 audit: for an issue item the earlier reads on this path are the issue,
+# its comments and run metadata; none returns pull requests (the only PR read,
+# `pulls/${ITEM}`, is for a PR item). One GraphQL call returns both lookups:
+# open `ai/issue-<n>` head PRs and the issue's cross-referencing PRs.
+unblock_resolve_implementation_pr()
+{
+	local owner name graphql_file result_file impl_pr impl_reason
+	[ "${ITEM_KIND:-}" = "issue" ] || return 0
+	case "${ITEM_STOP:-}" in
+		needs-human|blocked|scope-blocked|destructive-blocked|implement-diagnose-failed) ;;
+		*) return 0 ;;
+	esac
+	unblock_existing_pr_routing_enabled || return 0
+	owner="${REPOSITORY%%/*}"
+	name="${REPOSITORY#*/}"
+	graphql_file="${RUNTIME_DIR}/impl_pr_graphql.json"
+	result_file="${RUNTIME_DIR}/impl_pr.json"
+	# Plain `gh` like unblock_resolve_ci_owner: the CONSIST-001 gh_retry list is
+	# fixed, and a failed read only keeps today's reset.
+	# shellcheck disable=SC2016
+	if ! gh api graphql \
+		-f query='query($owner:String!,$name:String!,$head:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequests(headRefName:$head,states:OPEN,first:5){nodes{number state headRefName headRepository{nameWithOwner}}} issue(number:$number){timelineItems(itemTypes:[CROSS_REFERENCED_EVENT],last:50){nodes{... on CrossReferencedEvent{source{... on PullRequest{number state body headRepository{nameWithOwner} author{login} authorAssociation}}}}}}}}' \
+		-f owner="${owner}" -f name="${name}" -f head="ai/issue-${ITEM}" -F number="${ITEM}" \
+		> "${graphql_file}" 2>/dev/null; then
+		unblock_log "item=${ITEM} op=impl_pr outcome=unavailable reason=read_failed"
+		return 0
+	fi
+	if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" impl-pr --graphql-file "${graphql_file}" --item "${ITEM}" \
+		--repo "${REPOSITORY}" --pipeline-login "${UNBLOCK_LOGIN:-}" > "${result_file}" 2>/dev/null; then
+		unblock_log "item=${ITEM} op=impl_pr outcome=unavailable reason=parse_failed"
+		return 0
+	fi
+	impl_pr="$(jq -r '.pr // empty' "${result_file}" 2>/dev/null || true)"
+	impl_reason="$(jq -r '.reason // "unknown"' "${result_file}" 2>/dev/null | tr -cd 'a-z_' | cut -c1-40)"
+	if ! [[ "${impl_pr}" =~ ^[1-9][0-9]{0,8}$ ]]; then
+		if [ "${impl_reason}" = "unreadable" ]; then
+			unblock_log "item=${ITEM} op=impl_pr outcome=unavailable reason=unreadable"
+		else
+			unblock_log "item=${ITEM} op=impl_pr outcome=none reason=${impl_reason:-unknown}"
+		fi
+		return 0
+	fi
+	if jq --argjson n "${impl_pr}" '. + {implementation_pr: $n}' "${RUNTIME_DIR}/context.json" > "${RUNTIME_DIR}/context_impl_pr.json" 2>/dev/null \
+		&& mv "${RUNTIME_DIR}/context_impl_pr.json" "${RUNTIME_DIR}/context.json"; then
+		unblock_log "item=${ITEM} op=impl_pr outcome=found pr=${impl_pr} reason=${impl_reason}"
+	else
+		rm -f "${RUNTIME_DIR}/context_impl_pr.json"
+		unblock_log "item=${ITEM} op=impl_pr outcome=unavailable reason=context_write_failed pr=${impl_pr}"
+	fi
+	return 0
+}
+
 # Protected-path handoff (#7060), off by default: only a scope-blocked issue
 # (the stop the automation-path guard latches) is ever held.
 unblock_protected_handoff_applies()
@@ -2019,6 +2094,10 @@ unblock_main()
 		--arg needs_human_digest "${NEEDS_HUMAN_DIGEST_ENABLED}" --arg chain_title "${chain_title}" \
 		'{chain_title: (if $chain_title == "" then null else $chain_title end), needs_human_digest: (($needs_human_digest | ascii_downcase) != "false"), repo: $repo, kind: $kind, item: $item, stop: $stop, labels: $labels[0], tracking: (if $tracking == "" then null else ($tracking | tonumber) end), linked_issue: (if $linked == "" then null else ($linked | tonumber) end), has_plan: $has_plan, title: $title, security_finding_id: (if $finding == "" then null else $finding end), security_source_body: (if $kind == "issue" and ($labels[0] | index("ai:security")) != null then $security_body else null end), pr_trusted: $pr_trusted, pr_author: $pr_author, pr_head_repo: $pr_head_repo, pr_head_sha: $pr_head_sha}' \
 		> "${RUNTIME_DIR}/context.json"
+	# #9809: every later unblock_actions.py call reads context.json, so the
+	# issue's open implementation PR reaches plan, followup, hold-followup
+	# and regrant alike.
+	unblock_resolve_implementation_pr
 
 	# A pending fix-up comes first (Q11): wait for it, or run its follow-up.
 	local last_activity="" wait_id wait_fixup wait_state wait_at wait_updated fixup_json

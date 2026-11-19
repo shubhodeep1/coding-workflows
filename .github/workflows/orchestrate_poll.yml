@@ -1557,6 +1557,7 @@ jobs:
           # Issue #8685: close a complete project's tracking issue once its follow-ups settle.
           ORCHESTRATOR_CLOSE_COMPLETED_TRACKING: ${{ vars.ORCHESTRATOR_CLOSE_COMPLETED_TRACKING || 'true' }}
           ENABLE_STALL_MERGED_PR_GUARD: ${{ vars.ENABLE_STALL_MERGED_PR_GUARD || 'true' }}
+          UNBLOCK_EXISTING_PR_ROUTING_ENABLED: ${{ vars.UNBLOCK_EXISTING_PR_ROUTING_ENABLED || 'true' }}
           # Issue #6680 kill switch for closing and re-issuing a PR whose only
           # host-only conflicts are retired files the base no longer has.
           STALL_RETIRED_CONFLICT_REISSUE_ENABLED: ${{ vars.STALL_RETIRED_CONFLICT_REISSUE_ENABLED || 'true' }}
@@ -1763,6 +1764,7 @@ jobs:
           # Issue #8685: close a complete project's tracking issue once its follow-ups settle.
           ORCHESTRATOR_CLOSE_COMPLETED_TRACKING: ${{ vars.ORCHESTRATOR_CLOSE_COMPLETED_TRACKING || 'true' }}
           ENABLE_STALL_MERGED_PR_GUARD: ${{ vars.ENABLE_STALL_MERGED_PR_GUARD || 'true' }}
+          UNBLOCK_EXISTING_PR_ROUTING_ENABLED: ${{ vars.UNBLOCK_EXISTING_PR_ROUTING_ENABLED || 'true' }}
           STALL_RETIRED_CONFLICT_REISSUE_ENABLED: ${{ vars.STALL_RETIRED_CONFLICT_REISSUE_ENABLED || 'true' }}
           # PR #7709: stall recovery's check-triage resolution gate; false turns it off.
           CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}
