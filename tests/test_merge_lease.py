@@ -46,11 +46,13 @@ def _pull(num: int, base: str = "main", head_ref: str | None = None, sha: str | 
 		"created_at": "2026-11-17T00:00:00Z"}
 
 
-def _record(pr: int, *, state: str = "held", expires: int | None = None, paths: str = "shared.py") -> str:
+def _record(pr: int, *, state: str = "held", expires: int | None = None, paths: str = "shared.py",
+		acquired: int | None = None) -> str:
 	if expires is None:
 		expires = int(time.time()) + 3600
+	acquired_line = "" if acquired is None else f"acquired={acquired}\n"
 	return (f"merge-lease v1\nstate={state}\nbase=main\npr={pr}\nhead={'b' * 40}\n"
-		f"expires={expires}\nupdated={int(time.time())}\npaths:\n{paths}")
+		f"expires={expires}\n{acquired_line}updated={int(time.time())}\npaths:\n{paths}")
 
 
 def _seed_lease(state: dict, record: str, sha: str = "c" * 40) -> None:
@@ -450,6 +452,249 @@ class ReleaseTick(unittest.TestCase):
 		h = self._resume([self.MARK, self.GATE], fresh_rc=1)
 		self.assertIn("outcome=deferred reason=lease_wait", h.out)  # type: ignore[attr-defined]
 		self.assertNotIn("merged", h.state)
+
+
+
+def _metrics(out: str) -> list[dict[str, str]]:
+	"""Parse every MERGE_LEASE_METRIC line into a dict of its fields."""
+	rows = []
+	for line in out.splitlines():
+		if line.startswith("MERGE_LEASE_METRIC "):
+			rows.append(dict(field.split("=", 1) for field in line.split()[1:]))
+	return rows
+
+
+def _stable_record(record: str) -> str:
+	"""A lease record without its clock fields, for on/off comparisons."""
+	return re.sub(r"^(expires|acquired|updated)=\d+$", r"\1=N", record, flags=re.MULTILINE)
+
+
+def _stable_calls(calls: list[str]) -> list[str]:
+	"""The fake gh call log without clock fields (record bodies are logged) or
+	the record commit SHAs that hash them; endpoints, order and count remain."""
+	return [re.sub(r"\b[0-9a-f]{40}\b", "SHA", re.sub(r"(expires|acquired|updated)=\d+", r"\1=N", c)) for c in calls]
+
+
+class LeaseGateMetrics(unittest.TestCase):
+	"""Merge-lease parallel merges Phase 1 (Refs #9781): metrics are additive and
+	never change a gate decision, return code or API call."""
+
+	def test_acquired_emits_a_metric_and_keeps_the_lease_line_byte_for_byte(self) -> None:
+		h = _Harness({"pulls": [_pull(7)], "files": {"7": ["a.py"]}})
+		rc, out = _gate(h, 7, "update")
+		self.assertEqual(rc, 0, out)
+		self.assertIn("MERGE_LEASE pr=7 base=main mode=update outcome=acquired reason=ttl_s=14400 holder=7 blocker=-\n", out)
+		rows = _metrics(out)
+		self.assertEqual(len(rows), 1, out)
+		row = rows[0]
+		self.assertEqual({k: row[k] for k in ("event", "base", "pr", "mode", "reason", "holder", "hold_s", "waiters")},
+			{"event": "acquired", "base": "main", "pr": "7", "mode": "update", "reason": "acquired", "holder": "7",
+				"hold_s": "0", "waiters": "-"})
+		self.assertRegex(row["ts"], r"^\d+$")
+		self.assertNotIn("a.py", "\n".join(ln for ln in out.splitlines() if ln.startswith("MERGE_LEASE_METRIC")))
+
+	def test_renewed_reports_the_hold_since_first_acquisition(self) -> None:
+		st = {"pulls": [_pull(8)], "files": {"8": ["shared.py"]}}
+		_seed_lease(st, _record(8, acquired=int(time.time()) - 600))
+		h = _Harness(st)
+		rc, out = _gate(h, 8, "update")
+		self.assertEqual(rc, 0, out)
+		self.assertIn("outcome=renewed", out)
+		row = _metrics(out)[0]
+		self.assertEqual((row["event"], row["reason"], row["holder"]), ("renewed", "renewed", "8"))
+		self.assertGreaterEqual(int(row["hold_s"]), 600)
+
+	def test_renewal_of_a_record_without_acquired_has_no_hold(self) -> None:
+		st = {"pulls": [_pull(8)], "files": {"8": ["shared.py"]}}
+		_seed_lease(st, _record(8))
+		h = _Harness(st)
+		_, out = _gate(h, 8, "update")
+		self.assertEqual(_metrics(out)[0]["hold_s"], "-")
+
+	def test_wait_held_and_holder_shares_paths(self) -> None:
+		st = {"pulls": [_pull(7), _pull(4)], "files": {"7": ["shared.py"]}}
+		_seed_lease(st, _record(4))
+		h = _Harness(st)
+		rc, out = _gate(h, 7, "update")
+		self.assertEqual(rc, 1, out)
+		self.assertIn("outcome=wait reason=held blocker=4", out)
+		row = _metrics(out)[0]
+		self.assertEqual((row["event"], row["reason"], row["holder"], row["pr"], row["mode"]), ("wait", "held", "4", "7", "update"))
+		st2 = {"pulls": [_pull(7), _pull(4)], "files": {"7": ["shared.py"]}}
+		_seed_lease(st2, _record(4))
+		h2 = _Harness(st2)
+		rc2, out2 = _gate(h2, 7, "merge")
+		self.assertEqual(rc2, 1, out2)
+		self.assertIn("reason=holder_shares_paths blocker=4", out2)
+		row2 = _metrics(out2)[0]
+		self.assertEqual((row2["event"], row2["reason"], row2["mode"]), ("wait", "holder_shares_paths", "merge"))
+
+	def test_queued_behind_and_merge_proceed(self) -> None:
+		st = {"pulls": [_pull(5), _pull(7)], "labels": {"5": ["ai:merge-lease-wait"]}}
+		_seed_lease(st, _record(3, state="released", paths=""))
+		h = _Harness(st)
+		rc, out = _gate(h, 7, "update")
+		self.assertEqual(rc, 1, out)
+		self.assertIn("reason=queued_behind blocker=5", out)
+		self.assertEqual((_metrics(out)[0]["event"], _metrics(out)[0]["reason"]), ("wait", "queued_behind"))
+		st2 = {"pulls": [_pull(7), _pull(8)], "files": {"7": ["own.py"]}}
+		_seed_lease(st2, _record(8, paths="shared.py"))
+		h2 = _Harness(st2)
+		rc2, out2 = _gate(h2, 7, "merge")
+		self.assertEqual(rc2, 0, out2)
+		self.assertEqual((_metrics(out2)[0]["event"], _metrics(out2)[0]["reason"]), ("proceed", "no_shared_paths_with_holder"))
+
+	def test_unavailable_read_failed_keeps_failing_open(self) -> None:
+		h = _Harness({"fail": ["git/matching-refs"]})
+		rc, out = _gate(h, 7, "update")
+		self.assertEqual(rc, 0, out)
+		self.assertIn("outcome=unavailable reason=read_failed", out)
+		self.assertEqual((_metrics(out)[0]["event"], _metrics(out)[0]["reason"]), ("unavailable", "read_failed"))
+
+	def test_lost_race_emits_retry_then_the_final_decision(self) -> None:
+		st = {"pulls": [_pull(7), _pull(8)], "files": {"7": ["a"]}}
+		_seed_lease(st, _record(3, state="released", paths=""))
+		winner = "d" * 40
+		st["commits"][winner] = {"message": _record(8), "tree": "f" * 40, "parents": ["c" * 40]}
+		st["move_ref_on_patch"] = {REF: winner}
+		h = _Harness(st)
+		rc, out = _gate(h, 7, "update")
+		self.assertEqual(rc, 1, out)
+		self.assertEqual([(r["event"], r["reason"]) for r in _metrics(out)], [("retry", "lost_race"), ("wait", "held")])
+
+	def test_disabled_lease_emits_no_metric(self) -> None:
+		h = _Harness({})
+		_, out = _gate(h, 7, "update", {"MERGE_LEASE_ENABLED": "false"})
+		self.assertEqual(_metrics(out), [])
+
+	def _scenarios(self) -> list[tuple[dict, int, str]]:
+		acquire = {"pulls": [_pull(7)], "files": {"7": ["a.py"]}}
+		wait = {"pulls": [_pull(7), _pull(8)], "files": {"7": ["shared.py"]}}
+		_seed_lease(wait, _record(8))
+		queued = {"pulls": [_pull(5), _pull(7)], "labels": {"5": ["ai:merge-lease-wait"]}}
+		_seed_lease(queued, _record(3, state="released", paths=""))
+		return [(acquire, 7, "update"), (wait, 7, "update"), (wait, 7, "merge"), (queued, 7, "update")]
+
+	def test_kill_switch_changes_nothing_but_the_metric_lines(self) -> None:
+		for st, pr, mode in self._scenarios():
+			on = _Harness(json.loads(json.dumps(st)))
+			off = _Harness(json.loads(json.dumps(st)))
+			rc_on, out_on = _gate(on, pr, mode)
+			rc_off, out_off = _gate(off, pr, mode, {"MERGE_LEASE_METRICS_ENABLED": "false"})
+			self.assertEqual(rc_on, rc_off)
+			self.assertTrue(_metrics(out_on), out_on)
+			self.assertEqual(_metrics(out_off), [])
+			def strip(o: str) -> list[str]:
+				return [ln for ln in o.splitlines() if not ln.startswith("MERGE_LEASE_METRIC")]
+			self.assertEqual(strip(out_on), strip(out_off))
+			self.assertEqual(_stable_calls(on.calls), _stable_calls(off.calls), "metrics make no GitHub call")
+			self.assertEqual(on.state.get("labels"), off.state.get("labels"))
+			if REF in on.state.get("refs", {}):
+				self.assertEqual(_stable_record(on.record()), _stable_record(off.record()))
+
+	def test_a_failing_metric_helper_never_changes_the_gate(self) -> None:
+		for st, pr, mode in self._scenarios():
+			ref = _Harness(json.loads(json.dumps(st)))
+			broken = _Harness(json.loads(json.dumps(st)))
+			_, out_ref = _gate(ref, pr, mode)
+			res = broken.lib(f'_merge_lease_metric() {{ echo boom >&2; return 7; }}\n_merge_lease_gate {pr} main {HEAD} {mode}; rc=$?; '
+				'echo "rc=$rc outcome=$MERGE_LEASE_OUTCOME reason=$MERGE_LEASE_REASON blocker=$MERGE_LEASE_BLOCKER"')
+			self.assertEqual(res.returncode, 0, res.stderr)
+			final_ref = [ln for ln in out_ref.splitlines() if ln.startswith("rc=")][-1]
+			final_broken = [ln for ln in res.stdout.splitlines() if ln.startswith("rc=")][-1]
+			self.assertEqual(final_ref, final_broken)
+			self.assertEqual(_stable_calls(ref.calls), _stable_calls(broken.calls))
+
+	def test_helper_survives_a_failing_clock_and_sanitizes_fields(self) -> None:
+		h = _Harness({})
+		res = h.lib('date() { return 1; }\nset -e\n_merge_lease_metric "wait x=1" "main extra=1" "7 pr=9" update "r=1" "12a" "3"; echo "rc=$?"')
+		self.assertIn("rc=0", res.stdout, res.stderr)
+		row = _metrics(res.stdout)[0]
+		self.assertEqual(row, {"event": "-", "base": "-", "pr": "-", "mode": "update", "reason": "-", "holder": "-",
+			"hold_s": "-", "waiters": "3", "ts": "-"})
+		self.assertEqual(h.calls, [])
+
+
+class TickMetrics(unittest.TestCase):
+	_prs_jsonl = ReleaseTick._prs_jsonl
+
+	def _tick(self, st: dict, pulls: list[dict], labels: dict[str, list[str]], prelude: str = "",
+			env: dict[str, str] | None = None) -> tuple[_Harness, str]:
+		h = _Harness(st)
+		res = h.train_fn(prelude + '_mt_merge_lease_tick "${PRS_JSONL}" ""',
+			{"PRS_JSONL": self._prs_jsonl(pulls, labels), **(env or {})})
+		return h, res.stdout + res.stderr
+
+	def test_release_of_a_closed_holder_then_grant(self) -> None:
+		pulls = [_pull(5), _pull(6)]
+		labels = {"5": ["ai:merge-lease-wait"], "6": ["ai:merge-lease-wait"]}
+		st = {"pulls": pulls, "labels": labels, "files": {"5": ["shared.py"]}, "closed": [4]}
+		_seed_lease(st, _record(4, acquired=int(time.time()) - 900))
+		h, out = self._tick(st, pulls, labels)
+		rows = _metrics(out)
+		self.assertEqual([r["event"] for r in rows], ["released", "granted"], out)
+		released, granted = rows
+		self.assertEqual((released["pr"], released["reason"], released["mode"], released["waiters"]), ("4", "holder_closed", "tick", "2"))
+		self.assertGreaterEqual(int(released["hold_s"]), 900)
+		self.assertEqual((granted["pr"], granted["holder"], granted["reason"], granted["waiters"], granted["hold_s"]),
+			("5", "5", "first_in_queue", "2", "0"))
+		self.assertIn("pr=5", h.record())
+		self.assertIn("MERGE_LEASE pr=4 base=main mode=tick outcome=released reason=holder_closed\n", out)
+
+	def test_held_reports_queue_depth(self) -> None:
+		pulls = [_pull(4), _pull(5)]
+		labels = {"5": ["ai:merge-lease-wait"]}
+		st = {"pulls": pulls, "labels": labels}
+		_seed_lease(st, _record(4))
+		h, out = self._tick(st, pulls, labels)
+		row = _metrics(out)[0]
+		self.assertEqual((row["event"], row["pr"], row["reason"], row["waiters"], row["hold_s"]), ("held", "4", "holder_open", "1", "-"))
+		self.assertEqual(h.state["refs"][REF], "c" * 40)
+
+	def test_no_waiter(self) -> None:
+		pulls = [_pull(5)]
+		st = {"pulls": pulls}
+		_seed_lease(st, _record(3, state="released", paths=""))
+		_, out = self._tick(st, pulls, {})
+		row = _metrics(out)[0]
+		self.assertEqual((row["event"], row["pr"], row["reason"], row["waiters"]), ("no_waiter", "-", "lease_free", "0"))
+
+	def test_expired_holder(self) -> None:
+		pulls = [_pull(4)]
+		st = {"pulls": pulls}
+		_seed_lease(st, _record(4, expires=int(time.time()) - 5))
+		_, out = self._tick(st, pulls, {})
+		rows = _metrics(out)
+		self.assertEqual((rows[0]["event"], rows[0]["reason"]), ("released", "expired"), out)
+		self.assertEqual(rows[1]["event"], "no_waiter")
+
+	def test_library_without_the_metric_helper_still_releases_and_grants(self) -> None:
+		pulls = [_pull(5)]
+		labels = {"5": ["ai:merge-lease-wait"]}
+		st = {"pulls": pulls, "labels": labels, "files": {"5": ["a"]}, "closed": [4]}
+		_seed_lease(st, _record(4))
+		h, out = self._tick(st, pulls, labels, prelude="unset -f _merge_lease_metric\n")
+		self.assertEqual(_metrics(out), [])
+		self.assertIn("outcome=released reason=holder_closed", out)
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=granted", out)
+		self.assertIn("pr=5", h.record())
+
+	def test_kill_switch_keeps_tick_decisions_and_calls(self) -> None:
+		pulls = [_pull(5)]
+		labels = {"5": ["ai:merge-lease-wait"]}
+		def state() -> dict:
+			st = {"pulls": [_pull(5)], "labels": {"5": ["ai:merge-lease-wait"]}, "files": {"5": ["a"]}, "closed": [4]}
+			_seed_lease(st, _record(4))
+			return st
+		on, out_on = self._tick(state(), pulls, labels)
+		off, out_off = self._tick(state(), pulls, labels, env={"MERGE_LEASE_METRICS_ENABLED": "false"})
+		self.assertEqual(_metrics(out_off), [])
+		self.assertTrue(_metrics(out_on))
+		def strip(o: str) -> list[str]:
+			return [ln for ln in o.splitlines() if not ln.startswith("MERGE_LEASE_METRIC")]
+		self.assertEqual(strip(out_on), strip(out_off))
+		self.assertEqual(_stable_calls(on.calls), _stable_calls(off.calls))
+		self.assertEqual(_stable_record(on.record()), _stable_record(off.record()))
 
 
 class Wiring(unittest.TestCase):
