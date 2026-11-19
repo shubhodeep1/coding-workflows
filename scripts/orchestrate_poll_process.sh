@@ -18200,8 +18200,8 @@ declare -g _ACTIONS_RUNS_BLOB_READY='false'
 # backpressure threshold. Every path that reuses the ai_memory cached rows
 # (in-TTL hit, 304 reuse, and the mktemp-failure and unconfirmed-fetch
 # fallbacks) restores it from the depth the last fresh read stamped on the
-# cached queued rows, when that stamp is under 1800s old
-# (_actions_queued_total_from_cached_runs). Empty means unknown: no fresh
+# cached queued rows, when that stamp is under 1800s old (3600s on the 304
+# path; see _actions_queued_total_from_cached_runs). Empty means unknown: no fresh
 # stamp, or a fallback with no cache hit, leaves it empty, and the
 # backpressure hold then fails open (legacy behaviour). An in-process ready cache hit returns before the reset and keeps
 # the tick's first value.
@@ -18218,15 +18218,23 @@ declare -g PHASE_CAPS_RUNNING_BY_STATE='{}'
 # cached queued row with _poller_queued_total / _poller_queued_total_at (the
 # cache schema allows extra row fields), so a 304 tick in a jammed queue, where
 # the in-progress ETag rarely changes, still sees the last depth read. A
-# snapshot older than 1800s, or none, leaves the depth unknown (fail open), so
-# a queue that drained without any run starting cannot hold dispatch forever.
+# snapshot older than the age bound (optional third argument, default 1800s),
+# or none, leaves the depth unknown (fail open), so a queue that drained
+# without any run starting cannot hold dispatch forever. The 304 path passes
+# 3600s: a 304 means the in-progress list is unchanged since the last fresh
+# read, so no run of this repo started or finished and the queue can only have
+# shrunk through cancellation; the 3600s cap still bounds that case. Without it
+# a jam whose in-progress ETag never changes (e.g. the account's runner pool is
+# held by other repos) restored the depth on one 15-minute tick only.
 # Adds no API call. Always returns 0.
 _actions_queued_total_from_cached_runs() {
   local aqt_runs="$1"
   local aqt_now="$2"
+  local aqt_max_age="${3:-1800}"
   local aqt_restored=''
   [[ "${aqt_now}" =~ ^[0-9]+$ ]] || return 0
-  aqt_restored="$(printf '%s' "${aqt_runs}" | jq -r --argjson now "${aqt_now}" --argjson max_age 1800 '
+  [[ "${aqt_max_age}" =~ ^[1-9][0-9]{0,6}$ ]] || aqt_max_age=1800
+  aqt_restored="$(printf '%s' "${aqt_runs}" | jq -r --argjson now "${aqt_now}" --argjson max_age "${aqt_max_age}" '
     [ .[]? | objects
       | select((._poller_queued_total | type) == "number" and (._poller_queued_total_at | type) == "number")
       | select(($now - ._poller_queued_total_at) >= 0 and ($now - ._poller_queued_total_at) < $max_age)
@@ -18308,6 +18316,8 @@ _load_actions_runs_cached() {
 		else
 			_ACTIONS_RUNS_BLOB_CACHE="${empty_blob}"
 		fi
+		# Remove whichever temp files mktemp did create (empty names are ignored).
+		rm -f "${response_file}" "${response_body_file}" "${response_err}" 2>/dev/null || true
 		_ACTIONS_RUNS_BLOB_READY="true"
 		printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
 		return 0
@@ -18359,7 +18369,8 @@ _load_actions_runs_cached() {
       else
         echo "::warning::rate_limit_audit_fallback helper=_load_actions_runs_cached reason=mktemp_failed_ttl_put_file repo=${repo}" >&2
       fi
-      _actions_queued_total_from_cached_runs "${cached_runs}" "${now_epoch}"
+      # 304: in-progress list unchanged, so trust the stamp up to 3600s.
+      _actions_queued_total_from_cached_runs "${cached_runs}" "${now_epoch}" 3600
       _ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
       _ACTIONS_RUNS_BLOB_READY="true"
       rm -f "${response_file}" "${response_body_file}" "${response_err}"

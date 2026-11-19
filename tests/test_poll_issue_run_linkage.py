@@ -369,7 +369,8 @@ def test_loader_records_queued_total_from_existing_read(tmp_path: Path) -> None:
 	assert "[1,3]" in legacy.stdout
 
 
-def _cached_loader(tmp_path: Path, *, cached_runs: list[dict], fetched_age_seconds: int, status_line: str) -> str:
+def _cached_loader(tmp_path: Path, *, cached_runs: list[dict], fetched_age_seconds: int, status_line: str,
+		env: dict[str, str] | None = None) -> str:
 	"""Run the loader with a stub ai_memory cache hit; return the restored depth."""
 	(tmp_path / "loader.sh").write_text(
 		"declare -g _ACTIONS_RUNS_BLOB_READY='false'\ndeclare -g ACTIONS_QUEUED_TOTAL=''\n"
@@ -392,7 +393,7 @@ def _cached_loader(tmp_path: Path, *, cached_runs: list[dict], fetched_age_secon
 		"_load_actions_runs_cached >blob.out\n"
 		"echo \"total=${ACTIONS_QUEUED_TOTAL}\"\n"
 	)
-	result = _run_bash(script, tmp_path)
+	result = _run_bash(script, tmp_path, env)
 	assert result.returncode == 0, result.stderr
 	assert "unexpected queued read" not in result.stderr
 	match = re.search(r"(?m)^total=(.*)$", result.stdout)
@@ -431,6 +432,30 @@ def test_unconfirmed_fetch_fallback_restores_recent_queued_depth(tmp_path: Path)
 		status_line="HTTP/2.0 500 Internal Server Error") == "400"
 	assert _cached_loader(tmp_path, cached_runs=_stamped(400, 4000), fetched_age_seconds=300,
 		status_line="HTTP/2.0 500 Internal Server Error") == ""
+
+
+def test_304_reuse_trusts_depth_stamp_up_to_an_hour(tmp_path: Path) -> None:
+	# A 304 means the in-progress list is unchanged, so consecutive 304 ticks
+	# keep the hold past 1800s; the 3600s cap still bounds a cancelled queue.
+	assert _cached_loader(tmp_path, cached_runs=_stamped(400, 2700), fetched_age_seconds=300,
+		status_line="HTTP/2.0 304 Not Modified") == "400"
+	assert _cached_loader(tmp_path, cached_runs=_stamped(400, 3700), fetched_age_seconds=300,
+		status_line="HTTP/2.0 304 Not Modified") == ""
+	# The unconfirmed-fetch fallback has no such evidence and keeps 1800s.
+	assert _cached_loader(tmp_path, cached_runs=_stamped(400, 2700), fetched_age_seconds=300,
+		status_line="HTTP/2.0 500 Internal Server Error") == ""
+
+
+def test_mktemp_failure_fallback_restores_recent_queued_depth(tmp_path: Path) -> None:
+	# A TMPDIR that does not exist makes every mktemp fail, so the loader takes
+	# the reason=mktemp_failed branch and reuses the cached rows.
+	# The gh stub would answer 304; a 2700s stamp coming back unknown proves the
+	# 304 path (3600s bound) never ran and the fallback kept its 1800s bound.
+	env = {"TMPDIR": str(tmp_path / "missing-tmpdir")}
+	assert _cached_loader(tmp_path, cached_runs=_stamped(400, 60), fetched_age_seconds=300,
+		status_line="HTTP/2.0 304 Not Modified", env=env) == "400"
+	assert _cached_loader(tmp_path, cached_runs=_stamped(400, 2700), fetched_age_seconds=300,
+		status_line="HTTP/2.0 304 Not Modified", env=env) == ""
 
 
 def test_cached_paths_leave_stale_or_missing_depth_unknown(tmp_path: Path) -> None:
