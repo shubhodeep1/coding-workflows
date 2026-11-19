@@ -1538,6 +1538,9 @@ def test_only_the_listed_reads_are_wrapped_in_gh_retry() -> None:
 		'gh_retry gh api "repos/${REPOSITORY}/issues/${BASH_REMATCH[1]}" --jq \'(.title // "") | .[0:400]\'',
 	):
 		assert text.count(read) == 1, read
+	# The list above is exhaustive: a seventh wrapped read must be added to it
+	# and to the CONSIST-001 header comments.
+	assert sum(1 for line in text.splitlines() if "gh_retry gh api" in line) == 6
 	for line in text.splitlines():
 		if "gh_retry" in line:
 			for write in ("-X POST", "-X PATCH", "-X DELETE", "/dispatches", "-f body="):
