@@ -4105,6 +4105,19 @@ and resolver chains, a failed project) now goes to the unblock judge
   specification, and picks one verdict: `retry_budget`, `auto_answer`,
   `descope`, `override_guard`, `reissue`, `accept_with_followup`,
   `operator_step` or `close`.
+- **Chain depth cap** (`scripts/unblock_ledger.py`, `MAX_CHAIN_DEPTH = 2`).
+  `reissue`, `accept_with_followup`, `descope` and `operator_step` each open a
+  new issue that restarts clarify, plan and implement. An item's depth is the
+  number of chain prefixes its title starts with (`Re-issue of #N: `,
+  `Follow-up to #N: `, `Unblock descope for #N: `, `Unblock operator step for
+  #N: `, `Unblock fix-up for #N: `). For a trusted PR on an `ai/issue-<n>`
+  branch the judge reads the title of issue `<n>` (one extra read) and a new
+  issue filed from that PR carries that title on, so the prefixes survive the
+  PR. At depth 2 those four verdicts are off the judge's menu: it can only
+  continue on the item itself (`retry_budget`, `auto_answer`,
+  `override_guard`, `wait`), and once nothing is left the item is terminal
+  (`menu_exhausted`) and is parked in the needs-human digest with
+  `ai:needs-human`, like any other exhausted item.
 - **Hard limits** (`scripts/unblock_ledger.py`). A verdict is never repeated
   for the same failure fingerprint; at most 2 rounds per item and 6 per
   project; `override_guard` only for the scope and destructive latches on an
