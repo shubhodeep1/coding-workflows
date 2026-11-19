@@ -104,37 +104,13 @@ _SANDBOX_FILES = (
 	"ai_pipeline.md",
 )
 
-# Issue #9776: the review-blocked judge inlines the whole agents file into its
-# prompt and skips the model when the prompt passes codex's 1048576-character
-# stdin cap. The release-folded agents.md on `stable` is close to that size by
-# itself, so the sandbox copy is cut to this many characters to keep judge-path
-# prompts well under the cap. The repository's own agents.md is never changed.
-_SANDBOX_AGENTS_MD_MAX_CHARS = 262144
+# Issue #9776: the review-blocked fix tests failed with empty assert messages
+# when the judge was skipped, because the poller exits 0 and its stdout never
+# reached the AssertionError. Failing review-blocked assertions now carry the
+# tail of the poller's stdout. The sandbox `agents.md` copy itself is bounded
+# by `_copy_sandbox_agents_md` (issue #9753) below.
 # Characters of poller stdout shown in a failing review-blocked assertion.
 _POLLER_STDOUT_TAIL_CHARS = 4000
-
-
-def _copy_sandbox_file_bounded(src: Path, dst: Path) -> None:
-	"""Copy a sandbox file; an oversized ``agents.md`` is cut at a newline.
-
-	The cut copy keeps the leading text up to the last newline that fits and
-	ends with one marker line, and is never longer than
-	``_SANDBOX_AGENTS_MD_MAX_CHARS`` characters. Every other file, and an
-	``agents.md`` under the limit, is copied unchanged with ``shutil.copy2``.
-	"""
-	if src.name == "agents.md":
-		text = src.read_text(encoding="utf-8")
-		if len(text) > _SANDBOX_AGENTS_MD_MAX_CHARS:
-			marker = (
-				f"<!-- test sandbox: agents.md truncated to "
-				f"{_SANDBOX_AGENTS_MD_MAX_CHARS} characters (issue #9776) -->\n"
-			)
-			limit = _SANDBOX_AGENTS_MD_MAX_CHARS - len(marker)
-			cut = text.rfind("\n", 0, limit)
-			head = text[: cut + 1] if cut >= 0 else ""
-			dst.write_text(head + marker, encoding="utf-8")
-			return
-	shutil.copy2(src, dst)
 
 
 def _poller_stdout_tail(result: dict) -> str:
@@ -11601,8 +11577,8 @@ def test_review_blocked_judge_caps_minified_pr_diff_by_bytes():
 	assert "[NOTE: PR diff is " in prompt
 	assert "after the 1000-line cap; truncated to a prefix within 2000 bytes" in prompt
 	assert "x" * 2001 not in prompt
-	assert "Review-blocked judge prompt size: " in result["stdout"]
-	assert "JUDGE_PR_DIFF_MAX_BYTES=2000" in result["stdout"]
+	_assert_in_poller_stdout("Review-blocked judge prompt size: ", result)
+	_assert_in_poller_stdout("JUDGE_PR_DIFF_MAX_BYTES=2000", result)
 
 
 def test_review_blocked_judge_skips_codex_when_prompt_exceeds_character_cap():
@@ -11867,40 +11843,31 @@ def test_review_blocked_judge_prompt_fits_stdin_cap_with_repo_agents_md():
 
 
 def test_make_poller_sandbox_bounds_agents_md_copy():
+	# Issue #9776: `_make_poller_sandbox` must route `agents.md` through the
+	# bounded copy (`_copy_sandbox_agents_md`, issue #9753) so the inline judge
+	# prompt stays under codex's 1048576-character stdin cap, while every other
+	# sandbox file is copied byte for byte.
+	marker = _SANDBOX_AGENTS_MD_TRUNCATION_MARKER
 	with tempfile.TemporaryDirectory() as tmp:
-		root = Path(tmp)
-		src_dir = root / "src"
-		dst_dir = root / "dst"
-		src_dir.mkdir()
-		dst_dir.mkdir()
-		big = src_dir / "agents.md"
-		source_text = ("x" * 99 + "\n") * 12000
-		big.write_text(source_text, encoding="utf-8")
-		big_dst = dst_dir / "agents.md"
-		_copy_sandbox_file_bounded(big, big_dst)
-		copied = big_dst.read_text(encoding="utf-8")
-		assert len(copied) <= _SANDBOX_AGENTS_MD_MAX_CHARS
-		marker = (
-			f"<!-- test sandbox: agents.md truncated to "
-			f"{_SANDBOX_AGENTS_MD_MAX_CHARS} characters (issue #9776) -->\n"
-		)
-		assert copied.endswith(marker)
-		head = copied[: -len(marker)]
-		assert head and head.endswith("\n")
-		assert source_text.startswith(head)
-		# Small agents.md and other files are copied byte for byte.
-		small_dir = root / "small"
-		small_dir.mkdir()
-		small = small_dir / "agents.md"
-		small.write_bytes(b"# small\n\xc3\xa9\n")
-		small_dst = dst_dir / "small_agents.md"
-		_copy_sandbox_file_bounded(small, small_dst)
-		assert small_dst.read_bytes() == small.read_bytes()
-		other = src_dir / "ai_pipeline.md"
-		other.write_text(source_text, encoding="utf-8")
-		other_dst = dst_dir / "ai_pipeline.md"
-		_copy_sandbox_file_bounded(other, other_dst)
-		assert other_dst.read_bytes() == other.read_bytes()
+		sandbox = Path(tmp) / "sandbox"
+		sandbox.mkdir()
+		_make_poller_sandbox(sandbox)
+		for rel in _SANDBOX_FILES:
+			src = REPO_ROOT / rel
+			if not src.exists():
+				continue
+			copied = (sandbox / rel).read_bytes()
+			real = src.read_bytes()
+			if rel != "agents.md":
+				assert copied == real, rel
+				continue
+			assert len(copied) <= _SANDBOX_AGENTS_MD_MAX_BYTES + len(marker), len(copied)
+			assert len(copied.decode("utf-8")) < 1048576
+			if len(real) > _SANDBOX_AGENTS_MD_MAX_BYTES:
+				assert copied.endswith(marker)
+				assert real.startswith(copied[: -len(marker)])
+			else:
+				assert copied == real
 
 
 # The file's own runner calls tests without arguments, so cases loop here.
@@ -11919,10 +11886,10 @@ def test_review_blocked_fix_target_rejects_untrusted_pr():
 			touch="sandbox_fix.txt", files=["sandbox_fix.txt"], pr_overrides=pr_overrides,
 		)
 		try:
-			assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
+			_assert_in_poller_stdout(f"issue=10 pr=901 reason={reason}", result)
 			assert result.get("git_push_calls", []) == []
 			assert result.get("review_blocked_fix_commit_calls", []) == []
-			assert "Judge decision for #10" not in result["stdout"]
+			assert "Judge decision for #10" not in result["stdout"], _poller_stdout_tail(result)
 		except AssertionError as exc:
 			failures.append((reason, str(exc)))
 	assert not failures, failures
@@ -11933,7 +11900,7 @@ def test_review_blocked_fix_target_rejects_failed_fetch_without_local_fallback()
 		touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
 		missing_git_branch_fetches=["ai/issue-10"],
 	)
-	assert "REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=fetch_failed" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=fetch_failed", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 
@@ -11943,7 +11910,7 @@ def test_review_blocked_fix_target_rejects_fetched_tip_mismatch():
 		touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
 		pr_overrides={"headSha": "f" * 40},
 	)
-	assert "REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=head_sha_mismatch" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=head_sha_mismatch", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 
@@ -11959,7 +11926,7 @@ def test_review_blocked_fix_target_rejects_ref_change_before_checkout():
 		touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
 		pr_api_sequence={901: [dict(open_pr) for _ in range(5)] + [{**open_pr, "headRefFromApi": "feature/other"}]},
 	)
-	assert "REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=head_ref_changed" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=head_ref_changed", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 
@@ -12031,7 +11998,7 @@ def test_review_blocked_merged_fix_target_rejects_unrelated_followup():
 			codex_touch_file="sandbox_fix.txt", mock_git_push_success=True,
 		)
 		try:
-			assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
+			_assert_in_poller_stdout(f"issue=10 pr=901 reason={reason}", result)
 			assert result.get("git_push_calls", []) == []
 			assert result.get("review_blocked_fix_commit_calls", []) == []
 			assert len(result["prs"]) == 1
@@ -12053,14 +12020,14 @@ def test_review_blocked_rejects_unverified_open_pr_head():
 			head_repo=head_repo, head_sha=head_sha, head_ref_from_api=head_ref,
 			missing_git_branch_fetches=missing_fetches,
 		)
-		assert f"REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=10 pr=901 reason={reason}" in result["stdout"]
+		_assert_in_poller_stdout(f"REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=10 pr=901 reason={reason}", result)
 		assert result.get("git_push_calls", []) == []
 		assert result.get("review_blocked_fix_commit_calls", []) == []
 		assert not any("ai/issue-10" in call for call in result.get("git_worktree_add_calls", []))
 		assert "ai:review-blocked" in result["issues"]["10"]["labels"]
-		assert "reusing local HEAD as PR branch base" not in result["stdout"]
+		assert "reusing local HEAD as PR branch base" not in result["stdout"], _poller_stdout_tail(result)
 		assert result["latest_state"]["review_blocked_retries"].get("10", 0) == 0
-		assert "Judge decision for #10" not in result["stdout"]
+		assert "Judge decision for #10" not in result["stdout"], _poller_stdout_tail(result)
 
 
 def test_review_blocked_rejects_changed_pr_head_ref_before_judge():
@@ -12070,10 +12037,10 @@ def test_review_blocked_rejects_changed_pr_head_ref_before_judge():
 	)
 	# The #6325 fix-target check runs first and rejects the non-implementation
 	# head before #6388's ref comparison; either way the judge never runs.
-	assert "REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=not_implementation_pr" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=not_implementation_pr", result)
 	assert result["latest_state"]["review_blocked_retries"].get("10", 0) == 0
 	assert result.get("git_push_calls", []) == []
-	assert "Judge decision for #10" not in result["stdout"]
+	assert "Judge decision for #10" not in result["stdout"], _poller_stdout_tail(result)
 
 
 def test_review_blocked_rejects_fork_before_any_judge_action():
@@ -12083,8 +12050,8 @@ def test_review_blocked_rejects_fork_before_any_judge_action():
 			head_repo="attacker/repo", codex_action=action,
 			env_overrides={"MAX_REVIEW_BLOCKED_RETRIES": "0"},
 		)
-		assert "REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=10 pr=901 reason=cross_repository" in result["stdout"]
-		assert "Judge decision for #10" not in result["stdout"]
+		_assert_in_poller_stdout("REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=10 pr=901 reason=cross_repository", result)
+		assert "Judge decision for #10" not in result["stdout"], _poller_stdout_tail(result)
 		assert result["latest_state"]["review_blocked_retries"].get("10", 0) == 0
 		assert "ai:review-blocked" in result["issues"]["10"]["labels"]
 		assert result.get("git_push_calls", []) == []
@@ -12118,7 +12085,7 @@ def test_review_blocked_rejects_fork_head_on_merged_followup():
 		codex_json={"action": "fix", "justification": "apply fixes", "fix_description": "patched"},
 		codex_touch_file="sandbox_fix.txt", mock_git_push_success=True,
 	)
-	assert "REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=10 pr=901 reason=cross_repository" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=10 pr=901 reason=cross_repository", result)
 	assert result.get("git_push_calls", []) == []
 	assert not any("fix/10-followup-" in str(call) for call in result.get("git_worktree_add_calls", []))
 
@@ -12173,7 +12140,7 @@ def test_review_blocked_fix_scope_rejects_workflow_edit_opt_out_automation_asset
 			touch=path, files=[path], env_overrides={"ALLOW_WORKFLOW_EDITS": "false"},
 		)
 		try:
-			assert f"reason=workflow_edits_disabled rejected=1 paths={path}" in result["stdout"]
+			_assert_in_poller_stdout(f"reason=workflow_edits_disabled rejected=1 paths={path}", result)
 			assert result.get("git_push_calls", []) == []
 			assert result.get("review_blocked_fix_commit_calls", []) == []
 			assert result["latest_state"]["review_blocked_retries"].get("10") == 1
@@ -12190,7 +12157,7 @@ def test_review_blocked_fix_scope_rejects_mixed_workflow_edit_opt_out():
 			"MOCK_CODEX_TOUCH_FILE": "sandbox_fix.txt\nworkflow-templates/ai-plan.yml",
 		},
 	)
-	assert "reason=workflow_edits_disabled rejected=1 paths=workflow-templates/ai-plan.yml" in result["stdout"]
+	_assert_in_poller_stdout("reason=workflow_edits_disabled rejected=1 paths=workflow-templates/ai-plan.yml", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
@@ -12201,8 +12168,8 @@ def test_review_blocked_fix_scope_rejects_template_pr_file_by_default():
 	result = _review_blocked_fix_scope_case(
 		touch="workflow-templates/ai-review.yml", files=["workflow-templates/ai-review.yml"],
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=workflow-templates/ai-review.yml" in result["stdout"]
-	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED" not in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=workflow-templates/ai-review.yml", result)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED" not in result["stdout"], _poller_stdout_tail(result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
@@ -12214,7 +12181,7 @@ def test_review_blocked_fix_scope_rejects_template_outside_pr():
 	result = _review_blocked_fix_scope_case(
 		touch="workflow-templates/ai-review.yml", files=["sandbox_fix.txt"],
 	)
-	assert "reason=protected_path_forbidden rejected=1 paths=workflow-templates/ai-review.yml" in result["stdout"]
+	_assert_in_poller_stdout("reason=protected_path_forbidden rejected=1 paths=workflow-templates/ai-review.yml", result)
 	assert result.get("git_push_calls", []) == []
 
 
@@ -12236,7 +12203,7 @@ def test_review_blocked_fix_scope_rejects_protected_pr_file_with_default_env():
 	result = _review_blocked_fix_scope_case(
 		touch=".github/workflows/ci.yml", files=[".github/workflows/ci.yml"],
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=.github/workflows/ci.yml" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=.github/workflows/ci.yml", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert not any("pulls/901/files" in path for path in result.get("api_calls", []))
@@ -12273,7 +12240,7 @@ def test_review_blocked_fix_scope_rejects_non_protected_judge_citation():
 		touch="docs/new.md", files=["other.txt"],
 		remaining=[{"file": "docs/new.md"}],
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"]["10"] == 1
@@ -12284,7 +12251,7 @@ def test_review_blocked_fix_scope_rejects_fix_description_citation():
 	result = _review_blocked_fix_scope_case(
 		touch="docs/new.md", files=["other.txt"], description="Updated `docs/new.md`",
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"]["10"] == 1
@@ -12295,7 +12262,7 @@ def test_review_blocked_fix_scope_rejects_extensionless_citation():
 	result = _review_blocked_fix_scope_case(
 		touch="Makefile", files=["other.txt"], description="Updated `Makefile`",
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"]["10"] == 1
@@ -12307,7 +12274,7 @@ def test_review_blocked_fix_scope_rejects_injected_auth_citations():
 		touch="src/auth.py", files=["other.txt"],
 		remaining=[{"file": "src/auth.py"}], description="Updated `src/auth.py`",
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope rejected=1 paths=src/auth.py" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope rejected=1 paths=src/auth.py", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 
@@ -12317,7 +12284,7 @@ def test_review_blocked_fix_scope_accepts_cited_pr_file_without_citation_authori
 		touch="docs/new.md", files=["docs/new.md"],
 		remaining=[{"file": "docs/new.md"}],
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901 staged=1 pr_files=1 judge_cited=0" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901 staged=1 pr_files=1 judge_cited=0", result)
 	assert result.get("git_push_calls", [])
 
 
@@ -12326,7 +12293,7 @@ def test_review_blocked_fix_scope_rejects_protected_judge_citation():
 		touch="scripts/evil.sh", files=["other.txt"],
 		remaining=[{"file": "scripts/evil.sh"}],
 	)
-	assert "reason=protected_path_forbidden" in result["stdout"]
+	_assert_in_poller_stdout("reason=protected_path_forbidden", result)
 	assert result.get("git_push_calls", []) == []
 
 
@@ -12335,7 +12302,7 @@ def test_review_blocked_fix_scope_protected_reason_wins_for_mixed_rejections():
 		touch="docs/new.md", files=["other.txt"],
 		env_overrides={"MOCK_CODEX_TOUCH_FILE": "docs/new.md\nscripts/evil.sh"},
 	)
-	assert "reason=protected_path_forbidden rejected=1 paths=scripts/evil.sh" in result["stdout"]
+	_assert_in_poller_stdout("reason=protected_path_forbidden rejected=1 paths=scripts/evil.sh", result)
 	assert result.get("git_push_calls", []) == []
 
 
@@ -12344,7 +12311,7 @@ def test_review_blocked_fix_scope_rejects_uncited_unrelated_workflow():
 		touch=".github/workflows/unrelated.yml", files=["sandbox_fix.txt"],
 		env_overrides={"ALLOW_WORKFLOW_EDITS": "true"},
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=.github/workflows/unrelated.yml" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=.github/workflows/unrelated.yml", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
@@ -12358,7 +12325,7 @@ def test_review_blocked_fix_scope_rejects_uncited_unrelated_script():
 		touch="scripts/unrelated.sh", files=["sandbox_fix.txt"],
 		env_overrides={"ALLOW_WORKFLOW_EDITS": "true"},
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=scripts/unrelated.sh" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=scripts/unrelated.sh", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
@@ -12375,7 +12342,7 @@ def test_review_blocked_fix_scope_rejects_unrelated_action_and_claude_hook():
 			"MOCK_CODEX_TOUCH_FILE": ".github/actions/x/action.yml\n.claude/hooks/x.py",
 		},
 	)
-	assert "reason=protected_path_forbidden rejected=2" in result["stdout"]
+	_assert_in_poller_stdout("reason=protected_path_forbidden rejected=2", result)
 	assert any(
 		".github/actions/x/action.yml" in line and ".claude/hooks/x.py" in line
 		for line in result["stdout"].splitlines() if "REVIEW_BLOCKED_FIX_SCOPE_REJECTED" in line
@@ -12394,7 +12361,7 @@ def test_review_blocked_fix_scope_rejects_mixed_in_scope_and_unrelated_workflow(
 			"MOCK_CODEX_TOUCH_FILE": "sandbox_fix.txt\n.github/workflows/unrelated.yml",
 		},
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=.github/workflows/unrelated.yml" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=.github/workflows/unrelated.yml", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
@@ -12402,7 +12369,7 @@ def test_review_blocked_fix_scope_rejects_mixed_in_scope_and_unrelated_workflow(
 
 def test_review_blocked_fix_scope_rejects_protected_pr_file():
 	result = _review_blocked_fix_scope_case(touch="scripts/foo.sh", files=["scripts/foo.sh"])
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=scripts/foo.sh" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=scripts/foo.sh", result)
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
@@ -12415,7 +12382,7 @@ def test_review_blocked_fix_scope_accepts_renamed_pr_source():
 		touch="docs/old.md",
 		files=[{"filename": "docs/new.md", "previous_filename": "docs/old.md"}],
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901", result)
 	assert result.get("git_push_calls", [])
 
 
@@ -12424,7 +12391,7 @@ def test_review_blocked_fix_scope_rejects_renamed_protected_pr_source():
 		touch="scripts/old.sh",
 		files=[{"filename": "scripts/new.sh", "previous_filename": "scripts/old.sh"}],
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=scripts/old.sh" in result["stdout"]
+	_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=scripts/old.sh", result)
 	assert result.get("git_push_calls", []) == []
 
 
@@ -12432,7 +12399,7 @@ def test_review_blocked_fix_scope_rejects_capped_pr_listing():
 	result = _review_blocked_fix_scope_case(
 		touch="sandbox_fix.txt", files=[f"docs/file-{n}.md" for n in range(3000)],
 	)
-	assert "reason=pr_files_unavailable" in result["stdout"]
+	_assert_in_poller_stdout("reason=pr_files_unavailable", result)
 	assert result.get("git_push_calls", []) == []
 
 
@@ -12440,7 +12407,7 @@ def test_review_blocked_fix_scope_rejects_incomplete_pr_listing():
 	result = _review_blocked_fix_scope_case(
 		touch="sandbox_fix.txt", files=["sandbox_fix.txt"], pr_changed_file_count=2,
 	)
-	assert "reason=pr_files_unavailable rejected=1 paths=sandbox_fix.txt" in result["stdout"]
+	_assert_in_poller_stdout("reason=pr_files_unavailable rejected=1 paths=sandbox_fix.txt", result)
 	assert result.get("git_push_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
 
@@ -12450,13 +12417,13 @@ def test_review_blocked_fix_scope_ignores_invalid_citations():
 		touch="escape.txt", files=["other.txt"],
 		remaining=[{"file": "../escape.txt"}, {"file": ".git/config"}],
 	)
-	assert "reason=out_of_scope" in result["stdout"]
+	_assert_in_poller_stdout("reason=out_of_scope", result)
 	assert result.get("git_push_calls", []) == []
 
 
 def test_review_blocked_fix_scope_fails_closed_on_pr_listing_failure():
 	result = _review_blocked_fix_scope_case(touch="sandbox_fix.txt", files=["sandbox_fix.txt"], pr_files_fail=True)
-	assert "reason=pr_files_unavailable rejected=1 paths=sandbox_fix.txt" in result["stdout"]
+	_assert_in_poller_stdout("reason=pr_files_unavailable rejected=1 paths=sandbox_fix.txt", result)
 	assert result.get("git_push_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
 
