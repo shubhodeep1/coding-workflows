@@ -154,7 +154,13 @@ if [ "${PR_STATE}" = "closed" ]; then
   phase7_wait_deadline "${PHASE7_WAIT_START}" "${EXISTING_STATUS}"
   WAIT_DEADLINE="${PHASE7_WAIT_DEADLINE}"
   while [ "${EXISTING_STATUS}" != "completed" ] && [ "$(date +%s)" -lt "${WAIT_DEADLINE}" ]; do
-    sleep 5
+    # Poll a queued run every 15 s: the queue cap allows up to 30m of
+    # waiting, often while API limits are tight (run 44490333814).
+    if phase7_run_is_queued "${EXISTING_STATUS}"; then
+      sleep 15
+    else
+      sleep 5
+    fi
     # Fetch once, then parse locally. A transient failure still
     # produces an empty string rather than malformed JSON for the
     # local jq parses below.
