@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:121-136 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  PROBLEM: In `_copy_sandbox_agents_md`, when no newline exists in the first 524,288 bytes, `rfind` returns -1 and only the truncation marker is written; this fallback is untested and undocumented.\n  WHY: It does not crash and the real `agents.md` has newlines, so it is a coverage/documentation nit. Both reviewers rated it NIT, which is mapped to low.\n- agents.md:2061-2067 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The reviewer reported no problem with the folded \"Final CI run\" bullet; the restored references match README.md.\n  WHY: It is documentation only with no runtime effect (rated NIT).\n- .github/workflows/orchestrate_poll.yml:1475-1477 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The reviewer reported no problem; the duplicate `HEAL_STALE_*` env keys were removed (also at lines 1710-1712) and behaviour is unchanged.\n  WHY: The values were identical and the change fixes the yamllint duplicate-key error (rated NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_orchestrate_poll_process.py:`_copy_sandbox_agents_md` (`cut = data.rfind(...)`, `prefix = ...`) | severity=NIT | confidence=2\n  PROBLEM: When data is over budget with no newline in the first 524,288 bytes, only the truncation marker is written.\n  WHY: It is handled by `cut >= 0 else b\"\"` and unreachable with the real agents.md; the test does not cover the branch.\n- agents.md:2061-2067 | severity=NIT | confidence=3\n  PROBLEM: None. The restored \"Final CI run\" bullet matches README.md.\n  WHY: Documentation only.\n- .github/workflows/orchestrate_poll.yml:1475-1477, 1710-1712 | severity=NIT | confidence=4\n  PROBLEM: None. Duplicate `HEAL_STALE_*` keys were removed.\n  WHY: Values were identical; this fixes the yamllint error.\n- .github/workflows/ci.yml:3021 | no severity stated\n  PROBLEM: A test file appended to a pytest step may run twice.\n  WHY: It costs seconds and nothing breaks.\n- TASK COMPLETENESS: the reviewer raised no gap and found the requirement met (severity=NIT, confidence=4).\n- HARDENING_SUGGESTIONS: add one assertion in `_copy_sandbox_agents_md` for a payload with no newline, or document the fallback (HARDENING_RISK_SCORE: 1).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_process.py:121-136 | severity=NIT | confidence=3\n  PROBLEM: When no newline is in the first 524,288 bytes, `rfind` returns -1 and only the truncation marker is written; the docstring does not mention this and the branch is untested.\n  WHY: It does not fail at runtime and the output stays bounded.\n- TASK COMPLETENESS: the reviewer raised no gap and found no missing change site (severity=NIT, confidence=4).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "51263df1f97ca572f08a193a63d0b6a8371eb1f8fe0c300e517fc0bbea20444e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9778,
+    "run_id": "44518121733",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44518121733",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261119134302_c17eef1f8b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9778,
+    "run_id": "44518121733"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-19T13:43:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
