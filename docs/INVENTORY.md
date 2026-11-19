@@ -319,6 +319,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_workflow_sync_skip.sh` — review-gate check that skips the reviewer panel for an `ai-sync/stable` consumer sync PR whose changed paths are all in the signed sync allowlist.
 - `scripts/review_filter_uninteresting_files.sh` — Shell helper for review filter uninteresting files.
 - `scripts/review_sweep_head_gate.sh` — Sourced by the review sweep's enumerate step: reads every open PR's `ai-review/head-gate` state in one GraphQL call per 100 PRs into the snapshot (`head_gate_state`, fail-open), and gives the final-CI state of a head so the sweep skips re-reviewing an approved head whose final CI failed (PR #9649).
+- `scripts/review_sweep_round_cap.sh` — Sourced by the review sweep's enumerate step: counts each PR's dispatched `internal-review.yml` runs in a time window from one paginated listing per tick (fail-open), and escalates a PR at the cap whose head is not approved with `ai:needs-human` and one comment in place of another dispatch.
 - `scripts/review_floor_rules.sh` — Shell helper for review floor rules.
 - `scripts/review_issue_ledger.sh` — Shell helper for review issue ledger.
 - `scripts/review_merge_train.sh` — merge train for review_autofix.yml: `gate` queues an ai/issue-* PR behind older open same-repository ai/issue-* PRs on the same base that edit the same files (fork heads never block; label ai:merge-queued); `release` (cancel_on_pr_close.yml, orchestrate_poll.yml) re-dispatches review once the blockers are gone.
