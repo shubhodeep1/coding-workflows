@@ -3456,6 +3456,8 @@ jobs:
           CI_BUDGET_ISSUE_TOKEN: ${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}
           CI_BUDGET_WORKFLOW_WARN_BYTES: ${{ vars.CI_BUDGET_WORKFLOW_WARN_BYTES || '440000' }}
           CI_BUDGET_JOB_WARN_RATIO: ${{ vars.CI_BUDGET_JOB_WARN_RATIO || '0.75' }}
+          CI_BUDGET_REFILE_COOLDOWN_DAYS: ${{ vars.CI_BUDGET_REFILE_COOLDOWN_DAYS || '7' }}
+          CI_BUDGET_REFILE_URGENT_RATIO: ${{ vars.CI_BUDGET_REFILE_URGENT_RATIO || '0.9' }}
         run: |
           set -uo pipefail
           python3 -m pip install --quiet pyyaml || true
