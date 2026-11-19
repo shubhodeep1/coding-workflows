@@ -301,9 +301,8 @@ jobs:
           # further down, so the early exits below skip it. Say so in the log
           # instead of skipping silently (silent while the reaper is off).
           # Opt-in (P11b first shipped it default-on): only 1/true/yes/on
-          # enable it, so a typo in the repo variable keeps it off. P11b's
-          # default-on gate (Refs #8291) read:
-          # case "$(printf '%s' "${ZOMBIE_RUN_REAPER_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+          # enable it, so a typo in the repo variable keeps it off. P11b
+          # (Refs #8291) first shipped a default-on deny-list; this replaced it.
           zombie_reaper_skip_note()
           {
             case "$(printf '%s' "${ZOMBIE_RUN_REAPER_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
