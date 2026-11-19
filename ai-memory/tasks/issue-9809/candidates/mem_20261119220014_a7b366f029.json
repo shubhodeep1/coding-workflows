@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9809,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9809\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9811\",\"pr_number\":9811,\"branch\":\"ai/issue-9809\",\"run_id\":\"44613758464\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/44613758464\",\"changed_files\":[\".github/workflows/orchestrate_poll.yml\",\".github/workflows/unblock_judge.yml\",\"README.md\",\"agents.d/9809-unblock-existing-pr-routing.md\",\"changelog.d/9809-unblock-existing-pr-routing.md\",\"scripts/orchestrate_poll_process.sh\",\"scripts/unblock_actions.py\",\"scripts/unblock_judge.sh\",\"tests/test_stall_existing_impl_pr_routing.py\",\"tests/test_unblock_judge.py\"]}",
+  "fingerprint": "6ed6bc1f471137d2817418109732d5d7fa80adecb2e4334a931868ac736c43db",
+  "lineage": {
+    "issue_number": 9809,
+    "parent_ids": [],
+    "pr_number": 9811,
+    "run_id": "44613758464",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44613758464",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9811"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261119220014_a7b366f029",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9809,
+    "level": "run",
+    "pr_number": 9811,
+    "run_id": "44613758464"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9809: https://github.com/shubhodeep1/coding-workflows/pull/9811",
+  "timestamps": {
+    "created_at": "2026-11-19T22:00:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
