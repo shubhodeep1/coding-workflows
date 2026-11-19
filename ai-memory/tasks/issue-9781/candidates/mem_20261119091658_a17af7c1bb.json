@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Let non-conflicting approved PRs merge past the merge lease (plan docs/plans/merge-lease-parallel-merges-plan.md, phases 1-5)\",\"issues\":[{\"id\":\"p1-lease-metrics\",\"title\":\"Merge lease phase 1: emit lease metrics (wait, hold, grant/release outcomes) without changing behaviour\",\"priority\":1},{\"id\":\"p2-lease-revocation-eligibility\",\"title\":\"Merge lease phase 2: revoke from ineligible holders, check eligibility at grant time, skip waiters until their head changes\",\"priority\":2},{\"id\":\"p3-forward-merge-priority\",\"title\":\"Merge lease phase 3: give forward-merge PRs priority in the merge-lease queue\",\"priority\":3},{\"id\":\"p4-soft-path-class\",\"title\":\"Merge lease phase 4: soft path class ignored by base-freshness overlap and lease overlap checks\",\"priority\":4},{\"id\":\"p5-multi-holder-lease\",\"title\":\"Merge lease phase 5: allow multiple path-disjoint lease holders behind MERGE_LEASE_MAX_HOLDERS (default 1)\",\"priority\":5}],\"dependency_edges\":[{\"from\":\"p1-lease-metrics\",\"to\":\"p2-lease-revocation-eligibility\"},{\"from\":\"p2-lease-revocation-eligibility\",\"to\":\"p3-forward-merge-priority\"},{\"from\":\"p3-forward-merge-priority\",\"to\":\"p4-soft-path-class\"},{\"from\":\"p4-soft-path-class\",\"to\":\"p5-multi-holder-lease\"}]}",
+  "fingerprint": "a6266016e0943cc75491206f7117c8a6e1ec402b3326a72bce59cca96458a8ef",
+  "lineage": {
+    "issue_number": 9781,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44493623387",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44493623387",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261119091658_a17af7c1bb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9781,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44493623387"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Let non-conflicting approved PRs merge past the merge lease (plan docs/plans/merge-lease-parallel-merges-plan.md, phases 1-5)' into 5 issues (tracking #9781)",
+  "timestamps": {
+    "created_at": "2026-11-19T09:16:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
