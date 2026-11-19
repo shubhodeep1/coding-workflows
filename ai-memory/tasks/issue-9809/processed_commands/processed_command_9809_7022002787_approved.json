@@ -5,13 +5,31 @@
   "entry_id": "processed_command_9809_7022002787_approved",
   "issue_number": 9809,
   "metadata": {
+    "branch": "ai/issue-9809",
+    "changed_files": [
+      ".github/workflows/orchestrate_poll.yml",
+      ".github/workflows/unblock_judge.yml",
+      "README.md",
+      "agents.d/9809-unblock-existing-pr-routing.md",
+      "changelog.d/9809-unblock-existing-pr-routing.md",
+      "scripts/orchestrate_poll_process.sh",
+      "scripts/unblock_actions.py",
+      "scripts/unblock_judge.sh",
+      "tests/test_stall_existing_impl_pr_routing.py",
+      "tests/test_unblock_judge.py"
+    ],
+    "issue_number": 9809,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9809",
+    "pr_number": 9811,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9811",
+    "run_attempt": "1",
+    "run_id": "44613758464",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/44613758464"
   },
   "run_attempt": 1,
   "run_id": "44613758464",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-19T20:58:18Z",
+  "status": "completed",
+  "timestamp": "2026-11-19T22:00:44Z",
   "workflow": "implement"
 }
