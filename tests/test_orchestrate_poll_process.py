@@ -121,7 +121,7 @@ def _poller_stdout_tail(result: dict) -> str:
 
 def _assert_in_poller_stdout(needle: str, result: dict) -> None:
 	"""Assert ``needle`` is in the poller stdout; on a miss show the stdout tail."""
-	if needle not in result["stdout"]:
+	if needle not in str(result.get("stdout", "")):
 		raise AssertionError(f"missing {needle!r} in poller stdout\n{_poller_stdout_tail(result)}")
 
 
