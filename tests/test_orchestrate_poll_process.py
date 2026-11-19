@@ -22064,7 +22064,8 @@ def _run_candidate_details_cross_repo_filter(tmp_path: Path) -> None:
 	assert linked["merge_commit_sha"] == "a" * 40
 	assert set(linked) == {
 		"number", "state", "merged", "labels", "merged_at", "merge_commit_sha",
-		"head_ref", "base_ref", "head_sha", "mergeable", "merge_state_status", "headPushedAt",
+		"head_ref", "base_ref", "head_sha", "mergeable", "merge_state_status", "draft", "title",
+		"headPushedAt",
 	}
 	assert out["11"]["linked_pr"] is None
 	assert out["12"]["linked_pr"] is None
