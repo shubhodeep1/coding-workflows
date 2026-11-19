@@ -9,15 +9,20 @@ import re
 import subprocess
 import tempfile
 import textwrap
+import sys
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_test_and_mark_stable_text  # noqa: E402
+
 
 def _read_workflow() -> str:
-	return WORKFLOW.read_text(encoding="utf-8")
+	return expanded_test_and_mark_stable_text()
 
 
 def _slice_between(text: str, start_marker: str, end_marker: str) -> str:

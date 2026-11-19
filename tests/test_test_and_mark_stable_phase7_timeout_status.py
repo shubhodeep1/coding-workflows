@@ -15,6 +15,7 @@ import re
 import subprocess
 import tempfile
 import textwrap
+import sys
 from pathlib import Path
 
 import yaml
@@ -23,13 +24,17 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_test_and_mark_stable_text  # noqa: E402
+
 WAIT_START = "DEADLINE=$(( $(date +%s) + (PHASE7_WAIT_BUDGET_MINUTES * 60) ))"
 CONCLUSION_CHECK = 'if [ "${NEW_CONCLUSION}" != "success" ]; then'
 TIMEOUT_ERROR = "did not complete within ${PHASE7_WAIT_BUDGET_MINUTES}m (status=${STATUS:-?})"
 
 
 def _read_workflow() -> str:
-	return WORKFLOW.read_text(encoding="utf-8")
+	return expanded_test_and_mark_stable_text()
 
 
 def _slice_between(text: str, start_marker: str, end_marker: str) -> str:
