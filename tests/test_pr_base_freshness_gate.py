@@ -536,7 +536,8 @@ class RequiredCiCheckWait(unittest.TestCase):
 		self.assertIn("ci_state=success", out)
 
 	def test_same_named_check_from_another_workflow_does_not_count(self) -> None:
-		"""lint-pr-body-auto-close.yml's job is also named `lint`; only a CI run's `lint` counts."""
+		"""lint-plan-archival.yml's job is also named `lint` (lint-pr-body-auto-close.yml's was
+		until it became `pr-body-lint`); only a CI run's `lint` counts."""
 		other = json.dumps([{"check_runs": [
 			{"name": "lint", "status": "completed", "conclusion": "success", "details_url": "https://github.com/o/r/actions/runs/555/job/1"},
 		]}])
