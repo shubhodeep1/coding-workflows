@@ -21680,6 +21680,54 @@ def test_stall_judge_resolve_merge_conflict_dispatches_review_and_increments_onc
 	assert issue_entry["stall_recovery_count"] == 3
 
 
+def test_stall_judge_resolve_merge_conflict_skips_held_pr():
+	# PR #9750: the linked-PR caches lack the hold fields. recover_stalled_issue
+	# re-checks the implementation-PR payload before the judge, and the
+	# resolve_merge_conflict arm re-checks the REST payload, so a held PR the
+	# judge would route to conflict resolution gets no update-branch, dispatch
+	# or attempt. Mergeable, so the wave-level conflict path stays out of it.
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 77},
+		prs=[
+			{
+				"number": 77,
+				"body": "Closes #10",
+				"state": "open",
+				"draft": True,
+				"title": "AI implementation for issue #10",
+				"mergeable": True,
+				"mergeable_state": "clean",
+				"headRefName": "feature/stall-judge",
+				"headRefFromApi": "feature/stall-judge",
+				"headSha": "deadbeef",
+				"baseRefName": "main",
+			},
+		],
+		mock_store_extra={"graphql_omit_pr_hold_fields": True},
+		mock_stall_judge_json={
+			"action": "resolve_merge_conflict",
+			"justification": "conflicted",
+			"target_pr": 77,
+			"head_ref": "feature/stall-judge",
+		},
+	)
+	assert "STALL_SKIP issue=10 reason=pr_ai_hold pr=77 detail=draft phase=ai:done action=none" in result["stdout"], result["stdout"]
+	assert 77 not in result.get("update_branch_calls", [])
+	assert result.get("review_dispatches", []) == []
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 2
+
+
 
 def test_stall_judge_escalate_human_adds_needs_human_label_and_increments_counter():
 	state = _base_state(status="in_progress")

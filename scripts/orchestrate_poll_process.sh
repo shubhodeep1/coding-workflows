@@ -21345,6 +21345,17 @@ The judge will evaluate this gap when the wave completes and decide whether to r
       local head_sha
       local dispatch_rc=0
       pr_json="$(_fetch_pr_json "${target_pr}")"
+      # Owner hold (draft / `[skip ai]` title, PR #9750): the stall judge can
+      # route a held PR here; no branch update, no dispatch, no attempt
+      # counted. Reads the payload fetched above (0 extra API calls).
+      local _rmc_ai_hold_reason=""
+      _rmc_ai_hold_reason="$(_stall_pr_ai_hold_reason "${pr_json}")"
+      if [ -n "${_rmc_ai_hold_reason}" ]; then
+        echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${target_pr} detail=${_rmc_ai_hold_reason} phase=${phase} action=none"
+        STALL_RECOVERY_EFFECTIVE_ACTION="resolve_merge_conflict_skipped_pr_ai_hold"
+        STALL_RECOVERY_SHOULD_INCREMENT="false"
+        return 1
+      fi
       # Issue #6680: a conflict on retired host-only file(s) the base no
       # longer has can never be merged by the sandboxed resolver; close the
       # PR and re-issue against the current base instead of re-dispatching.
@@ -22909,6 +22920,11 @@ ${diagnostics}
         return $?
       fi
       if ! execute_stall_recovery_action "${issue_num}" "${phase}" "resolve_merge_conflict" "${recovery_count}" "${local_id}" "${stall_minutes}"; then
+        # Owner hold (PR #9750): the target PR is held, so no fallback
+        # dispatch either; no attempt is counted.
+        if [ "${STALL_RECOVERY_EFFECTIVE_ACTION:-}" = "resolve_merge_conflict_skipped_pr_ai_hold" ]; then
+          return 1
+        fi
         echo "::warning::resolve_merge_conflict dispatch failed for issue #${issue_num}; falling back to ${fallback_action}."
         execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
         return $?
@@ -23475,8 +23491,10 @@ _linked_pr_is_capacity_waiting()
 # scripts/review_autofix_step_evaluate_gate.sh), and nothing otherwise.
 # Accepts a full REST pulls/<n> payload (.draft, .title) and the batched
 # GraphQL linked_pr shape (.draft, .title; .isDraft also read). Only an open,
-# unmerged PR (or one whose state is absent) can be held. A missing or
-# malformed payload prints nothing, so recovery fails open to the old path.
+# unmerged PR (or one whose state is absent, treated as open) can be held,
+# and only when it carries a true draft flag or a `[skip ai]` title. A
+# missing or malformed payload, or one without those fields, prints nothing,
+# so recovery fails open to the old path.
 # Stall recovery never dispatches a review, pushes an empty commit or calls
 # the stall judge for a held PR; a manual workflow_dispatch of
 # internal-review.yml still overrides the hold in the review gate.
@@ -27674,14 +27692,19 @@ recover_stalled_issue() {
   # Cancel any zombie runs for this issue before retrying.
   # Owner hold on the linked PR (draft / `[skip ai]` title, PR #9750):
   # managed ai:done issues skip the stall judge and every dispatch. Reads
-  # the wave's batched GraphQL linked_pr (0 extra API calls); a missing
+  # _fresh_lpr_entry first (the same STALL_MANAGED_LINKED_PR_CACHE entry,
+  # or REST implementation-PR fallback, the guards above use), then the
+  # wave's batched GraphQL linked_pr (0 extra API calls); a missing
   # payload fails open, and execute_stall_recovery_action retrigger_review
-  # re-checks the REST payload.
+  # / resolve_merge_conflict re-check the REST payload.
   if [ "${phase}" = "ai:done" ] && [ "${action}" != "skip" ]; then
-    local _recover_hold_pr_json=""
-    _recover_hold_pr_json="$(printf '%s' "${_current_wave_details_json:-}" | jq -c --arg n "${issue_num}" '.[$n].linked_pr // empty' 2>/dev/null || true)"
+    local _recover_hold_pr_json="${_fresh_lpr_entry:-}"
     local _recover_hold_reason=""
     _recover_hold_reason="$(_stall_pr_ai_hold_reason "${_recover_hold_pr_json}")"
+    if [ -z "${_recover_hold_reason}" ]; then
+      _recover_hold_pr_json="$(printf '%s' "${_current_wave_details_json:-}" | jq -c --arg n "${issue_num}" '.[$n].linked_pr // empty' 2>/dev/null || true)"
+      _recover_hold_reason="$(_stall_pr_ai_hold_reason "${_recover_hold_pr_json}")"
+    fi
     if [ -n "${_recover_hold_reason}" ]; then
       local _recover_hold_pr_num=""
       _recover_hold_pr_num="$(printf '%s' "${_recover_hold_pr_json}" | jq -r '.number // empty' 2>/dev/null || true)"
@@ -35999,21 +36022,21 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 		echo "STANDALONE_CONFLICT_STUCK pr=${S_PR} outcome=skip reason=claude_capacity_wait"
 		continue
 	fi
-	# Owner hold (draft or `[skip ai]` title, PR #9750): no update-branch,
-	# no review dispatch, no attempt marker. Poller run 44450042608 dispatched
-	# on held drafts #9573/#9502/#9497. Reads the payload fetched above.
-	_conflict_sweep_hold_reason="$(_stall_pr_ai_hold_reason "${S_PR_JSON}")"
-	if [ -n "${_conflict_sweep_hold_reason}" ]; then
-		echo "STANDALONE_CONFLICT_STUCK pr=${S_PR} outcome=skip reason=pr_ai_hold detail=${_conflict_sweep_hold_reason}"
-		continue
-	fi
-
 	S_MERGEABLE_STATE="$(echo "${S_PR_JSON}" | jq -r '.mergeable_state // ""')"
 	if [ -z "${S_MERGEABLE_STATE}" ] || [ "${S_MERGEABLE_STATE}" = "unknown" ]; then
 		continue
 	fi
 
 	if [ "${S_MERGEABLE_STATE}" != "dirty" ]; then
+		continue
+	fi
+	# Owner hold (draft or `[skip ai]` title, PR #9750): no update-branch,
+	# no review dispatch, no attempt marker. Poller run 44450042608 dispatched
+	# on held drafts #9573/#9502/#9497. Reads the payload fetched above;
+	# runs after the dirty filter so only conflicted held PRs are logged.
+	_conflict_sweep_hold_reason="$(_stall_pr_ai_hold_reason "${S_PR_JSON}")"
+	if [ -n "${_conflict_sweep_hold_reason}" ]; then
+		echo "STANDALONE_CONFLICT_STUCK pr=${S_PR} outcome=skip reason=pr_ai_hold detail=${_conflict_sweep_hold_reason}"
 		continue
 	fi
 
