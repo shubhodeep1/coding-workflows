@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_test_and_mark_stable_step_scripts_contract.py:32-76 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The workflow size-guard `assert size <= MAX_WORKFLOW_BYTES` (MAX_WORKFLOW_BYTES = 430_000) in test_workflow_keeps_fifty_thousand_bytes_of_headroom fails on head 43b21173 with \"AssertionError: 430487\", which fails tests-system-python (11) and tests-promote-stall-and-review; lint fails only because it collects those two jobs.\n  WHY: Every CI run hits this assertion while .github/workflows/test-and-mark-stable.yml is over 430,000 bytes, so the required CI aggregate stays red. The extra bytes came in through base merge 43b21173 from orchestrator/project-8291. The workflow file is not in this PR's diff or its files_touched grant, and \u00a724 forbids raising the guard, so the fix (moving `run:` bodies into scripts/) belongs on the integration branch. Both reviewers rated it MAJOR and treat it as an out-of-scope blocker that came from the base branch, not a defect in this PR. z-ai_glm-5_3-flash cited the file as .github/workflows/test-and-mark-stable.yml, measured against the test file's lines :32 and :76.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_test_and_mark_stable_step_scripts_contract.py:line 32 `MAX_WORKFLOW_BYTES = 430_000`; line 74 `def test_workflow_keeps_fifty_thousand_bytes_of_headroom()`; line 76 `assert size <= MAX_WORKFLOW_BYTES, size` | severity=MAJOR | confidence=5\n  PROBLEM: Three CI checks fail on PR head 43b21173 with \"AssertionError: 430487 / assert 430487 <= 430000\": tests-system-python (11), tests-promote-stall-and-review, and lint (which fails only because it collects the other two). This PR does not change test-and-mark-stable.yml, and that file is outside the files_touched grant. The PR's only workflow edit adds two `SECURITY_PASS_REBIND_ENABLED` env lines to orchestrate_poll.yml, which this guard does not measure. The bytes came in through base-sync merge 43b21173 from orchestrator/project-8291, and earlier heads a120ac7a, c3bbaf72 and 8c04d15b failed the same way.\n  WHY: Every CI run hits the assertion while the base branch keeps the workflow over 430,000 bytes, so the CI aggregate stays red and the final-CI gate keeps sending the PR back to review. \u00a724 forbids raising the guard. The fix (moving `run:` bodies into scripts/) belongs on orchestrator/project-8291. The reviewer treats this as an out-of-scope blocker that came from the base branch, not a defect in this PR.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/test-and-mark-stable.yml:measured against tests/test_test_and_mark_stable_step_scripts_contract.py:32 (MAX_WORKFLOW_BYTES = 430_000) and :76 (assert size <= MAX_WORKFLOW_BYTES) | severity=MAJOR | confidence=5\n  PROBLEM: The size-guard assertion fails on head 43b21173 with \"AssertionError: 430487\" (FAILED tests/test_test_and_mark_stable_step_scripts_contract.py::test_workflow_keeps_fifty_thousand_bytes_of_headroom). This fails tests-system-python (11) and tests-promote-stall-and-review, and lint fails only because it collects them. The workflow file is not in this PR's diff. The bytes came in through base merge 43b21173 from orchestrator/project-8291, the same cause recorded for heads a120ac7a, c3bbaf72 and 8c04d15b.\n  WHY: Every CI run hits the assertion while the file exceeds 430,000 bytes, so the CI aggregate cannot go green on this head whatever this PR contains. The fix (moving inline run: bodies into scripts/) belongs on the integration branch. Raising the guard is forbidden, and the file is outside this PR's changed files and files_touched grant.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b2b8ebc9f26f80c30d87664e2fb7a76a3fad07faa71c97b22490590f7dbba6ef",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9602,
+    "run_id": "44702072840",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44702072840",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120084355_2ecd22a572",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9602,
+    "run_id": "44702072840"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T08:43:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
