@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:32554-32701 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: Five new module-level tests (lines 32554, 32568, 32586, 32610, 32701) declare a required `tmp_path` parameter, but the module's custom runner `_run_selected_tests` (line 27688) calls `func()` with no arguments.\n  WHY: Under the CI runner each test raises `TypeError: missing 1 required positional argument: 'tmp_path'`, and the guard test `test_custom_runner_tests_need_no_pytest_arguments` (line 27955) also fails, so the orchestrate-poll CI job goes red. Reviewers rated this BLOCKER, and BLOCKER is mapped to critical here. The fix is to use `tempfile.TemporaryDirectory()` inside each test.\n- scripts/orchestrate_poll_process.sh:unspecified | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR diff introduces shell code that triggers a `shellcheck` failure.\n  WHY: CI enforces `shellcheck --severity=error`, so this blocks merge. Reviewers rated this BLOCKER, and BLOCKER is mapped to critical here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add tests in tests/test_orchestrate_poll_process.py\" (Issue #9732) for the new standalone-attempt-merge required-checks chain\n  expected_change_site: tests/test_orchestrate_poll_process.py (the five tests at 32554-32701 and the helper at 32487-32510)\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The five tests exist but declare `tmp_path`, so under the custom runner (line 27688 calls `func()`) they raise TypeError and never reach their assertions, and the required coverage is not exercised by CI.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_orchestrate_poll_process.py:32554, 32568, 32586, 32610, 32701 | severity=BLOCKER | confidence=5\n  PROBLEM: Five module-level tests take a required `tmp_path` parameter, but the module runs under its own runner, `_run_selected_tests` (line 27688), which calls `func()` with no arguments. CI invokes it at ci.yml lines 3496 and 3557.\n  WHY: Each test raises TypeError under the CI runner, and the guard test at line 27955 fails too. The earlier autofix runs only used `pytest -k`, which injects `tmp_path`. The fix is `tempfile.TemporaryDirectory()` in each test.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_orchestrate_poll_process.py:32554, 32568, 32586, 32610, 32701 | severity=BLOCKER | confidence=5\n  PROBLEM: The tests declare a `tmp_path` fixture parameter, but the custom runner (`_run_selected_tests`) calls `func()` without injecting fixtures.\n  WHY: Each raises TypeError for the missing `tmp_path` argument, so CI runs fail.\n- scripts/orchestrate_poll_process.sh:shellcheck failure | severity=BLOCKER | confidence=5\n  PROBLEM: The PR diff introduces shell code that triggers a `shellcheck` failure.\n  WHY: CI enforces `shellcheck --severity=error`, so this blocks merge.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_process.py:32554, 32568, 32586, 32610, 32701 (helper at 32487-32510) | severity=BLOCKER | confidence=5\n  PROBLEM: All five new tests declare `tmp_path`, but the custom CI runner invokes each as `func()` (line 27688) with no fixtures injected.\n  WHY: Each raises TypeError, counted as a FAIL by `_run_selected_tests` (27692-27694, `failed += 1` at 27725), so the orchestrate-poll job goes red. The pre-push gate hides this because the file is in `Unverified: timeout`. The last run (commit f4ff451) added the fifth broken test at 32701. The module convention is `tempfile.TemporaryDirectory()` (line 29102).\n- TASK_GAP: tests/test_orchestrate_poll_process.py | severity=BLOCKER | confidence=5\n  Requirement: \"Add tests in tests/test_orchestrate_poll_process.py\" (Issue #9732, linked issue body) for the new standalone-attempt-merge required-checks chain.\n  Expected change site: tests/test_orchestrate_poll_process.py (the five tests and the helper at 32487-32510)\n  Evidence of absence: The tests are present but raise TypeError under the custom runner (line 27688), so the required coverage is not exercised by CI.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_orchestrate_poll_process.py:27688, 32554, 32568, 32586, 32610, 32701 | severity=BLOCKER | confidence=5\n  PROBLEM: The five new tests require a pytest fixture (`tmp_path`), but CI runs this module through its custom runner, which does not inject fixtures.\n  WHY: Each test raises TypeError for the missing `tmp_path` argument and is counted as a failure, so the orchestrate-poll check fails.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_orchestrate_poll_process.py:32554, 32568, 32586, 32610, 32701 (runner at 27688, main() at 29071-29092, guard test at 27955, ci.yml:3496 and 3557) | severity=BLOCKER | confidence=5\n  PROBLEM: Five tests declare a required `tmp_path` parameter. The runner calls every `test_*` as bare `func()` through `main()`, and the module's own contract (lines 4310, 21216, 22351) and the guard test at 27955-27967 forbid tests that need arguments.\n  WHY: Each test raises TypeError under the CI runner, and the guard test fails on `bind()` for all five names. The earlier autofix rounds verified only with `pytest -k`. The fix is `tempfile.TemporaryDirectory()` inside each test.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c75bbfdb62ae9f9fed5a690d1953d888fa2a643cfcc9f7a7f2514b23d43dfef5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9737,
+    "run_id": "44785451762",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44785451762",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120181216_82d5e666a4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9737,
+    "run_id": "44785451762"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T18:12:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
