@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_test_and_mark_stable_clarify_negative_outputs.py:84-88,137 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: STUB_FAKES is claimed to be a tuple of strings that is string-concatenated with `_step_script(...)` at line 137, raising a TypeError.\n  WHY: Reviewer says the tests fail to execute in CI. Severity was BLOCKER. Disputed: anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna and z-ai_glm-5_3-flash refuted it. They say adjacent string literals with no commas form a single `str`, so line 137 is `str + str`.\n- tests/test_test_and_mark_stable_gh_api_error_body_capture.py:68-79 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: `_run_step` writes the fake `gh` as an executable file in a TemporaryDirectory prepended to PATH, which a `noexec` mount in the pre-push gate container would block.\n  WHY: Tests would fail with \"Permission denied\" in the CI gate. Severity was MAJOR. Disputed: anthropic_claude-sonnet-5_5 and minimax_minimax-m3 judged it pre-existing and out of scope, and anthropic_claude-sonnet-5_5 found no evidence of a gate failure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_test_and_mark_stable_clarify_negative_outputs.py:84-88, 137 | severity=BLOCKER | confidence=5\n  PROBLEM: STUB_FAKES is defined as a tuple of strings due to implicit concatenation, and then string-concatenated (`+`) with the result of `_step_script` at line 137, raising a `TypeError`.\n  WHY: The tests fail to execute, causing `tests/test_test_and_mark_stable_clarify_negative_outputs.py` to fail in CI.\n- tests/test_test_and_mark_stable_gh_api_error_body_capture.py:68-79 (used by tests at lines 99-107, 110-118, 121-124) | severity=MAJOR | confidence=4\n  PROBLEM: The test continues to build the fake `gh` as an executable file in a `TemporaryDirectory` on PATH, which is blocked by the pre-push gate container's `noexec` mount.\n  WHY: Tests will fail with \"Permission denied\" in the CI gate.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_test_and_mark_stable_gh_api_error_body_capture.py:`_run_step`, lines 68-86 (specifically lines 72-74 `gh.write_text(...)` + `gh.chmod(0o755)` and line 79 `PATH: f\"{bindir}{os.pathsep}...\"`) | severity=MAJOR | confidence=4\n  PROBLEM: The fake `gh` is written as an executable file inside a `tempfile.TemporaryDirectory()` prepended to PATH, and the pre-push gate container mounts the temp dir `noexec`.\n  WHY: `bash -c body` resolves `gh` to the temp-dir file and gets Permission denied. `assert result.returncode == 0` at line 87 then fails for the 4 subprocess-based tests.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "24b7131af63dc0be0ac620023ba0b7ec93a72be4bababd6c884bda34a32d9f0b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9806,
+    "run_id": "44666478925",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44666478925",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120035713_3edc95bf63",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9806,
+    "run_id": "44666478925"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T03:57:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
