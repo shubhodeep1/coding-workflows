@@ -1842,10 +1842,44 @@ def _phase_failure_markers_to_evidence(markers: list[dict[str, Any]]) -> list[di
 	return evidence
 
 
-def _linked_pr_evidence(linked_pr: dict[str, Any] | None) -> dict[str, Any] | None:
+def _linked_pr_base_ref(linked_pr: dict[str, Any]) -> str:
+	"""The linked PR's base branch from a cache (base_ref / baseRefName) or REST (.base.ref) shape."""
+	for key in ("base_ref", "baseRefName"):
+		value = linked_pr.get(key)
+		if isinstance(value, str) and value.strip():
+			return value.strip()
+	base = linked_pr.get("base")
+	if isinstance(base, dict) and isinstance(base.get("ref"), str):
+		return base["ref"].strip()
+	return ""
+
+
+def _linked_pr_evidence(
+	linked_pr: dict[str, Any] | None,
+	*,
+	default_branch: str | None = None,
+	declared_branch: str | None = None,
+	is_managed: bool = False,
+) -> dict[str, Any] | None:
+	"""Evidence action implied by the linked PR's state.
+
+	Issue #9481: when ``default_branch`` is given and the PR's base is known, a
+	merged PR implies ``attempt_merge`` only when it merged into the default
+	branch, the declared integration branch, or (managed issues without a
+	declared branch) an ``orchestrator/project-*`` branch. Any other base
+	returns None so the judge's decision stands. A missing base or no
+	``default_branch`` keeps the legacy behaviour.
+	"""
 	if not isinstance(linked_pr, dict):
 		return None
 	if bool(linked_pr.get("merged")):
+		base_ref = _linked_pr_base_ref(linked_pr) if default_branch else ""
+		if base_ref and not (
+			base_ref == default_branch
+			or (declared_branch and base_ref == declared_branch)
+			or (is_managed and not declared_branch and base_ref.startswith("orchestrator/project-"))
+		):
+			return None
 		return {
 			"action": "attempt_merge",
 			"source": "linked_pr_state",
@@ -1883,6 +1917,9 @@ def evaluate_phase_failure_resume(
 	comments: list[dict[str, Any]],
 	linked_pr: dict[str, Any] | None,
 	processed_workflow_run_ids: list[str] | set[str] | None = None,
+	default_branch: str | None = None,
+	declared_branch: str | None = None,
+	is_managed: bool = False,
 ) -> dict[str, Any]:
 	"""Evaluate whether a phase-failure marker can safely resume a retrigger action."""
 	markers = parse_phase_failure_markers(comments)
@@ -1898,7 +1935,9 @@ def evaluate_phase_failure_resume(
 		}
 
 	evidence = _phase_failure_markers_to_evidence(markers)
-	pr_evidence = _linked_pr_evidence(linked_pr)
+	pr_evidence = _linked_pr_evidence(
+		linked_pr, default_branch=default_branch, declared_branch=declared_branch, is_managed=is_managed,
+	)
 	if pr_evidence is not None:
 		evidence.append(pr_evidence)
 
@@ -2081,11 +2120,16 @@ def resolve_label_repair_evidence(
 	labels: list[str],
 	comments: list[dict[str, Any]],
 	linked_pr: dict[str, Any] | None,
+	default_branch: str | None = None,
+	declared_branch: str | None = None,
+	is_managed: bool = False,
 ) -> dict[str, Any]:
 	"""Resolve authoritative label evidence and stale-marker audit details."""
 	markers = parse_phase_failure_markers(comments)
 	evidence = _phase_failure_markers_to_evidence(markers)
-	pr_evidence = _linked_pr_evidence(linked_pr)
+	pr_evidence = _linked_pr_evidence(
+		linked_pr, default_branch=default_branch, declared_branch=declared_branch, is_managed=is_managed,
+	)
 	if pr_evidence is not None:
 		evidence.append(pr_evidence)
 	current_phase = determine_phase(labels)
@@ -2847,6 +2891,90 @@ def extract_integration_branch(body: str) -> str:
 	if not alias_match:
 		return ""
 	return (alias_match.group(1) or alias_match.group(2) or "").strip()
+
+
+# Issue #8955: the failing-PR marker scripts/check_failure_triage.sh writes
+# into an ai:check-triage issue body. Must stay identical to
+# check_triage_resolution.PR_MARKER_RE (a test compares the two patterns);
+# copied rather than imported because issue_pr_status.yml stages only this
+# module, and check_triage_resolution imports workflow_failure_heal.
+CHECK_TRIAGE_PR_MARKER_RE = re.compile(r"^ {0,3}<!-- check-failure-triage:pr=([1-9][0-9]{0,9}) -->\s*$")
+CHECK_TRIAGE_LABEL_NAME = "ai:check-triage"
+
+
+def _check_triage_lines_outside_fences(body: str) -> list[str]:
+	"""Body lines outside code fences.
+
+	Copy of check_triage_resolution._lines_outside_fences (a test compares
+	the two), so a marker quoted inside a fence is not counted.
+	"""
+	fence: str | None = None
+	kept: list[str] = []
+	for line in body.split("\n"):
+		match = re.match(r" {0,3}(`{3,}|~{3,})", line)
+		if fence is None:
+			if match:
+				fence = match.group(1)
+				continue
+			kept.append(line)
+		elif match and match.group(1)[0] == fence[0] and len(match.group(1)) >= len(fence) and not line[match.end():].strip():
+			fence = None
+	return kept
+
+
+def check_triage_target_branch(
+	issue_body: Any,
+	labels: Any,
+	author_login: Any,
+	pipeline_login: Any,
+) -> int | None:
+	"""Return the failing PR number an ai:check-triage issue names, or None.
+
+	Issue #8955: a check-triage fix PR merges into the head branch of the PR
+	whose check failed, not into the default branch. Callers
+	(issue_pr_status.yml and close_merged_issues_sweep) count a merge into
+	that PR's head branch as completion with reason ``check_triage_pr_branch``.
+
+	Trust rules (all must hold, otherwise None):
+	- ``labels`` contains ``ai:check-triage`` (strings or ``{"name": ...}``
+	objects; anything else is ignored);
+	- ``author_login`` and ``pipeline_login`` are non-empty and equal,
+	case-insensitively (the issue was written by the pipeline login);
+	- the body has exactly one ``<!-- check-failure-triage:pr=<N> -->`` line
+	outside code fences (CHECK_TRIAGE_PR_MARKER_RE, fence rule shared with
+	check_triage_resolution); zero or several markers return None.
+
+	API budget: this function makes no API calls. Callers make at most one
+	``GET pulls/<N>`` per issue, only after the existing target-branch rules
+	have rejected the merge, and compare the API's ``head.ref`` (never issue
+	text) with the merged PR's base, requiring a same-repository head.
+	"""
+	if not isinstance(labels, list):
+		return None
+	label_names: set[str] = set()
+	for entry in labels:
+		if isinstance(entry, str):
+			label_names.add(entry)
+		elif isinstance(entry, dict) and isinstance(entry.get("name"), str):
+			label_names.add(entry["name"])
+	if CHECK_TRIAGE_LABEL_NAME not in label_names:
+		return None
+	if not isinstance(author_login, str) or not isinstance(pipeline_login, str):
+		return None
+	author = author_login.strip()
+	pipeline = pipeline_login.strip()
+	if not author or not pipeline or author.lower() != pipeline.lower():
+		return None
+	if not isinstance(issue_body, str) or not issue_body:
+		return None
+	markers = [
+		match.group(1)
+		for match in (CHECK_TRIAGE_PR_MARKER_RE.match(line.rstrip("\r")) for line in _check_triage_lines_outside_fences(issue_body))
+		if match
+	]
+	if len(markers) != 1:
+		return None
+	return int(markers[0])
 
 
 def extract_tracking_issue_number(body: str) -> int | None:
@@ -3750,6 +3878,25 @@ def cmd_extract_integration_branch(args: argparse.Namespace) -> int:
 	branch = extract_integration_branch(body)
 	if branch:
 		print(branch)
+	return 0
+
+
+def cmd_check_triage_target_pr(args: argparse.Namespace) -> int:
+	"""Print the failing PR number an ai:check-triage issue names, or nothing.
+
+	Issue #8955. Reads the issue body from stdin and applies
+	check_triage_target_branch with ``--labels-json``, ``--author`` and
+	``--pipeline-login``. Always exits 0; malformed ``--labels-json`` prints
+	nothing so callers fail closed. Makes no API calls.
+	"""
+	body = sys.stdin.read()
+	try:
+		labels = json.loads(args.labels_json or "[]")
+	except (TypeError, ValueError):
+		return 0
+	pr_number = check_triage_target_branch(body, labels, args.author or "", args.pipeline_login or "")
+	if pr_number is not None:
+		print(pr_number)
 	return 0
 
 
@@ -4682,6 +4829,15 @@ def build_parser() -> argparse.ArgumentParser:
 		help="Print the integration branch declared in an issue body read from stdin",
 	)
 	p_extract_branch.set_defaults(func=cmd_extract_integration_branch)
+
+	p_triage_target = subparsers.add_parser(
+		"check-triage-target-pr",
+		help="Print the failing PR number a pipeline-authored ai:check-triage issue body (stdin) names",
+	)
+	p_triage_target.add_argument("--labels-json", default="[]")
+	p_triage_target.add_argument("--author", default="")
+	p_triage_target.add_argument("--pipeline-login", default="")
+	p_triage_target.set_defaults(func=cmd_check_triage_target_pr)
 
 	p_unrouted = subparsers.add_parser("unrouted-blocked-comments", help="Flag blocked issues whose newest trusted human reply was never routed (JSON on stdin)")
 	p_unrouted.add_argument("--grace-minutes", type=int, default=15)
