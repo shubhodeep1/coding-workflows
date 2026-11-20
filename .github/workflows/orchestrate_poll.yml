@@ -1481,6 +1481,7 @@ jobs:
           # Audit a clean worktree of the audited head (scripts/orchestrate_poll_process.sh
           # security_pass_prepare_audit_worktree); false audits the poller checkout in place.
           SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED: ${{ vars.SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED || 'true' }}
+          SECURITY_PASS_REBIND_ENABLED: ${{ vars.SECURITY_PASS_REBIND_ENABLED || 'true' }}
           # Claude engine (plan Phase 5c): the judges' engine, per tracking
           # issue (scripts/ai_engine.sh; CLAUDE_FIXER_ENABLED=false keeps
           # RB_JUDGE on codex).
@@ -1734,6 +1735,7 @@ jobs:
           SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW: ${{ vars.SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW || '40' }}
           SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED: ${{ vars.SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED || 'true' }}
           SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED: ${{ vars.SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED || 'true' }}
+          SECURITY_PASS_REBIND_ENABLED: ${{ vars.SECURITY_PASS_REBIND_ENABLED || 'true' }}
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
           AI_ENGINE_WAVE_JUDGE: ${{ vars.AI_ENGINE_WAVE_JUDGE || '' }}
           AI_ENGINE_STALL_JUDGE: ${{ vars.AI_ENGINE_STALL_JUDGE || '' }}

@@ -917,6 +917,39 @@ def _add_contract_list_conflict(sandbox: Path) -> None:
 	_git("checkout", "-q", "main")
 
 
+def _add_security_pass_sync_merge(sandbox: Path, mode: str) -> str:
+	"""Stuck-states P13B fixture: commit a new default-branch file on ``main``
+	and merge ``main`` into the sandbox integration branch with ``--no-ff``.
+	``mode="clean"`` records a plain merge (empty ``git show --cc``);
+	``mode="evil"`` also edits a project file inside the merge commit.
+	Returns the integration head before the sync merge. Leaves ``main``
+	checked out."""
+	assert mode in ("clean", "evil"), mode
+	env = _git_test_env()
+
+	def _git(*args: str) -> str:
+		return subprocess.run(["git", "-C", str(sandbox), "-c", "commit.gpgsign=false", *args], check=True, env=env,
+			capture_output=True, text=True).stdout.strip()
+
+	pre_sync_head = _git("rev-parse", "refs/heads/orchestrator/project-192")
+	_git("checkout", "-q", "main")
+	(sandbox / "docs").mkdir(parents=True, exist_ok=True)
+	(sandbox / "docs" / "default_branch_sync_fixture.txt").write_text("default-branch change\n", encoding="utf-8")
+	_git("add", "docs/default_branch_sync_fixture.txt")
+	_git("commit", "-qm", "default-branch change")
+	_git("checkout", "-q", "orchestrator/project-192")
+	if mode == "clean":
+		_git("merge", "-q", "--no-ff", "--no-edit", "main")
+	else:
+		_git("merge", "-q", "--no-ff", "--no-commit", "main")
+		sentinel = sandbox / ".orchestrator_judge_context_sentinel.txt"
+		sentinel.write_text(sentinel.read_text(encoding="utf-8") + "code added inside the merge\n", encoding="utf-8")
+		_git("add", ".orchestrator_judge_context_sentinel.txt")
+		_git("commit", "-qm", "chore: sync main into orchestrator/project-192")
+	_git("checkout", "-q", "main")
+	return pre_sync_head
+
+
 def _run_poller(
 	*,
 	state: dict,
@@ -949,6 +982,9 @@ def _run_poller(
 	merge_conflict_on_sync: bool = False,
 	mock_local_integration_content_conflict: bool = False,
 	mock_local_contract_list_conflict: bool = False,
+	# Stuck-states P13B: "clean" or "evil" sync merge of main into the
+	# integration branch; exposes `__pre_sync_integration_head__`.
+	mock_security_pass_sync_merge: str | None = None,
 	blocked_check_shas: list[str] | None = None,
 	validation_workflow_runs: list[dict] | None = None,
 	issue_closed: dict[int, bool] | None = None,
@@ -1137,6 +1173,9 @@ def _run_poller(
 			# same read_entrypoints list of db/contracts/x.yml after a shared
 			# base, so the local `git merge` conflicts only on that list.
 			_add_contract_list_conflict(sandbox)
+		security_pass_pre_sync_head_sha = ""
+		if mock_security_pass_sync_merge is not None:
+			security_pass_pre_sync_head_sha = _add_security_pass_sync_merge(sandbox, mock_security_pass_sync_merge)
 		if mock_rb_judge_prompt_cap is not None:
 			# Exercise the same skip branch without passing a >1 MiB issue
 			# body through the fixture's executable gh/jq wrappers (ARG_MAX).
@@ -1203,6 +1242,8 @@ esac
 				env=_git_test_env(),
 			).stdout.strip(),
 		}
+		if security_pass_pre_sync_head_sha:
+			sandbox_sha_aliases["__pre_sync_integration_head__"] = security_pass_pre_sync_head_sha
 		integration_head_sha = sandbox_sha_aliases["__integration_head__"]
 		integration_tree_sha = subprocess.run(
 			["git", "-C", str(sandbox), "rev-parse", f"{integration_head_sha}^{{tree}}"],
@@ -4513,6 +4554,14 @@ def test_security_pass_audit_worktree_wiring_contract() -> None:
 	assert judge.count("poller_claude_judge SECURITY_JUDGE") == 1
 	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
 	assert "SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED: ${{ vars.SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED || 'true' }}" in workflow
+	# Stuck-states P13B: the rebind kill switch reaches both poll env blocks,
+	# and the rebind runs after the merge base and before the audit worktree.
+	assert workflow.count("SECURITY_PASS_REBIND_ENABLED: ${{ vars.SECURITY_PASS_REBIND_ENABLED || 'true' }}") == 2
+	rebind_call = 'security_pass_rebind_if_no_new_project_lines "${current_head_sha}" "${merge_base_sha}" "${prior_security_status}"'
+	assert security_runner.count(rebind_call) == 1
+	assert security_runner.index('merge_base_sha="$(git merge-base') < security_runner.index(rebind_call)
+	assert security_runner.index(rebind_call) < security_runner.index("security_pass_prepare_audit_worktree")
+	assert security_runner.index("SECURITY_PASS_CYCLE_BUDGET_RESET") < security_runner.index(rebind_call)
 
 
 def test_security_pass_findings_create_one_consolidated_managed_fix_issue() -> None:
@@ -4890,6 +4939,11 @@ def test_security_pass_head_advance_after_clean_pass_restores_fix_cycle_budget()
 	combined_log = result["stdout"] + result["stderr"]
 	assert "SECURITY_PASS_CYCLE_BUDGET_RESET" in combined_log
 	assert "reason=head_advanced_after_clean_pass" in combined_log
+	# Stuck-states P13B: the seeded pointer is not a commit SHA, so the rebind
+	# skips fail-safe and the audit runs as before.
+	assert "SECURITY_PASS_REBIND_SKIPPED tracking_issue=192" in combined_log
+	assert "reason=no_last_audited_sha" in combined_log
+	assert "SECURITY_PASS_REBOUND" not in combined_log
 	assert "SECURITY_PASS_FAILED reason=cycle_exhausted" not in combined_log
 	assert not any(
 		"security pass FAILED" in notification["message"]
@@ -5201,9 +5255,111 @@ def test_security_pass_head_advance_after_clean_pass_reaudits_only_the_delta() -
 	assert "SECURITY_PASS_CYCLE_BUDGET_RESET" in combined_log
 	assert f"mode=delta reason=head_advanced_since_last_audit base_sha={capture['diff_base']} since_sha={passed_sha}" in combined_log
 	assert latest_state["security_pass_cycle"] == 0
+	# Stuck-states P13B: the advanced head is a single-parent commit, so the
+	# rebind skips and the delta audit runs.
+	assert "SECURITY_PASS_REBIND_SKIPPED tracking_issue=192" in combined_log
+	assert "reason=non_merge_commit" in combined_log
+	assert "SECURITY_PASS_REBOUND" not in combined_log
 	assert latest_state["security_pass_status"] == "blocked"
 	assert latest_state["security_pass_last_audited_sha"] == capture["diff_head"]
 	assert [finding["finding_id"] for finding in latest_state["security_pass_reported_findings"]] == ["SEC-TEST-1"]
+
+
+def _security_pass_sync_merge_state() -> dict:
+	state = _base_state(status="security-pass")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 2,
+			"security_pass_status": "passed",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "__pre_sync_integration_head__",
+			"security_pass_last_audited_sha": "__pre_sync_integration_head__",
+		}
+	)
+	return state
+
+
+def test_security_pass_clean_sync_merge_after_clean_pass_rebinds_without_audit() -> None:
+	"""Stuck-states P13B / convergence plan D4: a clean pass invalidated only
+	by a clean `chore: sync main into <integration>` merge is rebound to the
+	new head without a model run (SECURITY_PASS_REBOUND)."""
+	result = _run_poller(
+		state=_security_pass_sync_merge_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		mock_security_pass_sync_merge="clean",
+	)
+
+	aliases = result["sandbox_sha_aliases"]
+	pre_sync = aliases["__pre_sync_integration_head__"]
+	merge_head = aliases["__integration_head__"]
+	assert pre_sync != merge_head
+	combined_log = result["stdout"] + result["stderr"]
+	assert (
+		f"SECURITY_PASS_REBOUND tracking_issue=192 from={pre_sync} to={merge_head} "
+		f"merge_base={aliases['__default_head__']} commits=1 reason=no_new_project_lines"
+	) in combined_log
+	assert "SECURITY_PASS_REBIND_SKIPPED" not in combined_log
+	assert result["security_audit_capture"] is None
+	assert "SECURITY_PASS_SCOPE" not in combined_log
+	assert "SECURITY_PASS_BLOCKED" not in combined_log
+	latest_state = result["latest_state"]
+	assert latest_state["security_pass_status"] == "passed"
+	assert latest_state["security_pass_head_sha"] == merge_head
+	assert latest_state["security_pass_last_audited_sha"] == merge_head
+	assert latest_state["security_pass_active_fix_issues"] == []
+
+
+def test_security_pass_evil_sync_merge_after_clean_pass_reaudits() -> None:
+	"""A sync merge that edits project code in its resolution is audited."""
+	result = _run_poller(
+		state=_security_pass_sync_merge_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		mock_security_pass_sync_merge="evil",
+	)
+
+	merge_head = result["sandbox_sha_aliases"]["__integration_head__"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_CYCLE_BUDGET_RESET" in combined_log
+	assert f"SECURITY_PASS_REBIND_SKIPPED tracking_issue=192 head_sha={merge_head} reason=evil_merge commit={merge_head}" in combined_log
+	assert "SECURITY_PASS_REBOUND" not in combined_log
+	capture = result["security_audit_capture"]
+	assert capture is not None
+	assert capture["diff_head"] == merge_head
+	assert combined_log.index("SECURITY_PASS_CYCLE_BUDGET_RESET") < combined_log.index("SECURITY_PASS_REBIND_SKIPPED")
+
+
+def test_security_pass_rebind_disabled_reaudits_clean_sync_merge() -> None:
+	"""SECURITY_PASS_REBIND_ENABLED=false restores today's re-audit exactly."""
+	result = _run_poller(
+		state=_security_pass_sync_merge_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		mock_security_pass_sync_merge="clean",
+		env_overrides={"SECURITY_PASS_REBIND_ENABLED": "false"},
+	)
+
+	merge_head = result["sandbox_sha_aliases"]["__integration_head__"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"SECURITY_PASS_REBIND_SKIPPED tracking_issue=192 head_sha={merge_head} reason=disabled" in combined_log
+	assert "SECURITY_PASS_REBOUND" not in combined_log
+	capture = result["security_audit_capture"]
+	assert capture is not None
+	assert capture["diff_head"] == merge_head
 
 
 def test_security_pass_unusable_last_audited_sha_falls_back_to_full_range() -> None:

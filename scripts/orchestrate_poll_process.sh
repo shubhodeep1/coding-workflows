@@ -9696,6 +9696,132 @@ security_pass_remove_audit_worktree() {
   return 0
 }
 
+# Stuck-states P13B / security-pass convergence plan D4 (Refs #8291): rebind
+# a clean pass across a head advance that adds no project lines.  The most
+# common invalidation of a `passed` security pass is a routine
+# `chore: sync <default> into <integration>` merge, which brings in only
+# default-branch code; re-running the whole model audit for it costs a run
+# and can surface pre-existing defects as new blockers.  When every commit in
+# `<head> ^<last_audited> ^<merge_base>` is a merge commit whose combined diff
+# (`git show --cc`) is empty -- no conflict-resolution edits -- the recorded
+# clean result still covers every project line, so the pass is moved to the
+# new head without a model run.  Any non-merge commit, any evil merge, any
+# git error, or any unusable pointer falls through to the existing audit.
+# Local git only; no GitHub API calls beyond the existing state comment and
+# hash-gated body reconcile a clean audit already pays.
+# SECURITY_PASS_REBIND_ENABLED (default true): unset, empty, true/1/yes/on
+# keeps it on, false/0/no/off turns it off, any other value warns and keeps
+# it on.  Logs SECURITY_PASS_REBOUND on success and SECURITY_PASS_REBIND_SKIPPED
+# reason=<r> when a prior clean pass could not be rebound.
+security_pass_rebind_enabled() {
+  case "$(printf '%s' "${SECURITY_PASS_REBIND_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+    ''|true|1|yes|on) return 0 ;;
+    false|0|no|off) return 1 ;;
+    *)
+      echo "::warning::SECURITY_PASS_REBIND_ENABLED has an unrecognised value; the security pass keeps rebinding clean passes across clean sync merges. Use true or false." >&2
+      return 0
+      ;;
+  esac
+}
+
+# security_pass_rebind_if_no_new_project_lines <head_sha> <merge_base_sha> <prior_security_status>
+# Returns 0 only after the pass was rebound to <head_sha>; 1 otherwise (the
+# caller then runs the audit exactly as before).
+security_pass_rebind_if_no_new_project_lines() {
+  local rebind_head_sha="${1:-}" rebind_merge_base_sha="${2:-}" rebind_prior_status="${3:-}"
+  local rebind_last_audited rebind_bound_head rebind_commits rebind_commit rebind_parents rebind_cc
+  local rebind_commit_count=0
+
+  [ "${rebind_prior_status}" = "passed" ] || return 1
+  if ! security_pass_rebind_enabled; then
+    echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=disabled"
+    return 1
+  fi
+  rebind_last_audited="$(jq -r '
+    if (.security_pass_last_audited_sha // "") != "" then .security_pass_last_audited_sha
+    elif (.security_pass_status // "") == "passed" then (.security_pass_head_sha // "")
+    else "" end' "${STATE_FILE}" 2>/dev/null || true)"
+  if ! [[ "${rebind_last_audited}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=no_last_audited_sha"
+    return 1
+  fi
+  rebind_bound_head="$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}" 2>/dev/null || true)"
+  if [ "${rebind_bound_head}" != "${rebind_last_audited}" ]; then
+    echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=pass_not_bound_to_last_audited"
+    return 1
+  fi
+  if ! [[ "${rebind_head_sha}" =~ ^[0-9a-f]{40}$ ]] || ! [[ "${rebind_merge_base_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=invalid_sha"
+    return 1
+  fi
+  if [ "${rebind_last_audited}" = "${rebind_head_sha}" ]; then
+    # The caller only reaches here when the pass is not valid at this head;
+    # a pointer already at the head means the state disagrees with itself.
+    echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=head_unchanged"
+    return 1
+  fi
+  if ! git cat-file -e "${rebind_last_audited}^{commit}" 2>/dev/null \
+    || ! git merge-base --is-ancestor "${rebind_last_audited}" "${rebind_head_sha}" 2>/dev/null; then
+    echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=last_audited_not_ancestor"
+    return 1
+  fi
+  if ! rebind_commits="$(git rev-list "${rebind_head_sha}" "^${rebind_last_audited}" "^${rebind_merge_base_sha}" 2>/dev/null)"; then
+    echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=git_error"
+    return 1
+  fi
+  if [ -z "${rebind_commits}" ]; then
+    echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=no_new_commits"
+    return 1
+  fi
+  while IFS= read -r rebind_commit; do
+    [ -n "${rebind_commit}" ] || continue
+    if ! [[ "${rebind_commit}" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=git_error"
+      return 1
+    fi
+    if ! rebind_parents="$(git rev-list --parents -n 1 "${rebind_commit}" 2>/dev/null)"; then
+      echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=git_error"
+      return 1
+    fi
+    # rev-list --parents prints "<commit> <parent>..."; a merge has 3+ words.
+    if [ "$(printf '%s\n' "${rebind_parents}" | wc -w | tr -d '[:space:]')" -lt 3 ]; then
+      echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=non_merge_commit commit=${rebind_commit}"
+      return 1
+    fi
+    # --no-ext-diff / --no-textconv: no repository-configured diff driver runs.
+    if ! rebind_cc="$(git show --no-color --no-ext-diff --no-textconv --format= --cc "${rebind_commit}" 2>/dev/null)"; then
+      echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=git_error"
+      return 1
+    fi
+    if [ -n "${rebind_cc//[[:space:]]/}" ]; then
+      echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=evil_merge commit=${rebind_commit}"
+      return 1
+    fi
+    rebind_commit_count=$((rebind_commit_count + 1))
+  done <<< "${rebind_commits}"
+  if [ "${rebind_commit_count}" -eq 0 ]; then
+    echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=no_new_commits"
+    return 1
+  fi
+  # Only the pass pointers move: .status, labels, the cycle and the findings
+  # memory stay as they are, the same contract as the "already valid" return.
+  if ! jq --arg head "${rebind_head_sha}" '
+      .security_pass_status = "passed"
+      | .security_pass_head_sha = $head
+      | .security_pass_last_audited_sha = $head' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null \
+    || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    rm -f "${STATE_FILE}.tmp"
+    echo "::warning::Could not rebind the clean security pass of tracking issue #${TRACKING_NUM} to ${rebind_head_sha}; running the audit instead."
+    echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=state_write_failed"
+    return 1
+  fi
+  reconcile_tracking_body_after_security_pass_transition
+  post_state_comment || true
+  echo "SECURITY_PASS_REBOUND tracking_issue=${TRACKING_NUM} from=${rebind_last_audited} to=${rebind_head_sha} merge_base=${rebind_merge_base_sha} commits=${rebind_commit_count} reason=no_new_project_lines"
+  return 0
+}
+
 run_security_pass_inline() {
   local integration_branch="$1"
   local default_branch="$2"
@@ -9806,6 +9932,13 @@ run_security_pass_inline() {
   if [ -z "${merge_base_sha}" ]; then
     security_pass_fail_closed "engine_unavailable" "No merge base exists between the default branch and integration head." "${prior_security_status}"
     return 1
+  fi
+  # Stuck-states P13B (Refs #8291): a clean pass whose head advanced only by
+  # clean sync merges is rebound without a model run.  Placed after the
+  # merge base is resolved (the `^merge_base` exclusion needs the refreshed
+  # default ref), so a SECURITY_PASS_CYCLE_BUDGET_RESET line precedes it.
+  if security_pass_rebind_if_no_new_project_lines "${current_head_sha}" "${merge_base_sha}" "${prior_security_status}"; then
+    return 0
   fi
   # Audit a clean worktree of the audited head, not the poller checkout whose
   # scripts/ and prompts/ may carry the restored support copies (see
