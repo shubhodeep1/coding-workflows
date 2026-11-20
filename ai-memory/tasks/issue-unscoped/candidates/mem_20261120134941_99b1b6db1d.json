@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_scan.py:364-370 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: `_rebuilt_labels` only restores `ai:security-audit` when the tracker body is in `details.json`, but the poller rotates and truncates the failed-project batch to 30 (scripts/orchestrate_poll_process.sh:25184-25191), so a rotated-out tracker is treated as a project and the judge can close it.\n  WHY: This breaks the \"Never close the tracker\" requirement on those ticks. Severity disagreement: minimax=MAJOR, glm=NIT, and the highest is used. anthropic_claude-sonnet-5_5 examined this and rejected it, because `select` still skips such an item as `blocked_too_recently` or `no_details`.\n- tests/test_security_audit_tracker_pipeline_exclude.py:162 | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The assertion at line 162 does not distinguish \"body present, no marker\" from \"body absent from details (rotation)\", so it cannot catch the rotation regression.\n  WHY: A regression that drops the tracker body would still pass the test. Severity is MAJOR in the source.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Never close the tracker, and never edit its body or its last-sha marker.\" (linked issue #9730)\n  expected_change_site: scripts/unblock_scan.py `_rebuilt_labels` (lines 364-370) and its caller\n  confidence=4\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: No fail-closed path exists for a tracker whose body is missing from details.json under the 30-item GraphQL rotation at scripts/orchestrate_poll_process.sh:25184-25191.\n- requirement: \"When such a tracker carries ai:blocked, or any pipeline phase label (ai:clarification, ai:planning and similar), remove those labels.\"\n  expected_change_site: scripts/orchestrate_poll_process.sh `_security_audit_tracker_release_pipeline_labels` allowlist\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The allowlist at line 303 omits `ai:validation-failed`, which is a pipeline phase in scripts/orchestrate_lib.py:1533 and an unblock stop label in scripts/unblock_ledger.py:146. The release helper leaves it on a marked tracker. Source severity is NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/unblock_scan.py:364-370 | severity=MAJOR | confidence=4\n  PROBLEM: `_rebuilt_labels` only adds `SECURITY_AUDIT_LABEL` when the body marker is present, and the 30-item rotation at scripts/orchestrate_poll_process.sh:25184-25191 can leave the body out of `details.json`, so the tracker becomes `kind=\"project\"` and can be closed.\n  WHY: The \"Never close the tracker\" guarantee is broken on the ticks where the rotation excludes the tracker.\n- tests/test_security_audit_tracker_pipeline_exclude.py:162 | severity=MAJOR | confidence=3\n  PROBLEM: The assertion models \"genuine absence\" and \"rotated out\" identically, so the test locks in the rotation case.\n  WHY: A rotation regression would pass the test.\n- TASK_GAP: Requirement: \"Never close the tracker, and never edit its body or its last-sha marker.\" Expected change site: scripts/unblock_scan.py `_rebuilt_labels` (lines 364-370) and its caller at line 370. Evidence of absence: No fail-closed path exists for a body missing from details. | severity=MAJOR | confidence=4\n- HARDENING: scripts/unblock_scan.py `_rebuilt_labels`: also include `SECURITY_AUDIT_LABEL` when `details.get(str(number)) is None` (~3 lines). HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \"When such a tracker carries ai:blocked, or any pipeline phase label (ai:clarification, ai:planning and similar), remove those labels.\" Expected change site: `scripts/orchestrate_poll_process.sh`, `_security_audit_tracker_release_pipeline_labels` allowlist. Evidence of absence: The allowlist at line 303 omits `ai:validation-failed`, which is in scripts/orchestrate_lib.py:1533 and scripts/unblock_ledger.py:146. | severity=NIT | confidence=5\n- HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:25184-25191 (interacting with scripts/unblock_scan.py:364-369) | severity=NIT | confidence=4\n  PROBLEM: With more than 30 failed projects the details batch is rotated and truncated to 30, so a released tracker outside the window has no details entry and reaches the judge's project path.\n  WHY: This contradicts the \"Never close the tracker\" invariant on that tick.\n- HARDENING: scripts/orchestrate_poll_process.sh:25184-25190: pin security-audit-labelled failed projects into `$projects` before rotation (~4 lines of jq). HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "18c913f7bf8bc57e4269c6083350792be52ba5939bcadaadf5842bd1b9708b8b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9734,
+    "run_id": "44743632147",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44743632147",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120134941_99b1b6db1d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9734,
+    "run_id": "44743632147"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T13:49:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
