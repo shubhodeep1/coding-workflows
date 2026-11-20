@@ -347,6 +347,7 @@ def test_conflict_sweep_skips_claude_capacity_wait_prs():
 	helpers = (
 		_extract_bash_function(script, "_linked_pr_is_merge_queued()\n{")
 		+ _extract_bash_function(script, "_linked_pr_is_capacity_waiting()\n{")
+		+ _extract_bash_function(script, "_stall_pr_ai_hold_reason()\n{")
 	)
 	prs = [
 		{"number": 7, "headRefName": "ai/issue-7", "headRefOid": HEAD_A, "baseRefName": "main", "isDraft": False},
@@ -377,6 +378,57 @@ def test_conflict_sweep_skips_claude_capacity_wait_prs():
 	assert not any("pulls/7/update-branch" in call for call in calls)
 	assert "DISPATCH pr=8" in out and f"COUNT pr=8 head={HEAD_B}" in out
 	assert [message for _, message in sends if "#7" in message] == []
+
+
+def test_conflict_sweep_skips_held_draft_and_skip_ai_prs():
+	"""2026-11-19: poller run 44450042608 dispatched conflict recovery on
+	held drafts #9573/#9502/#9497 (draft, `[skip ai]` title, dirty). A held
+	PR gets no update-branch, no dispatch and no attempt counted; a dirty PR
+	that is not held still dispatches (PR #9750)."""
+	_require_jq()
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = script.index("for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do")
+	end = script.index('echo "Standalone conflict sweep complete.', start)
+	sweep_loop = script[start:end]
+	helpers = (
+		_extract_bash_function(script, "_linked_pr_is_merge_queued()\n{")
+		+ _extract_bash_function(script, "_linked_pr_is_capacity_waiting()\n{")
+		+ _extract_bash_function(script, "_stall_pr_ai_hold_reason()\n{")
+	)
+	head_c = "c" * 40
+	prs = [
+		{"number": 7, "headRefName": "ai/issue-7", "headRefOid": HEAD_A, "baseRefName": "main", "isDraft": True},
+		{"number": 8, "headRefName": "ai/issue-8", "headRefOid": HEAD_B, "baseRefName": "main", "isDraft": False},
+		{"number": 9, "headRefName": "ai/issue-9", "headRefOid": head_c, "baseRefName": "main", "isDraft": False},
+	]
+	pr_json = {
+		"7": {"state": "open", "draft": True, "title": "Fix thing", "mergeable_state": "dirty", "head": {"ref": "ai/issue-7", "sha": HEAD_A}, "labels": []},
+		"8": {"state": "open", "draft": False, "title": "[skip ai] parked", "mergeable_state": "dirty", "head": {"ref": "ai/issue-8", "sha": HEAD_B}, "labels": []},
+		"9": {"state": "open", "draft": False, "title": "Fix other thing", "mergeable_state": "dirty", "head": {"ref": "ai/issue-9", "sha": head_c}, "labels": []},
+	}
+	body = (
+		"declare -A _STANDALONE_CLEAN_PRS=()\n"
+		f"STANDALONE_PRS={json.dumps(json.dumps(prs))}\n"
+		"STANDALONE_COUNT=3\n"
+		"CONFLICT_SWEEP_FIXED=0\n"
+		f"PR7={json.dumps(json.dumps(pr_json['7']))}\n"
+		f"PR8={json.dumps(json.dumps(pr_json['8']))}\n"
+		f"PR9={json.dumps(json.dumps(pr_json['9']))}\n"
+		'_safe_gh_jq() { case "$1" in */pulls/7) printf \'%s\' "${PR7}" ;; */pulls/8) printf \'%s\' "${PR8}" ;; */pulls/9) printf \'%s\' "${PR9}" ;; esac; }\n'
+		'gh() { printf \'%s\\n\' "$*" >> "${GH_LOG}"; return 1; }\n'
+		'_dispatch_review_for_conflicts() { echo "DISPATCH pr=$1"; return 0; }\n'
+		'_standalone_conflict_count_attempt() { echo "COUNT pr=$1 head=$2"; }\n'
+		+ helpers
+		+ sweep_loop
+	)
+	sends, calls, out = _run_harness(body)
+	assert "STANDALONE_CONFLICT_STUCK pr=7 outcome=skip reason=pr_ai_hold detail=draft" in out, out
+	assert "STANDALONE_CONFLICT_STUCK pr=8 outcome=skip reason=pr_ai_hold detail=skip_ai_title" in out, out
+	for held in (7, 8):
+		assert f"DISPATCH pr={held}" not in out and f"COUNT pr={held}" not in out
+		assert not any(f"pulls/{held}/update-branch" in call for call in calls)
+		assert [message for _, message in sends if f"#{held}" in message] == []
+	assert "DISPATCH pr=9" in out and f"COUNT pr=9 head={head_c}" in out
 
 
 def _sweep_alert_level_harness(env_lines: str) -> str:

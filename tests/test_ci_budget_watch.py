@@ -7,8 +7,10 @@ import os
 import stat
 import subprocess
 import sys
+from datetime import timedelta
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -142,7 +144,7 @@ def test_issue_text_names_the_fix_and_carries_the_marker() -> None:
 	assert "Do not raise `timeout-minutes`" in cbw.issue_body(dur, "u")
 
 
-def _fake_gh(tmp_path: Path, issues: list[dict], jobs: list[dict]) -> dict[str, str]:
+def _fake_gh(tmp_path: Path, issues: list[dict], jobs: list[dict], closed: list[dict] | None = None) -> dict[str, str]:
 	bin_dir = tmp_path / "bin"
 	bin_dir.mkdir()
 	log = tmp_path / "gh.log"
@@ -158,6 +160,8 @@ if path.endswith("/jobs?per_page=100"):
     print(json.dumps({{"jobs": {json.dumps(jobs)}}}))
 elif "issues?state=open" in path:
     print(json.dumps({json.dumps(issues)}))
+elif "issues?state=closed" in path and {closed is not None!r}:
+    print(json.dumps({json.dumps(closed or [])}))
 elif path.endswith("/issues"):
     print(json.dumps({{"number": 77}}))
 elif path.endswith("/labels"):
@@ -208,6 +212,65 @@ def test_matrix_jobs_sharing_a_subject_open_one_issue(tmp_path: Path) -> None:
 	assert "subject=orchestrate-poll action=exists" in result.stdout
 
 
+def _closed_issue(number: int, subject: str, hours_ago: float) -> dict:
+	closed_at = (cbw.datetime.now(cbw.timezone.utc) - timedelta(hours=hours_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+	return {"number": number, "state": "closed", "closed_at": closed_at, "body": cbw.marker("job_duration", subject) + "\nbody"}
+
+
+def _created(env: dict[str, str]) -> list[dict]:
+	calls = [json.loads(line) for line in Path(env["LOG"]).read_text().splitlines()]
+	return [c for c in calls if c["args"][1].endswith("/issues")]
+
+
+def test_recently_closed_issue_holds_back_a_marginal_refile(tmp_path: Path) -> None:
+	# orchestrate-poll was re-filed a few hours after each fix closed, for a
+	# job just over the 75% warning ratio. Closed two days ago: not re-filed.
+	root = _tree(tmp_path, {}, CI)
+	env = _fake_gh(tmp_path, [], [_job("tests-a", 16 * 60)], closed=[_closed_issue(9447, "tests-a", 48), _closed_issue(9214, "tests-a", 300), _closed_issue(9000, "other-job", 1)])
+	result = _run(root, env)
+	assert result.returncode == 0, result.stderr
+	assert _created(env) == []
+	assert "CI_BUDGET_ISSUE kind=job_duration subject=tests-a action=cooldown closed_issue=9447 cooldown_days=7 urgent_ratio=0.9" in result.stdout
+	assert "::warning::CI_BUDGET kind=job_duration subject=tests-a" in result.stdout
+	calls = [json.loads(line) for line in Path(env["LOG"]).read_text().splitlines()]
+	closed_reads = [c for c in calls if "issues?state=closed" in c["args"][1]]
+	assert len(closed_reads) == 1 and "labels=ai:ci-budget" in closed_reads[0]["args"][1] and "per_page=50" in closed_reads[0]["args"][1]
+
+
+@pytest.mark.parametrize("case", ["urgent", "cooldown_over", "cooldown_off", "closed_list_fails", "other_subject"])
+def test_refile_cooldown_does_not_hide_an_urgent_or_old_finding(tmp_path: Path, case: str) -> None:
+	root = _tree(tmp_path, {}, CI)
+	seconds = 19 * 60 if case == "urgent" else 16 * 60
+	closed: list[dict] | None = [_closed_issue(9447, "other-job" if case == "other_subject" else "tests-a", 24 * 9 if case == "cooldown_over" else 48)]
+	if case == "closed_list_fails":
+		closed = None
+	env = _fake_gh(tmp_path, [], [_job("tests-a", seconds)], closed=closed)
+	if case == "cooldown_off":
+		env["CI_BUDGET_REFILE_COOLDOWN_DAYS"] = "0"
+	result = _run(root, env)
+	assert result.returncode == 0, result.stderr
+	assert len(_created(env)) == 1, result.stdout
+	assert "action=opened number=77" in result.stdout and "action=cooldown" not in result.stdout
+	calls = [json.loads(line) for line in Path(env["LOG"]).read_text().splitlines()]
+	# No closed-issue read when the finding is urgent or the cooldown is off.
+	assert bool([c for c in calls if "issues?state=closed" in c["args"][1]]) == (case not in ("urgent", "cooldown_off"))
+	assert ("re-file cooldown not applied" in result.stdout) == (case == "closed_list_fails")
+
+
+def test_recently_closed_issue_ignores_malformed_entries() -> None:
+	now = cbw.datetime(2026, 11, 18, tzinfo=cbw.timezone.utc)
+	finding = {"kind": "job_duration", "subject": "tests-a", "value": 960, "limit": 1200}
+	body = cbw.marker("job_duration", "tests-a")
+	issues = [None, "x", {"number": 1, "body": body}, {"number": 2, "body": body, "closed_at": "not a time"},
+		{"number": 3, "body": body, "closed_at": "2026-11-17T00:00:00Z", "pull_request": {}},
+		{"number": "4", "body": body, "closed_at": "2026-11-17T00:00:00Z"},
+		{"number": 5, "body": body, "closed_at": "2026-11-16T00:00:00Z"}, {"number": 6, "body": body, "closed_at": "2026-11-17T00:00:00Z"}]
+	assert cbw.recently_closed_issue(issues, finding, cooldown_days=7, now=now) == 6
+	assert cbw.recently_closed_issue(issues, finding, cooldown_days=1, now=now) == 6
+	assert cbw.recently_closed_issue(issues[:-1], finding, cooldown_days=1, now=now) is None
+	assert cbw.recently_closed_issue(issues, finding, cooldown_days=0, now=now) is None
+
+
 def test_api_failures_never_fail_the_job(tmp_path: Path) -> None:
 	root = _tree(tmp_path, {"big.yml": 450_000}, CI)
 	bin_dir = tmp_path / "bin"
@@ -228,3 +291,6 @@ def test_ci_wiring() -> None:
 	assert "budget-watch" not in ci["jobs"]["lint"]["needs"]
 	assert set(ci["jobs"]["lint"]["needs"]) <= set(job["needs"])
 	assert "tests/test_ci_budget_watch.py" in (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+	env = next(step["env"] for step in job["steps"] if "CI_BUDGET_JOB_WARN_RATIO" in (step.get("env") or {}))
+	assert env["CI_BUDGET_REFILE_COOLDOWN_DAYS"] == "${{ vars.CI_BUDGET_REFILE_COOLDOWN_DAYS || '7' }}"
+	assert env["CI_BUDGET_REFILE_URGENT_RATIO"] == "${{ vars.CI_BUDGET_REFILE_URGENT_RATIO || '0.9' }}"
