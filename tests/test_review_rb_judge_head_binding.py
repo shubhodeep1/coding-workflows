@@ -1588,7 +1588,7 @@ def _fg_pr_state(base: str = "ai/issue-7") -> dict:
 	return {"code": 0, "stdout": f"open\tfalse\tfalse\t{JUDGED}\t{base}\n"}
 
 
-def _run_fg_site_with_retry(path: str, guard_results: list[str], responses: list[dict], payload: str = FG_PAYLOAD) -> dict:
+def _run_fg_site_with_retry(path: str, guard_results: list[str], responses: list[dict], payload: str = FG_PAYLOAD, extra_env: dict[str, str] | None = None) -> dict:
 	with tempfile.TemporaryDirectory(prefix="test_rb_judge_followup_guard_retry_") as td:
 		tmp = Path(td)
 		bin_dir = tmp / "bin"
@@ -1657,6 +1657,7 @@ def _run_fg_site_with_retry(path: str, guard_results: list[str], responses: list
 			"FG_STUB_COUNT": str(tmp / "stub_count"),
 			"FG_STUB_PAYLOADS": str(tmp),
 		}
+		env.update(extra_env or {})
 		proc = subprocess.run(["bash", str(harness)], env=env, text=True, capture_output=True, timeout=60)
 		calls = [json.loads(line) for line in gh_log.read_text(encoding="utf-8").splitlines() if line.strip()] if gh_log.exists() else []
 		count_file = tmp / "stub_count"
@@ -1766,5 +1767,24 @@ def test_followup_guard_unreadable_retry_base_reads_again_then_merges(path: str)
 	assert run["payloads"] == [json.loads(FG_PAYLOAD)] * 2
 	assert run["calls"][-1] == _expected_calls(path)[0]
 	assert sum("note=base_unverified" in line for line in _retry_lines(proc.stdout)) == 1
+	_assert_merge_succeeded(path, "\n".join(run["outputs"]), proc.stdout)
+	assert run["leftovers"] == []
+
+
+@needs_jq
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_followup_guard_kill_switch_keeps_old_retry_on_unreadable_base(path: str) -> None:
+	"""An explicit `false` kill switch: an unreadable retry read still retries
+	the head-bound merge, as before #9671."""
+	run = _run_fg_site_with_retry(
+		path,
+		["allow"],
+		_first_failure(path) + [FG_UNREADABLE_READS[0], _ok()],
+		extra_env={"SINGLE_PASS_FOLLOWUP_GUARD_SWITCH": "false"},
+	)
+	proc = run["proc"]
+	assert proc.returncode == 0, proc.stderr
+	assert not any("note=base_unverified" in line for line in _retry_lines(proc.stdout))
+	assert run["calls"][-1] == _expected_calls(path)[0]
 	_assert_merge_succeeded(path, "\n".join(run["outputs"]), proc.stdout)
 	assert run["leftovers"] == []

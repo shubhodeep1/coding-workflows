@@ -2503,8 +2503,10 @@ rb_judge_merge_retry_transient() {
     # A site that ran the guard never retries a merge on a base it could not
     # read (#9671): the merge binds only the head, so a retarget during the
     # delay would go unseen. The next attempt reads again; after the last
-    # one the site's failure branch runs.
-    if [ -n "${RB_JUDGE_FOLLOWUP_GUARD_RESULT:-}" ] && [ -z "${_rb_retry_base}" ]; then
+    # one the site's failure branch runs. An explicit kill switch (`false`,
+    # the guard's own `allow disabled` test) keeps the old retry behaviour.
+    if [ -n "${RB_JUDGE_FOLLOWUP_GUARD_RESULT:-}" ] && [ -z "${_rb_retry_base}" ] \
+      && [ "${SINGLE_PASS_FOLLOWUP_GUARD_SWITCH-}" != "false" ]; then
       echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 note=base_unverified action=skip_attempt"
       continue
     fi
