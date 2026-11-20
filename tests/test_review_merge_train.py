@@ -3297,7 +3297,9 @@ def test_merge_lease_tick_metrics_are_additive_and_guarded():
 	body = text[start:text.index("\n}\n", start)]
 	assert "declare -F _merge_lease_metric >/dev/null 2>&1 && tick_metric_ok=1" in body
 	calls = [line.strip() for line in body.splitlines() if "_merge_lease_metric " in line and "declare -F" not in line]
-	assert len(calls) == 9, calls
+	# 9 Phase 1 calls plus Phase 2's skipped (skip_head_unchanged, ineligible)
+	# and no_waiter reason=no_eligible_waiter.
+	assert len(calls) == 12, calls
 	for call in calls:
 		assert call.startswith('[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric '), call
 		assert call.endswith("|| true"), call
@@ -3313,7 +3315,43 @@ def test_merge_lease_tick_metrics_are_additive_and_guarded():
 		assert fmt in body, fmt
 	# The grant metric's ts is taken right after the lease write, before the
 	# unlabel and the dispatch, so dispatch latency is not counted as wait.
-	assert body.index('tick_grant_ts="$(date -u +%s') < body.index('_merge_lease_unlabel_wait "${tick_first}"')
+	# rindex: the grant's unlabel is the last one (Phase 2 also unlabels an
+	# ineligible candidate in the grant loop, before any write).
+	assert body.index('tick_grant_ts="$(date -u +%s') < body.rindex('_merge_lease_unlabel_wait "${tick_first}"')
 	# No new GitHub call: the tick's gh reads are the matching-refs listing and
 	# the live holder-state read, as before the metrics.
 	assert body.count("gh_retry _safe_gh_jq") == 2
+
+
+def test_list_open_prs_emits_the_title_for_the_merge_lease():
+	"""Merge-lease Phase 2 (Refs #9781): _mt_list_open_prs adds `title` (the
+	lease tick's `[skip ai]` check) and keeps every existing field."""
+	text = SCRIPT.read_text()
+	start = text.index("_mt_list_open_prs() {")
+	body = text[start:text.index("\n}\n", start)]
+	program = re.search(r"--jq '([^']*)'", body).group(1)
+	listing = [{"number": 5, "head": {"ref": "ai/issue-5", "sha": "a" * 40, "repo": {"full_name": "o/r"}},
+		"created_at": "2026-11-19T00:00:00Z", "base": {"ref": "main"}, "draft": False,
+		"labels": [{"name": "ai:merge-lease-wait"}], "title": "Fix [skip ai] \"quoted\""},
+		{"number": 6, "head": {"ref": "ai/issue-6", "sha": "b" * 40, "repo": None},
+		"base": {"ref": "main"}, "draft": True, "labels": []}]
+	res = subprocess.run(["jq", "-r", program], input=json.dumps(listing), capture_output=True, text=True, check=True)
+	rows = [json.loads(line) for line in res.stdout.splitlines()]
+	assert len(rows) == 2
+	assert rows[0] == {"number": 5, "head": "ai/issue-5", "head_repo": "o/r", "head_sha": "a" * 40,
+		"created_at": "2026-11-19T00:00:00Z", "base": "main", "draft": False, "labels": ["ai:merge-lease-wait"],
+		"title": 'Fix [skip ai] "quoted"'}
+	assert rows[1]["title"] == ""
+	assert rows[1]["head_repo"] == ""
+
+
+def test_merge_lease_tick_phase_2_is_guarded_by_the_staged_library():
+	"""Phase 2 runs only when the staged pr_checks_lib.sh has its helpers, and
+	the tick adds no direct GitHub call of its own."""
+	text = SCRIPT.read_text()
+	start = text.index("_mt_merge_lease_tick()\n{")
+	body = text[start:text.index("\n}\n", start)]
+	assert "declare -F _merge_lease_pr_eligible >/dev/null 2>&1" in body
+	assert 'if [ "${tick_p2_lib}" = 1 ] && _merge_lease_revoke_enabled; then' in body
+	assert "local tick_max_candidates=10" in body
+	assert '_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=skipped reason=${tick_skip_why}"' in body
