@@ -291,7 +291,7 @@ class ReleaseDownloadRerunGateTests(unittest.TestCase):
 
 	def test_job_without_a_name_or_id_is_not_classified(self) -> None:
 		# Validated like list_run_jobs() in scripts/ci_cancelled_rerun.py, which
-		# requires a positive numeric id and a string name.
+		# requires a positive integer id and a string name.
 		for drop in ("name", "id"):
 			with self.subTest(drop=drop):
 				payload = json.loads(_jobs_payload([5]))
