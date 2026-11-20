@@ -4491,6 +4491,42 @@ def test_gate_stops_a_head_with_three_identical_failure_markers() -> None:
 		assert sum(1 for call in state["calls"] if "user" in call) == 1
 
 
+def test_gate_stops_a_head_after_two_identical_reviewers_failed_markers() -> None:
+	# Issue #9533: a reviewer-stage crash that repeats with one fingerprint on
+	# one head is deterministic; the cap trips at 2 for that reason only.
+	fp = _cap_fp("reviewers_failed")
+	two = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), reason="reviewers_failed") for run in (101, 102)]
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-reviewers-") as tmp_name:
+		result, outputs, _state = _run_gate(Path(tmp_name), comments=two)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"AUTOFIX_FINGERPRINT_CAP_TRIPPED pr=4259 head={SHA_A} fp={fp} reason=reviewers_failed count=2 max=2 already_applied=false" in result.stdout
+		assert outputs["should_run"] == "false" and outputs["skip_reason"] == "fingerprint_cap"
+		assert outputs["fingerprint_cap"] == "true" and outputs["fingerprint_cap_max"] == "2"
+	# One failure still retries.
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-reviewers-one-") as tmp_name:
+		result, outputs, _state = _run_gate(Path(tmp_name), comments=two[:1])
+		assert outputs["fingerprint_cap"] == "false" and outputs["should_run"] == "true", result.stdout
+		assert f"AUTOFIX_FINGERPRINT cap=not_tripped pr=4259 head={SHA_A} fp={fp} reason=reviewers_failed count=1 max=2" in result.stdout
+	# A different fingerprint or another head resets the count.
+	other_fp = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run="101", reason="reviewers_failed", fp="e" * 64), two[1]]
+	other_head = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run="101", reason="reviewers_failed", head="f" * 40), two[1]]
+	for name, comments in (("fp", other_fp), ("head", other_head)):
+		with tempfile.TemporaryDirectory(prefix=f"heal-gate-cap-reviewers-{name}-") as tmp_name:
+			result, outputs, _state = _run_gate(Path(tmp_name), comments=comments)
+			assert outputs["fingerprint_cap"] == "false" and outputs["should_run"] == "true", (name, result.stdout)
+	# Other reasons keep the global threshold of 3; the reason-scoped value is configurable.
+	editor_two = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run)) for run in (101, 102)]
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-editor-two-") as tmp_name:
+		_result, outputs, _state = _run_gate(Path(tmp_name), comments=editor_two)
+		assert outputs["fingerprint_cap"] == "false" and outputs["fingerprint_cap_max"] == "3"
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-reviewers-max3-") as tmp_name:
+		_result, outputs, _state = _run_gate(Path(tmp_name), comments=two, extra_env={"REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED": "3"})
+		assert outputs["fingerprint_cap"] == "false" and outputs["fingerprint_cap_max"] == "3"
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-reviewers-bad-") as tmp_name:
+		_result, outputs, _state = _run_gate(Path(tmp_name), comments=two, extra_env={"REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED": "x"})
+		assert outputs["fingerprint_cap"] == "true" and outputs["fingerprint_cap_max"] == "2"
+
+
 def test_gate_cap_already_applied_threshold_bypass_and_fail_open() -> None:
 	fp = _cap_fp()
 	three = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run)) for run in (101, 102, 103)]
@@ -5728,6 +5764,77 @@ def test_failure_headline_names_the_first_specific_error() -> None:
 	assert headline == "Conflict resolver edited files outside the conflicted set: workflow-templates/CLAUDE.md"
 	assert heal.failure_headline(["no errors here\n", "##[error]Process completed with exit code 2."]) == ""
 	assert heal.failure_headline([]) == ""
+
+
+RENDER_PROMPT_CRASH = "/home/runner/work/_temp/support/scripts/render_prompt.sh: line 306: 1abc: invalid variable name\n"
+
+
+def test_failure_headline_falls_back_to_a_bash_diagnostic_line() -> None:
+	# Issue #9533: the reviewer step crashed in its own shell and printed no
+	# ::error:: line; the headline names the crash, directory stripped.
+	assert heal.failure_headline(["starting\n", RENDER_PROMPT_CRASH]) == "render_prompt.sh: line 306: 1abc: invalid variable name"
+	assert heal.failure_headline(["ERROR: reviewer prompt missing\n"]) == "reviewer prompt missing"
+	# A specific ::error:: line anywhere still wins over the fallback.
+	assert heal.failure_headline([RENDER_PROMPT_CRASH, "::error::Reviewer slot crashed\n"]) == "Reviewer slot crashed"
+	# Review text that only looks like a location is not a diagnostic.
+	assert heal.failure_headline(["src/app.py: line 12: consider renaming\n"]) == ""
+
+
+def test_reviewer_failure_evidence_keeps_the_bash_diagnostic_line() -> None:
+	evidence = heal.reviewer_failure_evidence([], [RENDER_PROMPT_CRASH, "  | other/path/render_prompt.sh: line 307: 2abc: invalid variable name\n"])
+	assert evidence.splitlines() == ["reviewers_failed=true", "render_prompt.sh: line 306: 1abc: invalid variable name"]
+	assert heal.failure_headline([evidence]) == "render_prompt.sh: line 306: 1abc: invalid variable name"
+	assert "line 12" not in heal.reviewer_failure_evidence(["review.sh: line 12: looks fine\n"])
+	# Spec item 3: the first plain `ERROR:` line of the step's own stderr also
+	# reaches the evidence the headline reads; later ones are dropped and
+	# secrets are redacted.
+	plain = heal.reviewer_failure_evidence([], ["starting\n", "ERROR: reviewer prompt missing\n", "ERROR: second failure\n"])
+	assert plain.splitlines() == ["reviewers_failed=true", "ERROR: reviewer prompt missing"]
+	assert heal.failure_headline([plain]) == "reviewer prompt missing"
+	assert "ghp_secret" not in heal.reviewer_failure_evidence([], ["ERROR: token ghp_secretvalue123 rejected\n"])
+	# A slot log's ERROR line (model-CLI stderr or review prose) is never kept,
+	# so it can neither name the failure nor feed the fingerprint; the stage
+	# stderr's bash diagnostic still names the crash.
+	slot_noise = "  | ERROR 2026-11-16 request abcxyz rejected\nERROR: missing regression test for X\n"
+	assert heal.reviewer_failure_evidence([slot_noise]) == "reviewers_failed=true\n"
+	mixed = heal.reviewer_failure_evidence([slot_noise], ["starting\n", RENDER_PROMPT_CRASH])
+	assert mixed.splitlines() == ["reviewers_failed=true", "render_prompt.sh: line 306: 1abc: invalid variable name"]
+	assert heal.failure_headline([mixed]) == "render_prompt.sh: line 306: 1abc: invalid variable name"
+	# A diagnostic-shaped slot-log line (raw model-CLI stderr) is never kept.
+	assert heal.reviewer_failure_evidence(["bash: line 3: foo: command not found\n", RENDER_PROMPT_CRASH]) == "reviewers_failed=true\n"
+	# review_run_reviewers.sh re-emits the model CLI's stderr tail to the
+	# step's stderr indented `  | `: neither its ERROR line nor its diagnostic
+	# is kept, so the crash line still names the failure.
+	indented = heal.reviewer_failure_evidence([], [
+		"  | ERROR 2026-11-16 request abcxyz rejected\n",
+		"  | bash: line 3: foo: command not found\n",
+		RENDER_PROMPT_CRASH,
+	])
+	assert indented.splitlines() == ["reviewers_failed=true", "render_prompt.sh: line 306: 1abc: invalid variable name"]
+	# A kept bash diagnostic is redacted like the plain ERROR line.
+	assert "ghp_secret" not in heal.reviewer_failure_evidence([], ["deploy.sh: line 12: invalid token ghp_secretvalue123\n"])
+
+
+def test_reviewer_crash_fingerprint_carries_the_bash_diagnostic() -> None:
+	# Issue #9533 (spec item 3): the fingerprint names the cause, so two
+	# different shell crashes do not collapse to one "no-error-lines" fp and
+	# trip the 2-strike reviewers_failed cap together.
+	crash = heal.reviewer_failure_evidence([], [RENDER_PROMPT_CRASH])
+	other = heal.reviewer_failure_evidence([], ["/x/scripts/review_run_reviewers.sh: line 88: SLOT_ID: unbound variable\n"])
+	assert heal.error_signature(crash) != "no-error-lines"
+	fp_crash = heal.autofix_failure_fingerprint(failure_reason="reviewers_failed", evidence_text=crash)["fp"]
+	fp_other = heal.autofix_failure_fingerprint(failure_reason="reviewers_failed", evidence_text=other)["fp"]
+	assert fp_crash != fp_other
+	# The same crash under another runner path keeps one fingerprint.
+	moved = heal.reviewer_failure_evidence([], [RENDER_PROMPT_CRASH.replace("/home/runner/work/_temp/support", "/opt/elsewhere")])
+	assert heal.autofix_failure_fingerprint(failure_reason="reviewers_failed", evidence_text=moved)["fp"] == fp_crash
+	# Review text shaped like a location is not a crash and stays out.
+	assert heal.error_signature("src/review.sh: line 12: looks fine\n") == "no-error-lines"
+	# A diagnostic whose message only says "errors" / "fail" still names itself.
+	assert heal.error_signature("x.sh: line 3: network errors detected\n") != "no-error-lines"
+	assert heal.error_signature("x.sh: line 5: upload failing\n") != "no-error-lines"
+	# An earlier bucket still wins, so existing signatures keep their value.
+	assert heal.error_signature("::error::boom\n" + RENDER_PROMPT_CRASH) == heal.error_signature("::error::boom\n")
 
 
 def test_failure_headline_redacts_credentials_and_stays_one_line() -> None:
