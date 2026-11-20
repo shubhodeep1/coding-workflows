@@ -271,7 +271,7 @@ def test_hunk_line_cap_and_report_cap(tmp_path):
 	text = report.read_text(encoding="utf-8")
 	assert sum(1 for line in text.splitlines() if line.startswith("+")) == 40
 	assert "... (10 more line(s))" in text
-	assert len(text.encode("utf-8")) <= 16 * 1024 + len("\n(truncated)\n")
+	assert len(text.encode("utf-8")) <= 16 * 1024
 
 
 def test_report_is_truncated_at_16_kib(tmp_path):
