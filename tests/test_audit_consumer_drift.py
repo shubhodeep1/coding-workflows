@@ -7,6 +7,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -1815,7 +1816,50 @@ def main() -> int:
 	test_repair_reports_errors_without_raising()
 	test_repair_credentials_stay_out_of_command_lines()
 	test_workflow_runs_daily_and_restores_from_the_stable_tree()
+	# Pin-age alarm (#9483): the release gates run this file without pytest.
+	test_pin_age_23_hours_behind_is_not_stale()
+	test_pin_age_25_hours_behind_is_stale()
+	test_pin_age_counts_from_the_first_newer_release_not_the_latest()
+	test_pin_age_uses_the_oldest_of_mixed_pins()
+	test_pin_age_fails_closed_on_unknown_pins_and_tag_times()
+	test_pin_age_stable_refs_are_current()
+	test_release_tags_file_keeps_only_versions_and_peeled_commits()
+	test_extract_pinned_refs_reads_only_coding_workflows_reusable_refs()
+	test_drifted_consumer_gets_a_pin_age_from_the_fetched_wrappers()
+	test_pin_age_is_off_without_a_release_tags_file()
+	test_pin_max_age_falls_back_to_the_default_for_bad_values()
+	test_report_warns_when_behind_stable_even_with_a_fresh_sync_pull_request()
+	test_report_warns_for_an_unknown_pin_and_stays_quiet_within_threshold()
+	for env_test in (
+		test_report_heading_follows_the_threshold_and_splits_unknown_pins,
+		test_report_heading_parses_the_threshold_like_the_audit,
+	):
+		env_patch = _DirectRunEnvPatch()
+		try:
+			env_test(env_patch)
+		finally:
+			env_patch.undo()
+	test_workflow_passes_release_tags_and_pin_age_threshold()
 	return 0
+
+
+class _DirectRunEnvPatch:
+	"""Minimal stand-in for pytest's monkeypatch.setenv in the direct run."""
+
+	def __init__(self) -> None:
+		self._saved: dict[str, str | None] = {}
+
+	def setenv(self, name: str, value: str) -> None:
+		self._saved.setdefault(name, os.environ.get(name))
+		os.environ[name] = value
+
+	def undo(self) -> None:
+		for name, value in self._saved.items():
+			if value is None:
+				os.environ.pop(name, None)
+			else:
+				os.environ[name] = value
+		self._saved.clear()
 
 
 if __name__ == "__main__":
