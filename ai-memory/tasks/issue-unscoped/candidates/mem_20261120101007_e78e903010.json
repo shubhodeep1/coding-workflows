@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"File a separate normal (non-heal) issue for the helper changes and the snapshot regression test\" (AD-1, Option A)\n  expected_change_site: GitHub issue tracker, with the follow-up issue linked from the PR description's deferred-scope section\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The PR description and changelog say the helper changes need their own issue but give no follow-up issue reference, the PR body, changelog fragment and PR_CHANGED_FILES contain no link, and the editor summary (issue_comment 7036535612) recorded it as TASK_GAP_DEFERRED. All three reviewers rated it SEVERITY: NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP:\n  Requirement: File a separate normal (non-heal) issue for the helper changes and the snapshot regression test as required by the approved plan (AD-1, Option A).\n  Expected change site: GitHub issue tracker, with the follow-up issue linked from the PR description.\n  Evidence of absence: The PR description and changelog explicitly acknowledge that these changes need their own issue, but there is no evidence that this issue has been filed.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP:\n  Requirement: \"File a separate normal (non-heal) issue for the helper changes and the snapshot regression test,\" per AD-1 Option A in the PR description.\n  Expected change site: GitHub issue tracker; the follow-up issue number should be referenced from the PR description's \"Deferred scope\" section.\n  Evidence of absence: The PR description enumerates the six deferred items but provides no follow-up issue number. The autofix editor summary (issue_comment 7036535612) explicitly stated: \"TASK_GAP_DEFERRED: filing a separate follow-up issue for the helper changes. This is a process step on GitHub, not something a file edit can do.\" No follow-up issue reference appears in PR_CHANGED_FILES, the PR body, or the changelog fragment. The approved plan called for the filing as part of Option A; the in-scope code shipped but the separate issue was not opened (or, if opened, is not linked from the PR).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: \"File a separate normal (non-heal) issue for the helper changes and the snapshot regression test,\" as selected in PR description decision AD-1.\n  Expected change site: GitHub issue tracker, with the follow-up issue linked from the PR description.\n  Evidence of absence: The PR description and changelog state that the helper changes still need their own issue, but provide no follow-up issue reference.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "42555ae8150a2366ea219a5a27b700dc28f91770934bb537f6db9564e182bec5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9840,
+    "run_id": "44714751142",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44714751142",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120101007_e78e903010",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9840,
+    "run_id": "44714751142"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T10:10:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
