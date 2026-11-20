@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.77,
+  "details": "Changes to unblock routing and handling of cases with nothing to implement have touched `scripts/unblock_judge.sh` and `tests/test_unblock_judge.py`. When adjusting unblock outcomes, check the judge's callers and preserve coverage for the distinct decision paths.",
+  "fingerprint": "5deea95d520b019f785e183f376082ce6a09947c6f6ab95f3075d1d0f34b08ad",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44696031692",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44696031692",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9768",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9805",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9808",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9809",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9814",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9774",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9807",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9810",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9811",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9817"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261120075046_270101ef6b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Unblock decisions are implemented in a shared judge script with dedicated regression coverage.",
+  "timestamps": {
+    "created_at": "2026-11-20T07:50:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
