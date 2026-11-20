@@ -164,6 +164,21 @@ def test_verify_run_binds_a_self_dispatched_review_run_by_its_marker_head() -> N
 			raise AssertionError(f"head mismatch accepted: {case}")
 
 
+def test_verify_run_binds_a_pull_request_run_by_its_own_head() -> None:
+	# Issue #9250: a pull_request run whose PR head moved while it ran has
+	# `pull_requests: []` and its own head. The reporter now sends that head,
+	# and verify_run (unchanged) binds the run only when the heads are equal.
+	run = {"id": 500, "repository": {"full_name": CONSUMER_REPO}, "event": "pull_request", "head_sha": SHA_A,
+		"display_title": "AI Review", "pull_requests": [], "conclusion": "failure", "path": ".github/workflows/ai-review.yml"}
+	assert heal.verify_run(run, repo=CONSUMER_REPO, kind="autofix_failure", head_sha=SHA_A, pr_number=4174)["run_id"] == 500
+	try:
+		heal.verify_run(run, repo=CONSUMER_REPO, kind="autofix_failure", head_sha=SHA_B, pr_number=4174)
+	except ValueError as exc:
+		assert str(exc) == "run head mismatch"
+	else:
+		raise AssertionError("a pull_request run on another head was bound")
+
+
 def test_verify_run_provenance_lists_runs_a_trusted_marker_binds_to_the_pr_head() -> None:
 	payload = heal.validate_payload(_autofix_payload())
 	assert payload["head_sha"] == SHA_B
@@ -1122,6 +1137,148 @@ def test_filter_log_keeps_runtime_lines_outside_tail() -> None:
 	report = ["filler"] * 100
 	report[0] = "AI_ENGINE_FALLBACK_REPORT role=IMPLEMENT entries=2"
 	assert "AI_ENGINE_FALLBACK_REPORT" not in heal.filter_log("\n".join(report), max_lines=10)
+
+
+# The chained argparse crash of scripts/render_prompt.py on Python 3.14 (plan
+# run 42929246385, heal issues #9190 / #9200): filter_log used to keep only the
+# two bare `Traceback (most recent call last):` lines, so the heal was filed as
+# inconclusive.
+CHAINED_VALUEERROR_TRACEBACK_LINES = (
+	"2026-11-11T00:15:15.5012084Z Traceback (most recent call last):",
+	'2026-11-11T00:15:15.5013904Z   File "/usr/lib/python3.14/argparse.py", line 1759, in _check_help',
+	"2026-11-11T00:15:15.5019025Z ValueError: unsupported format character '.' (0x2e) at index 237",
+	"2026-11-11T00:15:15.5020164Z The above exception was the direct cause of the following exception:",
+	"2026-11-11T00:15:15.5021014Z Traceback (most recent call last):",
+	'2026-11-11T00:15:15.5033125Z   File "/home/runner/work/coding-workflows/coding-workflows/scripts/render_prompt.py", line 1414, in <module>',
+	"2026-11-11T00:15:15.5043693Z ValueError: badly formed help string",
+	"2026-11-11T00:15:15.5227737Z ##[error]Process completed with exit code 1.",
+)
+
+
+def test_filter_log_keeps_chained_traceback_frames_and_exception_lines_outside_tail() -> None:
+	# The traceback sits before the 400-line tail, so only the signal match
+	# can keep it.
+	filler = [f"2026-11-11T00:16:00.0000000Z step output {i}" for i in range(600)]
+	log = "\n".join(list(CHAINED_VALUEERROR_TRACEBACK_LINES) + filler) + "\n"
+	filtered = heal.filter_log(log)
+	for kept_line in CHAINED_VALUEERROR_TRACEBACK_LINES:
+		assert kept_line in filtered
+	assert "ValueError: unsupported format character '.' (0x2e) at index 237" in filtered
+	assert "ValueError: badly formed help string" in filtered
+	# The block ends at the first line after the exception that is not part of
+	# the traceback, so the filler before the tail is still dropped.
+	assert "step output 0\n" not in filtered and "step output 150\n" not in filtered
+	assert "step output 599" in filtered
+
+
+def test_filter_log_keeps_the_innermost_lines_of_a_long_traceback() -> None:
+	frames = [f'  File "/srv/app/mod{i}.py", line {i}, in f{i}' for i in range(80)]
+	traceback_lines = ["Traceback (most recent call last):", *frames, "RecursionError: too deep"]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert "Traceback (most recent call last):" in filtered
+	assert "RecursionError: too deep" in filtered
+	kept_frames = [line for line in filtered if line.startswith('  File "/srv/app/')]
+	assert len(kept_frames) == heal._TRACEBACK_CONTEXT_MAX_LINES - 1
+	assert frames[-1] in kept_frames and frames[0] not in kept_frames
+	assert "later output 0" not in filtered
+
+
+def test_filter_log_keeps_the_exception_line_of_a_traceback_longer_than_the_scan_window() -> None:
+	# Mutual recursion is not collapsed by CPython, so its traceback can run
+	# past _TRACEBACK_SCAN_MAX_LINES before the exception line.
+	frames: list[str] = []
+	for i in range(heal._TRACEBACK_SCAN_MAX_LINES):
+		frames += [f'  File "/srv/app/ping.py", line {i}, in ping{i}', f"    pong{i}()"]
+	traceback_lines = ["Traceback (most recent call last):", *frames, "RecursionError: maximum recursion depth exceeded"]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert "RecursionError: maximum recursion depth exceeded" in filtered
+	assert frames[-1] in filtered and frames[0] not in filtered
+	kept_frames = [line for line in filtered if line in set(frames)]
+	assert len(kept_frames) == heal._TRACEBACK_CONTEXT_MAX_LINES - 1
+	assert "later output 0" not in filtered
+
+
+def test_filter_log_keeps_the_chain_marker_after_a_traceback_longer_than_the_scan_window() -> None:
+	# A long mutual-recursion traceback caught and re-raised: the walk past
+	# _TRACEBACK_SCAN_MAX_LINES must keep the chain marker after the first
+	# exception line, as the in-window scan does.
+	frames: list[str] = []
+	for i in range(heal._TRACEBACK_SCAN_MAX_LINES):
+		frames += [f'  File "/srv/app/ping.py", line {i}, in ping{i}', f"    pong{i}()"]
+	marker = "The above exception was the direct cause of the following exception:"
+	traceback_lines = [
+		"Traceback (most recent call last):",
+		*frames,
+		"RecursionError: maximum recursion depth exceeded",
+		"",
+		marker,
+		"",
+		"Traceback (most recent call last):",
+		'  File "/srv/app/main.py", line 9, in <module>',
+		"RuntimeError: ping failed",
+	]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert "RecursionError: maximum recursion depth exceeded" in filtered
+	assert marker in filtered
+	assert "RuntimeError: ping failed" in filtered
+	assert frames[-1] in filtered and frames[0] not in filtered
+	assert "later output 0" not in filtered
+
+
+def test_filter_log_keeps_the_chain_marker_after_an_exception_line_at_the_scan_window_edge() -> None:
+	# The exception line is the last line of the scan window, so the chain
+	# marker sits just past it and must still be kept.
+	frames = [f'  File "/srv/app/mod{i}.py", line {i}, in f{i}' for i in range(heal._TRACEBACK_SCAN_MAX_LINES - 1)]
+	marker = "The above exception was the direct cause of the following exception:"
+	traceback_lines = [
+		"Traceback (most recent call last):",
+		*frames,
+		"ValueError: inner failure",
+		marker,
+		"Traceback (most recent call last):",
+		'  File "/srv/app/main.py", line 9, in <module>',
+		"RuntimeError: outer failure",
+	]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert "ValueError: inner failure" in filtered
+	assert marker in filtered
+	assert "RuntimeError: outer failure" in filtered
+	assert "later output 0" not in filtered
+
+
+def test_filter_log_keeps_the_exception_line_before_many_continuation_lines() -> None:
+	# A pydantic ValidationError prints every error indented after the
+	# exception line, so more than _TRACEBACK_CONTEXT_MAX_LINES continuation
+	# lines can follow it; the cut must still keep the exception line.
+	frames = [f'  File "/srv/app/mod{i}.py", line {i}, in f{i}' for i in range(40)]
+	details = [f"  field_{i}\n    Field required [type=missing]" for i in range(30)]
+	exception_line = "pydantic_core._pydantic_core.ValidationError: 30 validation errors for Settings"
+	marker = "During handling of the above exception, another exception occurred:"
+	traceback_lines = [
+		"Traceback (most recent call last):",
+		*frames,
+		exception_line,
+		*"\n".join(details).split("\n"),
+		"",
+		marker,
+		"",
+		"Traceback (most recent call last):",
+		'  File "/srv/app/main.py", line 9, in <module>',
+		"RuntimeError: settings failed",
+	]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert exception_line in filtered
+	assert frames[-1] in filtered and frames[0] not in filtered
+	assert marker in filtered
+	assert "RuntimeError: settings failed" in filtered
+	first_block = set(frames) | {exception_line} | set("\n".join(details).split("\n"))
+	assert len([line for line in filtered if line in first_block]) <= heal._TRACEBACK_CONTEXT_MAX_LINES
+	assert "later output 0" not in filtered
 
 
 def test_drop_step_script_lines_drops_unstyled_echoed_script() -> None:
@@ -2236,6 +2393,9 @@ def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[s
 					"pull_requests": [{"number": payload.get("issue_number")}],
 				} for ref in payload.get("run_refs", [])
 			}
+		# extra_run_details adds runs (e.g. the intake's own run) on top of
+		# the default fixtures without replacing them.
+		state["run_details"].update(state.pop("extra_run_details", {}))
 		state_file.write_text(json.dumps(state), encoding="utf-8")
 		payload_file = tmp / "payload_raw.json"
 		payload_file.write_text(json.dumps(payload), encoding="utf-8")
@@ -4331,6 +4491,42 @@ def test_gate_stops_a_head_with_three_identical_failure_markers() -> None:
 		assert sum(1 for call in state["calls"] if "user" in call) == 1
 
 
+def test_gate_stops_a_head_after_two_identical_reviewers_failed_markers() -> None:
+	# Issue #9533: a reviewer-stage crash that repeats with one fingerprint on
+	# one head is deterministic; the cap trips at 2 for that reason only.
+	fp = _cap_fp("reviewers_failed")
+	two = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), reason="reviewers_failed") for run in (101, 102)]
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-reviewers-") as tmp_name:
+		result, outputs, _state = _run_gate(Path(tmp_name), comments=two)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"AUTOFIX_FINGERPRINT_CAP_TRIPPED pr=4259 head={SHA_A} fp={fp} reason=reviewers_failed count=2 max=2 already_applied=false" in result.stdout
+		assert outputs["should_run"] == "false" and outputs["skip_reason"] == "fingerprint_cap"
+		assert outputs["fingerprint_cap"] == "true" and outputs["fingerprint_cap_max"] == "2"
+	# One failure still retries.
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-reviewers-one-") as tmp_name:
+		result, outputs, _state = _run_gate(Path(tmp_name), comments=two[:1])
+		assert outputs["fingerprint_cap"] == "false" and outputs["should_run"] == "true", result.stdout
+		assert f"AUTOFIX_FINGERPRINT cap=not_tripped pr=4259 head={SHA_A} fp={fp} reason=reviewers_failed count=1 max=2" in result.stdout
+	# A different fingerprint or another head resets the count.
+	other_fp = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run="101", reason="reviewers_failed", fp="e" * 64), two[1]]
+	other_head = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run="101", reason="reviewers_failed", head="f" * 40), two[1]]
+	for name, comments in (("fp", other_fp), ("head", other_head)):
+		with tempfile.TemporaryDirectory(prefix=f"heal-gate-cap-reviewers-{name}-") as tmp_name:
+			result, outputs, _state = _run_gate(Path(tmp_name), comments=comments)
+			assert outputs["fingerprint_cap"] == "false" and outputs["should_run"] == "true", (name, result.stdout)
+	# Other reasons keep the global threshold of 3; the reason-scoped value is configurable.
+	editor_two = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run)) for run in (101, 102)]
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-editor-two-") as tmp_name:
+		_result, outputs, _state = _run_gate(Path(tmp_name), comments=editor_two)
+		assert outputs["fingerprint_cap"] == "false" and outputs["fingerprint_cap_max"] == "3"
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-reviewers-max3-") as tmp_name:
+		_result, outputs, _state = _run_gate(Path(tmp_name), comments=two, extra_env={"REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED": "3"})
+		assert outputs["fingerprint_cap"] == "false" and outputs["fingerprint_cap_max"] == "3"
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-reviewers-bad-") as tmp_name:
+		_result, outputs, _state = _run_gate(Path(tmp_name), comments=two, extra_env={"REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED": "x"})
+		assert outputs["fingerprint_cap"] == "true" and outputs["fingerprint_cap_max"] == "2"
+
+
 def test_gate_cap_already_applied_threshold_bypass_and_fail_open() -> None:
 	fp = _cap_fp()
 	three = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run)) for run in (101, 102, 103)]
@@ -5205,6 +5401,118 @@ def test_autofix_payload_lists_the_trusted_failed_runs_first() -> None:
 	assert [ref["run_id"] for ref in plain["run_refs"]] == ["500"]
 
 
+def test_build_autofix_failure_payload_prefers_run_head_sha() -> None:
+	# Issue #9250: the failed run's own head replaces the PR's current head in
+	# head_sha and in the failure-marker lookup; head_branch stays the PR's.
+	kwargs = dict(
+		repo=CONSUMER_REPO,
+		pr=_pr(),
+		comments=[],
+		workflow_name="AI Review",
+		failure_reason="editor_empty_noop",
+		failure_evidence="::error::PR diff unavailable\n",
+		failure_streak=1,
+		run_id="500",
+		run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+		wrapper_sha=SHA_A,
+		reporter_run_url=None,
+	)
+	for run_head in (SHA_A, SHA_A.upper(), f"  {SHA_A}\n"):
+		payload = heal.validate_payload(heal.build_autofix_failure_payload(**kwargs, run_head_sha=run_head))
+		assert payload["head_sha"] == SHA_A, run_head
+		assert payload["head_branch"] == "ai/issue-4173"
+	for run_head in (None, "", "abc", "g" * 40, SHA_A + "a"):
+		payload = heal.validate_payload(heal.build_autofix_failure_payload(**kwargs, run_head_sha=run_head))
+		assert payload["head_sha"] == SHA_B, run_head
+	assert heal.build_autofix_failure_payload(**kwargs)["head_sha"] == SHA_B
+	# Markers are looked up by the run head, not by the PR head.
+	comments = [*_trusted_failure_comments(["101"], head=SHA_A), *_trusted_failure_comments(["102"], head=SHA_B)]
+	by_run_head = heal.build_autofix_failure_payload(**{**kwargs, "comments": comments}, failure_marker_author=CAP_AUTHOR, run_head_sha=SHA_A)
+	assert [ref["run_id"] for ref in by_run_head["run_refs"]] == ["101", "500"]
+	by_pr_head = heal.build_autofix_failure_payload(**{**kwargs, "comments": comments}, failure_marker_author=CAP_AUTHOR)
+	assert [ref["run_id"] for ref in by_pr_head["run_refs"]] == ["102", "500"]
+
+
+def _autofix_report_event_env(tmp: Path, env: dict[str, str], *, event_name: str, event: object | None) -> None:
+	env["GITHUB_EVENT_NAME"] = event_name
+	event_path = tmp / "event.json"
+	if event is not None:
+		event_path.write_text(json.dumps(event), encoding="utf-8")
+	env["GITHUB_EVENT_PATH"] = str(event_path)
+
+
+def test_autofix_report_sends_the_pull_request_event_head() -> None:
+	# Issue #9250: the PR head moved (SHA_B) while the pull_request run went on
+	# its own head (SHA_A); the report carries the run head, read from the event
+	# file on disk with no GitHub read.
+	event = {"pull_request": {"number": 4174, "head": {"sha": SHA_A.upper()}}}
+	for override, expected, source in ((None, SHA_A, "event"), (SHA_C.upper(), SHA_C, "override")):
+		with tempfile.TemporaryDirectory(prefix="heal-autofix-run-head-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true", "AUTOFIX_STREAK_AUTHOR_LOGIN": "workflow-bot"})
+			_autofix_report_event_env(tmp, env, event_name="pull_request", event=event)
+			if override is not None:
+				env["REPORT_RUN_HEAD_SHA"] = override
+			result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert f"run_head={expected} run_head_source={source} pr_head={SHA_B}" in result.stdout, result.stdout
+			state = _state(state_file)
+			assert len(state["dispatches"]) == 1
+			payload = heal.validate_payload(state["dispatches"][0]["body"]["client_payload"]["report"])
+			assert payload["head_sha"] == expected and payload["head_branch"] == "ai/issue-4173"
+			assert all(call[:1] != ["api"] or "/dispatches" in " ".join(call) for call in state["calls"])
+
+
+def test_autofix_report_keeps_pr_head_without_a_usable_event_head() -> None:
+	good = {"pull_request": {"number": 4174, "head": {"sha": SHA_A}}}
+	cases = [
+		("workflow_dispatch", "workflow_dispatch", good, {}),
+		("pull_request_target", "pull_request_target", good, {}),
+		("non_hex", "pull_request", {"pull_request": {"number": 4174, "head": {"sha": "z" * 40}}}, {}),
+		("short", "pull_request", {"pull_request": {"number": 4174, "head": {"sha": "abc"}}}, {}),
+		("other_pr", "pull_request", {"pull_request": {"number": 4175, "head": {"sha": SHA_A}}}, {}),
+		("not_json", "pull_request", "not an object", {}),
+		("missing_file", "pull_request", None, {}),
+		("invalid_override", "workflow_dispatch", None, {"REPORT_RUN_HEAD_SHA": "not-a-sha"}),
+		# The identical-failure cap keeps the PR (gate) head its counted markers carry.
+		("identical_failure_cap", "pull_request", good, {"AUTOFIX_FAILURE_REASON": "identical_failure_cap", "REPORT_RUN_HEAD_SHA": SHA_C}),
+	]
+	for name, event_name, event, extra in cases:
+		with tempfile.TemporaryDirectory(prefix=f"heal-autofix-run-head-{name}-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true", **extra})
+			_autofix_report_event_env(tmp, env, event_name=event_name, event=event)
+			result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert f"run_head=none run_head_source=none pr_head={SHA_B}" in result.stdout, (name, result.stdout)
+			payload = heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])
+			assert payload["head_sha"] == SHA_B, name
+	# An event path that is a directory, not a file, is ignored.
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-run-head-dir-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+		env["GITHUB_EVENT_NAME"] = "pull_request"
+		env["GITHUB_EVENT_PATH"] = str(tmp)
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert "run_head=none run_head_source=none" in result.stdout, result.stdout
+		assert heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])["head_sha"] == SHA_B
+	# A staged helper that predates --run-head-sha still reports, with the PR head.
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-run-head-old-helper-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+		_autofix_report_event_env(tmp, env, event_name="pull_request", event=good)
+		staged_helper = work / "scripts" / "workflow_failure_heal.py"
+		old_text = staged_helper.read_text(encoding="utf-8")
+		old_text = re.sub(r'\tp\.add_argument\(\n\t\t"--run-head-sha",\n(?:\t\t.*\n)*?\t\)\n', "", old_text)
+		old_text = old_text.replace("\t\trun_head_sha=args.run_head_sha or None,\n", "")
+		assert "run-head-sha" not in old_text
+		staged_helper.write_text(old_text, encoding="utf-8")
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "dispatched pr=4174 failure=editor_empty_noop" in result.stdout and "run_head=none" in result.stdout, result.stdout + result.stderr
+		assert heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])["head_sha"] == SHA_B
+
+
 def test_autofix_report_cap_links_the_failed_runs_and_counts_only_them() -> None:
 	with tempfile.TemporaryDirectory(prefix="heal-autofix-cap-runs-") as tmp_name:
 		tmp = Path(tmp_name)
@@ -5456,6 +5764,77 @@ def test_failure_headline_names_the_first_specific_error() -> None:
 	assert headline == "Conflict resolver edited files outside the conflicted set: workflow-templates/CLAUDE.md"
 	assert heal.failure_headline(["no errors here\n", "##[error]Process completed with exit code 2."]) == ""
 	assert heal.failure_headline([]) == ""
+
+
+RENDER_PROMPT_CRASH = "/home/runner/work/_temp/support/scripts/render_prompt.sh: line 306: 1abc: invalid variable name\n"
+
+
+def test_failure_headline_falls_back_to_a_bash_diagnostic_line() -> None:
+	# Issue #9533: the reviewer step crashed in its own shell and printed no
+	# ::error:: line; the headline names the crash, directory stripped.
+	assert heal.failure_headline(["starting\n", RENDER_PROMPT_CRASH]) == "render_prompt.sh: line 306: 1abc: invalid variable name"
+	assert heal.failure_headline(["ERROR: reviewer prompt missing\n"]) == "reviewer prompt missing"
+	# A specific ::error:: line anywhere still wins over the fallback.
+	assert heal.failure_headline([RENDER_PROMPT_CRASH, "::error::Reviewer slot crashed\n"]) == "Reviewer slot crashed"
+	# Review text that only looks like a location is not a diagnostic.
+	assert heal.failure_headline(["src/app.py: line 12: consider renaming\n"]) == ""
+
+
+def test_reviewer_failure_evidence_keeps_the_bash_diagnostic_line() -> None:
+	evidence = heal.reviewer_failure_evidence([], [RENDER_PROMPT_CRASH, "  | other/path/render_prompt.sh: line 307: 2abc: invalid variable name\n"])
+	assert evidence.splitlines() == ["reviewers_failed=true", "render_prompt.sh: line 306: 1abc: invalid variable name"]
+	assert heal.failure_headline([evidence]) == "render_prompt.sh: line 306: 1abc: invalid variable name"
+	assert "line 12" not in heal.reviewer_failure_evidence(["review.sh: line 12: looks fine\n"])
+	# Spec item 3: the first plain `ERROR:` line of the step's own stderr also
+	# reaches the evidence the headline reads; later ones are dropped and
+	# secrets are redacted.
+	plain = heal.reviewer_failure_evidence([], ["starting\n", "ERROR: reviewer prompt missing\n", "ERROR: second failure\n"])
+	assert plain.splitlines() == ["reviewers_failed=true", "ERROR: reviewer prompt missing"]
+	assert heal.failure_headline([plain]) == "reviewer prompt missing"
+	assert "ghp_secret" not in heal.reviewer_failure_evidence([], ["ERROR: token ghp_secretvalue123 rejected\n"])
+	# A slot log's ERROR line (model-CLI stderr or review prose) is never kept,
+	# so it can neither name the failure nor feed the fingerprint; the stage
+	# stderr's bash diagnostic still names the crash.
+	slot_noise = "  | ERROR 2026-11-16 request abcxyz rejected\nERROR: missing regression test for X\n"
+	assert heal.reviewer_failure_evidence([slot_noise]) == "reviewers_failed=true\n"
+	mixed = heal.reviewer_failure_evidence([slot_noise], ["starting\n", RENDER_PROMPT_CRASH])
+	assert mixed.splitlines() == ["reviewers_failed=true", "render_prompt.sh: line 306: 1abc: invalid variable name"]
+	assert heal.failure_headline([mixed]) == "render_prompt.sh: line 306: 1abc: invalid variable name"
+	# A diagnostic-shaped slot-log line (raw model-CLI stderr) is never kept.
+	assert heal.reviewer_failure_evidence(["bash: line 3: foo: command not found\n", RENDER_PROMPT_CRASH]) == "reviewers_failed=true\n"
+	# review_run_reviewers.sh re-emits the model CLI's stderr tail to the
+	# step's stderr indented `  | `: neither its ERROR line nor its diagnostic
+	# is kept, so the crash line still names the failure.
+	indented = heal.reviewer_failure_evidence([], [
+		"  | ERROR 2026-11-16 request abcxyz rejected\n",
+		"  | bash: line 3: foo: command not found\n",
+		RENDER_PROMPT_CRASH,
+	])
+	assert indented.splitlines() == ["reviewers_failed=true", "render_prompt.sh: line 306: 1abc: invalid variable name"]
+	# A kept bash diagnostic is redacted like the plain ERROR line.
+	assert "ghp_secret" not in heal.reviewer_failure_evidence([], ["deploy.sh: line 12: invalid token ghp_secretvalue123\n"])
+
+
+def test_reviewer_crash_fingerprint_carries_the_bash_diagnostic() -> None:
+	# Issue #9533 (spec item 3): the fingerprint names the cause, so two
+	# different shell crashes do not collapse to one "no-error-lines" fp and
+	# trip the 2-strike reviewers_failed cap together.
+	crash = heal.reviewer_failure_evidence([], [RENDER_PROMPT_CRASH])
+	other = heal.reviewer_failure_evidence([], ["/x/scripts/review_run_reviewers.sh: line 88: SLOT_ID: unbound variable\n"])
+	assert heal.error_signature(crash) != "no-error-lines"
+	fp_crash = heal.autofix_failure_fingerprint(failure_reason="reviewers_failed", evidence_text=crash)["fp"]
+	fp_other = heal.autofix_failure_fingerprint(failure_reason="reviewers_failed", evidence_text=other)["fp"]
+	assert fp_crash != fp_other
+	# The same crash under another runner path keeps one fingerprint.
+	moved = heal.reviewer_failure_evidence([], [RENDER_PROMPT_CRASH.replace("/home/runner/work/_temp/support", "/opt/elsewhere")])
+	assert heal.autofix_failure_fingerprint(failure_reason="reviewers_failed", evidence_text=moved)["fp"] == fp_crash
+	# Review text shaped like a location is not a crash and stays out.
+	assert heal.error_signature("src/review.sh: line 12: looks fine\n") == "no-error-lines"
+	# A diagnostic whose message only says "errors" / "fail" still names itself.
+	assert heal.error_signature("x.sh: line 3: network errors detected\n") != "no-error-lines"
+	assert heal.error_signature("x.sh: line 5: upload failing\n") != "no-error-lines"
+	# An earlier bucket still wins, so existing signatures keep their value.
+	assert heal.error_signature("::error::boom\n" + RENDER_PROMPT_CRASH) == heal.error_signature("::error::boom\n")
 
 
 def test_failure_headline_redacts_credentials_and_stays_one_line() -> None:
@@ -5914,6 +6293,45 @@ def test_intake_verifies_report_identity_and_rejects_a_forged_repository() -> No
 
 	result, state, _ = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REPORT_IDENTITY_STATE": "malformed"})
 	assert "report_auth=rejected reason=identity_malformed" in result.stdout
+	assert _api_writes(state) == []
+
+
+def test_intake_credits_runner_queue_wait_against_a_stale_identity() -> None:
+	# 2026-11-14: six reports sat ~3h50m waiting for a runner and were all
+	# rejected identity_stale; the age limit applies at arrival (run_started_at).
+	payload = _consumer_payload(reporter_run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/{_ID_RUN_ID}")
+	own_run_path = f"repos/{SELF_REPO}/actions/runs/777"
+
+	def _iso(epoch: int) -> str:
+		return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+	def _stale_run(run_started_at: str | None) -> tuple[subprocess.CompletedProcess[str], dict]:
+		with tempfile.TemporaryDirectory(prefix="heal-identity-wait-") as tmp_name:
+			# Token minted two hours ago (iat = now - 7200 - 60).
+			token_file, jwks_file, token = _fresh_identity(Path(tmp_name), iat=int(time.time()) - 7260, nbf=int(time.time()) - 7260)
+			extra = {} if run_started_at is None else {own_run_path: {"id": 777, "run_attempt": 1, "run_started_at": run_started_at}}
+			result, state, _ = _run_intake(payload, _intake_state(extra_run_details=extra), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=_identity_env(token_file, jwks_file))
+			assert token not in result.stdout + result.stderr
+			return result, state
+
+	# The run started when the dispatch arrived, right after the token was minted.
+	result, state = _stale_run(_iso(int(time.time()) - 7230))
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL report_identity_age_credit arrival_waited_seconds=" in result.stdout
+	assert "report_auth=verified reason=bound" in result.stdout
+	assert len(_composed_issues(state)) == 1
+	# A recent start (e.g. a re-run of an old report) earns no credit.
+	result, state = _stale_run(_iso(int(time.time()) - 30))
+	assert "report_auth=rejected reason=identity_stale" in result.stdout
+	assert _api_writes(state) == []
+	# The own-run read failing keeps the rejection (fails closed).
+	result, state = _stale_run(None)
+	assert "report_identity_age_credit arrival_waited_seconds=0" in result.stdout
+	assert "report_auth=rejected reason=identity_stale" in result.stdout
+	assert _api_writes(state) == []
+	# A malformed timestamp earns no credit either.
+	result, state = _stale_run("yesterday")
+	assert "report_auth=rejected reason=identity_stale" in result.stdout
 	assert _api_writes(state) == []
 
 
@@ -6757,18 +7175,90 @@ def test_intake_phase_failure_deduplicates_on_source_issue_and_falls_back_withou
 	assert "issues_created" not in _state_after
 
 
-def test_intake_escalates_a_heal_issue_that_fails_its_own_run() -> None:
-	# A heal issue (#6413-style, in this repository) whose plan run fails with
-	# the failure it was filed for: the pipeline cannot run its own fix.
+def _run_heal_self_escalation_intake(labels: list[str] | None, *, raw_labels: object = None) -> tuple[subprocess.CompletedProcess[str], dict, str, list[str]]:
+	"""Run the intake for heal issue #42 failing its own plan run.
+
+	*labels* become the report payload's issue labels (``None`` drops the
+	payload's ``labels`` field entirely). A non-``None`` *raw_labels* is
+	written to the payload's ``labels`` field verbatim instead, so a
+	malformed value can be injected. Returns the intake result, the
+	fake-gh state, the heal fingerprint and every ``level|text`` line the
+	stubbed ``tg_send_msg`` recorded.
+	"""
 	first, _state_first, _ = _run_intake(_phase_payload(repo=SELF_REPO), _plan_intake_state(repo=SELF_REPO), diagnosis=DIAG_WORKFLOW_DEFECT)
 	fp = re.search(r"fingerprint fp=([0-9a-f]{64})", first.stdout).group(1)
 	heal_issue = _sourced_heal_issue(42, state="open", fp=fp, source=f"{SELF_REPO}#6208")
-	body = heal_issue["body"]
-	payload = _phase_payload(repo=SELF_REPO, issue=_issue(body=body, labels=["ai:planning", heal.HEAL_LABEL]))
+	payload = _phase_payload(repo=SELF_REPO, issue=_issue(body=heal_issue["body"], labels=labels or []))
+	if raw_labels is not None:
+		payload["labels"] = raw_labels
+	elif labels is None:
+		payload.pop("labels", None)
 	state = _plan_intake_state(repo=SELF_REPO, heal_issues=[heal_issue])
-	result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	tg_dir = Path(tempfile.mkdtemp(prefix="heal-tg-"))
+	try:
+		def setup(tmp: Path, work: Path) -> None:
+			(work / "scripts" / "tg_helpers.sh").write_text(
+				f'tg_send_msg() {{ printf \'%s|%s\\n\' "${{2:-}}" "$1" >> {str(tg_dir / "calls.txt")!r}; }}\n', encoding="utf-8")
+		result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=setup)
+		calls_file = tg_dir / "calls.txt"
+		calls = calls_file.read_text(encoding="utf-8").splitlines() if calls_file.exists() else []
+	finally:
+		shutil.rmtree(tg_dir, ignore_errors=True)
+	return result, state_after, fp, calls
+
+
+def _heal_self_escalation_alerts(calls: list[str]) -> list[str]:
+	return [line for line in calls if line.startswith("CRITICAL|") and "heal issue" in line and "failed its own plan run" in line]
+
+
+def test_intake_heal_self_escalation_alerts_once() -> None:
+	# Issue #9248: heal issue #9200 sent a CRITICAL alert on each of its four
+	# self-failures. Once the payload shows the escalated label, a repeat still
+	# re-adds the label, logs `escalate` and posts the occurrence, but replaces
+	# the alert with a stable `escalate_repeat ... alert=suppressed` line.
+	result, state_after, fp, calls = _run_heal_self_escalation_intake(["ai:planning", heal.HEAL_LABEL, heal.ESCALATED_LABEL])
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert f"WORKFLOW_HEAL escalate reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed" in result.stdout
+	assert f"WORKFLOW_HEAL escalate_repeat reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed alert=suppressed" in result.stdout
+	assert not [line for line in calls if line.startswith("CRITICAL|")], calls
+	assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
+	assert any(c["path"] == f"repos/{SELF_REPO}/issues/42/comments" for c in state_after["comments_posted"])
+	# Fail open: with no label list in the payload the alert is sent as before.
+	result, state_after, fp, calls = _run_heal_self_escalation_intake(None)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL escalate reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed" in result.stdout
+	assert "escalate_repeat" not in result.stdout
+	assert len(_heal_self_escalation_alerts(calls)) == 1, calls
+	assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
+	# Fail open on a malformed label list too: a bare string (not a list) and
+	# object entries are not a readable label list: validate-payload
+	# (workflow_failure_heal.py) keeps only string entries, so the escalated
+	# label never reaches the intake's jq check and the alert is still sent.
+	# A dict keyed by the label itself survives validate-payload as its keys,
+	# so the intake also requires the raw report's labels to be an array.
+	for malformed in (heal.ESCALATED_LABEL, [{"name": heal.ESCALATED_LABEL}], {"name": heal.ESCALATED_LABEL}, {heal.ESCALATED_LABEL: True}):
+		result, state_after, fp, calls = _run_heal_self_escalation_intake(None, raw_labels=malformed)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"WORKFLOW_HEAL escalate reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed" in result.stdout
+		assert "escalate_repeat" not in result.stdout, malformed
+		assert len(_heal_self_escalation_alerts(calls)) == 1, (malformed, calls)
+		# Only the dict keyed by the label would have suppressed without the
+		# raw-shape check, so only it logs the overturned suppression.
+		assert ("WORKFLOW_HEAL warn heal_self_labels_unreadable issue=42" in result.stdout) == (malformed == {heal.ESCALATED_LABEL: True}), malformed
+		assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
+
+
+def test_intake_escalates_a_heal_issue_that_fails_its_own_run() -> None:
+	# A heal issue (#6413-style, in this repository) whose plan run fails with
+	# the failure it was filed for: the pipeline cannot run its own fix. The
+	# first escalation sends exactly one CRITICAL alert (issue #9248).
+	result, state_after, fp, calls = _run_heal_self_escalation_intake(["ai:planning", heal.HEAL_LABEL])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL escalate reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed" in result.stdout
+	assert "escalate_repeat" not in result.stdout
+	assert len(_heal_self_escalation_alerts(calls)) == 1, calls
+	assert len([line for line in calls if line.startswith("CRITICAL|")]) == 1, calls
+	payload = _phase_payload(repo=SELF_REPO, issue=_issue(body=_sourced_heal_issue(42, state="open", fp=fp, source=f"{SELF_REPO}#6208")["body"], labels=["ai:planning", heal.HEAL_LABEL]))
 	assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
 	assert "issues_created" not in state_after
 	assert any(c["path"] == f"repos/{SELF_REPO}/issues/42/comments" for c in state_after["comments_posted"])
@@ -7556,6 +8046,42 @@ def test_non_retryable_route_explains_sandbox_excluded_editor_stop() -> None:
 	assert "review editor sandbox does not admit" in body
 	assert "conflicted path(s) could not be read" not in body
 	assert body.rstrip().endswith(f"{NR_DIAG_MARKER_PREFIX} pr=4174 head={SHA_B} reason={SANDBOX_EXCLUDED_REASON} -->")
+
+
+def test_provenance_accepts_a_green_sandbox_excluded_run_bound_by_its_trusted_marker() -> None:
+	"""PR #9112 / intake run 42583232747: the #8321 marker run and the cap run both end
+	`success`, so the cap report was rejected as no_verified_runs and never diagnosed."""
+	cap_ref = _autofix_payload()["run_refs"][0]
+	payload = heal.validate_payload(_autofix_payload(
+		failure_reason="identical_failure_cap",
+		run_refs=[{**cap_ref, "run_id": "801", "url": f"https://github.com/{CONSUMER_REPO}/actions/runs/801"}, cap_ref],
+	))
+	marker_run = _provenance_run(801, path="ai-review.yml", conclusion="success", event="pull_request")
+	cap_run = _provenance_run(500, path="ai-review.yml", conclusion="success", pull_requests=[{"number": 4174}])
+
+	def check(comment: dict, run: dict = marker_run) -> dict:
+		return heal.verify_run_provenance(payload, runs={"801": run, "500": cap_run}, comments=[comment], trusted_login=NR_LOGIN, self_repo=SELF_REPO)
+
+	trusted = _sandbox_excluded_summary_comment(head=SHA_B, author=NR_LOGIN)
+	verdict = check(trusted)
+	assert verdict["status"] == "ok" and [ref["run_id"] for ref in verdict["run_refs"]] == ["801"]
+	assert verdict["rejections"] == [{"run_id": "500", "reason": "not_failed"}] and verdict["marker_head_run_ids"] == ["801"]
+	routed = heal.non_retryable_route(dict(payload, run_refs=verdict["run_refs"]), comments=[trusted], trusted_login=NR_LOGIN)
+	assert routed["route"] is True and routed["reason"] == SANDBOX_EXCLUDED_REASON
+	# Before the fix this was the outcome for every such report; it still is
+	# whenever the marker does not bind this run, head and reason.
+	retryable_marker = heal.render_failure_marker(SHA_B, "workflow_failure", FP_HEX, False, "801", None)
+	for comment, run in (
+		(_sandbox_excluded_summary_comment(head=SHA_B, author="attacker"), marker_run),
+		(_sandbox_excluded_summary_comment(head=SHA_A, author=NR_LOGIN), marker_run),
+		(_sandbox_excluded_summary_comment(head=SHA_B, run="802", author=NR_LOGIN), marker_run),
+		(dict(trusted, body=trusted["body"] + "\n\nquoted after the marker"), marker_run),
+		({"author_login": NR_LOGIN, "body": "AI review/autofix failed\n\n" + retryable_marker}, marker_run),
+		(trusted, dict(marker_run, conclusion="cancelled")),
+	):
+		assert check(comment, run)["reason"] == "no_verified_runs", comment
+	# The green-run exemption never relaxes the workflow-path check.
+	assert check(trusted, dict(marker_run, path=".github/workflows/evil.yml"))["rejections"][0] == {"run_id": "801", "reason": "unexpected_workflow_path"}
 
 
 def test_skip_reason_and_label_suppression_for_non_retryable_diagnosis() -> None:
@@ -10136,8 +10662,20 @@ def test_heal_stale_keeps_with_too_few_or_failed_runs() -> None:
 	runs = _stale_runs(6)
 	runs["workflow_runs"][2]["conclusion"] = "failure"
 	assert _stale_decide(runs=runs)["reason"] == "run_not_green"
+	# A cancelled run (a push replaced while it waited, run-volume plan D14)
+	# counts neither way: the other five green runs close the issue.
 	runs["workflow_runs"][2]["conclusion"] = "cancelled"
-	assert _stale_decide(runs=runs)["decision"] == "keep"
+	result = _stale_decide(runs=runs)
+	assert result["decision"] == "close" and result["green_runs"] == 5
+	assert result["first_green"]["id"] == 4000 and result["newest_green"]["id"] == 4005
+	# ...but it does not stand in for a green run either.
+	runs = _stale_runs(5)
+	runs["workflow_runs"][4]["conclusion"] = "cancelled"
+	result = _stale_decide(runs=runs)
+	assert result["reason"] == "too_few_green_runs" and result["green_runs"] == 4
+	# A failure beside a cancelled run still keeps the issue.
+	runs["workflow_runs"][1]["conclusion"] = "failure"
+	assert _stale_decide(runs=runs)["reason"] == "run_not_green"
 	# Runs at or before the anchor, other branches and other events do not count.
 	old = _stale_runs(5)
 	old["workflow_runs"][0]["created_at"] = "2025-12-31T00:00:00Z"

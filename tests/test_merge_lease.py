@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Merge lease (scripts/pr_checks_lib.sh, scripts/review_merge_train.sh;
-follow-up to #9642, answers Q1-Q5: A).
+"""Merge lease and final-CI merge resume (scripts/pr_checks_lib.sh,
+scripts/review_merge_train.sh; follow-up to #9642, answers Q1-Q5: A).
 
 On 2026-11-17 approved PRs into `main` had been updated from `main` up to six
 times without merging (#9367, #9368): every update head needed a CI run that
 took 1.5-2.5 hours on the congested runner pool, and `main` moved again before
-it finished. (The final-CI merge resume that #9660 shipped beside the lease is
-not on the stable line, so its tests are not here.)
+it finished. Integration children (#9603, #9597, #9545) sat with green final
+CI because the merge step's 45-minute checks wait had timed out first and
+nothing merged them afterwards.
 
 These tests drive the shipped scripts through a stateful fake `gh`
 (tests/merge_lease_fake_gh.py) that models refs with a fast-forward-only
@@ -302,6 +303,37 @@ class FreshnessIntegration(unittest.TestCase):
 		self.assertIn("action=lease_wait", res.stdout)
 
 
+class FinalCiPendingMark(unittest.TestCase):
+	def test_mark_posts_a_pending_status_and_the_index_label(self) -> None:
+		h = _Harness({})
+		res = h.lib(f"_pr_final_ci_merge_pending_mark 7 {HEAD}")
+		self.assertIn("outcome=marked", res.stdout, res.stderr)
+		st = h.state
+		self.assertEqual(st["statuses"][HEAD][0]["context"], "ai-review/final-ci-merge-pending")
+		self.assertEqual(st["statuses"][HEAD][0]["state"], "pending")
+		self.assertIn("ai:final-ci-merge-pending", st["labels"]["7"])
+
+	def test_mark_can_be_switched_off(self) -> None:
+		h = _Harness({})
+		res = h.lib(f"_pr_final_ci_merge_pending_mark 7 {HEAD}", {"FINAL_CI_MERGE_RESUME_ENABLED": "false"})
+		self.assertIn("outcome=disabled", res.stdout)
+		self.assertEqual(h.calls, [])
+
+	def test_every_timeout_exit_of_the_wait_marks_only_with_a_real_budget(self) -> None:
+		text = LIB.read_text()
+		start = text.index("_pr_wait_for_required_checks()\n{")
+		body = text[start:text.index("\n}\n", start)]
+		timeouts = re.findall(r'echo "AUTOFIX_AUTO_MERGE_CHECKS ([^\n]*outcome=timeout[^\n]*)\n\t*([^\n]*)', body)
+		# A failed final CI dispatch leaves no run to wait for, so that exit must not mark.
+		marking = [follow for line, follow in timeouts if "reason=final_ci_dispatch_failed" not in line]
+		unmarked = [follow for line, follow in timeouts if "reason=final_ci_dispatch_failed" in line]
+		self.assertEqual(len(marking), 3)
+		for follow in unmarked:
+			self.assertNotIn("_pr_final_ci_merge_pending_mark", follow)
+		for follow in marking:
+			self.assertEqual(follow.strip(), 'if [ "${max_minutes}" -gt 0 ]; then _pr_final_ci_merge_pending_mark "${pr_number}" "${head_sha}"; fi')
+
+
 class ReleaseTick(unittest.TestCase):
 	def _prs_jsonl(self, pulls: list[dict], labels: dict[str, list[str]]) -> str:
 		return "\n".join(json.dumps({"number": p["number"], "head": p["head"]["ref"], "head_repo": p["head"]["repo"]["full_name"],
@@ -347,6 +379,78 @@ class ReleaseTick(unittest.TestCase):
 		self.assertEqual(h.state["refs"][REF], "c" * 40)
 		self.assertNotIn("dispatched", h.state)
 
+	def _resume(self, statuses: list[dict], checks_rc: int = 0, checks_outcome: str = "ok", fresh_rc: int = 0,
+			ci_state: str = "success", extra_labels: list[str] | None = None, env: dict[str, str] | None = None) -> _Harness:
+		pulls = [_pull(7, sha=HEAD)]
+		labels = {"7": ["ai:final-ci-merge-pending"] + (extra_labels or [])}
+		st = {"pulls": pulls, "labels": labels, "user": "pipeline-bot", "statuses": {HEAD: statuses},
+			"graphql": {"data": {"repository": {"pullRequest": {"closingIssuesReferences": {"nodes": [{"number": 70}]}}}}}}
+		h = _Harness(st)
+		stubs = (f"_pr_wait_for_required_checks() {{ PR_CHECKS_WAIT_OUTCOME={checks_outcome}; PR_CHECKS_LAST_CI_STATE={ci_state}; echo \"WAIT_ARGS=$*\"; return {checks_rc}; }}\n"
+			f"_pr_base_fresh_for_merge() {{ PR_BASE_FRESHNESS_OUTCOME=lease_wait; return {fresh_rc}; }}\n")
+		res = h.train_fn(stubs + '_mt_final_ci_merge_resume "${PRS_JSONL}" ""', {"PRS_JSONL": self._prs_jsonl(pulls, labels), **(env or {})})
+		h.out = res.stdout + res.stderr  # type: ignore[attr-defined]
+		return h
+
+	MARK = {"context": "ai-review/final-ci-merge-pending", "state": "pending", "creator": {"login": "pipeline-bot"}}
+	GATE = {"context": "ai-review/head-gate", "state": "success", "creator": {"login": "Pipeline-Bot"}}
+
+	def test_green_final_ci_enables_head_bound_auto_merge(self) -> None:
+		h = self._resume([self.MARK, self.GATE])
+		self.assertIn("outcome=auto_merge_enabled", h.out)  # type: ignore[attr-defined]
+		self.assertIn(f"WAIT_ARGS=7 {HEAD} main 0", h.out)  # type: ignore[attr-defined]
+		merged = h.state["merged"][0]
+		self.assertIn("--match-head-commit", merged)
+		self.assertIn(HEAD, merged)
+		self.assertIn("--squash", merged)
+		self.assertNotIn("ai:final-ci-merge-pending", h.state["labels"]["7"])
+		self.assertIn("ai:ready-to-merge", h.state["labels"]["70"])
+		self.assertEqual(h.state["statuses"][HEAD][0]["state"], "success")
+
+	def test_marker_from_another_login_authorizes_nothing(self) -> None:
+		forged = dict(self.MARK, creator={"login": "someone-else"})
+		h = self._resume([forged, self.GATE])
+		self.assertIn("reason=no_marker_on_head", h.out)  # type: ignore[attr-defined]
+		self.assertNotIn("merged", h.state)
+
+	def test_head_gate_not_green_keeps_waiting(self) -> None:
+		h = self._resume([self.MARK, dict(self.GATE, state="pending")])
+		self.assertIn("reason=head_gate_not_success", h.out)  # type: ignore[attr-defined]
+		self.assertNotIn("merged", h.state)
+		self.assertIn("ai:final-ci-merge-pending", h.state["labels"]["7"])
+
+	def test_ci_still_running_keeps_waiting_and_failure_drops(self) -> None:
+		h = self._resume([self.MARK, self.GATE], checks_rc=1, checks_outcome="timeout")
+		self.assertIn("outcome=waiting reason=required_checks_timeout", h.out)  # type: ignore[attr-defined]
+		self.assertIn("ai:final-ci-merge-pending", h.state["labels"]["7"])
+		h2 = self._resume([self.MARK, self.GATE], checks_rc=1, checks_outcome="failed")
+		self.assertIn("reason=required_checks_failed", h2.out)  # type: ignore[attr-defined]
+		self.assertNotIn("ai:final-ci-merge-pending", h2.state["labels"]["7"])
+		self.assertNotIn("merged", h2.state)
+
+	def test_auto_merge_kill_switch_drops_the_label(self) -> None:
+		h = self._resume([self.MARK, self.GATE], env={"ENABLE_AUTO_MERGE": "false"})
+		self.assertIn("outcome=dropped reason=auto_merge_disabled", h.out)  # type: ignore[attr-defined]
+		self.assertNotIn("merged", h.state)
+		self.assertNotIn("ai:final-ci-merge-pending", h.state["labels"]["7"])
+
+	def test_a_hold_label_added_after_the_mark_wins(self) -> None:
+		for hold in ("ai:needs-human", "ai:review-blocked", "ai:merge-queued", "ai:security-pass-failed"):
+			h = self._resume([self.MARK, self.GATE], extra_labels=[hold])
+			self.assertIn(f"reason=blocked_by_{hold}", h.out)  # type: ignore[attr-defined]
+			self.assertNotIn("merged", h.state)
+
+	def test_no_named_ci_success_never_resumes(self) -> None:
+		"""A base with no required CI check reads "no check-runs" as green; the tick does not."""
+		h = self._resume([self.MARK, self.GATE], ci_state="absent")
+		self.assertIn("reason=no_named_ci_success", h.out)  # type: ignore[attr-defined]
+		self.assertNotIn("merged", h.state)
+
+	def test_lease_or_freshness_defers_the_merge(self) -> None:
+		h = self._resume([self.MARK, self.GATE], fresh_rc=1)
+		self.assertIn("outcome=deferred reason=lease_wait", h.out)  # type: ignore[attr-defined]
+		self.assertNotIn("merged", h.state)
+
 
 class Wiring(unittest.TestCase):
 	def test_sweep_skips_lease_waiters_only_while_the_train_releases_them(self) -> None:
@@ -364,9 +468,25 @@ class Wiring(unittest.TestCase):
 	def test_merge_paths_get_the_lease_switches(self) -> None:
 		self.assertEqual(REVIEW.read_text().count("MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}"), 3)
 
-	def test_release_runs_the_lease_tick(self) -> None:
+	def test_release_steps_get_the_review_paths_switches(self) -> None:
+		for wf in (POLL, CLOSE):
+			text = wf.read_text()
+			for name in ("ENABLE_AUTO_MERGE", "AUTO_MERGE_REQUIRED_CI_CHECK", "MERGE_BASE_FRESHNESS_ENABLED",
+					"MERGE_BASE_FRESHNESS_MAX_SYNCS", "ORCH_INTEGRATION_BRANCH_PATTERN", "AUTO_MERGE_WAIT_WORKFLOWS"):
+				self.assertIn(f"          {name}: ${{{{ vars.{name}", text, f"{wf.name}: {name}")
+
+	def test_rb_judge_waits_never_mark(self) -> None:
+		"""The judge posts head-gate success only after its wait, so its marker could never resume."""
+		text = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text()
+		calls = re.findall(r"^.*\b_pr_wait_for_required_checks \"\$\{PR_NUMBER\}\".*$", text, re.M)
+		self.assertEqual(len(calls), 2)
+		for call in calls:
+			self.assertIn("FINAL_CI_MERGE_RESUME_ENABLED=false _pr_wait_for_required_checks", call)
+
+	def test_release_runs_both_tick_passes(self) -> None:
 		text = TRAIN.read_text()
 		self.assertIn('_mt_merge_lease_tick "${prs_json}" "${base_filter}" || true', text)
+		self.assertIn('_mt_final_ci_merge_resume "${prs_json}" "${base_filter}" || true', text)
 
 
 if __name__ == "__main__":

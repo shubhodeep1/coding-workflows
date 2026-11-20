@@ -82,6 +82,7 @@ REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Pre-push affected-test gate": ("review_autofix_step_prepush_test_gate.sh", "error"),
 	"Integration post-sync test repair": ("review_autofix_step_prepush_test_gate.sh", "error"),
 	"Single-issue security pass (deterministic skip)": ("review_autofix_step_deterministic_skip_security_pass.sh", "error"),
+	"Checkout PR head branch": ("review_autofix_step_checkout_pr_head_branch.sh", "error"),
 }
 
 # Gate-job step scripts -> the verified checkout directory their wrapper reads.
@@ -105,6 +106,7 @@ REVIEW_AUTOFIX_SKIP_MERGE_JOB_STEP_SCRIPTS: dict[str, str] = {
 TEST_AND_MARK_STABLE_STEP_SCRIPTS: dict[str, str] = {
 	"Phase 4: Wait for review & autofix to complete": "stable_e2e_step_wait_review.sh",
 	"Phase 4b: Verify editor restored canary (pytest + retry)": "stable_e2e_step_verify_bait_removed.sh",
+	"Deep verify: inspect all workflow run steps": "stable_e2e_step_deep_verify.sh",
 	"Phase 7: Close PR and verify cancel_on_pr_close fires": "stable_e2e_step_verify_cancel_on_close.sh",
 }
 

@@ -169,6 +169,93 @@ def test_render_prompt_py_help_strings_are_valid_format_strings() -> None:
 	assert "{%...%}" in proc.stdout
 
 
+# Issue #9269 / AD-1: argparse scripts under scripts/ that the tests run by the
+# `tests-release-and-log-analysis` and `orchestrate-poll` jobs in ci.yml call,
+# either as a subprocess or as an import. The list holds each script that
+# contains `ArgumentParser` and whose `<name>.py` path, `import <name>` or
+# `from <name> import` appears in one of those tests. Excluded on purpose:
+# - render_prompt.py: covered by the test above.
+# - verify_release_manifest.py: its parser uses add_help=False and has no
+#   help= strings, so --help exits 2 by design.
+# - scripts named only in tests/test_ci_poll_test_sharding.py, which lists
+#   test-file paths, not script calls.
+ARGPARSE_HELP_SCRIPTS = (
+	"acceptance_check.py",
+	"ai_labels.py",
+	"ai_memory.py",
+	"analyze_workflow_logs.py",
+	"apply_audit_gate_assets.py",
+	"assemble_agents.py",
+	"assemble_changelog.py",
+	"attempt_journal.py",
+	"blocker_check.py",
+	"build_state_snapshot.py",
+	"build_sync_manifest.py",
+	"check_triage_resolution.py",
+	"check_workflow_script_refs.py",
+	"claude_engine.py",
+	"collect_workflow_logs.py",
+	"consolidate_soft_error_reports.py",
+	"cost_audit.py",
+	"evidence_pack.py",
+	"files_touched_scope_guard.py",
+	"lint_pr_body_auto_close.py",
+	"load_workflow_overlay.py",
+	"mcp_handshake_probe.py",
+	"operator_step_issue.py",
+	"orchestrate_lib.py",
+	"orchestrate_state_v2.py",
+	"orphan_fixup_close.py",
+	"partial_delivery.py",
+	"persist_budget.py",
+	"persist_orchestrator.py",
+	"persist_postmerge_verify.py",
+	"plan_superseded_merged_pr.py",
+	"pr_dependency.py",
+	"provider_outage.py",
+	"release_manifest.py",
+	"render_validation_templates.py",
+	"security_dependency.py",
+	"security_pass_skip.py",
+	"slop_scan_local.py",
+	"summarize_unselected_runs.py",
+	"sync_claude_live_copies.py",
+	"targeted_file_context.py",
+	"task_state.py",
+	"unblock_actions.py",
+	"unblock_ledger.py",
+	"unblock_scan.py",
+	"validation_lint.py",
+	"validation_refresh_runner.py",
+	"workflow_failure_heal.py",
+	"workflow_wrapper_refs.py",
+)
+
+
+def test_argparse_scripts_called_by_ci_tests_exit_zero_on_help() -> None:
+	# Python 3.14+ argparse checks every help string (subparser arguments
+	# included) with `%` formatting when the argument is added, so any bad help
+	# string fails here. On the 3.12 CI job, a top-level `--help` only expands
+	# the top-level parser's help strings (and each subcommand's one-line
+	# help); argument help strings inside subparsers are not exercised there.
+	failures: list[str] = []
+	for name in ARGPARSE_HELP_SCRIPTS:
+		script = REPO_ROOT / "scripts" / name
+		assert script.is_file(), f"listed script is missing: {script}"
+		assert "argparse" in script.read_text(encoding="utf-8"), f"listed script no longer uses argparse: {script}"
+		proc = subprocess.run(
+			[sys.executable, str(script), "--help"],
+			cwd=str(REPO_ROOT),
+			env=_base_env(),
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+		if proc.returncode != 0 or "usage:" not in proc.stdout:
+			failures.append(f"{name}: rc={proc.returncode} stderr_tail={proc.stderr[-500:]!r}")
+	assert not failures, "\n".join(failures)
+
+
 def test_output_contract_reference_includes_status_update_cadence() -> None:
 	reference_text = _load_reference_text("output-contract.txt")
 	assert "Emit one short preamble sentence (≤20 words) before each tool-call batch" in reference_text
@@ -207,6 +294,284 @@ def test_render_prompt_sh_renders_implement_contract_defaults_and_env_values() -
 		"- CI workflow edits under .github/workflows/ are permitted when required by the approved plan; keep changes inside the plan's stated file scope.\n"
 		"Footer\n"
 	)
+
+
+_NON_UTF8_PROMPT_BYTES = b"Header\n\xff\nFooter\n"
+
+
+def _stderr_error_lines(stderr: str) -> list[str]:
+	return [line for line in stderr.splitlines() if line.startswith("ERROR:")]
+
+
+def _brace(name: str) -> str:
+	# Built by concatenation so this file's source (embedded in reviewer prompt
+	# bodies) never carries a contiguous braced env-like token that an older
+	# renderer would fill from the review runner's environment (#9465).
+	return "{{" + name + "}}"
+
+
+def test_render_prompt_py_reports_non_utf8_prompt_without_traceback() -> None:
+	# #9341: a non-UTF-8 prompt used to escape load_prompt as a raw
+	# UnicodeDecodeError traceback with no named ERROR line.
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_non_utf8_py_") as td:
+		prompt_file = Path(td) / "mode-implement.txt"
+		prompt_file.write_bytes(_NON_UTF8_PROMPT_BYTES)
+		proc = _run_render_prompt_py(prompt_file)
+
+	assert proc.returncode == 1, proc.stderr
+	assert proc.stdout == ""
+	assert "Traceback" not in proc.stderr
+	error_lines = _stderr_error_lines(proc.stderr)
+	assert len(error_lines) == 1, proc.stderr
+	assert str(prompt_file) in error_lines[0]
+	assert "byte offset 7" in error_lines[0]
+
+
+def test_render_prompt_sh_reports_non_utf8_prompt_without_traceback() -> None:
+	# #9341: collect_prompt_placeholders read the prompt with no error handling,
+	# and its process substitution hid the failure from the shell. The helper
+	# now prints one named ERROR line and the shell exits 1 before calling
+	# render_prompt.py, so no second ERROR line follows.
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_non_utf8_sh_") as td:
+		prompt_file = Path(td) / "mode-implement.txt"
+		prompt_file.write_bytes(_NON_UTF8_PROMPT_BYTES)
+		env = _base_env()
+		env["PROMPT_PRELUDE_REFACTOR_ENABLED"] = "false"
+		proc = subprocess.run(
+			["bash", str(RENDER_PROMPT_SH), str(prompt_file)],
+			cwd=str(REPO_ROOT),
+			env=env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+
+	assert proc.returncode == 1, proc.stderr
+	assert proc.stdout == ""
+	assert "Traceback" not in proc.stderr
+	error_lines = _stderr_error_lines(proc.stderr)
+	assert len(error_lines) == 1, proc.stderr
+	assert error_lines[0].startswith("ERROR: collect_prompt_placeholders UnicodeDecodeError:")
+	assert str(prompt_file) in error_lines[0]
+
+
+def test_render_prompt_py_reports_unexpected_exception_without_traceback() -> None:
+	# #9341: main() caught only RenderPromptError, so any other exception
+	# printed a raw traceback. The final `except Exception` branch names it on
+	# one stderr line and keeps exit code 1.
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_unexpected_") as td:
+		prompt_file = Path(td) / "mode-sample.txt"
+		prompt_file.write_text("Header\nFooter\n", encoding="utf-8")
+		script = (
+			"import importlib.util, sys\n"
+			f"spec = importlib.util.spec_from_file_location('render_prompt', {str(RENDER_PROMPT_PY)!r})\n"
+			"module = importlib.util.module_from_spec(spec)\n"
+			"assert spec.loader is not None\n"
+			"sys.modules['render_prompt'] = module\n"
+			"spec.loader.exec_module(module)\n"
+			"def _boom(*args, **kwargs):\n"
+			"\traise RuntimeError('boom')\n"
+			"module.apply_workflow_overlay = _boom\n"
+			f"raise SystemExit(module.main([{str(prompt_file)!r}]))\n"
+		)
+		proc = subprocess.run(
+			[sys.executable, "-c", script],
+			cwd=str(REPO_ROOT),
+			env=_base_env(),
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+
+	assert proc.returncode == 1, proc.stderr
+	assert proc.stdout == ""
+	assert "Traceback" not in proc.stderr
+	assert proc.stderr.splitlines() == [
+		f"ERROR: render_prompt unexpected RuntimeError: boom (prompt={prompt_file})"
+	]
+
+
+def test_render_prompt_py_escapes_multiline_unexpected_exception_message() -> None:
+	# #9341: the `except Exception` branch writes CR/LF in the exception
+	# message as literal `\r` / `\n` text so a multi-line message still prints
+	# exactly one stderr line. A regression that drops the escaping fails here.
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_unexpected_multiline_") as td:
+		prompt_file = Path(td) / "mode-sample.txt"
+		prompt_file.write_text("Header\nFooter\n", encoding="utf-8")
+		script = (
+			"import importlib.util, sys\n"
+			f"spec = importlib.util.spec_from_file_location('render_prompt', {str(RENDER_PROMPT_PY)!r})\n"
+			"module = importlib.util.module_from_spec(spec)\n"
+			"assert spec.loader is not None\n"
+			"sys.modules['render_prompt'] = module\n"
+			"spec.loader.exec_module(module)\n"
+			"def _boom(*args, **kwargs):\n"
+			"\traise RuntimeError('line1\\nline2\\r\\nline3')\n"
+			"module.apply_workflow_overlay = _boom\n"
+			f"raise SystemExit(module.main([{str(prompt_file)!r}]))\n"
+		)
+		proc = subprocess.run(
+			[sys.executable, "-c", script],
+			cwd=str(REPO_ROOT),
+			env=_base_env(),
+			text=True,
+			capture_output=True,
+			timeout=60,
+			check=False,
+		)
+
+	assert proc.returncode == 1, proc.stderr
+	assert proc.stdout == ""
+	assert "Traceback" not in proc.stderr
+	assert proc.stderr.splitlines() == [
+		f"ERROR: render_prompt unexpected RuntimeError: line1\\nline2\\r\\nline3 (prompt={prompt_file})"
+	]
+
+
+def test_render_prompt_sh_never_substitutes_credential_env_placeholders() -> None:
+	# Security audit #9399 / #9431 / #9465: placeholder names come from the
+	# prompt body, which can embed untrusted PR / issue text. A literal GH_PAT
+	# placeholder there must not pull the runner secret into the prompt, and a
+	# harmless-looking name whose value is a whole token must not either.
+	secret_value = "render-prompt-test-secret-value-9465"
+	token_value = "ghp_" + "A" * 36
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_env_secret_") as td:
+		prompt_file = Path(td) / "mode-sample.txt"
+		prompt_file.write_text(
+			f"pat={_brace('GH_PAT')}\nkey={_brace('OPENROUTER_API_KEY')}\ncf={_brace('FT_GAMES_CF')}\n"
+			f"looks_safe={_brace('RENDER_PROMPT_TEST_LOOKS_SAFE')}\nsafe={_brace('RENDER_PROMPT_TEST_SAFE')}\n",
+			encoding="utf-8",
+		)
+		env = _base_env()
+		env["PROMPT_PRELUDE_REFACTOR_ENABLED"] = "false"
+		env["GH_PAT"] = secret_value
+		env["OPENROUTER_API_KEY"] = secret_value
+		env["FT_GAMES_CF"] = secret_value
+		env["RENDER_PROMPT_TEST_LOOKS_SAFE"] = token_value
+		env["RENDER_PROMPT_TEST_SAFE"] = "plain-value"
+		proc = subprocess.run(
+			["bash", str(RENDER_PROMPT_SH), str(prompt_file)],
+			cwd=str(REPO_ROOT),
+			env=env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+			check=False,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert secret_value not in proc.stdout
+	assert token_value not in proc.stdout
+	assert secret_value not in proc.stderr
+	assert token_value not in proc.stderr
+	assert f"pat={_brace('GH_PAT')}" in proc.stdout
+	assert f"key={_brace('OPENROUTER_API_KEY')}" in proc.stdout
+	assert f"cf={_brace('FT_GAMES_CF')}" in proc.stdout
+	assert f"looks_safe={_brace('RENDER_PROMPT_TEST_LOOKS_SAFE')}" in proc.stdout
+	assert "safe=plain-value" in proc.stdout
+	assert not _stderr_error_lines(proc.stderr), proc.stderr
+
+
+def _run_render_prompt_sh_with_env(prompt_file: Path, extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+	env = _base_env()
+	env["PROMPT_PRELUDE_REFACTOR_ENABLED"] = "false"
+	env.pop("RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED", None)
+	env.pop("RENDER_PROMPT_SKIP_SYNTAX_VALIDATION", None)
+	env.update(extra_env)
+	return subprocess.run(
+		["bash", str(RENDER_PROMPT_SH), str(prompt_file)],
+		cwd=str(REPO_ROOT),
+		env=env,
+		text=True,
+		capture_output=True,
+		timeout=60,
+		check=False,
+	)
+
+
+def test_render_prompt_sh_does_not_substitute_env_into_untrusted_body() -> None:
+	# Security audit #9399 / #9431 / #9465: the reviewer/editor callers set the
+	# untrusted-body flags because the body embeds PR-diff / comment text. Either
+	# flag must stop every environment lookup, so even a harmless-looking name
+	# stays literal; the explicit scaffolding vars still render.
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_untrusted_body_") as td:
+		prompt_file = Path(td) / "mode-render-env-probe.txt"
+		prompt_file.write_text(
+			f"Header\n{_brace('RENDER_PROMPT_TEST_PLAIN_PROBE')}\ninline {_brace('GH_PAT')} here\n"
+			f"{_brace('SERENA_TOOL_HINTS')}\nFooter\n",
+			encoding="utf-8",
+		)
+		probe_env = {
+			"GH_PAT": "ghp_should_not_leak",
+			"RENDER_PROMPT_TEST_PLAIN_PROBE": "plain_should_not_render",
+			"SERENA_TOOL_HINTS": "explicit-serena-hint",
+		}
+		for flags in (
+			{"RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED": "1", "RENDER_PROMPT_SKIP_SYNTAX_VALIDATION": "1"},
+			{"RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED": "1"},
+			{"RENDER_PROMPT_SKIP_SYNTAX_VALIDATION": "1"},
+		):
+			proc = _run_render_prompt_sh_with_env(prompt_file, {**probe_env, **flags})
+			assert proc.returncode == 0, (flags, proc.stderr)
+			for leaked in ("ghp_should_not_leak", "plain_should_not_render"):
+				assert leaked not in proc.stdout, flags
+				assert leaked not in proc.stderr, flags
+			assert _brace("RENDER_PROMPT_TEST_PLAIN_PROBE") in proc.stdout, flags
+			assert f"inline {_brace('GH_PAT')} here" in proc.stdout, flags
+			assert "explicit-serena-hint" in proc.stdout, flags
+			assert not _stderr_error_lines(proc.stderr), (flags, proc.stderr)
+
+
+def test_render_prompt_sh_refuses_secret_like_env_placeholders() -> None:
+	# Trusted-template mode still fills harmless env placeholders, but never a
+	# credential-like name, nor a harmless name whose whole value is shaped like
+	# an API key or a PEM private key (#9399 / #9431 / #9465).
+	sk_value = "sk-" + "b" * 32
+	pem_value = "-----BEGIN RSA " + "PRIVATE KEY-----\nMIIBOgIBAAJBAK\n-----END RSA " + "PRIVATE KEY-----"
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_secret_like_") as td:
+		prompt_file = Path(td) / "mode-sample.txt"
+		prompt_file.write_text(
+			f"{_brace('RENDER_PROMPT_TEST_PLAIN_VALUE')}\nmid {_brace('RENDER_PROMPT_TEST_API_TOKEN')} end\n"
+			f"sk={_brace('RENDER_PROMPT_TEST_SK_SHAPED')}\npem={_brace('RENDER_PROMPT_TEST_PEM_SHAPED')}\n",
+			encoding="utf-8",
+		)
+		proc = _run_render_prompt_sh_with_env(
+			prompt_file,
+			{
+				"RENDER_PROMPT_TEST_PLAIN_VALUE": "plain_ok",
+				"RENDER_PROMPT_TEST_API_TOKEN": "tok_should_not_leak",
+				"RENDER_PROMPT_TEST_SK_SHAPED": sk_value,
+				"RENDER_PROMPT_TEST_PEM_SHAPED": pem_value,
+			},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	for leaked in ("tok_should_not_leak", sk_value, "MIIBOgIBAAJBAK"):
+		assert leaked not in proc.stdout
+		assert leaked not in proc.stderr
+	assert "plain_ok\n" in proc.stdout
+	assert f"mid {_brace('RENDER_PROMPT_TEST_API_TOKEN')} end" in proc.stdout
+	assert f"sk={_brace('RENDER_PROMPT_TEST_SK_SHAPED')}" in proc.stdout
+	assert f"pem={_brace('RENDER_PROMPT_TEST_PEM_SHAPED')}" in proc.stdout
+	assert not _stderr_error_lines(proc.stderr), proc.stderr
+
+
+def test_render_prompt_sh_leaves_non_identifier_placeholders_literal() -> None:
+	# `{{1abc}}` matches the collector regex but is not a bash identifier, so the
+	# indirect env lookup used to abort render_prompt.sh with a bare
+	# "invalid variable name" line; `{{0}}` read the script path from $0.
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_non_identifier_") as td:
+		prompt_file = Path(td) / "mode-sample.txt"
+		prompt_file.write_text(
+			f"Header\n{_brace('1abc')}\n{_brace('0')}\n{_brace('RENDER_PROMPT_TEST_PLAIN_VALUE')}\nFooter\n",
+			encoding="utf-8",
+		)
+		proc = _run_render_prompt_sh_with_env(prompt_file, {"RENDER_PROMPT_TEST_PLAIN_VALUE": "plain_ok"})
+
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout == f"Header\n{_brace('1abc')}\n{_brace('0')}\nplain_ok\nFooter\n"
+	assert "invalid variable name" not in proc.stderr
+	assert str(RENDER_PROMPT_SH) not in proc.stdout
 
 
 def test_render_prompt_sh_renders_header_with_empty_repo_learnings() -> None:
@@ -1334,7 +1699,30 @@ def test_render_prompt_py_identity_recall_fail_open_on_malformed_prompt() -> Non
 	assert identity_proc.stderr.strip() == "IDENTITY_REINJECT_PARSE_FAIL: mode-malformed reason=metadata_extract_failed"
 
 
+def test_render_prompt_py_help_strings_are_well_formed() -> None:
+	# argparse expands help text with %-formatting. Python 3.14 checks every help string in add_argument(), so a bare
+	# `%` (like `{%...%}`) made build_parser() raise "badly formed help string" and every render_prompt.sh call fail.
+	# format_help() expands them all on every supported Python version.
+	script = (
+		"import importlib.util, sys\n"
+		f"spec = importlib.util.spec_from_file_location('render_prompt', {str(RENDER_PROMPT_PY)!r})\n"
+		"module = importlib.util.module_from_spec(spec)\n"
+		"assert spec.loader is not None\n"
+		"sys.modules['render_prompt'] = module\n"
+		"spec.loader.exec_module(module)\n"
+		"print(module.build_parser().format_help())\n"
+	)
+	env = _base_env()
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	proc = subprocess.run([sys.executable, "-c", script], env=env, text=True, capture_output=True, timeout=60)
+	assert proc.returncode == 0, proc.stderr
+	help_text = " ".join(proc.stdout.split())
+	assert "{%...%}" in help_text, help_text
+
+
 def main() -> int:
+	test_render_prompt_py_help_strings_are_valid_format_strings()
+	test_argparse_scripts_called_by_ci_tests_exit_zero_on_help()
 	test_output_contract_reference_includes_status_update_cadence()
 	test_render_prompt_sh_renders_implement_contract_defaults_and_env_values()
 	test_render_prompt_sh_renders_header_with_empty_repo_learnings()
@@ -1359,6 +1747,8 @@ def main() -> int:
 	test_render_prompt_py_resolves_standalone_include_for_trusted_templates()
 	test_render_prompt_py_uses_checked_in_persona_source()
 	test_apply_phase_c_persona_prefix_accepts_legacy_mode_name_only_call()
+	test_render_prompt_py_help_strings_are_well_formed()
+	test_render_prompt_py_help_strings_are_valid_format_strings()
 	test_render_prompt_py_prepends_phase_c_persona_prefix_without_altering_legacy_body()
 	test_render_prompt_py_enables_phase_c_persona_prefix_by_default()
 	test_render_prompt_py_treats_blank_persona_env_value_as_disabled()
@@ -1374,7 +1764,22 @@ def main() -> int:
 	test_render_prompt_py_identity_recall_reports_canonical_prompt_missing_details()
 	test_render_prompt_py_identity_recall_reports_render_failure_details()
 	test_render_prompt_py_identity_recall_fail_open_on_malformed_prompt()
+	# CI runs this module directly (`python3 tests/test_render_prompt_foundation.py`),
+	# so tests must be listed here to execute there (#9341, #9365).
+	test_render_prompt_py_reports_non_utf8_prompt_without_traceback()
+	test_render_prompt_sh_reports_non_utf8_prompt_without_traceback()
+	test_render_prompt_py_reports_unexpected_exception_without_traceback()
+	test_render_prompt_py_escapes_multiline_unexpected_exception_message()
+	test_render_prompt_sh_never_substitutes_credential_env_placeholders()
+	test_render_prompt_sh_does_not_substitute_env_into_untrusted_body()
+	test_render_prompt_sh_refuses_secret_like_env_placeholders()
+	test_render_prompt_sh_leaves_non_identifier_placeholders_literal()
 	print("OK: render prompt foundation assertions hold")
+	# Imported here so pytest does not collect these cases twice; run as a
+	# script, sys.path[0] is tests/.
+	import test_scripts_build_parser_help as _bp_help_tests
+
+	_bp_help_tests.main()
 	return 0
 
 

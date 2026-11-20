@@ -32,10 +32,22 @@ claude_template_drift = importlib.util.module_from_spec(_DRIFT_SPEC)
 _DRIFT_SPEC.loader.exec_module(claude_template_drift)
 GUARD_PATH = REPO_ROOT / ".claude" / "hooks" / "pr_merge_status_guard.py"
 TEMPLATE_GUARD_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "hooks" / "pr_merge_status_guard.py"
+# The review sandbox snapshot omits the live hook (allowed() refuses it); the
+# subprocess tests then run its byte-identical template twin instead.
+RUNNABLE_GUARD_PATH = GUARD_PATH if GUARD_PATH.is_file() else TEMPLATE_GUARD_PATH
 SETTINGS_PATH = REPO_ROOT / ".claude" / "settings.json"
 TEMPLATE_SETTINGS_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "settings.json"
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 TEMPLATE_CLAUDE_MD = REPO_ROOT / "workflow-templates" / "CLAUDE.md"
+# The review sandbox snapshot leaves out the live hook and settings (allowed()
+# refuses them) and every symlink, so workflow-templates/CLAUDE.md (a symlink to
+# ../CLAUDE.md) too. Only when all three are absent do the wiring and parity
+# tests read the template twins; a full checkout missing any one stays strict.
+REVIEW_SANDBOX_SNAPSHOT = all(
+	not path.exists() and not path.is_symlink()
+	for path in (GUARD_PATH, SETTINGS_PATH, TEMPLATE_CLAUDE_MD)
+)
+LIVE_OR_SANDBOX_SETTINGS_PATH = TEMPLATE_SETTINGS_PATH if REVIEW_SANDBOX_SNAPSHOT else SETTINGS_PATH
 # Full §21 text moved out of CLAUDE.md to keep the always-loaded file small.
 CLAUDE_MD_S21_REFERENCE = REPO_ROOT / ".claude" / "docs" / "s21-merged-pr-commit-guard.md"
 TEMPLATE_CLAUDE_MD_S21_REFERENCE = REPO_ROOT / "workflow-templates" / ".claude" / "docs" / "s21-merged-pr-commit-guard.md"
@@ -45,7 +57,10 @@ _WORKER_URL = f"https://api.cloudflare.com/client/v4/accounts/{_WORKER_ACCOUNT_I
 
 
 def _load_guard():
-	spec = importlib.util.spec_from_file_location("pr_merge_status_guard", GUARD_PATH)
+	# The review sandbox snapshot omits the live hook (allowed() refuses it), so
+	# import its byte-identical template twin there; the parity test below still
+	# fails when the live copy is missing in a full checkout.
+	spec = importlib.util.spec_from_file_location("pr_merge_status_guard", RUNNABLE_GUARD_PATH)
 	assert spec is not None and spec.loader is not None
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)
@@ -383,6 +398,8 @@ def test_slug_extraction_matches_the_bash_implementation_it_mirrors() -> None:
 	unrelated github.com repo.
 	"""
 	session_start = REPO_ROOT / ".claude" / "hooks" / "session-start.sh"
+	if REVIEW_SANDBOX_SNAPSHOT:
+		session_start = REPO_ROOT / "workflow-templates" / ".claude" / "hooks" / "session-start.sh"
 	urls = [
 		"https://github.com/owner/repo.git",
 		"git@github.com:owner/repo.git",
@@ -752,7 +769,7 @@ def test_cached_allow_issues_no_api_call(monkeypatch, tmp_path: Path) -> None:
 @pytest.mark.parametrize("payload", ["", "not json", "[]", "null"])
 def test_malformed_stdin_exits_zero(payload: str) -> None:
 	proc = subprocess.run(
-		[sys.executable, str(GUARD_PATH)],
+		[sys.executable, str(RUNNABLE_GUARD_PATH)],
 		input=payload,
 		capture_output=True,
 		text=True,
@@ -763,7 +780,7 @@ def test_malformed_stdin_exits_zero(payload: str) -> None:
 
 def test_unguarded_command_exits_zero_without_touching_git() -> None:
 	proc = subprocess.run(
-		[sys.executable, str(GUARD_PATH)],
+		[sys.executable, str(RUNNABLE_GUARD_PATH)],
 		input=json.dumps({"tool_name": "Bash", "tool_input": {"command": "ls -la"}}),
 		capture_output=True,
 		text=True,
@@ -848,7 +865,7 @@ def _run_hook(repo: Path, stub_bin: Path, command: str) -> subprocess.CompletedP
 	env["TMPDIR"] = str(repo.parent / "cache")
 	(repo.parent / "cache").mkdir(exist_ok=True)
 	return subprocess.run(
-		[sys.executable, str(GUARD_PATH)],
+		[sys.executable, str(RUNNABLE_GUARD_PATH)],
 		input=json.dumps(
 			{"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(repo)}
 		),
@@ -2355,7 +2372,7 @@ def test_conditional_cd_or_exit_keeps_worktree_after_semicolon(merged_branch_rep
 # ──────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
+@pytest.mark.parametrize("path", [LIVE_OR_SANDBOX_SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
 def test_api_write_allowlist_disables_implicit_curl_config(path: Path) -> None:
 	settings = json.loads(path.read_text(encoding="utf-8"))
 	allow = settings["permissions"]["allow"]
@@ -2370,7 +2387,7 @@ def test_api_write_allowlist_disables_implicit_curl_config(path: Path) -> None:
 	assert not any("api.digitalocean.com" in rule for rule in allow)
 
 
-@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
+@pytest.mark.parametrize("path", [LIVE_OR_SANDBOX_SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
 def test_guard_is_wired_as_a_pretooluse_bash_hook(path: Path) -> None:
 	settings = json.loads(path.read_text(encoding="utf-8"))
 	entries = settings["hooks"]["PreToolUse"]
@@ -2388,7 +2405,7 @@ def test_guard_is_wired_as_a_pretooluse_bash_hook(path: Path) -> None:
 	)
 
 
-@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
+@pytest.mark.parametrize("path", [LIVE_OR_SANDBOX_SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
 def test_session_start_hook_is_preserved(path: Path) -> None:
 	"""§6 — adding PreToolUse must not displace the existing SessionStart hook."""
 	settings = json.loads(path.read_text(encoding="utf-8"))
@@ -2410,7 +2427,7 @@ def _matches_any(command: str, patterns: list[str]) -> bool:
 	return any(fnmatch.fnmatchcase(command, pattern) for pattern in patterns)
 
 
-@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
+@pytest.mark.parametrize("path", [LIVE_OR_SANDBOX_SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
 def test_claude_branch_push_rules_allow_plain_forms_and_ask_on_default_branch_or_delete(
 	path: Path,
 ) -> None:
@@ -2448,6 +2465,11 @@ def test_template_copies_are_identical() -> None:
 	# On PR CI only, a template the PR changed (or whose drift its base already
 	# has) waits for the post-merge live-copy sync; CLAUDE.md stays strict.
 	pending = claude_template_drift.pending_template_paths(REPO_ROOT)
+	if REVIEW_SANDBOX_SNAPSHOT:
+		# No live copy exists to compare against; the template twins must.
+		assert TEMPLATE_GUARD_PATH.is_file() and TEMPLATE_SETTINGS_PATH.is_file()
+		assert CLAUDE_MD.is_file()
+		return
 	if "hooks/pr_merge_status_guard.py" not in pending:
 		assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
 	if "settings.json" not in pending:
@@ -2523,7 +2545,7 @@ def _run_hook_payload(repo: Path, stub_bin: Path, payload: dict) -> subprocess.C
 	(repo.parent / "cache").mkdir(exist_ok=True)
 	payload = {**payload, "cwd": str(repo)}
 	return subprocess.run(
-		[sys.executable, str(GUARD_PATH)],
+		[sys.executable, str(RUNNABLE_GUARD_PATH)],
 		input=json.dumps(payload),
 		capture_output=True,
 		text=True,
@@ -2850,7 +2872,7 @@ def test_mcp_push_escape_hatch(monkeypatch) -> None:
 	assert guard.evaluate(_mcp_payload()) == (0, "")
 
 
-@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
+@pytest.mark.parametrize("path", [LIVE_OR_SANDBOX_SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
 def test_guard_is_wired_for_the_mcp_push_tools(path: Path) -> None:
 	settings = json.loads(path.read_text(encoding="utf-8"))
 	entries = settings["hooks"]["PreToolUse"]
@@ -3022,7 +3044,7 @@ def _load_template_guard():
 template_guard = _load_template_guard()
 WRAPPER_GUARD_COPIES = pytest.mark.parametrize(
 	("guard_module", "hook_path"),
-	[(guard, GUARD_PATH), (template_guard, TEMPLATE_GUARD_PATH)],
+	[(guard, RUNNABLE_GUARD_PATH), (template_guard, TEMPLATE_GUARD_PATH)],
 	ids=["live", "template"],
 )
 

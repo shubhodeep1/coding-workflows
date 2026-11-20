@@ -120,11 +120,20 @@ review_head_gate_main()
 # of {author_login, body}); this adds no comments call. API budget (§15): one
 # `commits/<head>` and one compare read, both only when a bound marker names
 # the head. Exit 0 = skip the reviewers; 1 = review normally. Every outcome
-# logs one REVIEW_HEAD_GATE mode=freshness_sync line.
+# logs one REVIEW_HEAD_GATE mode=freshness_sync line. On exit 0 it also sets
+# REVIEW_HEAD_GATE_FRESHNESS_SYNC_FROM to the verified approved head (`from`),
+# empty otherwise; the single-issue security pass reads it to reuse that
+# head's clean audit (scripts/review_single_issue_security_pass.sh).
 review_head_gate_freshness_sync()
 {
 	local fs_repo="${1:-}" fs_pr="${2:-}" fs_head="${3:-}" fs_base="${4:-}" fs_login="${5:-}" fs_comments="${6:-}"
 	local fs_markers fs_marker fs_from fs_sync fs_base_parent fs_commit fs_parent_count fs_first fs_second fs_verified fs_committer fs_status
+	# Issue #9533: on a skip, expose the verified approved head and base
+	# parent to a sourcing caller (the single-issue security pass), so it
+	# needs no second marker parser. Empty on every other outcome.
+	REVIEW_HEAD_GATE_FRESHNESS_FROM=""
+	REVIEW_HEAD_GATE_FRESHNESS_BASE_PARENT=""
+	REVIEW_HEAD_GATE_FRESHNESS_SYNC_FROM=""
 	fs_log()
 	{
 		echo "REVIEW_HEAD_GATE mode=freshness_sync pr=${fs_pr:-?} head=${fs_head:-?} outcome=$1 reason=$2${3:+ $3}"
@@ -199,7 +208,85 @@ review_head_gate_freshness_sync()
 			return 1
 			;;
 	esac
+	REVIEW_HEAD_GATE_FRESHNESS_FROM="${fs_from}"
+	REVIEW_HEAD_GATE_FRESHNESS_BASE_PARENT="${fs_second}"
 	fs_log skip freshness_sync "from=${fs_from} base_parent=${fs_second} sync=${fs_sync} merge=${fs_head}"
+	REVIEW_HEAD_GATE_FRESHNESS_SYNC_FROM="${fs_from}"
+	return 0
+}
+
+# final-ci-repair <repo> <pr> <head sha> <author login> <comments json file>
+# (docs/plans/final-ci-failure-ci-fix-plan.md Phase 3). Recognises a final-CI
+# repair head so its review covers only the repair commit. All must hold:
+#   * a marker comment by <author login> (the GH_PAT login) ends in
+#     `<!-- ai:final-ci-repair:v1 pr=<pr> from=<sha> repair=<head> attempt=<k> -->`;
+#   * the head commit has exactly one parent, and it is `from`;
+#   * the head commit's committer is the pipeline identity (`codex-bot` or
+#     `claude-bot` at users.noreply.invalid, as review_conflict_resolve.sh
+#     commits);
+#   * `from`'s newest ai-review/head-gate status is `success` and was posted
+#     by <author login>.
+# The comments file is the gate's shared marker read (no comments call here).
+# API budget (§15): one `commits/<head>` and one `commits/<from>/statuses`
+# read, both only when a trusted marker names the head. On success it prints
+# `final_ci_repair_from=<from>` and exits 0; any other outcome (including a
+# failed read) exits 1, which means a full review. Every outcome logs one
+# `REVIEW_HEAD_GATE mode=final_ci_repair` line.
+review_head_gate_final_ci_repair()
+{
+	local fr_repo="${1:-}" fr_pr="${2:-}" fr_head="${3:-}" fr_login="${4:-}" fr_comments="${5:-}"
+	local fr_from fr_commit fr_parents fr_name fr_email fr_gate fr_gate_state fr_gate_creator
+	fr_log()
+	{
+		echo "REVIEW_HEAD_GATE mode=final_ci_repair pr=${fr_pr:-?} head=${fr_head:-?} outcome=$1 reason=$2${3:+ $3}"
+	}
+	if ! review_head_gate_valid_repo "${fr_repo}" || ! [[ "${fr_pr}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${fr_head}" =~ ^[0-9a-f]{40}$ ]] \
+		|| [ -z "${fr_login}" ] || [ ! -f "${fr_comments}" ]; then
+		fr_log review invalid_input
+		return 1
+	fi
+	fr_from="$(jq -r --arg login "${fr_login}" --arg pr "${fr_pr}" --arg head "${fr_head}" '
+		[ .[]? | select(type == "object" and ((.author_login // "") | ascii_downcase) == ($login | ascii_downcase))
+		| (.body // "") | select(type == "string")
+		| capture("<!-- ai:final-ci-repair:v1 pr=(?<pr>[0-9]+) from=(?<from>[0-9a-f]{40}) repair=(?<repair>[0-9a-f]{40}) attempt=[1-9][0-9]* -->\\s*$")?
+		| select(.pr == $pr and .repair == $head) | .from ] | last // ""' "${fr_comments}" 2>/dev/null || true)"
+	if ! [[ "${fr_from}" =~ ^[0-9a-f]{40}$ ]]; then
+		fr_log review no_repair_marker
+		return 1
+	fi
+	if ! fr_commit="$(gh_retry gh api "repos/${fr_repo}/commits/${fr_head}" \
+		--jq '{parents: [.parents[]?.sha], name: (.commit.committer.name // ""), email: (.commit.committer.email // "")}' 2>/dev/null)"; then
+		fr_log review commit_read_failed "from=${fr_from}"
+		return 1
+	fi
+	fr_parents="$(printf '%s' "${fr_commit}" | jq -r '.parents | join(",")' 2>/dev/null || true)"
+	fr_name="$(printf '%s' "${fr_commit}" | jq -r '.name' 2>/dev/null || true)"
+	fr_email="$(printf '%s' "${fr_commit}" | jq -r '.email' 2>/dev/null || true)"
+	if [ "${fr_parents}" != "${fr_from}" ]; then
+		fr_log review head_is_not_the_repair "from=${fr_from} parents=${fr_parents:-none}"
+		return 1
+	fi
+	case "${fr_name}" in
+		codex-bot|claude-bot) ;;
+		*) fr_name="" ;;
+	esac
+	if [ -z "${fr_name}" ] || [ "${fr_email}" != "${fr_name}@users.noreply.invalid" ]; then
+		fr_log review committer_not_pipeline "from=${fr_from}"
+		return 1
+	fi
+	if ! fr_gate="$(gh_retry gh api "repos/${fr_repo}/commits/${fr_from}/statuses?per_page=100" \
+		--jq '[.[] | select(.context == "ai-review/head-gate")][0] // {} | "\(.state // "none") \(.creator.login // "-")"' 2>/dev/null)"; then
+		fr_log review from_gate_read_failed "from=${fr_from}"
+		return 1
+	fi
+	read -r fr_gate_state fr_gate_creator <<< "${fr_gate:-none -}"
+	if [ "${fr_gate_state}" != "success" ] \
+		|| [ "$(printf '%s' "${fr_gate_creator}" | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "${fr_login}" | tr '[:upper:]' '[:lower:]')" ]; then
+		fr_log review from_not_approved "from=${fr_from} state=${fr_gate_state:-none}"
+		return 1
+	fi
+	fr_log delta final_ci_repair "from=${fr_from}"
+	echo "final_ci_repair_from=${fr_from}"
 	return 0
 }
 
@@ -210,6 +297,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 	case "${1:-}" in
 		gate) review_head_gate_main ;;
 		freshness-sync) shift; review_head_gate_freshness_sync "$@" ;;
-		*) echo "Usage: review_head_gate.sh gate | freshness-sync <repo> <pr> <head sha> <base ref> <author login> <comments json file>" >&2; exit 2 ;;
+		final-ci-repair) shift; review_head_gate_final_ci_repair "$@" ;;
+		*) echo "Usage: review_head_gate.sh gate | freshness-sync <repo> <pr> <head sha> <base ref> <author login> <comments json file> | final-ci-repair <repo> <pr> <head sha> <author login> <comments json file>" >&2; exit 2 ;;
 	esac
 fi

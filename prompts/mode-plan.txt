@@ -36,7 +36,7 @@ Output contract — produce a plan covering, in order:
    or a directory such as `scripts/`: the plan approval gate reads every `.github/`,
    `.claude/`, `scripts/`, `prompts/` and `workflow-templates/` token in this section, and a
    bare directory holds the plan for a human. Explain why a file changes in a later section.
-   Keep the section to those bullets: no prose paragraphs, and no placeholder path such as `scripts/<helper>`, which the gate reads as the bare directory `scripts/`.
+   Keep the section to those bullets: no prose paragraphs, and no placeholder path such as `scripts/<helper>`, which the gate reads as the bare directory `scripts/`. When the issue body has a `files_touched:` list, the gate also holds a plan that names a file off that list, so name one only when the plan cannot work without it, and never list a file you only might change. A new fragment the list does not name goes in `changelog.d/<this issue number>-<slug>.md` or `agents.d/<this issue number>-<slug>.md`, which are always in scope.
 2. Functions/modules to implement.
 3. Data structures affected.
 4. API/interface changes.

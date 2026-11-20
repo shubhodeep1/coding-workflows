@@ -13,14 +13,15 @@ Subcommands
                     and static checks as JSON.
 ``run``             select, run every unit (sharded, time-boxed), re-run the
                     failures on ``--baseline-tree`` and write the result JSON
-                    plus a Markdown summary. ``--tests-file FILE`` replaces the
+                    plus a Markdown summary. ``--tests-only FILE`` replaces the
                     selection with an explicit list of test files, one
-                    ``path[::name]`` per line (``select_tests`` is not called).
-                    ``--expect-baseline-fail-file`` (a plan's done-check, issue
-                    #8427 P3) adds its ``path[::name]`` targets and re-runs
-                    them on the baseline tree; either option adds an
-                    ``acceptance`` map to the result. Without them the result
-                    is unchanged.
+                    ``path[::name]`` per line (``select_tests`` is not called;
+                    the heal reproduction runner, issue #8461).
+                    ``--tests-file`` adds explicit ``path[::name]`` targets to
+                    the selection (a plan's done-check, issue #8427 P3) and
+                    ``--expect-baseline-fail-file`` re-runs its targets on the
+                    baseline tree; any of the three adds an ``acceptance`` map
+                    to the result. Without them the result is unchanged.
 ``assertion-diff``  list assertion lines removed from pre-existing test files.
 ``stamp``           interactive: run the gate on the committed HEAD against
                     its merge-base with origin and write a pass/fail stamp
@@ -127,7 +128,7 @@ GIT_SAFE = ("-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null")
 RUFF_CHECK_ARGS = ("check", "--select", "E,F", "--ignore", "E501")
 SHELLCHECK_ARGS = ("--severity=error",)
 MAX_NEW_STATIC_FINDINGS_LISTED = 20
-# `run --tests-file` limits. The list may be built from untrusted CI log text,
+# `run --tests-only` limits. The list may be built from untrusted CI log text,
 # so every line is validated and the file size and entry count are capped.
 # The entry cap counts rejected lines too, which bounds result.json.
 MAX_TESTS_FILE_BYTES = 256 * 1024
@@ -623,7 +624,7 @@ def plan_units(repo: Path, selection: dict) -> tuple[list[dict], list[dict]]:
 					targets = [f"{path}::{name}" for name in names] or [path]
 					unit = {"id": path, "file": path, "argv": ["python3", "-m", "pytest", "-q", "-p", "no:cacheprovider", *targets], "kind": "test"}
 					if names and "tests_file" in (entry.get("reasons") or []):
-						# Named `--tests-file` targets: a node missing on the
+						# Named `--tests-only` targets: a node missing on the
 						# baseline is not evidence the failure is inherited.
 						unit["tests_file_nodes"] = True
 					units.append(unit)
@@ -866,7 +867,7 @@ def classify_baseline(
 		ambiguous_ids: set[str] = set()
 		for unit in rerun:
 			unit["baseline_status"] = baseline_statuses.get(unit["id"])
-			# Named `--tests-file` nodes cannot be compared when a 4/5 exit hides
+			# Named `--tests-only` nodes cannot be compared when a 4/5 exit hides
 			# results: in a merged multi-name unit a 4/5 on either tree means its
 			# other nodes never ran there, and a node missing on this change's tree
 			# only never ran here. Report it unverified (baseline_error), not caused
@@ -881,7 +882,7 @@ def classify_baseline(
 				unit["baseline_status"] = "error"
 				ambiguous_ids.add(unit["id"])
 		# pytest exits 4 (node not found) or 5 (nothing collected) when a named
-		# `--tests-file` test does not exist on the baseline, for example a test
+		# `--tests-only` test does not exist on the baseline, for example a test
 		# the change added. That is not an inherited failure. A node missing on
 		# both trees (4/5 on the PR tree too) is still inherited for single-name units.
 		inherited_ids = {
@@ -1082,7 +1083,7 @@ def run_gate(
 	shards = shards or _int_env("PREPUSH_TEST_GATE_SHARDS", DEFAULT_SHARDS, 1, 64)
 	start = time.monotonic()
 	deadline = start + timeout_minutes * 60
-	# Validated `run --tests-file` lines (tests_file_selection; absent otherwise).
+	# Validated `run --tests-only` lines (tests_file_selection; absent otherwise).
 	listed_tests = selection.get("tests_file_targets")
 	acceptance_requested = explicit_tests is not None or expect_baseline_fail is not None or listed_tests is not None
 	selected_count = len(selection.get("affected_tests", []))
@@ -1096,7 +1097,7 @@ def run_gate(
 		head_targets += [t for t in base_targets if t[0] not in known]
 		target_unverified += [u for u in base_unverified if u not in target_unverified]
 		selection = _merge_explicit_tests(selection, head_targets)
-		# `run --tests-file` lines are the selection already and were validated
+		# `run --tests-only` lines are the selection already and were validated
 		# by parse_tests_file: they are only scored here, never re-parsed, so a
 		# rejected line is reported once, by line number, without its text.
 		known = {target for target, _path, _name in head_targets}
@@ -1106,7 +1107,7 @@ def run_gate(
 				head_targets.append((line, path, name))
 				known.add(line)
 	units, unverified = plan_units(repo, selection)
-	# Lines of a `run --tests-file` list that were not run (absent otherwise).
+	# Lines of a `run --tests-only` list that were not run (absent otherwise).
 	unverified = [*selection.get("tests_file_rejected", []), *target_unverified, *unverified]
 	results = run_units(units, repo, deadline, shards)
 	ran = [r for r in results if r.get("status") in ("pass", "fail")]
@@ -1627,7 +1628,7 @@ def _selection_from_args(args: argparse.Namespace) -> dict:
 
 
 def _tests_file_path_reason(repo: Path, path: str) -> str:
-	"""Reason a `--tests-file` path is rejected, or "" when it is a test file in `repo`."""
+	"""Reason a `--tests-only` path is rejected, or "" when it is a test file in `repo`."""
 	if path.startswith("/") or "\\" in path or _TESTS_FILE_DRIVE_RE.match(path):
 		return "tests_file_absolute_path"
 	segments = path.split("/")
@@ -1650,7 +1651,7 @@ def _tests_file_path_reason(repo: Path, path: str) -> str:
 
 
 def parse_tests_file(repo: Path, text: str, accepted: list[str] | None = None) -> tuple[list[dict], list[dict]]:
-	"""(affected_tests, rejected) from a `run --tests-file` list.
+	"""(affected_tests, rejected) from a `run --tests-only` list.
 
 	One ``path[::name]`` per line; blank lines and ``#`` comments are skipped.
 	The entries have the shape select_tests returns (``functions`` empty runs
@@ -1703,7 +1704,7 @@ def parse_tests_file(repo: Path, text: str, accepted: list[str] | None = None) -
 
 
 def tests_file_selection(repo: Path, tests_file: str, changed_files: list[str]) -> dict:
-	"""Selection for `run --tests-file`: the listed tests only, select_tests is not called."""
+	"""Selection for `run --tests-only`: the listed tests only, select_tests is not called."""
 	repo = repo.resolve()
 	affected: list[dict] = []
 	rejected: list[dict] = []
@@ -1737,7 +1738,7 @@ def tests_file_selection(repo: Path, tests_file: str, changed_files: list[str]) 
 
 
 def _changes_from_args(args: argparse.Namespace) -> dict[str, str]:
-	"""Changed files for `run --tests-file` (they feed only changed_files)."""
+	"""Changed files for `run --tests-only` (they feed only changed_files)."""
 	repo = Path(args.repo_root).resolve()
 	if args.base:
 		return changes_from_base(repo, args.base)[0]
@@ -1767,6 +1768,7 @@ def main(argv: list[str] | None = None) -> int:
 	run_parser.add_argument("--out")
 	run_parser.add_argument("--summary")
 	run_parser.add_argument("--tests-file")
+	run_parser.add_argument("--tests-only")
 	run_parser.add_argument("--expect-baseline-fail-file")
 	diff_parser = sub.add_parser("assertion-diff")
 	diff_parser.add_argument("--repo-root", default=".")
@@ -1787,8 +1789,8 @@ def main(argv: list[str] | None = None) -> int:
 		changed = list(parse_changes(Path(args.changed_files_file).read_text(encoding="utf-8").splitlines()))
 		print(json.dumps(assertion_diff(Path(args.repo_root).resolve(), Path(args.baseline_tree), changed), indent=2))
 		return 0
-	if args.command == "run" and args.tests_file is not None:
-		selection = tests_file_selection(Path(args.repo_root), args.tests_file, list(_changes_from_args(args)))
+	if args.command == "run" and args.tests_only is not None:
+		selection = tests_file_selection(Path(args.repo_root), args.tests_only, list(_changes_from_args(args)))
 	else:
 		selection = _selection_from_args(args)
 	if args.command == "select":
@@ -1802,12 +1804,13 @@ def main(argv: list[str] | None = None) -> int:
 	shards = args.shards if args.shards and 0 < args.shards <= 64 else None
 	baseline = Path(args.baseline_tree) if args.baseline_tree else None
 	# Explicit done-check targets (issue #8427, P3): absent options keep the
-	# run and its result exactly as before. The `--tests-file` list was read
-	# and validated by tests_file_selection above (issue #8461); run_gate
-	# scores its accepted lines, so it is not read a second time here.
+	# run and its result exactly as before. `--tests-file` adds its targets to
+	# the selection. The `--tests-only` list was read and validated by
+	# tests_file_selection above (issue #8461); run_gate scores its accepted
+	# lines, so it is not read a second time here.
 	target_lists: dict[str, list[str]] = {}
 	unreadable: list[str] = []
-	for key, option in (("expect_baseline_fail_file", args.expect_baseline_fail_file),):
+	for key, option in (("tests_file", args.tests_file), ("expect_baseline_fail_file", args.expect_baseline_fail_file)):
 		if option:
 			lines = _read_target_file(option)
 			if lines is None:

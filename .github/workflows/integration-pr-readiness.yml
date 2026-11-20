@@ -20,6 +20,19 @@
 # Configure this status as a required check in repository branch
 # protection settings so the PR cannot be merged while the status is
 # failing.
+#
+# Since 2026-11-18 this workflow handles label events only. On `opened`,
+# `edited`, `synchronize`, `reopened` and `ready_for_review` the same script
+# runs as a step group of the `pr-body-lint` job in
+# .github/workflows/pr-checks.yml, so those events take one runner instead
+# of two (CLAUDE.md §33.A, docs/plans/fold-per-pr-checks-plan.md).
+# Label events stay here on purpose. A job skipped by its `if:` still
+# reports a check-run with conclusion `skipped`, and GitHub and
+# `_pr_ruleset_required_check_blockers` (scripts/pr_checks_lib.sh) read the
+# newest check-run of a name. If label events ran through `pr-checks.yml`,
+# any label change after a failed PR-body lint would post a newer `skipped`
+# `pr-body-lint` on the same head and hide the failure. Here the skipped
+# check-run is named `readiness`, which carries no verdict.
 name: Integration PR readiness check
 
 "on":
@@ -28,8 +41,8 @@ name: Integration PR readiness check
     # immediately re-evaluates. `edited` for tracking-issue body changes
     # would be ideal but pull_request edited fires on PR body edits, not
     # on referenced-issue body edits — the next push/sync to the PR will
-    # re-run the check anyway.
-    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    # re-run the check anyway (in pr-checks.yml).
+    types: [labeled, unlabeled]
     branches: [main, stable]
 
 permissions:
@@ -42,11 +55,18 @@ jobs:
   readiness:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # Run on every PR so the status context exists when branch
-    # protection marks it required. The script itself posts a no-op
-    # success on non-orchestrator branches, which keeps the trust
-    # boundary out of workflow expressions and avoids actionlint's
-    # untrusted-inline-script warning path.
+    # The script itself posts a no-op success on non-orchestrator
+    # branches, which keeps the trust boundary out of workflow expressions
+    # and avoids actionlint's untrusted-inline-script warning path.
+    #
+    # A label change re-runs the check only for the override label, the one
+    # label the script reads (run-volume plan item 10). Any other label is
+    # added or removed on the same head SHA, so the status already posted for
+    # that SHA still stands, and the job is skipped without taking a runner.
+    # Tracking-issue checkbox changes do not reach this workflow at all: the
+    # orchestrator poller refreshes the status itself
+    # (TRACKING_BODY_READINESS_REFRESH in scripts/orchestrate_poll_process.sh).
+    if: ${{ github.event.label.name == 'ai:override-incomplete-merge' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5

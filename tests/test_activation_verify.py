@@ -77,8 +77,12 @@ if "issues?labels=ai:operator-step" in endpoint:
 		done(json.dumps([{**listed_issue, "body": listed_issue["body"].replace("\n", "\r\n")} for listed_issue in state.get("operator_issues", [])]))
 	done(json.dumps(state.get("operator_issues", [])))
 if endpoint.endswith("/comments?per_page=100") and method == "GET":
+	if os.environ.get("FAKE_GH_FAIL_COMMENT_LIST") == "1":
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
 	comment_endpoint = endpoint.split("?", 1)[0]
-	done(json.dumps([[comment for comment in state["comments"] if comment["endpoint"] == comment_endpoint]]))
+	extra_comments = [comment for comment in json.loads(os.environ.get("FAKE_GH_EXTRA_COMMENTS", "[]")) if comment.get("endpoint") == comment_endpoint]
+	done(json.dumps([[comment for comment in state["comments"] if comment["endpoint"] == comment_endpoint] + extra_comments]))
 if endpoint.endswith("/files?per_page=100"):
 	if os.environ.get("FAKE_GH_FAIL_FILES") == "1":
 		sys.exit(1)
@@ -104,6 +108,17 @@ if "-X" in args and "PATCH" in args:
 			if issue["number"] == issue_number:
 				issue["body"] = fields.get("body", "")
 	done("{}")
+if endpoint.endswith("/comments") and method == "POST":
+	if state.get("comment_post_failures", 0) < int(os.environ.get("FAKE_GH_FAIL_COMMENT_POSTS", "0") or 0):
+		state["comment_post_failures"] = state.get("comment_post_failures", 0) + 1
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
+	if os.environ.get("FAKE_GH_COMMENT_POST_LANDS_THEN_FAILS") == "1" and not state.get("comment_post_landed"):
+		state["comment_post_landed"] = True
+		state["comments"].append({"id": state.get("next_comment_id", 100), "endpoint": endpoint, "body": fields.get("body", ""), "user": {"login": "pipeline-bot"}, "author_association": "OWNER"})
+		state["next_comment_id"] = state.get("next_comment_id", 100) + 1
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
 if endpoint.endswith("/comments"):
 	comment = {"id": state.get("next_comment_id", 100), "endpoint": endpoint, "body": fields.get("body", ""), "user": {"login": "pipeline-bot"}}
 	state["next_comment_id"] = comment["id"] + 1
@@ -111,6 +126,14 @@ if endpoint.endswith("/comments"):
 	done(json.dumps(comment))
 if endpoint == "repos/o/r/issues" and "title" in fields:
 	if os.environ.get("FAKE_GH_FAIL_CREATE") == "1":
+		json.dump(state, open(state_path, "w"))  # Record the failed attempt.
+		sys.exit(1)
+	if os.environ.get("FAKE_GH_FIX_CREATE_LANDS_THEN_FAILS") == "1" and fields.get("title", "").startswith("Activation gaps after"):
+		state["created"].append(fields)
+		fix_search = state.setdefault("fix_search", {"total_count": 0, "items": []})
+		fix_search["items"].append({"body": fields.get("body", ""), "author_association": "OWNER"})
+		fix_search["total_count"] += 1
+		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
 	if fields.get("labels[]") == "ai:operator-step" and not state.get("operator_label_exists"):
 		json.dump(state, open(state_path, "w"))
@@ -945,6 +968,103 @@ def test_prompt_explains_open_pr_tagging() -> None:
 		assert "`open_pull_requests` lists this repository's open, unmerged pull requests" in prompt, rel
 		assert '"open_pr": <optional, code gaps only:' in prompt, rel
 		assert "when unsure, leave it out" in prompt, rel
+
+
+# --- Marker-aware write reconciliation (CONSIST-001, workflow-optimization-2026-10-08) ---
+
+LIVE_MARKER = "<!-- ai:activation:v1 verdict=LIVE source=pr-42 -->"
+
+
+def _verdict_posts(state: dict) -> list:
+	return [call for call in state["calls"] if len(call) > 2 and call[1] == "repos/o/r/issues/7/comments" and "-f" in call]
+
+
+def _fix_creates(state: dict) -> list:
+	return [call for call in state["calls"] if len(call) > 1 and call[1] == "repos/o/r/issues" and "title=Activation gaps after PR #42" in call]
+
+
+def _fix_searches(state: dict) -> list:
+	return [call for call in state["calls"] if len(call) > 1 and call[1].startswith("search/issues?")]
+
+
+def test_verdict_comment_ambiguous_failure_reconciles_trusted_marker(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, LIVE, env_extra={"FAKE_GH_COMMENT_POST_LANDS_THEN_FAILS": "1"})
+	assert result.returncode == 0
+	assert len(_verdict_posts(state)) == 1
+	assert "ACTIVATION_VERIFY mode=pr item=42 outcome=verdict_comment_reconciled" in result.stdout
+	assert "op=verdict_comment_retry" not in result.stdout
+	assert "verdict=LIVE code_gaps=0 operator_gaps=0 outcome=posted" in result.stdout
+	assert "reason=verdict_comment_failed" not in result.stdout
+	assert len(state["comments"]) == 1 and state["comments"][0]["body"].endswith(LIVE_MARKER)
+
+
+@pytest.mark.parametrize(("failures", "posted"), [(1, True), (2, False)])
+def test_verdict_comment_failure_without_marker_retries_once(tmp_path: Path, failures: int, posted: bool) -> None:
+	result, state = _verify(tmp_path, LIVE, env_extra={"FAKE_GH_FAIL_COMMENT_POSTS": str(failures)})
+	assert result.returncode == 0
+	assert len(_verdict_posts(state)) == 2
+	assert "ACTIVATION_VERIFY mode=pr item=42 op=verdict_comment_retry" in result.stdout
+	assert "verdict_comment_reconciled" not in result.stdout
+	if posted:
+		assert "outcome=posted" in result.stdout
+		assert len(state["comments"]) == 1 and state["comments"][0]["body"].endswith(LIVE_MARKER)
+	else:
+		assert "ACTIVATION_VERIFY mode=pr item=42 outcome=skip reason=verdict_comment_failed" in result.stdout
+		assert "Could not post the activation verdict on #7." in result.stdout
+		assert state["comments"] == []
+
+
+def test_verdict_comment_listing_failure_does_not_retry(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, LIVE, env_extra={"FAKE_GH_FAIL_COMMENT_POSTS": "2", "FAKE_GH_FAIL_COMMENT_LIST": "1"})
+	assert result.returncode == 0
+	assert len(_verdict_posts(state)) == 1
+	assert "op=verdict_comment_recheck outcome=lookup_failed" in result.stdout
+	assert "op=verdict_comment_retry" not in result.stdout
+	assert "ACTIVATION_VERIFY mode=pr item=42 outcome=skip reason=verdict_comment_failed" in result.stdout
+	assert state["comments"] == []
+
+
+def test_fix_issue_create_failure_recheck_finds_marker_and_posts_verdict(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, DORMANT, env_extra={"FAKE_GH_FIX_CREATE_LANDS_THEN_FAILS": "1"})
+	assert result.returncode == 0
+	assert len(_fix_searches(state)) == 2
+	assert len(_fix_creates(state)) == 1
+	assert "ACTIVATION_VERIFY mode=pr item=42 outcome=fix_issue_reused reason=create_failed_recheck" in result.stdout
+	assert "fix_issue_failed" not in result.stdout
+	assert state["comments"][-1]["body"].endswith("<!-- ai:activation:v1 verdict=DORMANT source=pr-42 -->")
+	assert "verdict=DORMANT code_gaps=1 operator_gaps=1 outcome=posted" in result.stdout
+
+
+def test_fix_issue_create_failure_recheck_miss_never_retries_create(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, DORMANT, env_extra={"FAKE_GH_FAIL_CREATE": "1"})
+	assert result.returncode == 0
+	assert len(_fix_searches(state)) == 2
+	assert len(_fix_creates(state)) == 1
+	assert "ACTIVATION_VERIFY mode=pr item=42 outcome=skip reason=fix_issue_failed" in result.stdout
+	assert "Could not open the activation-fix issue for pr-42." in result.stdout
+	assert "create_failed_recheck" not in result.stdout
+	assert state["comments"] == []
+
+
+def test_untrusted_verdict_marker_comment_is_ignored(tmp_path: Path) -> None:
+	extra = [
+		{"endpoint": "repos/o/r/issues/7/comments", "body": f"Copied.\n\n{LIVE_MARKER}", "author_association": "NONE", "user": {"login": "outsider"}},
+		{"endpoint": "repos/o/r/issues/7/comments", "body": f"Quoting {LIVE_MARKER} here.\n\nThanks", "author_association": "OWNER", "user": {"login": "owner"}},
+	]
+	result, state = _verify(tmp_path, LIVE, env_extra={"FAKE_GH_FAIL_COMMENT_POSTS": "1", "FAKE_GH_EXTRA_COMMENTS": json.dumps(extra)})
+	assert result.returncode == 0
+	assert len(_verdict_posts(state)) == 2
+	assert "verdict_comment_reconciled" not in result.stdout
+	assert "op=verdict_comment_retry" in result.stdout
+	assert len(state["comments"]) == 1 and state["comments"][0]["body"].endswith(LIVE_MARKER)
+
+
+def test_trusted_crlf_verdict_marker_reconciles(tmp_path: Path) -> None:
+	extra = [{"endpoint": "repos/o/r/issues/7/comments", "body": f"## Activation: LIVE\r\n\r\n{LIVE_MARKER}\r\n", "user": {"login": "github-actions[bot]"}}]
+	result, state = _verify(tmp_path, LIVE, env_extra={"FAKE_GH_FAIL_COMMENT_POSTS": "1", "FAKE_GH_EXTRA_COMMENTS": json.dumps(extra)})
+	assert result.returncode == 0
+	assert "outcome=verdict_comment_reconciled" in result.stdout
+	assert len(_verdict_posts(state)) == 1 and state["comments"] == []
 
 
 # Issue #8685: the poller's close_completed_tracking_issue_if_ready cases live in

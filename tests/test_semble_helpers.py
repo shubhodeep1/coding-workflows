@@ -321,8 +321,10 @@ def test_semble_elapsed_ms_clamps_negative_duration_to_zero() -> None:
 			"exit 1\n",
 		)
 
+		# A far-future start: the end reading now comes from EPOCHREALTIME
+		# (issue #9252), so only a start after "now" exercises the clamp.
 		result = _run_bash(
-			f"source {HELPERS}\n_semble_elapsed_ms 1715251234567",
+			f"source {HELPERS}\n_semble_elapsed_ms 99999999999999",
 			root,
 			env={
 				"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",

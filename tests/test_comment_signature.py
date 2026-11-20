@@ -575,9 +575,9 @@ def test_script_using_the_activate_only_line_posts_signed(env, tmp_path):
 ACTIVATE_LINE = '[ -z "${BASH_SOURCE[0]:-}" ] || AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" >/dev/null 2>&1 || true'
 ACTIVATED_SCRIPTS = (
 	"ai_engine_fallback_report.sh", "implement_handle_guard_block.sh", "implement_heal_preflight.sh",
-	"orchestrate_poll_process.sh", "plan_split_dispatch.sh",
+	"orchestrate_poll_process.sh", "orchestrate_poll_smoke_fixture_reap.sh", "plan_split_dispatch.sh",
 	"post_review_comment.sh", "review_autofix_step_evaluate_gate.sh", "review_conflict_resolve.sh",
-	"review_freshness_ci_failed.sh", "review_merge_train.sh",
+	"review_final_ci_failed.sh", "review_freshness_ci_failed.sh", "review_merge_train.sh",
 	"review_rb_judge_security_pass.sh", "review_single_issue_security_pass.sh", "security_audit.sh",
 	"unblock_judge.sh", "validate_process.sh", "workflow_failure_heal_phase_report.sh",
 	"workflow_failure_heal_pr_reconcile.sh",

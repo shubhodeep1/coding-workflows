@@ -93,7 +93,9 @@ EXPECTED_STEP_DECLARATIONS = {
 	# "Run standalone PR sweeps without active projects" (#7177) and
 	# "Run daily consumer health check", plus "Check Claude pool daily usage slot"
 	# and "Send Claude pool daily usage report" (daily pool usage report).
-	"orchestrate_poll.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 11,
+	# 12 adds "Release merge-queued PRs (merge train backstop)" (merge-train
+	# queue-age warning).
+	"orchestrate_poll.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 12,
 	# 3 = "Standalone RECOMMENDED fallback" (pages when the standalone worker
 	# fails with no fallback), "Parse and post answer", the failure alert.
 	"orchestrate_clarify_respond.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 3,

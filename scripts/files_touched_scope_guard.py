@@ -819,10 +819,14 @@ _PLAN_GRANT_ROOT_FILE_RE = re.compile(
 # Extensionless file names accepted as the last segment of a grant path. Any
 # other extensionless (or `.d`) last segment may be a directory, and a
 # files_touched entry without a trailing slash covers everything beneath it
-# (entry_matches), so it is never written as an "exact" grant.
+# (entry_matches), so it is never written as an "exact" grant. `_headers` and
+# `_redirects` are the Cloudflare Pages / Netlify static-site config files:
+# leaving them out dropped a planned `lobby-frontend/public/_headers` from the
+# grant, and implement then refused the commit (consumer fun-token-multi-chain
+# #771).
 _PLAN_GRANT_BARE_FILE_RE = re.compile(
 	r"^(?:Makefile|Dockerfile|LICENSE|COPYING|NOTICE|CODEOWNERS|Gemfile|Rakefile|Procfile|Justfile|Vagrantfile"
-	r"|Pipfile|Jenkinsfile|Containerfile|Brewfile|Podfile|Tiltfile)$")
+	r"|Pipfile|Jenkinsfile|Containerfile|Brewfile|Podfile|Tiltfile|_headers|_redirects)$")
 # The extension must start with a letter: a digit-led suffix (`v1.0`,
 # `2024.01.15`) is usually a versioned directory, which would cover its subtree.
 _PLAN_GRANT_FILE_SEGMENT_RE = re.compile(r"^(?:\.[A-Za-z0-9_-][A-Za-z0-9._-]*|[^.].*\.[A-Za-z][A-Za-z0-9]*)$")
