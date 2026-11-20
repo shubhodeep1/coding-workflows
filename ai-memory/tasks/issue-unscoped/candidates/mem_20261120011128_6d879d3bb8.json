@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stable_e2e_step_verify_cancel_on_close.sh:174-176 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The error-handling block that restores the last known status does not account for `PHASE7_KNOWN_EXISTING_STATUS` being empty, for example when the initial read fails before any successful status fetch.\n  WHY: `EXISTING_STATUS` becomes an empty string, which could make `phase7_run_is_queued` (line 52) misbehave or skip polling cycles. The reviewer labelled this MAJOR, which is mapped here to high. Other reviewers found no defect in this path: glm-5_3-flash said an empty status falls to the 5 s branch harmlessly, and sonnet-5_5 and minimax-m3 said the failed-read restore works.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Implement Phase 7 wait deadline logic such that PHASE7_WAIT_BUDGET_MINUTES starts only after the cancel run leaves the queue (in_progress).\n  expected_change_site: scripts/stable_e2e_step_verify_cancel_on_close.sh (phase7_wait_deadline, polling loop lines 174-210)\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The `phase7_wait_deadline` logic seems to attempt this. The polling loop at lines 174-210 still relies on `WAIT_DEADLINE`, and it does not clearly show how `PHASE7_WAIT_BUDGET_MINUTES` is kept from being consumed before `PHASE7_RUN_STARTED_AT` (lines 58-60) is set.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/stable_e2e_step_verify_cancel_on_close.sh:174-176 | severity=MAJOR | confidence=3\n  PROBLEM: The error-handling block that restores the last known status does not account for `PHASE7_KNOWN_EXISTING_STATUS` being empty, for example when the initial read fails before any successful status fetch.\n  WHY: `EXISTING_STATUS` becomes an empty string, potentially causing `phase7_run_is_queued` (line 52) to behave unexpectedly or failing the loop condition check, leading to premature exit or skipped polling cycles.\n- TASK_GAP:\n  Requirement: Implement Phase 7 wait deadline logic such that PHASE7_WAIT_BUDGET_MINUTES starts only after the cancel run leaves the queue (in_progress).\n  Expected change site: scripts/stable_e2e_step_verify_cancel_on_close.sh\n  Evidence of absence: The implemented `phase7_wait_deadline` logic seems to attempt this, but the budget clock logic inside the `while` loop (lines 174-210) still heavily relies on `WAIT_DEADLINE`, which is updated using `phase7_wait_deadline` inside the loop. The logic for `PHASE7_RUN_STARTED_AT` (lines 58-60) correctly updates the state, but the polling loop doesn't clearly demonstrate how it prevents the `PHASE7_WAIT_BUDGET_MINUTES` from being consumed before `PHASE7_RUN_STARTED_AT` is set.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5718b21aff96ca12bbcc34708c719f86bcafa01b2d2621ab2a4da8692fad78e8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9794,
+    "run_id": "44649531370",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44649531370",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120011128_6d879d3bb8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9794,
+    "run_id": "44649531370"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-20T01:11:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
