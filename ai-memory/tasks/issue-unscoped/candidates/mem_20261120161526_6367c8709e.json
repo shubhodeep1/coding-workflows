@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:337-375 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `_security_audit_tracker_release_pipeline_labels` function uses `printf` and `jq` for label processing, but nothing stops it removing critical non-pipeline labels if the input JSON is malformed or crafted.\n  WHY: The `gh issue edit --remove-label` call stays exposed if the jq logic were ever changed to allow broader removals. The reviewer rated this NIT, which maps to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Mirror the exclusion in scripts/unblock_scan.py select.\" (the skip reason should be logged when the unblock scan skips the tracker)\n  expected_change_site: scripts/unblock_scan.py (select, skip(\"security_audit_tracker\") at line 383)\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: scripts/unblock_scan.py includes `skip(\"security_audit_tracker\")` (line 383), but the Python code has no log output mirroring the `STALL_RECOVERY_SKIP` or `UNBLOCK_SCAN` logging in orchestrate_poll_process.sh. Severity as stated by the reviewer: MAJOR. Other reviewers found no gaps.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:337-375 | severity=low | confidence=2\n  PROBLEM: The `_security_audit_tracker_release_pipeline_labels` function uses `printf` and `jq` for label processing, but nothing stops it removing critical non-pipeline labels if the input JSON is malformed or crafted.\n  WHY: The `gh issue edit --remove-label` call stays exposed if the jq logic were ever changed to allow broader removals. The reviewer rated this NIT, which maps to low.\n- TASK_GAP:\n  Requirement: \"Mirror the exclusion in scripts/unblock_scan.py select.\" (the skip reason should be logged when the unblock scan skips the tracker)\n  Expected change site: scripts/unblock_scan.py\n  Evidence of absence: `skip(\"security_audit_tracker\")` (line 383) exists, but the Python code has no log output mirroring the `STALL_RECOVERY_SKIP` or `UNBLOCK_SCAN` logging in orchestrate_poll_process.sh.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3f6d65fdefbe2dc881e021089ae64a786793cf73aff34d44c7ca9c931a17f0af",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9734,
+    "run_id": "44764101484",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44764101484",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120161526_6367c8709e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9734,
+    "run_id": "44764101484"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-20T16:15:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
