@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import unittest
 from pathlib import Path
 
 
@@ -35,6 +36,14 @@ def _seed_repo(workspace_dir: Path, module_lines: list[str]) -> None:
 	)
 
 
+def _skip_unless_gawk() -> None:
+	# The review scripts use gawk-only match() capture arrays; mawk (the
+	# default awk in some containers) cannot run them. GitHub's ubuntu
+	# runners ship gawk, so CI still runs these tests.
+	if shutil.which("gawk") is None:
+		raise unittest.SkipTest("gawk is required by the review ledger/parser scripts")
+
+
 def _run_ledger(
 	workspace_dir: Path,
 	review_issues_fixture: str,
@@ -46,6 +55,7 @@ def _run_ledger(
 	review_ledger_enabled: str = "1",
 	review_issues_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
+	_skip_unless_gawk()
 	runtime_dir = workspace_dir / "runtime"
 	runtime_dir.mkdir(parents=True, exist_ok=True)
 
@@ -368,6 +378,7 @@ def test_ledger_status_schema_and_sorting() -> None:
 
 
 def test_multiline_current_code_round_trip() -> None:
+	_skip_unless_gawk()
 	with tempfile.TemporaryDirectory() as td:
 		workspace = Path(td)
 		_seed_repo(
@@ -485,6 +496,7 @@ def test_multiline_editor_outcomes_parse_and_status_render() -> None:
 
 
 def test_hash_uses_repo_ignorecase_setting() -> None:
+	_skip_unless_gawk()
 	with tempfile.TemporaryDirectory() as td:
 		workspace = Path(td)
 		_seed_repo(
@@ -620,17 +632,21 @@ def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0
 	failed = 0
+	skipped = 0
 	for func in test_funcs:
 		name = func.__name__
 		try:
 			func()
 			print(f"  PASS  {name}")
 			passed += 1
+		except unittest.SkipTest as exc:
+			print(f"  SKIP  {name}: {exc}")
+			skipped += 1
 		except Exception as exc:
 			print(f"  FAIL  {name}: {exc}")
 			failed += 1
 
-	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	print(f"\n{passed} passed, {failed} failed, {skipped} skipped, {passed + failed + skipped} total")
 	return 1 if failed > 0 else 0
 
 

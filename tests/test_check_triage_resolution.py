@@ -895,7 +895,9 @@ def test_merged_integration_pr_needs_both_compares(tmp_path, monkeypatch):
 	(None, {rf"repos/{REPO}/issues/{PROJECT}": {"number": PROJECT, "labels": [{"name": "ai:orchestrator-tracking"}], "pull_request": {}}},
 		"integration_base_untrusted"),
 	(None, {rf"repos/{REPO}/issues/{PROJECT}": mod.GhApiError("rc=1")}, "integration_issue_unreadable"),
-	(None, {INT_LIST: []}, "integration_pr_missing"),
+	# Issue #9481: a missing integration PR now reaches the default-branch
+	# content fallback; with no readable content evidence it stays unverified.
+	(None, {INT_LIST: []}, "integration_fallback_unreadable"),
 	(None, {INT_LIST: mod.GhApiError("rc=1")}, "integration_pr_unreadable"),
 	(_integration_pr(head_repo="fork/coding-workflows"), {}, "integration_pr_cross_repository"),
 	(_integration_pr(state="closed"), {}, "integration_pr_closed"),
@@ -1090,3 +1092,112 @@ def test_step_error_excerpt_keeps_max_excerpt_lines_before_the_trailing_lines():
 	out = excerpt.split("\n")
 	assert out.index(STEP_ERROR_8799) == mod.MAX_EXCERPT_LINES - 1
 	assert out[-1] == f"t{mod.STEP_ERROR_AFTER_LINES - 1}"
+
+
+# --- Issue #9481: integration fallback to default-branch content ------------
+# #750 shape: project #739 reached main through an activation re-issue, so no
+# integration PR from orchestrator/project-739 exists.
+
+FALLBACK_COMPARE = rf"repos/{REPO}/compare/{MERGE_SHA}\.\.\.{EVIDENCE_SHA}"
+MERGE_TREE_SHA = "1" * 40
+EVIDENCE_TREE_SHA = "2" * 40
+
+
+def _tree(entries, truncated=False):
+	return {"truncated": truncated, "tree": [{"path": path, "type": "blob", "sha": sha} for path, sha in entries.items()]}
+
+
+def _fallback_routes(compare_status="ahead", files=None, merge_tree=None, evidence_tree=None, **overrides):
+	routes = _int_routes(**{
+		INT_LIST: [],
+		FALLBACK_COMPARE: {"status": compare_status},
+		rf"repos/{REPO}/pulls/{PR}/files\?per_page=100": [files if files is not None else [
+			{"filename": "src/fix.py", "status": "modified"}, {"filename": "old.py", "status": "removed"},
+		]],
+		rf"repos/{REPO}/git/commits/{MERGE_SHA}": {"tree": {"sha": MERGE_TREE_SHA}},
+		rf"repos/{REPO}/git/commits/{EVIDENCE_SHA}": {"tree": {"sha": EVIDENCE_TREE_SHA}},
+		rf"repos/{REPO}/git/trees/{MERGE_TREE_SHA}\?recursive=1": merge_tree or _tree({"src/fix.py": "c" * 40}),
+		rf"repos/{REPO}/git/trees/{EVIDENCE_TREE_SHA}\?recursive=1": evidence_tree or _tree({"src/fix.py": "c" * 40, "README.md": "d" * 40}),
+	})
+	routes.update(overrides)
+	return routes
+
+
+def test_integration_pr_missing_falls_back_to_default_branch_content(tmp_path, monkeypatch):
+	monkeypatch.delenv("CHECK_TRIAGE_INTEGRATION_FALLBACK_ENABLED", raising=False)
+	result, rc, fake = _gate(tmp_path, monkeypatch, routes=_fallback_routes())
+	assert rc == 0 and result["status"] == "resolved", result
+	assert result["evidence_ref"] == f"default_branch_content:{EVIDENCE_SHA}"
+	assert result["content_check"] == "ancestor" and result["evidence_sha"] == EVIDENCE_SHA
+	assert result["path"] == "merged"
+	body = result["writes"][0]["payload"]["body"]
+	assert "- **Content check:** `ancestor`" in body
+	assert body.endswith(f"<!-- ai:check-triage-resolved:v1 issue={ISSUE} pr={PR} sha={EVIDENCE_SHA} -->")
+	assert not any("/git/trees/" in call[-1] for call in fake.calls)
+
+	# Ancestry diverged (squash), but every changed file matches by blob SHA.
+	result, rc, fake = _gate(tmp_path, monkeypatch, routes=_fallback_routes(compare_status="diverged"))
+	assert rc == 0 and result["status"] == "resolved", result
+	assert result["content_check"] == "tree_match"
+	assert "- **Content check:** `tree_match`" in result["writes"][0]["payload"]["body"]
+	assert sum(1 for call in fake.calls if "/compare/" in call[-1]) == 1
+
+
+@pytest.mark.parametrize(("overrides", "reason"), [
+	({"evidence_tree": _tree({"src/fix.py": "9" * 40})}, "integration_fallback_content_absent"),
+	({"evidence_tree": _tree({"src/fix.py": "c" * 40, "old.py": "e" * 40})}, "integration_fallback_content_absent"),
+	({"evidence_tree": _tree({"README.md": "d" * 40})}, "integration_fallback_content_absent"),
+	({"evidence_tree": _tree({"src/fix.py": "c" * 40}, truncated=True)}, "integration_fallback_unreadable"),
+	({"files": [{"filename": f"f{n}.py", "status": "modified"} for n in range(301)]}, "integration_fallback_unreadable"),
+])
+def test_integration_fallback_content_absent_stays_unverified(tmp_path, monkeypatch, overrides, reason):
+	monkeypatch.delenv("CHECK_TRIAGE_INTEGRATION_FALLBACK_ENABLED", raising=False)
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_fallback_routes(compare_status="diverged", **overrides))
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == reason, result
+	assert not any(w["method"] == "PATCH" or w["path"].endswith("/labels") for w in result["writes"])
+
+
+def test_integration_fallback_needs_green_default_branch(tmp_path, monkeypatch):
+	monkeypatch.delenv("CHECK_TRIAGE_INTEGRATION_FALLBACK_ENABLED", raising=False)
+	routes = _fallback_routes(**{
+		rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?branch=main&event=push&status=completed&per_page=1": {
+			"workflow_runs": [_base_run(conclusion="failure")],
+		},
+	})
+	result, _, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert result["status"] == "unverified" and result["reason"] == "integration_fallback_default_check_failed"
+	assert result["fallback_detail"] == "default_run_not_success"
+
+
+def test_integration_fallback_disabled_keeps_integration_pr_missing(tmp_path, monkeypatch):
+	monkeypatch.setenv("CHECK_TRIAGE_INTEGRATION_FALLBACK_ENABLED", "false")
+	result, _, fake = _gate(tmp_path, monkeypatch, routes=_fallback_routes())
+	assert result["status"] == "unverified" and result["reason"] == "integration_pr_missing"
+	assert not any(f"compare/{MERGE_SHA}...{EVIDENCE_SHA}" in call[-1] for call in fake.calls)
+
+
+def test_untrusted_project_branch_never_reaches_the_fallback(tmp_path, monkeypatch):
+	monkeypatch.delenv("CHECK_TRIAGE_INTEGRATION_FALLBACK_ENABLED", raising=False)
+	routes = _fallback_routes(**{rf"repos/{REPO}/issues/{PROJECT}": {"number": PROJECT, "labels": [{"name": "enhancement"}]}})
+	result, _, fake = _gate(tmp_path, monkeypatch, routes=routes)
+	assert result["status"] == "unverified" and result["reason"] == "integration_base_untrusted"
+	assert not any("branch=main" in call[-1] for call in fake.calls)
+
+
+def test_no_traceback_flag_skips_job_log_reads_and_traceback_comment(tmp_path, monkeypatch):
+	"""Issue #9481: the orchestrator close sweep's rotating gate pass passes
+	--no-traceback, so an unverified verdict reads no job log and posts nothing."""
+	issue = _issue(body=_body(check_run_id=FAILED_JOB_ID, details="https://ci.example.com/check/1"))
+	check_run = {"id": FAILED_JOB_ID, "app": {"slug": "github-actions"}, "output": {}}
+	fake = FakeGh(_check_run_triage_routes(check_run))
+	monkeypatch.setattr(mod, "_gh_api", fake)
+	monkeypatch.delenv("CHECK_TRIAGE_RESOLVED_GATE_ENABLED", raising=False)
+	issue_path = tmp_path / "issue.json"
+	issue_path.write_text(json.dumps(issue), encoding="utf-8")
+	args = argparse.Namespace(
+		issue_json=str(issue_path), repo=REPO, issue_number=ISSUE, default_branch="main", dry_run=True, no_traceback=True,
+	)
+	result, rc = mod.gate(args)
+	assert rc == 0 and result["status"] == "unverified" and result["traceback_posted"] == []
+	assert not result["writes"]
+	assert not any(call[-1].endswith("/logs") for call in fake.calls)

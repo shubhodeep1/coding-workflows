@@ -502,7 +502,11 @@ _RUN_URL_RE = re.compile(
 	r"https://github\.com/(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/actions/runs/(?P<run_id>[0-9]+)"
 )
 _PR_RUN_NAME_RE = re.compile(r"\[pr:(?P<n>[0-9]+)\]\s*$")
-_SMOKE_TITLE_RE = re.compile(r"\[E2E Smoke Test\b", re.IGNORECASE)
+# Release-gate fixtures: `[E2E Smoke Test ...]`, `[E2E Smoke Test alt-model ...]`,
+# `[E2E Orchestrate Smoke <run>] ...` (the orchestrate smoke's tracking and wave
+# issues carry no e2e-smoke-test label; #9236 was filed for #9210) and
+# `[E2E Clarify Negative Test ...]`.
+_SMOKE_TITLE_RE = re.compile(r"\[E2E (?:Smoke Test|Orchestrate Smoke|Clarify Negative Test)\b", re.IGNORECASE)
 _SMOKE_LABELS = frozenset({"e2e-smoke-test"})
 _MARKER_RE = re.compile(r"<!--\s*" + re.escape(MARKER_PREFIX) + r"(?P<key>[a-z_]+)=(?P<value>[^\s>]+)\s*-->")
 _ORCHESTRATOR_STATE_V2_COMMENT_RE = re.compile(
@@ -575,6 +579,17 @@ _SIGNATURE_PATTERNS: tuple[re.Pattern[str], ...] = (
 	re.compile(r"\b[A-Z][A-Z0-9_]*_FAILED\b"),
 	re.compile(r"\bTraceback \(most recent call last\)|^\s*\w+Error:", re.MULTILINE),
 	re.compile(r"\bfatal:|\berror:|\bERROR\b|\bFAILED\b|\bexit code\b|\bexited with\b", re.IGNORECASE),
+	# Issue #9533, checked last so existing signatures keep their value: a
+	# normalised bash diagnostic (`render_prompt.sh: line 306: 1abc: invalid
+	# variable name`) names no "error", so without this bucket every such
+	# reviewer crash hashed to the constant "no-error-lines". The message
+	# must be error-shaped (the same words as _BASH_DIAGNOSTIC_MSG_RE).
+	re.compile(
+		r"^(?:\S*/)?(?:[A-Za-z0-9_.-]+\.sh|bash|sh|environment): line [0-9]+: .*(?:invalid|unbound variable|command not found"
+		r"|syntax error|bad substitution|no such file or directory|permission denied|ambiguous redirect|expression expected"
+		r"|too many arguments|readonly variable|not a valid identifier|bad array subscript|division by 0|unexpected|error|fail)",
+		re.IGNORECASE,
+	),
 )
 # GitHub opens every `run:` step with a `##[group]Run <first line>` header that
 # echoes the whole script, one ANSI-cyan line per source line, before the
@@ -3982,9 +3997,35 @@ _SUMMARISER_EMPTY_STDOUT_RE = re.compile(r"summariser \((?P<prefix>[A-Za-z0-9_.-
 _SELF_NAMED_SCRIPT_LINE_RE = re.compile(r"^(?:::error::|##\[error\])?\s*(?P<name>[a-z][a-z0-9]*_[a-z0-9_]*(?:\.(?:sh|py))?): (?P<rest>\S.*)$")
 _SELF_NAMED_SCRIPT_FAILURE_RE = re.compile(r"\b(?:[a-z0-9_]+_(?:failed|error)|fail(?:ed|ure)?|error|invalid|missing|denied|exhausted|exception|fatal)\b|\brc=[1-9][0-9]*\b", re.IGNORECASE)
 REVIEWER_FAILURE_HELPER_LINES_MAX = 10
+# Issue #9533: a bash diagnostic printed by the reviewer step's own shell, e.g.
+# `/home/runner/.../scripts/render_prompt.sh: line 306: 1abc: invalid variable
+# name`. The directory is dropped so the fingerprint stays stable across
+# runner paths; see _normalise_bash_diagnostic.
+# Only a shell script name (or bash's own `bash` / `sh` / `environment`) and an
+# error-shaped message count. reviewer_failure_evidence keeps one only from the
+# step's own stderr and never from a `  | `-indented line (the model CLI's
+# stderr that review_run_reviewers.sh re-emits), so model output in a slot log
+# or that indented tail never feeds the fingerprint.
+_BASH_DIAGNOSTIC_LINE_RE = re.compile(r"^(?:\S*/)?(?P<script>[A-Za-z0-9_.-]+\.sh|bash|sh|environment): line (?P<line>[0-9]+): (?P<msg>\S.*)$")
+_BASH_DIAGNOSTIC_MSG_RE = re.compile(
+	r"invalid|unbound variable|command not found|syntax error|bad substitution|no such file or directory|permission denied"
+	r"|ambiguous redirect|expression expected|too many arguments|readonly variable|not a valid identifier|bad array subscript"
+	r"|division by 0|unexpected|error|fail",
+	re.IGNORECASE,
+)
+# A plain `ERROR: <message>` / `ERROR <message>` line.
+_PLAIN_ERROR_LINE_RE = re.compile(r"^ERROR:?\s+(?P<msg>\S.*)$")
 
 
-def reviewer_failure_evidence(log_texts: Iterable[str]) -> str:
+def _normalise_bash_diagnostic(line: str) -> str:
+	"""Return ``<script>: line <n>: <msg>`` for a bash diagnostic line, else ``""``."""
+	match = _BASH_DIAGNOSTIC_LINE_RE.match(line.strip())
+	if not match or not _BASH_DIAGNOSTIC_MSG_RE.search(match.group("msg")):
+		return ""
+	return f"{match.group('script')}: line {match.group('line')}: {match.group('msg').strip()}"
+
+
+def reviewer_failure_evidence(log_texts: Iterable[str], stage_stderr_texts: Iterable[str] = ()) -> str:
 	"""Summarise why the reviewer step failed, from the per-slot and summariser logs.
 
 	Emits one ``reviewer_slot_exit`` line per failed slot (its last recorded
@@ -3996,16 +4037,30 @@ def reviewer_failure_evidence(log_texts: Iterable[str]) -> str:
 	prefixed with its own name (a slot's stderr is indented ``  | `` in its
 	log). The text feeds the failure fingerprint and the heal report, so it
 	keeps only stable fields: no timestamps, attempt counts or run ids.
+
+	``stage_stderr_texts`` (issue #9533) is the reviewer step's own stderr. It
+	is read after the logs, the same way, and is the only source of the kept
+	bash diagnostics and the one plain ``ERROR: <msg>`` line, and only from its
+	non-indented lines: slot logs carry raw model-CLI stderr and review prose,
+	and review_run_reviewers.sh re-emits the model CLI's stderr tail to the
+	step's stderr indented ``  | ``. Neither may become the headline or the
+	fingerprint.
 	"""
 	slot_codes: dict[str, str] = {}
 	summariser_code = ""
 	summariser_empty_stdout_prefixes: set[str] = set()
 	helper_lines: list[str] = []
-	for text in log_texts:
+	plain_error_kept = False
+	sources = [(text, False) for text in log_texts] + [(text, True) for text in stage_stderr_texts]
+	for text, from_stage_stderr in sources:
 		for raw_line in sanitize_text(text).split("\n"):
 			line = raw_line.strip()
-			if line.startswith("| "):
+			slot_stderr_indented = line.startswith("| ")
+			if slot_stderr_indented:
 				line = line[2:].strip()
+			# Issue #9533: only a non-indented line of the step's own stderr
+			# may supply a bash diagnostic or the plain ERROR line.
+			own_stage_line = from_stage_stderr and not slot_stderr_indented
 			slot_match = _REVIEWER_SLOT_EXIT_RE.search(line)
 			if slot_match:
 				slot_codes[single_line(slot_match.group("slot"), 100)] = slot_match.group("rc")
@@ -4018,6 +4073,26 @@ def reviewer_failure_evidence(log_texts: Iterable[str]) -> str:
 			if empty_stdout_match:
 				summariser_code = "0"
 				summariser_empty_stdout_prefixes.add(empty_stdout_match.group("prefix"))
+				continue
+			bash_diagnostic = _normalise_bash_diagnostic(line) if own_stage_line else ""
+			if bash_diagnostic:
+				# Issue #9533: keep the shell's own crash line (directory
+				# stripped) so the fingerprint and the headline name the cause.
+				if len(helper_lines) < REVIEWER_FAILURE_HELPER_LINES_MAX:
+					bash_diagnostic = single_line(redact_secrets(bash_diagnostic), 300)
+					if bash_diagnostic not in helper_lines:
+						helper_lines.append(bash_diagnostic)
+				continue
+			plain_error = _PLAIN_ERROR_LINE_RE.match(line) if own_stage_line else None
+			if plain_error:
+				# Issue #9533 (spec item 3): keep the first plain `ERROR: <msg>`
+				# line of the step's own stderr too, so failure-headline (which
+				# reads this evidence) names it. One line only, redacted, and
+				# never from a slot log, so review text cannot feed the
+				# fingerprint.
+				if not plain_error_kept and len(helper_lines) < REVIEWER_FAILURE_HELPER_LINES_MAX:
+					helper_lines.append(single_line(redact_secrets("ERROR: " + plain_error.group("msg").strip()), 300))
+					plain_error_kept = True
 				continue
 			helper_match = _SELF_NAMED_SCRIPT_LINE_RE.match(line)
 			if helper_match and (_CRASH_ERROR_LINE_RE.match(line) or _SELF_NAMED_SCRIPT_FAILURE_RE.search(helper_match.group("rest"))) and len(helper_lines) < REVIEWER_FAILURE_HELPER_LINES_MAX:
@@ -4723,14 +4798,14 @@ def _recovery_occurrence_runs(comments: list[Any], *, pipeline_login: str, sourc
 		text = comment.get("body") if isinstance(comment, dict) else None
 		if not isinstance(text, str) or _comment_author_login(comment).casefold() != login:
 			continue
-		lines = sanitize_text(text).splitlines()
-		if not lines or lines[0].strip() != f"<!-- {MARKER_PREFIX}occurrence -->":
-			continue
-		if head_line not in lines or not any(line.startswith("- **Source pull request:** ") and line.endswith(source_suffix) for line in lines):
-			continue
-		runs = extract_run_refs([line for line in lines if line.startswith("- **Failed run:** ")], repo=source_repo)
-		if runs:
-			return runs
+		# One report per legacy comment; a counter comment (edited in place)
+		# holds several, newest first. Lines never mix across reports.
+		for lines in occurrence_report_sections(text):
+			if head_line not in lines or not any(line.startswith("- **Source pull request:** ") and line.endswith(source_suffix) for line in lines):
+				continue
+			runs = extract_run_refs([line for line in lines if line.startswith("- **Failed run:** ")], repo=source_repo)
+			if runs:
+				return runs
 	return []
 
 
@@ -4841,7 +4916,13 @@ def failure_headline(texts: Iterable[str], limit: int = FAILURE_HEADLINE_LIMIT) 
 	are skipped. A ``  - item`` list printed right under the error (for
 	example the out-of-scope paths ``check_resolver_diff.sh`` names) is folded
 	into the line, up to three items. The result is one redacted line.
+
+	Issue #9533: when no text has such a line, the first bash diagnostic
+	(``<script>: line <n>: <msg>``, directory stripped) or plain ``ERROR:``
+	line is returned instead, so a shell crash that never printed
+	``::error::`` is still named.
 	"""
+	texts = list(texts)
 	for text in texts:
 		lines = sanitize_text(text).split("\n")
 		for index, raw in enumerate(lines):
@@ -4861,6 +4942,17 @@ def failure_headline(texts: Iterable[str], limit: int = FAILURE_HEADLINE_LIMIT) 
 			if details:
 				message = message.rstrip(":") + ": " + ", ".join(details)
 			return single_line(redact_secrets(message), limit)
+	for text in texts:
+		for raw in sanitize_text(text).split("\n"):
+			line = raw.strip()
+			if line.startswith("| "):
+				line = line[2:].strip()
+			fallback = _normalise_bash_diagnostic(line)
+			if not fallback:
+				plain = _PLAIN_ERROR_LINE_RE.match(line)
+				fallback = plain.group("msg").strip() if plain else ""
+			if fallback and not _GENERIC_ERROR_RE.match(fallback):
+				return single_line(redact_secrets(fallback), limit)
 	return ""
 
 
@@ -5952,6 +6044,7 @@ def budget_decision(
 	reissues: Iterable[dict[str, Any]] | None = None,
 	cause: str | None = None,
 	cause_window_days: int = 3,
+	report_issue: str | None = None,
 ) -> dict[str, Any]:
 	"""Decide what to do with a fingerprinted failure given the heal issue list.
 
@@ -5989,8 +6082,23 @@ def budget_decision(
 	(``match: cause``), ahead of the budget caps. A missing or unparseable
 	``created_at`` never matches. ``None`` (or anything but 64 lowercase hex)
 	leaves the decision unchanged.
+
+	``report_issue`` (``owner/repo#N``, optional) is the issue whose own
+	clarify / plan / implement run failed. When it is itself an OPEN listed
+	heal issue and no fingerprint, source or cause duplicate exists, the report is a
+	duplicate of that issue (``match: heal_source``): a heal issue's own failed
+	run never opens a heal issue for the heal issue (#9200 was filed for
+	#9190, #9192 for #9189, #9238 for #9234). The report is not diagnosed, so
+	a defect that only ever fails on heal issues gets no heal issue of its
+	own; the same defect still gets one from any report whose source is not a
+	heal issue. The intake records the occurrence and does not escalate. The
+	listing comes from GitHub (label ``ai:workflow-heal``), not from the
+	report. A closed heal issue keeps the lineage rules below.
 	"""
 	now = now or _utc_now()
+	report_issue_match = _SOURCE_KEY_RE.fullmatch(str(report_issue or ""))
+	report_issue_number = _positive_int(str(report_issue).rsplit("#", 1)[-1]) if report_issue_match else None
+	heal_source_record: dict[str, Any] | None = None
 	day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 	if not (isinstance(cause, str) and _FP_HEX_RE.fullmatch(cause)):
 		cause = None
@@ -6050,6 +6158,11 @@ def budget_decision(
 		is_linked_heal_issue = linked_heal_issue is not None and number == linked_heal_issue and issue_repository in (linked_heal_repo, "")
 		if state == "open":
 			open_issues.append(issue)
+			if report_issue_match and report_issue_number == number and (
+				issue_repository == report_issue_match.group("repo")
+				or (not issue_repository and report_issue_match.group("repo") == preferred_repo)
+			):
+				heal_source_record = issue
 			if markers.get("fp") == fp:
 				duplicate = _preferred_duplicate(duplicate, issue)
 			elif same_source:
@@ -6079,6 +6192,22 @@ def budget_decision(
 			"existing_repo": duplicate.get("repository") if is_valid_repo_slug(duplicate.get("repository")) else "",
 			"gen": _positive_int(parse_heal_markers(duplicate.get("body")).get("gen")) or 1,
 			"root": parse_heal_markers(duplicate.get("body")).get("root") or fp,
+			"open_count": len(open_issues),
+			"today_count": created_today,
+		}
+	# A cause match keeps its precedence: when the heal issue's own run fails
+	# with the issue's own cause, `match: cause` keeps the
+	# heal_issue_failed_itself escalation; another issue's cause records there.
+	if heal_source_record is not None and cause_duplicate is None:
+		heal_source_markers = parse_heal_markers(heal_source_record.get("body"))
+		return {
+			"action": "duplicate",
+			"match": "heal_source",
+			"existing_issue": _positive_int(heal_source_record.get("number")),
+			"existing_url": sanitize_text(heal_source_record.get("html_url"), 300),
+			"existing_repo": heal_source_record.get("repository") if is_valid_repo_slug(heal_source_record.get("repository")) else "",
+			"gen": _positive_int(heal_source_markers.get("gen")) or 1,
+			"root": heal_source_markers.get("root") or fp,
 			"open_count": len(open_issues),
 			"today_count": created_today,
 		}
@@ -8077,6 +8206,179 @@ def compose_occurrence_comment(
 
 
 # ---------------------------------------------------------------------------
+# Occurrence counter comment (one comment per heal issue, edited in place)
+# ---------------------------------------------------------------------------
+# Every repeat report used to be its own comment: heal issue #9200 collected
+# 271 of them in two days, and each PAT comment starts four `issue_comment`
+# wrapper runs. The intake now keeps ONE occurrence comment per heal issue and
+# edits it (`issue_comment` wrappers run on `created` only): a count line plus
+# the newest OCCURRENCE_KEEP_ENTRIES reports, each under its own entry marker
+# (older reports stay in their intake run's log).
+# The first line stays `<!-- workflow-failure-heal:occurrence -->`, so every
+# reader that recognises an occurrence comment by that line still does.
+#
+# Run-volume plan D18 kept edit-in-place out because readers order markers by
+# `created_at`. The two readers of occurrence comments are handled here:
+# `_recovery_occurrence_runs` reads the entries one by one (newest first), and
+# `heal_stale_decision` moves its anchor to the count line's `last=` time.
+# Untrusted text in a report (error signature, evidence pack) has `<!--`
+# neutralised by its composer, so an entry marker is always intake-written.
+OCCURRENCE_MARKER_LINE = f"<!-- {MARKER_PREFIX}occurrence -->"
+OCCURRENCE_KEEP_ENTRIES = 10
+# GitHub refuses a comment over 65,536 characters; the signing shim adds a line.
+OCCURRENCE_COMMENT_MAX_CHARS = 60000
+_OCCURRENCE_TIME_PATTERN = r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"
+_OCCURRENCE_COUNT_LINE_RE = re.compile(
+	r"<!-- " + re.escape(MARKER_PREFIX) + r"occurrence-count:v1 count=([1-9][0-9]{0,8})"
+	r" first=(" + _OCCURRENCE_TIME_PATTERN + r") last=(" + _OCCURRENCE_TIME_PATTERN + r") -->"
+)
+_OCCURRENCE_ENTRY_LINE_RE = re.compile(
+	r"<!-- " + re.escape(MARKER_PREFIX) + r"occurrence-entry:v1 n=([1-9][0-9]{0,8}) at=(" + _OCCURRENCE_TIME_PATTERN + r") -->"
+)
+
+
+def parse_occurrence_counter(body: Any) -> dict[str, Any] | None:
+	"""Parse an in-place occurrence comment; ``None`` for anything else.
+
+	Returns ``{"count", "first", "last", "entries"}`` where ``entries`` is a
+	list of ``{"n", "at", "text"}`` in body order (newest first). A legacy
+	single-report occurrence comment (no count line) is not a counter.
+	"""
+	if not isinstance(body, str):
+		return None
+	lines = sanitize_text(body).split("\n")
+	if len(lines) < 2 or lines[0].strip() != OCCURRENCE_MARKER_LINE:
+		return None
+	count_line = _OCCURRENCE_COUNT_LINE_RE.fullmatch(lines[1].strip())
+	if count_line is None:
+		return None
+	entries: list[dict[str, Any]] = []
+	current: dict[str, Any] | None = None
+	for line in lines[2:]:
+		entry_line = _OCCURRENCE_ENTRY_LINE_RE.fullmatch(line.strip())
+		if entry_line is not None:
+			current = {"n": int(entry_line.group(1)), "at": entry_line.group(2), "lines": []}
+			entries.append(current)
+		elif current is not None:
+			current["lines"].append(line)
+	return {
+		"count": int(count_line.group(1)),
+		"first": count_line.group(2),
+		"last": count_line.group(3),
+		"entries": [{"n": entry["n"], "at": entry["at"], "text": "\n".join(entry["lines"]).strip("\n")} for entry in entries],
+	}
+
+
+def occurrence_report_sections(body: Any) -> list[list[str]]:
+	"""The reports of one occurrence comment as line lists, newest first.
+
+	A legacy comment is one report (all its lines); a counter comment yields
+	one list per kept entry. Anything else yields nothing.
+	"""
+	if not isinstance(body, str):
+		return []
+	lines = sanitize_text(body).splitlines()
+	if not lines or lines[0].strip() != OCCURRENCE_MARKER_LINE:
+		return []
+	counter = parse_occurrence_counter(body)
+	if counter is None:
+		return [lines]
+	return [entry["text"].splitlines() for entry in counter["entries"]]
+
+
+def occurrence_last_reported(body: Any) -> datetime | None:
+	"""``last=`` time of a counter comment, else ``None`` (legacy or other)."""
+	counter = parse_occurrence_counter(body)
+	return _parse_iso(counter["last"]) if counter else None
+
+
+def merge_occurrence_comment(
+	comments: Iterable[Any],
+	occurrence: str,
+	*,
+	trusted_login: str,
+	now: datetime | None = None,
+	keep_entries: int = OCCURRENCE_KEEP_ENTRIES,
+	max_chars: int = OCCURRENCE_COMMENT_MAX_CHARS,
+) -> dict[str, Any]:
+	"""Fold one composed occurrence comment into the issue's counter comment.
+
+	``comments`` is the heal issue's comment list (``id``, ``body``, author
+	under ``author`` or ``user.login``), oldest first. Only comments written
+	by ``trusted_login`` (the account the intake posts as) count. Returns
+	``{"comment_id", "count", "body", "newer_comments"}``: ``comment_id`` is
+	the newest trusted counter comment to edit, or ``None`` when the body must
+	be posted as a new comment; ``newer_comments`` is how many comments of any
+	author follow that counter (0 without one), so the caller can re-post a
+	counter that fell out of the window other readers fetch. The first counter
+	on an issue starts at the number of legacy occurrence comments already
+	there plus one, and its ``first=`` is the oldest of them. A legacy comment
+	posted after a counter exists (the intake's fallback) is not counted.
+	Entries beyond ``keep_entries`` are dropped, oldest first, and
+	further ones while the body exceeds ``max_chars``; a single entry that is
+	still too long is cut.
+	"""
+	if not isinstance(occurrence, str) or not occurrence.startswith(OCCURRENCE_MARKER_LINE):
+		raise ValueError("occurrence text does not start with the occurrence marker")
+	login = trusted_login.strip().casefold() if isinstance(trusted_login, str) else ""
+	stamp = _iso(now or _utc_now())
+	target_id: int | None = None
+	counter: dict[str, Any] | None = None
+	legacy_reports = 0
+	legacy_first: datetime | None = None
+	newer_comments = 0
+	for comment in comments if isinstance(comments, (list, tuple)) else []:
+		newer_comments += 1
+		if not isinstance(comment, dict) or not login or _comment_author_login(comment).casefold() != login:
+			continue
+		parsed = parse_occurrence_counter(comment.get("body"))
+		if parsed is not None:
+			comment_id = _positive_int(comment.get("id"))
+			if comment_id is not None:
+				target_id, counter = comment_id, parsed
+				newer_comments = 0
+		elif isinstance(comment.get("body"), str) and sanitize_text(comment["body"]).split("\n", 1)[0].strip() == OCCURRENCE_MARKER_LINE:
+			legacy_reports += 1
+			legacy_created = _parse_iso(comment.get("created_at"))
+			if legacy_created is not None and (legacy_first is None or legacy_created < legacy_first):
+				legacy_first = legacy_created
+	if counter is None:
+		newer_comments = 0
+		count = legacy_reports + 1
+		first = _iso(legacy_first) if legacy_first is not None and _iso(legacy_first) <= stamp else stamp
+		entries: list[dict[str, Any]] = []
+	else:
+		count = counter["count"] + 1
+		first = counter["first"]
+		entries = list(counter["entries"])
+	report_text = sanitize_text(occurrence)[len(OCCURRENCE_MARKER_LINE):].strip("\n")
+	entries.insert(0, {"n": count, "at": stamp, "text": report_text})
+	entries = entries[:max(1, keep_entries)]
+
+	def _render(kept: list[dict[str, Any]]) -> str:
+		head = [
+			OCCURRENCE_MARKER_LINE,
+			f"<!-- {MARKER_PREFIX}occurrence-count:v1 count={count} first={first} last={stamp} -->",
+			f"This failure was reported again **{count}** time{'s' if count != 1 else ''} (first `{first}`, latest `{stamp}`). "
+			f"This comment is updated in place; the newest {len(kept)} report{'s are' if len(kept) != 1 else ' is'} kept below.",
+		]
+		for entry in kept:
+			head.extend(["", f"<!-- {MARKER_PREFIX}occurrence-entry:v1 n={entry['n']} at={entry['at']} -->", entry["text"]])
+		return "\n".join(head) + "\n"
+
+	body = _render(entries)
+	while len(body) > max_chars and len(entries) > 1:
+		entries.pop()
+		body = _render(entries)
+	if len(body) > max_chars:
+		overflow = len(body) - max_chars
+		note = "\n\n_(report shortened to fit one comment)_"
+		entries[0] = dict(entries[0], text=entries[0]["text"][:max(0, len(entries[0]["text"]) - overflow - len(note))].rstrip() + note)
+		body = _render(entries)
+	return {"comment_id": target_id, "count": count, "body": body, "newer_comments": newer_comments}
+
+
+# ---------------------------------------------------------------------------
 # Synced-file security findings (source_kind synced_security_finding)
 # ---------------------------------------------------------------------------
 
@@ -9428,7 +9730,13 @@ def _cmd_reviewer_failure_evidence(args: argparse.Namespace) -> int:
 			texts.append(Path(path).read_text(encoding="utf-8", errors="replace"))
 		except OSError:
 			continue
-	sys.stdout.write(reviewer_failure_evidence(texts))
+	stage_texts: list[str] = []
+	for path in getattr(args, "stage_stderr_file", None) or []:
+		try:
+			stage_texts.append(Path(path).read_text(encoding="utf-8", errors="replace"))
+		except OSError:
+			continue
+	sys.stdout.write(reviewer_failure_evidence(texts, stage_texts))
 	return 0
 
 
@@ -10304,6 +10612,11 @@ def heal_stale_decision(issue: Any, comments: Any, runs: Any, *, pipeline_login:
 		created = _heal_stale_parse_time(comment.get("created_at"))
 		if created is not None and created > anchor:
 			anchor = created
+		# A counter comment is edited in place, so its `created_at` is the
+		# first repeat; the count line's `last=` is the newest one.
+		last_reported = occurrence_last_reported(body)
+		if last_reported is not None and last_reported > anchor:
+			anchor = last_reported
 	result["anchor"] = _heal_stale_iso(anchor)
 	if now - anchor < timedelta(hours=min_age_hours):
 		return done("keep", "too_young")
@@ -10798,6 +11111,7 @@ def _cmd_budget(args: argparse.Namespace) -> int:
 		reissues=_load_reissues(args.reissues_json) if args.reissues_json else None,
 		cause=args.cause or None,
 		cause_window_days=min(max(args.cause_window_days, 1), 30),
+		report_issue=args.report_issue or None,
 	)
 	_write_json(decision)
 	return 0
@@ -11104,6 +11418,16 @@ def _cmd_compose_issue(args: argparse.Namespace) -> int:
 			body = body.rstrip() + "\n\n" + marker + "\n"
 	Path(args.title_out).write_text(title + "\n", encoding="utf-8")
 	Path(args.body_out).write_text(body, encoding="utf-8")
+	return 0
+
+
+def _cmd_merge_occurrence(args: argparse.Namespace) -> int:
+	"""Fold an occurrence file into the issue's counter comment (see merge_occurrence_comment)."""
+	comments = _load_json_file(args.comments_json)
+	occurrence = Path(args.occurrence_file).read_text(encoding="utf-8", errors="replace")
+	merged = merge_occurrence_comment(comments if isinstance(comments, list) else [], occurrence, trusted_login=args.trusted_login)
+	Path(args.body_out).write_text(merged["body"], encoding="utf-8")
+	print(json.dumps({"comment_id": merged["comment_id"], "count": merged["count"], "newer_comments": merged["newer_comments"]}))
 	return 0
 
 
@@ -11595,6 +11919,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 	p = sub.add_parser("reviewer-failure-evidence", help="Summarise a failed reviewer step (slot / summariser exit codes, self-named script errors) from its logs")
 	p.add_argument("--log-file", action="append", default=[], help="reviewer slot or summariser log; repeatable, unreadable files are skipped")
+	p.add_argument("--stage-stderr-file", action="append", default=[], help="the reviewer step's own stderr (issue #9533): the only source of the kept bash diagnostics and plain ERROR line (non-indented lines only); repeatable, unreadable files are skipped")
 	p.set_defaults(func=_cmd_reviewer_failure_evidence)
 
 	p = sub.add_parser(
@@ -11922,6 +12247,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--source-gen", type=int)
 	p.add_argument("--source-root", default="")
 	p.add_argument("--source-issue", default="", help="owner/repo#N of the issue carrying the reported lineage")
+	p.add_argument("--report-issue", default="", help="owner/repo#N of the issue whose own phase run failed (heal-of-heal dedupe)")
 	p.add_argument("--trusted-author", default="", help="authenticated intake account that created heal issues")
 	p.add_argument("--max-depth", type=int, default=DEFAULT_MAX_LINEAGE_DEPTH)
 	p.add_argument("--max-open", type=int, default=DEFAULT_MAX_OPEN_ISSUES)
@@ -12044,6 +12370,13 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--evidence-pack-file", default="")
 	p.add_argument("--cause-shape", default="")
 	p.set_defaults(func=_cmd_compose_occurrence)
+
+	p = sub.add_parser("merge-occurrence", help="Fold an occurrence comment into the heal issue's in-place counter comment")
+	p.add_argument("--comments-json", required=True)
+	p.add_argument("--occurrence-file", required=True)
+	p.add_argument("--trusted-login", required=True)
+	p.add_argument("--body-out", required=True)
+	p.set_defaults(func=_cmd_merge_occurrence)
 
 	p = sub.add_parser("branch-progress", help="Summarise a compare response (failing SHA ... branch) as JSON")
 	p.add_argument("--compare-json", required=True)
