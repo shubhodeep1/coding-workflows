@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nI'm going with Q1 = REFRAME and Q2 = A. The helper script can't change in this heal, and the pipeline can't file the follow-up issue that option A asks for, so the helper work is written down for a human to pick up instead.\n\nDECISIONS:\nQ1: REFRAME\nQ2: A\n\nRATIONALE:\nQ1: The heal's edit scope is fixed before diagnosis (agents.md L2520-2552: \"The diagnosis still cannot add a path\"). It covers only `.github/workflows/clarify.yml`, `.github/workflows/internal-clarify.yml`, `tests/**` and `changelog.d/*.md`, so `scripts/clarify_isolated_run.sh` cannot change here. Option A also asks for a separate issue to be filed, and option B asks for this issue to be closed and re-filed. The planner and implementer only change repository files and open one PR, so they can do neither. This decision therefore keeps the in-scope part of A: `clarify.yml` stops retrying after a snapshot rejection, plus contract tests and a changelog fragment. Filing the issue is replaced by a written record of the helper work in the changelog fragment and the PR body. That keeps A's intent without a step the pipeline cannot run, and avoids C's silent drop of the helper fix.\nQ2: Skipping oversized files matches the read-only snapshot in `scripts/codex_isolated_workspace.py:15,105,309-311`, which skips and counts files over `MAX_READONLY_FILE`. The checks that protect against unsafe paths stay as they are: the symlinked-parent rejection (`clarify_isolated_run.sh:153-154`), the non-regular-file rejection, the source-changed checks (L163-171) and the 5,000-file / 64 MiB caps. A missing worktree path has nothing to copy, so skipping it opens nothing. This choice is binding on the later helper change. It is not used in this PR, because no helper code changes here.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: reframe\n  inputs:\n    - .github/workflows/clarify.yml lines 1754-1866: stderr capture helpers `_clarify_attempt_stderr_capture_start` / `_stop`, `clarify_attempt_stderr_file`, the `for attempt` retry loop, `_clarify_emit_attempt_failed`\n    - scripts/clarify_isolated_run.sh:189, read only, not edited: `raise SystemExit(\"clarify source snapshot rejected\") from None`. Python writes this to stderr as exactly one line, and the exit code is 1.\n    - .github/workflows/internal-clarify.yml: edit only if it holds its own copy of this retry loop; otherwise leave it alone\n    - tests/test_plan_clarify_blocked_output.py: existing consumer of `CLARIFY_ENGINE_ATTEMPT_FAILED`; keep its format unchanged\n  steps:\n    - In the `Run Codex` step of `.github/workflows/clarify.yml`, wrap the codex-path call (line 1845) with the same stderr capture start/stop pair as the Claude path. The snapshot runs before the engine is chosen, so both paths can be rejected. The capture still only tees, so output that already goes to the log keeps going there.\n    - After each attempt with `rc != 0`, emit the existing `_clarify_emit_attempt_failed \"${rc}\" nonzero_exit` line unchanged. Then, if `grep -a -qx 'clarify source snapshot rejected' \"${clarify_attempt_stderr_file}\"` matches, print a fixed-text `::error::` annotation saying the snapshot was rejected and won't change on retry (no path or file content in it) and `exit 1` straight away, with no sleep and no further attempts. Use only the exact whole line, never a substring. A forged line can only make the run fail sooner, which fails closed.\n    - Don't add a new log prefix. Registering one needs an `agents.d/` fragment (\u00a725), and this scope doesn't cover `agents.d/`. Leave the `kind=` values and every other rc branch (80, 75, empty output, other non-zero exits) as they are, and keep `max_attempts=3`.\n    - Add a new test file under `tests/`, with a name that is not already taken, for example `tests/test_clarify_snapshot_reject_no_retry.py`. It should check that: (a) the fixed string in `scripts/clarify_isolated_run.sh`'s `SystemExit(...)` is exactly the one `clarify.yml` matches (read both files), so a later helper change can't quietly break the short-circuit; (b) the `Run Codex` body matches it with `grep -a -qx` against `clarify_attempt_stderr_file`, and exits before the `sleep` branch; (c) both engine invocations sit inside the capture start/stop pair; (d) `CLARIFY_ENGINE_ATTEMPT_FAILED` keeps its format. If it's practical, also extract the loop and run it with a stub helper that prints the line and exits 1, then assert one attempt and no sleep.\n    - Add a changelog fragment under `changelog.d/`, named after this heal issue's number. It describes the short-circuit and has a \"Deferred, outside this heal's scope\" paragraph covering `scripts/clarify_isolated_run.sh`: the `CLARIFY_SNAPSHOT_REJECTED reason=<token>` stderr line with tokens from a fixed set, a distinct rejection exit code that `clarify.yml` then keys on, and the Q2:A skip rules with the snapshot regression test. Repeat that paragraph in the PR body. Don't file or close any issue.\n    - Run `wc -c .github/workflows/clarify.yml` and keep the file under 480,000 bytes (\u00a724).\n  replaces_acceptance_criterion: The issue's suggested fix items 1-4 and the helper regression test, which all require editing `scripts/clarify_isolated_run.sh`, and option A's \"file a separate normal issue\" step.\n  equivalence_argument: The only in-scope part of the defect is the three pointless retries of a fixed outcome (clarify.yml:1854-1865), and this removes them in full. The helper work can't land under a frozen heal scope. Recording its exact spec in the changelog and PR body, together with a test that ties the two files to the same string, keeps the intent of A's follow-up without a step the pipeline can't run. When the helper fix lands, the matched line and the exit code stay tied together by a test.\n  reversibility: The short-circuit is one branch on an exact string match. Removing it brings back the 3-attempt retry with no other effect. If a human prefers B, the deferred paragraph already holds the full spec for a single combined issue.\n\nSETUP REQUIRED: none.\n\nMissing context: I couldn't see the tree at PR #9602's head (`43b21173`), so I don't know which snapshot rule actually fired. That doesn't change these decisions, because the in-scope change works the same for every rule.",
+  "fingerprint": "e3dc2b4975628634813ad749730ede403d5efeb6bfda9c085773ae5289288d90",
+  "lineage": {
+    "issue_number": 9837,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44705552886",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44705552886",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9837"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261120085710_1ef30f5246",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9837,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44705552886"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9837",
+  "timestamps": {
+    "created_at": "2026-11-20T08:57:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
