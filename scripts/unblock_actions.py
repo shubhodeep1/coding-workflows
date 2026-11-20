@@ -51,6 +51,13 @@ the network; the shell only executes.
       the verified PR head ref), `verified` (the marker only) or `unverified`.
       A missing or malformed object keeps today's re-issue unchanged. Only
       standalone, non-security issues use it.
+      Optional `implementation_pr` (issues only, #9809): the issue's own open
+      implementation PR (`impl-pr` below). For the stops in
+      EXISTING_PR_ROUTED_STOPS, reset_ops then posts the judge's note on that
+      PR, dispatches its review and clears the stop label instead of posting
+      `/approved` (implement.yml refuses it with `existing_pr`). Switch
+      UNBLOCK_EXISTING_PR_ROUTING_ENABLED (unset, empty or `true` on; `false`
+      off; any other value off with a warning). A malformed value is dropped.
   followup --context-file PATH --fixup N [--done-text TEXT]
       The reset to run once the fix-up issue N of a `descope` or
       `operator_step` verdict has merged (Q11).
@@ -69,6 +76,13 @@ the network; the shell only executes.
       `ai:check-triage-escalated`, or the `check-failure-triage:pr=` marker),
       and the issue's single line-anchored integration branch. Conflicting PR
       numbers or a URL into another repository give `pr: null`.
+  impl-pr --graphql-file PATH --item N --repo R --pipeline-login L
+      Reads the already-fetched GraphQL response (open `ai/issue-<N>` head PRs
+      and the issue's cross-referencing PRs) and prints `{"pr": n|null,
+      "reason": "head_branch"|"closes"|"none"|"ambiguous"|"unreadable"}`: a
+      same-repository `ai/issue-<N>` head PR, else exactly one open
+      same-repository PR by the pipeline login or a repository member whose
+      body closes the issue (#9809).
   fixup-delivered-body --item-file PATH --repo R --pipeline-login L
       Reads the already-fetched item JSON and prints `{"status": "ok"|"skip",
       "reason": s, "target_branch": s|null, "paths": [s]}` for the unblock
@@ -171,6 +185,10 @@ SOURCE_REPO = "shubhodeep1/coding-workflows"
 PROJECT_VALIDATION_STOPS = ("validation-failed", "validate-failed", "harness-broken")
 CLARIFY_STOPS = ("clarify-failed", "clarify-respond-failed", "plan-failed")
 GUARD_STOPS = ("scope-blocked", "destructive-blocked")
+# Issue stops whose reset posts `/approved` (or re-plans); with an open
+# implementation PR the reset goes to that PR instead (#9809).
+EXISTING_PR_ROUTED_STOPS = ("needs-human", "blocked", "implement-diagnose-failed") + GUARD_STOPS
+IMPL_PR_TRUSTED_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
 CLOSED_LABEL = "ai:unblock-closed"
 SECURITY_LABEL = "ai:security"
 SECURITY_FINDING_MARKER_PREFIX = "<!-- ai:security-finding:"
@@ -509,7 +527,15 @@ def _context(raw: object) -> dict:
 		"pr_source_target_branch": pr_source_target_branch,
 		"pr_source_metadata_unsafe": pr_source_metadata_unsafe,
 		"pr_base_branch": pr_base_branch,
+		"implementation_pr": _implementation_pr(raw.get("implementation_pr"), kind, item),
 	}
+
+
+def _implementation_pr(raw: object, kind: str, item: int) -> int | None:
+	"""The issue's open implementation PR from the judge (#9809); anything malformed is None."""
+	if kind != "issue" or isinstance(raw, bool) or not isinstance(raw, int) or raw < 1 or raw == item:
+		return None
+	return raw
 
 
 def chain_depth(title: object) -> int:
@@ -597,6 +623,124 @@ def _target_repo_guard_enabled(env: object = None) -> bool:
 	if value.lower() != "false":
 		print("warning: UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED is not true or false; the target_repo guard is off", file=sys.stderr)
 	return False
+
+
+def _existing_pr_routing_enabled(env: object = None) -> bool:
+	"""UNBLOCK_EXISTING_PR_ROUTING_ENABLED: unset, empty or `true` is on, `false` off (#9809)."""
+	env = os.environ if env is None else env
+	value = str(env.get("UNBLOCK_EXISTING_PR_ROUTING_ENABLED", "") or "").strip()
+	if value == "" or value.lower() == "true":
+		return True
+	if value.lower() != "false":
+		print("warning: UNBLOCK_EXISTING_PR_ROUTING_ENABLED is not true or false; existing-PR routing is off", file=sys.stderr)
+	return False
+
+
+def _closing_keyword_re(item: int) -> re.Pattern:
+	"""implement.yml's closing_kw_re ("Safety check for existing PR") for issue `item`."""
+	return re.compile(
+		r"(^|[^A-Za-z0-9_-])(close[sd]?|fix(es|ed)?|resolve[sd]?)\s+"
+		rf"(#{item}|[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#{item}|https?://github[.]com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/{item})"
+		r"([^A-Za-z0-9_-]|$)",
+		re.IGNORECASE,
+	)
+
+
+def implementation_pr_candidate(raw: object, item: int, repo: str, pipeline_login: str) -> dict:
+	"""The issue's own open implementation PR, from one GraphQL response (no network, #9809).
+
+	Rule 1: an open `ai/issue-<item>` head PR (checked again here, not only
+	in the query) whose head is in `repo`; the highest number wins. Rule 2:
+	exactly one open cross-referencing PR in `repo` (base `repository`, which
+	a missing value fails) with a same-repository head, by the
+	pipeline login or a repository member, whose body closes the issue. A
+	fork head or an outside author never qualifies; two closing PRs are
+	ambiguous. Every unreadable shape is `unreadable`.
+	"""
+	def result(pr: int | None, reason: str) -> dict:
+		return {"pr": pr, "reason": reason}
+
+	if not isinstance(item, int) or item < 1 or not repo:
+		return result(None, "unreadable")
+	try:
+		repository = raw["data"]["repository"]
+		head_nodes = repository["pullRequests"]["nodes"]
+		issue = repository.get("issue") or {}
+		timeline = ((issue.get("timelineItems") or {}).get("nodes")) or []
+		if not isinstance(head_nodes, list) or not isinstance(timeline, list):
+			return result(None, "unreadable")
+	except (KeyError, TypeError, AttributeError):
+		return result(None, "unreadable")
+
+	def same_repo(node: dict) -> bool:
+		head = node.get("headRepository")
+		owner = head.get("nameWithOwner") if isinstance(head, dict) else None
+		return isinstance(owner, str) and owner.lower() == repo.lower()
+
+	def number_of(node: dict) -> int | None:
+		number = node.get("number")
+		if isinstance(number, bool) or not isinstance(number, int) or number < 1 or number == item:
+			return None
+		return number
+
+	head_ref = f"ai/issue-{item}"
+	head_prs = [
+		number_of(node) for node in head_nodes
+		if isinstance(node, dict) and same_repo(node) and node.get("headRefName") == head_ref
+		and node.get("state", "OPEN") == "OPEN"
+	]
+	head_prs = [number for number in head_prs if number is not None]
+	if head_prs:
+		return result(max(head_prs), "head_branch")
+	closing = _closing_keyword_re(item)
+	closes: set[int] = set()
+	for event in timeline:
+		source = event.get("source") if isinstance(event, dict) else None
+		if not isinstance(source, dict) or source.get("state") != "OPEN" or not same_repo(source):
+			continue
+		# The PR's own (base) repository must be `repo` too: the timeline also
+		# lists PRs from other repositories, and their numbers mean nothing here.
+		base = source.get("repository")
+		base_owner = base.get("nameWithOwner") if isinstance(base, dict) else None
+		if not isinstance(base_owner, str) or base_owner.lower() != repo.lower():
+			continue
+		number = number_of(source)
+		author = source.get("author")
+		login = author.get("login") if isinstance(author, dict) else None
+		trusted = (isinstance(login, str) and bool(pipeline_login) and login == pipeline_login) or source.get("authorAssociation") in IMPL_PR_TRUSTED_ASSOCIATIONS
+		body = source.get("body")
+		if number is None or not trusted or not isinstance(body, str) or not closing.search(body):
+			continue
+		closes.add(number)
+	if len(closes) > 1:
+		return result(None, "ambiguous")
+	if closes:
+		return result(closes.pop(), "closes")
+	return result(None, "none")
+
+
+def _existing_pr_route_ops(ctx: dict, text: str) -> list[dict]:
+	"""An issue reset sent to its open implementation PR (#9809), or [] for today's reset.
+
+	implement.yml stops at `existing_pr` while the issue has an open PR, so
+	`/approved` would do nothing: the note goes to the PR behind a fixed
+	prefix (never a slash command), the PR's review runs, and the stop label
+	comes off the issue.
+	"""
+	pr = ctx.get("implementation_pr")
+	if ctx["kind"] != "issue" or ctx["stop"] not in EXISTING_PR_ROUTED_STOPS or not pr:
+		return []
+	if not _existing_pr_routing_enabled():
+		return []
+	item = ctx["item"]
+	label = _stop_label(ctx["stop"])
+	ops: list[dict] = [
+		{"op": "comment", "issue": pr, "body": f"Unblock judge instructions for #{item} (stop `{ctx['stop']}`): {text}".rstrip()},
+		{"op": "dispatch_review", "pr": pr},
+	]
+	if label and label in ctx["labels"]:
+		ops.append({"op": "remove_label", "issue": item, "label": label})
+	return ops
 
 
 _OWNERSHIP_CACHE: dict = {}
@@ -854,6 +998,9 @@ def reset_ops(ctx: dict, note: str) -> list[dict]:
 			ops.append({"op": "remove_label", "issue": item, "label": label})
 		return ops
 	present = label if label in ctx["labels"] else ""
+	routed = _existing_pr_route_ops(ctx, text)
+	if routed:
+		return routed
 	if stop in GUARD_STOPS or stop == "implement-diagnose-failed":
 		if ctx["has_plan"]:
 			return _approve(item, ctx["labels"], present)
@@ -1354,6 +1501,12 @@ def build_parser() -> argparse.ArgumentParser:
 	owner_cmd = sub.add_parser("ci-owner")
 	owner_cmd.add_argument("--item-file", required=True)
 	owner_cmd.add_argument("--repo", required=True)
+	# #9809: the issue's open implementation PR, from one fetched GraphQL response.
+	impl_pr_cmd = sub.add_parser("impl-pr")
+	impl_pr_cmd.add_argument("--graphql-file", required=True)
+	impl_pr_cmd.add_argument("--item", required=True, type=int)
+	impl_pr_cmd.add_argument("--repo", required=True)
+	impl_pr_cmd.add_argument("--pipeline-login", required=True)
 	# #8530: read-only checks of the fix-up-delivered close.
 	delivered_cmd = sub.add_parser("fixup-delivered-body")
 	delivered_cmd.add_argument("--item-file", required=True)
@@ -1379,6 +1532,12 @@ def run(argv: list[str] | None = None) -> dict:
 		result = ci_owner_candidate(body, labels, args.repo)
 		result["declared_branch"] = declared_integration_branch(body)
 		return result
+	if args.command == "impl-pr":
+		try:
+			raw = _read_json(args.graphql_file, "--graphql-file")
+		except InputError:
+			return implementation_pr_candidate(None, args.item, args.repo, args.pipeline_login)
+		return implementation_pr_candidate(raw, args.item, args.repo, args.pipeline_login)
 	if args.command == "fixup-delivered-body":
 		return fixup_delivered_body(_read_json(args.item_file, "--item-file"), args.repo, args.pipeline_login)
 	ctx = _context(_read_json(args.context_file, "--context-file"))

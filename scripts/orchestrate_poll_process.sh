@@ -3206,6 +3206,15 @@ else
   ENABLE_STALL_MERGED_PR_GUARD="false"
 fi
 
+# UNBLOCK_EXISTING_PR_ROUTING_ENABLED (#9809) — when on, the auto_approve and
+# retrigger_implement stall-recovery arms check for the issue's open
+# implementation PR first and dispatch its review instead of posting
+# /approved, which implement.yml refuses with `existing_pr` while that PR is
+# open (#9733). Default true: unset, empty or `true` (any case) is on;
+# `false` keeps today's /approved; any other value is off with a warning
+# (_existing_pr_routing_enabled).
+UNBLOCK_EXISTING_PR_ROUTING_ENABLED="${UNBLOCK_EXISTING_PR_ROUTING_ENABLED:-true}"
+
 MAX_RECOVERY_ATTEMPTS="${MAX_RECOVERY_ATTEMPTS:-3}"
 if ! [[ "${MAX_RECOVERY_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_RECOVERY_ATTEMPTS}" -lt 1 ]; then
   echo "::warning::MAX_RECOVERY_ATTEMPTS must be a positive integer; defaulting to 3"
@@ -20556,6 +20565,63 @@ _plan_auto_approval_hold_notify()
   return 0
 }
 
+# _existing_pr_routing_enabled — UNBLOCK_EXISTING_PR_ROUTING_ENABLED (#9809):
+# unset, empty or `true` (any case) returns 0; `false` returns 1; any other
+# value returns 1 with a ::warning::.
+_existing_pr_routing_enabled() {
+  local _eprf_value
+  _eprf_value="$(printf '%s' "${UNBLOCK_EXISTING_PR_ROUTING_ENABLED-true}" | tr '[:upper:]' '[:lower:]')"
+  case "${_eprf_value}" in
+    ""|true) return 0 ;;
+    false) return 1 ;;
+  esac
+  echo "::warning::UNBLOCK_EXISTING_PR_ROUTING_ENABLED is not true or false; existing-PR routing is off" >&2
+  return 1
+}
+
+# _stall_route_open_impl_pr <issue_num> <phase> <action> (#9809)
+#
+# implement.yml stops at `existing_pr` while the issue has an open
+# implementation PR, so the /approved the auto_approve / retrigger_implement
+# arms post does nothing there (#9733). When the issue's own implementation PR
+# (_resolve_issue_implementation_pr) is open, dispatch its review instead
+# (_dispatch_review_for_conflicts, default branch only, #4701).
+# Returns: 0 = review dispatched; 1 = flag off, no open implementation PR or
+# an inconclusive lookup (the caller keeps today's /approved, fail open);
+# 2 = a review run is already active; 3 = the dispatch failed.
+# API (§14): the resolver's head-branch / cross-reference reads plus one
+# pulls/<n> read; only when the flag is on, per action fired.
+_stall_route_open_impl_pr() {
+  local issue_num="$1"
+  local phase="$2"
+  local action="$3"
+  local _srip_pr _srip_head _srip_rc=0
+  _existing_pr_routing_enabled || return 1
+  _resolve_issue_implementation_pr "${issue_num}" || return 1
+  _srip_pr="${STALL_IMPL_PR_NUM:-}"
+  [[ "${_srip_pr}" =~ ^[1-9][0-9]*$ ]] || return 1
+  printf '%s' "${STALL_IMPL_PR_JSON:-}" | jq -e '.state == "open"' >/dev/null 2>&1 || return 1
+  _srip_head="$(printf '%s' "${STALL_IMPL_PR_JSON}" | jq -r '.head.ref // ""' 2>/dev/null || true)"
+  _dispatch_review_for_conflicts "${_srip_pr}" "${_srip_head}" || _srip_rc=$?
+  case "${_srip_rc}" in
+    0)
+      echo "STALL_RECOVERY issue=${issue_num} reason=open_impl_pr pr=${_srip_pr} phase=${phase} action=dispatch_review override_from=${action}"
+      add_healing_note "Issue #${issue_num}: stall recovery dispatched review on its open implementation PR #${_srip_pr} instead of posting /approved (${action})."
+      STALL_HEALING_CHANGED=true
+      tg_notify "Stall recovery: dispatched review on open implementation PR #${_srip_pr} for issue #${issue_num} instead of ${action}."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
+      return 0
+      ;;
+    2)
+      echo "STALL_SKIP issue=${issue_num} reason=open_impl_pr_review_active pr=${_srip_pr} phase=${phase} action=${action}"
+      return 2
+      ;;
+    *)
+      echo "STALL_SKIP issue=${issue_num} reason=open_impl_pr_dispatch_failed pr=${_srip_pr} phase=${phase} action=${action}"
+      return 3
+      ;;
+  esac
+}
+
 execute_stall_recovery_action() {
   local issue_num="$1"
   local phase="$2"
@@ -20701,6 +20767,19 @@ STALL_EOF
         "${_managed_staged_support_comments}" "${phase}"; then
         return 1
       fi
+      # #9809: an open implementation PR makes /approved a no-op; review it
+      # instead. Runs after the no-op cap, the staged-support latch and the
+      # plan gate, so every existing hold keeps running first.
+      local _auto_approve_route_rc=0
+      _stall_route_open_impl_pr "${issue_num}" "${phase}" "${action}" || _auto_approve_route_rc=$?
+      case "${_auto_approve_route_rc}" in
+        0)
+          STALL_RECOVERY_SHOULD_INCREMENT="true"
+          STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_review"
+          return 0
+          ;;
+        2|3) return 1 ;;
+      esac
       echo "  Auto-approving plan for issue #${issue_num}..."
       local _auto_approve_rc=0
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
@@ -20741,6 +20820,18 @@ STALL_EOF
           return 1
         fi
       fi
+      # #9809: an open implementation PR makes /approved a no-op; review it
+      # instead. Runs after the no-op cap and the plan gate.
+      local _retrigger_implement_route_rc=0
+      _stall_route_open_impl_pr "${issue_num}" "${phase}" "${action}" || _retrigger_implement_route_rc=$?
+      case "${_retrigger_implement_route_rc}" in
+        0)
+          STALL_RECOVERY_SHOULD_INCREMENT="true"
+          STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_review"
+          return 0
+          ;;
+        2|3) return 1 ;;
+      esac
       echo "  Re-triggering implementation for issue #${issue_num}..."
       # The implement workflow precheck (implement.yml) skips when
       # ai:implementing is present ("another implement run is in progress")
@@ -26969,12 +27060,28 @@ STALL_EOF
         # the staged-support skip.
         # In ai:awaiting-approval, comments_json already holds the complete
         # history (_staged_support_comments_for_guard above); reuse it.
+        # #9809: reset per issue; "gate_held" means the plan gate held it and
+        # nothing below runs (this function loops over issues, so a `local`
+        # from an earlier issue would otherwise carry over).
+        local _std_auto_approve_route_rc="gate_held"
         local _std_plan_gate_comments="${comments_json:-[]}"
         if [ "${phase}" != "ai:awaiting-approval" ]; then
           _std_plan_gate_comments="$(_plan_auto_approval_gate_comments "${issue_num}" "${_candidate_details_json:-}")"
         fi
         if _plan_auto_approval_gate "${issue_num}" "${_candidate_details_json:-}" \
           "${_std_plan_gate_comments}" "${phase}"; then
+          # #9809: an open implementation PR makes /approved a no-op; review it
+          # instead. Runs only once the plan gate approves, so its holds run
+          # first (rc 0 counts, rc 2/3 take no action, rc 1 keeps /approved).
+          _std_auto_approve_route_rc=0
+          _stall_route_open_impl_pr "${issue_num}" "${phase}" "${action}" || _std_auto_approve_route_rc=$?
+          if [ "${_std_auto_approve_route_rc}" -eq 0 ]; then
+            STALL_RECOVERY_SHOULD_INCREMENT="true"
+            STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_review"
+            took_action="true"
+          fi
+        fi
+        if [ "${_std_auto_approve_route_rc}" = "1" ]; then
           local _std_auto_approve_rc=0
           gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
 /approved
@@ -27000,6 +27107,21 @@ STALL_EOF
           if ! _plan_auto_approval_gate "${issue_num}" "${_candidate_details_json:-}" \
             "${_std_rti_gate_comments}" "${phase}"; then
             _std_rti_gate_ok="false"
+          fi
+        fi
+        # #9809: an open implementation PR makes /approved a no-op; review it
+        # instead. Runs only once the plan gate passes (rc 0 counts, rc 2/3
+        # take no action, rc 1 keeps /approved).
+        if [ "${_std_rti_gate_ok}" = "true" ]; then
+          local _std_retrigger_implement_route_rc=0
+          _stall_route_open_impl_pr "${issue_num}" "${phase}" "${action}" || _std_retrigger_implement_route_rc=$?
+          if [ "${_std_retrigger_implement_route_rc}" -ne 1 ]; then
+            _std_rti_gate_ok="false"
+          fi
+          if [ "${_std_retrigger_implement_route_rc}" -eq 0 ]; then
+            STALL_RECOVERY_SHOULD_INCREMENT="true"
+            STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_review"
+            took_action="true"
           fi
         fi
         if [ "${_std_rti_gate_ok}" = "true" ]; then

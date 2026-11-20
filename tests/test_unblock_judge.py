@@ -1169,6 +1169,10 @@ def fields():
 			k, _, v = args[i + 1].partition("=")
 			out.setdefault(k, v)
 	return out
+if args[:2] == ["api", "graphql"]:
+	# #9809: the implementation-PR lookup; unset keeps the empty (unreadable) answer.
+	state.setdefault("graphql", []).append(args)
+	done(os.environ.get("FAKE_GH_GRAPHQL", ""))
 if args[:1] == ["workflow"]:
 	if os.environ.get("FAKE_GH_FAIL_DISPATCH"):
 		json.dump(state, open(state_path, "w"))
@@ -6024,3 +6028,173 @@ def test_unblock_workflow_forwards_triage_nothing_to_implement_gate_switch() -> 
 	assert "\n          UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED: ${{ vars.UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED || 'true' }}\n" in step
 	script = (ROOT / "scripts" / "unblock_judge.sh").read_text(encoding="utf-8")
 	assert '"${UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED:-true}"' in script
+
+
+# --- Existing implementation PR routing (#9809, UNBLOCK_EXISTING_PR_ROUTING_ENABLED) ---
+
+EXISTING_PR_STOPS = ("needs-human", "blocked", "scope-blocked", "destructive-blocked", "implement-diagnose-failed")
+
+
+@pytest.mark.parametrize("stop", EXISTING_PR_STOPS)
+def test_issue_reset_routes_to_open_implementation_pr(stop: str, monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.delenv("UNBLOCK_EXISTING_PR_ROUTING_ENABLED", raising=False)
+	ctx = _ctx(stop=stop, has_plan=True, implementation_pr=42)
+	ops = actions.plan(_verdict("retry_budget", instructions="fix the failing test"), ctx)
+	assert ops == [
+		{"op": "comment", "issue": 7, "body": "Next attempt, per the unblock judge: fix the failing test"},
+		{"op": "comment", "issue": 42, "body": f"Unblock judge instructions for #7 (stop `{stop}`): fix the failing test"},
+		{"op": "dispatch_review", "pr": 42},
+		{"op": "remove_label", "issue": 7, "label": f"ai:{stop}"},
+	]
+	assert "/approved" not in _bodies(ops)
+	assert not any(op["op"] == "add_labels" for op in ops)
+	# The follow-up path (a fix-up merged) routes the same way.
+	followup = actions.reset_ops(ctx, "fix-up #9 merged")
+	assert followup == [
+		{"op": "comment", "issue": 42, "body": f"Unblock judge instructions for #7 (stop `{stop}`): fix-up #9 merged"},
+		{"op": "dispatch_review", "pr": 42},
+		{"op": "remove_label", "issue": 7, "label": f"ai:{stop}"},
+	]
+	# Without the stop label on the issue there is nothing to remove.
+	unlabelled = actions.reset_ops(_ctx(stop=stop, has_plan=True, implementation_pr=42, labels=[]), "go")
+	assert [op["op"] for op in unlabelled] == ["comment", "dispatch_review"]
+	# The PR comment never starts with a slash command.
+	assert all(not body.startswith("/") for body in _bodies(followup))
+
+
+def test_issue_reset_routing_keeps_other_stops(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.delenv("UNBLOCK_EXISTING_PR_ROUTING_ENABLED", raising=False)
+	ops = actions.reset_ops(_ctx(stop="clarify-failed", implementation_pr=42), "x")
+	assert ops == [{"op": "comment", "issue": 7, "body": "/reclarify"}, {"op": "remove_label", "issue": 7, "label": "ai:clarify-failed"}]
+
+
+def test_existing_pr_routing_flag_off_keeps_approve(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+	ctx = _ctx(has_plan=True, implementation_pr=42)
+	expected = [
+		{"op": "comment", "issue": 7, "body": "Next attempt, per the unblock judge: x"},
+		{"op": "add_labels", "issue": 7, "labels": ["ai:awaiting-approval"]},
+		{"op": "remove_label", "issue": 7, "label": "ai:blocked"},
+		{"op": "comment", "issue": 7, "body": "/approved"},
+	]
+	for value in ("false", "FALSE"):
+		monkeypatch.setenv("UNBLOCK_EXISTING_PR_ROUTING_ENABLED", value)
+		assert actions.plan(_verdict("retry_budget", instructions="x"), ctx) == expected
+	capsys.readouterr()
+	monkeypatch.setenv("UNBLOCK_EXISTING_PR_ROUTING_ENABLED", "maybe")
+	assert actions.plan(_verdict("retry_budget", instructions="x"), ctx) == expected
+	assert "UNBLOCK_EXISTING_PR_ROUTING_ENABLED is not true or false" in capsys.readouterr().err
+	for value in ("TRUE", "true", ""):
+		monkeypatch.setenv("UNBLOCK_EXISTING_PR_ROUTING_ENABLED", value)
+		assert {"op": "dispatch_review", "pr": 42} in actions.plan(_verdict("retry_budget", instructions="x"), ctx)
+	monkeypatch.delenv("UNBLOCK_EXISTING_PR_ROUTING_ENABLED")
+	assert {"op": "dispatch_review", "pr": 42} in actions.plan(_verdict("retry_budget", instructions="x"), ctx)
+
+
+def test_issue_reset_without_implementation_pr_keeps_approve(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.delenv("UNBLOCK_EXISTING_PR_ROUTING_ENABLED", raising=False)
+	today = actions.plan(_verdict("retry_budget", instructions="x"), _ctx(has_plan=True))
+	assert [op["op"] for op in today] == ["comment", "add_labels", "remove_label", "comment"]
+	assert _bodies(today)[-1] == "/approved"
+	for bad in (0, -3, "42", True, 7, 4.2, None, [42]):
+		ctx = _ctx(has_plan=True, implementation_pr=bad)
+		assert ctx["implementation_pr"] is None
+		assert actions.plan(_verdict("retry_budget", instructions="x"), ctx) == today
+	# Only issue items carry the key: a PR item keeps its own review dispatch.
+	pr_ctx = _ctx("pr", "needs-human", implementation_pr=42)
+	assert pr_ctx["implementation_pr"] is None
+	assert {"op": "dispatch_review", "pr": 7} in actions.reset_ops(pr_ctx, "x")
+	project_ctx = _ctx("project", "blocked", implementation_pr=42)
+	assert project_ctx["implementation_pr"] is None
+	# No plan and no PR: the needs-human reset still re-clarifies.
+	assert _bodies(actions.reset_ops(_ctx(stop="needs-human"), "x")) == ["/reclarify"]
+
+
+def _impl_pr_payload(head_nodes: list | None = None, sources: list | None = None) -> dict:
+	return {"data": {"repository": {
+		"pullRequests": {"nodes": head_nodes or []},
+		"issue": {"timelineItems": {"nodes": [{"source": source} for source in (sources or [])]}},
+	}}}
+
+
+def _closing_pr(number: int, body: str = "Closes #7", login: str = "pipeline-bot", assoc: str = "NONE", head: str = "acme/app", state: str = "OPEN", base: str | None = "acme/app") -> dict:
+	pr = {"number": number, "state": state, "body": body, "headRepository": {"nameWithOwner": head}, "author": {"login": login}, "authorAssociation": assoc}
+	if base is not None:
+		pr["repository"] = {"nameWithOwner": base}
+	return pr
+
+
+def test_impl_pr_subcommand_selects_only_trusted_implementation_pr(tmp_path: Path) -> None:
+	def run_impl(payload: object) -> dict:
+		path = tmp_path / "graphql.json"
+		path.write_text(payload if isinstance(payload, str) else json.dumps(payload), encoding="utf-8")
+		return actions.run(["impl-pr", "--graphql-file", str(path), "--item", "7", "--repo", "acme/app", "--pipeline-login", "pipeline-bot"])
+
+	head = {"number": 40, "state": "OPEN", "headRefName": "ai/issue-7", "headRepository": {"nameWithOwner": "Acme/App"}}
+	newer = dict(head, number=41)
+	assert run_impl(_impl_pr_payload([head, newer], [_closing_pr(50)])) == {"pr": 41, "reason": "head_branch"}
+	# A fork head or another head ref never counts as the issue's branch.
+	fork = dict(head, headRepository={"nameWithOwner": "evil/app"})
+	other_ref = dict(head, headRefName="ai/issue-70")
+	assert run_impl(_impl_pr_payload([fork, other_ref])) == {"pr": None, "reason": "none"}
+	# A PR whose body closes the issue, by the pipeline login or a member.
+	assert run_impl(_impl_pr_payload([], [_closing_pr(50)])) == {"pr": 50, "reason": "closes"}
+	assert run_impl(_impl_pr_payload([], [_closing_pr(51, body="Fixes acme/app#7", login="bob", assoc="MEMBER")])) == {"pr": 51, "reason": "closes"}
+	assert run_impl(_impl_pr_payload([], [_closing_pr(52, body="resolves https://github.com/acme/app/issues/7.")])) == {"pr": 52, "reason": "closes"}
+	# Fork head, mention only, untrusted author, a closed PR, another issue number: rejected.
+	assert run_impl(_impl_pr_payload([], [_closing_pr(53, head="evil/app")])) == {"pr": None, "reason": "none"}
+	# A PR in another repository (head branch here) or with no base repository: rejected.
+	assert run_impl(_impl_pr_payload([], [_closing_pr(58, base="other/app")])) == {"pr": None, "reason": "none"}
+	assert run_impl(_impl_pr_payload([], [_closing_pr(59, base=None)])) == {"pr": None, "reason": "none"}
+	assert run_impl(_impl_pr_payload([], [_closing_pr(60, base="ACME/App")])) == {"pr": 60, "reason": "closes"}
+	assert run_impl(_impl_pr_payload([], [_closing_pr(54, body="Related to #7")])) == {"pr": None, "reason": "none"}
+	assert run_impl(_impl_pr_payload([], [_closing_pr(55, login="mallory", assoc="CONTRIBUTOR")])) == {"pr": None, "reason": "none"}
+	assert run_impl(_impl_pr_payload([], [_closing_pr(56, state="MERGED")])) == {"pr": None, "reason": "none"}
+	assert run_impl(_impl_pr_payload([], [_closing_pr(57, body="Closes #70")])) == {"pr": None, "reason": "none"}
+	# Two distinct closing PRs are ambiguous; the same PR twice is not.
+	assert run_impl(_impl_pr_payload([], [_closing_pr(50), _closing_pr(51)])) == {"pr": None, "reason": "ambiguous"}
+	assert run_impl(_impl_pr_payload([], [_closing_pr(50), _closing_pr(50)])) == {"pr": 50, "reason": "closes"}
+	# Unreadable payloads fail open to "no PR".
+	for bad in ("", "not json", {"data": None}, {"data": {"repository": {"pullRequests": {"nodes": "x"}}}}, [], {"errors": [{"message": "x"}]}):
+		assert run_impl(bad) == {"pr": None, "reason": "unreadable"}
+	assert actions.main(["impl-pr", "--graphql-file", str(tmp_path / "missing.json"), "--item", "7", "--repo", "acme/app", "--pipeline-login", "pipeline-bot"]) == 0
+
+
+def test_unblock_judge_wires_existing_pr_routing() -> None:
+	text = JUDGE.read_text(encoding="utf-8")
+	assert '"${UNBLOCK_EXISTING_PR_ROUTING_ENABLED:-true}"' in text
+	write = text.index('> "${RUNTIME_DIR}/context.json"\n')
+	call = text.index("\tunblock_resolve_implementation_pr\n", write)
+	assert call > write
+	assert text.index("A pending fix-up comes first (Q11)") > call
+	assert "unblock_actions.py\" impl-pr --graphql-file" in text
+	workflow = (ROOT / ".github" / "workflows" / "unblock_judge.yml").read_text(encoding="utf-8")
+	assert "UNBLOCK_EXISTING_PR_ROUTING_ENABLED: ${{ vars.UNBLOCK_EXISTING_PR_ROUTING_ENABLED || 'true' }}" in workflow
+
+
+def test_judge_routes_issue_reset_to_open_implementation_pr(tmp_path: Path) -> None:
+	plan_comment = _comment("Implementation Plan\n\nDo it", "pipeline-bot", "2026-10-04T07:00:00Z")
+	payload = json.dumps(_impl_pr_payload([{"number": 40, "state": "OPEN", "headRefName": "ai/issue-7", "headRepository": {"nameWithOwner": "o/r"}}]))
+	verdict = {"verdict": "retry_budget", "reason": "pr checks red", "instructions": "fix the PR checks"}
+	result, state = _judge(tmp_path, ISSUE, [plan_comment], verdict=verdict, FAKE_GH_GRAPHQL=payload)
+	assert result.returncode == 0, result.stderr
+	assert "op=impl_pr outcome=found pr=40 reason=head_branch" in result.stdout
+	assert len(state["graphql"]) == 1
+	bodies = [comment["body"] for comment in state["comments"]]
+	assert "/approved" not in bodies
+	pr_comments = [comment for comment in state["comments"] if comment["body"].startswith("Unblock judge instructions for #7 (stop `blocked`): fix the PR checks")]
+	assert len(pr_comments) == 1 and pr_comments[0]["endpoint"] == "repos/o/r/issues/40/comments"
+	assert any("pr_number=40" in " ".join(call) for call in state["dispatched"])
+	# Flag off: no lookup, today's /approved.
+	off_dir = tmp_path / "off"
+	off_dir.mkdir()
+	result, state = _judge(off_dir, ISSUE, [plan_comment], verdict=verdict, FAKE_GH_GRAPHQL=payload, UNBLOCK_EXISTING_PR_ROUTING_ENABLED="false")
+	assert result.returncode == 0, result.stderr
+	assert "graphql" not in state
+	assert state["comments"][-1]["body"] == "/approved"
+	# No PR found: today's reset.
+	none_dir = tmp_path / "none"
+	none_dir.mkdir()
+	result, state = _judge(none_dir, ISSUE, [plan_comment], verdict=verdict, FAKE_GH_GRAPHQL=json.dumps(_impl_pr_payload()))
+	assert result.returncode == 0, result.stderr
+	assert "op=impl_pr outcome=none reason=none" in result.stdout
+	assert state["comments"][-1]["body"] == "/approved"
