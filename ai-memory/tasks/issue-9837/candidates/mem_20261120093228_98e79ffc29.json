@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9837,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9837\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9840\",\"pr_number\":9840,\"branch\":\"ai/issue-9837\",\"run_id\":\"44709446481\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/44709446481\",\"changed_files\":[\".github/workflows/clarify.yml\",\"changelog.d/9837-clarify-snapshot-reject-no-retry.md\",\"tests/test_clarify_snapshot_reject_no_retry.py\",\"tests/test_plan_clarify_blocked_output.py\"]}",
+  "fingerprint": "48ac7f1305749d5b047fbcd137eb9bacf8f5e6f843e94a91825c79a276e94ba1",
+  "lineage": {
+    "issue_number": 9837,
+    "parent_ids": [],
+    "pr_number": 9840,
+    "run_id": "44709446481",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44709446481",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9840"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261120093228_98e79ffc29",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9837,
+    "level": "run",
+    "pr_number": 9840,
+    "run_id": "44709446481"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9837: https://github.com/shubhodeep1/coding-workflows/pull/9840",
+  "timestamps": {
+    "created_at": "2026-11-20T09:32:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
