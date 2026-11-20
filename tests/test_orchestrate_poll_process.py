@@ -32551,7 +32551,14 @@ def test_stall_merge_required_checks_flag_parsing():
 	assert "::warning::STALL_MERGE_REQUIRED_CHECKS_ENABLED" in out
 
 
-def test_standalone_attempt_merge_required_checks_merges_only_on_rc0(tmp_path):
+def test_standalone_attempt_merge_required_checks_merges_only_on_rc0() -> None:
+	# No arguments: this module's custom runner calls every test as func()
+	# (test_custom_runner_tests_need_no_pytest_arguments).
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		_check_standalone_attempt_merge_required_checks_merges_only_on_rc0(Path(tmp_dir))
+
+
+def _check_standalone_attempt_merge_required_checks_merges_only_on_rc0(tmp_path: Path) -> None:
 	result, calls = _run_stall_merge_required_checks(tmp_path)
 	assert result == "rc=0 reason= in_flight=false"
 	assert calls == [
@@ -32565,7 +32572,14 @@ def test_standalone_attempt_merge_required_checks_merges_only_on_rc0(tmp_path):
 	assert not any(call.startswith("merge ") for call in calls)
 
 
-def test_standalone_attempt_merge_required_checks_no_dispatch_without_same_repo_head_ref(tmp_path):
+def test_standalone_attempt_merge_required_checks_no_dispatch_without_same_repo_head_ref() -> None:
+	# No arguments: this module's custom runner calls every test as func()
+	# (test_custom_runner_tests_need_no_pytest_arguments).
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		_check_standalone_attempt_merge_required_checks_no_dispatch_without_same_repo_head_ref(Path(tmp_dir))
+
+
+def _check_standalone_attempt_merge_required_checks_no_dispatch_without_same_repo_head_ref(tmp_path: Path) -> None:
 	# Empty head_ref (fork or deleted-fork head): the wait runs with no final-CI
 	# workflow, so _pr_ensure_final_ci (whose fork check misses a null
 	# head.repo) is never reached; a missing check still refuses the merge.
@@ -32583,7 +32597,14 @@ def test_standalone_attempt_merge_required_checks_no_dispatch_without_same_repo_
 	assert after == "wf_after=ci.yml head_ref_after=", after
 
 
-def test_standalone_attempt_merge_required_checks_dispatch_in_flight_refuses_without_merge(tmp_path):
+def test_standalone_attempt_merge_required_checks_dispatch_in_flight_refuses_without_merge() -> None:
+	# No arguments: this module's custom runner calls every test as func()
+	# (test_custom_runner_tests_need_no_pytest_arguments).
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		_check_standalone_attempt_merge_required_checks_dispatch_in_flight_refuses_without_merge(Path(tmp_dir))
+
+
+def _check_standalone_attempt_merge_required_checks_dispatch_in_flight_refuses_without_merge(tmp_path: Path) -> None:
 	result, calls = _run_stall_merge_required_checks(
 		tmp_path, wait_rc=1, wait_outcome="timeout", final_ci_outcome="dispatched", ci_state="absent",
 	)
@@ -32607,7 +32628,14 @@ def test_standalone_attempt_merge_required_checks_dispatch_in_flight_refuses_wit
 	assert not any(call.startswith("merge ") for call in calls)
 
 
-def test_standalone_attempt_merge_required_checks_first_refusal_reasons(tmp_path):
+def test_standalone_attempt_merge_required_checks_first_refusal_reasons() -> None:
+	# No arguments: this module's custom runner calls every test as func()
+	# (test_custom_runner_tests_need_no_pytest_arguments).
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		_check_standalone_attempt_merge_required_checks_first_refusal_reasons(Path(tmp_dir))
+
+
+def _check_standalone_attempt_merge_required_checks_first_refusal_reasons(tmp_path: Path) -> None:
 	for kwargs, reason in (
 		({"state": "closed", "mergeable": "false", "head_sha": "abc"}, "state_not_open"),
 		({"mergeable": "false", "head_sha": "abc"}, "not_mergeable"),
@@ -32698,7 +32726,14 @@ def test_orchestrate_poll_steps_carry_stall_merge_final_ci_env():
 			assert block.count(line) == 1, (step, line)
 
 
-def test_stall_merge_final_ci_workflow_is_captured_and_cleared_for_other_paths(tmp_path):
+def test_stall_merge_final_ci_workflow_is_captured_and_cleared_for_other_paths() -> None:
+	# No arguments: this module's custom runner calls every test as func()
+	# (test_custom_runner_tests_need_no_pytest_arguments).
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		_check_stall_merge_final_ci_workflow_is_captured_and_cleared_for_other_paths(Path(tmp_dir))
+
+
+def _check_stall_merge_final_ci_workflow_is_captured_and_cleared_for_other_paths(tmp_path: Path) -> None:
 	# The step-wide REVIEW_FINAL_CI_WORKFLOW is for the new attempt_merge chain
 	# only: the poller captures it right after sourcing pr_checks_lib.sh and
 	# clears it, so gate D, the base-freshness branch update and the legacy
