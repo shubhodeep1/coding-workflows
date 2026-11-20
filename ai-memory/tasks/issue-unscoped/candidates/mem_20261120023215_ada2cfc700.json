@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_check_failure_triage_release_download_rerun.py:293-294 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The header comment on `test_job_without_a_name_or_id_is_not_classified` still says `list_run_jobs()` \"requires a positive numeric id and a string name\". The last run tightened scripts/check_failure_triage.sh:616 to require a positive integer id with `(.id | floor) == .id`, added a fractional-id case at lines 302-306/307, and changed the agents.d \"Bounds\" bullet to \"positive integer\". The comment now contradicts the code, the fragment and the test below it.\n  WHY: Nothing fails at runtime; this is documentation drift only. A future reader could loosen the jq check back to \"numeric\", which would bring back the shell/Python drift that goal (f) removes. All three reviewers rated it NIT, so it maps to low with no severity disagreement. Confidence was 4 from two reviewers and 3 from one; the max is used.\n- scripts/check_failure_triage.sh:616 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new `(.id | floor) == .id` check in `triage_release_download_rerun_gate` correctly rejects fractional ids. But the header comment of `triage_release_download_rerun_gate`, or the matching comment in `scripts/ci_cancelled_rerun.py`, is now stale.\n  WHY: Nothing fails at runtime. The documentation drift makes the code harder to maintain and could lead to inconsistent future updates. The source rated it NIT, which maps to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_check_failure_triage_release_download_rerun.py:lines 293-294, the comment heading `test_job_without_a_name_or_id_is_not_classified` | severity=NIT | confidence=4\n  PROBLEM: The comment still says \"positive numeric id\". The shell check was tightened to integer ids (scripts/check_failure_triage.sh:616), a fractional-id case was added at lines 302-307, and the agents.d \"Bounds\" bullet now says \"positive integer `id`\". The comment contradicts the code, the fragment and the test case.\n  WHY: Nothing fails at runtime and the test asserts the right behaviour. The comment misstates the contract that the PR's \"keep both copies in sync\" rule protects. Changing \"numeric\" to \"integer\" fixes it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/check_failure_triage.sh:616 (in `triage_release_download_rerun_gate`) | severity=NIT | confidence=4\n  PROBLEM: The new `(.id | floor) == .id` id check is correct, but the header comment of `triage_release_download_rerun_gate`, or the matching comment in `scripts/ci_cancelled_rerun.py`, is now stale.\n  WHY: Nothing fails at runtime. The documentation drift makes the code harder to maintain and could lead to inconsistencies in future updates.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_check_failure_triage_release_download_rerun.py:test_job_without_a_name_or_id_is_not_classified, header comment (\"requires a positive numeric id and a string name\") | severity=NIT | confidence=3\n  PROBLEM: The header comment says the check requires \"a positive numeric id\". The last run tightened the jq check to `(.id | floor) == .id` to mirror `positive_number()` in `scripts/ci_cancelled_rerun.py`, which requires a positive integer. The agents.d fragment was updated to \"positive integer\", but this comment was not.\n  WHY: This is documentation drift, not a runtime bug. Readers may believe the shell accepts `5.5` as a job id, and the comment mismatches the contract that `list_run_jobs()` enforces.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_check_failure_triage_release_download_rerun.py:lines 293-294 (comment in `test_job_without_a_name_or_id_is_not_classified`) | severity=NIT | confidence=4\n  PROBLEM: The comment still says `list_run_jobs()` \"requires a positive numeric id and a string name\". The fractional-id case at lines 302-306 and the `floor` check at scripts/check_failure_triage.sh:616 require a positive *integer* id, and the agents.d fragment was updated to \"positive integer\". The comment contradicts both the code and the test body.\n  WHY: Nothing fails at runtime; this is documentation drift only. A future reader could loosen the jq check back to \"numeric\", which would bring back the shell/Python drift that goal (f) removes.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c0725874b89cdc2700c062a869e639b7cb431666fc7e9639c0f02f00581d7123",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9813,
+    "run_id": "44659450455",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44659450455",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120023215_ada2cfc700",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9813,
+    "run_id": "44659450455"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T02:32:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
