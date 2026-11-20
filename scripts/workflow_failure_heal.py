@@ -539,6 +539,13 @@ _FAILURE_MARKER_TRAILING_RE = re.compile(
 _FP_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 # Optional sixth heal issue header line (cause grouping, P5 / D3); matched with fullmatch.
 _HEAL_CAUSE_MARKER_LINE_RE = re.compile(r"<!-- " + re.escape(MARKER_PREFIX) + r"cause=[0-9a-f]{64} -->")
+# Red-main grouping (issue #9823, plan Phase 2): optional header line after the
+# cause line. `_MARKER_RE` only reads `[a-z_]+` keys, so the hyphenated key has
+# its own exact full-line matcher (see parse_red_main_group_marker).
+HEAL_RED_MAIN_GROUP_MARKER_KEY = "red-main-group"
+_HEAL_RED_MAIN_GROUP_MARKER_LINE_RE = re.compile(
+	r"<!-- " + re.escape(MARKER_PREFIX) + re.escape(HEAL_RED_MAIN_GROUP_MARKER_KEY) + r"=(?P<key>[0-9a-f]{64}) -->"
+)
 # Authorship facts on ai:scope-blocked reports (Q81): the automation-path
 # guard grants by author, so the diagnosis needs the issue author, its
 # association and the pipeline login. Invalid values are dropped, never fatal.
@@ -765,6 +772,9 @@ def validate_heal_issue_body_routing(body: str, *, target_branch: str | None, in
 			header_length += 1
 	if len(lines) > header_length and _HEAL_CAUSE_MARKER_LINE_RE.fullmatch(lines[header_length]):
 		header_length += 1
+	# Red-main grouping (#9823): at most one exact red-main-group line next.
+	if len(lines) > header_length and _HEAL_RED_MAIN_GROUP_MARKER_LINE_RE.fullmatch(lines[header_length]):
+		header_length += 1
 	if "<!--" in "\n".join(lines[header_length:]):
 		return "marker"
 	if re.search(r"Re-issued from\s*#|review-blocked-reissue", body, re.IGNORECASE):
@@ -819,6 +829,22 @@ def is_valid_branch(value: Any) -> bool:
 # ---------------------------------------------------------------------------
 # Markers + run references
 # ---------------------------------------------------------------------------
+
+
+def parse_red_main_group_marker(body: str | None) -> str:
+	"""Return the ``red-main-group`` key of a heal issue body, or ``""``.
+
+	Only the leading run of ``<!-- workflow-failure-heal:`` header lines is
+	read, and only an exact full-line match counts, so quoted body text can
+	never supply the marker (#9823).
+	"""
+	for line in str(body or "").split("\n"):
+		if not line.startswith(f"<!-- {MARKER_PREFIX}"):
+			break
+		match = _HEAL_RED_MAIN_GROUP_MARKER_LINE_RE.fullmatch(line)
+		if match:
+			return match.group("key")
+	return ""
 
 
 def parse_heal_markers(body: str | None) -> dict[str, str]:
@@ -3919,6 +3945,57 @@ def cause_key(workflow: str, failing_step: str, shape: str) -> str:
 	return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
+def red_main_group_reason(
+	workflow_name: str,
+	failing_job: str,
+	branch: str,
+	*,
+	default_branch: str,
+	event: str,
+	workflow_path: str,
+) -> str:
+	"""Why red_main_group_key() does or does not return a key (log token)."""
+	if str(event or "") != "push" or not is_valid_branch(default_branch) or str(branch or "") != default_branch:
+		return "not_default_branch_push"
+	if _run_workflow_file({"path": workflow_path}) not in CI_WORKFLOW_FILES:
+		return "not_ci_workflow"
+	if not single_line(workflow_name, 200) or not single_line(failing_job, 200):
+		return "no_job"
+	return "ok"
+
+
+def red_main_group_key(
+	workflow_name: str,
+	failing_job: str,
+	branch: str,
+	*,
+	default_branch: str,
+	event: str,
+	workflow_path: str,
+) -> str:
+	"""Red-main grouping key (issue #9823, plan Phase 2).
+
+	Input: the failing run's workflow name, the name of its first failing job
+	and its head branch, plus keyword-only run facts read from the verified run
+	object: the repository's default branch, the run's ``event`` and its
+	workflow ``path`` (``.github/workflows/<file>``).
+
+	Output: 64 lowercase hex for a ``push`` run of a CI workflow
+	(CI_WORKFLOW_FILES) on the default branch, otherwise ``""``. The
+	``[cycle:<id>]`` run-name suffix is stripped as in fingerprint(), so every
+	red-main run failing in the same job shares one key whatever its error.
+
+	Pure: no API call, no I/O.
+	"""
+	if red_main_group_reason(
+		workflow_name, failing_job, branch, default_branch=default_branch, event=event, workflow_path=workflow_path
+	) != "ok":
+		return ""
+	stable_workflow_name = _CYCLE_RUN_NAME_SUFFIX_RE.sub("", single_line(workflow_name, 200))
+	material = "red-main|" + stable_workflow_name.lower() + "|" + single_line(failing_job, 200).lower() + "|" + branch
+	return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
 # ---------------------------------------------------------------------------
 # Identical-failure fingerprint cap (review_autofix.yml)
 # ---------------------------------------------------------------------------
@@ -6045,6 +6122,8 @@ def budget_decision(
 	cause: str | None = None,
 	cause_window_days: int = 3,
 	report_issue: str | None = None,
+	red_main_group: str | None = None,
+	red_main_grouping_enabled: bool = True,
 ) -> dict[str, Any]:
 	"""Decide what to do with a fingerprinted failure given the heal issue list.
 
@@ -6094,6 +6173,16 @@ def budget_decision(
 	heal issue. The intake records the occurrence and does not escalate. The
 	listing comes from GitHub (label ``ai:workflow-heal``), not from the
 	report. A closed heal issue keeps the lineage rules below.
+
+	``red_main_group`` (optional, issue #9823, see :func:`red_main_group_key`):
+	checked first, ahead of every other rule, when ``red_main_grouping_enabled``
+	is true and the value is 64 lowercase hex. An OPEN heal issue whose header
+	carries ``<!-- workflow-failure-heal:red-main-group=<key> -->`` is the
+	duplicate (``match: red_main_group``), so a red default-branch CI job keeps
+	one heal issue across heads and error texts. When that issue's own ``fp``
+	marker equals ``fp``, the fingerprint rule below matches it instead
+	(``match: fingerprint``), so inline heal-scope recovery still applies. ``gen`` / ``root`` are the
+	matched issue's own, for display only. No match leaves the decision unchanged.
 	"""
 	now = now or _utc_now()
 	report_issue_match = _SOURCE_KEY_RE.fullmatch(str(report_issue or ""))
@@ -6102,6 +6191,13 @@ def budget_decision(
 	day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 	if not (isinstance(cause, str) and _FP_HEX_RE.fullmatch(cause)):
 		cause = None
+	if not (red_main_grouping_enabled is True and isinstance(red_main_group, str) and _FP_HEX_RE.fullmatch(red_main_group)):
+		red_main_group = None
+	red_main_group_duplicate: dict[str, Any] | None = None
+	# Set when any open group issue carries this report's fingerprint (#9823).
+	red_main_group_same_fp_seen = False
+	# The preferred open group issue that carries this report's fingerprint.
+	red_main_group_same_fp_duplicate: dict[str, Any] | None = None
 	cause_window_start = now - timedelta(days=min(max(cause_window_days, 1), 30) if type(cause_window_days) is int else 3)
 	cause_duplicate: dict[str, Any] | None = None
 	open_issues: list[dict[str, Any]] = []
@@ -6163,6 +6259,11 @@ def budget_decision(
 				or (not issue_repository and report_issue_match.group("repo") == preferred_repo)
 			):
 				heal_source_record = issue
+			if red_main_group is not None and parse_red_main_group_marker(issue.get("body")) == red_main_group:
+				red_main_group_duplicate = _preferred_duplicate(red_main_group_duplicate, issue)
+				red_main_group_same_fp_seen = red_main_group_same_fp_seen or markers.get("fp") == fp
+				if markers.get("fp") == fp:
+					red_main_group_same_fp_duplicate = _preferred_duplicate(red_main_group_same_fp_duplicate, issue)
 			if markers.get("fp") == fp:
 				duplicate = _preferred_duplicate(duplicate, issue)
 			elif same_source:
@@ -6179,6 +6280,30 @@ def budget_decision(
 			prior_source_lineage.append((_positive_int(markers.get("gen")) or 1, number, markers.get("root") or fp, issue_repository))
 			closed_lineage.add((issue_repository, number))
 
+	# A group issue that also carries this report's fingerprint is left to the
+	# fingerprint match below (`match: fingerprint`), so inline heal-scope
+	# recovery (#7191) still sees it; the issue it records on is the same.
+	# Any such open group issue wins over a higher-numbered group issue with
+	# another fingerprint, so the occurrence lands on the matching issue.
+	group_markers = parse_heal_markers(red_main_group_duplicate.get("body")) if red_main_group_duplicate is not None else {}
+	if red_main_group_duplicate is not None and not red_main_group_same_fp_seen and group_markers.get("fp") != fp:
+		return {
+			"action": "duplicate",
+			"match": "red_main_group",
+			"red_main_group": red_main_group,
+			"existing_issue": _positive_int(red_main_group_duplicate.get("number")),
+			"existing_url": sanitize_text(red_main_group_duplicate.get("html_url"), 300),
+			"existing_repo": red_main_group_duplicate.get("repository") if is_valid_repo_slug(red_main_group_duplicate.get("repository")) else "",
+			"gen": _positive_int(group_markers.get("gen")) or 1,
+			"root": group_markers.get("root") or fp,
+			"open_count": len(open_issues),
+			"today_count": created_today,
+		}
+	# The fingerprint match records on that group issue, not on a non-group
+	# issue with the same fingerprint that _preferred_duplicate would favour,
+	# so the group keeps one heal issue (#9823).
+	if red_main_group_same_fp_duplicate is not None:
+		duplicate = red_main_group_same_fp_duplicate
 	duplicate_match = "fingerprint"
 	if duplicate is None and source_duplicate is not None:
 		duplicate = source_duplicate
@@ -7978,6 +8103,7 @@ def compose_issue_body(
 	suspect_commits_section: str | None = None,
 	cause: str | None = None,
 	code_ran_from: str | None = None,
+	red_main_group: str | None = None,
 ) -> str:
 	"""Compose the heal issue body (upstream or consumer-side).
 
@@ -8010,6 +8136,11 @@ def compose_issue_body(
 	``workflow=`` line of a workflow_run source (#8808); ``None``, empty or
 	invalid adds nothing, so a switch-off body is byte-identical.
 
+	``red_main_group`` (optional, :func:`red_main_group_key`, 64 lowercase
+	hex, issue #9823) adds ``red-main-group=<hex>`` after the optional
+	``cause=`` line, for a workflow_run source only; ``None``, empty or invalid
+	adds nothing, so a switch-off body is byte-identical.
+
 	``code_ran_from`` (optional, ``<branch>@<sha>``, code-ref routing P6) adds
 	``- **Code ran from:** <branch>@<sha>`` after the ``Head SHA`` line (after
 	``Failed on branch`` without one); ``None`` or an invalid value
@@ -8029,6 +8160,8 @@ def compose_issue_body(
 		parts.append(f"<!-- {MARKER_PREFIX}workflow={workflow_path} -->")
 	if isinstance(cause, str) and _FP_HEX_RE.fullmatch(cause):
 		parts.append(f"<!-- {MARKER_PREFIX}cause={cause} -->")
+	if payload.get("source_kind") == "workflow_run" and isinstance(red_main_group, str) and _FP_HEX_RE.fullmatch(red_main_group):
+		parts.append(f"<!-- {MARKER_PREFIX}{HEAL_RED_MAIN_GROUP_MARKER_KEY}={red_main_group} -->")
 	parts.append("")
 	if target_branch:
 		parts.append(f"- **Target branch:** `{target_branch}`")
@@ -11112,8 +11245,24 @@ def _cmd_budget(args: argparse.Namespace) -> int:
 		cause=args.cause or None,
 		cause_window_days=min(max(args.cause_window_days, 1), 30),
 		report_issue=args.report_issue or None,
+		red_main_group=getattr(args, "red_main_group", "") or None,
+		# Second gate behind the intake's own switch (#9823): only "false" turns it off.
+		red_main_grouping_enabled=os.environ.get("WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED", "true").strip().lower() != "false",
 	)
 	_write_json(decision)
+	return 0
+
+
+def _cmd_red_main_group_key(args: argparse.Namespace) -> int:
+	"""Print {"key", "reason"} for a run (red-main grouping, #9823). Pure, no API call; always exits 0."""
+	run_facts = {
+		"default_branch": args.default_branch,
+		"event": args.event,
+		"workflow_path": args.workflow_path,
+	}
+	reason = red_main_group_reason(args.workflow_name, args.failing_job, args.branch, **run_facts)
+	key = red_main_group_key(args.workflow_name, args.failing_job, args.branch, **run_facts) if reason == "ok" else ""
+	_write_json({"key": key, "reason": reason})
 	return 0
 
 
@@ -11389,6 +11538,7 @@ def _cmd_compose_issue(args: argparse.Namespace) -> int:
 		suspect_commits_section=suspect_commits_text or None,
 		cause=getattr(args, "cause", "") or None,
 		code_ran_from=getattr(args, "code_ran_from", "") or None,
+		red_main_group=getattr(args, "red_main_group", "") or None,
 	)
 	reason = validate_heal_issue_body_routing(body, target_branch=args.target_branch or None, integration_branch=args.integration_branch or None)
 	if reason:
@@ -12257,7 +12407,17 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--reissues-json", default="", help="issues opening with the unblock judge's re-issue line (Q147)")
 	p.add_argument("--cause", default="", help="cause grouping key (P5 / D3); empty disables the cause match")
 	p.add_argument("--cause-window-days", type=int, default=3, help="cause match window in days (clamped to 1..30)")
+	p.add_argument("--red-main-group", default="", help="red-main grouping key (#9823); empty disables the group match")
 	p.set_defaults(func=_cmd_budget)
+
+	p = sub.add_parser("red-main-group-key", help="Red-main grouping key for a default-branch push CI run as JSON; pure, no API call")
+	p.add_argument("--workflow-name", default="")
+	p.add_argument("--failing-job", default="")
+	p.add_argument("--branch", default="")
+	p.add_argument("--default-branch", default="")
+	p.add_argument("--event", default="")
+	p.add_argument("--workflow-path", default="")
+	p.set_defaults(func=_cmd_red_main_group_key)
 
 	p = sub.add_parser("heal-already-fixed", help="Closed siblings whose fix merged, for a blocked heal issue (Q148)")
 	p.add_argument("--item-json", required=True)
@@ -12297,6 +12457,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--trend-file", default="")
 	p.add_argument("--suspect-commits-file", default="")
 	p.add_argument("--cause", default="", help="cause grouping key for the sixth header line (P5 / D3)")
+	p.add_argument("--red-main-group", default="", help="red-main grouping key header line (#9823)")
 	p.add_argument("--code-ran-from", default="", help="<branch>@<sha> for the `Code ran from` line (code-ref routing P6); invalid values add nothing")
 	p.add_argument("--max-depth", type=int, default=DEFAULT_MAX_LINEAGE_DEPTH)
 	p.add_argument("--intake-run-url", required=True)
