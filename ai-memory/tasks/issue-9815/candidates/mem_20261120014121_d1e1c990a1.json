@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9815,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9815\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9816\",\"pr_number\":9816,\"branch\":\"ai/issue-9815\",\"run_id\":\"44653695362\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/44653695362\",\"changed_files\":[\"changelog.d/9815-one-sided-delete-resolver-guard-test.md\",\"tests/test_conflict_one_sided_delete_workflow_path.py\"]}",
+  "fingerprint": "567073d9a5709f3303e9b1798ed9e2eaaab037837fb0e50d7bac1fdf6e5b084a",
+  "lineage": {
+    "issue_number": 9815,
+    "parent_ids": [],
+    "pr_number": 9816,
+    "run_id": "44653695362",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44653695362",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9816"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261120014121_d1e1c990a1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9815,
+    "level": "run",
+    "pr_number": 9816,
+    "run_id": "44653695362"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9815: https://github.com/shubhodeep1/coding-workflows/pull/9816",
+  "timestamps": {
+    "created_at": "2026-11-20T01:41:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
