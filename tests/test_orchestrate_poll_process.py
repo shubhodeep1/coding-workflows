@@ -15737,13 +15737,45 @@ def test_stall_judge_diagnostics_report_merged_linked_pr_and_keep_escalation():
 	assert "**Decision (effective):** escalate_human" in judge_body
 	assert "ai:needs-human" in result["issues"]["823"]["labels"]
 	assert "normalized to 'attempt_merge'" not in result["stdout"]
+	# PR #825 merged into the non-target base orchestrator/project-768, so the
+	# #9481 keep (_stall_judge_linked_pr_keeps_escalation) handles it before
+	# the #9482 elif is evaluated.
+	assert "STALL_RECOVERY issue=823 reason=judge_escalate_kept linked_pr=merged_non_target_base pr=825" in result["stdout"]
+	assert "Stall judge action 'escalate_human' kept" not in result["stdout"]
+
+
+def test_stall_judge_keeps_escalation_for_implementation_pr_merged_into_default_branch():
+	# Target-base sibling: the #9481 keep returns 1 for a merge into a target
+	# base, so only the #9482 elif keeps the judge's escalate_human here.
+	result = _run_standalone_ready_to_merge_tick_9482(
+		pr_overrides={**_MERGED_PR_9482, "baseRefName": "main"},
+		stall_recovery_count=2,
+		env_overrides={"ENABLE_STALL_MERGED_PR_GUARD": "false"},
+		mock_stall_judge_json={
+			"action": "escalate_human",
+			"justification": "cannot tell whether PR #825 merged",
+			"target_pr": None,
+			"head_ref": None,
+		},
+	)
+	judge_comments = [
+		str(comment.get("body", ""))
+		for comment in result["issues"]["823"]["comments"]
+		if "Stall Judge" in str(comment.get("body", ""))
+	]
+	assert judge_comments, result["stdout"]
+	assert '"state":"merged"' in judge_comments[-1]
+	assert "ai:needs-human" in result["issues"]["823"]["labels"]
+	assert "normalized to 'attempt_merge'" not in result["stdout"]
+	assert "reason=judge_escalate_kept" not in result["stdout"]
 	assert "Stall judge action 'escalate_human' kept for issue #823: linked PR #825 is merged" in result["stdout"]
 
 
-def test_stall_judge_escalation_not_kept_for_closed_non_implementation_cross_ref():
-	# The last cross-reference is a closed mention-only PR, not the issue's
-	# implementation PR, so its state says nothing about attempt_merge and
-	# the judge's escalate_human is normalised as before #9482.
+def test_stall_judge_closed_non_implementation_cross_ref_kept_by_closed_unmerged_guard():
+	# The last cross-reference is a closed mention-only PR. The #9481 keep
+	# (_stall_judge_linked_pr_keeps_escalation, reason closed_unmerged) keeps
+	# the judge's escalate_human for any closed unmerged linked PR before the
+	# #9482 implementation-PR elif runs, so the #9482 notice is not printed.
 	result = _run_standalone_ready_to_merge_tick_9482(
 		pr_overrides={
 			"state": "closed",
@@ -15766,8 +15798,9 @@ def test_stall_judge_escalation_not_kept_for_closed_non_implementation_cross_ref
 		for comment in result["issues"]["823"]["comments"]
 	), result["stdout"]
 	assert "Stall judge action 'escalate_human' kept" not in result["stdout"]
-	assert "normalized to 'attempt_merge'" in result["stdout"]
-	assert "ai:needs-human" not in result["issues"]["823"]["labels"]
+	assert "STALL_RECOVERY issue=823 reason=judge_escalate_kept linked_pr=closed_unmerged pr=825" in result["stdout"]
+	assert "normalized to 'attempt_merge'" not in result["stdout"]
+	assert "ai:needs-human" in result["issues"]["823"]["labels"]
 
 
 def test_standalone_ready_to_merge_open_linked_pr_still_attempts_merge():

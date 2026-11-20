@@ -23042,9 +23042,11 @@ invoke_stall_judge() {
   # no-op when the linked PR is already closed or merged, so the issue would
   # loop forever. Keep the judge's escalation in that case. An empty
   # pr_state (fetch failure) is inconclusive and keeps the normalisation.
-  # target_pr is only the last cross-reference, so require it to be the
-  # issue's implementation PR (payload already in hand, no API call): a
-  # closed mention-only PR says nothing about the PR attempt_merge targets
+  # The #9481 branch above already keeps every closed-unmerged PR and every
+  # PR merged into a non-target base, whoever authored it, so this elif in
+  # practice adds the PR merged into a target base. target_pr is only the
+  # last cross-reference, so require it to be the issue's implementation PR
+  # (payload already in hand, no API call) before keeping on that basis
   # (#3816 / #3828 mis-target).
   elif [ "${judge_action}" = "escalate_human" ] && [ "${effective_action}" = "attempt_merge" ] && \
      [[ "${target_pr}" =~ ^[0-9]+$ ]] && { [ "${pr_state}" = "closed" ] || [ "${pr_state}" = "merged" ]; } && \
