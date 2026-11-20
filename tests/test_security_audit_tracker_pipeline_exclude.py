@@ -164,6 +164,29 @@ def test_unblock_scan_skips_a_released_failed_tracker_on_a_later_tick(monkeypatc
 	assert "security_audit_tracker" not in _select([], {"77": tracker}, failed=[77])["skipped"]
 
 
+def test_rebuilt_failed_project_outcomes_are_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
+	# A rebuilt failed project gets `since` from the newest trusted state comment
+	# (it has no block label), so it can really reach the project path. This
+	# proves the unmarked and inline-marker cases dispatch as a project and the
+	# marked case is withheld only by the security_audit_tracker skip.
+	monkeypatch.delenv(FLAG, raising=False)
+	state = {"login": BOT, "body": "<!-- ORCHESTRATOR_STATE_V1 -->\n{}", "created_at": _iso(3)}
+
+	def info(body: str) -> dict:
+		return {"labeled": [], "comments": [state], "body": body}
+
+	project = [{"item": 77, "kind": "project"}]
+	assert _select([], {"77": info("Ordinary project.")}, failed=[77])["dispatch"] == project
+	assert _select([], {"77": info("see <!-- ai:security-audit-tracker:v1 --> inline")}, failed=[77])["dispatch"] == project
+	marked = _select([], {"77": info(TRACKER_BODY)}, failed=[77])
+	assert marked["dispatch"] == [] and marked["skipped"] == {"security_audit_tracker": 1}
+	# No details entry (body unknown): never dispatched, skipped before the judge.
+	missing = _select([], {}, failed=[77])
+	assert missing["dispatch"] == [] and "security_audit_tracker" not in missing["skipped"]
+	monkeypatch.setenv(FLAG, "false")
+	assert _select([], {"77": info(TRACKER_BODY)}, failed=[77])["dispatch"] == project
+
+
 @pytest.mark.parametrize("value", ["", "true", "TRUE", "True"])
 def test_flag_on_values(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, value: str) -> None:
 	monkeypatch.setenv(FLAG, value)
