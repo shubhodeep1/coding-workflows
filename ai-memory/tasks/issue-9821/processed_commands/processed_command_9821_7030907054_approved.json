@@ -5,13 +5,26 @@
   "entry_id": "processed_command_9821_7030907054_approved",
   "issue_number": 9821,
   "metadata": {
+    "branch": "ai/issue-9821",
+    "changed_files": [
+      ".github/workflows/cancel_on_pr_close.yml",
+      ".github/workflows/orchestrate_poll.yml",
+      ".github/workflows/review_autofix.yml",
+      "changelog.d/merge-lease-parallel-p2-p3-env-wiring.md",
+      "tests/test_merge_lease.py"
+    ],
+    "issue_number": 9821,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9821",
+    "pr_number": 9822,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9822",
+    "run_attempt": "1",
+    "run_id": "44678144506",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/44678144506"
   },
   "run_attempt": 1,
   "run_id": "44678144506",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-20T05:05:11Z",
+  "status": "completed",
+  "timestamp": "2026-11-20T05:54:37Z",
   "workflow": "implement"
 }
