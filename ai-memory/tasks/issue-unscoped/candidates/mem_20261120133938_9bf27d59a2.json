@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:6260-6264, 6284-6309 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: If a matching red-main group issue has the report's fingerprint, `red_main_group_same_fp_seen` suppresses the group match, and the fingerprint match that follows is picked from all open issues by `_preferred_duplicate`, which prefers the configured repository and then the higher issue number (6220-6230), so the matching group issue is not guaranteed to win.\n  WHY: If another open issue has the same fingerprint and wins that preference, the occurrence is recorded on that issue, which may lack the group marker, so later red-main failures with different fingerprints keep using the other grouped issue and leave several heal issues open for one group. The source severity was MAJOR, mapped here to high. No other reviewer flagged this, and anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash checked this logic and reported no defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal.py:6260-6264, 6284-6309 | severity=MAJOR | confidence=4\n  PROBLEM: When a matching red-main group issue has the report's fingerprint, `red_main_group_same_fp_seen` suppresses the group match. The fingerprint match that follows is selected from all open issues by `_preferred_duplicate`, which prefers the configured repository and then the higher issue number (6220-6230), so it is not guaranteed to be the matching group issue.\n  WHY: If another open issue has the same fingerprint and wins that preference, the occurrence is recorded on that issue instead of the red-main group issue. That issue may lack the group marker, so later red-main failures with different fingerprints keep using the other grouped issue, which leaves several heal issues open for the same group.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bc53ac1e7ba977bdbaa3cfc48e61de6b7b86b40aeb788820137f07a37ee12207",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9834,
+    "run_id": "44737228618",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44737228618",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120133938_9bf27d59a2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9834,
+    "run_id": "44737228618"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-20T13:39:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
