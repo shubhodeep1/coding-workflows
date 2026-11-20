@@ -23,7 +23,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+from review_autofix_step_scripts import expanded_review_autofix_text, review_autofix_step_script_body  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -101,7 +101,9 @@ def test_dispatch_checkout_file_read_uses_head_not_default_branch():
 def test_review_head_mismatch_skips_before_agent_steps():
     workflow = yaml.safe_load(REVIEW_AUTOFIX_WF.read_text())
     steps = {step["name"]: step for step in workflow["jobs"]["codex-agent"]["steps"] if "name" in step}
-    checkout_step = steps["Checkout PR head branch"]["run"]
+    # The step body lives in scripts/ (the step sources it); read the moved body.
+    checkout_step = review_autofix_step_script_body("review_autofix_step_checkout_pr_head_branch.sh")
+    assert steps["Checkout PR head branch"]["env"]["REVIEW_HEAD_CHECKOUT_REPOSITORY"] == "${{ github.repository }}"
     assert 'env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}" rev-parse HEAD' in checkout_step
     assert '.head.sha // ""' in checkout_step
     assert '"${review_source_sha}" != "${REVIEW_CHECKOUT_SHA}"' in checkout_step
@@ -117,9 +119,7 @@ def test_review_head_mismatch_skips_before_agent_steps():
 
 def test_review_branch_fetch_movement_skips_the_older_source_tree():
     """The branch fetch must not make a default/old workspace look current."""
-    workflow = yaml.safe_load(REVIEW_AUTOFIX_WF.read_text())
-    checkout_step = next(step["run"] for step in workflow["jobs"]["codex-agent"]["steps"] if step.get("name") == "Checkout PR head branch")
-    checkout_step = checkout_step.replace("${{ github.repository }}", "o/r")
+    checkout_step = review_autofix_step_script_body("review_autofix_step_checkout_pr_head_branch.sh")
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         seed = root / "seed"
@@ -156,7 +156,7 @@ def test_review_branch_fetch_movement_skips_the_older_source_tree():
                 "PR_NUMBER": "42", "GITHUB_WORKSPACE": str(source), "WORKSPACE_PATH": str(split),
                 "PR_META_FILE": str(metadata), "PR_PAYLOAD_FILE": str(payload),
                 "SUPPORT_SCRIPTS_DIR": str(support), "GITHUB_ENV": str(github_env),
-                "REVIEW_CHECKOUT_SHA": reviewed_sha}
+                "REVIEW_CHECKOUT_SHA": reviewed_sha, "REVIEW_HEAD_CHECKOUT_REPOSITORY": "o/r"}
             result = subprocess.run(["bash", "-c", checkout_step], cwd=split, env=env, capture_output=True, text=True)
             assert result.returncode == 0, result.stderr
             return github_env.read_text()

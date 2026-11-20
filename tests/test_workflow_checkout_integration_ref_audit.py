@@ -29,11 +29,12 @@ ALLOWLIST_EXCEPTIONS = {
 	"audit_consumer_drift.yml": "Consumer-wrapper drift audit is scheduled/manual repository maintenance, not an orchestrator issue-phase checkout path.",
 	"cancel_on_pr_close.yml": "PR-close cleanup cancels branch runs and has no orchestrator issue-phase checkout.",
 	"ci.yml": "PR CI validation has no orchestrator issue metadata.",
+	"pr-checks.yml": "Folded per-PR checks (PR-body auto-close lint, integration-PR readiness status) run on pull_request refs and validate pull_request metadata, not orchestrator issue-phase checkout.",
 	"integration-pr-readiness.yml": "Integration-PR readiness check runs on pull_request refs and posts commit status metadata, not orchestrator issue-phase checkout.",
 	"issue_pr_status.yml": "Issue/PR status utility workflow does not execute orchestrator issue phases.",
+	"cs_investigate.yml": "CS ticket investigation checks out the caller's default branch read-only for one CS ticket (workflow_call from a repo-owned wrapper); it is not an orchestrator issue-phase path and reads no tracking-issue metadata.",
 	"unblock_judge.yml": "Unblock judge checks out the default branch read-only for the model; it acts through the API on one blocked item, not on an issue-phase integration ref.",
 	"lint-plan-archival.yml": "Plan-archival lint validates pull_request body/diff state rather than orchestrator issue-phase integration refs.",
-	"lint-pr-body-auto-close.yml": "PR-body auto-close lint validates pull_request metadata rather than orchestrator issue-phase checkout.",
 	"mark-stable.yml": "Release promotion workflow operates on repo refs, not tracking-issue metadata.",
 	"memory_maintenance.yml": "Maintenance workflow has no issue-comment or tracking-issue context.",
 	"orchestrate.yml": "Project bootstrap workflow has no integration-branch metadata at checkout time.",
@@ -197,7 +198,16 @@ def test_required_workflows_fail_closed_on_ci_triage_routing_refusal() -> None:
 		assert "resolver_rc=0" in step and capture in step, f"{workflow_name} refctx missing resolver rc capture"
 		assert 'if [ "${resolver_rc}" -eq 0 ]; then' in step, f"{workflow_name} refctx missing rc 0 branch"
 		assert refused_branch in step, f"{workflow_name} refctx missing exit-3 branch"
-		refused = step[step.index(refused_branch):step.index(fallback)]
+		# Only the exit-3 branch body: plan's exit-75 deferral (#9599), which
+		# follows it, writes GITHUB_OUTPUT on purpose.
+		refused_start = step.index(refused_branch)
+		refused_ends = [
+			pos for pos in (
+				step.find("\n          elif ", refused_start + len(refused_branch)),
+				step.find("\n          else", refused_start + len(refused_branch)),
+			) if pos != -1
+		]
+		refused = step[refused_start:min(refused_ends)]
 		assert "exit 1" in refused, f"{workflow_name} exit-3 branch must fail the step"
 		assert "GITHUB_OUTPUT" not in refused, f"{workflow_name} exit-3 branch must not write a ref"
 		assert fallback in step, f"{workflow_name} non-3 failure lost its default-branch fallback"
@@ -411,7 +421,8 @@ def test_clarify_tolerates_pr_not_open_and_routing_fails_closed_on_rate_limit() 
 	whose superseded-PR step (#7216, #7477) closes the issue, plans on the
 	PR's base or skips planning; every other phase still refuses. With
 	routing on, a rate-limited resolver (exit 75) never falls back to the
-	default branch."""
+	default branch. Plan defers that case without failing the job (#9599);
+	every other phase still fails."""
 	pr_not_open = {
 		"FAKE_RESOLVER_RC": "3",
 		"FAKE_RESOLVER_STDERR": "::error::CI_TRIAGE_PR_BRANCH_ROUTING issue=5 pr=7 outcome=refused reason=pr_not_open",
@@ -444,6 +455,11 @@ def test_clarify_tolerates_pr_not_open_and_routing_fails_closed_on_rate_limit() 
 		assert rc != 0 and "ref=" not in gh_output, f"{workflow_name} other refusal\n{out}"
 		for routing in ("true", None):
 			rc, out, gh_output = _run_refctx(workflow_name, "ok", routing, rate_limited)
+			if workflow_name == "plan.yml":
+				assert rc == 0, f"{workflow_name} rate_limited routing={routing}\n{out}"
+				assert "rate_limited_defer=true\n" in gh_output, gh_output
+				assert "outcome=deferred reason=rate_limited" in out, out
+				continue
 			assert rc != 0 and "ref=" not in gh_output, f"{workflow_name} rate_limited routing={routing}\n{out}"
 			assert "INTEGRATION_REF_RESOLVE outcome=rate_limited" in out, out
 		if workflow_name in ("clarify.yml", "plan.yml", "orchestrate_clarify_respond.yml"):
@@ -1001,6 +1017,92 @@ def test_plan_setup_steps_skip_on_label_missing_hold() -> None:
 		assert "steps.refctx.outputs.label_missing_hold != 'true'" in cond, f"{name}: {cond!r}"
 
 
+_RATE_LIMITED_STDERR = "::error::INTEGRATION_REF_RESOLVE outcome=rate_limited what=issue-5"
+
+
+def test_plan_rate_limited_refusal_defers_without_failing() -> None:
+	"""Issue #9599 (heal of #9582, run 43885930759): a rate-limited resolver
+	(exit 75) with CI-triage routing on failed plan and filed plan_failed heal
+	reports. Plan now defers: no ref, no default-branch fallback, SKIP_PLAN,
+	exit 0 and no GitHub call. Exit 2, exit 3 and routing off are unchanged."""
+	rate_limited = {"FAKE_RESOLVER_RC": "75", "FAKE_RESOLVER_STDERR": _RATE_LIMITED_STDERR}
+	for routing in ("true", None):
+		rc, out, gh_output, env_text, calls = _run_refctx_core("plan.yml", "ok", routing, rate_limited)
+		label = f"routing={routing}"
+		assert rc == 0, f"{label}\n{out}"
+		for line in ("rate_limited_defer=true\n", "ref=\n", "resolver_status=failed\n"):
+			assert line in gh_output, f"{label}: {gh_output!r}"
+		assert "label_missing_hold" not in gh_output, f"{label}: {gh_output!r}"
+		assert "SKIP_PLAN=true" in env_text, f"{label}: {env_text!r}"
+		assert ("::warning::INTEGRATION_REF_RESOLVE outcome=deferred reason=rate_limited rc=75 "
+			"ci_triage_routing=on issue=5") in out, out
+		# The resolver's own line is replayed as a warning: the run is green.
+		assert "::warning::INTEGRATION_REF_RESOLVE outcome=rate_limited what=issue-5" in out, out
+		assert "::error::INTEGRATION_REF_RESOLVE outcome=rate_limited" not in out, out
+		assert calls == [], f"{label}: {calls!r}"
+	# The deferral leaves a run-summary trace ("Write run summary" skips on SKIP_PLAN).
+	with tempfile.TemporaryDirectory() as summary_tmp:
+		summary_path = Path(summary_tmp) / "step_summary"
+		rc, out, _gh_output, _env_text, _calls = _run_refctx_core(
+			"plan.yml", "ok", "true", {**rate_limited, "GITHUB_STEP_SUMMARY": str(summary_path)})
+		assert rc == 0, out
+		summary_text = summary_path.read_text(encoding="utf-8")
+		assert "Planning for issue #5 was deferred" in summary_text, summary_text
+		assert "post /answer again by hand" in summary_text, summary_text
+		# The label transition is skipped. Stall recovery covers ai:planning
+		# (retrigger_plan) and ai:clarification (auto_respond_clarify);
+		# ai:blocked has no stall-recovery action.
+		assert "If the issue is in ai:planning or ai:clarification, standalone stall recovery" in summary_text, summary_text
+		assert "if it is in ai:blocked, or stall recovery is off" in summary_text, summary_text
+		assert "The issue keeps ai:planning" not in summary_text, summary_text
+	# Routing off keeps the legacy default-branch fallback and the error replay.
+	rc, out, gh_output, env_text, _calls = _run_refctx_core("plan.yml", "ok", "false", rate_limited)
+	assert rc == 0 and "ref=\n" in gh_output, out
+	assert "::error::INTEGRATION_REF_RESOLVE outcome=rate_limited what=issue-5" in out, out
+	assert "rate_limited_defer" not in gh_output and "SKIP_PLAN" not in env_text, (gh_output, env_text)
+	# Exit 2 and exit 3 with routing on still fail the step.
+	for extra in (
+		{"FAKE_RESOLVER_RC": "2"},
+		{"FAKE_RESOLVER_RC": "3", "FAKE_RESOLVER_STDERR":
+			"::error::CI_TRIAGE_PR_BRANCH_ROUTING issue=5 pr=7 outcome=refused reason=branch_missing"},
+	):
+		rc, out, gh_output, env_text, _calls = _run_refctx_core("plan.yml", "ok", "true", extra)
+		assert rc != 0, f"{extra}\n{out}"
+		assert "ref=" not in gh_output and "rate_limited_defer" not in gh_output, f"{extra}: {gh_output!r}"
+		assert "SKIP_PLAN" not in env_text, f"{extra}: {env_text!r}"
+
+
+def test_plan_setup_steps_skip_on_rate_limited_defer() -> None:
+	"""Issue #9599: a deferred run must never reach Checkout, where the empty
+	ref resolves to the default branch, nor make more reads while rate-limited."""
+	wf = _workflow_text("plan.yml")
+	for name in (
+		"Checkout repository",
+		"Log checkout ref",
+		"Configure git auth for memory helper clones",
+		"Resolve workflow support ref",
+		"Checkout workflow support source",
+		"Checkout workflow support source fallback",
+		"Ensure workflow support source checkout",
+		"Checkout workflow support source main snapshot",
+		"Stage workflow support files",
+		"Create runtime workspace",
+		"Fetch issue metadata",
+	):
+		step = _step_text(wf, name)
+		cond = next((ln for ln in step.splitlines() if ln.startswith("        if: ")), "")
+		assert "steps.refctx.outputs.label_missing_hold != 'true'" in cond, f"{name}: {cond!r}"
+		assert "steps.refctx.outputs.rate_limited_defer != 'true'" in cond, f"{name}: {cond!r}"
+	for name in ("Write run summary", "Record attempt journal entry (plan)", "Record planning run completed"):
+		step = _step_text(wf, name)
+		cond = next((ln for ln in step.splitlines() if ln.startswith("        if: ")), "")
+		assert "env.SKIP_PLAN != 'true'" in cond, f"{name}: {cond!r}"
+	# Every step gated on the label_missing hold is gated on the deferral too.
+	for line in wf.splitlines():
+		if "steps.refctx.outputs.label_missing_hold != 'true'" in line and line.lstrip().startswith("if:"):
+			assert "steps.refctx.outputs.rate_limited_defer != 'true'" in line, line
+
+
 def main() -> int:
 	test_checkout_workflows_are_all_classified()
 	test_allowlist_entries_have_rationale()
@@ -1028,6 +1130,8 @@ def main() -> int:
 	test_plan_label_missing_fixture_holds()
 	test_plan_steps_after_refctx_skip_on_skip_plan()
 	test_plan_setup_steps_skip_on_label_missing_hold()
+	test_plan_rate_limited_refusal_defers_without_failing()
+	test_plan_setup_steps_skip_on_rate_limited_defer()
 	return 0
 
 

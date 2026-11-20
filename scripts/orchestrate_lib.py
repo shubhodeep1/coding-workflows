@@ -1602,12 +1602,22 @@ DEDICATED_HANDLER_PHASES: set[str] = {
 # codex stall-judge run plus Telegram alerts, until the recovery budget
 # closed the issue and the judge regenerated it under a fresh number
 # (issue #3906 on shubhodeep1/tele-funtoken-msg-scoring, 2026-09-01).
-# The guard that latches these labels already posted the human-facing
-# comment and CRITICAL alert, so stall recovery must pause exactly like
+# The guard that latches ai:destructive-blocked / ai:scope-blocked
+# already posted the human-facing comment and CRITICAL alert, so stall recovery must pause exactly like
 # it does for ai:needs-human until a human removes the latch.
+# ai:workflow-heal-escalated (issue #9248) is latched too: the workflow
+# failure heal intake sets it when a heal issue's own clarify / plan /
+# implement run fails the way the issue was filed for, or when the heal
+# lineage cap is hit, and post-merge verification
+# (workflow_failure_heal_verify.sh) sets it when a heal fix did not hold
+# for the second time.  Retrying such an issue only re-runs the failing
+# phase and adds another occurrence, so stall recovery pauses until a
+# human removes the label.  Appended last so first-match results for
+# the existing labels do not change.
 STALL_RECOVERY_LATCH_LABELS: tuple[str, ...] = (
 	"ai:destructive-blocked",
 	"ai:scope-blocked",
+	"ai:workflow-heal-escalated",
 )
 
 
@@ -2609,9 +2619,9 @@ def detect_stalls(
 		if "ai:needs-human" in labels:
 			continue
 		if stall_recovery_latch_label(labels) is not None:
-			# Human-gated latch (ai:destructive-blocked / ai:scope-blocked):
-			# implement.yml refuses every redispatch until a human removes
-			# it, so any recovery action here is a guaranteed no-op loop.
+			# Human-gated latch (any STALL_RECOVERY_LATCH_LABELS entry):
+			# the latch holds until a human removes it, so any recovery
+			# action here is a guaranteed no-op (or failing) loop.
 			# detect_stall_latched_issues() reports these for logging.
 			continue
 		phase = determine_phase(labels)
@@ -4214,6 +4224,25 @@ _UNROUTED_AUTOMATION_PREFIXES = (
 	"ai planning workflow",
 	"ai implementation workflow",
 )
+# Openings of the unblock judge's unmarked status notes
+# (scripts/unblock_actions.py). They are posted under the owner's account a
+# second after the judge's verdict comment, so they look like a human reply to
+# the block (fun-token-multi-chain#821: the "belongs in the harness" note paged
+# the operator twice). They only disqualify the comment as the human
+# candidate; they do not show that an earlier reply was handled.
+_UNROUTED_PIPELINE_PREFIXES = (
+	"the unblock judge found this work belongs in",
+	"the unblock judge has no verdicts left",
+	"next attempt, per the unblock judge:",
+	"unblock judge could not act on",
+	# The bare "this ... stays open" openings are common prose, so these keep
+	# the judge-specific words that follow them.
+	"this security finding stays open: its finding marker",
+	"this security finding stays open; it is tracked here until",
+	"this security finding stays open and blocked: the unblock judge",
+	"this pull request stays open: its linked issue's security finding marker",
+	"superseded: owning pr #",
+)
 
 
 def is_reclarify_command_body(body: Any) -> bool:
@@ -4242,6 +4271,8 @@ def _is_unrouted_non_human_body(body: Any) -> bool:
 		return True
 	text = body if isinstance(body, str) else ""
 	if _UNROUTED_PIPELINE_MARKER_RE.search(text):
+		return True
+	if text.lstrip().lower().startswith(_UNROUTED_PIPELINE_PREFIXES):
 		return True
 	if (_UNROUTED_CLAUDE_CODE_FOOTER_RE.search(text) and not text.lstrip().startswith("/")
 			and not is_reclarify_command_body(text)):

@@ -2586,7 +2586,7 @@ case "${RB_ACTION}" in
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
           fi
-        elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+        elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" FINAL_CI_MERGE_RESUME_ENABLED=false _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           echo "::warning::Review-blocked judge: required check-runs on ${RB_JUDGED_HEAD_SHA:0:7} are ${PR_CHECKS_WAIT_OUTCOME:-unknown}; not enabling auto-merge and withholding ai:ready-to-merge."
           RB_MERGE_STATUS="checks_not_ready"
           [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "failed" ] && RB_MERGE_STATUS="checks_failed"
@@ -2685,7 +2685,7 @@ case "${RB_ACTION}" in
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
           fi
-        elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+        elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" FINAL_CI_MERGE_RESUME_ENABLED=false _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           echo "::warning::Review-blocked judge: required check-runs on ${RB_JUDGED_HEAD_SHA:0:7} are ${PR_CHECKS_WAIT_OUTCOME:-unknown}; not enabling the terminal auto-merge and withholding ai:ready-to-merge."
           RB_MERGE_STATUS="checks_not_ready"
           [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "failed" ] && RB_MERGE_STATUS="checks_failed"

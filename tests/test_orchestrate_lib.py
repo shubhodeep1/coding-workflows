@@ -1400,6 +1400,27 @@ def _assert_detect_stalls_skips_latch_label(latch_label: str) -> None:
 	assert stalls[0]["recovery_action"] == "auto_approve"
 
 
+def test_detect_stalls_skips_workflow_heal_escalated_latch():
+	"""Issue #9248: a heal issue the workflow-failure heal intake escalated
+	(ai:workflow-heal-escalated) must not be retried or auto-answered by
+	stall recovery; the poller reports it as a human-gated latch instead.
+	"""
+	_assert_detect_stalls_skips_latch_label("ai:workflow-heal-escalated")
+
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	labels = {"10": ["ai:awaiting-approval", "ai:workflow-heal-escalated"]}
+	latched = orchestrate_lib.detect_stall_latched_issues(state, labels)
+	assert latched == [
+		{
+			"id": "issue-1",
+			"github_issue": 10,
+			"phase": "ai:awaiting-approval",
+			"latch_label": "ai:workflow-heal-escalated",
+		}
+	]
+
+
 def test_stall_recovery_latch_label_helper():
 	assert orchestrate_lib.stall_recovery_latch_label(["ai:awaiting-approval"]) is None
 	assert orchestrate_lib.stall_recovery_latch_label([]) is None
@@ -1412,6 +1433,15 @@ def test_stall_recovery_latch_label_helper():
 	assert (
 		orchestrate_lib.stall_recovery_latch_label(["ai:scope-blocked", "ai:implementing"])
 		== "ai:scope-blocked"
+	)
+	assert (
+		orchestrate_lib.stall_recovery_latch_label(["ai:awaiting-approval", "ai:workflow-heal-escalated"])
+		== "ai:workflow-heal-escalated"
+	)
+	# Appended last: first-match order for the older latch labels holds.
+	assert (
+		orchestrate_lib.stall_recovery_latch_label(["ai:workflow-heal-escalated", "ai:destructive-blocked"])
+		== "ai:destructive-blocked"
 	)
 	# Every latch label is a plain marker, never a phase label, so the
 	# phase machine keeps reporting the underlying pipeline phase.
@@ -2496,7 +2526,7 @@ def test_validate_decomposition_rejects_empty_path_in_files_touched():
 def test_validate_decomposition_caps_files_touched_length():
 	data = _make_decomposition(issues=[
 		{"id": "a", "title": "T", "body": "b", "priority": 1,
-		 "files_touched": [f"f{i}.py" for i in range(51)]},
+			"files_touched": [f"f{i}.py" for i in range(51)]},
 	])
 	try:
 		orchestrate_lib.validate_decomposition(data)
@@ -3281,6 +3311,48 @@ def test_unrouted_ignores_claude_code_status_notes():
 	assert _unrouted(_unrouted_issue([plain]))[0]["comment_id"] == 7
 
 
+def test_unrouted_ignores_unblock_judge_status_notes():
+	# fun-token-multi-chain#821: the judge's unmarked "belongs in the harness"
+	# note, posted a second after its verdict comment, was flagged twice.
+	import unblock_actions
+	# Every opening must still appear in the note text unblock_actions posts,
+	# so a reworded note fails here instead of paging the operator again.
+	source = Path(unblock_actions.__file__).read_text(encoding="utf-8").lower()
+	for prefix in orchestrate_lib._UNROUTED_PIPELINE_PREFIXES:
+		assert prefix in source, prefix
+	verdict = _unrouted_comment(2, "## Unblock judge: `operator_step` (round 1)\n\n<!-- ai:unblock:v1 item=7 -->", 20)
+	for index, call in enumerate((
+		lambda: unblock_actions._harness_ops(
+			{"item": 7, "stop": "blocked", "labels": ["ai:blocked"], "kind": "issue", "tracking": 0},
+			{"instructions": "Change the implement workflow.", "reason": "Wrong checkout.", "fingerprint": ""},
+			{"reason": "target_repo", "harness_paths": [], "project_paths": []}),
+		lambda: unblock_actions._untrusted_pr_ops({"item": 7}, "reissue"),
+	)):
+		bodies = [op["body"] for op in call() if op.get("op") == "comment"]
+		assert bodies, index
+		for body in bodies:
+			assert _unrouted(_unrouted_issue([verdict, _unrouted_comment(3, body, 19.98)], [("ai:blocked", 120)])) == [], body
+	for body in (
+		"The unblock judge has no verdicts left for this security finding. It stays open until a linked fix is merged.\n\nWhy: x",
+		"Next attempt, per the unblock judge: retry with the cache cleared",
+		"This security finding stays open: its finding marker could not be carried.",
+		"This pull request stays open: its linked issue's security finding marker could not be carried.",
+		"Superseded: owning PR #5 merged with its required checks passing at head `abc`. No re-issue was created.",
+	):
+		assert _unrouted(_unrouted_issue([_unrouted_comment(3, body, 20)])) == [], body
+	# A judge note after a human reply does not hide that reply.
+	answer = _unrouted_comment(4, "Pick option B.", 40)
+	note = _unrouted_comment(5, "The unblock judge found this work belongs in `o/r` (the shared workflow harness).", 30)
+	assert _unrouted(_unrouted_issue([answer, note])) == [
+		{"issue": 7, "comment_id": 4, "reason": "no_command", "age_minutes": 40}]
+	# A human reply that opens with the bare "stays open" words still counts.
+	for index, body in enumerate(("This security finding stays open until B lands.", "This pull request stays open; use B.")):
+		assert _unrouted(_unrouted_issue([_unrouted_comment(8 + index, body, 20)]))[0]["comment_id"] == 8 + index
+	# A human who merely mentions the judge is still a human reply.
+	plain = _unrouted_comment(6, "I think the unblock judge found this work belongs in the harness; use B.", 20)
+	assert _unrouted(_unrouted_issue([plain]))[0]["comment_id"] == 6
+
+
 def test_unrouted_bookkeeping_after_a_reply_does_not_hide_it():
 	answer = _unrouted_comment(2, "Pick option B.", 40)
 	cleanup = _unrouted_comment(3, "<!-- tg_cleanup:1 -->", 30)
@@ -3753,7 +3825,7 @@ def test_render_expected_files_section_has_no_allowlist():
 		staged_file.write_text("scripts/a.py\n", encoding="utf-8")
 		guard = subprocess.run(
 			[sys.executable, str(REPO_ROOT / "scripts" / "files_touched_scope_guard.py"),
-			 "--issue-body-file", str(body_file), "--staged-file", str(staged_file)],
+				"--issue-body-file", str(body_file), "--staged-file", str(staged_file)],
 			capture_output=True, text=True, check=False,
 		)
 		assert guard.returncode == 10, (guard.returncode, guard.stdout, guard.stderr)

@@ -563,3 +563,20 @@ def test_tg_forged_marker_only_creates_a_new_marker(tmp_path: Path, script: str,
 	assert result.returncode == 0, result.stderr
 	assert not any(c.startswith("PATCH") for c in calls)
 	assert calls[-1] == expected
+
+
+@pytest.mark.parametrize("compress", ["true", "false"])
+def test_state_write_with_compression_reads_back(tmp_path: Path, compress: str) -> None:
+	state = {"status": "in_progress", "wave": 2, "merged_issue_fingerprints": {"9001": {"a.py": [r"def\s+x"] * 200}}}
+	path = _write_state(tmp_path, state)
+	result, mock = _run_poller_functions(tmp_path, "post_state_comment", [], STATE_FILE=str(path), ORCH_STATE_COMPRESS=compress)
+	assert result.returncode == 0, result.stderr
+	assert _post_calls(mock) == ["POST repos/o/r/issues/40/comments"]
+	body = _body(mock, "POST")
+	payload = base64.b64decode(body.split("\n", 1)[1].rsplit("\nORCHESTRATOR_STATE_V2 -->", 1)[0])
+	assert payload.startswith(b"zlib:") is (compress == "true")
+	comments = tmp_path / "posted.json"
+	comments.write_text(json.dumps([{"id": 1, "user": {"login": BOT}, "body": body}]), encoding="utf-8")
+	extracted = subprocess.run(["python3", str(STATE_V2), "extract", "--comments-json", str(comments)], capture_output=True, check=True)
+	assert json.loads(extracted.stdout) == state
+	assert hashlib.sha256(extracted.stdout).hexdigest() in body

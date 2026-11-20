@@ -670,8 +670,8 @@ Rules:
   session.
 - The rule is enforced by **two** mechanisms, both anchored on
   `scripts/lint_pr_body_auto_close.py`:
-  1. The `Lint PR body for auto-close keywords against orchestrator-tracking
-     issues` GitHub workflow (`.github/workflows/lint-pr-body-auto-close.yml`)
+  1. The `pr-body-lint` job of the `PR checks` GitHub workflow
+     (`.github/workflows/pr-checks.yml`)
      runs on every pull request and fails the check when a violation
      is found.
   2. The unattended pipelines' PR-body composition paths invoke the
@@ -1498,6 +1498,130 @@ not change:
    account starts clarify on its own; do not also post `/reclarify`.
 5. **Report** each issue or dispatch link. Do not implement the planned work
    in the session: no branch, no code edits, no PR for it.
+
+---
+
+## §32. Production Data Reads — Bridge First (MANDATORY)
+
+This applies in this repo and in every consumer repo that receives this file
+via the `@stable` sync. **When a repo documents a read-only DB bridge, read
+production data through it yourself. Ask the user only when the bridge cannot
+answer.**
+
+### A) Read Through the Bridge — Act, Do Not Ask
+
+Whenever a task needs production data (documents, counts, job or settlement
+state, run markers, logs), query the read-only bridge described in the repo's
+agents file (`AGENTS.md` / `agents.md`, usually an "Agent DB bridge" section)
+before doing anything else. This is a carve-out from §2. It covers:
+
+- verification steps in `/deploy-activate` and `/verify-activation` runbooks;
+- removal preflight checks in `docs/scripts-pending-removal.md` (§18.F);
+- investigations and diagnostics (§8).
+
+Use the targets, ops and request shapes that section documents, and reference
+the bridge URL and token only via env expansion.
+
+### B) What Not to Do
+
+- Do not ask the user to run a query, open a database client, or paste data
+  that the bridge can return.
+- Do not pull database credentials (for example from the DigitalOcean API)
+  to connect directly.
+- Do not treat a 404 as "bridge down": the bridges answer only a correct
+  POST. Check the env vars and send the real request.
+
+### C) When to Go to the User
+
+Ask only when the bridge cannot answer: its env vars are missing, the correct
+POST fails, or the data needs an op, target or database outside the bridge's
+scope. Say once exactly what failed and what you need, then continue with any
+work that does not depend on it. No retry loops (§18).
+
+### D) Scope
+
+Bridges are read-only. Writes and DB mutations still go through code paths
+under §10 and §18.D. Never echo, log or commit a bridge URL or token. A repo
+whose agents file documents no bridge is unaffected.
+
+---
+
+## §33. GitHub Runner Concurrency (MANDATORY)
+
+This applies in this repo and in every consumer repo that receives this file
+via the `@stable` sync, and it is not superseded by §12.
+
+The account's concurrent-job limit is a shared resource, like the API rate
+limit in §15. Every job, matrix leg and reusable-workflow job holds one runner
+slot while it runs, and every workflow in every repo on the account draws from
+the same pool. A burst of small jobs queues the pipeline's real work behind
+them. Incident: from 2026-11-11 the account's Actions queue was jammed, with
+487 queued runs in coding-workflows alone on 2026-11-15
+(`docs/plans/reduce-actions-run-volume-plan.md`).
+
+When you add or change a workflow (`.github/workflows/*.yml`,
+`workflow-templates/*.yml`), or plan one, check first whether the work can run
+on fewer runners. Delivery speed must not suffer.
+
+### A) Rules
+
+- **Fold before you add.** Before you add a job, look for an existing job in
+  the same workflow, or on the same trigger, that already runs at that point.
+  Give it the work as extra steps, or as a script one step calls.
+- **Split only for a reason**, and name the reason in a comment above the job:
+  - running in parallel shortens the critical path to a result someone is
+    waiting on (independent reviewers, long test shards);
+  - the combined job would come within 25% of its `timeout-minutes` or of the
+    360-minute GitHub-hosted job limit;
+  - the work needs different `permissions:`, secrets, environment or runner
+    image, and must stay isolated for security (§1 outranks this rule);
+  - a `needs:` gate, a different trigger condition, or failure isolation
+    requires it (one job's failure must not hide another's result).
+- **Filter at the trigger, then at the job.** Use trigger filters (`paths:`,
+  `types:`, `branches:`) so a run that would do nothing is never created. A
+  job-level `if:` that is false takes no runner, but the skipped run still
+  floods the queue and the API, and in consumers it fires another
+  `workflow_run` event. Avoid a job whose only purpose is to decide whether
+  other jobs run; fold that check into a trigger filter or into the first
+  step of the job that needs it.
+- **Coalesce superseded runs.** Give workflows that re-run on every push, sync
+  or schedule a `concurrency:` group, so a newer run replaces the one still
+  waiting. Set `cancel-in-progress: true` only for runs that write no state
+  (lint, tests, read-only reports). Runs that merge, release, push, label or
+  write a DB keep `cancel-in-progress: false`.
+- **Bound fan-out.** Batch N items into `ceil(N / batch_size)` jobs instead of
+  one job per item, and set `max-parallel` on matrices, so one event cannot
+  take most of the pool. This is the runner counterpart of §15's batched
+  GraphQL. Starting one run per item from inside a loop (`gh workflow run`,
+  `repository_dispatch`) when one run could take the batch is a
+  review-blocker.
+- **Keep delivery fast.** Merging jobs that run one after another is always
+  allowed: it saves the setup and the queue wait between them. Merge parallel
+  jobs only when the merged job stays inside its time limits and no result
+  someone is waiting on arrives later. Otherwise keep them parallel and say
+  why.
+- **Respect time limits.** Set the merged job's `timeout-minutes` to the sum
+  of the work it now runs plus headroom, never above 360, and keep each
+  step's own timeouts.
+
+### B) Justification and Review
+
+- A PR or plan that adds a job, a workflow or a matrix leg that runs on every
+  PR, push, comment or schedule MUST say in its body why the work could not
+  join an existing job, and give the jobs per triggering event before and
+  after. An unexplained new job of that kind is a review-blocker. Rarely
+  triggered jobs (manual dispatch, release) need a one-line reason.
+- Merging or removing a job that is a required status check, or that a
+  `needs:`, a log parser or a heal rule cites by id or name, is a §6 removal:
+  ask first (§2, §12.D).
+
+### C) Relationship to Other Rules
+
+- §27: steps folded into a job grow the workflow file. Stay under the
+  480,000-byte guard by moving `run:` bodies into `scripts/`, never by
+  splitting the work into more jobs or workflows.
+- §15: one job that does the work of several also shares their API results;
+  reuse them instead of fetching again.
 
 ---
 
