@@ -2240,7 +2240,10 @@ _heal_red_main_group_key()
 	red_main_job="$(jq -r --arg id "${red_main_run_id}" 'map(select((.run_id | tostring) == $id and (.job_name // "") != "")) | first | .job_name // ""' "${SUMMARIES_FILE}" 2>/dev/null || true)"
 	red_main_workflow="$(jq -r --arg id "${red_main_run_id}" 'map(select((.run_id | tostring) == $id and (.workflow_name // "") != "")) | first | .workflow_name // ""' "${SUMMARIES_FILE}" 2>/dev/null || true)"
 	[ -n "${red_main_workflow}" ] || red_main_workflow="${FIRST_WORKFLOW_NAME:-}"
-	if ! red_main_json="$(python3 "${HEAL_PY}" red-main-group-key --workflow-name "${red_main_workflow}" --failing-job "${red_main_job}" 		--branch "${red_main_branch}" --default-branch "${PROVENANCE_DEFAULT_BRANCH:-}" --event "${red_main_event}" 		--workflow-path "${red_main_path}" 2>/dev/null)" 		|| ! jq -e '(.key | type == "string" and test("^([0-9a-f]{64})?$")) and (.reason | type == "string" and test("^[a-z_]{1,40}$"))' <<< "${red_main_json}" >/dev/null 2>&1; then
+	if ! red_main_json="$(python3 "${HEAL_PY}" red-main-group-key --workflow-name "${red_main_workflow}" --failing-job "${red_main_job}" \
+		--branch "${red_main_branch}" --default-branch "${PROVENANCE_DEFAULT_BRANCH:-}" --event "${red_main_event}" \
+		--workflow-path "${red_main_path}" 2>/dev/null)" \
+		|| ! jq -e '(.key | type == "string" and test("^([0-9a-f]{64})?$")) and (.reason | type == "string" and test("^[a-z_]{1,40}$"))' <<< "${red_main_json}" >/dev/null 2>&1; then
 		log "red_main_group key= outcome=skipped reason=helper_failed"
 		return 0
 	fi
@@ -2346,6 +2349,9 @@ python3 "${HEAL_PY}" budget "${BUDGET_ARGS[@]}" > "${DECISION_FILE}"
 if [ -n "${RED_MAIN_GROUP_KEY}" ]; then
 	if [ "$(jq -r '.match // ""' "${DECISION_FILE}" 2>/dev/null || true)" = "red_main_group" ]; then
 		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=open_group_heal"
+	elif [ "$(jq -r '.match // ""' "${DECISION_FILE}" 2>/dev/null || true)" = "fingerprint" ]; then
+		# Same fingerprint: recorded by the fingerprint match (scope recovery applies).
+		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=fingerprint_match"
 	else
 		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=new reason=no_open_group_heal"
 	fi

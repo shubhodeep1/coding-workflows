@@ -6179,7 +6179,9 @@ def budget_decision(
 	is true and the value is 64 lowercase hex. An OPEN heal issue whose header
 	carries ``<!-- workflow-failure-heal:red-main-group=<key> -->`` is the
 	duplicate (``match: red_main_group``), so a red default-branch CI job keeps
-	one heal issue across heads and error texts. ``gen`` / ``root`` are the
+	one heal issue across heads and error texts. When that issue's own ``fp``
+	marker equals ``fp``, the fingerprint rule below matches it instead
+	(``match: fingerprint``), so inline heal-scope recovery still applies. ``gen`` / ``root`` are the
 	matched issue's own, for display only. No match leaves the decision unchanged.
 	"""
 	now = now or _utc_now()
@@ -6271,8 +6273,11 @@ def budget_decision(
 			prior_source_lineage.append((_positive_int(markers.get("gen")) or 1, number, markers.get("root") or fp, issue_repository))
 			closed_lineage.add((issue_repository, number))
 
-	if red_main_group_duplicate is not None:
-		group_markers = parse_heal_markers(red_main_group_duplicate.get("body"))
+	# A group issue that also carries this report's fingerprint is left to the
+	# fingerprint match below (`match: fingerprint`), so inline heal-scope
+	# recovery (#7191) still sees it; the issue it records on is the same.
+	group_markers = parse_heal_markers(red_main_group_duplicate.get("body")) if red_main_group_duplicate is not None else {}
+	if red_main_group_duplicate is not None and group_markers.get("fp") != fp:
 		return {
 			"action": "duplicate",
 			"match": "red_main_group",

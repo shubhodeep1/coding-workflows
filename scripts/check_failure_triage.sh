@@ -760,18 +760,23 @@ UPSTREAM_DIAGNOSIS_FALLBACK="false"
 # (the existing default-branch route). The check is local only: the trusted
 # support helper extracts the files from the collected check-run context (no
 # credentials in its environment) and `git cat-file -e` reads the checkout's
-# objects. No GitHub API call and no fetch. Any ref that does not resolve
+# objects. No GitHub API call and no fetch here. The default-branch tree comes
+# from the workspace's refs, else from the depth-1 default-branch checkout the
+# triage workflow stages in CHECK_TRIAGE_DEFAULT_BRANCH_TREE_DIR (its local
+# branch is named after the default branch). Any ref that does not resolve
 # locally keeps today's route (fail open). Behind
 # CHECK_TRIAGE_TARGET_FILES_GUARD_ENABLED (default true).
 triage_target_files_guard()
 {
 	local guard_target="${ROUTING_TARGET_BRANCH:-}" guard_default="${ROUTING_DEFAULT_BRANCH:-}" guard_sha="${HEAD_SHA:-}"
 	local guard_tests="" guard_path="" guard_target_commit="" guard_default_commit="" guard_ref=""
+	local guard_dir="" guard_default_dir="" guard_tree_dir="${CHECK_TRIAGE_DEFAULT_BRANCH_TREE_DIR:-}"
 	local guard_on_target=0 guard_on_default=0
-	local -a guard_paths=()
+	local -a guard_paths=() guard_dirs=()
 	# Git without system/global config or credentials; never prompts or fetches.
-	local -a guard_git=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GH_TOKEN -u GITHUB_TOKEN -u OPENROUTER_API_KEY -u TG_BOT_SECRET
-		GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 git -C "${GITHUB_WORKSPACE:-.}")
+	local -a guard_git_env=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GH_TOKEN -u GITHUB_TOKEN -u OPENROUTER_API_KEY -u TG_BOT_SECRET
+		GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 git)
+	local -a guard_git=("${guard_git_env[@]}" -C "${GITHUB_WORKSPACE:-.}")
 	guard_sha="${guard_sha,,}"
 	[ -n "${guard_target}" ] || return 0
 	[ "${HISTORICAL_MODE:-false}" != "true" ] || return 0
@@ -788,8 +793,14 @@ triage_target_files_guard()
 		return 0
 	fi
 	if [ -s "${PR_CHECK_RUNS_CONTEXT_FILE:-}" ]; then
-		guard_tests="$(env -u GH_TOKEN -u GITHUB_TOKEN -u OPENROUTER_API_KEY -u TG_BOT_SECRET PYTHONDONTWRITEBYTECODE=1 \
-			timeout 60 python3 -I -B "${UPSTREAM_HEAL_PY}" heal-scope failing-tests --log-files "${PR_CHECK_RUNS_CONTEXT_FILE}" 2>/dev/null || true)"
+		# A failed, timed-out or malformed extraction keeps the route but logs
+		# its own token, so it is never read as "no failing files".
+		if ! guard_tests="$(env -u GH_TOKEN -u GITHUB_TOKEN -u OPENROUTER_API_KEY -u TG_BOT_SECRET PYTHONDONTWRITEBYTECODE=1 \
+			timeout 60 python3 -I -B "${UPSTREAM_HEAL_PY}" heal-scope failing-tests --log-files "${PR_CHECK_RUNS_CONTEXT_FILE}" 2>/dev/null)" \
+			|| ! jq -e 'type == "object"' <<< "${guard_tests}" >/dev/null 2>&1; then
+			log "routing outcome=keep reason=helper_failed target_branch=${guard_target}"
+			return 0
+		fi
 	fi
 	# Paths come from untrusted CI log text: strict shape, no `..`, at most 20.
 	while IFS= read -r guard_path; do
@@ -814,10 +825,19 @@ triage_target_files_guard()
 		log "routing outcome=keep reason=target_ref_unavailable target_branch=${guard_target}"
 		return 0
 	fi
-	for guard_ref in "refs/remotes/origin/${guard_default}" "refs/heads/${guard_default}"; do
-		guard_default_commit="$("${guard_git[@]}" rev-parse --verify --quiet "${guard_ref}^{commit}" 2>/dev/null || true)"
-		[[ "${guard_default_commit}" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] && break
-		guard_default_commit=""
+	guard_dirs=("${GITHUB_WORKSPACE:-.}")
+	if [ -n "${guard_tree_dir}" ] && [ -d "${guard_tree_dir}" ] && [ ! -L "${guard_tree_dir}" ]; then
+		guard_dirs+=("${guard_tree_dir}")
+	fi
+	for guard_dir in "${guard_dirs[@]}"; do
+		for guard_ref in "refs/remotes/origin/${guard_default}" "refs/heads/${guard_default}"; do
+			guard_default_commit="$("${guard_git_env[@]}" -C "${guard_dir}" rev-parse --verify --quiet "${guard_ref}^{commit}" 2>/dev/null || true)"
+			if [[ "${guard_default_commit}" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+				guard_default_dir="${guard_dir}"
+				break 2
+			fi
+			guard_default_commit=""
+		done
 	done
 	if [ -z "${guard_default_commit}" ]; then
 		log "routing outcome=keep reason=default_ref_unavailable target_branch=${guard_target}"
@@ -827,7 +847,7 @@ triage_target_files_guard()
 		if "${guard_git[@]}" cat-file -e "${guard_target_commit}:${guard_path}" >/dev/null 2>&1; then
 			guard_on_target=$((guard_on_target + 1))
 		fi
-		if "${guard_git[@]}" cat-file -e "${guard_default_commit}:${guard_path}" >/dev/null 2>&1; then
+		if "${guard_git_env[@]}" -C "${guard_default_dir}" cat-file -e "${guard_default_commit}:${guard_path}" >/dev/null 2>&1; then
 			guard_on_default=$((guard_on_default + 1))
 		fi
 	done
@@ -1612,28 +1632,13 @@ fi
 # as before.
 BASE_GATE_ENABLED="${CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED:-true}"
 BASE_REF="$(printf '%s' "${PR_JSON}" | jq -r '.base.ref // ""' 2>/dev/null || true)"
-if [ "${HISTORICAL_MODE}" = "true" ]; then
-	# The PR is already closed (usually merged into its base), so comparing
-	# with the base branch's current result says nothing about this run.
-	log "base_gate outcome=bypassed reason=historical_mode pr=${PR_NUMBER}"
-elif [ "${BASE_GATE_ENABLED,,}" = "false" ]; then
-	log "base_gate outcome=disabled pr=${PR_NUMBER}"
-elif [ -n "${INTEGRATION_BRANCH}" ]; then
-	# Issue #6726: this issue is routed to the failing PR's own verified
-	# orchestrator/project-<N> head, so its fix lands on that PR's branch and a
-	# green base branch does not make the failure unfixable. No API reads.
-	log "base_gate outcome=file reason=integration_branch branch=${INTEGRATION_BRANCH} pr=${PR_NUMBER}"
-elif [ -n "${ROUTING_REF}" ]; then
-	# Issue #6974: routed to the failing PR's verified head ref (see above).
-	log "base_gate outcome=file reason=pr_head_route branch=${ROUTING_REF} pr=${PR_NUMBER}"
-elif [ -n "${ROUTING_TARGET_BRANCH}" ]; then
-	# Issue #7056: the issue carries a verified "Target branch:" line naming the
-	# failing PR's own head, so its fix lands on that branch and a green base
-	# branch does not make the failure unfixable. No API reads.
-	log "base_gate outcome=file reason=target_branch_route branch=${ROUTING_TARGET_BRANCH} pr=${PR_NUMBER}"
-elif ! [[ "${BASE_REF}" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || [[ "${BASE_REF}" == *..* ]]; then
-	log "base_gate outcome=unknown reason=base_ref_unavailable pr=${PR_NUMBER}"
-else
+# Issue #9823: the base-branch comparison below is a function, so it runs
+# again when the target-files guard (triage_target_files_guard) later clears a
+# PR-branch route that skipped it here (reason=target_branch_route): the
+# fallback issue then targets the default branch, so it must pass the same
+# green-base check as any default-branch issue (#7020).
+triage_base_gate_check()
+{
 	base_gate_conclusion=""
 	base_gate_reason=""
 	base_gate_run_id=""
@@ -1797,6 +1802,32 @@ else
 		fi
 	fi
 	log "base_gate outcome=file base=${BASE_REF} base_conclusion=${base_gate_conclusion:-unknown}${base_gate_reason:+ reason=${base_gate_reason}} pr=${PR_NUMBER}"
+}
+BASE_GATE_TARGET_ROUTE_DEFERRED="false"
+if [ "${HISTORICAL_MODE}" = "true" ]; then
+	# The PR is already closed (usually merged into its base), so comparing
+	# with the base branch's current result says nothing about this run.
+	log "base_gate outcome=bypassed reason=historical_mode pr=${PR_NUMBER}"
+elif [ "${BASE_GATE_ENABLED,,}" = "false" ]; then
+	log "base_gate outcome=disabled pr=${PR_NUMBER}"
+elif [ -n "${INTEGRATION_BRANCH}" ]; then
+	# Issue #6726: this issue is routed to the failing PR's own verified
+	# orchestrator/project-<N> head, so its fix lands on that PR's branch and a
+	# green base branch does not make the failure unfixable. No API reads.
+	log "base_gate outcome=file reason=integration_branch branch=${INTEGRATION_BRANCH} pr=${PR_NUMBER}"
+elif [ -n "${ROUTING_REF}" ]; then
+	# Issue #6974: routed to the failing PR's verified head ref (see above).
+	log "base_gate outcome=file reason=pr_head_route branch=${ROUTING_REF} pr=${PR_NUMBER}"
+elif [ -n "${ROUTING_TARGET_BRANCH}" ]; then
+	# Issue #7056: the issue carries a verified "Target branch:" line naming the
+	# failing PR's own head, so its fix lands on that branch and a green base
+	# branch does not make the failure unfixable. No API reads.
+	log "base_gate outcome=file reason=target_branch_route branch=${ROUTING_TARGET_BRANCH} pr=${PR_NUMBER}"
+	BASE_GATE_TARGET_ROUTE_DEFERRED="true"
+elif ! [[ "${BASE_REF}" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || [[ "${BASE_REF}" == *..* ]]; then
+	log "base_gate outcome=unknown reason=base_ref_unavailable pr=${PR_NUMBER}"
+else
+	triage_base_gate_check
 fi
 
 # --- Lineage cap / escalation ----------------------------------------------
@@ -2301,6 +2332,18 @@ fi
 # Issue #9823: after routing set the target and the context was collected,
 # before the route crosses the collect-stage metadata hand-off.
 triage_target_files_guard || true
+# The base gate skipped its comparison for the PR-branch route; when the guard
+# cleared that route, the issue now targets the default branch, so run the
+# comparison it skipped (same reads, skips and fail-open as above).
+if [ "${BASE_GATE_TARGET_ROUTE_DEFERRED}" = "true" ] && [ -z "${ROUTING_TARGET_BRANCH}" ] &&
+	[ -z "${INTEGRATION_BRANCH}" ] && [ -z "${ROUTING_REF}" ]; then
+	if ! [[ "${BASE_REF}" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || [[ "${BASE_REF}" == *..* ]]; then
+		log "base_gate outcome=unknown reason=base_ref_unavailable pr=${PR_NUMBER}"
+	else
+		log "base_gate outcome=recheck reason=target_files_fallback base=${BASE_REF} pr=${PR_NUMBER}"
+		triage_base_gate_check
+	fi
+fi
 
 if [ "${TRIAGE_STAGE}" = "collect" ]; then
 	jq -n --arg pr_number "${PR_NUMBER}" --arg check_name "${CHECK_NAME}" \

@@ -13750,6 +13750,13 @@ def test_budget_decision_red_main_group_hit_miss_branch_and_switch_off(tmp_path:
 	same_fp = _heal_issue(9, state="open", fp=fp)
 	assert heal.budget_decision([same_fp, grouped], fp=fp, now=P5_NOW, red_main_group=group)["match"] == "red_main_group"
 	assert heal.budget_decision([grouped], fp=fp, now=P5_NOW, red_main_group=group, max_open=1)["match"] == "red_main_group"
+	# The group issue also carries this report's fingerprint: the fingerprint
+	# match records it, so inline heal-scope recovery still sees the issue.
+	same_fp_grouped = _red_main_issue(9702, fp=fp, group=group)
+	same_fp_decision = heal.budget_decision([same_fp_grouped], fp=fp, now=P5_NOW, red_main_group=group)
+	assert same_fp_decision["action"] == "duplicate" and same_fp_decision["match"] == "fingerprint"
+	assert same_fp_decision["existing_issue"] == 9702
+	assert heal.budget_decision([same_fp_grouped, grouped], fp=fp, now=P5_NOW, red_main_group=group)["match"] == "fingerprint"
 	# Miss: another group, or a closed grouped issue, falls through to today's logic.
 	baseline = heal.budget_decision([grouped], fp=fp, now=P5_NOW)
 	assert baseline["action"] == "open"
@@ -13833,6 +13840,7 @@ def test_red_main_grouping_switch_default_log_and_workflow_wiring() -> None:
 	assert 'BUDGET_ARGS+=(--red-main-group "${RED_MAIN_GROUP_KEY}")' in script
 	assert 'log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=open_group_heal"' in script
 	assert 'log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=new reason=no_open_group_heal"' in script
+	assert 'log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=fingerprint_match"' in script
 	# Recovery strips the group argument and never replaces a group-matched issue.
 	recovery = script.split("\n_heal_scope_recovery_evaluate()\n{", 1)[1].split("\n}\n", 1)[0]
 	assert '!= "red_main_group" ] || return 0' in recovery
