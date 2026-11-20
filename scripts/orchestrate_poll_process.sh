@@ -428,6 +428,16 @@ elif [ -f "scripts/pr_checks_lib.sh" ]; then
   source scripts/pr_checks_lib.sh
 fi
 unset _OPP_LIB_DIR
+# Issue #9732: the two stall-recovery poller steps set REVIEW_FINAL_CI_WORKFLOW
+# (ci.yml in this repository) only for the standalone attempt_merge
+# required-checks chain. Capture it here and clear it for the rest of the
+# poller, so every existing caller of the shared helpers (noop-suspicious
+# gate D, the base-freshness branch update, the legacy attempt_merge chain
+# with STALL_MERGE_REQUIRED_CHECKS_ENABLED=false) runs exactly as it did
+# before the steps set it. _standalone_attempt_merge_required_checks passes
+# the captured value to its own calls only.
+_OPP_STALL_MERGE_FINAL_CI_WORKFLOW="${REVIEW_FINAL_CI_WORKFLOW:-}"
+unset REVIEW_FINAL_CI_WORKFLOW
 # Merge-base freshness gate (scripts/pr_checks_lib.sh, operator decision
 # Q35: A): before a direct merge, a PR whose base moved under files it
 # touches is updated from the base instead and re-validated by its
@@ -2630,7 +2640,8 @@ _stall_merge_required_checks_enabled()
 # rule. Since #9528 Phase 4 ci.yml has no pull_request trigger, so the named
 # CI check (lint) exists on a head only after a final-CI dispatch; the wait
 # helper (scripts/pr_checks_lib.sh) makes that dispatch when
-# REVIEW_FINAL_CI_WORKFLOW is set. Stops at the first refusal so the recorded
+# REVIEW_FINAL_CI_WORKFLOW is set (here, the value captured at startup in
+# _OPP_STALL_MERGE_FINAL_CI_WORKFLOW). Stops at the first refusal so the recorded
 # reason is always the first one.
 #
 #   _standalone_attempt_merge_required_checks <issue> <pr> <state> <mergeable> <head_sha> <base_ref> [head_ref]
@@ -2667,7 +2678,11 @@ _standalone_attempt_merge_required_checks()
 		STALL_MERGE_REFUSAL_REASON="bad_head_sha"
 		return 1
 	fi
-	if ! _pr_base_fresh_for_merge "${pr}" "${head_sha}" "${base_ref}"; then
+	# The final-CI workflow the poller captured at startup (see the source
+	# block); a caller that never sourced the poller falls back to the env.
+	local stall_step_final_ci_wf="${_OPP_STALL_MERGE_FINAL_CI_WORKFLOW-${REVIEW_FINAL_CI_WORKFLOW:-}}"
+	if ! REVIEW_FINAL_CI_WORKFLOW="${stall_step_final_ci_wf}" \
+		_pr_base_fresh_for_merge "${pr}" "${head_sha}" "${base_ref}"; then
 		STALL_MERGE_REFUSAL_REASON="base_not_fresh"
 		return 1
 	fi
@@ -2695,7 +2710,7 @@ _standalone_attempt_merge_required_checks()
 	# head (fork head, or a deleted fork whose head.repo is null, which
 	# _pr_ensure_final_ci's own fork check lets through). Evaluate the
 	# checks without any final-CI dispatch then; a missing check refuses.
-	local merge_final_ci_wf="${REVIEW_FINAL_CI_WORKFLOW:-}"
+	local merge_final_ci_wf="${stall_step_final_ci_wf}"
 	[ -n "${head_ref}" ] || merge_final_ci_wf=""
 	PR_CHECKS_HEAD_REF="${head_ref}" REVIEW_FINAL_CI_WORKFLOW="${merge_final_ci_wf}" \
 		_pr_wait_for_required_checks "${pr}" "${head_sha}" "${base_ref}" 0 || wait_rc=$?

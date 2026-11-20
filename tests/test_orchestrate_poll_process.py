@@ -32697,5 +32697,43 @@ def test_orchestrate_poll_steps_carry_stall_merge_final_ci_env():
 		for line in lines:
 			assert block.count(line) == 1, (step, line)
 
+
+def test_stall_merge_final_ci_workflow_is_captured_and_cleared_for_other_paths(tmp_path):
+	# The step-wide REVIEW_FINAL_CI_WORKFLOW is for the new attempt_merge chain
+	# only: the poller captures it right after sourcing pr_checks_lib.sh and
+	# clears it, so gate D, the base-freshness branch update and the legacy
+	# flag-off chain never see it (their dispatch behaviour is unchanged).
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	capture = (
+		"unset _OPP_LIB_DIR\n"
+		"# Issue #9732: the two stall-recovery poller steps set REVIEW_FINAL_CI_WORKFLOW\n"
+	)
+	assert capture in source
+	block = source[source.index(capture):]
+	block = block[:block.index("unset REVIEW_FINAL_CI_WORKFLOW\n") + len("unset REVIEW_FINAL_CI_WORKFLOW\n")]
+	assert '_OPP_STALL_MERGE_FINAL_CI_WORKFLOW="${REVIEW_FINAL_CI_WORKFLOW:-}"\n' in block
+	helper = _extract_bash_function(source, "_standalone_attempt_merge_required_checks()\n{")
+	# Outside the helper and its header comment, nothing in the poller reads it.
+	rest = source.replace(helper, "")
+	assert "${REVIEW_FINAL_CI_WORKFLOW" not in rest.replace('"${REVIEW_FINAL_CI_WORKFLOW:-}"\nunset REVIEW_FINAL_CI_WORKFLOW', "")
+	log = tmp_path / "calls.log"
+	q = shlex.quote
+	script = (
+		"set -euo pipefail\n"
+		f"LOG={q(str(log))}\n"
+		"unset REVIEW_FINAL_CI_WORKFLOW\n"
+		"_OPP_STALL_MERGE_FINAL_CI_WORKFLOW=ci.yml\n"
+		"_pr_base_fresh_for_merge() { echo \"fresh wf=${REVIEW_FINAL_CI_WORKFLOW:-}\" >> \"$LOG\"; return 0; }\n"
+		"_pr_wait_for_required_checks() { echo \"wait wf=${REVIEW_FINAL_CI_WORKFLOW:-}\" >> \"$LOG\"; PR_CHECKS_WAIT_OUTCOME=ok; return 0; }\n"
+		"_orch_squash_merge_bound() { echo \"merge wf=${REVIEW_FINAL_CI_WORKFLOW:-}\" >> \"$LOG\"; return 0; }\n"
+		+ helper
+		+ f"_standalone_attempt_merge_required_checks 501 416 open true {_STALL_MERGE_SHA} main ai/issue-501\n"
+		+ 'echo "after=${REVIEW_FINAL_CI_WORKFLOW:-unset}"\n'
+	)
+	res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+	assert res.returncode == 0, res.stdout + res.stderr
+	assert res.stdout.strip().splitlines()[-1] == "after=unset"
+	assert log.read_text(encoding="utf-8").splitlines() == ["fresh wf=ci.yml", "wait wf=ci.yml", "merge wf="]
+
 if __name__ == "__main__":
 	raise SystemExit(main())
