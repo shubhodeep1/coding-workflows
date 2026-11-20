@@ -15,3 +15,5 @@ The same run's Phase 7 failure (the cancel-on-close run stayed queued for the wh
 ### For contributors
 
 Tests: `tests/test_test_and_mark_stable_clarify_negative_outputs.py` runs the step bodies of both jobs against a fake `gh` that returns a rate-limit body.
+
+The "Deep verify: inspect all workflow run steps" body of the `e2e-smoke-test` job moved verbatim to `scripts/stable_e2e_step_deep_verify.sh`, through the same github.sha-pinned step-script wrapper as Phase 4 and Phase 4b. The move keeps `test-and-mark-stable.yml` under its 430,000-byte ceiling after the guards above were added.
