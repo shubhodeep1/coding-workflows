@@ -824,7 +824,10 @@ review_prepush_test_gate_repair()
 	# PR-caused failures, the editor had changes and the tree is now provably
 	# clean, keep the editor's change. The pre-repair result stays final, so
 	# an unmet done-check is still reported. Any unreadable input falls
-	# through to "ran" (today's behaviour).
+	# through to "ran" (today's behaviour). In the repair loop the pre-repair
+	# result is the run just before this turn (possibly a re-run after an
+	# earlier repair), and "revert all" restores this turn's baseline, the
+	# tree that run verified; a result with PR-caused failures never fires.
 	if [ "${rpg_pre_repair_ok}" = true ] && [ -n "${rpg_pre_repair_changed}" ] \
 		&& [ "${rpg_pre_repair_status}" = pass ] && [ "${rpg_pre_repair_failures}" = 0 ] \
 		&& [ "${rpg_post_repair_ok}" = true ] && [ -z "${rpg_post_repair_changed}" ]; then

@@ -426,6 +426,33 @@ def test_review_loop_repair_erased_by_the_syntax_validator_keeps_the_editor_edit
 	assert len(diag) == 1 and diag[0]["after"] == "1"
 
 
+def test_review_loop_later_turn_that_erases_a_repaired_passing_tree_keeps_it(tmp_path):
+	# Multi-turn loop: the initial run has a PR-caused failure, turn 1 fixes it
+	# (the re-run passes, done-check still unmet), and turn 2 erases the whole
+	# tree. The guard keys on the result the turn was repairing (pass, zero
+	# PR-caused failures), so it restores the tree turn 1 left, which the gate
+	# verified; it does not wipe the editor's change ("Editor changes lost").
+	# The failure is on another file, so the unmet done-check counts on top of it.
+	fail_unmet = _result("fail", failures=[{"test": "tests/test_b.py", "file": "tests/test_b.py", "names": ["test_y"],
+		"tail": "AssertionError\n"}])
+	fail_unmet["acceptance"] = {"tests/test_a.py": {"head": "fail"}}
+	repo, env = _setup(tmp_path, [fail_unmet, PASS_UNMET, PASS])
+	_seed_unmet_done_check(tmp_path, env)
+	(_work(tmp_path) / "edit.sh").write_text(
+		f"if [ \"$(wc -l < '{_work(tmp_path) / 'editor.log'}')\" -le 1 ]; then printf 'X = 3\\n' > lib/a.py;"
+		" else printf 'X = 1\\n' > lib/a.py; fi\n", encoding="utf-8")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert _editor_calls(tmp_path) == 2 and _docker_runs(tmp_path) == 2, proc.stderr
+	assert (repo / "lib" / "a.py").read_text(encoding="utf-8") == "X = 3\n"
+	assert "outcome=repair_reverted reason=passing_change_erased" in proc.stderr
+	assert "turns=1 stop=reverted" in proc.stderr
+	diag = _repair_diag(proc.stderr)
+	assert len(diag) == 2
+	assert diag[0]["pre_status"] == "fail" and diag[0]["after"] == "1"
+	assert diag[1]["pre_status"] == "pass" and diag[1]["pre_failures"] == "0" and diag[1]["after"] == "0"
+
+
 def test_review_loop_repair_that_keeps_a_change_is_kept(tmp_path):
 	repo, env = _setup(tmp_path, [PASS_UNMET, PASS])
 	_seed_unmet_done_check(tmp_path, env)
