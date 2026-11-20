@@ -13762,6 +13762,14 @@ def test_budget_decision_red_main_group_hit_miss_branch_and_switch_off(tmp_path:
 	low_same_fp = _red_main_issue(9690, fp=fp, group=group)
 	low_decision = heal.budget_decision([grouped, low_same_fp], fp=fp, now=P5_NOW, red_main_group=group)
 	assert low_decision["match"] == "fingerprint" and low_decision["existing_issue"] == 9690
+	# A higher-numbered open non-group issue with this fingerprint never takes
+	# the occurrence from the group issue that carries the same fingerprint.
+	high_non_group = _heal_issue(9800, state="open", fp=fp)
+	for listing in ([low_same_fp, high_non_group], [high_non_group, low_same_fp], [grouped, high_non_group, low_same_fp]):
+		pinned = heal.budget_decision(listing, fp=fp, now=P5_NOW, red_main_group=group)
+		assert pinned["match"] == "fingerprint" and pinned["existing_issue"] == 9690, listing
+	# Grouping off: today's fingerprint preference (the higher number) applies.
+	assert heal.budget_decision([low_same_fp, high_non_group], fp=fp, now=P5_NOW)["existing_issue"] == 9800
 	# Miss: another group, or a closed grouped issue, falls through to today's logic.
 	baseline = heal.budget_decision([grouped], fp=fp, now=P5_NOW)
 	assert baseline["action"] == "open"

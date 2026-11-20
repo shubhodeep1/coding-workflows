@@ -6196,6 +6196,8 @@ def budget_decision(
 	red_main_group_duplicate: dict[str, Any] | None = None
 	# Set when any open group issue carries this report's fingerprint (#9823).
 	red_main_group_same_fp_seen = False
+	# The preferred open group issue that carries this report's fingerprint.
+	red_main_group_same_fp_duplicate: dict[str, Any] | None = None
 	cause_window_start = now - timedelta(days=min(max(cause_window_days, 1), 30) if type(cause_window_days) is int else 3)
 	cause_duplicate: dict[str, Any] | None = None
 	open_issues: list[dict[str, Any]] = []
@@ -6260,6 +6262,8 @@ def budget_decision(
 			if red_main_group is not None and parse_red_main_group_marker(issue.get("body")) == red_main_group:
 				red_main_group_duplicate = _preferred_duplicate(red_main_group_duplicate, issue)
 				red_main_group_same_fp_seen = red_main_group_same_fp_seen or markers.get("fp") == fp
+				if markers.get("fp") == fp:
+					red_main_group_same_fp_duplicate = _preferred_duplicate(red_main_group_same_fp_duplicate, issue)
 			if markers.get("fp") == fp:
 				duplicate = _preferred_duplicate(duplicate, issue)
 			elif same_source:
@@ -6295,6 +6299,11 @@ def budget_decision(
 			"open_count": len(open_issues),
 			"today_count": created_today,
 		}
+	# The fingerprint match records on that group issue, not on a non-group
+	# issue with the same fingerprint that _preferred_duplicate would favour,
+	# so the group keeps one heal issue (#9823).
+	if red_main_group_same_fp_duplicate is not None:
+		duplicate = red_main_group_same_fp_duplicate
 	duplicate_match = "fingerprint"
 	if duplicate is None and source_duplicate is not None:
 		duplicate = source_duplicate
