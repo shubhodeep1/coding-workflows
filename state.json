@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-20T15:03:50Z",
+  "tick_at": "2026-11-20T15:27:19Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -78,13 +78,13 @@
     },
     {
       "current_wave": 2,
-      "integration_ahead_by": "6",
+      "integration_ahead_by": "7",
       "issue_counts": {
         "closed": 1,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 1,
+        "merged": 2,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -95,7 +95,7 @@
       "status": "failed",
       "title": "[Orchestrator] Pipeline human-wait elimination: CI-quick parity, red-main heal dedupe, resolver safeguards, .github/ai plan grants, hold re-evaluation, nothing-to-implement verify, operator-step tick",
       "total_waves": 10,
-      "wave_complete": false
+      "wave_complete": true
     },
     {
       "current_wave": 3,
