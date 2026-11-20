@@ -2689,7 +2689,7 @@ jobs:
             gate_log skipped pr_read_failed
             exit 0
           fi
-          pr_reason="$(jq -r --arg repo "${GITHUB_REPOSITORY}" --arg sha "${PUSHED_SHA}" --arg re '^auto/update-workflows-[0-9a-f]{12}$' '
+          pr_reason="$(jq -r --arg repo "${GITHUB_REPOSITORY}" --arg sha "${PUSHED_SHA}" --arg re '^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$' '
             if type != "object" then "invalid_response"
             elif .state != "open" then "pr_not_open"
             elif ((.head.ref // "") | type) != "string" or ((.head.ref // "") | test($re) | not) then "not_updater_branch"

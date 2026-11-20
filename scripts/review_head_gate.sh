@@ -87,7 +87,9 @@ review_head_gate_withdraw_auto_merge()
 # (btc_sweeper#264, atlas-bridge.gd#134). Post `success` for the gated head
 # only when every signal holds; anything missing, failed, stale or unreadable
 # keeps the gate pending (fail closed):
-#   - the head ref matches ^auto/update-workflows-[0-9a-f]{12}$ (hint and live);
+#   - the head ref matches ^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$ (hint
+#     and live; -r2..-r5 are updater resend branches, as in the other review
+#     guards in review_enable_auto_merge.sh and review_rb_judge.sh);
 #   - the PR is open and its head repository is the base repository (no fork);
 #   - the live head SHA equals the gated SHA;
 #   - the combined status of that SHA has ai-update-workflows/verify=success
@@ -99,7 +101,7 @@ review_head_gate_withdraw_auto_merge()
 # its own fresh read); one combined-status read. Logs exactly one
 # REVIEW_HEAD_GATE mode=updater_exempt line. Returns 0 only when posted.
 : "${REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED:=true}"
-REVIEW_HEAD_GATE_UPDATER_BRANCH_RE='^auto/update-workflows-[0-9a-f]{12}$'
+REVIEW_HEAD_GATE_UPDATER_BRANCH_RE='^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$'
 REVIEW_HEAD_GATE_UPDATER_VERIFY_CONTEXT="ai-update-workflows/verify"
 REVIEW_HEAD_GATE_UPDATER_INTEGRITY_CONTEXT="coding-workflows/workflow-integrity"
 

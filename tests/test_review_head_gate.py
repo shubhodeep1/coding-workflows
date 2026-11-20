@@ -391,6 +391,17 @@ def test_updater_pr_with_green_verify_and_integrity_gets_success(tmp_path: Path)
 	assert [call[1] for call in calls if call[:2] != ["api", "-X"]] == ["repos/o/r/pulls/42", f"repos/o/r/commits/{HEAD}/status?per_page=100"]
 
 
+def test_updater_resend_branch_gets_success(tmp_path: Path) -> None:
+	# Resend branches (-r2..-r5) are updater PRs too; the other review guards
+	# accept them, so the head gate must not stay pending on them (#9483).
+	resend = UPDATER_REF + "-r2"
+	pr = _updater_pr(head={"ref": resend, "sha": HEAD, "repo": {"full_name": "o/r"}})
+	result, calls = _run_exempt(tmp_path, hint=resend, pr=pr)
+	assert result.returncode == 0, result.stderr
+	assert len(_statuses(calls)) == 1
+	assert "outcome=posted reason=verified" in result.stdout
+
+
 def test_updater_exemption_reports_a_failed_post(tmp_path: Path) -> None:
 	result, calls = _run_exempt(tmp_path, FAKE_FAIL="post")
 	assert result.returncode == 1
@@ -442,6 +453,7 @@ def test_updater_exemption_fails_closed(tmp_path: Path, kwargs: dict, reason: st
 	("", {}, "head_ref_unavailable"),
 	("auto/update-workflows-0123", {}, "not_updater_branch"),
 	("ai/issue-9483", {}, "not_updater_branch"),
+	(UPDATER_REF + "-r6", {}, "not_updater_branch"),
 	(UPDATER_REF, {"REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED": "false"}, "disabled"),
 	(UPDATER_REF, {"REVIEW_HEAD_GATE_STATUS_ENABLED": "false"}, "status_disabled"),
 	(UPDATER_REF, {"REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED": "FALSE"}, "disabled"),
@@ -478,7 +490,7 @@ def test_gate_main_skips_the_exemption_on_deterministic_skip(tmp_path: Path) -> 
 
 def test_review_tail_calls_the_exemption_before_its_updater_exit() -> None:
 	text = (ROOT / "scripts" / "review_enable_auto_merge.sh").read_text(encoding="utf-8")
-	branch = text.index('if [[ "${_orch_pr_head_ref}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then')
+	branch = text.index('if [[ "${_orch_pr_head_ref}" =~ ^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$ ]]; then')
 	section = text[branch:text.index("exit 0", branch)]
 	assert 'review_head_gate_updater_exempt "${GITHUB_REPOSITORY}" "${PR_NUMBER}" "${INITIAL_HEAD_SHA:-}" "${_orch_pr_head_ref}" "${_ORCH_PR_META_JSON}" || true' in section
 	assert "reason=updater_pr_verify_job_owns_merge" in section
