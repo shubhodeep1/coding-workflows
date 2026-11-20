@@ -211,6 +211,7 @@ def _run_prerequisites_budget(**overrides: str) -> subprocess.CompletedProcess[s
 		"REVIEW_PHASE_HANDOFF_BUDGET_MINUTES",
 		"EDITOR_RETRY_BUDGET_MINUTES",
 		"PHASE7_WAIT_BUDGET_MINUTES",
+		"PHASE7_QUEUE_WAIT_CAP_MINUTES",
 		"E2E_FINALIZATION_RESERVE_MINUTES",
 		"PREPUSH_GATE_STEP_STALL_MINUTES",
 	):
@@ -254,7 +255,13 @@ def test_prepush_gate_stall_budget_defaults_fit_and_bad_values_fail() -> None:
 def test_named_retry_and_phase7_budgets_replace_literal_deadlines() -> None:
 	job = _e2e_job(_read_workflow())
 	assert "DEADLINE=$(( $(date +%s) + (EDITOR_RETRY_BUDGET_MINUTES * 60) ))" in job
-	assert job.count("(PHASE7_WAIT_BUDGET_MINUTES * 60)") == 2
+	# The open-PR wait starts from the named budget; both Phase 7 waits then
+	# take their deadline from phase7_wait_deadline, which derives it from
+	# the same budget (#9794).
+	assert job.count("(PHASE7_WAIT_BUDGET_MINUTES * 60)") == 1
+	assert job.count("budget_secs=$(( PHASE7_WAIT_BUDGET_MINUTES * 60 ))") == 1
+	assert job.count('phase7_wait_deadline "${PHASE7_WAIT_START}" "${EXISTING_STATUS}"') == 2
+	assert job.count('phase7_wait_deadline "${POLL_START}" "${STATUS:-}"') == 1
 
 
 def test_phase4b_adopts_the_oldest_eligible_active_review_run() -> None:

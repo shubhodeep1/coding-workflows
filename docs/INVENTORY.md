@@ -337,6 +337,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/setup_serena.sh` — setup_serena.sh — fail-soft Serena bootstrapper for Codex MCP usage.
 - `scripts/slop_scan_local.py` — Local slop-scan heuristics for review_autofix changed scripts and Python heredocs.
 - `scripts/stable_e2e_step_verify_bait_removed.sh` — body of the test-and-mark-stable.yml "Phase 4b: Verify editor restored canary (pytest + retry)" step (`id: verify-bait-removed`; sourced by the step from a `github.sha`-pinned copy in `RUNNER_TEMP`; moved out to keep the workflow under the §27 size guard, issue #7991).
+- `scripts/stable_e2e_step_verify_cancel_on_close.sh` — body of the test-and-mark-stable.yml "Phase 7: Close PR and verify cancel_on_pr_close fires" step (`id: verify-cancel-on-close`; sourced by the step from a `github.sha`-pinned copy in `RUNNER_TEMP`; moved out to keep the workflow under the 430,000-byte headroom check, PR #9794). Its wait budget starts when the cancel run leaves the queue, under `PHASE7_QUEUE_WAIT_CAP_MINUTES`.
 - `scripts/stable_e2e_step_wait_review.sh` — body of the test-and-mark-stable.yml "Phase 4: Wait for review & autofix to complete" step (`id: wait-review`; sourced by the step from a `github.sha`-pinned copy in `RUNNER_TEMP`; moved out to keep the workflow under the §27 size guard, issue #7991).
 - `scripts/stage_workflow_log_bundle.py` — Bound workflow-log artifacts before mounting them into the isolated analyzer.
 - `scripts/stage_workflow_support.sh` — Shell helper for stage workflow support.
