@@ -61,8 +61,10 @@ issue #9730) is not a work item and is skipped as `security_audit_tracker`,
 also when it is in the failed-project set, so the judge can never close it;
 SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED (unset, empty or `true` in any
 case is on; `false` is off; any other value is off with one stderr warning)
-turns it off. A failed project the search did not return carries no labels
-here, so it keeps the project path.
+turns it off. A failed project the search did not return (its block label
+was released) carries no labels here; it gets `ai:security-audit` back when
+its fetched body carries `<!-- ai:security-audit-tracker:v1 -->` on its own
+line, so it is still skipped, and otherwise keeps the project path.
 An item is picked when all hold:
   - it has been blocked for at least --min-blocked-minutes (the newest
     `labeled` event of a block label it still carries; for a failed project
@@ -109,6 +111,7 @@ MARKER_PREFIXES = ("<!-- ai:unblock:v1 ", "<!-- ai:unblock-wait:v1 ")
 STATE_PREFIX = "<!-- ORCHESTRATOR_STATE_V"
 NEEDS_HUMAN_LABEL = "ai:needs-human"
 SECURITY_AUDIT_LABEL = "ai:security-audit"
+SECURITY_AUDIT_TRACKER_MARKER_RE = re.compile(r"^[ \t]*<!-- ai:security-audit-tracker:v1 -->[ \t]*\r?$", re.M)
 VERDICT_PREFIX = "<!-- ai:unblock:v1 "
 VERDICT_RE = re.compile(r" verdict=([a-z_]+) ")
 RUN_NAME_RE = re.compile(r"^Unblock judge #([1-9][0-9]*)$")
@@ -355,7 +358,16 @@ def select(
 	known = {int(item["number"]) for item in items if str(item.get("number", "")).isdigit()}
 	# A failed project the search did not return (no block label on it) is
 	# still judged; its labels are unknown here, so it is a project by origin.
-	items += [{"number": number, "labels": [TRACKING_LABEL], "updated_at": ""} for number in sorted(failed - known)]
+	# Issue #9730: a tracker whose block label was released drops out of the
+	# search but stays a failed project; its body marker (same rule as the
+	# poller) restores its label so the skip below still holds on later ticks.
+	def _rebuilt_labels(number: int) -> list[str]:
+		info = details.get(str(number))
+		body = info.get("body") if isinstance(info, dict) else None
+		if isinstance(body, str) and SECURITY_AUDIT_TRACKER_MARKER_RE.search(body):
+			return [TRACKING_LABEL, SECURITY_AUDIT_LABEL]
+		return [TRACKING_LABEL]
+	items += [{"number": number, "labels": _rebuilt_labels(number), "updated_at": ""} for number in sorted(failed - known)]
 	for item in items:
 		if not str(item.get("number", "")).isdigit():
 			continue

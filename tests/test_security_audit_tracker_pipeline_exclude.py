@@ -147,6 +147,23 @@ def test_unblock_scan_skips_a_failed_project_that_is_a_tracker(monkeypatch: pyte
 	assert _select(search, {"77": _details("ai:blocked")}, failed=[77])["dispatch"] == [{"item": 77, "kind": "project"}]
 
 
+def test_unblock_scan_skips_a_released_failed_tracker_on_a_later_tick(monkeypatch: pytest.MonkeyPatch) -> None:
+	# Later tick: ai:blocked was released, so the search no longer returns the
+	# tracker, but it is still a failed project. select rebuilds it and must
+	# still skip it by its body marker, never judge it as a project.
+	monkeypatch.delenv(FLAG, raising=False)
+	tracker = dict(_details("ai:orchestrator-tracking"), body="<!-- ai:security-audit-tracker:v1 -->\r\n## AI Security Audit Tracker\n")
+	result = _select([], {"77": tracker}, failed=[77])
+	assert result["dispatch"] == []
+	assert result["skipped"].get("security_audit_tracker") == 1
+	# A rebuilt failed project without the marker (or the marker inline only) keeps the project path.
+	inline = dict(_details("ai:orchestrator-tracking"), body="see <!-- ai:security-audit-tracker:v1 --> inline")
+	assert "security_audit_tracker" not in _select([], {"77": inline}, failed=[77])["skipped"]
+	assert "security_audit_tracker" not in _select([], {"77": _details("ai:orchestrator-tracking")}, failed=[77])["skipped"]
+	monkeypatch.setenv(FLAG, "false")
+	assert "security_audit_tracker" not in _select([], {"77": tracker}, failed=[77])["skipped"]
+
+
 @pytest.mark.parametrize("value", ["", "true", "TRUE", "True"])
 def test_flag_on_values(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, value: str) -> None:
 	monkeypatch.setenv(FLAG, value)
