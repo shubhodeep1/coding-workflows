@@ -218,7 +218,22 @@ alert_inbox_capture()
 	fi
 
 	local captured_at="" record_id="" release_sha="" cfg="" support_root=""
-	captured_at="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ 2>/dev/null)" || captured_at=""
+	local captured_rt="${EPOCHREALTIME:-}" captured_whole=""
+	local captured_re='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$'
+	# Bash's clock first: on ubuntu-26.04 runners `date +%3N` (uutils) sometimes
+	# prints one digit short (#9240). `date` %3N is the fallback for bash < 5,
+	# then whole seconds with .000.
+	if [[ "${captured_rt}" =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
+		captured_whole="$(date -u -d "@${BASH_REMATCH[1]}" +%Y-%m-%dT%H:%M:%S 2>/dev/null)" || captured_whole=""
+		[ -z "${captured_whole}" ] || captured_at="${captured_whole}.${BASH_REMATCH[2]:0:3}Z"
+	fi
+	if ! [[ "${captured_at}" =~ ${captured_re} ]]; then
+		captured_at="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ 2>/dev/null)" || captured_at=""
+	fi
+	if ! [[ "${captured_at}" =~ ${captured_re} ]]; then
+		captured_whole="$(date -u +%Y-%m-%dT%H:%M:%S 2>/dev/null)" || captured_whole=""
+		captured_at="${captured_whole}.000Z"
+	fi
 	if ! [[ "${captured_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$ ]]; then
 		rm -rf "${tmp_dir}" 2>/dev/null || true
 		_alert_inbox_log failed payload_build
@@ -260,8 +275,8 @@ alert_inbox_capture()
 		_alert_inbox_log failed payload_build
 		return 1
 	fi
-	# Invalid UTF-8 in the alert becomes U+FFFD in jq and can grow past the cap;
-	# the intake would reject it, so fail here (the alert still reaches Telegram).
+	# jq may replace or reject invalid UTF-8 in the alert, so recheck the cap the
+	# intake enforces and fail closed (capture fails; Telegram still gets it).
 	if ! jq -e --argjson cap "${_ALERT_INBOX_MESSAGE_MAX_BYTES}" '.client_payload.record.message | utf8bytelength <= $cap' "${body_file}" >/dev/null 2>&1; then
 		rm -rf "${tmp_dir}" 2>/dev/null || true
 		_alert_inbox_log failed payload_build

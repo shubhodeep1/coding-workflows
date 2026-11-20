@@ -324,6 +324,42 @@ def _aggregate_runs_by_key(runs: list[dict[str, Any]], key_name: str) -> dict[st
 	return result
 
 
+def _normalize_collector_coverage(raw: dict[str, Any]) -> dict[str, Any]:
+	"""Normalize the collector's optional `coverage` object (P3).
+
+	Lists keep only their non-empty string items (other items are dropped,
+	not converted); failed entries keep only string `repository` and
+	`message`; `page_limit_reached` is a bool.
+	"""
+	def _str_list(value: Any) -> list[str]:
+		if not isinstance(value, list):
+			return []
+		return [str(item) for item in value if isinstance(item, str) and item]
+
+	failed: list[dict[str, str]] = []
+	raw_failed = raw.get("repositories_failed")
+	if isinstance(raw_failed, list):
+		for item in raw_failed:
+			if not isinstance(item, dict):
+				continue
+			repository = item.get("repository")
+			if not isinstance(repository, str) or not repository:
+				continue
+			message = item.get("message")
+			failed.append(
+				{
+					"repository": repository,
+					"message": message if isinstance(message, str) else "",
+				}
+			)
+	return {
+		"repositories_requested": _str_list(raw.get("repositories_requested")),
+		"repositories_failed": failed,
+		"repositories_truncated": _str_list(raw.get("repositories_truncated")),
+		"page_limit_reached": raw.get("page_limit_reached") is True,
+	}
+
+
 def prepare_analysis_context(input_data: dict[str, Any]) -> dict[str, Any]:
 	collector_report = input_data.get("collector_report")
 	run_metrics = input_data.get("run_metrics")
@@ -333,8 +369,12 @@ def prepare_analysis_context(input_data: dict[str, Any]) -> dict[str, Any]:
 	scope: dict[str, Any] = {}
 	errors: list[dict[str, Any]] = []
 	summary: dict[str, Any] = {}
+	coverage: dict[str, Any] | None = None
 
 	if isinstance(collector_report, dict):
+		raw_coverage = collector_report.get("coverage")
+		if isinstance(raw_coverage, dict):
+			coverage = _normalize_collector_coverage(raw_coverage)
 		raw_runs = collector_report.get("runs")
 		if isinstance(raw_runs, list):
 			runs = [item for item in raw_runs if isinstance(item, dict)]
@@ -442,7 +482,7 @@ def prepare_analysis_context(input_data: dict[str, Any]) -> dict[str, Any]:
 	# untruncated step logs are exported by the collector under
 	# `--log-output-dir` and shipped via the `workflow-log-output` artifact
 	# for Codex to read directly.
-	return {
+	context: dict[str, Any] = {
 		"source_files": input_data.get("source_files") or [],
 		"scope": scope,
 		"summary": summary,
@@ -460,6 +500,11 @@ def prepare_analysis_context(input_data: dict[str, Any]) -> dict[str, Any]:
 			else ""
 		),
 	}
+	# Additive (P3): present only when the collector supplied coverage, so
+	# older reports and the run_metrics/summary_stats paths are unchanged.
+	if coverage is not None:
+		context["coverage"] = coverage
+	return context
 
 
 def resolve_dated_output_path(

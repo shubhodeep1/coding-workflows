@@ -41,6 +41,14 @@ PYPROJECT = ROOT / "pyproject.toml"
 CATCH_ALL_JOB = "tests-system-python"
 CATCH_ALL_COLLECT_COMMAND = "python3 -m pytest --collect-only -q -p no:cacheprovider tests "
 
+# Former allowlist entry kept for the record (project #9116, P1). The
+# catch-all above now runs this file directly, so it no longer needs an entry;
+# its cases are also still collected through the failure-contract file:
+#	"tests/test_workflow_log_analysis_report_pr.py": (
+#		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
+#		"through tests/test_workflow_log_analysis_failure_contract.py, which collects them"
+#	),
+
 
 def _strip_comment(line: str) -> str:
 	"""Drop a full-line comment or a trailing ` #` comment (YAML or shell), so a path named only in a comment is not wired."""
@@ -69,11 +77,18 @@ def _test_files() -> list[str]:
 
 def _catch_all_collects_python_tests() -> bool:
 	"""True while ci.yml's catch-all job collects all of tests/ and pytest collects every test_*.py there."""
-	import yaml
-
-	workflow = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
-	job = (workflow.get("jobs") or {}).get(CATCH_ALL_JOB) or {}
-	runs = [str(step.get("run") or "") for step in job.get("steps") or [] if isinstance(step, dict)]
+	workflow_text = CI_WORKFLOW.read_text(encoding="utf-8")
+	try:
+		import yaml
+	except ImportError:
+		# PyYAML is installed in CI; without it (an offline container), read the
+		# job's block from the text: from `  <job>:` to the next 2-space job key.
+		block = re.search(rf"^  {re.escape(CATCH_ALL_JOB)}:[ \t]*\n(.*?)(?=^  \S|\Z)", workflow_text, re.MULTILINE | re.DOTALL)
+		runs = [block.group(1)] if block else []
+	else:
+		workflow = yaml.safe_load(workflow_text)
+		job = (workflow.get("jobs") or {}).get(CATCH_ALL_JOB) or {}
+		runs = [str(step.get("run") or "") for step in job.get("steps") or [] if isinstance(step, dict)]
 	collects_all = any(
 		CATCH_ALL_COLLECT_COMMAND in "\n".join(_strip_comment(line) for line in run.splitlines())
 		for run in runs

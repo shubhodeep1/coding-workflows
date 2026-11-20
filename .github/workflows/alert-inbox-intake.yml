@@ -30,7 +30,7 @@ permissions:
 
 # One group per run: GitHub keeps only one pending run per group and cancels
 # the rest, so a shared group would drop records in a burst of alerts. Record
-# paths are unique and the store retries a 409 once, so parallel writes are safe.
+# paths are unique and the store retries a 409 up to 3 times, so parallel writes are safe.
 concurrency:
   group: alert-inbox-intake-${{ github.run_id }}
   cancel-in-progress: false
@@ -63,6 +63,8 @@ jobs:
         run: |
           set -euo pipefail
           # Only regex-checked fields are echoed; the alert's message text never is.
+          # The source run link lets the operator find an alert that route mode
+          # kept off Telegram; it is sent at CRITICAL so ALERT_MSG_LEVEL=CRITICAL keeps it.
           source_repo="$(jq -r '.client_payload.record.source_repo // "" | if type == "string" then . else "" end' "${GITHUB_EVENT_PATH}" 2>/dev/null)" || source_repo=""
           [[ "${source_repo}" =~ ^[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}$ ]] || source_repo="unknown"
           alert_level="$(jq -r '.client_payload.record.level // "" | if type == "string" then . else "" end' "${GITHUB_EVENT_PATH}" 2>/dev/null)" || alert_level=""
@@ -70,10 +72,12 @@ jobs:
             WARNING|ERROR|CRITICAL) ;;
             *) alert_level="unknown" ;;
           esac
+          source_run="$(jq -r '.client_payload.record.run_url // "" | if type == "string" then . else "" end' "${GITHUB_EVENT_PATH}" 2>/dev/null)" || source_run=""
+          [[ "${source_run}" =~ ^https://github\.com/[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}/actions/runs/[0-9]{1,20}$ ]] || source_run="unknown"
           if [ ! -f scripts/tg_helpers.sh ]; then
             echo "::error::Alert inbox intake failed and scripts/tg_helpers.sh is unavailable; no Telegram notice could be sent (${alert_level} alert from ${source_repo})."
             exit 1
           fi
           # shellcheck disable=SC1091
           source scripts/tg_helpers.sh
-          tg_send_msg_direct "Alert inbox intake could not store a ${alert_level} alert from ${source_repo}. Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" "ERROR" >/dev/null
+          tg_send_msg_direct "Alert inbox intake could not store a ${alert_level} alert from ${source_repo}. Source run: ${source_run}. Intake run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" "CRITICAL" >/dev/null

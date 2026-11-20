@@ -257,7 +257,7 @@ fi
 # Consumer-updater PRs (update_workflows.yml pull-request delivery, #7004):
 # only that workflow's `verify` job may enable auto-merge, after it has checked
 # the PR tree against the attested release manifest. Review never does.
-if [[ "${_orch_pr_head_ref}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then
+if [[ "${_orch_pr_head_ref}" =~ ^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$ ]]; then
 	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA:-unknown} action=skip reason=updater_pr_verify_job_owns_merge"
 	exit 0
 fi
@@ -270,6 +270,40 @@ if ! [[ "${INITIAL_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
 fi
 if [ -z "${_orch_pr_head_sha}" ] || [ "${_orch_pr_head_sha}" != "${INITIAL_HEAD_SHA}" ]; then
 	echo "::warning::PR #${PR_NUMBER} no longer points at reviewed head ${INITIAL_HEAD_SHA}. Failing closed: refusing auto-merge enablement and merge-authorization labels for current head ${_orch_pr_head_sha:-unknown}."
+	exit 0
+fi
+
+# Superseded security follow-up guard (#9479): a PR whose base is a standalone
+# PR's head branch must not merge once that branch's current head passed its
+# single-issue security audit (the merge would move the clean head). On this
+# auto-merge path it runs before the success status, so a refused PR gets
+# neither status nor merge labels; the ENABLE_AUTO_MERGE!=true and
+# e2e-smoke-test early exits above never enable auto-merge and are not
+# covered. No API call for PRs into the default or an integration branch.
+# Anything but `allow` (helper missing, lookup failure) fails closed; the next
+# review run or the review sweep retries. Sets _followup_guard_result.
+_followup_guard_result=""
+run_security_followup_guard()
+{
+	local _followup_guard_output="" _followup_guard_payload
+	_followup_guard_result=""
+	_followup_guard_payload="$(mktemp 2>/dev/null || true)"
+	if [ -n "${_followup_guard_payload}" ] && [ -f "${SCRIPT_DIR}/review_single_issue_security_pass.sh" ] \
+		&& printf '%s' "${_ORCH_PR_META_JSON}" > "${_followup_guard_payload}"; then
+		_followup_guard_output="$(REPOSITORY="${GITHUB_REPOSITORY}" PR_NUMBER="${PR_NUMBER}" PR_PAYLOAD_FILE="${_followup_guard_payload}" \
+			bash "${SCRIPT_DIR}/review_single_issue_security_pass.sh" followup-guard)" || _followup_guard_output=""
+		printf '%s\n' "${_followup_guard_output}" | grep '^SINGLE_ISSUE_SECURITY_PASS ' || true
+		_followup_guard_result="$(printf '%s\n' "${_followup_guard_output}" | sed -n 's/^SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=//p' | tail -n 1)" || _followup_guard_result=""
+	fi
+	[ -n "${_followup_guard_payload}" ] && rm -f "${_followup_guard_payload}"
+	if [ "${_followup_guard_result}" != "allow" ]; then
+		echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=refuse reason=security_followup_guard_${_followup_guard_result:-unavailable}"
+		echo "::warning::Auto-merge not enabled for PR #${PR_NUMBER}: the security follow-up guard returned '${_followup_guard_result:-unavailable}' (its base branch's head passed a clean security audit, or that could not be verified). The PR stays open."
+		return 1
+	fi
+	return 0
+}
+if ! run_security_followup_guard; then
 	exit 0
 fi
 
@@ -327,6 +361,17 @@ if [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
 	else
 		echo "Auto-merge not enabled for PR #${PR_NUMBER}: base freshness could not be verified after the checks wait (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); no branch update was requested. The review sweep or the next review round retries."
 	fi
+	exit 0
+fi
+
+# The base branch's head may have received a clean security audit after the
+# first guard ran (#9479). That result is a snapshot, and security-audit.yml
+# posts its marker concurrently whether or not the checks wait polled, so
+# re-run the guard once more right before any --auto merge. PRs into the
+# default or an integration branch get `allow` with no API call. The success
+# status posted above stays bound to this PR's head; refusing here withholds
+# auto-merge and merge labels.
+if ! run_security_followup_guard; then
 	exit 0
 fi
 
