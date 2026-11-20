@@ -16370,12 +16370,25 @@ def test_managed_skip_leaves_held_pr_open_when_cache_lacks_hold_fields():
 def test_managed_implementing_held_pr_skips_dispatch_action():
 	result = _managed_held_pr_run("ai:implementing", 0, {"draft": True})
 	assert "STALL_SKIP issue=10 reason=pr_ai_hold" in result["stdout"], result["stdout"]
-	assert "requested_action=skip " not in result["stdout"]
-	_assert_managed_held_pr_left_alone(
-		result, "draft", "ai:implementing",
-		re.search(r"requested_action=(\S+)", result["stdout"]).group(1), 0,
-	)
+	# Pin the stall detector's action for a fresh ai:implementing stall so a
+	# regression to `skip` (or any other action) fails here.
+	assert "Action: retrigger_implement" in result["stdout"], result["stdout"]
+	_assert_managed_held_pr_left_alone(result, "draft", "ai:implementing", "retrigger_implement", 0)
 	assert "reason=open_linked_pr" not in result["stdout"]
+
+
+def test_managed_implementing_held_conflicted_pr_gets_no_resolver_when_cache_lacks_hold_fields():
+	# Cache without isDraft/title: the pre-action hold guard fails open, and
+	# the early-phase open-PR guard's REST payload must catch the hold before
+	# routing the merge conflict to the resolver.
+	result = _managed_held_pr_run(
+		"ai:implementing", 0,
+		{"draft": True, "mergeable": False, "mergeable_state": "dirty"},
+		mock_store_extra={"graphql_omit_pr_hold_fields": True},
+	)
+	assert "Action: retrigger_implement" in result["stdout"], result["stdout"]
+	_assert_managed_held_pr_left_alone(result, "draft", "ai:implementing", "retrigger_implement", 0)
+	assert "reason=open_pr_merge_conflict" not in result["stdout"]
 
 
 def test_managed_skip_still_closes_unheld_pr_in_awaiting_approval():

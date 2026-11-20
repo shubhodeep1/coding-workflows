@@ -21217,6 +21217,13 @@ STALL_EOF
         ensure_label_exists "ai:closed"
         close_linked_pr "${issue_num}" \
           "Closed by orchestrator stall recovery — ancestor-chain no-op cap reached (${stall_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES})."
+        if [ -n "${CLOSE_LINKED_PR_HELD_PRS:-}" ]; then
+          # close_linked_pr left an owner-held PR open (#9733): leave the issue open too.
+          echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${CLOSE_LINKED_PR_HELD_PRS%% *} detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown} phase=${phase} action=none requested_action=close_and_reissue source=close_linked_pr"
+          STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue_skipped_pr_ai_hold"
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
+          return 1
+        fi
         gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
           --remove-label 'ai:done' --remove-label 'ai:implementing' \
           --remove-label 'ai:planning' --remove-label 'ai:clarification' \
@@ -27468,6 +27475,15 @@ STALL_EOF
           echo "  [standalone-stall-recovery] Ancestor-chain no-op cap reached for #${issue_num} (${standalone_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES:-2}). Closing without re-issue — judge will verify."
           ensure_label_exists "ai:closed"
           close_linked_pr "${issue_num}" "Closed by standalone stall recovery — ancestor-chain no-op cap reached (${standalone_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES:-2})."
+          if [ -n "${CLOSE_LINKED_PR_HELD_PRS:-}" ]; then
+            # close_linked_pr left an owner-held PR open (#9733): leave the issue open too.
+            echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${CLOSE_LINKED_PR_HELD_PRS%% *} detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown} phase=${phase} action=none requested_action=close_and_reissue source=close_linked_pr"
+            STALL_RECOVERY_SHOULD_INCREMENT="false"
+            if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+              write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+            fi
+            continue
+          fi
           gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
             --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
             --add-label 'ai:closed' 2>/dev/null || true
@@ -28205,6 +28221,16 @@ recover_stalled_issue() {
         _opr_mergeable="$(_jq_field "${_opr_json}" '.mergeable' 'true|false')"
         _opr_mergeable_state="$(_jq_field "${_opr_json}" '.mergeable_state')"
         _opr_head_ref="$(_jq_field "${_opr_json}" '.head.ref')"
+        # Owner hold re-check (issue #9733) on this payload (0 extra calls):
+        # the guard above fails open when the cached payloads lack draft/title.
+        local _opr_hold_reason=""
+        _opr_hold_reason="$(_stall_pr_ai_hold_reason "${_opr_json}")"
+        if [ -n "${_opr_hold_reason}" ]; then
+          echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${_lpr_num} detail=${_opr_hold_reason} phase=${phase} action=none requested_action=${action}"
+          STALL_RECOVERY_EFFECTIVE_ACTION="${action}_skipped_pr_ai_hold"
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
+          return 1
+        fi
 
         # Sub-case 1: PR has merge conflicts → dispatch conflict resolver
         if { [ "${_opr_mergeable}" = "false" ] || [ "${_opr_mergeable_state}" = "dirty" ]; } && [ -n "${_opr_head_ref}" ]; then
