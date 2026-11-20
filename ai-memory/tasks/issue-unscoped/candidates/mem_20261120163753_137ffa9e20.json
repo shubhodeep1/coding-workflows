@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_audit_consumer_drift.py:1766 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new pin-age alarm tests are not listed in the file main() function.\n  WHY: The direct python3 run in CI at ci.yml line 696 would skip these tests and lose regression protection (source severity MAJOR); anthropic_claude-sonnet-5_5 (main() at lines 1831-1854) and z-ai_glm-5_3-flash (main() at tests/test_audit_consumer_drift.py:1828-1856) rejected this as stale and say main() calls every pin-age test, including the two run through _DirectRunEnvPatch.\n- .github/workflows/update_workflows.yml:~2576 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The verify_head_gate poll window (6 reads, 20 seconds apart) can run out while workflow-integrity is still pending.\n  WHY: The step exits 0 without posting ai-review/head-gate=success, so the PR stays pending in review and someone must step in by hand (source severity NIT); anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash call this a NIT accepted in earlier rounds and note that an expired poll window now raises a ::warning::.\n- scripts/review_head_gate.sh:106-183 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The updater-PR exemption in review_head_gate_updater_exempt uses a hard-coded regex, REVIEW_HEAD_GATE_UPDATER_BRANCH_RE, and an integrity context string that duplicate values defined in other workflow files.\n  WHY: A later change to the updater branch format or the integrity context could break the exemption or the gating without warning, and nothing automated would catch it (source severity NIT); anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash call this a residual NIT accepted in earlier rounds.\n- scripts/review_head_gate.sh:160 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The head-gate exemption trusts commit statuses without checking who created them.\n  WHY: Anyone with push access and statuses: write can already post the gate directly, so this is accepted residual risk, but it adds an implicit trust boundary to the review process (source severity NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add a drift alarm that pages when a consumer in .github/ai/consumer_repos.json stays behind the latest @stable tag for more than 24 hours.\n  expected_change_site: .github/workflows/audit_consumer_drift.yml and scripts/audit_consumer_drift.py\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The pin-age alarm exists and logs a WARNING but sends no active Telegram page; it only adds drift information to the existing Telegram summary, which is daily (now 6-hourly), not an immediate page (source severity MAJOR). anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash rejected this: the stale-pin WARNING level is written to the telegram_level output (line 405 / audit_consumer_drift.yml:229-233), and the \"Telegram alert\" step (audit_consumer_drift.yml:419-442 / 419-437) sends it via tg_send_msg / tg_helpers.sh.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_audit_consumer_drift.py:main() function at line 1766 | severity=MAJOR | confidence=4\n  PROBLEM: The new pin-age alarm tests are not listed in the file main() function.\n  WHY: The direct python3 run in CI at ci.yml line 696 skips these tests, so they are not executed during the automated drift audit, losing regression protection.\n- .github/workflows/update_workflows.yml:verify_head_gate step polling logic, around line 2576 | severity=NIT | confidence=3\n  PROBLEM: The poll window (6 reads, 20 seconds apart) can run out while workflow-integrity is still pending.\n  WHY: The step exits 0 without posting ai-review/head-gate=success, leaving the PR pending in review, which is a silent stall that requires manual intervention.\n- scripts/review_head_gate.sh:review_head_gate_updater_exempt function, lines 106-183 | severity=NIT | confidence=4\n  PROBLEM: The new exemption for updater PRs uses a hard-coded regex REVIEW_HEAD_GATE_UPDATER_BRANCH_RE and integrity context string, which are duplicates of values defined in other workflow files.\n  WHY: Future changes to the updater branch format or integrity context could lead to silent exemption failures or incorrect gating, with no automated catch.\n- scripts/review_head_gate.sh:review_head_gate_updater_exempt function, line 160 | severity=NIT | confidence=3\n  PROBLEM: The head-gate exemption trusts commit statuses without checking who created them.\n  WHY: Anyone with push access and statuses: write can already post the gate directly; while accepted as residual risk, this creates an implicit trust boundary in the review process.\n- TASK_GAP | severity=MAJOR | confidence=4\n  Requirement: Add a drift alarm that pages when a consumer in .github/ai/consumer_repos.json stays behind the latest @stable tag for more than 24 hours.\n  Expected change site: .github/workflows/audit_consumer_drift.yml and scripts/audit_consumer_drift.py\n  Evidence of absence: The pin-age alarm exists and logs a WARNING, but it does not send an active Telegram page. It adds drift information only to the existing Telegram summary, which is a daily (now 6-hourly) summary, not an immediate page as requested by the intent.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0077b08232ccd0716376ad24262ccd7378b104e77a05b310d75e4159d4bb3b79",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9505,
+    "run_id": "44770322438",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44770322438",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120163753_137ffa9e20",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9505,
+    "run_id": "44770322438"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-20T16:37:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
