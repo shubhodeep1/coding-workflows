@@ -60,7 +60,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/drift-audit.yml` — GitHub Actions workflow: Drift Audit.
 - `.github/workflows/forward-merge-stable-to-main.yml` — GitHub Actions workflow: Forward-merge stable to main.
 - `.github/workflows/implement.yml` — GitHub Actions workflow: AI Implement.
-- `.github/workflows/integration-pr-readiness.yml` — GitHub Actions workflow: Integration PR readiness check.
+- `.github/workflows/integration-pr-readiness.yml` — GitHub Actions workflow: Integration PR readiness check (label events only; other PR events run the same script in `pr-checks.yml`).
 - `.github/workflows/internal-cancel-on-pr-close.yml` — GitHub Actions workflow: Internal: Cancel on PR Close.
 - `.github/workflows/internal-check-failure-triage.yml` — GitHub Actions workflow: Internal: AI Check Failure Triage.
 - `.github/workflows/internal-clarify.yml` — GitHub Actions workflow: Internal: AI Clarify.
@@ -76,7 +76,6 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/internal-workflow-failure-heal.yml` — GitHub Actions workflow: Internal: AI Workflow Failure Heal.
 - `.github/workflows/issue_pr_status.yml` — GitHub Actions workflow: AI Issue PR Status Sync.
 - `.github/workflows/lint-plan-archival.yml` — GitHub Actions workflow: Lint plan-archival completeness.
-- `.github/workflows/lint-pr-body-auto-close.yml` — GitHub Actions workflow: Lint PR body for auto-close keywords against orchestrator-tracking issues.
 - `.github/workflows/mark-stable.yml` — GitHub Actions workflow: Mark Stable Release.
 - `.github/workflows/memory_maintenance.yml` — GitHub Actions workflow: AI Memory Maintenance (Reusable).
 - `.github/workflows/nightly-validation-selftest.yml` — GitHub Actions workflow: Nightly Validation Self-Test.
@@ -85,6 +84,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/orchestrate_clarify_respond.yml` — GitHub Actions workflow: AI Orchestrate Clarify Respond (Reusable).
 - `.github/workflows/orchestrate_poll.yml` — GitHub Actions workflow: AI Orchestrate Poller (Reusable).
 - `.github/workflows/plan.yml` — GitHub Actions workflow: AI Plan.
+- `.github/workflows/pr-checks.yml` — GitHub Actions workflow: PR checks; one job (`pr-body-lint`) runs the §19 PR-body auto-close lint and posts the `orchestrator/integration-pr-not-ready` status on every PR into `main` or `stable`.
 - `.github/workflows/promote-candidate-follow.yml` — GitHub Actions workflow: Promote candidate follower (keeps the `promote-candidate` branch at the main tip between promote cycles).
 - `.github/workflows/promote-main-to-stable.yml` — GitHub Actions workflow: Promote main to stable.
 - `.github/workflows/propagate-consumer-secrets.yml` — GitHub Actions workflow: Propagate consumer secrets.
