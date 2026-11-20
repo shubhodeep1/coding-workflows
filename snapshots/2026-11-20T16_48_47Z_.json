@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-19T12:38:53Z",
+  "tick_at": "2026-11-20T16:48:47Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,12 +11,12 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 6
+    "tracking_issues": 5
   },
   "tracking_issues": [
     {
       "current_wave": 19,
-      "integration_ahead_by": "229",
+      "integration_ahead_by": "231",
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -37,7 +37,7 @@
     },
     {
       "current_wave": 2,
-      "integration_ahead_by": "45",
+      "integration_ahead_by": "46",
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -57,14 +57,13 @@
       "wave_complete": false
     },
     {
-      "current_wave": 3,
-      "integration_ahead_by": "37",
+      "current_wave": 0,
       "issue_counts": {
         "closed": 0,
-        "done": 2,
+        "done": 0,
         "implementation_failed": 0,
-        "in_progress": 1,
-        "merged": 2,
+        "in_progress": 0,
+        "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -74,12 +73,12 @@
       "project_complete": false,
       "status": "in-progress",
       "title": "[Orchestrator] Stop runner-image drift, red-main cascades and queue-driven re-dispatch from jamming the pipeline",
-      "total_waves": 3,
+      "total_waves": 0,
       "wave_complete": false
     },
     {
-      "current_wave": 2,
-      "integration_ahead_by": "4",
+      "current_wave": 3,
+      "integration_ahead_by": "8",
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -99,14 +98,14 @@
       "wave_complete": false
     },
     {
-      "current_wave": 1,
-      "integration_ahead_by": "0",
+      "current_wave": 3,
+      "integration_ahead_by": "5",
       "issue_counts": {
         "closed": 0,
         "done": 1,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 0,
+        "merged": 1,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -117,27 +116,6 @@
       "status": "in-progress",
       "title": "[Orchestrator] Let non-conflicting approved PRs merge past the merge lease (plan docs/plans/merge-lease-parallel-merges-plan.md, phases 1-5)",
       "total_waves": 5,
-      "wave_complete": false
-    },
-    {
-      "current_wave": 1,
-      "integration_ahead_by": "0",
-      "issue_counts": {
-        "closed": 0,
-        "done": 0,
-        "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 0,
-        "not_created": 0,
-        "ready_to_merge": 0,
-        "review_blocked": 1,
-        "skipped": 0
-      },
-      "number": 9796,
-      "project_complete": false,
-      "status": "in-progress",
-      "title": "[E2E Smoke Test] Review-Blocked Simulation (run 44490333814)",
-      "total_waves": 1,
       "wave_complete": false
     }
   ]
