@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/9674-triage-base-keyed-fingerprint.md:2 (also README.md:2003-2031) | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The last-run edit added a best-effort CRITICAL Telegram alert on the `error base_keyed_metadata_invalid` rejection path (scripts/check_failure_triage.sh:2314). Neither the agents.d fragment nor the README triage section says this rejection alerts an operator, but both document the collect-stage `open_issue_cap` Telegram WARNING.\n  WHY: Nothing fails at runtime, because the run still exits 1 and the stable `error base_keyed_metadata_invalid` log line is unchanged. An operator reading the docs would miss this alerting path, and future contract-test edits that align the docs to the code would find the fragment incomplete. Both reviewers rated it SEVERITY: NIT, which is mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Document the check-failure triage rejection paths (specifically the Telegram alert) in the triage section of README.md and agents.md (via agents.d/, \u00a730).\n  expected_change_site: agents.d/9674-triage-base-keyed-fingerprint.md and README.md\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: Neither document mentions that the error base_keyed_metadata_invalid rejection path triggers a CRITICAL Telegram alert, although this path was added in the last run and the collect-stage open_issue_cap Telegram WARNING is explicitly documented in both.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Document the check-failure triage rejection paths (specifically the Telegram alert) in the triage section of README.md and agents.md (via agents.d/, \u00a730).\n  Expected change site: agents.d/9674-triage-base-keyed-fingerprint.md and README.md\n  Evidence of absence: Neither document mentions that the error base_keyed_metadata_invalid rejection path triggers a CRITICAL Telegram alert, although this path was added in the last run and the collect-stage open_issue_cap Telegram WARNING is explicitly documented in both.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.d/9674-triage-base-keyed-fingerprint.md:2 (\"else `error base_keyed_metadata_invalid` and exit 1\") and README.md:2003-2031 (the \"One issue per failing base branch\" bullet) | severity=NIT | confidence=4\n  PROBLEM: The new best-effort CRITICAL Telegram alert on the `error base_keyed_metadata_invalid` rejection path (scripts/check_failure_triage.sh:2314) matches the sibling `integration_branch_metadata_invalid` alert at line 1118. Neither the agents.d fragment nor the README triage section names it as an alerting rejection, but the `open_issue_cap` Telegram WARNING is documented in both. This is a declared-vs-effective capability gap on the documented surface.\n  WHY: Nothing crashes, because the run still exits 1 and the stable log line is unchanged. The failure is on the documentation surface: future contract-test edits that align docs to code would find the fragment incomplete, and an operator reviewing a CRITICAL would not find it described.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.d/9674-triage-base-keyed-fingerprint.md:\"Workflow architecture\" paragraph, sentence ending \"else `error base_keyed_metadata_invalid` and exit 1\"; same gap in README.md triage section (~lines 2003-2028) | severity=NIT | confidence=4\n  PROBLEM: The diagnose-stage `base_keyed_metadata_invalid` rejection now sends a best-effort CRITICAL Telegram alert (scripts/check_failure_triage.sh:2314), matching the sibling `integration_branch_metadata_invalid` alert at line 1118. Neither the agents.d fragment (\"Stable log prefixes (contractual)\" registry) nor the README records this, but the collect-stage `open_issue_cap` Telegram WARNING is documented in both.\n  WHY: Nothing fails at runtime. An operator reading the docs to learn which rejection paths page them would miss this one, and future contract-test edits that align docs to the code would find the registry entry incomplete.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9f1bef9064dae06f03f77600f72ab7db162f157eb037b9d654b9922c0138dfa9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9703,
+    "run_id": "44735732776",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44735732776",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120133551_ec68a186c0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9703,
+    "run_id": "44735732776"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T13:35:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
