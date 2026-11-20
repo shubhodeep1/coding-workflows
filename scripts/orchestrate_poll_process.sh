@@ -25250,13 +25250,13 @@ run_unblock_scan() {
   # work item, so it never reaches the unblock judge. Its block/phase labels
   # are released (only with the tracker body marker from the GraphQL batch
   # above; no new read) and it leaves search.json before selection. A failed
-  # project stays in search.json with its labels: scripts/unblock_scan.py
-  # select then skips it as security_audit_tracker (dropping it here would make
-  # select re-add it as a label-less failed project and judge it). A filter
-  # failure skips this tick.
+  # project gets the same label release but stays in search.json with its
+  # labels, so the selector (scripts/unblock_scan.py) skips it as
+  # security_audit_tracker (dropping it here would make select re-add it as a
+  # label-less failed project and judge it). A filter failure skips this tick.
   if _security_audit_tracker_exclude_enabled; then
-    local _scan_sat_item _scan_sat_labels _scan_sat_marker _scan_sat_items="[]"
-    while IFS= read -r _scan_sat_item; do
+    local _scan_sat_item _scan_sat_failed _scan_sat_labels _scan_sat_marker _scan_sat_items="[]"
+    while IFS=' ' read -r _scan_sat_item _scan_sat_failed; do
       [[ "${_scan_sat_item}" =~ ^[1-9][0-9]*$ ]] || continue
       _scan_sat_labels="$(jq -c --argjson n "${_scan_sat_item}" '[.[]? | select(.number == $n) | .labels[]?] | unique' "${work_dir}/search.json" 2>/dev/null || echo '[]')"
       _scan_sat_marker="false"
@@ -25265,14 +25265,18 @@ run_unblock_scan() {
         _scan_sat_marker="true"
       fi
       _security_audit_tracker_release_pipeline_labels "${_scan_sat_item}" "${_scan_sat_labels}" "${_scan_sat_marker}" "unblock_scan"
+      if [ "${_scan_sat_failed}" = "true" ]; then
+        # Kept in search.json: select skips it by its label.
+        echo "UNBLOCK_SCAN item=${_scan_sat_item} kind=project outcome=skip reason=security_audit_tracker"
+        continue
+      fi
       echo "UNBLOCK_SCAN item=${_scan_sat_item} kind=issue outcome=skip reason=security_audit_tracker"
       _scan_sat_items="$(printf '%s' "${_scan_sat_items}" | jq -c --argjson n "${_scan_sat_item}" '. + [$n]')"
     done < <(jq -r --slurpfile failed "${work_dir}/failed_projects.json" '
         .[]? | select(((.pull_request // false) != true) and ((.number | type) == "number"))
         | .number as $n
         | select(any((.labels // [])[]?; . == "ai:security-audit"))
-        | select(any(($failed[0] // [])[]?; . == $n) | not)
-        | $n' "${work_dir}/search.json" 2>/dev/null || true)
+        | "\($n) \(any(($failed[0] // [])[]?; . == $n))"' "${work_dir}/search.json" 2>/dev/null || true)
     if [ "${_scan_sat_items}" != "[]" ]; then
       if ! jq -c --argjson held "${_scan_sat_items}" '[.[]? | select(.number as $n | any($held[]; . == $n) | not)]' \
         "${work_dir}/search.json" > "${work_dir}/search_sat_excluded.json" 2>/dev/null \

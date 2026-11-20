@@ -362,13 +362,17 @@ def test_run_unblock_scan_executes_tracker_skip_and_still_dispatches_ordinary_is
 	result, calls = _run_unblock_scan(tmp_path, None)
 	assert calls == [
 		"gh issue edit 3576 --repo owner/repo --remove-label ai:blocked --remove-label ai:planning",
+		"gh issue edit 77 --repo owner/repo --remove-label ai:blocked",
 		"gh workflow run unblock_judge_dispatch.yml --repo owner/repo -f item=42",
 	], result.stdout
 	assert "UNBLOCK_SCAN item=3576 kind=issue outcome=skip reason=security_audit_tracker" in result.stdout
 	assert "STALL_RECOVERY_SKIP issue=3576 reason=security_audit_tracker source=unblock_scan removed=ai:blocked,ai:planning outcome=labels_removed" in result.stdout
 	assert "UNBLOCK_SCAN item=42 kind=issue outcome=dispatched" in result.stdout
-	# The failed project stays in search.json for select, which skips it: never judged.
-	assert "item=77" not in result.stdout
+	# The failed project tracker has its labels released too, but stays in
+	# search.json for select, which skips it: never judged.
+	assert "STALL_RECOVERY_SKIP issue=77 reason=security_audit_tracker source=unblock_scan removed=ai:blocked outcome=labels_removed" in result.stdout
+	assert "UNBLOCK_SCAN item=77 kind=project outcome=skip reason=security_audit_tracker" in result.stdout
+	assert "item=77 kind=project outcome=dispatched" not in result.stdout
 	assert '"security_audit_tracker":1' in result.stdout
 
 
