@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_test_and_mark_stable_clarify_negative_outputs.py:262-264 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: test_alt_create_step_rate_limited_read_writes_single_line_outputs asserts every GITHUB_OUTPUT line matches a numeric-only regex, but the alt-model create step also writes non-numeric `created_after=` (test-and-mark-stable.yml:5428) and `title=` (test-and-mark-stable.yml:5442).\n  WHY: assertRegex raises AssertionError on every run, turning the release gate (test-and-mark-stable.yml:3885) and the ci.yml system-Python shard (ci.yml:4533) red. Severity disagreement: MAJOR from four reviewers, BLOCKER from minimax_minimax-m3, so the highest (BLOCKER, mapped to critical) is used.\n- .github/workflows/ci.yml:2262-2264, 2945-2947 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The added \"main runs this through a catch-all step that stable does not have\" comments are wrong for main, and the three explicitly wired test files also run in the ci.yml:4533 catch-all System-Python shard.\n  WHY: The files run twice per CI run, which wastes runner time, and the comment misleads maintainers. It is not a runtime failure (NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_test_and_mark_stable_clarify_negative_outputs.py:262-264 | severity=MAJOR | confidence=5\n  PROBLEM: The numeric regex `^[a-z_]+=[0-9]*$` is applied to every output line, but the step also writes `created_after=` (test-and-mark-stable.yml:5428) and `title=` (test-and-mark-stable.yml:5442).\n  WHY: assertRegex fails on every run, so the release gate (test-and-mark-stable.yml:3885) and the ci.yml:4533 shard both go red.\n- .github/workflows/ci.yml:2262-2264, 2945-2947 | severity=NIT | confidence=3\n  PROBLEM: The stable-only comments are wrong for main, and the three files run twice because of the catch-all shard (ci.yml:4533-4554).\n  WHY: Duplicate runner time and a misleading comment. Not a failure.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_test_and_mark_stable_clarify_negative_outputs.py:262-264 | severity=MAJOR | confidence=5\n  PROBLEM: The test validates every GITHUB_OUTPUT line with a numeric regex (`OUTPUT_LINE_RE`), which fails for lines with non-numeric values.\n  WHY: The create step writes `created_after=` and `title=`, so the test fails deterministically in the release gate and ci.yml.\n- .github/workflows/ci.yml:2262-2264, 2945-2947 | severity=NIT | confidence=3\n  PROBLEM: The added comments say main has no catch-all step, but ci.yml has one at line 4533.\n  WHY: Not a runtime failure, but the comment is incorrect and misleading.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_test_and_mark_stable_clarify_negative_outputs.py:253-267 (loop at 263-264) | severity=BLOCKER | confidence=5\n  PROBLEM: The test asserts every GITHUB_OUTPUT line matches `^[a-z_]+=[0-9]*$`, but the alt-model create step (test-and-mark-stable.yml:5419-5462) writes non-numeric `created_after=` (5428) and `title=` (5442).\n  WHY: AssertionError on every invocation, and the release gate (test-and-mark-stable.yml:3885) goes red on every attempt.\n- .github/workflows/ci.yml:2262-2264, 2945-2947 | severity=NIT | confidence=4\n  PROBLEM: The comments claim main has no catch-all, but the ci.yml:4533 shard already runs the three added test files.\n  WHY: Each file runs twice per CI run on every PR, which wastes runner minutes, and the comment misleads.\n- TASK_GAP (reviewer rated NIT, confidence 1; reviewer concluded not a real gap)\n  Requirement: The forward-merge must include the stable-side fix, so the four conflict-list files (`README.md`, `scripts/unblock_ledger.py`, `tests/test_orchestrate_poll_process.py`, `tests/test_prepush_affected_tests.py`) must land on main.\n  Expected change site: `README.md`, `scripts/unblock_ledger.py`, `tests/test_orchestrate_poll_process.py`, `tests/test_prepush_affected_tests.py`\n  Evidence of absence: last_commit_stat.txt shows all four files changed in the merge commit, so they were delivered. Not a real gap.\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_test_and_mark_stable_clarify_negative_outputs.py:263-264 | severity=MAJOR | confidence=5\n  PROBLEM: A numeric-only regex is applied to every output line of the alt-model create step, which also writes `created_after=` (test-and-mark-stable.yml:5428) and `title=` (:5442).\n  WHY: The timestamp and title outputs are non-numeric, so the assertion fails every run, and the release gate (test-and-mark-stable.yml:3885) fails.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_test_and_mark_stable_clarify_negative_outputs.py:262-264 | severity=MAJOR | confidence=5\n  PROBLEM: The test asserts `^[a-z_]+=[0-9]*$` on every line, but the real step body also writes `created_after=` (test-and-mark-stable.yml:5428) and `title=` (test-and-mark-stable.yml:5442).\n  WHY: AssertionError on the first `created_after=` line every run, so the release gate (test-and-mark-stable.yml:3885) and the ci.yml:4533 catch-all both go red.\n- .github/workflows/ci.yml:2262-2264, 2945-2947 | severity=NIT | confidence=3\n  PROBLEM: The three test files run twice per CI run: once in the dedicated steps and once in the tests-system-python shard (ci.yml:4533). This contradicts the convention documented in tests/test_ci_wires_every_test_file.py:32-38.\n  WHY: Redundant execution cost on every pull_request/push CI run. Not a failure.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8b64755bec7bb040c04eae25f5fed53ace549255aeff4892c46ec2d04ffe398f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9820,
+    "run_id": "44681229169",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44681229169",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120054604_61965d06fe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9820,
+    "run_id": "44681229169"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T05:46:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
