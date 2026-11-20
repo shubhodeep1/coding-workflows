@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:945-960 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The final-CI path sets `head_commit` to the current `HEAD` and then fetches that SHA from `origin`.\n  WHY: The failed check-run log shows `HEAD` was a merge commit created locally (`e47a8bee...`) that `origin` does not serve, so the fetch fails with `upload-pack: not our ref` and the test jobs exit before any test runs; the source severity was MAJOR, mapped here to high, and anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash looked at the same CI failure and chose not to flag it because it is base-branch infrastructure outside this PR's four changed files.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- HARDENING_SUGGESTION scripts/review_autofix_step_prepush_test_gate.sh:review_prepush_test_gate_repair_diag (lines 676-694) and the post-validator re-read block (lines 798-808, LAST RUN DIFF) | HARDENING_RISK_SCORE: 1\n  PROBLEM: The diagnostic line is logged before the validator runs, so it shows the pre-validator `after=` state. The new block at lines 798-808 then overwrites `rpg_post_repair_changed`/`rpg_post_repair_ok` with the post-validator state. When the validator erases the change, the log records `after=1` even though the guard fires on a clean tree.\n  WHY: The comment at lines 798-801 documents this, but a reader matching log lines against the guard's decision has no signal for the discrepancy. Suggested fix: append `post_validator_after=<n|unknown|same|none>`, computed from the re-read in the new block (~6 lines).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:945-960 | severity=MAJOR | confidence=5\n  PROBLEM: The final-CI path sets `head_commit` to the current `HEAD`, then fetches that SHA from `origin`.\n  WHY: The failed check-run log shows `HEAD` was a locally generated merge commit (`e47a8bee...`), which `origin` does not serve. The fetch fails with `upload-pack: not our ref`, causing the test jobs to exit before running tests.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "99ab2b7877ba434dd80cab506b3ccbd892b8b16d56e015889f26fff7c50904fb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9562,
+    "run_id": "44728126277",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44728126277",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120120403_2006fe878c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9562,
+    "run_id": "44728126277"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-20T12:04:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
