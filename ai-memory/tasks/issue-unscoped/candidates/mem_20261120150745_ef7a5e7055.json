@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_head_gate.sh:102-104 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The integrity context string and updater-branch regex are hard-coded in both scripts/review_head_gate.sh and the update_workflows.yml verify_head_gate step.\n  WHY: A future change to either constant must be made in several places, which raises the risk that the copies drift apart (reviewer severity NIT, mapped to low).\n- .github/workflows/update_workflows.yml:2548-2612 (verify_head_gate step) | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The verify_head_gate poll window (6 reads, 20s apart) can expire before the workflow-integrity commit status is posted.\n  WHY: The step logs a warning and exits 0, which leaves ai-review/head-gate pending until the next review run and may delay auto-merge for updater PRs (reviewer severity NIT, mapped to low).\n- tests/test_audit_consumer_drift.py:1516-1818 | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: None of the nine new pin-age tests are listed in the file's explicit `main()` test list, so the direct-python3 invocations at .github/workflows/mark-stable.yml:567 and .github/workflows/test-and-mark-stable.yml:4373 run none of the new pin-age assertions.\n  WHY: The stable-release gate jobs run `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_consumer_drift.py`, so a regression in `evaluate_pin_age`/`load_release_tags`/the report step passes that gate silently and only the pytest path (ci.yml:737) catches it (reviewer severity NIT, mapped to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_head_gate.sh:102-104 | severity=NIT | confidence=4\n  PROBLEM: The integrity context string and updater-branch regex are hard-coded in both scripts/review_head_gate.sh and the update_workflows.yml verify_head_gate step.\n  WHY: This is a maintenance risk; a future change to either constant requires updates in multiple locations, increasing the risk of desynchronization.\n- .github/workflows/update_workflows.yml:2548-2612 (verify_head_gate step) | severity=NIT | confidence=3\n  PROBLEM: The verify_head_gate poll window (6 reads, 20s apart) can expire before the workflow-integrity commit status is posted.\n  WHY: The step logs a warning and exits 0, leaving ai-review/head-gate pending until the next review run, which may delay auto-merge for updater PRs.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_audit_consumer_drift.py:main() at lines 1766-1818 (test list); new tests at lines 1516-1763 | severity=NIT | confidence=5\n  PROBLEM: The file carries an explicit `main()` test list because the release workflows run it directly without pytest; none of the nine new pin-age tests added by this PR are listed in that `main()`, so the direct-python3 invocations at .github/workflows/mark-stable.yml:567 and .github/workflows/test-and-mark-stable.yml:4373 execute zero of the new pin-age assertions. Only the pytest path (ci.yml:737) exercises them.\n  WHY: The stable-release gate jobs run `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_consumer_drift.py`; a regression in `evaluate_pin_age`/`load_release_tags`/the report step that only pytest would catch passes the release gate silently, so a broken 24-hour drift alarm can ship in a release without failing that gate.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3f094c071d5ab4519d119c866f7661694fc42c59d4791acf0537f650d83477dc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9505,
+    "run_id": "44753429584",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44753429584",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120150745_ef7a5e7055",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9505,
+    "run_id": "44753429584"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-20T15:07:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
