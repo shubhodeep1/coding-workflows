@@ -10,7 +10,7 @@ WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 
 # Every kill switch and tuning knob the stuck-states project added
 # (docs/plans/remove-unattended-pipeline-stuck-states-plan.md, "Rollout",
-# plus P8c, P12 and P13b).
+# plus P8c, P12, P13a and P13b).
 STUCK_STATES_KILL_SWITCHES = (
 	"MERGE_TRAIN_CONFLICT_CHECK_ENABLED",
 	"MERGE_TRAIN_HEAD_MAX_AGE_HOURS",
@@ -38,6 +38,7 @@ STUCK_STATES_KILL_SWITCHES = (
 	"ZOMBIE_RUN_REAPER_ENABLED",
 	"ZOMBIE_RUN_MAX_QUEUED_HOURS",
 	"ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED",
+	"SECURITY_AUDIT_LINE_OWNERSHIP",
 	"SECURITY_PASS_REBIND_ENABLED",
 )
 
@@ -86,7 +87,7 @@ def _workflow_defaults(name):
 
 
 def test_kill_switch_tuple_has_no_duplicates():
-	assert len(STUCK_STATES_KILL_SWITCHES) == len(set(STUCK_STATES_KILL_SWITCHES)) == 27
+	assert len(STUCK_STATES_KILL_SWITCHES) == len(set(STUCK_STATES_KILL_SWITCHES)) == 28
 
 
 def test_every_kill_switch_has_one_variables_row():
