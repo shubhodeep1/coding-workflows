@@ -317,6 +317,108 @@ if [ "${editor_summary_is_real}" = "1" ] && [ "${sandbox_excluded_nothing_commit
     sandbox_excluded_pr="${PR_NUMBER:-}"
     [[ "${sandbox_excluded_pr}" =~ ^[0-9]+$ ]] || sandbox_excluded_pr="unknown"
     echo "AUTOFIX_SANDBOX_EXCLUDED_ESCALATION pr=${sandbox_excluded_pr} head=${sandbox_excluded_head} findings=${sandbox_excluded_findings} outcome=${sandbox_excluded_outcome}${sandbox_excluded_reason}"
+
+    # .gitleaksignore fingerprint suggestion (#9659). The editor never writes
+    # .gitleaksignore (a sandbox-excluded root dotfile), so when a
+    # sandbox-excluded finding names it, the gitleaks "Fingerprint:" lines of
+    # the failed checks' log_tail blocks in PR_CHECK_RUNS_CONTEXT_FILE are
+    # offered as a ready-to-paste block in this step's existing comment (no
+    # extra API call), ahead of the trailing markers. log_tail is untrusted:
+    # a line is used only when it fully matches the gitleaks fingerprint
+    # shape, carries no backtick, angle bracket or control character, and
+    # names a commit that exists and is an ancestor of the validated PR head.
+    # At most 10 lines. Only the count is logged, never the lines. Fail-open:
+    # any error logs outcome=none count=0 and leaves the step's status alone.
+    # Log key: REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=<n|unknown> outcome=suggested|none count=<k> missing=<m>
+    gitleaks_suggest_named="$(tr -d '\r' < "${EDITOR_SUMMARY_FILE}" | awk '
+      BEGIN { section = ""; found = 0; trail = "[] \t.\"\047`)*]+$" }
+      /^(Changes made|Change status|Already satisfied \(suggested but already present\)|Ignored suggestions \(with short reason\)|Reviewer files processed|Review file issue audit|PR comment audit|Regression fingerprint|Runtime failure path):[ \t]*$/ {
+        section = $0
+        sub(/:[ \t]*$/, "", section)
+        next
+      }
+      section == "Ignored suggestions (with short reason)" && /^[ \t]*-[ \t]+/ {
+        value = tolower($0)
+        sub(trail, "", value)
+        if (value ~ /sandbox-excluded path$/ && index(value, ".gitleaksignore") > 0) found = 1
+      }
+      END { print found }
+    ' 2>/dev/null || echo 0)"
+    if [ "${gitleaks_suggest_named}" = "1" ]; then
+      _review_editor_gitleaks_suggestion()
+      {
+        local gitleaks_suggest_head gitleaks_suggest_repo gitleaks_suggest_candidate gitleaks_suggest_sha
+        # Candidates whose commit is absent from the shallow checkout
+        # (fetch-depth 100) are dropped, never fetched; missing=<k> tells that
+        # apart from "no gitleaks output" in the log line.
+        local gitleaks_suggest_missing=0
+        local -a gitleaks_suggest_lines=()
+        gitleaks_suggest_head="$(printf '%s' "${AUTOFIX_FAILURE_HEAD_SHA:-}" | tr 'A-F' 'a-f')"
+        gitleaks_suggest_repo="${GITHUB_WORKSPACE:-$PWD}"
+        if [[ "${gitleaks_suggest_head}" =~ ^[0-9a-f]{40}$ ]] && [ -n "${PR_CHECK_RUNS_CONTEXT_FILE:-}" ] \
+          && [ -f "${PR_CHECK_RUNS_CONTEXT_FILE}" ] && [ ! -L "${PR_CHECK_RUNS_CONTEXT_FILE}" ]; then
+          while IFS= read -r gitleaks_suggest_candidate; do
+            [[ "${gitleaks_suggest_candidate}" =~ ^[0-9a-f]{40}: ]] || continue
+            gitleaks_suggest_sha="${gitleaks_suggest_candidate%%:*}"
+            # The 10-line cap bounds only the suggestion: later candidates are
+            # still counted toward missing= (the extractor emits at most 200).
+            if ! git -C "${gitleaks_suggest_repo}" cat-file -e "${gitleaks_suggest_sha}^{commit}" >/dev/null 2>&1; then
+              gitleaks_suggest_missing=$((gitleaks_suggest_missing + 1))
+            elif [ "${#gitleaks_suggest_lines[@]}" -lt 10 ] && git -C "${gitleaks_suggest_repo}" merge-base --is-ancestor "${gitleaks_suggest_sha}" "${gitleaks_suggest_head}" >/dev/null 2>&1; then
+              gitleaks_suggest_lines+=("${gitleaks_suggest_candidate}")
+            fi
+          done < <(PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c '
+import re, sys
+FP = r"[0-9a-f]{40}:[^:\n]+:[A-Za-z0-9_.-]+:[0-9]+"
+START = re.compile(r"^failed\[[0-9]+\]\.log_tail \([0-9]+ chars\):$")
+HEADER = re.compile(r"^(failed|incomplete)\[[0-9]+\]\.")
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+STAMP = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z[ \t]+")
+LINE = re.compile(r"Fingerprint:[ \t]+(" + FP + r")[ \t]*")
+with open(sys.argv[1], "rb") as fh:
+	text = fh.read(4 * 1024 * 1024).decode("utf-8", errors="replace")
+seen = []
+in_tail = False
+for raw in text.split("\n"):
+	line = raw.replace("\r", "")
+	if START.match(line):
+		in_tail = True
+		continue
+	if HEADER.match(line):
+		in_tail = False
+		continue
+	if not in_tail:
+		continue
+	line = STAMP.sub("", ANSI.sub("", line), count=1)
+	match = LINE.fullmatch(line)
+	if not match:
+		continue
+	fp = match.group(1)
+	if len(fp) > 400 or any(ch in fp for ch in "`<>") or not fp.isprintable():
+		continue
+	if fp not in seen:
+		seen.append(fp)
+	if len(seen) >= 200:
+		break
+for fp in seen:
+	print(fp)
+' "${PR_CHECK_RUNS_CONTEXT_FILE}" 2>/dev/null || true)
+        fi
+        if [ "${#gitleaks_suggest_lines[@]}" -gt 0 ] && {
+          printf '\n%s\n\n' "### Suggested \`.gitleaksignore\` lines (not applied)"
+          printf '%s\n\n' "The editor declined a finding on \`.gitleaksignore\`, a sandbox-excluded path the autofix editor never writes. The failed checks' gitleaks output names the fingerprints below, each for a commit in this pull request's history. Adding them suppresses a gitleaks secret finding, so a human or the main-branch pipeline must decide whether each one is a false positive before pasting it into \`.gitleaksignore\`."
+          printf '%s\n' '```text'
+          printf '%s\n' "${gitleaks_suggest_lines[@]}"
+          printf '%s\n' '```'
+        } >> "${PR_EDITOR_COMMENT_FILE}"; then
+          echo "REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=${sandbox_excluded_pr} outcome=suggested count=${#gitleaks_suggest_lines[@]} missing=${gitleaks_suggest_missing}"
+        else
+          echo "REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=${sandbox_excluded_pr} outcome=none count=0 missing=${gitleaks_suggest_missing}"
+        fi
+        return 0
+      }
+      _review_editor_gitleaks_suggestion || echo "REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=${sandbox_excluded_pr} outcome=none count=0 missing=0"
+    fi
   fi
 fi
 

@@ -61,7 +61,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/drift-audit.yml` — GitHub Actions workflow: Drift Audit.
 - `.github/workflows/forward-merge-stable-to-main.yml` — GitHub Actions workflow: Forward-merge stable to main.
 - `.github/workflows/implement.yml` — GitHub Actions workflow: AI Implement.
-- `.github/workflows/integration-pr-readiness.yml` — GitHub Actions workflow: Integration PR readiness check.
+- `.github/workflows/integration-pr-readiness.yml` — GitHub Actions workflow: Integration PR readiness check (label events only; other PR events run the same script in `pr-checks.yml`).
 - `.github/workflows/internal-cancel-on-pr-close.yml` — GitHub Actions workflow: Internal: Cancel on PR Close.
 - `.github/workflows/internal-check-failure-triage.yml` — GitHub Actions workflow: Internal: AI Check Failure Triage.
 - `.github/workflows/internal-clarify.yml` — GitHub Actions workflow: Internal: AI Clarify.
@@ -77,7 +77,6 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/internal-workflow-failure-heal.yml` — GitHub Actions workflow: Internal: AI Workflow Failure Heal.
 - `.github/workflows/issue_pr_status.yml` — GitHub Actions workflow: AI Issue PR Status Sync.
 - `.github/workflows/lint-plan-archival.yml` — GitHub Actions workflow: Lint plan-archival completeness.
-- `.github/workflows/lint-pr-body-auto-close.yml` — GitHub Actions workflow: Lint PR body for auto-close keywords against orchestrator-tracking issues.
 - `.github/workflows/mark-stable.yml` — GitHub Actions workflow: Mark Stable Release.
 - `.github/workflows/memory_maintenance.yml` — GitHub Actions workflow: AI Memory Maintenance (Reusable).
 - `.github/workflows/nightly-validation-selftest.yml` — GitHub Actions workflow: Nightly Validation Self-Test.
@@ -86,6 +85,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/orchestrate_clarify_respond.yml` — GitHub Actions workflow: AI Orchestrate Clarify Respond (Reusable).
 - `.github/workflows/orchestrate_poll.yml` — GitHub Actions workflow: AI Orchestrate Poller (Reusable).
 - `.github/workflows/plan.yml` — GitHub Actions workflow: AI Plan.
+- `.github/workflows/pr-checks.yml` — GitHub Actions workflow: PR checks; one job (`pr-body-lint`) runs the §19 PR-body auto-close lint and posts the `orchestrator/integration-pr-not-ready` status on every PR into `main` or `stable`.
 - `.github/workflows/promote-candidate-follow.yml` — GitHub Actions workflow: Promote candidate follower (keeps the `promote-candidate` branch at the main tip between promote cycles).
 - `.github/workflows/promote-main-to-stable.yml` — GitHub Actions workflow: Promote main to stable.
 - `.github/workflows/propagate-consumer-secrets.yml` — GitHub Actions workflow: Propagate consumer secrets.
@@ -319,6 +319,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_workflow_sync_skip.sh` — review-gate check that skips the reviewer panel for an `ai-sync/stable` consumer sync PR whose changed paths are all in the signed sync allowlist.
 - `scripts/review_filter_uninteresting_files.sh` — Shell helper for review filter uninteresting files.
 - `scripts/review_sweep_head_gate.sh` — Sourced by the review sweep's enumerate step: reads every open PR's `ai-review/head-gate` state in one GraphQL call per 100 PRs into the snapshot (`head_gate_state`, fail-open), and gives the final-CI state of a head so the sweep skips re-reviewing an approved head whose final CI failed (PR #9649).
+- `scripts/review_sweep_round_cap.sh` — Sourced by the review sweep's enumerate step: counts each PR's dispatched `internal-review.yml` runs in a time window from one paginated listing per tick (fail-open), and escalates a PR at the cap whose head is not approved with `ai:needs-human` and one comment in place of another dispatch.
 - `scripts/review_floor_rules.sh` — Shell helper for review floor rules.
 - `scripts/review_issue_ledger.sh` — Shell helper for review issue ledger.
 - `scripts/review_merge_train.sh` — merge train for review_autofix.yml: `gate` queues an ai/issue-* PR behind older open same-repository ai/issue-* PRs on the same base that edit the same files (fork heads never block; label ai:merge-queued); `release` (cancel_on_pr_close.yml, orchestrate_poll.yml) re-dispatches review once the blockers are gone.
@@ -354,7 +355,9 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/serena_stats_emit.py` — Aggregate Serena tool-call rollups from Codex logs.
 - `scripts/setup_serena.sh` — setup_serena.sh — fail-soft Serena bootstrapper for Codex MCP usage.
 - `scripts/slop_scan_local.py` — Local slop-scan heuristics for review_autofix changed scripts and Python heredocs.
+- `scripts/stable_e2e_step_deep_verify.sh` — body of the test-and-mark-stable.yml "Deep verify: inspect all workflow run steps" step (`id: deep-verify`; sourced by the step from a `github.sha`-pinned copy in `RUNNER_TEMP`; moved out to keep the workflow at or under the 430,000-byte headroom ceiling in `tests/test_test_and_mark_stable_step_scripts_contract.py`).
 - `scripts/stable_e2e_step_verify_bait_removed.sh` — body of the test-and-mark-stable.yml "Phase 4b: Verify editor restored canary (pytest + retry)" step (`id: verify-bait-removed`; sourced by the step from a `github.sha`-pinned copy in `RUNNER_TEMP`; moved out to keep the workflow under the §27 size guard, issue #7991).
+- `scripts/stable_e2e_step_verify_cancel_on_close.sh` — body of the test-and-mark-stable.yml "Phase 7: Close PR and verify cancel_on_pr_close fires" step (`id: verify-cancel-on-close`; sourced by the step from a `github.sha`-pinned copy in `RUNNER_TEMP`; moved out to keep the workflow under the 430,000-byte headroom check, PR #9794). Its wait budget starts when the cancel run leaves the queue, under `PHASE7_QUEUE_WAIT_CAP_MINUTES`.
 - `scripts/stable_e2e_step_wait_review.sh` — body of the test-and-mark-stable.yml "Phase 4: Wait for review & autofix to complete" step (`id: wait-review`; sourced by the step from a `github.sha`-pinned copy in `RUNNER_TEMP`; moved out to keep the workflow under the §27 size guard, issue #7991).
 - `scripts/stable_orchestrate_cancel_dispatched_run.sh` — called by the test-and-mark-stable.yml "Cleanup orchestrate test issues" step: cancels the orchestrate bootstrap the job dispatched when it is still queued or running, and finds a tracking issue it already created.
 - `scripts/stage_workflow_log_bundle.py` — Bound workflow-log artifacts before mounting them into the isolated analyzer.

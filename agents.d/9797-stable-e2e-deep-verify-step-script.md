@@ -1,0 +1,2 @@
+<!-- agents: section="Workflow file size limit" -->
+- The `e2e-smoke-test` job's "Deep verify: inspect all workflow run steps" body (`id: deep-verify`) also lives in `scripts/stable_e2e_step_deep_verify.sh` (#9797 forward-merge). It moved so `test-and-mark-stable.yml` stays at or under the 430,000-byte ceiling (`MAX_WORKFLOW_BYTES` in `tests/test_test_and_mark_stable_step_scripts_contract.py`). It uses the same sparse checkout, verify step, wrapper and `TEST_AND_MARK_STABLE_STEP_SCRIPTS` registry entry as Phase 4 and Phase 4b.
