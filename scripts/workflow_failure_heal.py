@@ -6194,6 +6194,8 @@ def budget_decision(
 	if not (red_main_grouping_enabled is True and isinstance(red_main_group, str) and _FP_HEX_RE.fullmatch(red_main_group)):
 		red_main_group = None
 	red_main_group_duplicate: dict[str, Any] | None = None
+	# Set when any open group issue carries this report's fingerprint (#9823).
+	red_main_group_same_fp_seen = False
 	cause_window_start = now - timedelta(days=min(max(cause_window_days, 1), 30) if type(cause_window_days) is int else 3)
 	cause_duplicate: dict[str, Any] | None = None
 	open_issues: list[dict[str, Any]] = []
@@ -6257,6 +6259,7 @@ def budget_decision(
 				heal_source_record = issue
 			if red_main_group is not None and parse_red_main_group_marker(issue.get("body")) == red_main_group:
 				red_main_group_duplicate = _preferred_duplicate(red_main_group_duplicate, issue)
+				red_main_group_same_fp_seen = red_main_group_same_fp_seen or markers.get("fp") == fp
 			if markers.get("fp") == fp:
 				duplicate = _preferred_duplicate(duplicate, issue)
 			elif same_source:
@@ -6276,8 +6279,10 @@ def budget_decision(
 	# A group issue that also carries this report's fingerprint is left to the
 	# fingerprint match below (`match: fingerprint`), so inline heal-scope
 	# recovery (#7191) still sees it; the issue it records on is the same.
+	# Any such open group issue wins over a higher-numbered group issue with
+	# another fingerprint, so the occurrence lands on the matching issue.
 	group_markers = parse_heal_markers(red_main_group_duplicate.get("body")) if red_main_group_duplicate is not None else {}
-	if red_main_group_duplicate is not None and group_markers.get("fp") != fp:
+	if red_main_group_duplicate is not None and not red_main_group_same_fp_seen and group_markers.get("fp") != fp:
 		return {
 			"action": "duplicate",
 			"match": "red_main_group",

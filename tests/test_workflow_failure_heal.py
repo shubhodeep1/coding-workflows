@@ -13757,6 +13757,11 @@ def test_budget_decision_red_main_group_hit_miss_branch_and_switch_off(tmp_path:
 	assert same_fp_decision["action"] == "duplicate" and same_fp_decision["match"] == "fingerprint"
 	assert same_fp_decision["existing_issue"] == 9702
 	assert heal.budget_decision([same_fp_grouped, grouped], fp=fp, now=P5_NOW, red_main_group=group)["match"] == "fingerprint"
+	# A lower-numbered group issue with this fingerprint beats a higher-numbered
+	# group issue with another one: the occurrence lands on the matching issue.
+	low_same_fp = _red_main_issue(9690, fp=fp, group=group)
+	low_decision = heal.budget_decision([grouped, low_same_fp], fp=fp, now=P5_NOW, red_main_group=group)
+	assert low_decision["match"] == "fingerprint" and low_decision["existing_issue"] == 9690
 	# Miss: another group, or a closed grouped issue, falls through to today's logic.
 	baseline = heal.budget_decision([grouped], fp=fp, now=P5_NOW)
 	assert baseline["action"] == "open"
@@ -13845,6 +13850,12 @@ def test_red_main_grouping_switch_default_log_and_workflow_wiring() -> None:
 	assert 'log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=other_match"' in script
 	assert 'log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=skipped reason=budget_decision"' in script
 	assert 'elif [ "${red_main_decision_action}" = "open" ]; then\n\t\tlog "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=new reason=no_open_group_heal"' in script
+	# The outcome is logged from the final decision: after the re-issue lookup
+	# and scope recovery, which can rewrite DECISION_FILE.
+	outcome_log = script.index('log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=open_group_heal"')
+	assert script.index("\n_heal_reissue_lookup\n") < outcome_log
+	assert script.index("\n_heal_scope_recovery_evaluate\n") < outcome_log < script.index('\ncase "${ACTION}" in\n\tduplicate)')
+	assert 'log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=new reason=scope_recovery"' in script
 	# Recovery strips the group argument and never replaces a group-matched issue.
 	recovery = script.split("\n_heal_scope_recovery_evaluate()\n{", 1)[1].split("\n}\n", 1)[0]
 	assert '!= "red_main_group" ] || return 0' in recovery

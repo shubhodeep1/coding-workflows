@@ -2346,24 +2346,6 @@ if [ -n "${RED_MAIN_GROUP_KEY}" ]; then
 fi
 DECISION_FILE="${RUNTIME_DIR}/decision.json"
 python3 "${HEAL_PY}" budget "${BUDGET_ARGS[@]}" > "${DECISION_FILE}"
-if [ -n "${RED_MAIN_GROUP_KEY}" ]; then
-	red_main_decision_match="$(jq -r '.match // ""' "${DECISION_FILE}" 2>/dev/null || true)"
-	red_main_decision_action="$(jq -r '.action // ""' "${DECISION_FILE}" 2>/dev/null || true)"
-	if [ "${red_main_decision_match}" = "red_main_group" ]; then
-		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=open_group_heal"
-	elif [ "${red_main_decision_match}" = "fingerprint" ]; then
-		# Same fingerprint: recorded by the fingerprint match (scope recovery applies).
-		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=fingerprint_match"
-	elif [ "${red_main_decision_action}" = "duplicate" ]; then
-		# Recorded on another heal issue (source, heal_source, reissue or cause match).
-		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=other_match"
-	elif [ "${red_main_decision_action}" = "open" ]; then
-		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=new reason=no_open_group_heal"
-	else
-		# escalate / budget_exhausted / unreadable decision: no new issue here.
-		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=skipped reason=budget_decision"
-	fi
-fi
 
 # --- Re-issue lineage (Q147) -------------------------------------------------
 # The unblock judge re-issues a blocked heal issue as an ordinary, unlabelled
@@ -2640,6 +2622,31 @@ if [ "${REPORT_AUTH}" = "reconstructed" ] && { [ "${HEAL_SCOPE_RECOVERY_ACTIVE}"
 	# The scan records no occurrence: only a recovery may follow a replay.
 	log "heal_scope_recovery outcome=skip reason=not_recovered issue=${RECOVERY_SCAN_EXPECTED_ISSUE} fp=${FP}"
 	exit 0
+fi
+
+# Red-main grouping (#9823): log the final decision, after the re-issue lookup
+# and scope recovery could rewrite DECISION_FILE, so `outcome=` names what this
+# run does (a re-issue match is `action=duplicate`, logged as other_match).
+if [ -n "${RED_MAIN_GROUP_KEY}" ]; then
+	red_main_decision_match="$(jq -r '.match // ""' "${DECISION_FILE}" 2>/dev/null || true)"
+	red_main_decision_action="$(jq -r '.action // ""' "${DECISION_FILE}" 2>/dev/null || true)"
+	if [ "${red_main_decision_match}" = "red_main_group" ]; then
+		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=open_group_heal"
+	elif [ "${red_main_decision_match}" = "fingerprint" ]; then
+		# Same fingerprint: recorded by the fingerprint match (scope recovery applies).
+		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=fingerprint_match"
+	elif [ "${red_main_decision_action}" = "duplicate" ]; then
+		# Recorded on another heal issue (source, heal_source, reissue or cause match).
+		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=other_match"
+	elif [ "${red_main_decision_action}" = "open" ] && [ "${HEAL_SCOPE_RECOVERY_ACTIVE}" = "true" ]; then
+		# Scope recovery turned a duplicate into an open: a replacement issue.
+		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=new reason=scope_recovery"
+	elif [ "${red_main_decision_action}" = "open" ]; then
+		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=new reason=no_open_group_heal"
+	else
+		# escalate / budget_exhausted / unreadable decision: no new issue here.
+		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=skipped reason=budget_decision"
+	fi
 fi
 
 # Cause-match occurrence inputs (P5 / D3): the signature, the error class and,
