@@ -1,0 +1,11 @@
+<!-- changelog: fixed -->
+- **Stall recovery no longer closes a PR the owner has put on hold, in any phase.** A draft PR, or one whose title contains `[skip ai]`, now stops every stall-recovery action, including the `skip` close-out that closes the PR and the issue when the recovery budget runs out.
+
+The hold check from #9750 only covered issues in `ai:done` and skipped the `skip` action. On 2026-11-20 at 05:58 UTC, orchestrator project #9650 lost wave issue #9733: it sat in `ai:awaiting-approval`, stall recovery chose `skip`, and `close_linked_pr` closed the held PR #9744 before closing the issue with `ai:closed`. This raised the CRITICAL "wave PR(s) closed without merge" alert. Held PRs #9602 (issue #9575) and #9679 (issue #9669) were in the same state. Now `recover_stalled_issue` and the standalone stall loop in `scripts/orchestrate_poll_process.sh` check the hold for every phase and action. The managed `skip` arm re-checks the PR payload it already fetches. `close_linked_pr` refuses to close a held PR, and the issue then stays open. A held issue logs `STALL_SKIP issue=<n> reason=pr_ai_hold pr=<m> detail=draft|skip_ai_title phase=<phase> action=none requested_action=<action>`, counts no attempt and keeps its stall clock.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Extra GitHub API calls | 0 (`close_linked_pr` reads `draft` and `title` from its existing `pulls/<n>` request) |
+| Held wave PRs exposed on 2026-11-20 | 3 (#9744 closed, #9602 and #9679 un-held by hand) |
+
+What this means for operators: putting a wave PR in draft, or adding `[skip ai]` to its title, now keeps the orchestrator away from it until you lift the hold. Stall alerts may keep firing for that issue while it is held, but the PR and issue are never closed. Recovery resumes on its own once the hold is lifted.

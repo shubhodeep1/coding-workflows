@@ -1,0 +1,7 @@
+<!-- agents: section="Workflow architecture" -->
+The stall-recovery `skip` close-out also honours the owner hold (issue #9733, where `skip` closed held PR #9744 on an `ai:awaiting-approval` issue). The hold log line now carries the action it replaced: `STALL_SKIP issue=<n> reason=pr_ai_hold pr=<m> detail=draft|skip_ai_title phase=<phase> action=none requested_action=<action>`, where `phase` can be any phase. Three more checks back up the guards above when the batched linked-PR payload lacks `draft`/`title`:
+- `execute_stall_recovery_action skip` (managed path) re-checks the REST implementation-PR payload its healthy-PR guard already resolves (`STALL_RECOVERY_EFFECTIVE_ACTION=skip_skipped_pr_ai_hold`; returns 1; nothing closed).
+- `close_linked_pr` reads `draft` and `title` from the `pulls/<n>` request it already makes and never closes a held PR. It logs `close_linked_pr: skipping PR #<n> for issue #<m> (owner hold: reason=pr_ai_hold detail=…)` and records the PR in `CLOSE_LINKED_PR_HELD_PRS` (space-separated) and `CLOSE_LINKED_PR_HELD_DETAIL`, which are reset on every call.
+- When `close_linked_pr` reports a held PR, the managed `skip` arm and the standalone exhausted-close arm leave the issue open with no `ai:closed` label. They log the hold line with `requested_action=skip source=close_linked_pr`, count no attempt and keep the stall clock.
+
+When a `close_and_reissue` path calls `close_linked_pr`, a held PR is left open and logged. The pre-action guards stop those paths for a held PR whenever the payload carries the hold fields.
