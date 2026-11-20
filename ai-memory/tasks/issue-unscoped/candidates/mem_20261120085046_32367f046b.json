@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate_poll.yml:n/a (PR-head check run 44694992513, job \"orchestrate-poll (3)\" (cancelled) \u2192 aggregate \"lint\" job (failed)) | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The aggregate \"lint\" check fails only because the \"orchestrate-poll (3)\" job was cancelled, so this run's validation did not finish.\n  WHY: Both reviewers rated this NIT (mapped to low). The log tail shows every TEST_CASE_EVENT as pass and points to no failure caused by this diff. It looks like a run-level cancellation (superseded or concurrent run) that needs a re-run, not a code change. Confidence was 4 from openai_gpt-6-luna and 2 from z-ai_glm-5_3-flash; the higher value is kept.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add a test asserting each of the four workflows passes the three variables with those exact defaults.\" Put it in the existing Wiring class of tests/test_merge_lease.py.\n  expected_change_site: `tests/test_merge_lease.py`, `Wiring.test_lease_revocation_and_priority_switches_reach_every_lease_path`\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The test checks the three variable assignments in `review_autofix.yml`, `orchestrate_poll.yml`, and `cancel_on_pr_close.yml` but leaves out `review_autofix_sweep.yml`. For `review_autofix_sweep.yml` it only asserts that the lease gate and tick helpers are absent. It does not assert that the sweep workflow passes the three variables with the specified defaults. Severity disagreement: google_gemini-3_1-flash-lite rated it MAJOR, openai_gpt-6-luna rated it NIT. Disputed by minimax_minimax-m3 and z-ai_glm-5_3-flash: they say the issue's sweep clause is conditional (\"add only those its called code reads\"), the sweep calls neither the gate nor the tick, so the `assertNotIn` guard encodes that condition correctly.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Add a test asserting each of the four workflows passes the three variables with those exact defaults. Put it in the existing Wiring class of tests/test_merge_lease.py.\n  Expected change site: tests/test_merge_lease.py\n  Evidence of absence: The existing test `test_lease_revocation_and_priority_switches_reach_every_lease_path` covers `review_autofix.yml`, `orchestrate_poll.yml`, and `cancel_on_pr_close.yml` but explicitly omits `review_autofix_sweep.yml`. While the issue text notes that `review_autofix_sweep.yml` does not call the lease gate or tick, the requirement explicitly asks for a test asserting \"each of the four workflows\" passes the variables.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/orchestrate_poll.yml:PR-head check run 44694992513, job \u201corchestrate-poll (3)\u201d (cancelled); aggregate \u201clint\u201d job (failed) | severity=NIT | confidence=4\n  PROBLEM: The cancelled job caused the aggregate lint check to fail, so this run did not complete validation.\n  WHY: The lint job rejects the cancelled prerequisite. The available log tail shows passing test events but no successful job conclusion; it does not identify a failure caused by this diff.\n- TASK_GAP\n  Requirement: \u201cAdd a test asserting each of the four workflows passes the three variables with those exact defaults.\u201d\n  Expected change site: `tests/test_merge_lease.py`, `Wiring.test_lease_revocation_and_priority_switches_reach_every_lease_path`\n  Evidence of absence: The test checks the three variable assignments in `review_autofix.yml`, `orchestrate_poll.yml`, and `cancel_on_pr_close.yml`. For `review_autofix_sweep.yml`, it only asserts that the lease gate and tick helpers are absent; it does not assert that the workflow passes the three variables with the specified defaults.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/orchestrate_poll.yml (PR-head run 44694992513, job \"orchestrate-poll (3)\" \u2192 aggregated \"lint\" job):none in the diff \u2014 check-run signal, not a code site | severity=NIT | confidence=2\n  PROBLEM: The \"lint\" job fails the PR solely because `orchestrate-poll` reported conclusion `cancelled`. Every emitted `TEST_CASE_EVENT` in the log tail is `status: pass`, and no test failure is recorded against the added env lines.\n  WHY: It does not fail from the change. This is a run-level cancellation (superseded/concurrent run), not a defect in the added `MERGE_LEASE_*` lines; the correct action is a re-run/re-dispatch, not a code change.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a1dcdd9d30b765c7fda5cacbab5469771cc46067b383252c808022ff510a3513",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9822,
+    "run_id": "44703315364",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44703315364",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120085046_32367f046b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9822,
+    "run_id": "44703315364"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T08:50:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
