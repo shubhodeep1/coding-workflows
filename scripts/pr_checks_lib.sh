@@ -2063,6 +2063,12 @@ _pr_final_ci_refused_base_update()
 # eligibility, the skip list and `skip=` writes, so the record is byte-for-byte
 # the old format), MERGE_LEASE_IDLE_MINUTES (default 60, 0-1440; 0 turns the
 # idle test off). Every read failure is eligible (fail-open).
+# Forward-merge priority (merge-lease-parallel Phase 3, Refs #9781): the
+# order is a priority label or a same-repository head ref starting with an
+# entry of MERGE_LEASE_PRIORITY_HEAD_PREFIXES, then the lowest PR number.
+# Env (default here): MERGE_LEASE_PRIORITY_HEAD_PREFIXES (default
+# auto/forward-merge-stable-; comma-separated literal prefixes; empty, none
+# or off turns it off). The head ref comes from the listing already read.
 # ---------------------------------------------------------------------------
 
 _merge_lease_enabled()
@@ -2299,9 +2305,15 @@ _merge_lease_paths_intersect()
 
 # Order key for queue position: "0" for a PR carrying a priority label, "1"
 # otherwise, then the zero-padded PR number. Lower sorts first.
+# Optional <head_ref> (Phase 3, Refs #9781): a ref starting with an entry of
+# MERGE_LEASE_PRIORITY_HEAD_PREFIXES (default auto/forward-merge-stable-;
+# comma-separated literal prefixes, no globs; empty, none or off turns it
+# off) also gives "0". The caller passes the ref only for a same-repository
+# head. Without it, or with an empty ref, the key is as before.
 _merge_lease_order_key()
 {
 	local lease_pr="$1" lease_labels="$2" lease_prio_raw lease_label lease_prio=1
+	local lease_head_ref="${3:-}" lease_head_prefixes_raw lease_head_prefix
 	lease_prio_raw="${MERGE_TRAIN_PRIORITY_LABELS-ai:workflow-heal,ai:security}"
 	case "$(printf '%s' "${lease_prio_raw}" | tr '[:upper:]' '[:lower:]')" in
 		""|none|off) lease_prio_raw="" ;;
@@ -2313,6 +2325,22 @@ _merge_lease_order_key()
 			break
 		fi
 	done < <(printf '%s\n' "${lease_labels}" | tr ',' '\n')
+	if [ "${lease_prio}" = 1 ] && [ -n "${lease_head_ref}" ]; then
+		lease_head_prefixes_raw="${MERGE_LEASE_PRIORITY_HEAD_PREFIXES-auto/forward-merge-stable-}"
+		case "$(printf '%s' "${lease_head_prefixes_raw}" | tr '[:upper:]' '[:lower:]')" in
+			""|none|off) lease_head_prefixes_raw="" ;;
+		esac
+		while IFS= read -r lease_head_prefix; do
+			lease_head_prefix="${lease_head_prefix#"${lease_head_prefix%%[![:space:]]*}"}"
+			lease_head_prefix="${lease_head_prefix%"${lease_head_prefix##*[![:space:]]}"}"
+			[ -n "${lease_head_prefix}" ] || continue
+			# Quoted pattern: the prefix is literal, `*`, `?` and `[` never glob.
+			if [[ "${lease_head_ref}" == "${lease_head_prefix}"* ]]; then
+				lease_prio=0
+				break
+			fi
+		done < <(printf '%s\n' "${lease_head_prefixes_raw}" | tr ',' '\n')
+	fi
 	printf '%s%012d' "${lease_prio}" "${lease_pr}"
 }
 
@@ -2323,16 +2351,25 @@ _merge_lease_order_key()
 # number and current head match an entry; <exclude_csv> passes over those
 # numbers. Both apply to the candidate too. The head is `.head.sha` (REST
 # listing) or `.head_sha` (merge-train listing).
+# Phase 3 (Refs #9781): the head ref, `.head.ref` (REST listing, when
+# `.head.repo.full_name` is this repository) or `.head` (merge-train listing,
+# when `.head_repo` is this repository), feeds _merge_lease_order_key's
+# forward-merge priority. A fork head or an unknown repository gives no ref,
+# so no priority; it never blocks a PR.
 _merge_lease_queue_first()
 {
 	local lease_pulls_json="$1" lease_candidate="${2:-}" lease_label="${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}"
-	local lease_skips="${3:-}" lease_exclude="${4:-}" lease_row_head lease_row_rest
+	local lease_skips="${3:-}" lease_exclude="${4:-}" lease_row_head lease_row_rest lease_row_ref
+	local lease_row_repo
+	lease_row_repo="$(printf '%s' "${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" | tr '[:upper:]' '[:lower:]')"
 	local lease_best="" lease_best_key="" lease_row lease_num lease_labels lease_key
 	while IFS= read -r lease_row; do
 		[ -n "${lease_row}" ] || continue
 		lease_num="${lease_row%%$'\t'*}"
 		lease_row_rest="${lease_row#*$'\t'}"
 		lease_row_head="${lease_row_rest%%$'\t'*}"
+		lease_row_rest="${lease_row_rest#*$'\t'}"
+		lease_row_ref="${lease_row_rest%%$'\t'*}"
 		lease_labels="${lease_row_rest#*$'\t'}"
 		[[ "${lease_num}" =~ ^[1-9][0-9]*$ ]] || continue
 		if [ "${lease_num}" != "${lease_candidate}" ] && ! printf ',%s,' "${lease_labels}" | grep -Fq ",${lease_label},"; then
@@ -2344,13 +2381,16 @@ _merge_lease_queue_first()
 		if [ -n "${lease_skips}" ] && [ -n "${lease_row_head}" ] && printf '%s\n' "${lease_skips}" | grep -Fxq -- "${lease_num}:${lease_row_head}"; then
 			continue
 		fi
-		lease_key="$(_merge_lease_order_key "${lease_num}" "${lease_labels}")"
+		lease_key="$(_merge_lease_order_key "${lease_num}" "${lease_labels}" "${lease_row_ref}")"
 		if [ -z "${lease_best_key}" ] || [[ "${lease_key}" < "${lease_best_key}" ]]; then
 			lease_best_key="${lease_key}"
 			lease_best="${lease_num}"
 		fi
-	done < <(jq -r '[ .[]? | if type == "array" then .[] else . end | select(type == "object" and (.draft // false) == false)
-		| "\(.number)\t\(((if (.head | type) == "object" then .head.sha else .head_sha end) // "") | tostring)\t\([ (.labels // [])[] | if type == "object" then .name else . end ] | join(","))" ] | .[]' <<< "${lease_pulls_json}" 2>/dev/null)
+	done < <(jq -r --arg repo "${lease_row_repo}" '[ .[]? | if type == "array" then .[] else . end | select(type == "object" and (.draft // false) == false)
+		| "\(.number)\t\(((if (.head | type) == "object" then .head.sha else .head_sha end) // "") | tostring)\t\((if $repo == "" then ""
+			elif (.head | type) == "object" then (if ((.head.repo.full_name // "") | tostring | ascii_downcase) == $repo then (.head.ref // "") else "" end)
+			elif (.head | type) == "string" then (if ((.head_repo // "") | tostring | ascii_downcase) == $repo then .head else "" end)
+			else "" end) | tostring | gsub("[\t\n\r]"; ""))\t\([ (.labels // [])[] | if type == "object" then .name else . end ] | join(","))" ] | .[]' <<< "${lease_pulls_json}" 2>/dev/null)
 	printf '%s' "${lease_best}"
 }
 

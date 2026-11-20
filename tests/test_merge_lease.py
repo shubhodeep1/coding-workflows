@@ -1149,6 +1149,102 @@ class LeaseRecordCompat(unittest.TestCase):
 		self.assertTrue(held.endswith(f"skip=6:{_sha(6)}\npaths:\na.py"), held)
 
 
+FM = "auto/forward-merge-stable-123-1"
+
+
+def _fork_pull(num: int, head_ref: str) -> dict:
+	pull = _pull(num, head_ref=head_ref)
+	pull["head"]["repo"] = {"full_name": "other/repo"}
+	return pull
+
+
+class LeaseForwardMergePriority(unittest.TestCase):
+	"""Merge-lease parallel merges Phase 3 (Refs #9781): a same-repository
+	forward-merge head ranks with the MERGE_TRAIN_PRIORITY_LABELS group."""
+
+	def _free_gate(self, pulls: list[dict], waiting: list[int], extra_env: dict[str, str] | None = None,
+			labels: dict[str, list[str]] | None = None) -> tuple[int, str]:
+		st = {"pulls": pulls, "labels": labels or {str(n): [WAIT] for n in waiting}, "files": {"5": ["a"]}}
+		_seed_lease(st, _record(3, state="released", paths=""))
+		return _gate(_Harness(st), 5, "update", extra_env)
+
+	def test_update_gate_queues_a_plain_pr_behind_a_forward_merge_waiter(self) -> None:
+		rc, out = self._free_gate([_pull(5), _pull(12, head_ref=FM)], [12])
+		self.assertEqual(rc, 1, out)
+		self.assertIn("outcome=wait reason=queued_behind blocker=12", out)
+
+	def test_tick_grants_a_forward_merge_waiter_before_a_lower_number(self) -> None:
+		st = {"pulls": [_pull(5), _pull(12, head_ref=FM)], "labels": {"5": [WAIT], "12": [WAIT]},
+			"files": {"5": ["a"], "12": ["b"]}}
+		_seed_lease(st, _record(3, state="released", paths=""))
+		_gates_ok(st, 5, 12)
+		h, out = _p2_tick(st)
+		self.assertIn("MERGE_LEASE pr=12 base=main mode=tick outcome=granted", out)
+		self.assertIn("pr=12", h.record())
+		self.assertIn(WAIT, h.state["labels"]["5"])
+
+	def test_priority_label_and_forward_merge_tie_on_pr_number(self) -> None:
+		# Labelled 9 against forward-merge 12: 9 first.
+		st = {"pulls": [_pull(5), _pull(9), _pull(12, head_ref=FM)],
+			"labels": {"9": [WAIT, "ai:security"], "12": [WAIT]}, "files": {"5": ["a"]}}
+		_seed_lease(st, _record(3, state="released", paths=""))
+		rc, out = _gate(_Harness(st), 5, "update")
+		self.assertEqual(rc, 1, out)
+		self.assertIn("reason=queued_behind blocker=9", out)
+		# Forward-merge 8 against labelled 9: 8 first.
+		st2 = {"pulls": [_pull(5), _pull(8, head_ref=FM), _pull(9)],
+			"labels": {"8": [WAIT], "9": [WAIT, "ai:security"]}, "files": {"5": ["a"]}}
+		_seed_lease(st2, _record(3, state="released", paths=""))
+		rc2, out2 = _gate(_Harness(st2), 5, "update")
+		self.assertEqual(rc2, 1, out2)
+		self.assertIn("reason=queued_behind blocker=8", out2)
+
+	def test_none_restores_number_order(self) -> None:
+		pulls = [_pull(5), _pull(12, head_ref=FM)]
+		labels = {"5": [WAIT], "12": [WAIT]}
+		for value in ("none", "", "OFF"):
+			rc, out = self._free_gate([dict(p) for p in pulls], [5, 12], {"MERGE_LEASE_PRIORITY_HEAD_PREFIXES": value}, labels)
+			self.assertEqual(rc, 0, (value, out))
+			self.assertIn("outcome=acquired", out, value)
+
+	def test_fork_head_with_a_forward_merge_name_gets_no_priority(self) -> None:
+		rc, out = self._free_gate([_pull(5), _fork_pull(12, FM)], [5, 12])
+		self.assertEqual(rc, 0, out)
+		self.assertIn("outcome=acquired", out)
+
+	def test_unknown_repository_gives_no_priority(self) -> None:
+		pulls = json.dumps([dict(_pull(n, head_ref=FM if n == 12 else None), labels=[{"name": WAIT}]) for n in (5, 12)])
+		h = _Harness({})
+		body = '_merge_lease_queue_first "${PULLS}" ""'
+		self.assertEqual(h.lib(body, {"PULLS": pulls}).stdout, "12")
+		self.assertEqual(h.lib(body, {"PULLS": pulls, "PR_CHECKS_REPOSITORY": "", "GITHUB_REPOSITORY": ""}).stdout, "5")
+		self.assertEqual(h.lib(body, {"PULLS": pulls, "PR_CHECKS_REPOSITORY": "OWNER/Repo"}).stdout, "12")
+
+	def test_unchanged_order_without_a_forward_merge_waiter(self) -> None:
+		rc, out = self._free_gate([_pull(5), _pull(12)], [12])
+		self.assertEqual(rc, 0, out)
+		self.assertIn("outcome=acquired", out)
+
+	def _key(self, args: str, env: dict[str, str] | None = None) -> str:
+		res = _Harness({}).lib(f"_merge_lease_order_key {args}", env)
+		self.assertEqual(res.returncode, 0, res.stderr)
+		return res.stdout
+
+	def test_order_key_contract(self) -> None:
+		self.assertEqual(self._key("5 ''"), "1000000000005")
+		self.assertEqual(self._key("5 '' ''"), "1000000000005")
+		self.assertEqual(self._key("5 'ai:security'"), "0000000000005")
+		self.assertEqual(self._key(f"12 '' {FM}"), "0000000000012")
+		self.assertEqual(self._key("12 '' ai/issue-12"), "1000000000012")
+		self.assertEqual(self._key(f"12 '' {FM}", {"MERGE_LEASE_PRIORITY_HEAD_PREFIXES": " release/ , auto/forward-merge-stable- "}),
+			"0000000000012")
+		self.assertEqual(self._key("12 '' release/x", {"MERGE_LEASE_PRIORITY_HEAD_PREFIXES": " release/ , auto/forward-merge-stable- "}),
+			"0000000000012")
+		self.assertEqual(self._key("12 '' auto/forward-merge-stable-1", {"MERGE_LEASE_PRIORITY_HEAD_PREFIXES": "auto/*"}),
+			"1000000000012")
+		self.assertEqual(self._key(f"12 '' {FM}", {"MERGE_LEASE_PRIORITY_HEAD_PREFIXES": "none"}), "1000000000012")
+
+
 class Wiring(unittest.TestCase):
 	def test_sweep_skips_lease_waiters_only_while_the_train_releases_them(self) -> None:
 		text = SWEEP.read_text()
