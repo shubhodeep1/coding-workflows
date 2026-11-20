@@ -521,3 +521,22 @@ def test_failed_list_call_defers_groups_instead_of_treating_them_as_untracked(tm
 	assert counts["markers"] == 0
 	# The next run with working list calls picks the records up again.
 	assert _prepare(tmp_path, FakeGh())["model_groups"] == 1
+
+
+def test_repeated_self_fix_disabled_escalation_is_rate_limited(tmp_path: Path) -> None:
+	inbox = tmp_path / "inbox"
+	work = tmp_path / "work"
+	fp = "c" * 64
+	(work / "groups" / fp).mkdir(parents=True)
+	group = {**_group(fingerprint=fp, stalled=True, mapped_paths=[]), "source_repo": CONSUMER, "needs_model": True, "records": []}
+	(work / "groups.json").write_text(json.dumps({"now": at.iso(NOW), "self_files": [], "invalid": [], "groups": [group]}), encoding="utf-8")
+	(work / "groups" / fp / "diagnosis.json").write_text(json.dumps({"classification": "noise", "files": []}), encoding="utf-8")
+	(work / "groups" / fp / "outcome").write_text("ok\n", encoding="utf-8")
+	first = at.decide(work, inbox, self_fix_enabled=False, self_fix_present=False, run_url="u")
+	assert first["groups"][0]["reason"] == "self_fix_disabled" and len(first["escalations"]) == 1
+	at.apply(work, inbox, dry_run=False, run_id="1", now=NOW)
+	second = at.decide(work, inbox, self_fix_enabled=False, self_fix_present=False, run_url="u")
+	assert second["escalations"] == [] and second["groups"][0]["escalation_suppressed"] is True
+	at.apply(work, inbox, dry_run=False, run_id="2", now=NOW)
+	ledger = json.loads((inbox / "ledger" / f"{fp}.json").read_text(encoding="utf-8"))
+	assert ledger["last_escalated_at"] == at.iso(NOW) and ledger["attempts"] == []

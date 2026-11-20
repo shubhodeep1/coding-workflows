@@ -68,6 +68,7 @@ LEDGER_CAP_ATTEMPTS = 2
 LEDGER_CAP_DAYS = 7
 PRUNE_DAYS = 14
 DISPATCH_ROUTES = ("heal_dispatch", "self_fix_dispatch")
+SELF_FIX_ESCALATE_REASONS = ("self_fix_disabled", "self_fix_missing")
 DIAGNOSIS_MAX_BYTES = 16 * 1024
 REPLY_MAX_BYTES = 256 * 1024
 
@@ -255,6 +256,8 @@ def load_ledger(inbox_dir: Path, fp: str) -> dict[str, Any]:
 		"last_seen": data.get("last_seen") if parse_time(data.get("last_seen")) else None,
 		"occurrences": occurrences if isinstance(occurrences, int) and not isinstance(occurrences, bool) and occurrences >= 0 else 0,
 		"attempts": attempts,
+		# Last self_fix_disabled/self_fix_missing escalation (rate limit, see decide()).
+		"last_escalated_at": data.get("last_escalated_at") if parse_time(data.get("last_escalated_at")) else None,
 	}
 
 
@@ -735,6 +738,7 @@ def escalation_text(kind: str, *, fp: str = "", source_repo: str = "", workflow:
 def decide(work_dir: Path, inbox_dir: Path, *, self_fix_enabled: bool, self_fix_present: bool, run_url: str) -> dict[str, Any]:
 	doc = _load_groups(work_dir)
 	self_files = set(doc.get("self_files") or [])
+	now = parse_time(doc.get("now"))
 	out_groups = []
 	escalations = []
 	for group in doc["groups"]:
@@ -744,7 +748,12 @@ def decide(work_dir: Path, inbox_dir: Path, *, self_fix_enabled: bool, self_fix_
 		decision = decide_group(group, diagnosis, outcome, self_files=self_files, self_fix_enabled=self_fix_enabled, self_fix_present=self_fix_present)
 		entry = {"fingerprint": fp, "source_repo": group["source_repo"], "workflow": group["workflow"], "records": [record["key"] for record in group["records"]], **decision}
 		out_groups.append(entry)
-		if decision["route"] == "escalate":
+		# A self-fix escalation repeats every run while the switch is off or the
+		# workflow is missing: send it at most once per ALERT_TRIAGE_HEAL_STALL_HOURS.
+		last_escalated = parse_time(load_ledger(inbox_dir, fp).get("last_escalated_at")) if decision["reason"] in SELF_FIX_ESCALATE_REASONS else None
+		if last_escalated is not None and now is not None and now - last_escalated < datetime.timedelta(hours=_env_int("ALERT_TRIAGE_HEAL_STALL_HOURS", 6)):
+			entry["escalation_suppressed"] = True
+		elif decision["route"] == "escalate":
 			escalations.append({"target": "group", "id": fp[:12], "fingerprint": fp, "text": escalation_text("group", fp=fp, source_repo=group["source_repo"], workflow=group["workflow"], classification=decision["classification"] or "", reason=decision["reason"], run_url=run_url)})
 	if doc.get("invalid"):
 		escalations.append({"target": "group", "id": "invalid_records", "fingerprint": "", "text": escalation_text("other", reason=f"{len(doc['invalid'])} invalid inbox record(s) marked done", run_url=run_url)})
@@ -840,6 +849,8 @@ def apply(work_dir: Path, inbox_dir: Path, *, dry_run: bool, run_id: str, now: d
 		ledger["occurrences"] += len(group.get("records") or [])
 		if group["route"] in DISPATCH_ROUTES and not dry_run:
 			ledger["attempts"].append({"at": stamp, "route": group["route"], "run_id": run_id})
+		if group["route"] == "escalate" and group.get("reason") in SELF_FIX_ESCALATE_REASONS and not group.get("escalation_suppressed") and not dry_run:
+			ledger["last_escalated_at"] = stamp
 		_write_json(inbox_dir / "ledger" / f"{fp}.json", ledger)
 		ledgers += 1
 	for item in doc.get("invalid") or []:
