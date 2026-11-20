@@ -21522,7 +21522,10 @@ The judge will evaluate this gap when the wave completes and decide whether to r
         STALL_HEALING_CHANGED=true
         local _rmc_reissue_rc=0
         "${STALL_RETIRED_CONFLICT_REISSUE_FN}" "${issue_num}" "${phase}" "close_and_reissue" "${recovery_count}" "${local_id}" "${stall_minutes}" || _rmc_reissue_rc=$?
-        STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
+        # Keep the nested reissue's owner-hold marker (#9733) so
+        # invoke_stall_judge skips its fallback dispatch too.
+        [ "${STALL_RECOVERY_EFFECTIVE_ACTION:-}" = "close_and_reissue_skipped_pr_ai_hold" ] \
+          || STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
         return "${_rmc_reissue_rc}"
       fi
       head_sha="$(_jq_field "${pr_json}" '.head.sha')"
@@ -21568,6 +21571,16 @@ The judge will evaluate this gap when the wave completes and decide whether to r
         STALL_RECOVERY_SHOULD_INCREMENT="true"
         return 0
       fi
+      # Owner hold (#9733) on the payload resolved above (0 extra calls):
+      # also covers the stall judge's dispatch_rb_judge fallback.
+      local _rbj_hold_reason=""
+      _rbj_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON:-}")"
+      if [ -n "${_rbj_hold_reason}" ]; then
+        echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${rb_pr_num} detail=${_rbj_hold_reason} phase=${phase} action=none requested_action=dispatch_rb_judge"
+        STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_rb_judge_skipped_pr_ai_hold"
+        STALL_RECOVERY_SHOULD_INCREMENT="false"
+        return 1
+      fi
       # Issue #6680: a PR that conflicts with its base only on retired
       # host-only file(s) the base no longer has can never be merged by the
       # sandboxed resolver, and the judge cannot merge it either. Close and
@@ -21579,7 +21592,8 @@ The judge will evaluate this gap when the wave completes and decide whether to r
         STALL_HEALING_CHANGED=true
         local _rbj_reissue_rc=0
         "${STALL_RETIRED_CONFLICT_REISSUE_FN}" "${issue_num}" "${phase}" "close_and_reissue" "${recovery_count}" "${local_id}" "${stall_minutes}" || _rbj_reissue_rc=$?
-        STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
+        [ "${STALL_RECOVERY_EFFECTIVE_ACTION:-}" = "close_and_reissue_skipped_pr_ai_hold" ] \
+          || STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
         return "${_rbj_reissue_rc}"
       fi
       local rb_dispatch_rc=0
@@ -23111,10 +23125,14 @@ ${diagnostics}
       fi
       if ! execute_stall_recovery_action "${issue_num}" "${phase}" "resolve_merge_conflict" "${recovery_count}" "${local_id}" "${stall_minutes}"; then
         # Owner hold (PR #9750): the target PR is held, so no fallback
-        # dispatch either; no attempt is counted.
-        if [ "${STALL_RECOVERY_EFFECTIVE_ACTION:-}" = "resolve_merge_conflict_skipped_pr_ai_hold" ]; then
-          return 1
-        fi
+        # dispatch either; no attempt is counted. A retired-host-only
+        # reissue stopped by its own hold re-check (#9733) reports
+        # close_and_reissue_skipped_pr_ai_hold and gets the same treatment.
+        case "${STALL_RECOVERY_EFFECTIVE_ACTION:-}" in
+          resolve_merge_conflict_skipped_pr_ai_hold|close_and_reissue_skipped_pr_ai_hold)
+            return 1
+            ;;
+        esac
         echo "::warning::resolve_merge_conflict dispatch failed for issue #${issue_num}; falling back to ${fallback_action}."
         execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
         return $?
@@ -28276,7 +28294,8 @@ recover_stalled_issue() {
             STALL_HEALING_CHANGED=true
             local _opr_reissue_rc=0
             "${STALL_RETIRED_CONFLICT_REISSUE_FN}" "${issue_num}" "${phase}" "close_and_reissue" "${recovery_count}" "${local_id}" "${stall_minutes}" || _opr_reissue_rc=$?
-            STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
+            [ "${STALL_RECOVERY_EFFECTIVE_ACTION:-}" = "close_and_reissue_skipped_pr_ai_hold" ] \
+              || STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
             return "${_opr_reissue_rc}"
           fi
           local _opr_dispatch_rc=0
