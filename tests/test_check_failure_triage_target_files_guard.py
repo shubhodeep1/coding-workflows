@@ -182,6 +182,26 @@ def test_unresolvable_refs_and_missing_files_keep_target(tmp_path: Path) -> None
 	assert all("passwd" not in arg and not arg.startswith("-rf") for call in git_calls for arg in call)
 
 
+def test_advanced_head_keeps_target_without_a_branch_ref(tmp_path: Path) -> None:
+	# The failing commit is no longer the PR head: it does not stand for the
+	# branch, so the route is kept (files may have been added since).
+	target, logs, _calls = _run_guard(
+		tmp_path, refs=DEFAULT_REFS, objects=[f"{HEAD_SHA}^{{commit}}", f"{DEFAULT_TIP}:{FAILING_FILE}"],
+		extra_env={"PR_HEAD_SHA_CURRENT": "D" * 40},
+	)
+	assert target == "feature/widget"
+	assert logs == ["CHECK_TRIAGE routing outcome=keep reason=target_head_advanced target_branch=feature/widget"]
+	# Same head (any case): the fallback still applies.
+	same_dir = tmp_path / "same-head"
+	same_dir.mkdir()
+	target, logs, _calls = _run_guard(
+		same_dir, refs=DEFAULT_REFS, objects=[f"{HEAD_SHA}^{{commit}}", f"{DEFAULT_TIP}:{FAILING_FILE}"],
+		extra_env={"PR_HEAD_SHA_CURRENT": HEAD_SHA.upper()},
+	)
+	assert target == ""
+	assert logs == ["CHECK_TRIAGE routing outcome=fallback reason=target_branch_lacks_files target_branch=main"]
+
+
 def test_fallback_reads_the_staged_default_branch_checkout(tmp_path: Path) -> None:
 	# The triage checkout is a depth-1 checkout of the failing SHA, with no
 	# default-branch ref; the workflow stages a depth-1 default-branch checkout

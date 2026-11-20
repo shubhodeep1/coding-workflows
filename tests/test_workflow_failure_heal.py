@@ -13841,6 +13841,10 @@ def test_red_main_grouping_switch_default_log_and_workflow_wiring() -> None:
 	assert 'log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=open_group_heal"' in script
 	assert 'log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=new reason=no_open_group_heal"' in script
 	assert 'log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=fingerprint_match"' in script
+	# Other duplicates, and escalate / budget caps, are never logged as a new issue.
+	assert 'log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=other_match"' in script
+	assert 'log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=skipped reason=budget_decision"' in script
+	assert 'elif [ "${red_main_decision_action}" = "open" ]; then\n\t\tlog "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=new reason=no_open_group_heal"' in script
 	# Recovery strips the group argument and never replaces a group-matched issue.
 	recovery = script.split("\n_heal_scope_recovery_evaluate()\n{", 1)[1].split("\n}\n", 1)[0]
 	assert '!= "red_main_group" ] || return 0' in recovery

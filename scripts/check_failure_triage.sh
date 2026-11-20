@@ -770,7 +770,7 @@ triage_target_files_guard()
 {
 	local guard_target="${ROUTING_TARGET_BRANCH:-}" guard_default="${ROUTING_DEFAULT_BRANCH:-}" guard_sha="${HEAD_SHA:-}"
 	local guard_tests="" guard_path="" guard_target_commit="" guard_default_commit="" guard_ref=""
-	local guard_dir="" guard_default_dir="" guard_tree_dir="${CHECK_TRIAGE_DEFAULT_BRANCH_TREE_DIR:-}"
+	local guard_dir="" guard_default_dir="" guard_tree_dir="${CHECK_TRIAGE_DEFAULT_BRANCH_TREE_DIR:-}" guard_head_current=""
 	local guard_on_target=0 guard_on_default=0
 	local -a guard_paths=() guard_dirs=()
 	# Git without system/global config or credentials; never prompts or fetches.
@@ -816,7 +816,16 @@ triage_target_files_guard()
 	guard_target_commit="$("${guard_git[@]}" rev-parse --verify --quiet "refs/remotes/origin/${guard_target}^{commit}" 2>/dev/null || true)"
 	if ! [[ "${guard_target_commit}" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
 		guard_target_commit=""
-		# The checkout is the failing tip of the PR head branch.
+		# The checkout is the failing commit. It stands for the PR head branch
+		# only while it is still that branch's tip; once the head advanced
+		# (possible with CHECK_TRIAGE_SKIP_HEAD_ADVANCED_ENABLED=false), files
+		# added since would read as missing, so keep the route (fail open).
+		guard_head_current="${PR_HEAD_SHA_CURRENT:-}"
+		guard_head_current="${guard_head_current,,}"
+		if [[ "${guard_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${guard_head_current}" =~ ^[0-9a-f]{40}$ ]] && [ "${guard_head_current}" != "${guard_sha}" ]; then
+			log "routing outcome=keep reason=target_head_advanced target_branch=${guard_target}"
+			return 0
+		fi
 		if [[ "${guard_sha}" =~ ^[0-9a-f]{40}$ ]] && "${guard_git[@]}" cat-file -e "${guard_sha}^{commit}" >/dev/null 2>&1; then
 			guard_target_commit="${guard_sha}"
 		fi

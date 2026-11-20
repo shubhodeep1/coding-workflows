@@ -2347,13 +2347,21 @@ fi
 DECISION_FILE="${RUNTIME_DIR}/decision.json"
 python3 "${HEAL_PY}" budget "${BUDGET_ARGS[@]}" > "${DECISION_FILE}"
 if [ -n "${RED_MAIN_GROUP_KEY}" ]; then
-	if [ "$(jq -r '.match // ""' "${DECISION_FILE}" 2>/dev/null || true)" = "red_main_group" ]; then
+	red_main_decision_match="$(jq -r '.match // ""' "${DECISION_FILE}" 2>/dev/null || true)"
+	red_main_decision_action="$(jq -r '.action // ""' "${DECISION_FILE}" 2>/dev/null || true)"
+	if [ "${red_main_decision_match}" = "red_main_group" ]; then
 		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=open_group_heal"
-	elif [ "$(jq -r '.match // ""' "${DECISION_FILE}" 2>/dev/null || true)" = "fingerprint" ]; then
+	elif [ "${red_main_decision_match}" = "fingerprint" ]; then
 		# Same fingerprint: recorded by the fingerprint match (scope recovery applies).
 		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=fingerprint_match"
-	else
+	elif [ "${red_main_decision_action}" = "duplicate" ]; then
+		# Recorded on another heal issue (source, heal_source, reissue or cause match).
+		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=other_match"
+	elif [ "${red_main_decision_action}" = "open" ]; then
 		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=new reason=no_open_group_heal"
+	else
+		# escalate / budget_exhausted / unreadable decision: no new issue here.
+		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=skipped reason=budget_decision"
 	fi
 fi
 
