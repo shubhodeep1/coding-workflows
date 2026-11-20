@@ -8,8 +8,11 @@ post-`git merge` state; you are starting over, not editing your previous
 output.
 
 For every region listed below:
-  - Resolve the conflict using only lines taken from "ours", from
-    "theirs", or a combination of both sides' lines.
+  - Resolve the conflict using only whole lines taken from "ours", from
+    "theirs", or both sides' lines stacked together.
+  - If a correct resolution must merge both sides' edits into one line,
+    keep that merged line. Never drop one side's edit just to pass this
+    check: the run then escalates for review instead of losing an edit.
   - Do NOT invent new values, flip flags (for example `'false'` to
     `'true'`), rename identifiers, or re-add lines that exist only in the
     merge base.

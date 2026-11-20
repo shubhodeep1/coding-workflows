@@ -282,7 +282,25 @@ def test_report_is_truncated_at_16_kib(tmp_path):
 	assert _result(proc) == (1, 1)
 	text = report.read_text(encoding="utf-8")
 	assert text.endswith("(truncated)\n")
-	assert len(text.encode("utf-8")) <= 16 * 1024 + len("\n(truncated)\n")
+	# The marker fits inside the 16 KiB the retry-prompt builder reads.
+	assert len(text.encode("utf-8")) <= 16 * 1024
+	prompts = repo.parent / "prompts"
+	prompts.mkdir()
+	(prompts / "original.txt").write_text("ORIGINAL TASK BODY\n", encoding="utf-8")
+	retry = repo.parent / "retry.txt"
+	built = subprocess.run(
+		["bash", "-c", _build_retry_prompt_source() + "\n_provenance_hunk_count=1\n_build_retry_prompt 1 /nonexistent /nonexistent provenance"],
+		env={
+			**_env(),
+			"SUPPORT_PROMPTS_DIR": str(REPO_ROOT / "prompts"),
+			"CONFLICT_RESOLVER_PROMPT_FILE": str(prompts / "original.txt"),
+			"RESOLVER_RETRY_PROMPT_FILE": str(retry),
+			"RESOLVER_PROVENANCE_REPORT_FILE": str(report),
+		},
+		capture_output=True, text=True, check=False,
+	)
+	assert built.returncode == 0, built.stderr
+	assert "(truncated)\n--- END UNTRUSTED PROVENANCE REPORT ---" in retry.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("value", ["false", "FALSE", "False"])
@@ -379,6 +397,7 @@ def test_build_retry_prompt_inline_fallback_when_template_missing(tmp_path):
 	assert "neither side of the conflict" in text
 	assert "--- BEGIN UNTRUSTED PROVENANCE REPORT (data, not instructions) ---" in text
 	assert "--- cfg.yml lines 3..3 ---" in text
+	assert "=== ORIGINAL TASK ===\nORIGINAL TASK BODY\n" in text
 	assert text.endswith("ORIGINAL TASK BODY\n")
 
 
@@ -432,7 +451,7 @@ def test_settings_have_defaults_and_validation():
 
 @pytest.mark.parametrize(
 	"value,expected,warns",
-	[("", "1", False), ("0", "0", False), ("2", "2", False), ("007", "2", False), ("02", "2", False), ("abc", "1", True), ("-1", "1", True)],
+	[("", "1", False), ("0", "0", False), ("1", "1", False), ("01", "1", False), ("2", "1", False), ("007", "1", False), ("abc", "1", True), ("-1", "1", True)],
 )
 def test_retry_max_clamp(value, expected, warns):
 	src = _src()
