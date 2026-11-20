@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.79,
+  "details": "Changes involving queue backpressure, persisted pauses, concurrency caps, or base-CI gates have touched `scripts/orchestrate_poll_process.sh` and its focused tests. When changing poller behavior, check the corresponding tests and any workflow YAML or templates that invoke the script.",
+  "fingerprint": "56755b49a664fd9157477be8facb7523b28a3b02cd7d920f9307edfd21572d9f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44696031692",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44696031692",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9768",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9805",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9808",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9809",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9814",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9774",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9807",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9810",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9811",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9817"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261120074808_ba7d1de579",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator polling and queue behavior is shared across several workflow concerns.",
+  "timestamps": {
+    "created_at": "2026-11-20T07:48:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
