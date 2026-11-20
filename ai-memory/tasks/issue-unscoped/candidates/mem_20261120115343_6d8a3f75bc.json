@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"When such a tracker carries ai:blocked, or any pipeline phase label (ai:clarification, ai:planning and similar), remove those labels and log STALL_RECOVERY_SKIP reason=security_audit_tracker.\"\n  expected_change_site: scripts/orchestrate_poll_process.sh, run_unblock_scan security-audit tracker label-release loop (lines 25257-25285; jq filter at 25270-25275), calling _security_audit_tracker_release_pipeline_labels\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The loop's jq filter `select(any(($failed[0] // [])[]?; . == $n) | not)` excludes failed-project tracker IDs before `_security_audit_tracker_release_pipeline_labels` is called, and scripts/unblock_scan.py select (lines 367-371) skips them as security_audit_tracker without releasing labels, so a failed-project tracker keeps its ai:blocked and phase labels and no STALL_RECOVERY_SKIP line is logged. Standalone recovery (around 25733/25762) does not release them either. Severity disagreement: MAJOR (gemini, minimax, luna) vs NIT (sonnet, glm). Reachability is narrow, since it needs an issue carrying both ai:orchestrator-tracking and ai:security-audit. The test test_run_unblock_scan_executes_tracker_skip_and_still_dispatches_ordinary_issue codifies the current behaviour. Highest severity is MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP: Requirement: \"When such a tracker carries ai:blocked, or any pipeline phase label (ai:clarification, ai:planning and similar), remove those labels and log STALL_RECOVERY_SKIP reason=security_audit_tracker.\"\n  Expected change site: `scripts/orchestrate_poll_process.sh`, `run_unblock_scan`, the security-audit label-release loop (about lines 25270-25275).\n  Evidence of absence: The jq filter `select(any(($failed[0] // [])[]?; . == $n) | not)` keeps failed-project trackers out of `_security_audit_tracker_release_pipeline_labels`. `scripts/unblock_scan.py` `select` still skips them, so their labels stay and no `STALL_RECOVERY_SKIP` line is logged. The exclusion is deliberate, and label release could run for them without touching `search.json`. The case needs one issue carrying both `ai:orchestrator-tracking` and `ai:security-audit`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- HARDENING_SUGGESTIONS: split the filter so labels are released for every tracker and only non-failed ones are removed from `search.json` (about 8 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP: Requirement: \"When such a tracker carries ai:blocked, or any pipeline phase label, remove those labels and log STALL_RECOVERY_SKIP reason=security_audit_tracker.\"\n  Expected change site: scripts/orchestrate_poll_process.sh, run_unblock_scan security-audit tracker filter and label-release loop OR scripts/unblock_scan.py, select label-release logic.\n  Evidence of absence: The shell loop in run_unblock_scan excludes failed-project IDs at lines 25270-25275 before `_security_audit_tracker_release_pipeline_labels`. scripts/unblock_scan.py select skips the tracker at line 367 without removing labels or logging the STALL_RECOVERY_SKIP reason.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: \"When such a tracker carries ai:blocked, or any pipeline phase label (ai:clarification, ai:planning and similar), remove those labels and log STALL_RECOVERY_SKIP reason=security_audit_tracker. Never close the tracker, and never edit its body or its last-sha marker.\"\n  Expected change site: scripts/orchestrate_poll_process.sh \u2014 the run_unblock_scan security-audit-tracker label-release loop around lines 25250-25275.\n  Evidence of absence: The jq filter `select(any(($failed[0] // [])[]?; . == $n) | not)` keeps failed-project tracker IDs out of the loop, so the helper is never called for them and no STALL_RECOVERY_SKIP line is emitted. The Python `select()` change correctly removes the failed-project exemption. The standalone stall recovery branch (around line 25755-25770) does not carve out failed projects, so the two paths are inconsistent. The test `test_run_unblock_scan_executes_tracker_skip_and_still_dispatches_ordinary_issue` codifies the behaviour with `assert \"item=77\" not in result.stdout`.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \"When such a tracker carries ai:blocked, or any pipeline phase label, remove those labels and log STALL_RECOVERY_SKIP reason=security_audit_tracker.\"\n  Expected change site: scripts/orchestrate_poll_process.sh, run_unblock_scan security-audit tracker filter and label-release loop.\n  Evidence of absence: At lines 25270-25275 the loop excludes issues in failed_projects.json before calling _security_audit_tracker_release_pipeline_labels. Those issues stay in search.json, where scripts/unblock_scan.py skips them as security_audit_tracker at lines 367-371, so they are not judged but keep their block and phase labels.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP: Requirement: \"When such a tracker carries ai:blocked, or any pipeline phase label, remove those labels and log STALL_RECOVERY_SKIP reason=security_audit_tracker.\"\n  Expected change site: scripts/orchestrate_poll_process.sh, run_unblock_scan security-audit tracker filter loop (lines 25257-25285).\n  Evidence of absence: The jq predicate at line 25274 excludes failed-project IDs before `_security_audit_tracker_release_pipeline_labels`, so such a tracker keeps its labels and emits no STALL_RECOVERY_SKIP line. scripts/unblock_scan.py select (lines 367-371) then skips it. Standalone recovery cannot release them either, because the managed-set check at 25733 continues before the release block at 25762. The safety tradeoff is correct, and releasing labels while keeping the item in search.json is safe. Reachability is narrow: the failed set only receives tracking-issue numbers (24894, 28847).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0d8164864432865d033f79cfc5dd75d52b3938a424aba09def34f3d71ff1860f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9734,
+    "run_id": "44722485493",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44722485493",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120115343_6d8a3f75bc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9734,
+    "run_id": "44722485493"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T11:53:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
