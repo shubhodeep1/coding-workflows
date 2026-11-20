@@ -106,11 +106,11 @@ def _run_payload(**overrides) -> str:
 
 def _jobs_payload(failed_ids: list[int], passed_ids: list[int] | None = None) -> str:
 	jobs = [
-		{"id": job_id, "status": "completed", "conclusion": "failure", "check_run_url": f"https://api.github.com/repos/owner/repo/check-runs/{job_id}"}
+		{"id": job_id, "name": f"job {job_id}", "status": "completed", "conclusion": "failure", "check_run_url": f"https://api.github.com/repos/owner/repo/check-runs/{job_id}"}
 		for job_id in failed_ids
 	]
 	jobs += [
-		{"id": job_id, "status": "completed", "conclusion": "success", "check_run_url": f"https://api.github.com/repos/owner/repo/check-runs/{job_id}"}
+		{"id": job_id, "name": f"job {job_id}", "status": "completed", "conclusion": "success", "check_run_url": f"https://api.github.com/repos/owner/repo/check-runs/{job_id}"}
 		for job_id in passed_ids or []
 	]
 	return json.dumps({"total_count": len(jobs), "jobs": jobs})
@@ -288,6 +288,17 @@ class ReleaseDownloadRerunGateTests(unittest.TestCase):
 	def test_page_of_99_jobs_is_read(self) -> None:
 		proc, outputs, calls = _collect({5: FOUNDRY}, jobs=_jobs_payload([5], list(range(1000, 1098))))
 		self._assert_rerun(proc, outputs, calls)
+
+	def test_job_without_a_name_or_id_is_not_classified(self) -> None:
+		# Validated like list_run_jobs() in scripts/ci_cancelled_rerun.py, which
+		# requires a positive numeric id and a string name.
+		for drop in ("name", "id"):
+			with self.subTest(drop=drop):
+				payload = json.loads(_jobs_payload([5]))
+				del payload["jobs"][0][drop]
+				proc, outputs, calls = _collect({5: FOUNDRY}, jobs=json.dumps(payload))
+				self._assert_normal_path(proc, outputs, calls, "jobs_unreadable")
+				self.assertEqual(_annotation_gets(calls), [])
 
 	def test_full_page_of_100_annotations_is_not_classified(self) -> None:
 		# Bounded like failure_annotations() in scripts/ci_cancelled_rerun.py.
