@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:27683-27734 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The standalone `dispatch_rb_judge` arm of `run_standalone_stall_recovery` never runs `_stall_pr_ai_hold_reason` on the resolved `STALL_IMPL_PR_JSON` (resolved at 27002-27010 and 27698) before `_dispatch_rb_judge_for_pr` at 27714. The managed arm has this check at 21574-21583.\n  WHY: The generic guard at 26724-26732 fails open when the batched linked-PR payload lacks `draft`/`title`. A held PR can then reach the judge, which can fix, merge or close/reissue it, which is the #9733 harm. Reviewers rated this MAJOR, mapped here to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The hold check \"covers all phases and all actions\". The agents.d fragment says held PRs get no dispatch, and an owner hold means \"leave this item alone\" in every phase and for every action.\n  expected_change_site: scripts/orchestrate_poll_process.sh, the standalone `dispatch_rb_judge` arm (27683-27734), plus a standalone test in tests/test_stall_retired_conflict_reissue.py or a peer test file\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  EVIDENCE: No `_stall_pr_ai_hold_reason` call sits between the REST payload resolution (27698 or 27004) and `_dispatch_rb_judge_for_pr` at 27714, and no test covers a standalone held PR in `ai:review-blocked`. `test_managed_dispatch_rb_judge_honours_owner_hold_before_dispatch` covers only the managed arm, and the agents.d/9733 fragment documents only the managed check.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:27683-27734 (`run_standalone_stall_recovery`, `dispatch_rb_judge)` case; dispatch at 27714; REST payload at 27002-27007 and 27698) | severity=MAJOR | confidence=4\n  PROBLEM: The standalone `dispatch_rb_judge` arm never runs `_stall_pr_ai_hold_reason` on the implementation-PR REST payload it already holds. The managed arm and the standalone `close_and_reissue`, `skip` and `retrigger_review` arms have this check.\n  WHY: The generic hold check at 26722-26733 fails open on a null or incomplete batched payload. A held PR in `ai:review-blocked` can reach the judge, which can fix, merge or close/reissue it.\n- TASK_GAP: Requirement: The hold check \"runs for every phase and every action\". Expected change site: the standalone `dispatch_rb_judge` case (27683-27734) or the pre-resolve block (27001-27014), plus a standalone test. Evidence of absence: No diff hunk adds a `_stall_pr_ai_hold_reason` call to the standalone `dispatch_rb_judge` path, and no test exercises a standalone held PR in `ai:review-blocked`. | confidence=4\n- HARDENING_SUGGESTIONS: add the REST-payload hold re-check before line 27714, plus one assertion beside the managed test (8-12 lines). HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:27683-27734 (resolve at 27698, dispatch at 27714; managed arm at 21574-21583) | severity=MAJOR | confidence=5\n  PROBLEM: The standalone `dispatch_rb_judge` arm never calls `_stall_pr_ai_hold_reason` on `STALL_IMPL_PR_JSON` before `_dispatch_rb_judge_for_pr` at 27714. The only added test covers the managed arm.\n  WHY: The generic guard at 26724-26732 fails open when `draft`/`title` are missing. A held PR can reach the judge, which can close it (the #9733 failure class).\n- TASK_GAP: Requirement: \"Stall recovery: owner hold on the linked PR covers every phase and the skip close-out\". Expected change site: the standalone `dispatch_rb_judge` arm (27683-27734), plus a test. Evidence of absence: No `_stall_pr_ai_hold_reason` call exists between the resolve at 27698 and the dispatch at 27714, and the agents.d/9733 fragment says nothing about the standalone arm. | confidence=5\n- HARDENING_SUGGESTIONS: insert an 8-line hold block before the dispatch at 27714 (about 10 lines). HARDENING_RISK_SCORE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:27694-27714 (PR resolution also at 27004-27010) | severity=MAJOR | confidence=5\n  PROBLEM: The standalone `dispatch_rb_judge` arm uses the resolved PR number but does not check `STALL_IMPL_PR_JSON` for an owner hold before dispatching the judge.\n  WHY: The generic hold check at 26724-26725 fails open on cached linked-PR data without `draft` or `title`. A held PR can then reach the judge, which can close or reissue it.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:27683-27734 (PR resolution at 27694-27700, dispatch at 27714; pre-resolve block at 27002-27014; generic guard at 26724-26732; managed contrast at 21574-21583) | severity=MAJOR | confidence=5\n  PROBLEM: The standalone `dispatch_rb_judge` arm does not re-check the owner hold on `STALL_IMPL_PR_JSON` before `_dispatch_rb_judge_for_pr` at 27714. The managed arm and the early-phase open-PR guard (28276-28289) have this check.\n  WHY: When the batched payload lacks `draft`/`title`, the generic guard fails open and the judge is dispatched for a held PR. The judge can close it, which is the #9733 harm class. No test covers this arm.\n- TASK_GAP: Requirement: The hold check \"covers all phases and all actions\", and the #9733 goal that \"An owner hold now means 'leave this item alone' in every phase and for every action\" (scripts/orchestrate_poll_process.sh:28130-28132). Expected change site: the standalone `dispatch_rb_judge` arm (27694-27714), mirroring the managed arm at 21574-21583. Evidence of absence: No `_stall_pr_ai_hold_reason` call sits between 27698 (or 27004) and 27714. The re-check was added only to the managed arm, the `invoke_stall_judge` fallback suppression and the `_opr` early-phase guard. The agents.d/9733-stall-skip-honours-pr-ai-hold.md paragraph covers only the managed path. | confidence=4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a3c845bce1fbf226a314bf01209fb77d4b304fd21f923e82f0abe616d3f29355",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9832,
+    "run_id": "44736958690",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44736958690",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120134006_dc96529eea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9832,
+    "run_id": "44736958690"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T13:40:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
