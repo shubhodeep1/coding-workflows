@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:21326-21336 and 27568-27575 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The managed and standalone `close_and_reissue` branches close the source issue even when `close_linked_pr` leaves a held PR open, if the cached payload lacks the hold fields.\n  WHY: The source issue is closed while its linked PR stays open, so issue and PR state drift. The reviewer rated this MAJOR, which is mapped here to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The owner hold applies \"for every phase and every action, skip included\", and \"the PR and issue are never closed\" while a wave PR is in draft or titled `[skip ai]`.\n  expected_change_site: scripts/orchestrate_poll_process.sh, the managed `close_and_reissue` branch at lines 21326-21336 and the standalone `close_and_reissue` branch at lines 27568-27575\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The `close_and_reissue` branches do not consult `CLOSE_LINKED_PR_HELD_PRS` before closing the source issue when the cached payload lacks `draft`/`title`, agents.d/9733-stall-skip-honours-pr-ai-hold.md documents this gap, the last run added the held-PR check only to the no-op cap arms and the skip arms, and no test covers a held-PR `close_and_reissue` with a cache that lacks the hold fields. Severity MAJOR in both reviewers.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:21326-21336 and 27568-27575 | severity=high | confidence=5\n  PROBLEM: The managed and standalone `close_and_reissue` branches fail to preserve the source issue when a held PR is encountered, even though `close_linked_pr` refuses to close the PR.\n  WHY: When the hold fields are missing from the cached payload, the source issue is still closed and a replacement issue is created, so issue and PR state drift. The source labels this MAJOR, which is mapped here to high.\n- TASK_GAP:\n  Requirement: \"The hold check now runs for every phase and every action\" and the owner hold must prevent stall recovery from acting on the held PR, especially for the `close_and_reissue` branches.\n  Expected change site: scripts/orchestrate_poll_process.sh, the managed and standalone `close_and_reissue` branches\n  Evidence of absence: The `close_and_reissue` branches in `execute_stall_recovery_action` (managed) and the standalone loop do not stop the source issue close-out when `close_linked_pr` reports a held PR and the cached payload lacks `draft`/`title`. The `agents.d/9733-stall-skip-honours-pr-ai-hold.md` documentation acknowledges this gap.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP:\n  Requirement: Stall recovery must honor the owner hold \"for every phase and every action, skip included\", and \"the PR and issue are never closed\" while a wave PR is in draft or titled `[skip ai]`.\n  Expected change site: `scripts/orchestrate_poll_process.sh`, the managed `close_and_reissue` reissue branch at lines 21326-21336 and the standalone one at lines 27568-27575.\n  Evidence of absence: Both branches call `close_linked_pr` (lines 21328, 27570) and then close the source issue without consulting `CLOSE_LINKED_PR_HELD_PRS`. The last run added that check only to the ancestor-chain no-op cap arm (lines 21220-21226, 27478-27486) and the skip arm (lines 21438-21444, 27612-27620). No test covers a held-PR `close_and_reissue` with a cache that lacks the hold fields. The changelog fragment claims \"the PR and issue are never closed\", which contradicts the agents.d/9733 fragment.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fbc47a9008eef43f6aed74b48cddd084e75ccf0b146327343d1fdbfebd1b79c1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9832,
+    "run_id": "44717807649",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44717807649",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120103242_faeb8440c2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9832,
+    "run_id": "44717807649"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T10:32:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
