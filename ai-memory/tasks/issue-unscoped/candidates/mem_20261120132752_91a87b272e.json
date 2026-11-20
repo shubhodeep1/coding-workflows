@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_extract_plan_diagnostics.py:216-218 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The loop in test_crafted_login_cannot_inject_workflow_commands asserts no line starts with `::set-env` or `::add-mask`, but every stdout line starts with `::warning::`, `::error::` or the static failure message, so these assertions can never fail.\n  WHY: The test would still pass after a regression in newline sanitizing. Only `len(candidates) == 1` and `\"%\" not in candidates[0]` guard it. Production output is correct. Both reviewers rated it NIT.\n- .github/workflows/implement.yml:2700 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `clean` filter in the diagnostic jq keeps `:` characters, so a crafted login containing `::set-env` or `::add-mask` survives inside the candidate line.\n  WHY: Reported as MAJOR, and described as currently inert because every line is prefixed with `::warning::` or `::error::`. The other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) note the same behaviour and judge it safe, so they disagree on severity. z-ai_glm-5_3-flash and google_gemini-3_1-flash-lite suggest appending `| gsub(\"::\"; \"_\")` as hardening.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: To recover issue #9718, post `/reclarify` or `/answer` so the issue is re-planned (suggested fix 3 of the linked issue).\n  expected_change_site: Recovery action on source issue #9718\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The PR adds diagnostics, tests and documentation but contains no `/reclarify` or `/answer` recovery action for #9718. anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash judged this an action on the source issue and not a repository gap. Severity ranged from NIT to MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_implement_extract_plan_diagnostics.py:216-218 | severity=NIT | confidence=4\n  PROBLEM: Every stdout line starts with `::warning::`, `::error::` or the plain \"Unable to locate\u2026\" message, so the assertions `not line.startswith(\"::set-env\")` and `not line.startswith(\"::add-mask\")` can never fail.\n  WHY: The test would still pass after a regression that let a login's newline through. The checks that actually guard this are `len(candidates) == 1` and `\"%\" not in candidates[0]`. Production output is correct.\n- Hardening: assert that every stdout line starts with a known prefix (`::warning::IMPLEMENT_PLAN_CANDIDATE `, `::error::IMPLEMENT_PLAN_NOT_FOUND `, or the \"Unable to locate\" message). HARDENING_RISK_SCORE: 1\n- All other checklist sections: NONE. No task gaps.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/implement.yml:2700 | severity=MAJOR | confidence=3\n  PROBLEM: The `clean` filter in the diagnostic jq only replaces `[^A-Za-z0-9_.:\\\\[\\\\]-]` with `_`, preserving `:` characters.\n  WHY: Because the output uses `::` prefixes, a crafted login containing `::set-env` or `::add-mask` could in principle inject workflow commands. The reviewer says it is currently inert because the lines are already prefixed with valid diagnostic identifiers, and calls it a brittle validation gap.\n- TASK_GAP: Requirement: The task identifies that implement run 44292180289 for issue #9718 failed at the \"Extract implementation plan\" step and requires diagnosing and fixing the workflow failure.\n  Expected change site: Recovery action on source issue #9718.\n  Evidence of absence: The PR adds diagnostic logging but does not perform the recovery action on #9718 (suggested fix item 3). SEVERITY: MAJOR, ISSUE_CONFIDENCE: 3\n- Hardening: append `| gsub(\"::\"; \"_\")` to the `clean` definition. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \"To recover issue #9718, post `/reclarify` or `/answer` so the issue is re-planned. Do not post `/approved` again: there is no plan comment for it to approve.\"\n  Expected change site: Recovery action on source issue #9718.\n  Evidence of absence: The PR diff adds diagnostics, tests and documentation but contains no `/reclarify` or `/answer` recovery action for #9718. The PR description's deferred items do not defer this action. SEVERITY: NIT, ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_implement_extract_plan_diagnostics.py:216-218 | severity=NIT | confidence=4\n  PROBLEM: The loop asserts no stdout line starts with `::set-env` or `::add-mask`, but every emitted line starts with `::warning::`, `::error::` or the static failure message, so neither assertion can fail.\n  WHY: There is no runtime failure and production output is correct. The test's named claim is not verified, and only `len(candidates) == 1` (line 220) and `\"%\" not in candidates[0]` (line 221) actually guard it.\n- Hardening: .github/workflows/implement.yml line 2700, `def clean:`. `clean` keeps `:`, so a crafted `user.login` can embed `::set-env` or `::add-mask` text inside a candidate line. This is inert today because the line begins with `::warning::`. Suggested fix: append `| gsub(\"::\"; \"_\")`. HARDENING_RISK_SCORE: 1\n- All other checklist sections: NONE. The `/reclarify` task gap was considered and rejected as not a code deliverable.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "89d1c59cbc804db3901eca000f1e17571155b25c41db40661d32735931a3eef1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9729,
+    "run_id": "44734554545",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44734554545",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120132752_91a87b272e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9729,
+    "run_id": "44734554545"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T13:27:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
