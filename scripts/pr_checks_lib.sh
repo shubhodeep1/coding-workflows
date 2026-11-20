@@ -105,7 +105,7 @@
 # the empty-string allow-all sentinel. Keep this string identical to the
 # orchestrate_poll_process.sh ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT
 # assignment; tests/test_pr_checks_lib_required_filter.py pins them equal.
-: "${ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT:=CI,lint,Integration PR readiness check,Lint plan-archival completeness,Lint PR body for auto-close keywords against orchestrator-tracking issues,review / gate}"
+: "${ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT:=CI,lint,Integration PR readiness check,Lint plan-archival completeness,Lint PR body for auto-close keywords against orchestrator-tracking issues,pr-body-lint,review / gate}"
 
 # jq definitions shared by the gate filters below and by
 # _summarize_final_merge_blockers (scripts/orchestrate_poll_process.sh).
@@ -114,9 +114,12 @@
 # _mark_superseded tags each check-run with `_superseded`. For most names a
 # run is superseded when a newer run of the same name exists (highest id,
 # then latest started_at), so a re-run replaces a cancelled attempt. The
-# configured CI check name is shared by jobs of other workflows (here
-# `lint` also exists in lint-pr-body-auto-close.yml and
-# lint-plan-archival.yml, which re-run on every PR body edit), so for that
+# configured CI check name can be shared by jobs of other workflows (here
+# `lint` also exists in lint-plan-archival.yml, which re-runs on every
+# body edit of a PR that changes docs/completed/**;
+# the PR-body lint job, now in pr-checks.yml, was `lint` too until it was
+# renamed `pr-body-lint` on 2026-11-18, and a branch that predates the
+# rename still reports the old name), so for that
 # name a newer run supersedes only when it comes from the same Actions run
 # (a re-run attempt) or when both runs are bound CI runs. Otherwise an
 # unrelated workflow's `lint` would hide a cancelled CI `lint`.
@@ -219,7 +222,8 @@ _pr_required_check_names_for_base()
 # Every other check-run is evaluated on its own: a failed, timed-out or
 # still-running run blocks even when a newer run of the same name exists.
 # A check-run carries no workflow identity, so a newer same-name run from
-# another workflow (this repo has three jobs named `lint`) must not hide a
+# another workflow (this repo has two jobs named `lint`: ci.yml and
+# lint-plan-archival.yml) must not hide a
 # failure or an in-progress run, nor a cancelled run of the CI check.
 # Newest is decided before the self-run
 # exclusion, so an older cancelled attempt of the caller's own job never
@@ -1118,7 +1122,8 @@ _pr_wait_for_required_checks()
 		rc=0
 		# Bind the named CI check to a run of an AUTO_MERGE_WAIT_WORKFLOWS
 		# workflow on this head (issue #6963): other workflows also have a
-		# job named `lint` (lint-pr-body-auto-close.yml, lint-plan-archival.yml),
+		# job named `lint` (lint-plan-archival.yml; the PR-body lint job
+		# too on a branch that predates its rename to `pr-body-lint`),
 		# and their success must not stand in for CI. With the runs listing
 		# unreadable, a success is not trusted (state unknown, keep polling);
 		# with AUTO_MERGE_WAIT_WORKFLOWS=none the match is by name only.
