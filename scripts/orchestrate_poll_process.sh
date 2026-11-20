@@ -20735,17 +20735,6 @@ STALL_EOF
         STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
         return 0
       fi
-      # #9809: an open implementation PR makes /approved a no-op; review it instead.
-      local _auto_approve_route_rc=0
-      _stall_route_open_impl_pr "${issue_num}" "${phase}" "${action}" || _auto_approve_route_rc=$?
-      case "${_auto_approve_route_rc}" in
-        0)
-          STALL_RECOVERY_SHOULD_INCREMENT="true"
-          STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_review"
-          return 0
-          ;;
-        2|3) return 1 ;;
-      esac
       local _managed_staged_support_comments='[]'
       local _managed_staged_support_latch_rc=0
       local _managed_staged_support_cache_available="false"
@@ -20778,6 +20767,19 @@ STALL_EOF
         "${_managed_staged_support_comments}" "${phase}"; then
         return 1
       fi
+      # #9809: an open implementation PR makes /approved a no-op; review it
+      # instead. Runs after the no-op cap, the staged-support latch and the
+      # plan gate, so every existing hold keeps running first.
+      local _auto_approve_route_rc=0
+      _stall_route_open_impl_pr "${issue_num}" "${phase}" "${action}" || _auto_approve_route_rc=$?
+      case "${_auto_approve_route_rc}" in
+        0)
+          STALL_RECOVERY_SHOULD_INCREMENT="true"
+          STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_review"
+          return 0
+          ;;
+        2|3) return 1 ;;
+      esac
       echo "  Auto-approving plan for issue #${issue_num}..."
       local _auto_approve_rc=0
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
@@ -20808,17 +20810,6 @@ STALL_EOF
         STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
         return 0
       fi
-      # #9809: an open implementation PR makes /approved a no-op; review it instead.
-      local _retrigger_implement_route_rc=0
-      _stall_route_open_impl_pr "${issue_num}" "${phase}" "${action}" || _retrigger_implement_route_rc=$?
-      case "${_retrigger_implement_route_rc}" in
-        0)
-          STALL_RECOVERY_SHOULD_INCREMENT="true"
-          STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_review"
-          return 0
-          ;;
-        2|3) return 1 ;;
-      esac
       if [ "${phase}" = "ai:awaiting-approval" ]; then
         # Issue #6769: this arm posts the same /approved, so a stall-judge
         # choice cannot skip the plan auto-approval gate.
@@ -20829,6 +20820,18 @@ STALL_EOF
           return 1
         fi
       fi
+      # #9809: an open implementation PR makes /approved a no-op; review it
+      # instead. Runs after the no-op cap and the plan gate.
+      local _retrigger_implement_route_rc=0
+      _stall_route_open_impl_pr "${issue_num}" "${phase}" "${action}" || _retrigger_implement_route_rc=$?
+      case "${_retrigger_implement_route_rc}" in
+        0)
+          STALL_RECOVERY_SHOULD_INCREMENT="true"
+          STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_review"
+          return 0
+          ;;
+        2|3) return 1 ;;
+      esac
       echo "  Re-triggering implementation for issue #${issue_num}..."
       # The implement workflow precheck (implement.yml) skips when
       # ai:implementing is present ("another implement run is in progress")
@@ -27057,21 +27060,28 @@ STALL_EOF
         # the staged-support skip.
         # In ai:awaiting-approval, comments_json already holds the complete
         # history (_staged_support_comments_for_guard above); reuse it.
-        # #9809: an open implementation PR makes /approved a no-op; review it
-        # instead (rc 0 counts, rc 2/3 take no action, rc 1 keeps /approved).
-        local _std_auto_approve_route_rc=0
-        _stall_route_open_impl_pr "${issue_num}" "${phase}" "${action}" || _std_auto_approve_route_rc=$?
-        if [ "${_std_auto_approve_route_rc}" -eq 0 ]; then
-          STALL_RECOVERY_SHOULD_INCREMENT="true"
-          STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_review"
-          took_action="true"
-        fi
+        # #9809: reset per issue; "gate_held" means the plan gate held it and
+        # nothing below runs (this function loops over issues, so a `local`
+        # from an earlier issue would otherwise carry over).
+        local _std_auto_approve_route_rc="gate_held"
         local _std_plan_gate_comments="${comments_json:-[]}"
-        if [ "${_std_auto_approve_route_rc}" -eq 1 ] && [ "${phase}" != "ai:awaiting-approval" ]; then
+        if [ "${phase}" != "ai:awaiting-approval" ]; then
           _std_plan_gate_comments="$(_plan_auto_approval_gate_comments "${issue_num}" "${_candidate_details_json:-}")"
         fi
-        if [ "${_std_auto_approve_route_rc}" -eq 1 ] && _plan_auto_approval_gate "${issue_num}" "${_candidate_details_json:-}" \
+        if _plan_auto_approval_gate "${issue_num}" "${_candidate_details_json:-}" \
           "${_std_plan_gate_comments}" "${phase}"; then
+          # #9809: an open implementation PR makes /approved a no-op; review it
+          # instead. Runs only once the plan gate approves, so its holds run
+          # first (rc 0 counts, rc 2/3 take no action, rc 1 keeps /approved).
+          _std_auto_approve_route_rc=0
+          _stall_route_open_impl_pr "${issue_num}" "${phase}" "${action}" || _std_auto_approve_route_rc=$?
+          if [ "${_std_auto_approve_route_rc}" -eq 0 ]; then
+            STALL_RECOVERY_SHOULD_INCREMENT="true"
+            STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_review"
+            took_action="true"
+          fi
+        fi
+        if [ "${_std_auto_approve_route_rc}" = "1" ]; then
           local _std_auto_approve_rc=0
           gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
 /approved
@@ -27091,24 +27101,27 @@ STALL_EOF
         # Issue #6769: before the first approval this arm posts the same
         # /approved as auto_approve, so it passes the same plan gate.
         local _std_rti_gate_ok="true"
-        # #9809: an open implementation PR makes /approved a no-op; review it
-        # instead (rc 0 counts, rc 2/3 take no action, rc 1 keeps /approved).
-        local _std_retrigger_implement_route_rc=0
-        _stall_route_open_impl_pr "${issue_num}" "${phase}" "${action}" || _std_retrigger_implement_route_rc=$?
-        if [ "${_std_retrigger_implement_route_rc}" -ne 1 ]; then
-          _std_rti_gate_ok="false"
-        fi
-        if [ "${_std_retrigger_implement_route_rc}" -eq 0 ]; then
-          STALL_RECOVERY_SHOULD_INCREMENT="true"
-          STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_review"
-          took_action="true"
-        fi
-        if [ "${_std_rti_gate_ok}" = "true" ] && [ "${phase}" = "ai:awaiting-approval" ]; then
+        if [ "${phase}" = "ai:awaiting-approval" ]; then
           # comments_json is the complete history in this phase (see auto_approve).
           local _std_rti_gate_comments="${comments_json:-[]}"
           if ! _plan_auto_approval_gate "${issue_num}" "${_candidate_details_json:-}" \
             "${_std_rti_gate_comments}" "${phase}"; then
             _std_rti_gate_ok="false"
+          fi
+        fi
+        # #9809: an open implementation PR makes /approved a no-op; review it
+        # instead. Runs only once the plan gate passes (rc 0 counts, rc 2/3
+        # take no action, rc 1 keeps /approved).
+        if [ "${_std_rti_gate_ok}" = "true" ]; then
+          local _std_retrigger_implement_route_rc=0
+          _stall_route_open_impl_pr "${issue_num}" "${phase}" "${action}" || _std_retrigger_implement_route_rc=$?
+          if [ "${_std_retrigger_implement_route_rc}" -ne 1 ]; then
+            _std_rti_gate_ok="false"
+          fi
+          if [ "${_std_retrigger_implement_route_rc}" -eq 0 ]; then
+            STALL_RECOVERY_SHOULD_INCREMENT="true"
+            STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_review"
+            took_action="true"
           fi
         fi
         if [ "${_std_rti_gate_ok}" = "true" ]; then

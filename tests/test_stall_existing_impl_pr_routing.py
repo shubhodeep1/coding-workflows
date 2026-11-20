@@ -177,9 +177,12 @@ def test_stall_arms_route_before_posting_approved(arm: str) -> None:
 	route = body.index('_stall_route_open_impl_pr "${issue_num}" "${phase}" "${action}"')
 	# The /approved comment heredoc, not the comments that mention it.
 	assert route < body.index("cat <<'STALL_EOF'\n/approved")
-	# After the no-op cap, before the plan gate.
+	# After the no-op cap and after every existing hold (the staged-support
+	# latch skip and the plan gate), so an open PR never bypasses them.
 	assert body.index("MAX_IMPL_NOOP_REISSUES") < route
-	assert route < body.index("_plan_auto_approval_gate")
+	assert body.index("_plan_auto_approval_gate") < route
+	if arm == "auto_approve":
+		assert body.index("staged_support_latch_release_incomplete") < route
 	assert re.search(r'0\)\n\s+STALL_RECOVERY_SHOULD_INCREMENT="true"\n\s+STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_review"\n\s+return 0', body[route:])
 	assert "2|3) return 1 ;;" in body[route:]
 
@@ -196,16 +199,21 @@ def test_standalone_stall_arms_route_before_posting_approved(arm: str, rc_var: s
 	text = POLLER_SCRIPT.read_text(encoding="utf-8")
 	body = _standalone_arm(text, arm)
 	route = body.index(f'_stall_route_open_impl_pr "${{issue_num}}" "${{phase}}" "${{action}}" || {rc_var}=$?')
-	# Before the plan gate and the /approved comment heredoc.
-	assert route < body.index("_plan_auto_approval_gate")
+	# After the plan gate (its heal hold, stale-close check and protected-path
+	# hold run first), before the /approved comment heredoc.
+	assert body.index("_plan_auto_approval_gate") < route
 	assert route < body.index("cat <<'STALL_EOF'\n/approved")
 	routed = body[route:]
 	assert re.search(rf'if \[ "\$\{{{rc_var}\}}" -eq 0 \]; then\n\s+STALL_RECOVERY_SHOULD_INCREMENT="true"\n\s+STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_review"\n\s+took_action="true"', routed)
 	# Only rc 1 (flag off, no open PR, inconclusive lookup) reaches /approved.
 	if arm == "auto_approve":
-		assert f'if [ "${{{rc_var}}}" -eq 1 ] && _plan_auto_approval_gate' in routed
+		# Reset per issue so a held gate never inherits an earlier issue's rc.
+		assert body.index(f'local {rc_var}="gate_held"') < body.index("_plan_auto_approval_gate")
+		assert routed.index(f'if [ "${{{rc_var}}}" = "1" ]; then') < routed.index("cat <<'STALL_EOF'\n/approved")
 	else:
-		assert f'if [ "${{{rc_var}}}" -ne 1 ]; then\n          _std_rti_gate_ok="false"' in routed
+		# The route runs only when the gate passed.
+		assert body.index('if [ "${_std_rti_gate_ok}" = "true" ]; then') < route
+		assert f'if [ "${{{rc_var}}}" -ne 1 ]; then\n            _std_rti_gate_ok="false"' in routed
 		assert routed.index('_std_rti_gate_ok="false"') < routed.index('if [ "${_std_rti_gate_ok}" = "true" ]; then')
 
 
