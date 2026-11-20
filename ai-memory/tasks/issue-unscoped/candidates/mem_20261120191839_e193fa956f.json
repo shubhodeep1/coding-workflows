@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_prepush_test_gate.sh:831-842 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `passing_change_erased` guard relies on a `git stash create` baseline, which tracks only files git already knows, so when the editor's change is only new untracked files that a repair turn deletes, `review_prepush_test_gate_revert all` does not restore them.\n  WHY: The working tree stays clean, the commit step finds nothing to commit and reports \"Editor changes lost\", so the main requirement of issue #9519 is not met, and the logged `outcome=repair_reverted reason=passing_change_erased` misreports the result (the source rated this MAJOR, recorded here as high).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_autofix_step_prepush_test_gate.sh:831-842 (the `passing_change_erased` guard) | severity=MAJOR | confidence=4\n  PROBLEM: The baseline for reverting repairs comes from `git stash create`, which tracks only files git already knows, so an editor change made only of new untracked files is not captured, and `review_prepush_test_gate_revert all` does not bring those files back after a repair turn deletes them.\n  WHY: The working tree stays clean, the commit step finds nothing to commit and reports \"Editor changes lost\", so the main requirement of issue #9519 is not met, and the logged `outcome=repair_reverted reason=passing_change_erased` misleadingly says the repair was reverted.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "64253f2bd80fbafd4034663f02f2b2056e05aec44ab4d8c7feb617d2e1db3e75",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9562,
+    "run_id": "44798323603",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44798323603",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120191839_e193fa956f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9562,
+    "run_id": "44798323603"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-20T19:18:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
