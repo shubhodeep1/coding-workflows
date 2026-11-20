@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-20T21:40:25Z",
+  "issue_number": 9844,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=.github/workflows/review_autofix_sweep.yml:315-320; cited_path=.github/workflows/review_autofix_sweep.yml; files_touched=README.md, changelog.d/9844-stuck-states-readme-docs.md, tests/test_readme_stuck_states_kill_switches.py.",
+  "phase": "review_autofix",
+  "pr_number": 9845,
+  "record_id": "lesson_20261120214025_b8dead3ab0",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/review_autofix_sweep.yml",
+    "README.md",
+    "changelog.d/9844-stuck-states-readme-docs.md",
+    "tests/test_readme_stuck_states_kill_switches.py"
+  ]
+}
