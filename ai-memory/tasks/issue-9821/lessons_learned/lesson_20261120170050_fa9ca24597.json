@@ -1,0 +1,22 @@
+{
+  "discovered_at": "2026-11-20T17:00:50Z",
+  "issue_number": 9821,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=.github/workflows/ci.yml:4916-4919; cited_path=.github/workflows/ci.yml; files_touched=.github/workflows/cancel_on_pr_close.yml, .github/workflows/orchestrate_poll.yml, .github/workflows/review_autofix.yml, agents.d/merge-lease-parallel-p2-revocation.md, agents.d/merge-lease-parallel-p3-forward-merge-priority.md, changelog.d/merge-lease-parallel-p2-p3-env-wiring.md, changelog.d/merge-lease-parallel-p2-revocation.md, changelog.d/merge-lease-parallel-p3-forward-merge-priority.md, tests/test_merge_lease.py.",
+  "phase": "review_autofix",
+  "pr_number": 9822,
+  "record_id": "lesson_20261120170050_fa9ca24597",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/ci.yml",
+    ".github/workflows/cancel_on_pr_close.yml",
+    ".github/workflows/orchestrate_poll.yml",
+    ".github/workflows/review_autofix.yml",
+    "agents.d/merge-lease-parallel-p2-revocation.md",
+    "agents.d/merge-lease-parallel-p3-forward-merge-priority.md",
+    "changelog.d/merge-lease-parallel-p2-p3-env-wiring.md",
+    "changelog.d/merge-lease-parallel-p2-revocation.md",
+    "changelog.d/merge-lease-parallel-p3-forward-merge-priority.md",
+    "tests/test_merge_lease.py"
+  ]
+}
