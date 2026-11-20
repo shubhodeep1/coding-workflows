@@ -364,8 +364,10 @@ LINT_REQUIRED_ENV = {
 
 
 def test_cancelled_ci_check_not_superseded_by_other_workflow_same_name() -> None:
-	"""The CI check name (`lint` here) is shared with lint-pr-body-auto-close
-	and lint-plan-archival, which re-run on every PR body edit. A newer
+	"""The CI check name (`lint` here) is shared with lint-plan-archival
+	(and, on branches that predate its rename to `pr-body-lint`, with
+	the PR-body lint, now a step group of pr-checks.yml), which re-runs on
+	PR body edits. A newer
 	`lint` from another Actions run must not hide a cancelled CI `lint`,
 	in either filter mode, when the runs are not bound to CI run ids."""
 	runs = _page([_lint_run("555", "cancelled", 1), _lint_run("777", "success", 2)])
@@ -373,6 +375,20 @@ def test_cancelled_ci_check_not_superseded_by_other_workflow_same_name() -> None
 	assert rc == 1 and reason == "blocking", (rc, reason)
 	rc, reason = _gate(runs_json=runs, args='5 "abc1234"', env=LINT_REQUIRED_ENV)
 	assert rc == 1 and reason == "blocking", (rc, reason)
+
+
+def test_failed_pr_body_lint_blocks_under_the_default_required_set() -> None:
+	"""pr-checks.yml's job is `pr-body-lint`, the name the PR-body lint job
+	had in lint-pr-body-auto-close.yml before the fold (earlier it was `lint`,
+	and blocked only through that shared name). A failed run must still
+	block with the built-in default set; a passing one must not."""
+	ci_lint_ok = _lint_run("555", "success", 1)
+	pr_body_lint_failed = {"id": 2, "name": "pr-body-lint", "status": "completed", "conclusion": "failure",
+		"details_url": "https://github.com/o/r/actions/runs/777/job/2"}
+	rc, reason = _gate(runs_json=_page([ci_lint_ok, pr_body_lint_failed]), args='5 "abc1234" "main"', env=REPO_ENV)
+	assert rc == 1 and reason == "blocking", (rc, reason)
+	rc, reason = _gate(runs_json=_page([ci_lint_ok, {**pr_body_lint_failed, "conclusion": "success"}]), args='5 "abc1234" "main"', env=REPO_ENV)
+	assert rc == 0 and reason == "ok", (rc, reason)
 
 
 def test_cancelled_ci_check_superseded_by_rerun_of_same_actions_run() -> None:
@@ -626,6 +642,7 @@ def test_required_names_uses_env_default_when_unset() -> None:
 		"CI,lint,Integration PR readiness check,"
 		"Lint plan-archival completeness,"
 		"Lint PR body for auto-close keywords against orchestrator-tracking issues,"
+		"pr-body-lint,"
 		"review / gate"
 	)
 
