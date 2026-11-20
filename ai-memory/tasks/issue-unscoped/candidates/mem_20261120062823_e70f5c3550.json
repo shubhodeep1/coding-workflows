@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_merge_lease.py:1287-1289 | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test `test_lease_revocation_and_priority_switches_reach_every_lease_path` uses `assertNotIn` to assert that `review_autofix_sweep.yml` makes no lease-related function calls.\n  WHY: The reviewer reads the task as saying the sweep workflow calls lease functions (`_merge_lease_gate`, etc.), so the test contradicts the task and passes on a configuration that ignores the requirement; the source gave no severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add three env lines (MERGE_LEASE_REVOKE_ENABLED, MERGE_LEASE_IDLE_MINUTES, MERGE_LEASE_PRIORITY_HEAD_PREFIXES) beside the existing MERGE_LEASE_* env block in review_autofix_sweep.yml.\n  expected_change_site: .github/workflows/review_autofix_sweep.yml near line 233\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff does not contain any changes to .github/workflows/review_autofix_sweep.yml. The issue explicitly requested this if the step calls the lease gate or tick, which review_autofix_sweep.yml does (via scripts/review_autofix_sweep.sh calling lease-related scripts).\n- requirement: \u201cThe new wiring test passes, and every existing test in tests/test_merge_lease.py and tests/test_review_merge_train.py still passes.\u201d\n  expected_change_site: Verification of tests/test_merge_lease.py and tests/test_review_merge_train.py.\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The PR description / acceptance table marks both suites as unmet and gives no passing result for the required suites, and the pre-push test gate reports tests/test_merge_lease.py as baseline_timeout, so the required passing result is not established.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_merge_lease.py:1287-1289 | confidence=4\n  PROBLEM: The test `test_lease_revocation_and_priority_switches_reach_every_lease_path` incorrectly asserts the absence of lease-related function calls in `review_autofix_sweep.yml` using `assertNotIn`.\n  WHY: The task requirement says the sweep workflow calls these lease functions (`_merge_lease_gate`, etc.) and needs the new env vars wired, so the test contradicts the requirement and passes while validating a configuration that ignores it.\n- TASK_GAP | severity=BLOCKER | confidence=5\n  Requirement: Add three env lines (MERGE_LEASE_REVOKE_ENABLED, MERGE_LEASE_IDLE_MINUTES, MERGE_LEASE_PRIORITY_HEAD_PREFIXES) beside the existing MERGE_LEASE_* env block in review_autofix_sweep.yml.\n  Expected change site: .github/workflows/review_autofix_sweep.yml near line 233\n  Evidence of absence: The PR diff does not contain any changes to .github/workflows/review_autofix_sweep.yml. The issue explicitly requested this if the step calls the lease gate or tick, which review_autofix_sweep.yml does (via scripts/review_autofix_sweep.sh calling lease-related scripts).\n- TASK_GAP | severity=MAJOR | confidence=4\n  Requirement: \u201cThe new wiring test passes, and every existing test in tests/test_merge_lease.py and tests/test_review_merge_train.py still passes.\u201d\n  Expected change site: Verification of tests/test_merge_lease.py and tests/test_review_merge_train.py.\n  Evidence of absence: The PR description marks both suites as unmet and reports a baseline timeout for tests/test_merge_lease.py; it provides no passing result for the required test suites.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP | severity=MAJOR | confidence=4\n  Requirement: \u201cThe new wiring test passes, and every existing test in tests/test_merge_lease.py and tests/test_review_merge_train.py still passes.\u201d\n  Expected change site: Verification of tests/test_merge_lease.py and tests/test_review_merge_train.py.\n  Evidence of absence: The PR acceptance table marks both suites unmet. The pre-push test gate reports tests/test_merge_lease.py as baseline_timeout, so the required passing result is not established.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "673470a8e80f6ca189e7e92e71fdea0c8d14572447989f3fd8f6aa512026c17b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9822,
+    "run_id": "44684000308",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44684000308",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120062823_e70f5c3550",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9822,
+    "run_id": "44684000308"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T06:28:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
