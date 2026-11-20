@@ -1700,8 +1700,14 @@ def _pin_summary(pin_age: dict | None, repairs: list[dict]) -> dict:
 
 def test_report_warns_when_behind_stable_even_with_a_fresh_sync_pull_request() -> None:
 	pin_age = {"stale": True, "reason": "behind_stable", "pinned_release": "v1.46.0", "first_newer_release": "v1.47.0", "behind_seconds": 25 * 3600}
-	with tempfile.TemporaryDirectory(prefix="drift-report-pin-") as td:
-		level, telegram, summary_md = _run_report_step(Path(td), _pin_summary(pin_age, [_sync_skip(False)]))
+	# Pin the default threshold: the report subprocess inherits os.environ.
+	env_patch = _DirectRunEnvPatch()
+	env_patch.setenv("CONSUMER_PIN_MAX_AGE_SECONDS", "86400")
+	try:
+		with tempfile.TemporaryDirectory(prefix="drift-report-pin-") as td:
+			level, telegram, summary_md = _run_report_step(Path(td), _pin_summary(pin_age, [_sync_skip(False)]))
+	finally:
+		env_patch.undo()
 	assert level == "WARNING"
 	assert "### Behind stable for 24 hours or more" in summary_md
 	assert "owner/drifted" in telegram and "pinned v1.46.0, v1.47.0 released 25 hours ago" in telegram
@@ -1712,11 +1718,17 @@ def test_report_warns_for_an_unknown_pin_and_stays_quiet_within_threshold() -> N
 		level, telegram, _md = _run_report_step(Path(td), _pin_summary({"stale": True, "reason": "pin_unknown"}, [_sync_skip(False)]))
 		assert level == "WARNING"
 		assert "pin_unknown" in telegram
-	with tempfile.TemporaryDirectory(prefix="drift-report-pin-fresh-") as td:
-		fresh = {"stale": False, "reason": "within_threshold", "behind_seconds": 23 * 3600}
-		level, telegram, summary_md = _run_report_step(Path(td), _pin_summary(fresh, [_sync_skip(False)]))
-		assert level == "DEBUG"
-		assert "Behind stable" not in summary_md
+	# Pin the default threshold so 23 hours stays within it whatever the caller exports.
+	env_patch = _DirectRunEnvPatch()
+	env_patch.setenv("CONSUMER_PIN_MAX_AGE_SECONDS", "86400")
+	try:
+		with tempfile.TemporaryDirectory(prefix="drift-report-pin-fresh-") as td:
+			fresh = {"stale": False, "reason": "within_threshold", "behind_seconds": 23 * 3600}
+			level, telegram, summary_md = _run_report_step(Path(td), _pin_summary(fresh, [_sync_skip(False)]))
+	finally:
+		env_patch.undo()
+	assert level == "DEBUG"
+	assert "Behind stable" not in summary_md
 
 
 def test_report_heading_follows_the_threshold_and_splits_unknown_pins(monkeypatch) -> None:
