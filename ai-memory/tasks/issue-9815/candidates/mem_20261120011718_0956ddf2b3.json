@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: C\n\nRATIONALE:\nQ1: The pipeline can only edit files and open one pull request. It cannot close this issue or file a new one, so A cannot run and would loop. B is a dead end: `plan.yml:3290-3291` and `scripts/files_touched_scope_guard.py:1360` hold the plan as `heal_scope_plan_out_of_scope`, and `/approved` cannot lift that hold. D is a manual change that leaves the defect in place. C is the only option the pipeline can deliver, and it matches the precedent in `tests/fixtures/heal_counterfactual/issue_8327_plan.md:22-27`: the in-scope work ships, and the resolver fix goes under `## Deferred scope`. On merge, `scripts/partial_delivery.py` keeps the issue open and posts the remaining items, so the fix is deferred, not dropped.\n\nEXECUTION PLAN:\nQ1:\n  strategy: reframe\n  inputs:\n    - Heal scope marker of this issue: only `tests/**` and `changelog.d/*.md` (plus the listed workflow files and `agents.d/<issue>-*.md`) are writable. `scripts/` and `prompts/` are not.\n    - `tests/test_conflict_folded_fragment_keep.py`: model the new test on its helpers `_git`, `_env`, `_conflict`, `_run_block` and `test_check_resolver_diff_names_an_untouched_unmerged_path` (around line 187), which uses `PREPARE` = `scripts/review_conflict_prepare.sh` and `CHECK_DIFF` = `scripts/check_resolver_diff.sh`.\n    - `scripts/partial_delivery.py`: the `## Deferred scope` contract (`parse_plan`), the `Refs` PR linkage, and the rule that every job named on a `HEAL_COUNTERFACTUAL: PARTIAL:` line must appear in a Deferred-scope bullet.\n    - `tests/fixtures/heal_counterfactual/issue_8327_plan.md`: the reference shape for a heal plan with deferred out-of-scope items.\n  steps:\n    - Add one new sibling test file under `tests/`, for example `tests/test_conflict_one_sided_delete_workflow_path.py`. Use tabs and copy the helpers locally, as the sibling files do. Build a scratch repo where the base branch deletes `.github/workflows/x.yml` and the head branch modifies it, then merge base into head so the index shows stages `1 2` for that path. The tests must pass on today's code and pin the existing guard:\n      (a) `review_conflict_prepare.sh` leaves the path in the conflicted set handed to the resolver. No deterministic one-sided-delete handler takes it, unlike manifest, folded-fragment, host-only and `.ai/` paths.\n      (b) `check_resolver_diff.sh` fails when the path stays present and unchanged. Assert the output contains `index stages: 1 2` and `keep or delete it explicitly`, and does not contain `check_resolver_diff: OK`.\n      (c) Deleting the path on disk makes `check_resolver_diff.sh` report OK, because an absent path counts as touched.\n      (d) Repeat (b) for stages `1 3`, with the head deleting and the base modifying.\n    - Add no xfail or skip markers, and do not assert behaviour that only exists after the fix. The repo has no `xfail(strict=True)` convention, and a test that fails on purpose would turn CI red.\n    - Optionally add `changelog.d/<issue>-one-sided-delete-resolver-guard-test.md`, in the `<!-- changelog: ... -->` header format the folder already uses.\n    - Write a `## Deferred scope` section in the plan, one bullet per item. Each bullet must name the job token used on the `HEAL_COUNTERFACTUAL: PARTIAL:` line, and contain no links, issue references or @-mentions:\n      1. `scripts/review_conflict_prepare.sh`, where `CONFLICTED_FILES_LIST` is built and where it is rebuilt after fingerprint expansion: use `git ls-files -u` to add `(deleted on <base>, modified on this branch)` to paths with stages 1 2 and `(deleted on this branch, modified on <base>)` to paths with stages 1 3.\n      2. A one-sided-deletion rule in `prompts/integration-sync-conflict-resolver.txt` and `prompts/conflict-resolver.txt`, plus their `prompts/_templates/` copies if present. The rule tells the model to delete the file when the deleting side replaced or retired it and no `must_contain` fingerprint for that path requires it. Otherwise the model lists the path on a `Kept one-sided-delete paths:` line. The rule states that such marker-free paths are in scope.\n      3. `scripts/review_conflict_resolve.sh`, just before `check_resolver_diff.sh` runs: add a stage-1 2 or stage-1 3 path to `RESOLVER_TOUCHED_FILE` only when the path is in `CONFLICTED_PATHS_FILE`, is still on disk, and appears on the model's keep line.\n      4. Extend the new test with the behaviour after the fix: the stage note appears in the rendered list, and a mocked resolver that names the path on the keep line passes.\n    - Emit `HEAL_COUNTERFACTUAL: PARTIAL: <job>` for the failing review job. The tests alone do not change the outcome of run 44646017321: the resolver would still leave the file untouched.\n    - Use `Refs` rather than `Closes`/`Fixes` for this issue in the PR body, as the partial-delivery contract expects.\n  replaces_acceptance_criterion: \"The resolver handles modify/delete conflicts on sandbox-admitted paths (stage note, prompt rule, keep resolution), proven by a regression test that fails without the fix.\" It becomes: \"This PR adds passing tests that pin today's guard for one-sided deletes on a `.github/workflows/*.yml` path. The resolver fix is recorded item by item under Deferred scope, and partial-delivery tracking keeps the issue open until an ordinary non-heal issue delivers it.\"\n  equivalence_argument: Not fully equivalent. The defect cannot be fixed inside this heal scope. The test is a real gain: it locks the \"keep or delete it explicitly\" invariant and the delete-counts-as-touched path, so the later fix cannot weaken the guard (the issue's fix constraints forbid that). The deferred bullets carry the diagnosis's full fix spec, so nothing is lost. This is the same pattern the pipeline approved for the #8327 heal.\n  reversibility: Test-only, additive and backward compatible. Revert the PR to undo it. A maintainer who prefers A can still close this issue and file the deferred bullets as an ordinary issue at any time. The new tests stay valid after that fix lands, and item 4 extends them.\n\nAssumptions: the heal-scope marker as rendered is authoritative, and the pipeline cannot widen it. `scripts/` and `prompts/` are outside it. I confirmed on the checkout that no one-sided-delete note or keep line exists yet in `scripts/review_conflict_*.sh` or `prompts/*conflict-resolver*.txt`, so the defect is still present on `main`.\n\nMissing context: the issue's own analysis leaves open whether a captured `must_contain` fingerprint for project #9421 names `lint-pr-body-auto-close.yml`. That matters only for the deferred fix and for unblocking PR #9442, not for this test-only delivery.",
+  "fingerprint": "59308d34da9fb9886156925acad1c6ddd1a510b0f8aa829728aa245eb7c96808",
+  "lineage": {
+    "issue_number": 9815,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44651376189",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44651376189",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9815"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261120011718_0956ddf2b3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9815,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44651376189"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9815",
+  "timestamps": {
+    "created_at": "2026-11-20T01:17:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
