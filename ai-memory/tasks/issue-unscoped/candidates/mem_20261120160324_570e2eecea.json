@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_prepush_test_gate.py:411-428 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The new validator-path test (test_review_loop_repair_erased_by_the_syntax_validator_keeps_the_editor_edit) leaves out assertions that its sibling test_review_loop_repair_that_erases_a_passing_change_keeps_the_editor_edit makes: `_editor_calls == 1 and _docker_runs == 1`, `before_paths == \"lib/a.py\"`, the `Repair turn: reverted ...` summary line, and `truncated == \"0\"`.\n  WHY: A future regression on the revert or re-read path could pass this test without being caught, for example an extra docker run after `revert all`, a corrupt summary, a truncated path, or diag logging the post-validator read. Both reviewers rated it NIT, which maps to low. anthropic_claude-sonnet-5_5 looked at this item and chose not to raise it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_prepush_test_gate.py:411-426 (test_review_loop_repair_erased_by_the_syntax_validator_keeps_the_editor_edit) | severity=NIT | confidence=2\n  PROBLEM: The new test leaves out assertions present in the sibling test_review_loop_repair_that_erases_a_passing_change_keeps_the_editor_edit. It does not check `_editor_calls == 1 and _docker_runs == 1`, `before_paths == \"lib/a.py\"`, the \"Repair turn: reverted ...\" summary line, or `truncated == \"0\"`.\n  WHY: A future regression that broke one of these guarantees would pass this test silently, while the sibling test would catch it. Examples are the guard firing twice and writing a corrupt summary, or the diagnostic line truncating a path.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_review_prepush_test_gate.py:411-428 (test_review_loop_repair_erased_by_the_syntax_validator_keeps_the_editor_edit) | severity=NIT | confidence=2\n  PROBLEM: The new validator-path test leaves out assertions that its sibling test_review_loop_repair_that_erases_a_passing_change_keeps_the_editor_edit makes: `_editor_calls == 1 and _docker_runs == 1`, `before_paths == \"lib/a.py\"`, the `Repair turn: reverted ...` summary line, and `truncated == \"0\"`.\n  WHY: Both paths share the same guard exit (`return 0` after `reason=passing_change_erased`). The weaker assertions would miss a regression specific to the re-read ordering, for example diag logging the post-validator read so that `after` becomes 0.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6ea383d70f1457afaf4d7dada1582ea61a74e8a11e3872a739f88944b107e14a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9562,
+    "run_id": "44764143356",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44764143356",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120160324_570e2eecea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9562,
+    "run_id": "44764143356"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T16:03:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
