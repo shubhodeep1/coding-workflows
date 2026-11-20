@@ -29381,6 +29381,7 @@ def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	helper = _extract_bash_function(script, "_linked_pr_is_issue_implementation()\n{")
 	closer = _extract_bash_function(script, "close_linked_pr() {")
+	hold_helper = _extract_bash_function(script, "_stall_pr_ai_hold_reason()\n{")
 	with tempfile.TemporaryDirectory() as tmp:
 		closed_log = Path(tmp) / "closed.txt"
 		api_log = Path(tmp) / "api.txt"
@@ -29399,12 +29400,15 @@ def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
 			"    103) printf '%s' '{\"state\":\"open\",\"head_ref\":\"feature/x\",\"base_ref\":\"orchestrator/project-9\",\"body\":\"Closes #77\"}' ;;\n"
 			"    104) printf '%s' '{\"state\":\"closed\",\"head_ref\":\"ai/issue-77\",\"base_ref\":\"main\",\"body\":\"\"}' ;;\n"
 			"    105) return 1 ;;\n"
+			"    106) printf '%s' '{\"state\":\"open\",\"head_ref\":\"ai/issue-77\",\"base_ref\":\"main\",\"body\":\"impl\",\"draft\":true,\"title\":\"impl\"}' ;;\n"
+			"    107) printf '%s' '{\"state\":\"open\",\"head_ref\":\"ai/issue-77\",\"base_ref\":\"main\",\"body\":\"impl\",\"draft\":false,\"title\":\"[skip ai] impl\"}' ;;\n"
 			"  esac\n"
 			"}\n"
 			'gh() { if [ "$1" = pr ] && [ "$2" = close ]; then echo "$3" >> "$CLOSED_LOG"; return 0; fi; return 1; }\n'
-			"_find_all_linked_prs() { printf '101\\n102\\n103\\n104\\n105\\n'; }\n"
-			+ helper + "\n" + closer + "\n"
-			'close_linked_pr 77 "why"\n',
+			"_find_all_linked_prs() { printf '101\\n102\\n103\\n104\\n105\\n106\\n107\\n'; }\n"
+			+ helper + "\n" + hold_helper + "\n" + closer + "\n"
+			'close_linked_pr 77 "why"\n'
+			'echo "HELD=${CLOSE_LINKED_PR_HELD_PRS} DETAIL=${CLOSE_LINKED_PR_HELD_DETAIL}"\n',
 			encoding="utf-8",
 		)
 		result = subprocess.run(
@@ -29426,10 +29430,14 @@ def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
 		assert "close_linked_pr: closing linked PR #103 for issue #77 (state=open)." in out
 		assert "close_linked_pr: skipping PR #104 for issue #77 (state=closed)." in out
 		assert "close_linked_pr: skipping PR #105 for issue #77 (state=unknown)." in out
-		assert "close_linked_pr: issue=#77 scanned=5 closed=2" in out
+		# Issue #9733: owner-held PRs are never closed and are reported back.
+		assert "close_linked_pr: skipping PR #106 for issue #77 (owner hold: reason=pr_ai_hold detail=draft)." in out
+		assert "close_linked_pr: skipping PR #107 for issue #77 (owner hold: reason=pr_ai_hold detail=skip_ai_title)." in out
+		assert "HELD=106 107 DETAIL=draft" in out
+		assert "close_linked_pr: issue=#77 scanned=7 closed=2" in out
 		# §15: exactly one pulls/<n> request per candidate, none extra.
 		api_calls = api_log.read_text(encoding="utf-8").split()
-		assert sorted(api_calls) == sorted(f"repos/o/r/pulls/{n}" for n in (101, 102, 103, 104, 105)), api_calls
+		assert sorted(api_calls) == sorted(f"repos/o/r/pulls/{n}" for n in (101, 102, 103, 104, 105, 106, 107)), api_calls
 
 
 def test_linked_pr_is_issue_implementation_predicate_contract():
