@@ -1,0 +1,22 @@
+{
+  "discovered_at": "2026-11-20T07:10:24Z",
+  "issue_number": 9575,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=N/A (Copilot review check-run):N/A; cited_path=Copilot review check-run (external CI check, not a repository file); files_touched=.github/workflows/orchestrate_poll.yml, README.md, agents.d/stuck-states-p13b-security-pass-rebind.md, changelog.d/stuck-states-p13b-security-pass-rebind.md, docs/how-it-works.md, docs/plans/security-pass-convergence-plan.md, scripts/orchestrate_poll_process.sh, tests/test_orchestrate_poll_process.py.",
+  "phase": "review_autofix",
+  "pr_number": 9602,
+  "record_id": "lesson_20261120071024_43b1f91c2e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "Copilot review check-run (external CI check, not a repository file)",
+    "N/A (Copilot review check-run)",
+    ".github/workflows/orchestrate_poll.yml",
+    "README.md",
+    "agents.d/stuck-states-p13b-security-pass-rebind.md",
+    "changelog.d/stuck-states-p13b-security-pass-rebind.md",
+    "docs/how-it-works.md",
+    "docs/plans/security-pass-convergence-plan.md",
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_orchestrate_poll_process.py"
+  ]
+}
