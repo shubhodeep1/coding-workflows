@@ -232,6 +232,10 @@ def test_every_candidate_gets_a_line(tmp_path: Path) -> None:
 	assert len(candidates) == 25
 	assert "id=100 " in candidates[0]
 	assert "id=124 " in candidates[-1]
+	# The error line comes after every candidate line, so the heal log
+	# filter's tail-keeping byte cut keeps the reason token.
+	lines = result.stdout.splitlines()
+	assert lines.index(error) > lines.index(candidates[-1])
 
 
 def test_malformed_comments_file_still_exits_one(tmp_path: Path) -> None:
