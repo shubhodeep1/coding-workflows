@@ -299,6 +299,12 @@ class ReleaseDownloadRerunGateTests(unittest.TestCase):
 				proc, outputs, calls = _collect({5: FOUNDRY}, jobs=json.dumps(payload))
 				self._assert_normal_path(proc, outputs, calls, "jobs_unreadable")
 				self.assertEqual(_annotation_gets(calls), [])
+		# positive_number() accepts integers only, so a fractional id is rejected too.
+		payload = json.loads(_jobs_payload([5]))
+		payload["jobs"][0]["id"] = 5.5
+		proc, outputs, calls = _collect({5: FOUNDRY}, jobs=json.dumps(payload))
+		self._assert_normal_path(proc, outputs, calls, "jobs_unreadable")
+		self.assertEqual(_annotation_gets(calls), [])
 
 	def test_full_page_of_100_annotations_is_not_classified(self) -> None:
 		# Bounded like failure_annotations() in scripts/ci_cancelled_rerun.py.

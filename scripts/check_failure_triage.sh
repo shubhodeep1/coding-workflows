@@ -613,7 +613,7 @@ triage_release_download_rerun_gate()
 			if type == "object" and (.jobs | type) == "array" and (.total_count | type) == "number"
 				and .total_count == (.jobs | length) and .total_count < 100
 				and all(.jobs[]; type == "object" and .status == "completed"
-					and (.id | type) == "number" and .id > 0
+					and (.id | type) == "number" and .id > 0 and (.id | floor) == .id
 					and (.name | type) == "string"
 					and (.conclusion | type) == "string"
 					and (.check_run_url | type) == "string"
