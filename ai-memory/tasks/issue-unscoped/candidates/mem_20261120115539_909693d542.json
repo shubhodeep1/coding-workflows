@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:21520-21526 (also 21581-21583, 28273-28280) | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The retired-conflict caller overwrites the reissue precheck's `STALL_RECOVERY_EFFECTIVE_ACTION=close_and_reissue_skipped_pr_ai_hold` with `close_and_reissue`, so `invoke_stall_judge` (23112-23119) misses its hold short-circuit and runs the fallback action against a held PR.\n  WHY: Severity disagreement: sonnet-5_5 and glm-5_3-flash rated it NIT (confidence 2, narrow and contrived trigger), while minimax and gpt-6-luna rated it MAJOR (confidence 4). The highest is used here, mapped to high. The fallback, `dispatch_rb_judge` or `retrigger_implement`, has no hold check.\n- scripts/orchestrate_poll_process.sh:21259-21268 and 27564-27578 | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: When `_resolve_issue_implementation_pr` fails, the reissue pre-check is skipped and the reissue proceeds. The source issue is closed and re-issued even though the PR may be held, unlike the `skip` arm, which defers on `pr_fetch_failed`.\n  WHY: The changelog and agents fragment document this as a deliberate fail-open. The reviewer rated it MAJOR because it diverges from the `skip` arm at 21389-21407.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:21520-21526 and 28273-28280 | severity=NIT | confidence=2\n  PROBLEM: The reissue hold marker `close_and_reissue_skipped_pr_ai_hold` is overwritten with `close_and_reissue`, so the `invoke_stall_judge` branch at 23112-23118 loses it and the fallback action runs.\n  WHY: This needs a held implementation PR that differs from the judge's target PR. The impact is narrow, because the same-PR case is caught earlier at 21509-21516.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:21524-21526, 21581-21583, 28277-28280 | severity=MAJOR | confidence=4\n  PROBLEM: The reissue hold marker is overwritten with `close_and_reissue` on three retire-host-only branches. `invoke_stall_judge` then falls back to `dispatch_rb_judge`, which has no hold gate.\n  WHY: A held PR can still reach `_dispatch_rb_judge_for_pr`. The added test only covers the `close_and_reissue` arm in isolation.\n- scripts/orchestrate_poll_process.sh:21259-21268 and 27564-27578 | severity=MAJOR | confidence=3\n  PROBLEM: When the implementation-PR lookup fails, the pre-check is skipped, so the reissue closes the source issue and creates a replacement even if the PR is held.\n  WHY: This diverges from the `skip` arm at 21389-21407, which defers on `pr_fetch_failed`.\n- TASK_GAP: requirement: PR DESCRIPTION says `close_linked_pr` never closes a held PR, records it in `CLOSE_LINKED_PR_HELD_PRS` / `CLOSE_LINKED_PR_HELD_DETAIL`, and both close-out arms then skip closing the issue.\n  expected_change_site: scripts/orchestrate_poll_process.sh around 21223 and 27498\n  EVIDENCE: The reviewer found both arms implemented, so this is not a real gap. | severity=NIT | confidence=5\n- TASK_GAP: requirement: PR DESCRIPTION says \"A failed lookup fails open to the legacy flow.\"\n  expected_change_site: scripts/orchestrate_poll_process.sh reissue pre-check at 21259-21268 and 27564-27578\n  EVIDENCE: This is implemented and documented as a deliberate carve-out, not a gap. The reviewer notes it produces a divergent outcome from the `skip` arm. | severity=NIT | confidence=5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:21520-21526, 23112-23119, 20770-20781 | severity=MAJOR | confidence=4\n  PROBLEM: The retired-conflict caller overwrites `close_and_reissue_skipped_pr_ai_hold` with `close_and_reissue`. `invoke_stall_judge` then misses its hold short-circuit and runs the phase fallback, which for `ai:implementing` is `retrigger_implement`.\n  WHY: `retrigger_implement` posts `/approved` without a hold check. If the PR becomes held between the conflict handler's initial fetch and the reissue precheck, implementation recovery can be dispatched against the held PR.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:21524-21526 and 21581-21583 (interacting with 21259-21268 and 23112-23120) | severity=NIT | confidence=2\n  PROBLEM: The retired-host-only arm overwrites the hold marker with `close_and_reissue`. `invoke_stall_judge` then runs the fallback, and the `dispatch_rb_judge` fallback has no hold check.\n  WHY: The trigger is contrived: the 21509 check normally fires first. The destructive close stays guarded, so the residual exposure is one unguarded rb-judge dispatch against a held PR.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "24dbdbd5152655c2d56f848eae2c0f68da1ede72721c3c152ed0efd9a87e5c40",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9832,
+    "run_id": "44723887355",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44723887355",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120115539_909693d542",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9832,
+    "run_id": "44723887355"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T11:55:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
