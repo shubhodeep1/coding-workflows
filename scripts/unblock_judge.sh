@@ -1892,7 +1892,7 @@ unblock_resolve_implementation_pr()
 		return 0
 	fi
 	impl_pr="$(jq -r '.pr // empty' "${result_file}" 2>/dev/null || true)"
-	impl_reason="$(jq -r '.reason // "unknown"' "${result_file}" 2>/dev/null | tr -cd 'a-z_' | cut -c1-40)"
+	impl_reason="$(jq -r '.reason // "unknown"' "${result_file}" 2>/dev/null | tr -cd 'a-z_' | cut -c1-40 || true)"
 	if ! [[ "${impl_pr}" =~ ^[1-9][0-9]{0,8}$ ]]; then
 		if [ "${impl_reason}" = "unreadable" ]; then
 			unblock_log "item=${ITEM} op=impl_pr outcome=unavailable reason=unreadable"
