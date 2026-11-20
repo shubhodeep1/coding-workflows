@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Multiple merged changes concerning merge-lease metrics, revocation, and forward-merge priority touched both `scripts/pr_checks_lib.sh` and `scripts/review_merge_train.sh`. Changes in this area should consider both scripts and the `test_merge_lease.py` and `test_review_merge_train.py` suites.",
+  "fingerprint": "642f539911bf9b981daa81bfbcfbd7a8308c4097f17714ede72b846c7c1a6237",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44696031692",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44696031692",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9768",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9805",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9808",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9809",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9814",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9774",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9807",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9810",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9811",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9817"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261120074928_28e968b76c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Merge-train lease behavior is shared between the PR-check library and review merge-train script.",
+  "timestamps": {
+    "created_at": "2026-11-20T07:49:28Z",
+    "promoted_at": "2026-11-20T07:50:08Z",
+    "superseded_at": null
+  }
+}
