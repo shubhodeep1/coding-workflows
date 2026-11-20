@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue improve?\nChoices:\nA. The issue \u2192 PR pipeline phases (clarify / plan / implement workflows and their prompts) (RECOMMENDED)\nB. Review & Autofix (`review_autofix.yml` and its helper scripts)\nC. The orchestrator (`orchestrate_poll.yml`, `scripts/orchestrate_poll_process.sh`, tracking-issue state)\nD. Consumer onboarding and updates (`workflow-templates/`, the Update Workflows wrapper, README quickstart)\nE. Something else. Name the file, workflow or feature in your `/answer`.\nQ2: What kind of \"better\" do you mean?\nChoices:\nA. Fix a specific bug or failure. Include a run URL, run ID or the error text in your `/answer` (RECOMMENDED)\nB. Lower cost or resource use: fewer runner jobs, fewer GitHub API calls, fewer model tokens\nC. Faster delivery: lower end-to-end latency\nD. Clearer or more accurate documentation (README, `agents.md` fragments, `docs/`)\nE. A new capability. Describe the desired behavior in your `/answer`.\nQ3: How will we know this issue is done?\nChoices:\nA. A concrete, checkable result that you state in your `/answer` (for example \"run X no longer fails with error Y\", or \"workflow Z uses N fewer jobs per PR\") (RECOMMENDED)\nB. Close it with no code change: the request is too vague to act on, and a new, specific issue will be filed instead\n**Note:** Q3:B overrides Q1 and Q2. If you choose it, you don't need to answer them.",
+  "fingerprint": "70e3a0ac62d13b0ec65cf2ef5f66f9c859a8bf12feff344e61adb2ba3b9da186",
+  "lineage": {
+    "issue_number": 9825,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44691189127",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44691189127",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261120070050_7111625a28",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9825,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44691189127"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9825 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-20T07:00:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
