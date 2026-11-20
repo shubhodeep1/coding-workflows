@@ -15769,13 +15769,15 @@ def test_standalone_retrigger_review_rechecks_hold_on_resolved_pr_payload():
 
 
 def test_standalone_retrigger_review_dispatches_for_unheld_pr():
+	# Stable-only adaptation (backport of #9750): stable's standalone
+	# retrigger_review arm retriggers with an empty-commit push; the
+	# review-dispatch-first path is main-only (cut-ci-runner-time Phase 3).
+	# An unheld PR must still pass the #9750 hold check and reach that
+	# retrigger path instead of the pr_ai_hold skip.
 	for title in ("AI implementation for issue #504", "Mentions skip ai without brackets"):
 		result = _standalone_pr_ai_hold_run({"title": title, "draft": False})
-		assert any(str(d.get("pr_number")) == "419" for d in result.get("review_dispatches", [])), result["stdout"]
 		assert "reason=pr_ai_hold" not in result["stdout"]
-		standalone_state = _extract_latest_standalone_state(result["issues"]["504"]["comments"])
-		assert standalone_state is not None
-		assert standalone_state["stall_recovery_count"] == 1
+		assert "Issue #504 PR #419 empty-commit retrigger" in result["stdout"] or "Issue #504 PR #419 head advanced" in result["stdout"], result["stdout"]
 
 
 def test_standalone_retrigger_review_mixed_fetch_failure_counts_conclusive_rejection():
