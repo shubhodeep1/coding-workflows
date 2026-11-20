@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"README.md env-table rows for ENABLE_STALL_HUMAN_TERMINALIZATION should mention the second exception: a judge escalate_human is kept, and the issue gets ai:needs-human, when the issue's own implementation PR is closed or merged (verified via _pr_json_is_issue_implementation_pr).\"\n  expected_change_site: README.md (orchestrate_poll env table around line 341, defaults table around line 2622 on current head)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The PR diff (both LAST RUN and FULL) does not include any changes to README.md; this is an acknowledged gap that has been deferred as out of scope for the files_touched grant of this PR, PR diff contains no hunks for README.md; the change is the tracked follow-up item from the unblock judge (both reviewers rated it SEVERITY: NIT)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"README.md:337 (orchestrate_poll env table) and README.md:2611 (defaults table) describe ENABLE_STALL_HUMAN_TERMINALIZATION with only the MAX_JUDGE_REPLAY exception. They do not mention the second exception this PR adds: a judge escalate_human is kept, and the issue gets ai:needs-human, when the issue's own implementation PR is closed or merged.\"\n  Expected change site: README.md\n  Evidence of absence: The PR diff (both LAST RUN and FULL) does not include any changes to README.md. This is an acknowledged gap that has been deferred as out-of-scope for the files_touched grant of this PR.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"README.md env-table rows for ENABLE_STALL_HUMAN_TERMINALIZATION should mention the second exception: a judge escalate_human is kept, and the issue gets ai:needs-human, when the issue's own implementation PR is closed or merged (verified via _pr_json_is_issue_implementation_pr).\"\n  Expected change site: README.md (orchestrate_poll env table around line 341, defaults table around line 2622 on current head)\n  Evidence of absence: PR diff contains no hunks for README.md; the change is the tracked follow-up item from the unblock judge.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b4db68c8d2999ed58baf0ffc15af3d72cb994d8acc67cdf1c4620f0ab387789b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9502,
+    "run_id": "44747382830",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44747382830",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120140613_a14f447a5d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9502,
+    "run_id": "44747382830"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T14:06:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
