@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_audit_consumer_drift.py:1701-1719 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `main()` wraps only the two monkeypatch-taking tests in `_DirectRunEnvPatch`. It does not wrap `test_report_warns_when_behind_stable_even_with_a_fresh_sync_pull_request` (lines 1701-1707) or `test_report_warns_for_an_unknown_pin_and_stays_quiet_within_threshold` (lines 1710-1719), called at lines 1831-1832. Both run `_run_report_step` (line 1231), whose subprocess has no `env=` override (lines 1242-1245), so it inherits `CONSUMER_PIN_MAX_AGE_SECONDS`.\n  WHY: If a runner or shell exports `CONSUMER_PIN_MAX_AGE_SECONDS`, the \"### Behind stable for 24 hours or more\" assertion fails. A positive value below 23*3600 also breaks the `\"Behind stable\" not in summary_md` assertion for the 23-hour within-threshold case. The source rated this SEVERITY: MAJOR, mapped here to high. The other four reviewers did not raise it as a finding; anthropic_claude-sonnet-5_5, openai_gpt-6-luna and z-ai_glm-5_3-flash listed the same env-inheritance issue only as a hardening suggestion (risk score 1).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION: tests/test_audit_consumer_drift.py | location: `main()`, the call to `test_report_warns_when_behind_stable_even_with_a_fresh_sync_pull_request()`\n  PROBLEM: The asserted heading \"Behind stable for 24 hours or more\" depends on `CONSUMER_PIN_MAX_AGE_SECONDS` being unset in the caller's environment.\n  WHY: No release gate sets the variable today. Suggested fix: wrap the call in a `_DirectRunEnvPatch` that sets `CONSUMER_PIN_MAX_AGE_SECONDS=\"86400\"` and call `undo()` in `finally`. Estimated lines changed: 4. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_audit_consumer_drift.py:lines 1701-1707 (test_report_warns_when_behind_stable_even_with_a_fresh_sync_pull_request), lines 1710-1719 (test_report_warns_for_an_unknown_pin_and_stays_quiet_within_threshold), and the call sites for both at lines 1831-1832 inside main(). | severity=MAJOR | confidence=4\n  PROBLEM: The `_DirectRunEnvPatch` protection (lines 1846-1862) does not cover these two tests. They call `_run_report_step` (line 1231), which runs `subprocess.run([sys.executable, \"-I\", str(script), ...])` with no `env=` override (lines 1242-1245). `pin_threshold_label()` reads the inherited `os.environ.get(\"CONSUMER_PIN_MAX_AGE_SECONDS\", \"86400\")` (`.github/workflows/audit_consumer_drift.yml:248`).\n  WHY: If `CONSUMER_PIN_MAX_AGE_SECONDS` is exported, the \"### Behind stable for 24 hours or more\" assertion (line 1706) fails. A positive value below 23*3600 also fails the `\"Behind stable\" not in summary_md` assertion (line 1719). Suggested fix: wrap both calls in `main()` with `_DirectRunEnvPatch` and pin the variable under pytest. Estimated lines changed: ~5.\n- HARDENING_SUGGESTION: tests/test_audit_consumer_drift.py | location: lines 1831-1832 inside main(), paired with the existing _DirectRunEnvPatch block at lines 1833-1841\n  PROBLEM: This is the same env-inheritance boundary. The wrapping loop covers only the tests that take a monkeypatch parameter, so it cannot be reused as-is for the tests at lines 1701 and 1710.\n  WHY: Suggested fix: run `env_patch = _DirectRunEnvPatch(); env_patch.setenv(\"CONSUMER_PIN_MAX_AGE_SECONDS\", \"86400\")`, then run the two tests in try/finally with `env_patch.undo()`. Also add a `monkeypatch` parameter to each test and call `monkeypatch.setenv(...)`. Estimated lines changed: 6-8. HARDENING_RISK_SCORE: 3.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n- HARDENING_SUGGESTION: tests/test_audit_consumer_drift.py | location: test_report_warns_when_behind_stable_even_with_a_fresh_sync_pull_request(), lines 1701-1706; _run_report_step(), lines 1242-1244\n  PROBLEM: The test expects the default 24-hour heading, but its report subprocess inherits the environment.\n  WHY: If CONSUMER_PIN_MAX_AGE_SECONDS is set, the report uses that threshold and the assertion fails. Suggested fix: scope CONSUMER_PIN_MAX_AGE_SECONDS=86400 around the test in the direct-run main() path and pin it with monkeypatch under pytest. Estimated lines changed: 4. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING_SUGGESTION: tests/test_audit_consumer_drift.py | location: main(), line 1831 (`test_report_warns_when_behind_stable_even_with_a_fresh_sync_pull_request()`), and the test at ~line 1690; also `_run_report_step` at line 1242\n  PROBLEM: The test asserts \"### Behind stable for 24 hours or more\", but `_run_report_step` runs the report with the caller's environment inherited (no `env=`, and `-I` strips only PYTHON* variables).\n  WHY: If a runner exports `CONSUMER_PIN_MAX_AGE_SECONDS`, the heading changes and the test fails even though the code is correct; neither release gate sets it today. Suggested fix: wrap the line-1831 call in `_DirectRunEnvPatch` with `setenv(\"CONSUMER_PIN_MAX_AGE_SECONDS\", \"86400\")` and undo in finally, and pin the variable via monkeypatch under pytest. Estimated lines changed: 4. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "876b739db81bd09cd1c5ace8cfb80944045f8539d4c7d6a6fbfcaab4e6789f4a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9505,
+    "run_id": "44765724087",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44765724087",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120160531_6b1aed2a9f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9505,
+    "run_id": "44765724087"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-20T16:05:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
