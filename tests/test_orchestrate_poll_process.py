@@ -32515,6 +32515,8 @@ def _run_stall_merge_required_checks(
 		+ "_standalone_attempt_merge_required_checks 501 416 "
 		+ " ".join(q(v) for v in (state, mergeable, head_sha, "main", head_ref))
 		+ " || rc=$?\n"
+		# Caller-shell state after the helper returns (prefix assignments must not leak).
+		+ f'echo "wf_after=${{REVIEW_FINAL_CI_WORKFLOW:-}} head_ref_after=${{PR_CHECKS_HEAD_REF:-}}" > {q(str(tmp_path / "after.log"))}\n'
 		+ 'echo "rc=${rc} reason=${STALL_MERGE_REFUSAL_REASON} in_flight=${STALL_MERGE_CHECKS_IN_FLIGHT}"\n'
 	)
 	res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
@@ -32575,6 +32577,10 @@ def test_standalone_attempt_merge_required_checks_no_dispatch_without_same_repo_
 		f"fresh 416 {_STALL_MERGE_SHA} main",
 		f"wait 416 {_STALL_MERGE_SHA} main 0 head_ref= wf=",
 	]
+	# The empty final-CI workflow is scoped to the wait call: the step-wide
+	# value survives for later PRs in the same tick.
+	after = (tmp_path / "after.log").read_text(encoding="utf-8").strip()
+	assert after == "wf_after=ci.yml head_ref_after=", after
 
 
 def test_standalone_attempt_merge_required_checks_dispatch_in_flight_refuses_without_merge(tmp_path):
