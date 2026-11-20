@@ -26867,6 +26867,15 @@ STALL_EOF
           # Same PR JSON, no extra API call: lets the final-CI dispatch skip
           # its own pulls/<pr> read.
           merge_head_ref="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .head.ref?) then .head.ref else empty end' 2>/dev/null | tail -n1)"
+          # The resolver binds by head-ref name without checking .head.repo,
+          # and _pr_ensure_final_ci rejects a fork head only when it reads
+          # the PR itself. Pass the ref only for a same-repository head;
+          # otherwise leave it empty so the helper's fork_head check runs.
+          local merge_head_repo
+          merge_head_repo="$(printf '%s' "${merge_pr_json}" | jq -r 'if type == "object" then (.head.repo.full_name? // "") else "" end' 2>/dev/null | tail -n1)"
+          if [ -z "${merge_head_repo}" ] || [ "${merge_head_repo}" != "${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" ]; then
+            merge_head_ref=""
+          fi
           # One observed head feeds the checks, the freshness gate and the
           # bound merge (two-argument checks call keeps the legacy
           # block-on-any filter). Reset so a merge-lease wait below is read

@@ -32631,6 +32631,36 @@ def test_standalone_attempt_merge_arm_gates_new_chain_and_keeps_legacy():
 	assert "merge_head_ref=\"$(printf '%s' \"${merge_pr_json}\" | jq -r" in arm
 
 
+def test_standalone_attempt_merge_head_ref_only_for_same_repo_head():
+	# A fork head must not pre-supply PR_CHECKS_HEAD_REF: _pr_ensure_final_ci
+	# runs its fork_head rejection only when it reads the PR itself.
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	body = _extract_bash_function(source, "run_standalone_stall_recovery() {")
+	start = body.index("      attempt_merge)\n")
+	arm = body[start:body.index("\n        ;;\n", start)]
+	ref_at = arm.index("merge_head_ref=\"$(printf '%s' \"${merge_pr_json}\" | jq -r")
+	guard_at = arm.index("merge_head_repo=\"$(printf '%s' \"${merge_pr_json}\" | jq -r")
+	call_at = arm.index("_standalone_attempt_merge_required_checks \"${issue_num}\"")
+	assert ref_at < guard_at < call_at
+	guard = arm[guard_at:call_at]
+	assert '"${merge_head_repo}" != "${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"' in guard
+	assert 'merge_head_ref=""' in guard
+	snippet = guard[guard.index("if [ -z"):guard.index("fi\n") + 3]
+	for head_repo, expected in (("o/r", "ai/issue-501"), ("fork/r", ""), ("", "")):
+		pr_json = json.dumps({"head": {"ref": "ai/issue-501", "repo": {"full_name": head_repo} if head_repo else None}})
+		script = (
+			"GITHUB_REPOSITORY=o/r\n"
+			"merge_head_ref=ai/issue-501\n"
+			f"merge_pr_json={shlex.quote(pr_json)}\n"
+			"merge_head_repo=\"$(printf '%s' \"${merge_pr_json}\" | jq -r 'if type == \"object\" then (.head.repo.full_name? // \"\") else \"\" end' 2>/dev/null | tail -n1)\"\n"
+			+ snippet
+			+ 'printf "ref=%s\\n" "${merge_head_ref}"\n'
+		)
+		res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+		assert res.returncode == 0, res.stderr
+		assert res.stdout.strip() == f"ref={expected}", (head_repo, res.stdout)
+
+
 def test_orchestrate_poll_steps_carry_stall_merge_final_ci_env():
 	wf = _STALL_MERGE_ORCH_POLL_WF.read_text(encoding="utf-8")
 	lines = (
