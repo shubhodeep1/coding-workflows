@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/audit-plans.md:109-110 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The bundle output example indents the meta-note two spaces under the placeholder bullet, so CommonMark treats the note as a continuation of that single list item instead of a paragraph that applies to the whole list.\n  WHY: A user following the template literally would write one list item with the note as its second line (reviewer rated it NIT). Two other reviewers (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) said the note sits inside a fenced code block, where list attachment does not apply, so they did not report it.\n- .claude/commands/audit-plans.md:42 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The success-case instruction \"List the bundle in dependency order (prerequisites first)\u2026\" sits mid-paragraph between blocked-anchor failure sentences and the \"If no other candidate qualifies as a member\" sentence.\n  WHY: A reader is told how to format a bundle before being told whether one forms, so the success instruction reads as part of the failure flow (minimax rated it NIT; glm-5_3-flash listed it as a hardening suggestion).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nHARDENING_SUGGESTIONS:\n- tests/test_audit_plans_command.py, around lines 92-102: the text added by the last two autofix runs is not pinned by any assert. The strings are \"the anchor is not startable now and is not recommended, alone or bundled\", \"Blocked on an unshipped prerequisite (only if any):\" and \"a member that is a prerequisite of the anchor goes ahead of the anchor\". Suggested fix: add three or four `assert ... in text` lines (about 4 lines changed). Not blocking.\nHARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/commands/audit-plans.md:109-110 | severity=NIT | confidence=4\n  PROBLEM: The bundle output example indents the meta-note two spaces under the placeholder bullet, so CommonMark treats the note as a continuation of that single list item instead of a paragraph that applies to the whole list.\n  WHY: A user following the template literally would write one list item whose second line is the note, breaking the \"one line per plan, prerequisites first\" rule.\n- .claude/commands/audit-plans.md:42 | severity=NIT | confidence=3\n  PROBLEM: The closing paragraph of the step 6 bundle rule strings failure handling, the success-case list-formatting instruction, the alternative-case fallback and the degraded-mode rule into one continuous run of sentences.\n  WHY: The \"List the bundle\u2026\" instruction is wedged between two failure-handling sentences, so a reader has to re-segment the paragraph to find the success-case instruction.\n\nHARDENING_SUGGESTIONS:\n- tests/test_audit_plans_command.py, after test_bundle_output_names_a_single_hand_off: pin the unasserted strings \"the anchor is not startable now and is not recommended, alone or bundled\", \"Blocked on an unshipped prerequisite (only if any):\", \"(or: blocked on unshipped prerequisite <plan>)\", \"a member that is a prerequisite of the anchor goes ahead of the anchor\" and \"If no other candidate qualifies as a member\" (about 10 lines).\n- tests/test_audit_plans_command.py, after test_implement_plan_template_parity: add a live-vs-template parity test for audit-plans.md, or parametrise the step6/text fixtures over both copies (about 10 lines).\nHARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nHARDENING_SUGGESTIONS:\n- tests/test_audit_plans_command.py lines 92-97, test_bundle_requires_relatedness_and_caps: add assertions for the anchor-blocking wording and the blocked-prerequisite output section (2-4 lines).\nHARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .claude/commands/audit-plans.md:42 | (hardening suggestion; no severity stated)\n  PROBLEM: The success-path instruction \"List the bundle in dependency order (prerequisites first)\u2026\" sits mid-paragraph between the blocked-anchor failure sentences and the closing \"If no other candidate qualifies as a member\" sentence, so it reads as part of the failure flow.\n  WHY: Suggested fix: move that sentence to its own sentence after the member-condition bullets or before the blocked-anchor sentences (about 2-4 lines, both copies).\n\nHARDENING_SUGGESTIONS:\n- tests/test_audit_plans_command.py, after line 97 (test_bundle_requires_relatedness_and_caps): pin \"the anchor is not startable now and is not recommended, alone or bundled\" (audit-plans.md line 42), \"Blocked on an unshipped prerequisite (only if any):\" (line 87), \"(or: blocked on unshipped prerequisite <plan>)\" (line 122) and \"a member that is a prerequisite of the anchor goes ahead of the anchor\" (line 105) (about 8 lines).\nHARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6fb9df993f384950ee03317e844fe2604e7b972c2fc82342a3618be29f606b1e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9839,
+    "run_id": "44750849550",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44750849550",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120144320_584eed71f6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9839,
+    "run_id": "44750849550"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T14:43:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
