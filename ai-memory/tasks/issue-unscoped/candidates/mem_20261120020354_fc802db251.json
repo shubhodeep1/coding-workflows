@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_conflict_one_sided_delete_workflow_path.py:240-251 | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The test iterates `git rm -q -- .github/workflows/x.yml` on an unmerged path, which reviewers claim fails without `--force` and aborts the script under `set -euo pipefail`, so `result.returncode == 0` fails.\n  WHY: `git rm` is said to refuse unmerged entries. The severity BLOCKER is mapped to critical. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash explicitly disputed this as a false positive, since `git rm` is the standard resolution for unmerged paths.\n- tests/test_conflict_one_sided_delete_workflow_path.py:208-210 | severity=critical | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: `_touched_block()` extracts only through the `rm -f` line inside `review_conflict_resolve.sh`'s `if` block, so the generated shell script omits the closing `fi`.\n  WHY: Bash exits with an unexpected-EOF syntax error, so tests using `_run_pipeline()` fail their `result.returncode == 0` assertion. The severity BLOCKER is mapped to critical.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_conflict_one_sided_delete_workflow_path.py:240-251 | severity=BLOCKER | confidence=4\n  PROBLEM: The test iterates `rm -f` and `git rm -q`. In a conflicted state, `git rm` refuses to remove an unmerged path unless `--force` is used, so the command fails and `result.returncode == 0` fails.\n  WHY: The script runs under `set -euo pipefail`, so it aborts when `git rm` exits non-zero.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_conflict_one_sided_delete_workflow_path.py:240-251 | severity=BLOCKER | confidence=4\n  PROBLEM: The second iteration runs `git rm -q -- .github/workflows/x.yml` against a path with unmerged index entries (stages 1 2 or 1 3). `git rm` without `--force` refuses to remove unmerged paths and exits non-zero, so under `set -euo pipefail` (line 175 of the generated script in `_run_pipeline`) the bash script aborts before the touched-set is recomputed and before `check_resolver_diff.sh` runs.\n  WHY: `git rm` returns non-zero on unmerged entries, and the script's `set -euo pipefail` propagates the failure, so the `returncode == 0` assertion fires. The first iteration (`rm -f`) works because plain `rm` ignores the index.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_conflict_one_sided_delete_workflow_path.py:208-210 | severity=BLOCKER | confidence=5\n  PROBLEM: `_touched_block()` extracts only through the `rm -f` line inside `review_conflict_resolve.sh`'s `if` block, so the generated shell script omits the block's closing `fi`.\n  WHY: Bash parses the whole script first and exits with an unexpected-EOF syntax error. Tests using `_run_pipeline()` then fail their `result.returncode == 0` assertion, including the deletion and untouched-path guard tests.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4a9c88a2744e870aa01d09d6d5bef26f578bc5a4ea7444d3fe695588b2ced3c5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9816,
+    "run_id": "44655384403",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44655384403",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120020354_fc802db251",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9816,
+    "run_id": "44655384403"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T02:03:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
