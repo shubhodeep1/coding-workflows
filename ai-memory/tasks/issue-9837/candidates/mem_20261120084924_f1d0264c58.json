@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should the change to `scripts/clarify_isolated_run.sh` (the reason token, distinct exit code and skip rules) land, given that this heal issue's scope cannot include it?\nChoices:\n- A) Here, ship only what the scope allows: `clarify.yml` stops retrying when a Claude attempt's output contains the fixed line `clarify source snapshot rejected`, which needs no change to the helper. Add a contract test and a changelog fragment. File a separate normal (non-heal) issue for the helper changes and the snapshot regression test. (RECOMMENDED)\n- B) Close this heal issue without changes and re-file the whole fix (helper, `clarify.yml` and tests) as one normal issue, so all of it lands in a single PR.\n- C) Ship only the in-scope `clarify.yml` retry short-circuit and tests, with no follow-up issue for the helper. Snapshot rejections would still not name the rule that fired.\nQ2: For the helper change (wherever Q1 puts it), how should a tracked file over 2 MiB, or a tracked path missing from the worktree, be handled? The issue's fix constraints say \"do not weaken the failing check\", and skipping these files loosens the current fail-closed rule.\nChoices:\n- A) Skip and count them, logging `CLARIFY_SNAPSHOT_OVERSIZED_SKIPPED count=<n>` and a matching missing-path count line. This matches the read-only snapshot in `codex_isolated_workspace.py`, which skips files over 2 MiB. Keep rejecting non-regular files and symlinked parent directories, and keep the 5,000-file / 64 MiB caps. (RECOMMENDED)\n- B) Keep rejecting the whole run for these cases. Only add `CLARIFY_SNAPSHOT_REJECTED reason=<token>` to stderr and a distinct exit code, so the run fails fast with a reason you can diagnose.\n- C) Skip oversized files, but keep rejecting missing paths (an `OSError` from `lstat`) with `reason=missing`.\n**Note:** With Q1:C there is no helper change, so this answer would not be used.",
+  "fingerprint": "af7368380f79f7ec944ad3cccfa03198f81ef31b271d5c3968feede517f17c0c",
+  "lineage": {
+    "issue_number": 9837,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44704892328",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44704892328",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261120084924_f1d0264c58",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9837,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44704892328"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9837 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-20T08:49:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
