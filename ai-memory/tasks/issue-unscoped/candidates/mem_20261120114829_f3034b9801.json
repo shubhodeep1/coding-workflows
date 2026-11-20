@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:2715-2717 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The unbounded `IMPLEMENT_PLAN_CANDIDATE` warning output can exceed the 60,000-byte limit in the workflow-heal `filter_log` (scripts/workflow_failure_heal.py:3786, 3799-3813). The head-truncating cut can then drop the `IMPLEMENT_PLAN_NOT_FOUND` error line.\n  WHY: Losing that line removes the reason token from the heal evidence. Severity disagreement: gemini rated it MAJOR, while minimax and luna rated it NIT. The highest is used, mapped to high.\n- .github/workflows/implement.yml:2715-2716 | severity=low | confidence=1\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The diagnostic block now emits one candidate line per plan-like comment with no upper bound.\n  WHY: The reviewer states there is no defect: this matches the issue's request for \"every comment matching the plan heading\". Rated NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/implement.yml:2715-2717 | severity=MAJOR | confidence=4\n  PROBLEM: The `IMPLEMENT_PLAN_NOT_FOUND` error line is printed before the unbounded number of `IMPLEMENT_PLAN_CANDIDATE` warning lines.\n  WHY: If the output exceeds the 60,000-byte limit, `filter_log` (scripts/workflow_failure_heal.py:3786, 3799-3813) keeps only the tail. That drops the error line and its reason token.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/implement.yml:2715-2716 | severity=NIT | confidence=1\n  PROBLEM: The diagnostic block emits one `IMPLEMENT_PLAN_CANDIDATE` line per plan-like comment with no upper bound.\n  WHY: The reviewer reports no defect. The change matches issue #9724, the selection logic is preserved, and the iteration order is oldest first.\n- .github/workflows/implement.yml:2715-2716 (interacting with scripts/workflow_failure_heal.py:3786, 3811-3813) | severity=NIT | confidence=4\n  PROBLEM: Many plan-like comments can push the filtered log past 60,000 bytes. `filter_log` then keeps the tail, and the `::error::IMPLEMENT_PLAN_NOT_FOUND` line, emitted before the candidates, can be lost.\n  WHY: Without that line the heal fingerprint reverts to `Process completed with exit code 1.`. It only triggers on extreme inputs, since issues typically have 1-3 plan-like comments.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/implement.yml:2715-2716 | severity=NIT | confidence=4\n  PROBLEM: The unbounded diagnostic output can exceed the workflow-heal log filter's 60,000-byte limit.\n  WHY: scripts/workflow_failure_heal.py:3805, 3810-3813 keeps these `::warning::` lines but truncates oversized output from the beginning. The heal evidence then loses the `IMPLEMENT_PLAN_NOT_FOUND` line and the oldest candidate lines.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "205f8e320728e5bcbeedc7b2228ca08f23f1fe59ad55de3d801879d309d211e1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9729,
+    "run_id": "44722474420",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44722474420",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120114829_f3034b9801",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9729,
+    "run_id": "44722474420"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T11:48:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
