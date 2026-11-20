@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/clarify.yml:1862-1869 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The stop rule keys on the single fixed line `clarify source snapshot rejected`, which scripts/clarify_isolated_run.sh:188-189 emits for every snapshot failure. That includes the transient \"source changed during snapshot\" case (lines 167-171), so a failure that might clear on retry now ends the step after one attempt.\n  WHY: The old three-attempt loop could pass on a later attempt, and the new rule makes it a one-attempt hard failure. Reviewers rated it NIT and called it an intentional trade-off, since the helper cannot be edited under the heal scope (AD-1). The reviewers who rated it gave NIT and confidence 3 (minimax, openai) or 2 (z-ai).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"File a separate normal (non-heal) issue for the helper changes and the snapshot regression test.\"\n  expected_change_site: A separate normal issue tracking the deferred `scripts/clarify_isolated_run.sh` changes and regression test.\n  confidence=3\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR description and changelog say those changes \"still need their own issue\", but the PR diff and discussion reference no filed follow-up issue. Severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/clarify.yml:1862-1869 | severity=NIT | confidence=3\n  PROBLEM: The stop rule keys on the single fixed line `clarify source snapshot rejected`, which scripts/clarify_isolated_run.sh:188-189 emits for every snapshot failure. That includes the transient source-changed race (lines 168, 171), a transient OSError and a UnicodeError, so a transient cause now ends the step after one attempt.\n  WHY: The original three-attempt loop could pass on a later attempt. The reviewer notes that the issue, AD-1 and the changelog all acknowledge this and defer the helper-side workarounds, so it is an intentional trade-off rather than a regression.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/clarify.yml:1866-1868; scripts/clarify_isolated_run.sh:167-171, 188-189 | severity=NIT | confidence=3\n  PROBLEM: The retry loop treats every snapshot rejection as deterministic, but the helper uses the same rejection line when it detects a source file changing during the copy.\n  WHY: If a concurrent change causes that check to fail and then settles, the immediate exit prevents a later snapshot attempt from succeeding. The previous retry loop allowed another attempt.\n- TASK_GAP:\n  Requirement: \"File a separate normal (non-heal) issue for the helper changes and the snapshot regression test.\"\n  Expected change site: A separate normal issue tracking the deferred `scripts/clarify_isolated_run.sh` changes and regression test.\n  Evidence of absence: The PR description and changelog say those changes \"still need their own issue\"; the PR diff and discussion provide no reference to a filed follow-up issue. The helper implementation itself is explicitly deferred and is not reported as a gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/clarify.yml:1862-1869 | severity=NIT | confidence=2\n  PROBLEM: scripts/clarify_isolated_run.sh:189 emits the single fixed line `clarify source snapshot rejected` for every rejection class (unsafe source path, unsafe source file, limit exceeded, OSError, UnicodeError, source-changed-during-copy). The new stop rule therefore also ends the run after one attempt for the transient `changed` race, where a re-snapshot on attempt 2 could succeed.\n  WHY: Only in the source-changed race does the old three-attempt loop gain anything, and the new rule turns that into a one-attempt hard failure. The changelog's \"a retry gets the same result\" lacks this qualification. The reviewer calls it a wording/behavior trade-off, not a blocker, because no helper change is possible under the heal scope.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d1a6ee5d125e26ddbf0d4e25f05ec499e86853b5567fec7db3ba76fd73b5ebd3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9840,
+    "run_id": "44711530253",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44711530253",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120095219_16d5bcea31",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9840,
+    "run_id": "44711530253"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T09:52:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
