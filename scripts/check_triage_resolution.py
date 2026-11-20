@@ -64,6 +64,22 @@ contain the PR's merge commit. Once the integration PR merged, the existing
 default-branch check runs, the integration PR head must contain the PR's merge
 commit, and the default-branch evidence commit must contain the integration
 PR's merge commit. An integration PR closed without merging is ``unverified``.
+When no integration PR exists (issue #9481: the project reached the default
+branch another way, for example an activation re-issue) and
+``CHECK_TRIAGE_INTEGRATION_FALLBACK_ENABLED`` (default ``true``) is not
+``false``, the gate falls back to the default branch, only after the tracking
+label check passed: the existing default-branch check rule must pass, and the
+triaged PR's content must be on that evidence commit, either because its merge
+commit is an ancestor (compare ``ahead``/``identical``, ``content_check=ancestor``)
+or because every file the PR changed has the same blob SHA in both recursive
+trees and every removed file is absent (``content_check=tree_match``). Success
+resolves with ``evidence_ref=default_branch_content:<sha>``; otherwise the
+reason is ``integration_fallback_default_check_failed`` (with
+``fallback_detail``), ``integration_fallback_content_absent`` or
+``integration_fallback_unreadable``. The fallback checks the triaged PR, not
+a separate fix PR: a fix PR merges into the triaged PR's head before that PR
+merges into the project branch, so the triaged PR's merge commit already
+contains the fix.
 Every other base keeps the default-branch path (``evidence_ref=default``).
 Any other conclusion (``neutral``, ``skipped``, pending, ...) or any read
 failure is ``unverified``: a failed check is never treated as passed.
@@ -86,7 +102,10 @@ log reads on the unverified path, and up to 3 writes. The open-head path
 replaces the default-branch and compare reads with at most 2 reads (1 for
 check-run triage), made only for an open PR whose head moved. The
 integration-branch path adds 1 issue read, 1 PR list read and 1-2 run/check
-reads, plus 1 more compare read once the integration PR merged. ``CHECK_TRIAGE_RESOLVED_GATE_ENABLED``
+reads, plus 1 more compare read once the integration PR merged. The
+integration fallback (only after ``integration_pr_missing``) adds the
+default-branch reads, 1 compare read and, when that is not an ancestor, 1-3
+PR file pages, 2 commit reads and 2 tree reads. ``CHECK_TRIAGE_RESOLVED_GATE_ENABLED``
 (default ``true``) set to ``false`` disables the gate with no API call.
 Log prefix: ``CHECK_TRIAGE_RESOLVED``.
 """
@@ -145,6 +164,9 @@ STEP_ERROR_RE = re.compile(r"##\[error\]")
 PY_TRACEBACK_RE = re.compile(r"Traceback \(most recent call last\)")
 EXCERPT_ANCHORS = ("test_failure", "step_error", "traceback", "legacy")
 GH_TIMEOUT_SECONDS = 120
+# Issue #9481: the integration fallback's tree-match check reads at most this
+# many changed files of the triaged PR; more counts as unreadable.
+MAX_FALLBACK_FILES = 300
 
 
 class GhApiError(RuntimeError):
@@ -577,7 +599,12 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 		]
 		if not candidates:
 			_fail("integration_pr_missing")
-			return None
+			# Issue #9481: the project reached the default branch without an
+			# integration PR (for example an activation re-issue). The tracking
+			# label check above already passed.
+			if os.environ.get("CHECK_TRIAGE_INTEGRATION_FALLBACK_ENABLED", "true").strip().lower() == "false":
+				return None
+			return _default_branch_content_fallback()
 		integration = max(candidates, key=lambda item: item["created_at"])
 		integration_number = integration["number"]
 		int_head = integration["head"]
@@ -669,6 +696,79 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 		verdict["matched"] = [f"{name}: success" for name in names]
 		return merge_sha, evidence
 
+	def _tree_match(evidence: str) -> str:
+		"""``match``, ``content_absent`` or ``unreadable`` for the triaged PR's
+		changed files at its merge commit versus the evidence commit."""
+		try:
+			pages = _gh_api(["--paginate", "--slurp", f"repos/{repo}/pulls/{triage['pr']}/files?per_page=100"])
+		except GhApiError:
+			return "unreadable"
+		if not isinstance(pages, list) or not all(isinstance(page, list) for page in pages):
+			return "unreadable"
+		files = [item for page in pages for item in page]
+		if not files or len(files) > MAX_FALLBACK_FILES or not all(
+			isinstance(item, dict) and isinstance(item.get("filename"), str) and item["filename"] for item in files
+		):
+			return "unreadable"
+		trees: list[dict[str, tuple[str, Any]]] = []
+		for sha in (merge_sha, evidence):
+			try:
+				commit = _gh_api([f"repos/{repo}/git/commits/{sha}"])
+				tree_ref = commit.get("tree") if isinstance(commit, dict) else None
+				tree_sha = tree_ref.get("sha") if isinstance(tree_ref, dict) else None
+				if not isinstance(tree_sha, str) or not SHA_RE.match(tree_sha):
+					return "unreadable"
+				tree = _gh_api([f"repos/{repo}/git/trees/{tree_sha}?recursive=1"])
+			except GhApiError:
+				return "unreadable"
+			if not isinstance(tree, dict) or tree.get("truncated") is True or not isinstance(tree.get("tree"), list):
+				return "unreadable"
+			trees.append({
+				entry["path"]: (entry.get("type"), entry.get("sha"))
+				for entry in tree["tree"] if isinstance(entry, dict) and isinstance(entry.get("path"), str)
+			})
+		merge_tree, evidence_tree = trees
+		for item in files:
+			name = item["filename"]
+			previous = item.get("previous_filename")
+			if isinstance(previous, str) and previous and previous not in merge_tree and previous in evidence_tree:
+				return "content_absent"
+			if item.get("status") == "removed":
+				if name in evidence_tree:
+					return "content_absent"
+				continue
+			merged_entry = merge_tree.get(name)
+			if merged_entry is None or merged_entry[0] != "blob" or not isinstance(merged_entry[1], str):
+				return "unreadable"
+			if evidence_tree.get(name) != merged_entry:
+				return "content_absent"
+		return "match"
+
+	def _default_branch_content_fallback() -> tuple[str | None, str] | None:
+		"""(None, evidence) when the default branch is green and holds the
+		triaged PR's content (issue #9481), else None after _fail."""
+		evidence = _default_branch_evidence()
+		if evidence is None:
+			verdict["fallback_detail"] = verdict.get("reason")
+			_fail("integration_fallback_default_check_failed")
+			return None
+		try:
+			ancestry = _gh_api([f"repos/{repo}/compare/{merge_sha}...{evidence}"])
+		except GhApiError:
+			ancestry = None
+		ancestry_status = ancestry.get("status") if isinstance(ancestry, dict) else None
+		if ancestry_status in ("ahead", "identical"):
+			verdict["content_check"] = "ancestor"
+			verdict["compare_status"] = ancestry_status
+		else:
+			outcome = _tree_match(evidence)
+			if outcome != "match":
+				_fail(f"integration_fallback_{outcome}")
+				return None
+			verdict["content_check"] = "tree_match"
+		verdict["evidence_ref"] = f"default_branch_content:{evidence}"
+		return None, evidence
+
 	# A PR merged into an orchestrator project branch reaches the default
 	# branch only inside the project's squash commit, so its own merge commit
 	# is never an ancestor of the default tip (issue #8685). Every other base
@@ -688,6 +788,10 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 		if bound is None:
 			return verdict
 		compare_base, evidence_sha = bound
+		if compare_base is None:
+			# Issue #9481: the integration fallback already verified the content.
+			verdict.update({"status": "resolved", "reason": "verified", "path": "merged", "evidence_sha": evidence_sha})
+			return verdict
 
 	try:
 		compare = _gh_api([f"repos/{repo}/compare/{compare_base}...{evidence_sha}"])
@@ -934,7 +1038,14 @@ def render_evidence_comment(issue_number: int, verdict: dict[str, Any]) -> str:
 		]
 		return "\n".join(lines)
 	evidence_ref = verdict.get("evidence_ref") or "default"
-	if evidence_ref == "default":
+	content_check = verdict.get("content_check")
+	if content_check in ("ancestor", "tree_match"):
+		summary = (
+			f"The PR this issue was filed for, #{verdict['pr']}, merged into an orchestrator project branch "
+			f"(merge commit `{verdict['merge_sha']}`) that has no integration PR. The failing check now passes on "
+			"the default branch, and that commit holds the PR's content."
+		)
+	elif evidence_ref == "default":
 		summary = (
 			f"The PR this issue was filed for, #{verdict['pr']}, has merged (merge commit `{verdict['merge_sha']}`), "
 			"and the failing check now passes on the default branch at a commit that contains that merge."
@@ -958,7 +1069,11 @@ def render_evidence_comment(issue_number: int, verdict: dict[str, Any]) -> str:
 		"",
 		f"- **Evidence commit:** `{verdict['evidence_sha']}` ({verdict['evidence_url']})",
 	]
-	if verdict.get("integration_compare_status"):
+	if content_check in ("ancestor", "tree_match"):
+		lines.append(f"- **Content check:** `{content_check}`")
+		if verdict.get("compare_status"):
+			lines.append(f"- **Compare (merge commit...evidence commit):** `{verdict['compare_status']}`")
+	elif verdict.get("integration_compare_status"):
 		lines.append(f"- **Compare (merge commit...integration PR head):** `{verdict['integration_compare_status']}`")
 		lines.append(f"- **Compare (integration PR merge commit...evidence commit):** `{verdict['compare_status']}`")
 	else:
@@ -1086,6 +1201,11 @@ def gate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
 	# Unverified: keep the normal fix path and attach the failing job's traceback.
 	if verdict.get("reason") in ("run_identity_mismatch",):
 		return result, 0
+	# Issue #9481: the orchestrator close sweep gates issues in any phase on a
+	# rotating window; it passes --no-traceback so it neither re-downloads job
+	# logs every rotation nor posts tracebacks outside the clarify/plan path.
+	if getattr(args, "no_traceback", False):
+		return result, 0
 	already = traceback_jobs_posted(comments, pipeline_login, issue_number)
 	pending = [job for job in verdict.get("failed_jobs") or [] if job.get("id") not in already]
 	for traceback in fetch_failing_tracebacks(args.repo, pending):
@@ -1117,6 +1237,7 @@ def main(argv: list[str] | None = None) -> int:
 	p_gate.add_argument("--issue-number", type=int, required=True)
 	p_gate.add_argument("--default-branch", required=True)
 	p_gate.add_argument("--dry-run", action="store_true")
+	p_gate.add_argument("--no-traceback", action="store_true", help="skip the unverified-path failing-job traceback (issue #9481)")
 	args = parser.parse_args(argv)
 	if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.repo) or not re.fullmatch(r"[A-Za-z0-9._/-]{1,200}", args.default_branch) or ".." in args.default_branch:
 		print(json.dumps({"status": "unverified", "reason": "invalid_arguments"}))

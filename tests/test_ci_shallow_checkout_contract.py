@@ -74,8 +74,9 @@ def test_fetch_step_follows_checkout_before_any_base_reader(job_id: str) -> None
 	job = _jobs()[job_id]
 	steps = job["steps"]
 	# The final-CI merge-ref check (scripts/ci_final_merge_ref_fresh.sh) may sit
-	# between the checkout and the fetch: it reads only HEAD, never the base
-	# the fetch provides.
+	# between the checkout and the fetch: it reads HEAD and fetches what its
+	# own merge needs; it never reads the base the fetch provides. When it
+	# builds the merge locally, the fetch fetches that merge's parents.
 	assert steps[1]["name"] == MERGE_REF_CHECK_STEP
 	fetch = steps[2]
 	assert fetch["name"] == SHALLOW_JOBS[job_id]
@@ -297,6 +298,30 @@ def test_final_ci_dispatch_run_uses_the_merge_ref_base(tmp_path: Path, origin: d
 	diff = _git(work, origin["env"], "diff", "--name-only", f"{origin['project']}...HEAD")
 	assert diff.stdout.split() == ["workflow-templates/.claude/hooks/guard.py"]
 	assert f"history ready for {origin['merge']}" in result.stdout
+
+
+def test_final_ci_dispatch_run_on_a_locally_built_merge_fetches_its_parents(tmp_path: Path, origin: dict) -> None:
+	# scripts/ci_final_merge_ref_fresh.sh merged the head into the base itself
+	# (GitHub had not recomputed refs/pull/<n>/merge): origin does not have
+	# that commit, so the step fetches its parents instead of HEAD.
+	env = origin["env"]
+	work = _checkout(tmp_path, origin, origin["project"])
+	_git(work, env, "fetch", "-q", "--no-tags", "--depth=2", "origin", origin["feature"])
+	tree = _git(work, env, "merge-tree", "--write-tree", origin["project"], origin["feature"]).stdout.split()[0]
+	local_merge = _git(work, env, "commit-tree", tree, "-p", origin["project"], "-p", origin["feature"], "-m", "local").stdout.strip()
+	_git(work, env, "checkout", "-q", "--detach", local_merge)
+	extra = _final_ci_env(tmp_path, "orchestrator/project-x")
+	without = _run(work, origin, event="workflow_dispatch", ref="refs/heads/feature", sha=origin["feature"], extra_env=extra)
+	assert without.returncode != 0  # origin cannot serve the local commit
+	assert "could not fetch history" in without.stdout
+	extra["CI_FINAL_MERGE_REF_LOCAL_MERGE"] = local_merge
+	result = _run(work, origin, event="workflow_dispatch", ref="refs/heads/feature", sha=origin["feature"], extra_env=extra)
+	assert result.returncode == 0, result.stdout + result.stderr
+	exported = Path(extra["GITHUB_ENV"]).read_text(encoding="utf-8").splitlines()
+	assert f"CI_FINAL_PR_BASE_SHA={origin['project']}" in exported
+	diff = _git(work, env, "diff", "--name-only", f"{origin['project']}...HEAD")
+	assert diff.stdout.split() == ["workflow-templates/.claude/hooks/guard.py"]
+	assert f"history ready for {local_merge}" in result.stdout
 
 
 def test_final_ci_dispatch_run_with_unreadable_base_branch_warns(tmp_path: Path, origin: dict) -> None:
