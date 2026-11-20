@@ -1852,10 +1852,44 @@ def _phase_failure_markers_to_evidence(markers: list[dict[str, Any]]) -> list[di
 	return evidence
 
 
-def _linked_pr_evidence(linked_pr: dict[str, Any] | None) -> dict[str, Any] | None:
+def _linked_pr_base_ref(linked_pr: dict[str, Any]) -> str:
+	"""The linked PR's base branch from a cache (base_ref / baseRefName) or REST (.base.ref) shape."""
+	for key in ("base_ref", "baseRefName"):
+		value = linked_pr.get(key)
+		if isinstance(value, str) and value.strip():
+			return value.strip()
+	base = linked_pr.get("base")
+	if isinstance(base, dict) and isinstance(base.get("ref"), str):
+		return base["ref"].strip()
+	return ""
+
+
+def _linked_pr_evidence(
+	linked_pr: dict[str, Any] | None,
+	*,
+	default_branch: str | None = None,
+	declared_branch: str | None = None,
+	is_managed: bool = False,
+) -> dict[str, Any] | None:
+	"""Evidence action implied by the linked PR's state.
+
+	Issue #9481: when ``default_branch`` is given and the PR's base is known, a
+	merged PR implies ``attempt_merge`` only when it merged into the default
+	branch, the declared integration branch, or (managed issues without a
+	declared branch) an ``orchestrator/project-*`` branch. Any other base
+	returns None so the judge's decision stands. A missing base or no
+	``default_branch`` keeps the legacy behaviour.
+	"""
 	if not isinstance(linked_pr, dict):
 		return None
 	if bool(linked_pr.get("merged")):
+		base_ref = _linked_pr_base_ref(linked_pr) if default_branch else ""
+		if base_ref and not (
+			base_ref == default_branch
+			or (declared_branch and base_ref == declared_branch)
+			or (is_managed and not declared_branch and base_ref.startswith("orchestrator/project-"))
+		):
+			return None
 		return {
 			"action": "attempt_merge",
 			"source": "linked_pr_state",
@@ -1893,6 +1927,9 @@ def evaluate_phase_failure_resume(
 	comments: list[dict[str, Any]],
 	linked_pr: dict[str, Any] | None,
 	processed_workflow_run_ids: list[str] | set[str] | None = None,
+	default_branch: str | None = None,
+	declared_branch: str | None = None,
+	is_managed: bool = False,
 ) -> dict[str, Any]:
 	"""Evaluate whether a phase-failure marker can safely resume a retrigger action."""
 	markers = parse_phase_failure_markers(comments)
@@ -1908,7 +1945,9 @@ def evaluate_phase_failure_resume(
 		}
 
 	evidence = _phase_failure_markers_to_evidence(markers)
-	pr_evidence = _linked_pr_evidence(linked_pr)
+	pr_evidence = _linked_pr_evidence(
+		linked_pr, default_branch=default_branch, declared_branch=declared_branch, is_managed=is_managed,
+	)
 	if pr_evidence is not None:
 		evidence.append(pr_evidence)
 
@@ -2091,11 +2130,16 @@ def resolve_label_repair_evidence(
 	labels: list[str],
 	comments: list[dict[str, Any]],
 	linked_pr: dict[str, Any] | None,
+	default_branch: str | None = None,
+	declared_branch: str | None = None,
+	is_managed: bool = False,
 ) -> dict[str, Any]:
 	"""Resolve authoritative label evidence and stale-marker audit details."""
 	markers = parse_phase_failure_markers(comments)
 	evidence = _phase_failure_markers_to_evidence(markers)
-	pr_evidence = _linked_pr_evidence(linked_pr)
+	pr_evidence = _linked_pr_evidence(
+		linked_pr, default_branch=default_branch, declared_branch=declared_branch, is_managed=is_managed,
+	)
 	if pr_evidence is not None:
 		evidence.append(pr_evidence)
 	current_phase = determine_phase(labels)

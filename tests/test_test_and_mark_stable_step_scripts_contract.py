@@ -123,6 +123,11 @@ def test_moved_steps_keep_id_if_and_env() -> None:
 	assert "steps.inject-bait.outputs.status == 'injected'" in verify
 	for key in ("PR_NUMBER", "ISSUE_NUMBER", "BAIT_SHA", "PRIOR_REVIEW_RUN"):
 		assert f"\n          {key}: ${{{{ " in verify, key
+	cancel = _step(steps, "Phase 7: Close PR and verify cancel_on_pr_close fires")["text"]
+	assert "\n        id: verify-cancel-on-close\n" in cancel
+	assert "\n        if: steps.wait-implement.outputs.pr_number != ''\n" in cancel
+	for key in ("PR_NUMBER", "ISSUE_NUMBER"):
+		assert f"\n          {key}: ${{{{ " in cancel, key
 
 
 def test_scripts_have_header_mode_and_no_expressions() -> None:

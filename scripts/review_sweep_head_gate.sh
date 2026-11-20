@@ -24,6 +24,12 @@
 #           `absent` when the head has no such status). A row whose head moved
 #           between the two reads, or that the read did not return, gets no
 #           field (callers treat that as unknown).
+#           An annotated row also gains `head_committed_at`, the head commit's
+#           committer date normalised to UTC (`YYYY-MM-DDTHH:MM:SSZ`), when
+#           GitHub returned a parseable one; the same query field, so no extra
+#           call. scripts/review_sweep_round_cap.sh counts a PR's review rounds
+#           from that time, so dispatches of an earlier head do not count
+#           against a new push.
 #   API:    one GraphQL query per 100 open PRs (`gh api graphql --paginate`),
 #           aliased over `repository.pullRequests(states: OPEN)`, so a tick
 #           with N open PRs costs ceil(N / 100) calls (§15). It replaces the
@@ -64,7 +70,7 @@ REVIEW_SWEEP_HEAD_GATE_QUERY='query($owner: String!, $name: String!, $endCursor:
       nodes {
         number
         headRefOid
-        commits(last: 1) { nodes { commit { oid status { context(name: "ai-review/head-gate") { state } } } } }
+        commits(last: 1) { nodes { commit { oid committedDate status { context(name: "ai-review/head-gate") { state } } } } }
       }
     }
   }
@@ -88,16 +94,28 @@ review_sweep_annotate_head_gate()
 		return 0
 	fi
 	gate_output="$(printf '%s' "${gate_input}" | jq -c --argjson pages "${gate_pages}" '
+		# committedDate is a GitTimestamp: ISO-8601 in the committer offset,
+		# not UTC. Normalise it so it compares with run created_at.
+		def gate_utc_ts:
+			try (if type == "string" then
+				((capture("^(?<d>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(\\.[0-9]+)?(?<z>Z|(?<s>[+-])(?<h>[0-9]{2}):?(?<m>[0-9]{2}))$")) // null) as $t
+				| if $t == null then null
+					else ((($t.d + "Z") | fromdateiso8601)
+						- (if $t.z == "Z" then 0 else (($t.h | tonumber) * 3600 + ($t.m | tonumber) * 60) * (if $t.s == "-" then -1 else 1 end) end))
+						| todateiso8601 end
+			else null end) catch null;
 		([$pages[].data.repository.pullRequests.nodes[]
 			| select(type == "object" and ((.number // null) | type) == "number")
 			| ((.commits.nodes // [])[0].commit // {}) as $c
 			| select(($c.oid // "") == (.headRefOid // "") and ($c.oid // "") != "")
 			| {key: (.number | tostring),
-				value: {sha: $c.oid, state: (($c.status.context.state // "absent") | ascii_downcase)}}]
+				value: {sha: $c.oid, state: (($c.status.context.state // "absent") | ascii_downcase), committed_at: ($c.committedDate | gate_utc_ts)}}]
 			| from_entries) as $gate
 		| map(if type == "object" and ($gate[(.number | tostring)] // null) != null
 				and $gate[(.number | tostring)].sha == (.head_sha // "")
 			then . + {head_gate_state: $gate[(.number | tostring)].state}
+				+ (if ($gate[(.number | tostring)].committed_at | type) == "string"
+					then {head_committed_at: $gate[(.number | tostring)].committed_at} else {} end)
 			else . end)' 2>/dev/null || true)"
 	if ! printf '%s' "${gate_output}" | jq -e 'type == "array"' >/dev/null 2>&1; then
 		echo "REVIEW_SWEEP_HEAD_GATE outcome=read_failed reason=parse prs=$(printf '%s' "${gate_input}" | jq 'length')" >&2

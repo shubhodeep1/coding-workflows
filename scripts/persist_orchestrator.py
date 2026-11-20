@@ -802,7 +802,7 @@ def classify_check_runs(
 	runs, total = parsed
 	result["truncated"] = total > len(runs)
 	# Same rule as scripts/pr_checks_lib.sh: a check run carries no workflow
-	# identity (this repo has three jobs named `lint`), so a newer run of the
+	# identity (this repo has two jobs named `lint`), so a newer run of the
 	# same name supersedes only a cancelled run. A failed or still-running
 	# run keeps counting even when a newer same-name run exists.
 	named = [r for r in runs if isinstance(r.get("name"), str)]
