@@ -27005,6 +27005,19 @@ PY
         _std_rb_pre_pr_num="${STALL_IMPL_PR_NUM}"
       fi
       _std_rb_pre_failure_reason="${STALL_IMPL_PR_FAILURE_REASON}"
+      # Owner hold (#9733) on the REST payload resolved above (0 extra
+      # calls), mirroring the managed dispatch_rb_judge arm: the generic
+      # guard above fails open when the batched linked_pr lacks draft/title.
+      local _std_rb_hold_reason=""
+      [[ "${_std_rb_pre_pr_num}" =~ ^[0-9]+$ ]] && _std_rb_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON:-}")"
+      if [ -n "${_std_rb_hold_reason}" ]; then
+        echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${_std_rb_pre_pr_num} detail=${_std_rb_hold_reason} phase=${phase} action=none requested_action=dispatch_rb_judge"
+        STALL_RECOVERY_SHOULD_INCREMENT="false"
+        if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+          write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+        fi
+        continue
+      fi
       if [[ "${_std_rb_pre_pr_num}" =~ ^[0-9]+$ ]] \
         && _stall_pr_json_may_conflict "${STALL_IMPL_PR_JSON:-}" \
         && _stall_retired_host_only_conflict_check "${issue_num}" "${_std_rb_pre_pr_num}" "${STALL_IMPL_PR_JSON:-}"; then

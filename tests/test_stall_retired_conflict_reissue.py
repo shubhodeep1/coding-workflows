@@ -542,6 +542,25 @@ def test_managed_dispatch_rb_judge_honours_owner_hold_before_dispatch() -> None:
 	assert "requested_action=dispatch_rb_judge" in block[hold:]
 
 
+def test_standalone_dispatch_rb_judge_honours_owner_hold_before_reroute_and_dispatch() -> None:
+	# Issue #9733: the standalone review-blocked rung re-checks the hold on the
+	# REST payload it pre-resolves, before the retired-host-only reroute and
+	# the case arm's _dispatch_rb_judge_for_pr.
+	pre = POLLER_TEXT.index('    if [ "${action}" = "dispatch_rb_judge" ]; then\n      _std_rb_pre_resolved="true"')
+	retired = POLLER_TEXT.index('_stall_retired_host_only_conflict_check "${issue_num}" "${_std_rb_pre_pr_num}"', pre)
+	block = POLLER_TEXT[pre:retired]
+	hold = block.index('_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON:-}"')
+	assert block.index('_std_rb_pre_pr_num="${STALL_IMPL_PR_NUM}"') < hold
+	after = block[hold:]
+	assert "reason=pr_ai_hold pr=${_std_rb_pre_pr_num}" in after
+	assert "requested_action=dispatch_rb_judge" in after
+	assert 'STALL_RECOVERY_SHOULD_INCREMENT="false"' in after
+	assert 'write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"' in after
+	assert "continue" in after
+	case_start = POLLER_TEXT.index('    case "${action}" in\n      run_stall_judge)', retired)
+	assert pre < retired < case_start
+
+
 @needs_tools
 def test_helper_fetch_failure_fails_closed(tmp_path: Path) -> None:
 	# A failed refresh must not let cached (possibly stale) base refs decide.
