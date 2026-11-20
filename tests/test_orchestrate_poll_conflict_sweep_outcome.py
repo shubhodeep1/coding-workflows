@@ -97,6 +97,7 @@ def _run_sweep(
 	helpers = (
 		_bash_function(script, "_linked_pr_is_merge_queued()\n{")
 		+ _bash_function(script, "_linked_pr_is_capacity_waiting()\n{")
+		+ _bash_function(script, "_stall_pr_ai_hold_reason()\n{")
 	)
 	dispatch_rc = dispatch_rc or {}
 	with tempfile.TemporaryDirectory() as tmp:
