@@ -15,6 +15,7 @@ import re
 import subprocess
 import tempfile
 import textwrap
+import sys
 from pathlib import Path
 
 import yaml
@@ -23,13 +24,17 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_test_and_mark_stable_text  # noqa: E402
+
 WAIT_START = "DEADLINE=$(( $(date +%s) + (PHASE7_WAIT_BUDGET_MINUTES * 60) ))"
 CONCLUSION_CHECK = 'if [ "${NEW_CONCLUSION}" != "success" ]; then'
 TIMEOUT_ERROR = "did not complete within ${PHASE7_WAIT_BUDGET_MINUTES}m (status=${STATUS:-?})"
 
 
 def _read_workflow() -> str:
-	return WORKFLOW.read_text(encoding="utf-8")
+	return expanded_test_and_mark_stable_text()
 
 
 def _slice_between(text: str, start_marker: str, end_marker: str) -> str:
@@ -46,6 +51,15 @@ def _step_run(step_id: str) -> str:
 		if step.get("id") == step_id:
 			return step["run"]
 	raise AssertionError(f"step {step_id} not found")
+
+
+def _deadline_helpers() -> str:
+	"""The Phase 7 deadline helper functions (#9794), defined once at the top
+	of the step and used by both wait loops."""
+	return textwrap.dedent(
+		"          "
+		+ _slice_between(_read_workflow(), "# ── Phase 7 wait deadline helpers", "# ── end Phase 7 wait deadline helpers ──")
+	)
 
 
 def _open_pr_wait_block() -> str:
@@ -78,6 +92,8 @@ def _run_wait(runs: list) -> tuple[subprocess.CompletedProcess, str]:
 				"PR_CLOSED_AT=2026-10-20T00:00:00Z",
 				"PRE_RUN_ID=100",
 				"TEST_REPO=o/r",
+				'PHASE7_RUN_STARTED_AT=""',
+				_deadline_helpers(),
 				"",
 			]
 		)
@@ -100,14 +116,27 @@ def _run_wait(runs: list) -> tuple[subprocess.CompletedProcess, str]:
 	return proc, github_output
 
 
-def test_pending_run_past_budget_writes_timeout() -> None:
-	proc, out = _run_wait([{"id": 200, "event": "pull_request", "status": "pending", "conclusion": None}])
+def test_running_run_past_budget_writes_timeout() -> None:
+	proc, out = _run_wait([{"id": 200, "event": "pull_request", "status": "in_progress", "conclusion": None}])
 	assert proc.returncode == 1, (proc.stdout, proc.stderr)
 	lines = out.splitlines()
 	assert "status=timeout" in lines, out
 	assert "cancel_run_id=200" in lines, out
 	assert "status=" not in lines, out
-	assert "::error::cancel-on-close run #200 did not complete within 1m (status=pending)" in proc.stdout
+	assert "::error::cancel-on-close run #200 did not complete within 1m (status=in_progress)" in proc.stdout
+	assert "REACHED_CONCLUSION_CHECK" not in proc.stdout
+
+
+def test_pending_run_past_queue_cap_writes_queued_timeout() -> None:
+	"""A run that never leaves `pending` (run 40794181365) is reported as
+	queued_timeout once PHASE7_QUEUE_WAIT_CAP_MINUTES (default 60) runs out."""
+	proc, out = _run_wait([{"id": 200, "event": "pull_request", "status": "pending", "conclusion": None}])
+	assert proc.returncode == 1, (proc.stdout, proc.stderr)
+	lines = out.splitlines()
+	assert "status=queued_timeout" in lines, out
+	assert "cancel_run_id=200" in lines, out
+	assert "status=timeout" not in lines, out
+	assert "::error::cancel-on-close run #200 never left the queue within 60m (status=pending)" in proc.stdout
 	assert "REACHED_CONCLUSION_CHECK" not in proc.stdout
 
 
@@ -175,6 +204,12 @@ def test_summary_empty_status_without_pr_is_skipped() -> None:
 def test_summary_timeout_fails() -> None:
 	out = _run_summary("timeout", "42")
 	assert "FAILED (timeout" in out
+	assert "PASSED=false" in out
+
+
+def test_summary_queued_timeout_fails() -> None:
+	out = _run_summary("queued_timeout", "42")
+	assert "FAILED (queued_timeout" in out
 	assert "PASSED=false" in out
 
 
