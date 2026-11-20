@@ -39,7 +39,7 @@ $ARGUMENTS
      - **Related** to the anchor or to a member already added: the two declare overlapping touched files or change the same tightly-coupled unit (the same test as the conflict screen above), or one depends on the other (a declared prerequisite, or one's phases build on code the other adds). Sharing only an independent file — one the conflict screen lets pass, such as distinct rows appended to one doc table — does not make two plans related. Unrelated plans are never bundled, however small or conflict-free — they stay separate recommendations for later audits.
      - **Prerequisites satisfied:** every prerequisite the candidate declares is already shipped on the default branch, or is the anchor or a member already added. A candidate with any other unshipped prerequisite is skipped: the bundle's issue DAG can only order the plans it is given.
      - **Within the caps:** at most **3 plans** and at most **8 phases** in the bundle, counting each plan's phases from its Phases & Merge Strategy section (a plan with no phase split counts as 1; for a PARTIAL plan count only the phases still missing). A candidate that would break either cap is skipped, not truncated.
-     A candidate ranked lower only because a prerequisite was missing may join when that prerequisite is the anchor or a member. The anchor's own declared prerequisites follow the same rule before any bundle forms: each must already be shipped on the default branch or join as a member (passing every condition above, and listed ahead of the anchor). If any anchor prerequisite can do neither (it is unshipped and in flight, screened out, or would break a cap), the anchor is not startable now and is not recommended, alone or bundled: report it as **blocked on an unshipped prerequisite**, naming that prerequisite, then repeat the pick and this bundle step from the next-ranked conflict-free candidate; if none remains, the no-recommendation outcome applies. List the bundle in dependency order (prerequisites first) and record, for each member, the shared path / unit or the dependency that relates it. If no candidate qualifies, the recommendation stays the single anchor plan. Bundling never applies to an UNSCREENED pick (degraded mode) or to a no-recommendation outcome.
+     A candidate ranked lower only because a prerequisite was missing may join when that prerequisite is the anchor or a member. The anchor's own declared prerequisites follow the same rule before any bundle forms: each must already be shipped on the default branch or join as a member (passing every condition above, and listed ahead of the anchor). If any anchor prerequisite can do neither (it is unshipped and in flight, screened out, or would break a cap), the anchor is not startable now and is not recommended, alone or bundled: report it as **blocked on an unshipped prerequisite**, naming that prerequisite, then repeat the pick and this bundle step from the next-ranked conflict-free candidate; if none remains, the no-recommendation outcome applies. List the bundle in dependency order (prerequisites first) and record, for each member, the shared path / unit or the dependency that relates it. If no other candidate qualifies as a member, the recommendation stays the single anchor plan — only an anchor whose own prerequisites are all shipped; a blocked anchor is never recommended, per the rule above. Bundling never applies to an UNSCREENED pick (degraded mode) or to a no-recommendation outcome.
    - **Degraded mode.** If GitHub state cannot be read (missing/invalid token, API failure — degrade per §23.E, say so once), report the value ranking but mark the pick **UNSCREENED**, instructing the user to check open `ai:orchestrator-tracking` issues and their PRs before starting. Never present an unscreened pick as conflict-safe.
 
 7. **Archive verified-complete plans.** For every `docs/plans/*.md` plan step 4 classified **COMPLETE**, move it into `docs/completed/` with `git mv` (create the directory if missing) so history follows the file. If `docs/completed/` already holds a file with the same name, diff the two: byte-identical → `git rm` the `docs/plans/` copy; different → `git mv -f` so the `docs/plans/` version (the maintained copy) replaces the stale archive copy. PARTIAL and NOT-IMPLEMENTED plans never move — archival is the "this project is done" signal and must be earned by step 4's evidence, not by a plan's self-reported status.
@@ -85,7 +85,7 @@ Conflict-screened out (only if any):
 - <plan> — overlaps <path(s)> with <issue #N / PR #M>
 
 Blocked on an unshipped prerequisite (only if any):
-- <plan> — needs <prerequisite plan> (<in flight in issue #N / screened out / over the bundle caps>)
+- <plan> — needs <prerequisite plan> (<in flight in orchestrator issue #N / screened out: overlaps <path(s)> with <issue #N / PR #M> / over the bundle caps>)
 
 Archived to docs/completed/ (only if any):
 - <plan> — moved; Refs #<issue> (<boxes all ticked / de-scoped in PR body>)
@@ -106,8 +106,8 @@ When step 6 formed a bundle, replace the final block with the following. List th
 
 ```
 ➡ Next highest-value to implement: bundle of N related plans as ONE orchestrator project
-- <anchor plan> — anchor; <P> phases
-- <member plan> — <P> phases; related via <shared path(s) / coupled unit / depends on <plan>>
+- <plan> — <P> phases; <anchor | related via <shared path(s) / coupled unit / depends on <plan>>>
+  (one line per plan, prerequisites first — the anchor line follows any member it depends on)
 Total: N plans, P phases (caps: 3 plans, 8 phases)
 Why: <2–4 lines — combined value, why one project beats separate projects (the members
 would conflict with each other or depend on each other), §1 priority, and confirmation that
@@ -122,6 +122,8 @@ When the conflict gate excludes every candidate, replace the final block with:
 - <plan> — blocked by <issue #N / PR #M> on <path(s)>   (or: blocked on unshipped prerequisite <plan>)
 Re-run /audit-plans once <the blocking PRs merge / the blocking projects complete>.
 ```
+
+Use the same block when step 6 ends with no recommendation because the remaining candidates are blocked on unshipped prerequisites rather than (or as well as) conflicts: the headline then says `every viable plan risks merge conflicts with in-flight orchestrator work or is blocked on an unshipped prerequisite` (or names only the prerequisite cause when no candidate conflicts), and the re-run line names the prerequisite plan shipping as the unblock event.
 
 Omit empty sections. Keep evidence terse but specific — a classification without a citation is a guess.
 
