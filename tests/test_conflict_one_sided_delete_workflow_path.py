@@ -11,7 +11,8 @@ These tests pin the guard as it is today, so the later prompt and keep-line
 fix cannot weaken it:
 - prepare hands the path to the resolver (no deterministic handler takes it);
 - leaving the path present and unchanged fails, for stages 1 2 and 1 3;
-- deleting it counts as touched and passes;
+- deleting it counts as touched, passes, and is staged into the
+  two-parent `[ai-merge-resolve]` commit;
 - editing an unrelated file instead still fails.
 """
 
@@ -120,6 +121,21 @@ def _touched_block() -> str:
 	)
 
 
+def _staging_functions_block() -> str:
+	"""`stage_resolver_touched_path_or_fail` and `verify_resolver_index_complete_or_fail`."""
+	return _slice(RESOLVE, "stage_resolver_touched_path_or_fail() {", "# Deterministic-resolution short-circuit:", include_end=False)
+
+
+def _staging_loop_block() -> str:
+	"""Resolve's per-path staging loop over RESOLVER_TOUCHED_FILE (workflow source repo branch)."""
+	return _slice(
+		RESOLVE,
+		"git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true",
+		'done < "${RESOLVER_TOUCHED_FILE}"',
+		include_end=True,
+	)
+
+
 def _folded_fragment_block() -> str:
 	return _slice(
 		PREPARE,
@@ -188,8 +204,22 @@ def test_folded_fragment_keep_leaves_the_workflow_path_to_the_resolver() -> None
 			assert not github_env.exists()
 
 
-def _run_pipeline(repo: Path, tmp: Path, action: str) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
-	"""Run prepare's snapshot, the mocked resolver, resolve's touched detection and the check."""
+def _run_pipeline(repo: Path, tmp: Path, action: str, *, commit: bool = False) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
+	"""Run prepare's snapshot, the mocked resolver, resolve's touched detection and the check.
+
+	With `commit`, a passing check is followed by resolve's staging loop, the
+	unmerged-index check and the `[ai-merge-resolve]` commit.
+	"""
+	commit_block = ""
+	if commit:
+		commit_block = f"""[ "${{rc}}" -eq 0 ]
+GITHUB_ENV={tmp / "github.env"!s}
+{_staging_functions_block()}
+{_staging_loop_block()}
+verify_resolver_index_complete_or_fail
+git commit -q -m "[ai-merge-resolve] resolve merge conflicts"
+echo "COMMITTED"
+"""
 	runtime = tmp / "runtime"
 	runtime.mkdir()
 	state = runtime / "pre_resolver_state.tsv"
@@ -204,14 +234,20 @@ RESOLVER_TOUCHED_FILE={touched!s}
 {_snapshot_block()}
 : > "${{CONFLICTED_PATHS_FILE}}"
 {CONFLICTED_SET_CMD}
+# Like resolve (#5627), the mocked model gets a private copy of the merge
+# index, so its `git rm` leaves the real index for resolve's staging loop.
+cp -- "$(git rev-parse --path-format=absolute --git-path index)" "${{RUNTIME_DIR}}/resolver_model_index"
+(
+export GIT_INDEX_FILE="${{RUNTIME_DIR}}/resolver_model_index"
 {action}
+)
 : > "${{RESOLVER_TOUCHED_FILE}}"
 {_touched_block()}
 sort -u -o "${{RESOLVER_TOUCHED_FILE}}" "${{RESOLVER_TOUCHED_FILE}}"
 rc=0
 bash {str(CHECK_DIFF)!s} --conflicted-set "${{CONFLICTED_PATHS_FILE}}" --touched-set "${{RESOLVER_TOUCHED_FILE}}" --repo-root {str(repo)!s} || rc=$?
 echo "RC=${{rc}}"
-"""
+{commit_block}"""
 	result = subprocess.run(["bash", "-c", script], check=False, cwd=repo, env=_env(), text=True, capture_output=True)
 	return result, touched, conflicted
 
@@ -242,11 +278,18 @@ def test_deleting_the_path_counts_as_touched_and_passes() -> None:
 		for action in (f"rm -f -- {WORKFLOW}", f"git rm -q -- {WORKFLOW}"):
 			with tempfile.TemporaryDirectory() as tmp_name:
 				tmp, repo = _setup(tmp_name, reverse=reverse)
-				result, touched, _ = _run_pipeline(repo, tmp, action)
-				assert result.returncode == 0, result.stdout + result.stderr
+				result, touched, _ = _run_pipeline(repo, tmp, action, commit=True)
+				assert result.returncode == 0, (reverse, action, result.stdout + result.stderr)
 				assert WORKFLOW in touched.read_text(encoding="utf-8").splitlines(), (reverse, action)
 				assert "RC=0" in result.stdout, (reverse, action, result.stdout + result.stderr)
 				assert "check_resolver_diff: OK" in result.stdout
+				# The staged deletion produces the two-parent [ai-merge-resolve] commit.
+				assert "COMMITTED" in result.stdout, (reverse, action, result.stdout + result.stderr)
+				assert _git(repo, "log", "-1", "--format=%s").stdout.strip() == "[ai-merge-resolve] resolve merge conflicts"
+				assert len(_git(repo, "rev-list", "--parents", "-n", "1", "HEAD").stdout.split()) == 3
+				assert _git(repo, "ls-files", "-u").stdout == ""
+				assert _git(repo, "ls-tree", "--name-only", "HEAD", "--", WORKFLOW).stdout == ""
+				assert _git(repo, "ls-tree", "--name-only", "HEAD", "--", REPLACEMENT).stdout.strip() == REPLACEMENT
 
 
 def test_unrelated_edit_does_not_satisfy_the_guard() -> None:
