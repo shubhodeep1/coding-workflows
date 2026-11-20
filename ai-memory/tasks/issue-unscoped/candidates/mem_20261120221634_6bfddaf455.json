@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:4034 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The P13a row in the \"Stuck-state recovery: kill switches\" table says \"findings on older lines become non-blocking `ai:security` follow-ups (project pass only)\" with no exceptions, but scripts/security_audit.sh:3201-3205 resets is_advisory to False when deletion_block_reason() returns a reason, and lines 3193-3199 keep blame, parse or missing-line failures blocking, so these findings still block (lines 3218-3221).\n  WHY: This is documentation only, so nothing fails at runtime, but an operator reading the summary table will expect every older-line finding to be advisory and can be misled when a project is held, and the row contradicts the Variables row at README.md:290. All reviewers rated this NIT, which is mapped to low here; there is no severity disagreement.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- README.md:4034 (code: scripts/security_audit.sh lines 3201-3207 and 3218-3221) | severity=NIT | confidence=4\n  PROBLEM: The P13a row says, with no exceptions, that \"findings on older lines become non-blocking `ai:security` follow-ups (project pass only)\". At scripts/security_audit.sh:3201-3205, a deletion_block_reason() result resets is_advisory to False, and at lines 3193-3199 a blame failure, parse failure or missing line also leaves it False. All of these count as blocking at lines 3218-3221. This contradicts the Variables row at README.md:290.\n  WHY: Docs only, so no runtime break, but operators relying on the summary table are misled about why a project is held. Suggested fix: add the exceptions to the cell or append \"(with exceptions, see Variables)\".\n- Checks that produced no finding: the `SECURITY_AUDIT_LINE_OWNERSHIP` default `project` matches .github/workflows/orchestrate_poll.yml:1478 and :1734 and README.md:290; the invalid-value fallback matches scripts/security_audit.sh:505-511; tests/test_readme_stuck_states_kill_switches.py has 28 unique switches; only \"Refs #8291\" is used, with no auto-close keyword.\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- README.md: Stuck-state recovery: kill switches table, row for P13a | severity=NIT | confidence=5\n  PROBLEM: The P13a description (\"findings on older lines become non-blocking ai:security follow-ups\") is unqualified.\n  WHY: Older-line findings become non-blocking only when `deletion_block_reason` returns no blocking reason; otherwise they stay blocking, so the README summary wrongly implies they are always non-blocking.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- README.md:4034 (P13a row in the \"Stuck-state recovery: kill switches\" table, introduced by LAST RUN DIFF) | severity=NIT | confidence=5\n  PROBLEM: The P13a summary has no qualification. At scripts/security_audit.sh:3201-3205, is_advisory=True is reset to False (line 3205) when deletion_block_reason(finding, file_value, line_value) returns a block_reason (e.g. deleted_lines_in_file, changed_hunk_within_window, references_file_with_deletions, transitive_reference_links_module_with_deletions, or a blame/diff failure), and the finding stays blocking (line 3221).\n  WHY: An operator reading only the table is misled about P13a's gate. The Variables row at README.md:290 documents this correctly and is the row's link target, so the inaccuracy is limited to the at-a-glance summary.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- README.md:4034; scripts/security_audit.sh:3201-3205, 3218-3221 | severity=NIT | confidence=5\n  PROBLEM: The P13a summary says older-line findings become non-blocking follow-ups without qualification, but the implementation keeps them blocking when `deletion_block_reason` returns a blocking reason.\n  WHY: Operators are told every older-line finding is non-blocking, but some still block the project security pass.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- README.md:4034 (P13a row, added by the last run); scripts/security_audit.sh:3201-3211 | severity=NIT | confidence=5\n  PROBLEM: The row says \"blocks only on findings whose cited line the project wrote; findings on older lines become non-blocking `ai:security` follow-ups\" without qualification. When `deletion_block_reason` returns a reason (deleted/added lines in the cited file, deletions in a referenced file, shared referrer, etc.), `is_advisory` is reset to `False` and the finding counts as blocking (`security-audit: line_ownership_blocking`).\n  WHY: Docs-only PR, so no runtime failure, but operators would expect older-line findings never to block. The full Variables row at README.md:290 documents the exceptions that the new row omits.\n- Verification notes: the `_workflow_defaults(\"SECURITY_AUDIT_LINE_OWNERSHIP\")` regex cannot match `SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW`; orchestrate_poll.yml:1478 and :1734 both give the default `project`, which matches README.md:290; the \"Off restores\" column matches scripts/security_audit.sh:505-511. No task gaps: all 28 switches have Variables rows, the five subsections exist, and the Labels bullets are present.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0159380d29dbe8d411f79b8fcdc5739dbdf5ae792453eaf16a32cf731b0ad3d3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9845,
+    "run_id": "44824757097",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44824757097",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120221634_6bfddaf455",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9845,
+    "run_id": "44824757097"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T22:16:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
