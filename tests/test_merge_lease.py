@@ -1268,6 +1268,30 @@ class Wiring(unittest.TestCase):
 					"MERGE_BASE_FRESHNESS_MAX_SYNCS", "ORCH_INTEGRATION_BRANCH_PATTERN", "AUTO_MERGE_WAIT_WORKFLOWS"):
 				self.assertIn(f"          {name}: ${{{{ vars.{name}", text, f"{wf.name}: {name}")
 
+	def test_lease_revocation_and_priority_switches_reach_every_lease_path(self) -> None:
+		"""Phase 2/3 rollback switches (Refs #9781): every workflow that passes
+		MERGE_LEASE_ENABLED to the lease gate or tick also passes these, with
+		defaults identical to the helper's."""
+		wired = (
+			"MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}",
+			"MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '60' }}",
+			"MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}",
+		)
+		review = REVIEW.read_text()
+		for line in wired:
+			self.assertEqual(review.count(line), 3, line)
+			for wf in (POLL, CLOSE):
+				self.assertIn(line, wf.read_text(), f"{wf.name}: {line}")
+		lib = LIB.read_text()
+		for expansion in ("${MERGE_LEASE_REVOKE_ENABLED:-true}", "${MERGE_LEASE_IDLE_MINUTES:-60}",
+				"${MERGE_LEASE_PRIORITY_HEAD_PREFIXES-auto/forward-merge-stable-}"):
+			self.assertIn(expansion, lib)
+		# The sweep reads only MERGE_LEASE_ENABLED / MERGE_LEASE_WAIT_LABEL; if it
+		# ever calls the gate or tick, it needs the three lines above too.
+		sweep = SWEEP.read_text()
+		for fn in ("_merge_lease_gate", "_merge_lease_queue_first", "_mt_merge_lease_tick"):
+			self.assertNotIn(fn, sweep)
+
 	def test_rb_judge_waits_never_mark(self) -> None:
 		"""The judge posts head-gate success only after its wait, so its marker could never resume."""
 		text = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text()
