@@ -2311,6 +2311,7 @@ if [ -n "${BASE_KEYED_REF}" ]; then
 		[ -n "${ROUTING_TARGET_BRANCH}${ROUTING_REF}${INTEGRATION_BRANCH}" ] ||
 		[ "${HISTORICAL_MODE}" = "true" ]; then
 		log "error base_keyed_metadata_invalid"
+		tg_send_msg "Check-failure auto-triage rejected invalid base-keyed metadata for ${REPO} PR #${PR_NUMBER}. No issue was filed."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
 		exit 1
 	fi
 fi
