@@ -160,6 +160,10 @@
 #                                         records a report with no fingerprint match but a cause match
 #                                         on a recent open heal issue as an occurrence there (P5 / D3)
 #   WORKFLOW_HEAL_CAUSE_GROUPING_DAYS     cause match window in days (default 3; the helper clamps 1-30)
+#   WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED default "true": only "false" turns it off. A failed push CI
+#                                         run on the default branch records on the open heal issue whose
+#                                         `red-main-group=` header matches (workflow, failing job, branch)
+#                                         before any fingerprint match; new red-main heals carry it (#9823)
 #   WORKFLOW_HEAL_CONSUMER_REGISTRY       consumer registry (default .github/ai/consumer_repos.json)
 #   WORKFLOW_HEAL_PY                      path of workflow_failure_heal.py
 #   WORKFLOW_HEAL_PROMPT_FILE             diagnosis prompt (default prompts/mode-workflow-failure-heal.txt)
@@ -388,6 +392,14 @@ CAUSE_GROUPING_ENABLED="${WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED:-false}"
 CAUSE_GROUPING_DAYS="$(_positive_or_default "${WORKFLOW_HEAL_CAUSE_GROUPING_DAYS:-}" 3)"
 CAUSE_KEY=""
 CAUSE_SHAPE=""
+# Red-main grouping (#9823): on by default; only "false" (any case) turns it off.
+RED_MAIN_GROUPING_ENABLED="${WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED:-true}"
+if [ "${RED_MAIN_GROUPING_ENABLED,,}" = "false" ]; then
+	RED_MAIN_GROUPING_ENABLED="false"
+else
+	RED_MAIN_GROUPING_ENABLED="true"
+fi
+RED_MAIN_GROUP_KEY=""
 # Suspect commits (P3 steps 4 and 5): same switch. The compare files JSON is
 # the handoff for the later suspect-scope phase; the last-green cache lets the
 # suspect step reuse the reproduction step's lookup instead of a second call.
@@ -2188,6 +2200,59 @@ _heal_cause_key()
 }
 _heal_cause_key || { CAUSE_KEY=""; CAUSE_SHAPE=""; log "cause outcome=skipped reason=helper_failed"; }
 
+# --- Red-main grouping (#9823, plan Phase 2) ----------------------------------
+# Behind WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED (default true): a failed push
+# CI run on the default branch gets a key over (workflow name, failing job,
+# branch), so every red-main run failing in the same job records on one open
+# heal issue whatever its error text. The run facts (event, head branch,
+# workflow path) come from the provenance-verified run object saved above and
+# the failing job from the jobs listing (SUMMARIES_FILE): local files only, no
+# API call. Any failure leaves grouping off for this report (fail open).
+_heal_red_main_group_key()
+{
+	local red_main_run_id="" red_main_run_json="" red_main_event="" red_main_branch="" red_main_path=""
+	local red_main_job="" red_main_workflow="" red_main_json="" red_main_reason=""
+	if [ "${RED_MAIN_GROUPING_ENABLED}" != "true" ]; then
+		log "red_main_group key= outcome=skipped reason=disabled"
+		return 0
+	fi
+	if [ "${SOURCE_KIND}" != "workflow_run" ]; then
+		log "red_main_group key= outcome=skipped reason=ineligible_kind"
+		return 0
+	fi
+	if [ "${REPORT_AUTH}" = "reconstructed" ]; then
+		log "red_main_group key= outcome=skipped reason=reconstructed"
+		return 0
+	fi
+	red_main_run_id="$(jq -r '.run_refs[0].run_id // "" | tostring' "${PAYLOAD_FILE}" 2>/dev/null || true)"
+	if ! [[ "${red_main_run_id}" =~ ^[0-9]+$ ]] || [ -z "${PROVENANCE_RUNS:-}" ] || [ ! -s "${PROVENANCE_RUNS}" ]; then
+		log "red_main_group key= outcome=skipped reason=no_verified_run"
+		return 0
+	fi
+	red_main_run_json="$(jq -c --arg id "${red_main_run_id}" '.[$id] // empty | objects' "${PROVENANCE_RUNS}" 2>/dev/null || true)"
+	if [ -z "${red_main_run_json}" ]; then
+		log "red_main_group key= outcome=skipped reason=no_verified_run"
+		return 0
+	fi
+	red_main_event="$(jq -r '.event // "" | tostring' <<< "${red_main_run_json}" 2>/dev/null || true)"
+	red_main_branch="$(jq -r '.head_branch // "" | tostring' <<< "${red_main_run_json}" 2>/dev/null || true)"
+	red_main_path="$(jq -r '.path // "" | tostring' <<< "${red_main_run_json}" 2>/dev/null || true)"
+	red_main_job="$(jq -r --arg id "${red_main_run_id}" 'map(select((.run_id | tostring) == $id and (.job_name // "") != "")) | first | .job_name // ""' "${SUMMARIES_FILE}" 2>/dev/null || true)"
+	red_main_workflow="$(jq -r --arg id "${red_main_run_id}" 'map(select((.run_id | tostring) == $id and (.workflow_name // "") != "")) | first | .workflow_name // ""' "${SUMMARIES_FILE}" 2>/dev/null || true)"
+	[ -n "${red_main_workflow}" ] || red_main_workflow="${FIRST_WORKFLOW_NAME:-}"
+	if ! red_main_json="$(python3 "${HEAL_PY}" red-main-group-key --workflow-name "${red_main_workflow}" --failing-job "${red_main_job}" 		--branch "${red_main_branch}" --default-branch "${PROVENANCE_DEFAULT_BRANCH:-}" --event "${red_main_event}" 		--workflow-path "${red_main_path}" 2>/dev/null)" 		|| ! jq -e '(.key | type == "string" and test("^([0-9a-f]{64})?$")) and (.reason | type == "string" and test("^[a-z_]{1,40}$"))' <<< "${red_main_json}" >/dev/null 2>&1; then
+		log "red_main_group key= outcome=skipped reason=helper_failed"
+		return 0
+	fi
+	red_main_reason="$(jq -r '.reason' <<< "${red_main_json}")"
+	RED_MAIN_GROUP_KEY="$(jq -r '.key' <<< "${red_main_json}")"
+	if [ -z "${RED_MAIN_GROUP_KEY}" ]; then
+		log "red_main_group key= outcome=skipped reason=${red_main_reason}"
+	fi
+	return 0
+}
+_heal_red_main_group_key || { RED_MAIN_GROUP_KEY=""; log "red_main_group key= outcome=skipped reason=helper_failed"; }
+
 # --- Dedup / lineage / budget ----------------------------------------------
 
 # A deferred non-retryable report (#7333) whose heal-issue list cannot be read
@@ -2272,8 +2337,19 @@ fi
 if [ -n "${CAUSE_KEY}" ]; then
 	BUDGET_ARGS+=(--cause "${CAUSE_KEY}" --cause-window-days "${CAUSE_GROUPING_DAYS}")
 fi
+# Red-main grouping (#9823): set only with the switch on and a red-main run.
+if [ -n "${RED_MAIN_GROUP_KEY}" ]; then
+	BUDGET_ARGS+=(--red-main-group "${RED_MAIN_GROUP_KEY}")
+fi
 DECISION_FILE="${RUNTIME_DIR}/decision.json"
 python3 "${HEAL_PY}" budget "${BUDGET_ARGS[@]}" > "${DECISION_FILE}"
+if [ -n "${RED_MAIN_GROUP_KEY}" ]; then
+	if [ "$(jq -r '.match // ""' "${DECISION_FILE}" 2>/dev/null || true)" = "red_main_group" ]; then
+		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=open_group_heal"
+	else
+		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=new reason=no_open_group_heal"
+	fi
+fi
 
 # --- Re-issue lineage (Q147) -------------------------------------------------
 # The unblock judge re-issues a blocked heal issue as an ordinary, unlabelled
@@ -2383,6 +2459,9 @@ _heal_scope_recovery_evaluate()
 	[ "$(jq -r '.match // ""' "${DECISION_FILE}")" != "cause" ] || return 0
 	# A heal issue's own failed run (heal-of-heal dedupe) is recorded, not replaced.
 	[ "$(jq -r '.match // ""' "${DECISION_FILE}")" != "heal_source" ] || return 0
+	# A red-main group match (#9823) may be another fingerprint's heal issue;
+	# this report never replaces or recovers it.
+	[ "$(jq -r '.match // ""' "${DECISION_FILE}")" != "red_main_group" ] || return 0
 	local recovery_issue recovery_repo recovery_url recovery_login
 	local recovery_record="${RUNTIME_DIR}/heal_scope_recovery_issue.json"
 	local recovery_comments="${RUNTIME_DIR}/heal_scope_recovery_comments.json"
@@ -2492,6 +2571,12 @@ _heal_scope_recovery_evaluate()
 		# unrelated same-cause heal issue must not block the replacement.
 		case "${BUDGET_ARGS[${recovery_arg_index}]}" in
 			--cause|--cause-window-days)
+				recovery_arg_index=$((recovery_arg_index + 2))
+				continue
+				;;
+			# Red-main grouping (#9823) is not a cap either: another open
+			# red-main heal issue must not block the replacement.
+			--red-main-group)
 				recovery_arg_index=$((recovery_arg_index + 2))
 				continue
 				;;
@@ -4544,6 +4629,11 @@ _open_issue()
 	local -a cause_args=()
 	if [ "${CAUSE_GROUPING_ENABLED}" = true ] && [ -n "${CAUSE_KEY}" ]; then
 		cause_args=(--cause "${CAUSE_KEY}")
+	fi
+	# Red-main grouping (#9823): the red-main-group header line, only with the
+	# switch on and a computed key, so a switch-off body is byte-identical.
+	if [ "${RED_MAIN_GROUPING_ENABLED}" = true ] && [ -n "${RED_MAIN_GROUP_KEY}" ]; then
+		cause_args+=(--red-main-group "${RED_MAIN_GROUP_KEY}")
 	fi
 	# Code-ref routing (P6 step 1): the `Code ran from` line, only with the
 	# switch on and a line, so a switch-off body is byte-identical.

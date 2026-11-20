@@ -259,6 +259,9 @@ jobs:
       CHECK_TRIAGE_SKIP_HEAD_ADVANCED_ENABLED: ${{ vars.CHECK_TRIAGE_SKIP_HEAD_ADVANCED_ENABLED || 'true' }}
       CHECK_TRIAGE_SKIP_FINAL_CI_ENABLED: ${{ vars.CHECK_TRIAGE_SKIP_FINAL_CI_ENABLED || 'true' }}
       FINAL_CI_FAILED_REDISPATCH_ENABLED: ${{ vars.FINAL_CI_FAILED_REDISPATCH_ENABLED || 'true' }}
+      # Issue #9823: with PR-branch routing on, route to the default branch when
+      # none of the failing files exist on the PR head (local git check only).
+      CHECK_TRIAGE_TARGET_FILES_GUARD_ENABLED: ${{ vars.CHECK_TRIAGE_TARGET_FILES_GUARD_ENABLED || 'true' }}
       # Issue #8671: supersede a blocked triage issue from an older PR head.
       CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED: ${{ vars.CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED || 'true' }}
       # Skip a failure the default branch already has when an open heal issue

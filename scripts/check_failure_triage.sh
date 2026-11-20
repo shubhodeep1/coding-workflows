@@ -434,6 +434,14 @@ case "${PR_HEAD_ROUTING_ENABLED,,}" in
 esac
 ROUTING_REF=""
 ROUTING_LINE=""
+# Target-files guard (issue #9823): on by default; only "false" (any case)
+# turns it off. See triage_target_files_guard.
+TARGET_FILES_GUARD_ENABLED="${CHECK_TRIAGE_TARGET_FILES_GUARD_ENABLED:-true}"
+if [ "${TARGET_FILES_GUARD_ENABLED,,}" = "false" ]; then
+	TARGET_FILES_GUARD_ENABLED="false"
+else
+	TARGET_FILES_GUARD_ENABLED="true"
+fi
 # Issue #6726: on by default. `false` (any case) turns it off; any other value
 # also turns it off and warns, so a typo never routes a fix to a branch.
 PR_HEAD_BRANCH_METADATA_ENABLED="${TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED:-true}"
@@ -743,6 +751,98 @@ UPSTREAM_ROUTE_FILE="${RUNTIME_DIR}/upstream_route.json"
 UPSTREAM_HEAL_PY="${TRUSTED_SUPPORT_DIR}/scripts/workflow_failure_heal.py"
 # Set when DIAG_FILE holds the CI-log fallback body: untrusted log text never routes.
 UPSTREAM_DIAGNOSIS_FALLBACK="false"
+
+# --- Target-files guard (issue #9823, plan Phase 2) --------------------------
+# Branch routing sends the triage fix to the failing PR's head branch. When
+# none of the failing files the CI log names exist on that branch but all of
+# them exist on the default branch, the fix belongs on the default branch:
+# clear ROUTING_TARGET_BRANCH, so the issue carries no `Target branch:` line
+# (the existing default-branch route). The check is local only: the trusted
+# support helper extracts the files from the collected check-run context (no
+# credentials in its environment) and `git cat-file -e` reads the checkout's
+# objects. No GitHub API call and no fetch. Any ref that does not resolve
+# locally keeps today's route (fail open). Behind
+# CHECK_TRIAGE_TARGET_FILES_GUARD_ENABLED (default true).
+triage_target_files_guard()
+{
+	local guard_target="${ROUTING_TARGET_BRANCH:-}" guard_default="${ROUTING_DEFAULT_BRANCH:-}" guard_sha="${HEAD_SHA:-}"
+	local guard_tests="" guard_path="" guard_target_commit="" guard_default_commit="" guard_ref=""
+	local guard_on_target=0 guard_on_default=0
+	local -a guard_paths=()
+	# Git without system/global config or credentials; never prompts or fetches.
+	local -a guard_git=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GH_TOKEN -u GITHUB_TOKEN -u OPENROUTER_API_KEY -u TG_BOT_SECRET
+		GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 git -C "${GITHUB_WORKSPACE:-.}")
+	guard_sha="${guard_sha,,}"
+	[ -n "${guard_target}" ] || return 0
+	[ "${HISTORICAL_MODE:-false}" != "true" ] || return 0
+	if [ "${TARGET_FILES_GUARD_ENABLED}" != "true" ]; then
+		log "routing outcome=keep reason=target_files_guard_disabled target_branch=${guard_target}"
+		return 0
+	fi
+	if ! [[ "${guard_default}" =~ ^[A-Za-z0-9._/-]{1,255}$ ]] || [[ "${guard_default}" == *..* ]]; then
+		log "routing outcome=keep reason=default_branch_invalid target_branch=${guard_target}"
+		return 0
+	fi
+	if [ ! -f "${UPSTREAM_HEAL_PY:-}" ] || [ -L "${UPSTREAM_HEAL_PY:-}" ]; then
+		log "routing outcome=keep reason=helper_missing target_branch=${guard_target}"
+		return 0
+	fi
+	if [ -s "${PR_CHECK_RUNS_CONTEXT_FILE:-}" ]; then
+		guard_tests="$(env -u GH_TOKEN -u GITHUB_TOKEN -u OPENROUTER_API_KEY -u TG_BOT_SECRET PYTHONDONTWRITEBYTECODE=1 \
+			timeout 60 python3 -I -B "${UPSTREAM_HEAL_PY}" heal-scope failing-tests --log-files "${PR_CHECK_RUNS_CONTEXT_FILE}" 2>/dev/null || true)"
+	fi
+	# Paths come from untrusted CI log text: strict shape, no `..`, at most 20.
+	while IFS= read -r guard_path; do
+		[[ "${guard_path}" =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]{0,199}$ ]] || continue
+		[[ "${guard_path}" != *..* ]] || continue
+		guard_paths+=("${guard_path}")
+		[ "${#guard_paths[@]}" -lt 20 ] || break
+	done < <(jq -r '.files // [] | .[]? | strings' <<< "${guard_tests}" 2>/dev/null || true)
+	if [ "${#guard_paths[@]}" -eq 0 ]; then
+		log "routing outcome=keep reason=no_failing_files target_branch=${guard_target}"
+		return 0
+	fi
+	guard_target_commit="$("${guard_git[@]}" rev-parse --verify --quiet "refs/remotes/origin/${guard_target}^{commit}" 2>/dev/null || true)"
+	if ! [[ "${guard_target_commit}" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+		guard_target_commit=""
+		# The checkout is the failing tip of the PR head branch.
+		if [[ "${guard_sha}" =~ ^[0-9a-f]{40}$ ]] && "${guard_git[@]}" cat-file -e "${guard_sha}^{commit}" >/dev/null 2>&1; then
+			guard_target_commit="${guard_sha}"
+		fi
+	fi
+	if [ -z "${guard_target_commit}" ]; then
+		log "routing outcome=keep reason=target_ref_unavailable target_branch=${guard_target}"
+		return 0
+	fi
+	for guard_ref in "refs/remotes/origin/${guard_default}" "refs/heads/${guard_default}"; do
+		guard_default_commit="$("${guard_git[@]}" rev-parse --verify --quiet "${guard_ref}^{commit}" 2>/dev/null || true)"
+		[[ "${guard_default_commit}" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] && break
+		guard_default_commit=""
+	done
+	if [ -z "${guard_default_commit}" ]; then
+		log "routing outcome=keep reason=default_ref_unavailable target_branch=${guard_target}"
+		return 0
+	fi
+	for guard_path in "${guard_paths[@]}"; do
+		if "${guard_git[@]}" cat-file -e "${guard_target_commit}:${guard_path}" >/dev/null 2>&1; then
+			guard_on_target=$((guard_on_target + 1))
+		fi
+		if "${guard_git[@]}" cat-file -e "${guard_default_commit}:${guard_path}" >/dev/null 2>&1; then
+			guard_on_default=$((guard_on_default + 1))
+		fi
+	done
+	if [ "${guard_on_target}" -gt 0 ]; then
+		log "routing outcome=keep reason=files_on_target target_branch=${guard_target}"
+		return 0
+	fi
+	if [ "${guard_on_default}" -ne "${#guard_paths[@]}" ]; then
+		log "routing outcome=keep reason=files_absent_on_default target_branch=${guard_target}"
+		return 0
+	fi
+	ROUTING_TARGET_BRANCH=""
+	log "routing outcome=fallback reason=target_branch_lacks_files target_branch=${guard_default}"
+	return 0
+}
 
 # Classify the raw diagnosis (before neutralisation). Writes the decision to
 # UPSTREAM_ROUTE_FILE; never fails the run.
@@ -2197,6 +2297,10 @@ elif [ -f scripts/collect_pr_check_runs_context.py ]; then
 else
 	log "warn context_collector_missing"
 fi
+
+# Issue #9823: after routing set the target and the context was collected,
+# before the route crosses the collect-stage metadata hand-off.
+triage_target_files_guard || true
 
 if [ "${TRIAGE_STAGE}" = "collect" ]; then
 	jq -n --arg pr_number "${PR_NUMBER}" --arg check_name "${CHECK_NAME}" \
