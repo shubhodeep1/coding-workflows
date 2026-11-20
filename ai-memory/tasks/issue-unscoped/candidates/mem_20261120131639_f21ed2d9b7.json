@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:25161-25271 (with scripts/unblock_scan.py:356-358, 367-371, 427-433) | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: A failed-project tracker has its ai:blocked and phase labels released, so it drops out of the next search. It stays in failed_projects.json, and select() re-adds it with only ai:orchestrator-tracking. The security-audit skip no longer matches, and the tracker can reach the project judge and be closed.\n  WHY: This violates \"never close the tracker\". Reviewers rated it MAJOR (sonnet-5_5, minimax-m3, gpt-6-luna) or NIT (glm-5_3-flash, which noted that a real tracker without state comments is unlikely to reach the judge). The highest severity is used.\n- agents.d/9730-security-audit-tracker-pipeline-exclude.md:2 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The fragment documents only the `UNBLOCK_SCAN ... kind=issue outcome=skip reason=security_audit_tracker` log line. It omits the `kind=project` variant added near orchestrate_poll_process.sh:25270.\n  WHY: The log-prefix registry is contractual, so parsers will miss the failed-project skip line. Both reviewers rated it NIT.\n- scripts/orchestrate_poll_process.sh:25192-25286 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: `count` is computed before the tracker exclusion, so the `security_audit_filter_failed` log line reports a candidate count that includes dropped items.\n  WHY: The count is misleading. This was raised as a hardening suggestion with risk score 1, and no severity was stated. Low is used for the bucket.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:~25268-25271 (with scripts/unblock_scan.py:356-358, 369) | severity=MAJOR | confidence=3\n  PROBLEM: Releasing labels from a failed-project tracker removes it from the search results. It stays in failed_projects.json, so select() re-adds it with only the tracking label and the security-audit skip no longer applies. The tracker can then reach the project judge, which has a close path.\n  WHY: The \"never close the tracker\" guarantee holds only until the labels are released. Suggested fix: remove the number from failed_projects.json (jq plus mv), or skip the label release for failed projects.\n- agents.d/9730-security-audit-tracker-pipeline-exclude.md:2 | severity=NIT | confidence=3\n  PROBLEM: The fragment omits the `kind=project` UNBLOCK_SCAN log line.\n  WHY: No runtime impact, but readers and parsers will not know about the line.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:25249-25289 (with scripts/unblock_scan.py:358, 369, 427-428) | severity=MAJOR | confidence=4\n  PROBLEM: On the next tick the released failed-project tracker is no longer in the search. select() reconstructs it from failed_projects.json with only the tracking label, so the SECURITY_AUDIT_LABEL skip does not match. It is classified as kind=project.\n  WHY: The project judge's close verdict can run `gh issue close`. No test simulates a second tick.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:25267-71, 25161-64, 28850-52; scripts/unblock_scan.py:356-358, 427-433 | severity=MAJOR | confidence=5\n  PROBLEM: Releasing a failed-project tracker's labels makes it vanish from the next search, but it stays in the failed-project list. The selector rebuilds it without ai:security-audit, so the exclusion no longer applies.\n  WHY: The tracker can be dispatched as kind=project, and the project-close path (orchestrate_poll_process.sh:24484-31) can close the tracking issue.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:25252-25272 (failed-project branch 25268-25272; with scripts/unblock_scan.py:356-358, 367-371) | severity=NIT | confidence=3\n  PROBLEM: The code comment and test claim a failed-project tracker is never judged. That holds only while the search still returns the tracker. Once ai:blocked is released, select() rebuilds it at unblock_scan.py:358 with only [TRACKING_LABEL], so the skip at 369 does not match.\n  WHY: This applies to a hybrid issue that is both a failed tracking project with state comments and a tracker-marker body. The reviewer noted a mitigation: the live tracker #3576 has no orchestrator state comments and is not in the failed-projects file, so it cannot reach the judge this way.\n- agents.d/9730-security-audit-tracker-pipeline-exclude.md:2 | severity=NIT | confidence=5\n  PROBLEM: The fragment documents only the `kind=issue` skip line and omits the `kind=project` shape emitted at scripts/orchestrate_poll_process.sh:25270.\n  WHY: A parser filtering on the documented shape silently misses the failed-project skip line.\n- scripts/orchestrate_poll_process.sh:25192-25286 | confidence=1\n  PROBLEM: Hardening suggestion: `count` is computed before the tracker exclusion, so the `security_audit_filter_failed` log reports a candidate count that includes dropped items.\n  WHY: The count is misleading. Suggested fix: recompute `count` from the rewritten search.json, or log the post-exclusion count (HARDENING_RISK_SCORE 1).\n- scripts/unblock_scan.py:356-358 | confidence=3\n  PROBLEM: Hardening suggestion: select() rebuilds a failed project missing from the search with only [TRACKING_LABEL], so the security-audit skip at 369 cannot match.\n  WHY: Suggested fix: add SECURITY_AUDIT_LABEL when the details body contains the `ai:security-audit-tracker:v1` marker (about 4 lines, HARDENING_RISK_SCORE 3).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "921072861a94326f8fbd28ef9ef1814e1313fd0abf375af28296927480add0be",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9734,
+    "run_id": "44732352710",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44732352710",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120131639_f21ed2d9b7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9734,
+    "run_id": "44732352710"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T13:16:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
