@@ -178,6 +178,9 @@ def _run_poller_functions(tmp_path: Path, script: str, comments: list[dict], **e
 		_function(text, "post_tracking_comment"),
 		_function(text, "_tracking_comment_recent_file"),
 		_function(text, "prune_state_comment_chains"),
+		_function(text, "_state_persisted_sha_file"),
+		_function(text, "_state_content_sha"),
+		_function(text, "record_state_persisted_sha"),
 		_function(text, "post_state_comment"),
 		_function(text, "_post_state_comment_v2_chunk"),
 	]) + "\n" + script
@@ -285,6 +288,104 @@ def test_state_write_prunes_after_posting(tmp_path: Path) -> None:
 	result, mock = _run_poller_functions(tmp_path, "post_state_comment", _three_old_chains(), STATE_FILE=str(tmp_path / "state.json"))
 	assert result.returncode == 0, result.stderr
 	assert _calls(mock) == ["POST repos/o/r/issues/40/comments"] + [f"DELETE repos/o/r/issues/comments/{n}" for n in (10, 11, 20, 21)]
+
+
+# --- unchanged-state write skip -------------------------------------------------
+
+
+def _write_state(tmp_path: Path, state: dict) -> Path:
+	path = tmp_path / "state.json"
+	path.write_text(json.dumps(state), encoding="utf-8")
+	return path
+
+
+def _post_calls(mock: Path) -> list[str]:
+	return [c for c in _calls(mock) if c.startswith("POST ")]
+
+
+def test_state_write_with_unchanged_content_posts_nothing(tmp_path: Path) -> None:
+	state = _write_state(tmp_path, {"status": "in_progress", "wave": 2})
+	# Written once, then the same content again in another key order and layout.
+	script = 'post_state_comment\nprintf \'{ "wave": 2,\n "status": "in_progress" }\' > "${STATE_FILE}"\npost_state_comment'
+	result, mock = _run_poller_functions(tmp_path, script, [], STATE_FILE=str(state))
+	assert result.returncode == 0, result.stderr
+	assert _post_calls(mock) == ["POST repos/o/r/issues/40/comments"]
+	assert result.stdout.count("STATE_WRITE tracking_issue=40 outcome=skip reason=unchanged") == 1
+
+
+def test_state_write_after_a_change_posts_again(tmp_path: Path) -> None:
+	state = _write_state(tmp_path, {"status": "in_progress", "wave": 2})
+	script = 'post_state_comment\njq \'.wave = 3\' "${STATE_FILE}" > "${STATE_FILE}.t" && mv "${STATE_FILE}.t" "${STATE_FILE}"\npost_state_comment'
+	result, mock = _run_poller_functions(tmp_path, script, [], STATE_FILE=str(state))
+	assert result.returncode == 0, result.stderr
+	assert _post_calls(mock) == ["POST repos/o/r/issues/40/comments"] * 2
+	assert "STATE_WRITE" not in result.stdout
+
+
+def test_state_matching_the_chain_read_posts_nothing(tmp_path: Path) -> None:
+	state = {"status": "in_progress", "wave": 2}
+	path = _write_state(tmp_path, state)
+	# As the poller does after reading the newest chain at the start of a tracking issue.
+	script = 'record_state_persisted_sha "$(printf \'%s\' "$(cat "${STATE_FILE}")" | _state_content_sha)"\npost_state_comment'
+	result, mock = _run_poller_functions(tmp_path, script, _chain(10, state), STATE_FILE=str(path))
+	assert result.returncode == 0, result.stderr
+	assert _calls(mock) == []
+
+
+def test_write_in_a_subshell_updates_the_record(tmp_path: Path) -> None:
+	path = _write_state(tmp_path, {"wave": 1})
+	# A: read; B: written in a subshell; back to A: must post, because B is now the newest chain.
+	script = "\n".join([
+		'record_state_persisted_sha "$(_state_content_sha < "${STATE_FILE}")"',
+		'( echo \'{"wave": 2}\' > "${STATE_FILE}"; post_state_comment )',
+		'echo \'{"wave": 1}\' > "${STATE_FILE}"',
+		"post_state_comment",
+	])
+	result, mock = _run_poller_functions(tmp_path, script, [], STATE_FILE=str(path))
+	assert result.returncode == 0, result.stderr
+	assert _post_calls(mock) == ["POST repos/o/r/issues/40/comments"] * 2
+
+
+@pytest.mark.parametrize("env", [{"ORCH_STATE_SKIP_UNCHANGED": "false"}, {"ORCH_STATE_SKIP_UNCHANGED": " Off "}, {"RUNTIME_DIR": ""}])
+def test_unchanged_skip_off_or_without_runtime_dir_always_posts(tmp_path: Path, env: dict) -> None:
+	path = _write_state(tmp_path, {"wave": 1})
+	result, mock = _run_poller_functions(tmp_path, "post_state_comment\npost_state_comment", [], STATE_FILE=str(path), **env)
+	assert result.returncode == 0, result.stderr
+	assert _post_calls(mock) == ["POST repos/o/r/issues/40/comments"] * 2
+
+
+def test_failed_write_keeps_the_previous_record(tmp_path: Path) -> None:
+	path = _write_state(tmp_path, {"wave": 1})
+	# Write A; a write of B fails at the cap twice (no chain lands); A again matches the newest chain.
+	script = "\n".join([
+		"post_state_comment",
+		'echo \'{"wave": 2}\' > "${STATE_FILE}"',
+		'echo 0 > "${MOCK_DIR}/post_failures"; export MOCK_POST_FAILS=2',
+		"post_state_comment || echo B_FAILED",
+		'echo \'{"wave": 1}\' > "${STATE_FILE}"',
+		"post_state_comment",
+	])
+	result, mock = _run_poller_functions(tmp_path, script, [], STATE_FILE=str(path))
+	assert result.returncode == 0, result.stderr
+	assert "B_FAILED" in result.stdout
+	assert [c for c in _post_calls(mock) if not c.endswith(" cap")] == ["POST repos/o/r/issues/40/comments"]
+	assert "STATE_WRITE tracking_issue=40 outcome=skip reason=unchanged" in result.stdout
+
+
+def test_content_sha_of_empty_or_invalid_state_is_empty(tmp_path: Path) -> None:
+	script = 'printf "[%s]" "$(printf "" | _state_content_sha)"; printf "[%s]" "$(printf "{" | _state_content_sha)"'
+	result, _ = _run_poller_functions(tmp_path, script, [])
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == "[][]"
+
+
+def test_poller_records_the_read_chain_only_without_fallback() -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	start = text.index('  record_state_persisted_sha "" 2>/dev/null || true\n  if extract_latest_valid_orchestrator_state "${COMMENTS}"; then')
+	block = text[start:text.index("\n  else\n", start)]
+	assert 'if [ "${STATE_FALLBACK_USED}" != "true" ] && [ "${COMMENTS_FETCH_OK:-false}" = "true" ] \\\n' in block
+	assert '&& [ "${COMMENTS_FOR_TRACKING_NUM:-}" = "${TRACKING_NUM}" ]; then' in block
+	assert 'record_state_persisted_sha "$(printf \'%s\' "${STATE_JSON}" | _state_content_sha 2>/dev/null)"' in block
 
 
 def test_state_write_at_the_comment_cap_prunes_and_retries_once(tmp_path: Path) -> None:
@@ -462,3 +563,20 @@ def test_tg_forged_marker_only_creates_a_new_marker(tmp_path: Path, script: str,
 	assert result.returncode == 0, result.stderr
 	assert not any(c.startswith("PATCH") for c in calls)
 	assert calls[-1] == expected
+
+
+@pytest.mark.parametrize("compress", ["true", "false"])
+def test_state_write_with_compression_reads_back(tmp_path: Path, compress: str) -> None:
+	state = {"status": "in_progress", "wave": 2, "merged_issue_fingerprints": {"9001": {"a.py": [r"def\s+x"] * 200}}}
+	path = _write_state(tmp_path, state)
+	result, mock = _run_poller_functions(tmp_path, "post_state_comment", [], STATE_FILE=str(path), ORCH_STATE_COMPRESS=compress)
+	assert result.returncode == 0, result.stderr
+	assert _post_calls(mock) == ["POST repos/o/r/issues/40/comments"]
+	body = _body(mock, "POST")
+	payload = base64.b64decode(body.split("\n", 1)[1].rsplit("\nORCHESTRATOR_STATE_V2 -->", 1)[0])
+	assert payload.startswith(b"zlib:") is (compress == "true")
+	comments = tmp_path / "posted.json"
+	comments.write_text(json.dumps([{"id": 1, "user": {"login": BOT}, "body": body}]), encoding="utf-8")
+	extracted = subprocess.run(["python3", str(STATE_V2), "extract", "--comments-json", str(comments)], capture_output=True, check=True)
+	assert json.loads(extracted.stdout) == state
+	assert hashlib.sha256(extracted.stdout).hexdigest() in body

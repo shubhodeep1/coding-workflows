@@ -4232,6 +4232,42 @@ def main() -> int:
 	return 1 if failed > 0 else 0
 
 
+def test_linked_pr_evidence_ignores_merge_into_non_target_base():
+	"""Issue #9481 (binance-blessings #507 shape): a linked PR merged into an
+	unrelated branch must not imply attempt_merge once the default branch is known."""
+	evidence = orchestrate_lib._linked_pr_evidence
+	merged_other = {"merged": True, "state": "closed", "base_ref": "claude/busy-babbage-grn9nj"}
+	assert evidence(merged_other, default_branch="main") is None
+	assert evidence({"merged": True, "baseRefName": "claude/x"}, default_branch="main") is None
+	assert evidence({"merged": True, "base": {"ref": "claude/x"}}, default_branch="main") is None
+	# Target bases still imply attempt_merge.
+	assert evidence({"merged": True, "base_ref": "main"}, default_branch="main")["action"] == "attempt_merge"
+	assert evidence(
+		{"merged": True, "base_ref": "orchestrator/project-5"}, default_branch="main", declared_branch="orchestrator/project-5",
+	)["action"] == "attempt_merge"
+	assert evidence(
+		{"merged": True, "base_ref": "orchestrator/project-5"}, default_branch="main", is_managed=True,
+	)["action"] == "attempt_merge"
+	assert evidence({"merged": True, "base_ref": "orchestrator/project-5"}, default_branch="main") is None
+	assert evidence(
+		{"merged": True, "base_ref": "orchestrator/project-5"}, default_branch="main",
+		declared_branch="orchestrator/project-6", is_managed=True,
+	) is None
+	# Legacy: base missing, or no default branch passed.
+	assert evidence({"merged": True}, default_branch="main")["action"] == "attempt_merge"
+	assert evidence(merged_other)["action"] == "attempt_merge"
+	# Closed and unmerged stays None; open stays retrigger_review.
+	assert evidence({"merged": False, "state": "closed", "base_ref": "main"}, default_branch="main") is None
+	assert evidence({"merged": False, "state": "OPEN"}, default_branch="main")["action"] == "retrigger_review"
+	# The keyword arguments reach the resolver through the public entry points.
+	resolved = orchestrate_lib.resolve_label_repair_evidence(
+		labels=["ai:ready-to-merge"], comments=[], linked_pr=merged_other, default_branch="main",
+	)
+	assert "linked_pr_state" not in json.dumps(resolved)
+	legacy = orchestrate_lib.resolve_label_repair_evidence(labels=["ai:ready-to-merge"], comments=[], linked_pr=merged_other)
+	assert "linked_pr_state" in json.dumps(legacy)
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())
 

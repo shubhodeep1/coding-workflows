@@ -150,7 +150,7 @@ save(); sys.stderr.write("unexpected gh call " + " ".join(args) + "\n"); sys.exi
 STUB_DISPATCHER = r'''#!/usr/bin/env bash
 set -euo pipefail
 if [ "${APPLY_ANALYSIS_LIST_ONLY:-false}" = "true" ]; then
-  echo "APPLY_ANALYSIS_CANDIDATES count=${STUB_CANDIDATES:-2} docs=a,b"
+  echo "APPLY_ANALYSIS_CANDIDATES count=${STUB_CANDIDATES:-2} docs=a,b${STUB_CANDIDATES_SUFFIX:-}"
   exit 0
 fi
 env | grep -E '^(APPLY_ANALYSIS_|GITHUB_SHA)' | sort > "${STUB_ENV_OUT}"
@@ -527,7 +527,43 @@ def test_insufficient_docs_skips_before_the_smoke_gate() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}}, env={"STUB_CANDIDATES": "1"})
 	assert "PROMOTE_CYCLE_SKIPPED reason=insufficient_docs available=1 required=2" in proc.stdout
+	assert "scan_capped_behind_markers" not in proc.stdout + proc.stderr
 	assert not final.get("dispatches")
+
+
+def test_capped_candidates_line_skips_as_scan_capped_behind_markers() -> None:
+	# Plan P6 step 3 (Refs #9116): the dispatcher's doc scan stopped behind
+	# dispatch markers, so a low count is not "insufficient docs".
+	for count in ("0", "1"):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, final, _ = _run(
+				Path(tmp),
+				{"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}},
+				env={"STUB_CANDIDATES": count, "STUB_CANDIDATES_SUFFIX": " capped_behind_markers=true"},
+			)
+		assert proc.returncode == 0, proc.stderr + proc.stdout
+		assert f"PROMOTE_CYCLE_SKIPPED reason=scan_capped_behind_markers available={count} required=2" in proc.stdout
+		assert f"::warning::PROMOTE_CYCLE_SKIPPED reason=scan_capped_behind_markers available={count} required=2" in proc.stdout
+		assert "insufficient_docs" not in proc.stdout
+		assert "outcome=skipped:scan_capped_behind_markers" in final["github_output"]
+		assert not final.get("dispatches")
+
+
+def test_capped_candidates_line_with_enough_docs_still_runs_the_cycle() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(
+			Path(tmp),
+			{"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": GATE_SUCCESS},
+			env={"STUB_CANDIDATES": "2", "STUB_CANDIDATES_SUFFIX": " capped_behind_markers=true"},
+		)
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert "scan_capped_behind_markers" not in proc.stdout
+	assert "PROMOTE_CYCLE_DISPATCHED doc=" in proc.stdout
+
+
+def test_promote_cycle_forwards_min_docs_to_the_list_only_scan() -> None:
+	text = SCRIPT.read_text(encoding="utf-8")
+	assert 'PROMOTE_CYCLE_MIN_DOCS="${PROMOTE_CYCLE_MIN_DOCS}" APPLY_ANALYSIS_LIST_ONLY=true' in text
 
 
 def test_full_cycle_runs_smoke_gate_then_dispatches_proving_run() -> None:

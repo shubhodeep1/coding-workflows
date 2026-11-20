@@ -137,6 +137,94 @@ def test_last_run_diff_placeholder_matches_first_iteration_sentinel() -> None:
 	)
 
 
+
+# --- Final-CI repair delta range (final-ci-failure-ci-fix plan, Phase 3) ------
+
+def _diff_context_run(tmp_path: Path, review_diff_base: str | None) -> tuple[str, dict[str, str]]:
+	"""Run the step script in a clone whose PR branch has an earlier
+	[ai-autofix] commit (lib.py), the approved head, and a repair commit
+	(tests/test_lib.py) on top; returns (stdout, {output name: text})."""
+	import os
+	import subprocess
+
+	def git(cwd: Path, *args: str) -> str:
+		env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+		env.update({"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"})
+		return subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True, text=True, env=env).stdout.strip()
+
+	origin = tmp_path / "origin.git"
+	work = tmp_path / "work"
+	subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
+	subprocess.run(["git", "clone", "-q", str(origin), str(work)], check=True, capture_output=True)
+	(work / "README").write_text("base\n", encoding="utf-8")
+	git(work, "add", "-A")
+	git(work, "commit", "-q", "-m", "base")
+	git(work, "push", "-q", "origin", "HEAD:main")
+	git(work, "checkout", "-q", "-b", "topic")
+	(work / "lib.py").write_text("VALUE = 2\n", encoding="utf-8")
+	git(work, "add", "-A")
+	git(work, "commit", "-q", "-m", "[ai-autofix] earlier review fix")
+	approved = git(work, "rev-parse", "HEAD")
+	(work / "tests").mkdir()
+	(work / "tests" / "test_lib.py").write_text("def test_value():\n\tassert True\n", encoding="utf-8")
+	git(work, "add", "-A")
+	git(work, "commit", "-q", "-m", "[ai-merge-resolve] repair final CI failures")
+	support = tmp_path / "support"
+	support.mkdir()
+	(support / "git_ref_health_check.sh").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+	out = tmp_path / "out"
+	out.mkdir()
+	(out / "pr.diff").write_text("FULL PR DIFF FROM gh pr diff\n", encoding="utf-8")
+	env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k not in ("BASH_ENV", "ENV")}
+	env.update({
+		"SUPPORT_SCRIPTS_DIR": str(support), "BASE_BRANCH": "main", "TARGET_BRANCH": "topic", "GITHUB_ENV": str(out / "github_env"),
+		"PR_DIFF_FILE": str(out / "pr.diff"), "ORIGINAL_PR_DIFF_FILE": str(out / "original.diff"),
+		"PR_CHANGED_FILES_FILE": str(out / "changed.txt"), "LAST_COMMIT_STAT_FILE": str(out / "stat.txt"),
+		"LAST_RUN_DIFF_FILE": str(out / "lr.diff"), "LAST_RUN_CHANGED_FILES_FILE": str(out / "lr.txt"),
+		"LAST_RUN_DIFF_STAT_FILE": str(out / "lr.stat"), "PR_DIFF_SOURCE": "gh_pr_diff",
+	})
+	if review_diff_base is not None:
+		env["REVIEW_DIFF_BASE_SHA"] = approved if review_diff_base == "APPROVED" else review_diff_base
+	script = REPO_ROOT / "scripts" / "review_autofix_step_generate_diff_context.sh"
+	proc = subprocess.run(["bash", "-c", f'source "{script}"'], cwd=work, env=env, capture_output=True, text=True, check=False)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	names = {"pr": "pr.diff", "changed": "changed.txt", "original": "original.diff", "last": "lr.diff", "last_files": "lr.txt", "last_stat": "lr.stat"}
+	return proc.stdout, {key: (out / name).read_text(encoding="utf-8") for key, name in names.items()}
+
+
+def test_final_ci_repair_head_is_reviewed_on_its_delta(tmp_path: Path) -> None:
+	stdout, files = _diff_context_run(tmp_path, "APPROVED")
+	assert "REVIEW_DIFF_CONTEXT range=delta base=" in stdout
+	# The repair commit is the previous AI run the reviewers focus on ...
+	assert "tests/test_lib.py" in files["last"] and "VALUE = 2" not in files["last"]
+	assert files["last_files"].split() == ["tests/test_lib.py"]
+	assert "tests/test_lib.py" in files["last_stat"]
+	# ... while the whole-PR inputs (risk tier, materiality, panel) are unchanged.
+	assert files["pr"] == files["original"] == "FULL PR DIFF FROM gh pr diff\n"
+	assert sorted(files["changed"].split()) == ["lib.py", "tests/test_lib.py"]
+
+
+def test_diff_context_keeps_the_last_autofix_diff_otherwise(tmp_path: Path) -> None:
+	cases = {None: "REVIEW_DIFF_CONTEXT range=merge_base\n", "not-a-sha": "reason=invalid_base", "f" * 40: "reason=not_an_ancestor"}
+	for index, (base, expected) in enumerate(cases.items()):
+		sub = tmp_path / str(index)
+		sub.mkdir()
+		stdout, files = _diff_context_run(sub, base)
+		assert expected in stdout, (base, stdout)
+		# LAST_RUN_DIFF stays the newest [ai-autofix] commit.
+		assert "VALUE = 2" in files["last"] and "tests/test_lib.py" not in files["last"], base
+		assert files["pr"] == "FULL PR DIFF FROM gh pr diff\n", base
+		assert sorted(files["changed"].split()) == ["lib.py", "tests/test_lib.py"], base
+
+
+def test_diff_context_step_receives_the_gate_output() -> None:
+	text = REVIEW_AUTOFIX.read_text(encoding="utf-8")
+	step = text[text.index("      - name: Generate diff context\n"):]
+	step = step[:step.index("\n      - name: ", 10)]
+	assert "REVIEW_DIFF_BASE_SHA: ${{ needs.gate.outputs.review_diff_base_sha }}" in step
+	assert "      review_diff_base_sha: ${{ steps.evaluate.outputs.review_diff_base_sha }}" in text
+	assert "FINAL_CI_REPAIR_DELTA_REVIEW_ENABLED: ${{ vars.FINAL_CI_REPAIR_DELTA_REVIEW_ENABLED || 'true' }}" in text
+
 if __name__ == "__main__":
 	test_last_run_diff_walks_back_to_autofix_commit()
 	test_last_run_diff_uses_caret_dotdotdot_range()

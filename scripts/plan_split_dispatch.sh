@@ -33,6 +33,9 @@
 # that loses a concurrent split to another run's earlier marker exits 0 too.
 # Log prefix PLAN_SPLIT (outcome=dispatched|dispatch_unconfirmed|deduplicated|skipped reason=...).
 set -uo pipefail
+# Signed job-token comments (run-volume plan item 15): route this script's
+# gh comment calls through the shim even when no earlier step loaded it.
+[ -z "${BASH_SOURCE[0]:-}" ] || AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" >/dev/null 2>&1 || true
 
 SPLIT_LABEL="ai:split-to-project"
 SOURCE_MARKER_PREFIX="<!-- ai:plan-split:v1 issue="
