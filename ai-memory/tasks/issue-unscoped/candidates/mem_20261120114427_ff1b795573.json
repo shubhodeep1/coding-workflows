@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/check_failure_triage.yml:820-862 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The post step adds a second read of open triage issues to close the base-keyed filing race, but the race still exists between that read and the filing.\n  WHY: Two runs can both do the check and file at the same time, and the \"no new API call\" constraint is broken (source severity MAJOR).\n- scripts/check_failure_triage.sh:1735 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The Telegram warning sent when the open-issue cap is hit is silenced by `>/dev/null 2>&1 || true`.\n  WHY: If Telegram is unreachable or the credentials have expired, the failure is ignored and the operator never sees the warning (source severity NIT).\n- scripts/check_failure_triage.sh:2320 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The script exits non-zero on invalid base-keyed metadata, and a log line is its only feedback to the operator.\n  WHY: It fails closed, but an operator will not understand why progress on a default branch is blocked (source severity NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"\u00a715: no new API call; both guards read the existing OPEN_TRIAGE listing.\"\n  expected_change_site: .github/workflows/check_failure_triage.yml, \"Post check-failure triage issue\" step\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The post step adds a paginated `gh_retry gh api` request at lines 835-839 to re-read open triage issues before creating a base-keyed issue, the collect-stage listing is not reused, so the PR does not meet the no-new-API-call requirement (gemini severity BLOCKER, luna severity MAJOR)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/check_failure_triage.sh:line 1735 (tg_send_msg ...) | severity=NIT | confidence=4\n  PROBLEM: The Telegram warning triggered when the open-issue cap is hit is silenced by `>/dev/null 2>&1 || true`.\n  WHY: If Telegram is unreachable or credentials have expired, the failure is ignored, and no warning is surfaced to the operator.\n- scripts/check_failure_triage.sh:line 2320 (exit 1 on base_keyed_metadata_invalid) | severity=NIT | confidence=3\n  PROBLEM: The script exits with a non-zero status when base-keyed metadata is invalid without providing actionable feedback to the operator beyond a log line.\n  WHY: It fails closed, but an operator will not understand why the pipeline progress on a default branch is blocked.\n- .github/workflows/check_failure_triage.yml:lines 820-862 (Post check-failure triage issue step re-read) | severity=MAJOR | confidence=4\n  PROBLEM: The secondary read of open issues in the post step, added to close the base-keyed filing race, re-introduces the race between this read and the actual filing.\n  WHY: Even with this extra read, two runs can still perform this check and attempt filing simultaneously, and the \"no new API call\" constraint is violated.\n- TASK_GAP\n  Requirement: \"\u00a715: no new API call; both guards read the existing OPEN_TRIAGE listing.\"\n  Expected change site: .github/workflows/check_failure_triage.yml, Post check-failure triage issue step.\n  Evidence of absence: The PR introduces a paginated `gh_retry gh api` request in the post step at lines 835-839 to re-read open triage issues before creating a base-keyed issue. This is an additional API call not covered by the existing collect-stage listing that the issue constraints and project policy prohibit.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"\u00a715: no new API call; both guards read the existing OPEN_TRIAGE listing.\"\n  Expected change site: `.github/workflows/check_failure_triage.yml`, \"Post check-failure triage issue\" step.\n  Evidence of absence: The post step adds a paginated GitHub API request at lines 835\u2013839 to re-read open triage issues before creating a base-keyed issue. The collect-stage listing is not reused, so the PR does not meet the no-new-API-call requirement.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "69704ec3976377dc11370860e79508a4b82bf65487f23539741dc2e2ed676347",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9703,
+    "run_id": "44722445381",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44722445381",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120114427_ff1b795573",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9703,
+    "run_id": "44722445381"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T11:44:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
