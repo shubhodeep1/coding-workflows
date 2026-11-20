@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate_poll.yml:1475-1487 (and 1717-1729; also cited as lines 1481 and 1723) | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: `REVIEW_FINAL_CI_WORKFLOW` is set for the whole poller step, so it gates more than the new `attempt_merge` arm behind `STALL_MERGE_REQUIRED_CHECKS_ENABLED`. Existing callers of `_pr_wait_for_required_checks` (e.g. the noop-suspicious gate D at `scripts/orchestrate_poll_process.sh:36841`, base-freshness update) also dispatch final CI when a required check is missing.\n  WHY: With the flag false, existing paths still dispatch `ci.yml`, which breaks the \"keep the current chain unchanged when the flag is off\" requirement. The reviewers rate it MAJOR (openai_gpt-6-luna); the other reviewers rejected it as intentional and documented, so severity is disputed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/orchestrate_poll.yml:1475-1487 (and 1717-1729) | confidence=5\n  PROBLEM: `REVIEW_FINAL_CI_WORKFLOW` is set at the workflow-step level, which affects all paths in `scripts/orchestrate_poll_process.sh` that call `_pr_wait_for_required_checks`, not just the `attempt_merge` arm gated by `STALL_MERGE_REQUIRED_CHECKS_ENABLED`.\n  WHY: The requirement \"When the flag is off, keep the current chain unchanged\" is violated. Other paths (e.g. gate D wait, base-freshness update) now dispatch final CI when required checks are missing even with `STALL_MERGE_REQUIRED_CHECKS_ENABLED=false`.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/orchestrate_poll.yml:1481, 1723 (also scripts/orchestrate_poll_process.sh:36841, scripts/pr_checks_lib.sh:1143-1147, tests/test_orchestrate_poll_process.py:32580-32583) | severity=high (source: MAJOR) | confidence=5\n  PROBLEM: The feature flag gates only the new merge chain. Setting the final-CI workflow for the whole step also enables dispatches from existing poller paths, regardless of `STALL_MERGE_REQUIRED_CHECKS_ENABLED`.\n  WHY: With the flag `false`, the existing noop-suspicious path can still dispatch `ci.yml` for a head missing its required check, so the off switch does not preserve the existing dispatch behavior.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "935966b191378c158c655909ab65a37838c5cf8cbfe7dae9d9b15d251c2b983c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9737,
+    "run_id": "44773530607",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44773530607",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120164714_8bb5333167",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9737,
+    "run_id": "44773530607"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T16:47:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
