@@ -102,12 +102,11 @@ with in-flight orchestrator work (or the UNSCREENED caveat). Reference
 /implement-plan-claude (Claude-engine orchestrator hand-off) or /implement-plan-ai (default-engine hand-off) as the follow-up.>
 ```
 
-When step 6 formed a bundle, replace the final block with the following. List the plans, and the `Hand off:` paths, in dependency order (prerequisites first): a member that is a prerequisite of the anchor goes ahead of the anchor.
+When step 6 formed a bundle, replace the final block with the following. List the plans, and the `Hand off:` paths, in dependency order (prerequisites first): a member that is a prerequisite of the anchor goes ahead of the anchor. Write one `- <plan>` line per bundled plan; the anchor line follows any member it depends on.
 
 ```
 ➡ Next highest-value to implement: bundle of N related plans as ONE orchestrator project
 - <plan> — <P> phases; <anchor | related via <shared path(s) / coupled unit / depends on <plan>>>
-  (one line per plan, prerequisites first — the anchor line follows any member it depends on)
 Total: N plans, P phases (caps: 3 plans, 8 phases)
 Why: <2–4 lines — combined value, why one project beats separate projects (the members
 would conflict with each other or depend on each other), §1 priority, and confirmation that
