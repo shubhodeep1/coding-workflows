@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Append the stage notes to CONFLICTED_FILES_LIST (in the review_conflict_prepare script, append stage information to the conflicted-file list)\n  expected_change_site: scripts/review_conflict_prepare.sh (around lines 1567 and 1833)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  EVIDENCE: No hunk touches scripts/review_conflict_prepare.sh; the PR description lists it under \"Deferred scope (not delivered by this PR)\". Both reviewers rated it NIT.\n- requirement: Add a one-sided-deletion rule to prompts/integration-sync-conflict-resolver.txt and prompts/conflict-resolver.txt (plus any prompts/_templates copies)\n  expected_change_site: prompts/integration-sync-conflict-resolver.txt, prompts/conflict-resolver.txt\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  EVIDENCE: No hunk touches prompts/; the PR description lists it under \"Deferred scope (not delivered by this PR)\". Both reviewers rated it NIT.\n- requirement: Accept a keep-line path (stage 1 2 or stage 1 3 path) into RESOLVER_TOUCHED_FILE before check_resolver_diff.sh runs\n  expected_change_site: scripts/review_conflict_resolve.sh (around line 4644)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  EVIDENCE: No hunk touches scripts/review_conflict_resolve.sh; the PR description lists it under \"Deferred scope (not delivered by this PR)\". Both reviewers rated it NIT.\n- requirement: Add the post-fix tests: stage note renders in the list, and a mocked resolver that names the path on the keep line passes (kept file passes, unmodified fails)\n  expected_change_site: tests/test_conflict_one_sided_delete_workflow_path.py\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  EVIDENCE: The test file has no keep-line tests; they depend on the deferred script changes, and the PR description lists them under \"Deferred scope (not delivered by this PR)\". Both reviewers rated it NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP (all four deferred in PR description):\n- Requirement: Append the stage notes to CONFLICTED_FILES_LIST.\n  Expected change site: scripts/review_conflict_prepare.sh, around lines 1567 and 1833.\n  Evidence of absence: No hunk touches the file. The PR description defers it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n- Requirement: Add a one-sided-deletion rule to prompts/integration-sync-conflict-resolver.txt and prompts/conflict-resolver.txt, plus any prompts/_templates copies.\n  Expected change site: the prompts/ files named above.\n  Evidence of absence: No hunk touches prompts/. The PR description defers it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n- Requirement: Accept a keep-line path into RESOLVER_TOUCHED_FILE before check_resolver_diff.sh runs.\n  Expected change site: scripts/review_conflict_resolve.sh, around line 4644.\n  Evidence of absence: No hunk touches the file. The PR description defers it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n- Requirement: Add the post-fix tests: the stage note in the rendered list, and a mocked resolver that names the path on the keep line passes.\n  Expected change site: tests/test_conflict_one_sided_delete_workflow_path.py.\n  Evidence of absence: The file has no keep-line tests. They depend on the deferred script changes, and the PR description defers them.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP (all four deferred in PR description):\n- Requirement: In the review_conflict_prepare script, append stage information to the conflicted-file list.\n  Expected change site: scripts/review_conflict_prepare.sh\n  Evidence of absence: Explicitly deferred in PR description as \"Deferred scope (not delivered by this PR)\".\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: Add a one-sided-deletion rule to the integration-sync-conflict-resolver and conflict-resolver prompts.\n  Expected change site: prompts/integration-sync-conflict-resolver.txt, prompts/conflict-resolver.txt\n  Evidence of absence: Explicitly deferred in PR description as \"Deferred scope (not delivered by this PR)\".\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: In the review_conflict_resolve script, add a stage 1 2 or stage 1 3 path to RESOLVER_TOUCHED_FILE based on the model's keep line.\n  Expected change site: scripts/review_conflict_resolve.sh\n  Evidence of absence: Explicitly deferred in PR description as \"Deferred scope (not delivered by this PR)\".\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: Extend tests/test_conflict_one_sided_delete_workflow_path.py with the post-fix behaviour (stage note renders, kept file passes, unmodified fails).\n  Expected change site: tests/test_conflict_one_sided_delete_workflow_path.py\n  Evidence of absence: Explicitly deferred in PR description as \"Deferred scope (not delivered by this PR)\".\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d982b5f38e8ce65ebca6efc435e192aa900faf320656d56296d2bcbc5de9a1f7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9816,
+    "run_id": "44670584773",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44670584773",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120040625_8d82bf9e00",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9816,
+    "run_id": "44670584773"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T04:06:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
