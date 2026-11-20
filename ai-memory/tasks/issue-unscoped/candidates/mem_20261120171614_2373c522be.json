@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/update_workflows.yml:2608-2615 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The verify_head_gate step polls up to 6 times, 20 seconds apart (120 seconds in total), and if workflow-integrity is still pending after that it logs a ::warning:: and exits 0, so the gate can stay pending for longer than expected when CI is slow.\n  WHY: The reviewer calls this a design choice rather than a runtime failure: review has to re-check the gate on a later run if it stays pending (source severity NIT, mapped to low).\n- scripts/review_head_gate.sh:102-104 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: verify_head_gate duplicates the integrity context and updater-branch regex instead of sharing the constants in scripts/review_head_gate.sh:102-104.\n  WHY: Nothing fails at runtime, but a change in one place has to be copied to the other by hand (source severity NIT, mapped to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/update_workflows.yml:2608-2615 | severity=NIT | confidence=4\n  PROBLEM: The verify_head_gate step polls up to 6 times, 20 seconds apart (120 seconds in total). If workflow-integrity is still pending after that, the gate stays pending and the step logs a ::warning:: but exits 0; this fails closed correctly but may leave the gate pending for longer than expected when CI is slow.\n  WHY: Not a failure but a design choice; review has to re-check the gate on a later run if it stays pending.\n- scripts/review_head_gate.sh:102-104 | severity=NIT | confidence=4\n  PROBLEM: verify_head_gate duplicates the integrity context and updater-branch regex instead of sharing the constants in scripts/review_head_gate.sh:102-104.\n  WHY: Does not fail, but creates maintenance overhead because a change in one location must be synced by hand in the other.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "60c764e8e91343dee22c27e969a04b32a4a3524181d06339fddc2bdc75bdbde0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9505,
+    "run_id": "44776503120",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44776503120",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120171614_2373c522be",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9505,
+    "run_id": "44776503120"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-20T17:16:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
