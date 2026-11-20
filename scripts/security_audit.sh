@@ -596,6 +596,23 @@ if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ]; then
 	}
 fi
 
+# Issues mode: the audit model invents the finding_id on every run, so a
+# defect that already has an OPEN follow-up came back under a new id and was
+# filed again: #9399, #9431 and #9465 were one finding at
+# `scripts/render_prompt.sh:326` on branch ai/issue-9341, each filed while the
+# earlier ones were still open. A finding whose id has no follow-up takes the
+# id of an open ai:security follow-up of the same audit scope (same
+# `Integration branch`, or both the default branch) that names the same file
+# and the same category within this many lines. From there on it is the
+# existing finding: nothing new is filed and the reported finding ids name the
+# open issue, which is what the single-issue security pass looks for. A
+# closed follow-up never matches, so a finding that comes back after its
+# issue closed is filed again. 0 turns the check off (id-only dedupe).
+SECURITY_AUDIT_SIMILAR_FINDING_LINE_WINDOW="${SECURITY_AUDIT_SIMILAR_FINDING_LINE_WINDOW:-25}"
+if ! [[ "${SECURITY_AUDIT_SIMILAR_FINDING_LINE_WINDOW}" =~ ^[0-9]{1,6}$ ]]; then
+	echo "SECURITY_AUDIT_SIMILAR_FINDING_LINE_WINDOW must be a non-negative integer" >&2
+	exit 1
+fi
 SECURITY_AUDIT_CONFIDENCE_GATE="${SECURITY_AUDIT_CONFIDENCE_GATE:-8}"
 if ! [[ "${SECURITY_AUDIT_CONFIDENCE_GATE}" =~ ^[0-9]+$ ]] \
 	|| [ "${SECURITY_AUDIT_CONFIDENCE_GATE}" -lt 1 ] \
@@ -3378,7 +3395,8 @@ python3 - \
 	"${OVERSIZED_EXPORT_DIR}/manifest.json" \
 	"${SECURITY_AUDIT_PASS_FINDINGS_OUT}" \
 	"${SECURITY_AUDIT_CONSOLIDATE_ACTIVE}" \
-	"${SECURITY_AUDIT_PASS_PR_NUMBER}" <<'PY'
+	"${SECURITY_AUDIT_PASS_PR_NUMBER}" \
+	"${SECURITY_AUDIT_SIMILAR_FINDING_LINE_WINDOW}" <<'PY'
 from __future__ import annotations
 
 import base64
@@ -3419,6 +3437,8 @@ consolidate_active = (
 	and bool(target_ref)
 	and re.fullmatch(r"[1-9][0-9]{0,9}", consolidate_pr_number) is not None
 )
+# Same-file-and-category repeat window (argv 20, after the P5a/P5b arguments).
+similar_line_window = int(sys.argv[20])
 
 
 def load_json(path: Path, *, label: str):
@@ -3472,6 +3492,52 @@ existing_finding_numbers: dict[str, int] = {}
 # Issue state per finding ID, so the consolidated follow-up can depend on an
 # open same-file predecessor (stuck-states P5b).
 existing_finding_open: dict[str, bool] = {}
+# Open follow-ups by (file, category key), for the same-file-and-category
+# check: the lines this script wrote into the body (`- Category:`,
+# `- Location:`, `- Integration branch:`).
+category_line_regex = re.compile(r"^- Category: `([^`\n]+)`[ \t]*$", re.MULTILINE)
+location_line_regex = re.compile(r"^- Location: `([^`\n]+):([1-9][0-9]{0,8})`[ \t]*$", re.MULTILINE)
+branch_line_regex = re.compile(r"^- Integration branch: `([^`\n]+)`[ \t]*$", re.MULTILINE)
+open_by_location: dict[tuple[str, str, str], list[tuple[int, int, str]]] = {}
+
+
+def category_key(raw: object) -> str:
+	"""`A01` for any spelling of an OWASP category, else the lower-cased letters and digits."""
+	text = str(raw or "")
+	owasp = re.search(r"\bA(0[1-9]|10)\b", text, re.IGNORECASE)
+	if owasp:
+		return f"A{owasp.group(1)}"
+	return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+def open_followup_for(finding: dict) -> tuple[int, str] | None:
+	"""(issue number, finding id) of the open follow-up this finding repeats, if any.
+
+	Same audit scope (the follow-up's `Integration branch` equals this
+	audit's target ref; both empty for the default branch), same file, same
+	category key, at most `similar_line_window` lines apart. The nearest
+	line wins, then the older issue.
+	"""
+	if similar_line_window <= 0:
+		return None
+	try:
+		line = int(finding.get("line"))
+	except (TypeError, ValueError):
+		return None
+	key = category_key(finding.get("owasp_or_stride_category"))
+	if not key:
+		return None
+	best: tuple[int, int, str] | None = None
+	for existing_line, existing_number, existing_id in open_by_location.get((target_ref, str(finding.get("file")), key), []):
+		distance = abs(existing_line - line)
+		if distance > similar_line_window:
+			continue
+		rank = (distance, existing_number, existing_id)
+		if best is None or rank < best:
+			best = rank
+	return (best[1], best[2]) if best is not None else None
+
+
 now_utc = datetime.now(timezone.utc)
 
 for issue in existing_followup_issues:
@@ -3481,23 +3547,43 @@ for issue in existing_followup_issues:
 	match = marker_regex.search(body)
 	if match is None:
 		continue
-	issue_finding_ids = [match.group(1).strip(), *leading_marker_ids(body)]
+	issue_marker_id = match.group(1).strip()
+	issue_finding_ids = [issue_marker_id, *leading_marker_ids(body)]
 	for finding_id in dict.fromkeys(issue_finding_ids):
 		if finding_id:
 			existing_finding_ids.add(finding_id)
 			if isinstance(issue.get("number"), int) and issue["number"] > 0:
 				existing_finding_numbers[finding_id] = issue["number"]
 				existing_finding_open[finding_id] = str(issue.get("state") or "").lower() == "open"
+	# Same-file-and-category index: the first `- Category:` / `- Location:`
+	# lines belong to the first marker's finding (legacy and consolidated bodies).
+	if issue_marker_id and isinstance(issue.get("number"), int) and issue["number"] > 0:
+		category_line = category_line_regex.search(body)
+		location_line = location_line_regex.search(body)
+		branch_line = branch_line_regex.search(body)
+		if str(issue.get("state") or "").lower() == "open" and category_line is not None and location_line is not None \
+			and category_key(category_line.group(1)):
+			open_by_location.setdefault(
+				(branch_line.group(1) if branch_line is not None else "", location_line.group(1), category_key(category_line.group(1))), []
+			).append((int(location_line.group(2)), issue["number"], issue_marker_id))
 
 # Every surviving finding without a marked follow-up gets its own issue; there
 # is no per-run or per-week cap.
 planned_followups: list[dict[str, object]] = []
 skipped_existing_count = 0
+# id(finding) -> (the id the model reported, the open issue whose id it took).
+adopted_ids: dict[int, tuple[str, int]] = {}
 
 for finding in findings:
 	if not isinstance(finding, dict):
 		continue
 	finding_id = str(finding.get("finding_id") or "").strip()
+	if finding_id not in existing_finding_ids:
+		repeated = open_followup_for(finding)
+		if repeated is not None:
+			# The same finding under a new id: it is the open follow-up's.
+			adopted_ids[id(finding)] = (finding_id, repeated[0])
+			finding["finding_id"] = finding_id = repeated[1]
 	if finding_id in existing_finding_ids:
 		skipped_existing_count += 1
 		continue
@@ -3555,6 +3641,7 @@ comment_lines = [
 	f"- New follow-up issues planned this run: {(1 if planned_followups else 0) if consolidate_active else len(planned_followups)}",
 	f"- Findings skipped because a marked follow-up issue already exists: {skipped_existing_count}",
 	*([f"- Follow-up mode: consolidated ({len(planned_followups)} findings in one issue)"] if consolidate_active and planned_followups else []),
+	*([f"- Of those, findings reported under a new id that repeat an open follow-up (same file and category, within {similar_line_window} lines): {len(adopted_ids)}"] if adopted_ids else []),
 ]
 
 if findings:
@@ -3564,6 +3651,7 @@ if findings:
 			[
 				f"{idx}. **[{finding['severity']} | {finding['confidence']}/10]** `{finding['file']}:{finding['line']}` — `{finding['owasp_or_stride_category']}`",
 				f"   - Finding ID: `{finding['finding_id']}`",
+				*([f"   - Reported this run as `{adopted_ids[id(finding)][0]}`; it repeats open follow-up #{adopted_ids[id(finding)][1]} (same file and category), so that issue's finding id is used and nothing new is filed."] if id(finding) in adopted_ids else []),
 				f"   - Exploit scenario: {finding['exploit_scenario']}",
 				f"   - Recommendation: {finding['recommendation']}",
 			]
@@ -3719,13 +3807,18 @@ if consolidate_active:
 		followup_create_count = 1
 
 followup_index_path.write_text("".join(index_lines), encoding="utf-8")
+# Two findings that repeat one open follow-up carry the same id. The count
+# is the number of distinct ids, because the single-issue security pass
+# (review_single_issue_security_pass.sh report) accepts the ids only when the
+# array has exactly `findings=` unique entries.
+surviving_finding_ids = list(dict.fromkeys(finding["finding_id"] for finding in findings))
 finding_ids_b64 = base64.b64encode(
-	json.dumps([finding["finding_id"] for finding in findings], ensure_ascii=True).encode("ascii")
+	json.dumps(surviving_finding_ids, ensure_ascii=True).encode("ascii")
 ).decode("ascii")
 followup_summary_env_path.write_text(
 	"\n".join(
 		[
-			f"SURVIVING_FINDINGS_COUNT={shlex.quote(str(len(findings)))}",
+			f"SURVIVING_FINDINGS_COUNT={shlex.quote(str(len(surviving_finding_ids)))}",
 			f"SURVIVING_FINDING_IDS_B64={shlex.quote(finding_ids_b64)}",
 			f"FOLLOWUP_CREATE_COUNT={shlex.quote(str(followup_create_count))}",
 		]

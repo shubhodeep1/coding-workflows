@@ -40,7 +40,40 @@ if args[:3] == ["api", "-X", "POST"] and args[3].endswith("/dispatches"):
     state.setdefault("heal_dispatches", []).append(body)
     respond({})
 if args[:1] == ["api"]:
-    path = args[1]
+    rest = args[1:]
+    method = "GET"
+    if rest[:1] == ["-X"]:
+        method = rest[1]
+        rest = rest[2:]
+    path = rest[0]
+    fields = dict(f.split("=", 1) for f in rest[1:] if "=" in f and not f.startswith("-"))
+    if path == "user":
+        if state.get("user_error"):
+            save(); sys.stderr.write("HTTP 403\n"); sys.exit(1)
+        save(); sys.stdout.write(state.get("login", "pipeline-bot") + "\n"); sys.exit(0)
+    if path == "search/issues":
+        if state.get("search_error"):
+            save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
+        query = fields.get("q", "")
+        state.setdefault("search_queries", []).append(query)
+        kind = "pr" if "is:pull-request" in query else "issue"
+        items = [i for i in state.get("fixtures", []) if ("pull_request" in i) == (kind == "pr")]
+        if not state.get("search_ignores_qualifiers"):
+            items = [i for i in items if ("author:" + i["user"]["login"]) in query.split()]
+            items = [i for i in items if not any(("-label:" + l["name"]) in query.split() for l in i.get("labels", []))]
+        respond({"items": items})
+    if method == "PATCH":
+        if path.rsplit("/", 1)[-1] in [str(n) for n in state.get("close_fails", [])]:
+            save(); sys.stderr.write("HTTP 422\n"); sys.exit(1)
+        state.setdefault("closed", []).append([path, fields])
+        respond({})
+    if path.endswith("/comments"):
+        state.setdefault("comments", []).append([path, fields.get("body", "")])
+        respond({})
+    if "/actions/runs?status=queued" in path:
+        if state.get("queued_error"):
+            save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
+        respond({"total_count": state.get("queued_runs", 0), "workflow_runs": []})
     if "/git/ref/heads/" in path:
         respond({"object": {"type": "commit", "sha": state["branch_tip"]}})
     if path.endswith("/git/ref/tags/stable"):
@@ -571,3 +604,225 @@ def test_stale_reported_when_the_tip_only_has_cancelled_gate_runs() -> None:
 	assert [r["blocker_reason"] for r in reports] == ["stable_release_stale"]
 	assert "/actions/runs/993" in reports[0]["blocker_evidence"]
 	assert "conclusion=cancelled" in reports[0]["blocker_evidence"]
+
+
+# Runner-queue back-off and fixture cleanup before a retry.
+
+GATE_RUN = 43934729786
+
+
+def _queue_failed_gate(run_id: int = GATE_RUN, conclusion: str = "failure", branch: str = "stable", sha: str = TIP, hours_ago: float = 3) -> dict:
+	ended = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
+	started = ended - timedelta(hours=3)
+	return {
+		"id": run_id,
+		"status": "completed",
+		"conclusion": conclusion,
+		"head_sha": sha,
+		"head_branch": branch,
+		"created_at": started.strftime("%Y-%m-%dT%H:%M:%SZ"),
+		"updated_at": ended.strftime("%Y-%m-%dT%H:%M:%SZ"),
+	}
+
+
+def _api_paths(state: dict) -> list[str]:
+	return [" ".join(call) for call in state.get("calls", []) if call[:1] == ["api"]]
+
+
+def test_retry_waits_while_the_queue_is_deep_after_a_recent_failed_gate() -> None:
+	for conclusion in ("failure", "timed_out"):
+		state = _state(tag_commit="3" * 40, runs=[_queue_failed_gate(conclusion=conclusion)], queued_runs=375)
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, final = _run(Path(tmp), state)
+		assert proc.returncode == 0, proc.stderr
+		assert f"AUTO_RELEASE_SKIPPED reason=runner_queue_deep sha={TIP} queued=375 max=100 last_run={GATE_RUN} last_age_hours=3 window_hours=24" in proc.stdout
+		assert not final.get("dispatches")
+		assert "dispatched=false" in final["github_output"]
+
+
+def test_retry_goes_ahead_once_the_queue_has_drained() -> None:
+	state = _state(tag_commit="3" * 40, runs=[_queue_failed_gate()], queued_runs=99)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state)
+	assert proc.returncode == 0, proc.stderr
+	assert f"AUTO_RELEASE_QUEUE_CHECK outcome=clear queued=99 max=100 last_run={GATE_RUN} last_age_hours=3" in proc.stdout
+	assert len(final["dispatches"]) == 1
+
+
+def test_failure_older_than_the_window_gets_one_cycle_whatever_the_queue() -> None:
+	# A deep queue delays a release by at most the window; it never holds it.
+	state = _state(tag_commit="3" * 40, runs=[_queue_failed_gate(hours_ago=25)], queued_runs=375)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state)
+	assert proc.returncode == 0, proc.stderr
+	assert f"AUTO_RELEASE_QUEUE_CHECK outcome=not_recent last_run={GATE_RUN} last_age_hours=25 window_hours=24" in proc.stdout
+	assert not any("status=queued" in path for path in _api_paths(final))
+	assert len(final["dispatches"]) == 1
+
+
+def test_failed_gate_without_a_readable_end_time_does_not_hold_the_release() -> None:
+	run = _queue_failed_gate()
+	del run["updated_at"]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[run], queued_runs=375))
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTO_RELEASE_QUEUE_CHECK outcome=not_recent" in proc.stdout
+	assert len(final["dispatches"]) == 1
+
+
+def test_queue_back_off_reads_nothing_when_the_last_gate_did_not_fail() -> None:
+	for runs in ([], [_queue_failed_gate(conclusion="success")], [_queue_failed_gate(conclusion="cancelled")], [_queue_failed_gate(branch="main")]):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, final = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs, queued_runs=900))
+		assert proc.returncode == 0, proc.stderr
+		assert not any("status=queued" in path for path in _api_paths(final)), runs
+		assert len(final["dispatches"]) == 1, runs
+
+
+def test_newest_completed_stable_gate_decides_the_back_off() -> None:
+	# A success after the failure means the queue problem is over; a cancelled
+	# run after it decides nothing, so the failure before it still counts.
+	failed = _queue_failed_gate(hours_ago=10)
+	for later, held in (("success", False), ("cancelled", True)):
+		runs = [failed, _queue_failed_gate(run_id=GATE_RUN + 5, conclusion=later, hours_ago=1)]
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, final = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs, queued_runs=900))
+		assert proc.returncode == 0, proc.stderr
+		assert ("reason=runner_queue_deep" in proc.stdout) is held, later
+		assert bool(final.get("dispatches")) is not held, later
+
+
+def test_queue_back_off_fails_open_and_can_be_disabled() -> None:
+	base = {"tag_commit": "3" * 40, "runs": [_queue_failed_gate()], "queued_runs": 375}
+	for overrides, env, expected, dispatched in (
+		({"queued_error": True}, None, f"AUTO_RELEASE_QUEUE_CHECK outcome=read_failed lookup=queued_runs last_run={GATE_RUN}", True),
+		({}, {"AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS": "0"}, f"AUTO_RELEASE_DISPATCHED sha={TIP}", True),
+		({}, {"AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS": "0"}, "AUTO_RELEASE_QUEUE_CHECK outcome=not_recent", True),
+		({}, {"AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS": "many"}, "AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS is not a non-negative integer of at most 6 digits; using 100.", False),
+		({}, {"AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS": "soon"}, "AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS is not a non-negative integer of at most 5 digits; using 24.", False),
+	):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, final = _run(Path(tmp), _state(**base, **overrides), env=env)
+		assert proc.returncode == 0, proc.stderr
+		assert expected in proc.stdout, (overrides, env)
+		assert bool(final.get("dispatches")) is dispatched, (overrides, env)
+		assert ("reason=runner_queue_deep" in proc.stdout) is not dispatched, (overrides, env)
+
+
+def _fixture(number: int, title: str, login: str = "pipeline-bot", pr: bool = False, labels: tuple[str, ...] = ()) -> dict:
+	item: dict = {"number": number, "title": title, "user": {"login": login}, "labels": [{"name": name} for name in labels]}
+	if pr:
+		item["pull_request"] = {"url": "x"}
+	return item
+
+
+def _fixtures() -> list[dict]:
+	return [
+		_fixture(101, f"[E2E Smoke Test] Update smoke-test canary (run {GATE_RUN})"),
+		_fixture(102, f"[E2E Smoke Test] Review-Blocked Simulation (run {GATE_RUN})", pr=True),
+		_fixture(103, f"[E2E Orchestrate Smoke {GATE_RUN}] child task"),
+		# Not closed: another author, a run this listing does not show as
+		# finished, a project the poller owns, no run id, not a fixture title,
+		# and the pipeline's own PR for a fixture issue (the sweep closes it).
+		_fixture(104, f"[E2E Smoke Test] hand-written (run {GATE_RUN})", login="someone-else"),
+		_fixture(105, "[E2E Smoke Test] Update smoke-test canary (run 55555555555)"),
+		_fixture(106, f"[E2E Orchestrate Smoke {GATE_RUN}] project", labels=("ai:orchestrator-tracking",)),
+		_fixture(107, f"[E2E Orchestrate Smoke {GATE_RUN}] wave issue", labels=("ai:orchestrator-managed",)),
+		_fixture(108, "[E2E Smoke Test] no run id"),
+		_fixture(109, f"Release gate: mentions [E2E Smoke Test] (run {GATE_RUN})"),
+		_fixture(110, "AI implementation for issue #101", pr=True, labels=("e2e-smoke-test",)),
+	]
+
+
+def test_retry_closes_the_previous_cycles_fixtures_before_dispatching() -> None:
+	# search_ignores_qualifiers: the script's own filters must hold even when
+	# the search returns rows its qualifiers should have excluded.
+	for ignores in (False, True):
+		state = _state(tag_commit="3" * 40, runs=[_queue_failed_gate()], fixtures=_fixtures(), search_ignores_qualifiers=ignores)
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, final = _run(Path(tmp), state)
+		assert proc.returncode == 0, proc.stderr
+		assert final["closed"] == [
+			["repos/owner/repo/issues/101", {"state": "closed", "state_reason": "not_planned"}],
+			["repos/owner/repo/issues/103", {"state": "closed", "state_reason": "not_planned"}],
+			["repos/owner/repo/pulls/102", {"state": "closed"}],
+		], ignores
+		# No comment: issue_comment starts eleven workflows.
+		assert not final.get("comments"), ignores
+		assert "AUTO_RELEASE_FIXTURE_CLEANUP outcome=done closed=3 failed=0 skipped=0" in proc.stdout
+		assert f"AUTO_RELEASE_FIXTURE_CLEANUP outcome=closed number=102 type=pr gate_run={GATE_RUN}" in proc.stdout
+		for query in final["search_queries"]:
+			assert "author:pipeline-bot" in query and "-label:ai:orchestrator-tracking" in query and "-label:ai:orchestrator-managed" in query
+		# The cleanup runs before the dispatch, and the dispatch still happens.
+		calls = [" ".join(call) for call in final["calls"]]
+		assert max(i for i, call in enumerate(calls) if "PATCH" in call) < next(i for i, call in enumerate(calls) if call.startswith("workflow run"))
+		assert len(final["dispatches"]) == 1
+
+
+def test_fixtures_are_closed_even_when_the_tick_then_waits_for_the_queue() -> None:
+	state = _state(tag_commit="3" * 40, runs=[_queue_failed_gate()], fixtures=_fixtures(), queued_runs=375)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state)
+	assert proc.returncode == 0, proc.stderr
+	assert len(final["closed"]) == 3
+	assert "AUTO_RELEASE_SKIPPED reason=runner_queue_deep" in proc.stdout
+	assert not final.get("dispatches")
+
+
+def test_fixtures_of_gate_runs_on_other_branches_and_of_cancelled_runs_are_closed() -> None:
+	for run in (_queue_failed_gate(branch="main"), _queue_failed_gate(conclusion="cancelled")):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, final = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[run], fixtures=_fixtures()))
+		assert proc.returncode == 0, proc.stderr
+		assert len(final["closed"]) == 3, run
+		assert len(final["dispatches"]) == 1, run
+
+
+def test_fixture_cleanup_is_skipped_when_no_gate_run_failed() -> None:
+	for runs in ([], [_queue_failed_gate(conclusion="success")]):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, final = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs, fixtures=_fixtures()))
+		assert proc.returncode == 0, proc.stderr
+		assert "AUTO_RELEASE_FIXTURE_CLEANUP" not in proc.stdout, runs
+		assert not any("search/issues" in path or path == "api user --jq .login // \"\"" for path in _api_paths(final)), runs
+		assert not final.get("closed"), runs
+		assert len(final["dispatches"]) == 1, runs
+
+
+def test_fixture_cleanup_does_not_run_while_a_gate_is_in_flight() -> None:
+	# A running gate still owns its fixtures: the in-flight skip comes before
+	# the cleanup, so even a failed earlier run's fixtures wait for a later tick.
+	running = {**_queue_failed_gate(run_id=GATE_RUN + 5), "status": "in_progress", "conclusion": None}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[running, _queue_failed_gate()], fixtures=_fixtures()))
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight" in proc.stdout
+	assert not any("search/issues" in path for path in _api_paths(final))
+	assert not final.get("closed")
+	assert not final.get("dispatches")
+
+
+def test_fixture_cleanup_never_blocks_the_dispatch() -> None:
+	base = {"tag_commit": "3" * 40, "runs": [_queue_failed_gate(conclusion="cancelled")], "fixtures": _fixtures()}
+	for overrides, env, expected, closed in (
+		({"search_error": True}, None, "AUTO_RELEASE_FIXTURE_CLEANUP outcome=read_failed lookup=search kind=issue", 0),
+		({"user_error": True}, None, "AUTO_RELEASE_FIXTURE_CLEANUP outcome=read_failed lookup=user", 0),
+		({"close_fails": [101]}, None, f"AUTO_RELEASE_FIXTURE_CLEANUP outcome=close_failed number=101 type=issue gate_run={GATE_RUN}", 2),
+		({}, {"AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX": "1"}, "AUTO_RELEASE_FIXTURE_CLEANUP outcome=done closed=1 failed=0 skipped=2", 1),
+		({}, {"AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_ENABLED": "false"}, f"AUTO_RELEASE_DISPATCHED sha={TIP}", 0),
+	):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, final = _run(Path(tmp), _state(**base, **overrides), env=env)
+		assert proc.returncode == 0, proc.stderr
+		assert expected in proc.stdout, (overrides, env, proc.stdout)
+		assert len(final.get("closed", [])) == closed, (overrides, env)
+		assert len(final["dispatches"]) == 1, (overrides, env)
+
+
+def test_workflow_passes_the_back_off_and_cleanup_knobs() -> None:
+	wf = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+	run_step = next(s for s in wf["jobs"]["release-check"]["steps"] if "run" in s)
+	assert run_step["env"]["AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS"] == "${{ vars.AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS || '100' }}"
+	assert run_step["env"]["AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS"] == "${{ vars.AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS || '24' }}"
+	assert run_step["env"]["AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_ENABLED"] == "${{ vars.AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_ENABLED || 'true' }}"
+	assert run_step["env"]["AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX"] == "${{ vars.AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX || '30' }}"
