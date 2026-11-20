@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR raises the release gates' `validate-scripts` budget from 90 to 135 minutes; the documented budget in agents.md must reflect this (agents.md:5185 still says \"Its budget is 90 minutes since #7773\")\n  expected_change_site: an `agents.d/<issue-or-pr>-<slug>.md` fragment targeting the section containing agents.md line 5185 (or agents.md:5185 itself, per the reviewers who proposed a direct correction)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: the diff touches only .github/workflows/mark-stable.yml, .github/workflows/test-and-mark-stable.yml, changelog.d/9819-release-validate-scripts-timeout-135.md and tests/test_ci_poll_test_sharding.py; no agents.d/ fragment is added; agents.md:5185 still reads \"Its budget is 90 minutes since #7773\". Severity NIT across all reviewers.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: The PR raises the `validate-scripts` budget from 90 to 135 minutes in both release workflows. `agents.md` line 5185 still says \"Its budget is 90 minutes since #7773 ...\", so the documented budget contradicts the shipped one.\nExpected change site: an `agents.d/<issue-or-pr>-<slug>.md` fragment using `<!-- agents: section=\"<the heading that contains line 5185>\" -->` (not a direct agents.md edit, per \u00a725), noting the budget is 135 minutes since this PR, citing run 44689548109.\nEvidence of absence: the diff touches only the two workflows, `changelog.d/9819-release-validate-scripts-timeout-135.md` and `tests/test_ci_poll_test_sharding.py`; no `agents.d/` fragment is added; `agents.md:5185` still reads \"Its budget is 90 minutes\".\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n(All other lenses: NONE.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: The PR raises the release gates' validate-scripts budget to 135 minutes. The repository `agents.md` documentation contract needs to reflect this change.\nExpected change site: `agents.md`, specifically the budget history in the section documenting the `validate-scripts` job.\nEvidence of absence: The PR changes the timeout values in `.github/workflows/mark-stable.yml` and `.github/workflows/test-and-mark-stable.yml` and updates `tests/test_ci_poll_test_sharding.py`, but adds no `agents.d/` fragment; `agents.md` still states the budget is 90 minutes.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n(All other lenses: NONE.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"Raise the release gates' validate-scripts budget from 90 to 135 minutes.\"\nExpected change site: `agents.md`, the release-gate budget history in the orchestrate-poll section, or a corresponding `agents.d/` fragment.\nEvidence of absence: Both workflow timeouts are now 135 minutes, but `agents.md` line 5185 still states \"Its budget is 90 minutes since #7773,\" leaving the documented budget inconsistent.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n(All other lenses: NONE.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: The PR raises the release gates' `validate-scripts` budget from 90 to 135 minutes (PR Description, \"Changes\" section). agents.md:5185 states \"Its budget is 90 minutes since #7773, because the job hit its 60-minute cap and was cancelled mid 'Unit tests' in test-and-mark-stable run 39526632477 (orchestrate-poll alone took 39.5 minutes).\" After merge, both workflows ship `timeout-minutes: 135` while the agents file says 90.\nExpected change site: agents.md, the sentence at line 5185 beginning \"Its budget is 90 minutes since #7773\" (extend to 135 since this PR, citing run 44689548109), or an agents.d/<issue>-<slug>.md fragment appended under the same section.\nEvidence of absence: The PR diff contains exactly 4 files (.github/workflows/mark-stable.yml:284-294, .github/workflows/test-and-mark-stable.yml:3434-3444, changelog.d/9819-release-validate-scripts-timeout-135.md:1-12, tests/test_ci_poll_test_sharding.py:480); no hunk touches agents.md, no agents.d/ fragment is added; agents.md:5185 still reads \"Its budget is 90 minutes since #7773\". README.md:2787 and CHANGELOG.md:1913, 5963-5969 are unaffected/historical.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n(All other lenses: NONE.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a3eb7e5ce91b73fbe644bb2e6dc7b3635b2d0cedfa51aa35799adff716def501",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9838,
+    "run_id": "44708413715",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44708413715",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120092959_740e01dad4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9838,
+    "run_id": "44708413715"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T09:29:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
