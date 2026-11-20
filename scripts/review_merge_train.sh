@@ -1769,6 +1769,9 @@ _mt_merge_lease_tick()
 			[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric released "${tick_base}" "${MERGE_LEASE_PR}" tick "${tick_reason}" "$(_merge_lease_metric_hold_seconds "${MERGE_LEASE_ACQUIRED:-0}" 2>/dev/null)" "${tick_waiters}" || true
 			MERGE_LEASE_STATE="released"
 		fi
+		# The rows keep _mt_list_open_prs's `head` and `head_repo` fields: they
+		# feed the lease queue's forward-merge priority (merge-lease-parallel
+		# Phase 3, Refs #9781). Do not trim them from the projection.
 		tick_base_prs="$(printf '%s\n' "${tick_prs_json}" | jq -sc --arg b "${tick_base}" '[ .[] | select(type == "object" and .base == $b) ]' 2>/dev/null || echo '[]')"
 		tick_excluded=""
 		tick_skipped_any=0

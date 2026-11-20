@@ -3355,3 +3355,38 @@ def test_merge_lease_tick_phase_2_is_guarded_by_the_staged_library():
 	assert 'if [ "${tick_p2_lib}" = 1 ] && _merge_lease_revoke_enabled; then' in body
 	assert "local tick_max_candidates=10" in body
 	assert '_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=skipped reason=${tick_skip_why}"' in body
+
+
+def _merge_lease_queue_first_from_train_rows(listing: list[dict], extra_env: dict[str, str] | None = None) -> str:
+	"""Run the _mt_list_open_prs --jq program over a REST listing, then the
+	staged library's _merge_lease_queue_first over the slurped rows."""
+	text = SCRIPT.read_text()
+	start = text.index("_mt_list_open_prs() {")
+	body = text[start:text.index("\n}\n", start)]
+	program = re.search(r"--jq '([^']*)'", body).group(1)
+	assert "head: .head.ref" in program
+	assert "head_repo: (.head.repo.full_name" in program
+	res = subprocess.run(["jq", "-r", program], input=json.dumps(listing), capture_output=True, text=True, check=True)
+	rows = "[" + ",".join(res.stdout.splitlines()) + "]"
+	env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "GITHUB_REPOSITORY": "o/r", "ROWS": rows, **(extra_env or {})}
+	lib = REPO_ROOT / "scripts" / "pr_checks_lib.sh"
+	out = subprocess.run(["bash", "-c", f'source {str(lib)!r}; _merge_lease_queue_first "${{ROWS}}" ""'],
+		env=env, capture_output=True, text=True, check=True)
+	return out.stdout
+
+
+def test_merge_lease_queue_ranks_forward_merge_rows_from_the_train_listing():
+	"""Merge-lease Phase 3 (Refs #9781): the tick's rows carry the head ref and
+	head repository, so a same-repository forward-merge waiter orders first."""
+	def pr(num: int, ref: str, repo: str = "o/r") -> dict:
+		return {"number": num, "head": {"ref": ref, "sha": f"{num:040d}", "repo": {"full_name": repo}},
+			"created_at": "2026-11-19T00:00:00Z", "base": {"ref": "main"}, "draft": False,
+			"labels": [{"name": "ai:merge-lease-wait"}], "title": ""}
+	listing = [pr(5, "ai/issue-5"), pr(12, "auto/forward-merge-stable-1-1")]
+	assert _merge_lease_queue_first_from_train_rows(listing) == "12"
+	# Unchanged ordering when no forward-merge PR waits.
+	assert _merge_lease_queue_first_from_train_rows([pr(5, "ai/issue-5"), pr(12, "ai/issue-12")]) == "5"
+	# A fork head with a forward-merge name gets no priority.
+	assert _merge_lease_queue_first_from_train_rows([pr(5, "ai/issue-5"), pr(12, "auto/forward-merge-stable-1-1", "x/r")]) == "5"
+	# The kill switch restores number order.
+	assert _merge_lease_queue_first_from_train_rows(listing, {"MERGE_LEASE_PRIORITY_HEAD_PREFIXES": "none"}) == "5"
