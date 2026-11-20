@@ -5,13 +5,27 @@
   "entry_id": "processed_command_9814_7026980216_approved",
   "issue_number": 9814,
   "metadata": {
+    "branch": "ai/issue-9814",
+    "changed_files": [
+      "agents.d/merge-lease-parallel-p3-forward-merge-priority.md",
+      "changelog.d/merge-lease-parallel-p3-forward-merge-priority.md",
+      "scripts/pr_checks_lib.sh",
+      "scripts/review_merge_train.sh",
+      "tests/test_merge_lease.py",
+      "tests/test_review_merge_train.py"
+    ],
+    "issue_number": 9814,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9814",
+    "pr_number": 9817,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9817",
+    "run_attempt": "1",
+    "run_id": "44650071259",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/44650071259"
   },
   "run_attempt": 1,
   "run_id": "44650071259",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-20T01:01:07Z",
+  "status": "completed",
+  "timestamp": "2026-11-20T01:52:52Z",
   "workflow": "implement"
 }
