@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Plan for issue #9824: replace the content of `tests/e2e_smoke_canary.txt`\n\nPlanning ref: `main` @ `692bea9735514dadf58c7e0088ec329e2e9ea934`. The integration branch mismatch flag reads `unknown`, not `true`, so the plan goes ahead.\n\nThe file holds two lines today: `status: ok` and `decompose-run: 41445772297`.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: test tests/test_e2e_editor_smoke_canary.py\nACCEPTANCE: post-merge none: this is a canary data file and no post-merge workflow depends on its content\n\n## Functions or modules to implement\nNone. The change is data only. Overwrite the file so it is exactly these three lines, each ending in `\\n`:\n```\nstatus: ok\nrun_id: alt-44689548109\nupdated-by: ai-pipeline\n```\nUse LF line endings and one newline at the end of the file, which matches how the file ends today. The `decompose-run:` line is removed.\n\n## Data structures affected\nOnly the content of the canary file.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Line endings and trailing newline\n- Chosen: LF line endings with one trailing newline, the same as the current file.\n- Alternatives considered: leaving out the final newline.\n- Why: it keeps the file's existing convention. The issue asks for \"exactly these three lines\", and a POSIX text file of three lines ends each one with a newline.\n\n## Security considerations\nNo trust boundary, endpoint or external input is touched. The file holds no secrets.\n\n## Potential risks or edge cases\n- `tests/test_e2e_editor_smoke_canary.py` compares the canary file byte for byte against a run ID it is given. It appears to apply only to smoke runs where that input is set, so normal CI should not be affected.\n- Several other tests mention this file by name. None of them should depend on the old `decompose-run` line, but the implementer should confirm this when CI runs.\n\n## Testing considerations\n- Confirm the content with `cat -A tests/e2e_smoke_canary.txt`. Expect exactly three lines, each ending in `$`.\n- Run `pytest tests/test_e2e_editor_smoke_canary.py`.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies one data file and its exact content. Following \u00a76 Core Priorities (Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed), the complete change is the minimal one, so there is nothing to expand.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- AI_ACCEPTANCE_V1 {\"checks\":[],\"errors\":[],\"post_merge\":null,\"post_merge_none\":\"this is a canary data file and no post-merge workflow depends on its content\",\"schema\":\"acceptance.v1\",\"source\":\"plan\",\"state\":\"valid\",\"tests\":[{\"name\":\"\",\"path\":\"tests/test_e2e_editor_smoke_canary.py\",\"red_on_base\":false}]} -->\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "090745d9e5050ec20e40fde21d42af222dd9d66e99bbbe0b4ad6459b08f1cf81",
+  "lineage": {
+    "issue_number": 9824,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44691703856",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44691703856",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9824"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261120070710_dc23f1c459",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9824,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44691703856"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9824",
+  "timestamps": {
+    "created_at": "2026-11-20T07:07:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
