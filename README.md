@@ -2023,6 +2023,10 @@ the way to a fix PR without human action.
   read, base-keyed filings only) and files nothing when one already carries the
   fingerprint (`CHECK_TRIAGE skip reason=base_triage_tracked … stage=post`); a
   failed read files as before (`base_keyed recheck=read_failed outcome=file`).
+  If the base-keyed metadata handed to the diagnose stage fails its re-check
+  (unsafe ref, fingerprint mismatch, a routing line beside it, or historical
+  mode), nothing is filed: the run logs `CHECK_TRIAGE error
+  base_keyed_metadata_invalid`, sends one Telegram CRITICAL and fails.
 - **Open-issue cap (Refs #9674):** once `CHECK_FAILURE_TRIAGE_MAX_OPEN_ISSUES`
   (default 5, `0` = no cap) `ai:check-triage` issues are open, the collect stage
   files nothing, logs `CHECK_TRIAGE skip reason=open_issue_cap open=<n> cap=<cap>
