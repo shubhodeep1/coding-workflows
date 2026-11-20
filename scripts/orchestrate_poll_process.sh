@@ -2691,7 +2691,14 @@ _standalone_attempt_merge_required_checks()
 	PR_CHECKS_LAST_CI_STATE=""
 	PR_FINAL_CI_OUTCOME=""
 	PR_FINAL_CI_REASON=""
-	PR_CHECKS_HEAD_REF="${head_ref}" _pr_wait_for_required_checks "${pr}" "${head_sha}" "${base_ref}" 0 || wait_rc=$?
+	# An empty head_ref means the caller could not confirm a same-repository
+	# head (fork head, or a deleted fork whose head.repo is null, which
+	# _pr_ensure_final_ci's own fork check lets through). Evaluate the
+	# checks without any final-CI dispatch then; a missing check refuses.
+	local merge_final_ci_wf="${REVIEW_FINAL_CI_WORKFLOW:-}"
+	[ -n "${head_ref}" ] || merge_final_ci_wf=""
+	PR_CHECKS_HEAD_REF="${head_ref}" REVIEW_FINAL_CI_WORKFLOW="${merge_final_ci_wf}" \
+		_pr_wait_for_required_checks "${pr}" "${head_sha}" "${base_ref}" 0 || wait_rc=$?
 	if [ "${wait_rc}" -ne 0 ]; then
 		STALL_MERGE_REFUSAL_REASON="checks_incomplete"
 		if [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "timeout" ]; then
@@ -26870,7 +26877,8 @@ STALL_EOF
           # The resolver binds by head-ref name without checking .head.repo,
           # and _pr_ensure_final_ci rejects a fork head only when it reads
           # the PR itself. Pass the ref only for a same-repository head;
-          # otherwise leave it empty so the helper's fork_head check runs.
+          # otherwise leave it empty, which makes the merge chain skip the
+          # final-CI dispatch (a null head.repo passes the helper's check).
           local merge_head_repo
           merge_head_repo="$(printf '%s' "${merge_pr_json}" | jq -r 'if type == "object" then (.head.repo.full_name? // "") else "" end' 2>/dev/null | tail -n1)"
           if [ -z "${merge_head_repo}" ] || [ "${merge_head_repo}" != "${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" ]; then

@@ -32489,6 +32489,7 @@ def _run_stall_merge_required_checks(
 	runs_pending: str = "0",
 	ci_state: str = "success",
 	merge_rc: int = 0,
+	head_ref: str = "ai/issue-501",
 ) -> tuple[str, list[str]]:
 	source = POLLER_SCRIPT.read_text(encoding="utf-8")
 	helper = _extract_bash_function(source, "_standalone_attempt_merge_required_checks()\n{")
@@ -32512,7 +32513,7 @@ def _run_stall_merge_required_checks(
 		+ helper
 		+ "rc=0\n"
 		+ "_standalone_attempt_merge_required_checks 501 416 "
-		+ " ".join(q(v) for v in (state, mergeable, head_sha, "main", "ai/issue-501"))
+		+ " ".join(q(v) for v in (state, mergeable, head_sha, "main", head_ref))
 		+ " || rc=$?\n"
 		+ 'echo "rc=${rc} reason=${STALL_MERGE_REFUSAL_REASON} in_flight=${STALL_MERGE_CHECKS_IN_FLIGHT}"\n'
 	)
@@ -32560,6 +32561,20 @@ def test_standalone_attempt_merge_required_checks_merges_only_on_rc0(tmp_path):
 	result, calls = _run_stall_merge_required_checks(tmp_path, wait_rc=1, wait_outcome="failed", ci_state="failure")
 	assert result == "rc=1 reason=checks_incomplete in_flight=false"
 	assert not any(call.startswith("merge ") for call in calls)
+
+
+def test_standalone_attempt_merge_required_checks_no_dispatch_without_same_repo_head_ref(tmp_path):
+	# Empty head_ref (fork or deleted-fork head): the wait runs with no final-CI
+	# workflow, so _pr_ensure_final_ci (whose fork check misses a null
+	# head.repo) is never reached; a missing check still refuses the merge.
+	result, calls = _run_stall_merge_required_checks(
+		tmp_path, head_ref="", wait_rc=1, wait_outcome="timeout", ci_state="absent",
+	)
+	assert result == "rc=1 reason=checks_incomplete in_flight=false"
+	assert calls == [
+		f"fresh 416 {_STALL_MERGE_SHA} main",
+		f"wait 416 {_STALL_MERGE_SHA} main 0 head_ref= wf=",
+	]
 
 
 def test_standalone_attempt_merge_required_checks_dispatch_in_flight_refuses_without_merge(tmp_path):
@@ -32666,6 +32681,8 @@ def test_orchestrate_poll_steps_carry_stall_merge_final_ci_env():
 	lines = (
 		"          STALL_MERGE_REQUIRED_CHECKS_ENABLED: ${{ vars.STALL_MERGE_REQUIRED_CHECKS_ENABLED || 'true' }}\n",
 		"          REVIEW_FINAL_CI_WORKFLOW: ${{ github.repository == 'shubhodeep1/coding-workflows' && 'ci.yml' || '' }}\n",
+		"          AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}\n",
+		"          AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}\n",
 	)
 	for step in ("Process each tracking issue", "Run standalone stall recovery without active projects"):
 		start = wf.index(f"      - name: {step}\n")
