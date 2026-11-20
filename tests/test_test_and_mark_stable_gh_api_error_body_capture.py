@@ -107,10 +107,13 @@ def test_clarify_negative_create_keeps_real_run_id():
 	assert outputs["pre_clarify_run_id"] == "4242"
 
 
-def test_alt_model_create_falls_back_to_zero_on_error_body():
+def test_alt_model_create_leaves_baseline_empty_on_error_body():
+	# Stable keeps #9800's (#9797) rule for the alt-model baselines: a failed
+	# read leaves pre_<wf>_run_id empty, never 0, so the capture step skips
+	# instead of matching an older, unrelated run with `id > 0`.
 	outputs = _run_step(_step("e2e-alt-model-test", "create"), "error")
 	for wf in ("clarify", "plan", "implement", "review_autofix"):
-		assert outputs[f"pre_{wf}_run_id"] == "0"
+		assert outputs[f"pre_{wf}_run_id"] == ""
 	assert outputs["issue_number"] == "77"
 
 
