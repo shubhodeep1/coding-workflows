@@ -21247,6 +21247,26 @@ STALL_EOF
       STALL_REISSUE_EXTRA_GUIDANCE_ISSUE=""
       [ -n "${_stall_reissue_close_msg}" ] || _stall_reissue_close_msg="Closed by orchestrator stall recovery — issue #${issue_num} was stuck in '${phase}' for ${stall_minutes}m. A replacement issue will be created."
 
+      # Owner hold re-check before the replacement exists (issue #9733).
+      # The pre-action guards fail open when the cached linked-PR payloads
+      # lack draft/title, and once the replacement is created the source
+      # issue is closed even when close_linked_pr leaves a held PR open.
+      # §14 audit: those cached payloads (_fresh_lpr_entry, the wave's
+      # batched linked_pr) are exactly what lacked the fields, so this
+      # reuses the skip arm's REST implementation-PR lookup (1 `gh pr list
+      # --head` + 1 pulls/<n> on the common path) on this rare arm only.
+      # A failed or empty lookup fails open to the legacy flow.
+      if _resolve_issue_implementation_pr "${issue_num}"; then
+        local _reissue_hold_reason=""
+        _reissue_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}")"
+        if [ -n "${_reissue_hold_reason}" ]; then
+          echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${STALL_IMPL_PR_NUM} detail=${_reissue_hold_reason} phase=${phase} action=none requested_action=close_and_reissue source=reissue_precheck"
+          STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue_skipped_pr_ai_hold"
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
+          return 1
+        fi
+      fi
+
       local orig_title orig_body orig_issue_json orig_issue_is_heal orig_issue_is_managed orig_issue_is_check_triage
       orig_issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '{title: (.title // ""), body: (.body // ""), heal: ([.labels[]?.name] | index("ai:workflow-heal") != null), managed: ([.labels[]?.name] | index("ai:orchestrator-managed") != null), check_triage: ([.labels[]?.name] | index("ai:check-triage") != null)}' || echo "")"
       orig_title="$(printf '%s' "${orig_issue_json}" | jq -r '.title // ""' 2>/dev/null || echo "")"
@@ -27541,6 +27561,21 @@ REISSUE_EOF
           new_body="${new_body}"$'\n'"- ${_std_reissue_extra}"
         fi
         [ -n "${_std_reissue_close_msg}" ] || _std_reissue_close_msg="Closed by standalone stall recovery — issue #${issue_num} was stuck in '${phase}' for ${elapsed_minutes}m."
+        # Owner hold re-check before the replacement exists (issue #9733);
+        # same REST lookup and fail-open rule as the managed close_and_reissue
+        # arm in execute_stall_recovery_action. Counts nothing, keeps the clock.
+        if _resolve_issue_implementation_pr "${issue_num}"; then
+          local _std_reissue_hold_reason=""
+          _std_reissue_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}")"
+          if [ -n "${_std_reissue_hold_reason}" ]; then
+            echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${STALL_IMPL_PR_NUM} detail=${_std_reissue_hold_reason} phase=${phase} action=none requested_action=close_and_reissue source=reissue_precheck"
+            STALL_RECOVERY_SHOULD_INCREMENT="false"
+            if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+              write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+            fi
+            continue
+          fi
+        fi
         ensure_label_exists "ai:clarification"
         local -a _heal_reissue_label_args=()
         if [ "${orig_issue_is_heal}" = true ] || printf '%s' "${orig_body}" | grep -q 'workflow-failure-heal:fp=' || printf '%s' "${labels_json:-[]}" | jq -e 'index("ai:workflow-heal") != null' >/dev/null 2>&1; then
