@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: `.github/workflows/ci.yml`, selection and placement of steps moved from `tests-heal-plan-and-validation`.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The workflow comment at lines 1332-1334 says the run's step timings could not be read and the six steps were selected by estimates from other timings and test/subprocess counts, The test comment at `tests/test_ci_poll_test_sharding.py:4446-4447` confirms the selection is estimated, not based on the specified run's step timings, so the diff does not establish that the moved steps were the slowest or that the destination had the most headroom.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, selection and placement of steps moved from `tests-heal-plan-and-validation`.\n  Evidence of absence: The workflow comment at lines 1332-1334 says the run's step timings could not be read and the six steps were selected by estimates from other timings and test/subprocess counts. The test comment at `tests/test_ci_poll_test_sharding.py:4446-4447` confirms the selection is estimated, not based on the specified run's step timings. Thus the diff does not establish that the moved steps were the slowest or that the destination had the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5d4a157d57ffd7466bc0296b6fcbcda12c61247b80772c5aeb90a4b65858ae37",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9702,
+    "run_id": "44722440375",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44722440375",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120114304_5ff1cd97e6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9702,
+    "run_id": "44722440375"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-20T11:43:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
