@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"README.md:311 (orchestrate_poll env table) and README.md:2611 (defaults table) describe ENABLE_STALL_HUMAN_TERMINALIZATION with only the MAX_JUDGE_REPLAY exception. They do not mention the second exception this PR adds: a judge escalate_human is kept, and the issue gets ai:needs-human, when the issue's own implementation PR is closed or merged.\"\n  expected_change_site: README.md (ENABLE_STALL_HUMAN_TERMINALIZATION rows: orchestrate_poll env table and defaults table)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The PR diffs do not include edits to README.md, no README.md hunk is present in `pr_diff.patch` or `last_run_diff.patch`; only `scripts/orchestrate_poll_process.sh`, `tests/test_orchestrate_poll_process.py`, `agents.d/9482-standalone-stall-merged-linked-pr.md`, and `changelog.d/9482-standalone-stall-merged-linked-pr.md` are touched. Both reviewers rated it SEVERITY: NIT and say it was explicitly deferred in earlier autofix cycles because README.md is outside the plan's `files_touched` grant and is tracked separately. The agents.d and changelog.d fragments already document the exception. The reviewers give different README line numbers (README.md:311/2611 vs README.md:341/2622). anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash looked at this gap and skipped it as deferred.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"README.md:311 (orchestrate_poll env table) and README.md:2611 (defaults table) describe ENABLE_STALL_HUMAN_TERMINALIZATION with only the MAX_JUDGE_REPLAY exception. They do not mention the second exception this PR adds: a judge escalate_human is kept, and the issue gets ai:needs-human, when the issue's own implementation PR is closed or merged.\"\n  Expected change site: README.md\n  Evidence of absence: The PR diffs do not include edits to README.md. This requirement was explicitly deferred by the author in previous autofix cycles as it falls outside the original plan's files_touched grant, and is tracked separately.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: the two `ENABLE_STALL_HUMAN_TERMINALIZATION` rows in README.md (orchestrate_poll env table around README.md:341 and the defaults table around README.md:2622) describe only the `MAX_JUDGE_REPLAY` exception and do not mention the new \"implementation PR closed or merged\" exception added by this PR.\n  Expected change site: README.md\n  Evidence of absence: no README.md hunk is present in `pr_diff.patch` or `last_run_diff.patch`; only `scripts/orchestrate_poll_process.sh`, `tests/test_orchestrate_poll_process.py`, `agents.d/9482-standalone-stall-merged-linked-pr.md`, and `changelog.d/9482-standalone-stall-merged-linked-pr.md` are touched. Explicitly deferred: README.md is outside the plan's `files_touched` grant and is tracked as a separate follow-up. The agents.d/changelog.d fragments already document the exception, so no new change is required in this PR.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "638fb246d4f7b4ab37f281674e1b1549b21ba75bbc3484a870249a3b677ab359",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9502,
+    "run_id": "44799098147",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44799098147",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261120192422_e319874e9a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9502,
+    "run_id": "44799098147"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-20T19:24:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
