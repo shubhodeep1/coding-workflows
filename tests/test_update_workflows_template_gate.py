@@ -814,3 +814,16 @@ def test_head_gate_falls_back_to_the_job_token_and_never_fails_the_job(tmp_path:
 	assert result.returncode == 0, result.stderr
 	assert len(_gate_posts(calls)) == 2
 	assert "outcome=skipped reason=post_failed" in result.stdout
+
+
+def test_head_gate_accepts_resend_branch(tmp_path: Path) -> None:
+	# The verify step's own regex copy must accept -r2..-r5 resend branches
+	# like REVIEW_HEAD_GATE_UPDATER_BRANCH_RE, or their gate stays pending (#9483).
+	result, calls = _run_head_gate(tmp_path, pr=_gate_pr(ref=UPDATER_BRANCH + "-r3"))
+	assert result.returncode == 0, result.stderr
+	assert len(_gate_posts(calls)) == 1
+	assert "outcome=posted reason=verified" in result.stdout
+	result, calls = _run_head_gate(tmp_path / "r6", pr=_gate_pr(ref=UPDATER_BRANCH + "-r6"))
+	assert result.returncode == 0, result.stderr
+	assert not _gate_posts(calls)
+	assert "outcome=skipped reason=not_updater_branch" in result.stdout

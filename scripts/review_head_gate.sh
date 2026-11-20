@@ -81,7 +81,7 @@ review_head_gate_withdraw_auto_merge()
 }
 
 # Updater-PR exemption (#9483, AD-1: A). Consumer-updater PRs
-# (auto/update-workflows-<sha12>) are never merged by review: the updater's
+# (auto/update-workflows-<sha12>[-r2..-r5]) are never merged by review: the updater's
 # verify job owns the merge, and review_enable_auto_merge.sh leaves before
 # the review tail's success post, so the gate used to stay `pending` forever
 # (btc_sweeper#264, atlas-bridge.gd#134). Post `success` for the gated head
