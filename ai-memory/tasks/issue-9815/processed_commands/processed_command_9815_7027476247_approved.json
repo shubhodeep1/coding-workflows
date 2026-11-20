@@ -5,13 +5,23 @@
   "entry_id": "processed_command_9815_7027476247_approved",
   "issue_number": 9815,
   "metadata": {
+    "branch": "ai/issue-9815",
+    "changed_files": [
+      "changelog.d/9815-one-sided-delete-resolver-guard-test.md",
+      "tests/test_conflict_one_sided_delete_workflow_path.py"
+    ],
+    "issue_number": 9815,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9815",
+    "pr_number": 9816,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9816",
+    "run_attempt": "1",
+    "run_id": "44653695362",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/44653695362"
   },
   "run_attempt": 1,
   "run_id": "44653695362",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-20T01:31:21Z",
+  "status": "completed",
+  "timestamp": "2026-11-20T01:41:56Z",
   "workflow": "implement"
 }
