@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "Changes to polling behavior commonly touch both `.github/workflows/orchestrate_poll.yml` and `scripts/orchestrate_poll_process.sh`, with focused coverage in the orchestrator tests. When planning a polling change, check whether both workflow integration and processing logic need updates.",
+  "fingerprint": "22e047b9b5393dce7fcbc60eab0c766668b1d886fec9ed4f9f32295c21abf33b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44847816684",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44847816684",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9575",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9706",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9809",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9823",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9844",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9602",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9712",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9811",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9834",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9845"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261121011107_66890f2083",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator polling behavior spans workflow wiring and shared processing code.",
+  "timestamps": {
+    "created_at": "2026-11-21T01:11:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
