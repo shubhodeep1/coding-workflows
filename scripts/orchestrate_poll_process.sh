@@ -27266,7 +27266,9 @@ _Orchestrator: released the \`ai:needs-human\` latch that the staged-support res
 # costs no events read; per PR whose head moved one paginated events read
 # (the poller's caches carry neither the full marker history nor label-event
 # provenance); per release candidate one comments, one events and one
-# `pulls/<n>` re-read (revalidation), one label removal and one comment write. PRs without a
+# `pulls/<n>` re-read (revalidation), one label removal, one comments read
+# after the removal (a latch that raced the removal gets its label back: one
+# label add, no release comment) and one comment write. PRs without a
 # head-bound latch cost only the comments read. Every read failure skips that PR for the tick
 # (fail open: the label stays). NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED=false
 # skips the sweep.
@@ -27279,6 +27281,7 @@ release_head_bound_needs_human_latches() {
   local hl_prs hl_count hl_idx hl_pr hl_labels hl_comments hl_latch hl_latch_idx
   local hl_latch_at hl_latch_login hl_latch_head hl_reason hl_events hl_event
   local hl_pull hl_head hl_release_marker hl_body hl_refreshed_comments hl_refreshed_events hl_refreshed_event hl_refreshed_pull
+  local hl_post_delete_comments
   if ! hl_prs="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues?state=open&labels=ai%3Aneeds-human&per_page=100" \
     | jq -s 'add // [] | map(select(.pull_request != null))' 2>/dev/null)" \
     || ! hl_count="$(printf '%s' "${hl_prs}" | jq 'length' 2>/dev/null)" \
@@ -27416,6 +27419,27 @@ release_head_bound_needs_human_latches() {
     fi
     if ! gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/${hl_pr}/labels/ai:needs-human" >/dev/null 2>&1; then
       echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=label_write_failed latch=${hl_reason}"
+      continue
+    fi
+    # GitHub has no conditional label delete. A writer whose latch comment and
+    # label add both land between the re-reads above and the DELETE added a
+    # label that was already there (no event), so the DELETE removed its hold
+    # and the next tick's listing would never see the PR again. Both writers
+    # comment first, so one comments read after the DELETE sees that latch;
+    # put the label back for it. A read failure keeps the release (fail open).
+    if hl_post_delete_comments="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${hl_pr}/comments?sort=created&direction=asc&per_page=100" | jq -s 'add // []' 2>/dev/null)" \
+      && printf '%s' "${hl_post_delete_comments}" | jq -e --arg at "${hl_latch_at}" --arg pr "${hl_pr}" '
+        any(.[];
+          (.created_at // "") > $at
+          and ((((.user.login // "") | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))))
+          and ((.body // "") | (contains("ai:needs-human") or contains("<!-- ai:workflow-heal-non-retryable:v1 ") or contains("<!-- ai:review-round-cap:v1 -->"))
+            and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
+      if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${hl_pr}/labels" -f "labels[]=ai:needs-human" >/dev/null 2>&1; then
+        echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=relatched_after_release latch=${hl_reason} head=${hl_head:0:12}"
+      else
+        echo "::warning::Removed ai:needs-human on PR #${hl_pr}, then found a newer latch and could not add the label back; a person should re-add it."
+        echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=relatch_failed latch=${hl_reason} head=${hl_head:0:12}"
+      fi
       continue
     fi
     if [ "${hl_reason}" = "non_retryable_head_moved" ]; then

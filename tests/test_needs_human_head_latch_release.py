@@ -100,6 +100,13 @@ FAKE_GH = textwrap.dedent(
 		if "events" in fail:
 			sys.exit(1)
 		out(load_seq("events.json", []))
+	m = re.search(r"/issues/(\d+)/labels$", path)
+	if m and method == "POST":
+		if "label_add" in fail:
+			sys.exit(1)
+		with open(os.path.join(d, "added.log"), "a", encoding="utf-8") as fh:
+			fh.write(m.group(1) + " " + ",".join(f[len("labels[]="):] for f in fields) + "\n")
+		out([])
 	m = re.search(r"/issues/(\d+)/labels/(.+)$", path)
 	if m and method == "DELETE":
 		if "label_delete" in fail:
@@ -168,6 +175,7 @@ def _run(
 	refreshed_comments: list[dict] | None = None,
 	refreshed_events: list[dict] | None = None,
 	refreshed_pull: dict | None = None,
+	post_delete_comments: list[dict] | None = None,
 ) -> dict:
 	fake_dir = tmp_path / "fake"
 	fake_dir.mkdir(parents=True)
@@ -184,6 +192,8 @@ def _run(
 	(fake_dir / "events.json").write_text(json.dumps(events if events is not None else [_labeled()]), encoding="utf-8")
 	if refreshed_comments is not None:
 		(fake_dir / "comments.2.json").write_text(json.dumps(refreshed_comments), encoding="utf-8")
+	if post_delete_comments is not None:
+		(fake_dir / "comments.3.json").write_text(json.dumps(post_delete_comments), encoding="utf-8")
 	if refreshed_events is not None:
 		(fake_dir / "events.2.json").write_text(json.dumps(refreshed_events), encoding="utf-8")
 	(fake_dir / "pull.json").write_text(
@@ -216,6 +226,7 @@ def _run(
 		"stdout": proc.stdout,
 		"stderr": proc.stderr,
 		"deleted": lines("deleted.log"),
+		"added": lines("added.log"),
 		"posted": [json.loads(line) for line in lines("posted.log")],
 		"calls": [json.loads(line) for line in lines("calls.log")],
 	}
@@ -231,8 +242,10 @@ def test_non_retryable_latch_is_released_once_the_head_moved(tmp_path: Path) -> 
 	assert OLD_HEAD[:12] in body and NEW_HEAD[:12] in body
 	assert f"NEEDS_HUMAN_HEAD_LATCH pr=5 outcome=released latch=non_retryable_head_moved from={OLD_HEAD[:12]} head={NEW_HEAD[:12]}" in result["stdout"]
 	# §15: one list, one comments read, one pull read, one events read, one
-	# comments, one events and one pull re-read (revalidation), two writes.
-	assert len(result["calls"]) == 9
+	# comments, one events and one pull re-read (revalidation), the label
+	# removal, one comments read after it, and the release comment.
+	assert len(result["calls"]) == 10
+	assert result["added"] == []
 
 
 def test_round_cap_latch_with_head_marker_is_released_once_the_head_moved(tmp_path: Path) -> None:
@@ -296,6 +309,29 @@ def test_a_latch_written_during_the_release_is_kept(tmp_path: Path) -> None:
 	assert "outcome=skip reason=latch_changed_during_release" in event_case["stdout"]
 	unavailable = _run(tmp_path / "unavailable", comments=[_non_retryable_comment()], fail="comments_refresh")
 	assert unavailable["deleted"] == [] and "outcome=skip reason=latch_revalidation_unavailable" in unavailable["stdout"]
+
+
+def test_a_latch_that_races_the_label_removal_gets_its_label_back(tmp_path: Path) -> None:
+	# The writer commented and re-added the (still present, so eventless)
+	# label after the revalidation reads, just before the DELETE.
+	relatch = _non_retryable_comment(head=NEW_HEAD, created_at="2026-11-20T14:00:00Z")
+	result = _run(tmp_path / "relatch", comments=[_non_retryable_comment()], post_delete_comments=[_non_retryable_comment(), relatch])
+	assert result["deleted"] == ["5 ai:needs-human"]
+	assert result["added"] == ["5 ai:needs-human"]
+	assert result["posted"] == []
+	assert "outcome=relatched_after_release latch=non_retryable_head_moved" in result["stdout"]
+	failed = _run(tmp_path / "failed", comments=[_non_retryable_comment()], post_delete_comments=[_non_retryable_comment(), relatch], fail="label_add")
+	assert failed["rc"] == 0 and failed["posted"] == []
+	assert "outcome=relatch_failed" in failed["stdout"] and "::warning::" in failed["stdout"]
+	# Our own release comment for this PR does not count as a re-latch.
+	own = {
+		"user": {"login": "pipeline"},
+		"author_association": "OWNER",
+		"created_at": "2026-11-20T14:00:00Z",
+		"body": f"_Orchestrator: removed `ai:needs-human`._\n\n<!-- ai:needs-human-auto-release reason=non_retryable_head_moved pr=5 head={NEW_HEAD} -->",
+	}
+	released = _run(tmp_path / "own", comments=[_non_retryable_comment()], post_delete_comments=[_non_retryable_comment(), own])
+	assert released["added"] == [] and len(released["posted"]) == 1
 
 
 def test_a_head_or_label_change_during_the_release_is_kept(tmp_path: Path) -> None:

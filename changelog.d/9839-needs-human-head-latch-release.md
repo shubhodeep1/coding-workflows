@@ -9,7 +9,7 @@ Two latches set `ai:needs-human` for a single head: the workflow-failure-heal di
 | Repositories | every repository (the staged-support release stays source-only) |
 | Label binding window | the `labeled` event must follow the latch comment by at most 30 minutes, same login |
 | Releases per head | 1 (`<!-- ai:needs-human-auto-release reason=... pr=<n> head=<sha> -->`) |
-| API per tick | 1 listing; per latched PR 1 comments read, plus 1 `pulls/<n>` read for a head-bound latch and 1 events read once the head moved; per release 1 comments + 1 events + 1 `pulls/<n>` re-read, 1 label removal, 1 comment |
+| API per tick | 1 listing; per latched PR 1 comments read, plus 1 `pulls/<n>` read for a head-bound latch and 1 events read once the head moved; per release 1 comments + 1 events + 1 `pulls/<n>` re-read, 1 label removal, 1 comments read after it (1 label add if a latch raced the removal), 1 comment |
 
 What this means for operators: a PR parked for a head it is no longer on moves forward again by itself. Latches without a recorded head (round-cap comments posted before this change), PRs that also carry `ai:scope-blocked` or `ai:destructive-blocked`, and any label a person re-added stay human-cleared. Set the switch to `false` to keep every such latch for a person.
 
