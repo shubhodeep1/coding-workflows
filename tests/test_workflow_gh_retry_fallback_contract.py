@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import shutil
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -20,6 +22,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 COMPREHENSIVE_RELEASE_GH_API_HELPER = REPO_ROOT / "scripts" / "comprehensive_test_and_release_gh_api.sh"
 DISPATCH_WATCH_HELPER = REPO_ROOT / "scripts" / "dispatch_and_watch_workflow_run.sh"
 SOURCE_LINE = 'source scripts/gh_helpers.sh 2>/dev/null || true'
+# clarify.yml sources the verified support bundle copy (stuck-states plan P2a);
+# the `:-scripts` default keeps the kill-switch path identical to SOURCE_LINE.
+SUPPORT_SOURCE_LINE = 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true'
+SOURCE_LINES = (SOURCE_LINE, SUPPORT_SOURCE_LINE)
 FALLBACK_LINE = 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }'
 SAFE_GH_JQ_LINE = 'type _safe_gh_jq >/dev/null 2>&1 || _safe_gh_jq() {'
 TARGET_STEPS = (
@@ -123,7 +129,7 @@ def _step_lines(relative_path: str, step_name: str) -> list[str]:
 def test_targeted_optional_source_blocks_define_local_gh_retry_fallback() -> None:
 	for relative_path, step_name in TARGET_STEPS:
 		lines = _step_lines(relative_path, step_name)
-		source_idx = next((i for i, line in enumerate(lines) if SOURCE_LINE in line), -1)
+		source_idx = next((i for i, line in enumerate(lines) if any(source_line in line for source_line in SOURCE_LINES)), -1)
 		fallback_idx = next((i for i, line in enumerate(lines) if FALLBACK_LINE in line), -1)
 		call_idx = next(
 			(
@@ -157,7 +163,7 @@ def test_safe_fetch_steps_define_canonical_safe_gh_jq_fallback() -> None:
 	for relative_path, step_name in SAFE_FETCH_STEPS:
 		block = _step_block(_workflow_text(relative_path), step_name)
 
-		assert SOURCE_LINE in block
+		assert any(source_line in block for source_line in SOURCE_LINES)
 		assert FALLBACK_LINE in block
 		assert SAFE_GH_JQ_LINE in block
 		assert 'if ! _tmpf=$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX" 2>/dev/null); then' in block
@@ -411,7 +417,7 @@ GH_API_RETRY_SHIM = (
 GH_API_RETRY_MIGRATED_STEPS = {
 	"review_autofix.yml": ("Resolve trusted review support commit", "Evaluate review gate"),
 	"validate.yml": ("Authorize explicit validation target",),
-	"implement.yml": ("Precheck approval phase label", "Safety check for existing PR"),
+	"implement.yml": ("Precheck approval phase label", "Safety check for existing PR", "Fetch issue comments"),
 	"orchestrate_clarify_respond.yml": ("Check orchestrator metadata",),
 	"security-audit.yml": ("Resolve trusted audit support commit", "Resolve audit target"),
 	"review_autofix_sweep.yml": ("Enumerate open PRs and dispatch internal-review.yml",),
@@ -570,6 +576,115 @@ def test_sweep_snapshot_parse_failure_marks_incomplete_behaviour() -> None:
 	assert empty.returncode == 0, empty.stderr
 	assert "FLAG=false" in empty.stdout, empty.stdout
 	assert "status=parse" not in empty.stdout
+
+
+# ---------------------------------------------------------------------------
+# implement.yml "Fetch issue comments" waits out a rate limit (issue #9858).
+# ---------------------------------------------------------------------------
+
+IMPLEMENT_FETCH_COMMENTS_STEP = "Fetch issue comments"
+IMPLEMENT_FETCH_COMMENTS_READ = (
+	'gh_api_retry --paginate "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?per_page=100"'
+)
+IMPLEMENT_FETCH_COMMENTS_READ_ERROR = "::error::Unable to read issue comments (GitHub API unavailable or rate-limited)."
+IMPLEMENT_FETCH_COMMENTS_APPROVAL_ERROR = "Unable to fetch triggering approval comment from issue comments."
+
+# Fake gh: rate limited until the simulated clock (real time plus the offset
+# in FAKE_CLOCK) reaches FAKE_RESET; `gh api rate_limit` reports FAKE_RESET.
+_FAKE_RATE_LIMITED_GH = """#!/usr/bin/env bash
+if [ "${1:-}" = api ] && [ "${2:-}" = rate_limit ]; then
+	printf '%s\\n' "${FAKE_RESET}"
+	exit 0
+fi
+now=$(( $(date +%s) + $(cat "${FAKE_CLOCK}") ))
+if [ "${now}" -lt "${FAKE_RESET}" ]; then
+	echo "gh: API rate limit exceeded for user ID 1. (HTTP 403)" >&2
+	exit 1
+fi
+cat "${FAKE_COMMENTS_FILE}"
+"""
+
+
+def _implement_fetch_comments_step() -> str:
+	return _gh_api_retry_step(_gh_api_retry_workflow("implement.yml"), IMPLEMENT_FETCH_COMMENTS_STEP)
+
+
+def _run_implement_fetch_issue_comments(*, reset_offset: int, comments_json: str, approval_id: str) -> tuple[subprocess.CompletedProcess[str], str, str]:
+	assert shutil.which("jq") is not None, "jq is required for the implement fetch-comments behavioural test"
+	assert shutil.which("bash") is not None, "bash is required for the implement fetch-comments behavioural test"
+	body = textwrap.dedent(_implement_fetch_comments_step().split("        run: |\n", 1)[1])
+	body = body.replace("${{ github.repository }}", "o/r")
+	with tempfile.TemporaryDirectory() as tempdir_name:
+		return _run_implement_fetch_issue_comments_in(Path(tempdir_name), body, reset_offset=reset_offset, comments_json=comments_json, approval_id=approval_id)
+
+
+def _run_implement_fetch_issue_comments_in(tempdir: Path, body: str, *, reset_offset: int, comments_json: str, approval_id: str) -> tuple[subprocess.CompletedProcess[str], str, str]:
+	bin_dir = tempdir / "bin"
+	bin_dir.mkdir()
+	_write_executable(bin_dir / "gh", _FAKE_RATE_LIMITED_GH)
+	clock = tempdir / "clock"
+	clock.write_text("0", encoding="utf-8")
+	comments_src = tempdir / "comments_src.json"
+	comments_src.write_text(comments_json, encoding="utf-8")
+	comments_file = tempdir / "c.json"
+	env = {
+		k: v
+		for k, v in os.environ.items()
+		if not k.startswith(("TG_", "GH_RETRY", "GH_API_RETRY", "PERSIST_JOURNAL"))
+	}
+	env.update(
+		{
+			"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+			"GH_API_RETRY_HELPERS": str(REPO_ROOT / "scripts" / "gh_helpers.sh"),
+			"ISSUE_NUMBER": "1",
+			"ISSUE_COMMENTS_FILE": str(comments_file),
+			"APPROVAL_COMMENT_ID": approval_id,
+			"TMPDIR": str(tempdir),
+			"GH_RATE_LIMIT_BREAKER_FILE": str(tempdir / "breaker"),
+			"PYTHONDONTWRITEBYTECODE": "1",
+			"FAKE_CLOCK": str(clock),
+			"FAKE_RESET": str(int(time.time()) + reset_offset),
+			"FAKE_COMMENTS_FILE": str(comments_src),
+		}
+	)
+	# Simulated clock: sleeping only moves FAKE_CLOCK forward.
+	prefix = 'sleep() { echo $(( $(cat "${FAKE_CLOCK}") + $1 )) > "${FAKE_CLOCK}"; }\n'
+	result = subprocess.run(["bash", "-c", prefix + body], env=env, capture_output=True, text=True, check=False, cwd=tempdir)
+	output = result.stdout + result.stderr
+	comments_text = comments_file.read_text(encoding="utf-8") if comments_file.exists() else ""
+	return result, comments_text, output
+
+
+def test_implement_fetch_issue_comments_uses_gh_api_retry_and_keeps_stderr() -> None:
+	step = _implement_fetch_comments_step()
+	assert IMPLEMENT_FETCH_COMMENTS_READ in step
+	assert 'gh api --paginate "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments' not in step
+	assert "} 2>/dev/null; then" not in step
+	assert IMPLEMENT_FETCH_COMMENTS_READ_ERROR in step
+	assert IMPLEMENT_FETCH_COMMENTS_APPROVAL_ERROR in step
+
+
+def test_implement_fetch_issue_comments_waits_out_primary_rate_limit() -> None:
+	comments = '[{"id": 7, "body": "hi"}, {"id": 42, "body": "/approved"}]'
+	result, comments_text, output = _run_implement_fetch_issue_comments(reset_offset=300, comments_json=comments, approval_id="42")
+	assert result.returncode == 0, output
+	ids = [c["id"] for c in json.loads(comments_text)]
+	assert 42 in ids
+	assert "GH_API_RETRY outcome=retry kind=primary bucket=core" in result.stderr, output
+
+
+def test_implement_fetch_issue_comments_reports_read_failure_separately() -> None:
+	# Reset beyond the helper's 600 s maximum wait: every read fails.
+	result, _, output = _run_implement_fetch_issue_comments(reset_offset=5000, comments_json="[]", approval_id="42")
+	assert result.returncode == 1, output
+	assert IMPLEMENT_FETCH_COMMENTS_READ_ERROR in output
+	assert IMPLEMENT_FETCH_COMMENTS_APPROVAL_ERROR in output
+	assert "outcome=gave_up" in result.stderr, output
+	# Control: the read works but the approval comment is absent.
+	result, _, output = _run_implement_fetch_issue_comments(reset_offset=-100, comments_json='[{"id": 7, "body": "hi"}]', approval_id="42")
+	assert result.returncode == 1, output
+	assert IMPLEMENT_FETCH_COMMENTS_APPROVAL_ERROR in output
+	assert IMPLEMENT_FETCH_COMMENTS_READ_ERROR not in output
 
 
 def test_idempotent_marker_never_rides_on_creates() -> None:
