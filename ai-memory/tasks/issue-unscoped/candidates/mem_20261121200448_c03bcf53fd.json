@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:671-682, 3456-3481 (start/end budget steps in e2e-smoke-test; same pair in e2e-alt-model-test, validate-standalone-test, workflow-log-analysis-test, orphan-workflows-test, orchestrate-decompose-test, clarify-rejects-unsolvable-test) | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The new \"Record GH_PAT budget at <job> start/end\" steps in seven release-gate jobs each run `gh api rate_limit`, which adds 14 GitHub API requests per test-and-mark-stable run and breaks the issue's \"No API calls added\" / \"no new API calls and no new jobs. Part A adds zero calls\" constraint.\n  WHY: openai_gpt-6-luna and z-ai_glm-5_3-flash rated it MAJOR (mapped to high), and google_gemini-3_1-flash-lite gave no severity. All three agree that `/rate_limit` does not debit the core REST allowance but still counts as an added API request. z-ai_glm-5_3-flash points to the compliant pattern in the `validate` job (lines ~5893-5897, ~6019-6031), which skips the read and prints `remaining=unknown reset=unknown`. Severity disagreement: anthropic_claude-sonnet-5_5 judged it low severity and chose not to re-flag it, because the issue asks for the \"same format\" and the read does not consume core quota. minimax_minimax-m3 skipped it as out of last-run scope.\n- .github/workflows/test-and-mark-stable.yml:New steps in e2e-smoke-test, e2e-alt-model-test, validate-standalone-test, workflow-log-analysis-test, orphan-workflows-test, orchestrate-decompose-test, and clarify-rejects-unsolvable-test jobs. | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Seven release-gate jobs that previously had no access to the `GH_PAT` secret now use it.\n  WHY: The issue explicitly says \"no added ... secrets\", and giving these seven jobs the secret widens its exposure. The reviewer stated no severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/test-and-mark-stable.yml:New steps in e2e-smoke-test, e2e-alt-model-test, validate-standalone-test, workflow-log-analysis-test, orphan-workflows-test, orchestrate-decompose-test, and clarify-rejects-unsolvable-test jobs. | confidence=4\n  PROBLEM: Seven release-gate jobs that previously had no access to the `GH_PAT` secret now use it.\n  WHY: The issue explicitly says \"no added ... secrets\", and giving these seven release-gate jobs the `GH_PAT` secret widens its exposure, against that constraint.\n- .github/workflows/test-and-mark-stable.yml:New budget steps (start and end) in e2e-smoke-test, e2e-alt-model-test, validate-standalone-test, workflow-log-analysis-test, orphan-workflows-test, orchestrate-decompose-test, and clarify-rejects-unsolvable-test jobs. | confidence=5\n  PROBLEM: Seven jobs that previously made no `gh api rate_limit` calls now make them.\n  WHY: The issue explicitly says \"No API calls added\". The `GH_PAT_BUDGET` steps call `gh api rate_limit` at the start and end of each of the seven jobs, which adds 14 GitHub API requests per workflow run.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml:Lines 671 and 3466; the same `gh api rate_limit` calls are added to the start and end steps of the other six PAT-holding release-gate jobs. | severity=MAJOR | confidence=5\n  PROBLEM: The release-gate budget steps add 14 GitHub API calls per run, against the issue's \"No API calls added\" constraint.\n  WHY: Each of the seven jobs calls `gh api rate_limit` at both start and end. The endpoint does not debit the primary REST allowance, but these are still extra API requests.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/test-and-mark-stable.yml:the new \"Record GH_PAT budget at <job> start\" / \"Record GH_PAT budget at <job> end\" steps in the seven PAT-holding release-gate jobs (e.g. lines 671-682 start / 3456-3481 end for e2e-smoke-test; same pair in e2e-alt-model-test, validate-standalone-test, workflow-log-analysis-test, orphan-workflows-test, orchestrate-decompose-test, clarify-rejects-unsolvable-test) | severity=MAJOR | confidence=4\n  PROBLEM: Each start and end step runs `gh api rate_limit` (`reading=\"$(gh api rate_limit --jq ...)\"`), adding 14 GitHub API requests per test-and-mark-stable run. This breaks the issue's \"no new API calls and no new jobs. Part A adds zero calls\" and \"No API calls added\". The `validate` job (lines ~5893-5897, ~6019-6031) already shows the compliant pattern: it makes no API call and prints `remaining=unknown reset=unknown used_in_job=unknown`.\n  WHY: This is a spec-constraint violation, not a crash. `gh_helpers.sh` documents that `/rate_limit` does not debit the core REST allowance, so the practical harm is small (14 requests per 6-hourly run). The fix is cheap: copy the `validate`-job pattern by skipping the `rate_limit` read, printing quota keys as `unknown`, and keeping `calls_in_job` numeric.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c49cda4e0d62fa67720cbc220df7912fc5c8a56c380da0d2b90d352cc50ace0c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9899,
+    "run_id": "44940375351",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44940375351",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121200448_c03bcf53fd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9899,
+    "run_id": "44940375351"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T20:04:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
