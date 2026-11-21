@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_inline_prompt_files_touched_scope.py:1-89 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The new test file is not wired into any workflow (`.github/workflows/ci.yml:686-692` does not run it) and is not in `UNWIRED_ALLOWLIST` in `tests/test_ci_wires_every_test_file.py`, so `test_every_test_file_runs_in_a_workflow` fails.\n  WHY: `static-checks` and the aggregate `lint` job fail, so the PR cannot go green and the new prompt contract test never runs in CI. Severity is BLOCKER in all three source reviews. Reviewers differ on the fix site: a collector in `tests/test_implement_prepush_test_gate.py` plus an allowlist entry, or a `ci.yml` edit.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: A contract test that the inline prompt contains the `files_touched` rule (suggested fix 3 in the linked issue) must actually run in CI to give its stated guarantee.\n  expected_change_site: `tests/test_implement_prepush_test_gate.py` (collector) and `tests/test_ci_wires_every_test_file.py` (`UNWIRED_ALLOWLIST` entry), or `.github/workflows/ci.yml` (`wg2_modules` array or a new step like line 691)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: `tests/test_implement_inline_prompt_files_touched_scope.py` appears only in `changelog.d/9775-inline-implement-files-touched-scope.md:4` and is absent from `.github/workflows/ci.yml`, CI run 44850422362 shows `test_every_test_file_runs_in_a_workflow` failing and `static-checks` and `lint` failing, and the PR description's \"Post-merge: none\" claim is contradicted. The heal scope excludes `ci.yml`, so a `tests/`-only fix is needed.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_implement_inline_prompt_files_touched_scope.py:1-89 | severity=critical | confidence=5\n  PROBLEM: The new test file is not referenced in any workflow (`.github/workflows/ci.yml:686-692` does not run it) and is not in `UNWIRED_ALLOWLIST` (`tests/test_ci_wires_every_test_file.py:25`), so `test_every_test_file_runs_in_a_workflow` (lines 106-112) fails.\n  WHY: The PR cannot go green and the contract test never runs in CI. The heal scope excludes `ci.yml`. Suggested fix: add a collector in `tests/test_implement_prepush_test_gate.py` and an `UNWIRED_ALLOWLIST` entry.\n- TASK_GAP: requirement: A contract test that the inline prompt contains the `files_touched` rule | expected_change_site: `tests/test_implement_prepush_test_gate.py` (collector) and `tests/test_ci_wires_every_test_file.py` (`UNWIRED_ALLOWLIST` entry) | evidence: the test file exists but no test file that runs it is changed, and the PR's CI shows the wiring guard failing | severity=BLOCKER | confidence=5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_inline_prompt_files_touched_scope.py:56-82 | severity=critical | confidence=5\n  PROBLEM: The new test file is not wired into any workflow and is not in `UNWIRED_ALLOWLIST`, so `test_every_test_file_runs_in_a_workflow` fails.\n  WHY: The `static-checks` CI job fails, which blocks the PR and keeps the new contract test from running in CI.\n- TASK_GAP: requirement: Add a contract test that the inline prompt contains the files_touched rule, and make sure it runs in the CI suite | expected_change_site: .github/workflows/ci.yml | evidence: `ci.yml` has no reference to the test file, and only the changelog entry mentions it. The PR description's \"Post-merge: none\" claim is false for this test. | severity=BLOCKER | confidence=5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: requirement: The PR deliverable is a contract test that the inline prompt contains the files_touched rule, and it must run in CI (issue #9775 suggested-fix step 3). | expected_change_site: `.github/workflows/ci.yml` (add the test to the `wg2_modules` array near line 2873, or add a step mirroring line 691), or an `UNWIRED_ALLOWLIST` entry in `tests/test_ci_wires_every_test_file.py` lines 25-74 | evidence: the test file is referenced only in `changelog.d/9775-inline-implement-files-touched-scope.md:4` and is absent from `ci.yml`. CI run 44850422362 (PR head SHA 27e1e6ef41431f0813527e4f47096de242ac4dff) shows `test_every_test_file_runs_in_a_workflow` failing, with `static-checks` and `lint` failing. The contract added at `.github/workflows/implement.yml:3159-3185` has no automated CI guard. The heal scope excludes `ci.yml`, and the PR does not declare the wiring deferred. | severity=BLOCKER | confidence=5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:686-692 | severity=critical | confidence=5\n  PROBLEM: The \"Pre-push affected-test gate tests\" step does not run `tests/test_implement_inline_prompt_files_touched_scope.py`.\n  WHY: `tests/test_ci_wires_every_test_file.py:106-112` requires every test file to be referenced by a workflow or added to its allowlist. This new test is neither, so `static-checks` and the aggregate `lint` check fail.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "8593b0eac40eaf80ab150260e352985e47fbbe2d2a320b58f81d4c5f635700c9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9860,
+    "run_id": "44860924146",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44860924146",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121044755_550e45d6fc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9860,
+    "run_id": "44860924146"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T04:47:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
