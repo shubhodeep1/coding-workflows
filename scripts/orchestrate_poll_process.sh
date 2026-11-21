@@ -5235,8 +5235,10 @@ _linked_pr_is_issue_implementation()
 # body close-keyword hits first (ascending), then the remaining candidates
 # (ascending), so the 20-fetch cap is spent on likely implementation PRs.
 # Once a match is found, only lower-numbered candidates are still fetched
-# (within the cap), so the pick is the lowest-numbered implementation PR,
-# the one close_linked_pr reaches first, whenever the cap allows.
+# (within the cap), so the pick is the numerically lowest implementation PR
+# whenever the cap allows. close_linked_pr closes every open implementation
+# PR (in _find_all_linked_prs' lexicographic order), so the pick is always
+# one of the PRs it acts on; with several, the close guard checks them all.
 # API calls (§14/§15): the three lookups inside _find_all_linked_prs (one
 # timeline read, two `gh pr list`), one `pulls/<n>` per candidate tried
 # (hard cap 20; after a match only lower-numbered candidates are tried), and
@@ -25054,9 +25056,11 @@ _linked_pr_is_capacity_waiting()
 # hold check runs in $(...) subshells), so the same PR is read at most once
 # per poller process however many hold checks see it; read errors are not
 # cached. The age is recomputed from the cached epoch on every call.
-# Prints the age; returns 1 and prints nothing on a read error or when no
-# matching event is found (the caller then keeps the hold, subject to the
-# stall-clock backstop in _stall_pr_ai_hold_reason).
+# Prints the age. Prints nothing and returns 2 on a transient read error
+# (GraphQL/jq failure, empty or malformed response, no clock; not cached, so
+# the next call reads again), or 1 when no age can ever be read: no matching
+# event in the last 50 (cached `none`), or no PR number / repository. The
+# caller keeps the hold on 2 and applies its stall-clock backstop only on 1.
 _stall_merge_lease_label_age_minutes()
 {
   local _smla_pr="$1" _smla_label="$2"
@@ -25072,8 +25076,8 @@ _stall_merge_lease_label_age_minutes()
     # shellcheck disable=SC2016
     _smla_resp="$(gh_retry gh api graphql \
       -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){timelineItems(itemTypes:[LABELED_EVENT],last:50){nodes{... on LabeledEvent{createdAt label{name}}}}}}}' \
-      -f owner="${_smla_owner}" -f name="${_smla_name}" -F number="${_smla_pr}" 2>/dev/null)" || return 1
-    [ -n "${_smla_resp}" ] || return 1
+      -f owner="${_smla_owner}" -f name="${_smla_name}" -F number="${_smla_pr}" 2>/dev/null)" || return 2
+    [ -n "${_smla_resp}" ] || return 2
     _smla_epoch="$(printf '%s' "${_smla_resp}" | jq -r --arg l "${_smla_label}" '
       if (.data.repository.pullRequest.timelineItems.nodes | type) != "array" then error("shape")
       else
@@ -25083,8 +25087,8 @@ _stall_merge_lease_label_age_minutes()
           | fromdateiso8601]
         | if length == 0 then "none" else (max | floor | tostring) end
       end
-    ' 2>/dev/null)" || return 1
-    [[ "${_smla_epoch}" =~ ^([0-9]+|none)$ ]] || return 1
+    ' 2>/dev/null)" || return 2
+    [[ "${_smla_epoch}" =~ ^([0-9]+|none)$ ]] || return 2
     if [ -n "${_smla_cache}" ]; then
       printf '%s\t%s\t%s\n' "${_smla_pr}" "${_smla_epoch}" "${_smla_label}" >> "${_smla_cache}" 2>/dev/null || true
     fi
@@ -25092,7 +25096,7 @@ _stall_merge_lease_label_age_minutes()
   [[ "${_smla_epoch}" =~ ^[0-9]+$ ]] || return 1
   local _smla_now="" _smla_age=0
   _smla_now="$(date -u +%s 2>/dev/null || echo "")"
-  [[ "${_smla_now}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${_smla_now}" =~ ^[0-9]+$ ]] || return 2
   _smla_age=$(( (10#${_smla_now} - 10#${_smla_epoch}) / 60 ))
   [ "${_smla_age}" -ge 0 ] || _smla_age=0
   printf '%s\n' "${_smla_age}"
@@ -25132,15 +25136,19 @@ _stall_merge_lease_label_age_minutes()
 # line on stderr per PR per poller process (callers run this in $(...), so
 # the dedupe lives in the per-process marker file
 # _STALL_MERGE_LEASE_LAPSE_LOG_FILE, created with mktemp below; without it
-# the line is logged on every lapse). When the label age cannot be read
-# (read error, or the event is outside the last 50 labeled events), the hold
-# is kept: a wrong lapse would let recovery push to or close a green PR
-# waiting for the lease. Backstop: if the age stays unreadable and the
-# caller's stall clock exceeds twice the maximum, the hold lapses anyway
-# (logged with label_age_minutes=unknown), so an unreadable age cannot park
-# an issue forever. The review-blocked arm passes `0`, so the backstop never
-# fires there. Without the second argument (the conflict sweep) output is
-# exactly as before.
+# the line is logged on every lapse; a payload without a PR number is never
+# deduped, so it cannot hide another PR's line). When the label age cannot
+# be read, the hold is kept: a wrong lapse would let recovery push to or
+# close a green PR waiting for the lease. A transient read error (return 2)
+# always keeps the hold; it is not cached, so the next check reads again.
+# Backstop, only when no age can ever be read (return 1: the event is
+# outside the last 50 labeled events, or no PR number): once the caller's
+# stall clock exceeds twice the maximum the hold lapses anyway (logged with
+# label_age_minutes=unknown), so such a PR cannot park an issue forever. The
+# stall clock is the issue's, not the label's, so it never overrides a read
+# error. The review-blocked arm passes `0`, so the backstop never fires
+# there. Without the second argument (the conflict sweep) output is exactly
+# as before.
 _stall_pr_ai_hold_reason()
 {
   local _spahr_json="$1"
@@ -25180,17 +25188,23 @@ _stall_pr_ai_hold_reason()
       _spahr_max=1440
     fi
     [ "${_spahr_max}" -gt 0 ] || return 0
-    local _spahr_label_age=""
+    local _spahr_label_age="" _spahr_age_rc=1
     if type _stall_merge_lease_label_age_minutes >/dev/null 2>&1; then
-      _spahr_label_age="$(_stall_merge_lease_label_age_minutes "${_spahr_number}" "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" 2>/dev/null || true)"
+      _spahr_age_rc=0
+      _spahr_label_age="$(_stall_merge_lease_label_age_minutes "${_spahr_number}" "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" 2>/dev/null)" || _spahr_age_rc=$?
     fi
-    if ! [[ "${_spahr_label_age}" =~ ^[0-9]+$ ]] && [[ "${_spahr_stall_minutes}" =~ ^[0-9]+$ ]] \
+    # Backstop only for "no age can ever be read" (rc 1); a transient read
+    # error (rc 2) keeps the hold whatever the issue's stall clock says.
+    if ! [[ "${_spahr_label_age}" =~ ^[0-9]+$ ]] && [ "${_spahr_age_rc}" -ne 2 ] \
+      && [[ "${_spahr_stall_minutes}" =~ ^[0-9]+$ ]] \
       && [ "$((10#${_spahr_stall_minutes}))" -gt "$((10#${_spahr_max} * 2))" ]; then
       _spahr_label_age="unknown"
     fi
     if [ "${_spahr_label_age}" = "unknown" ] || { [[ "${_spahr_label_age}" =~ ^[0-9]+$ ]] && [ "${_spahr_label_age}" -gt "${_spahr_max}" ]; }; then
       local _spahr_lapse_file="${_STALL_MERGE_LEASE_LAPSE_LOG_FILE:-}"
-      local _spahr_lapse_key="${_spahr_number:-unknown}"
+      local _spahr_lapse_key="${_spahr_number:-}"
+      # No PR number: skip the dedupe rather than share one `unknown` key.
+      [ -n "${_spahr_lapse_key}" ] || _spahr_lapse_file=""
       if [ -z "${_spahr_lapse_file}" ] || ! grep -qxF "${_spahr_lapse_key}" "${_spahr_lapse_file}" 2>/dev/null; then
         [ -z "${_spahr_lapse_file}" ] || printf '%s\n' "${_spahr_lapse_key}" >> "${_spahr_lapse_file}" 2>/dev/null || true
         echo "STALL_MERGE_LEASE_HOLD_LAPSED pr=${_spahr_number:-unknown} label_age_minutes=${_spahr_label_age} max_minutes=${_spahr_max}" >&2

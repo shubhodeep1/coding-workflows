@@ -723,7 +723,7 @@ def test_hold_reason_lease_wait_lapses_on_label_age_and_logs_once():
 		q = _bash_single_quote(payload)
 		r = _invoke(
 			body=f"""
-			_stall_merge_lease_label_age_minutes() {{ [ -n "${{LABEL_AGE:-}}" ] || return 1; printf '%s\\n' "${{LABEL_AGE}}"; }}
+			_stall_merge_lease_label_age_minutes() {{ [ -z "${{LABEL_RC:-}}" ] || return "${{LABEL_RC}}"; [ -n "${{LABEL_AGE:-}}" ] || return 1; printf '%s\\n' "${{LABEL_AGE}}"; }}
 			export STALL_MERGE_LEASE_WAIT_MAX_MINUTES=60
 			export _STALL_MERGE_LEASE_LAPSE_LOG_FILE="{tmp}/lapse.log"
 			a="$(LABEL_AGE=60 _stall_pr_ai_hold_reason {q} 5000)"
@@ -733,16 +733,19 @@ def test_hold_reason_lease_wait_lapses_on_label_age_and_logs_once():
 			e="$(STALL_MERGE_LEASE_WAIT_MAX_MINUTES=0 LABEL_AGE=1 _stall_pr_ai_hold_reason {q} 1)"
 			f="$(LABEL_AGE= _stall_pr_ai_hold_reason {q} 121)"
 			g="$(LABEL_AGE= _stall_pr_ai_hold_reason {q} 0)"
-			echo "A=[$a] B=[$b] C=[$c] D=[$d] E=[$e] F=[$f] G=[$g]"
+			h="$(LABEL_RC=2 _stall_pr_ai_hold_reason {q} 5000)"
+			echo "A=[$a] B=[$b] C=[$c] D=[$d] E=[$e] F=[$f] G=[$g] H=[$h]"
 			""",
 			cwd=tmp,
 		)
 		assert r.returncode == 0, r.stderr
-		# D: unreadable age, stall clock at 2x max -> hold kept. F: unreadable
-		# age, stall clock past 2x max -> backstop lapse. G: the review-blocked
-		# `0` form never hits the backstop.
+		# D: no readable age (rc 1), stall clock at 2x max -> hold kept. F: no
+		# readable age (rc 1), stall clock past 2x max -> backstop lapse. G: the
+		# review-blocked `0` form never hits the backstop. H: a transient read
+		# error (rc 2) keeps the hold however long the issue has stalled.
 		assert (
-			"A=[merge_lease_wait] B=[] C=[] D=[merge_lease_wait] E=[] F=[] G=[merge_lease_wait]" in r.stdout
+			"A=[merge_lease_wait] B=[] C=[] D=[merge_lease_wait] E=[] F=[] G=[merge_lease_wait] H=[merge_lease_wait]"
+			in r.stdout
 		), (r.stdout, r.stderr)
 		lapse_lines = [ln for ln in r.stderr.splitlines() if ln.startswith("STALL_MERGE_LEASE_HOLD_LAPSED")]
 		assert lapse_lines == ["STALL_MERGE_LEASE_HOLD_LAPSED pr=9402 label_age_minutes=61 max_minutes=60"], r.stderr
@@ -776,12 +779,14 @@ def test_label_age_reads_the_newest_labeled_event():
 		m = re.search(r"A=\[(\d+)\]", r.stdout)
 		assert m and 119 <= int(m.group(1)) <= 121, (r.stdout, r.stderr)
 		assert "B=[] RC=1" in r.stdout, r.stdout
-		assert "C=[] RC=1" in r.stdout, r.stdout
+		# A GraphQL read error is transient (rc 2), unlike a missing event (rc 1).
+		assert "C=[] RC=2" in r.stdout, r.stdout
 
 
 def test_hold_reason_backstop_lapse_logs_unknown_age():
-	"""An unreadable label age (read error, event outside the last 50) lapses
-	once the stall clock is past twice the maximum, logged as unknown."""
+	"""A label age that can never be read (rc 1: event outside the last 50)
+	lapses once the stall clock is past twice the maximum, logged as
+	unknown. A transient read error (rc 2) keeps the hold instead."""
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
 		_bootstrap(tmp)
@@ -792,11 +797,15 @@ def test_hold_reason_backstop_lapse_logs_unknown_age():
 			export STALL_MERGE_LEASE_WAIT_MAX_MINUTES=60
 			out="$(_stall_pr_ai_hold_reason {q} 200)"
 			echo "OUT=[$out]"
+			_stall_merge_lease_label_age_minutes() {{ return 2; }}
+			err="$(_stall_pr_ai_hold_reason {q} 200)"
+			echo "ERR=[$err]"
 			""",
 			cwd=tmp,
 		)
 		assert r.returncode == 0, r.stderr
 		assert "OUT=[]" in r.stdout, (r.stdout, r.stderr)
+		assert "ERR=[merge_lease_wait]" in r.stdout, (r.stdout, r.stderr)
 		assert "STALL_MERGE_LEASE_HOLD_LAPSED pr=9402 label_age_minutes=unknown max_minutes=60" in r.stderr, r.stderr
 
 
