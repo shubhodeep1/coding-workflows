@@ -192,8 +192,11 @@ import pathlib
 import re
 import sys
 
+# Placeholder names are ASCII, so replacing undecodable bytes in untrusted
+# embedded content (#9180 reviewers_failed, heal #9261) cannot change which
+# names are found; a strict decode here dropped every env-derived placeholder.
 try:
-	text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+	text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
 except (OSError, UnicodeDecodeError) as exc:
 	print(f"ERROR: collect_prompt_placeholders {type(exc).__name__}: {sys.argv[1]}: {exc}", file=sys.stderr)
 	sys.exit(1)
@@ -335,8 +338,8 @@ fi
 # scaffolding still runs. Default (unset) keeps
 # include assembly for every trusted template render.
 #
-# Security (#9399, #9431, #9465): either untrusted-body flag below marks a body
-# that embeds PR-diff / comment text, so its `{{NAME}}` tokens are
+# Security (#9399, #9431, #9465): RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED marks a
+# body that embeds PR-diff / comment text, so its `{{NAME}}` tokens are
 # attacker-chosen. In that mode the open-ended environment lookup in the
 # placeholder loop is skipped entirely; only the explicit vars appended before
 # the loop are substituted and every other `{{NAME}}` stays literal. The
@@ -345,6 +348,10 @@ fi
 _render_untrusted_body_mode=false
 case "${RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED:-}" in
 	1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])
+		# The body embeds untrusted PR text, so a `{{NAME}}` token in it must
+		# not select a process env var: that rendered secrets such as the
+		# OpenRouter key into the model prompt (heal #9261 review). Only the
+		# four static append_render_var names below are passed on this path.
 		_render_untrusted_body_mode=true
 		if [ "${INPUT_ALREADY_ASSEMBLED_FLAG_ADDED}" != "true" ]; then
 			RENDER_ARGS+=(--input-already-assembled)
@@ -361,7 +368,11 @@ esac
 # Default (unset) keeps the strict syntax gate for every static template render.
 case "${RENDER_PROMPT_SKIP_SYNTAX_VALIDATION:-}" in
 	1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])
-		_render_untrusted_body_mode=true
+		# Not untrusted-body mode by itself: a trusted template render that only
+		# skips the syntax gate keeps env placeholder passthrough
+		# (tests/test_prompt_invalid_utf8.py). The name/value credential guards
+		# in the placeholder loop still apply. Every shipped untrusted caller
+		# also sets RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED.
 		RENDER_ARGS+=(--skip-syntax-validation)
 		;;
 esac

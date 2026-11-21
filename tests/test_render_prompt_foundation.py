@@ -312,26 +312,25 @@ def _brace(name: str) -> str:
 
 def test_render_prompt_py_reports_non_utf8_prompt_without_traceback() -> None:
 	# #9341: a non-UTF-8 prompt used to escape load_prompt as a raw
-	# UnicodeDecodeError traceback with no named ERROR line.
+	# UnicodeDecodeError traceback. Since #9261 load_prompt replaces undecodable
+	# bytes with U+FFFD (tests/test_prompt_invalid_utf8.py), so the render
+	# succeeds with no traceback and no ERROR line.
 	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_non_utf8_py_") as td:
 		prompt_file = Path(td) / "mode-implement.txt"
 		prompt_file.write_bytes(_NON_UTF8_PROMPT_BYTES)
 		proc = _run_render_prompt_py(prompt_file)
 
-	assert proc.returncode == 1, proc.stderr
-	assert proc.stdout == ""
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout == "Header\n\ufffd\nFooter\n"
 	assert "Traceback" not in proc.stderr
-	error_lines = _stderr_error_lines(proc.stderr)
-	assert len(error_lines) == 1, proc.stderr
-	assert str(prompt_file) in error_lines[0]
-	assert "byte offset 7" in error_lines[0]
+	assert not _stderr_error_lines(proc.stderr), proc.stderr
 
 
 def test_render_prompt_sh_reports_non_utf8_prompt_without_traceback() -> None:
 	# #9341: collect_prompt_placeholders read the prompt with no error handling,
-	# and its process substitution hid the failure from the shell. The helper
-	# now prints one named ERROR line and the shell exits 1 before calling
-	# render_prompt.py, so no second ERROR line follows.
+	# and its process substitution hid the failure from the shell. Since #9261
+	# both the collector and load_prompt replace undecodable bytes, so a
+	# non-UTF-8 prompt renders with U+FFFD and no traceback or ERROR line.
 	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_non_utf8_sh_") as td:
 		prompt_file = Path(td) / "mode-implement.txt"
 		prompt_file.write_bytes(_NON_UTF8_PROMPT_BYTES)
@@ -346,13 +345,10 @@ def test_render_prompt_sh_reports_non_utf8_prompt_without_traceback() -> None:
 			timeout=60,
 		)
 
-	assert proc.returncode == 1, proc.stderr
-	assert proc.stdout == ""
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout == "Header\n\ufffd\nFooter\n"
 	assert "Traceback" not in proc.stderr
-	error_lines = _stderr_error_lines(proc.stderr)
-	assert len(error_lines) == 1, proc.stderr
-	assert error_lines[0].startswith("ERROR: collect_prompt_placeholders UnicodeDecodeError:")
-	assert str(prompt_file) in error_lines[0]
+	assert not _stderr_error_lines(proc.stderr), proc.stderr
 
 
 def test_render_prompt_py_reports_unexpected_exception_without_traceback() -> None:
@@ -490,10 +486,13 @@ def _run_render_prompt_sh_with_env(prompt_file: Path, extra_env: dict[str, str])
 
 
 def test_render_prompt_sh_does_not_substitute_env_into_untrusted_body() -> None:
-	# Security audit #9399 / #9431 / #9465: the reviewer/editor callers set the
-	# untrusted-body flags because the body embeds PR-diff / comment text. Either
-	# flag must stop every environment lookup, so even a harmless-looking name
-	# stays literal; the explicit scaffolding vars still render.
+	# Security audit #9399 / #9431 / #9465: the reviewer/editor callers set
+	# RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED because the body embeds PR-diff /
+	# comment text. That flag must stop every environment lookup, so even a
+	# harmless-looking name stays literal; the explicit scaffolding vars still
+	# render. RENDER_PROMPT_SKIP_SYNTAX_VALIDATION alone is a trusted-template
+	# render that keeps env passthrough (tests/test_prompt_invalid_utf8.py), but
+	# the credential-name guard still keeps GH_PAT literal there.
 	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_untrusted_body_") as td:
 		prompt_file = Path(td) / "mode-render-env-probe.txt"
 		prompt_file.write_text(
@@ -509,7 +508,6 @@ def test_render_prompt_sh_does_not_substitute_env_into_untrusted_body() -> None:
 		for flags in (
 			{"RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED": "1", "RENDER_PROMPT_SKIP_SYNTAX_VALIDATION": "1"},
 			{"RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED": "1"},
-			{"RENDER_PROMPT_SKIP_SYNTAX_VALIDATION": "1"},
 		):
 			proc = _run_render_prompt_sh_with_env(prompt_file, {**probe_env, **flags})
 			assert proc.returncode == 0, (flags, proc.stderr)
@@ -520,6 +518,13 @@ def test_render_prompt_sh_does_not_substitute_env_into_untrusted_body() -> None:
 			assert f"inline {_brace('GH_PAT')} here" in proc.stdout, flags
 			assert "explicit-serena-hint" in proc.stdout, flags
 			assert not _stderr_error_lines(proc.stderr), (flags, proc.stderr)
+		proc = _run_render_prompt_sh_with_env(prompt_file, {**probe_env, "RENDER_PROMPT_SKIP_SYNTAX_VALIDATION": "1"})
+		assert proc.returncode == 0, proc.stderr
+		assert "ghp_should_not_leak" not in proc.stdout
+		assert "ghp_should_not_leak" not in proc.stderr
+		assert f"inline {_brace('GH_PAT')} here" in proc.stdout
+		assert "plain_should_not_render" in proc.stdout
+		assert not _stderr_error_lines(proc.stderr), proc.stderr
 
 
 def test_render_prompt_sh_refuses_secret_like_env_placeholders() -> None:
