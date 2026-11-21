@@ -4465,6 +4465,8 @@ jobs:
           # Escalate the integration-sync retry state on the first non-retryable
           # isolation failure (sandbox_path_host_only and friends).
           RESOLVER_NON_RETRYABLE_ESCALATE_ENABLED: ${{ vars.RESOLVER_NON_RETRYABLE_ESCALATE_ENABLED || 'true' }}
+          # Provenance check: resolved regions must come from ours or theirs (#9842).
+          RESOLVER_PROVENANCE_CHECK_ENABLED: ${{ vars.RESOLVER_PROVENANCE_CHECK_ENABLED || 'true' }}
           # Decoupled from EDITOR_REASONING_EFFORT: the smoke-test override
           # ("Detect smoke test PR" step) sets editor reasoning to "none" so
           # the single-line bait removal completes deterministically. The
