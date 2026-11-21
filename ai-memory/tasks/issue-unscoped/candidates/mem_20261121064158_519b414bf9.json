@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: AD-1 selected Option A: \u201cFile a separate normal (non-heal) issue for the helper changes and the snapshot regression test.\u201d\n  expected_change_site: GitHub issue tracker; the follow-up issue number referenced from the PR description's `ai:partial-delivery` block or the changelog's \"Deferred, outside this heal's scope\" section.\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The PR description and `changelog.d/9837-clarify-snapshot-reject-no-retry.md` say the helper changes need their own issue but provide no follow-up issue number or link; no such issue exists in any artifact available to this pass.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: AD-1 selected Option A: \u201cFile a separate normal (non-heal) issue for the helper changes and the snapshot regression test.\u201d\n  Expected change site: GitHub issue tracker, with the follow-up issue referenced in the PR description or changelog.\n  Evidence of absence: The PR description and `changelog.d/9837-clarify-snapshot-reject-no-retry.md` say the helper changes need their own issue, but the supplied PR artifacts contain no follow-up issue number or link, so completion of the selected action is not verifiable.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: AD-1's selected option directs the work to \"File a separate normal (non-heal) issue for the helper changes and the snapshot regression test,\" so the deferred helper work (reason token, distinct exit code, skip rules, snapshot regression test, orchestrate_clarify_respond.yml stop rule) gets a tracking issue referenced from the PR.\n  Expected change site: GitHub issue tracker; the follow-up issue number referenced from the PR description's `ai:partial-delivery` block or the changelog's \"Deferred, outside this heal's scope\" section.\n  Evidence of absence: The PR description and changelog.d/9837-clarify-snapshot-reject-no-retry.md list the deferred helper work but reference no follow-up issue number; no such issue exists in any artifact available to this pass. This is a GitHub-process step no file edit in this review can complete, and the helper changes themselves are explicitly deferred, so this is recorded only as the residual process gap; severity reflects that.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f5872826cf65cc660701eef5610e0b5c9873cf3d2e83545b206d2f6318b77f2a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9840,
+    "run_id": "44876269320",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44876269320",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121064158_519b414bf9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9840,
+    "run_id": "44876269320"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T06:41:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
