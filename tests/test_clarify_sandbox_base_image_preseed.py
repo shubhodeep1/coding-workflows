@@ -474,7 +474,11 @@ def test_helper_is_executable_and_parses() -> None:
 
 def test_step_calls_shared_helper() -> None:
 	body = _step(STEP_NAME)["run"]
-	assert "bash scripts/clarify_base_image_preseed.sh scripts/clarify_sandbox/Dockerfile" in body
+	# The helper runs from the verified support bundle when it is staged
+	# (SUPPORT_SCRIPTS_DIR, P2a) and from scripts/ under the kill switch.
+	assert (
+		'bash "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_base_image_preseed.sh" scripts/clarify_sandbox/Dockerfile'
+	) in body
 	assert "reason=helper_missing" in body
 	assert "preseed_mirror_re" not in body, "the step body must not duplicate the helper"
 
@@ -744,7 +748,10 @@ def test_callers_stage_the_helper() -> None:
 	smoke = (WORKFLOWS / "claude-engine-smoke.yml").read_text(encoding="utf-8")
 	assert "bash scripts/clarify_isolated_run.sh" in smoke
 	plan = (REPO_ROOT / "scripts" / "run_plan_codex.sh").read_text(encoding="utf-8")
-	assert "bash scripts/clarify_isolated_run.sh" in plan
+	# run_plan_codex.sh resolves the helper from its own directory: the support
+	# bundle in unified mode, the checkout's scripts/ under the kill switch
+	# (stuck-states plan P2a).
+	assert 'bash "${RUN_PLAN_CODEX_SUPPORT_DIR}/clarify_isolated_run.sh"' in plan
 	triage_script = (REPO_ROOT / "scripts" / "check_failure_triage.sh").read_text(encoding="utf-8")
 	assert 'ISOLATED_HELPER="${TRUSTED_SUPPORT_DIR}/scripts/clarify_isolated_run.sh"' in triage_script
 
