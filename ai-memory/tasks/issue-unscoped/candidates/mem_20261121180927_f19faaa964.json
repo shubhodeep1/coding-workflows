@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:27429-27444 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: When the post-delete comments read fails or is malformed, the `if read && jq` condition is false, so execution falls through to the release comment with no log line and no re-latch check.\n  WHY: A trusted latch that lands between the revalidation reads and the DELETE can be silently lost, and operators cannot tell the check was skipped. Severity disagreement: MAJOR (gemini, openai, glm) vs NIT (sonnet, minimax). The sonnet reviewer treated this as deliberate documented fail-open and a narrow window.\n- tests/test_needs_human_head_latch_release.py:420-429 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: No test exercises failure of the post-delete comments read (`hl_post_delete_comments`) in isolation. The `comments_refresh` fail mode stops at `latch_revalidation_unavailable` first.\n  WHY: The fail-open path is unverified, so a future change could wrongly make it a hard gate. Severity disagreement: MAJOR (gemini) vs NIT (minimax).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:27430-27444 | severity=NIT | confidence=2\n  PROBLEM: A failed or malformed post-delete comments read leaves `ai:needs-human` off. The reviewer judged this a deliberate fail-open with a narrow window, not a defect.\n  WHY: The label is already deleted, so skipping cannot restore it. If a latch landed in that window and the read failed, the hold would be lost with no log line.\n- HARDENING: log `outcome=skip reason=post_release_check_unavailable` on post-delete read failure, without `continue`. Add the reason to the registry bullet in `agents.d/9839-needs-human-head-latch-release.md` (risk score 1).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:27429-27444 | severity=MAJOR | confidence=4\n  PROBLEM: Error handling for the post-delete comment recheck is inconsistent with other API read patterns in the function. On read failure the code posts a removal comment even though the re-latch check was skipped.\n  WHY: A re-latch plus a read failure produces a misleading removal comment on a still-latched PR, violating the fail-open label-release contract.\n- tests/test_needs_human_head_latch_release.py:Test suite | severity=MAJOR | confidence=3\n  PROBLEM: The test suite lacks coverage for the error path of the `hl_post_delete_comments` read.\n  WHY: The path stays unverified and potentially unhandled.\n- HARDENING: check for read failure explicitly, log a warning, and continue to the next PR instead of posting the removal comment (risk score 1).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:27430-27444 | severity=NIT | confidence=3\n  PROBLEM: If the post-delete comments read fails, the `if` is false and execution falls through to the release comment with no audit log. A latch that landed between the re-reads and the DELETE is silently missed.\n  WHY: The DELETE has no conditional variant, so this read is the only safety net. A `post_release_check_unavailable` log line would make the audit trail honest. This is the only read path in the function that violates the stated fail-open contract.\n- tests/test_needs_human_head_latch_release.py:420-429 | severity=NIT | confidence=3\n  PROBLEM: No test exercises `hl_post_delete_comments` failing in isolation. `comments_refresh` fails at the revalidation read first.\n  WHY: This is a test-coverage gap and not a runtime defect. A test would pin the fail-open contract.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:27429-27444 | severity=MAJOR | confidence=4\n  PROBLEM: If the post-delete comments read fails or is malformed, the condition is false and execution continues without restoring `ai:needs-human`.\n  WHY: A new trusted latch landing before the DELETE is lost, and the release comment is posted and logged. This conflicts with the stated fail-open behavior that a read failure skips the PR and leaves the label in place.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:27430-27444 | severity=MAJOR | confidence=3\n  PROBLEM: The post-delete read and the latch test share one `if <read> && <jq>` chain. A read failure falls through to the release comment with no label restoration and no log line.\n  WHY: A latch landing between the revalidation reads (27384-27418) and the DELETE (27420) would lose its label permanently. Nothing re-checks the PR on the next tick, and logs show `outcome=released`. This was newly introduced by the last run's diff.\n- HARDENING: split the read from the jq test. On read failure echo `outcome=skip reason=post_release_check_unavailable latch=${hl_reason}` without `continue`. Add the reason to the registry bullet in `agents.d/9839-needs-human-head-latch-release.md` (risk score 1).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2093c846be1940db8a4a4d55961c7619dd6d211f49e0286baa02056606f5ef0d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9862,
+    "run_id": "44929360280",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44929360280",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121180927_f19faaa964",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9862,
+    "run_id": "44929360280"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T18:09:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
