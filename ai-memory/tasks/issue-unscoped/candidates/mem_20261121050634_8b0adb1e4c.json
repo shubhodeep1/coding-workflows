@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:20588-20598 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The comment body interpolates untrusted LLM-generated input in a double-quoted string, which the reviewer says can execute command substitutions or backticks during construction.\n  WHY: The finding is rated MAJOR by Gemini; z-ai_glm-5_3-flash disputes it, stating that expanded variable contents are not re-evaluated for command substitution.\n- tests/test_orchestrate_poll_process.py:Test suite | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test suite does not exercise the helper's branch for a missing tracking issue pointer.\n  WHY: Existing `escalate_human` tests run with `local_id` set and `TRACKING_NUM` populated, leaving the missing-pointer branch unverified.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"It [the comment] also points to the tracking issue when there is one, and names the resume step (remove `ai:needs-human`).\"\n  expected_change_site: tests/test_orchestrate_poll_process.py\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The test suite does not exercise the branch where the tracking issue pointer is omitted (when `local_id` is empty or `TRACKING_NUM` is unset), leaving the implementation of the \"when there is one\" requirement unverified for the case where there is not one.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:20588-20598 | severity=high | confidence=4\n  PROBLEM: The comment body is built using double-quoted string interpolation with untrusted LLM-generated input (`STALL_ESCALATE_HUMAN_JUSTIFICATION`).\n  WHY: Bash double-quoted strings perform command substitution. If an LLM-generated justification contains `$(...)` or backticks, those commands will execute in the orchestrator shell during body construction before being sent to `gh api`.\n- tests/test_orchestrate_poll_process.py:Test suite | severity=low | confidence=3\n  PROBLEM: The new helper `_post_stall_escalate_human_comment` has a branching path for `seh_where` (the tracking issue pointer), but this path is never exercised in the test suite.\n  WHY: All existing tests for `escalate_human` (including the new ones) run with `local_id` set and `TRACKING_NUM` populated, covering only one branch. The logic for the missing-pointer branch is not verified to work or to handle missing inputs correctly, which is a gap in coverage for the new feature's reliability.\n- TASK_GAP: Requirement: \"It [the comment] also points to the tracking issue when there is one, and names the resume step (remove `ai:needs-human`).\"\n  Expected change site: tests/test_orchestrate_poll_process.py\n  Evidence of absence: The test suite fails to exercise the branch where the tracking issue pointer is omitted (when `local_id` is empty or `TRACKING_NUM` is unset), leaving the implementation of the \"when there is one\" requirement unverified for the case where there is not one.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2bd8d64d415305ad91a17a70478166d5ff72b727dc41f17face3acd82952839e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9853,
+    "run_id": "44861654665",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44861654665",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121050634_8b0adb1e4c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9853,
+    "run_id": "44861654665"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-21T05:06:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
