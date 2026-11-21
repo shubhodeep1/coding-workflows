@@ -1,0 +1,28 @@
+{
+  "discovered_at": "2026-11-21T19:29:22Z",
+  "issue_number": 9888,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=scripts/review_run_reviewers.sh:4656; cited_path=scripts/review_run_reviewers.sh; files_touched=.github/workflows/promote-main-to-stable.yml, .github/workflows/review_autofix.yml, .github/workflows/test-and-mark-stable.yml, .github/workflows/workflow-failure-heal-intake.yml, README.md, agents.d/9888-gh-read-token-polling.md, changelog.d/9888-gh-read-token-polling.md, scripts/comprehensive_test_and_release_gh_api.sh, scripts/dispatch_and_watch_workflow_run.sh, scripts/gh_helpers.sh, scripts/promote_main_cycle.sh, scripts/stable_e2e_step_wait_review.sh, scripts/stable_orchestrate_cancel_dispatched_run.sh, scripts/workflow_failure_heal_queue.sh, tests/test_gh_read.py.",
+  "phase": "review_autofix",
+  "pr_number": 9897,
+  "record_id": "lesson_20261121192922_067bc0c2b4",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/review_run_reviewers.sh",
+    ".github/workflows/promote-main-to-stable.yml",
+    ".github/workflows/review_autofix.yml",
+    ".github/workflows/test-and-mark-stable.yml",
+    ".github/workflows/workflow-failure-heal-intake.yml",
+    "README.md",
+    "agents.d/9888-gh-read-token-polling.md",
+    "changelog.d/9888-gh-read-token-polling.md",
+    "scripts/comprehensive_test_and_release_gh_api.sh",
+    "scripts/dispatch_and_watch_workflow_run.sh",
+    "scripts/gh_helpers.sh",
+    "scripts/promote_main_cycle.sh",
+    "scripts/stable_e2e_step_wait_review.sh",
+    "scripts/stable_orchestrate_cancel_dispatched_run.sh",
+    "scripts/workflow_failure_heal_queue.sh",
+    "tests/test_gh_read.py"
+  ]
+}
