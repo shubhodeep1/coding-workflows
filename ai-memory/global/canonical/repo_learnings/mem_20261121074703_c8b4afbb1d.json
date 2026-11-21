@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.8,
+  "details": "For changes to merge-lease behavior, check the interactions between scripts/pr_checks_lib.sh and scripts/review_merge_train.sh, and extend the focused lease and merge-train tests as needed. The repository has a fake-gh test helper for exercising GitHub CLI behavior without relying on live calls.",
+  "fingerprint": "631cae614b959037406ac97e3f5f7b19242bced269630c01223b892acfacdf2a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44881001944",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44881001944",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9363",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9575",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9821",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9844",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9858",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9367",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9602",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9822",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9845",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9864"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261121074703_c8b4afbb1d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Merge-lease changes are tested across shared PR-check helpers and merge-train logic, often using a fake GitHub CLI.",
+  "timestamps": {
+    "created_at": "2026-11-21T07:47:03Z",
+    "promoted_at": "2026-11-21T07:47:41Z",
+    "superseded_at": null
+  }
+}
