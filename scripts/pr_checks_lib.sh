@@ -1475,7 +1475,7 @@ _pr_base_freshness()
 		PR_BASE_FRESHNESS_PR_PATHS="$(jq -r --arg soft_on "${freshness_soft_on}" '
 			[ .[]? | if type == "array" then .[] else . end | select(type == "object")
 			  | (.filename // empty), (.previous_filename // empty) ] | unique
-			| if $soft_on != "" and any(.[]; test("[\n\r]")) then "*" else .[] end
+			| if $soft_on != "" and any(.[]; (type != "string") or test("[\n\r]")) then "*" else .[] end
 		' "${tmp_pr_files}" 2>/dev/null || true)"
 		PR_BASE_FRESHNESS_PR_PATHS_FOR="${pr_number}"
 		# Phase 4: the real shared paths, one per line, for the soft split.
@@ -1488,7 +1488,7 @@ _pr_base_freshness()
 			(($compare[0].files // []) | names) as $base_paths
 			| ([ $pr_files[0][]? | if type == "array" then .[] else . end ] | names) as $pr_paths
 			| [ $base_paths[] | select(. as $p | $pr_paths | index($p)) ] | unique
-			| if any(.[]; test("[\n\r]")) then "/unsafe-path" else .[] end
+			| if any(.[]; (type != "string") or test("[\n\r]")) then "/unsafe-path" else .[] end
 		' 2>/dev/null || true)"
 	fi
 	rm -f "${tmp_compare}" "${tmp_pr_files}"
@@ -2636,12 +2636,14 @@ _merge_lease_pr_paths()
 	jq -e 'type == "array"' >/dev/null 2>&1 <<< "${lease_files_json}" || return 1
 	# Phase 4 (Refs #9781): with the soft class on, a path holding CR/LF
 	# yields `*` (fail closed) instead of newline-split fragments that could
-	# each look soft. With the class off the list is as before.
+	# each look soft; so does a non-string name, which would otherwise make
+	# jq fail and the gate take its fail-open pr_files_failed path. With the
+	# class off the list is as before.
 	local lease_soft_on=""
 	[ -z "$(_merge_lease_soft_entries 2>/dev/null)" ] || lease_soft_on="1"
 	jq -r --arg soft_on "${lease_soft_on}" '[ .[]? | if type == "array" then .[] else . end | select(type == "object")
 		| (.filename // empty), (.previous_filename // empty) ] | unique
-		| if $soft_on != "" and any(.[]; test("[\n\r]")) then "*" else .[] end' <<< "${lease_files_json}" 2>/dev/null
+		| if $soft_on != "" and any(.[]; (type != "string") or test("[\n\r]")) then "*" else .[] end' <<< "${lease_files_json}" 2>/dev/null
 }
 
 # 0 when the two newline lists share a path (`*` shares every path).

@@ -1432,6 +1432,17 @@ class LeaseSoftPaths(unittest.TestCase):
 		self.assertIn("reason=holder_shares_paths", out)
 		self.assertNotIn("soft_paths_merge_clean", out)
 
+	def test_a_non_string_file_name_fails_closed(self) -> None:
+		"""A malformed files page must yield `*` (wait), not a jq error that
+		the merge-mode gate would treat as pr_files_failed (fail-open)."""
+		body = """_safe_gh_jq() { printf '%s' '[[{"filename":5},{"filename":"README.md"}]]'; }
+_merge_lease_pr_paths 7; echo "rc=$?"
+"""
+		res = _Harness({}).lib(body)
+		self.assertIn("*\nrc=0", res.stdout, res.stdout + res.stderr)
+		off = _Harness({}).lib(body, {"MERGE_LEASE_SOFT_PATHS": "none"})
+		self.assertIn("5\nREADME.md\nrc=0", off.stdout, off.stdout + off.stderr)
+
 	def test_unshared_paths_keep_the_old_reason(self) -> None:
 		rc, out = _soft_lease_gate(False, ["own.py"], "README.md")
 		self.assertEqual(rc, 0, out)
