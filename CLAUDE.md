@@ -670,8 +670,8 @@ Rules:
   session.
 - The rule is enforced by **two** mechanisms, both anchored on
   `scripts/lint_pr_body_auto_close.py`:
-  1. The `Lint PR body for auto-close keywords against orchestrator-tracking
-     issues` GitHub workflow (`.github/workflows/lint-pr-body-auto-close.yml`)
+  1. The `pr-body-lint` job of the `PR checks` GitHub workflow
+     (`.github/workflows/pr-checks.yml`)
      runs on every pull request and fails the check when a violation
      is found.
   2. The unattended pipelines' PR-body composition paths invoke the

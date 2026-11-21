@@ -39,6 +39,11 @@ class FakeGitHub:
 		self.next_number = 900
 		self.comments: dict[int, list[dict]] = {}
 		self.next_comment_id = 5000
+		# `<sha>...stable` compare status per commit; a missing or "error" status fails the call.
+		self.compare_status: dict[str, str] = {}
+		self.closed: list[int] = []
+		self.closed_issues: dict[int, dict] = {}
+		self.reopened: list[int] = []
 
 	def __call__(self, args: list[str], *, allow_existing_label: bool = False) -> str:
 		self.calls.append(args)
@@ -46,11 +51,28 @@ class FakeGitHub:
 			return ""
 		if args[:2] == ["api", "user"]:
 			return BOT
+		if args[0] == "api" and len(args) > 1 and args[1].startswith(f"repos/{REPO}/compare/"):
+			status = self.compare_status.get(args[1].split("/compare/", 1)[1].split("...", 1)[0], "error")
+			if status == "error":
+				raise writer.ApiError("compare failed: HTTP 404")
+			return status + "\n"
 		if args[:2] == ["api", "-X"] and args[2] == "POST" and args[3].endswith("/labels"):
 			self.labels_added.append((args[3], args[-1]))
 			return "{}"
 		if args[:3] == ["api", "-X", "DELETE"]:
 			self.labels_removed.append(args[3])
+			return "{}"
+		if args[:3] == ["api", "-X", "PATCH"] and "state=closed" in args and "/comments/" not in args[3]:
+			number = int(args[3].rsplit("/", 1)[1])
+			self.closed.append(number)
+			self.closed_issues.update({issue["number"]: issue for issue in self.issues if issue["number"] == number})
+			self.issues[:] = [issue for issue in self.issues if issue["number"] != number]
+			return "{}"
+		if args[:3] == ["api", "-X", "PATCH"] and "state=open" in args:
+			number = int(args[3].rsplit("/", 1)[1])
+			self.reopened.append(number)
+			if number in self.closed_issues:
+				self.issues.append(dict(self.closed_issues.pop(number), state_reason="reopened"))
 			return "{}"
 		if args[:2] == ["api", "-X"] and args[2] == "PATCH":
 			number = int(args[3].rsplit("/", 1)[1])
@@ -61,6 +83,12 @@ class FakeGitHub:
 			return "{}"
 		if args[0] == "api" and args[1].startswith(f"repos/{REPO}/issues?labels=ai:operator-step"):
 			return json.dumps([dict(issue) for issue in self.issues])
+		single = re.fullmatch(rf"repos/{re.escape(REPO)}/issues/([0-9]+)", args[1]) if len(args) == 2 and args[0] == "api" else None
+		if single:
+			number = int(single.group(1))
+			if number in self.closed_issues:
+				return json.dumps(dict(self.closed_issues[number], state="closed"))
+			return json.dumps(next(dict({"state": "open"}, **issue) for issue in self.issues if issue["number"] == number))
 		comments_path = re.fullmatch(rf"repos/{re.escape(REPO)}/issues/([0-9]+)/comments(\?per_page=100)?", args[-1] if "--slurp" in args else (args[1] if len(args) > 1 else ""))
 		if "--slurp" in args and comments_path:
 			return json.dumps([self.comments.get(int(comments_path.group(1)), [])])
@@ -86,8 +114,20 @@ class FakeGitHub:
 
 
 @pytest.fixture
-def fake(monkeypatch: pytest.MonkeyPatch) -> FakeGitHub:
+def fake(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> FakeGitHub:
 	monkeypatch.delenv("NEEDS_HUMAN_DIGEST_ENABLED", raising=False)
+	monkeypatch.delenv("OPERATOR_STEP_AUTO_RESOLVE_ENABLED", raising=False)
+	# _ensure_operator_label reads the label registration next to the writer's
+	# checkout; give it a hermetic one (values mirror scripts/label_helpers.sh) so
+	# these tests do not depend on .github/ai/label_contract.v1.json being present.
+	# tests/test_activation_verify.py covers the real registration.
+	contract_path = tmp_path / ".github/ai/label_contract.v1.json"
+	contract_path.parent.mkdir(parents=True)
+	contract_path.write_text(json.dumps({"labels": {"ai:operator-step": {
+		"color": "fbca04",
+		"description": "Steps only a person can take; the pipeline continues and gated work stays off until they are done",
+	}}}), encoding="utf-8")
+	monkeypatch.setattr(writer, "__file__", str(tmp_path / "scripts" / "operator_step_issue.py"))
 	gh = FakeGitHub()
 	monkeypatch.setattr(writer, "_gh", gh)
 	return gh
@@ -498,3 +538,692 @@ def test_operator_step_tick_cli_round_trip(fake: FakeGitHub, tmp_path: Path, cap
 	assert code == 0 and json.loads(captured.out)["ticked"] == ["pr-1"]
 	assert f"OPERATOR_STEP_TICK key=pr-1 outcome=ticked stable={stable[:7]}" in captured.err
 	assert writer.main(["tick", "--repo", REPO, "--stable-sha", "x"]) == 1
+
+
+# --- at most one persisted alert attempt per parking (stuck-states P6b) -------
+
+STAMP = "2026-10-08T00:00:00Z"
+
+
+def _claim_body(item: int = 7, parking: str = STAMP, state: str = "attempted", message: str | None = None) -> str:
+	return writer.render_alert_claim(item, parking, state, message)
+
+
+def _claim_posts(fake: FakeGitHub, item: int = 7) -> list[list[str]]:
+	return [args for args in fake.calls if args[:2] == ["api", f"repos/{REPO}/issues/{item}/comments"] and "-f" in args]
+
+
+def test_needs_human_park_reports_the_parking_identity(fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch) -> None:
+	assert _park(7)["parking"] == NOW
+	# An update keeps the entry's original stamp.
+	assert _park(7, now="2026-10-09T00:00:00Z", item_labeled=True)["parking"] == NOW
+	entries = {
+		n: {"kind": "issue", "parked": NOW, "line": writer.render_digest_entry(n, "issue", "blocked", "item_cap", "", NOW)}
+		for n in range(1, writer.NEEDS_HUMAN_MAX_ENTRIES + 1)
+	}
+	fake.issues[:] = [{"number": 5, "body": writer.render_digest(entries, []), "user": {"login": BOT}}]
+	assert _park(1001)["parking"] == "overflow"
+	monkeypatch.setenv("NEEDS_HUMAN_DIGEST_ENABLED", "false")
+	assert _park(7)["parking"] is None
+
+
+def test_needs_human_alert_claim_posts_one_claim_and_wins(fake: FakeGitHub) -> None:
+	result = writer.needs_human_alert_claim(REPO, 7, STAMP, BOT, now=NOW)
+	assert result["claimed"] is True and result["comment_id"] == 5000 and result["alert_attempted_at"] == NOW
+	posts = _claim_posts(fake)
+	assert len(posts) == 1
+	last = posts[0][-1].split("\n")[-1]
+	assert last == f"<!-- ai:unblock-park-alert:v1 item=7 parked={STAMP} state=attempted -->"
+	assert writer.NEEDS_HUMAN_ALERT_MARKER_RE.match(last)
+	# Two paginated reads (before and after the claim), one POST.
+	assert len([args for args in fake.calls if "--slurp" in args]) == 2
+
+
+@pytest.mark.parametrize("prior", [
+	_claim_body(),
+	_claim_body(state="confirmed", message="4242"),
+	_claim_body(parking="overflow"),
+])
+def test_needs_human_alert_claim_skips_an_attempted_parking(fake: FakeGitHub, prior: str) -> None:
+	fake.comments[7] = [{"id": 10, "body": prior, "user": {"login": BOT}}]
+	result = writer.needs_human_alert_claim(REPO, 7, STAMP, BOT)
+	assert result["claimed"] is False and result["reason"] == "already_attempted" and result["comment_id"] == 10
+	assert _claim_posts(fake) == []
+
+
+@pytest.mark.parametrize("prior", [
+	_claim_body(parking="2026-01-01T00:00:00Z"),  # An earlier parking of the same item.
+	_claim_body(item=8),  # Another item.
+	"quoted\n" + _claim_body() + "\nand more",  # Not the last line.
+])
+def test_needs_human_alert_claim_ignores_claims_for_other_parkings(fake: FakeGitHub, prior: str) -> None:
+	fake.comments[7] = [{"id": 10, "body": prior, "user": {"login": BOT}}]
+	assert writer.needs_human_alert_claim(REPO, 7, STAMP, BOT)["claimed"] is True
+
+
+def test_needs_human_alert_claim_ignores_a_forged_claim(fake: FakeGitHub) -> None:
+	fake.comments[7] = [{"id": 10, "body": _claim_body(state="confirmed", message="1"), "user": {"login": "mallory"}}]
+	result = writer.needs_human_alert_claim(REPO, 7, STAMP, BOT)
+	assert result["claimed"] is True and len(_claim_posts(fake)) == 1
+
+
+def test_needs_human_alert_claim_loses_to_a_concurrent_lower_id_claim(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch) -> None:
+	original = fake.__call__
+
+	def racing(args: list[str], *, allow_existing_label: bool = False) -> str:
+		out = original(args, allow_existing_label=allow_existing_label)
+		if "-f" in args and args[1] == f"repos/{REPO}/issues/7/comments":
+			# Another run's claim landed first (lower id).
+			fake.comments[7].insert(0, {"id": 10, "body": _claim_body(), "user": {"login": BOT}})
+		return out
+
+	monkeypatch.setattr(writer, "_gh", racing)
+	result = writer.needs_human_alert_claim(REPO, 7, STAMP, BOT)
+	assert result["claimed"] is False and result["reason"] == "lost_race"
+
+
+def test_needs_human_alert_claim_unverified_when_its_claim_is_not_listed(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch) -> None:
+	original = fake.__call__
+
+	def lagging(args: list[str], *, allow_existing_label: bool = False) -> str:
+		out = original(args, allow_existing_label=allow_existing_label)
+		if "-f" in args and args[1] == f"repos/{REPO}/issues/7/comments":
+			fake.comments[7] = []  # The listing lags behind the POST.
+		return out
+
+	monkeypatch.setattr(writer, "_gh", lagging)
+	result = writer.needs_human_alert_claim(REPO, 7, STAMP, BOT)
+	assert result["claimed"] is False and result["reason"] == "claim_unverified"
+
+
+@pytest.mark.parametrize("fail", ["post", "reread", "no_id"])
+def test_needs_human_alert_claim_failures_exit_2(fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch,
+		capsys: pytest.CaptureFixture[str], fail: str) -> None:
+	original = fake.__call__
+	reads = {"count": 0}
+
+	def failing(args: list[str], *, allow_existing_label: bool = False) -> str:
+		if "--slurp" in args:
+			reads["count"] += 1
+			if fail == "reread" and reads["count"] == 2:
+				raise writer.ApiError("re-read failed")
+		if "-f" in args and args[1] == f"repos/{REPO}/issues/7/comments":
+			if fail == "post":
+				raise writer.ApiError("post failed")
+			if fail == "no_id":
+				return "{}"
+		return original(args, allow_existing_label=allow_existing_label)
+
+	monkeypatch.setattr(writer, "_gh", failing)
+	code = writer.main(["needs-human", "alert-claim", "--repo", REPO, "--item", "7", "--parking", STAMP, "--trusted-login", BOT])
+	captured = capsys.readouterr()
+	assert code == 2 and "error" in json.loads(captured.out)
+	assert "NEEDS_HUMAN_ALERT item=7 parking=" in captured.err and "outcome=failed" in captured.err
+
+
+def test_needs_human_alert_claim_kill_switch_and_bad_arguments(fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch) -> None:
+	assert writer.main(["needs-human", "alert-claim", "--repo", REPO, "--item", "7", "--parking", "yesterday"]) == 1
+	assert writer.main(["needs-human", "alert-confirm", "--repo", REPO, "--item", "7", "--parking", STAMP,
+		"--comment-id", "5000", "--message-id", "12a"]) == 1
+	assert writer.main(["needs-human", "alert-confirm", "--repo", REPO, "--item", "7", "--parking", STAMP,
+		"--comment-id", "0", "--message-id", "12"]) == 1
+	assert fake.calls == []
+	monkeypatch.setenv("NEEDS_HUMAN_DIGEST_ENABLED", "false")
+	assert writer.needs_human_alert_claim(REPO, 7, STAMP, BOT)["reason"] == "disabled"
+	assert writer.needs_human_alert_confirm(REPO, 7, STAMP, "5000", "12")["reason"] == "disabled"
+	assert fake.calls == []
+
+
+def test_needs_human_alert_confirm_patches_the_claim_in_place(fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch,
+		capsys: pytest.CaptureFixture[str]) -> None:
+	result = writer.needs_human_alert_confirm(REPO, 7, STAMP, "5000", "4242")
+	assert result["confirmed"] is True
+	patch = fake.patches()
+	assert len(patch) == 1 and patch[0][3] == f"repos/{REPO}/issues/comments/5000"
+	assert patch[0][-1].endswith(f"<!-- ai:unblock-park-alert:v1 item=7 parked={STAMP} state=confirmed message=4242 -->")
+	# A confirmed claim still counts as the parking's one attempt.
+	fake.comments[7] = [{"id": 5000, "body": patch[0][-1][len("body="):], "user": {"login": BOT}}]
+	assert writer.needs_human_alert_claim(REPO, 7, STAMP, BOT)["reason"] == "already_attempted"
+
+	def failing(args: list[str], *, allow_existing_label: bool = False) -> str:
+		raise writer.ApiError("patch failed")
+
+	monkeypatch.setattr(writer, "_gh", failing)
+	capsys.readouterr()
+	assert writer.main(["needs-human", "alert-confirm", "--repo", REPO, "--item", "7", "--parking", STAMP,
+		"--comment-id", "5000", "--message-id", "4242"]) == 2
+	assert "outcome=failed reason=confirm_write_failed" in capsys.readouterr().err
+
+
+def test_needs_human_cli_dispatch_keeps_prune_reachable(fake: FakeGitHub, capsys: pytest.CaptureFixture[str]) -> None:
+	assert writer.main(["needs-human", "prune", "--repo", REPO, "--trusted-login", BOT]) == 0
+	assert json.loads(capsys.readouterr().out)["reason"] == "no_digest"
+
+
+# --- resolving released entries (stuck-states P10, Refs #8291) ----------------
+
+RELEASE_SHA = "c" * 40
+RELEASE_STEPS = [{"title": "Ship the change to consumers", "instructions": "The promote cycle tags stable.",
+	"dormant_until": f"@stable contains {RELEASE_SHA}"}]
+SECRET_STEP = {"title": "Add the DEPLOY_TOKEN secret", "instructions": "gh secret set DEPLOY_TOKEN", "dormant_until": "DEPLOY_TOKEN"}
+
+
+def _release_entry(fake: FakeGitHub, number: int, comment_id: int, key: str, sha: str | None = RELEASE_SHA,
+		steps: list[dict] | None = None, login: str = BOT) -> str:
+	body = writer.render_entry(key, f"Activation of {key}", steps or RELEASE_STEPS, sha)
+	_entry_comment(fake, number, comment_id, body, login=login)
+	return body
+
+
+def _compares(fake: FakeGitHub) -> list[list[str]]:
+	return [args for args in fake.calls if args[0] == "api" and len(args) > 1 and "/compare/" in args[1]]
+
+
+def _issue_patches(fake: FakeGitHub, number: int) -> list[list[str]]:
+	return [args for args in fake.patches() if args[3] == f"repos/{REPO}/issues/{number}"]
+
+
+@pytest.mark.parametrize(("status", "outcome"), [
+	("ahead", "ticked"), ("identical", "ticked"), ("behind", "not_contained"), ("diverged", "not_contained"),
+])
+def test_operator_step_resolve_ticks_only_contained_release_entries(fake: FakeGitHub, status: str, outcome: str) -> None:
+	number = _tracker(fake)
+	original = _release_entry(fake, number, 10, "pr-1")
+	fake.compare_status[RELEASE_SHA] = status
+	result = writer.resolve(REPO, BOT)
+	assert result["compares"] == 1
+	assert _compares(fake)[0][1] == f"repos/{REPO}/compare/{RELEASE_SHA}...stable"
+	assert fake.comments[number][0]["body"] == original  # Never edited.
+	assert not any("/comments/" in args[3] for args in fake.patches())
+	if outcome == "ticked":
+		assert result["ticked"] == ["pr-1"] and result["skipped"] == {} and result["unticked"] == 0
+		resolved = next(comment for comment in fake.comments[number] if "ai:operator-step:resolved" in comment["body"])
+		lines = resolved["body"].split("\n")
+		assert lines[0] == "<!-- ai:operator-step:entry key=pr-1 -->"
+		assert lines[1] == f"<!-- ai:operator-step:source-sha={RELEASE_SHA} -->"
+		assert "- [x] **Ship the change to consumers**" in lines and not any(line.startswith("- [ ]") for line in lines)
+		assert f"<!-- ai:operator-step:resolved release=stable status={status} -->" in lines
+		assert any(writer.RESOLVED_RE.match(line) for line in lines)
+	else:
+		assert result["ticked"] == [] and result["skipped"] == {"not_contained": 1}
+		assert _posts(fake, number) == [] and fake.patches() == [] and result["closed"] is False
+
+
+def test_operator_step_resolve_compare_failure_halts_later_compares(fake: FakeGitHub) -> None:
+	number = _tracker(fake)
+	_release_entry(fake, number, 10, "pr-1", "d" * 40)  # No status: the compare fails.
+	_release_entry(fake, number, 11, "pr-2", "e" * 40)
+	fake.compare_status["e" * 40] = "ahead"
+	result = writer.resolve(REPO, BOT)
+	assert result["skipped"] == {"compare_failed": 1, "deferred": 1} and result["ticked"] == []
+	assert len(_compares(fake)) == 1 and result["closed"] is False and fake.closed == []
+
+
+def test_operator_step_resolve_caps_and_caches_compares(fake: FakeGitHub) -> None:
+	number = _tracker(fake)
+	for n in range(1, 13):
+		_release_entry(fake, number, 10 + n, f"pr-{n}", f"{n:040x}")
+		fake.compare_status[f"{n:040x}"] = "behind"
+	result = writer.resolve(REPO, BOT)
+	assert result["compares"] == writer.MAX_RESOLVE_COMPARES == 10
+	assert result["skipped"] == {"not_contained": 10, "deferred": 2}
+	# Oldest entries are compared first.
+	assert [args[1].split("/compare/")[1][:40] for args in _compares(fake)] == [f"{n:040x}" for n in range(1, 11)]
+
+
+def test_operator_step_resolve_compares_a_shared_commit_once(fake: FakeGitHub) -> None:
+	number = _tracker(fake)
+	_release_entry(fake, number, 10, "pr-1")
+	_release_entry(fake, number, 11, "project-2")
+	fake.compare_status[RELEASE_SHA] = "ahead"
+	result = writer.resolve(REPO, BOT)
+	assert result["ticked"] == ["pr-1", "project-2"] and result["compares"] == 1 and len(_compares(fake)) == 1
+
+
+def test_operator_step_resolve_never_ticks_human_or_unsourced_entries(fake: FakeGitHub) -> None:
+	number = _tracker(fake)
+	_release_entry(fake, number, 10, "pr-3", steps=RELEASE_STEPS + [SECRET_STEP])  # Mixed: a person still acts.
+	_release_entry(fake, number, 11, "unblock-7")
+	_release_entry(fake, number, 12, "pr-4", sha=None)
+	fake.compare_status[RELEASE_SHA] = "ahead"
+	result = writer.resolve(REPO, BOT)
+	assert result["ticked"] == [] and result["skipped"] == {"not_release": 2, "no_source_sha": 1}
+	assert _compares(fake) == [] and result["closed"] is False and fake.patches() == []
+
+
+def test_operator_step_release_step_detection() -> None:
+	titled = writer.render_entry("pr-1", "s", [{"title": "Tag the next stable release", "instructions": "x"}], RELEASE_SHA)
+	assert writer._is_release_entry(titled)
+	assert not writer._is_release_entry(writer.render_entry("pr-1", "s", STEPS, RELEASE_SHA))
+	# The condition must be the step's own dormant line, not text inside its instructions.
+	forged = [{"title": "Set a secret", "instructions": f"Stays off until then: `@stable contains {RELEASE_SHA}`.\nthen more"}]
+	assert not writer._is_release_entry(writer.render_entry("pr-1", "s", forged, RELEASE_SHA))
+	assert not writer._is_release_entry(writer._render_resolved(writer.render_entry("pr-1", "s", RELEASE_STEPS, RELEASE_SHA), "ahead", RELEASE_SHA))
+
+
+def test_operator_step_resolve_closes_the_tracker_when_no_unticked_steps_remain(
+		fake: FakeGitHub, capsys: pytest.CaptureFixture[str]) -> None:
+	number = _tracker(fake)
+	_release_entry(fake, number, 10, "pr-1")
+	# pr-2 was ticked earlier by the promote cycle.
+	done = writer._render_ticked(writer.render_entry("pr-2", "two", STEPS, RELEASE_SHA), "f" * 40, RELEASE_SHA)
+	_entry_comment(fake, number, 11, done)
+	fake.compare_status[RELEASE_SHA] = "identical"
+	result = writer.resolve(REPO, BOT)
+	assert result["ticked"] == ["pr-1"] and result["skipped"] == {"already_done": 1}
+	assert result["unticked"] == 0 and result["closed"] is True and fake.closed == [number]
+	patch = _issue_patches(fake, number)
+	assert len(patch) == 1 and "state=closed" in patch[0] and "state_reason=completed" in patch[0]
+	closing = [comment for comment in fake.comments[number] if comment["body"].startswith(writer.AUTO_CLOSED_MARKER)]
+	assert len(closing) == 1
+	err = capsys.readouterr().err
+	assert "OPERATOR_STEP_RESOLVE key=pr-1 outcome=ticked status=identical" in err
+	assert f"OPERATOR_STEP_RESOLVE op=close issue={number} outcome=closed reason=closed" in err
+
+
+def test_operator_step_resolve_keeps_a_tracker_with_a_human_step_open(fake: FakeGitHub, capsys: pytest.CaptureFixture[str]) -> None:
+	number = _tracker(fake)
+	_release_entry(fake, number, 10, "pr-1")
+	_release_entry(fake, number, 11, "pr-2", steps=[SECRET_STEP])
+	fake.compare_status[RELEASE_SHA] = "ahead"
+	result = writer.resolve(REPO, BOT)
+	assert result["ticked"] == ["pr-1"] and result["unticked"] == 1 and result["closed"] is False
+	assert _issue_patches(fake, number) == []
+	assert f"op=close issue={number} outcome=open reason=unticked" in capsys.readouterr().err
+
+
+def test_operator_step_resolve_never_closes_an_empty_tracker(fake: FakeGitHub, capsys: pytest.CaptureFixture[str]) -> None:
+	number = _tracker(fake)
+	result = writer.resolve(REPO, BOT)
+	assert result["closed"] is False and fake.patches() == [] and _posts(fake, number) == []
+	assert "reason=no_entries" in capsys.readouterr().err
+
+
+def test_operator_step_resolve_never_closes_a_reopened_tracker(fake: FakeGitHub, capsys: pytest.CaptureFixture[str]) -> None:
+	number = _tracker(fake)
+	fake.issues[0]["state_reason"] = "reopened"
+	_entry_comment(fake, number, 10, writer._render_resolved(writer.render_entry("pr-1", "s", RELEASE_STEPS, RELEASE_SHA), "ahead", RELEASE_SHA))
+	result = writer.resolve(REPO, BOT)
+	assert result["skipped"] == {"already_done": 1} and result["closed"] is False and fake.patches() == []
+	assert "reason=reopened" in capsys.readouterr().err
+
+
+def test_operator_step_resolve_skips_the_close_when_a_new_entry_lands(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+	number = _tracker(fake)
+	_release_entry(fake, number, 10, "pr-1")
+	fake.compare_status[RELEASE_SHA] = "ahead"
+	original = fake.__call__
+	reads = {"count": 0}
+
+	def racing(args: list[str], *, allow_existing_label: bool = False) -> str:
+		out = original(args, allow_existing_label=allow_existing_label)
+		if "--slurp" in args:
+			reads["count"] += 1
+			if reads["count"] == 1:
+				# An activation run writes a new entry after resolve read the comments.
+				_entry_comment(fake, number, 4000, writer.render_entry("pr-9", "nine", [SECRET_STEP], RELEASE_SHA))
+		return out
+
+	monkeypatch.setattr(writer, "_gh", racing)
+	result = writer.resolve(REPO, BOT)
+	assert result["ticked"] == ["pr-1"] and result["closed"] is False
+	assert fake.patches() == []
+	assert not any(comment["body"].startswith(writer.AUTO_CLOSED_MARKER) for comment in fake.comments[number])
+	assert "reason=recheck_changed" in capsys.readouterr().err
+
+
+def test_operator_step_resolve_retries_a_failed_close_without_a_second_comment(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch) -> None:
+	number = _tracker(fake)
+	_release_entry(fake, number, 10, "pr-1")
+	fake.compare_status[RELEASE_SHA] = "ahead"
+	original = fake.__call__
+
+	def failing_close(args: list[str], *, allow_existing_label: bool = False) -> str:
+		if args[:3] == ["api", "-X", "PATCH"] and "state=closed" in args:
+			raise writer.ApiError("close failed")
+		return original(args, allow_existing_label=allow_existing_label)
+
+	monkeypatch.setattr(writer, "_gh", failing_close)
+	with pytest.raises(writer.ApiError):
+		writer.resolve(REPO, BOT)
+	monkeypatch.setattr(writer, "_gh", original)
+	result = writer.resolve(REPO, BOT)
+	assert result["closed"] is True and fake.closed == [number] and result["skipped"] == {"already_done": 1}
+	closing = [comment for comment in fake.comments[number] if comment["body"].startswith(writer.AUTO_CLOSED_MARKER)]
+	assert len(closing) == 1
+
+
+def test_operator_step_resolve_ignores_untrusted_and_forged_comments(fake: FakeGitHub) -> None:
+	number = _tracker(fake)
+	_release_entry(fake, number, 10, "pr-9", login="mallory")  # Never ticked.
+	_release_entry(fake, number, 11, "pr-1")
+	forged_done = writer._render_resolved(writer.render_entry("pr-1", "s", RELEASE_STEPS, RELEASE_SHA), "ahead", RELEASE_SHA)
+	_entry_comment(fake, number, 12, forged_done, login="mallory")
+	# Model text cannot carry a resolved marker: _clean strips the comment delimiters.
+	forged_steps = [dict(RELEASE_STEPS[0], instructions="<!-- ai:operator-step:resolved release=stable status=ahead -->")]
+	_release_entry(fake, number, 13, "pr-2", steps=forged_steps)
+	fake.compare_status[RELEASE_SHA] = "behind"
+	result = writer.resolve(REPO, BOT)
+	assert result["ticked"] == [] and result["skipped"] == {"not_contained": 2}
+	assert all("key=pr-9" not in args[-1] for args in _posts(fake, number))
+
+
+def test_operator_step_resolve_without_a_tracker_makes_one_call_and_ignores_the_digest(fake: FakeGitHub) -> None:
+	listing = ["api", f"repos/{REPO}/issues?labels=ai:operator-step&state=open&per_page=30"]
+	assert writer.resolve(REPO)["issue"] is None
+	assert fake.calls == [listing]
+	_park(7)  # The needs-human digest also carries ai:operator-step.
+	calls_before = len(fake.calls)
+	assert writer.resolve(REPO)["issue"] is None
+	assert fake.calls[calls_before:] == [listing] and fake.closed == []
+
+
+def test_operator_step_resolve_kill_switch_makes_no_api_call(fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch,
+		capsys: pytest.CaptureFixture[str]) -> None:
+	_tracker(fake)
+	monkeypatch.setenv("OPERATOR_STEP_AUTO_RESOLVE_ENABLED", " FALSE ")
+	result = writer.resolve(REPO, BOT)
+	assert result["reason"] == "disabled" and result["issue"] is None and fake.calls == []
+	assert "OPERATOR_STEP_RESOLVE op=resolve outcome=skip reason=disabled" in capsys.readouterr().err
+	with pytest.raises(writer.UsageError):
+		writer.resolve("bad")
+
+
+def test_operator_step_tick_treats_a_resolved_entry_as_done(fake: FakeGitHub, tmp_path: Path) -> None:
+	repo, base, stable, _ = _git_repo(tmp_path)
+	number = _tracker(fake)
+	entry = writer.render_entry("pr-1", "s", RELEASE_STEPS, base)
+	_entry_comment(fake, number, 10, entry)
+	_entry_comment(fake, number, 11, writer._render_resolved(entry, "ahead", base))
+	result = writer.tick(REPO, stable, str(repo), BOT)
+	assert result["ticked"] == [] and result["skipped"] == {"already_done": 1}
+	assert _posts(fake, number) == []
+
+
+def test_operator_step_resolve_cli_round_trip(fake: FakeGitHub, capsys: pytest.CaptureFixture[str]) -> None:
+	number = _tracker(fake)
+	_release_entry(fake, number, 10, "pr-1")
+	fake.compare_status[RELEASE_SHA] = "ahead"
+	assert writer.main(["resolve", "--repo", REPO, "--trusted-login", BOT]) == 0
+	out = json.loads(capsys.readouterr().out)
+	assert out["issue"] == number and out["ticked"] == ["pr-1"] and out["closed"] is True
+	assert writer.main(["resolve", "--repo", "bad"]) == 1
+
+
+def test_operator_step_release_condition_matches_activation_verify() -> None:
+	script = (ROOT / "scripts" / "activation_verify.sh").read_text(encoding="utf-8")
+	match = re.search(r'RELEASE_CONDITION_RE = re\.compile\(r"(.+?)", re\.I\)', script)
+	assert match and match.group(1) == writer.RELEASE_CONDITION_RE.pattern
+	assert writer.RELEASE_CONDITION_RE.flags & re.I
+
+
+def test_poller_wires_operator_step_resolve_step() -> None:
+	# Plain-text parse of the poll job's steps: PyYAML is not installed in
+	# every test container, and this test must not skip without it.
+	text = (ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	poll_job = re.search(r"\n  poll:\n(.*?)(?=\n  [A-Za-z0-9_-]+:\n|\Z)", text, re.S)
+	assert poll_job
+	blocks = poll_job.group(1).split("\n      - ")[1:]
+	names = [block.split("\n", 1)[0][len("name: "):].strip() if block.startswith("name: ") else None for block in blocks]
+	block = blocks[names.index("Resolve released operator steps")]
+	assert names.index("Resume dependency waits") + 1 == names.index("Resolve released operator steps") < names.index("Find active tracking issues")
+	keys = re.findall(r"^        ([A-Za-z-]+):", block, re.M)
+	assert "if" not in keys and re.search(r"^        continue-on-error: true$", block, re.M)
+	env_block = re.search(r"^        env:\n((?:          .*\n)+)", block, re.M)
+	assert env_block
+	env = dict(line.strip().split(": ", 1) for line in env_block.group(1).splitlines())
+	assert env == {
+		"GH_TOKEN": "${{ secrets.GH_PAT }}",
+		"GITHUB_REPOSITORY": "${{ github.repository }}",
+		"OPERATOR_STEP_AUTO_RESOLVE_ENABLED": "${{ vars.OPERATOR_STEP_AUTO_RESOLVE_ENABLED || 'true' }}",
+	}
+	run_block = re.search(r"^        run: \|\n((?:          .*\n|\n)+)", block + "\n", re.M)
+	assert run_block
+	run = "\n".join(line[10:] for line in run_block.group(1).splitlines())
+	assert 'helper=".codex-workflow-src/scripts/operator_step_issue.py"' in run
+	assert '[ -L "${helper}" ]' in run and "grep -q 'OPERATOR_STEP_RESOLVE' \"${helper}\"" in run
+	assert "::notice::OPERATOR_STEP_RESOLVE op=resolve outcome=skip reason=helper_missing" in run
+	assert run.index("exit 0") < run.index("python3 -I -B")
+	assert 'PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${helper}" resolve --repo "${GITHUB_REPOSITORY}"' in run
+	assert "outcome=error reason=helper_exit" in run
+
+
+# --- review follow-ups: human steps with release-verb titles, close race ------
+
+
+def test_operator_step_resolve_never_ticks_a_human_step_with_a_release_title(fake: FakeGitHub) -> None:
+	number = _tracker(fake)
+	human = {"title": "Sync the DEPLOY_TOKEN secret to the stable environment", "instructions": "gh secret set DEPLOY_TOKEN",
+		"dormant_until": "DEPLOY_TOKEN"}
+	assert not writer._is_release_entry(writer.render_entry("pr-5", "s", [human], RELEASE_SHA))
+	_release_entry(fake, number, 10, "pr-5", steps=[human])
+	fake.compare_status[RELEASE_SHA] = "ahead"
+	result = writer.resolve(REPO, BOT)
+	assert result["ticked"] == [] and result["skipped"] == {"not_release": 1}
+	assert _compares(fake) == [] and result["closed"] is False and fake.closed == []
+
+
+def test_operator_step_resolve_reopens_when_an_entry_lands_during_the_close(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+	number = _tracker(fake)
+	_release_entry(fake, number, 10, "pr-1")
+	fake.compare_status[RELEASE_SHA] = "ahead"
+	original = fake.__call__
+
+	def racing(args: list[str], *, allow_existing_label: bool = False) -> str:
+		out = original(args, allow_existing_label=allow_existing_label)
+		if args[:3] == ["api", "-X", "PATCH"] and "state=closed" in args:
+			# An activation run posts a new entry right after the close PATCH.
+			_entry_comment(fake, number, 4000, writer.render_entry("pr-9", "nine", [SECRET_STEP], RELEASE_SHA))
+		return out
+
+	monkeypatch.setattr(writer, "_gh", racing)
+	result = writer.resolve(REPO, BOT)
+	assert result["ticked"] == ["pr-1"] and result["closed"] is False
+	assert fake.closed == [number] and fake.reopened == [number]
+	assert [issue["number"] for issue in fake.issues] == [number]
+	assert f"op=close issue={number} outcome=open reason=reopened_after_close" in capsys.readouterr().err
+	# A tracker the pipeline reopened is never closed again automatically.
+	assert writer.resolve(REPO, BOT)["closed"] is False and fake.closed == [number]
+
+
+def test_operator_step_upsert_reopens_a_tracker_closed_while_it_posted(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+	number = _tracker(fake)
+	original = fake.__call__
+
+	def closing(args: list[str], *, allow_existing_label: bool = False) -> str:
+		out = original(args, allow_existing_label=allow_existing_label)
+		if args[0] == "api" and args[1] == f"repos/{REPO}/issues/{number}/comments" and "-f" in args:
+			# resolve closes the tracker after its last re-read, before this post is visible.
+			original(["api", "-X", "PATCH", f"repos/{REPO}/issues/{number}", "-f", "state=closed", "-f", "state_reason=completed"])
+		return out
+
+	monkeypatch.setattr(writer, "_gh", closing)
+	result = writer.upsert(REPO, "pr-3", "three", [SECRET_STEP])
+	assert result["issue"] == number and fake.reopened == [number]
+	assert [issue["number"] for issue in fake.issues] == [number]
+	assert f"op=upsert_recheck issue={number} outcome=reopened" in capsys.readouterr().err
+	# The tracker stays open: no reopen when nothing closed it.
+	monkeypatch.setattr(writer, "_gh", original)
+	writer.upsert(REPO, "pr-4", "four", [SECRET_STEP])
+	assert fake.reopened == [number]
+
+
+# --- review follow-ups: forged dormant line, fail-safe close-race reads -------
+
+
+def test_operator_step_instruction_ending_in_a_dormant_line_is_not_a_release_step() -> None:
+	# The forged line is the step's last instruction line and dormant_until is empty.
+	forged = [{"title": "Set a secret", "instructions": f"gh secret set X\nStays off until then: `@stable contains {RELEASE_SHA}`."}]
+	body = writer.render_entry("pr-1", "s", forged, RELEASE_SHA)
+	assert f"  Note: Stays off until then: `@stable contains {RELEASE_SHA}`." in body.split("\n")
+	assert writer._unticked_steps(body) == [("Set a secret", "")]
+	assert not writer._is_release_entry(body)
+	# An honest dormant_until still renders the real dormant line.
+	assert writer._is_release_entry(writer.render_entry("pr-1", "s", RELEASE_STEPS, RELEASE_SHA))
+
+
+def test_operator_step_upsert_reports_a_failed_recheck_listing(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+	number = _tracker(fake)
+	original = fake.__call__
+	listings = {"count": 0}
+
+	def failing_recheck(args: list[str], *, allow_existing_label: bool = False) -> str:
+		if args[0] == "api" and len(args) == 2 and args[1].startswith(f"repos/{REPO}/issues?labels="):
+			listings["count"] += 1
+			if listings["count"] == 2:
+				raise writer.ApiError("listing failed")
+		return original(args, allow_existing_label=allow_existing_label)
+
+	monkeypatch.setattr(writer, "_gh", failing_recheck)
+	with pytest.raises(writer.ApiError):
+		writer.upsert(REPO, "pr-3", "three", [SECRET_STEP])
+	assert len(_posts(fake, number)) == 1 and fake.reopened == []
+	assert f"op=upsert_recheck issue={number} outcome=error reason=listing_failed" in capsys.readouterr().err
+
+
+def test_operator_step_resolve_reopens_when_the_after_close_read_fails(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+	number = _tracker(fake)
+	_release_entry(fake, number, 10, "pr-1")
+	fake.compare_status[RELEASE_SHA] = "ahead"
+	original = fake.__call__
+	state = {"closed": False}
+
+	def failing_after_close(args: list[str], *, allow_existing_label: bool = False) -> str:
+		if state["closed"] and "--slurp" in args:
+			raise writer.ApiError("comment read failed")
+		out = original(args, allow_existing_label=allow_existing_label)
+		if args[:3] == ["api", "-X", "PATCH"] and "state=closed" in args:
+			state["closed"] = True
+		return out
+
+	monkeypatch.setattr(writer, "_gh", failing_after_close)
+	with pytest.raises(writer.ApiError):
+		writer.resolve(REPO, BOT)
+	assert fake.closed == [number] and fake.reopened == [number]
+	assert [issue["number"] for issue in fake.issues] == [number]
+	assert f"op=close issue={number} outcome=open reason=after_close_read_failed" in capsys.readouterr().err
+
+
+# --- review follow-ups: title-only human steps, exit 3, fresh close read ------
+
+
+def test_operator_step_title_only_step_naming_a_secret_is_a_human_step(fake: FakeGitHub) -> None:
+	# dormant_until is optional: no condition line, release verb and "stable" in the title.
+	human = {"title": "Sync the DEPLOY_TOKEN secret to the stable environment", "instructions": "gh secret set DEPLOY_TOKEN"}
+	assert not writer._is_release_entry(writer.render_entry("pr-5", "s", [human], RELEASE_SHA))
+	assert writer._is_release_entry(writer.render_entry("pr-5", "s", [{"title": "Promote main to stable", "instructions": "x"}], RELEASE_SHA))
+	number = _tracker(fake)
+	_release_entry(fake, number, 10, "pr-5", steps=[human])
+	fake.compare_status[RELEASE_SHA] = "ahead"
+	result = writer.resolve(REPO, BOT)
+	assert result["ticked"] == [] and result["skipped"] == {"not_release": 1} and fake.closed == []
+
+
+@pytest.mark.parametrize("title", ["Sync NPM_TOKEN to stable", "Publish API_KEY to the stable environment",
+	"Sync DEPLOY_TOKEN to stable"])
+def test_operator_step_title_only_step_naming_an_underscore_secret_is_a_human_step(fake: FakeGitHub, title: str) -> None:
+	# `_` is a regex word character: the guard must still see TOKEN / KEY inside a SCREAMING_SNAKE name.
+	human = {"title": title, "instructions": "Set it in the repository settings."}
+	assert not writer._is_release_entry(writer.render_entry("pr-6", "s", [human], RELEASE_SHA))
+	number = _tracker(fake)
+	_release_entry(fake, number, 10, "pr-6", steps=[human])
+	fake.compare_status[RELEASE_SHA] = "ahead"
+	result = writer.resolve(REPO, BOT)
+	assert result["ticked"] == [] and result["skipped"] == {"not_release": 1} and fake.closed == []
+
+
+@pytest.mark.parametrize("title", ["Sync npmToken to stable", "Publish apiKey to stable", "Sync the githubSecret to stable"])
+def test_operator_step_title_only_step_naming_a_camelcase_secret_is_a_human_step(title: str) -> None:
+	# A secret name inside a camelCase identifier must still make the step a human step.
+	human = {"title": title, "instructions": "Set it in the repository settings."}
+	assert not writer._is_release_entry(writer.render_entry("pr-7", "s", [human], RELEASE_SHA))
+	# Release titles without a secret name still pass.
+	assert writer._is_release_entry(writer.render_entry("pr-7", "s", [{"title": "Promote main to stable", "instructions": "x"}], RELEASE_SHA))
+
+
+def test_operator_step_upsert_recheck_failure_exits_3_with_the_entry_posted(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+	number = _tracker(fake)
+	original = fake.__call__
+	listings = {"count": 0}
+
+	def failing_recheck(args: list[str], *, allow_existing_label: bool = False) -> str:
+		if args[0] == "api" and len(args) == 2 and args[1].startswith(f"repos/{REPO}/issues?labels="):
+			listings["count"] += 1
+			if listings["count"] == 2:
+				raise writer.ApiError("listing failed")
+		return original(args, allow_existing_label=allow_existing_label)
+
+	monkeypatch.setattr(writer, "_gh", failing_recheck)
+	steps_file = tmp_path / "steps.json"
+	steps_file.write_text(json.dumps([SECRET_STEP]), encoding="utf-8")
+	assert writer.main(["upsert", "--repo", REPO, "--key", "pr-3", "--source", "three", "--steps-file", str(steps_file)]) == 3
+	assert json.loads(capsys.readouterr().out)["posted"] is True
+	assert len(_posts(fake, number)) == 1
+
+
+def test_operator_step_pipeline_reopens_set_state_reason(fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch) -> None:
+	number = _tracker(fake)
+	original = fake.__call__
+
+	def closing(args: list[str], *, allow_existing_label: bool = False) -> str:
+		out = original(args, allow_existing_label=allow_existing_label)
+		if args[0] == "api" and args[1] == f"repos/{REPO}/issues/{number}/comments" and "-f" in args:
+			original(["api", "-X", "PATCH", f"repos/{REPO}/issues/{number}", "-f", "state=closed", "-f", "state_reason=completed"])
+		return out
+
+	monkeypatch.setattr(writer, "_gh", closing)
+	writer.upsert(REPO, "pr-3", "three", [SECRET_STEP])
+	reopen = [args for args in _issue_patches(fake, number) if "state=open" in args]
+	assert len(reopen) == 1 and "state_reason=reopened" in reopen[0]
+
+
+def test_operator_step_resolve_keeps_a_tracker_reopened_during_the_tick_open(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+	number = _tracker(fake)
+	_release_entry(fake, number, 10, "pr-1")
+	fake.compare_status[RELEASE_SHA] = "ahead"
+	original = fake.__call__
+
+	def reopened_meanwhile(args: list[str], *, allow_existing_label: bool = False) -> str:
+		if args == ["api", f"repos/{REPO}/issues/{number}"]:
+			# A person closed and reopened the tracker after the tick's listing.
+			return json.dumps({"number": number, "state": "open", "state_reason": "reopened"})
+		return original(args, allow_existing_label=allow_existing_label)
+
+	monkeypatch.setattr(writer, "_gh", reopened_meanwhile)
+	result = writer.resolve(REPO, BOT)
+	assert result["ticked"] == ["pr-1"] and result["closed"] is False and fake.closed == []
+	assert not any(comment["body"].startswith(writer.AUTO_CLOSED_MARKER) for comment in fake.comments[number])
+	assert f"op=close issue={number} outcome=open reason=reopened" in capsys.readouterr().err
+
+
+def test_operator_step_resolve_logs_a_failed_fail_safe_reopen(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+	number = _tracker(fake)
+	_release_entry(fake, number, 10, "pr-1")
+	fake.compare_status[RELEASE_SHA] = "ahead"
+	original = fake.__call__
+	state = {"closed": False}
+
+	def failing(args: list[str], *, allow_existing_label: bool = False) -> str:
+		if state["closed"] and ("--slurp" in args or "state=open" in args):
+			raise writer.ApiError("GitHub unavailable")
+		out = original(args, allow_existing_label=allow_existing_label)
+		if args[:3] == ["api", "-X", "PATCH"] and "state=closed" in args:
+			state["closed"] = True
+		return out
+
+	monkeypatch.setattr(writer, "_gh", failing)
+	with pytest.raises(writer.ApiError):
+		writer.resolve(REPO, BOT)
+	assert fake.closed == [number] and fake.reopened == []
+	assert f"op=close issue={number} outcome=closed reason=after_close_reopen_failed" in capsys.readouterr().err
