@@ -1025,9 +1025,11 @@ def parse_unparked(body: str) -> list[tuple[int, str]]:
 	if NEEDS_HUMAN_UNPARKED_MARKER not in text:
 		return []
 	found: list[tuple[int, str]] = []
+	seen_unparked: set[int] = set()
 	for raw in text.split(NEEDS_HUMAN_UNPARKED_MARKER, 1)[1].split("\n"):
 		match = NEEDS_HUMAN_UNPARKED_LINE_RE.match(raw.strip())
-		if match and int(match.group(1)) not in {n for n, _ in found}:
+		if match and int(match.group(1)) not in seen_unparked:
+			seen_unparked.add(int(match.group(1)))
 			found.append((int(match.group(1)), match.group(2)))
 	return found
 
