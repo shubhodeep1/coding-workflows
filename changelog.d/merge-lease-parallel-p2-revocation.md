@@ -3,6 +3,6 @@
 
 `MERGE_LEASE_REVOKE_ENABLED=false` turns all of this off and writes the lease record in the old format; `MERGE_LEASE_IDLE_MINUTES=0` turns off the idle test. Both defaults live in `scripts/pr_checks_lib.sh`. Every read failure counts as eligible (fail-open), so a GitHub hiccup never revokes a lease or blocks a grant. Records written before this change, and records with the new `skip=` lines, are read the same way by old and new code. New `MERGE_LEASE` tokens: `outcome=skipped` and the reasons `revoked_draft`, `revoked_skip_ai`, `revoked_no_head_gate`, `revoked_final_ci_failed`, `revoked_idle`, `skip_head_unchanged`, `draft`, `skip_ai`, `no_head_gate`, `final_ci_failed` and `no_eligible_waiter`; `MERGE_LEASE_METRIC` gains `event=skipped`.
 
-What this means for consumer repos: after the next `@stable` sync, a stuck lease holder hands the lease on within one poll tick instead of holding it until its TTL (240 minutes) expires. Nothing needs to be done; set the repo variable `MERGE_LEASE_REVOKE_ENABLED=false` (once a later phase wires it into the workflows) to keep the old behaviour.
+What this means for consumer repos: after the next `@stable` sync, a stuck lease holder hands the lease on within one poll tick instead of holding it until its TTL (240 minutes) expires. Nothing needs to be done; set the repo variable `MERGE_LEASE_REVOKE_ENABLED=false` to keep the old behaviour.
 
 Refs #9781
