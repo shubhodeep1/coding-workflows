@@ -14,7 +14,8 @@ compare {..}, closed [PR numbers whose GET pulls/<n> reads closed], user "login"
 runs {sha: [workflow runs]} (actions/runs?head_sha=), check_runs {sha: [check-runs]}
 (commits/<sha>/check-runs), fail ["substring", ...] (any call whose joined
 argv contains one fails), move_ref_on_patch {ref: sha} (simulates a peer
-winning the race: applied before the first PATCH of that ref), graphql {..}.
+winning the race: applied before the first PATCH of that ref; a list of SHAs
+is applied one per PATCH), graphql {..}.
 """
 
 from __future__ import annotations
@@ -153,7 +154,15 @@ def main() -> None:
 		ref = "refs/" + rest[len("git/refs/"):]
 		moves = state.get("move_ref_on_patch", {})
 		if ref in moves:
-			state.setdefault("refs", {})[ref] = moves.pop(ref)
+			move = moves[ref]
+			if isinstance(move, list):
+				# One SHA per PATCH of that ref (repeated lost races).
+				if move:
+					state.setdefault("refs", {})[ref] = move.pop(0)
+				if not move:
+					moves.pop(ref)
+			else:
+				state.setdefault("refs", {})[ref] = moves.pop(ref)
 		cur = state.get("refs", {}).get(ref)
 		new = fields["sha"][0]
 		if cur is None:

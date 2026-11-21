@@ -2416,6 +2416,28 @@ _merge_lease_split_soft()
 # Env (default here): MERGE_LEASE_PRIORITY_HEAD_PREFIXES (default
 # auto/forward-merge-stable-; comma-separated literal prefixes; empty, none
 # or off turns it off). The head ref comes from the listing already read.
+# Several holders per base (merge-lease-parallel Phase 5, Refs #9781):
+# MERGE_LEASE_MAX_HOLDERS (default 1, 1-5; not a whole number gives 1 with a
+# warning, out of range is clamped) PRs whose paths are pairwise disjoint
+# (Phase 4 soft class included) may hold one base's lease at once. With 2+
+# live holders the record keeps pr=/head=/acquired=/updated= for the primary,
+# expires= is the latest holder expiry (an old v1 reader then sees the primary
+# plus the union of paths: a stricter lease, never a weaker one), and lines
+# before `paths:` list every holder:
+#   holder=<pr> head=<sha|> expires=<epoch> acquired=<epoch> updated=<epoch>
+#   holder_path=<pr> <path>   (one per path; `*` for a holder over the cap)
+# `paths:` holds the union, or `*`. One holder is written in the v1 shape, so
+# with the default of 1 the code path, record bytes, log lines and API calls
+# are those of Phases 1-4. _merge_lease_read sets MERGE_LEASE_HOLDER_ROWS
+# (live rows `pr head expires acquired updated`, head `-` when unknown,
+# primary first), MERGE_LEASE_HOLDER_ALL_ROWS (expired rows too),
+# MERGE_LEASE_HOLDER_PATHS (`pr<TAB>path` lines) and MERGE_LEASE_HOLDER_COUNT;
+# the scalar MERGE_LEASE_* fields describe the primary (an expired primary
+# is replaced in memory by the oldest-acquired live holder) and
+# MERGE_LEASE_PATHS is the union. MERGE_LEASE_BLOCKER stays one PR number.
+# The `MERGE_LEASE` line gains a trailing ` holders=<n>` only with 2+ live
+# holders. API: none extra at 1; above 1 an update-mode acquisition reads the
+# files of each queue candidate ahead of the caller (at most 10).
 # ---------------------------------------------------------------------------
 
 _merge_lease_enabled()
@@ -2469,6 +2491,28 @@ _merge_lease_idle_seconds()
 	echo $((lease_idle_minutes * 60))
 }
 
+# Phase 5 (Refs #9781): holders allowed per base. MERGE_LEASE_MAX_HOLDERS
+# (default 1, range 1-5). A value that is not a whole number of at most three
+# digits uses 1 and prints one ::warning:: to stderr (the value shown is cut
+# to [0-9A-Za-z_-] and 32 characters); 0 gives 1, above 5 gives 5.
+_merge_lease_max_holders()
+{
+	local lease_mh_raw="${MERGE_LEASE_MAX_HOLDERS:-1}" lease_mh_shown
+	lease_mh_raw="${lease_mh_raw#"${lease_mh_raw%%[![:space:]]*}"}"
+	lease_mh_raw="${lease_mh_raw%"${lease_mh_raw##*[![:space:]]}"}"
+	[ -n "${lease_mh_raw}" ] || lease_mh_raw=1
+	if ! [[ "${lease_mh_raw}" =~ ^[0-9]{1,3}$ ]]; then
+		lease_mh_shown="$(printf '%s' "${lease_mh_raw}" | tr -cd '0-9A-Za-z_-' | cut -c1-32)"
+		echo "::warning::MERGE_LEASE_MAX_HOLDERS=${lease_mh_shown} is not an integer; using 1" >&2
+		echo 1
+		return 0
+	fi
+	lease_mh_raw=$((10#${lease_mh_raw}))
+	[ "${lease_mh_raw}" -ge 1 ] || lease_mh_raw=1
+	[ "${lease_mh_raw}" -le 5 ] || lease_mh_raw=5
+	echo "${lease_mh_raw}"
+}
+
 # _merge_lease_skips_normalize <skips> [<drop pr>]: the skip list (newline-
 # separated `pr:head`) with malformed entries and <drop pr>'s entries removed,
 # duplicates collapsed to their last position, and only the newest 50 kept.
@@ -2515,6 +2559,10 @@ _merge_lease_read()
 	MERGE_LEASE_PATHS=""
 	MERGE_LEASE_UPDATED=0
 	MERGE_LEASE_SKIPS=""
+	MERGE_LEASE_HOLDER_ROWS=""
+	MERGE_LEASE_HOLDER_ALL_ROWS=""
+	MERGE_LEASE_HOLDER_PATHS=""
+	MERGE_LEASE_HOLDER_COUNT=0
 	lease_ref="$(_merge_lease_ref_name "${lease_base}")"
 	lease_refs_json="$(gh_retry _safe_gh_jq "repos/${lease_repo}/git/matching-refs/${lease_ref}" 2>/dev/null)" || return 1
 	jq -e 'type == "array"' >/dev/null 2>&1 <<< "${lease_refs_json}" || return 1
@@ -2546,13 +2594,154 @@ _merge_lease_read()
 		*) MERGE_LEASE_STATE="released" ;;
 	esac
 	[ -n "${MERGE_LEASE_PR}" ] || MERGE_LEASE_STATE="released"
+	# Phase 5 (Refs #9781): the holder list (see the header).
+	_merge_lease_parse_holders "${lease_message}"
 	return 0
 }
 
+# _merge_lease_parse_holders <record message> (Phase 5, Refs #9781): sets
+# MERGE_LEASE_HOLDER_ROWS/ALL_ROWS/PATHS/COUNT from the record
+# _merge_lease_read just parsed. Optional `holder=` / `holder_path=` lines
+# before `paths:` are matched strictly (malformed lines are dropped; the first
+# line for a PR wins). Without them a held record is its one holder, with
+# the union `paths:` as its paths. With them the primary's scalars come from
+# its own `holder=` line, so another holder's renewal never looks like the
+# primary's activity (Phase 2 idle test); an expired primary is replaced in
+# memory by the oldest-acquired live holder (then the lowest PR number).
+_merge_lease_parse_holders()
+{
+	local hold_msg="$1" hold_line hold_now hold_all="" hold_paths="" hold_seen="," hold_pr hold_head hold_live="" hold_rest
+	local hold_re='^holder=([1-9][0-9]{0,9}) head=([0-9a-f]{40})? expires=([0-9]{1,12}) acquired=([0-9]{1,12}) updated=([0-9]{1,12})$'
+	local hold_path_re='^holder_path=([1-9][0-9]{0,9}) (.+)$'
+	local hold_primary_row="" hold_f_pr hold_f_head hold_f_exp hold_f_acq hold_f_upd
+	MERGE_LEASE_HOLDER_ROWS=""
+	MERGE_LEASE_HOLDER_ALL_ROWS=""
+	MERGE_LEASE_HOLDER_PATHS=""
+	MERGE_LEASE_HOLDER_COUNT=0
+	[ "${MERGE_LEASE_STATE:-}" = "held" ] && [ -n "${MERGE_LEASE_PR:-}" ] || return 0
+	hold_now="$(date -u +%s 2>/dev/null)"
+	[[ "${hold_now}" =~ ^[0-9]+$ ]] || hold_now=0
+	while IFS= read -r hold_line; do
+		if [[ "${hold_line}" =~ ${hold_re} ]]; then
+			hold_pr="${BASH_REMATCH[1]}"
+			case "${hold_seen}" in *",${hold_pr},"*) continue ;; esac
+			hold_seen+="${hold_pr},"
+			hold_all+="${hold_pr} ${BASH_REMATCH[2]:--} $((10#${BASH_REMATCH[3]})) $((10#${BASH_REMATCH[4]})) $((10#${BASH_REMATCH[5]}))"$'\n'
+		elif [[ "${hold_line}" =~ ${hold_path_re} ]]; then
+			hold_paths+="${BASH_REMATCH[1]}"$'\t'"${BASH_REMATCH[2]}"$'\n'
+		fi
+	done < <(printf '%s\n' "${hold_msg}" | sed -n '/^paths:$/q; /^holder/p')
+	if [ -z "${hold_all}" ]; then
+		# A v1 or single-holder record: the record itself is the one holder.
+		hold_head="${MERGE_LEASE_HEAD:-}"
+		[[ "${hold_head}" =~ ^[0-9a-f]{40}$ ]] || hold_head="-"
+		MERGE_LEASE_HOLDER_ALL_ROWS="${MERGE_LEASE_PR} ${hold_head} ${MERGE_LEASE_EXPIRES:-0} ${MERGE_LEASE_ACQUIRED:-0} ${MERGE_LEASE_UPDATED:-0}"
+		if [ "${MERGE_LEASE_EXPIRES:-0}" -gt "${hold_now}" ]; then
+			MERGE_LEASE_HOLDER_ROWS="${MERGE_LEASE_HOLDER_ALL_ROWS}"
+			MERGE_LEASE_HOLDER_COUNT=1
+		fi
+		while IFS= read -r hold_line; do
+			[ -n "${hold_line}" ] || continue
+			MERGE_LEASE_HOLDER_PATHS+="${MERGE_LEASE_PR}"$'\t'"${hold_line}"$'\n'
+		done <<< "${MERGE_LEASE_PATHS}"
+		MERGE_LEASE_HOLDER_PATHS="${MERGE_LEASE_HOLDER_PATHS%$'\n'}"
+		return 0
+	fi
+	hold_all="${hold_all%$'\n'}"
+	MERGE_LEASE_HOLDER_PATHS="${hold_paths%$'\n'}"
+	hold_primary_row="$(printf '%s\n' "${hold_all}" | awk -v p="${MERGE_LEASE_PR}" '$1 == p' | head -n1)"
+	if [ -n "${hold_primary_row}" ]; then
+		hold_rest="$(printf '%s\n' "${hold_all}" | awk -v p="${MERGE_LEASE_PR}" 'NF && $1 != p')"
+		hold_all="$(printf '%s\n%s\n' "${hold_primary_row}" "${hold_rest}" | sed '/^$/d')"
+	fi
+	MERGE_LEASE_HOLDER_ALL_ROWS="${hold_all}"
+	hold_live="$(printf '%s\n' "${hold_all}" | awk -v now="${hold_now}" 'NF && ($3 + 0) > (now + 0)')"
+	if [ -n "${hold_primary_row}" ] && printf '%s\n' "${hold_live}" | awk -v p="${MERGE_LEASE_PR}" '$1 == p { found = 1 } END { exit found ? 0 : 1 }'; then
+		:
+	elif [ -n "${hold_live}" ]; then
+		hold_primary_row="$(printf '%s\n' "${hold_live}" | sort -k4,4n -k1,1n | head -n1)"
+		hold_f_pr="${hold_primary_row%% *}"
+		hold_rest="$(printf '%s\n' "${hold_live}" | awk -v p="${hold_f_pr}" 'NF && $1 != p')"
+		hold_live="$(printf '%s\n%s\n' "${hold_primary_row}" "${hold_rest}" | sed '/^$/d')"
+	fi
+	if [ -n "${hold_primary_row}" ]; then
+		read -r hold_f_pr hold_f_head hold_f_exp hold_f_acq hold_f_upd <<< "${hold_primary_row}"
+		[ "${hold_f_head}" != "-" ] || hold_f_head=""
+		MERGE_LEASE_PR="${hold_f_pr}"
+		MERGE_LEASE_HEAD="${hold_f_head}"
+		MERGE_LEASE_EXPIRES="${hold_f_exp}"
+		MERGE_LEASE_ACQUIRED="${hold_f_acq}"
+		MERGE_LEASE_UPDATED="${hold_f_upd}"
+	fi
+	MERGE_LEASE_HOLDER_ROWS="${hold_live}"
+	[ -z "${hold_live}" ] || MERGE_LEASE_HOLDER_COUNT="$(printf '%s\n' "${hold_live}" | grep -c .)"
+	return 0
+}
+
+# Phase 5 helpers over the globals _merge_lease_read sets (no API call).
+# _merge_lease_holder_paths <pr>: that holder's paths, one per line; the
+# record's union `paths:` when it has no `holder_path=` lines, `*` when that
+# is empty too (the stricter reading).
+_merge_lease_holder_paths()
+{
+	local hp_pr="$1" hp_line hp_out=""
+	while IFS= read -r hp_line; do
+		[[ "${hp_line}" == *$'\t'* ]] || continue
+		[ "${hp_line%%$'\t'*}" = "${hp_pr}" ] || continue
+		hp_out+="${hp_line#*$'\t'}"$'\n'
+	done <<< "${MERGE_LEASE_HOLDER_PATHS:-}"
+	hp_out="${hp_out%$'\n'}"
+	[ -n "${hp_out}" ] || hp_out="${MERGE_LEASE_PATHS:-}"
+	[ -n "${hp_out}" ] || hp_out="*"
+	printf '%s\n' "${hp_out}"
+}
+
+# _merge_lease_holder_paths_set <pr> <paths>: replaces <pr>'s lines in
+# MERGE_LEASE_HOLDER_PATHS (the writer reads them from there).
+_merge_lease_holder_paths_set()
+{
+	local hps_pr="$1" hps_paths="${2:-}" hps_line hps_out=""
+	while IFS= read -r hps_line; do
+		[ -n "${hps_line}" ] || continue
+		[ "${hps_line%%$'\t'*}" != "${hps_pr}" ] || continue
+		hps_out+="${hps_line}"$'\n'
+	done <<< "${MERGE_LEASE_HOLDER_PATHS:-}"
+	[ -n "${hps_paths}" ] || hps_paths="*"
+	while IFS= read -r hps_line; do
+		[ -n "${hps_line}" ] || continue
+		hps_out+="${hps_pr}"$'\t'"${hps_line}"$'\n'
+	done <<< "${hps_paths}"
+	MERGE_LEASE_HOLDER_PATHS="${hps_out%$'\n'}"
+}
+
+# _merge_lease_holder_row <pr> [<rows>]: that PR's row (default: the live rows).
+_merge_lease_holder_row()
+{
+	printf '%s\n' "${2-${MERGE_LEASE_HOLDER_ROWS:-}}" | awk -v p="$1" 'NF && $1 == p { print; exit }'
+}
+
+# _merge_lease_rows_without <pr> [<rows>]: the rows without <pr>. When <pr>
+# is the primary (first row) the rest is re-ordered oldest acquired first,
+# then lowest PR number, so that holder becomes the primary (plan step 5.1).
+_merge_lease_rows_without()
+{
+	local rw_pr="$1" rw_rows rw_first rw_rest
+	rw_rows="$(printf '%s\n' "${2-${MERGE_LEASE_HOLDER_ROWS:-}}" | sed '/^$/d')"
+	rw_first="$(printf '%s\n' "${rw_rows}" | head -n1 | awk '{ print $1 }')"
+	rw_rest="$(printf '%s\n' "${rw_rows}" | awk -v p="${rw_pr}" 'NF && $1 != p')"
+	if [ -n "${rw_rest}" ] && [ "${rw_first}" = "${rw_pr}" ]; then
+		rw_rest="$(printf '%s\n' "${rw_rest}" | sort -k4,4n -k1,1n)"
+	fi
+	[ -z "${rw_rest}" ] || printf '%s\n' "${rw_rest}"
+}
+
 # True when the record just read is a live lease (held and not expired).
+# Phase 5: or any holder in it is still live.
 _merge_lease_is_held()
 {
-	[ "${MERGE_LEASE_STATE:-}" = "held" ] && [ "${MERGE_LEASE_EXPIRES:-0}" -gt "$(date -u +%s)" ]
+	[ "${MERGE_LEASE_STATE:-}" = "held" ] || return 1
+	[ "${MERGE_LEASE_EXPIRES:-0}" -gt "$(date -u +%s)" ] && return 0
+	[ "${MERGE_LEASE_HOLDER_COUNT:-0}" -gt 0 ] 2>/dev/null
 }
 
 # _merge_lease_write <base> <state> <pr> <head> <paths> [<acquired epoch>]:
@@ -2565,9 +2754,7 @@ _merge_lease_write()
 {
 	local lease_base="$1" lease_state="$2" lease_pr="$3" lease_head="$4" lease_paths="$5" lease_acquired="${6:-}"
 	local lease_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
-	local lease_ref lease_now lease_expires lease_tree lease_parent lease_msg lease_new_sha lease_max_paths
-	local -a lease_commit_args=()
-	lease_ref="$(_merge_lease_ref_name "${lease_base}")"
+	local lease_now lease_expires lease_msg lease_max_paths
 	lease_now="$(date -u +%s)"
 	[[ "${lease_acquired}" =~ ^[1-9][0-9]*$ ]] || lease_acquired="${lease_now}"
 	lease_expires=0
@@ -2580,11 +2767,9 @@ _merge_lease_write()
 	fi
 	[ "${lease_state}" = "released" ] && lease_paths=""
 	local lease_skip_lines="" lease_skip_block="" lease_skip_drop=""
-	if _merge_lease_revoke_enabled; then
-		[ "${lease_state}" = "held" ] && lease_skip_drop="${lease_pr}"
-		lease_skip_lines="$(_merge_lease_skips_normalize "${MERGE_LEASE_SKIPS:-}" "${lease_skip_drop}" | sed 's/^/skip=/')"
-		[ -z "${lease_skip_lines}" ] || lease_skip_block="${lease_skip_lines}"$'\n'
-	fi
+	[ "${lease_state}" = "held" ] && lease_skip_drop="${lease_pr}"
+	lease_skip_lines="$(_merge_lease_skip_block "${lease_skip_drop}")"
+	[ -z "${lease_skip_lines}" ] || lease_skip_block="${lease_skip_lines}"$'\n'
 	lease_msg="merge-lease v1
 state=${lease_state}
 base=${lease_base}
@@ -2595,6 +2780,34 @@ acquired=${lease_acquired}
 updated=${lease_now}
 ${lease_skip_block}paths:
 ${lease_paths}"
+	_merge_lease_cas_commit "${lease_base}" "${lease_msg}"
+}
+
+# _merge_lease_skip_block <drop_pr>...: the `skip=` lines of the next write
+# (no trailing newline; empty with MERGE_LEASE_REVOKE_ENABLED off), with each
+# <drop_pr>'s own entries removed (a holder is never on the skip list).
+_merge_lease_skip_block()
+{
+	local skip_lines="${MERGE_LEASE_SKIPS:-}" skip_drop
+	_merge_lease_revoke_enabled || return 0
+	for skip_drop in "$@"; do
+		skip_lines="$(_merge_lease_skips_normalize "${skip_lines}" "${skip_drop}")"
+	done
+	[ -z "${skip_lines}" ] || printf '%s\n' "${skip_lines}" | sed 's/^/skip=/'
+}
+
+# _merge_lease_cas_commit <base> <message>: the compare-and-swap shared by
+# _merge_lease_write and _merge_lease_write_holders (Phase 5 extraction, body
+# unchanged). Commits <message> as a child of MERGE_LEASE_SHA (empty: create
+# the ref) and moves the ref with a fast-forward-only PATCH. 0 written, 3 lost
+# the race (re-read shows another record), 1 error.
+_merge_lease_cas_commit()
+{
+	local lease_base="$1" lease_msg="$2"
+	local lease_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	local lease_ref lease_tree lease_parent lease_new_sha
+	local -a lease_commit_args=()
+	lease_ref="$(_merge_lease_ref_name "${lease_base}")"
 	lease_parent="${MERGE_LEASE_SHA:-}"
 	lease_tree="${MERGE_LEASE_TREE:-}"
 	if [ -z "${lease_tree}" ]; then
@@ -2623,6 +2836,103 @@ ${lease_paths}"
 		return 3
 	fi
 	return 1
+}
+
+# _merge_lease_paths_record_form <paths> <max>: one holder's paths as written
+# to the record: `*` when empty, over <max>, or when any path holds CR or
+# starts with `*` (fails closed; a path can never forge a record line).
+_merge_lease_paths_record_form()
+{
+	local rf_paths rf_max="${2:-200}"
+	rf_paths="$(printf '%s\n' "${1:-}" | sed '/^$/d')"
+	if [ -z "${rf_paths}" ] || [ "$(printf '%s\n' "${rf_paths}" | wc -l | tr -d ' ')" -gt "${rf_max}" ] \
+		|| printf '%s\n' "${rf_paths}" | grep -q -e $'\r' -e '^\*'; then
+		echo "*"
+		return 0
+	fi
+	printf '%s\n' "${rf_paths}"
+}
+
+# _merge_lease_write_holders <base> <rows> (Phase 5, Refs #9781): writes a
+# held record for the ordered holder list <rows> (`pr head expires acquired
+# updated`, head `-` when unknown; the first row is the primary). Each
+# holder's paths come from _merge_lease_holder_paths. One row writes the v1
+# shape with that row's own times, byte-identical to a single-holder record,
+# so releasing the other holder never extends this one's lease. Two or more
+# rows write pr=/head=/acquired=/updated= of the primary, expires= the latest
+# expiry, the skip lines (every holder's own entries dropped), one `holder=`
+# line per row, the `holder_path=` lines, then `paths:` with the union (`*`
+# when a holder is `*` or the union exceeds MERGE_LEASE_MAX_PATHS). Same
+# compare-and-swap and return codes as _merge_lease_write (1 also for
+# malformed rows).
+_merge_lease_write_holders()
+{
+	local wh_base="$1" wh_rows wh_pr wh_head wh_exp wh_acq wh_upd wh_max_exp=0 wh_n=0 wh_max_paths wh_line
+	local wh_paths wh_union="" wh_union_star=0 wh_holder_lines="" wh_path_lines="" wh_skip_lines wh_skip_block="" wh_msg
+	local wh_p_pr="" wh_p_head="" wh_p_acq="" wh_p_upd="" wh_p_paths=""
+	local -a wh_drop=() wh_row_arr=()
+	wh_rows="$(printf '%s\n' "${2:-}" | sed '/^$/d')"
+	[ -n "${wh_rows}" ] || return 1
+	wh_max_paths="${MERGE_LEASE_MAX_PATHS:-200}"
+	[[ "${wh_max_paths}" =~ ^[1-9][0-9]*$ ]] || wh_max_paths=200
+	mapfile -t wh_row_arr <<< "${wh_rows}"
+	for wh_line in "${wh_row_arr[@]}"; do
+		read -r wh_pr wh_head wh_exp wh_acq wh_upd <<< "${wh_line}"
+		[[ "${wh_pr}" =~ ^[1-9][0-9]*$ && "${wh_exp}" =~ ^[0-9]+$ && "${wh_acq}" =~ ^[0-9]+$ && "${wh_upd}" =~ ^[0-9]+$ ]] || return 1
+		[[ "${wh_head}" =~ ^[0-9a-f]{40}$ ]] || wh_head=""
+		wh_n=$((wh_n + 1))
+		wh_drop+=("${wh_pr}")
+		[ "${wh_exp}" -le "${wh_max_exp}" ] || wh_max_exp="${wh_exp}"
+		wh_paths="$(_merge_lease_paths_record_form "$(_merge_lease_holder_paths "${wh_pr}")" "${wh_max_paths}")"
+		if [ "${wh_n}" -eq 1 ]; then
+			wh_p_pr="${wh_pr}"
+			wh_p_head="${wh_head}"
+			wh_p_acq="${wh_acq}"
+			wh_p_upd="${wh_upd}"
+			wh_p_paths="${wh_paths}"
+		fi
+		wh_holder_lines+="holder=${wh_pr} head=${wh_head} expires=${wh_exp} acquired=${wh_acq} updated=${wh_upd}"$'\n'
+		while IFS= read -r wh_line; do
+			[ -n "${wh_line}" ] || continue
+			wh_path_lines+="holder_path=${wh_pr} ${wh_line}"$'\n'
+		done <<< "${wh_paths}"
+		if [ "${wh_paths}" = "*" ]; then
+			wh_union_star=1
+		else
+			wh_union+="${wh_paths}"$'\n'
+		fi
+	done
+	wh_skip_lines="$(_merge_lease_skip_block "${wh_drop[@]}")"
+	[ -z "${wh_skip_lines}" ] || wh_skip_block="${wh_skip_lines}"$'\n'
+	if [ "${wh_n}" -eq 1 ]; then
+		wh_msg="merge-lease v1
+state=held
+base=${wh_base}
+pr=${wh_p_pr}
+head=${wh_p_head}
+expires=${wh_max_exp}
+acquired=${wh_p_acq}
+updated=${wh_p_upd}
+${wh_skip_block}paths:
+${wh_p_paths}"
+	else
+		wh_union="$(printf '%s' "${wh_union}" | sed '/^$/d' | awk '!seen[$0]++')"
+		if [ "${wh_union_star}" = 1 ] || [ -z "${wh_union}" ] \
+			|| [ "$(printf '%s\n' "${wh_union}" | wc -l | tr -d ' ')" -gt "${wh_max_paths}" ]; then
+			wh_union="*"
+		fi
+		wh_msg="merge-lease v1
+state=held
+base=${wh_base}
+pr=${wh_p_pr}
+head=${wh_p_head}
+expires=${wh_max_exp}
+acquired=${wh_p_acq}
+updated=${wh_p_upd}
+${wh_skip_block}${wh_holder_lines}${wh_path_lines}paths:
+${wh_union}"
+	fi
+	_merge_lease_cas_commit "${wh_base}" "${wh_msg}"
 }
 
 # Paths this PR changes, newline-separated: the freshness check's cache when
@@ -2874,9 +3184,15 @@ _merge_lease_pr_eligible()
 	return 0
 }
 
+# Phase 5 (Refs #9781): ` holders=<n>` is appended only with 2+ live holders;
+# otherwise the line is unchanged. holder= is the primary.
 _merge_lease_log()
 {
-	echo "MERGE_LEASE pr=${1:-?} base=${2:-?} mode=${3:-?} outcome=${4:-?} reason=${5:-?} holder=${MERGE_LEASE_PR:--} blocker=${MERGE_LEASE_BLOCKER:--}"
+	local lease_log_holders=""
+	if [[ "${MERGE_LEASE_HOLDER_COUNT:-0}" =~ ^[0-9]+$ ]] && [ "${MERGE_LEASE_HOLDER_COUNT:-0}" -gt 1 ]; then
+		lease_log_holders=" holders=${MERGE_LEASE_HOLDER_COUNT}"
+	fi
+	echo "MERGE_LEASE pr=${1:-?} base=${2:-?} mode=${3:-?} outcome=${4:-?} reason=${5:-?} holder=${MERGE_LEASE_PR:--} blocker=${MERGE_LEASE_BLOCKER:--}${lease_log_holders}"
 }
 
 # Metric kill switch: MERGE_LEASE_METRICS_ENABLED (default true; true/1/yes/on).
@@ -2941,6 +3257,217 @@ _merge_lease_unlabel_wait()
 	gh_retry _safe_gh_jq -X DELETE "repos/${lease_repo}/issues/${lease_pr}/labels/$(printf '%s' "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" | jq -sRr @uri)" >/dev/null 2>&1 || true
 }
 
+# _merge_lease_gate_multi_wait <pr> <base> <mode> <reason> [<holder>]: the
+# Phase 5 wait (log, metric, wait label); always returns 1.
+_merge_lease_gate_multi_wait()
+{
+	MERGE_LEASE_OUTCOME="wait"
+	MERGE_LEASE_REASON="$4"
+	_merge_lease_log "$1" "$2" "$3" wait "$4"
+	_merge_lease_metric wait "$2" "$1" "$3" "$4" "" "" "${5:-}" || true
+	_merge_lease_label_wait "$1"
+	return 1
+}
+
+# _merge_lease_gate_multi <pr> <base> <head> update|merge <max_holders>
+# Phase 5 (Refs #9781): _merge_lease_gate's decision when the record just
+# read has a live holder and MERGE_LEASE_MAX_HOLDERS > 1, or 2+ live holders.
+# 0 proceed, 1 wait (labelled), 3 lost the compare-and-swap (the caller reads
+# again and decides on the winning record). Outcome and reason words are the
+# single-holder ones; MERGE_LEASE_BLOCKER is one PR: the first holder (record
+# order) sharing a path, the primary at the holder cap, or the first waiter
+# ahead in queue order whose paths are disjoint from every holder.
+# - merge: a holder proceeds (self); another PR waits on the first holder it
+#   shares a path with (_merge_lease_paths_intersect with both heads, so the
+#   Phase 4 soft class applies), else proceeds. Its own unreadable files fail
+#   open (pr_files_failed), as in the single-holder path.
+# - update: a holder renews its own row (max-hold on its own acquired time);
+#   at the cap a newcomer waits `held`; below it a newcomer waits on a holder
+#   it shares a path with, then on the first disjoint waiter ahead (waiters
+#   overlapping a holder are passed over; at most 10 are read), else is added
+#   as a holder. Unreadable files of the caller or a waiter count as `*`.
+_merge_lease_gate_multi()
+{
+	local gm_pr="$1" gm_base="$2" gm_head="$3" gm_mode="$4" gm_max="$5"
+	local gm_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" gm_rows="${MERGE_LEASE_HOLDER_ROWS:-}"
+	local gm_count="${MERGE_LEASE_HOLDER_COUNT:-0}" gm_own_row gm_own_paths="" gm_own_read=0 gm_line gm_h gm_h_head gm_hpaths
+	local gm_soft="" gm_now gm_rc=0 gm_keep_acq gm_new_rows gm_pulls_json gm_first gm_excluded="" gm_cand_n=0 gm_cand_paths
+	local gm_cand_head gm_overlap gm_was_waiting=0 gm_skips="" gm_ttl gm_row_head
+	local -a gm_row_arr=()
+	mapfile -t gm_row_arr < <(printf '%s\n' "${gm_rows}" | sed '/^$/d')
+	gm_own_row="$(_merge_lease_holder_row "${gm_pr}" "${gm_rows}")"
+	if [ "${gm_mode}" = "merge" ]; then
+		if [ -n "${gm_own_row}" ]; then
+			MERGE_LEASE_OUTCOME="self"
+			MERGE_LEASE_REASON="self"
+			_merge_lease_log "${gm_pr}" "${gm_base}" merge proceed self
+			_merge_lease_metric proceed "${gm_base}" "${gm_pr}" merge self "" "" "${gm_pr}" || true
+			return 0
+		fi
+		MERGE_LEASE_BLOCKER="${MERGE_LEASE_PR}"
+		for gm_line in ${gm_row_arr[@]+"${gm_row_arr[@]}"}; do
+			read -r gm_h gm_h_head _ <<< "${gm_line}"
+			[ "${gm_h_head}" != "-" ] || gm_h_head=""
+			gm_hpaths="$(_merge_lease_holder_paths "${gm_h}")"
+			if [ "${gm_hpaths}" != "*" ] && [ "${gm_own_read}" = 0 ]; then
+				gm_own_read=1
+				if ! gm_own_paths="$(_merge_lease_pr_paths "${gm_pr}")"; then
+					MERGE_LEASE_OUTCOME="unavailable"
+					MERGE_LEASE_REASON="pr_files_failed"
+					echo "::warning::$(_merge_lease_log "${gm_pr}" "${gm_base}" merge unavailable pr_files_failed) (fail-open)"
+					_merge_lease_metric unavailable "${gm_base}" "${gm_pr}" merge pr_files_failed || true
+					return 0
+				fi
+			fi
+			MERGE_LEASE_SOFT_SHARED=""
+			if _merge_lease_paths_intersect "${gm_hpaths}" "${gm_own_paths:-*}" "${gm_head}" "${gm_h_head}"; then
+				MERGE_LEASE_BLOCKER="${gm_h}"
+				MERGE_LEASE_SOFT_SHARED=""
+				_merge_lease_gate_multi_wait "${gm_pr}" "${gm_base}" merge holder_shares_paths "${gm_h}"
+				return 1
+			fi
+			[ -z "${MERGE_LEASE_SOFT_SHARED}" ] || gm_soft="${gm_soft:+${gm_soft},}${MERGE_LEASE_SOFT_SHARED}"
+		done
+		MERGE_LEASE_SOFT_SHARED="${gm_soft}"
+		MERGE_LEASE_OUTCOME="no_overlap"
+		MERGE_LEASE_REASON="no_shared_paths_with_holder"
+		[ -n "${gm_soft}" ] && MERGE_LEASE_REASON="soft_paths_merge_clean"
+		_merge_lease_log "${gm_pr}" "${gm_base}" merge proceed "${MERGE_LEASE_REASON}"
+		_merge_lease_metric proceed "${gm_base}" "${gm_pr}" merge "${MERGE_LEASE_REASON}" || true
+		return 0
+	fi
+	gm_now="$(date -u +%s)"
+	gm_ttl="$(_merge_lease_ttl_seconds)"
+	gm_row_head="${gm_head}"
+	[[ "${gm_row_head}" =~ ^[0-9a-f]{40}$ ]] || gm_row_head="-"
+	if [ -n "${gm_own_row}" ]; then
+		# Renewal of our own row; the other holders' rows are kept as read.
+		read -r _ _ _ gm_keep_acq _ <<< "${gm_own_row}"
+		if [ "${gm_keep_acq}" -gt 0 ] && [ $((gm_now - gm_keep_acq)) -ge "$(_merge_lease_max_hold_seconds)" ]; then
+			MERGE_LEASE_OUTCOME="self"
+			MERGE_LEASE_REASON="max_hold_reached"
+			_merge_lease_log "${gm_pr}" "${gm_base}" update proceed max_hold_reached
+			_merge_lease_metric proceed "${gm_base}" "${gm_pr}" update max_hold_reached "$(_merge_lease_metric_hold_seconds "${gm_keep_acq}" 2>/dev/null)" "" "${gm_pr}" || true
+			return 0
+		fi
+		[ "${gm_keep_acq}" -gt 0 ] || gm_keep_acq="${gm_now}"
+		gm_own_paths="$(_merge_lease_pr_paths "${gm_pr}" 2>/dev/null || true)"
+		_merge_lease_holder_paths_set "${gm_pr}" "${gm_own_paths:-*}"
+		gm_new_rows="$(printf '%s\n' "${gm_rows}" | awk -v p="${gm_pr}" -v row="${gm_pr} ${gm_row_head} $((gm_now + gm_ttl)) ${gm_keep_acq} ${gm_now}" 'NF { if ($1 == p) print row; else print }')"
+		_merge_lease_write_holders "${gm_base}" "${gm_new_rows}" || gm_rc=$?
+		case "${gm_rc}" in
+			0)
+				MERGE_LEASE_OUTCOME="renewed"
+				MERGE_LEASE_REASON="renewed"
+				_merge_lease_log "${gm_pr}" "${gm_base}" update renewed "ttl_s=${gm_ttl}"
+				_merge_lease_metric renewed "${gm_base}" "${gm_pr}" update renewed "$(_merge_lease_metric_hold_seconds "${gm_keep_acq}" 2>/dev/null)" "" "${gm_pr}" || true
+				return 0
+				;;
+			3)
+				_merge_lease_log "${gm_pr}" "${gm_base}" update retry lost_race
+				_merge_lease_metric retry "${gm_base}" "${gm_pr}" update lost_race || true
+				return 3
+				;;
+			*)
+				MERGE_LEASE_OUTCOME="unavailable"
+				MERGE_LEASE_REASON="write_failed"
+				echo "::warning::$(_merge_lease_log "${gm_pr}" "${gm_base}" update unavailable write_failed) (fail-open: updating as before the lease)"
+				_merge_lease_metric unavailable "${gm_base}" "${gm_pr}" update write_failed || true
+				return 0
+				;;
+		esac
+	fi
+	if [ "${gm_count}" -ge "${gm_max}" ]; then
+		MERGE_LEASE_BLOCKER="${MERGE_LEASE_PR}"
+		_merge_lease_gate_multi_wait "${gm_pr}" "${gm_base}" update held
+		return 1
+	fi
+	gm_own_paths="$(_merge_lease_pr_paths "${gm_pr}" 2>/dev/null)" || gm_own_paths="*"
+	[ -n "${gm_own_paths}" ] || gm_own_paths="*"
+	for gm_line in ${gm_row_arr[@]+"${gm_row_arr[@]}"}; do
+		read -r gm_h gm_h_head _ <<< "${gm_line}"
+		[ "${gm_h_head}" != "-" ] || gm_h_head=""
+		gm_excluded="${gm_excluded:+${gm_excluded},}${gm_h}"
+		MERGE_LEASE_SOFT_SHARED=""
+		if _merge_lease_paths_intersect "$(_merge_lease_holder_paths "${gm_h}")" "${gm_own_paths}" "${gm_head}" "${gm_h_head}"; then
+			MERGE_LEASE_BLOCKER="${gm_h}"
+			MERGE_LEASE_SOFT_SHARED=""
+			_merge_lease_gate_multi_wait "${gm_pr}" "${gm_base}" update holder_shares_paths "${gm_h}"
+			return 1
+		fi
+	done
+	MERGE_LEASE_SOFT_SHARED=""
+	# Queue: the first waiter ahead whose paths are disjoint from every holder
+	# goes first. The listing is the single-holder path's call.
+	gm_pulls_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${gm_repo}/pulls?state=open&base=$(printf '%s' "${gm_base}" | jq -sRr @uri)&per_page=100" 2>/dev/null)" || gm_pulls_json=""
+	if jq -e 'type == "array"' >/dev/null 2>&1 <<< "${gm_pulls_json}"; then
+		_merge_lease_revoke_enabled && gm_skips="${MERGE_LEASE_SKIPS:-}"
+		if printf '%s' "${gm_pulls_json}" | jq -e --argjson n "${gm_pr}" --arg l "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" \
+			'[ .[]? | if type == "array" then .[] else . end | select(type == "object" and .number == $n) | (.labels // [])[] | (if type == "object" then .name else . end) | select(. == $l) ] | length > 0' >/dev/null 2>&1; then
+			gm_was_waiting=1
+		fi
+		while :; do
+			gm_first="$(_merge_lease_queue_first "${gm_pulls_json}" "${gm_pr}" "${gm_skips}" "${gm_excluded}")"
+			[ -n "${gm_first}" ] && [ "${gm_first}" != "${gm_pr}" ] || break
+			gm_cand_n=$((gm_cand_n + 1))
+			if [ "${gm_cand_n}" -gt 10 ]; then
+				MERGE_LEASE_BLOCKER="${gm_first}"
+				_merge_lease_gate_multi_wait "${gm_pr}" "${gm_base}" update queued_behind
+				return 1
+			fi
+			gm_cand_head="$(jq -r --argjson n "${gm_first}" '[ .[]? | if type == "array" then .[] else . end | select(type == "object" and .number == $n)
+				| (if (.head | type) == "object" then .head.sha else .head_sha end) // "" ][0] // ""' <<< "${gm_pulls_json}" 2>/dev/null)" || gm_cand_head=""
+			gm_cand_paths="$(_merge_lease_pr_paths "${gm_first}" 2>/dev/null)" || gm_cand_paths="*"
+			[ -n "${gm_cand_paths}" ] || gm_cand_paths="*"
+			gm_overlap=0
+			for gm_line in ${gm_row_arr[@]+"${gm_row_arr[@]}"}; do
+				read -r gm_h gm_h_head _ <<< "${gm_line}"
+				[ "${gm_h_head}" != "-" ] || gm_h_head=""
+				if _merge_lease_paths_intersect "$(_merge_lease_holder_paths "${gm_h}")" "${gm_cand_paths}" "${gm_cand_head}" "${gm_h_head}"; then
+					gm_overlap=1
+					break
+				fi
+			done
+			MERGE_LEASE_SOFT_SHARED=""
+			if [ "${gm_overlap}" = 1 ]; then
+				gm_excluded="${gm_excluded:+${gm_excluded},}${gm_first}"
+				continue
+			fi
+			MERGE_LEASE_BLOCKER="${gm_first}"
+			_merge_lease_gate_multi_wait "${gm_pr}" "${gm_base}" update queued_behind
+			return 1
+		done
+	fi
+	# Disjoint from every holder and first among the disjoint waiters: join.
+	_merge_lease_holder_paths_set "${gm_pr}" "${gm_own_paths}"
+	gm_new_rows="$(printf '%s\n%s\n' "${gm_rows}" "${gm_pr} ${gm_row_head} $((gm_now + gm_ttl)) ${gm_now} ${gm_now}" | sed '/^$/d')"
+	_merge_lease_write_holders "${gm_base}" "${gm_new_rows}" || gm_rc=$?
+	case "${gm_rc}" in
+		0)
+			MERGE_LEASE_OUTCOME="acquired"
+			MERGE_LEASE_REASON="acquired"
+			MERGE_LEASE_HOLDER_ROWS="${gm_new_rows}"
+			MERGE_LEASE_HOLDER_COUNT=$((gm_count + 1))
+			_merge_lease_log "${gm_pr}" "${gm_base}" update acquired "ttl_s=${gm_ttl}"
+			_merge_lease_metric acquired "${gm_base}" "${gm_pr}" update acquired 0 "" "${gm_pr}" || true
+			[ "${gm_was_waiting}" = "1" ] && _merge_lease_unlabel_wait "${gm_pr}"
+			return 0
+			;;
+		3)
+			_merge_lease_log "${gm_pr}" "${gm_base}" update retry lost_race
+			_merge_lease_metric retry "${gm_base}" "${gm_pr}" update lost_race || true
+			return 3
+			;;
+		*)
+			MERGE_LEASE_OUTCOME="unavailable"
+			MERGE_LEASE_REASON="write_failed"
+			echo "::warning::$(_merge_lease_log "${gm_pr}" "${gm_base}" update unavailable write_failed) (fail-open: updating as before the lease)"
+			_merge_lease_metric unavailable "${gm_base}" "${gm_pr}" update write_failed || true
+			return 0
+			;;
+	esac
+}
+
 # _merge_lease_gate <pr> <base> <head> update|merge
 # Returns 0 to proceed (MERGE_LEASE_OUTCOME acquired|renewed|free|no_overlap|
 # self|unavailable|disabled), 1 to wait (MERGE_LEASE_OUTCOME=wait,
@@ -2951,6 +3478,7 @@ _merge_lease_gate()
 	local lease_pr="$1" lease_base="$2" lease_head="$3" lease_mode="$4"
 	local lease_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
 	local lease_rc=0 lease_own_paths="" lease_pulls_json="" lease_first="" lease_attempt lease_was_waiting=0
+	local lease_max_holders=1 lease_multi_rc=0
 	MERGE_LEASE_OUTCOME=""
 	MERGE_LEASE_REASON=""
 	MERGE_LEASE_BLOCKER=""
@@ -2967,6 +3495,10 @@ _merge_lease_gate()
 		_merge_lease_metric unavailable "${lease_base}" "${lease_pr}" "${lease_mode}" invalid_input "" "" - || true
 		return 0
 	fi
+	# Phase 5 (Refs #9781): above 1, or with 2+ live holders in the record,
+	# _merge_lease_gate_multi decides; otherwise the single-holder code below
+	# runs unchanged.
+	lease_max_holders="$(_merge_lease_max_holders)"
 	for lease_attempt in 1 2; do
 		lease_rc=0
 		_merge_lease_read "${lease_base}" || lease_rc=$?
@@ -2976,6 +3508,13 @@ _merge_lease_gate()
 			echo "::warning::$(_merge_lease_log "${lease_pr}" "${lease_base}" "${lease_mode}" unavailable read_failed) (fail-open: proceeding as before the lease)"
 			_merge_lease_metric unavailable "${lease_base}" "${lease_pr}" "${lease_mode}" read_failed || true
 			return 0
+		fi
+		if [ "${lease_rc}" -eq 0 ] && [ "${MERGE_LEASE_HOLDER_COUNT:-0}" -ge 1 ] \
+			&& { [ "${lease_max_holders}" -gt 1 ] || [ "${MERGE_LEASE_HOLDER_COUNT:-0}" -gt 1 ]; }; then
+			lease_multi_rc=0
+			_merge_lease_gate_multi "${lease_pr}" "${lease_base}" "${lease_head}" "${lease_mode}" "${lease_max_holders}" || lease_multi_rc=$?
+			[ "${lease_multi_rc}" -eq 3 ] && continue
+			return "${lease_multi_rc}"
 		fi
 		if [ "${lease_rc}" -eq 0 ] && _merge_lease_is_held && [ "${MERGE_LEASE_PR}" != "${lease_pr}" ]; then
 			MERGE_LEASE_BLOCKER="${MERGE_LEASE_PR}"

@@ -245,6 +245,7 @@ jobs:
           ZOMBIE_RUN_REAPER_TOKEN: ${{ github.token }}
           MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
           MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
+          MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
           # Smoke-PR backstop age limit in hours (issue #8953); 0 disables
           # the age rule (an issue_closed match still closes).
           SWEEP_SMOKE_PR_MAX_AGE_HOURS: ${{ vars.SWEEP_SMOKE_PR_MAX_AGE_HOURS || '6' }}

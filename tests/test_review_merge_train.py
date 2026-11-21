@@ -3357,6 +3357,28 @@ def test_merge_lease_tick_phase_2_is_guarded_by_the_staged_library():
 	assert '_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=skipped reason=${tick_skip_why}"' in body
 
 
+def test_merge_lease_tick_phase_5_is_guarded_and_keeps_the_single_holder_lines():
+	"""Merge-lease Phase 5 (Refs #9781): the multi-holder tick runs only when the
+	staged library has the Phase 5 helpers and MERGE_LEASE_MAX_HOLDERS > 1 or the
+	record lists 2+ live holders; the single-holder block keeps its pinned lines."""
+	text = SCRIPT.read_text()
+	start = text.index("_mt_merge_lease_tick()\n{")
+	body = text[start:text.index("\n}\n", start)]
+	for helper in ("_merge_lease_max_holders", "_merge_lease_write_holders", "_merge_lease_rows_without"):
+		assert f"declare -F {helper} >/dev/null 2>&1" in body, helper
+	assert '[ "${tick_p5_lib}" = 1 ] && tick_max_holders="$(_merge_lease_max_holders)"' in body
+	assert ('if [ "${tick_p5_lib}" = 1 ] && { [ "${tick_max_holders}" -gt 1 ] || [ "${MERGE_LEASE_HOLDER_COUNT:-0}" -gt 1 ]; }; then'
+		in body)
+	assert body.index("_mt_merge_lease_tick_multi ") < body.index('if [ "${MERGE_LEASE_STATE}" = "held" ]; then')
+	assert '_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=first_in_queue"' in body
+	assert " holders=" not in body
+	multi_start = text.index("_mt_merge_lease_tick_multi()\n{")
+	multi = text[multi_start:text.index("\n}\n", multi_start)]
+	assert "outcome=skipped reason=holder_shares_paths blocker=${tm_blocker}" in multi
+	assert "outcome=granted reason=first_in_queue holders=${tm_count}" in multi
+	assert multi.count("gh_retry _safe_gh_jq") == 1
+
+
 def _merge_lease_queue_first_from_train_rows(listing: list[dict], extra_env: dict[str, str] | None = None) -> str:
 	"""Run the _mt_list_open_prs --jq program over a REST listing, then the
 	staged library's _merge_lease_queue_first over the slurped rows."""
