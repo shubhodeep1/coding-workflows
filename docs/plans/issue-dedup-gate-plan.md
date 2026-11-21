@@ -41,7 +41,12 @@ The same gate ships as a reusable workflow, `issue_dedup_gate.yml`. tele-funtoke
   - `cs_verdict.py validate` schema-checks the verdict.
 
   The gate follows this pattern with GitHub reads in place of bridge reads.
-- **Sibling work.** The "AI layer for performance issue diagnostics" plan (tele-funtoken-msg-scoring) enriches new auto-heal remediation issues with Opus at the same point in `auto_heal_issue_dispatch.py::_handle_source_opened`. Both layers share `issue_dedup_gate.yml`, one job and one Opus run per batch: the dedup verdict comes first, and enrichment runs only for `new` (Q11 A). This plan ships the workflow with `mode: dedup` and reserves `mode: dedup_and_enrich` and the verdict's `enrichment` field for that plan.
+- **Sibling work.** The "AI layer for performance issue diagnostics" plan (tele-funtoken-msg-scoring) enriches new auto-heal remediation issues with Opus at the same point in `auto_heal_issue_dispatch.py::_handle_source_opened`. Both layers share `issue_dedup_gate.yml`, one job and one Opus run per batch: the dedup verdict comes first, and enrichment runs only for `new` (Q11 A). This plan ships the workflow with `mode: dedup` and reserves `mode: dedup_and_enrich` and the verdict's `enrichment` field for that plan. shubhodeep1/tele-funtoken-msg-scoring#5699 (`docs/plans/auto-heal-perf-remediation-enrichment-plan.md`) implements `dedup_and_enrich`:
+  - the `bridge_targets` input;
+  - the per-candidate `enrich` flag;
+  - the `bridge_requests` relay;
+  - the enrichment schema and prompt;
+  - tele rendering.
 
 ## Decisions
 
@@ -158,7 +163,7 @@ Subcommands:
      - the search and commit-list results above.
   2. Writes the prompt from `prompts/mode-issue-dedup-gate.txt`.
   3. Runs `claude_run ISSUE_DEDUP_GATE` (`scripts/ai_engine.sh`) with `AI_ENGINE_FALLBACK_POLICY=capacity` and `CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false` for this call. Any non-zero exit (75/76/80, timeout) maps to `unavailable` without codex. The gate never calls `ai_engine_fallback_report.sh` (G6).
-  4. Read loop: the model may reply `{"github_requests":[...]}` (1-5 objects from the allowlist) at most `MAX_READ_ROUNDS` times. The runner performs the requests with the job's read token and appends the results as untrusted data. This mirrors `cs_investigate.sh`'s `bridge_requests` loop.
+  4. Read loop: the model may reply `{"github_requests":[...]}` (1-5 objects from the allowlist) at most `MAX_READ_ROUNDS` times. The runner performs the requests with the job's read token and appends the results as untrusted data. This mirrors `cs_investigate.sh`'s `bridge_requests` loop. The loop dispatches on the reply's single top-level key, so #5699 can add `{"bridge_requests":[...]}` as a second request kind without changing this one.
   5. Final reply schema (one object per candidate, `validate` rejects anything else):
 
      ```json
@@ -386,6 +391,7 @@ None in this repo. All state is in GitHub comments with versioned markers.
 - **Pool load.** At most one Opus call per batch, only for candidates that pass the deterministic dedup (about 11 heal and 2 triage issues in the last 3 days here). ACCEPTED: small next to the implement runs each blocked duplicate saves.
 - **Search index lag misses a minutes-old duplicate.** Mitigation: the caller-supplied label list (fresh, not searched) covers same-label duplicates, and search covers the rest. ACCEPTED for cross-label cases opened in the last minute.
 - **Consumers lag the `@stable` sync.** ACCEPTED: they keep today's behaviour until synced, because the triage code ships with the script.
+- **Enrichment bridge reads are refused today (affects #5699, not this plan).** `CLAUDE_AGENT_DB_BRIDGE_OIDC_ALLOWED_WORKFLOWS` is not set on the `mongo-explorer` app (`aab42cfa-3295-4556-88c8-3487428020b4`, app spec read 2026-11-21), so `agent_db_bridge.py` refuses every Actions OIDC caller. Its match is an exact `job_workflow_ref`, so each pinned SHA needs its own entry. ACCEPTED: dedup uses no bridge reads, and setting the variable is a §22.B change owned by #5699.
 - **Broker redeploy fails or is refused.** Mitigation: only tele's path needs the new allowlist entry. Heal intake and triage work without it. The tele plan cannot start until `/deploy-activate` confirms the deploy.
 
 ## Rollout
@@ -405,4 +411,5 @@ None in this repo. All state is in GitHub comments with versioned markers.
 - #9861, #9865, #9776, #9797, #9577, #9578, #9596 (surviving duplicates); #9673, #9680, #9681 (deterministic fixes)
 - shubhodeep1/tele-funtoken-msg-scoring#5656, #5659, #5661, #5665, #5667 (cross-route surge)
 - tele run 44901238141 (`CLAUDE_POOL available=true` on a SHA-pinned consumer)
-- shubhodeep1/tele-funtoken-msg-scoring `docs/plans/auto-heal-dedup-gate-plan.md` (companion plan)
+- shubhodeep1/tele-funtoken-msg-scoring#5700, `docs/plans/auto-heal-dedup-gate-plan.md` (companion plan: tele wiring and `log_monitor` attach)
+- shubhodeep1/tele-funtoken-msg-scoring#5699, `docs/plans/auto-heal-perf-remediation-enrichment-plan.md` (implements `mode: dedup_and_enrich`)
