@@ -327,8 +327,9 @@ deployment fallback.
 | `COMPREHENSIVE_CYCLE_BOT_LOGINS` | No | `github-actions[bot]` | orchestrate_poll | Kept for compatibility; since #7662 it no longer affects the decision. A commit between the smoke-tested commit and the promotion candidate does not defer the promotion when it has one parent and every file it lists is a non-code path, whoever wrote it. A merge commit, a commit with no listed files or 300 or more, and a commit touching any code path defer it (`COMPREHENSIVE_PROMOTION_DEFERRED`). |
 | `COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS` | No | `OWNER,MEMBER,COLLABORATOR` | orchestrate_poll | Comma-separated `author_association` values whose tracking-issue comments may carry the promote-cycle marker (`apply-analysis-*` lines). Comments by `github-actions[bot]` are always trusted. The same setting governs `scripts/apply_analysis_on_main.sh` (was this doc dispatched before?) and `scripts/promote_main_cycle.sh` (last cycle baseline), so a stray comment from an outside account can neither retire an analysis doc nor fake a completed cycle. A marker found only in an untrusted comment is ignored: the callback logs `COMPREHENSIVE_MARKER_UNTRUSTED`, sends one CRITICAL alert, keeps the label so no new cycle starts, and neither dispatches the verifying run nor promotes until a human resolves it. |
 | `COMPREHENSIVE_VERIFICATION_RETRY_MAX` | No | `24` | orchestrate_poll | How many poll ticks the proving-run callback retries a transient verifying dispatch failure (`default_branch_unavailable`, `project_in_flight`, `orchestrate_run_in_flight`, `guard_unavailable`, `dispatcher_error`) before giving up with `COMPREHENSIVE_VERIFICATION_NOT_DISPATCHED ... retries_exhausted=N`. Non-transient outcomes (`disabled`, `no_docs`, `all_docs_processed`) are terminal on the first tick. |
-| `AUTO_RELEASE_STABLE_ENABLED` | No | `true` | auto-release-stable | Kill switch for `.github/workflows/auto-release-stable.yml`, which every 6 hours (at 30 past the hour) dispatches `test-and-mark-stable.yml` on `stable` when the branch tip is strictly ahead of the `stable` tag commit (compare status `ahead`). A tip that is behind or diverged logs `AUTO_RELEASE_SKIPPED reason=branch_not_ahead`. The workflow shares the `promote-main-to-stable` concurrency group with the promote job so the two never race on `stable`, skips while a gate or promote run is active, retries a failed/timed-out gate on the same tip on the next tick until `AUTO_RELEASE_STABLE_MAX_ATTEMPTS` is spent (`last_gate_failed` after that), and retries cancelled gates on the next tick without counting them. `false` logs `AUTO_RELEASE_SKIPPED reason=disabled`. |
+| `AUTO_RELEASE_STABLE_ENABLED` | No | `true` | auto-release-stable | Kill switch for `.github/workflows/auto-release-stable.yml`, which every 6 hours (at 30 past the hour) dispatches `test-and-mark-stable.yml` on `stable` when the branch tip is strictly ahead of the `stable` tag commit (compare status `ahead`). A tip that is behind or diverged logs `AUTO_RELEASE_SKIPPED reason=branch_not_ahead`. The workflow shares the `promote-main-to-stable` concurrency group with the promote job so the two never race on `stable`, skips while a gate or promote run is active, retries a failed/timed-out gate on the same tip on the next tick until `AUTO_RELEASE_STABLE_MAX_ATTEMPTS` is spent (`last_gate_failed` after that), and retries cancelled gates on the next tick without counting them. `false` logs `AUTO_RELEASE_SKIPPED reason=disabled`. While a stable rollback hold is active (see `STABLE_ROLLBACK_ENABLED`) it skips with `AUTO_RELEASE_SKIPPED reason=stable_hold_active to=<v>`, and a hold that cannot be read skips with `reason=stable_hold_unknown` (fail closed). |
 | `AUTO_RELEASE_STABLE_MAX_ATTEMPTS` | No | `3` | auto-release-stable | How many completed `test-and-mark-stable.yml` runs on the current `stable` tip may end in `failure`, `timed_out` or `startup_failure` before the tip is held. Below the budget the next 6-hour tick dispatches the gate again (log line `Retrying test-and-mark-stable.yml on stable@<sha>: N failed attempt(s) so far, budget M.`), so a release lost to a transient error such as a GitHub-side tag-push rejection goes out on a later tick by itself; at the budget the tick logs `AUTO_RELEASE_SKIPPED reason=last_gate_failed sha=<sha> conclusion=<last> attempts=N max=M` until the branch moves (a workflow-heal hotfix merged into `stable` is such a move) or an operator re-runs the gate. Only runs on the `stable` branch count, `cancelled` runs never do, and attempts are counted from the 30 most recent gate runs. Must be a positive integer. |
+| `STABLE_ROLLBACK_ENABLED` | No | `true` | rollback-stable | Kill switch for `.github/workflows/rollback-stable.yml` (#9342), the one-dispatch rollback of `@stable` to an earlier signed release. Any value other than `true`, `1`, `yes` or `on` (any case) logs `STABLE_ROLLBACK outcome=skipped reason=disabled` and changes nothing. The hold the workflow writes (`stable-hold.json` on branch `ai/stable-hold`) makes `auto-release-stable.yml` and the `promote-main-to-stable.yml` cycle skip (`reason=stable_hold_active`) until the release job of `test-and-mark-stable.yml` or `mark-stable.yml` publishes a release and clears it (`STABLE_HOLD outcome=cleared`). |
 | `RELEASE_BLOCKER_HEAL_ENABLED` | No | `true` | auto-release-stable, promote-main-to-stable (cycle job), orchestrate_poll | Kill switch for the release-blocker reporters in `scripts/auto_release_stable.sh`, `scripts/promote_main_cycle.sh` and `scripts/orchestrate_poll_process.sh` (stuck-states P4, Refs #8291). The poller's reports (`promotion_failed:<reason>`, `verification_not_dispatched`, `marker_untrusted`; see 12f) are sent only from this repository's `internal-orchestrate-poll.yml` (any other `GITHUB_WORKFLOW_REF` logs `RELEASE_BLOCKER_REPORT_SKIPPED reason=disabled detail=producer_unregistered`), at most once per outcome per tracking issue (`release_blocker_reported` in state; a repeat logs `reason=already_reported`). In the promote cycle the reports (`cycle_gate_unavailable`, `cycle_held_untrusted_marker`, `cycle_stale`; see the rows below) are sent from `skip_cycle`, before the unchanged `PROMOTE_CYCLE_SKIPPED` line, with `head_branch=main`, no `run_refs` and an OIDC report identity (the `cycle` job grants `id-token: write`); `false` there logs `RELEASE_BLOCKER_REPORT_SKIPPED reason=disabled blocker=cycle_reporters` and makes no detection read. When a condition below has persisted past its threshold, the tick sends one `release_blocker` heal report (`workflow_failure_heal.py build-blocker-payload`, an OIDC report identity, `wrap-dispatch`, `POST repos/<self>/dispatches`) before its unchanged `AUTO_RELEASE_*` line and logs `RELEASE_BLOCKER_REPORTED reason=<r> age=<n> branch=<b> sha=<tip> run_ref=<id|none>`. At most one report per tick: `last_gate_failed` or `release_in_flight` first, `stable_release_stale` only when neither reported and no gate run on the tip exists other than completed `cancelled` runs (a completed `success`, `skipped` or `neutral` run on the tip, for example a gate that passed with publishing off, also suppresses it). A report that could not be built or sent logs `RELEASE_BLOCKER_REPORT_SKIPPED reason=payload_invalid|dispatch_denied` with a Telegram WARNING; a missing timestamp logs `reason=guard_unavailable` and sends nothing. `false` logs `RELEASE_BLOCKER_REPORT_SKIPPED reason=disabled`. The release decision, exit code and outputs never change. |
 | `RELEASE_BLOCKER_GATE_FAILED_MIN_AGE_SECS` | No | `86400` | auto-release-stable | `last_gate_failed` report: the gate budget (`AUTO_RELEASE_STABLE_MAX_ATTEMPTS`) is spent on the `stable` tip and the newest failed gate run on it finished (`updated_at`) at least this long ago. That run goes in the report's `run_refs` when it ended `failure` or `timed_out`; a `startup_failure` run has no failed job, so it is named in the evidence only. A run without `updated_at` logs `RELEASE_BLOCKER_REPORT_SKIPPED reason=guard_unavailable blocker=last_gate_failed lookup=updated_at`. A non-integer value warns and uses the default. |
 | `RELEASE_BLOCKER_IN_FLIGHT_MIN_AGE_SECS` | No | `21600` | auto-release-stable | `release_in_flight` report: the oldest queued or running gate, `promote-main-to-stable.yml` or `mark-stable.yml` run started (`run_started_at`, else `created_at`) at least this long ago. The run is named in the evidence only, not in `run_refs` (the intake drops claimed runs that did not fail). A non-integer value warns and uses the default. |
@@ -5050,6 +5051,9 @@ Two automations take the operator out of that loop by default:
   the tip hold (`AUTO_RELEASE_SKIPPED reason=last_gate_failed ... attempts=N max=M`) until the branch
   moves or an operator re-runs the gate. A cancelled gate is retried on the next tick and never
   counts as an attempt. Kill switch: `AUTO_RELEASE_STABLE_ENABLED=false`.
+  While a stable rollback hold is active it skips with `AUTO_RELEASE_SKIPPED reason=stable_hold_active`
+  (`reason=stable_hold_unknown` when the hold cannot be read), and so does the daily cycle
+  (`PROMOTE_CYCLE_SKIPPED reason=stable_hold_active|stable_hold_unknown`).
   When the budget is spent for a day, a run stays in flight for six hours, or unreleased work on
   `stable` has waited a day, the tick also sends one `release_blocker` heal report
   (`RELEASE_BLOCKER_REPORTED`; kill switch `RELEASE_BLOCKER_HEAL_ENABLED=false`).
@@ -5061,6 +5065,57 @@ Two automations take the operator out of that loop by default:
   (`AUTO_RELEASE_SKIPPED reason=runner_queue_deep`), because a new cycle would wait on the same
   queue and add five to nine fixture issues and PRs to it. After the window one cycle runs
   whatever the queue.
+- [`rollback-stable.yml`](.github/workflows/rollback-stable.yml) (`workflow_dispatch` only, from
+  `main` or `stable`; #9342) rolls `@stable` back to an earlier release in one dispatch. See
+  "Roll back @stable" below.
+
+**Roll back @stable.** When a release itself breaks consumers, run `rollback-stable.yml`
+(`scripts/rollback_stable.sh`) instead of moving tags by hand; a hand-moved tag is re-released by
+`auto-release-stable.yml` within 6 hours.
+
+1. Dispatch it with `dry_run=true`, a `reason` (at most 200 characters) and, optionally,
+   `target_version` (`vX.Y.Z`). A blank target picks the highest release below the current stable
+   version, in the same major, whose commit is on the `stable` branch and whose GitHub Release
+   carries both `sync-manifest.json` and `release-manifest.v1.json`. Check the
+   `STABLE_ROLLBACK outcome=dry_run from=<v> to=<v> target_sha=<sha> planned=<steps>` line and the
+   step summary.
+2. Dispatch it again with `dry_run=false`. It writes the hold first (`STABLE_HOLD outcome=set`, with
+   the job token, so no workflow is triggered), cancels queued or running `auto-release-stable.yml`,
+   `test-and-mark-stable.yml`, `mark-stable.yml` and `promote-main-to-stable.yml` runs and waits up
+   to 5 minutes for them to stop, moves the `stable` and `v<MAJOR>` tags with `GH_PAT` (verified
+   against the remote), and sends `coding-workflows-stable-released` to every entry of
+   `.github/ai/consumer_repos.json`. It ends with
+   `STABLE_ROLLBACK outcome=rolled_back from=<v> to=<v> consumers_dispatched=<n>/<m>` and a CRITICAL
+   Telegram message. The `stable` branch is never changed.
+3. Verify: `git ls-remote origin 'refs/tags/stable^{}' 'refs/tags/v1^{}'` prints the target commit,
+   and the consumer update runs start. A consumer whose dispatch failed picks the rollback up on its
+   04:00 UTC sync.
+4. Clear the hold by releasing: once the fix is on `stable`, a release by `test-and-mark-stable.yml`
+   or `mark-stable.yml` publishes its tags and then runs `stable_hold.sh clear`
+   (`STABLE_HOLD outcome=cleared version=<v>`). Auto-release and the promote cycle resume on their
+   next tick.
+
+Re-running with the same target is safe while the hold for that version is still active: it only
+re-sends the consumer dispatch (`outcome=already_rolled_back`), and a blank target re-confirms the
+current version instead of going further back. Once the hold is cleared (by a release, or by hand),
+an explicit target equal to the current version is refused (`reason=target_not_lower`) and a blank
+target rolls `@stable` back one more release. Refusals (`outcome=refused reason=<code>`),
+`hold_failed`, `release_still_running`, `runs_lookup_failed` and `tag_push_failed` exit 1; every
+failure after the hold leaves it active, so re-dispatch once the cause is fixed. To drop a hold
+without a release, commit `"active": false` to `stable-hold.json` on `ai/stable-hold`.
+
+The hold gates only the scheduled `cycle` job of `promote-main-to-stable.yml`. A promote cycle that
+was already in flight at rollback time (an open tracking issue labelled
+`ai:comprehensive-test-pending`) is not gated: when its verifying run is ready to merge, the poller
+dispatches the `promote` job with `target_sha`, which fast-forwards `stable`, runs the release gate,
+and that release clears the hold. The rollback cancels promote, release and auto-release runs that
+are queued or running at its start or that become active before its last drain poll. The drain
+ends at the first poll that finds no active run; `STABLE_ROLLBACK_CANCEL_WAIT_SECS` only limits how
+long it waits for active runs to stop (`release_still_running` after that). A promote run the
+poller dispatches after the drain ends (while the hold is set again, while the tags move, while
+consumers are notified, or later) is not cancelled. If such a tracking issue is open and the regression may be in its `promote_sha`,
+remove the `ai:comprehensive-test-pending` label from it after rolling back, so the cycle stays
+unpromoted until a human decides.
 
 **The `promote-candidate` branch.** The internal wrappers (`.github/workflows/internal-*.yml`) call
 their reusable workflows at `@promote-candidate`, not `@main`. Between promote cycles
