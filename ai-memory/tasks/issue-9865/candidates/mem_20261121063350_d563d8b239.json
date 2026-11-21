@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The root-cause fix (`verifyTrustedSha` in `tools/claude-pool-broker/src/index.ts`) and its regression test (`tools/claude-pool-broker/test/broker.test.ts:480-488`) are outside this heal issue's allowed paths. Editing the issue body to widen them makes the implement step refuse the issue. How should the broker change get in?\nChoices:\n- A) Close this heal issue and file a regular (non-heal) issue whose `files_touched` covers `tools/claude-pool-broker/src/index.ts`, `tools/claude-pool-broker/test/broker.test.ts`, `scripts/claude_pool_token.sh` and `tests/test_claude_pool_token.py`. This issue then stops. (RECOMMENDED)\n- B) Have the heal intake file a replacement issue with a newly built allowed-paths marker that includes `tools/claude-pool-broker/**`, then continue there.\n- C) Stay inside the current allowed paths: change only the client side (`scripts/claude_pool_token.sh` plus tests). **Note:** this leaves only a retry, which this issue's rules reject as a fix for a deterministic failure. Choosing C means relaxing that rule for this issue.\nQ2: Should the client in `scripts/claude_pool_token.sh` retry the broker POST, only on `403 workflow_sha_unverifiable` (suggested fix 3), in addition to the broker fix?\nChoices:\n- A) Yes, as an extra safeguard alongside the broker fix. Use a new default-on switch named like the existing `CLAUDE_POOL_OIDC_RETRY_ENABLED` / `CLAUDE_POOL_OIDC_RETRY_SLEEPS`. Every other 403 code still gets a single attempt. (RECOMMENDED)\n- B) No. Fix only the broker, so nothing that looks like a retry ships, following the issue's rules.\n**Note:** Q1:C with Q2:B leaves nothing to implement.\nQ3: Once `verifyTrustedSha` keeps checking the remaining branches after an `\"unavailable\"` result, which branch should it ask first?\nChoices:\n- A) Keep the current order `[\"main\", \"stable\"]` and only remove the early `break`. This is the smallest change, and an unavailable `main` followed by `stable` `behind`/`identical` is granted. (RECOMMENDED)\n- B) Ask `stable` first. Consumer pins are `stable` commits, so this usually answers `identical` in one call and halves the GitHub reads on a cold cache.",
+  "fingerprint": "3bafdb5a31bc10a767c0e6ec7942a39c03ce539e1d6979aaefc101438a3476dc",
+  "lineage": {
+    "issue_number": 9865,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44875713176",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44875713176",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261121063350_d563d8b239",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9865,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44875713176"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9865 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-21T06:33:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
