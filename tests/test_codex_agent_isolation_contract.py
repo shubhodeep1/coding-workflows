@@ -23,7 +23,6 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 from review_autofix_step_scripts import expanded_implement_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
