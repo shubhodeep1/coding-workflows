@@ -1467,9 +1467,10 @@ _pr_base_freshness()
 		  else ([ $base_paths[] | select(. as $p | $pr_paths | index($p)) ] | unique | join(",")) end
 	' 2>/dev/null | tail -n1)"
 	if [ "${overlap}" != "__invalid__" ] && [ "${overlap}" != "__capped__" ]; then
-		# Phase 4: with the soft class on, a path holding CR/LF makes the
-		# cached list `*` (overlaps every holder), so the lease's newline
-		# split can never turn one hard path into soft fragments.
+		# Phase 4: with the soft class on, a path holding CR/LF (or a name
+		# that is not a string) makes the cached list `*` (overlaps every
+		# holder), so the lease's newline split can never turn one hard path
+		# into soft fragments.
 		local freshness_soft_on=""
 		[ -z "$(_merge_lease_soft_entries 2>/dev/null)" ] || freshness_soft_on="1"
 		PR_BASE_FRESHNESS_PR_PATHS="$(jq -r --arg soft_on "${freshness_soft_on}" '
@@ -1481,8 +1482,9 @@ _pr_base_freshness()
 		# Phase 4: the real shared paths, one per line, for the soft split.
 		# The comma-joined `overlap` is display only: a path holding a comma
 		# would split into pieces that may each look soft. A path holding a
-		# newline turns the list into "/unsafe-path", which no soft entry can
-		# match (entries never start with `/`), so the split fails closed.
+		# newline, or a name that is not a string, turns the list into
+		# "/unsafe-path", which no soft entry can match (entries never start
+		# with `/`), so the split fails closed.
 		freshness_soft_input="$(jq -n -r --slurpfile compare "${tmp_compare}" --slurpfile pr_files "${tmp_pr_files}" '
 			def names: [ .[]? | select(type == "object") | (.filename // empty), (.previous_filename // empty) ];
 			(($compare[0].files // []) | names) as $base_paths

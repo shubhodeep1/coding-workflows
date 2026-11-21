@@ -1308,6 +1308,23 @@ done"""
 		self.assertIn("reason=shared_paths", out)
 		self.assertNotIn("PROBE_CALLED", out)
 
+	def test_a_non_string_file_name_fails_closed(self) -> None:
+		"""A files page holding a non-string name makes the cached PR path list
+		`*` (class on) and keeps a shared non-string name out of the soft split
+		("/unsafe-path" gives shared_paths with no probe). Class off: unchanged."""
+		body = (f'_pr_merge_tree_probe() {{ echo PROBE_CALLED >&2; _PR_PROBE_RESULT=none; }}\n'
+			f'_pr_base_freshness 7 {HEAD} main; printf "reason=%s\\n" "$PR_BASE_FRESHNESS_LAST_REASON"; '
+			'printf "PATHS<%s>\\n" "$PR_BASE_FRESHNESS_PR_PATHS"')
+		pr_files = json.dumps([[{"filename": 5}, {"filename": "README.md"}]])
+		compare = json.dumps({"ahead_by": 1, "behind_by": 3, "commits": [{"sha": "c" * 40}],
+			"files": [{"filename": 5}, {"filename": "README.md"}]})
+		on = _run(body, compare_json=compare, pr_files_json=pr_files)
+		self.assertIn("PATHS<*>", on.stdout, on.stdout + on.stderr)
+		self.assertIn("reason=shared_paths", on.stdout, on.stdout + on.stderr)
+		self.assertNotIn("PROBE_CALLED", on.stdout + on.stderr)
+		off = _run(body, compare_json=compare, pr_files_json=pr_files, env={"MERGE_LEASE_SOFT_PATHS": "none"})
+		self.assertIn("PATHS<5\nREADME.md>", off.stdout, off.stdout + off.stderr)
+
 	def test_non_soft_clean_lines_end_with_an_empty_soft_overlap(self) -> None:
 		rc, out, _ = _gate(compare_json=_compare(2, ["docs/x.md"]), pr_files_json=_pr_files(["scripts/mine.sh"]))
 		self.assertEqual(rc, 0)
