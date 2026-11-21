@@ -99,6 +99,10 @@ OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} ci_docs_only_paths.sh"
 # ci_sync_quick.sh: the sync-quick CI helper (from the default branch),
 # appended the same way.
 OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} ci_sync_quick.sh"
+# alert_inbox_capture.sh + truncate_to_utf8_byte_cap.py: alert inbox capture,
+# sourced by tg_helpers.sh from its own directory (alert triage Phase 1).
+# Optional: without them tg_helpers.sh keeps every alert on Telegram.
+OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} alert_inbox_capture.sh truncate_to_utf8_byte_cap.py"
 for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
   src=".codex-workflow-src/scripts/${f}"
   if [ ! -f "${src}" ]; then

@@ -26,6 +26,7 @@ REQUIRED_RESOLVER_WORKFLOWS = {
 # Explicit allow-list exceptions for checkout@v5 workflows that are not
 # orchestrator-managed issue execution paths.
 ALLOWLIST_EXCEPTIONS = {
+	"alert-inbox-intake.yml": "Alert inbox intake is repository_dispatch record storage on the default branch, not an orchestrator issue-phase checkout path.",
 	"audit_consumer_drift.yml": "Consumer-wrapper drift audit is scheduled/manual repository maintenance, not an orchestrator issue-phase checkout path.",
 	"cancel_on_pr_close.yml": "PR-close cleanup cancels branch runs and has no orchestrator issue-phase checkout.",
 	"ci.yml": "PR CI validation has no orchestrator issue metadata.",

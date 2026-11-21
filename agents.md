@@ -5738,6 +5738,7 @@ Active workflow files (regenerate with `make generate`):
 
 <!-- TREE:START id=workflows -->
 ```
+.github/workflows/alert-inbox-intake.yml
 .github/workflows/audit_consumer_drift.yml
 .github/workflows/auto-release-stable.yml
 .github/workflows/cancel_on_pr_close.yml

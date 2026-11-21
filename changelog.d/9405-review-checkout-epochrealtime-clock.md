@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **A regression test now guards the review "Checkout PR head branch" clock on ubuntu-26.04 runners.** `review_head_checkout_now_ms` in `scripts/review_autofix_step_checkout_pr_head_branch.sh` already reads bash's `EPOCHREALTIME` first (see the #9252 entry); the new test in `tests/test_review_checkout_head_diagnostics.py` feeds a `date +%s%3N` reading one digit short and checks the helper ignores it, and that without `EPOCHREALTIME` it falls back to whole seconds. No script or log format changes. Refs #9405.
