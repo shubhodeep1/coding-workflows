@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Put the skip behind the env var UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED as an off switch.\" And \"Ship the new behaviour on: gate only the new code path behind UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED as an off switch. Unset, empty or `true` (any case) keeps it on; `false` turns it off; any other value also turns it off and logs a warning.\"\n  expected_change_site: `.github/workflows/orchestrate_poll.yml` poller `env:` blocks at lines 1443-1456, 1680-1693, and 1839-1851; `README.md` variables table\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The three poller environment blocks at lines 1443\u20131446, 1680\u20131683, and 1839\u20131840 do not pass `UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED`; the README variables table has no entry for it. The scan reads the setting from its process environment (`scripts/unblock_scan.py:177`), so setting a repository Actions variable cannot turn the skip off.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"Put the skip behind the env var UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED, default true; only the value 'false' turns it off.\" And \"Ship the new behaviour on: gate only the new code path behind UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED as an off switch. Unset, empty or `true` (any case) keeps it on; `false` turns it off; any other value also turns it off and logs a warning.\"\n  Expected change site: `.github/workflows/orchestrate_poll.yml` poller `env:` blocks at lines 1443-1456, 1680-1693, and 1839-1851 (where sibling kill switches like `UNBLOCK_JUDGE_ENABLED` and `NEEDS_HUMAN_DIGEST_ENABLED` are mapped via `${{ vars.<NAME> || 'true' }}`); plus a row in `README.md` variables table.\n  Evidence of absence: The PR DIFF and LAST RUN DIFF contain no edit under `.github/workflows/` or `README.md`. The script reads the env var straight from `os.environ.get(E2E_SKIP_FLAG)` (`scripts/unblock_scan.py:177`), but no workflow file passes `UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED` into the poller's process environment. The repository variable cannot turn the skip off \u2014 the code-level default (on) is the only effective state. The plan grant (`files_touched`) does not include `.github/workflows/orchestrate_poll.yml` or `README.md`, so the deferred route (follow-up PR with workflow edit) is the only path to actually expose the off switch to operators.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cPut the skip behind the env var UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED as an off switch.\u201d\n  Expected change site: The poller environment blocks in `.github/workflows/orchestrate_poll.yml`; document the setting in the README variables table.\n  Evidence of absence: The three poller environment blocks at lines 1443\u20131446, 1680\u20131683, and 1839\u20131840 do not pass `UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED`; the README variables table has no entry for it. The scan reads the setting from its process environment, so setting a repository Actions variable cannot turn the skip off.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4120172785833fc514aa7fc3918e357f18999dabc24f67eab3c2d3ad9862ea22",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9795,
+    "run_id": "44910029425",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44910029425",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121143827_3f0e85e5d1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9795,
+    "run_id": "44910029425"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T14:38:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
