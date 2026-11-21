@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: `.github/workflows/ci.yml`, selection and group guard for `Pre-push affected-test gate tests` (lines 3753-3775)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The workflow comment at lines 3753-3773 states run 43993691500 provided step statuses only with no durations and the group 0 pick is an estimate from test and subprocess counts, so the PR does not select the step or target group using the requested run's step timings. Severity MAJOR per both reviewers. anthropic_claude-sonnet-5_5 considered this gap and declined to report it, and z-ai_glm-5_3-flash treated it as an accepted documented residual.\n- requirement: \"Move its slowest steps (see the run's step timings)\" (the word \"steps\" is plural)\n  expected_change_site: `.github/workflows/ci.yml`, group 3 pinned steps\n  confidence=[1]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: Only one step moved. Group 3's other pinned step, `SINGLE_FILE_MODULES_STEP`, already runs its three modules in parallel, and the PR documents this. Moving it would only shift its load to another group. Severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings)\". The word \"steps\" is plural.\n  Expected change site: `.github/workflows/ci.yml`, group 3 pinned steps.\n  Evidence of absence: only one step moved. Group 3's other pinned step, `SINGLE_FILE_MODULES_STEP`, already runs its three modules in parallel, and the PR documents this. Moving it too would only shift its load to another group.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, selection and group guard for `Pre-push affected-test gate tests` (lines 3753-3775)\n  Evidence of absence: The workflow comment at lines 3753-3773 states run 43993691500 provided step statuses only with no durations, and that the group 0 pick is an estimate from test and subprocess counts. The PR therefore does not establish from the requested run's step timings that the step is among the slowest, or that group 0 has the most headroom. The hard constraints are satisfied. The comment documents this residual and says to measure step timings before any further move.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: `.github/workflows/ci.yml`, selection and group guard for `Pre-push affected-test gate tests`.\n  Evidence of absence: The workflow diff moves the step from group 3 to group 0, but states run 43993691500 provided no step durations and that this placement is an estimate from test and subprocess counts. The PR therefore does not select the step or target group using the requested run timings.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8c9bb09ef39e2ba59d94ee60dd028b742b782679342debe5d1d0b1347a6c7e07",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9641,
+    "run_id": "44850739449",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44850739449",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121025136_6239a7e38f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9641,
+    "run_id": "44850739449"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T02:51:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
