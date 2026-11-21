@@ -25,6 +25,14 @@ name: AI Sync Labels
 env:
   ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
 
+# Kept at contents: read + issues: write on purpose. A called workflow cannot
+# request more than its caller grants, and the consumer template
+# (workflow-templates/ai-sync-labels.yml) grants no pull-requests scope, so
+# adding pull-requests: write here would stop every consumer label sync from
+# starting. This block also caps the job token whatever the caller grants, so
+# the github.token fallback never has pull-requests scope: draining a retired
+# label from PRs needs GH_PAT. Without it each PR item fails as drain_comment /
+# drain_close and keeps the label (issues still drain with github.token).
 permissions:
   contents: read
   issues: write
@@ -101,6 +109,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           PYTHONDONTWRITEBYTECODE: "1"
+          # Drain (comment on and close) open items that still carry a retired
+          # label before deleting it; scripts/ai_labels.py also defaults to true.
+          # Set vars.RETIRED_LABEL_DRAIN_ENABLED=false for warn-only deletes.
+          RETIRED_LABEL_DRAIN_ENABLED: ${{ vars.RETIRED_LABEL_DRAIN_ENABLED || 'true' }}
         run: |
           set -euo pipefail
 

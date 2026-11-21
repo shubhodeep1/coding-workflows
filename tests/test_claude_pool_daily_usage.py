@@ -50,7 +50,7 @@ def env(tmp_path: Path) -> dict:
 	curl = fake_bin / "curl"
 	curl.write_text(FAKE_CURL, encoding="utf-8")
 	curl.chmod(curl.stat().st_mode | stat.S_IXUSR)
-	values = {key: value for key, value in os.environ.items() if not key.startswith(("CLAUDE_", "TG_", "GITHUB_", "ALERT_"))}
+	values = {key: value for key, value in os.environ.items() if not key.startswith(("CLAUDE_", "CHATGPT_", "TG_", "GITHUB_", "ALERT_"))}
 	values.update({
 		"PATH": f"{fake_bin}:{os.environ['PATH']}",
 		"FAKE_CURL_LOG": str(tmp_path / "curl.log"),
@@ -100,6 +100,7 @@ def test_report_lists_every_account_in_one_message() -> None:
 	report = claude_engine.pool_usage_report(probes, 0.95, now=0)
 	assert report == {
 		"accounts": 6, "usable": 2, "gated": 2, "auth_failed": 1, "probe_failed": 1,
+		"chatgpt_accounts": 0, "chatgpt_alerts": 0,
 		"text": "\n".join([
 			"Claude pool daily usage: 6 account(s), 2 usable, 2 at or above the 95% gate, 1 with a rejected token, 1 not probed.",
 			"ALPHA: 5h 12% (resets in 0.3h), 7d 48% (resets in 0.6h)",
@@ -193,6 +194,86 @@ def test_send_with_unreadable_probes_still_reports(env: dict) -> None:
 	result = _run(env, "send", None, CLAUDE_POOL_PROBES="not json")
 	assert result.returncode == 0 and "outcome=sent" in result.stdout
 	assert _sent_text(env).startswith("📊 Claude pool daily usage: probe results unreadable.")
+
+
+# --- send: ChatGPT accounts section (trial plan Phase 4, Refs #8969) ----------
+
+
+def _chatgpt_status(*accounts: dict) -> str:
+	return json.dumps({"accounts": list(accounts), "gate": 0.9})
+
+
+def _chatgpt_account(name: str, *, outcome: str | None = "ok", weekly: float | None = 0.2, **extra: object) -> dict:
+	entry = {
+		"account": name, "generation": 1, "last_refresh": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 3600)),
+		"last_outcome": outcome, "usage": {"five_hour": 0.1, "weekly": weekly, "resets": {}}, "usable": True, "reason": None,
+	}
+	entry.update(extra)
+	return entry
+
+
+def test_send_appends_the_chatgpt_section_after_the_claude_lines(env: dict) -> None:
+	status = _chatgpt_status(
+		_chatgpt_account("TWO", outcome="auth_failed", auth_json={"tokens": {"refresh_token": "sentinel-refresh"}}),
+		_chatgpt_account("ONE"),
+	)
+	result = _run(env, "send", [_probe("ALPHA", 0.2, 0.1)], CHATGPT_POOL_STATUS=status, CHATGPT_POOL_STATUS_REASON="status")
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.rstrip().endswith("outcome=sent truncated=false chatgpt_accounts=2 chatgpt_alerts=1")
+	text = _sent_text(env)
+	claude_line = text.index("ALPHA: 5h 20%")
+	section = text.index("\n\nChatGPT accounts: 2 account(s), 2 usable, 1 needing attention.\nONE: 5h 10%, weekly 20%, refreshed 1.0h ago, last outcome ok\n")
+	assert claude_line < section
+	assert "TWO: 5h 10%, weekly 20%, refreshed 1.0h ago, last outcome auth_failed; login rejected (auth_failed); save a new CHATGPT_POOL_AUTH_TWO" in text
+	assert "sentinel-refresh" not in text + result.stdout + result.stderr
+
+
+def test_send_with_no_chatgpt_accounts_is_unchanged(env: dict) -> None:
+	probes = [_probe("ALPHA", 0.2, 0.1)]
+	_run(env, "send", probes)
+	plain = _sent_text(env)
+	result = _run(env, "send", probes, CHATGPT_POOL_STATUS=_chatgpt_status(), CHATGPT_POOL_STATUS_REASON="status")
+	assert result.stdout.rstrip().endswith("chatgpt_accounts=0 chatgpt_alerts=0")
+	assert _sent_text(env) == plain
+
+
+@pytest.mark.parametrize(
+	("extra", "line"),
+	[
+		({"CHATGPT_POOL_STATUS": "", "CHATGPT_POOL_STATUS_REASON": "broker_refused_not_found"}, "ChatGPT accounts: unavailable (broker_refused_not_found)."),
+		({"CHATGPT_POOL_STATUS": "not json", "CHATGPT_POOL_STATUS_REASON": "status"}, "ChatGPT accounts: unavailable (status_invalid)."),
+	],
+)
+def test_send_shows_an_unavailable_chatgpt_line(env: dict, extra: dict, line: str) -> None:
+	result = _run(env, "send", [_probe("ALPHA", 0.2, 0.1)], **extra)
+	assert result.returncode == 0 and "outcome=sent" in result.stdout
+	text = _sent_text(env)
+	assert text.startswith("📊 Claude pool daily usage: 1 account(s), 1 usable.\n")
+	assert f"\n\n{line}\nProbed by " in text
+
+
+def test_send_without_probes_keeps_the_pool_reason_on_the_claude_headline(env: dict) -> None:
+	result = _run(env, "send", [], CLAUDE_POOL_REASON="not_probed", CHATGPT_POOL_STATUS="", CHATGPT_POOL_STATUS_REASON="broker_unavailable_503")
+	assert result.returncode == 0 and "outcome=sent" in result.stdout
+	text = _sent_text(env)
+	assert text.startswith("📊 Claude pool daily usage: no probe results (pool: not_probed).\n\nChatGPT accounts: unavailable (broker_unavailable_503).\n")
+	assert "(broker_unavailable_503) (pool:" not in text
+
+
+def test_unreadable_claude_probes_still_send_with_a_chatgpt_status(env: dict) -> None:
+	result = _run(env, "send", None, CLAUDE_POOL_PROBES="not json", CHATGPT_POOL_STATUS=_chatgpt_status(_chatgpt_account("ONE")))
+	assert result.returncode == 0 and "outcome=sent" in result.stdout
+	assert result.stdout.rstrip().endswith("chatgpt_accounts=0 chatgpt_alerts=0")
+	assert _sent_text(env).startswith("📊 Claude pool daily usage: probe results unreadable.")
+
+
+def test_send_with_an_oversized_chatgpt_status_reports_it_unavailable(env: dict) -> None:
+	status = json.dumps({"accounts": [], "pad": "x" * 100_001})
+	result = _run(env, "send", [_probe("ALPHA", 0.2, 0.1)], CHATGPT_POOL_STATUS=status, CHATGPT_POOL_STATUS_REASON="status")
+	assert result.returncode == 0 and "outcome=sent" in result.stdout
+	text = _sent_text(env)
+	assert text.startswith("📊 Claude pool daily usage: 1 account(s), 1 usable.\n")
+	assert "\n\nChatGPT accounts: unavailable (status_too_large).\n" in text
 
 
 def test_unknown_mode_never_fails(env: dict) -> None:
