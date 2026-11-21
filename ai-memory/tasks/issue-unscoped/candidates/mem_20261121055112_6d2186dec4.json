@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:invoke_stall_judge (around lines 22485-22504) | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The reviewer was concerned that `[ -n \"${pr_merged_at}\" ]` could set `pr_state=\"merged\"` for a PR that was closed without being merged.\n  WHY: The reviewer withdrew the concern in the same entry, noting that `merged_at` is only populated for merged PRs in the GitHub REST API and that the condition `if [ \"${pr_merged}\" = \"true\" ] || { [ -z \"${pr_merged}\" ] && [ -n \"${pr_merged_at}\" ]; }; then` is robust; the source stated no severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Do not normalize a judge `escalate_human` to `attempt_merge` when the linked PR is not open.\"\n  expected_change_site: scripts/orchestrate_poll_process.sh, `invoke_stall_judge` escalation-keep chain (lines 23037-23056)\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: `_stall_judge_linked_pr_keeps_escalation` (24666-24694) returns 1 for a PR merged into a target base (24689-24690), and the #9482 elif (23051-23053) keeps escalation only when `_pr_json_is_issue_implementation_pr` accepts the PR, which rejects a mention-only cross-reference (23894-23910; comment at 23886-23888), so a mention-only linked PR merged into a target branch is still normalized to `attempt_merge` (23008) and loops until the `MAX_JUDGE_REPLAY` backstop (23004-23006); no test exercises the merged-target mention-only shape; the agents.d/9482-standalone-stall-merged-linked-pr.md:2 wording claims coverage this case does not have; all three reviewers rated it SEVERITY: MAJOR; anthropic_claude-sonnet-5_5 and minimax_minimax-m3 explicitly rejected this gap as a deliberate, documented narrowing\n- requirement: \"Update the two README.md rows for ENABLE_STALL_HUMAN_TERMINALIZATION to mention the second exception (escalate_human is kept when the issue's own implementation PR is closed or merged).\"\n  expected_change_site: README.md:337 (orchestrate_poll env table) and README.md:2611 (defaults table)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: README.md, which is outside the files_touched grant (so this requirement is deferred), still lists only the MAX_JUDGE_REPLAY exception; SEVERITY: NIT\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:invoke_stall_judge (around lines 22485-22504) | confidence=4\n  PROBLEM: `[ -n \"${pr_merged_at}\" ]` might set `pr_state=\"merged\"` for a PR that was closed without being merged.\n  WHY: The reviewer withdrew this in the same entry: `merged_at` is only populated for merged PRs, and the condition `if [ \"${pr_merged}\" = \"true\" ] || { [ -z \"${pr_merged}\" ] && [ -n \"${pr_merged_at}\" ]; }; then` is robust.\n- TASK_GAP\n  Requirement: \"Do not normalize a judge escalate_human to attempt_merge when the linked PR is not open.\"\n  Expected change site: scripts/orchestrate_poll_process.sh, invoke_stall_judge escalation handling.\n  Evidence of absence: escalate_human is kept only when the linked PR is closed or merged *and* is the issue's implementation PR, so a mention-only cross-reference merged into a target branch is still normalized to attempt_merge.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: \"Update the two README.md rows for ENABLE_STALL_HUMAN_TERMINALIZATION to mention the second exception (escalate_human is kept when the issue's own implementation PR is closed or merged).\"\n  Expected change site: README.md:337 (orchestrate_poll env table) and README.md:2611 (defaults table).\n  Evidence of absence: README.md, which is outside the files_touched grant (deferring this requirement), still lists only the MAX_JUDGE_REPLAY exception.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Do not normalize a judge `escalate_human` to `attempt_merge` when the linked PR is not open.\"\n  Expected change site: `scripts/orchestrate_poll_process.sh`, `invoke_stall_judge` escalation handling.\n  Evidence of absence: For a PR merged into a target branch, `_stall_judge_linked_pr_keeps_escalation` returns 1 at lines 24689-24690. The fallback at lines 23051-23053 keeps escalation only if `_pr_json_is_issue_implementation_pr` accepts the PR, so a mention-only PR merged into a target branch is still normalized to `attempt_merge`. Tests cover a merged implementation PR into the default branch and a closed, unmerged mention-only PR, but not a merged target-branch mention-only PR.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: \"Do not normalize a judge `escalate_human` to `attempt_merge` when the linked PR is not open.\" (issue #9482, Proposed fix, third bullet; echoed in the agents.d fragment's claim \"A judge `escalate_human` is kept, not normalised to `attempt_merge`, when the linked PR is closed or merged.\")\n  Expected change site: scripts/orchestrate_poll_process.sh, `invoke_stall_judge` escalation-keep chain (lines 23037-23056) \u2014 the case \"linked PR merged into a target base AND not recognized as the issue's implementation PR\".\n  Evidence of absence: `_stall_judge_linked_pr_keeps_escalation` (24666-24694) returns 1 for a PR merged into a target base (24689-24690). The #9482 elif (23051-23053) requires `_pr_json_is_issue_implementation_pr`, which rejects mention-only PRs (23894-23910; comment at 23886-23888). So a mention-only PR whose head branch is not `ai/issue-<n>` and which was merged into a target branch (the #823/#825 reachability shape) is normalized to `attempt_merge` (23008). The judge then re-runs every tick until the `MAX_JUDGE_REPLAY` backstop (23004-23006) forces escalation. No test covers this shape. The agents.d/9482-standalone-stall-merged-linked-pr.md:2 wording claims coverage this case does not have; the changelog.d wording hedges it.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e4067c2c23ef509227a8a22748fda705442fed9e0072cdeafd2d2ad90a5c0fe6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9502,
+    "run_id": "44862322686",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44862322686",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121055112_6d2186dec4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9502,
+    "run_id": "44862322686"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T05:51:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
