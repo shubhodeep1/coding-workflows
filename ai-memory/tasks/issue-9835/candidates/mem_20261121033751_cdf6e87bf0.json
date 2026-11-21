@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which tests failed in `tests-promote-stall-and-review` and `tests-system-python` (run 44693965366, jobs 136146165325 and the matching promote-stall-and-review job), and with what assertion or traceback?\nChoices:\n- A: Paste the failing test IDs and the assertion or traceback lines from both job logs into `/answer`, so planning can fix the real cause. (RECOMMENDED)\n- B: The same test fails in both jobs (`tests-system-python` runs the whole pytest-collected `tests/` suite, so overlap is likely); paste that one test ID and its traceback.\n- C: The logs are no longer available; let planning first add a step that captures the failing test IDs in the triage evidence, and fix the test failure itself in a later triage generation.\nQ2: What should this triage issue fix, given that PR #9602's change has already landed on this ref and the red run tested PR head `43b21173` merged into `orchestrator/project-8291`?\nChoices:\n- A: Fix the failing test or code on PR #9602's branch (`ai/issue-9575`) if it is still open, and do nothing on `main`. (RECOMMENDED)\n- B: Fix it on `main` as a hotfix, because the failure reproduces on `main` and does not come from the `orchestrator/project-8291` base.\n- C: No code change: the failure came from an outdated base, or PR #9602 is now merged or green on a newer head. Close this issue as superseded.\n  **Note:** incompatible with Q1:C. Choosing both leaves nothing to implement and sends the issue back to clarification.",
+  "fingerprint": "73a53ca41ab9d55db0251a2c05db34d6a15c218f104c65d3dd05396585c2b9cb",
+  "lineage": {
+    "issue_number": 9835,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44861722429",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44861722429",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261121033751_cdf6e87bf0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9835,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44861722429"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9835 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-21T03:37:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
