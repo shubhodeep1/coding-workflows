@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/9846-release-notes-from-fragments.md:3-4 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The published changelog entry omits the case where a single oversized fragment is cut to the cap and marked `...(truncated; see CHANGELOG.md)`.\n  WHY: When that case occurs, the release output follows the head-cut path, but the published changelog entry does not describe it; both reviewers identify this as a documentation-parity NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The change set is meant to publish release notes filled from the changelog fragments each release folds (issue #9846); the plan specifies one \u00a720 changelog fragment (`fixed`) describing `--notes-out` behavior. The current `_render_release_notes` implements a documented head-cut exception (cut a single oversized fragment to the cap and mark it `...(truncated; see CHANGELOG.md)`), and this exception is described in the module docstring (`scripts/assemble_changelog.py:67-69`), the `_render_release_notes` docstring (`scripts/assemble_changelog.py:476-478`), and `agents.d/9846-release-notes-from-fragments.md:2` \u2014 but not in the user-facing changelog fragment that will be folded verbatim into `CHANGELOG.md`.\n  expected_change_site: `changelog.d/9846-release-notes-from-fragments.md:3`, in the sentence beginning \"and capped at 120,000 characters\".\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The fragment's trailing clause is \"...capped at 120,000 characters with a `...and N more; see CHANGELOG.md.` line.\" with no clause for the head-cut exception. Compare against `agents.d/9846-release-notes-from-fragments.md:2`, which now reads \"...caps it at `RELEASE_NOTES_CHAR_LIMIT` = 120,000 characters at whole-fragment boundaries with a `...and N more; see CHANGELOG.md.` trailer (a first fragment that alone passes the cap is instead cut to the cap, marked `...(truncated; see CHANGELOG.md)` and counted as written)...\". This is the same documentation-parity gap the previous autofix rounds fixed in the three other locations.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: The change set is meant to publish release notes filled from the changelog fragments each release folds (issue #9846); the plan specifies one \u00a720 changelog fragment (`fixed`) describing `--notes-out` behavior. The current `_render_release_notes` implements a documented head-cut exception (cut a single oversized fragment to the cap and mark it `...(truncated; see CHANGELOG.md)`), and this exception is described in the module docstring (`scripts/assemble_changelog.py:67-69`), the `_render_release_notes` docstring (`scripts/assemble_changelog.py:476-478`), and `agents.d/9846-release-notes-from-fragments.md:2` \u2014 but not in the user-facing changelog fragment that will be folded verbatim into `CHANGELOG.md`.\n  Expected change site: `changelog.d/9846-release-notes-from-fragments.md:3`, in the sentence beginning \"and capped at 120,000 characters\".\n  Evidence of absence: The fragment's trailing clause is \"...capped at 120,000 characters with a `...and N more; see CHANGELOG.md.` line.\" with no clause for the head-cut exception. Compare against `agents.d/9846-release-notes-from-fragments.md:2`, which now reads \"...caps it at `RELEASE_NOTES_CHAR_LIMIT` = 120,000 characters at whole-fragment boundaries with a `...and N more; see CHANGELOG.md.` trailer (a first fragment that alone passes the cap is instead cut to the cap, marked `...(truncated; see CHANGELOG.md)` and counted as written)...\". This is the same documentation-parity gap the previous autofix rounds fixed in the three other locations.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/9846-release-notes-from-fragments.md:4 | severity=low | confidence=4\n  PROBLEM: The published changelog entry describes truncation with the `...and N more; see CHANGELOG.md.` trailer, but omits the separate case where a single oversized fragment is cut and marked `...(truncated; see CHANGELOG.md)`.\n  WHY: When that case occurs, the release output follows the head-cut path, but the published changelog entry does not describe it.\n  Line or code reference: Line 4; compare scripts/assemble_changelog.py:507-524\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/9846-release-notes-from-fragments.md:3 | severity=low | confidence=3\n  PROBLEM: The fragment documents only the whole-fragment-drop trailer case. It omits the head-cut exception implemented at scripts/assemble_changelog.py:507-513 and documented in the module docstring (scripts/assemble_changelog.py:66-69), the `_render_release_notes` docstring (scripts/assemble_changelog.py:476-478), and agents.d/9846-release-notes-from-fragments.md:2 \u2014 where a single fragment that alone passes the cap is cut to the cap, marked `...(truncated; see CHANGELOG.md)`, and counted as written.\n  WHY: No runtime failure; the folded CHANGELOG.md entry under-documents one behavior branch of the new flag for release-note readers. Documentation-parity NIT of the same class the previous rounds fixed everywhere else.\n  Line or code reference: line 3, the sentence \"capped at 120,000 characters with a `...and N more; see CHANGELOG.md.` line\"\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1fe82003e653da69ff4e2231d411c92dfec981623dcd812e354123c821e7788a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9854,
+    "run_id": "44894144640",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44894144640",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121114709_04bb809664",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9854,
+    "run_id": "44894144640"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T11:47:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
