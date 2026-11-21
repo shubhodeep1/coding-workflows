@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/worktree_registry.sh:17-24,260-273 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The fix that sources gh_helpers.sh (and the companion test at tests/test_zombie_queued_guard_contract.py:208-237) is absent from the PR head commit 603e3e3, so the registry process lacks the zombie_queued_* helpers.\n  WHY: worktree_gc.sh runs the registry in a separate bash process; without the helpers the cutoff stays 0 and the predicate is always false, so wedged queued runs stay active and their worktrees are kept past the TTL. Severity: MAJOR from both reviewers.\n- scripts/worktree_registry.sh:17-24 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  PROBLEM: The edit that sources gh_helpers.sh is outside the pipeline plan grant for #9901, which covers only review_autofix_sweep.yml, tests/**, changelog.d/* and agents.d/*.\n  WHY: A scope-enforcement step might reject the file, or the PR body may not explain the wider change. The runtime is safe because the source is fail-open. Sonnet rated it NIT with confidence 2. Minimax raised it only as a note and gave no severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/worktree_registry.sh:17-24 | severity=NIT | confidence=2\n  PROBLEM: The edit that sources gh_helpers.sh is outside the pipeline plan grant for #9901, which covers only review_autofix_sweep.yml, tests/**, changelog.d/* and agents.d/*.\n  WHY: A scope-enforcement step might reject the file, or the PR body may not explain the wider change. The runtime is safe because the source is fail-open and the helpers have no side effects. The edit fixes a real gap left by #9473, so the reviewer does not recommend reverting it. The PR body should record why it was needed.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/worktree_registry.sh:21-24,262 and tests/test_zombie_queued_guard_contract.py:208-237 | severity and confidence not stated\n  PROBLEM: These are a note for the editor pass, not a formal finding. The last run's uncommitted changes (the gh_helpers.sh source block, a comment refresh at line 262, and the test test_worktree_registry_filters_wedged_runs_in_its_own_process) reference #9473 and are outside the #9901 plan grant. They are not in PR head 603e3e3.\n  WHY: The reviewer says that if the editor includes them they must land in this PR, and otherwise they should be left for a follow-up. The reviewer considers the committed PR complete for #9901 on its own.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/worktree_registry.sh:264-273 (caller scripts/worktree_gc.sh:77-79) | severity=MAJOR | confidence=4\n  PROBLEM: The last-run diff adds the helper source needed by the registry, but that change is absent from the submitted PR files and commit summary. The PR-head registry process therefore reaches the helper checks without the zombie_queued_* functions.\n  WHY: worktree_gc.sh launches the registry in a separate Bash process. Without those functions the registry uses cutoff 0 and a predicate that always returns false, so wedged queued runs remain active owners and their worktrees are preserved past the TTL.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/worktree_registry.sh:17-24,260-273 (with tests/test_zombie_queued_guard_contract.py:208-237) | severity=MAJOR | confidence=4\n  PROBLEM: The last autofix run's fix exists only as uncommitted working-tree edits. PR head 603e3e3 contains neither the gh_helpers.sh source block (worktree_registry.sh:21-24), the updated comment (lines 260-263), nor the companion test test_worktree_registry_filters_wedged_runs_in_its_own_process.\n  WHY: The registry runs as its own bash process (scripts/worktree_gc.sh:79,81 and scripts/orchestrate_poll_process.sh:987,996). On the committed head, zombie_queued_cutoff_epoch and zombie_queued_jq_def are undefined at worktree_registry.sh:265, so zq_cutoff stays 0 and no queued run is excluded. worktree_registry_gc (line 483) then treats wedged queued runs as active forever. The reviewer says the edits must be committed to this PR rather than reverted, with the out-of-plan-grant rationale recorded in the PR body.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9d6271459cb0c7eb5f3ff32506de0b270e1a60a1cec038225b55022eb15ae207",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9904,
+    "run_id": "44927869340",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44927869340",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121182126_d3e1aab97d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9904,
+    "run_id": "44927869340"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T18:21:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
