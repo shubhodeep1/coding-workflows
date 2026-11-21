@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/pr_checks_lib.sh:147-148, 365, 377-385, 883-889, 930-938 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The new success-supersession override groups and binds CI runs by workflow/job name, not workflow file, so a same-name workflow's success can drop an older real CI failure.\n  WHY: The merge gate can proceed despite a real CI failure. Both reviewers rated this MAJOR; the severity is mapped to high. anthropic_claude-sonnet-5_5 examined the same concern and dropped it as a pre-existing trust-model property that the owner accepted.\n- README.md:158 (also README.md:2695) | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The README `AUTO_MERGE_REQUIRED_CI_CHECK` row documents only the cancelled-run exception, not the new exception for an older non-success run superseded by a newer bound success.\n  WHY: Operator documentation contradicts the merge gate's behavior. All reviewers rated it NIT.\n- agents.md:2920 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The #6963 entry still says any failed, skipped, neutral or cancelled run with that name refuses the merge, while the new rule exempts a failed CI-name run with a newer bound success.\n  WHY: Two adjacent sections of the canonical maintainer reference disagree. Both reviewers rated it NIT.\n- scripts/pr_checks_lib.sh:65-71, 788-801 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The header comments (the PR_CHECKS_JQ_SUPERSEDE_DEFS / PR_CHECKS_LAST_CI_STATE comment at lines 65-71 and the `_pr_wait_for_required_checks` named-CI-check block at lines 788-801) still say every such run must succeed and mention only the cancelled-run exception.\n  WHY: The comments are stale against the new supersession rule and can mislead maintainers. All reviewers rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The README `AUTO_MERGE_REQUIRED_CI_CHECK` row should reflect the new supersession exception (documentation not updated alongside the behavior change).\n  expected_change_site: README.md:158\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: README.md:158 documents only the cancelled-run exception, and the PR's \"Changes\" list omits README.\n- requirement: The #6963 entry in agents.md should reflect the new supersession exception.\n  expected_change_site: agents.md:2920\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: agents.md:2920 still says every failed/skipped/neutral/cancelled run refuses, and only the #7127 entry (line 5342) was updated.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/pr_checks_lib.sh:792-796 (also README.md:2695) | severity=low | confidence=4\n  PROBLEM: The `_pr_wait_for_required_checks` header comment and the README `AUTO_MERGE_REQUIRED_CI_CHECK` row still say every such run must succeed, with no mention of the new exception.\n  WHY: Nothing fails at runtime, but maintainers and operators would expect `failed` where the gate now returns `ok`.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/pr_checks_lib.sh:365, 377-385 | severity=high | confidence=4\n  PROBLEM: The CI supersession logic groups runs by job name string (`.name == $ci`), not by workflow file or run identity.\n  WHY: A same-name workflow's runs could interfere with supersession and mark a legitimate failure as superseded.\n- README.md (AUTO_MERGE_REQUIRED_CI_CHECK section) | severity=low | confidence=5\n  PROBLEM: The documentation says only a superseded cancelled run is excepted, but completed non-success runs older than a newer bound success are now also dropped.\n  WHY: The doc mismatch misleads operators and maintainers.\n- scripts/pr_checks_lib.sh:65-70 | severity=low | confidence=5\n  PROBLEM: The PR_CHECKS_JQ_SUPERSEDE_DEFS header comment mentions only the cancelled-run exception, not the new success-supersession exception.\n  WHY: It misleads maintainers inspecting the merge-gate logic.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- README.md:158 | severity=low | confidence=5\n  PROBLEM: The README row documents only the cancelled-run exception, not the new exception for a completed failure superseded by a newer bound success. (Reported under TASK COMPLETENESS / INTENT GAPS.)\n  WHY: Operators read one rule while the merge gate applies another.\n- agents.md:2920 | severity=low | confidence=5\n  PROBLEM: The #6963 entry still says every failed, skipped, neutral or cancelled run refuses the merge. Only the #7127 entry was updated. (Reported under TASK COMPLETENESS / INTENT GAPS.)\n  WHY: Two adjacent sections of the canonical maintainer reference disagree.\n- scripts/pr_checks_lib.sh:65-71 | severity=low | confidence=5\n  PROBLEM: The header comment describing the side-channel aggregation (\"every non-self check-run with that exact name\", and \"failure (any completed run whose conclusion is not success \u2026)\") is stale after the new filter. (Reported under TASK COMPLETENESS / INTENT GAPS.)\n  WHY: The docstring misstates what the side channel returns.\n- scripts/pr_checks_lib.sh:788-801 | severity=low | confidence=5\n  PROBLEM: The named-CI-check block still says \"every such run succeeded\" and enumerates only `cancelled` as an exception. (Reported under TASK COMPLETENESS / INTENT GAPS.)\n  WHY: This is doc drift, and maintainers will assume the stricter rule.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/pr_checks_lib.sh:147-148, 883-889, 930-938 | severity=high | confidence=4\n  PROBLEM: The success override trusts CI runs identified by workflow name, not workflow file. A same-repo PR can add a workflow named `CI` with a successful `lint` check, which causes an older failed CI `lint` check to be dropped.\n  WHY: `_pr_checks_completed` can return success and let the merge gate proceed although the real CI check failed.\n- README.md:158; agents.md:2920; scripts/pr_checks_lib.sh:788-796 | severity=low | confidence=5\n  PROBLEM: These descriptions still say every matching run must succeed and that any failed, skipped, neutral or cancelled run blocks the wait.\n  WHY: The documentation contradicts the merge gate's behavior and can mislead diagnosis.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "5144bc452bff85ef8d8906b4ff5ca3039865d85f59b3f9f4d33ddec48c06068b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9867,
+    "run_id": "44855841308",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44855841308",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121030023_9885c2536d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9867,
+    "run_id": "44855841308"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer item(s) across 6 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T03:00:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
