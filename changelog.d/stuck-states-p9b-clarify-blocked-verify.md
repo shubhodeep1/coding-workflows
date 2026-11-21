@@ -1,0 +1,4 @@
+<!-- changelog: changed -->
+- **Clarify retries once when a `BLOCKED:` answer cites a file the repository tracks (Refs #8291).** Clarify agents sometimes answered `BLOCKED:` because a source file was "missing" although git tracks it. The clarify workflow now checks the paths named in the first `BLOCKED:` reason against `git ls-files` at the checked-out ref and, when one is tracked, runs clarify once more in the same job with a listing of those paths appended to a copy of the prompt (marker `AI_CLARIFY_BLOCKED_RETRY_V1`). Sensitive paths (`.env*`, `secrets`, `credentials`, key files) are never listed. A failed retry or a second `BLOCKED:` keeps today's `ai:blocked` flow, and there is never more than one retry. Each decision is logged on a `CLARIFY_BLOCKED_VERIFY` line.
+
+  What this means for operators: nothing to do. Set the repository variable `CLARIFY_BLOCKED_VERIFY_ENABLED` to `false` to turn the retry off.

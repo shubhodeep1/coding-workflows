@@ -300,6 +300,41 @@ def test_a_ci_failed_marker_for_another_head_pr_or_author_is_ignored(tmp_path: P
 	assert "reason=freshness_sync" in result.stdout
 
 
+# --- freshness-sync exposes from= to a sourcing caller (issue #9533) ---
+
+def _freshness_sourced(tmp_path: Path, comments: list[dict], *, commit: str | None = None) -> subprocess.CompletedProcess[str]:
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir(exist_ok=True)
+	gh_path = bin_dir / "gh"
+	gh_path.write_text(FRESHNESS_FAKE_GH, encoding="utf-8")
+	gh_path.chmod(0o755)
+	comments_file = tmp_path / "comments.json"
+	comments_file.write_text(json.dumps(comments), encoding="utf-8")
+	env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FAKE_GH_LOG": str(tmp_path / "gh.log"),
+		"GH_RETRY_MAX_ATTEMPTS": "1", "FAKE_COMMIT": commit or _commit()}
+	script = (
+		f'source "{ROOT}/scripts/gh_helpers.sh"; source "{HELPER}"; '
+		'REVIEW_HEAD_GATE_FRESHNESS_FROM=stale; REVIEW_HEAD_GATE_FRESHNESS_BASE_PARENT=stale; '
+		f'review_head_gate_freshness_sync o/r 42 {MERGE_HEAD} main workflow-bot "{comments_file}"; rc=$?; '
+		'echo "RC=${rc} FROM=${REVIEW_HEAD_GATE_FRESHNESS_FROM} BASE_PARENT=${REVIEW_HEAD_GATE_FRESHNESS_BASE_PARENT}"'
+	)
+	return subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=False)
+
+
+def test_freshness_sync_exports_from_and_base_parent_on_skip(tmp_path: Path) -> None:
+	result = _freshness_sourced(tmp_path, [_marker()])
+	assert f"RC=0 FROM={APPROVED} BASE_PARENT={MAIN_TIP}" in result.stdout, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("comments,commit", (
+	([], None),
+	([_marker()], _commit(verified=False)),
+))
+def test_freshness_sync_clears_exports_on_review(tmp_path: Path, comments: list[dict], commit: str | None) -> None:
+	result = _freshness_sourced(tmp_path, comments, commit=commit)
+	assert "RC=1 FROM= BASE_PARENT=" in result.stdout, result.stdout + result.stderr
+
+
 # --- final-ci-repair: review a final-CI repair commit on its own diff -------------
 # (docs/plans/final-ci-failure-ci-fix-plan.md Phase 3)
 

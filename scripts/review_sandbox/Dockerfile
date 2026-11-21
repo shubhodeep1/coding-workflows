@@ -18,3 +18,12 @@ ARG CLAUDE_CLI_VERSION=
 RUN if [ -n "${CLAUDE_CLI_VERSION}" ]; then \
       npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}" --no-audit --no-fund; \
     fi
+# ChatGPT account review slot (scripts/chatgpt_codex_relay.py, Refs #8969):
+# the Codex CLI is installed only when `prepare-ephemeral chatgpt` passes a
+# version; the image is unchanged without it.
+ARG CODEX_CLI_VERSION=
+RUN if [ -n "${CODEX_CLI_VERSION}" ]; then \
+      npm install -g "@openai/codex@${CODEX_CLI_VERSION}" \
+        "@openai/codex-linux-x64@npm:@openai/codex@${CODEX_CLI_VERSION#v}-linux-x64" \
+        --no-audit --no-fund; \
+    fi

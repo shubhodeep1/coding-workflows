@@ -13,6 +13,8 @@ mounted; and Codex never falls back to running on the host.
 
 from __future__ import annotations
 
+import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -799,3 +801,250 @@ def test_static_context_file_rejections_fail_closed(sandbox, case):
 def test_static_context_marker_is_advertised():
 	text = (REPO_ROOT / "scripts" / "codex_isolated_exec.sh").read_text()
 	assert "# supports: CODEX_ISOLATED_STATIC_CONTEXT_FILES" in text.splitlines()
+
+
+# --- opt-in solc in the sandbox image (SANDBOX_SOLC_VERSIONS) ------------------------
+
+DEFAULT_IMAGE_ARGS = ["--build-arg", "CODEX_VERSION=v0.114.0"]
+
+
+def _fake_uname(bin_dir, machine="x86_64"):
+	"""Pin `uname -m` for the helper, so solc tests do not depend on the host architecture."""
+	bin_dir.mkdir(parents=True, exist_ok=True)
+	target = bin_dir / "uname"
+	target.write_text(f"#!/bin/sh\nprintf '%s\\n' '{machine}'\n")
+	target.chmod(0o755)
+	return bin_dir
+
+
+def _image_context(tmp_path, engine="codex", solc=None, name="ctx", machine="x86_64"):
+	out = tmp_path / f"{name}-{engine}"
+	out.mkdir()
+	env = {k: v for k, v in os.environ.items() if k != "SANDBOX_SOLC_VERSIONS"}
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	env["PATH"] = f"{_fake_uname(tmp_path / f'uname-{name}-{engine}', machine)}:{os.environ['PATH']}"
+	if solc is not None:
+		env["SANDBOX_SOLC_VERSIONS"] = solc
+	proc = subprocess.run(
+		["bash", str(REPO_ROOT / "scripts" / "codex_isolated_exec.sh"), "image-context", "--engine", engine, "--out", str(out)],
+		capture_output=True, text=True, env=env, check=True,
+	)
+	return out, proc
+
+
+def _image_ref(context, engine, extra_args=()):
+	env = {k: v for k, v in os.environ.items() if k not in ("SANDBOX_SOLC_VERSIONS", "SANDBOX_IMAGE_REGISTRY")}
+	return subprocess.run(
+		["bash", str(REPO_ROOT / "scripts" / "sandbox_image.sh"), "ref", "--family", f"codex-isolated-{engine}",
+			*DEFAULT_IMAGE_ARGS, *extra_args, str(context)],
+		capture_output=True, text=True, env=env, check=True,
+	).stdout.strip()
+
+
+@pytest.mark.parametrize("engine", ["codex", "claude"])
+def test_image_context_without_solc_versions_is_unchanged(tmp_path, engine):
+	unset, proc = _image_context(tmp_path, engine, None, "unset")
+	empty, _ = _image_context(tmp_path, engine, "", "empty")
+	blank, _ = _image_context(tmp_path, engine, "  ", "blank")
+	assert proc.stderr == ""
+	for context in (unset, empty, blank):
+		assert sorted(p.name for p in context.iterdir()) == ["Dockerfile"]
+		assert (context / "Dockerfile").read_bytes() == (unset / "Dockerfile").read_bytes()
+	assert "solc" not in (unset / "Dockerfile").read_text().lower()
+	refs = {_image_ref(context, engine) for context in (unset, empty, blank)}
+	assert len(refs) == 1
+
+
+def test_image_context_with_solc_versions_adds_verified_install(tmp_path):
+	default, _ = _image_context(tmp_path, "codex", None, "default")
+	solc, proc = _image_context(tmp_path, "codex", "0.8.24, 0.8.20", "solc")
+	assert "CODEX_ISOLATION solc_versions count=2" in proc.stderr
+	base = (default / "Dockerfile").read_text()
+	text = (solc / "Dockerfile").read_text()
+	assert text.startswith(base) and text != base
+	assert text[len(base):].splitlines() == [
+		"ARG SANDBOX_SOLC_VERSIONS",
+		"COPY solc_install.py /tmp/solc_install.py",
+		'RUN python3 /tmp/solc_install.py "${SANDBOX_SOLC_VERSIONS}" && rm -f /tmp/solc_install.py',
+	]
+	installer = (solc / "solc_install.py").read_text()
+	for needle in ("https://binaries.soliditylang.org/linux-amd64/list.json", "hashlib.sha256", "compare_digest", "checksum_mismatch"):
+		assert needle in installer
+	assert _image_ref(solc, "codex", ["--build-arg", "SANDBOX_SOLC_VERSIONS=0.8.24_0.8.20"]) != _image_ref(default, "codex")
+
+
+@pytest.mark.parametrize("value, reason", [
+	("0.8.24;curl x|sh", "format"),
+	("$(id)", "format"),
+	("../0.8.24", "format"),
+	("0.8.1 0.8.2 0.8.3 0.8.4 0.8.5 0.8.6", "too_many"),
+	("1.0.0", "format"),
+	("0.8", "format"),
+	("v0.8.24", "format"),
+])
+def test_invalid_solc_versions_warn_and_build_without_solc(tmp_path, value, reason):
+	default, _ = _image_context(tmp_path, "codex", None, "default")
+	context, proc = _image_context(tmp_path, "codex", value, "invalid")
+	assert f"::warning::CODEX_ISOLATION solc_versions_invalid reason={reason}" in proc.stderr
+	assert value not in proc.stderr
+	assert sorted(p.name for p in context.iterdir()) == ["Dockerfile"]
+	assert (context / "Dockerfile").read_bytes() == (default / "Dockerfile").read_bytes()
+
+
+def test_solc_versions_are_deduplicated_and_capped_after_dedupe(tmp_path):
+	context, proc = _image_context(tmp_path, "codex", "0.8.24,0.8.24 0.8.20\n0.8.1,0.8.2,0.8.3", "dedupe")
+	assert "CODEX_ISOLATION solc_versions count=5" in proc.stderr
+	assert (context / "solc_install.py").is_file()
+
+
+def test_solc_build_arg_is_forwarded_only_when_opted_in(sandbox, claude_engine):
+	write_fake_codex(sandbox)
+	_fake_uname(sandbox["bin"])
+	proc = run_helper(sandbox, "run", "--mode", "read-only", *CODEX_ARGS)
+	assert proc.returncode == 0, proc.stderr
+	(default_build,) = builds_of(sandbox)
+	assert not any("SANDBOX_SOLC_VERSIONS" in arg for arg in default_build["argv"])
+	sandbox["docker_log"].unlink()
+
+	proc = run_helper(sandbox, "run", "--mode", "read-only", *CODEX_ARGS, env_extra={"SANDBOX_SOLC_VERSIONS": "0.8.24, 0.8.20"})
+	assert proc.returncode == 0, proc.stderr
+	(build,) = builds_of(sandbox)
+	assert "SANDBOX_SOLC_VERSIONS=0.8.24_0.8.20" in build["argv"]
+	assert [arg for arg in build["argv"] if arg.startswith("CODEX_VERSION=")] == [arg for arg in default_build["argv"] if arg.startswith("CODEX_VERSION=")]
+	(run_entry,) = docker_runs(sandbox["docker_log"])
+	for entry in read_docker_log(sandbox["docker_log"]):
+		assert "SANDBOX_SOLC_VERSIONS" not in entry["env"]
+	inner = run_entry["argv"][run_entry["argv"].index("-c") + 1]
+	assert "if [ -d /opt/solc/hardhat-nodejs/compilers-v2/linux-amd64 ]; then" in inner
+	sandbox["docker_log"].unlink()
+
+	proc = run_helper(sandbox, *claude_engine["args"], *CLAUDE_ARGS, env_extra={"SANDBOX_SOLC_VERSIONS": "0.8.24"})
+	assert proc.returncode == 0, proc.stderr
+	assert any("SANDBOX_SOLC_VERSIONS=0.8.24" in entry["argv"] for entry in builds_of(sandbox))
+	(run_entry,) = docker_runs(sandbox["docker_log"])
+	inner = run_entry["argv"][run_entry["argv"].index("-c") + 1]
+	assert "if [ -d /opt/solc/hardhat-nodejs/compilers-v2/linux-amd64 ]; then" in inner
+
+
+FAKE_ELF = b"\x7fELF" + bytes([2, 1, 1, 0]) + bytes(8) + (2).to_bytes(2, "little") + (0x3E).to_bytes(2, "little") + b"solc-binary"
+
+
+def _load_solc_installer(tmp_path, monkeypatch):
+	context, _ = _image_context(tmp_path, "codex", "0.8.24", "installer")
+	monkeypatch.setattr(sys, "dont_write_bytecode", True)
+	spec = importlib.util.spec_from_file_location("solc_install_under_test", context / "solc_install.py")
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	hardhat = tmp_path / "opt" / "hardhat"
+	bin_dir = tmp_path / "bin-solc"
+	monkeypatch.setattr(module, "HARDHAT_DIR", str(hardhat))
+	monkeypatch.setattr(module, "BIN_DIR", str(bin_dir))
+	monkeypatch.setattr(module, "machine", lambda: "x86_64")
+	return module, hardhat, bin_dir
+
+
+def _listing(version="0.8.24", path=None, data=FAKE_ELF):
+	path = path or f"solc-linux-amd64-v{version}+commit.e11b9ed9"
+	return json.dumps({
+		"builds": [{"path": path, "version": version, "sha256": "0x" + hashlib.sha256(data).hexdigest()}],
+		"releases": {version: path},
+	}).encode()
+
+
+def test_solc_install_rejects_checksum_mismatch(tmp_path, monkeypatch, capsys):
+	module, hardhat, bin_dir = _load_solc_installer(tmp_path, monkeypatch)
+	listing = _listing()
+	monkeypatch.setattr(module, "fetch", lambda url, limit: listing if url == module.LIST_URL else FAKE_ELF + b"tampered")
+	assert module.main(["solc_install.py", "0.8.24"]) == 1
+	assert "solc_install version=0.8.24 outcome=checksum_mismatch" in capsys.readouterr().err
+	assert not hardhat.exists() and not bin_dir.exists()
+
+
+def test_solc_install_writes_verified_binary_and_links(tmp_path, monkeypatch):
+	module, hardhat, bin_dir = _load_solc_installer(tmp_path, monkeypatch)
+	listing = _listing()
+	fetched = []
+
+	def fake_fetch(url, limit):
+		fetched.append(url)
+		return listing if url == module.LIST_URL else FAKE_ELF
+
+	monkeypatch.setattr(module, "fetch", fake_fetch)
+	assert module.main(["solc_install.py", "0.8.24"]) == 0
+	binary = hardhat / "solc-linux-amd64-v0.8.24+commit.e11b9ed9"
+	assert binary.read_bytes() == FAKE_ELF
+	assert binary.stat().st_mode & 0o777 == 0o755
+	assert (hardhat / "list.json").read_bytes() == listing
+	assert os.readlink(bin_dir / "solc-0.8.24") == str(binary)
+	assert os.readlink(bin_dir / "solc") == str(binary)
+	assert fetched == [module.LIST_URL, module.BASE_URL + "solc-linux-amd64-v0.8.24+commit.e11b9ed9"]
+
+
+@pytest.mark.parametrize("case", ["traversal", "unknown", "bad_sha", "not_elf", "arch", "bad_arg"])
+def test_solc_install_rejects_untrusted_listing_and_inputs(tmp_path, monkeypatch, case):
+	module, hardhat, bin_dir = _load_solc_installer(tmp_path, monkeypatch)
+	listing = _listing()
+	binary = FAKE_ELF
+	argv = ["solc_install.py", "0.8.24"]
+	if case == "traversal":
+		listing = json.dumps({"builds": [{"path": "../../bin/sh", "version": "0.8.24", "sha256": "0x" + "0" * 64}],
+			"releases": {"0.8.24": "../../bin/sh"}}).encode()
+	elif case == "unknown":
+		argv = ["solc_install.py", "0.8.25"]
+	elif case == "bad_sha":
+		listing = listing.replace(b'"0x', b'"')
+	elif case == "not_elf":
+		binary = b"#!/bin/sh\necho pwned\n"
+		listing = _listing(data=binary)
+	elif case == "arch":
+		monkeypatch.setattr(module, "machine", lambda: "aarch64")
+	else:
+		argv = ["solc_install.py", "0.8.24;id"]
+	monkeypatch.setattr(module, "fetch", lambda url, limit: listing if url == module.LIST_URL else binary)
+	assert module.main(argv) == 1
+	assert not hardhat.exists() and not bin_dir.exists()
+
+
+def test_solc_install_refuses_off_host_redirect(tmp_path, monkeypatch):
+	module, _hardhat, _bin_dir = _load_solc_installer(tmp_path, monkeypatch)
+	with pytest.raises(ValueError):
+		module.AllowedHostRedirect().redirect_request(None, None, 302, "Found", {}, "https://evil.example/solc")
+	with pytest.raises(ValueError):
+		module.AllowedHostRedirect().redirect_request(None, None, 302, "Found", {}, "http://binaries.soliditylang.org/x")
+
+
+@pytest.mark.parametrize("value", [",,,", " , ,"])
+def test_separator_only_solc_versions_warn_and_build_without_solc(tmp_path, value):
+	default, _ = _image_context(tmp_path, "codex", None, "default")
+	context, proc = _image_context(tmp_path, "codex", value, "separators")
+	assert "::warning::CODEX_ISOLATION solc_versions_invalid reason=format" in proc.stderr
+	assert sorted(p.name for p in context.iterdir()) == ["Dockerfile"]
+	assert (context / "Dockerfile").read_bytes() == (default / "Dockerfile").read_bytes()
+
+
+def test_solc_install_reports_write_failure(tmp_path, monkeypatch, capsys):
+	module, _hardhat, _bin_dir = _load_solc_installer(tmp_path, monkeypatch)
+	listing = _listing()
+	monkeypatch.setattr(module, "fetch", lambda url, limit: listing if url == module.LIST_URL else FAKE_ELF)
+
+	def failing_write(target, data, mode):
+		raise OSError("disk full")
+
+	monkeypatch.setattr(module, "write_atomic", failing_write)
+	assert module.main(["solc_install.py", "0.8.24"]) == 1
+	err = capsys.readouterr().err
+	assert "outcome=write_failed" in err and "outcome=fetch_failed" not in err
+	assert "solc_install version=0.8.24 outcome=write_failed" in err
+
+
+def test_non_x86_64_runner_warns_and_builds_without_solc(tmp_path):
+	probe = _fake_uname(tmp_path / "uname-probe", "aarch64")
+	seen = subprocess.run(["bash", "-c", "uname -m"], capture_output=True, text=True,
+		env={**os.environ, "PATH": f"{probe}:{os.environ['PATH']}"}).stdout.strip()
+	if seen != "aarch64":
+		pytest.skip("fake binaries cannot execute from tmp_path here (noexec mount)")
+	default, _ = _image_context(tmp_path, "codex", None, "default")
+	context, proc = _image_context(tmp_path, "codex", "0.8.24", "arm", machine="aarch64")
+	assert "::warning::CODEX_ISOLATION solc_versions_invalid reason=unsupported_arch" in proc.stderr
+	assert sorted(p.name for p in context.iterdir()) == ["Dockerfile"]
+	assert (context / "Dockerfile").read_bytes() == (default / "Dockerfile").read_bytes()

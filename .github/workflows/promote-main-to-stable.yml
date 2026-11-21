@@ -28,7 +28,8 @@ name: Promote main to stable
 #   1. detect a code change on `main` since the `stable` tag (non-code paths
 #      such as analysis/, docs/ and most *.md do not count), hold while a
 #      cycle is in flight, already ran for this tip, or already failed on it
-#      PROMOTE_CYCLE_MAX_ATTEMPTS times;
+#      PROMOTE_CYCLE_MAX_ATTEMPTS times (a tracking issue parked on a human
+#      latch label for PROMOTE_CYCLE_HOLD_MAX_HOURS no longer holds);
 #   2. run test-and-mark-stable.yml in gate_only mode on `main` (the smoke
 #      gate) and wait for it;
 #   3. dispatch the PROVING apply-analysis run (one analysis doc) with the
@@ -38,6 +39,13 @@ name: Promote main to stable
 # merges it dispatches the VERIFYING run on the next doc, and when that run
 # is ready to merge it dispatches THIS workflow with `target_sha` (the
 # proving merge) and holds the verifying merge until the release finishes.
+#
+# Release-blocker reporters (stuck-states P4 / release-blocker Phase 2b,
+# Refs #8291): when a tick skips, the cycle job may send one `release_blocker`
+# heal report (cycle_gate_unavailable, cycle_held_untrusted_marker or
+# cycle_stale) to workflow-failure-heal through repository_dispatch, signed
+# with the job's OIDC identity (hence `id-token: write`). It never changes
+# the tick's outcome; RELEASE_BLOCKER_HEAL_ENABLED=false turns it off.
 #
 "on":
   schedule:
@@ -127,6 +135,8 @@ jobs:
       contents: read
       issues: write
       actions: write
+      # OIDC identity for the release-blocker heal reports (Refs #8291).
+      id-token: write
     steps:
       - name: Checkout main
         uses: actions/checkout@v5
@@ -143,6 +153,19 @@ jobs:
           PROMOTE_CYCLE_MAX_ATTEMPTS: ${{ vars.PROMOTE_CYCLE_MAX_ATTEMPTS || '3' }}
           PROMOTE_CYCLE_PIN_ENABLED: ${{ vars.PROMOTE_CYCLE_PIN_ENABLED || 'true' }}
           PROMOTE_CYCLE_FREEZE_MAX_SECS: ${{ vars.PROMOTE_CYCLE_FREEZE_MAX_SECS || '172800' }}
+          PROMOTE_CYCLE_HOLD_RELEASE_ENABLED: ${{ vars.PROMOTE_CYCLE_HOLD_RELEASE_ENABLED || 'true' }}
+          PROMOTE_CYCLE_HOLD_MAX_HOURS: ${{ vars.PROMOTE_CYCLE_HOLD_MAX_HOURS || '24' }}
+          # WARNING alert when a human-latched tracking issue stops holding
+          # the cycle (same rows as promote-candidate-follow.yml).
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          # Release-blocker reporters (stuck-states P4 / Phase 2b).
+          RELEASE_BLOCKER_HEAL_ENABLED: ${{ vars.RELEASE_BLOCKER_HEAL_ENABLED || 'true' }}
+          RELEASE_BLOCKER_CYCLE_SKIP_STREAK: ${{ vars.RELEASE_BLOCKER_CYCLE_SKIP_STREAK || '3' }}
+          RELEASE_BLOCKER_UNTRUSTED_HOLD_SECS: ${{ vars.RELEASE_BLOCKER_UNTRUSTED_HOLD_SECS || '86400' }}
+          RELEASE_BLOCKER_CYCLE_STALE_SECS: ${{ vars.RELEASE_BLOCKER_CYCLE_STALE_SECS || '259200' }}
           PROMOTE_CYCLE_GATE_WAIT_SECS: ${{ vars.PROMOTE_CYCLE_GATE_WAIT_SECS || '18000' }}
           PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS: ${{ vars.PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS || '1800' }}
           PROMOTE_CYCLE_GATE_POLL_SECS: ${{ vars.PROMOTE_CYCLE_GATE_POLL_SECS || '60' }}
@@ -209,6 +232,7 @@ jobs:
         id: ff
         env:
           TARGET_SHA_INPUT: ${{ inputs.target_sha }}
+          PROMOTE_STABLE_PUSH_TRANSIENT_RETRY_ENABLED: ${{ vars.PROMOTE_STABLE_PUSH_TRANSIENT_RETRY_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           # Pre-check: `stable` MUST exist on origin as a branch. A naked
@@ -274,7 +298,87 @@ jobs:
           # HEAD resolves to the local `stable` tag (if present) and
           # no-ops; the explicit `HEAD:refs/heads/stable` always
           # targets the branch.
-          git push origin "HEAD:refs/heads/stable"
+          #
+          # Transient push retry (issue #8822): run 41819783609 lost a
+          # pinned promotion to a single HTTP 500 on this push. The loop
+          # follows the review_autofix.yml "Push all pending commits"
+          # pattern (#7974): a protected-branch / repository-rule or a
+          # non-fast-forward rejection fails at once; a transient failure
+          # gets at most 2 retries (5 s, then 10 s), and before each retry
+          # (and once more before giving up) an ls-remote read treats a
+          # push that landed anyway as done. Each decision is logged as a
+          # registered PROMOTE_STABLE_PUSH_RETRY line. Never --force,
+          # --force-with-lease or a rebase. Only
+          # PROMOTE_STABLE_PUSH_TRANSIENT_RETRY_ENABLED=false (any letter
+          # case) turns the retry off.
+          promote_push_retry_enabled="${PROMOTE_STABLE_PUSH_TRANSIENT_RETRY_ENABLED:-true}"
+          promote_push_retry_max=2
+          promote_push_retry=0
+          promote_push_out="$(mktemp)"
+          trap 'rm -f "${promote_push_out}"' EXIT
+          while true; do
+            promote_push_exit=0
+            git push origin "HEAD:refs/heads/stable" >"${promote_push_out}" 2>&1 || promote_push_exit=$?
+            # Echo the push output with URL userinfo redacted.
+            sed -E 's#(https?://)[^/@[:space:]]+@#\1***@#g' "${promote_push_out}" >&2 || true
+            if [ "${promote_push_exit}" -eq 0 ]; then
+              break
+            fi
+            if grep -qiE 'GH006|GH013|protected branch|push declined|repository rule' "${promote_push_out}"; then
+              echo "::error::git push to refs/heads/stable was rejected by a protected-branch or repository rule; not retrying."
+              exit "${promote_push_exit}"
+            fi
+            if grep -qE '\[rejected\].*\((fetch first|non-fast-forward)\)' "${promote_push_out}"; then
+              echo "::error::stable moved on origin during the promotion (non-fast-forward); refusing to move stable sideways. Not retrying."
+              exit "${promote_push_exit}"
+            fi
+            promote_push_class=""
+            if [ "${promote_push_retry_enabled,,}" != "false" ]; then
+              if grep -qiE 'Internal Server Error|The requested URL returned error: 5[0-9][0-9]|HTTP 5[0-9][0-9]' "${promote_push_out}"; then
+                promote_push_class="server_error"
+              elif grep -qiE 'remote rejected.*\(failed\)' "${promote_push_out}"; then
+                promote_push_class="remote_rejected_failed"
+              elif grep -qiE 'RPC failed|unexpected disconnect|early EOF|Connection reset|Could not resolve host|Operation timed out' "${promote_push_out}"; then
+                promote_push_class="network"
+              fi
+            fi
+            if [ -z "${promote_push_class}" ]; then
+              echo "::error::git push to refs/heads/stable failed (exit ${promote_push_exit}); not retrying."
+              exit "${promote_push_exit}"
+            fi
+            if [ "${promote_push_retry}" -lt "${promote_push_retry_max}" ]; then
+              promote_push_retry=$((promote_push_retry + 1))
+              sleep "$((5 * promote_push_retry))"
+              promote_remote_tip=""
+              if promote_ls_out="$(timeout 60 git ls-remote origin refs/heads/stable 2>/dev/null)"; then
+                promote_remote_tip="${promote_ls_out%%[[:space:]]*}"
+              else
+                echo "::warning::git ls-remote origin refs/heads/stable failed (exit $?) before the retry decision; treating the push as not landed."
+              fi
+              if [ -n "${promote_remote_tip}" ] && [ "${promote_remote_tip}" = "${TARGET}" ]; then
+                echo "::warning::PROMOTE_STABLE_PUSH_RETRY attempt=${promote_push_retry}/${promote_push_retry_max} class=${promote_push_class} outcome=landed"
+                break
+              fi
+              echo "::warning::PROMOTE_STABLE_PUSH_RETRY attempt=${promote_push_retry}/${promote_push_retry_max} class=${promote_push_class} outcome=retry"
+              : >"${promote_push_out}"
+              continue
+            fi
+            promote_remote_tip=""
+            if promote_ls_out="$(timeout 60 git ls-remote origin refs/heads/stable 2>/dev/null)"; then
+              promote_remote_tip="${promote_ls_out%%[[:space:]]*}"
+            else
+              echo "::warning::git ls-remote origin refs/heads/stable failed (exit $?) before giving up; treating the push as not landed."
+            fi
+            if [ -n "${promote_remote_tip}" ] && [ "${promote_remote_tip}" = "${TARGET}" ]; then
+              echo "::warning::PROMOTE_STABLE_PUSH_RETRY attempt=${promote_push_retry}/${promote_push_retry_max} class=${promote_push_class} outcome=landed"
+              break
+            fi
+            echo "::warning::PROMOTE_STABLE_PUSH_RETRY attempt=${promote_push_retry}/${promote_push_retry_max} class=${promote_push_class} outcome=gave_up"
+            echo "::error::git push to refs/heads/stable failed with a transient error after ${promote_push_retry_max} retries; giving up."
+            exit "${promote_push_exit}"
+          done
+          rm -f "${promote_push_out}"
+          trap - EXIT
 
           # Post-verify: confirm origin's stable branch actually moved
           # to TARGET. Catches any path where the push appeared to
