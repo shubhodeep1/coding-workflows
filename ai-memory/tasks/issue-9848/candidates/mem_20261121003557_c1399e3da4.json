@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n# Plan for issue #9848: rewrite the smoke canary file\n\n**Planning ref:** `main` at 5b2a57d83fd6cdcc6f3e0e66d3ba67bb21b54173. The \"Integration branch mismatch\" line reads `unknown`, not `true`, so the mismatch block does not apply.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: test tests/test_review_autofix_smoke_editor_override.py\nACCEPTANCE: post-merge none: this change only rewrites a text fixture and no workflow runs because of it\n\n## Functions or modules to implement\n- None. Only the content of one text file changes.\n\n## Data structures affected\n- `tests/e2e_smoke_canary.txt` currently holds two lines: `status: ok` and `decompose-run: 41445772297`. Its whole content becomes exactly these three lines, each ending in a newline:\n  - `status: ok`\n  - `run_id: alt-44843326673`\n  - `updated-by: ai-pipeline`\n\n## API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Replace the whole file\n- Chosen: overwrite the file with exactly the three lines the issue gives.\n- Alternatives considered: editing the existing lines in place, or keeping the `decompose-run` line.\n- Why: the issue says the file must be \"exactly\" these three lines.\n\n## Security considerations\n- No trust boundaries, endpoints, external input or secrets are involved. The new content is static text from the issue.\n\n## Potential risks or edge cases\n- About ten tests mention this file by path (for example `tests/test_review_autofix_smoke_editor_override.py` and `tests/test_workflow_failure_heal.py`). They appear to use it as a path, not to check its contents. If one does check the old `decompose-run` line, it would break. The issue allows changing only this file, so that would be reported rather than fixed here.\n- The file should end with a single trailing newline, with no extra blank line.\n\n## Testing considerations\n- Run `diff` between the file and the expected three lines and confirm there is no output.\n- Run the canary-referencing tests that CI runs and confirm they still pass.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies the change: rewrite one existing file with fixed content. No helper or pattern applies, and the issue forbids widening scope. The complete option and the shortcut are the same here, so the \u00a76 priorities (correctness before speed) are met with no tradeoff.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- AI_ACCEPTANCE_V1 {\"checks\":[],\"errors\":[],\"post_merge\":null,\"post_merge_none\":\"this change only rewrites a text fixture and no workflow runs because of it\",\"schema\":\"acceptance.v1\",\"source\":\"plan\",\"state\":\"valid\",\"tests\":[{\"name\":\"\",\"path\":\"tests/test_review_autofix_smoke_editor_override.py\",\"red_on_base\":false}]} -->\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "80492acf888a4ef7936dc337d5ce8c2a4832ba8cb35673f5ec85e31595f88053",
+  "lineage": {
+    "issue_number": 9848,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44844286558",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44844286558",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9848"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261121003557_c1399e3da4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9848,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44844286558"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9848",
+  "timestamps": {
+    "created_at": "2026-11-21T00:35:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
