@@ -328,21 +328,21 @@ def test_review_auto_merge_skips_updater_prs() -> None:
 	# Ordinary review must never enable auto-merge on an updater PR; only the
 	# verify job does, after its PR-tree check.
 	script = (REPO_ROOT / "scripts" / "review_enable_auto_merge.sh").read_text(encoding="utf-8")
-	guard = script.index("^auto/update-workflows-[0-9a-f]{12}$")
+	guard = script.index("^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$")
 	assert "reason=updater_pr_verify_job_owns_merge" in script[guard:guard + 400]
 	assert guard < script.index("gh_retry gh pr merge")
 
 
 def test_deterministic_skip_merge_skips_updater_prs() -> None:
 	text = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
-	guard = text.index('elif [[ "${PR_HEAD_REF}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then')
+	guard = text.index('elif [[ "${PR_HEAD_REF}" =~ ^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$ ]]; then')
 	assert "reason=updater_pr_verify_job_owns_merge" in text[guard:guard + 600]
 	assert guard < text.index("gh_retry gh pr merge", guard)
 
 
 def test_review_blocked_judge_never_merges_updater_prs() -> None:
 	script = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
-	guard = script.index('=~ ^auto/update-workflows-[0-9a-f]{12}$ ]]')
+	guard = script.index('=~ ^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$ ]]')
 	assert "judge_skip_reason=updater_pr_verify_job_owns_merge" in script[guard:guard + 600]
 	assert script.index('RB_MERGE_ACTION="false"') < guard < script.index("rb_security_merge_gate; then")
 	assert guard < script.index('if gh pr merge "${PR_NUMBER}"')
@@ -354,7 +354,7 @@ def test_review_blocked_judge_never_merges_updater_prs() -> None:
 
 def test_review_editor_never_commits_to_updater_branches() -> None:
 	script = (REPO_ROOT / "scripts" / "review_commit_changes.sh").read_text(encoding="utf-8")
-	guard = script.index('[[ "${TARGET_BRANCH:-}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]')
+	guard = script.index('[[ "${TARGET_BRANCH:-}" =~ ^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$ ]]')
 	assert "reason=updater_pr_verify_job_owns_branch" in script[guard:guard + 400]
 	assert "AUTOFIX_UPDATER_COMMIT_WITHHELD=true" in script[guard:guard + 1200]
 	assert guard < script.index("git commit")
@@ -365,7 +365,7 @@ def test_review_editor_never_commits_to_updater_branches() -> None:
 def test_review_never_pushes_or_resolves_on_updater_branches() -> None:
 	text = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
 	push = text.index("- name: Push all pending commits")
-	guard = text.index('[[ "${TARGET_BRANCH:-}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]', push)
+	guard = text.index('[[ "${TARGET_BRANCH:-}" =~ ^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$ ]]', push)
 	assert "AUTOFIX_PUSH_SKIPPED" in text[guard:guard + 300]
 	assert guard < text.index("git push", push)
 	detect = (REPO_ROOT / "scripts" / "review_autofix_step_detect_merge_conflicts.sh").read_text(encoding="utf-8")

@@ -111,8 +111,8 @@
 # A `heal_report` op (harness routing): one actions/runs listing and one
 # repository_dispatch to shubhodeep1/coding-workflows; a `hold_request` op:
 # one comment on the tracking issue.
-# CONSIST-001: the identity, item, item re-check, item comments and cited-run
-# reads go through gh_retry, so after a transient error (5xx, connection
+# CONSIST-001: the identity, item, item re-check, item comments, cited-run
+# and chain-title (a trusted PR's `ai/issue-<n>` issue) reads go through gh_retry, so after a transient error (5xx, connection
 # reset) one of them may be attempted up to GH_RETRY_MAX_ATTEMPTS times in
 # total, with capped rate-limit waits. Permanent errors and every write still
 # make one attempt.
@@ -127,6 +127,7 @@
 #      UNBLOCK_JUDGE item= kind= stop= fixup= op=fixup_delivered outcome=warn reason=wait_update_failed
 #      UNBLOCK_JUDGE item= op=heal_report issue= label= outcome=sent|failed|skip reason=
 #      UNBLOCK_JUDGE item= op=hold_request issue= outcome=posted|failed|skip reason=
+#      UNBLOCK_JUDGE item= op=chain_title issue= outcome=unavailable reason=read_failed
 #      UNBLOCK_TARGET_REPO_GUARD item= verdict= outcome=consumer|harness|mixed|disabled paths=
 # Project-failed fallback skips: project_state_unverified, project_not_failed,
 # project_state_recheck_unavailable, project_resumed.
@@ -150,7 +151,8 @@ if [ -f "${SUPPORT_DIR}/scripts/label_helpers.sh" ]; then
 fi
 # CONSIST-001: retry transient GitHub errors (5xx, connection reset) on the
 # judge's read-only GETs the same way the poller paths do. gh_retry wraps only
-# the comments, identity, item-metadata, item re-check and cited-run reads;
+# the comments, identity, item-metadata, item re-check, cited-run and
+# chain-title (a trusted PR's `ai/issue-<n>` issue) reads;
 # writes (comment POSTs, label POST/DELETE, PATCH, issue creation, dispatches)
 # stay single-attempt on purpose. gh_helpers.sh has a load guard, so this is a
 # no-op when label_helpers.sh already sourced it. A missing or unsourceable
@@ -215,6 +217,56 @@ unblock_tg()
 			tg_send_msg "${text}" "${level}" >/dev/null 2>&1 || true
 		fi
 	fi
+}
+
+# unblock_needs_human_alert ITEM PARKING TEXT — at most one persisted CRITICAL
+# alert attempt per needs-human parking (stuck-states P6b, Refs #8291).
+# Claim (a trusted ai:unblock-park-alert comment on the item, written before
+# any Telegram call) -> send once -> confirm with the message id. Skips without
+# a claim when Telegram cannot send at CRITICAL, so the attempt is not used up.
+# Never retries a send and never fails the op list. Logs NEEDS_HUMAN_ALERT.
+unblock_needs_human_alert()
+{
+	local item="$1" parking="$2" text="$3" claim_json="" claim_id="" msg_id=""
+	if [ -f "${SUPPORT_DIR}/scripts/tg_helpers.sh" ]; then
+		# shellcheck source=/dev/null
+		source "${SUPPORT_DIR}/scripts/tg_helpers.sh" 2>/dev/null || true
+	fi
+	if ! declare -F tg_alert_configured >/dev/null 2>&1 || ! declare -F tg_send_msg >/dev/null 2>&1; then
+		echo "NEEDS_HUMAN_ALERT item=${item} parking=${parking} outcome=skip reason=helper_missing" >&2
+		return 0
+	fi
+	if ! tg_alert_configured CRITICAL; then
+		echo "NEEDS_HUMAN_ALERT item=${item} parking=${parking} outcome=skip reason=telegram_unconfigured" >&2
+		return 0
+	fi
+	if ! claim_json="$(unblock_py "${SUPPORT_DIR}/scripts/operator_step_issue.py" needs-human alert-claim \
+		--repo "${REPOSITORY}" --item "${item}" --parking "${parking}" --trusted-login "${UNBLOCK_LOGIN}")"; then
+		echo "NEEDS_HUMAN_ALERT item=${item} parking=${parking} outcome=failed reason=claim_failed" >&2
+		return 0
+	fi
+	# Not claimed (already attempted, lost race, unverified, disabled): the
+	# helper logged why; never send.
+	jq -e '.claimed == true' <<< "${claim_json}" >/dev/null 2>&1 || return 0
+	claim_id="$(jq -r '.comment_id // empty' <<< "${claim_json}" 2>/dev/null || true)"
+	if ! [[ "${claim_id}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+		echo "NEEDS_HUMAN_ALERT item=${item} parking=${parking} outcome=failed reason=claim_id_missing" >&2
+		return 0
+	fi
+	# stderr kept: tg_send_msg logs why a send returned no message id (curl stderr stays silenced inside).
+	msg_id="$(tg_send_msg "${text}" CRITICAL || true)"
+	if [[ "${msg_id}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+		if ! unblock_py "${SUPPORT_DIR}/scripts/operator_step_issue.py" needs-human alert-confirm \
+			--repo "${REPOSITORY}" --item "${item}" --parking "${parking}" --comment-id "${claim_id}" \
+			--message-id "${msg_id}" >/dev/null; then
+			echo "NEEDS_HUMAN_ALERT item=${item} parking=${parking} outcome=failed reason=confirm_write_failed" >&2
+		fi
+	else
+		# Explicit failure or ambiguous timeout: the claim stays state=attempted
+		# and is never retried for this parking.
+		echo "NEEDS_HUMAN_ALERT item=${item} parking=${parking} outcome=unconfirmed reason=send_failed_or_ambiguous" >&2
+	fi
+	return 0
 }
 
 # The newest trusted wait marker: `<comment id> <fixup> <done|open> <iso time>`.
@@ -572,6 +624,25 @@ unblock_check_triage_resolved()
 # The plan-phase blocker (prompts/mode-plan.txt) for an issue with no edits left.
 UNBLOCK_NOTHING_TO_IMPLEMENT_REASON="work is already on the planning ref; nothing to implement"
 
+# unblock_nothing_to_implement_blocked (#8470, shared with #9659): 0 when the
+# newest trusted "Planning blocked" comment on the item gives the
+# nothing-to-implement reason and no trusted implementation plan (the has_plan
+# rule in unblock_main) was posted after it; 1 otherwise. Reads only the
+# item_comments.json this run already fetched.
+unblock_nothing_to_implement_blocked()
+{
+	jq -e --arg login "${UNBLOCK_LOGIN}" --arg reason "Reason: ${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}" '
+		([.[] | select((.user.login // "") == $login)
+			| ((.body // "") | split("\n") | map(rtrimstr("\r"))) as $lines
+			| select(($lines | map(select(test("\\S"))) | first // "") == "Planning blocked: human input required.")
+			| {at: (.created_at // ""), match: ($lines | index($reason) != null)}]
+		| sort_by(.at) | last // {at: "", match: false}) as $block
+		| ([.[] | select(((.body // "") | test("(?im)^\\s*implementation\\s+plan\\b")) and (((.user.type // "") == "Bot") or ((.author_association // "") as $a | ["OWNER", "MEMBER", "COLLABORATOR"] | index($a)) or ((.user.login // "") == $login)))
+			| (.created_at // "")] | max // "") as $plan
+		| $block.match and ($plan == "" or $plan < $block.at)
+	' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1
+}
+
 # unblock_nothing_to_implement_close <fixup> <done text> (#8470): when the
 # newest trusted "Planning blocked" comment on a standalone issue gives the
 # nothing-to-implement reason, the issue is closed as completed once its
@@ -596,16 +667,7 @@ unblock_nothing_to_implement_close()
 	# A trusted implementation plan (the has_plan rule in unblock_main) posted
 	# after that block means planning moved on, so the stale block never closes
 	# the issue: it resumes as usual (`/approved`).
-	jq -e --arg login "${UNBLOCK_LOGIN}" --arg reason "Reason: ${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}" '
-		([.[] | select((.user.login // "") == $login)
-			| ((.body // "") | split("\n") | map(rtrimstr("\r"))) as $lines
-			| select(($lines | map(select(test("\\S"))) | first // "") == "Planning blocked: human input required.")
-			| {at: (.created_at // ""), match: ($lines | index($reason) != null)}]
-		| sort_by(.at) | last // {at: "", match: false}) as $block
-		| ([.[] | select(((.body // "") | test("(?im)^\\s*implementation\\s+plan\\b")) and (((.user.type // "") == "Bot") or ((.author_association // "") as $a | ["OWNER", "MEMBER", "COLLABORATOR"] | index($a)) or ((.user.login // "") == $login)))
-			| (.created_at // "")] | max // "") as $plan
-		| $block.match and ($plan == "" or $plan < $block.at)
-	' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1 || return 1
+	unblock_nothing_to_implement_blocked || return 1
 	marker="<!-- ai:unblock-nothing-to-implement:v1 item=${ITEM} fixup=${fixup} -->"
 	if jq -e --arg login "${UNBLOCK_LOGIN}" --arg marker "${marker}" \
 		'any(.[]; (.user.login // "") == $login and ((.body // "") | sub("\\s+$"; "") | endswith($marker)))' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; then
@@ -626,6 +688,173 @@ ${marker}" >/dev/null 2>&1; then
 	fi
 	UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT="closed"
 	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup} op=nothing_to_implement outcome=closed"
+	return 0
+}
+
+# unblock_triage_superseded_body <checked> (#9659): the superseded note. Its
+# last line is an `ai:unblock-wait:v1 ... reason=triage_superseded` marker, a
+# prefix scripts/unblock_scan.py throttles on (keyed on the comment's
+# updatedAt), so a held item is re-dispatched once per --marker-hours instead
+# of on every tick; `reason=` (no `hold=`) keeps it out of the hold parsers.
+# The once-per-issue `ai:unblock-triage-superseded:v1` marker is the line above.
+unblock_triage_superseded_body()
+{
+	printf '%s' "Planning found the fix for this check failure already on the planning ref (\`${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}\`), so the unblock judge is not resuming planning: it would only stop here again. This issue now waits for the pull request head's check to pass; the check-triage resolution gate closes it with evidence once the failure is verified fixed on the default branch. Reply with \`/reclarify\` if work is still missing. Last checked ${1:-}.
+
+<!-- ai:unblock-triage-superseded:v1 item=${ITEM} -->
+<!-- ai:unblock-wait:v1 item=${ITEM} reason=triage_superseded -->"
+}
+
+# unblock_triage_superseded_refresh <comment id> (#9659): re-writes the note so
+# its updatedAt restarts the scan's throttle while the item stays held. A
+# failed refresh only means an earlier re-dispatch; the next run retries it.
+unblock_triage_superseded_refresh()
+{
+	[[ "${1:-}" =~ ^[1-9][0-9]*$ ]] || return 0
+	unblock_patch_comment "$1" "$(unblock_triage_superseded_body "$(unblock_now)")" || true
+	return 0
+}
+
+# unblock_triage_superseded_note <tracking> (#9659): a standalone
+# ai:check-triage issue whose newest trusted "Planning blocked" comment gives
+# the nothing-to-implement reason has its fix on the planning ref already, so
+# resuming it with `/answer` or `/approved` would only loop planning (#629 in
+# shubhodeep1/binance-blessings). This run's Q129 check-triage resolution gate
+# verdict (triage_resolution.json, cached by unblock_check_triage_resolved)
+# decides: resolved or already_resolved means that gate has closed the issue;
+# an unverified verdict posts one trusted note (marker
+# `<!-- ai:unblock-triage-superseded:v1 item=<n> -->`, once per issue) saying
+# the issue waits for the pull request head's check to pass, and stops the
+# run without a resume command. A note older than UNBLOCK_JUDGE_WAIT_MAX_DAYS
+# records one trusted `close` round marker (as the judge's own close of an
+# issue does, so scripts/unblock_scan.py skips the parked item) and parks the
+# item in the needs-human digest (still no resume; a failed marker write, or a
+# failed or disabled park, holds and retries next run). Any other verdict (not_triage,
+# disabled: the gate will never close the issue) or no cached verdict (gate
+# off, missing or errored) judges as usual. A failed note write holds the
+# item (no resume) and is retried next run. Returns 0 when this run must
+# stop, 1 to judge as usual.
+# UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED=false (default true)
+# restores the previous behaviour.
+# API budget: no reads; at most one note comment per issue, plus, once the
+# note expires, one close-marker comment and the needs-human park's label
+# and digest read/write. Each held run (already_noted, park_failed,
+# marker_failed) re-writes the note once (PATCH): the note's last line is an
+# `ai:unblock-wait:v1` marker, so scripts/unblock_scan.py's recent_verdict
+# throttle re-dispatches the item once per --marker-hours, not every tick.
+# Log key: UNBLOCK_JUDGE ... op=triage_superseded outcome=closed|noted|parked|held|skip reason=<token>
+unblock_triage_superseded_note()
+{
+	local tracking_issue="${1:-}" marker status noted_at triage_noted triage_note_id
+	if [ "$(printf '%s' "${UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "false" ]; then
+		return 1
+	fi
+	[ "${ITEM_KIND}" = "issue" ] && [ "${ITEM_STOP}" = "blocked" ] && [ -z "${tracking_issue}" ] || return 1
+	jq -e 'index("ai:check-triage") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1 || return 1
+	# An empty tracking reference alone does not prove standalone: a managed
+	# issue whose `Tracking issue:` line is missing or malformed keeps today's judging.
+	jq -e 'index("ai:orchestrator-managed") == null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1 || return 1
+	unblock_nothing_to_implement_blocked || return 1
+	if ! { [ -s "${RUNTIME_DIR}/triage_resolution.json" ] \
+		&& jq -e --argjson item "${ITEM}" '.issue == $item' "${RUNTIME_DIR}/triage_resolution.json" >/dev/null 2>&1; }; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=skip reason=gate_unavailable"
+		return 1
+	fi
+	status="$(jq -r '.status // ""' "${RUNTIME_DIR}/triage_resolution.json" 2>/dev/null || true)"
+	status="$(printf '%s' "${status}" | tr -cd 'a-z_' | cut -c1-40)"
+	if [ "${status}" = "resolved" ] || [ "${status}" = "already_resolved" ]; then
+		# Defensive: the Q129 gate closed the issue and normally returns first.
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=closed reason=${status}"
+		return 0
+	fi
+	# Only an unverified verdict can later close through the gate; not_triage
+	# or disabled never will, so a note would hold the item forever.
+	if [ "${status}" != "unverified" ]; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=skip reason=gate_terminal"
+		return 1
+	fi
+	marker="<!-- ai:unblock-triage-superseded:v1 item=${ITEM} -->"
+	# The note carries the marker on its own line (the throttle marker follows
+	# it); "<id>|<created_at>" of the newest trusted note, or "none".
+	triage_noted="$(jq -r --arg login "${UNBLOCK_LOGIN}" --arg marker "${marker}" '
+		[.[] | select((.user.login // "") == $login
+			and (((.body // "") | split("\n") | map(rtrimstr("\r") | sub("^\\s+"; "") | sub("\\s+$"; ""))) | index($marker) != null))
+			| {at: (.created_at // ""), id: ((.id // "") | tostring)}]
+		| if length == 0 then "none" else (sort_by(.at) | last | "\(.id)|\(.at)") end' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null || echo none)"
+	noted_at="none"
+	triage_note_id=""
+	if [ "${triage_noted}" != "none" ] && [[ "${triage_noted}" == *"|"* ]]; then
+		triage_note_id="${triage_noted%%|*}"
+		noted_at="${triage_noted#*|}"
+	fi
+	if [ "${noted_at}" != "none" ]; then
+		# The hold ends with the wait lifetime: an unverified verdict that never
+		# resolves (a linked PR closed unmerged) goes to a person, not held forever.
+		if [ -n "${noted_at}" ] && [ "$(unblock_hours_since "${noted_at}")" -ge "$(unblock_wait_max_hours)" ]; then
+			# Never resumed (#9659: `/answer` or `/approved` only loops planning):
+			# an expired hold is parked in the needs-human digest for a person.
+			# A failed or disabled park keeps holding and is retried next run.
+			# scripts/unblock_scan.py skips a parked item only when its newest
+			# trusted verdict marker is `close` (and throttles on ai:unblock
+			# markers only), so, as the judge's own close of an issue does, one
+			# trusted `close` round marker is recorded before the park; without it
+			# every poller tick would redispatch the parked item. Recorded once
+			# after the note (a rerun reuses it), never while the digest is off.
+			if [ "$(printf '%s' "${NEEDS_HUMAN_DIGEST_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" != "false" ] \
+				&& ! jq -e --arg login "${UNBLOCK_LOGIN}" --arg at "${noted_at}" --arg re "^<!-- ai:unblock:v1 item=${ITEM} stop=${ITEM_STOP} fingerprint=[0-9a-f]{12} verdict=close round=[1-9][0-9]* -->$" \
+					'any(.[]; (.user.login // "") == $login and (.created_at // "") >= $at
+						and (((.body // "") | split("\n") | map(select(test("\\S")) | rtrimstr("\r")) | last // "") | test($re)))' \
+					"${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; then
+				local triage_close_fp triage_close_round triage_close_marker
+				echo '[]' > "${RUNTIME_DIR}/failing_checks.json"
+				unblock_evidence > "${RUNTIME_DIR}/triage_superseded_evidence.json" 2>/dev/null \
+					|| echo '{"reason": "unreadable"}' > "${RUNTIME_DIR}/triage_superseded_evidence.json"
+				triage_close_fp="$(unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" fingerprint --stop "${ITEM_STOP}" --evidence-file "${RUNTIME_DIR}/triage_superseded_evidence.json" 2>/dev/null | jq -r '.fingerprint // empty' 2>/dev/null || true)"
+				triage_close_round="$(jq -r --arg login "${UNBLOCK_LOGIN}" --arg item "${ITEM}" '
+					[.[] | select((.user.login // "") == $login)
+						| ((.body // "") | split("\n") | map(select(test("\\S")) | rtrimstr("\r")) | last // "")
+						| capture("^<!-- ai:unblock:v1 item=" + $item + " stop=[a-z-]+ fingerprint=[0-9a-f]{12} verdict=[a-z_]+ round=(?<r>[1-9][0-9]*)( override=[a-z_]+)? -->$")?
+						| .r | tonumber] | (max // 0) + 1' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null || true)"
+				triage_close_marker=""
+				if [[ "${triage_close_fp}" =~ ^[0-9a-f]{12}$ ]] && [[ "${triage_close_round}" =~ ^[1-9][0-9]*$ ]]; then
+					triage_close_marker="$(unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" marker --item "${ITEM}" --stop "${ITEM_STOP}" --fingerprint "${triage_close_fp}" --verdict close --round "${triage_close_round}" 2>/dev/null | jq -r '.marker // empty' 2>/dev/null || true)"
+				fi
+				if [ -z "${triage_close_marker}" ] || ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="## Unblock judge: \`close\` (round ${triage_close_round})
+
+Reason: planning found nothing to implement and this check-triage issue's check stayed unverified past the wait lifetime, so it is parked in the needs-human digest for a person to decide (#9659). It stays open and keeps its block; no resume command is posted.
+
+${triage_close_marker}" >/dev/null 2>&1; then
+					unblock_triage_superseded_refresh "${triage_note_id}"
+					unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=held reason=marker_failed"
+					return 0
+				fi
+			fi
+			local -a triage_park_args=(needs-human park --repo "${REPOSITORY}" --item "${ITEM}" --kind issue --stop "${ITEM_STOP}"
+				--reason "triage_superseded (the check stayed unverified past the wait lifetime)" --trusted-login "${UNBLOCK_LOGIN}")
+			jq -e 'index("ai:needs-human") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1 && triage_park_args+=(--item-labeled)
+			if unblock_py "${SUPPORT_DIR}/scripts/operator_step_issue.py" "${triage_park_args[@]}" > "${RUNTIME_DIR}/triage_superseded_park.json" \
+				&& jq -e '.outcome == "parked" or .outcome == "updated"' "${RUNTIME_DIR}/triage_superseded_park.json" >/dev/null 2>&1; then
+				if jq -e '.newly_parked == true' "${RUNTIME_DIR}/triage_superseded_park.json" >/dev/null 2>&1; then
+					unblock_tg "CRITICAL" "Unblock judge parked check-triage #${ITEM} (its check stayed unverified past the wait lifetime) in needs-human digest #$(jq -r '.issue // "?"' "${RUNTIME_DIR}/triage_superseded_park.json"); a person must decide (${REPOSITORY})."
+				fi
+				unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=parked reason=note_expired"
+				return 0
+			fi
+			unblock_triage_superseded_refresh "${triage_note_id}"
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=held reason=park_failed"
+			return 0
+		fi
+		# Refresh the note so the scan waits --marker-hours before the next check
+		# instead of re-dispatching this held item on every tick.
+		unblock_triage_superseded_refresh "${triage_note_id}"
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=noted reason=already_noted"
+		return 0
+	fi
+	if ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="$(unblock_triage_superseded_body "$(unblock_now)")" >/dev/null 2>&1; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=held reason=comment_failed"
+		return 0
+	fi
+	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_superseded outcome=noted reason=posted"
 	return 0
 }
 
@@ -1252,8 +1481,12 @@ PY
 					unblock_project_terminal_recheck needs_human || return 1
 				fi
 				if unblock_py "${SUPPORT_DIR}/scripts/operator_step_issue.py" "${park_args[@]}" > "${RUNTIME_DIR}/needs_human_park.json"; then
-					if jq -e '.newly_parked == true' "${RUNTIME_DIR}/needs_human_park.json" >/dev/null 2>&1; then
-						unblock_tg "CRITICAL" "Unblock judge parked #${issue} ($(jq -r ".ops[${idx}].kind" "${ops_file}"), $(jq -r ".ops[${idx}].stop" "${ops_file}"), $(jq -r ".ops[${idx}].reason" "${ops_file}")) in needs-human digest #$(jq -r '.issue // "?"' "${RUNTIME_DIR}/needs_human_park.json"); a person must decide (${REPOSITORY})."
+					# P6b: every successful park that lists the item may page, but the
+					# persisted claim keeps it to one attempt per parking.
+					local park_alert_parking=""
+					park_alert_parking="$(jq -r '.parking // empty' "${RUNTIME_DIR}/needs_human_park.json" 2>/dev/null || true)"
+					if [ -n "${park_alert_parking}" ]; then
+						unblock_needs_human_alert "${issue}" "${park_alert_parking}" "Unblock judge parked #${issue} ($(jq -r ".ops[${idx}].kind" "${ops_file}"), $(jq -r ".ops[${idx}].stop" "${ops_file}"), $(jq -r ".ops[${idx}].reason" "${ops_file}")) in needs-human digest #$(jq -r '.issue // "?"' "${RUNTIME_DIR}/needs_human_park.json"); a person must decide (${REPOSITORY})."
 					fi
 				else
 					ops_failed="true"
@@ -1740,7 +1973,7 @@ unblock_main()
 
 	# The project an item belongs to, and a PR's linked issue.
 	local tracking="" linked="" finding="" body_text pr_json="" head_sha="" head_ref="" head_repo="" binding_issue=""
-	local pr_trusted="false" pr_author="" pr_assoc="" pr_head_repo="" untrusted_project_pr="false"
+	local pr_trusted="false" pr_author="" pr_assoc="" pr_head_repo="" untrusted_project_pr="false" chain_title=""
 	body_text="$(jq -r '.body // ""' "${RUNTIME_DIR}/item.json")"
 	if [ "${ITEM_KIND}" = "issue" ]; then
 		finding="$(jq -r '(.body // "") | [match("<!-- ai:security-finding:([^>]+) -->").captures[0].string] | first // "" | gsub("^\\s+|\\s+$"; "")' "${RUNTIME_DIR}/item.json")"
@@ -1794,6 +2027,18 @@ unblock_main()
 			fi
 		fi
 		linked="$(printf '%s\n' "${body_text}" | grep -oiE '\b(refs|closes|close|closed|fixes|fix|fixed|resolves|resolve|resolved)[[:space:]]+#[0-9]+' | head -n1 | grep -oE '[0-9]+' || true)"
+		# Chain depth cap (unblock_ledger.py MAX_CHAIN_DEPTH): a PR title carries no chain
+		# prefixes, so the title of the issue it implements is read from its
+		# `ai/issue-<n>` head branch (never from the author-controlled body).
+		# §15: no earlier call returns that issue (item.json is the PR), so
+		# this is one GET per judged trusted PR (through gh_retry, CONSIST-001);
+		# a failed read sends no title, is logged, and the PR's own title is
+		# used as before. The title is cut to 400 codepoints inside jq, so a
+		# multibyte character is never split.
+		if [ "${pr_trusted}" = "true" ] && [[ "${head_ref}" =~ ^ai/issue-([1-9][0-9]*)$ ]]; then
+			chain_title="$(gh_retry gh api "repos/${REPOSITORY}/issues/${BASH_REMATCH[1]}" --jq '(.title // "") | .[0:400]' 2>/dev/null | head -n 1 || true)"
+			[ -n "${chain_title}" ] || unblock_log "item=${ITEM} op=chain_title issue=${BASH_REMATCH[1]} outcome=unavailable reason=read_failed"
+		fi
 	fi
 
 	if ! stop_json="$(unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" stop --labels-json "$(cat "${RUNTIME_DIR}/labels.json")")"; then
@@ -1825,8 +2070,8 @@ unblock_main()
 		--argjson has_plan "${has_plan}" --arg title "$(jq -r '.title // ""' "${RUNTIME_DIR}/item.json")" \
 		--arg security_body "${body_text}" \
 		--argjson pr_trusted "${pr_trusted}" --arg pr_author "${pr_author}" --arg pr_head_repo "${pr_head_repo}" --arg pr_head_sha "${head_sha}" \
-		--arg needs_human_digest "${NEEDS_HUMAN_DIGEST_ENABLED}" \
-		'{needs_human_digest: (($needs_human_digest | ascii_downcase) != "false"), repo: $repo, kind: $kind, item: $item, stop: $stop, labels: $labels[0], tracking: (if $tracking == "" then null else ($tracking | tonumber) end), linked_issue: (if $linked == "" then null else ($linked | tonumber) end), has_plan: $has_plan, title: $title, security_finding_id: (if $finding == "" then null else $finding end), security_source_body: (if $kind == "issue" and ($labels[0] | index("ai:security")) != null then $security_body else null end), pr_trusted: $pr_trusted, pr_author: $pr_author, pr_head_repo: $pr_head_repo, pr_head_sha: $pr_head_sha}' \
+		--arg needs_human_digest "${NEEDS_HUMAN_DIGEST_ENABLED}" --arg chain_title "${chain_title}" \
+		'{chain_title: (if $chain_title == "" then null else $chain_title end), needs_human_digest: (($needs_human_digest | ascii_downcase) != "false"), repo: $repo, kind: $kind, item: $item, stop: $stop, labels: $labels[0], tracking: (if $tracking == "" then null else ($tracking | tonumber) end), linked_issue: (if $linked == "" then null else ($linked | tonumber) end), has_plan: $has_plan, title: $title, security_finding_id: (if $finding == "" then null else $finding end), security_source_body: (if $kind == "issue" and ($labels[0] | index("ai:security")) != null then $security_body else null end), pr_trusted: $pr_trusted, pr_author: $pr_author, pr_head_repo: $pr_head_repo, pr_head_sha: $pr_head_sha}' \
 		> "${RUNTIME_DIR}/context.json"
 
 	# A pending fix-up comes first (Q11): wait for it, or run its follow-up.
@@ -2068,6 +2313,12 @@ ${step_escalation_marker}" >/dev/null 2>&1; then
 		return 0
 	fi
 
+	# #9659: a check-triage issue planning found nothing to implement for waits
+	# on its check (noted once) instead of looping planning with a resume.
+	if [ "${ITEM_KIND}" = "issue" ] && [ -z "${tracking}" ] && unblock_triage_superseded_note "${tracking}"; then
+		return 0
+	fi
+
 	# Q148: a heal issue whose failure a sibling already fixed is closed, no round used.
 	if [ "${ITEM_KIND}" = "issue" ] && [ -z "${tracking}" ] \
 		&& jq -e 'index("ai:workflow-heal") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1 \
@@ -2247,6 +2498,11 @@ Still waiting for an operator; last checked ${now}.
 		--trusted-login "${UNBLOCK_LOGIN}" --now "${now}" --kind "${ITEM_KIND}" --rejection-file "${RUNTIME_DIR}/rejection.json")
 	[ -n "${last_activity}" ] && decide_args+=(--last-activity "${last_activity}")
 	unblock_wait_enabled || decide_args+=(--wait-disabled)
+	# Chain depth cap (unblock_ledger.py MAX_CHAIN_DEPTH): the depth is read
+	# from the title of the issue a trusted PR implements, else the item's own.
+	# One argv element (`--chain-title=<value>`), so a title that starts with
+	# `-` is never parsed by argparse as an option.
+	decide_args+=("--chain-title=$(jq -r '(.chain_title // .title // "") | tostring' "${RUNTIME_DIR}/context.json" 2>/dev/null | head -n 1 || true)")
 	# An ai:security issue never gets accept_with_followup on its menu (#6541);
 	# unblock_actions.py refuses it again if this flag is ever missing.
 	if [ "${ITEM_KIND}" = "issue" ] && jq -e 'index("ai:security") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1; then
