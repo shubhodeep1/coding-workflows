@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: #9341 has since made a non-UTF-8 prompt file a readable `ERROR:` line with exit code 1. How should this re-issued #9261 fix treat `render_prompt.py`?\nChoices:\nA) Keep #9341's strict behaviour: leave `load_prompt` unchanged (no `errors=replace`). Add only the UTF-8-safe truncation to `_embed_input_file` in `scripts/gh_helpers.sh`. Add `tests/test_prompt_invalid_utf8.py` with `test_embed_input_file_head_truncation_mid_char_is_valid_utf8`, and replace the exits-zero test with one that checks the readable `ERROR:` line and exit code 1. Also wire the test into `.github/workflows/ci.yml` and add `changelog.d/9261-prompt-invalid-utf8.md` with the note that the `review_rb_judge.sh` trim was dropped. (RECOMMENDED)\nB) Make invalid UTF-8 prompts render and exit 0: switch `load_prompt` to `errors=replace`, which reverses the \"no fallback path\" contract #9341 just shipped. Also add the `gh_helpers.sh` truncation and keep both tests as the issue names them, the CI wiring and the changelog, including a note that #9341's behaviour changes.\nC) Close this issue as superseded by #9341 and make no code change. The `gh_helpers.sh` mid-character truncation stays as it is, and `sanitize_codex_prompt_file` keeps stripping invalid bytes later.",
+  "fingerprint": "35b5a90fa16c5e1132bb2526e2900aca9be236061f64ea0f0f189eacc1be9e95",
+  "lineage": {
+    "issue_number": 9885,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44900096353",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44900096353",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261121114417_3d26204391",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9885,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44900096353"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9885 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-21T11:44:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
