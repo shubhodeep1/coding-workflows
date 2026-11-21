@@ -221,6 +221,7 @@ Every phase is one PR to `main` and is independently mergeable. No phase assumes
 13. **P11b — Zombie run reaper.**
     - Files: `.github/workflows/review_autofix_sweep.yml` (extend the existing stale-queued listing), `scripts/review_autofix_sweep_reaper.sh` [new helper sourced by the step], tests, changelog.
     - Done when runs queued longer than `ZOMBIE_RUN_MAX_QUEUED_HOURS` get `cancel`, then `force-cancel` on 409, with an audit line per run, and the run list is not fetched a second time.
+    - Superseded by #9473: GitHub cannot clear a zero-job queued run (run `43095142301`: `cancel` 409, `force-cancel` 409, `DELETE` 403), so instead of reaping them every active-run guard now ignores a queued run older than `ZOMBIE_RUN_MAX_QUEUED_HOURS`.
 14. **P12 — Contract-list union pre-resolver.** Implements `docs/plans/orchestrator-sync-contract-list-union-plan.md` Phase 1 exactly as written, fresh off `main`. `scripts/sync_contract_list_union.py` may be ported from the closed branch `orchestrator/project-3965`. Done per that plan.
 15. **P13 — Project security pass line ownership and rebinding.** Implements `docs/plans/security-pass-convergence-plan.md` Phase A and Phase B exactly as written (two PRs, any order), fresh off `main`. Project pass only (Q17: A). Done per that plan.
 
@@ -368,6 +369,9 @@ Every phase is one PR to `main` and is independently mergeable. No phase assumes
 3. Tests and changelog.
 
 ### P11b — Zombie reaper
+
+> Superseded by #9473: GitHub cannot clear a zero-job queued run (run `43095142301`: `cancel` 409, `force-cancel` 409, `DELETE` 403), so instead of reaping them every active-run guard now ignores a queued run older than `ZOMBIE_RUN_MAX_QUEUED_HOURS`.
+
 1. `review_autofix_sweep.yml`'s existing stale-queued listing (`~:43-60`) is extended via `scripts/review_autofix_sweep_reaper.sh` (`ZOMBIE_RUN_REAPER_ENABLED`, default `true`; `ZOMBIE_RUN_MAX_QUEUED_HOURS`, default `24`):
    - For each run queued longer than the cap: `POST actions/runs/<id>/cancel`, then `POST .../force-cancel` on 409.
    - Log `ZOMBIE_RUN_REAPED run=<id> workflow=<path> age_h=<n> result=<cancel|force_cancel|failed>`.
