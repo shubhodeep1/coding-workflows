@@ -1,0 +1,8 @@
+<!-- changelog: changed -->
+- **Approved PRs that share only doc and fragment files with `main` or with the merge-lease holder no longer wait for a branch update.** Before, when `main` gained a commit touching any file the PR also touched, the merge-base freshness gate updated the PR branch and waited for a full CI round. A PR that shared a file with the lease holder also waited for the holder. Now the paths in `MERGE_LEASE_SOFT_PATHS` are handled differently: when every shared path is one of them, a `git merge-tree` probe decides. If the two commits merge cleanly, the PR merges without an update (freshness outcome `clean`, reason `soft_paths_merge_clean`; lease outcome `no_overlap`, reason `soft_paths_merge_clean`). A conflict (`soft_paths_conflict`) or a probe that cannot decide (`soft_paths_probe_unknown`) keeps the rule from before. Any shared path outside the class keeps the rule from before with no probe. The `MERGE_BASE_FRESHNESS` log lines gain a trailing `soft_overlap=<paths|->` field. No GitHub API call is added; the probe fetches the two commits by SHA when they are missing.
+
+`MERGE_LEASE_SOFT_PATHS` defaults to `README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/`, set in `scripts/pr_checks_lib.sh` and wired as a repo variable with the same default. An entry ending in `/` is a literal directory prefix; glob, absolute and `..` entries are ignored with a warning. Set it to `none` or `off` to restore the old behaviour; a repo variable set to an empty string falls back to the default.
+
+What this means for consumer repos: after the next `@stable` sync, PRs whose only overlap with `main` is in these files merge without an extra CI round when the files merge cleanly. Nothing needs to be done.
+
+Refs #9781
