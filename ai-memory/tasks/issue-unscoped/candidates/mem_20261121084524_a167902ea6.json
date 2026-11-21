@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/pr_checks_lib.sh:148-155, 381-394 | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The superseded-run filtering logic may be fragile because it relies on a single newest successful rerun.\n  WHY: No runtime failure was identified; the logic was judged sound given the requirements and test coverage.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/pr_checks_lib.sh, Line or code reference: 148-155, 381-394\n  Problem: The logic to filter out superseded runs is complex, involving multiple conditions (`$newest_ok == null`, `.status != \"completed\"`, `.conclusion == \"success\"`, and the ID/timestamp comparison). While it correctly targets older failed/cancelled runs, the reliance on a single success (`newest_ok`) might be fragile if multiple successful re-runs exist, though `max_by` correctly selects the newest one.\n  Why it fails at runtime: No runtime failure identified; the logic is sound given the requirements and test coverage.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "65e438393a31de3257767948e1dbae09ae77419788055c68d769ea113ac0b7ec",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9867,
+    "run_id": "44879622505",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44879622505",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121084524_a167902ea6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9867,
+    "run_id": "44879622505"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-21T08:45:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
