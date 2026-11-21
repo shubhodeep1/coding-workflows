@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-21T06:52:13Z",
+  "issue_number": 9775,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 007 as out-of-scope; anchor=scripts/implement_step_prepush_test_gate.sh:1-1; cited_path=scripts/implement_step_prepush_test_gate.sh; files_touched=.github/workflows/implement.yml, changelog.d/9775-inline-implement-files-touched-scope.md, tests/test_ci_wires_every_test_file.py, tests/test_implement_inline_prompt_files_touched_scope.py, tests/test_implement_prepush_test_gate.py.",
+  "phase": "review_autofix",
+  "pr_number": 9860,
+  "record_id": "lesson_20261121065213_47f13c4205",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/implement_step_prepush_test_gate.sh",
+    ".github/workflows/implement.yml",
+    "changelog.d/9775-inline-implement-files-touched-scope.md",
+    "tests/test_ci_wires_every_test_file.py",
+    "tests/test_implement_inline_prompt_files_touched_scope.py",
+    "tests/test_implement_prepush_test_gate.py"
+  ]
+}
