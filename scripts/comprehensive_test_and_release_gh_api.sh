@@ -117,6 +117,7 @@ gh_api_safe()
 	# Opt-in (issue #9888): try a read once with the job token first.
 	if [ "${GH_API_SAFE_USE_READ_TOKEN:-0}" = "1" ] && [ "${is_read}" = "1" ]; then
 		if output="$(gh_api_safe_job_token_read "$@")"; then
+			RATE_LIMIT_BACKOFF=0
 			GH_API_SAFE_OUTPUT="${output}"
 			return 0
 		fi

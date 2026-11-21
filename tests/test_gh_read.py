@@ -263,6 +263,19 @@ def test_gh_review_pr_state_reads_through_gh_read(tmp_path: Path) -> None:
 	assert _tokens(env) == [JOB_TOKEN]
 
 
+
+def test_gh_review_pr_state_keeps_only_the_fallback_line_on_stderr(tmp_path: Path) -> None:
+	env = _env(tmp_path, FAKE_JOB_STDERR="gh: Not Found (HTTP 404)", FAKE_JOB_RC="1")
+	env["RUNNER_TEMP"] = ""
+	result = _run(tmp_path, f"gh_review_pr_state {REPO} 7", env)
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.strip() == "open"
+	assert _tokens(env) == [JOB_TOKEN, PAT]
+	# The caller drops gh's own stderr but keeps the contractual line.
+	assert "GH_READ_FALLBACK reason=404 caller=poller.sh" in result.stderr
+	assert "HTTP 404" not in result.stderr
+
+
 # --- gh_api_safe_job_token_read / gh_api_safe (release-gate twin) ---------------
 
 

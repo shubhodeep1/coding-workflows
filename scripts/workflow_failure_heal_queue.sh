@@ -52,7 +52,8 @@
 # the queue empty costs five calls in all.
 #
 # The two reads in the wait loop go through gh_read (issue #9888), so they
-# use the job token when the workflow exports GH_READ_TOKEN.
+# use the job token when the workflow exports GH_READ_TOKEN. Their stderr
+# is dropped except the contractual GH_READ_FALLBACK line.
 #
 # Log lines are prefixed WORKFLOW_HEAL_QUEUE.
 
@@ -248,7 +249,7 @@ while :; do
 	if [ "$(_waited)" -ge "${MAX_WAIT_SECONDS}" ]; then
 		_unlocked max_wait
 	fi
-	if ! gh_retry gh_read --same-repo-only api --method GET --paginate --slurp "repos/${SELF_REPO}/issues/${QUEUE_ISSUE}/comments?per_page=100" > "${COMMENTS_FILE}" 2>/dev/null; then
+	if ! gh_retry gh_read --same-repo-only api --method GET --paginate --slurp "repos/${SELF_REPO}/issues/${QUEUE_ISSUE}/comments?per_page=100" > "${COMMENTS_FILE}" 2> >(grep -a '^GH_READ_FALLBACK ' >&2 || true); then
 		READ_FAILURES=$((READ_FAILURES + 1))
 		[ "${READ_FAILURES}" -lt 3 ] || _unlocked comments_unavailable
 		sleep "$(_poll_delay)"
@@ -286,7 +287,7 @@ while :; do
 		&& [ $((NOW_EPOCH - ${HOLDER_CHECKED_AT[${HOLDER_RUN}]:-0})) -ge "${HOLDER_CHECK_SECONDS}" ]; then
 		HOLDER_CHECKED_AT[${HOLDER_RUN}]="${NOW_EPOCH}"
 		HOLDER_RUN_FILE="${WORK_DIR}/holder_run.json"
-		if gh_retry gh_read --same-repo-only api --method GET "repos/${SELF_REPO}/actions/runs/${HOLDER_RUN}" > "${HOLDER_RUN_FILE}" 2>/dev/null \
+		if gh_retry gh_read --same-repo-only api --method GET "repos/${SELF_REPO}/actions/runs/${HOLDER_RUN}" > "${HOLDER_RUN_FILE}" 2> >(grep -a '^GH_READ_FALLBACK ' >&2 || true) \
 			&& jq -e 'type == "object"' "${HOLDER_RUN_FILE}" >/dev/null 2>&1; then
 			jq --arg id "${HOLDER_RUN}" --slurpfile run "${HOLDER_RUN_FILE}" '. + {($id): {status: ($run[0].status // ""), run_attempt: ($run[0].run_attempt // 0)}}' \
 				"${RUNS_FILE}" > "${RUNS_FILE}.tmp" && mv "${RUNS_FILE}.tmp" "${RUNS_FILE}"

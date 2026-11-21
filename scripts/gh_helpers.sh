@@ -1027,7 +1027,9 @@ gh_review_pr_state()
 		return 0
 	fi
 	if [ -z "${root}" ] || ! command -v flock >/dev/null 2>&1; then
-		gh_retry gh_read --same-repo-only api "repos/${repo}/pulls/${number}" --jq .state 2>/dev/null | grep -xE 'open|closed|merged' || echo open
+		# Only the contractual GH_READ_FALLBACK line (issue #9888) survives
+		# the stderr filter; other gh/gh_retry noise stays dropped.
+		gh_retry gh_read --same-repo-only api "repos/${repo}/pulls/${number}" --jq .state 2> >(grep -a '^GH_READ_FALLBACK ' >&2 || true) | grep -xE 'open|closed|merged' || echo open
 		return 0
 	fi
 	cache_file="${root}/review_pr_state_${GITHUB_RUN_ID:-local}_${GITHUB_RUN_ATTEMPT:-1}_${repo//\//_}_${number}"
@@ -1043,7 +1045,7 @@ gh_review_pr_state()
 				exit 0
 			fi
 		fi
-		state="$(gh_retry gh_read --same-repo-only api "repos/${repo}/pulls/${number}" --jq .state 2>/dev/null)" || state=""
+		state="$(gh_retry gh_read --same-repo-only api "repos/${repo}/pulls/${number}" --jq .state 2> >(grep -a '^GH_READ_FALLBACK ' >&2 || true))" || state=""
 		if [[ "${state}" =~ ^(open|closed|merged)$ ]]; then
 			if [ "${state}" = "open" ]; then
 				printf '%s %s %s %s\n' "${repo}" "${number}" "${state}" "$((now + 120))" > "${cache_file}.tmp" &&
