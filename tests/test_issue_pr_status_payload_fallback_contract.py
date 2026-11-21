@@ -326,13 +326,13 @@ def test_orchestrator_managed_children_are_relabeled_and_closed_on_pr_merge() ->
 	caught them via close_merged_issues_sweep.
 
 	Policy:
-	  - Detect children by `ai:orchestrator-managed` label OR the body
-	    marker, but NOT if they also carry `ai:orchestrator-tracking`
-	    (tracking takes precedence, skip wins).
-	  - On PR close, set FINAL_LABEL on the child and close the issue
-	    regardless of base ref.
-	  - Non-orchestrator standalone issues continue to use the original
-	    `PR_BASE_REF == main` close gate.
+		- Detect children by `ai:orchestrator-managed` label OR the body
+			marker, but NOT if they also carry `ai:orchestrator-tracking`
+			(tracking takes precedence, skip wins).
+		- On PR close, set FINAL_LABEL on the child and close the issue
+			regardless of base ref.
+		- Non-orchestrator standalone issues continue to use the original
+			`PR_BASE_REF == main` close gate.
 	"""
 	text = _workflow_text()
 
