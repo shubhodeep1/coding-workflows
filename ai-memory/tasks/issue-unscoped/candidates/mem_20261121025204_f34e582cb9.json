@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/operator_step_issue.py:1196-1273 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: A concurrent `needs_human_prune` that updates the body between a park's read and PATCH could be silently overwritten, because `_needs_human_park_digest` PATCHes without re-checking that the live body still matches what it read.\n  WHY: The reviewer rated it NIT (mapped to low) and said the worst case is a one-tick visual lag, not data loss. The PR description acknowledges the race and the next prune refreshes the section.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/operator_step_issue.py:1196-1273 (_needs_human_park_digest around line 1196, needs_human_prune around line 1273) | severity=NIT | confidence=2\n  PROBLEM: A concurrent `needs_human_prune` that updates the body between a park's read and PATCH would be silently overwritten. The park reads `body`, computes `parse_unparked(body)`, renders `new_body`, and PATCHes without re-checking the live body.\n  WHY: The section can be momentarily stale until the next prune tick. The PR description acknowledges this race, and the bounded retry plus the next-tick prune make the worst case a one-tick visual lag, not data loss.\n- HARDENING_SUGGESTION: scripts/operator_step_issue.py parse_unparked (around line 1022-1032) | HARDENING_RISK_SCORE=1\n  PROBLEM: The function rebuilds the dedup set `{n for n, _ in found}` on every loop iteration (O(n^2)), at most about 10,000 int comparisons with NEEDS_HUMAN_UNPARKED_MAX=100.\n  WHY: The body could be re-parsed on every park retry. Suggested fix: hoist the dedup set out of the loop (about 3 lines changed).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cc8164a5ac8acafb196d5731152b48b3d54c204d66bedc7e0b9276697285e430",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9859,
+    "run_id": "44850203767",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44850203767",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121025204_f34e582cb9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9859,
+    "run_id": "44850203767"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-21T02:52:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
