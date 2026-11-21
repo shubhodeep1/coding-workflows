@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cMove its slowest steps (see the run's step timings) into the CI job with the most headroom.\u201d\n  expected_change_site: `.github/workflows/ci.yml`, selection of steps moved from `tests-heal-plan-and-validation` and their destination job\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The workflow comment at lines 1332\u20131333 says the run\u2019s step timings could not be read and the selection is an estimate from planning-sandbox timings and test and subprocess counts. The diff provides no measured step timings establishing these six steps are the slowest, or comparative job timings establishing `tests-hooks-and-orchestrator` has the most headroom.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cMove its slowest steps (see the run's step timings) into the CI job with the most headroom.\u201d\n  Expected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-heal-plan-and-validation` and their destination job.\n  Evidence of absence: The workflow comment at lines 1332\u20131333 says the run\u2019s step timings could not be read and the selection is an estimate from planning-sandbox timings and test and subprocess counts. The diff provides no measured step timings establishing these six steps are the slowest, or comparative job timings establishing `tests-hooks-and-orchestrator` has the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f3d5bd9e85e64dc27fb5e5db69e75c03a468f702ea82b2286cef7048b7fcfc6b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9702,
+    "run_id": "44910231105",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44910231105",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121144152_3a46bbe692",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9702,
+    "run_id": "44910231105"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-21T14:41:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
