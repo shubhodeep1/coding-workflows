@@ -5234,9 +5234,13 @@ _linked_pr_is_issue_implementation()
 # otherwise today's _issue_cross_ref_pr_number_last. Fetch order: branch and
 # body close-keyword hits first (ascending), then the remaining candidates
 # (ascending), so the 20-fetch cap is spent on likely implementation PRs.
+# Once a match is found, only lower-numbered candidates are still fetched
+# (within the cap), so the pick is the lowest-numbered implementation PR,
+# the one close_linked_pr reaches first, whenever the cap allows.
 # API calls (§14/§15): the three lookups inside _find_all_linked_prs (one
-# timeline read, two `gh pr list`), one `pulls/<n>` per candidate until the
-# first match (hard cap 20), and one more timeline read only on fallback.
+# timeline read, two `gh pr list`), one `pulls/<n>` per candidate tried
+# (hard cap 20; after a match only lower-numbered candidates are tried), and
+# one more timeline read only on fallback.
 # Runs once per stalled issue on the judge path, never per loop item.
 # Fail-open: any lookup error falls through to the cross_ref_last pick, so
 # the diagnostics are never worse than before this helper existed.
@@ -5270,6 +5274,10 @@ _stall_judge_pick_linked_pr()
 	local _sjp_pr="" _sjp_json="" _sjp_head="" _sjp_body="" _sjp_fetches=0
 	while IFS= read -r _sjp_pr; do
 		[[ "${_sjp_pr}" =~ ^[0-9]+$ ]] || continue
+		# After a match, only a lower-numbered candidate can replace it.
+		if [ -n "${STALL_JUDGE_PICKED_PR}" ] && [ "${_sjp_pr}" -ge "${STALL_JUDGE_PICKED_PR}" ]; then
+			continue
+		fi
 		[ "${_sjp_fetches}" -lt 20 ] || break
 		_sjp_fetches=$((_sjp_fetches + 1))
 		_sjp_json="$(_fetch_pr_json "${_sjp_pr}" 2>/dev/null || echo '{}')"
@@ -5286,7 +5294,6 @@ _stall_judge_pick_linked_pr()
 			STALL_JUDGE_PICKED_PR="${_sjp_pr}"
 			STALL_JUDGE_PICKED_PR_JSON="${_sjp_json}"
 			STALL_JUDGE_PICKED_SOURCE="implementation"
-			break
 		fi
 	done <<< "${_sjp_order}"
 	if [ -z "${STALL_JUDGE_PICKED_PR}" ]; then
@@ -5423,6 +5430,9 @@ _stall_reissue_green_pr_guard()
 		fi
 		# Review gate: newest ai-review/head-gate status on the head (the same
 		# selection as the gate supersede check in scripts/pr_checks_lib.sh).
+		# §14 audit: no status payload for this head is cached on the stall
+		# path, and this read runs only on the rare close_and_reissue path
+		# (once per open implementation PR), never once per loop item.
 		if ! _srg_statuses="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/commits/${_srg_sha}/statuses?per_page=100" 2>/dev/null)"; then
 			_stall_reissue_guard_refuse "${issue_num}" "${_srg_pr}" "check_unavailable"
 			return 1
@@ -22161,7 +22171,8 @@ STALL_EOF
         fi
         # Owner hold (draft / `[skip ai]` title): no dispatch, no empty
         # commit, no conflict routing, no attempt counted. Reads the payload
-        # fetched above (0 extra API calls).
+        # fetched above (0 extra API calls, apart from the per-process cached
+        # label-age read for a PR labelled ai:merge-lease-wait).
         local _rtr_ai_hold_reason=""
         _rtr_ai_hold_reason="$(_stall_pr_ai_hold_reason "${_rtr_pr_json}" "${stall_minutes}")"
         if [ -n "${_rtr_ai_hold_reason}" ]; then
@@ -22822,7 +22833,8 @@ The judge will evaluate this gap when the wave completes and decide whether to r
       pr_json="$(_fetch_pr_json "${target_pr}")"
       # Owner hold (draft / `[skip ai]` title, PR #9750): the stall judge can
       # route a held PR here; no branch update, no dispatch, no attempt
-      # counted. Reads the payload fetched above (0 extra API calls).
+      # counted. Reads the payload fetched above (0 extra API calls, apart
+      # from the per-process cached label-age read for a lease-waiting PR).
       local _rmc_ai_hold_reason=""
       _rmc_ai_hold_reason="$(_stall_pr_ai_hold_reason "${pr_json}" "${stall_minutes}")"
       if [ -n "${_rmc_ai_hold_reason}" ]; then
@@ -25036,30 +25048,53 @@ _linked_pr_is_capacity_waiting()
 # linked_pr shape carry no label timestamps, so this makes one GraphQL read
 # (pullRequest.timelineItems, LABELED_EVENT, last 50). It runs only from
 # _stall_pr_ai_hold_reason, only when a stall-recovery caller sees the lease
-# label on an open PR, so at most once per held PR per stall check.
+# label on an open PR. The labeled-at epoch (or `none` when no matching
+# event is found) is cached per PR and label in the per-process file
+# _STALL_MERGE_LEASE_AGE_CACHE_FILE (created with mktemp below, because the
+# hold check runs in $(...) subshells), so the same PR is read at most once
+# per poller process however many hold checks see it; read errors are not
+# cached. The age is recomputed from the cached epoch on every call.
 # Prints the age; returns 1 and prints nothing on a read error or when no
-# matching event is found (the caller then keeps the hold).
+# matching event is found (the caller then keeps the hold, subject to the
+# stall-clock backstop in _stall_pr_ai_hold_reason).
 _stall_merge_lease_label_age_minutes()
 {
   local _smla_pr="$1" _smla_label="$2"
   [[ "${_smla_pr}" =~ ^[0-9]+$ ]] && [ -n "${_smla_label}" ] || return 1
   [[ "${GITHUB_REPOSITORY:-}" == */* ]] || return 1
-  local _smla_owner="${GITHUB_REPOSITORY%%/*}" _smla_name="${GITHUB_REPOSITORY##*/}"
-  local _smla_resp="" _smla_age=""
-  # shellcheck disable=SC2016
-  _smla_resp="$(gh_retry gh api graphql \
-    -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){timelineItems(itemTypes:[LABELED_EVENT],last:50){nodes{... on LabeledEvent{createdAt label{name}}}}}}}' \
-    -f owner="${_smla_owner}" -f name="${_smla_name}" -F number="${_smla_pr}" 2>/dev/null)" || return 1
-  _smla_age="$(printf '%s' "${_smla_resp}" | jq -r --arg l "${_smla_label}" '
-    [.data.repository.pullRequest.timelineItems.nodes[]?
-      | select(type == "object" and ((.label.name // "") == $l))
-      | (.createdAt // "") | select(type == "string" and . != "")
-      | fromdateiso8601]
-    | if length == 0 then empty
-      else ((now - max) / 60 | floor | if . < 0 then 0 else . end)
+  local _smla_cache="${_STALL_MERGE_LEASE_AGE_CACHE_FILE:-}" _smla_epoch=""
+  if [ -n "${_smla_cache}" ] && [ -f "${_smla_cache}" ]; then
+    _smla_epoch="$(awk -F'\t' -v pr="${_smla_pr}" -v l="${_smla_label}" '$1 == pr && $3 == l { v = $2 } END { if (v != "") print v }' "${_smla_cache}" 2>/dev/null || true)"
+  fi
+  if [ -z "${_smla_epoch}" ]; then
+    local _smla_owner="${GITHUB_REPOSITORY%%/*}" _smla_name="${GITHUB_REPOSITORY##*/}"
+    local _smla_resp=""
+    # shellcheck disable=SC2016
+    _smla_resp="$(gh_retry gh api graphql \
+      -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){timelineItems(itemTypes:[LABELED_EVENT],last:50){nodes{... on LabeledEvent{createdAt label{name}}}}}}}' \
+      -f owner="${_smla_owner}" -f name="${_smla_name}" -F number="${_smla_pr}" 2>/dev/null)" || return 1
+    [ -n "${_smla_resp}" ] || return 1
+    _smla_epoch="$(printf '%s' "${_smla_resp}" | jq -r --arg l "${_smla_label}" '
+      if (.data.repository.pullRequest.timelineItems.nodes | type) != "array" then error("shape")
+      else
+        [.data.repository.pullRequest.timelineItems.nodes[]
+          | select(type == "object" and ((.label.name // "") == $l))
+          | (.createdAt // "") | select(type == "string" and . != "")
+          | fromdateiso8601]
+        | if length == 0 then "none" else (max | floor | tostring) end
       end
-  ' 2>/dev/null)" || return 1
-  [[ "${_smla_age}" =~ ^[0-9]+$ ]] || return 1
+    ' 2>/dev/null)" || return 1
+    [[ "${_smla_epoch}" =~ ^([0-9]+|none)$ ]] || return 1
+    if [ -n "${_smla_cache}" ]; then
+      printf '%s\t%s\t%s\n' "${_smla_pr}" "${_smla_epoch}" "${_smla_label}" >> "${_smla_cache}" 2>/dev/null || true
+    fi
+  fi
+  [[ "${_smla_epoch}" =~ ^[0-9]+$ ]] || return 1
+  local _smla_now="" _smla_age=0
+  _smla_now="$(date -u +%s 2>/dev/null || echo "")"
+  [[ "${_smla_now}" =~ ^[0-9]+$ ]] || return 1
+  _smla_age=$(( (10#${_smla_now} - 10#${_smla_epoch}) / 60 ))
+  [ "${_smla_age}" -ge 0 ] || _smla_age=0
   printf '%s\n' "${_smla_age}"
 }
 
@@ -25076,7 +25111,8 @@ _stall_merge_lease_label_age_minutes()
 # Stall recovery never dispatches a review, pushes an empty commit or calls
 # the stall judge for a held PR; a manual workflow_dispatch of
 # internal-review.yml still overrides the hold in the review gate.
-# Makes no API calls.
+# Makes no API calls, except the lease-label age read described below
+# (cached per PR per poller process).
 #
 # Optional second argument [stall_minutes] (issue #9892): only stall-recovery
 # callers and the close_and_reissue guard pass it (the stall clock, or `0`
@@ -25096,10 +25132,15 @@ _stall_merge_lease_label_age_minutes()
 # line on stderr per PR per poller process (callers run this in $(...), so
 # the dedupe lives in the per-process marker file
 # _STALL_MERGE_LEASE_LAPSE_LOG_FILE, created with mktemp below; without it
-# the line is logged on every lapse). When the label age cannot be read, the
-# hold is kept: a wrong lapse would let recovery push to or close a green PR
-# waiting for the lease. Without the second argument (the conflict sweep)
-# output is exactly as before.
+# the line is logged on every lapse). When the label age cannot be read
+# (read error, or the event is outside the last 50 labeled events), the hold
+# is kept: a wrong lapse would let recovery push to or close a green PR
+# waiting for the lease. Backstop: if the age stays unreadable and the
+# caller's stall clock exceeds twice the maximum, the hold lapses anyway
+# (logged with label_age_minutes=unknown), so an unreadable age cannot park
+# an issue forever. The review-blocked arm passes `0`, so the backstop never
+# fires there. Without the second argument (the conflict sweep) output is
+# exactly as before.
 _stall_pr_ai_hold_reason()
 {
   local _spahr_json="$1"
@@ -25143,7 +25184,11 @@ _stall_pr_ai_hold_reason()
     if type _stall_merge_lease_label_age_minutes >/dev/null 2>&1; then
       _spahr_label_age="$(_stall_merge_lease_label_age_minutes "${_spahr_number}" "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" 2>/dev/null || true)"
     fi
-    if [[ "${_spahr_label_age}" =~ ^[0-9]+$ ]] && [ "${_spahr_label_age}" -gt "${_spahr_max}" ]; then
+    if ! [[ "${_spahr_label_age}" =~ ^[0-9]+$ ]] && [[ "${_spahr_stall_minutes}" =~ ^[0-9]+$ ]] \
+      && [ "$((10#${_spahr_stall_minutes}))" -gt "$((10#${_spahr_max} * 2))" ]; then
+      _spahr_label_age="unknown"
+    fi
+    if [ "${_spahr_label_age}" = "unknown" ] || { [[ "${_spahr_label_age}" =~ ^[0-9]+$ ]] && [ "${_spahr_label_age}" -gt "${_spahr_max}" ]; }; then
       local _spahr_lapse_file="${_STALL_MERGE_LEASE_LAPSE_LOG_FILE:-}"
       local _spahr_lapse_key="${_spahr_number:-unknown}"
       if [ -z "${_spahr_lapse_file}" ] || ! grep -qxF "${_spahr_lapse_key}" "${_spahr_lapse_file}" 2>/dev/null; then
@@ -25163,6 +25208,13 @@ _stall_pr_ai_hold_reason()
 # which case the lapse line is logged on every lapse. No API call.
 if [ -z "${_STALL_MERGE_LEASE_LAPSE_LOG_FILE:-}" ]; then
   _STALL_MERGE_LEASE_LAPSE_LOG_FILE="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/stall_merge_lease_lapse.XXXXXX" 2>/dev/null || true)"
+fi
+# Per-process cache of lease-label labeled-at epochs for
+# _stall_merge_lease_label_age_minutes (issue #9892, §14: at most one
+# GraphQL read per held PR per poller process). Same mktemp pattern; empty on
+# failure, in which case every hold check reads the label age again.
+if [ -z "${_STALL_MERGE_LEASE_AGE_CACHE_FILE:-}" ]; then
+  _STALL_MERGE_LEASE_AGE_CACHE_FILE="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/stall_merge_lease_age.XXXXXX" 2>/dev/null || true)"
 fi
 
 # _pr_json_closes_issue — conservative closing-keyword check used only
@@ -29194,7 +29246,8 @@ STALL_EOF
           fi
           # Owner hold (draft / `[skip ai]` title) on the resolved PR: no
           # review dispatch, no empty-commit fallback, no attempt counted.
-          # Reads the payload already in pr_json (0 extra API calls).
+          # Reads the payload already in pr_json (0 extra API calls, apart
+          # from the per-process cached label-age read for a lease-waiting PR).
           if [ -n "${head_ref}" ] && [ "${head_ref}" != "null" ]; then
             local _std_rtr_ai_hold_reason=""
             _std_rtr_ai_hold_reason="$(_stall_pr_ai_hold_reason "${pr_json}" "${elapsed_minutes}")"
@@ -30262,7 +30315,8 @@ recover_stalled_issue() {
   # managed ai:done issues skip the stall judge and every dispatch. Reads
   # _fresh_lpr_entry first (the same STALL_MANAGED_LINKED_PR_CACHE entry,
   # or REST implementation-PR fallback, the guards above use), then the
-  # wave's batched GraphQL linked_pr (0 extra API calls); a missing
+  # wave's batched GraphQL linked_pr (0 extra API calls, apart from the
+  # per-process cached label-age read for a lease-waiting PR); a missing
   # payload fails open, and execute_stall_recovery_action retrigger_review
   # / resolve_merge_conflict re-check the REST payload.
   if [ "${phase}" = "ai:done" ] && [ "${action}" != "skip" ]; then

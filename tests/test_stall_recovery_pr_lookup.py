@@ -729,14 +729,21 @@ def test_hold_reason_lease_wait_lapses_on_label_age_and_logs_once():
 			a="$(LABEL_AGE=60 _stall_pr_ai_hold_reason {q} 5000)"
 			b="$(LABEL_AGE=61 _stall_pr_ai_hold_reason {q} 1)"
 			c="$(LABEL_AGE=90 _stall_pr_ai_hold_reason {q} 1)"
-			d="$(LABEL_AGE= _stall_pr_ai_hold_reason {q} 5000)"
+			d="$(LABEL_AGE= _stall_pr_ai_hold_reason {q} 120)"
 			e="$(STALL_MERGE_LEASE_WAIT_MAX_MINUTES=0 LABEL_AGE=1 _stall_pr_ai_hold_reason {q} 1)"
-			echo "A=[$a] B=[$b] C=[$c] D=[$d] E=[$e]"
+			f="$(LABEL_AGE= _stall_pr_ai_hold_reason {q} 121)"
+			g="$(LABEL_AGE= _stall_pr_ai_hold_reason {q} 0)"
+			echo "A=[$a] B=[$b] C=[$c] D=[$d] E=[$e] F=[$f] G=[$g]"
 			""",
 			cwd=tmp,
 		)
 		assert r.returncode == 0, r.stderr
-		assert "A=[merge_lease_wait] B=[] C=[] D=[merge_lease_wait] E=[]" in r.stdout, (r.stdout, r.stderr)
+		# D: unreadable age, stall clock at 2x max -> hold kept. F: unreadable
+		# age, stall clock past 2x max -> backstop lapse. G: the review-blocked
+		# `0` form never hits the backstop.
+		assert (
+			"A=[merge_lease_wait] B=[] C=[] D=[merge_lease_wait] E=[] F=[] G=[merge_lease_wait]" in r.stdout
+		), (r.stdout, r.stderr)
 		lapse_lines = [ln for ln in r.stderr.splitlines() if ln.startswith("STALL_MERGE_LEASE_HOLD_LAPSED")]
 		assert lapse_lines == ["STALL_MERGE_LEASE_HOLD_LAPSED pr=9402 label_age_minutes=61 max_minutes=60"], r.stderr
 
@@ -770,6 +777,81 @@ def test_label_age_reads_the_newest_labeled_event():
 		assert m and 119 <= int(m.group(1)) <= 121, (r.stdout, r.stderr)
 		assert "B=[] RC=1" in r.stdout, r.stdout
 		assert "C=[] RC=1" in r.stdout, r.stdout
+
+
+def test_hold_reason_backstop_lapse_logs_unknown_age():
+	"""An unreadable label age (read error, event outside the last 50) lapses
+	once the stall clock is past twice the maximum, logged as unknown."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap(tmp)
+		q = _bash_single_quote(_pr_payload(9402, "open", "ai/issue-9398", labels=["ai:merge-lease-wait"]))
+		r = _invoke(
+			body=f"""
+			_stall_merge_lease_label_age_minutes() {{ return 1; }}
+			export STALL_MERGE_LEASE_WAIT_MAX_MINUTES=60
+			out="$(_stall_pr_ai_hold_reason {q} 200)"
+			echo "OUT=[$out]"
+			""",
+			cwd=tmp,
+		)
+		assert r.returncode == 0, r.stderr
+		assert "OUT=[]" in r.stdout, (r.stdout, r.stderr)
+		assert "STALL_MERGE_LEASE_HOLD_LAPSED pr=9402 label_age_minutes=unknown max_minutes=60" in r.stderr, r.stderr
+
+
+def test_label_age_is_cached_per_process():
+	"""With the per-process cache file set, the same PR and label are read
+	from GraphQL once; later calls reuse the cached labeled-at epoch."""
+	import datetime
+
+	when = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+	resp = json.dumps({"data": {"repository": {"pullRequest": {"timelineItems": {"nodes": [
+		{"createdAt": when, "label": {"name": "ai:merge-lease-wait"}},
+	]}}}}})
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap(tmp)
+		calls = tmp / "calls.log"
+		r = _invoke(
+			body=f"""
+			gh() {{ printf 'x\\n' >> "{calls}"; [ -n "${{GQL_FAIL:-}}" ] && return 1; printf '%s' {_bash_single_quote(resp)}; }}
+			export _STALL_MERGE_LEASE_AGE_CACHE_FILE="{tmp}/age.cache"
+			: > "$_STALL_MERGE_LEASE_AGE_CACHE_FILE"
+			a="$(_stall_merge_lease_label_age_minutes 9402 ai:merge-lease-wait)"
+			b="$(GQL_FAIL=1 _stall_merge_lease_label_age_minutes 9402 ai:merge-lease-wait)"
+			echo "A=[$a] B=[$b]"
+			""",
+			cwd=tmp,
+			extra_env={"GITHUB_REPOSITORY": "owner/repo"},
+		)
+		assert r.returncode == 0, r.stderr
+		m = re.search(r"A=\[(\d+)\] B=\[(\d+)\]", r.stdout)
+		assert m and 29 <= int(m.group(1)) <= 31 and 29 <= int(m.group(2)) <= 31, (r.stdout, r.stderr)
+		assert calls.read_text(encoding="utf-8").count("x") == 1, calls.read_text(encoding="utf-8")
+
+
+def test_stall_judge_pick_prefers_lower_numbered_timeline_implementation_pr():
+	"""Two open implementation PRs: #100 found only on the timeline (body
+	closes the issue) and #200 on `ai/issue-<n>`. The pick must be #100,
+	the PR close_linked_pr reaches first."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap(tmp)
+		r = _invoke(
+			body=_PICK_FETCH_STUB + f"""
+			ISSUE=55
+			CROSS_REF_PR_NUMBERS="100"
+			CROSS_REF_LAST=100
+			export GH_PR_LIST_HEAD_JSON='[{{"number":200}}]'
+			export GH_PR_LIST_SEARCH_JSON='[]'
+			PR_JSON_MAP[100]={_bash_single_quote(_pr_payload(100, "open", "feature/manual", "Fixes #55"))}
+			PR_JSON_MAP[200]={_bash_single_quote(_pr_payload(200, "open", "ai/issue-55"))}
+			""" + _PICK_REPORT,
+			cwd=tmp,
+		)
+		assert r.returncode == 0, r.stderr
+		assert "PICK=100 SRC=implementation CANDS=[100,200]" in r.stdout, (r.stdout, r.stderr)
 
 
 def test_hold_reason_honours_custom_label_and_invalid_max():

@@ -438,8 +438,9 @@ def test_guard_kill_switch_allows(tmp: Path):
 
 @_with_tmp
 def test_guard_without_stall_clock_does_not_hold_lease_wait(tmp: Path):
-	"""The review-blocked judge arm calls the guard without stall minutes:
-	the lease label alone does not refuse there, a green head still does."""
+	"""The one-argument form (no production caller) does not hold on the
+	lease label. The review-blocked judge arm passes `0`
+	(test_guard_review_blocked_form_holds_lease_wait), which does hold."""
 	r = _invoke(
 		tmp,
 		_IMPL_ONLY
