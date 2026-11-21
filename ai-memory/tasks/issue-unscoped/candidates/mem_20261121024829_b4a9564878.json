@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:691 | severity=critical | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The new prompt contract test is not wired into CI.\n  WHY: The test-wiring guard fails because no workflow runs the test file, causing `static-checks` and the aggregate `lint` check to fail.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Wire the new test `tests/test_implement_inline_prompt_files_touched_scope.py` into a CI step under `.github/workflows/ci.yml`.\n  expected_change_site: `.github/workflows/ci.yml`, alongside the existing implement pre-push test invocation at line 691\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The test file exists but no workflow invokes it; the PR diff contains no hunks in `.github/workflows/ci.yml`; the CI test-wiring guard reports it as unwired and `static-checks` failed in run 44850422362.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Wire the new test `tests/test_implement_inline_prompt_files_touched_scope.py` into a CI step under `.github/workflows/ci.yml`.\n  Expected change site: `.github/workflows/ci.yml`\n  Evidence of absence: The new test file `tests/test_implement_inline_prompt_files_touched_scope.py` exists but is not wired into any CI workflow step. The `static-checks` CI job in run 44850422362 failed because `test_ci_wires_every_test_file.py` identified this test file as unwired.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: PR description Acceptance section lists `tests/test_implement_inline_prompt_files_touched_scope.py` as a target test. The linked issue's heal scope explicitly permits edits under `tests/` and the inline prompt change under `.github/workflows/implement.yml`, so wiring the new test into an existing CI step under `.github/workflows/ci.yml` is in scope. The PR adds the new contract test file but does not register it in any workflow step.\n  Expected change site: `.github/workflows/ci.yml` step at line 691 (\"Pre-push affected-test gate tests\"), which already runs `tests/test_implement_prepush_test_gate.py`. Adding the new test alongside that invocation (or extending the existing pytest call) wires the test into CI.\n  Evidence of absence: `grep` for `test_implement_inline_prompt_files_touched_scope` across `.github/workflows/` returns zero matches; the only mention anywhere in the repository is the contributor note in `changelog.d/9775-inline-implement-files-touched-scope.md:4`. The PR diff contains no hunks in `.github/workflows/ci.yml`. The PR_CHECK_RUNS_CONTEXT already proves the runtime impact \u2014 `static-checks` failed in run 44850422362 with the exact `test_ci_wires_every_test_file.py` assertion listing `tests/test_implement_inline_prompt_files_touched_scope.py` as the only unwired file, and the downstream aggregate `lint` job then failed for the same reason.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml\n  Line or code reference: Line 691 runs `tests/test_implement_prepush_test_gate.py`; no workflow runs `tests/test_implement_inline_prompt_files_touched_scope.py`.\n  Problem: The new prompt contract test is not wired into CI. The repository\u2019s test-wiring guard reports it as unwired, causing `static-checks` to fail; the aggregate `lint` check also fails.\n  Why it fails at runtime: CI runs the guard in `tests/test_ci_wires_every_test_file.py`, which fails when a test file is absent from all workflows. The PR check log confirms this failure.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: The PR acceptance section lists `tests/test_implement_inline_prompt_files_touched_scope.py` as a test target, with status remaining \u201cnot run\u201d until a gate runs it.\n  Expected change site: `.github/workflows/ci.yml`, alongside the existing implement pre-push test invocation at line 691.\n  Evidence of absence: The test file is present in the PR, but no workflow invokes it. The CI test-wiring guard consequently fails and names this file as unwired.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "96ca3fc5e23c412b5b94d99bed9d3136402b406f4b2dbc7eeea1031888146bc7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9860,
+    "run_id": "44850422475",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44850422475",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121024829_b4a9564878",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9860,
+    "run_id": "44850422475"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T02:48:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
