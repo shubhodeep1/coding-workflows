@@ -1481,6 +1481,15 @@ esac
 			user = entry.get("user")
 			if isinstance(user, dict):
 				user_entry = dict(user)
+			elif not user and "AI_STANDALONE_STALL_STATE_V1" in str(entry.get("body", "")):
+				# Security #9718: the poller trusts a standalone state comment
+				# only from its own login, so a seeded state comment without an
+				# explicit author is the pipeline's own (the mocked user login).
+				user_entry = {"login": str(
+					(mock_store_extra or {}).get("authenticated_login")
+					or (env_overrides or {}).get("MOCK_GH_USER_LOGIN")
+					or os.environ.get("MOCK_GH_USER_LOGIN", "github-actions[bot]")
+				)}
 			else:
 				user_entry = {"login": str(user) if user else "octocat"}
 			user_entry.setdefault("login", "octocat")
@@ -16141,6 +16150,418 @@ def test_standalone_stall_recovery_runs_check_triage_gate_for_non_target_base():
 	# The sandbox copies scripts/, so the gate must reach its helper rather than skip.
 	assert "STALL_CHECK_TRIAGE_GATE issue=501 fix_pr=419 outcome=skip reason=support_missing" not in gate_result["stdout"]
 	assert "STALL_CHECK_TRIAGE_GATE issue=501 fix_pr=419 outcome=skip reason=disabled" not in gate_result["stdout"]
+
+
+def _run_standalone_ready_to_merge_tick_9482(
+	*,
+	pr_overrides: dict,
+	stall_recovery_count: int,
+	env_overrides: dict[str, str] | None = None,
+	mock_stall_judge_json: dict | None = None,
+) -> dict:
+	"""Issue #9482 shape: standalone ai:ready-to-merge issue #823 whose
+	implementation PR #825 targets an integration branch, so GitHub never
+	sets willCloseTarget and the GraphQL linked_pr lookups miss it."""
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:ready-to-merge",
+			"status_since_ts": 1,
+			"stall_recovery_count": stall_recovery_count,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	pr = {
+		"number": 825,
+		"body": "Closes #823",
+		"baseRefName": "orchestrator/project-768",
+		"headRefName": "ai/issue-823",
+		"headRefFromApi": "ai/issue-823",
+		"headSha": "0000000000000000000000000000000000000825",
+		"willCloseTarget": False,
+	}
+	pr.update(pr_overrides)
+	return _run_poller(
+		state=_base_state(status="complete"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 823: ["ai:ready-to-merge"]},
+		issue_comments={823: [standalone_state_comment]},
+		issue_linked_prs={823: 825},
+		mock_gh_issue_list_label_filter=True,
+		enable_stall_human_terminalization="false",
+		env_overrides=env_overrides,
+		mock_stall_judge_json=mock_stall_judge_json,
+		prs=[pr],
+	)
+
+
+_MERGED_PR_9482 = {
+	"state": "closed",
+	"merged": True,
+	"merged_at": "2026-11-10T04:34:00Z",
+}
+
+
+def test_standalone_ready_to_merge_skips_recovery_when_linked_pr_merged_into_integration_branch():
+	result = _run_standalone_ready_to_merge_tick_9482(
+		pr_overrides=_MERGED_PR_9482,
+		stall_recovery_count=2,
+		mock_stall_judge_json={
+			"action": "attempt_merge",
+			"justification": "must not be reached",
+			"target_pr": 825,
+			"head_ref": "ai/issue-823",
+		},
+	)
+	assert "linked PR #825 is MERGED" in result["stdout"]
+	# PR #825 merged into a non-target base, so the reconcile logs its own
+	# skip line; exactly one STALL_SKIP is printed for this skip.
+	assert "STALL_SKIP issue=823 reason=merged_non_target_base pr=825" in result["stdout"]
+	assert "reason=linked_pr_merged" not in result["stdout"]
+	assert result["stdout"].count("STALL_SKIP issue=823 ") == 1
+	standalone_state = _extract_latest_standalone_state(result["issues"]["823"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 2
+	assert not any(
+		"Stall Judge" in str(comment.get("body", ""))
+		for comment in result["issues"]["823"]["comments"]
+	)
+	assert result.get("merged_prs", []) == []
+	assert result.get("merge_calls", []) == []
+
+
+def test_standalone_ready_to_merge_logs_linked_pr_merged_when_merged_into_default_branch():
+	# Target-base sibling of the integration-branch case: the reconcile does
+	# not log merged_non_target_base, so the poller prints its own single
+	# STALL_SKIP ... reason=linked_pr_merged line.
+	result = _run_standalone_ready_to_merge_tick_9482(
+		pr_overrides={**_MERGED_PR_9482, "baseRefName": "main"},
+		stall_recovery_count=2,
+		mock_stall_judge_json={
+			"action": "attempt_merge",
+			"justification": "must not be reached",
+			"target_pr": 825,
+			"head_ref": "ai/issue-823",
+		},
+	)
+	assert "linked PR #825 is MERGED" in result["stdout"]
+	assert "STALL_SKIP issue=823 reason=linked_pr_merged pr=825 phase=ai:ready-to-merge" in result["stdout"]
+	assert "reason=merged_non_target_base" not in result["stdout"]
+	assert result["stdout"].count("STALL_SKIP issue=823 ") == 1
+	standalone_state = _extract_latest_standalone_state(result["issues"]["823"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 2
+	assert not any(
+		"Stall Judge" in str(comment.get("body", ""))
+		for comment in result["issues"]["823"]["comments"]
+	)
+	assert result.get("merge_calls", []) == []
+
+
+def test_stall_judge_diagnostics_report_merged_linked_pr_and_keep_escalation():
+	result = _run_standalone_ready_to_merge_tick_9482(
+		pr_overrides=_MERGED_PR_9482,
+		stall_recovery_count=2,
+		env_overrides={"ENABLE_STALL_MERGED_PR_GUARD": "false"},
+		mock_stall_judge_json={
+			"action": "escalate_human",
+			"justification": "cannot tell whether PR #825 merged",
+			"target_pr": None,
+			"head_ref": None,
+		},
+	)
+	judge_comments = [
+		str(comment.get("body", ""))
+		for comment in result["issues"]["823"]["comments"]
+		if "Stall Judge" in str(comment.get("body", ""))
+	]
+	assert judge_comments, result["stdout"]
+	judge_body = judge_comments[-1]
+	assert '"state":"merged"' in judge_body
+	assert '"merged":true' in judge_body
+	assert '"merged_at":"2026-11-10T04:34:00Z"' in judge_body
+	assert "**Decision (effective):** escalate_human" in judge_body
+	assert "ai:needs-human" in result["issues"]["823"]["labels"]
+	assert "normalized to 'attempt_merge'" not in result["stdout"]
+	# PR #825 merged into the non-target base orchestrator/project-768, so the
+	# #9481 keep (_stall_judge_linked_pr_keeps_escalation) handles it before
+	# the #9482 elif is evaluated.
+	assert "STALL_RECOVERY issue=823 reason=judge_escalate_kept linked_pr=merged_non_target_base pr=825" in result["stdout"]
+	assert "Stall judge action 'escalate_human' kept" not in result["stdout"]
+
+
+def test_stall_judge_keeps_escalation_for_implementation_pr_merged_into_default_branch():
+	# Target-base sibling: the #9481 keep returns 1 for a merge into a target
+	# base, so only the #9482 elif keeps the judge's escalate_human here.
+	result = _run_standalone_ready_to_merge_tick_9482(
+		pr_overrides={**_MERGED_PR_9482, "baseRefName": "main"},
+		stall_recovery_count=2,
+		env_overrides={"ENABLE_STALL_MERGED_PR_GUARD": "false"},
+		mock_stall_judge_json={
+			"action": "escalate_human",
+			"justification": "cannot tell whether PR #825 merged",
+			"target_pr": None,
+			"head_ref": None,
+		},
+	)
+	judge_comments = [
+		str(comment.get("body", ""))
+		for comment in result["issues"]["823"]["comments"]
+		if "Stall Judge" in str(comment.get("body", ""))
+	]
+	assert judge_comments, result["stdout"]
+	assert '"state":"merged"' in judge_comments[-1]
+	assert "ai:needs-human" in result["issues"]["823"]["labels"]
+	assert "normalized to 'attempt_merge'" not in result["stdout"]
+	assert "reason=judge_escalate_kept" not in result["stdout"]
+	assert "Stall judge action 'escalate_human' kept for issue #823: linked PR #825 is merged" in result["stdout"]
+
+
+def test_stall_judge_closed_non_implementation_cross_ref_kept_by_closed_unmerged_guard():
+	# The last cross-reference is a closed mention-only PR. The #9481 keep
+	# (_stall_judge_linked_pr_keeps_escalation, reason closed_unmerged) keeps
+	# the judge's escalate_human for any closed unmerged linked PR before the
+	# #9482 implementation-PR elif runs, so the #9482 notice is not printed.
+	result = _run_standalone_ready_to_merge_tick_9482(
+		pr_overrides={
+			"state": "closed",
+			"merged": False,
+			"body": "Refs #823",
+			"headRefName": "feature/unrelated",
+			"headRefFromApi": "feature/unrelated",
+		},
+		stall_recovery_count=2,
+		env_overrides={"ENABLE_STALL_MERGED_PR_GUARD": "false"},
+		mock_stall_judge_json={
+			"action": "escalate_human",
+			"justification": "cannot tell what happened to PR #825",
+			"target_pr": None,
+			"head_ref": None,
+		},
+	)
+	assert any(
+		"Stall Judge" in str(comment.get("body", ""))
+		for comment in result["issues"]["823"]["comments"]
+	), result["stdout"]
+	assert "Stall judge action 'escalate_human' kept" not in result["stdout"]
+	assert "STALL_RECOVERY issue=823 reason=judge_escalate_kept linked_pr=closed_unmerged pr=825" in result["stdout"]
+	assert "normalized to 'attempt_merge'" not in result["stdout"]
+	assert "ai:needs-human" in result["issues"]["823"]["labels"]
+
+
+def test_stall_judge_merged_target_base_non_implementation_cross_ref_keeps_normalisation():
+	# The last cross-reference is a mention-only PR merged into a target base
+	# (main). Neither keep applies: the #9481 keep returns 1 for a target-base
+	# merge, and the #9482 elif needs the issue's implementation PR. A merged
+	# PR that only mentions the issue says nothing about the PR attempt_merge
+	# resolves (#3816 / #3828 mis-target), so the escalation is normalised as
+	# before; the MAX_JUDGE_REPLAY backstop bounds any repeat.
+	result = _run_standalone_ready_to_merge_tick_9482(
+		pr_overrides={
+			**_MERGED_PR_9482,
+			"baseRefName": "main",
+			"body": "Refs #823",
+			"headRefName": "feature/unrelated",
+			"headRefFromApi": "feature/unrelated",
+		},
+		stall_recovery_count=2,
+		env_overrides={"ENABLE_STALL_MERGED_PR_GUARD": "false"},
+		mock_stall_judge_json={
+			"action": "escalate_human",
+			"justification": "cannot tell what happened to PR #825",
+			"target_pr": None,
+			"head_ref": None,
+		},
+	)
+	assert any(
+		"Stall Judge" in str(comment.get("body", ""))
+		for comment in result["issues"]["823"]["comments"]
+	), result["stdout"]
+	assert "Stall judge action 'escalate_human' kept" not in result["stdout"]
+	assert "reason=judge_escalate_kept" not in result["stdout"]
+	assert "Stall judge action 'escalate_human' normalized to 'attempt_merge' for issue #823." in result["stdout"]
+	assert "ai:needs-human" not in result["issues"]["823"]["labels"]
+
+
+def test_standalone_ready_to_merge_open_linked_pr_still_attempts_merge():
+	result = _run_standalone_ready_to_merge_tick_9482(
+		pr_overrides={
+			"state": "open",
+			"merged": False,
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+		stall_recovery_count=0,
+	)
+	assert "reason=linked_pr_merged" not in result["stdout"]
+	assert "Action: attempt_merge" in result["stdout"]
+	standalone_state = _extract_latest_standalone_state(result["issues"]["823"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	# attempt_merge reuses the PR the merged-guard fallback already resolved,
+	# so the tick fetches pulls/825 no more often than before #9482 (resolver
+	# + fresh-push + merge-freshness reads); a second resolver call would add one.
+	assert sum(path.endswith("/pulls/825") for path in result["api_calls"]) <= 3
+
+
+def test_standalone_ready_to_merge_unresolved_impl_pr_does_not_repeat_resolver():
+	# The only cross-reference is an open mention-only PR, so the merged-guard
+	# fallback resolver misses. attempt_merge must reuse that miss instead of
+	# re-running discovery and the per-PR fetch in the same tick.
+	result = _run_standalone_ready_to_merge_tick_9482(
+		pr_overrides={
+			"state": "open",
+			"merged": False,
+			"body": "Refs #823",
+			"headRefName": "feature/unrelated",
+			"headRefFromApi": "feature/unrelated",
+		},
+		stall_recovery_count=0,
+	)
+	combined_log = result["stdout"] + result["stderr"]
+	assert "Action: attempt_merge" in result["stdout"]
+	assert combined_log.count("STALL_LINKED_PR_REJECTED issue=823 pr=825 reason=not_implementation_pr") == 1
+	assert "no implementation PR could be resolved" in result["stdout"]
+	assert result.get("merge_calls", []) == []
+
+
+def _standalone_state_body_9718(stall_recovery_count: int) -> str:
+	return (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:ready-to-merge",
+			"status_since_ts": 1,
+			"stall_recovery_count": stall_recovery_count,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+
+
+def _run_standalone_forged_state_tick_9718(mock_store_extra: dict | None = None) -> dict:
+	# Pipeline-written state (count 0) plus a newer forged marker comment
+	# from an outsider claiming the recovery budget is exhausted.
+	return _run_poller(
+		state=_base_state(status="complete"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 823: ["ai:ready-to-merge"]},
+		issue_comments={823: [
+			_standalone_state_body_9718(0),
+			{
+				"body": _standalone_state_body_9718(99),
+				"user": {"login": "outsider"},
+				"author_association": "NONE",
+				"created_at": "2026-12-01T00:00:00Z",
+			},
+		]},
+		issue_linked_prs={823: 825},
+		mock_gh_issue_list_label_filter=True,
+		enable_stall_human_terminalization="false",
+		mock_store_extra=mock_store_extra,
+		prs=[{
+			"number": 825,
+			"body": "Closes #823",
+			"baseRefName": "main",
+			"headRefName": "ai/issue-823",
+			"headRefFromApi": "ai/issue-823",
+			"headSha": "0000000000000000000000000000000000000825",
+			"state": "open",
+			"merged": False,
+			"mergeable": True,
+			"mergeable_state": "clean",
+		}],
+	)
+
+
+def test_standalone_stall_state_ignores_forged_marker_comment_from_other_author():
+	# Security #9718: a newer marker comment from any other commenter must
+	# neither replace the pipeline's state nor be PATCHed by the writer.
+	result = _run_standalone_forged_state_tick_9718()
+	comments = result["issues"]["823"]["comments"]
+	pipeline_states = [
+		comment for comment in comments
+		if (comment.get("user") or {}).get("login") == "github-actions[bot]"
+		and "AI_STANDALONE_STALL_STATE_V1" in str(comment.get("body", ""))
+	]
+	assert pipeline_states, result["stdout"]
+	state = _extract_latest_standalone_state(pipeline_states)
+	assert state is not None
+	assert state["stall_recovery_count"] == 1
+	assert "Action: attempt_merge" in result["stdout"]
+	forged = [
+		comment for comment in comments
+		if (comment.get("user") or {}).get("login") == "outsider"
+	]
+	assert len(forged) == 1
+	assert forged[0]["body"] == _standalone_state_body_9718(99)
+
+
+def test_standalone_stall_state_skips_candidate_when_pipeline_login_unavailable():
+	# Without the pipeline's login no state comment can be verified: skip
+	# the candidate (fail closed) instead of recovering from a default state.
+	# When tracking_issues.json lists a tracking issue, the managed-set identity
+	# check in run_standalone_stall_recovery skips the whole sweep first; with no
+	# tracking issues, the per-candidate STANDALONE_STATE_AUTHOR_FILTER skip is
+	# the only gate. Either way nothing acts on the issue.
+	result = _run_standalone_forged_state_tick_9718(mock_store_extra={"fail_user_lookup": True})
+	combined_log = result["stdout"] + result["stderr"]
+	assert (
+		"STANDALONE_STATE_AUTHOR_FILTER issue=823 outcome=identity_unavailable action=skip" in combined_log
+		or "Pipeline identity unavailable; skipping standalone stall recovery this tick" in combined_log
+	), combined_log
+	assert "Action: attempt_merge" not in result["stdout"]
+	assert result.get("merge_calls", []) == []
+	comments = result["issues"]["823"]["comments"]
+	assert len(comments) == 2
+	assert comments[1]["body"] == _standalone_state_body_9718(99)
+
+
+def _standalone_state_parsers_script_9718(login: str, comments: list[dict], helper: str) -> str:
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+
+	def _fn(name: str) -> str:
+		body = source.split(f"\n{name}() {{", 1)[1].split("\n}\n", 1)[0]
+		return f"{name}() {{{body}\n}}\n"
+
+	return (
+		"set -euo pipefail\n"
+		'STANDALONE_STATE_MARKER_OPEN="<!-- AI_STANDALONE_STALL_STATE_V1"\n'
+		'STANDALONE_STATE_MARKER_CLOSE="AI_STANDALONE_STALL_STATE_V1 -->"\n'
+		f"UNBLOCK_TRUSTED_LOGIN={shlex.quote(login)}\n"
+		f"UNBLOCK_TRUSTED_LOGIN_STATE={'ok' if login else 'failed'}\n"
+		"unblock_trusted_login() { printf '%s' \"${UNBLOCK_TRUSTED_LOGIN}\"; }\n"
+		+ _fn("_standalone_state_trusted_login")
+		+ _fn("_extract_standalone_state_comment_id_from_comments")
+		+ _fn("_extract_standalone_state_json_from_comments")
+		+ f"{helper} {shlex.quote(json.dumps(comments))}\n"
+	)
+
+
+def test_standalone_state_parsers_trust_only_pipeline_login():
+	comments = [
+		{"id": 11, "created_at": "2026-01-01T00:00:00Z", "user": {"login": "pipeline-bot"},
+			"body": _standalone_state_body_9718(2)},
+		{"id": 12, "created_at": "2026-12-01T00:00:00Z", "user": {"login": "outsider"},
+			"body": _standalone_state_body_9718(99)},
+		{"id": 13, "created_at": "2026-12-02T00:00:00Z", "body": _standalone_state_body_9718(77)},
+	]
+
+	def _run(login: str, helper: str) -> str:
+		result = subprocess.run(
+			["bash", "-c", _standalone_state_parsers_script_9718(login, comments, helper)],
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		return result.stdout.strip()
+
+	assert _run("pipeline-bot", "_extract_standalone_state_comment_id_from_comments") == "11"
+	assert json.loads(_run("pipeline-bot", "_extract_standalone_state_json_from_comments"))["stall_recovery_count"] == 2
+	# No resolvable login: trust nothing (default state, no comment id).
+	assert _run("", "_extract_standalone_state_comment_id_from_comments") == ""
+	assert json.loads(_run("", "_extract_standalone_state_json_from_comments"))["stall_recovery_count"] == 0
 
 
 def test_standalone_retrigger_review_skips_empty_commit_when_review_run_has_blank_head_branch_but_matching_sha():
