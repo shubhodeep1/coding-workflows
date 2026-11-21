@@ -733,18 +733,23 @@ def test_hold_reason_lease_wait_lapses_on_label_age_and_logs_once():
 			e="$(STALL_MERGE_LEASE_WAIT_MAX_MINUTES=0 LABEL_AGE=1 _stall_pr_ai_hold_reason {q} 1)"
 			f="$(LABEL_AGE= _stall_pr_ai_hold_reason {q} 121)"
 			g="$(LABEL_AGE= _stall_pr_ai_hold_reason {q} 0)"
-			h="$(LABEL_RC=2 _stall_pr_ai_hold_reason {q} 5000)"
-			echo "A=[$a] B=[$b] C=[$c] D=[$d] E=[$e] F=[$f] G=[$g] H=[$h]"
+			h="$(LABEL_RC=2 _stall_pr_ai_hold_reason {q} 240)"
+			i="$(LABEL_RC=2 _stall_pr_ai_hold_reason {q} 241)"
+			j="$(LABEL_RC=2 _stall_pr_ai_hold_reason {q} 0)"
+			echo "A=[$a] B=[$b] C=[$c] D=[$d] E=[$e] F=[$f] G=[$g] H=[$h] I=[$i] J=[$j]"
 			""",
 			cwd=tmp,
 		)
 		assert r.returncode == 0, r.stderr
 		# D: no readable age (rc 1), stall clock at 2x max -> hold kept. F: no
 		# readable age (rc 1), stall clock past 2x max -> backstop lapse. G: the
-		# review-blocked `0` form never hits the backstop. H: a transient read
-		# error (rc 2) keeps the hold however long the issue has stalled.
+		# review-blocked `0` form never hits the backstop. H: a read error (rc 2)
+		# keeps the hold up to 4x max. I: a read error that persists past 4x
+		# max lapses (deduped: #9402 already logged). J: the `0` form keeps
+		# the hold on a read error.
 		assert (
 			"A=[merge_lease_wait] B=[] C=[] D=[merge_lease_wait] E=[] F=[] G=[merge_lease_wait] H=[merge_lease_wait]"
+			" I=[] J=[merge_lease_wait]"
 			in r.stdout
 		), (r.stdout, r.stderr)
 		lapse_lines = [ln for ln in r.stderr.splitlines() if ln.startswith("STALL_MERGE_LEASE_HOLD_LAPSED")]
@@ -786,7 +791,8 @@ def test_label_age_reads_the_newest_labeled_event():
 def test_hold_reason_backstop_lapse_logs_unknown_age():
 	"""A label age that can never be read (rc 1: event outside the last 50)
 	lapses once the stall clock is past twice the maximum, logged as
-	unknown. A transient read error (rc 2) keeps the hold instead."""
+	unknown. A read error (rc 2) keeps the hold until the stall clock is
+	past four times the maximum, then lapses logged as read_error."""
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
 		_bootstrap(tmp)
@@ -800,12 +806,17 @@ def test_hold_reason_backstop_lapse_logs_unknown_age():
 			_stall_merge_lease_label_age_minutes() {{ return 2; }}
 			err="$(_stall_pr_ai_hold_reason {q} 200)"
 			echo "ERR=[$err]"
+			persist="$(_stall_pr_ai_hold_reason {q} 241)"
+			echo "PERSIST=[$persist]"
 			""",
 			cwd=tmp,
 		)
 		assert r.returncode == 0, r.stderr
 		assert "OUT=[]" in r.stdout, (r.stdout, r.stderr)
 		assert "ERR=[merge_lease_wait]" in r.stdout, (r.stdout, r.stderr)
+		# A read error that persists past four times the maximum lapses too.
+		assert "PERSIST=[]" in r.stdout, (r.stdout, r.stderr)
+		assert "STALL_MERGE_LEASE_HOLD_LAPSED pr=9402 label_age_minutes=read_error max_minutes=60" in r.stderr, r.stderr
 		assert "STALL_MERGE_LEASE_HOLD_LAPSED pr=9402 label_age_minutes=unknown max_minutes=60" in r.stderr, r.stderr
 
 

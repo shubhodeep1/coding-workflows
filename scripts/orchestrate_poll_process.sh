@@ -25140,14 +25140,18 @@ _stall_merge_lease_label_age_minutes()
 # deduped, so it cannot hide another PR's line). When the label age cannot
 # be read, the hold is kept: a wrong lapse would let recovery push to or
 # close a green PR waiting for the lease. A transient read error (return 2)
-# always keeps the hold; it is not cached, so the next check reads again.
-# Backstop, only when no age can ever be read (return 1: the event is
-# outside the last 50 labeled events, or no PR number): once the caller's
-# stall clock exceeds twice the maximum the hold lapses anyway (logged with
-# label_age_minutes=unknown), so such a PR cannot park an issue forever. The
-# stall clock is the issue's, not the label's, so it never overrides a read
-# error. The review-blocked arm passes `0`, so the backstop never fires
-# there. Without the second argument (the conflict sweep) output is exactly
+# keeps the hold; it is not cached, so the next check reads again.
+# Backstop, when no age can ever be read (return 1: the event is outside
+# the last 50 labeled events, or no PR number / repository): once the
+# caller's stall clock exceeds twice the maximum the hold lapses anyway
+# (logged with label_age_minutes=unknown), so such a PR cannot park an
+# issue forever. A read error that keeps recurring (return 2 on every
+# check, e.g. a permission error gh_retry treats as permanent) gets a wider
+# bound: the hold lapses once the stall clock exceeds four times the
+# maximum (logged with label_age_minutes=read_error). A single failed read
+# therefore never ends a young hold, and the close guard still refuses a
+# green head after a lapse. The review-blocked arm passes `0`, so neither
+# backstop fires there. Without the second argument (the conflict sweep) output is exactly
 # as before.
 _stall_pr_ai_hold_reason()
 {
@@ -25193,14 +25197,17 @@ _stall_pr_ai_hold_reason()
       _spahr_age_rc=0
       _spahr_label_age="$(_stall_merge_lease_label_age_minutes "${_spahr_number}" "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" 2>/dev/null)" || _spahr_age_rc=$?
     fi
-    # Backstop only for "no age can ever be read" (rc 1); a transient read
-    # error (rc 2) keeps the hold whatever the issue's stall clock says.
-    if ! [[ "${_spahr_label_age}" =~ ^[0-9]+$ ]] && [ "${_spahr_age_rc}" -ne 2 ] \
-      && [[ "${_spahr_stall_minutes}" =~ ^[0-9]+$ ]] \
-      && [ "$((10#${_spahr_stall_minutes}))" -gt "$((10#${_spahr_max} * 2))" ]; then
-      _spahr_label_age="unknown"
+    # Backstop for "no age can ever be read" (rc 1) past 2x the maximum; a
+    # read error (rc 2) keeps the hold until the stall clock passes 4x, so a
+    # permanently failing read cannot park the issue forever.
+    if ! [[ "${_spahr_label_age}" =~ ^[0-9]+$ ]] && [[ "${_spahr_stall_minutes}" =~ ^[0-9]+$ ]]; then
+      if [ "${_spahr_age_rc}" -ne 2 ] && [ "$((10#${_spahr_stall_minutes}))" -gt "$((10#${_spahr_max} * 2))" ]; then
+        _spahr_label_age="unknown"
+      elif [ "${_spahr_age_rc}" -eq 2 ] && [ "$((10#${_spahr_stall_minutes}))" -gt "$((10#${_spahr_max} * 4))" ]; then
+        _spahr_label_age="read_error"
+      fi
     fi
-    if [ "${_spahr_label_age}" = "unknown" ] || { [[ "${_spahr_label_age}" =~ ^[0-9]+$ ]] && [ "${_spahr_label_age}" -gt "${_spahr_max}" ]; }; then
+    if [ "${_spahr_label_age}" = "unknown" ] || [ "${_spahr_label_age}" = "read_error" ] || { [[ "${_spahr_label_age}" =~ ^[0-9]+$ ]] && [ "${_spahr_label_age}" -gt "${_spahr_max}" ]; }; then
       local _spahr_lapse_file="${_STALL_MERGE_LEASE_LAPSE_LOG_FILE:-}"
       local _spahr_lapse_key="${_spahr_number:-}"
       # No PR number: skip the dedupe rather than share one `unknown` key.
