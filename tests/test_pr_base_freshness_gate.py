@@ -1183,7 +1183,7 @@ class SoftPathFreshness(unittest.TestCase):
 	def test_a_shared_hard_path_keeps_shared_paths_without_a_probe(self) -> None:
 		repo, head, tip = _soft_repo(conflict=False)
 		rc, out, _ = _soft_gate(repo, head, _compare(1, ["README.md", "scripts/x.sh"], [tip]), ["README.md", "scripts/x.sh"],
-			prelude="_pr_merge_tree_probe() { echo PROBE_CALLED; }\n")
+			prelude="_pr_merge_tree_probe() { echo PROBE_CALLED >&2; }\n")
 		self.assertEqual(rc, 1, out)
 		self.assertIn("reason=shared_paths", out)
 		self.assertIn("overlap=README.md,scripts/x.sh soft_overlap=-", out)
@@ -1303,7 +1303,7 @@ done"""
 	def test_a_shared_path_holding_a_comma_is_classified_whole(self) -> None:
 		path = "README.md,agents.d/x"
 		rc, out, _ = _soft_gate(None, HEAD, _compare(1, [path], ["c" * 40]), [path],
-			prelude='_pr_merge_tree_probe() { echo PROBE_CALLED; _PR_PROBE_RESULT=none; }\n')
+			prelude='_pr_merge_tree_probe() { echo PROBE_CALLED >&2; _PR_PROBE_RESULT=none; }\n')
 		self.assertEqual(rc, 1, out)
 		self.assertIn("reason=shared_paths", out)
 		self.assertNotIn("PROBE_CALLED", out)

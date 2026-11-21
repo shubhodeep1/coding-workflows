@@ -1467,9 +1467,15 @@ _pr_base_freshness()
 		  else ([ $base_paths[] | select(. as $p | $pr_paths | index($p)) ] | unique | join(",")) end
 	' 2>/dev/null | tail -n1)"
 	if [ "${overlap}" != "__invalid__" ] && [ "${overlap}" != "__capped__" ]; then
-		PR_BASE_FRESHNESS_PR_PATHS="$(jq -r '
+		# Phase 4: with the soft class on, a path holding CR/LF makes the
+		# cached list `*` (overlaps every holder), so the lease's newline
+		# split can never turn one hard path into soft fragments.
+		local freshness_soft_on=""
+		[ -z "$(_merge_lease_soft_entries 2>/dev/null)" ] || freshness_soft_on="1"
+		PR_BASE_FRESHNESS_PR_PATHS="$(jq -r --arg soft_on "${freshness_soft_on}" '
 			[ .[]? | if type == "array" then .[] else . end | select(type == "object")
-			  | (.filename // empty), (.previous_filename // empty) ] | unique | .[]
+			  | (.filename // empty), (.previous_filename // empty) ] | unique
+			| if $soft_on != "" and any(.[]; test("[\n\r]")) then "*" else .[] end
 		' "${tmp_pr_files}" 2>/dev/null || true)"
 		PR_BASE_FRESHNESS_PR_PATHS_FOR="${pr_number}"
 		# Phase 4: the real shared paths, one per line, for the soft split.
@@ -2628,8 +2634,14 @@ _merge_lease_pr_paths()
 	fi
 	lease_files_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${lease_repo}/pulls/${lease_pr}/files?per_page=100" 2>/dev/null)" || return 1
 	jq -e 'type == "array"' >/dev/null 2>&1 <<< "${lease_files_json}" || return 1
-	jq -r '[ .[]? | if type == "array" then .[] else . end | select(type == "object")
-		| (.filename // empty), (.previous_filename // empty) ] | unique | .[]' <<< "${lease_files_json}" 2>/dev/null
+	# Phase 4 (Refs #9781): with the soft class on, a path holding CR/LF
+	# yields `*` (fail closed) instead of newline-split fragments that could
+	# each look soft. With the class off the list is as before.
+	local lease_soft_on=""
+	[ -z "$(_merge_lease_soft_entries 2>/dev/null)" ] || lease_soft_on="1"
+	jq -r --arg soft_on "${lease_soft_on}" '[ .[]? | if type == "array" then .[] else . end | select(type == "object")
+		| (.filename // empty), (.previous_filename // empty) ] | unique
+		| if $soft_on != "" and any(.[]; test("[\n\r]")) then "*" else .[] end' <<< "${lease_files_json}" 2>/dev/null
 }
 
 # 0 when the two newline lists share a path (`*` shares every path).

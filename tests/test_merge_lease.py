@@ -1424,6 +1424,14 @@ class LeaseSoftPaths(unittest.TestCase):
 		self.assertEqual(res.returncode, 0, res.stderr)
 		self.assertIn("rc=1 outcome=wait reason=holder_shares_paths hard=scripts/x.sh", res.stdout, res.stdout + res.stderr)
 
+	def test_a_shared_path_holding_a_newline_waits(self) -> None:
+		"""One real path README.md<LF>agents.d/x must not split into two soft
+		fragments: with the class on, the PR's path list becomes `*`."""
+		rc, out = _soft_lease_gate(False, ["README.md\nagents.d/x"], "README.md\nagents.d/x")
+		self.assertEqual(rc, 1, out)
+		self.assertIn("reason=holder_shares_paths", out)
+		self.assertNotIn("soft_paths_merge_clean", out)
+
 	def test_unshared_paths_keep_the_old_reason(self) -> None:
 		rc, out = _soft_lease_gate(False, ["own.py"], "README.md")
 		self.assertEqual(rc, 0, out)
