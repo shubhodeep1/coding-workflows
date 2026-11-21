@@ -123,6 +123,14 @@
 # name a newer run supersedes only when it comes from the same Actions run
 # (a re-run attempt) or when both runs are bound CI runs. Otherwise an
 # unrelated workflow's `lint` would hide a cancelled CI `lint`.
+# _bound_rerun_succeeded (CI name only, PR #9839): a completed run that is
+# bound to the CI workflow (PR_CHECKS_CI_RUN_IDS) and has a newer bound run
+# of the same name that completed with `success`. The gate filters drop such
+# a run, so a failed CI `lint` that a later CI run on the same head passed no
+# longer blocks the head forever (#9839: `lint` failed at 17:15 because
+# `orchestrate-poll (3)` was cancelled, passed at 18:01, and every merge
+# attempt still read `failure`). A newer failure, a still-running newer run,
+# or unbound name-only matching keeps the older failure blocking.
 PR_CHECKS_JQ_SUPERSEDE_DEFS='
 def _run_id: [(.details_url // "") | capture("/actions/runs/(?<id>[0-9]+)(/|$)") | .id] | first;
 def _bound_ci_run: ($bound != "__unbound__") and (_run_id as $rid | ($rid != null) and (($bound | split(",") | index($rid)) != null));
@@ -136,7 +144,8 @@ def _mark_superseded:
 				. as $r
 				| ($r | _run_id) as $rrid
 				| ($r | _bound_ci_run) as $rb
-				| . + {_superseded: ([$grp[] | select(_newer_than($r) and (((_run_id) as $nid | ($nid != null and $nid == $rrid)) or ($rb and _bound_ci_run)))] | length > 0)}
+				| . + {_superseded: ([$grp[] | select(_newer_than($r) and (((_run_id) as $nid | ($nid != null and $nid == $rrid)) or ($rb and _bound_ci_run)))] | length > 0),
+					_bound_rerun_succeeded: ($rb and ([$grp[] | select(_newer_than($r) and _bound_ci_run and .status == "completed" and .conclusion == "success")] | length > 0))}
 			)
 		else
 			max_by([(.id // 0), (.started_at // "")]) as $newest | map(. + {_superseded: (. != $newest)})
@@ -343,7 +352,10 @@ _pr_checks_completed()
 	# `unknown`, never `success`. One exception, only when the runs are bound
 	# to the CI workflow (PR_CHECKS_CI_RUN_IDS): a cancelled run superseded by
 	# a newer bound run of the same name is dropped, as in the gate below, so
-	# a re-run of a cancelled CI check unblocks the wait. Unbound (name-only)
+	# a re-run of a cancelled CI check unblocks the wait. Likewise a completed
+	# failure older than the newest successful bound run is dropped
+	# (_bound_rerun_succeeded in the gate, PR #9839); a still-running run, or
+	# a failure newer than that success, still counts. Unbound (name-only)
 	# matching keeps every run, since another workflow's same-name run could
 	# otherwise hide the cancellation. The name reaches jq only through --arg.
 	# `__invalid__` (a malformed explicit value with no repository default)
@@ -365,7 +377,14 @@ _pr_checks_completed()
 				[$runs[] | select(type == "object" and .name == $ci and ((.head_sha // $sha) | tostring | startswith($sha)) and (_is_self_check_run | not) and _is_bound_run)] as $all |
 				(if ($bound == "__unbound__") or (($all | length) == 0) then $all
 				else ($all | max_by([(.id // 0), (.started_at // "")])) as $newest
-					| [$all[] | select(.conclusion != "cancelled" or . == $newest)]
+					| ([$all[] | select(.status == "completed" and .conclusion == "success")] | max_by([(.id // 0), (.started_at // "")])) as $newest_ok
+					| [$all[] | select(.conclusion != "cancelled" or . == $newest)
+						| select(
+							($newest_ok == null)
+							or (.status != "completed")
+							or (.conclusion == "success")
+							or (([($newest_ok.id // 0), ($newest_ok.started_at // "")] > [(.id // 0), (.started_at // "")]) | not)
+						)]
 				end) as $m |
 				if ([$m[] | select(.status == "completed" and .conclusion != "success")] | length) > 0 then "failure"
 				elif ([$m[] | select(.status != "completed")] | length) > 0 then "pending"
@@ -536,7 +555,7 @@ _pr_checks_completed()
 		# Legacy fail-closed-on-any-failure behaviour (with self-run exclusion).
 		incomplete="$(printf '%s' "${check_runs_json}" | jq -r --arg self_run "${self_run}" --arg gate_drop_id "${gate_sup_drop_id}" --arg ci "${PR_CHECKS_LAST_CI_NAME:-none}" --arg bound "${PR_CHECKS_CI_RUN_IDS-__unbound__}" "${PR_CHECKS_JQ_SUPERSEDE_DEFS}"'
 			def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
-			def _is_pending: .status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and (.conclusion != "cancelled" or (._superseded | not)));
+			def _is_pending: .status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and (.conclusion != "cancelled" or (._superseded | not)) and (._bound_rerun_succeeded | not));
 			(
 				if (type == "array") then
 					[.[]? | (.check_runs // [])[]]
@@ -578,7 +597,7 @@ _pr_checks_completed()
 					(
 						(.status != "completed")
 						or (
-							(.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and (.conclusion != "cancelled" or (._superseded | not)))
+							(.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and (.conclusion != "cancelled" or (._superseded | not)) and (._bound_rerun_succeeded | not))
 							and (.name as $n | $required | index($n))
 						)
 					)

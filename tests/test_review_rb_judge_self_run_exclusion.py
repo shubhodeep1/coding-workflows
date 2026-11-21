@@ -522,7 +522,8 @@ def _mark_superseded:
 				. as $r
 				| ($r | _run_id) as $rrid
 				| ($r | _bound_ci_run) as $rb
-				| . + {_superseded: ([$grp[] | select(_newer_than($r) and (((_run_id) as $nid | ($nid != null and $nid == $rrid)) or ($rb and _bound_ci_run)))] | length > 0)}
+				| . + {_superseded: ([$grp[] | select(_newer_than($r) and (((_run_id) as $nid | ($nid != null and $nid == $rrid)) or ($rb and _bound_ci_run)))] | length > 0),
+					_bound_rerun_succeeded: ($rb and ([$grp[] | select(_newer_than($r) and _bound_ci_run and .status == "completed" and .conclusion == "success")] | length > 0))}
 			)
 		else
 			max_by([(.id // 0), (.started_at // "")]) as $newest | map(. + {_superseded: (. != $newest)})
@@ -530,7 +531,7 @@ def _mark_superseded:
 	)
 	| add // [];
 def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
-def _is_pending: .status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and (.conclusion != "cancelled" or (._superseded | not)));
+def _is_pending: .status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and (.conclusion != "cancelled" or (._superseded | not)) and (._bound_rerun_succeeded | not));
 (
   if (type == "array") then
     [.[]? | (.check_runs // [])[]]
