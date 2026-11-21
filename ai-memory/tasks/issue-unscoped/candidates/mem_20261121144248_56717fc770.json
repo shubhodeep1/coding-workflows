@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:4848-4857,4934-4937 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The aggregate `lint` job failed on the current head because the `orchestrate-poll` matrix leg was cancelled (`CI jobs that did not succeed: orchestrate-poll`; check run 44903199931).\n  WHY: A cancelled required dependency counts as unsuccessful, so the merge gate stays blocked until a successful CI run completes; neither reviewer ties the cancellation to the latest test changes. Severity disagreement: anthropic_claude-sonnet-5_5 rated NIT (confidence 2), openai_gpt-6-luna rated MAJOR (confidence 5); the highest is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml (aggregate `lint` job, step \"Require every CI job to succeed\") | severity=NIT | confidence=2\n  PROBLEM: `lint` failed on this head because the `orchestrate-poll (3)` matrix leg was cancelled (log line `CI jobs that did not succeed: orchestrate-poll`, with `orchestrate-poll: cancelled` in `CI_NEEDS_JSON`). No failing test is shown.\n  WHY: The last autofix run changed only `tests/test_pr_checks_lib_required_filter.py`, which the `orchestrate-poll` shard does not run, so the PR diff did not cause the cancellation. A re-run of CI should clear it.\n- Other sections (security, concurrency, error paths, performance, index/DB, naming, trust-boundary, task completeness): NONE. The reviewer found no logic defect in the library and test changes. All deliverables in the PR description are present. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:4848-4857,4934-4937 | severity=MAJOR | confidence=5\n  PROBLEM: Check run 44903199931 reports `lint` failed because `orchestrate-poll` was cancelled.\n  WHY: The aggregate correctly treats a cancelled dependency as unsuccessful, so the current head has a failed required CI check and cannot pass the merge gate until a successful CI run completes. The available evidence does not tie this cancellation to the latest test changes.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "7f19a83abcebc2feae0b2918a2258442773182788301acd0a0b37ceaab314bbc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9867,
+    "run_id": "44896837056",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44896837056",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121144248_56717fc770",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9867,
+    "run_id": "44896837056"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T14:42:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
