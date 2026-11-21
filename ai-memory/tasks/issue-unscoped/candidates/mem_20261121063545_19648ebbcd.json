@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Do not normalize a judge `escalate_human` to `attempt_merge` when the linked PR is not open.\" (LINKED ISSUE #9482, proposed-fix bullet 3)\n  expected_change_site: `scripts/orchestrate_poll_process.sh`, `invoke_stall_judge` escalation handling (elif chain at scripts/orchestrate_poll_process.sh:23037-23056)\n  confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: the #9482 elif keeps escalation for a PR merged into a target branch only when `_pr_json_is_issue_implementation_pr` accepts it (scripts/orchestrate_poll_process.sh:23053), so a mention-only linked PR merged into a target base (state `merged`, body only \"Refs #823\") is still normalised at line 23096, `_stall_judge_linked_pr_keeps_escalation` returns 1 for a target-base merge (scripts/orchestrate_poll_process.sh:24689-24690), the new test `test_stall_judge_merged_target_base_non_implementation_cross_ref_keeps_normalisation` (tests/test_orchestrate_poll_process.py:15806-15837) asserts this normalisation, the deviation is deliberate and documented in the agents.d/changelog.d fragments to avoid the #3816/#3828 mention-only mis-target, and the loop is bounded (`attempt_merge` resolves the real implementation PR or misses; `MAX_JUDGE_REPLAY` limits repeats), but the fix is still narrower than the issue's literal wording (severity NIT for all three reviewers)\n- requirement: \"Add tests using the #823 / #825 shape.\"\n  expected_change_site: tests/test_orchestrate_poll_process.py\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: the reviewer states the PR has added tests using the #823/#825 shape, that they pass, and that the issue's requirements are fully implemented (severity NIT)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Add tests using the #823 / #825 shape.\"\n  Expected change site: tests/test_orchestrate_poll_process.py\n  Evidence of absence: The PR has added tests using the #823/#825 shape, and they pass. The requirements from the issue description have been fully implemented.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Do not normalize a judge `escalate_human` to `attempt_merge` when the linked PR is not open.\" (issue #9482, Proposed fix bullet 3)\n  Expected change site: scripts/orchestrate_poll_process.sh invoke_stall_judge escalation handling, around the new #9482 elif at lines 23041-23055\n  Evidence of absence: Normalisation is kept when the linked PR merged into a target branch and is NOT the issue's implementation PR, because the elif also requires `_pr_json_is_issue_implementation_pr`. The test `test_stall_judge_merged_target_base_non_implementation_cross_ref_keeps_normalisation` (tests/test_orchestrate_poll_process.py:15806-15837) asserts normalisation in that shape. The deviation is intentional (#3816/#3828 mention-only mis-target) and documented in the changelog/agents fragments, but it is narrower than the issue text.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Do not normalize a judge `escalate_human` to `attempt_merge` when the linked PR is not open.\"\n  Expected change site: `scripts/orchestrate_poll_process.sh`, `invoke_stall_judge` escalation handling.\n  Evidence of absence: The handler keeps escalation for a PR merged into a target branch only when `_pr_json_is_issue_implementation_pr` accepts that PR. The test `test_stall_judge_merged_target_base_non_implementation_cross_ref_keeps_normalisation` verifies that a merged target-base linked PR that only mentions the issue is still normalised to `attempt_merge`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: \"Do not normalize a judge `escalate_human` to `attempt_merge` when the linked PR is not open.\" (LINKED ISSUE #9482, proposed-fix bullet.)\n  Expected change site: `scripts/orchestrate_poll_process.sh`, `invoke_stall_judge` escalation handling (elif chain at scripts/orchestrate_poll_process.sh:23037-23056).\n  Evidence of absence: The keep fires only when `_pr_json_is_issue_implementation_pr` accepts the linked PR (scripts/orchestrate_poll_process.sh:23053). A mention-only linked PR merged into a target base (state `merged`, body only \"Refs #823\") is not open but is still normalised: `_stall_judge_linked_pr_keeps_escalation` returns 1 for a target-base merge (scripts/orchestrate_poll_process.sh:24689-24690), the #9482 elif fails the implementation-PR check, and line 23096 normalises `escalate_human` to `attempt_merge`. The last run added `test_stall_judge_merged_target_base_non_implementation_cross_ref_keeps_normalisation` (tests/test_orchestrate_poll_process.py:15806-15837), which asserts the normalisation, plus agents.d/changelog.d wording that documents the deviation. The deviation is deliberate and the loop is bounded (`attempt_merge` / `MAX_JUDGE_REPLAY`), but the literal requirement is still not implemented for this case.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "69692eb5fc2f454f09be6fe7aacb281dc54421ef94f30badc3fd823cd1036d87",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9502,
+    "run_id": "44874878366",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44874878366",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121063545_19648ebbcd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9502,
+    "run_id": "44874878366"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T06:35:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
