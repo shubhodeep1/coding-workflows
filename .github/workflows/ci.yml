@@ -2918,6 +2918,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_core_modes.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_review_judge_modes.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_validate_analytics_modes.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_prompt_invalid_utf8.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mode_workflow_analysis_prompt_findings_first.py
 
       # Moved again from tests-heal-plan-and-validation, which took 16m08s of
