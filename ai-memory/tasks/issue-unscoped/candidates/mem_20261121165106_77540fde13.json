@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:27386-27417 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: A new head-bound `ai:needs-human` latch can be posted after the revalidation reads (comments, events, `pulls/<n>`) but before the label DELETE, so the DELETE removes the label for the new latch.\n  WHY: The next tick lists only PRs that still carry `ai:needs-human`, so the new latch is never revisited. Reviewers rated it MAJOR. Two other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3) judged the race pre-existing and not introduced by the last run, and did not report it as a defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:27415-27416 | severity=MAJOR | confidence=4\n  PROBLEM: There is a race condition window between the revalidation reads and the label deletion.\n  WHY: A new `ai:needs-human` latch posted after `hl_refreshed_comments` and `hl_refreshed_pull` but before the `DELETE` would have its label removed, and it stays lost until the next tick.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:27386-27417 | severity=MAJOR | confidence=4\n  PROBLEM: The refreshed comments, label events and PR state are checked before a separate label DELETE. A latch writer can post a new head-bound latch after those checks but before the DELETE.\n  WHY: Both latch writers post the comment and then add the label. If a new latch lands in this interval, the poller deletes the label using stale snapshots. The next sweep lists only PRs still carrying `ai:needs-human` (line 27282), so it does not revisit the new latch.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:27386-27417 | severity=MAJOR | confidence=4\n  PROBLEM: A head-bound latch comment posted after the comments re-read (27386) but before the DELETE (27417) escapes every guard, and the DELETE removes the label unconditionally.\n  WHY: GitHub records no `labeled` event for an add of an already-present label, and both writers comment first and then label. After the DELETE the PR has no `ai:needs-human` label, so the next tick's listing (scripts/orchestrate_poll_process.sh:27282-27283) never revisits it and the new latch comment is orphaned. The last run's tightened marker regex does not change this window.\n  (Hardening suggestion, HARDENING_RISK_SCORE 4: after a successful DELETE at 27417, re-read the issue comments once. If a newer trusted comment carries a head-bound latch marker or mentions `ai:needs-human` without a well-formed release marker, re-POST the label and log `NEEDS_HUMAN_HEAD_LATCH pr=<n> outcome=relatch_after_release`. Fail open if the re-read or re-add fails. About 8 lines changed.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "49da9f4a7101105ae744ff6ee04255b0dff2abc400c96f6739619adac717dbcb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9862,
+    "run_id": "44920466330",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44920466330",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121165106_77540fde13",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9862,
+    "run_id": "44920466330"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T16:51:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
