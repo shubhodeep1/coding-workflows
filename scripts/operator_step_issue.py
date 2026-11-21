@@ -1003,7 +1003,50 @@ def render_digest_entry(item: int, kind: str, stop: str, reason: str, link: str,
 	return "; ".join(part for part in parts if part) + f" <!-- ai:needs-human:entry item={item} kind={kind} parked={parked} -->"
 
 
-def render_digest(entries: dict[int, dict], overflow: list[int], dropped: int = 0) -> str:
+# Items that carry ai:needs-human but are not parked by the unblock judge (a
+# review-round cap, a non-retryable heal diagnosis, a stall escalation, a
+# hand-applied label). Before this section the digest read "Nothing is
+# waiting." while such items sat unlisted (2026-11-20: #9283, #9261, #9839,
+# #9821). The section is display-only: its lines carry no entry marker, so
+# parse_digest (and with it the unblock scan's parked list, needs_human_prune
+# `items`) never sees them, and the judge keeps working on them.
+NEEDS_HUMAN_UNPARKED_MARKER = "<!-- ai:needs-human:unparked:v1 -->"
+NEEDS_HUMAN_UNPARKED_MAX = 100
+NEEDS_HUMAN_UNPARKED_LINE_RE = re.compile(r"^- #([1-9][0-9]{0,9}) \((issue|pr|project)\)$")
+NEEDS_HUMAN_UNPARKED_INTRO = (
+	f"These items carry `{NEEDS_HUMAN_LABEL}` but are not parked here, so the unblock judge may still act on "
+	"them. Each item's newest pipeline comment says what it waits for."
+)
+
+
+def parse_unparked(body: str) -> list[tuple[int, str]]:
+	"""(item, kind) pairs listed in the digest's not-parked section, in order."""
+	text = str(body or "").replace("\r\n", "\n")
+	if NEEDS_HUMAN_UNPARKED_MARKER not in text:
+		return []
+	found: list[tuple[int, str]] = []
+	seen_unparked: set[int] = set()
+	for raw in text.split(NEEDS_HUMAN_UNPARKED_MARKER, 1)[1].split("\n"):
+		match = NEEDS_HUMAN_UNPARKED_LINE_RE.match(raw.strip())
+		if match and int(match.group(1)) not in seen_unparked:
+			seen_unparked.add(int(match.group(1)))
+			found.append((int(match.group(1)), match.group(2)))
+	return found
+
+
+def _render_unparked(unparked: list[tuple[int, str]]) -> str:
+	shown = unparked[:NEEDS_HUMAN_UNPARKED_MAX]
+	lines = [f"- #{item} ({kind})" for item, kind in shown]
+	if len(unparked) > len(shown):
+		lines.append(f"...and {len(unparked) - len(shown)} more.")
+	return (
+		f"{NEEDS_HUMAN_UNPARKED_MARKER}\n### Also labelled `{NEEDS_HUMAN_LABEL}` (not parked)\n\n"
+		f"{NEEDS_HUMAN_UNPARKED_INTRO}\n\n" + "\n".join(lines)
+	)
+
+
+def render_digest(entries: dict[int, dict], overflow: list[int], dropped: int = 0,
+		unparked: list[tuple[int, str]] | None = None) -> str:
 	ordered = sorted(entries.items(), key=lambda pair: (pair[1]["parked"], pair[0]))
 	kept = ordered[:NEEDS_HUMAN_MAX_ENTRIES]
 	spill = [item for item, _ in ordered[NEEDS_HUMAN_MAX_ENTRIES:]]
@@ -1011,15 +1054,19 @@ def render_digest(entries: dict[int, dict], overflow: list[int], dropped: int = 
 		extra = list(dict.fromkeys(spill + overflow))
 		lost = max(0, len(extra) - NEEDS_HUMAN_OVERFLOW_MAX)
 		extra = extra[:NEEDS_HUMAN_OVERFLOW_MAX]
+		parked_items = {item for item, _ in kept} | set(extra)
+		others = [(item, kind) for item, kind in (unparked or []) if item not in parked_items]
 		parts = [NEEDS_HUMAN_MARKER, f"## {NEEDS_HUMAN_TITLE}", NEEDS_HUMAN_INTRO]
 		lines = [entry["line"] for _, entry in kept]
-		parts.append("\n".join(lines) if lines else "_Nothing is waiting._")
+		parts.append("\n".join(lines) if lines else ("_Nothing is parked._" if others else "_Nothing is waiting._"))
 		total_dropped = dropped + lost
 		if extra or total_dropped:
 			parts.append(
 				f"<!-- ai:needs-human:overflow items={','.join(str(n) for n in extra)} dropped={total_dropped} -->\n"
 				f"...and {len(extra) + total_dropped} more parked items carry `{NEEDS_HUMAN_LABEL}`."
 			)
+		if others:
+			parts.append(_render_unparked(others))
 		body = "\n\n".join(parts) + "\n"
 		if len(body.encode("utf-8")) <= MAX_BODY or not kept:
 			return body
@@ -1146,7 +1193,9 @@ def _needs_human_park_digest(repo: str, item: int, kind: str, stop: str, reason_
 				overflow.append(item)
 			elif not wrote:
 				dropped += 1
-		new_body = render_digest(entries, overflow, dropped)
+		# Keep the not-parked section as the last prune wrote it (minus this
+		# item); the next prune refreshes it from the live listing.
+		new_body = render_digest(entries, overflow, dropped, [pair for pair in parse_unparked(body) if pair[0] != item])
 		number = int(digest["number"])
 		if new_body.replace("\r\n", "\n") == body.replace("\r\n", "\n"):
 			break
@@ -1188,8 +1237,10 @@ def needs_human_prune(repo: str, trusted_login: str | None = None, now: str | No
 				entries.setdefault(number, entry)
 		overflow.extend(n for n in dup_overflow if n not in entries and n not in overflow)
 		dropped += dup_dropped
-	if not entries and not overflow and not duplicates:
-		return {"issue": int(digest["number"]), "outcome": "skip", "reason": "empty", "removed": [], "items": []}
+	# An empty digest still reads the listing: its not-parked section must show
+	# items that carry the label without being parked (one paginated read per
+	# tick, the same read a non-empty digest already makes).
+	was_empty = not entries and not overflow and not duplicates
 	raw = _gh(["api", "--paginate", "--slurp", f"repos/{repo}/issues?state=open&labels={NEEDS_HUMAN_LABEL}&per_page=100"])
 	try:
 		pages = json.loads(raw)
@@ -1219,8 +1270,11 @@ def needs_human_prune(repo: str, trusted_login: str | None = None, now: str | No
 		number = overflow.pop(0)
 		kind = open_items[number]
 		entries[number] = {"kind": kind, "parked": stamp, "line": render_digest_entry(number, kind, "", "(details in item)", "", stamp)}
-	new_body = render_digest(entries, overflow, dropped)
+	unparked = sorted((number, kind) for number, kind in open_items.items() if number not in entries and number not in overflow)
+	new_body = render_digest(entries, overflow, dropped, unparked)
 	body_changed = new_body.replace("\r\n", "\n") != body.replace("\r\n", "\n")
+	if was_empty and not body_changed:
+		return {"issue": int(digest["number"]), "outcome": "skip", "reason": "empty", "removed": [], "items": []}
 	if body_changed or duplicates:
 		# Narrow the read-modify-write window: if a concurrent park changed the
 		# digest, or a duplicate about to be closed, since our read, skip this
