@@ -1125,8 +1125,11 @@ class LeaseRecordCompat(unittest.TestCase):
 		self.assertIn("SKIPS<>", out)
 
 	def test_skip_lines_leave_the_other_fields_unchanged(self) -> None:
-		plain = self._read(_record(8, acquired=111, updated=222, paths="a.py\nskip=9:x"))
-		with_skips = self._read(_record(8, acquired=111, updated=222, paths="a.py\nskip=9:x",
+		# One expires value for both records: _record() derives it from
+		# time.time(), which can tick a second between the two reads.
+		expires = int(time.time()) + 3600
+		plain = self._read(_record(8, expires=expires, acquired=111, updated=222, paths="a.py\nskip=9:x"))
+		with_skips = self._read(_record(8, expires=expires, acquired=111, updated=222, paths="a.py\nskip=9:x",
 			skips=[f"5:{_sha(5)}", "bad", f"6:{_sha(6)}", f"5:{_sha(5)}"]))
 		self.assertEqual(plain.split("SKIPS<")[0], with_skips.split("SKIPS<")[0])
 		self.assertIn(f"SKIPS<6:{_sha(6)}\n5:{_sha(5)}>", with_skips)
@@ -1292,6 +1295,25 @@ class Wiring(unittest.TestCase):
 		for fn in ("_merge_lease_gate", "_merge_lease_queue_first", "_mt_merge_lease_tick"):
 			self.assertNotIn(fn, sweep)
 
+	def test_soft_paths_switch_reaches_every_freshness_and_lease_path(self) -> None:
+		"""Phase 4 (Refs #9781): the soft-class kill switch reaches every step
+		that runs the freshness gate or the lease, with the helper's default."""
+		line = ("MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || "
+			"'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}")
+		for wf, expected in ((REVIEW, 3), (POLL, 4), (CLOSE, 1), (SWEEP, 0)):
+			text = wf.read_text()
+			self.assertEqual(text.count(line), expected, wf.name)
+			if wf is SWEEP:
+				# The sweep's base sync treats clean and overlap alike, so its
+				# final-CI step pins the class off (no probe it cannot use).
+				step = text.split("- name: Ensure the final CI run on reviewed PR heads", 1)[1].split("\n      - name: ", 1)[0]
+				self.assertIn("          MERGE_LEASE_SOFT_PATHS: none\n", step)
+				continue
+			for segment in re.split(r"\n(?=\s*- name: |  [A-Za-z0-9_-]+:\n)", text):
+				if "MERGE_BASE_FRESHNESS_ENABLED:" in segment:
+					self.assertIn(line, segment, f"{wf.name}: {segment[:80]!r}")
+		self.assertIn("${MERGE_LEASE_SOFT_PATHS-README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/}", LIB.read_text())
+
 	def test_rb_judge_waits_never_mark(self) -> None:
 		"""The judge posts head-gate success only after its wait, so its marker could never resume."""
 		text = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text()
@@ -1304,6 +1326,138 @@ class Wiring(unittest.TestCase):
 		text = TRAIN.read_text()
 		self.assertIn('_mt_merge_lease_tick "${prs_json}" "${base_filter}" || true', text)
 		self.assertIn('_mt_final_ci_merge_resume "${prs_json}" "${base_filter}" || true', text)
+
+
+# --- Soft path class in merge mode (merge-lease Phase 4, Refs #9781) ---------
+
+def _soft_git(cwd: Path, *args: str) -> str:
+	env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(cwd), "GIT_CONFIG_NOSYSTEM": "1",
+		"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t",
+		"GIT_COMMITTER_EMAIL": "t@example.com"}
+	return subprocess.run(["git", *args], cwd=cwd, env=env, capture_output=True, text=True, check=True).stdout.strip()
+
+
+def _soft_heads(conflict: bool) -> tuple[Path, str, str]:
+	"""Own head edits README.md line 1; the holder head edits line 10 (or line 1
+	for a conflict). Returns (repo, own_sha, holder_sha)."""
+	if shutil.which("git") is None:
+		raise unittest.SkipTest("git binary not available in test environment")
+	repo = Path(tempfile.mkdtemp(prefix="merge_lease_soft_"))
+	_soft_git(repo, "init", "-q", "-b", "main")
+	(repo / "README.md").write_text("".join(f"line {i}\n" for i in range(1, 11)), encoding="utf-8")
+	(repo / "shared.py").write_text("x = 1\n", encoding="utf-8")
+	_soft_git(repo, "add", "-A")
+	_soft_git(repo, "commit", "-q", "-m", "base")
+	heads = []
+	for branch, index, text in (("own", 0, "own line 1\n"), ("holder", 0 if conflict else 9, "holder line\n")):
+		_soft_git(repo, "checkout", "-q", "-b", branch, "main")
+		lines = (repo / "README.md").read_text(encoding="utf-8").splitlines(keepends=True)
+		lines[index] = text
+		(repo / "README.md").write_text("".join(lines), encoding="utf-8")
+		_soft_git(repo, "commit", "-q", "-am", branch)
+		heads.append(_soft_git(repo, "rev-parse", "HEAD"))
+	return repo, heads[0], heads[1]
+
+
+def _soft_lease_gate(conflict: bool, own_files: list[str], holder_paths: str, *, holder_head: str | None = None,
+		env: dict[str, str] | None = None) -> tuple[int, str]:
+	repo, own, holder = _soft_heads(conflict)
+	st = {"pulls": [_pull(7), _pull(8)], "files": {"7": own_files}}
+	_seed_lease(st, _record(8, paths=holder_paths).replace(f"head={'b' * 40}", f"head={holder_head or holder}"))
+	h = _Harness(st)
+	res = h.lib(f'cd {str(repo)!r} || exit 9\n_merge_lease_gate 7 main {own} merge; rc=$?; '
+		'echo "rc=$rc outcome=$MERGE_LEASE_OUTCOME reason=$MERGE_LEASE_REASON soft=$MERGE_LEASE_SOFT_SHARED"',
+		{"GIT_CONFIG_NOSYSTEM": "1", **(env or {})})
+	assert res.returncode == 0, res.stderr
+	line = [ln for ln in res.stdout.splitlines() if ln.startswith("rc=")][-1]
+	return int(line.split()[0][3:]), res.stdout + res.stderr
+
+
+class LeaseSoftPaths(unittest.TestCase):
+	def test_soft_only_paths_that_merge_cleanly_pass_the_holder(self) -> None:
+		rc, out = _soft_lease_gate(False, ["README.md"], "README.md")
+		self.assertEqual(rc, 0, out)
+		self.assertIn("outcome=no_overlap reason=soft_paths_merge_clean soft=README.md", out)
+		self.assertIn("soft_paths_merge_clean", [m.get("reason") for m in _metrics(out)])
+
+	def test_a_conflict_on_a_soft_path_waits(self) -> None:
+		rc, out = _soft_lease_gate(True, ["README.md"], "README.md")
+		self.assertEqual(rc, 1, out)
+		self.assertIn("outcome=wait reason=holder_shares_paths", out)
+
+	def test_a_shared_hard_path_waits(self) -> None:
+		rc, out = _soft_lease_gate(False, ["README.md", "shared.py"], "README.md\nshared.py")
+		self.assertEqual(rc, 1, out)
+		self.assertIn("reason=holder_shares_paths", out)
+
+	def test_a_star_holder_record_waits_even_for_soft_only_files(self) -> None:
+		rc, out = _soft_lease_gate(False, ["README.md"], "*")
+		self.assertEqual(rc, 1, out)
+		self.assertIn("reason=holder_shares_paths", out)
+
+	def test_a_short_holder_head_waits(self) -> None:
+		rc, out = _soft_lease_gate(False, ["README.md"], "README.md", holder_head="abc1234")
+		self.assertEqual(rc, 1, out)
+		self.assertIn("reason=holder_shares_paths", out)
+
+	def test_class_off_keeps_todays_wait(self) -> None:
+		for value in ("none", "off", ""):
+			with self.subTest(value=value):
+				rc, out = _soft_lease_gate(False, ["README.md"], "README.md", env={"MERGE_LEASE_SOFT_PATHS": value})
+				self.assertEqual(rc, 1, out)
+				self.assertIn("reason=holder_shares_paths", out)
+
+	def test_a_soft_path_the_holder_renamed_to_a_hard_path_waits(self) -> None:
+		"""merge-ort follows the holder's README.md -> scripts/x.sh rename and
+		merges cleanly, but the merged scripts/x.sh matches neither head."""
+		repo, own, _ = _soft_heads(False)
+		_soft_git(repo, "checkout", "-q", "-b", "renamer", "main")
+		(repo / "scripts").mkdir()
+		_soft_git(repo, "mv", "README.md", "scripts/x.sh")
+		_soft_git(repo, "commit", "-q", "-m", "rename")
+		holder = _soft_git(repo, "rev-parse", "HEAD")
+		st = {"pulls": [_pull(7), _pull(8)], "files": {"7": ["README.md"]}}
+		_seed_lease(st, _record(8, paths="README.md\nscripts/x.sh").replace(f"head={'b' * 40}", f"head={holder}"))
+		res = _Harness(st).lib(f'cd {str(repo)!r} || exit 9\n_merge_lease_gate 7 main {own} merge; rc=$?; '
+			'echo "rc=$rc outcome=$MERGE_LEASE_OUTCOME reason=$MERGE_LEASE_REASON hard=$_PR_PROBE_HARD_COMBINED"',
+			{"GIT_CONFIG_NOSYSTEM": "1"})
+		self.assertEqual(res.returncode, 0, res.stderr)
+		self.assertIn("rc=1 outcome=wait reason=holder_shares_paths hard=scripts/x.sh", res.stdout, res.stdout + res.stderr)
+
+	def test_a_shared_path_holding_a_newline_waits(self) -> None:
+		"""One real path README.md<LF>agents.d/x must not split into two soft
+		fragments: with the class on, the PR's path list becomes `*`."""
+		rc, out = _soft_lease_gate(False, ["README.md\nagents.d/x"], "README.md\nagents.d/x")
+		self.assertEqual(rc, 1, out)
+		self.assertIn("reason=holder_shares_paths", out)
+		self.assertNotIn("soft_paths_merge_clean", out)
+
+	def test_a_non_string_file_name_fails_closed(self) -> None:
+		"""A malformed files page must yield `*` (wait), not a jq error that
+		the merge-mode gate would treat as pr_files_failed (fail-open)."""
+		body = """_safe_gh_jq() { printf '%s' '[[{"filename":5},{"filename":"README.md"}]]'; }
+_merge_lease_pr_paths 7; echo "rc=$?"
+"""
+		res = _Harness({}).lib(body)
+		self.assertIn("*\nrc=0", res.stdout, res.stdout + res.stderr)
+		off = _Harness({}).lib(body, {"MERGE_LEASE_SOFT_PATHS": "none"})
+		self.assertIn("5\nREADME.md\nrc=0", off.stdout, off.stdout + off.stderr)
+
+	def test_unshared_paths_keep_the_old_reason(self) -> None:
+		rc, out = _soft_lease_gate(False, ["own.py"], "README.md")
+		self.assertEqual(rc, 0, out)
+		self.assertIn("reason=no_shared_paths_with_holder soft=", out)
+
+	def test_two_argument_intersection_is_unchanged(self) -> None:
+		h = _Harness({})
+		body = """_merge_lease_paths_intersect "README.md" "README.md"; echo "a=$?"
+_merge_lease_paths_intersect "README.md" "other.py"; echo "b=$?"
+_merge_lease_paths_intersect "*" "other.py"; echo "c=$?"
+_merge_lease_paths_intersect "" "other.py"; echo "d=$?"
+"""
+		out = h.lib(body).stdout
+		for expected in ("a=0", "b=1", "c=0", "d=1"):
+			self.assertIn(expected, out)
 
 
 if __name__ == "__main__":

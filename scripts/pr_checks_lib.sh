@@ -1334,6 +1334,20 @@ _pr_wait_for_required_checks()
 # Env: MERGE_BASE_FRESHNESS_ENABLED (default true; true/1/yes/on,
 # case-insensitive; anything else disables the gate and every merge path
 # behaves as before).
+#
+# Soft path class (merge-lease Phase 4, Refs #9781): when every shared path
+# is in MERGE_LEASE_SOFT_PATHS (see the "Soft path class" section), a
+# `git merge-tree` probe of the head against the compared base tip decides:
+# a clean merge gives `clean` with reason soft_paths_merge_clean; a conflict
+# gives `overlap` with reason soft_paths_conflict; a probe that cannot
+# decide (no complete base tip, fetch failure, a clean merge that combines
+# content in a non-soft path such as a followed rename, ...) gives `overlap`
+# with reason soft_paths_probe_unknown. Any shared non-soft path keeps
+# reason shared_paths with no probe. PR_BASE_FRESHNESS_SOFT_OVERLAP holds
+# the shared soft paths (comma-separated) in those three cases. The
+# MERGE_BASE_FRESHNESS lines of _pr_base_fresh_for_merge end with
+# `soft_overlap=<paths|->`. An empty MERGE_LEASE_SOFT_PATHS, `none` or
+# `off` keeps the behaviour before Phase 4.
 _pr_base_freshness()
 {
 	local pr_number="$1"
@@ -1347,6 +1361,7 @@ _pr_base_freshness()
 	PR_BASE_FRESHNESS_OVERLAP=""
 	PR_BASE_FRESHNESS_BASE_REF=""
 	PR_BASE_FRESHNESS_BASE_SHA=""
+	PR_BASE_FRESHNESS_SOFT_OVERLAP=""
 	# The PR's own paths (newline-separated) and the PR they belong to, kept
 	# for the merge lease (_merge_lease_gate) so it never re-reads the files.
 	PR_BASE_FRESHNESS_PR_PATHS=""
@@ -1424,7 +1439,7 @@ _pr_base_freshness()
 
 	# The PR's own paths: `--paginate --slurp` yields an array of pages,
 	# each an array of file objects; renames count under both names.
-	local pr_files_json tmp_compare tmp_pr_files overlap
+	local pr_files_json tmp_compare tmp_pr_files overlap freshness_soft_input=""
 	pr_files_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${repo}/pulls/${pr_number}/files?per_page=100" 2>/dev/null || echo "{}")"
 	if ! tmp_compare="$(mktemp "${TMPDIR:-/tmp}/pr_base_compare.XXXXXX" 2>/dev/null)"; then
 		PR_BASE_FRESHNESS_LAST_REASON="tmp_failed"
@@ -1452,11 +1467,31 @@ _pr_base_freshness()
 		  else ([ $base_paths[] | select(. as $p | $pr_paths | index($p)) ] | unique | join(",")) end
 	' 2>/dev/null | tail -n1)"
 	if [ "${overlap}" != "__invalid__" ] && [ "${overlap}" != "__capped__" ]; then
-		PR_BASE_FRESHNESS_PR_PATHS="$(jq -r '
+		# Phase 4: with the soft class on, a path holding CR/LF (or a name
+		# that is not a string) makes the cached list `*` (overlaps every
+		# holder), so the lease's newline split can never turn one hard path
+		# into soft fragments.
+		local freshness_soft_on=""
+		[ -z "$(_merge_lease_soft_entries 2>/dev/null)" ] || freshness_soft_on="1"
+		PR_BASE_FRESHNESS_PR_PATHS="$(jq -r --arg soft_on "${freshness_soft_on}" '
 			[ .[]? | if type == "array" then .[] else . end | select(type == "object")
-			  | (.filename // empty), (.previous_filename // empty) ] | unique | .[]
+			  | (.filename // empty), (.previous_filename // empty) ] | unique
+			| if $soft_on != "" and any(.[]; (type != "string") or test("[\n\r]")) then "*" else .[] end
 		' "${tmp_pr_files}" 2>/dev/null || true)"
 		PR_BASE_FRESHNESS_PR_PATHS_FOR="${pr_number}"
+		# Phase 4: the real shared paths, one per line, for the soft split.
+		# The comma-joined `overlap` is display only: a path holding a comma
+		# would split into pieces that may each look soft. A path holding a
+		# newline, or a name that is not a string, turns the list into
+		# "/unsafe-path", which no soft entry can match (entries never start
+		# with `/`), so the split fails closed.
+		freshness_soft_input="$(jq -n -r --slurpfile compare "${tmp_compare}" --slurpfile pr_files "${tmp_pr_files}" '
+			def names: [ .[]? | select(type == "object") | (.filename // empty), (.previous_filename // empty) ];
+			(($compare[0].files // []) | names) as $base_paths
+			| ([ $pr_files[0][]? | if type == "array" then .[] else . end ] | names) as $pr_paths
+			| [ $base_paths[] | select(. as $p | $pr_paths | index($p)) ] | unique
+			| if any(.[]; (type != "string") or test("[\n\r]")) then "/unsafe-path" else .[] end
+		' 2>/dev/null || true)"
 	fi
 	rm -f "${tmp_compare}" "${tmp_pr_files}"
 	if [ "${overlap}" = "__invalid__" ] || [ -z "${overlap+x}" ]; then
@@ -1478,6 +1513,30 @@ _pr_base_freshness()
 		PR_BASE_FRESHNESS_LAST_REASON="no_shared_paths"
 		PR_BASE_FRESHNESS_OUTCOME="clean"
 		echo "clean"
+		return 0
+	fi
+	# Soft path class (Phase 4): only when every shared path is soft does a
+	# merge-tree probe decide; any shared hard path keeps shared_paths.
+	_merge_lease_split_soft "${freshness_soft_input}"
+	if [ -z "${_MERGE_LEASE_HARD_LIST}" ] && [ -n "${_MERGE_LEASE_SOFT_LIST}" ]; then
+		PR_BASE_FRESHNESS_SOFT_OVERLAP="$(printf '%s' "${_MERGE_LEASE_SOFT_LIST}" | paste -sd, -)"
+		_PR_PROBE_RESULT="unknown"
+		if [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] && [ -n "${PR_BASE_FRESHNESS_BASE_SHA}" ]; then
+			_pr_soft_merge_tree_probe "${head_sha}" "${PR_BASE_FRESHNESS_BASE_SHA}"
+		fi
+		case "${_PR_PROBE_RESULT}" in
+			none)
+				PR_BASE_FRESHNESS_LAST_REASON="soft_paths_merge_clean"
+				PR_BASE_FRESHNESS_OUTCOME="clean"
+				echo "clean"
+				return 0
+				;;
+			conflict) PR_BASE_FRESHNESS_LAST_REASON="soft_paths_conflict" ;;
+			*) PR_BASE_FRESHNESS_LAST_REASON="soft_paths_probe_unknown" ;;
+		esac
+		PR_BASE_FRESHNESS_OVERLAP="${overlap}"
+		PR_BASE_FRESHNESS_OUTCOME="overlap"
+		echo "overlap"
 		return 0
 	fi
 	PR_BASE_FRESHNESS_OVERLAP="${overlap}"
@@ -1834,7 +1893,7 @@ _pr_base_fresh_for_merge()
 	_pr_base_freshness "${pr_number}" "${head_sha}" "${base_ref}" >/dev/null
 	case "${PR_BASE_FRESHNESS_OUTCOME:-unknown}" in
 		overlap)
-			echo "MERGE_BASE_FRESHNESS pr=${pr_number} head_sha=${PR_BASE_FRESHNESS_HEAD_SHA:-unknown} base=${base_ref:-unknown} outcome=overlap reason=${PR_BASE_FRESHNESS_LAST_REASON} behind_by=${PR_BASE_FRESHNESS_BEHIND_BY:--} overlap=${PR_BASE_FRESHNESS_OVERLAP:--}"
+			echo "MERGE_BASE_FRESHNESS pr=${pr_number} head_sha=${PR_BASE_FRESHNESS_HEAD_SHA:-unknown} base=${base_ref:-unknown} outcome=overlap reason=${PR_BASE_FRESHNESS_LAST_REASON} behind_by=${PR_BASE_FRESHNESS_BEHIND_BY:--} overlap=${PR_BASE_FRESHNESS_OVERLAP:--} soft_overlap=${PR_BASE_FRESHNESS_SOFT_OVERLAP:--}"
 			# Merge lease: only the lease holder for this base updates its
 			# branch. Any other PR waits without updating, so N approved PRs
 			# no longer each spend a CI run on a combined tree the next merge
@@ -1881,13 +1940,13 @@ _pr_base_fresh_for_merge()
 			# stale, so it waits for the holder (Q3: A). disabled skips the lease.
 			if [ "${PR_BASE_FRESHNESS_OUTCOME}" != "disabled" ] \
 				&& ! _merge_lease_gate "${pr_number}" "${base_ref:-${PR_BASE_FRESHNESS_BASE_REF:-}}" "${PR_BASE_FRESHNESS_HEAD_SHA:-${head_sha:-}}" merge; then
-				echo "MERGE_BASE_FRESHNESS pr=${pr_number} head_sha=${PR_BASE_FRESHNESS_HEAD_SHA:-${head_sha:-unknown}} base=${base_ref:-unknown} outcome=${PR_BASE_FRESHNESS_OUTCOME} reason=${PR_BASE_FRESHNESS_LAST_REASON} behind_by=${PR_BASE_FRESHNESS_BEHIND_BY:--} action=lease_wait"
+				echo "MERGE_BASE_FRESHNESS pr=${pr_number} head_sha=${PR_BASE_FRESHNESS_HEAD_SHA:-${head_sha:-unknown}} base=${base_ref:-unknown} outcome=${PR_BASE_FRESHNESS_OUTCOME} reason=${PR_BASE_FRESHNESS_LAST_REASON} behind_by=${PR_BASE_FRESHNESS_BEHIND_BY:--} action=lease_wait soft_overlap=${PR_BASE_FRESHNESS_SOFT_OVERLAP:--}"
 				PR_BASE_FRESHNESS_OUTCOME="lease_wait"
 				PR_BASE_FRESHNESS_LAST_REASON="merge_lease_${MERGE_LEASE_REASON:-held}"
 				echo "  [merge-lease] PR #${pr_number}: PR #${MERGE_LEASE_BLOCKER:-?} holds the merge lease and changes a file this PR changes; merging now would make its CI run stale. Waiting under ${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}."
 				return 1
 			fi
-			echo "MERGE_BASE_FRESHNESS pr=${pr_number} head_sha=${PR_BASE_FRESHNESS_HEAD_SHA:-${head_sha:-unknown}} base=${base_ref:-unknown} outcome=${PR_BASE_FRESHNESS_OUTCOME} reason=${PR_BASE_FRESHNESS_LAST_REASON} behind_by=${PR_BASE_FRESHNESS_BEHIND_BY:--} action=proceed"
+			echo "MERGE_BASE_FRESHNESS pr=${pr_number} head_sha=${PR_BASE_FRESHNESS_HEAD_SHA:-${head_sha:-unknown}} base=${base_ref:-unknown} outcome=${PR_BASE_FRESHNESS_OUTCOME} reason=${PR_BASE_FRESHNESS_LAST_REASON} behind_by=${PR_BASE_FRESHNESS_BEHIND_BY:--} action=proceed soft_overlap=${PR_BASE_FRESHNESS_SOFT_OVERLAP:--}"
 			return 0
 			;;
 	esac
@@ -1984,6 +2043,294 @@ _pr_final_ci_refused_base_update()
 		echo "MERGE_BASE_SYNC_MARKER pr=${refused_pr} head_sha=${refused_head} outcome=skipped reason=${PR_BASE_SYNC_OBSERVE_REASON:-head_not_observed}"
 		refused_log requested "${PR_BASE_SYNC_OBSERVE_REASON:-head_not_observed}"
 	fi
+	return 0
+}
+
+# ---------------------------------------------------------------------------
+# Shared merge-tree conflict probe (merge-lease Phase 4, Refs #9781; plan
+# docs/plans/merge-lease-parallel-merges-plan.md D9).
+#
+# Lifted near-verbatim from scripts/review_merge_train.sh _mt_conflict_probe
+# (issue #6570) under the plan's `_pr_*` names, so the freshness gate and
+# the merge lease can probe without sourcing the merge train. The `_mt_*`
+# thin-wrapper conversion in the train is pending: the train is outside this
+# phase's files_touched scope. Until then the train keeps its own copy (it
+# sources this library first, so its `_mt_*` functions and
+# MERGE_TRAIN_PROBE_REPO logs are unchanged).
+#
+#   _pr_merge_tree_probe <sha_a> <sha_b>
+#       Sets _PR_PROBE_RESULT to none (the two commits merge cleanly),
+#       conflict (_PR_PROBE_PATHS lists the conflicted paths) or unknown
+#       (bad input, missing objects, fetch failure, too-shallow history, or
+#       any other git outcome). Always returns 0 and prints nothing on
+#       stdout, so callers that print one word stay intact.
+#
+# API budget: none. Missing commits are fetched by SHA (120 s timeout,
+# --no-tags --no-write-fetch-head; --depth=200 only in the private
+# repository or an already-shallow clone). Outside a git checkout the probe
+# uses a private bare repository under RUNNER_TEMP (or TMPDIR) whose origin
+# is ${GITHUB_SERVER_URL}/<repo>.git; GH_TOKEN (or GITHUB_TOKEN)
+# authenticates the fetch through GIT_CONFIG_* variables exported in a
+# subshell, never argv or a config file. Logs
+# `PR_MERGE_TREE_PROBE_REPO outcome=created|unavailable` on stderr.
+# merge-tree writes only objects; it runs no hooks.
+declare -gA _PR_PROBE_FETCHED_SHA=()
+_PR_GIT_PROBE_OK=""
+_PR_PROBE_RESULT="unknown"
+_PR_PROBE_PATHS=""
+_PR_PROBE_TREE=""
+_PR_PROBE_GIT_DIR=""
+
+# git in the probe repository when one was created, else in the cwd checkout.
+_pr_mt_git()
+{
+	if [ -n "${_PR_PROBE_GIT_DIR}" ]; then
+		git --git-dir="${_PR_PROBE_GIT_DIR}" "$@"
+	else
+		git "$@"
+	fi
+}
+
+# `_pr_mt_git_fetch <seconds> <fetch args...>`: git fetch under `timeout`, in
+# the probe repository when one exists. For an https origin the token rides
+# as an HTTP extraheader through GIT_CONFIG_* variables exported in a
+# subshell, so it never reaches argv (ps) or a config file.
+_pr_mt_git_fetch()
+{
+	local fetch_timeout="$1"
+	shift
+	(
+		local token="${GH_TOKEN:-${GITHUB_TOKEN:-}}" server="${GITHUB_SERVER_URL:-https://github.com}" basic
+		local -a git_dir_args=()
+		if [ -n "${_PR_PROBE_GIT_DIR}" ]; then
+			git_dir_args=(--git-dir="${_PR_PROBE_GIT_DIR}")
+			if [ -n "${token}" ] && [[ "${server}" =~ ^https:// ]]; then
+				basic="$(printf 'x-access-token:%s' "${token}" | base64 | tr -d '\n')"
+				export GIT_CONFIG_COUNT=1
+				export GIT_CONFIG_KEY_0="http.${server%/}/.extraheader"
+				export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${basic}"
+			fi
+		fi
+		GIT_TERMINAL_PROMPT=0 timeout "${fetch_timeout}" git ${git_dir_args[@]+"${git_dir_args[@]}"} fetch "$@"
+	)
+}
+
+_pr_probe_repo_cleanup()
+{
+	if [ -n "${_PR_PROBE_GIT_DIR}" ] && [[ "${_PR_PROBE_GIT_DIR}" == */pr-merge-tree-probe.* ]]; then
+		rm -rf -- "${_PR_PROBE_GIT_DIR}"
+	fi
+}
+
+# Create the private probe repository; returns 1 (probe stays unknown) when
+# the repository slug is unusable or git cannot create it. The cleanup is
+# chained onto the caller's EXIT trap instead of replacing it.
+_pr_probe_repo_init()
+{
+	local server="${GITHUB_SERVER_URL:-https://github.com}" probe_dir
+	local probe_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" probe_prev_trap=""
+	if ! [[ "${probe_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+		echo "PR_MERGE_TREE_PROBE_REPO outcome=unavailable reason=invalid_repository" >&2
+		return 1
+	fi
+	if ! probe_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/pr-merge-tree-probe.XXXXXX" 2>/dev/null)" \
+		|| ! git init -q --bare "${probe_dir}" >/dev/null 2>&1 \
+		|| ! git --git-dir="${probe_dir}" remote add origin "${server%/}/${probe_repo}.git" >/dev/null 2>&1; then
+		[ -n "${probe_dir:-}" ] && rm -rf -- "${probe_dir}"
+		echo "PR_MERGE_TREE_PROBE_REPO outcome=unavailable reason=init_failed" >&2
+		return 1
+	fi
+	_PR_PROBE_GIT_DIR="${probe_dir}"
+	probe_prev_trap="$(trap -p EXIT)"
+	if [ -n "${probe_prev_trap}" ]; then
+		eval "set -- ${probe_prev_trap}"
+		probe_prev_trap="${3:-}"
+	fi
+	# shellcheck disable=SC2064
+	trap -- "_pr_probe_repo_cleanup${probe_prev_trap:+; ${probe_prev_trap}}" EXIT
+	echo "PR_MERGE_TREE_PROBE_REPO outcome=created origin=${server%/}/${probe_repo}.git" >&2
+	return 0
+}
+
+_pr_merge_tree_probe()
+{
+	local own_sha="$1" other_sha="$2" probe_sha probe_out="" probe_rc=0
+	local -a probe_missing=() probe_depth=()
+	_PR_PROBE_RESULT="unknown"
+	_PR_PROBE_PATHS=""
+	_PR_PROBE_TREE=""
+	if ! [[ "${own_sha}" =~ ^[0-9a-f]{40}$ && "${other_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+		return 0
+	fi
+	if [ -z "${_PR_GIT_PROBE_OK}" ]; then
+		if git merge-tree --write-tree --name-only --no-messages HEAD HEAD >/dev/null 2>&1; then
+			_PR_GIT_PROBE_OK="yes"
+		elif ! git rev-parse --git-dir >/dev/null 2>&1 && _pr_probe_repo_init; then
+			# No checkout here: probe in the private repository instead.
+			_PR_GIT_PROBE_OK="yes"
+		else
+			_PR_GIT_PROBE_OK="no"
+		fi
+	fi
+	[ "${_PR_GIT_PROBE_OK}" = "yes" ] || return 0
+	for probe_sha in "${own_sha}" "${other_sha}"; do
+		if ! _pr_mt_git cat-file -e "${probe_sha}^{commit}" 2>/dev/null; then
+			[ "${_PR_PROBE_FETCHED_SHA[${probe_sha}]:-}" = "failed" ] && return 0
+			probe_missing+=("${probe_sha}")
+		fi
+	done
+	if [ "${#probe_missing[@]}" -gt 0 ]; then
+		# The private probe repository starts empty: fetch shallow there too.
+		if [ -n "${_PR_PROBE_GIT_DIR}" ] || [ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" = "true" ]; then
+			probe_depth=(--depth=200)
+		fi
+		if ! _pr_mt_git_fetch 120 --no-tags --quiet --no-write-fetch-head \
+			${probe_depth[@]+"${probe_depth[@]}"} origin "${probe_missing[@]}" >/dev/null 2>&1; then
+			for probe_sha in "${probe_missing[@]}"; do
+				_PR_PROBE_FETCHED_SHA[${probe_sha}]="failed"
+			done
+			return 0
+		fi
+		for probe_sha in "${probe_missing[@]}"; do
+			if _pr_mt_git cat-file -e "${probe_sha}^{commit}" 2>/dev/null; then
+				_PR_PROBE_FETCHED_SHA[${probe_sha}]="ok"
+			else
+				_PR_PROBE_FETCHED_SHA[${probe_sha}]="failed"
+				return 0
+			fi
+		done
+	fi
+	probe_out="$(_pr_mt_git merge-tree --write-tree --name-only --no-messages "${own_sha}" "${other_sha}" 2>/dev/null)" || probe_rc=$?
+	case "${probe_rc}" in
+		0)
+			_PR_PROBE_RESULT="none"
+			_PR_PROBE_TREE="$(printf '%s\n' "${probe_out}" | sed -n '1p')"
+			;;
+		1)
+			_PR_PROBE_RESULT="conflict"
+			_PR_PROBE_PATHS="$(printf '%s\n' "${probe_out}" | sed '1d' | sed '/^$/d' | sort -u)"
+			;;
+		*) _PR_PROBE_RESULT="unknown" ;;
+	esac
+	return 0
+}
+
+# `_pr_soft_merge_tree_probe <own_sha> <other_sha>`: the probe the soft path
+# class uses (freshness and merge-mode lease). A clean merge counts only when
+# every path whose merged content matches neither side (content combined
+# from both) is soft. merge-ort follows renames, and git before 2.45 has no
+# switch to turn that off in merge-tree, so a soft path renamed to a hard
+# path on one side and edited on the other merges "clean" into the hard
+# path. That path then differs from both sides, and the result drops to
+# unknown (fail closed: overlap / wait). _PR_PROBE_HARD_COMBINED lists such
+# paths. Always returns 0 and prints nothing on stdout.
+_PR_PROBE_HARD_COMBINED=""
+_pr_soft_merge_tree_probe()
+{
+	local soft_own="$1" soft_other="$2" soft_from_own soft_from_other soft_combined soft_chk_entries soft_chk_p
+	_PR_PROBE_HARD_COMBINED=""
+	_pr_merge_tree_probe "${soft_own}" "${soft_other}"
+	[ "${_PR_PROBE_RESULT}" = "none" ] || return 0
+	if ! [[ "${_PR_PROBE_TREE}" =~ ^[0-9a-f]{40}$ ]] \
+		|| ! soft_from_own="$(_pr_mt_git diff-tree -r --no-renames --name-only "${soft_own}" "${_PR_PROBE_TREE}" 2>/dev/null)" \
+		|| ! soft_from_other="$(_pr_mt_git diff-tree -r --no-renames --name-only "${soft_other}" "${_PR_PROBE_TREE}" 2>/dev/null)"; then
+		_PR_PROBE_RESULT="unknown"
+		return 0
+	fi
+	[ -n "${soft_from_own}" ] && [ -n "${soft_from_other}" ] || return 0
+	soft_combined="$(grep -Fx -f <(printf '%s\n' "${soft_from_own}") <(printf '%s\n' "${soft_from_other}") | sort -u || true)"
+	soft_chk_entries="$(_merge_lease_soft_entries 2>/dev/null)"
+	while IFS= read -r soft_chk_p; do
+		[ -n "${soft_chk_p}" ] || continue
+		_merge_lease_soft_path "${soft_chk_p}" "${soft_chk_entries}" && continue
+		_PR_PROBE_HARD_COMBINED+="${soft_chk_p}"$'\n'
+	done <<< "${soft_combined}"
+	_PR_PROBE_HARD_COMBINED="${_PR_PROBE_HARD_COMBINED%$'\n'}"
+	[ -z "${_PR_PROBE_HARD_COMBINED}" ] || _PR_PROBE_RESULT="unknown"
+	return 0
+}
+
+# ---------------------------------------------------------------------------
+# Soft path class (merge-lease Phase 4, Refs #9781; plan D1/D2).
+#
+# Paths in MERGE_LEASE_SOFT_PATHS (fragment directories and generated or
+# append-mostly docs) do not count as overlap on their own: when every path
+# a PR shares with the base (freshness) or with the lease holder (merge
+# mode) is soft, a `git merge-tree` probe decides, and only a clean merge
+# relaxes the decision. Any shared non-soft path keeps today's rule before
+# any probe runs; a probe that cannot decide keeps it too.
+#
+# Env: MERGE_LEASE_SOFT_PATHS (default
+# README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/).
+# Comma-separated; an entry ending in `/` is a literal directory prefix,
+# any other entry an exact path. Entries with glob characters (`*`, `?`,
+# `[`), a leading `/` or a `..` segment are skipped with a warning. An empty
+# value, `none` or `off` (case-insensitive) turns the class off, which is
+# exactly the behaviour before Phase 4.
+
+# Prints the usable entries, one per line.
+_merge_lease_soft_entries()
+{
+	local soft_raw soft_entry
+	soft_raw="${MERGE_LEASE_SOFT_PATHS-README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/}"
+	case "$(printf '%s' "${soft_raw}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+		""|none|off) return 0 ;;
+	esac
+	local -a soft_parts=()
+	IFS=',' read -r -a soft_parts <<< "${soft_raw}"
+	for soft_entry in ${soft_parts[@]+"${soft_parts[@]}"}; do
+		soft_entry="${soft_entry#"${soft_entry%%[![:space:]]*}"}"
+		soft_entry="${soft_entry%"${soft_entry##*[![:space:]]}"}"
+		[ -n "${soft_entry}" ] || continue
+		case "${soft_entry}" in
+			*'*'*|*'?'*|*'['*|/*|..|../*|*/..|*/../*)
+				echo "::warning::MERGE_LEASE_SOFT_PATHS entry '${soft_entry}' is not a literal relative path or directory prefix; ignoring it." >&2
+				continue
+				;;
+		esac
+		printf '%s\n' "${soft_entry}"
+	done
+	return 0
+}
+
+# 0 when <path> is in the soft class (literal comparison; no glob is
+# evaluated). Optional <entries> (newline list) skips re-reading the env.
+_merge_lease_soft_path()
+{
+	local soft_p="$1" soft_entries soft_e
+	if [ "$#" -ge 2 ]; then
+		soft_entries="$2"
+	else
+		soft_entries="$(_merge_lease_soft_entries 2>/dev/null)"
+	fi
+	[ -n "${soft_p}" ] && [ -n "${soft_entries}" ] || return 1
+	while IFS= read -r soft_e; do
+		[ -n "${soft_e}" ] || continue
+		[[ "${soft_p}" == "${soft_e}" ]] && return 0
+		[[ "${soft_e}" == */ && "${soft_p}" == "${soft_e}"* ]] && return 0
+	done <<< "${soft_entries}"
+	return 1
+}
+
+# `_merge_lease_split_soft <newline list>`: sets _MERGE_LEASE_HARD_LIST and
+# _MERGE_LEASE_SOFT_LIST (newline-separated) in the caller's shell. With the
+# class off every path is hard.
+_merge_lease_split_soft()
+{
+	local split_list="$1" split_p split_entries
+	_MERGE_LEASE_HARD_LIST=""
+	_MERGE_LEASE_SOFT_LIST=""
+	split_entries="$(_merge_lease_soft_entries)"
+	while IFS= read -r split_p; do
+		[ -n "${split_p}" ] || continue
+		if [ -n "${split_entries}" ] && _merge_lease_soft_path "${split_p}" "${split_entries}"; then
+			_MERGE_LEASE_SOFT_LIST+="${split_p}"$'\n'
+		else
+			_MERGE_LEASE_HARD_LIST+="${split_p}"$'\n'
+		fi
+	done <<< "${split_list}"
+	_MERGE_LEASE_HARD_LIST="${_MERGE_LEASE_HARD_LIST%$'\n'}"
+	_MERGE_LEASE_SOFT_LIST="${_MERGE_LEASE_SOFT_LIST%$'\n'}"
 	return 0
 }
 
@@ -2289,18 +2636,51 @@ _merge_lease_pr_paths()
 	fi
 	lease_files_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${lease_repo}/pulls/${lease_pr}/files?per_page=100" 2>/dev/null)" || return 1
 	jq -e 'type == "array"' >/dev/null 2>&1 <<< "${lease_files_json}" || return 1
-	jq -r '[ .[]? | if type == "array" then .[] else . end | select(type == "object")
-		| (.filename // empty), (.previous_filename // empty) ] | unique | .[]' <<< "${lease_files_json}" 2>/dev/null
+	# Phase 4 (Refs #9781): with the soft class on, a path holding CR/LF
+	# yields `*` (fail closed) instead of newline-split fragments that could
+	# each look soft; so does a non-string name, which would otherwise make
+	# jq fail and the gate take its fail-open pr_files_failed path. With the
+	# class off the list is as before.
+	local lease_soft_on=""
+	[ -z "$(_merge_lease_soft_entries 2>/dev/null)" ] || lease_soft_on="1"
+	jq -r --arg soft_on "${lease_soft_on}" '[ .[]? | if type == "array" then .[] else . end | select(type == "object")
+		| (.filename // empty), (.previous_filename // empty) ] | unique
+		| if $soft_on != "" and any(.[]; (type != "string") or test("[\n\r]")) then "*" else .[] end' <<< "${lease_files_json}" 2>/dev/null
 }
 
 # 0 when the two newline lists share a path (`*` shares every path).
+# Optional <own_head> <holder_head> (Phase 4, Refs #9781): when every shared
+# path is in the soft class (MERGE_LEASE_SOFT_PATHS) and both heads are full
+# SHAs, a merge-tree probe of the two heads decides; only a clean merge
+# returns 1, and sets MERGE_LEASE_SOFT_SHARED to the shared soft paths
+# (comma-separated). Any shared hard path, or a probe that cannot decide
+# (including a clean merge that combines content in a non-soft path, see
+# _pr_soft_merge_tree_probe), returns 0. With two arguments, or the class off, the check is as before.
 _merge_lease_paths_intersect()
 {
 	local lease_left="$1" lease_right="$2"
+	local lease_own_head="${3:-}" lease_holder_head="${4:-}" lease_shared="" lease_soft_entries=""
 	[ "${lease_left}" = "*" ] && return 0
 	[ "${lease_right}" = "*" ] && return 0
 	[ -n "${lease_left}" ] && [ -n "${lease_right}" ] || return 1
-	grep -Fxq -f <(printf '%s\n' "${lease_left}" | sed '/^$/d') <(printf '%s\n' "${lease_right}" | sed '/^$/d')
+	if [ "$#" -ge 4 ]; then
+		lease_soft_entries="$(_merge_lease_soft_entries)"
+	fi
+	if [ -z "${lease_soft_entries}" ]; then
+		grep -Fxq -f <(printf '%s\n' "${lease_left}" | sed '/^$/d') <(printf '%s\n' "${lease_right}" | sed '/^$/d')
+		return
+	fi
+	lease_shared="$(grep -Fx -f <(printf '%s\n' "${lease_left}" | sed '/^$/d') <(printf '%s\n' "${lease_right}" | sed '/^$/d') | sort -u)"
+	[ -n "${lease_shared}" ] || return 1
+	_merge_lease_split_soft "${lease_shared}"
+	[ -z "${_MERGE_LEASE_HARD_LIST}" ] || return 0
+	[[ "${lease_own_head}" =~ ^[0-9a-f]{40}$ && "${lease_holder_head}" =~ ^[0-9a-f]{40}$ ]] || return 0
+	_pr_soft_merge_tree_probe "${lease_own_head}" "${lease_holder_head}"
+	if [ "${_PR_PROBE_RESULT}" = "none" ]; then
+		MERGE_LEASE_SOFT_SHARED="$(printf '%s' "${_MERGE_LEASE_SOFT_LIST}" | paste -sd, -)"
+		return 1
+	fi
+	return 0
 }
 
 # Order key for queue position: "0" for a PR carrying a priority label, "1"
@@ -2574,6 +2954,7 @@ _merge_lease_gate()
 	MERGE_LEASE_OUTCOME=""
 	MERGE_LEASE_REASON=""
 	MERGE_LEASE_BLOCKER=""
+	MERGE_LEASE_SOFT_SHARED=""
 	if ! _merge_lease_enabled; then
 		MERGE_LEASE_OUTCOME="disabled"
 		return 0
@@ -2608,11 +2989,15 @@ _merge_lease_gate()
 						return 0
 					fi
 				fi
-				if ! _merge_lease_paths_intersect "${MERGE_LEASE_PATHS}" "${lease_own_paths:-*}"; then
+				MERGE_LEASE_SOFT_SHARED=""
+				if ! _merge_lease_paths_intersect "${MERGE_LEASE_PATHS}" "${lease_own_paths:-*}" "${lease_head}" "${MERGE_LEASE_HEAD:-}"; then
 					MERGE_LEASE_OUTCOME="no_overlap"
 					MERGE_LEASE_REASON="no_shared_paths_with_holder"
-					_merge_lease_log "${lease_pr}" "${lease_base}" merge proceed no_shared_paths_with_holder
-					_merge_lease_metric proceed "${lease_base}" "${lease_pr}" merge no_shared_paths_with_holder || true
+					# Phase 4 (Refs #9781): cleared only by a clean merge-tree
+					# probe of soft paths shared with the holder.
+					[ -n "${MERGE_LEASE_SOFT_SHARED}" ] && MERGE_LEASE_REASON="soft_paths_merge_clean"
+					_merge_lease_log "${lease_pr}" "${lease_base}" merge proceed "${MERGE_LEASE_REASON}"
+					_merge_lease_metric proceed "${lease_base}" "${lease_pr}" merge "${MERGE_LEASE_REASON}" || true
 					return 0
 				fi
 				MERGE_LEASE_REASON="holder_shares_paths"
