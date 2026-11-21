@@ -1,0 +1,11 @@
+<!-- changelog: fixed -->
+- **Stall recovery no longer closes a green pull request that is waiting for the merge lease.** The stall judge now sees the issue's own implementation PR, a PR waiting for the merge lease counts as held, and every `close_and_reissue` checks the PR before it closes anything.
+
+On 2026-11-21 stall recovery closed issue #9398 and its implementation PR #9402 unmerged, then opened replacement issue #9885. #9402 was green (`ai-review/head-gate` and `lint` passed, `mergeable_state=clean`) and labelled `ai:merge-lease-wait`, so it was only waiting for its turn on the merge lease. The judge's diagnostics had named #9685, an unrelated closed PR that was the last one to mention #9398, as the linked PR. The close step used a wider lookup, found #9402 and closed it.
+
+Three changes in `scripts/orchestrate_poll_process.sh`:
+- The judge diagnostics describe the PR `close_linked_pr` would act on: the lowest-numbered open implementation PR, with the last cross-reference kept only as a fallback. New keys `linked_pr_source` and `linked_pr_candidates`; existing keys are unchanged. Each pick logs `STALL_JUDGE_LINKED_PR`.
+- An open PR labelled `ai:merge-lease-wait` (`MERGE_LEASE_WAIT_LABEL`) is held: no judge, no review dispatch, no close. After `STALL_MERGE_LEASE_WAIT_MAX_MINUTES` (default `1440`) the hold lapses once (`STALL_MERGE_LEASE_HOLD_LAPSED`), so a leftover label cannot park an issue forever. The conflict sweep is unchanged.
+- Before any `close_and_reissue` (managed, standalone and review-blocked judge), a guard refuses to close an open implementation PR that is held or whose head has a successful `ai-review/head-gate` status and a successful required CI check from `ci.yml`. It also refuses when a read fails. Each refusal logs `STALL_REISSUE_REFUSED issue=<n> pr=<m> reason=<token>` and counts no attempt. Kill switch: `STALL_REISSUE_GREEN_PR_GUARD_ENABLED=false`.
+
+What this means for consumer repos: after the next `@stable` sync, stall recovery leaves green or lease-waiting implementation PRs open. In repos with no required CI check (`AUTO_MERGE_REQUIRED_CI_CHECK` unset or `none`), a successful head gate alone counts as green.
