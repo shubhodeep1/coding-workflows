@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:22437-22443 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The merged check `if [ \"${pr_merged}\" = \"true\" ] || { [ -z \"${pr_merged}\" ] && [ -n \"${pr_merged_at}\" ]; }; then pr_state=\"merged\"; fi` runs for every PR and sets `pr_state` to \"merged\" whatever the original REST `.state` was, which could be fragile if `_jq_field` returns something unexpected.\n  WHY: The source rated this SEVERITY: NIT, which is mapped to low here, and the reviewer itself concluded \"Given that `_jq_field` is used and limited to specific values, this logic is correct for this PR's scope\"; no other reviewer flagged it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"README.md:311 (orchestrate_poll env table) and README.md:2611 (defaults table) describe ENABLE_STALL_HUMAN_TERMINALIZATION with only the MAX_JUDGE_REPLAY exception. They do not mention the second exception this PR adds: a judge escalate_human is kept, and the issue gets ai:needs-human, when the issue's own implementation PR is closed or merged.\"\n  expected_change_site: README.md\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diffs (both original and autofix runs) do not show modifications to README.md. The documentation remains missing from the tables. (Source severity NIT. anthropic_claude-sonnet-5_5 explicitly did not count this as a gap: the issue does not ask for it, README.md is outside the plan's files_touched grant, and earlier judges are tracking it as a separate follow-up.)\n- requirement: \"Do not normalize a judge `escalate_human` to `attempt_merge` when the linked PR is not open.\"\n  expected_change_site: `scripts/orchestrate_poll_process.sh`, `invoke_stall_judge` escalation handling.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The new keep at lines 23051-23053 requires `_pr_json_is_issue_implementation_pr` to accept the linked PR, and the added test at `tests/test_orchestrate_poll_process.py:15806-15837` explicitly verifies that a merged mention-only PR targeting `main` is still normalized to `attempt_merge`. (Source severity NIT. z-ai_glm-5_3-flash, anthropic_claude-sonnet-5_5 and minimax_minimax-m3 judged this not a gap: the narrowing to the issue's own implementation PR is deliberate, to avoid the #3816/#3828 mis-target, and is documented in both fragments.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:22437-22443 | severity=NIT | confidence=4\n  PROBLEM: `pr_state` is set to \"merged\" by `if [ \"${pr_merged}\" = \"true\" ] || { [ -z \"${pr_merged}\" ] && [ -n \"${pr_merged_at}\" ]; }; then pr_state=\"merged\"; fi` for every PR, whether the original REST `.state` was \"closed\" or \"open\", which is potentially fragile if `_jq_field` returns something unexpected.\n  WHY: The reviewer concluded \"Given that `_jq_field` is used and limited to specific values, this logic is correct for this PR's scope.\"\n- TASK_GAP\n  Requirement: \"README.md:311 (orchestrate_poll env table) and README.md:2611 (defaults table) describe ENABLE_STALL_HUMAN_TERMINALIZATION with only the MAX_JUDGE_REPLAY exception. They do not mention the second exception this PR adds: a judge escalate_human is kept, and the issue gets ai:needs-human, when the issue's own implementation PR is closed or merged.\"\n  Expected change site: README.md\n  Evidence of absence: The PR diffs (both original and autofix runs) do not show modifications to README.md. The documentation remains missing from the tables.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Do not normalize a judge `escalate_human` to `attempt_merge` when the linked PR is not open.\"\n  Expected change site: `scripts/orchestrate_poll_process.sh`, `invoke_stall_judge` escalation handling.\n  Evidence of absence: The new keep at lines 23051-23053 requires `_pr_json_is_issue_implementation_pr` to accept the linked PR. The added test at `tests/test_orchestrate_poll_process.py:15806-15837` explicitly verifies that a merged mention-only PR targeting `main` is still normalized to `attempt_merge`. Thus, a merged linked PR in that case does not meet the stated requirement.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "52f60fb8aaf8744e5812e07e20b735ed998adada010897e41bade5808e6ac400",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9502,
+    "run_id": "44912854690",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44912854690",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121145544_1356373ad3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9502,
+    "run_id": "44912854690"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-21T14:55:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
