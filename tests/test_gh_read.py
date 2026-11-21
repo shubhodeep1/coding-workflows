@@ -41,7 +41,10 @@ if [ "${GH_TOKEN:-}" = "${FAKE_JOB_TOKEN}" ]; then
 	exit "${FAKE_JOB_RC:-0}"
 fi
 printf 'pat-output'
-exit 0
+if [ -n "${FAKE_PAT_STDERR:-}" ]; then
+	printf '%s\n' "${FAKE_PAT_STDERR}" >&2
+fi
+exit "${FAKE_PAT_RC:-0}"
 """
 
 FALLBACKS = (
@@ -274,6 +277,28 @@ def test_gh_review_pr_state_keeps_only_the_fallback_line_on_stderr(tmp_path: Pat
 	# The caller drops gh's own stderr but keeps the contractual line.
 	assert "GH_READ_FALLBACK reason=404 caller=poller.sh" in result.stderr
 	assert "HTTP 404" not in result.stderr
+
+
+def test_fallback_line_survives_a_caller_filter_when_the_pat_also_fails(tmp_path: Path) -> None:
+	# The heal queue / gh_review_pr_state filter keeps only lines starting with
+	# GH_READ_FALLBACK; gh_retry must replay the line from a failed attempt too.
+	env = _env(
+		tmp_path,
+		FAKE_JOB_STDERR="gh: Not Found (HTTP 404)",
+		FAKE_JOB_RC="1",
+		FAKE_PAT_STDERR="gh: Not Found (HTTP 404)",
+		FAKE_PAT_RC="1",
+	)
+	body = (
+		f'if gh_retry gh_read --same-repo-only api --method GET "repos/{REPO}/pulls/1" > "{tmp_path}/out.json" '
+		"2> >(grep -a '^GH_READ_FALLBACK ' >&2 || true); then echo ok; else echo failed; fi\nwait"
+	)
+	result = _run(tmp_path, body, env)
+	assert result.stdout.strip() == "failed"
+	assert _tokens(env) == [JOB_TOKEN, PAT]
+	assert re.search(r"^GH_READ_FALLBACK reason=404 caller=poller\.sh$", result.stderr, re.MULTILINE), result.stderr
+	assert "HTTP 404" not in result.stderr
+	assert JOB_TOKEN not in result.stdout + result.stderr
 
 
 # --- gh_api_safe_job_token_read / gh_api_safe (release-gate twin) ---------------

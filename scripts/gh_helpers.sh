@@ -2468,6 +2468,11 @@ gh_retry()
 
 		local stderr_content
 		stderr_content=$(cat "${stderr_file}" 2>/dev/null || true)
+		# A failed attempt's `GH_READ_FALLBACK` line (issue #9888) is replayed
+		# on its own line too, before the next attempt overwrites stderr_file;
+		# the excerpts below escape it, so callers filtering on
+		# `^GH_READ_FALLBACK ` would otherwise lose it when the PAT also fails.
+		grep -a '^GH_READ_FALLBACK ' "${stderr_file}" >&2 2>/dev/null || true
 
 		if _is_gh_permanent_failure "${stderr_content}"; then
 			echo "::warning::gh command failed with non-retryable error (attempt ${attempt}/${max_attempts}); not retrying: $(_gh_cmd_log_summary "$@")" >&2
