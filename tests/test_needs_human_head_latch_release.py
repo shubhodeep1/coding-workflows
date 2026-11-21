@@ -37,6 +37,20 @@ FAKE_GH = textwrap.dedent(
 			return default
 		with open(p, encoding="utf-8") as fh:
 			return json.load(fh)
+	def nth():
+		# 1 for the first identical call, 2 for its first repeat, ...
+		with open(os.path.join(d, "calls.log"), encoding="utf-8") as fh:
+			return sum(1 for line in fh if json.loads(line) == args)
+	def load_seq(name, default):
+		# The nth identical read serves "<name>.<n>" when that file exists,
+		# so a revalidation re-read can see a changed state.
+		n = nth()
+		stem, ext = os.path.splitext(name)
+		p = os.path.join(d, "%s.%d%s" % (stem, n, ext))
+		if os.path.exists(p):
+			with open(p, encoding="utf-8") as fh:
+				return json.load(fh)
+		return load(name, default)
 	fail = set(os.environ.get("FAKE_GH_FAIL", "").split(","))
 	assert args[0] == "api"
 	rest = [a for a in args[1:] if a != "--paginate"]
@@ -73,7 +87,9 @@ FAKE_GH = textwrap.dedent(
 	if m and method == "GET":
 		if "comments" in fail:
 			sys.exit(1)
-		out(load("comments.json", []))
+		if "comments_refresh" in fail and nth() > 1:
+			sys.exit(1)
+		out(load_seq("comments.json", []))
 	if m and fields:
 		if "comment_post" in fail:
 			sys.exit(1)
@@ -83,7 +99,7 @@ FAKE_GH = textwrap.dedent(
 	if re.search(r"/issues/(\d+)/events", path):
 		if "events" in fail:
 			sys.exit(1)
-		out(load("events.json", []))
+		out(load_seq("events.json", []))
 	m = re.search(r"/issues/(\d+)/labels/(.+)$", path)
 	if m and method == "DELETE":
 		if "label_delete" in fail:
@@ -147,6 +163,8 @@ def _run(
 	is_pr: bool = True,
 	fail: str = "",
 	enabled: str | None = None,
+	refreshed_comments: list[dict] | None = None,
+	refreshed_events: list[dict] | None = None,
 ) -> dict:
 	fake_dir = tmp_path / "fake"
 	fake_dir.mkdir(parents=True)
@@ -161,6 +179,10 @@ def _run(
 	(fake_dir / "list.json").write_text(json.dumps([item]), encoding="utf-8")
 	(fake_dir / "comments.json").write_text(json.dumps(comments), encoding="utf-8")
 	(fake_dir / "events.json").write_text(json.dumps(events if events is not None else [_labeled()]), encoding="utf-8")
+	if refreshed_comments is not None:
+		(fake_dir / "comments.2.json").write_text(json.dumps(refreshed_comments), encoding="utf-8")
+	if refreshed_events is not None:
+		(fake_dir / "events.2.json").write_text(json.dumps(refreshed_events), encoding="utf-8")
 	(fake_dir / "pull.json").write_text(
 		json.dumps({"state": pull_state, "head": {"sha": head}, "labels": [{"name": n} for n in (pull_labels if pull_labels is not None else labels)]}),
 		encoding="utf-8",
@@ -203,8 +225,9 @@ def test_non_retryable_latch_is_released_once_the_head_moved(tmp_path: Path) -> 
 	assert f"<!-- ai:needs-human-auto-release reason=non_retryable_head_moved pr=5 head={NEW_HEAD} -->" in body
 	assert OLD_HEAD[:12] in body and NEW_HEAD[:12] in body
 	assert f"NEEDS_HUMAN_HEAD_LATCH pr=5 outcome=released latch=non_retryable_head_moved from={OLD_HEAD[:12]} head={NEW_HEAD[:12]}" in result["stdout"]
-	# §15: one list, one comments read, one events read, one pull read, two writes.
-	assert len(result["calls"]) == 6
+	# §15: one list, one comments read, one pull read, one events read, one
+	# comments and one events re-read (revalidation), two writes.
+	assert len(result["calls"]) == 8
 
 
 def test_round_cap_latch_with_head_marker_is_released_once_the_head_moved(tmp_path: Path) -> None:
@@ -238,6 +261,36 @@ def test_already_released_for_this_head_is_not_released_again(tmp_path: Path) ->
 	result = _run(tmp_path, comments=[_non_retryable_comment(), release])
 	assert result["deleted"] == []
 	assert "outcome=skip reason=already_released" in result["stdout"]
+
+
+def test_untrusted_release_marker_does_not_block_the_release(tmp_path: Path) -> None:
+	spoof = {
+		"user": {"login": "drive-by"},
+		"author_association": "NONE",
+		"created_at": "2026-11-20T12:00:00Z",
+		"body": f"<!-- ai:needs-human-auto-release reason=non_retryable_head_moved pr=5 head={NEW_HEAD} -->",
+	}
+	result = _run(tmp_path, comments=[_non_retryable_comment(), spoof])
+	assert result["deleted"] == ["5 ai:needs-human"]
+	assert "outcome=released" in result["stdout"]
+
+
+def test_parked_pr_on_the_latched_head_costs_no_events_read(tmp_path: Path) -> None:
+	result = _run(tmp_path, comments=[_non_retryable_comment()], head=OLD_HEAD)
+	assert "outcome=skip reason=head_unchanged" in result["stdout"]
+	assert not any("/events" in arg for call in result["calls"] for arg in call)
+
+
+def test_a_latch_written_during_the_release_is_kept(tmp_path: Path) -> None:
+	relatch = _non_retryable_comment(head=NEW_HEAD, created_at="2026-11-20T14:00:00Z")
+	comment_case = _run(tmp_path / "comment", comments=[_non_retryable_comment()], refreshed_comments=[_non_retryable_comment(), relatch])
+	assert comment_case["deleted"] == [] and comment_case["posted"] == []
+	assert "outcome=skip reason=latch_changed_during_release" in comment_case["stdout"]
+	event_case = _run(tmp_path / "event", comments=[_non_retryable_comment()], refreshed_events=[_labeled(), _labeled(at="2026-11-20T14:00:02Z", login="someone-else")])
+	assert event_case["deleted"] == [] and event_case["posted"] == []
+	assert "outcome=skip reason=latch_changed_during_release" in event_case["stdout"]
+	unavailable = _run(tmp_path / "unavailable", comments=[_non_retryable_comment()], fail="comments_refresh")
+	assert unavailable["deleted"] == [] and "outcome=skip reason=latch_revalidation_unavailable" in unavailable["stdout"]
 
 
 def test_a_later_comment_reasserting_needs_human_keeps_the_label(tmp_path: Path) -> None:
