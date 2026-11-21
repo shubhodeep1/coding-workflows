@@ -5,13 +5,29 @@
   "entry_id": "processed_command_9846_7053664284_approved",
   "issue_number": 9846,
   "metadata": {
+    "branch": "ai/issue-9846",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/mark-stable.yml",
+      ".github/workflows/test-and-mark-stable.yml",
+      "agents.d/9846-release-notes-from-fragments.md",
+      "changelog.d/9846-release-notes-from-fragments.md",
+      "scripts/assemble_changelog.py",
+      "tests/test_assemble_changelog.py",
+      "tests/test_changelog_fragment_contract.py"
+    ],
+    "issue_number": 9846,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9846",
+    "pr_number": 9854,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9854",
+    "run_attempt": "1",
+    "run_id": "44840668557",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/44840668557"
   },
   "run_attempt": 1,
   "run_id": "44840668557",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-21T00:00:39Z",
+  "status": "completed",
+  "timestamp": "2026-11-21T00:46:48Z",
   "workflow": "implement"
 }
