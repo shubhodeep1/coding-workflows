@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should the exit-76 \"stop retrying\" fix be delivered, given that the fix file is outside this issue's heal scope?\nChoices:\nA) Implement it under this issue, after the scope is widened to `scripts/review_conflict_resolve.sh`. The widening must come from the pipeline: a replacement heal issue with a newly built scope, or a pipeline plan grant. A hand edit of the issue body is refused as `edited`. The change makes exit 76 stop after one attempt, skips the OpenCode `invocation_failed` alert (or tags it with the `claude` engine), exits 1 with `RESOLVER_TERMINAL_EXIT_CLASS=\"other\"`, and adds a regression test with a stub that exits 76. (RECOMMENDED)\nB) Leave the code fix to open PR #9843 (issue #9842), which already touches the same script and test file. Close this issue as a duplicate once that PR merges, if it covers exit 76.\n**Note:** pick B only if you know #9843 handles exit 76. If it does not, A is still needed.\nC) Make no code change. Treat this as a purely environmental failure (the Claude account pool was empty, reason other than `all_gated`). Close the issue once the pool tokens are refreshed through the `claude-workers` key-sync workflow or a re-run succeeds. The pointless retries stay as they are.\nQ2: Has the operator checked and fixed the Claude pool failure behind these failures? The occurrence log shows the same signature on PRs #9561, #9701, #9396, #9510 and #9862, and on 4 clarify runs of this issue itself, which points to an ongoing pool problem rather than a one-off.\nChoices:\nA) Yes, the pool has been refreshed or confirmed transient. The plan only needs the code hardening from Q1 and should not mention an operator step. (RECOMMENDED)\nB) No, the pool is still failing. The plan should state that the hardening alone will not turn review / codex-agent green, and that the operator refresh is a prerequisite outside this repository.",
+  "fingerprint": "55d073b63960460d0d49bbc8af07cc81a3a3a3562e14579847b357b7b6aed181",
+  "lineage": {
+    "issue_number": 9863,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44871885677",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44871885677",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261121054648_8e31604e4a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9863,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44871885677"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9863 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-21T05:46:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
