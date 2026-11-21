@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Do not normalize a judge escalate_human to attempt_merge when the linked PR is not open.\" (Issue #9482, Proposed fix, third bullet)\n  expected_change_site: scripts/orchestrate_poll_process.sh, `invoke_stall_judge`, the escalation-keep branches at lines 23037-23056 (elif at lines 23051-23055); tests/test_orchestrate_poll_process.py regression coverage of that rule\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The #9482 elif at lines 23051-23053/23051-23054/23051-23055 keeps the escalation only when `_pr_json_is_issue_implementation_pr` accepts the closed/merged linked PR, so a merged target-base linked PR that only mentions the issue is still normalized to `attempt_merge`; test_stall_judge_merged_target_base_non_implementation_cross_ref_keeps_normalisation (tests/test_orchestrate_poll_process.py:15806-15837) asserts this normalization and that no `ai:needs-human` label is set. All three reviewers rated it SEVERITY: NIT. anthropic_claude-sonnet-5_5 (confidence 2) and z-ai_glm-5_3-flash describe it as a deliberate, documented deviation, documented in the code comment at lines 23041-23050 and in agents.d/9482-standalone-stall-merged-linked-pr.md and changelog.d/9482-standalone-stall-merged-linked-pr.md: the #3816 / #3828 mis-target guard applies, and the `MAX_JUDGE_REPLAY` backstop (scripts/orchestrate_poll_process.sh:3529, 23004-23006) bounds repeats. anthropic_claude-sonnet-5_5 recommends no code change.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP:\n  Requirement: \"Do not normalize a judge escalate_human to attempt_merge when the linked PR is not open.\" (Issue #9482, Proposed fix, third bullet.)\n  Expected change site: scripts/orchestrate_poll_process.sh, `invoke_stall_judge`, the escalation-keep branches at lines 23037-23056.\n  Evidence of absence: The requirement is not met in one case. If the linked PR (the last cross-reference) was merged into a target base and fails `_pr_json_is_issue_implementation_pr` (lines 23051-23053), the escalation is still normalised. The new test `test_stall_judge_merged_target_base_non_implementation_cross_ref_keeps_normalisation` asserts this. The narrowing is deliberate and documented in the code comment at lines 23041-23050, the agents.d fragment and the changelog.d fragment: `attempt_merge` resolves through `_resolve_issue_implementation_pr` (the #3816 / #3828 mis-target guard), and `MAX_JUDGE_REPLAY` bounds repeats. The reported #823 / #825 case is kept by the #9481 branch at lines 23037-23040. Recorded as a known, justified deviation, not a defect; no code change recommended.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- The missing README rows for `ENABLE_STALL_HUMAN_TERMINALIZATION` are not a gap here: the issue does not ask for them, README.md is outside `files_touched`, and they are tracked as a separate follow-up.\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- Note: treats the openai_gpt-6-luna TASK_GAP as a deliberate, documented hardening against the #3816/#3828 mis-target, covered by the agents.d and changelog.d edits; the #823/#825 case is fully addressed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: \"Do not normalize a judge escalate_human to attempt_merge when the linked PR is not open.\"\n  Expected change site: scripts/orchestrate_poll_process.sh, invoke_stall_judge escalation handling.\n  Evidence of absence: The new escalation keep at lines 23051-23054 requires _pr_json_is_issue_implementation_pr to accept the linked PR. The test test_stall_judge_merged_target_base_non_implementation_cross_ref_keeps_normalisation at tests/test_orchestrate_poll_process.py:15806-15837 explicitly verifies that a merged, target-base linked PR that only mentions the issue is normalized to attempt_merge.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP:\n  Requirement: \"Do not normalize a judge `escalate_human` to `attempt_merge` when the linked PR is not open.\" (linked issue #9482, Proposed fix, third bullet \u2014 literal, unconditional)\n  Expected change site: scripts/orchestrate_poll_process.sh, invoke_stall_judge escalation handling (elif at lines 23051-23055); tests/test_orchestrate_poll_process.py regression coverage of that rule\n  Evidence of absence: The elif keeps the escalation only when `_pr_json_is_issue_implementation_pr` accepts the closed/merged PR, so a merged mention-only linked PR is still normalized to `attempt_merge`. The test test_stall_judge_merged_target_base_non_implementation_cross_ref_keeps_normalisation (tests/test_orchestrate_poll_process.py:15806-15837) asserts `\"Stall judge action 'escalate_human' normalized to 'attempt_merge' for issue #823.\"` and that no `ai:needs-human` label is set, which codifies the deviation.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Mitigating context (not a separate finding): the deviation is documented in changelog.d/9482-standalone-stall-merged-linked-pr.md and agents.d/9482-standalone-stall-merged-linked-pr.md. The resolver rejects mention-only refs (verified at 23894-23911). `MAX_JUDGE_REPLAY` (scripts/orchestrate_poll_process.sh:3529, 23004-23006) forces `escalate_human` after repeated escalations. The only residual risk is recovery budget spent on failed `attempt_merge` ticks before the backstop escalates.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bbc2b56b98e158d698fd867ceb17a1868894af79aedc65997195cbb7ffb3467b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9502,
+    "run_id": "44933077331",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44933077331",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121183346_128211226c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9502,
+    "run_id": "44933077331"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T18:33:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
