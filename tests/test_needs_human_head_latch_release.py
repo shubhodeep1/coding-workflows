@@ -110,7 +110,9 @@ FAKE_GH = textwrap.dedent(
 	if re.search(r"/pulls/(\d+)$", path):
 		if "pull" in fail:
 			sys.exit(1)
-		out(load("pull.json", {}))
+		if "pull_refresh" in fail and nth() > 1:
+			sys.exit(1)
+		out(load_seq("pull.json", {}))
 	sys.stderr.write("unexpected gh call: %r\n" % (args,))
 	sys.exit(2)
 	'''
@@ -165,6 +167,7 @@ def _run(
 	enabled: str | None = None,
 	refreshed_comments: list[dict] | None = None,
 	refreshed_events: list[dict] | None = None,
+	refreshed_pull: dict | None = None,
 ) -> dict:
 	fake_dir = tmp_path / "fake"
 	fake_dir.mkdir(parents=True)
@@ -187,6 +190,8 @@ def _run(
 		json.dumps({"state": pull_state, "head": {"sha": head}, "labels": [{"name": n} for n in (pull_labels if pull_labels is not None else labels)]}),
 		encoding="utf-8",
 	)
+	if refreshed_pull is not None:
+		(fake_dir / "pull.2.json").write_text(json.dumps(refreshed_pull), encoding="utf-8")
 	script = tmp_path / "run.sh"
 	script.write_text(
 		"set -euo pipefail\n"
@@ -226,8 +231,8 @@ def test_non_retryable_latch_is_released_once_the_head_moved(tmp_path: Path) -> 
 	assert OLD_HEAD[:12] in body and NEW_HEAD[:12] in body
 	assert f"NEEDS_HUMAN_HEAD_LATCH pr=5 outcome=released latch=non_retryable_head_moved from={OLD_HEAD[:12]} head={NEW_HEAD[:12]}" in result["stdout"]
 	# §15: one list, one comments read, one pull read, one events read, one
-	# comments and one events re-read (revalidation), two writes.
-	assert len(result["calls"]) == 8
+	# comments, one events and one pull re-read (revalidation), two writes.
+	assert len(result["calls"]) == 9
 
 
 def test_round_cap_latch_with_head_marker_is_released_once_the_head_moved(tmp_path: Path) -> None:
@@ -290,6 +295,22 @@ def test_a_latch_written_during_the_release_is_kept(tmp_path: Path) -> None:
 	assert event_case["deleted"] == [] and event_case["posted"] == []
 	assert "outcome=skip reason=latch_changed_during_release" in event_case["stdout"]
 	unavailable = _run(tmp_path / "unavailable", comments=[_non_retryable_comment()], fail="comments_refresh")
+	assert unavailable["deleted"] == [] and "outcome=skip reason=latch_revalidation_unavailable" in unavailable["stdout"]
+
+
+def test_a_head_or_label_change_during_the_release_is_kept(tmp_path: Path) -> None:
+	labels = [{"name": "ai:needs-human"}, {"name": "ai:review-blocked"}]
+	for name, pull in (
+		("back_to_latched_head", {"state": "open", "head": {"sha": OLD_HEAD}, "labels": labels}),
+		("other_head", {"state": "open", "head": {"sha": "c" * 40}, "labels": labels}),
+		("scope_blocked", {"state": "open", "head": {"sha": NEW_HEAD}, "labels": [*labels, {"name": "ai:scope-blocked"}]}),
+		("destructive_blocked", {"state": "open", "head": {"sha": NEW_HEAD}, "labels": [*labels, {"name": "ai:destructive-blocked"}]}),
+		("closed", {"state": "closed", "head": {"sha": NEW_HEAD}, "labels": labels}),
+	):
+		result = _run(tmp_path / name, comments=[_non_retryable_comment()], refreshed_pull=pull)
+		assert result["deleted"] == [] and result["posted"] == [], name
+		assert "outcome=skip reason=latch_changed_during_release" in result["stdout"], (name, result["stdout"])
+	unavailable = _run(tmp_path / "unavailable", comments=[_non_retryable_comment()], fail="pull_refresh")
 	assert unavailable["deleted"] == [] and "outcome=skip reason=latch_revalidation_unavailable" in unavailable["stdout"]
 
 

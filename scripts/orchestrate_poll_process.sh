@@ -27242,10 +27242,12 @@ _Orchestrator: released the \`ai:needs-human\` latch that the staged-support res
 # release marker (a `[bot]` login or OWNER/MEMBER/COLLABORATOR comment) exists
 # for the current head; the PR carries neither ai:destructive-blocked nor
 # ai:scope-blocked; a fresh PR read shows the PR open, still labelled, with a
-# 40-hex head different from the latch head; and a re-read of the comments
-# and label events right before the write shows no newer trusted latch or
-# needs-human comment and the same newest label event (otherwise
-# `latch_changed_during_release`). The release removes ai:needs-human,
+# 40-hex head different from the latch head; and a re-read of the comments,
+# label events and `pulls/<n>` right before the write shows no newer trusted
+# latch or needs-human comment, the same newest label event, and the PR still
+# open, labelled, on the same head, without ai:scope-blocked or
+# ai:destructive-blocked (otherwise `latch_changed_during_release`). The
+# release removes ai:needs-human,
 # then posts one comment ending in
 # `<!-- ai:needs-human-auto-release reason=<r> pr=<n> head=<current sha> -->`.
 # The release-once rule is per head, so a latch that comes back on the new
@@ -27263,8 +27265,8 @@ _Orchestrator: released the \`ai:needs-human\` latch that the staged-support res
 # fresh), taken before the events read so a PR parked on its latched head
 # costs no events read; per PR whose head moved one paginated events read
 # (the poller's caches carry neither the full marker history nor label-event
-# provenance); per release candidate one comments and one events re-read
-# (revalidation), one label removal and one comment write. PRs without a
+# provenance); per release candidate one comments, one events and one
+# `pulls/<n>` re-read (revalidation), one label removal and one comment write. PRs without a
 # head-bound latch cost only the comments read. Every read failure skips that PR for the tick
 # (fail open: the label stays). NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED=false
 # skips the sweep.
@@ -27276,7 +27278,7 @@ release_head_bound_needs_human_latches() {
   local hl_bind_minutes=30
   local hl_prs hl_count hl_idx hl_pr hl_labels hl_comments hl_latch hl_latch_idx
   local hl_latch_at hl_latch_login hl_latch_head hl_reason hl_events hl_event
-  local hl_pull hl_head hl_release_marker hl_body hl_refreshed_comments hl_refreshed_events hl_refreshed_event
+  local hl_pull hl_head hl_release_marker hl_body hl_refreshed_comments hl_refreshed_events hl_refreshed_event hl_refreshed_pull
   if ! hl_prs="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues?state=open&labels=ai%3Aneeds-human&per_page=100" \
     | jq -s 'add // [] | map(select(.pull_request != null))' 2>/dev/null)" \
     || ! hl_count="$(printf '%s' "${hl_prs}" | jq 'length' 2>/dev/null)" \
@@ -27395,6 +27397,17 @@ release_head_bound_needs_human_latches() {
           and ((((.user.login // "") | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))))
           and ((.body // "") | (contains("ai:needs-human") or contains("<!-- ai:workflow-heal-non-retryable:v1 ") or contains("<!-- ai:review-round-cap:v1 -->"))
             and (contains("<!-- ai:needs-human-auto-release ") | not)))' >/dev/null 2>&1; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_changed_during_release latch=${hl_reason}"
+      continue
+    fi
+    # The head and labels were checked on the first pulls/<n> read; read them
+    # again so a push back to the latched head (or any other head change) or a
+    # newly added ai:scope-blocked / ai:destructive-blocked keeps the hold.
+    if ! hl_refreshed_pull="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${hl_pr}" --jq '{state, head: (.head.sha // ""), labels: [.labels[]?.name]}' 2>/dev/null)"; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_revalidation_unavailable latch=${hl_reason}"
+      continue
+    fi
+    if ! printf '%s' "${hl_refreshed_pull}" | jq -e --arg h "${hl_head}" '.state == "open" and .head == $h and (.labels | index("ai:needs-human") != null) and (.labels | index("ai:destructive-blocked") == null) and (.labels | index("ai:scope-blocked") == null)' >/dev/null 2>&1; then
       echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_changed_during_release latch=${hl_reason}"
       continue
     fi
