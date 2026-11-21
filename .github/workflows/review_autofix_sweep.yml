@@ -228,8 +228,6 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
           ALLOW_WORKFLOW_EDITS: ${{ contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true')) && 'true' || 'false' }}
           SWEEP_STALE_QUEUED_MINUTES: ${{ vars.SWEEP_STALE_QUEUED_MINUTES || '120' }}
-          # Wedged-queued floor (issue #9473); 0 disables it.
-          ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
           # A stale queued run is wedged only when GitHub created no jobs for it.
           SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS: ${{ vars.SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS || 'true' }}
           PROVIDER_OUTAGE_PAUSED: ${{ steps.provider_outage.outputs.paused }}
@@ -243,6 +241,9 @@ jobs:
           # `ZOMBIE_RUN_REAPER_ENABLED: ${{ vars.ZOMBIE_RUN_REAPER_ENABLED || 'true' }}`;
           # setting the repo variable to true restores that.
           ZOMBIE_RUN_REAPER_ENABLED: ${{ vars.ZOMBIE_RUN_REAPER_ENABLED || 'false' }}
+          # Also the wedged-queued floor beneath SWEEP_STALE_QUEUED_MINUTES
+          # (issue #9473); 0 disables it. Defined once: a second key in this
+          # env mapping is a duplicate YAML key.
           ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
           ZOMBIE_RUN_REAPER_TOKEN: ${{ github.token }}
           MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
