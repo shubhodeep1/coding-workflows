@@ -10,7 +10,9 @@ workflow dispatch and `gh pr merge`.
 
 State keys (all optional): refs {name: sha}, commits {sha: {message, tree,
 parents}}, pulls [PR objects], files {pr: [paths]}, statuses {sha: [status]},
-compare {..}, closed [PR numbers whose GET pulls/<n> reads closed], user "login", fail ["substring", ...] (any call whose joined
+compare {..}, closed [PR numbers whose GET pulls/<n> reads closed], user "login",
+runs {sha: [workflow runs]} (actions/runs?head_sha=), check_runs {sha: [check-runs]}
+(commits/<sha>/check-runs), fail ["substring", ...] (any call whose joined
 argv contains one fails), move_ref_on_patch {ref: sha} (simulates a peer
 winning the race: applied before the first PATCH of that ref), graphql {..}.
 """
@@ -228,10 +230,14 @@ def main() -> None:
 				return
 		fail("no pr")
 	if parts[3:5] == ["actions", "runs"] or (len(parts) > 4 and parts[3] == "actions"):
-		emit({"total_count": 0, "workflow_runs": []}, jq_filter)
+		run_sha = (query.get("head_sha") or [""])[0]
+		runs = state.get("runs", {}).get(run_sha, []) if parts[3:5] == ["actions", "runs"] else []
+		emit({"total_count": len(runs), "workflow_runs": runs}, jq_filter)
 		return
 	if parts[3:4] == ["check-runs"] or (len(parts) > 5 and parts[5] == "check-runs"):
-		emit({"total_count": 0, "check_runs": []}, jq_filter)
+		check_runs = state.get("check_runs", {}).get(parts[4], []) if len(parts) > 5 else []
+		listing = {"total_count": len(check_runs), "check_runs": check_runs}
+		emit([listing] if (slurp and check_runs) else listing, jq_filter)
 		return
 	emit({}, jq_filter)
 

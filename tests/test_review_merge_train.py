@@ -3285,3 +3285,108 @@ def test_poll_release_step_passes_the_trusted_telegram_helper() -> None:
 	# Never the repository's own scripts/ copy.
 	assert "scripts/tg_helpers.sh" not in run.replace(".codex-workflow-src/scripts/tg_helpers.sh", "").replace(
 		".codex-workflow-src-main/scripts/tg_helpers.sh", "")
+
+
+def test_merge_lease_tick_metrics_are_additive_and_guarded():
+	"""Merge-lease Phase 1 metrics (Refs #9781): the tick emits MERGE_LEASE_METRIC
+	only behind a `declare -F` guard, so an older staged pr_checks_lib.sh without
+	the helper still releases and grants, and every existing MERGE_LEASE tick
+	line keeps its exact format."""
+	text = SCRIPT.read_text()
+	start = text.index("_mt_merge_lease_tick()\n{")
+	body = text[start:text.index("\n}\n", start)]
+	assert "declare -F _merge_lease_metric >/dev/null 2>&1 && tick_metric_ok=1" in body
+	calls = [line.strip() for line in body.splitlines() if "_merge_lease_metric " in line and "declare -F" not in line]
+	# 9 Phase 1 calls plus Phase 2's skipped (skip_head_unchanged, ineligible)
+	# and no_waiter reason=no_eligible_waiter.
+	assert len(calls) == 12, calls
+	for call in calls:
+		assert call.startswith('[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric '), call
+		assert call.endswith("|| true"), call
+	for fmt in (
+		'_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=held reason=holder_open"',
+		'_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=released reason=${tick_reason}"',
+		'_mt_log "MERGE_LEASE pr=- base=${tick_base} mode=tick outcome=no_waiter reason=lease_free"',
+		'_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=first_in_queue"',
+		'_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=dispatch_failed_sweep_retries"',
+		'_mt_warn "MERGE_LEASE mode=tick outcome=unavailable reason=refs_list_failed (no lease freed or granted this tick)"',
+		'_mt_warn "MERGE_LEASE base=${tick_base} mode=tick outcome=unavailable reason=read_failed"',
+	):
+		assert fmt in body, fmt
+	# The grant metric's ts is taken right after the lease write, before the
+	# unlabel and the dispatch, so dispatch latency is not counted as wait.
+	# rindex: the grant's unlabel is the last one (Phase 2 also unlabels an
+	# ineligible candidate in the grant loop, before any write).
+	assert body.index('tick_grant_ts="$(date -u +%s') < body.rindex('_merge_lease_unlabel_wait "${tick_first}"')
+	# No new GitHub call: the tick's gh reads are the matching-refs listing and
+	# the live holder-state read, as before the metrics.
+	assert body.count("gh_retry _safe_gh_jq") == 2
+
+
+def test_list_open_prs_emits_the_title_for_the_merge_lease():
+	"""Merge-lease Phase 2 (Refs #9781): _mt_list_open_prs adds `title` (the
+	lease tick's `[skip ai]` check) and keeps every existing field."""
+	text = SCRIPT.read_text()
+	start = text.index("_mt_list_open_prs() {")
+	body = text[start:text.index("\n}\n", start)]
+	program = re.search(r"--jq '([^']*)'", body).group(1)
+	listing = [{"number": 5, "head": {"ref": "ai/issue-5", "sha": "a" * 40, "repo": {"full_name": "o/r"}},
+		"created_at": "2026-11-19T00:00:00Z", "base": {"ref": "main"}, "draft": False,
+		"labels": [{"name": "ai:merge-lease-wait"}], "title": "Fix [skip ai] \"quoted\""},
+		{"number": 6, "head": {"ref": "ai/issue-6", "sha": "b" * 40, "repo": None},
+		"base": {"ref": "main"}, "draft": True, "labels": []}]
+	res = subprocess.run(["jq", "-r", program], input=json.dumps(listing), capture_output=True, text=True, check=True)
+	rows = [json.loads(line) for line in res.stdout.splitlines()]
+	assert len(rows) == 2
+	assert rows[0] == {"number": 5, "head": "ai/issue-5", "head_repo": "o/r", "head_sha": "a" * 40,
+		"created_at": "2026-11-19T00:00:00Z", "base": "main", "draft": False, "labels": ["ai:merge-lease-wait"],
+		"title": 'Fix [skip ai] "quoted"'}
+	assert rows[1]["title"] == ""
+	assert rows[1]["head_repo"] == ""
+
+
+def test_merge_lease_tick_phase_2_is_guarded_by_the_staged_library():
+	"""Phase 2 runs only when the staged pr_checks_lib.sh has its helpers, and
+	the tick adds no direct GitHub call of its own."""
+	text = SCRIPT.read_text()
+	start = text.index("_mt_merge_lease_tick()\n{")
+	body = text[start:text.index("\n}\n", start)]
+	assert "declare -F _merge_lease_pr_eligible >/dev/null 2>&1" in body
+	assert 'if [ "${tick_p2_lib}" = 1 ] && _merge_lease_revoke_enabled; then' in body
+	assert "local tick_max_candidates=10" in body
+	assert '_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=skipped reason=${tick_skip_why}"' in body
+
+
+def _merge_lease_queue_first_from_train_rows(listing: list[dict], extra_env: dict[str, str] | None = None) -> str:
+	"""Run the _mt_list_open_prs --jq program over a REST listing, then the
+	staged library's _merge_lease_queue_first over the slurped rows."""
+	text = SCRIPT.read_text()
+	start = text.index("_mt_list_open_prs() {")
+	body = text[start:text.index("\n}\n", start)]
+	program = re.search(r"--jq '([^']*)'", body).group(1)
+	assert "head: .head.ref" in program
+	assert "head_repo: (.head.repo.full_name" in program
+	res = subprocess.run(["jq", "-r", program], input=json.dumps(listing), capture_output=True, text=True, check=True)
+	rows = "[" + ",".join(res.stdout.splitlines()) + "]"
+	env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "GITHUB_REPOSITORY": "o/r", "ROWS": rows, **(extra_env or {})}
+	lib = REPO_ROOT / "scripts" / "pr_checks_lib.sh"
+	out = subprocess.run(["bash", "-c", f'source {str(lib)!r}; _merge_lease_queue_first "${{ROWS}}" ""'],
+		env=env, capture_output=True, text=True, check=True)
+	return out.stdout
+
+
+def test_merge_lease_queue_ranks_forward_merge_rows_from_the_train_listing():
+	"""Merge-lease Phase 3 (Refs #9781): the tick's rows carry the head ref and
+	head repository, so a same-repository forward-merge waiter orders first."""
+	def pr(num: int, ref: str, repo: str = "o/r") -> dict:
+		return {"number": num, "head": {"ref": ref, "sha": f"{num:040d}", "repo": {"full_name": repo}},
+			"created_at": "2026-11-19T00:00:00Z", "base": {"ref": "main"}, "draft": False,
+			"labels": [{"name": "ai:merge-lease-wait"}], "title": ""}
+	listing = [pr(5, "ai/issue-5"), pr(12, "auto/forward-merge-stable-1-1")]
+	assert _merge_lease_queue_first_from_train_rows(listing) == "12"
+	# Unchanged ordering when no forward-merge PR waits.
+	assert _merge_lease_queue_first_from_train_rows([pr(5, "ai/issue-5"), pr(12, "ai/issue-12")]) == "5"
+	# A fork head with a forward-merge name gets no priority.
+	assert _merge_lease_queue_first_from_train_rows([pr(5, "ai/issue-5"), pr(12, "auto/forward-merge-stable-1-1", "x/r")]) == "5"
+	# The kill switch restores number order.
+	assert _merge_lease_queue_first_from_train_rows(listing, {"MERGE_LEASE_PRIORITY_HEAD_PREFIXES": "none"}) == "5"
