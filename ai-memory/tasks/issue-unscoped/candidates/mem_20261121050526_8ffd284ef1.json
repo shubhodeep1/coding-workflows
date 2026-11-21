@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:(support-ref resolve step; not touched by this PR) | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The `review / gate` check-run failed on a GitHub primary rate limit (403 on core bucket, exit 75, `endpoint=repos/shubhodeep1/coding-workflows/branches/main`), unrelated to files changed by this PR.\n  WHY: The failure is external and transient, and a re-run after the rate-limit window clears it. Both reviewers rated it NIT, which is mapped to low here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: AD-1 (Option A) selects \"File a separate normal (non-heal) issue for the helper changes and the snapshot regression test.\"\n  expected_change_site: A follow-up GitHub issue, referenced from the PR description or changelog\n  confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  EVIDENCE: No issue number appears in the diff, the PR body or the changelog, which says the helper changes still need their own issue. Opening an issue cannot be done by a file edit. Severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/review_autofix.yml:(support-ref resolve step; not touched by this PR) | severity=NIT | confidence=5\n  PROBLEM: The gate failed on a GitHub primary rate limit (403 on the core bucket, 1166 s to reset).\n  WHY: It is external and transient, and does not map to any file this PR changes. A re-run after the rate-limit window should clear it.\n- TASK_GAP:\n  Requirement: AD-1 (Option A) says to file a separate normal (non-heal) issue for the helper changes and the snapshot regression test.\n  Expected change site: A follow-up GitHub issue, referenced from the PR body or changelog.\n  Evidence of absence: No issue number appears in the diff, the PR body or the changelog, which says the helper changes \"still need their own issue\". Opening an issue is a GitHub action that no file edit can do, so this is a process gap, not a code gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: AD-1 selects \"File a separate normal (non-heal) issue for the helper changes and the snapshot regression test.\"\n  Expected change site: A follow-up GitHub issue, referenced from the PR description or changelog.\n  Evidence of absence: The PR description and changelog say the helper changes still need their own issue, but provide no follow-up issue reference.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/clarify.yml:1913-1916 | severity=NIT | confidence=5\n  PROBLEM: The PR head has one failed check-run, `review / gate`, which exited 75 after a GitHub API 403 (core bucket, ~1166 s to reset) at `gh_api_retry repos/shubhodeep1/coding-workflows/branches/main`. It is a transient rate-limit failure in the review support-ref resolution (review_autofix.yml support-identity step), not caused by any file this PR changes.\n  WHY: The gate job could not resolve the protected main branch SHA before its rate-limit reset window, so the review result stayed unverified. A re-run after the window clears it, and no diff change is required.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9a99704401113327a13bc1cd88e348b27e348c5d534625c56bde8ed825ae42be",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9840,
+    "run_id": "44861663959",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44861663959",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121050526_8ffd284ef1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9840,
+    "run_id": "44861663959"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T05:05:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
