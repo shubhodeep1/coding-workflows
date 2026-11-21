@@ -593,6 +593,279 @@ if [ "${_ff_kept}" -gt 0 ]; then
   fi
 fi
 
+# >>> non-fragment modify/delete take-base
+# Issue #9886 (Phase 4 of docs/plans/pipeline-human-wait-elimination-plan.md;
+# PR #9452 parked on it): the PR changed a file only as part of a repo-wide
+# sweep (for example a `runs-on:` pin applied to every workflow) while a
+# squash-merged base PR deleted that file. That conflicts modify/delete
+# (index stages exactly 1 2) and the model resolver left it unmerged on every
+# run. Take the base side's deletion here, on the trusted runner, when:
+#   - the path is not a changelog.d / agents.d fragment, not under .ai/, not
+#     .gitleaksignore and not the workspace manifest (their own rules own
+#     those paths), is a regular 100644/100755 blob at stage 2 and not a
+#     symlink in the worktree (reason=not_regular);
+#   - the head is not an orchestrator/project-* integration-sync branch
+#     (reason=integration_sync): a merged sub-issue fingerprint may name the
+#     file, the fingerprints load only after this block, and a deferred commit
+#     that then failed the fingerprint check would exit with no retry state;
+#   - the commit that deleted it on the base side ends in "(#N)"
+#     (reason=no_pr_number);
+#   - the PR changed at most CONFLICT_MODIFY_DELETE_MAX_CHANGED_LINES lines of
+#     it (default 20, clamped 1..200; reason=too_large / no_pr_change /
+#     binary), and every non-blank changed line (sign kept, leading whitespace
+#     stripped, the path itself removed) is also changed with the same sign in
+#     another file the PR adds or modifies that is not itself a 1 2 conflict
+#     (reason=not_a_sweep).
+# Any other shape, or any git / parse error, leaves the path in the resolver
+# allowlist (fail closed: the model still gets it, with stage context). The
+# dropped PR-side edit is recorded in RESOLVER_DROPPED_EDITS_FILE and posted
+# on the PR (modify_delete_take_base_comment.md, marker
+# <!-- ai:modify-delete-take-base:v1 pr=<n> head=<sha> -->) once the merge
+# commit exists. This block never commits: the commit tail below does (its
+# orchestrator/project-* deferral to the integration fingerprint check stays
+# as a fail-closed backstop; the integration_sync skip keeps it unreached).
+# Switch: CONFLICT_MODIFY_DELETE_TAKE_BASE_ENABLED (default true; unset, empty
+# or true in any case is on, false off, anything else off with a warning).
+# Log key: "Modify/delete take-base: path=<p|redacted> deleted_by=#<n>
+# pr_lines=<k>" or "... outcome=skip reason=<token>".
+RESOLVER_DROPPED_EDITS_FILE="${RESOLVER_DROPPED_EDITS_FILE:-${RUNTIME_DIR}/resolver_dropped_edits.tsv}"
+_mdd_comment_file="${RUNTIME_DIR}/modify_delete_take_base_comment.md"
+rm -f -- "${_mdd_comment_file}" "${_mdd_comment_file}.posted" "${RESOLVER_DROPPED_EDITS_FILE}"
+_mdd_resolved=false
+_mdd_defer_commit=false
+_mdd_taken=0
+_mdd_taken_paths=""
+_mdd_pr="${PR_NUMBER:-none}"
+_mdd_switch="$(printf '%s' "${CONFLICT_MODIFY_DELETE_TAKE_BASE_ENABLED-}" | tr '[:upper:]' '[:lower:]')"
+_mdd_enabled=false
+case "${_mdd_switch}" in
+  ''|true) _mdd_enabled=true ;;
+  false) ;;
+  *) echo "::warning::Modify/delete take-base: CONFLICT_MODIFY_DELETE_TAKE_BASE_ENABLED has an unrecognised value; take-base is off." ;;
+esac
+# Paths are logged only when they match a conservative character set.
+_conflict_prepare_mdd_log_path()
+{
+  if [[ "$1" =~ ^[A-Za-z0-9._/-]{1,128}$ ]]; then
+    printf '%s' "$1"
+  else
+    printf '%s' "redacted"
+  fi
+}
+if [ "${_mdd_enabled}" = "true" ] && [ "${_resolver_allowlist_count}" -gt 0 ] \
+   && git rev-parse -q --verify 'MERGE_HEAD^{commit}' >/dev/null 2>&1; then
+  _mdd_max_lines="${CONFLICT_MODIFY_DELETE_MAX_CHANGED_LINES:-20}"
+  if [[ "${_mdd_max_lines}" =~ ^[0-9]{1,6}$ ]]; then
+    _mdd_max_lines="$((10#${_mdd_max_lines}))"
+    [ "${_mdd_max_lines}" -ge 1 ] || _mdd_max_lines=1
+    [ "${_mdd_max_lines}" -le 200 ] || _mdd_max_lines=200
+  else
+    echo "::warning::Modify/delete take-base: CONFLICT_MODIFY_DELETE_MAX_CHANGED_LINES is not a non-negative integer; falling back to 20."
+    _mdd_max_lines=20
+  fi
+  _mdd_merge_base="$(git merge-base HEAD MERGE_HEAD 2>/dev/null || true)"
+  if [ -z "${_mdd_merge_base}" ]; then
+    echo "Modify/delete take-base: outcome=skip reason=no_merge_base"
+  else
+    _mdd_dir="$(mktemp -d)"
+    : > "${_mdd_dir}/candidates.txt"
+    : > "${_mdd_dir}/eligible.tsv"
+    : > "${_mdd_dir}/results.tsv"
+    : > "${_mdd_dir}/sections.md"
+    while IFS= read -r _mdd_path; do
+      [ -n "${_mdd_path}" ] || continue
+      _mdd_stages="$(git --literal-pathspecs ls-files -u -- "${_mdd_path}" 2>/dev/null | awk '{print $3}' | sort -u | tr '\n' ' ' || true)"
+      if [ "${_mdd_stages}" = "1 2 " ]; then
+        printf '%s\n' "${_mdd_path}" >> "${_mdd_dir}/candidates.txt"
+      fi
+    done < "${RESOLVER_ALLOWLIST_FILE}"
+    while IFS= read -r _mdd_path; do
+      [ -n "${_mdd_path}" ] || continue
+      case "${_mdd_path}" in
+        changelog.d/*|agents.d/*|.ai/*|.gitleaksignore|"${MANIFEST_UNION_PATH:-.ai/.workspace_source_manifest.txt}")
+          continue
+          ;;
+      esac
+      _mdd_log="$(_conflict_prepare_mdd_log_path "${_mdd_path}")"
+      # Integration sync: a merged sub-issue's fingerprint may name this file,
+      # and the fingerprints load only after this block, so leave the path to
+      # the model (with fingerprint and stage context) as before #9886.
+      case "${TARGET_BRANCH:-${HEAD_REF:-}}" in
+        orchestrator/project-*)
+          echo "Modify/delete take-base: path=${_mdd_log} outcome=skip reason=integration_sync"
+          continue
+          ;;
+      esac
+      _mdd_mode="$(git --literal-pathspecs ls-files -u -- "${_mdd_path}" 2>/dev/null | awk '$3 == "2" {print $1; exit}' || true)"
+      case "${_mdd_mode}" in
+        100644|100755) ;;
+        *)
+          echo "Modify/delete take-base: path=${_mdd_log} outcome=skip reason=not_regular"
+          continue
+          ;;
+      esac
+      if [ -L "${_mdd_path}" ] || [ ! -f "${_mdd_path}" ]; then
+        echo "Modify/delete take-base: path=${_mdd_log} outcome=skip reason=not_regular"
+        continue
+      fi
+      _mdd_del="$(git --literal-pathspecs log --diff-filter=D -1 --format='%H%x09%s' "${_mdd_merge_base}..MERGE_HEAD" -- "${_mdd_path}" 2>/dev/null || true)"
+      _mdd_subject="${_mdd_del#*$'\t'}"
+      _mdd_pr_re='\(#([0-9]{1,10})\)$'
+      if [ -z "${_mdd_del}" ] || ! [[ "${_mdd_subject}" =~ ${_mdd_pr_re} ]]; then
+        echo "Modify/delete take-base: path=${_mdd_log} outcome=skip reason=no_pr_number"
+        continue
+      fi
+      printf '%s\t%s\n' "${BASH_REMATCH[1]}" "${_mdd_path}" >> "${_mdd_dir}/eligible.tsv"
+    done < "${_mdd_dir}/candidates.txt"
+    if [ -s "${_mdd_dir}/eligible.tsv" ]; then
+      # Containment test. Output: "<token>\t<changed lines>\t<n>\t<path>" per
+      # eligible path, plus the PR number; token "ok" means a sweep. Any error
+      # skips every path.
+      if ! PYTHONDONTWRITEBYTECODE=1 PYTHONSAFEPATH=1 python3 -c '
+import subprocess, sys
+merge_base, cap, cand_file, elig_file = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+def git(*args):
+    return subprocess.run(["git", "--literal-pathspecs", *args], capture_output=True, check=True, timeout=120).stdout
+def changed(path):
+    out = git("diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", merge_base, "HEAD", "--", path).decode("utf-8", "replace")
+    lines, binary, in_hunk = [], False, False
+    for line in out.split("\n"):
+        if line.startswith("diff --git "):
+            in_hunk = False
+            continue
+        if not in_hunk:
+            if line.startswith("Binary files ") or line.startswith("GIT binary patch"):
+                binary = True
+            if line.startswith("@@"):
+                in_hunk = True
+            continue
+        if line.startswith("@@"):
+            continue
+        if line[:1] in ("+", "-"):
+            lines.append(line)
+    return binary, lines
+def norm(line, path):
+    return line[0] + line[1:].replace(path, "").lstrip()
+with open(cand_file, encoding="utf-8", errors="surrogateescape") as fh:
+    conflicted = {p for p in fh.read().split("\n") if p}
+eligible = []
+with open(elig_file, encoding="utf-8", errors="surrogateescape") as fh:
+    for row in fh.read().split("\n"):
+        if row:
+            eligible.append(tuple(row.split("\t", 1)))
+names = [n.decode("utf-8", "surrogateescape") for n in git("diff", "--name-only", "-z", "--no-renames", "--diff-filter=AM", merge_base, "HEAD").split(b"\0") if n]
+others = []
+for name in sorted(n for n in names if n not in conflicted)[:2000]:
+    try:
+        binary, lines = changed(name)
+    except Exception:
+        continue
+    if not binary:
+        others.append(lines)
+for pr, path in eligible:
+    try:
+        binary, lines = changed(path)
+    except Exception:
+        print("diff_failed\t0\t" + pr + "\t" + path)
+        continue
+    count = len(lines)
+    if binary:
+        token = "binary"
+    elif count == 0:
+        token = "no_pr_change"
+    elif count > cap:
+        token = "too_large"
+    else:
+        wanted = {norm(l, path) for l in lines}
+        wanted = {w for w in wanted if w[1:]}
+        pool = set()
+        for other in others:
+            pool.update(norm(l, path) for l in other)
+        token = "ok" if wanted and wanted <= pool else "not_a_sweep"
+    print(token + "\t" + str(count) + "\t" + pr + "\t" + path)
+' "${_mdd_merge_base}" "${_mdd_max_lines}" "${_mdd_dir}/candidates.txt" "${_mdd_dir}/eligible.tsv" > "${_mdd_dir}/results.tsv" 2>/dev/null; then
+        : > "${_mdd_dir}/results.tsv"
+        while IFS=$'\t' read -r _mdd_n _mdd_path; do
+          [ -n "${_mdd_path}" ] || continue
+          echo "Modify/delete take-base: path=$(_conflict_prepare_mdd_log_path "${_mdd_path}") outcome=skip reason=diff_failed"
+        done < "${_mdd_dir}/eligible.tsv"
+      fi
+    fi
+    while IFS=$'\t' read -r _mdd_token _mdd_lines _mdd_n _mdd_path; do
+      [ -n "${_mdd_path}" ] || continue
+      _mdd_log="$(_conflict_prepare_mdd_log_path "${_mdd_path}")"
+      if [ "${_mdd_token}" != "ok" ]; then
+        echo "Modify/delete take-base: path=${_mdd_log} outcome=skip reason=${_mdd_token}"
+        continue
+      fi
+      if ! [[ "${_mdd_n}" =~ ^[0-9]{1,10}$ ]]; then
+        echo "Modify/delete take-base: path=${_mdd_log} outcome=skip reason=no_pr_number"
+        continue
+      fi
+      git --literal-pathspecs diff --no-color --no-ext-diff "${_mdd_merge_base}" HEAD -- "${_mdd_path}" > "${_mdd_dir}/dropped_full.diff" 2>/dev/null || true
+      head -n 10 "${_mdd_dir}/dropped_full.diff" > "${_mdd_dir}/dropped.diff" || true
+      git --literal-pathspecs rm -q -- "${_mdd_path}" >/dev/null 2>&1 || { echo "::error::Modify/delete take-base failed path=${_mdd_log}"; rm -rf -- "${_mdd_dir}"; exit 1; }
+      if [ -n "$(git --literal-pathspecs ls-files -u -- "${_mdd_path}" 2>/dev/null || echo error)" ]; then
+        echo "::error::Modify/delete take-base left ${_mdd_log} unmerged; refusing to dispatch resolver."
+        rm -rf -- "${_mdd_dir}"
+        exit 1
+      fi
+      printf '%s\t#%s\t%s\n' "${_mdd_path}" "${_mdd_n}" "${_mdd_lines}" >> "${RESOLVER_DROPPED_EDITS_FILE}"
+      _mdd_taken=$((_mdd_taken + 1))
+      _mdd_taken_paths="${_mdd_taken_paths:+${_mdd_taken_paths} }${_mdd_path}"
+      echo "Modify/delete take-base: path=${_mdd_log} deleted_by=#${_mdd_n} pr_lines=${_mdd_lines}"
+      _mdd_fence_len="$(grep -o '`\+' "${_mdd_dir}/dropped.diff" 2>/dev/null | awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }' || true)"
+      [ "${_mdd_fence_len:-0}" -ge 3 ] || _mdd_fence_len=2
+      _mdd_fence="$(printf '%*s' "$((_mdd_fence_len + 1))" '' | tr ' ' '`')"
+      {
+        printf '\n#### `%s`\n\n' "${_mdd_path//\`/}"
+        printf '%s\n\n' "Deleted on \`${BASE_BRANCH:-the base branch}\` by #${_mdd_n}; this PR changed ${_mdd_lines} line(s) of it, all repeated in other files of the PR."
+        if [ -s "${_mdd_dir}/dropped.diff" ]; then
+          printf '%sdiff\n' "${_mdd_fence}"
+          cat "${_mdd_dir}/dropped.diff"
+          printf '%s\n' "${_mdd_fence}"
+        else
+          printf '%s\n' "(no PR-side diff against the merge base)"
+        fi
+      } >> "${_mdd_dir}/sections.md"
+    done < "${_mdd_dir}/results.tsv"
+    if [ "${_mdd_taken}" -gt 0 ]; then
+      {
+        printf '%s\n' "<!-- ai:modify-delete-take-base:v1 pr=${_mdd_pr} head=$(git rev-parse HEAD) -->"
+        printf '%s\n\n' "### Modify/delete conflicts resolved with \`${BASE_BRANCH:-the base branch}\`'s deletion"
+        printf '%s\n' "The merge with \`origin/${BASE_BRANCH:-the base branch}\` conflicted on file(s) a base-branch PR deleted and this PR changed only as part of a sweep across other files (log key \`Modify/delete take-base:\`). Each path below took the deletion without a model call. The PR's edits to them (first 10 diff lines shown) were dropped; re-apply any that are still needed in a follow-up change."
+        head -c 61440 "${_mdd_dir}/sections.md"
+        if [ "$(wc -c < "${_mdd_dir}/sections.md" | tr -d '[:space:]')" -gt 61440 ]; then
+          printf '\n\n%s\n' "(dropped diff omitted: comment size budget reached; the text above may end mid-diff)"
+        fi
+      } > "${_mdd_comment_file}"
+      git diff --name-only --diff-filter=U | sort -u > "${RESOLVER_ALLOWLIST_FILE}" || true
+      _resolver_allowlist_count="$(wc -l < "${RESOLVER_ALLOWLIST_FILE}" | tr -d '[:space:]')"
+      echo "Modify/delete take-base: ${_mdd_taken} path(s) took the base deletion, ${_resolver_allowlist_count} unmerged path(s) remain."
+      _mdd_resolved=true
+      if [ "${_resolver_allowlist_count}" -eq 0 ]; then
+        # The commit tail below commits, or defers on integration sync.
+        _mdd_defer_commit=true
+      fi
+    fi
+    rm -rf -- "${_mdd_dir}"
+  fi
+fi
+# Posts the modify/delete take-base comment once the merge commit exists.
+# Fail-open: a failed post only warns; the merge commit stands.
+_conflict_prepare_post_modify_delete_comment()
+{
+  [ -f "${_mdd_comment_file:-}" ] && [ ! -L "${_mdd_comment_file}" ] || return 0
+  [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]] && [ -n "${GITHUB_REPOSITORY:-}" ] || return 0
+  if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -F "body=@${_mdd_comment_file}" >/dev/null 2>&1; then
+    mv -f -- "${_mdd_comment_file}" "${_mdd_comment_file}.posted" 2>/dev/null || true
+  else
+    echo "::warning::Modify/delete take-base: failed to post the dropped-edits comment on PR #${PR_NUMBER}; the merge commit stands."
+  fi
+  return 0
+}
+# <<< non-fragment modify/delete take-base
+
 # >>> .ai/ validation asset take-base (integration sync)
 # The resolver sandbox excludes .ai/ (review_untrusted_workspace.py EXCLUDED),
 # so a conflict on a tracked .ai/ file failed every integration-sync resolver
@@ -800,6 +1073,10 @@ _conflict_prepare_commit_deterministic_merge()
     git checkout -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' 2>/dev/null || true
   fi
   git commit -m "[ai-merge-resolve] resolve merge conflicts"
+  # Modify/delete take-base (issue #9886): post the dropped-edits comment.
+  if type _conflict_prepare_post_modify_delete_comment >/dev/null 2>&1; then
+    _conflict_prepare_post_modify_delete_comment
+  fi
   for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
     if [ -d "${RESOLVE_STASH}/${d}" ]; then
       cp -a "${RESOLVE_STASH}/${d}/." "${d}/" 2>/dev/null || cp -a "${RESOLVE_STASH}/${d}" "${d}"
@@ -1172,11 +1449,14 @@ _det_commit_path="${_det_commit_path:-${MANIFEST_UNION_PATH}}"
 if [ "${_ghm_resolved:-false}" = "true" ] && [ "${_resolver_allowlist_count}" -eq 0 ] \
    && [ "${_mu_resolved}" != "true" ] && [ "${_ff_defer_commit}" != "true" ] \
    && [ "${_gl_resolved:-false}" != "true" ] \
+   && [ "${_mdd_resolved:-false}" != "true" ] \
    && [ "${_ai_resolved:-false}" != "true" ]; then
   # A .gitleaksignore union (issue #9659) that resolved the last path owns the
   # commit: it committed already, or on integration sync its deferral below
   # waits for the fingerprint check (a hook resolved earlier, while
   # .gitleaksignore was still unmerged, left _ghm_defer_commit false).
+  # A modify/delete take-base (issue #9886) owns it the same way: its tail
+  # below commits, or defers to the fingerprint check on integration sync.
   if [ "${_ghm_defer_commit:-false}" = "true" ]; then
     _mu_defer_commit=true
     _det_commit_label="Guard-hook template merge"
@@ -1204,6 +1484,25 @@ if [ "${_resolver_allowlist_count}" -eq 0 ] && [ "${_mu_defer_commit}" != "true"
   _det_commit_scope=".ai-asset-only"
   _det_commit_path="$(paste -sd ' ' "${AI_ASSET_TAKE_BASE_PATHS_FILE}" 2>/dev/null || echo .ai/)"
   echo ".ai asset take-base: integration-sync branch; deferring the merge commit until the integration fingerprint check has run on the merged tree."
+fi
+
+# Non-fragment modify/delete take-base (issue #9886) that resolved the last
+# unmerged path: commit through the shared tail, or on an integration-sync
+# branch defer the commit until the fingerprint check below has run.
+if [ "${_resolver_allowlist_count}" -eq 0 ] && [ "${_mu_defer_commit}" != "true" ] && [ "${_ff_defer_commit}" != "true" ] \
+   && [ "${_mdd_defer_commit:-false}" = "true" ]; then
+  case "${TARGET_BRANCH:-${HEAD_REF:-}}" in
+    orchestrator/project-*)
+      _mu_defer_commit=true
+      _det_commit_label="Modify/delete take-base"
+      _det_commit_scope="modify-delete-only"
+      _det_commit_path="${_mdd_taken_paths:-modify/delete paths}"
+      echo "Modify/delete take-base: integration-sync branch; deferring the merge commit until the integration fingerprint check has run on the merged tree."
+      ;;
+    *)
+      _conflict_prepare_commit_deterministic_merge "Modify/delete take-base"
+      ;;
+  esac
 fi
 
 # .gitleaksignore union (issue #9659) on an integration-sync branch, when it
@@ -1541,6 +1840,10 @@ for index, issue in enumerate(issues):
               else
                 echo "::warning::Host-only take-base: failed to post the dropped-changes comment on PR #${PR_NUMBER}; the merge commit stands."
               fi
+            fi
+            # Modify/delete take-base (issue #9886): post its dropped edits too.
+            if type _conflict_prepare_post_modify_delete_comment >/dev/null 2>&1; then
+              _conflict_prepare_post_modify_delete_comment
             fi
             rm -rf "${_ho_dir}"
             echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"
@@ -1890,6 +2193,9 @@ if [ "${_mu_defer_commit}" = "true" ] || [ "${_ff_defer_commit}" = "true" ]; the
   git commit -m "[ai-merge-resolve] resolve merge conflicts"
   if type _conflict_prepare_post_ai_asset_comment >/dev/null 2>&1; then
     _conflict_prepare_post_ai_asset_comment
+  fi
+  if type _conflict_prepare_post_modify_delete_comment >/dev/null 2>&1; then
+    _conflict_prepare_post_modify_delete_comment
   fi
   echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"
   echo "${_det_commit_label:-Manifest union-merge}: integration fingerprints verified on the merged tree — committed deterministic merge resolution (push deferred); Codex resolver will be skipped."

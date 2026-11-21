@@ -4421,6 +4421,9 @@ jobs:
           # Take the default branch's .ai/validate.yml on an orchestrator/project-*
           # integration-sync conflict (the sandbox excludes .ai/).
           CONFLICT_AI_ASSET_TAKE_BASE_ENABLED: ${{ vars.CONFLICT_AI_ASSET_TAKE_BASE_ENABLED || 'true' }}
+          # Take the base deletion of a non-fragment file the PR only touched in a
+          # repo-wide sweep (modify/delete, #9886).
+          CONFLICT_MODIFY_DELETE_TAKE_BASE_ENABLED: ${{ vars.CONFLICT_MODIFY_DELETE_TAKE_BASE_ENABLED || 'true' }}
           # Read the poller's ORCHESTRATOR_STATE_V2 state (merged sub-issues and
           # their fingerprints) on an integration-sync conflict; 'false' keeps
           # the V1-only read, which leaves the resolver's fingerprint check off.
@@ -4469,6 +4472,8 @@ jobs:
           RESOLVER_NON_RETRYABLE_ESCALATE_ENABLED: ${{ vars.RESOLVER_NON_RETRYABLE_ESCALATE_ENABLED || 'true' }}
           # Provenance check: resolved regions must come from ours or theirs (#9842).
           RESOLVER_PROVENANCE_CHECK_ENABLED: ${{ vars.RESOLVER_PROVENANCE_CHECK_ENABLED || 'true' }}
+          # Modify/delete stage context and the in-loop unmerged-path check (#9886).
+          CONFLICT_MODIFY_DELETE_TAKE_BASE_ENABLED: ${{ vars.CONFLICT_MODIFY_DELETE_TAKE_BASE_ENABLED || 'true' }}
           # Decoupled from EDITOR_REASONING_EFFORT: the smoke-test override
           # ("Detect smoke test PR" step) sets editor reasoning to "none" so
           # the single-line bait removal completes deterministically. The
