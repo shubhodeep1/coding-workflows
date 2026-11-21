@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/operator_step_issue.py:1273 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: Parked items omitted from the digest because entry or overflow caps are full are classified as not parked in the next prune.\n  WHY: The prune excludes only items in `entries` and `overflow`, so dropped parked items are misleadingly shown as items the unblock judge may still act on; severity is high because two reviewers marked it MAJOR and two marked it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/operator_step_issue.py:1059 | severity=high | confidence=5\n  PROBLEM: Parked items dropped due to the digest overflow cap are incorrectly listed in the \"not parked\" section.\n  WHY: The `parked_items` set does not include items dropped from the digest because they exceed the overflow limit, so those items remain in `others` and are rendered as not-parked, misleading operators.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/operator_step_issue.py:1273; 1189-1195 | severity=high | confidence=5\n  PROBLEM: Items parked after both caps are full are counted as dropped without recording their numbers, so the next prune classifies them as unparked.\n  WHY: Dropped items still carrying `ai:needs-human` are absent from `entries` and `overflow`, so they appear in the \"Also labelled `ai:needs-human` (not parked)\" section even though the judge already tried to park them.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/operator_step_issue.py:1194-1195, 1273 | severity=low | confidence=5\n  PROBLEM: When the digest has reached both caps, parking another item increments `dropped` without recording its number, so the prune can show a previously parked, dropped item in the \u201cnot parked\u201d section.\n  WHY: After the 200 entry and 1,000 overflow slots are full, a subsequent parked item can be included in the unparked listing on the next prune, misrepresenting its parking status.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/operator_step_issue.py:1273; 1062-1066; 1190-1195 | severity=low | confidence=3\n  PROBLEM: A parked item that exceeded both digest caps is counted only in `dropped`/`total_dropped` and written nowhere, so the prune renders it as not parked.\n  WHY: Once the digest exceeds both caps, every subsequent prune tick re-lists those dropped parked items as not parked until their items close; this is a display-only misinformation edge, not a functional break.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "aefc99c9f74c5507e3f54d8f70f1794a56a8f622d4896a893e16dd2eeb40a358",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9859,
+    "run_id": "44858926360",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44858926360",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121034454_1298f67395",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9859,
+    "run_id": "44858926360"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T03:44:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
