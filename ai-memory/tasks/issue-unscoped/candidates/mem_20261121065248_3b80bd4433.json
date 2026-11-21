@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cTouch only the files the plan lists for Phase 3, plus any contract tests, changelog.d/ fragment and agents.d/ fragment the plan calls for.\u201d\n  expected_change_site: `scripts/stage_workflow_support.sh` should remain unchanged; it is not listed in the Phase 3 plan or the issue\u2019s `files_touched` grant.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The plan\u2019s Phase 3 file list and the grant omit `scripts/stage_workflow_support.sh`, but the PR adds prompt-staging logic there at lines 402-412 (disputed by anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash, which state the `<!-- ai:pipeline-plan-grant:v1 -->` files_touched list names `scripts/stage_workflow_support.sh`)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cTouch only the files the plan lists for Phase 3, plus any contract tests, changelog.d/ fragment and agents.d/ fragment the plan calls for.\u201d\n  Expected change site: `scripts/stage_workflow_support.sh` should remain unchanged; it is not listed in the Phase 3 plan or the issue\u2019s `files_touched` grant.\n  Evidence of absence: The plan\u2019s Phase 3 file list and the grant omit `scripts/stage_workflow_support.sh`, but the PR adds prompt-staging logic there at lines 402-412.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "89b24cf6eab8eac4d2ac0a04862e75db3dfd2638d6ac8eee86340a4127acb245",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9843,
+    "run_id": "44876309018",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44876309018",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121065248_3b80bd4433",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9843,
+    "run_id": "44876309018"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-21T06:52:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
