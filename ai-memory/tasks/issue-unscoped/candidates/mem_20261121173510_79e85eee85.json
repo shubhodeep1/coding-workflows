@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_prepush_test_gate.sh:583-589,604-612,733-739,831-838 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The backup of untracked files is best-effort (`tar ... 2>/dev/null || rm -f \"${rpg_untracked_backup}\"`). If that backup fails and the repair turn then deletes an untracked editor file, the new `passing_change_erased` guard runs `review_prepush_test_gate_revert all`, which cannot restore the file, yet the guard still logs `outcome=repair_reverted reason=passing_change_erased`.\n  WHY: The tar extract at lines 610-612 is skipped when `[ -s \"${rpg_untracked_backup}\" ]` is false, a missing backup produces no warning, and the deleted file is no longer in `git ls-files --others`, so the editor's change stays lost while the log claims a successful revert. All four flagging reviewers rated it MAJOR. anthropic_claude-sonnet-5_5 disagreed: it judged the path real but not a defect, because the behaviour predates this PR (the lint-only guard at line 815 has the same gap), the outcome is no worse than without the guard, and the precondition is unlikely; it rated only the misleading log as a hardening nit.\n- scripts/review_autofix_step_prepush_test_gate.sh:733-739,831-838 | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `passing_change_erased` guard can fire, and log `outcome=repair_reverted`, when the editor's only change is a NEW untracked file that did not exist when the backup was taken; `revert all` cannot recover that file because the tar at line 738 was created before the editor ran.\n  WHY: The persist loop ends with `stop=reverted` on a misleading log, the commit step finds nothing to commit and reports \"Editor changes lost\", and the regression test does not cover this untracked-file scenario.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_autofix_step_prepush_test_gate.sh:review_prepush_test_gate_revert all called in review_prepush_test_gate_repair (line 835) | severity=MAJOR | confidence=4\n  PROBLEM: If the untracked-file backup fails to capture changes, `review_prepush_test_gate_revert all` cannot restore untracked files that a repair turn deleted.\n  WHY: The editor's changes are lost for good while the log falsely reports \"reverted\", which defeats the goal of issue #9519.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_autofix_step_prepush_test_gate.sh:lines 733-739, 583-589, 604-612, 831-838 | severity=MAJOR | confidence=3\n  PROBLEM: The `passing_change_erased` guard can fire and log `outcome=repair_reverted reason=passing_change_erased` in two cases. First, when the editor's only change is a new untracked file created after the backup at line 738, which `revert all` cannot recover. Second, when the tar at line 738 fails (`|| rm -f \"${rpg_untracked_backup}\"`) and the repair deletes an existing untracked file: `tar -xf` is skipped and `untracked[]` excludes the deleted file. The pre-existing `lint_only_change_erased` guard has the same blind spot.\n  WHY: The persist loop ends with `stop=reverted` on a misleading log, the commit step finds nothing to commit and reports \"Editor changes lost\", and the real outcome is the same as if no guard had fired.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_autofix_step_prepush_test_gate.sh:735-738, 604-612, 831-836 | severity=MAJOR | confidence=4\n  PROBLEM: If creating the untracked-file backup fails, the script deletes the partial archive and carries on. When the repair then deletes an untracked editor change, `review_prepush_test_gate_revert all` has no archive to restore from, but the new guard still logs `passing_change_erased` as though the change was kept.\n  WHY: With a passing pre-repair result and a failed backup, a repair that deletes the editor's untracked file leaves the tree clean and satisfies the guard; the file cannot be restored, so the change stays lost while the run reports a successful revert.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_autofix_step_prepush_test_gate.sh:lines 737-738 (backup creation), 610-612 (restore gated on backup existence), 831-837 (new passing_change_erased guard) | severity=MAJOR | confidence=4\n  PROBLEM: The pre-repair untracked backup is best-effort (`tar ... 2>/dev/null || rm -f \"${rpg_untracked_backup}\"`), and the guard logs `reason=passing_change_erased` regardless of whether it exists. An untracked file deleted by the repair can only be restored by the tar extract at lines 610-612, which is skipped when the backup is absent. A missing backup raises no warning: `untracked_restore_failed` at line 611 fires only when `tar -xf` fails.\n  WHY: The guard logs `outcome=repair_reverted reason=passing_change_erased` and reports \"reverted (it removed the whole change though no test failed)\", but nothing was restored, which is the exact \"Editor changes lost\" outcome #9519 targets. The agents.d fail-safe contract does not cover this case, and the pre-existing lint-only guard (line 815) has the same gap.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7315919a2e44be86ed44e2d83bc429c52b7cacc4e278fe3546e177a8b0ae3468",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9562,
+    "run_id": "44927071098",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44927071098",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121173510_79e85eee85",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9562,
+    "run_id": "44927071098"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T17:35:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
