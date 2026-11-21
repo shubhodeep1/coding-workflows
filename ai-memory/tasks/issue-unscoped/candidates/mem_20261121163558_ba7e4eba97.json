@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_prepush_test_gate.py:699 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The reviewer reported no defect at the `collected >= 5` floor. The cases module defines exactly five `test_*` functions, so the floor matches that count. The reviewer marked it SEVERITY: NIT.\n  WHY: The previous floor of 4 was too low and would have missed a deleted case. The new floor of 5 detects a deletion and still allows new cases to be added.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_implement_prepush_test_gate.py:699 | severity=low | confidence=5\n  PROBLEM: No defect. The `collected >= 5` floor matches the five `test_*` functions in `tests/test_implement_inline_prompt_files_touched_scope.py`. The reviewer marked it SEVERITY: NIT.\n  WHY: The previous floor of 4 was too low and would have missed a deleted case. The new floor of 5 detects a deletion and still allows new cases to be added.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "849911da0b60542dc0c39ab7fa9fa8825c2d2e68bcc3231d0a9bd5c7c0f8b59e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9891,
+    "run_id": "44916671922",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44916671922",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121163558_ba7e4eba97",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9891,
+    "run_id": "44916671922"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-21T16:35:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
