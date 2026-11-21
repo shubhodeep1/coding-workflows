@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/activation_verify.sh:161-204 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: Acronym-prefixed CamelCase object names such as `APIKey` are not detected by the human-object title check, so a gap requiring a person to provide a key can be rerouted as an automated release step.\n  WHY: The normalization only splits lowercase-to-uppercase boundaries, leaving `APIKey` unchanged and the `Key` match blocked by its preceding letter; the same blind spot exists in scripts/operator_step_issue.py lines 713-714.\n- scripts/activation_verify.sh:202-204 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The release-condition check takes precedence over the human-object exclusion, so a secret-naming operator gap with an `@stable contains ...` condition is marked release-pending.\n  WHY: Such a gap is converted to a code gap and omitted from the operator-step issue, contrary to the activation prompt\u2019s rule that secrets stay operator gaps.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/activation_verify.sh:161, 204 | confidence=[4]\n  PROBLEM: The heuristic for detecting sensitive objects in titles fails for identifiers like \"APIKey\".\n  WHY: The normalization logic re.sub(r\"(?<=[a-z])(?=[A-Z])\", \"_\", title) only inserts underscores at lowercase-to-uppercase boundaries, and the HUMAN_OBJECT_TITLE_RE lookbehind (?<![A-Za-z]) prevents matching sensitive words (e.g., \"Key\") when they are immediately preceded by other letters within the same identifier. A title like \"Publish APIKey to stable\" will not be identified as containing a sensitive object (\"Key\"), and the activation verification will incorrectly reroute it as a standard release step, bypassing the necessary operator step.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/activation_verify.sh:204 | severity=high | confidence=[4]\n  PROBLEM: The title-only human-object check misses acronym-prefixed CamelCase names such as `APIKey`. The normalization inserts `_` only between a lowercase and uppercase letter, so `APIKey` remains unchanged and `keys?` does not match `Key` because it is preceded by `I`.\n  WHY: An operator gap titled \u201cPublish APIKey to stable\u201d matches the release-title rule but passes the human-object check. It is rerouted to a release-pending code gap, so no operator step is opened for the person who must provide the key.\n- scripts/activation_verify.sh:202-204 | severity=high | confidence=[4]\n  PROBLEM: The release-condition check takes precedence over the human-object exclusion. Any operator gap with a `@stable contains ...` condition is marked release-pending, even when its title names a secret or other human-provided object.\n  WHY: A gap such as \u201cPublish the DEPLOY_TOKEN secret to stable\u201d with a `@stable contains <sha>` condition is converted to a code gap and omitted from the operator-step issue, contrary to the activation prompt\u2019s rule that secrets stay operator gaps.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/activation_verify.sh:202-204; scripts/operator_step_issue.py:713-714 | severity=high | confidence=[4]\n  PROBLEM: The camelCase-boundary normalization only inserts `_` between a lowercase and an uppercase letter, so acronym-prefixed object names are invisible to HUMAN_OBJECT_TITLE_RE's `(?<![A-Za-z])keys?/tokens?...` lookbehind. A condition-less operator gap titled `Publish APIKey to stable` (or `Rotate SSHKey`, `Add OAuthToken`) matches RELEASE_STEP_TITLE_RE (\"Publish\" verb + \"stable\") and survives the human-object check.\n  WHY: `re.sub` leaves `APIKey` untouched (there is no lower\u2192upper boundary inside `APIKey`), and `Key`/`Token` is preceded by the letters `I`/`h`, so the lookbehind rejects it. The writer's own comment (scripts/operator_step_issue.py:710-711, \"so `npmToken` or `apiKey` count too\") states the intended coverage; lower-camel names work, acronym-prefixed ones do not, so the implementation does not match the documented intent. An activation run emits an `operator` gap \"Publish APIKey to stable\" with no `dormant_until` \u2192 activation_verify.sh marks it `kind: code, release_pending: true` and posts no `ai:operator-step` entry \u2192 the poller's resolve later ticks any such entry that did land and closes the tracker \u2192 the required human action is never performed and nothing flags it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c1c3c67053943a39b2e2b52364a37bc3b6e6aa49848f1a91ab397cb524a77f9d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9872,
+    "run_id": "44864842895",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44864842895",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121060013_1372029843",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9872,
+    "run_id": "44864842895"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T06:00:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
