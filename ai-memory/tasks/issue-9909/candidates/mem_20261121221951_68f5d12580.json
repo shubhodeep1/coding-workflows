@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Planning ref\n- `git rev-parse HEAD`: `001b5b140c8bd07030b3fdd530f2d8c0feaa2425`\n- Branch: `ai/issue-9886`, which is the branch of PR #9896. The integration branch matches (`Integration branch mismatch: false`).\n\n## Files likely to change\n- `tests/test_ci_poll_test_sharding.py`\n\n## Acceptance\nACCEPTANCE: test tests/test_ci_poll_test_sharding.py red-on-base\nACCEPTANCE: check lint\nACCEPTANCE: post-merge workflow .github/workflows/ci.yml\n\n## Change-surface (\u00a720.E)\n- No new script and no change to an existing script. Only one existing test module changes, and it gets no new jobs, steps or workflows.\n- Scheduler entry point: none new. The test already runs in `.github/workflows/ci.yml`, in the `static-checks` job (step \"Validation self-test unit tests\") and in the `orchestrate-poll` and `tests-system-python` jobs, on `pull_request` and `push`.\n- No long-running supervisor, no DB work, and no `docs/scripts-pending-removal.md` entry.\n\n## Functions or modules to implement\nEverything is in `tests/test_ci_poll_test_sharding.py`. No `ci.yml` change: its `vst_commands` array (lines 746\u2013750) is correct.\n\n1. **`VALIDATION_SELFTEST_COMMANDS` tuple (around lines 2916\u20132941).** Insert `(\"pytest\", \"tests/test_review_conflict_modify_delete.py\"),` right after `(\"pytest\", \"tests/test_review_conflict_resolve_provenance.py\"),` (line 2934) and before `(\"pytest\", \"tests/test_epochrealtime_ms_clock.py\"),`. That matches `ci.yml` line 749 entry for entry and in order. The table goes from 24 to 25 entries.\n2. **Comment above the tuple (lines 2907\u20132915).** Change \"runs 24 commands\" to \"runs 25 commands\". Add `tests/test_review_conflict_modify_delete.py` (#9886) to the list of paths that `VALIDATION_SELFTEST_MODULES` leaves out. That list currently names terminal_record, provenance (#9842) and epochrealtime (#9252). Keep \"It lists 21 paths\" as it is.\n3. **`ValidationSelftestConcurrencyContractTest` docstring (line 5379).** Change \"runs its 24 commands\" to \"runs its 25 commands\".\n4. **`test_command_table_matches_every_original_command` (line 5407).** Change `self.assertEqual(len(entries), 24)` to `25`. The issue's suggested fix missed this line (see Risks). Without it, the test still fails after the table is fixed.\n\nLeave these unchanged, as the issue says:\n- `VALIDATION_SELFTEST_MODULES` (lines 2884\u20132906), because `MovedPollGroupThree8472StepsContractTest` and the line 3070 mapping depend on it.\n- `VALIDATION_SELFTEST_LANE_COUNT = 4` and `VALIDATION_SELFTEST_LANE0_MODULE`.\n- The lane-layout test. It computes its expected value from the table, so it passes once the table has 25 entries.\n\n## Data structures affected\n- The `VALIDATION_SELFTEST_COMMANDS` tuple constant in the test module gains one entry.\n- One integer literal in an assertion changes from 24 to 25.\n\n## API or interface changes\nNone. Test-only change.\n\n## Decisions\n### D1 \u2014 Fix the test mirror, not the workflow\n- Chosen: add the missing entry to `VALIDATION_SELFTEST_COMMANDS` and bump the hard-coded count to 25.\n- Alternatives considered: removing `pytest:tests/test_review_conflict_modify_delete.py` from `ci.yml`; making the count assertion derive from the table.\n- Why: the new module must stay wired into CI (`tests/test_ci_wires_every_test_file.py` requires it), and the issue says not to remove the step entry. The fixed literal is deliberate: it catches drift on either side, so turning it into a derived value would weaken the contract.\n\n### D2 \u2014 Also update line 5407, which the issue did not cite\n- Chosen: bump `assertEqual(len(entries), 24)` to 25 in the same edit.\n- Alternatives considered: changing only the table, as the issue suggested.\n- Why: with only the table changed, `test_command_table_matches_every_original_command` still fails, because the list comparison passes but the length check sees 25 against 24.\n\n## Security considerations\n- No trust boundary, endpoint, secret or external input is touched. The only change is a constant in a test file.\n- Abuse cases: none. The contract test stays strict: exact order and exact count.\n- No money handling involved.\n\n## Potential risks or edge cases\n- **Conflict with the issue text:** the suggested fix says the lane-layout test fixes itself but does not mention the hard-coded `assertEqual(len(entries), 24)` at line 5407 or the docstring at line 5379. Both must change to 25. These were the only other \"24\" references in the class, and there were none outside this file.\n- Order matters. The entry must sit between provenance and epochrealtime, mirroring `ci.yml` lines 748\u2013750.\n- The judge-harness tests' `green()` fixture builds rc files from the table. With 25 entries every index lines up again, so `test_all_green_passes`, `test_failing_command_*`, `test_missing_rc_*`, `test_non_numeric_rc_*` and `test_backwards_clock_*` should pass with no other change.\n- Open PRs #9510 and #9515 also touch this file. That could cause a textual merge conflict later, but neither blocks this fix.\n\n## Testing considerations\n- Run `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_poll_test_sharding.py -k ValidationSelftest`. It is red on the base commit and must be green after the change.\n- Then run the whole module: `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ci_poll_test_sharding.py`.\n- Optional sanity check: `python3 -m pytest -q tests/test_ci_wires_every_test_file.py` should stay green, since `ci.yml` does not change.\n\nScope-mode: Hold Scope\nReuse-audit: extends VALIDATION_SELFTEST_COMMANDS\nScope-mode justification: The failure is a mirror table that has drifted from `ci.yml`. The complete fix is to add one table entry and update the two count references (the assertion and the docstring) plus the explanatory comment. That is about 4 lines in one test file, with no new dependency or interface. Under \u00a76 Core Priorities (Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed), correctness requires bumping the hard-coded count the issue missed. Without it the check stays red. The plan does not broaden into making the count derived, does not change `ci.yml`, and does not edit `VALIDATION_SELFTEST_MODULES`.\n\nPLAN_SELF_CHECK: WARNING: the issue's suggested fix misses the hard-coded len==24 assertion at line 5407 and the docstring at line 5379; the plan updates both to 25\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- AI_ACCEPTANCE_V1 {\"checks\":[{\"name\":\"lint\"}],\"errors\":[],\"post_merge\":{\"job\":\"\",\"workflow\":\".github/workflows/ci.yml\"},\"post_merge_none\":\"\",\"schema\":\"acceptance.v1\",\"source\":\"plan\",\"state\":\"valid\",\"tests\":[{\"name\":\"\",\"path\":\"tests/test_ci_poll_test_sharding.py\",\"red_on_base\":true}]} -->\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "f324d05da9042a2d202e80f1b7f3a168fe773354ef35eefe217ac86660f5997a",
+  "lineage": {
+    "issue_number": 9909,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44955626984",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44955626984",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9909"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261121221951_68f5d12580",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9909,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44955626984"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9909",
+  "timestamps": {
+    "created_at": "2026-11-21T22:19:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
