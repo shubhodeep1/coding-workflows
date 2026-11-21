@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-11-21T00:44:01Z",
+  "issue_number": 8291,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Orchestrator project \"Unattended pipeline: remove stuck states (plan P2a-P13 remainder)\" (#8291): issues stalled and needed automated recovery (18 time(s)). Causes: stuck in ai:done for 148m; recovery: retrigger_review (#8339); stuck in ai:done for 131m; recovery: retrigger_review (#9184); stuck in ai:review-blocked for 127m; recovery: dispatch_rb_judge (#9184); stuck in ai:review-blocked for 120m; recovery: dispatch_rb_judge (#9184); stuck in ai:clarification for 73m; recovery: auto_respond_clarify (#9203); stuck in ai:planning for 64m; recovery: retrigger_plan (#9203); stuck in ai:clarification for 68m; recovery: auto_respond_clarify (#9203); stuck in ai:planning for 75m; recovery: retrigger_plan (#9203); stuck in ai:clarification for 62m; recovery: auto_respond_clarify (#9203); stuck in ai:planning for 71m; recovery: retrigger_plan (#9203); stuck in ai:clarification for 61m; recovery: auto_respond_clarify (#9203); stuck in ai:awaiting-approval for 63m; recovery: auto_approve (#9575); stuck in ai:done for 211m; recovery: retrigger_review (#9575); stuck in ai:done for 411m; recovery: retrigger_review (#9575); stuck in ai:done for 231m; recovery: run_stall_judge (#9575); stuck in ai:awaiting-approval for 1981m; recovery: auto_approve (#9575); stuck in ai:awaiting-approval for 72m; recovery: auto_approve (#9575); stuck in ai:awaiting-approval for 69m; recovery: run_stall_judge (#9575). Similar work may need smaller, more explicit issues for these phases.",
+  "phase": "orchestrator_completion",
+  "pr_number": 8307,
+  "record_id": "lesson-orchestrator-8291-stall-recovery-47aa4b1a5bcc43c3",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:stall_recovery",
+    "project:8291"
+  ]
+}
