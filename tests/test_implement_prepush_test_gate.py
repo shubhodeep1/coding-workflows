@@ -696,7 +696,7 @@ def _collect_inline_prompt_files_touched_scope_cases() -> None:
 			globals()[case_name] = getattr(cases, case_name)
 			collected += 1
 	# A renamed or emptied cases module must fail loudly, not collect nothing.
-	assert collected >= 4, f"only {collected} inline prompt files_touched scope cases collected"
+	assert collected >= 5, f"only {collected} inline prompt files_touched scope cases collected"
 
 
 _collect_inline_prompt_files_touched_scope_cases()
