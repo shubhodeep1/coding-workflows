@@ -30,7 +30,6 @@ Rules:
 - Prefer preserving behavior from both sides when possible.
 - If both sides are incompatible, choose the version consistent with surrounding code.
 - Remove all conflict markers.
-- A modify/delete conflict (one side deleted the file) is resolved by deleting the file, or by keeping it and listing its exact path under "Conflicts resolved:"; see the stage-context block below.
 - Ensure the final code compiles logically.
 - You may read repository files as needed.
 - You may modify repository files directly.

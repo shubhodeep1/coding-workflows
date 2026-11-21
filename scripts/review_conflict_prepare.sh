@@ -608,7 +608,7 @@ fi
 #     (reason=no_pr_number);
 #   - the PR changed at most CONFLICT_MODIFY_DELETE_MAX_CHANGED_LINES lines of
 #     it (default 20, clamped 1..200; reason=too_large / no_pr_change /
-#     binary), and every non-blank changed line (sign kept, whitespace
+#     binary), and every non-blank changed line (sign kept, leading whitespace
 #     stripped, the path itself removed) is also changed with the same sign in
 #     another file the PR adds or modifies that is not itself a 1 2 conflict
 #     (reason=not_a_sweep).
@@ -731,7 +731,7 @@ def changed(path):
             lines.append(line)
     return binary, lines
 def norm(line, path):
-    return line[0] + line[1:].replace(path, "").strip()
+    return line[0] + line[1:].replace(path, "").lstrip()
 with open(cand_file, encoding="utf-8", errors="surrogateescape") as fh:
     conflicted = {p for p in fh.read().split("\n") if p}
 eligible = []
@@ -804,7 +804,7 @@ for pr, path in eligible:
       [ "${_mdd_fence_len:-0}" -ge 3 ] || _mdd_fence_len=2
       _mdd_fence="$(printf '%*s' "$((_mdd_fence_len + 1))" '' | tr ' ' '`')"
       {
-        printf '\n#### `%s`\n\n' "${_mdd_path}"
+        printf '\n#### `%s`\n\n' "${_mdd_path//\`/}"
         printf '%s\n\n' "Deleted on \`${BASE_BRANCH:-the base branch}\` by #${_mdd_n}; this PR changed ${_mdd_lines} line(s) of it, all repeated in other files of the PR."
         if [ -s "${_mdd_dir}/dropped.diff" ]; then
           printf '%sdiff\n' "${_mdd_fence}"
@@ -1435,11 +1435,14 @@ _det_commit_path="${_det_commit_path:-${MANIFEST_UNION_PATH}}"
 if [ "${_ghm_resolved:-false}" = "true" ] && [ "${_resolver_allowlist_count}" -eq 0 ] \
    && [ "${_mu_resolved}" != "true" ] && [ "${_ff_defer_commit}" != "true" ] \
    && [ "${_gl_resolved:-false}" != "true" ] \
+   && [ "${_mdd_resolved:-false}" != "true" ] \
    && [ "${_ai_resolved:-false}" != "true" ]; then
   # A .gitleaksignore union (issue #9659) that resolved the last path owns the
   # commit: it committed already, or on integration sync its deferral below
   # waits for the fingerprint check (a hook resolved earlier, while
   # .gitleaksignore was still unmerged, left _ghm_defer_commit false).
+  # A modify/delete take-base (issue #9886) owns it the same way: its tail
+  # below commits, or defers to the fingerprint check on integration sync.
   if [ "${_ghm_defer_commit:-false}" = "true" ]; then
     _mu_defer_commit=true
     _det_commit_label="Guard-hook template merge"
@@ -1823,6 +1826,10 @@ for index, issue in enumerate(issues):
               else
                 echo "::warning::Host-only take-base: failed to post the dropped-changes comment on PR #${PR_NUMBER}; the merge commit stands."
               fi
+            fi
+            # Modify/delete take-base (issue #9886): post its dropped edits too.
+            if type _conflict_prepare_post_modify_delete_comment >/dev/null 2>&1; then
+              _conflict_prepare_post_modify_delete_comment
             fi
             rm -rf "${_ho_dir}"
             echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"

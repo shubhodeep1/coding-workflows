@@ -199,6 +199,16 @@ def test_substantive_edit_is_not_a_sweep(tmp_path: Path) -> None:
 	assert not (runtime / "modify_delete_take_base_comment.md").exists()
 
 
+def test_trailing_whitespace_edit_is_not_a_sweep(tmp_path: Path) -> None:
+	# Only leading whitespace is normalised away: a trailing-space change that
+	# no other file repeats stays with the model.
+	repo = _sweep_repo(tmp_path, swept_override=_workflow("c", "ubuntu-24.04  "))
+	result, _ = _run_prepare_block(repo)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert f"Modify/delete take-base: path={WORKFLOWS[2]} outcome=skip reason=not_a_sweep" in result.stdout
+	assert _unmerged(repo) == [WORKFLOWS[2]]
+
+
 def test_change_over_the_cap_is_too_large(tmp_path: Path) -> None:
 	repo = _sweep_repo(tmp_path)
 	result, _ = _run_prepare_block(repo, {"CONFLICT_MODIFY_DELETE_MAX_CHANGED_LINES": "1"})
@@ -265,6 +275,12 @@ def test_prepare_commit_tail_wiring() -> None:
 	assert '"${_mdd_defer_commit:-false}" = "true"' in branch
 	assert "orchestrator/project-*)" in branch
 	assert '_conflict_prepare_commit_deterministic_merge "Modify/delete take-base"' in branch
+	# The guard-hook tail leaves a modify/delete resolution to its own tail.
+	ghm_at = text.index('if [ "${_ghm_resolved:-false}" = "true" ] && [ "${_resolver_allowlist_count}" -eq 0 ]')
+	assert '&& [ "${_mdd_resolved:-false}" != "true" ]' in text[ghm_at:ghm_at + 500]
+	# The host-only inline commit posts the modify/delete comment too.
+	ho_commit = text.index('-F "body=@${HOST_ONLY_TAKE_BASE_COMMENT_FILE}"')
+	assert "_conflict_prepare_post_modify_delete_comment" in text[ho_commit:text.index("exit 0", ho_commit)]
 	helper = text[text.index("_conflict_prepare_commit_deterministic_merge()\n{"):]
 	helper = helper[:helper.index("\n}\n")]
 	assert "_conflict_prepare_post_modify_delete_comment" in helper
@@ -404,6 +420,10 @@ def test_unmerged_left_retries_inside_loop(tmp_path: Path) -> None:
 	result = _verify_step(repo, f"Conflicts resolved:\n- notes.txt\n\nNotes:\n- {WORKFLOWS[2]}\n")
 	assert "VERIFY_FAIL count=1" in result.stdout, result.stdout + result.stderr
 
+	# A heading with digits ends the section too.
+	result = _verify_step(repo, f"Conflicts resolved:\n- notes.txt\n\nStep 2:\n- {WORKFLOWS[2]}\n")
+	assert "VERIFY_FAIL count=1" in result.stdout, result.stdout + result.stderr
+
 	# A non-matching declared path is ignored.
 	result = _verify_step(repo, f"Conflicts resolved:\n- {WORKFLOWS[2][:-1]}\n- ./{WORKFLOWS[2]}\n")
 	assert "VERIFY_FAIL count=1" in result.stdout, result.stdout + result.stderr
@@ -484,8 +504,12 @@ cat "${{RESOLVER_RETRY_PROMPT_FILE}}"
 def test_switch_defaults_and_forwarding() -> None:
 	src = _resolve_src()
 	assert 'case "$(printf \'%s\' "${CONFLICT_MODIFY_DELETE_TAKE_BASE_ENABLED-}" | tr \'[:upper:]\' \'[:lower:]\')" in' in src
-	for name in ("RESOLVER_MODIFY_DELETE_PATHS_FILE", "RESOLVER_UNMERGED_LEFT_FILE",
-	             "RESOLVER_UNMERGED_LEFT_BASELINE_FILE", "RESOLVER_MODIFY_DELETE_KEEP_FILE"):
+	for name in (
+		"RESOLVER_MODIFY_DELETE_PATHS_FILE",
+		"RESOLVER_UNMERGED_LEFT_FILE",
+		"RESOLVER_UNMERGED_LEFT_BASELINE_FILE",
+		"RESOLVER_MODIFY_DELETE_KEEP_FILE",
+	):
 		assert f'{name}="${{RUNTIME_DIR}}/' in src
 	workflow = REVIEW_WORKFLOW.read_text(encoding="utf-8")
 	forward = "CONFLICT_MODIFY_DELETE_TAKE_BASE_ENABLED: ${{ vars.CONFLICT_MODIFY_DELETE_TAKE_BASE_ENABLED || 'true' }}"
@@ -501,5 +525,8 @@ def test_switch_defaults_and_forwarding() -> None:
 	fragment = AGENTS_FRAGMENT.read_text(encoding="utf-8")
 	assert "LOG_PREFIX.name=Modify/delete take-base:" in fragment
 	assert "LOG_PREFIX.name=Modify/delete context:" in fragment
+	# The keep/delete rule lives only in the stage-context block, so the switch
+	# set to false leaves the static prompt as it was.
 	prompt = PROMPT.read_text(encoding="utf-8")
-	assert "modify/delete conflict" in prompt and '"Conflicts resolved:"' in prompt
+	assert "modify/delete conflict" not in prompt
+	assert "stage-context block" not in prompt

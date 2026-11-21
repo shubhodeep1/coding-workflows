@@ -755,10 +755,10 @@ _provenance_hunk_count=0
 # RESOLVER_TERMINAL exit_class=scope (the class check (4) already used).
 # CONFLICT_MODIFY_DELETE_TAKE_BASE_ENABLED=false (any case) restores today's
 # behaviour; unset, empty or true is on, any other value off with a warning.
-_resolver_mdd_enabled=false
+# Only the unrecognised-value warning is emitted here; every gate reads the
+# switch through _resolver_mdd_switch_on.
 case "$(printf '%s' "${CONFLICT_MODIFY_DELETE_TAKE_BASE_ENABLED-}" | tr '[:upper:]' '[:lower:]')" in
-  ''|true) _resolver_mdd_enabled=true ;;
-  false) ;;
+  ''|true|false) ;;
   *) echo "::warning::Modify/delete context: CONFLICT_MODIFY_DELETE_TAKE_BASE_ENABLED has an unrecognised value; stage context and the unmerged-path check are off." ;;
 esac
 RESOLVER_MODIFY_DELETE_PATHS_FILE="${RUNTIME_DIR}/resolver_modify_delete_paths.tsv"
@@ -2921,7 +2921,7 @@ _verify_no_unmerged_left()
   if [ -f "${CONFLICT_RESOLVER_SUMMARY_FILE:-}" ] && [ ! -L "${CONFLICT_RESOLVER_SUMMARY_FILE}" ]; then
     awk '
       /^[[:space:]]*Conflicts resolved:[[:space:]]*$/ { inside = 1; next }
-      inside && /^[A-Za-z][A-Za-z -]*:[[:space:]]*$/ { inside = 0 }
+      inside && /^[A-Za-z][A-Za-z0-9 -]*:[[:space:]]*$/ { inside = 0 }
       inside && /^[[:space:]]*- / {
         line = $0
         sub(/^[[:space:]]*- +/, "", line)
