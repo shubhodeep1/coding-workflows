@@ -1085,7 +1085,7 @@ def test_ci_lint_gate_executes_fail_closed_matrix() -> None:
 		"partial_page": ([_check_runs_body(_lint_run(), total_count=2)], False, "reason=unreadable"),
 		"foreign_app": ([_check_runs_body(_lint_run(slug="third-party"))], False, "reason=missing"),
 		"other_name": ([_check_runs_body(other_name)], False, "reason=missing"),
-		# A `lint` job of another workflow (lint-plan-archival.yml) must not count.
+		# A `lint` job of another workflow (as lint-plan-archival.yml had) must not count.
 		"other_workflow_failed": (
 			[_check_runs_body(_lint_run(), _lint_run(conclusion="failure", suite_id=99))],
 			True,

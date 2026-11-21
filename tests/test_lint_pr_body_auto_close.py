@@ -391,15 +391,16 @@ def test_workflow_job_is_not_named_like_the_ci_aggregate():
 
 def test_only_known_workflows_have_a_job_named_lint():
 	"""Any job with id `lint` reports the check-run the `main` ruleset
-	requires. ci.yml's is the one it means; lint-plan-archival.yml's is a
-	known remaining duplicate. A new one elsewhere fails here."""
+	requires. ci.yml's is the one it means, and the only one: the
+	plan-archival lint's `lint` job went away when it was folded into
+	pr-checks.yml. A new one elsewhere fails here."""
 	import re
 	lint_job_workflows = sorted(
 		wf.name for wf in (REPO_ROOT / ".github/workflows").glob("*.y*ml")
-		# A job-level `name: lint` under another job id reports the same check-run name.
-		if re.search(r"^  lint:|^    name:\s*[\"']?lint[\"']?\s*$", wf.read_text(encoding="utf-8").partition("\njobs:\n")[2], flags=re.M)
+		if re.search(r"^  lint:", wf.read_text(encoding="utf-8").partition("\njobs:\n")[2], flags=re.M)
 	)
-	assert lint_job_workflows == ["ci.yml", "lint-plan-archival.yml"], lint_job_workflows
+	assert lint_job_workflows == ["ci.yml"], lint_job_workflows
+	assert not (REPO_ROOT / ".github/workflows/lint-plan-archival.yml").exists()
 
 
 def test_workflow_lints_commit_messages_for_default_branch_prs():

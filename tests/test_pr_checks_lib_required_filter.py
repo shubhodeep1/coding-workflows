@@ -364,9 +364,9 @@ LINT_REQUIRED_ENV = {
 
 
 def test_cancelled_ci_check_not_superseded_by_other_workflow_same_name() -> None:
-	"""The CI check name (`lint` here) is shared with lint-plan-archival
-	(and, on branches that predate its rename to `pr-body-lint`, with
-	the PR-body lint, now a step group of pr-checks.yml), which re-runs on
+	"""The CI check name (`lint` here) is shared, on branches that predate
+	the fold into pr-checks.yml, with the plan-archival lint and the
+	PR-body lint, which re-run on
 	PR body edits. A newer
 	`lint` from another Actions run must not hide a cancelled CI `lint`,
 	in either filter mode, when the runs are not bound to CI run ids."""
