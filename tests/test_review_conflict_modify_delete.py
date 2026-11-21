@@ -391,9 +391,13 @@ def test_modify_delete_context_strips_backticks_from_prompt_paths(tmp_path: Path
 	assert result.returncode == 0, result.stdout + result.stderr
 	records, prompt = result.stdout.split("---\n", 1)
 	assert f"{odd}\t1 2" in records
-	assert "Modify/delete context: path=redacted stages=1 2" in result.stdout
-	assert "- `xy.yml`: deleted on the base branch by #123" in prompt
+	assert "Modify/delete context: path=redacted stages=1 2 deleted_by=#123 display=omitted" in result.stdout
+	# The stripped name is not the real path (a keep declared from it could
+	# never match), so the bullet names no path at all.
+	assert "- (a path whose name contains a backtick, not shown here; run `git status` to find it): deleted on the base branch by #123; modified on this PR." in prompt
 	assert odd not in prompt
+	assert "xy.yml" not in prompt
+	assert f"- `{WORKFLOWS[2]}`: deleted on the base branch by #123" in prompt
 
 
 def test_modify_delete_context_off_writes_nothing(tmp_path: Path) -> None:

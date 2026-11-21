@@ -7,5 +7,5 @@
 <!-- agents: section="Stable log prefixes (contractual)" -->
 - `Modify/delete take-base:` (`scripts/review_conflict_prepare.sh`: `path=<p|redacted> deleted_by=#<n> pr_lines=<k>` when the base deletion is taken, `path=<p|redacted> outcome=skip reason=integration_sync|not_regular|no_pr_number|binary|no_pr_change|too_large|not_a_sweep|diff_failed` otherwise, `outcome=skip reason=no_merge_base` without a path, and the run-level `<n> path(s) took the base deletion, <m> unmerged path(s) remain.`)
 LOG_PREFIX.name=Modify/delete take-base:
-- `Modify/delete context:` (`scripts/review_conflict_resolve.sh`: `path=<p|redacted> stages=1 2|1 3 deleted_by=#<n>|<sha12>|unknown` per modify/delete path given stage context, `path=<p|redacted> stages=<s> outcome=keep_declared` for a declared keep, and `path=<p|redacted> outcome=kept` when the keep joins the touched set.)
+- `Modify/delete context:` (`scripts/review_conflict_resolve.sh`: `path=<p|redacted> stages=1 2|1 3 deleted_by=#<n>|<sha12>|unknown[ display=omitted]` per modify/delete path given stage context (`display=omitted` when the path contains a backtick and its bullet names no path), `path=<p|redacted> stages=<s> outcome=keep_declared` for a declared keep, and `path=<p|redacted> outcome=kept` when the keep joins the touched set.)
 LOG_PREFIX.name=Modify/delete context:

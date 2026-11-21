@@ -2832,7 +2832,7 @@ _resolver_unmerged_left_state()
 # deleted_by=<#n|sha|unknown>". Fail-open: a lookup error only weakens the text.
 _resolver_modify_delete_context()
 {
-  local _rmd_path _rmd_stages _rmd_side _rmd_base _rmd_del _rmd_by _rmd_block _rmd_shown _rmd_count=0
+  local _rmd_path _rmd_stages _rmd_side _rmd_base _rmd_del _rmd_by _rmd_block _rmd_shown _rmd_display _rmd_count=0
   local _rmd_re='\(#([0-9]{1,10})\)$'
   : > "${RESOLVER_MODIFY_DELETE_PATHS_FILE}"
   _resolver_mdd_switch_on || return 0
@@ -2862,14 +2862,25 @@ _resolver_modify_delete_context()
     fi
     # The path is PR-controlled: strip backticks so it cannot close its code
     # span in the prompt (the raw path is still used for git and the record).
+    # A stripped name is not the real path, and a keep declared from it could
+    # never match _verify_no_unmerged_left, so such a path gets a bullet that
+    # names no path (log display=omitted).
     _rmd_shown="${_rmd_path//\`/}"
-    if [ "${_rmd_stages}" = "1 2" ]; then
+    _rmd_display=""
+    if [ "${_rmd_shown}" != "${_rmd_path}" ]; then
+      _rmd_display=" display=omitted"
+      if [ "${_rmd_stages}" = "1 2" ]; then
+        printf -- '- (a path whose name contains a backtick, not shown here; run `git status` to find it): deleted on the base branch by %s; modified on this PR.\n' "${_rmd_by}" >> "${_rmd_block}"
+      else
+        printf -- '- (a path whose name contains a backtick, not shown here; run `git status` to find it): deleted on this PR by %s; modified on the base branch.\n' "${_rmd_by}" >> "${_rmd_block}"
+      fi
+    elif [ "${_rmd_stages}" = "1 2" ]; then
       printf -- '- `%s`: deleted on the base branch by %s; modified on this PR. The PR'"'"'s version is at `%s` in the working tree.\n' "${_rmd_shown}" "${_rmd_by}" "${_rmd_shown}" >> "${_rmd_block}"
     else
       printf -- '- `%s`: deleted on this PR by %s; modified on the base branch. The base branch'"'"'s version is at `%s` in the working tree.\n' "${_rmd_shown}" "${_rmd_by}" "${_rmd_shown}" >> "${_rmd_block}"
     fi
     _rmd_count=$((_rmd_count + 1))
-    echo "Modify/delete context: path=$(_resolver_mdd_log_path "${_rmd_path}") stages=${_rmd_stages} deleted_by=${_rmd_by}"
+    echo "Modify/delete context: path=$(_resolver_mdd_log_path "${_rmd_path}") stages=${_rmd_stages} deleted_by=${_rmd_by}${_rmd_display}"
   done < "${RESOLVER_TARGETED_PATHS_FILE}"
   if [ "${_rmd_count}" -gt 0 ] && [ -f "${CONFLICT_RESOLVER_PROMPT_FILE:-}" ]; then
     {
