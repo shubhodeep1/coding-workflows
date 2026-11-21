@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml, selection and placement of the steps moved from tests-hooks-and-orchestrator\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The workflow comments document that run 43544291165's step timings could not be read, the moved steps and destination groups were selected using estimates rather than measurements, and group 0's headroom is unmeasured; the diff does not establish that the moved steps are the slowest or that their destination groups have the most headroom. The PR delegates verification to the post-merge budget-watch job on main.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The PR explicitly documents that runtime step timings for run 43544291165 could not be accessed, and thus the selection of \"slowest steps\" and \"most headroom\" was based on estimates derived from test and subprocess counts rather than actual measured durations as required by the issue.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml, the selection and placement of the three steps moved out of tests-hooks-and-orchestrator\n  Evidence of absence: The workflow comments at lines 3816-3818 (merge-train step) and lines 3923-3924 (Semble and pre-seed steps) openly document that the run's step timings could not be read and the destination groups were chosen by estimates from test and subprocess counts, not measurements. Group 0's headroom is described as unmeasured. The diff therefore does not establish that the three moved steps are the slowest in tests-hooks-and-orchestrator, nor that orchestrate-poll groups 0 and 1 have the most headroom; the PR delegates this verification to the post-merge budget-watch job on main.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cMove its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\u201d\n  Expected change site: `.github/workflows/ci.yml`, selection and placement of the steps moved from `tests-hooks-and-orchestrator`.\n  Evidence of absence: The workflow states that the run\u2019s step timings could not be read and that the merge-train step was selected using estimates, not measurements (`.github/workflows/ci.yml:3816-3818`). It also says group 0\u2019s headroom is unmeasured, while the Semble and pre-seed placements are likewise estimates (`.github/workflows/ci.yml:3923-3924`). The diff therefore does not establish that the moved steps are the slowest or that their destination groups have the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml \u2014 selection and placement of the steps moved out of tests-hooks-and-orchestrator.\n  Evidence of absence: The workflow's own history comments (ci.yml:3816-3818 and 3920-3926) state the run's step timings for run 43544291165 could not be read, the merge-train step was selected by test and subprocess counts (an estimate), and the destination groups' headroom is unmeasured. No diff hunk replaces the estimate with measured timings or measured headroom, and the changelog fragment states the same limitation. The timing data is GitHub runtime data absent from the repository, the PR documents this limitation openly, and the post-merge budget-watch run on main is the issue's designed check; six prior editor rounds deferred this with unchanged evidence, and the LAST RUN DIFF (comment reword plus the group-1 inventory test) does not change that evidence, so this is recorded as residual rather than newly actionable.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6044c5361f483f9a63eae46904b645c036e15fe9e07248c959cdb33541e64285",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9515,
+    "run_id": "44860935936",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44860935936",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121043544_65c0ccbb3a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9515,
+    "run_id": "44860935936"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T04:35:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
