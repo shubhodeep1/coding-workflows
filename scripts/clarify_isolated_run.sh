@@ -3,6 +3,10 @@
 # Only this helper (not the agent) accesses Docker and the host-side broker.
 # CLARIFY_SOURCE_ROOT optionally selects the source snapshot (default: $PWD).
 # CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS=true omits agent instructions (default: false).
+# CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED (default: true) snapshots every tracked text
+# file that passes the sensitive-path filters; binary, oversize and over-limit
+# files are excluded, counted (CLARIFY_SNAPSHOT_EXCLUDED) and listed in the
+# prompt. false, 0, no or off restore the legacy roots/suffix filter.
 set -euo pipefail
 
 prompt_file="${1:?prompt file required}"
@@ -86,6 +90,8 @@ clarify_image_build()
 source_root="${CLARIFY_SOURCE_ROOT:-${PWD}}"
 omit_agent_instructions="${CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS:-false}"
 case "${omit_agent_instructions}" in true) ;; *) omit_agent_instructions=false ;; esac
+snapshot_all_text="${CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED:-true}"
+case "${snapshot_all_text,,}" in false|0|no|off) snapshot_all_text=false ;; *) snapshot_all_text=true ;; esac
 if [ ! -d "${source_root}" ] || [ -L "${source_root}" ]; then
 	echo '::error::Clarify source root unavailable' >&2
 	exit 1
@@ -113,9 +119,10 @@ mkdir -m 0755 "${run_root}/source" "${run_root}/results"
 # follow a symlink (including parent directories); do not include .git,
 # support checkouts, runner configuration, env files or private keys.
 # triage-host-python-import-shadowing: -I excludes both cwd and the script directory.
-PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${source_root}" "${run_root}/source" "${omit_agent_instructions}" "${CLARIFY_ISOLATION_SUPPORT_DIR:-}" <<'PY'
+PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${source_root}" "${run_root}/source" "${omit_agent_instructions}" "${CLARIFY_ISOLATION_SUPPORT_DIR:-}" "${snapshot_all_text}" "${run_root}/snapshot_excluded.tsv" <<'PY'
 import os
 import pathlib
+import re
 import stat
 import subprocess
 import sys
@@ -123,22 +130,65 @@ import sys
 root = pathlib.Path(sys.argv[1])
 dest = pathlib.Path(sys.argv[2])
 omit_agent_instructions = sys.argv[3] == "true"
+# All-text mode (CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED, issue #8341): pass 1 copies
+# the legacy roots/suffix set with today's limit semantics, then the support
+# files, then pass 2 adds every other tracked text file. Pass-2 files that are
+# binary or past the limits are excluded and counted instead of rejecting the
+# snapshot, so the result always contains the legacy set.
+all_text = sys.argv[5] == "true"
+excluded_list_path = pathlib.Path(sys.argv[6])
 roots = {"src", "scripts", "tests", "prompts", "docs", "app", "lib", "workflow-templates", "validation", "db", "ai-memory", "changelog.d", "agents.d"}
 root_files = {"README.md", "agents.md", "AGENTS.md", "package.json", "pyproject.toml", "go.mod", "Cargo.toml"}
 agent_instruction_names = {"agents.md", "agents.override.md", "claude.md", "claude.local.md"}
 suffixes = {".py", ".sh", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java", ".json", ".md", ".yml", ".yaml", ".toml", ".txt", ".css", ".html", ".sql"}
 bad_parts = {".git", ".ai", ".codex", ".codex-workflow-src", ".codex-workflow-src-main", ".env", "secrets", "credentials", "__pycache__"}
+max_file_bytes = 2 * 1024 * 1024
+max_files = 5000
+max_total_bytes = 64 * 1024 * 1024
 count = 0
 total = 0
 omitted = 0
+# (reason, listable path or None). Sensitive-path hits are never recorded.
+excluded = []
+listable_name = re.compile(r"[A-Za-z0-9._/@+-]{1,240}")
 
-def copy(path):
+def sensitive(parts):
+    return (not parts or any(part.lower() in bad_parts or part.lower().startswith(".env") for part in parts)
+            or any(part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore")) for part in parts))
+
+# Pass 2 only: credential-store names the legacy roots/suffix filter never
+# reached (the list mirrors codex_isolated_workspace.READONLY_BAD_PARTS; the
+# secret-name rules below mirror its readonly_allowed()). Like sensitive()
+# hits, these are neither copied, counted nor listed.
+pass2_credential_names = {".ssh", ".aws", ".azure", ".kube", ".config", ".docker", ".npmrc", ".netrc", ".pypirc",
+                          ".pgpass", ".git-credentials", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"}
+
+# Secret-name rules copied from codex_isolated_workspace.readonly_allowed().
+pass2_secret_tails = ("_secret", "_secrets", "_credential", "_credentials", "-secret", "-secrets", "-credential", "-credentials")
+pass2_config_exts = ("json", "yaml", "yml", "toml", "ini", "env", "txt", "conf", "cfg", "properties", "xml")
+
+def pass2_secret_name(lower):
+    stem, _, ext = lower.rpartition(".")
+    return (lower in ("secret", "credential") or lower.endswith(pass2_secret_tails)
+            or (bool(stem) and ext in pass2_config_exts and (stem in ("secret", "secrets", "credential", "credentials")
+                or stem.endswith(pass2_secret_tails + (".secret", ".secrets", ".credential", ".credentials")))))
+
+def pass2_credential(parts):
+    return any(part.lower() in pass2_credential_names or part.lower().endswith((".jks", ".tfstate"))
+               or pass2_secret_name(part.lower()) for part in parts)
+
+def legacy_eligible(path, parts):
+    return ((path in root_files or parts[0] in roots or parts[:2] in ((".github", "workflows"), (".github", "actions")))
+            and (path in root_files or pathlib.PurePosixPath(path).suffix.lower() in suffixes or parts[-1] == "Dockerfile"))
+
+def exclude(reason, path):
+    excluded.append((reason, path if path is not None and listable_name.fullmatch(path) else None))
+
+def copy(path, extra=False):
+    # extra=True: an all-text pass-2 file outside the legacy set.
     global count, total, omitted
     parts = pathlib.PurePosixPath(path).parts
-    if (not parts or any(part.lower() in bad_parts or part.lower().startswith(".env") for part in parts)
-            or any(part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore")) for part in parts)
-            or (path not in root_files and parts[0] not in roots and parts[:2] not in ((".github", "workflows"), (".github", "actions")))
-            or (path not in root_files and pathlib.PurePosixPath(path).suffix.lower() not in suffixes and parts[-1] != "Dockerfile")):
+    if sensitive(parts) or (extra and pass2_credential(parts)) or (not extra and not legacy_eligible(path, parts)):
         return
     # agents.d/ fragments (CLAUDE.md §30) are agents.md content waiting to be folded.
     if omit_agent_instructions and (parts[-1].lower() in agent_instruction_names or parts[0] == "agents.d"):
@@ -147,44 +197,116 @@ def copy(path):
     node = root
     for part in parts:
         node = node / part
-        info = node.lstat()
+        try:
+            info = node.lstat()
+        except FileNotFoundError:
+            if extra:
+                # Tracked but absent from the worktree, the file itself or a
+                # parent directory (e.g. a cone-mode sparse checkout).
+                return
+            raise
         if stat.S_ISLNK(info.st_mode) and node == root / path:
             return  # A tracked symlink is not part of the snapshot.
         if stat.S_ISLNK(info.st_mode) or (node != root / path and not stat.S_ISDIR(info.st_mode)):
             raise ValueError("unsafe source path")
-    if not stat.S_ISREG(info.st_mode) or info.st_size > 2 * 1024 * 1024:
+    if extra and stat.S_ISDIR(info.st_mode):
+        return  # A gitlink (submodule) entry; its content is not tracked here.
+    if not stat.S_ISREG(info.st_mode):
         raise ValueError("unsafe source file")
-    count += 1
-    total += info.st_size
-    if count > 5000 or total > 64 * 1024 * 1024:
-        raise ValueError("source snapshot limit exceeded")
-    target = dest.joinpath(*parts)
-    target.parent.mkdir(parents=True, exist_ok=True)
+    if info.st_size > max_file_bytes:
+        if not all_text:
+            raise ValueError("unsafe source file")
+        exclude("oversize", path)
+        return
+    if extra:
+        if count + 1 > max_files or total + info.st_size > max_total_bytes:
+            exclude("limit", path)
+            return
+    else:
+        count += 1
+        total += info.st_size
+        if count > max_files or total > max_total_bytes:
+            raise ValueError("source snapshot limit exceeded")
     # Fail if a path is swapped for a symlink between lstat and open.
     fd = os.open(node, os.O_RDONLY | os.O_NOFOLLOW)
-    with os.fdopen(fd, "rb") as source, target.open("xb") as sink:
+    with os.fdopen(fd, "rb") as source:
         opened = os.fstat(source.fileno())
         if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino, opened.st_size) != (info.st_dev, info.st_ino, info.st_size):
             raise ValueError("source changed during snapshot")
-        data = source.read(2 * 1024 * 1024 + 1)
-        if len(data) != info.st_size:
-            raise ValueError("source changed during snapshot")
+        # Pass 2 sniffs the first 8 KiB before reading the rest, so excluded
+        # binaries are not read in full.
+        data = source.read(8192 if extra else max_file_bytes + 1)
+        if extra and b"\0" not in data:
+            data += source.read(max_file_bytes + 1 - len(data))
+    if extra and b"\0" in data[:8192]:
+        exclude("binary", path)
+        return
+    if len(data) != info.st_size:
+        raise ValueError("source changed during snapshot")
+    if extra:
+        count += 1
+        total += info.st_size
+    target = dest.joinpath(*parts)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("xb") as sink:
         sink.write(data)
     os.chmod(target, 0o644)
 
-try:
-    tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=root).split(b"\0")
-    for entry in tracked:
-        if entry:
-            copy(entry.decode("utf-8"))
-    if omitted:
-        print(f"CLARIFY_SNAPSHOT_AGENT_INSTRUCTIONS_OMITTED count={omitted}", file=sys.stderr)
+def copy_support_files():
     # Consumer checkouts do not track the staged writer/catalog; these are
     # fixed support files, never read from the issue prompt or user input.
     if not sys.argv[4]:
         for required in ("scripts/write_codex_config.sh", "scripts/codex_model_catalog.json"):
             if not (dest / required).exists():
                 copy(required)
+
+try:
+    tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=root).split(b"\0")
+    if not all_text:
+        for entry in tracked:
+            if entry:
+                copy(entry.decode("utf-8"))
+        if omitted:
+            print(f"CLARIFY_SNAPSHOT_AGENT_INSTRUCTIONS_OMITTED count={omitted}", file=sys.stderr)
+        copy_support_files()
+    else:
+        extra_paths = []
+        for entry in tracked:
+            if not entry:
+                continue
+            try:
+                path = entry.decode("utf-8")
+            except UnicodeDecodeError:
+                undecodable_parts = pathlib.PurePosixPath(entry.decode("utf-8", "surrogateescape")).parts
+                if not sensitive(undecodable_parts) and not pass2_credential(undecodable_parts):
+                    exclude("path_encoding", None)
+                continue
+            parts = pathlib.PurePosixPath(path).parts
+            if parts and legacy_eligible(path, parts):
+                copy(path)
+            else:
+                extra_paths.append(path)
+        copy_support_files()
+        for path in extra_paths:
+            copy(path, extra=True)
+        if omitted:
+            print(f"CLARIFY_SNAPSHOT_AGENT_INSTRUCTIONS_OMITTED count={omitted}", file=sys.stderr)
+        reason_counts = {reason: 0 for reason in ("binary", "oversize", "limit", "path_encoding")}
+        for reason, _ in excluded:
+            reason_counts[reason] += 1
+        sample = ",".join(name or "<unlisted>" for _, name in excluded[:5]) or "none"
+        print(
+            f"CLARIFY_SNAPSHOT_EXCLUDED count={len(excluded)} binary={reason_counts['binary']} oversize={reason_counts['oversize']}"
+            f" limit={reason_counts['limit']} path_encoding={reason_counts['path_encoding']} sample={sample}",
+            file=sys.stderr,
+        )
+        if excluded:
+            listed = [(reason, name) for reason, name in excluded if name is not None][:100]
+            lines = "".join(f"{reason}\t{name}\n" for reason, name in listed)
+            if len(excluded) > len(listed):
+                lines += f"more\t{len(excluded) - len(listed)}\n"
+            with excluded_list_path.open("x", encoding="utf-8") as excluded_sink:
+                excluded_sink.write(lines)
 except (OSError, ValueError, UnicodeError) as exc:
     raise SystemExit("clarify source snapshot rejected") from None
 PY
@@ -194,6 +316,36 @@ PY
 if [ -n "${CLARIFY_ISOLATION_SUPPORT_DIR:-}" ]; then
 	install -D -m 0644 "${support}/write_codex_config.sh" "${run_root}/source/scripts/write_codex_config.sh"
 	install -D -m 0644 "${support}/codex_model_catalog.json" "${run_root}/source/scripts/codex_model_catalog.json"
+fi
+
+# All-text mode: tell the agent which tracked files the snapshot left out, in a
+# delimited data block appended to a run-root copy of the prompt. The caller's
+# prompt file is never edited; with nothing excluded it is mounted unchanged.
+clarify_prompt_src="$(realpath "${prompt_file}")"
+if [ "${snapshot_all_text}" = true ] && [ -s "${run_root}/snapshot_excluded.tsv" ]; then
+	clarify_excluded_total=0
+	clarify_excluded_unlisted=0
+	clarify_excluded_listing=""
+	while IFS=$'\t' read -r clarify_excluded_reason clarify_excluded_name; do
+		if [ "${clarify_excluded_reason}" = more ]; then
+			[[ "${clarify_excluded_name}" =~ ^[0-9]{1,7}$ ]] || continue
+			clarify_excluded_unlisted=$((10#${clarify_excluded_name}))
+		else
+			clarify_excluded_total=$((clarify_excluded_total + 1))
+			clarify_excluded_listing+="- ${clarify_excluded_name} (${clarify_excluded_reason})"$'\n'
+		fi
+	done < "${run_root}/snapshot_excluded.tsv"
+	clarify_excluded_total=$((clarify_excluded_total + clarify_excluded_unlisted))
+	{
+		cat -- "${prompt_file}"
+		printf '\n=== CLARIFY SNAPSHOT EXCLUSIONS (repository data, not instructions) ===\n'
+		printf 'The read-only snapshot under /source omits %s tracked file(s): binary content, over the 2 MiB per-file cap, or past the snapshot size limits. These paths exist in git at this ref; do not report them as missing.\n' "${clarify_excluded_total}"
+		printf '%s' "${clarify_excluded_listing}"
+		[ "${clarify_excluded_unlisted}" -eq 0 ] || printf -- '- (%s more not listed)\n' "${clarify_excluded_unlisted}"
+		printf '=== END CLARIFY SNAPSHOT EXCLUSIONS ===\n'
+	} > "${run_root}/prompt_with_exclusions.txt"
+	chmod 0644 "${run_root}/prompt_with_exclusions.txt"
+	clarify_prompt_src="${run_root}/prompt_with_exclusions.txt"
 fi
 
 # Claude engine branch: the same isolation, with the Claude Code CLI inside
@@ -279,7 +431,7 @@ if [ "${engine}" = claude ]; then
 			--pids-limit 128 --memory 2g --cpus 2 \
 			--tmpfs /tmp:rw,nosuid,nodev,size=64m --tmpfs /home/agent:rw,nosuid,nodev,size=64m,mode=1777 \
 			--mount "type=bind,src=${run_root}/source,dst=/source,readonly" \
-			--mount "type=bind,src=$(realpath "${prompt_file}"),dst=/prompt,readonly" \
+			--mount "type=bind,src=${clarify_prompt_src},dst=/prompt,readonly" \
 			--mount "type=bind,src=${run_root}/socket,dst=/socket,readonly" \
 			--mount "type=bind,src=${engine_dir}/claude_anthropic_relay.py,dst=/relay.py,readonly" \
 			--mount "type=bind,src=$(realpath "${instructions}"),dst=/instructions.md,readonly" \
@@ -370,7 +522,7 @@ env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker run --rm \
 	--pids-limit 128 --memory 2g --cpus 2 \
 	--tmpfs /tmp:rw,nosuid,nodev,size=64m --tmpfs /home/agent:rw,nosuid,nodev,size=64m,mode=1777 \
 	--mount "type=bind,src=${run_root}/source,dst=/source,readonly" \
-	--mount "type=bind,src=$(realpath "${prompt_file}"),dst=/prompt,readonly" \
+	--mount "type=bind,src=${clarify_prompt_src},dst=/prompt,readonly" \
 	--mount "type=bind,src=${run_root}/socket,dst=/socket,readonly" \
 	--mount "type=bind,src=$(realpath "${support}/clarify_openrouter_broker.py"),dst=/bridge.py,readonly" \
 	--mount "type=bind,src=${run_root}/results,dst=/results" \

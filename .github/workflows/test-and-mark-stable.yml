@@ -637,7 +637,22 @@ jobs:
       PREPUSH_GATE_STEP_STALL_MINUTES: 35
       REVIEW_PHASE_HANDOFF_BUDGET_MINUTES: 15
       EDITOR_RETRY_BUDGET_MINUTES: 25
+      # Stuck states P4 (Refs #8291): Phase 4b's EDITOR_RETRY_BUDGET_MINUTES
+      # counts from the first poll that sees the pinned retry run leave the
+      # queue (in_progress/completed). Until then the run gets its own
+      # queued cap, E2E_RETRY_QUEUED_GRACE_MINUTES, and fails as
+      # retry_queued_timeout when still queued at that cap. Both deadlines
+      # stay within the job ceiling, so the serial budget above is
+      # unchanged. Any value that is not truthy restores the legacy
+      # queued-poll extension. The script defaults both values as well.
+      # See stable_e2e_step_verify_bait_removed.sh.
+      E2E_PHASE4B_QUEUED_GRACE_ENABLED: ${{ vars.E2E_PHASE4B_QUEUED_GRACE_ENABLED || 'true' }}
+      E2E_RETRY_QUEUED_GRACE_MINUTES: ${{ vars.E2E_RETRY_QUEUED_GRACE_MINUTES || '30' }}
       PHASE7_WAIT_BUDGET_MINUTES: 10
+      # Longest Phase 7 waits for the cancel run to leave the queue, from the
+      # start of its wait; PHASE7_WAIT_BUDGET_MINUTES starts once it runs
+      # (#9794, run 44490333814). Both stop before the finalization reserve.
+      PHASE7_QUEUE_WAIT_CAP_MINUTES: 60
       E2E_FINALIZATION_RESERVE_MINUTES: 20
       POLL_INTERVAL: 10
       # Wrapper-workflow filename used by the smoke gate to dispatch
@@ -689,6 +704,8 @@ jobs:
           sparse-checkout: |
             scripts/stable_e2e_step_wait_review.sh
             scripts/stable_e2e_step_verify_bait_removed.sh
+            scripts/stable_e2e_step_deep_verify.sh
+            scripts/stable_e2e_step_verify_cancel_on_close.sh
 
       - name: Verify release-gate step scripts
         id: stable_e2e_step_scripts
@@ -712,7 +729,7 @@ jobs:
             exit 1
           fi
           install -d -m 0700 "${DEST_DIR}"
-          for script in stable_e2e_step_wait_review.sh stable_e2e_step_verify_bait_removed.sh; do
+          for script in stable_e2e_step_wait_review.sh stable_e2e_step_verify_bait_removed.sh stable_e2e_step_deep_verify.sh stable_e2e_step_verify_cancel_on_close.sh; do
             src="${SRC_DIR}/scripts/${script}"
             if [ -L "${SRC_DIR}" ] || [ -L "${SRC_DIR}/scripts" ] || [ -L "${src}" ] || [ ! -f "${src}" ]; then
               echo "::error::Release gate step script ${script} is missing, not a regular file, or a symlink."
@@ -745,6 +762,7 @@ jobs:
             "${REVIEW_PHASE_HANDOFF_BUDGET_MINUTES}" \
             "${EDITOR_RETRY_BUDGET_MINUTES}" \
             "${PHASE7_WAIT_BUDGET_MINUTES}" \
+            "${PHASE7_QUEUE_WAIT_CAP_MINUTES}" \
             "${E2E_FINALIZATION_RESERVE_MINUTES}" \
             "${PREPUSH_GATE_STEP_STALL_MINUTES}"; do
             if ! [[ "${timeout_value}" =~ ^[0-9]+$ ]] || [ "${timeout_value}" -lt 1 ]; then
@@ -1350,7 +1368,7 @@ jobs:
               # Give one more cycle in case labels are delayed
               sleep "$POLL_INTERVAL"
               LABELS_RECHECK=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
-                --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+                --jq '[.labels[].name] | join(",")' 2>/dev/null) || LABELS_RECHECK=""
               if echo "$LABELS_RECHECK" | grep -qE 'ai:awaiting-approval|ai:implementing'; then
                 continue
               fi
@@ -1884,7 +1902,7 @@ jobs:
                   # after it: a newly indexed active run must not be missed.
                   sleep "$POLL_INTERVAL"
                   PR_RECHECK=$(gh api "repos/${TEST_REPO}/pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=1" \
-                    --jq '.[0].number // empty' 2>/dev/null || echo "")
+                    --jq '.[0].number // empty' 2>/dev/null) || PR_RECHECK=""
                   if [ -n "$PR_RECHECK" ]; then
                     continue
                   fi
@@ -2004,9 +2022,9 @@ jobs:
           # stale parent SHA, getting a 409 conflict from the contents
           # PUT and skipping the editor exercise.
           for stability_attempt in 1 2 3 4 5; do
-            HEAD_A=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+            HEAD_A=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null) || HEAD_A=""
             sleep 3
-            HEAD_B=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+            HEAD_B=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null) || HEAD_B=""
             if [ -n "${HEAD_A}" ] && [ "${HEAD_A}" = "${HEAD_B}" ]; then
               echo "  ✓ PR head SHA stable at ${HEAD_A:0:7} (attempt ${stability_attempt})"
               break
@@ -2033,7 +2051,7 @@ jobs:
           # (b) someone manually merges the PR mid-test, or (c) a
           # future auto-merge path is added that doesn't honor the
           # e2e-smoke-test label.
-          PR_META=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" 2>/dev/null || echo "")
+          PR_META=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" 2>/dev/null) || PR_META=""
           PR_STATE=$(printf '%s' "${PR_META}" | jq -r '.state // ""' 2>/dev/null || echo "")
           PR_MERGED=$(printf '%s' "${PR_META}" | jq -r '.merged // false' 2>/dev/null || echo "false")
           if [ "${PR_STATE}" = "closed" ] || [ "${PR_MERGED}" = "true" ]; then
@@ -2066,7 +2084,7 @@ jobs:
           # The implementer should have set the canary to exactly 3 lines.
           # We fetch its SHA so we can PUT a 4-line
           # version that adds one removable bait line at the end.
-          BLOB_JSON=$(gh api "repos/${TEST_REPO}/contents/${CANARY_PATH}?ref=${BRANCH}" 2>/dev/null || echo "")
+          BLOB_JSON=$(gh api "repos/${TEST_REPO}/contents/${CANARY_PATH}?ref=${BRANCH}" 2>/dev/null) || BLOB_JSON=""
           if [ -z "${BLOB_JSON}" ] || [ "${BLOB_JSON}" = "null" ]; then
             echo "::warning::Could not fetch ${CANARY_PATH} from branch ${BRANCH} — skipping bait injection (editor exercise not enforced this run)"
             echo "status=skipped" >> "$GITHUB_OUTPUT"
@@ -2367,7 +2385,10 @@ jobs:
       # for the bait/current head when one exists, or re-dispatch
       # ${REVIEW_WORKFLOW_FILE} via `--ref "${BRANCH}"` and register the
       # oldest matching post-snapshot run. We allow up to 25 minutes for
-      # the pinned run to complete (raised from 10 min
+      # the pinned run to complete, counted from when the run leaves the
+      # queue (E2E_PHASE4B_QUEUED_GRACE_ENABLED, default true; queued time
+      # is capped by E2E_RETRY_QUEUED_GRACE_MINUTES, see
+      # stable_e2e_step_verify_bait_removed.sh) (raised from 10 min
       # after run 25371432937 truncated a still-running successful
       # retry); if the second verification also fails, we hard-fail
       # this step. The retry
@@ -2391,6 +2412,7 @@ jobs:
       #   pr_head_fetch_failed     — pulls/<n> API failed; refused to fail-open commit guard
       #   retry_dispatch_failed    — run discovery/dispatch/registration failed, or wait-review id non-numeric
       #   retry_timeout            — pinned retry run did not complete in 25 min
+      #   retry_queued_timeout     — retry run still queued past E2E_RETRY_QUEUED_GRACE_MINUTES
       #   retry_workflow_failed    — retry run completed but conclusion != success
       #   pr_closed_during_retry   — PR closed/merged while waiting for the retry run
       #   pr_state_check_failed    — fetch_pr_state returned "unknown" 4 consecutive times
@@ -2992,217 +3014,12 @@ jobs:
           IMPL_RUN_ID: ${{ steps.wait-implement.outputs.run_id }}
           REVIEW_RUN_ID: ${{ steps.wait-review.outputs.review_run_id }}
         run: |
-          set -euo pipefail
-
-          DEEP_PASS=true
-          FAILED_STEPS=""
-          SKIPPED_STEPS=""
-          TOTAL_CHECKED=0
-          TOTAL_OK=0
-          TOTAL_FAILED=0
-          TOTAL_SKIPPED=0
-
-          # ── Helper: check ALL steps in a workflow run ──
-          check_all_steps() {
-            local run_id="$1"
-            local phase_name="$2"
-
-            if [ -z "${run_id}" ] || [ "${run_id}" = "null" ]; then
-              echo ""
-              echo "  ⚠ ${phase_name}: workflow run ID not captured — cannot verify steps"
-              DEEP_PASS=false
-              FAILED_STEPS="${FAILED_STEPS}\n  - ${phase_name}: run ID not found (phase may not have triggered)"
-              return 0
-            fi
-
-            echo ""
-            echo "  ┌─ ${phase_name} (run #${run_id})"
-
-            # Fetch all jobs and their steps (retry up to 3 times on transient failures).
-            #
-            # IMPORTANT: Do NOT use `JOBS_JSON=$(gh api ... || echo fallback)`.
-            # On non-zero exit, `gh api` still writes the API error body (e.g.
-            # `{"message":"Not Found",...}`) to stdout; inside `$(...)`, the
-            # `|| echo` branch runs anyway and its output is *concatenated*
-            # with gh's stdout, producing a multi-document JSON blob. Downstream
-            # `jq '.jobs | length'` then emits multiple lines (one per document),
-            # `[ "$TOTAL_JOBS" -eq 0 ]` trips with "integer expression expected",
-            # and `jq '[.jobs[] | select(...)] | length'` errors with "Cannot
-            # iterate over null (null)" on any error-body document whose .jobs
-            # key is missing. Always assign the fallback outside the command
-            # substitution so the two outputs can't concatenate.
-            #
-            # Single source of truth for the schema predicate. Uses `jq -se`
-            # (slurp + exit-status) so multi-document input fails the
-            # predicate — without `-s`, `jq -e` evaluates each document
-            # independently and exits with the truthiness of the *last*
-            # document, so a multi-doc blob whose tail happens to satisfy
-            # the schema would pass through and break downstream
-            # `jq '.jobs | length'` with mixed-line output. Extracted into a
-            # helper so the outer retry and the indexing-delay recheck stay
-            # in lock-step.
-            _jobs_json_valid() {
-              printf '%s' "$1" \
-                | jq -se 'length == 1 and (.[0] | type == "object" and (.jobs | type == "array"))' \
-                >/dev/null 2>&1
-            }
-
-            JOBS_JSON='{"jobs":[]}'
-            for _attempt in 1 2 3; do
-              if _JOBS_OUT=$(gh api "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null); then
-                JOBS_JSON="$_JOBS_OUT"
-                break
-              fi
-              echo "  │  ⚠ API attempt ${_attempt}/3 failed — retrying in 2s..."
-              sleep 2
-            done
-            unset _JOBS_OUT
-            # Shape check: reject anything that isn't a single JSON object
-            # with a `.jobs` array. Catches (a) all-retries-failed with an
-            # empty JOBS_JSON, (b) error-body responses that happen to parse,
-            # and (c) any future accidental multi-doc concatenation.
-            if ! _jobs_json_valid "$JOBS_JSON"; then
-              JOBS_JSON='{"jobs":[]}'
-            fi
-
-            # Check if all jobs in this run were skipped (spurious re-trigger where
-            # the reusable workflow's job-level if: condition was false). This commonly
-            # happens when a comment event re-triggers internal-clarify.yml or
-            # internal-implement.yml but the reusable workflow skips the job.
-            TOTAL_JOBS=$(echo "$JOBS_JSON" | jq '.jobs | length')
-            SKIPPED_JOBS=$(echo "$JOBS_JSON" | jq '[.jobs[] | select(.conclusion == "skipped")] | length')
-            if [ "$TOTAL_JOBS" -eq 0 ]; then
-              # GitHub can briefly report zero jobs before the run is fully indexed.
-              # Re-fetch a few times so we don't false-pass real runs as spurious.
-              echo "  │  ⚠ Run has no jobs yet — rechecking for indexing delay..."
-              for _jobs_retry in 1 2 3; do
-                sleep $((_jobs_retry * 2))
-                # Same hazard as the outer retry — assign fallback outside the
-                # command substitution so gh's error-body stdout cannot
-                # concatenate with the literal fallback JSON.
-                if _JOBS_OUT=$(gh api "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null); then
-                  JOBS_JSON="$_JOBS_OUT"
-                else
-                  JOBS_JSON='{"jobs":[]}'
-                fi
-                unset _JOBS_OUT
-                if ! _jobs_json_valid "$JOBS_JSON"; then
-                  JOBS_JSON='{"jobs":[]}'
-                fi
-                TOTAL_JOBS=$(echo "$JOBS_JSON" | jq '.jobs | length')
-                SKIPPED_JOBS=$(echo "$JOBS_JSON" | jq '[.jobs[] | select(.conclusion == "skipped")] | length')
-                [ "$TOTAL_JOBS" -gt 0 ] && break
-              done
-            fi
-            if [ "$TOTAL_JOBS" -eq 0 ]; then
-              echo "  │  ⊘ Run has no jobs after retries (spurious re-trigger) — OK"
-              echo "  └─"
-              return 0
-            fi
-            if [ "$SKIPPED_JOBS" -eq "$TOTAL_JOBS" ]; then
-              echo "  │  ⊘ All ${TOTAL_JOBS} job(s) were skipped (spurious re-trigger) — OK"
-              echo "  └─"
-              return 0
-            fi
-
-            # Iterate every step in every job
-            STEP_COUNT=$(echo "$JOBS_JSON" | jq '[.jobs[].steps[]] | length')
-            if [ "$STEP_COUNT" -eq 0 ]; then
-              echo "  │  ⚠ No steps found — run may still be in progress or API returned empty"
-              DEEP_PASS=false
-              FAILED_STEPS="${FAILED_STEPS}\n  - ${phase_name}: no steps found in run"
-              echo "  └─"
-              return 0
-            fi
-
-            local phase_ok=0
-            local phase_fail=0
-            local phase_skip=0
-
-            # Process each step
-            while IFS=$'\t' read -r step_name step_conclusion step_status; do
-              TOTAL_CHECKED=$((TOTAL_CHECKED + 1))
-
-              # Skip GitHub's internal "Set up job" / "Complete job" steps —
-              # these are infra steps, not workflow logic
-              if [ "$step_name" = "Set up job" ] || [ "$step_name" = "Complete job" ] || [ "$step_name" = "Post actions/checkout@v5" ]; then
-                continue
-              fi
-
-              case "${step_conclusion}" in
-                success)
-                  echo "  │  ✓ ${step_name}"
-                  phase_ok=$((phase_ok + 1))
-                  TOTAL_OK=$((TOTAL_OK + 1))
-                  ;;
-                skipped)
-                  echo "  │  ⊘ ${step_name} — SKIPPED"
-                  phase_skip=$((phase_skip + 1))
-                  TOTAL_SKIPPED=$((TOTAL_SKIPPED + 1))
-                  SKIPPED_STEPS="${SKIPPED_STEPS}\n  - ${phase_name} → ${step_name}"
-                  ;;
-                failure)
-                  echo "  │  ✗ ${step_name} — FAILED"
-                  phase_fail=$((phase_fail + 1))
-                  TOTAL_FAILED=$((TOTAL_FAILED + 1))
-                  DEEP_PASS=false
-                  FAILED_STEPS="${FAILED_STEPS}\n  - ${phase_name} → ${step_name}"
-                  ;;
-                cancelled)
-                  echo "  │  ⊘ ${step_name} — CANCELLED"
-                  phase_skip=$((phase_skip + 1))
-                  TOTAL_SKIPPED=$((TOTAL_SKIPPED + 1))
-                  SKIPPED_STEPS="${SKIPPED_STEPS}\n  - ${phase_name} → ${step_name} (cancelled)"
-                  ;;
-                *)
-                  echo "  │  ? ${step_name} — ${step_conclusion:-unknown} (status: ${step_status})"
-                  # In-progress or unknown — flag but don't fail
-                  SKIPPED_STEPS="${SKIPPED_STEPS}\n  - ${phase_name} → ${step_name} (${step_conclusion:-unknown})"
-                  ;;
-              esac
-            done < <(echo "$JOBS_JSON" | jq -r '.jobs[].steps[] | [.name, .conclusion, .status] | @tsv')
-
-            echo "  └─ ${phase_ok} ok, ${phase_fail} failed, ${phase_skip} skipped"
-          }
-
-          echo "═══════════════════════════════════════════"
-          echo "  Deep Verification: All Workflow Steps"
-          echo "═══════════════════════════════════════════"
-
-          check_all_steps "${CLARIFY_RUN_ID}" "Clarify"
-          check_all_steps "${PLAN_RUN_ID}" "Plan"
-          check_all_steps "${IMPL_RUN_ID}" "Implement"
-          check_all_steps "${REVIEW_RUN_ID}" "Review/Edit"
-
-          echo ""
-          echo "───────────────────────────────────────────"
-          echo "  Totals: ${TOTAL_OK} ok, ${TOTAL_FAILED} failed, ${TOTAL_SKIPPED} skipped"
-          echo "───────────────────────────────────────────"
-
-          # Print the failed-steps list whenever deep verify did not fully pass,
-          # so "no steps found in run" / "run ID not found" entries (which do not
-          # increment TOTAL_FAILED) are still surfaced in the summary.
-          if [ "$DEEP_PASS" != "true" ] || [ "$TOTAL_FAILED" -gt 0 ]; then
-            echo ""
-            echo "  Failed steps:"
-            echo -e "$FAILED_STEPS"
+          STABLE_E2E_STEP_SCRIPT="${RUNNER_TEMP}/stable-e2e-step-scripts/stable_e2e_step_deep_verify.sh"
+          if [ "${STABLE_E2E_STEP_SCRIPTS_VERIFIED:-}" != "true" ] || [ -L "${STABLE_E2E_STEP_SCRIPT}" ] || [ ! -f "${STABLE_E2E_STEP_SCRIPT}" ]; then
+            echo "::error::Release gate step script stable_e2e_step_deep_verify.sh is missing or unverified."
+            exit 1
           fi
-
-          if [ "$TOTAL_SKIPPED" -gt 0 ]; then
-            echo ""
-            echo "  Skipped steps:"
-            echo -e "$SKIPPED_STEPS"
-          fi
-
-          echo ""
-          if [ "$DEEP_PASS" = "true" ]; then
-            echo "  ✓ All steps across all phases succeeded."
-            echo "deep_passed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "  ✗ Some steps failed — see details above."
-            echo "deep_passed=false" >> "$GITHUB_OUTPUT"
-          fi
-          echo "═══════════════════════════════════════════"
+          source "${STABLE_E2E_STEP_SCRIPT}"
 
       # Per-phase soft-error analysis: orchestrate-poll (RBSIM)
       - name: "Phase 6b: Soft-error analyser (orchestrate-poll)"
@@ -3232,432 +3049,12 @@ jobs:
           PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
           ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
         run: |
-          set -euo pipefail
-          BRANCH="ai/issue-${ISSUE_NUMBER}"
-
-          # List internal-cancel-on-pr-close runs into PHASE7_CANCEL_RUNS_JSON.
-          # One transient GitHub error must not fail Phase 7: run 36389883126
-          # got a single HTTP 502 while the cancel run it was polling was
-          # already in progress, and the step exited lookup_failed. Retry up to
-          # 3 times, 5 s apart; only 3 consecutive failures return 1, and the
-          # caller then reports lookup_failed as before.
-          phase7_list_cancel_runs() {
-            local per_page="$1"
-            local _attempt
-            for _attempt in 1 2 3; do
-              if PHASE7_CANCEL_RUNS_JSON=$(gh api \
-                "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml/runs?per_page=${per_page}"); then
-                return 0
-              fi
-              if [ "${_attempt}" -lt 3 ]; then
-                echo "::warning::Listing internal-cancel-on-pr-close runs failed (attempt ${_attempt}/3); retrying in 5s."
-                sleep 5
-              fi
-            done
-            return 1
-          }
-
-          # The PR may already be closed/merged by the time Phase 7 runs —
-          # earlier phases (orchestrator auto-merge after review approval)
-          # can close it asynchronously. PATCH-ing state=closed on an
-          # already-closed PR is a no-op and fires no `pull_request.closed`
-          # webhook, so the poll below would time out even though
-          # cancel_on_pr_close already ran successfully on the original
-          # close. Detect that case and verify the cancel run that fired
-          # for the prior close instead.
-          PR_INFO=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
-            --jq '{state, head_sha: .head.sha, closed_at, mergeable, mergeable_state}' 2>/dev/null || echo "{}")
-          PR_STATE=$(echo "${PR_INFO}" | jq -r '.state // ""')
-          PR_HEAD_SHA=$(echo "${PR_INFO}" | jq -r '.head_sha // ""')
-          PR_CLOSED_AT=$(echo "${PR_INFO}" | jq -r '.closed_at // ""')
-          PR_MERGEABLE=$(echo "${PR_INFO}" | jq -r 'if .mergeable == null then "unknown" else (.mergeable | tostring) end')
-          PR_MERGEABLE_STATE=$(echo "${PR_INFO}" | jq -r '.mergeable_state // "unknown"')
-          if [ -z "${PR_STATE}" ]; then
-            echo "::error::Could not read state of PR #${PR_NUMBER} (gh api returned empty)"
-            echo "status=lookup_failed" >> "$GITHUB_OUTPUT"
+          STABLE_E2E_STEP_SCRIPT="${RUNNER_TEMP}/stable-e2e-step-scripts/stable_e2e_step_verify_cancel_on_close.sh"
+          if [ "${STABLE_E2E_STEP_SCRIPTS_VERIFIED:-}" != "true" ] || [ -L "${STABLE_E2E_STEP_SCRIPT}" ] || [ ! -f "${STABLE_E2E_STEP_SCRIPT}" ]; then
+            echo "::error::Release gate step script stable_e2e_step_verify_cancel_on_close.sh is missing or unverified."
             exit 1
           fi
-          echo "Pre-close PR diagnostics: mergeable=${PR_MERGEABLE}, mergeable_state=${PR_MERGEABLE_STATE}"
-          if [ "${PR_STATE}" = "closed" ]; then
-            if ! [[ "${PR_HEAD_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
-              echo "::error::Closed PR head is not a valid 40-hex SHA."
-              echo "status=lookup_failed" >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-            echo "PR #${PR_NUMBER} is already closed (head_sha=${PR_HEAD_SHA}); looking up the cancel-on-close run that fired for that closure."
-            if [ -z "${PR_CLOSED_AT}" ]; then
-              echo "::error::Closed PR #${PR_NUMBER} has no closed_at timestamp."
-              echo "status=lookup_failed" >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-            if ! phase7_list_cancel_runs 50; then
-              echo "::error::Could not list internal-cancel-on-pr-close runs for already-closed PR #${PR_NUMBER}."
-              echo "status=lookup_failed" >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-            EXISTING_RUNS_JSON="${PHASE7_CANCEL_RUNS_JSON}"
-            EXISTING=$(printf '%s' "${EXISTING_RUNS_JSON}" | jq -c \
-              --arg head_sha "${PR_HEAD_SHA}" \
-              --arg closed_at "${PR_CLOSED_AT}" \
-              '[.workflow_runs[]
-                | select(
-                    (.event == "pull_request" and .head_sha == $head_sha) or
-                    (.event == "schedule" and .created_at >= $closed_at)
-                  )]
-                | sort_by(.created_at)
-                | last')
-            if [ -z "${EXISTING}" ] || [ "${EXISTING}" = "null" ]; then
-              echo "::error::PR #${PR_NUMBER} already closed but no event or scheduled internal-cancel-on-pr-close run was found after closed_at=${PR_CLOSED_AT}"
-              echo "status=no_run" >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-            EXISTING_RUN_ID=$(echo "${EXISTING}" | jq -r '.id // ""')
-            EXISTING_STATUS=$(echo "${EXISTING}" | jq -r '.status // ""')
-            EXISTING_CONCLUSION=$(echo "${EXISTING}" | jq -r '.conclusion // ""')
-            echo "  found pre-existing cancel-on-close run #${EXISTING_RUN_ID}: status=${EXISTING_STATUS}, conclusion=${EXISTING_CONCLUSION}"
-            # Match the open-PR poll budget so a slow/queued run
-            # doesn't flake the smoke test if it would have eventually
-            # succeeded.
-            WAIT_DEADLINE=$(( $(date +%s) + (PHASE7_WAIT_BUDGET_MINUTES * 60) ))
-            while [ "${EXISTING_STATUS}" != "completed" ] && [ "$(date +%s)" -lt "${WAIT_DEADLINE}" ]; do
-              sleep 5
-              # Fetch once, then parse locally. A transient failure still
-              # produces an empty string rather than malformed JSON for the
-              # local jq parses below.
-              EXISTING_RUN_JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" 2>/dev/null || echo "")
-              EXISTING_STATUS=$(printf '%s' "${EXISTING_RUN_JSON}" | jq -r '.status // ""' 2>/dev/null || echo "")
-              EXISTING_CONCLUSION=$(printf '%s' "${EXISTING_RUN_JSON}" | jq -r '.conclusion // ""' 2>/dev/null || echo "")
-              echo "  cancel-on-close run #${EXISTING_RUN_ID}: status=${EXISTING_STATUS:-?}, conclusion=${EXISTING_CONCLUSION:-?}"
-            done
-            if [ "${EXISTING_STATUS}" != "completed" ]; then
-              echo "::error::cancel-on-close run #${EXISTING_RUN_ID} did not complete within ${PHASE7_WAIT_BUDGET_MINUTES}m (status=${EXISTING_STATUS:-?})"
-              echo "status=timeout" >> "$GITHUB_OUTPUT"
-              echo "cancel_run_id=${EXISTING_RUN_ID}" >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-            if [ "${EXISTING_CONCLUSION}" != "success" ]; then
-              echo "::error::cancel-on-close run #${EXISTING_RUN_ID} concluded ${EXISTING_CONCLUSION:-no_run}"
-              echo "status=${EXISTING_CONCLUSION:-no_run}" >> "$GITHUB_OUTPUT"
-              echo "cancel_run_id=${EXISTING_RUN_ID}" >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-            echo "✓ cancel-on-close run #${EXISTING_RUN_ID} succeeded (fired on prior PR close)"
-            echo "status=success" >> "$GITHUB_OUTPUT"
-            echo "cancel_run_id=${EXISTING_RUN_ID}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # PR is still open — exercise the close path end to end.
-
-          # ── Phase 7a: bring a conflicted smoke PR back to mergeable ──────
-          # GitHub never runs `pull_request` workflows for a PR that has a
-          # merge conflict (docs: events-that-trigger-workflows), so closing a
-          # conflicted smoke PR emits no `pull_request.closed` run and Phase 7
-          # fails `no_run` although the cancel wrapper is healthy. Run
-          # 35672590166 hit exactly that: the forward-merge of stable into
-          # main landed 75 s before the close and rewrote the same hunk of
-          # then-tracked .ai/.workspace_source_manifest.txt that the smoke PR's
-          # workspace init had regenerated. New smoke PRs no longer commit it.
-          # The scheduled cleanup sweep (#4258) is the
-          # production backstop for such closures, not a substitute for the
-          # close trigger, and its observed cadence (median ~12 min) exceeds
-          # PHASE7_WAIT_BUDGET_MINUTES, so a conflicted PR would still fail.
-          #
-          # Before closing, merge the PR's base into the throwaway ai/issue-N
-          # branch through the merges API. On a 409, overwrite every PR file
-          # that the base also changed since the merge base with the base's
-          # version (the smoke PR's own content is no longer load-bearing once
-          # Phase 4b has verified the canary), retry the merge once, then wait
-          # for GitHub to recompute mergeability. A branch that still cannot be
-          # made mergeable is closed anyway and left to the scheduled fallback;
-          # the outcome is recorded either way so a later `no_run` is
-          # diagnosable from the log (PHASE7_UNCONFLICT_* lines).
-          #
-          # API calls (§15): one mergeability poll (≤18 calls at 5 s while
-          # GitHub reports mergeable=null), one `/merges` (two on conflict),
-          # and on conflict one `/compare`, one `/pulls/N/files` page, and up
-          # to four calls per overlapping file (base contents, merge-base blob,
-          # branch blob, PUT). The snapshot and close calls below are unchanged.
-          PHASE7_UNCONFLICT_OUTCOME="not_needed"
-          PHASE7_BASE_REF=""
-          PHASE7_MERGEABLE="unknown"
-          PHASE7_MERGEABLE_STATE="unknown"
-          _phase7_refresh_mergeability()
-          {
-            # Sets PHASE7_MERGEABLE / PHASE7_MERGEABLE_STATE / PHASE7_BASE_REF,
-            # polling while GitHub still reports mergeable=null (it recomputes
-            # lazily after any push to the base or the head).
-            local deadline info
-            deadline=$(( $(date +%s) + 90 ))
-            while :; do
-              info=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
-                --jq '{mergeable, mergeable_state, base_ref: .base.ref}' 2>/dev/null || echo "{}")
-              PHASE7_MERGEABLE=$(printf '%s' "${info}" | jq -r 'if .mergeable == null then "unknown" else (.mergeable | tostring) end')
-              PHASE7_MERGEABLE_STATE=$(printf '%s' "${info}" | jq -r '.mergeable_state // "unknown"')
-              PHASE7_BASE_REF=$(printf '%s' "${info}" | jq -r '.base_ref // ""')
-              if [ "${PHASE7_MERGEABLE}" != "unknown" ] || [ "$(date +%s)" -ge "${deadline}" ]; then
-                return 0
-              fi
-              sleep 5
-            done
-          }
-          _phase7_merge_base_into_branch()
-          {
-            # 0 = merged or already up to date, 2 = merge conflict, 1 = other error.
-            local err
-            if err=$(gh api "repos/${TEST_REPO}/merges" \
-                -f base="${BRANCH}" -f head="${PHASE7_BASE_REF}" \
-                -f commit_message="[E2E Smoke Test] merge ${PHASE7_BASE_REF} into ${BRANCH} before close (run ${GITHUB_RUN_ID})" \
-                2>&1 >/dev/null); then
-              return 0
-            fi
-            if printf '%s' "${err}" | grep -Eqi 'HTTP 409|status code 409|conflict'; then
-              return 2
-            fi
-            echo "::warning::PHASE7_UNCONFLICT merge of ${PHASE7_BASE_REF} into ${BRANCH} failed with a non-conflict error: ${err}"
-            return 1
-          }
-          _phase7_take_base_version()
-          {
-            # Overwrite one PR file on the branch with the base's version,
-            # taken from the contents JSON the caller already fetched (one
-            # base read per file, reused for the blob comparison and the
-            # payload). The commit subject is prefixed `[E2E Smoke Test]`,
-            # never `[ai-autofix]`, for the same reason as the bait commit.
-            local path="$1" base_json="$2" branch_sha content
-            local -a sha_args=()
-            content=$(printf '%s' "${base_json}" | jq -r '.content // empty' 2>/dev/null | tr -d '\n')
-            if [ -z "${content}" ]; then
-              echo "PHASE7_UNCONFLICT_FILE path=${path} outcome=skipped reason=base_content_unavailable"
-              return 1
-            fi
-            branch_sha=$(gh api "repos/${TEST_REPO}/contents/${path}?ref=${BRANCH}" --jq '.sha // empty' 2>/dev/null || echo "")
-            if [ -n "${branch_sha}" ]; then
-              sha_args=(-f "sha=${branch_sha}")
-            fi
-            if ! gh api -X PUT "repos/${TEST_REPO}/contents/${path}" \
-                -f message="[E2E Smoke Test] take ${PHASE7_BASE_REF} version of ${path} to clear the merge conflict (run ${GITHUB_RUN_ID})" \
-                -f content="${content}" \
-                "${sha_args[@]}" \
-                -f branch="${BRANCH}" >/dev/null 2>&1; then
-              echo "PHASE7_UNCONFLICT_FILE path=${path} outcome=put_failed"
-              return 1
-            fi
-            echo "PHASE7_UNCONFLICT_FILE path=${path} outcome=replaced_with_base"
-            return 0
-          }
-
-          _phase7_refresh_mergeability
-          echo "PHASE7_UNCONFLICT_CHECK pr=${PR_NUMBER} branch=${BRANCH} base=${PHASE7_BASE_REF} mergeable=${PHASE7_MERGEABLE} mergeable_state=${PHASE7_MERGEABLE_STATE}"
-          if [ "${PHASE7_MERGEABLE}" = "false" ] && [ -n "${PHASE7_BASE_REF}" ]; then
-            PHASE7_UNCONFLICT_OUTCOME="merge_failed"
-            PHASE7_MERGE_RC=0
-            _phase7_merge_base_into_branch || PHASE7_MERGE_RC=$?
-            if [ "${PHASE7_MERGE_RC}" -eq 2 ]; then
-              PHASE7_MERGE_BASE_SHA=$(gh api "repos/${TEST_REPO}/compare/${PHASE7_BASE_REF}...${BRANCH}" \
-                --jq '.merge_base_commit.sha // ""' 2>/dev/null || echo "")
-              PHASE7_PR_FILES=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}/files?per_page=100" \
-                --jq '.[].filename' 2>/dev/null || echo "")
-              while IFS= read -r phase7_path; do
-                [ -n "${phase7_path}" ] || continue
-                phase7_base_json=$(gh api "repos/${TEST_REPO}/contents/${phase7_path}?ref=${PHASE7_BASE_REF}" 2>/dev/null || echo "")
-                phase7_base_blob=$(printf '%s' "${phase7_base_json}" | jq -r '.sha // ""' 2>/dev/null || echo "")
-                phase7_merge_base_blob=""
-                if [ -n "${PHASE7_MERGE_BASE_SHA}" ]; then
-                  phase7_merge_base_blob=$(gh api "repos/${TEST_REPO}/contents/${phase7_path}?ref=${PHASE7_MERGE_BASE_SHA}" \
-                    --jq '.sha // ""' 2>/dev/null || echo "")
-                fi
-                if [ -z "${PHASE7_MERGE_BASE_SHA}" ]; then
-                  echo "PHASE7_UNCONFLICT_FILE path=${phase7_path} outcome=kept reason=merge_base_unavailable"
-                elif [ -z "${phase7_merge_base_blob}" ]; then
-                  echo "PHASE7_UNCONFLICT_FILE path=${phase7_path} outcome=kept reason=merge_base_blob_unavailable"
-                elif [ -z "${phase7_base_blob}" ]; then
-                  echo "PHASE7_UNCONFLICT_FILE path=${phase7_path} outcome=kept reason=base_blob_unavailable"
-                elif [ -n "${phase7_base_blob}" ] && [ "${phase7_base_blob}" != "${phase7_merge_base_blob}" ]; then
-                  _phase7_take_base_version "${phase7_path}" "${phase7_base_json}" || true
-                else
-                  echo "PHASE7_UNCONFLICT_FILE path=${phase7_path} outcome=kept reason=base_unchanged_since_merge_base"
-                fi
-              done <<< "${PHASE7_PR_FILES}"
-              PHASE7_MERGE_RC=0
-              _phase7_merge_base_into_branch || PHASE7_MERGE_RC=$?
-            fi
-            if [ "${PHASE7_MERGE_RC}" -eq 0 ]; then
-              _phase7_refresh_mergeability
-              if [ "${PHASE7_MERGEABLE}" = "true" ]; then
-                PHASE7_UNCONFLICT_OUTCOME="unconflicted"
-              else
-                PHASE7_UNCONFLICT_OUTCOME="still_${PHASE7_MERGEABLE_STATE}"
-              fi
-            elif [ "${PHASE7_MERGE_RC}" -eq 2 ]; then
-              PHASE7_UNCONFLICT_OUTCOME="still_conflicted"
-            fi
-            echo "PHASE7_UNCONFLICT_RESULT pr=${PR_NUMBER} branch=${BRANCH} outcome=${PHASE7_UNCONFLICT_OUTCOME} mergeable=${PHASE7_MERGEABLE} mergeable_state=${PHASE7_MERGEABLE_STATE}"
-            if [ "${PHASE7_UNCONFLICT_OUTCOME}" != "unconflicted" ]; then
-              echo "::warning::Smoke PR #${PR_NUMBER} could not be made mergeable before close (outcome=${PHASE7_UNCONFLICT_OUTCOME}); GitHub will not fire pull_request.closed for a conflicted PR, so Phase 7 now depends on the scheduled cleanup fallback."
-            fi
-          elif [ "${PHASE7_MERGEABLE}" != "true" ]; then
-            PHASE7_UNCONFLICT_OUTCOME="still_${PHASE7_MERGEABLE_STATE}"
-            echo "PHASE7_UNCONFLICT_RESULT pr=${PR_NUMBER} branch=${BRANCH} outcome=${PHASE7_UNCONFLICT_OUTCOME} mergeable=${PHASE7_MERGEABLE} mergeable_state=${PHASE7_MERGEABLE_STATE}"
-            echo "::warning::Smoke PR #${PR_NUMBER} mergeability could not be confirmed before close (outcome=${PHASE7_UNCONFLICT_OUTCOME}, base=${PHASE7_BASE_REF:-unknown}); Phase 7 may depend on the scheduled cleanup fallback."
-          fi
-          echo "unconflict=${PHASE7_UNCONFLICT_OUTCOME}" >> "$GITHUB_OUTPUT"
-
-          # Snapshot the most recent cancel-on-close run BEFORE we close the
-          # PR so we can detect a fresh run by monotonic ID after the close.
-          if ! phase7_list_cancel_runs 1; then
-            echo "::error::Could not snapshot internal-cancel-on-pr-close runs before closing PR #${PR_NUMBER}."
-            echo "status=lookup_failed" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          PRE_RUNS_JSON="${PHASE7_CANCEL_RUNS_JSON}"
-          PRE_RUN_ID=$(printf '%s' "${PRE_RUNS_JSON}" | jq -r '.workflow_runs[0].id // 0')
-          echo "Pre-close cancel run head: ${PRE_RUN_ID}"
-
-          # Close the PR (this is what triggers internal-cancel-on-pr-close).
-          CLOSE_RESPONSE=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
-            -X PATCH -f state=closed --jq '{closed_at}' 2>/dev/null) \
-            || { echo "::error::Could not close PR #${PR_NUMBER}"; echo "status=close_failed" >> "$GITHUB_OUTPUT"; exit 1; }
-          PR_CLOSED_AT=$(printf '%s' "${CLOSE_RESPONSE}" | jq -r '.closed_at // ""')
-          if [ -z "${PR_CLOSED_AT}" ]; then
-            echo "::error::Close response for PR #${PR_NUMBER} did not include closed_at."
-            echo "status=close_failed" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          echo "✓ Closed PR #${PR_NUMBER}"
-
-          # Event-propagation grace: GitHub's webhook delivery for the
-          # `pull_request.closed` event is usually sub-second but has been
-          # observed to lag 2-3 seconds under heavy queue load. Sleep 5s
-          # before the first poll so we don't false-fail by reading the
-          # `actions/workflows/.../runs` index before the cancel run has
-          # been created. The named Phase 7 budget below absorbs this.
-          sleep 5
-
-          # Wait for a new cancel-on-close run to register and complete.
-          # Internal-cancel-on-pr-close fires near-immediately on the
-          # pull_request[closed] webhook but the API can take a few
-          # seconds to index the new run. Poll every 3s for the first 30s
-          # to catch quick runs (the cancel job is short — it only
-          # cancels other workflows), then wait 10s, 20s and 30s for every
-          # later poll, never sleeping past DEADLINE. Total budget
-          # defaults to 10m.
-          DEADLINE=$(( $(date +%s) + (PHASE7_WAIT_BUDGET_MINUTES * 60) ))
-          POLL_START=$(date +%s)
-          NEW_RUN_ID=""
-          NEW_CONCLUSION=""
-          PHASE7_POLL_COUNT=0
-          PHASE7_SLOW_POLL_COUNT=0
-          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-            if ! phase7_list_cancel_runs 10; then
-              echo "::error::Could not list internal-cancel-on-pr-close runs after closing PR #${PR_NUMBER}."
-              echo "status=lookup_failed" >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-            PHASE7_POLL_COUNT=$(( PHASE7_POLL_COUNT + 1 ))
-            CANDIDATE_RUNS_JSON="${PHASE7_CANCEL_RUNS_JSON}"
-            CANDIDATE=$(printf '%s' "${CANDIDATE_RUNS_JSON}" | jq -c \
-              --argjson pre_run_id "${PRE_RUN_ID}" \
-              --arg closed_at "${PR_CLOSED_AT}" \
-              '[.workflow_runs[]
-                | select(.id > $pre_run_id)
-                | select(
-                    .event == "pull_request" or
-                    (.event == "schedule" and .created_at >= $closed_at)
-                  )]
-                | sort_by(.created_at)
-                | last')
-            if [ -n "${CANDIDATE}" ] && [ "${CANDIDATE}" != "null" ]; then
-              NEW_RUN_ID=$(echo "${CANDIDATE}" | jq -r '.id // ""')
-              STATUS=$(echo "${CANDIDATE}" | jq -r '.status // ""')
-              NEW_CONCLUSION=$(echo "${CANDIDATE}" | jq -r '.conclusion // ""')
-              echo "  cancel-on-close run #${NEW_RUN_ID}: status=${STATUS}, conclusion=${NEW_CONCLUSION}"
-              if [ "${STATUS}" = "completed" ]; then
-                break
-              fi
-            fi
-            ELAPSED=$(( $(date +%s) - POLL_START ))
-            if [ "${ELAPSED}" -lt 30 ]; then
-              PHASE7_POLL_SLEEP=3
-            else
-              PHASE7_SLOW_POLL_COUNT=$(( PHASE7_SLOW_POLL_COUNT + 1 ))
-              case "${PHASE7_SLOW_POLL_COUNT}" in
-                1) PHASE7_POLL_SLEEP=10 ;;
-                2) PHASE7_POLL_SLEEP=20 ;;
-                *) PHASE7_POLL_SLEEP=30 ;;
-              esac
-            fi
-            PHASE7_POLL_REMAINING=$(( DEADLINE - $(date +%s) ))
-            if [ "${PHASE7_POLL_REMAINING}" -le 0 ]; then
-              break
-            fi
-            if [ "${PHASE7_POLL_SLEEP}" -ge "${PHASE7_POLL_REMAINING}" ]; then
-              # Wake one second before DEADLINE so the loop makes one last
-              # listing instead of exiting straight after the sleep.
-              PHASE7_POLL_SLEEP=$(( PHASE7_POLL_REMAINING - 1 ))
-            fi
-            if [ "${PHASE7_POLL_SLEEP}" -lt 1 ]; then
-              # With one second left the clamp gives 0: the listing this
-              # iteration just made is the last one inside the budget, so
-              # stop instead of sleeping past DEADLINE or listing again.
-              break
-            fi
-            sleep "${PHASE7_POLL_SLEEP}"
-          done
-
-          if [ -z "${NEW_RUN_ID}" ]; then
-            # No-run diagnostic. Run fields are data, so control
-            # characters become spaces and any line or value that starts
-            # with a workflow command is prefixed with [neutralised].
-            echo "::group::Phase 7 no-run diagnostic"
-            PHASE7_DIAG_ELAPSED=$(( $(date +%s) - POLL_START ))
-            printf '%s\n' "pr=${PR_NUMBER} closed_at=${PR_CLOSED_AT} pre_run_id=${PRE_RUN_ID} polls=${PHASE7_POLL_COUNT} elapsed_secs=${PHASE7_DIAG_ELAPSED}" \
-              | tr -d '\r' | sed -e 's/^\(::\|##\[\)/[neutralised]\1/' || true
-            PHASE7_DIAG_RUNS=""
-            if PHASE7_DIAG_RUNS=$(printf '%s' "${CANDIDATE_RUNS_JSON:-}" | jq -r '
-                def safe: tostring | gsub("[[:cntrl:]]"; " ") | if startswith("::") then "[neutralised]" + . else . end;
-                .workflow_runs[]? | "  run id=\(.id|safe) event=\(.event|safe) status=\(.status|safe) conclusion=\(.conclusion // ""|safe) head_sha=\(.head_sha // ""|safe) created_at=\(.created_at // ""|safe)"' 2>/dev/null); then
-              if [ -n "${PHASE7_DIAG_RUNS}" ]; then
-                printf '%s\n' "${PHASE7_DIAG_RUNS}" | sed -e 's/^\(::\|##\[\)/[neutralised]\1/' || echo "  runs: unrenderable"
-              else
-                echo "  runs: none"
-              fi
-            else
-              echo "  runs: unrenderable"
-            fi
-            # §15: the runs listing above carries no workflow state, so
-            # this one read, made only on this failure path, is the only
-            # extra call. A failed read prints workflow_state=unknown and
-            # never changes the step's outcome.
-            PHASE7_CANCEL_WORKFLOW_STATE=$(gh api "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml" --jq '.state // ""' 2>/dev/null || true)
-            if ! [[ "${PHASE7_CANCEL_WORKFLOW_STATE}" =~ ^[a-z_]+$ ]]; then
-              PHASE7_CANCEL_WORKFLOW_STATE="unknown"
-            fi
-            echo "  workflow_state=${PHASE7_CANCEL_WORKFLOW_STATE}"
-            echo "::endgroup::"
-            echo "::error::internal-cancel-on-pr-close did not register a new run within timeout"
-            echo "status=no_run" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          # A run was found but never reached `completed` inside the budget
-          # (for example still `pending` behind its concurrency group). This
-          # used to write an empty `status=`, which the results table showed
-          # as SKIPPED (run 40794181365).
-          if [ "${STATUS:-}" != "completed" ]; then
-            echo "::error::cancel-on-close run #${NEW_RUN_ID} did not complete within ${PHASE7_WAIT_BUDGET_MINUTES}m (status=${STATUS:-?})"
-            echo "status=timeout" >> "$GITHUB_OUTPUT"
-            echo "cancel_run_id=${NEW_RUN_ID}" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          if [ "${NEW_CONCLUSION}" != "success" ]; then
-            echo "::error::cancel-on-close run #${NEW_RUN_ID} concluded ${NEW_CONCLUSION}"
-            echo "status=${NEW_CONCLUSION}" >> "$GITHUB_OUTPUT"
-            echo "cancel_run_id=${NEW_RUN_ID}" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          echo "✓ cancel-on-close run #${NEW_RUN_ID} succeeded"
-          echo "status=success" >> "$GITHUB_OUTPUT"
-          echo "cancel_run_id=${NEW_RUN_ID}" >> "$GITHUB_OUTPUT"
+          source "${STABLE_E2E_STEP_SCRIPT}"
 
       # Per-phase soft-error analysis: cancel-on-pr-close
       - name: "Phase 7b: Soft-error analyser (cancel-on-pr-close)"
@@ -4296,6 +3693,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_integration_pr_readiness.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mark_stable_release_tag_refspec_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_review_blocked_budget.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_clarify_negative_outputs.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_targeted_file_context.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_prompt_untrusted_context_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_workflow_contract.py
@@ -5101,7 +4499,7 @@ jobs:
             TRACKING_NUMBER=$(gh api \
               "repos/${TEST_REPO}/issues?state=open&labels=ai:orchestrator-tracking&since=${DISPATCH_START_ISO}&per_page=50" \
               --jq "[.[] | select(.body // \"\" | contains(\"${GITHUB_RUN_ID}\"))] | sort_by(.created_at) | last | .number // empty" \
-              2>"${TRACKING_ERR_FILE}" || echo "")
+              2>"${TRACKING_ERR_FILE}") || TRACKING_NUMBER=""
             [ -n "${TRACKING_NUMBER}" ] && break
             sleep 5
           done
@@ -5143,7 +4541,7 @@ jobs:
             # TEST_REPO's own poller files its capacity tracker in TEST_REPO.
             if [ -z "${CAP_EVIDENCE}" ]; then
               CAP_TRACKERS=$(gh api "repos/${TEST_REPO}/issues?state=open&labels=ai:provider-outage&per_page=20" \
-                --jq '[.[] | select(.pull_request == null) | select(.author_association | IN("OWNER","MEMBER","COLLABORATOR")) | select((.body // "") | contains("<!-- ai:provider-outage:v1 kind=capacity "))] | length' 2>/dev/null || echo "0")
+                --jq '[.[] | select(.pull_request == null) | select(.author_association | IN("OWNER","MEMBER","COLLABORATOR")) | select((.body // "") | contains("<!-- ai:provider-outage:v1 kind=capacity "))] | length' 2>/dev/null) || CAP_TRACKERS="0"
               if [[ "${CAP_TRACKERS}" =~ ^[0-9]+$ ]] && [ "${CAP_TRACKERS}" -gt 0 ]; then
                 CAP_EVIDENCE="capacity_tracker"
               fi
@@ -5186,7 +4584,7 @@ jobs:
             CHILDREN_JSON=$(gh api \
               "repos/${TEST_REPO}/issues?state=all&labels=ai:orchestrator-managed&since=${DISPATCH_START_ISO}&per_page=100" \
               --jq "[.[] | select(.pull_request | not) | select(.body // \"\" | contains(\"Tracking issue: #${TRACKING_NUMBER}\")) | .number]" \
-              2>"${CHILDREN_ERR_FILE}" || echo "[]")
+              2>"${CHILDREN_ERR_FILE}") || CHILDREN_JSON="[]"
             CHILDREN=$(echo "${CHILDREN_JSON}" | jq -r 'sort | unique | join(",")' 2>/dev/null || echo "")
             # Count from the fetched JSON: `grep -c .` exited 1 on an empty
             # poll and set -e ended the step before the 90s loop and its
@@ -5291,7 +4689,7 @@ jobs:
           # word-split into bogus issue numbers in the loop below.
           STRAGGLERS=$(gh api \
             "search/issues?q=repo:${TEST_REPO}+is:issue+state:open+in:title+${MARKER_Q}" \
-            --jq '[.items[].number] | join(" ")' 2>/dev/null || echo "")
+            --jq '[.items[].number] | join(" ")' 2>/dev/null) || STRAGGLERS=""
           for n in ${STRAGGLERS}; do
             close_with_retry "${n}"
           done
@@ -5305,11 +4703,14 @@ jobs:
             PROJECT_BRANCH="orchestrator/project-${TRACKING_NUMBER}"
             OWNER="${TEST_REPO%%/*}"
             PROJECT_PRS=""
-            PROJECT_PRS+=" $(gh api "repos/${TEST_REPO}/pulls?state=open&base=${PROJECT_BRANCH}&per_page=100" --jq '.[].number' 2>/dev/null || echo "")"
-            PROJECT_PRS+=" $(gh api "repos/${TEST_REPO}/pulls?state=open&head=${OWNER}:${PROJECT_BRANCH}&per_page=100" --jq '.[].number' 2>/dev/null || echo "")"
+            PROJECT_PRS_PAGE=$(gh api "repos/${TEST_REPO}/pulls?state=open&base=${PROJECT_BRANCH}&per_page=100" --jq '.[].number' 2>/dev/null) || PROJECT_PRS_PAGE=""
+            PROJECT_PRS+=" ${PROJECT_PRS_PAGE}"
+            PROJECT_PRS_PAGE=$(gh api "repos/${TEST_REPO}/pulls?state=open&head=${OWNER}:${PROJECT_BRANCH}&per_page=100" --jq '.[].number' 2>/dev/null) || PROJECT_PRS_PAGE=""
+            PROJECT_PRS+=" ${PROJECT_PRS_PAGE}"
             for m in $(echo "${CHILDREN}" | tr ',' ' ') ${STRAGGLERS}; do
               [[ "${m}" =~ ^[1-9][0-9]*$ ]] || continue
-              PROJECT_PRS+=" $(gh api "repos/${TEST_REPO}/pulls?state=open&head=${OWNER}:ai/issue-${m}&per_page=100" --jq '.[].number' 2>/dev/null || echo "")"
+              PROJECT_PRS_PAGE=$(gh api "repos/${TEST_REPO}/pulls?state=open&head=${OWNER}:ai/issue-${m}&per_page=100" --jq '.[].number' 2>/dev/null) || PROJECT_PRS_PAGE=""
+              PROJECT_PRS+=" ${PROJECT_PRS_PAGE}"
             done
             for p in $(printf '%s\n' ${PROJECT_PRS} | grep -E '^[1-9][0-9]*$' | sort -u); do
               close_with_retry "${p}"
@@ -5518,12 +4919,28 @@ jobs:
           # Capture the latest clarify.yml run id BEFORE creating the
           # issue so the post-create capture step can find the new
           # run via `id > PRE_CLARIFY_RUN_ID`.
-          PRE_CLARIFY_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/workflows/clarify.yml/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo "0")
+          PRE_CLARIFY_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/workflows/clarify.yml/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null) || PRE_CLARIFY_RUN_ID=""
+          # #9797 (run 44490333814): a failed `gh api` prints its error body
+          # to stdout, and a failure with empty stdout would otherwise pass
+          # as a real 0, so a nonzero exit clears the value. Write only digits to
+          # GITHUB_OUTPUT; never echo the captured value (untrusted text).
+          # A 0 written here after a failed read is not a real watermark, so
+          # pre_clarify_run_id_read_failed=1 tells the capture step to skip
+          # rather than match an older, unrelated clarify run.
+          if ! [[ "${PRE_CLARIFY_RUN_ID}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Could not read the latest clarify.yml run id (gh api failed or returned a non-numeric value); using 0"
+            PRE_CLARIFY_RUN_ID=0
+            echo "pre_clarify_run_id_read_failed=1" >> "$GITHUB_OUTPUT"
+          fi
           echo "pre_clarify_run_id=${PRE_CLARIFY_RUN_ID}" >> "$GITHUB_OUTPUT"
           TITLE="[E2E Clarify Negative Test] under-specified task (run ${GITHUB_RUN_ID})"
           BODY="Make it better."
           NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
             -f title="${TITLE}" -f body="${BODY}" --jq '.number')
+          if ! [[ "${NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Issue creation returned a non-numeric issue number; refusing to write a malformed step output"
+            exit 1
+          fi
           echo "issue_number=${NUMBER}" >> "$GITHUB_OUTPUT"
           echo "Created issue #${NUMBER}"
 
@@ -5532,17 +4949,27 @@ jobs:
         if: steps.create.outputs.issue_number != ''
         env:
           PRE: ${{ steps.create.outputs.pre_clarify_run_id }}
+          PRE_READ_FAILED: ${{ steps.create.outputs.pre_clarify_run_id_read_failed }}
         run: |
           set -euo pipefail
           # Poll up to 90s for clarify.yml to register a new run id
           # past the pre-create snapshot. Fail-open: emits empty
           # output when no new run is observed; the analyser step
           # below skips (its `if:` gates on non-empty output).
+          # #9797: digits only, so an error body never reaches the jq
+          # filter or GITHUB_OUTPUT; a failed poll read keeps polling.
+          # Without a readable baseline, `id > 0` would match an older,
+          # unrelated run, so skip (fail-open) instead of polling.
+          if [ "${PRE_READ_FAILED:-}" = "1" ] || ! [[ "${PRE:-}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Could not capture clarify run id for negative-test issue: baseline run id unavailable (analyser will be skipped)"
+            exit 0
+          fi
           DEADLINE=$(( $(date +%s) + 90 ))
           NEW_ID=""
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
             NEW_ID=$(gh api "repos/${TEST_REPO}/actions/workflows/clarify.yml/runs?per_page=10" \
-              --jq "[.workflow_runs[] | select(.id > ${PRE:-0})] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || echo "")
+              --jq "[.workflow_runs[] | select(.id > ${PRE:-0})] | sort_by(.created_at) | last | .id // empty" 2>/dev/null) || NEW_ID=""
+            [[ "${NEW_ID}" =~ ^[0-9]+$ ]] || NEW_ID=""
             [ -n "${NEW_ID}" ] && break
             sleep 5
           done
@@ -5586,7 +5013,7 @@ jobs:
           CLARIFY_PERSIST_REQUIRED_SECS=60
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
             LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
-              --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+              --jq '[.labels[].name] | join(",")' 2>/dev/null) || LABELS=""
             echo "  labels: ${LABELS:-none}"
             # Definitively-terminal rejection labels — single observation
             # suffices. Anchored against the comma-separated label list
@@ -5599,7 +5026,7 @@ jobs:
             # when it asks for clarification; look for the canonical
             # marker so we still pass even if labels were never applied.
             BODY=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=20" \
-              --jq '[.[] | select(.user.type == "Bot" or (.user.login | endswith("[bot]"))) | .body] | join("\n")' 2>/dev/null || echo "")
+              --jq '[.[] | select(.user.type == "Bot" or (.user.login | endswith("[bot]"))) | .body] | join("\n")' 2>/dev/null) || BODY=""
             if echo "${BODY}" | grep -qiE 'NEEDS_CLARIFICATION|clarification.*(needed|required)|cannot proceed without'; then
               OUTCOME="rejected"
               break
@@ -5811,7 +5238,14 @@ jobs:
           # cleanup bounds its late-Implement cancel by this time instead (#8953).
           echo "created_after=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
           for WF in clarify plan implement review_autofix; do
-            LATEST=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF}.yml/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo "0")
+            LATEST=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF}.yml/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null) || LATEST=""
+            # #9797: a failed `gh api` prints its error body (or nothing) to
+            # stdout; a nonzero exit clears the value either way. Write
+            # digits or an empty value only; never echo the captured text.
+            if ! [[ "${LATEST}" =~ ^[0-9]+$ ]]; then
+              echo "::warning::Could not read the latest ${WF}.yml run id; leaving pre_${WF}_run_id empty"
+              LATEST=""
+            fi
             echo "pre_${WF}_run_id=${LATEST}" >> "$GITHUB_OUTPUT"
           done
           TITLE="[E2E Smoke Test alt-model] update canary (run ${GITHUB_RUN_ID})"
@@ -5832,6 +5266,10 @@ jobs:
           BODY+="- Note: this run uses \`${ALT_EDITOR_MODEL}\` as the editor model override."
           NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
             -f title="${TITLE}" -f body="${BODY}" --jq '.number')
+          if ! [[ "${NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Issue creation returned a non-numeric issue number; refusing to write a malformed step output"
+            exit 1
+          fi
           echo "issue_number=${NUMBER}" >> "$GITHUB_OUTPUT"
 
       - name: Wait for clarify→plan→implement (alt-model)
@@ -5856,7 +5294,7 @@ jobs:
           ALT_APPROVED_POSTED_AT=0
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
             LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
-              --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+              --jq '[.labels[].name] | join(",")' 2>/dev/null) || LABELS=""
             echo "  labels: ${LABELS:-none}"
             # Claude pool at capacity: the phase paused (#7370); fail fast with its own status (#8217).
             if [[ ",${LABELS}," == *",ai:claude-capacity-wait,"* ]]; then
@@ -5941,12 +5379,20 @@ jobs:
             PRE="${REST%%:*}"
             REST="${REST#*:}"
             BRANCH_FILTER="${REST}"
+            # #9797: an empty pre_<wf>_run_id means the baseline read failed.
+            # clarify/plan run on main, so `id > 0` could match an older,
+            # unrelated run: skip them. implement/review keep the branch filter.
+            if { [ "${WF}" = "clarify" ] && [ -z "${PRE_CLARIFY:-}" ]; } || { [ "${WF}" = "plan" ] && [ -z "${PRE_PLAN:-}" ]; } || ! [[ "${PRE}" =~ ^[0-9]+$ ]]; then
+              echo "  ⚠ alt-model ${WF} baseline run id unavailable (analyser will skip this phase)"
+              continue
+            fi
             if [ -n "${BRANCH_FILTER}" ]; then
               QUERY="repos/${TEST_REPO}/actions/workflows/${WF}.yml/runs?per_page=20&branch=${BRANCH_FILTER}"
             else
               QUERY="repos/${TEST_REPO}/actions/workflows/${WF}.yml/runs?per_page=20"
             fi
-            NEW_ID=$(gh api "${QUERY}" --jq "[.workflow_runs[] | select(.id > ${PRE})] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || echo "")
+            NEW_ID=$(gh api "${QUERY}" --jq "[.workflow_runs[] | select(.id > ${PRE})] | sort_by(.created_at) | last | .id // empty" 2>/dev/null) || NEW_ID=""
+            [[ "${NEW_ID}" =~ ^[0-9]+$ ]] || NEW_ID=""
             if [ -n "${NEW_ID}" ]; then
               echo "${WF}_run_id=${NEW_ID}" >> "$GITHUB_OUTPUT"
               echo "  ✓ alt-model ${WF} run #${NEW_ID}"
@@ -6077,7 +5523,7 @@ jobs:
           # force-closed as collateral damage when the implement run failed and
           # no real ai/issue-<N> PR existed to match.
           PR_NUMBER=$(gh api "repos/${TEST_REPO}/pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=1" \
-            --jq '.[0].number // empty' 2>/dev/null || echo "")
+            --jq '.[0].number // empty' 2>/dev/null) || PR_NUMBER=""
           if [ -n "${PR_NUMBER}" ]; then
             close_with_retry "pulls" "${PR_NUMBER}"
           fi
