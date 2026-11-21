@@ -244,6 +244,18 @@ def test_fragments_and_ai_assets_are_left_to_their_own_rules(tmp_path: Path) -> 
 	assert "deleted_by=#123" in result.stdout
 
 
+def test_integration_sync_head_leaves_modify_delete_to_resolver(tmp_path: Path) -> None:
+	# A merged sub-issue fingerprint may name the file; the fingerprints load
+	# after the block, so integration-sync heads keep the pre-#9886 path.
+	repo = _sweep_repo(tmp_path)
+	result, runtime = _run_prepare_block(repo, {"TARGET_BRANCH": "orchestrator/project-9650"})
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert f"Modify/delete take-base: path={WORKFLOWS[2]} outcome=skip reason=integration_sync" in result.stdout
+	assert "AFTER_BLOCK count=1 resolved=false defer=false" in result.stdout
+	assert _unmerged(repo) == [WORKFLOWS[2]]
+	assert not (runtime / "resolver_dropped_edits.tsv").exists()
+
+
 def test_switch_false_leaves_modify_delete_to_resolver(tmp_path: Path) -> None:
 	for value in ("false", "FALSE"):
 		case = tmp_path / value
@@ -344,6 +356,7 @@ def test_modify_delete_context_renders_both_directions(tmp_path: Path) -> None:
 	assert "Modify/delete conflicts (stage context):" in result.stdout
 	assert f"- `{WORKFLOWS[2]}`: deleted on the base branch by #123; modified on this PR." in result.stdout
 	assert '"Conflicts resolved:"' in result.stdout
+	assert "exception to the rules above about leaving files without conflict markers alone" in result.stdout
 
 
 def test_modify_delete_context_reverse_direction_uses_commit_sha(tmp_path: Path) -> None:
@@ -495,6 +508,7 @@ cat "${{RESOLVER_RETRY_PROMPT_FILE}}"
 	assert f"{WORKFLOWS[2]} (index stages: 1 2)" in result.stdout
 	assert "BEGIN UNTRUSTED UNMERGED PATH LIST" in result.stdout
 	assert '"Conflicts resolved:"' in result.stdout
+	assert "editing or deleting them does not abort the run" in result.stdout
 	assert result.stdout.rstrip().endswith("=== ORIGINAL TASK ===\nORIGINAL PROMPT")
 
 

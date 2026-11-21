@@ -604,6 +604,10 @@ fi
 #     .gitleaksignore and not the workspace manifest (their own rules own
 #     those paths), is a regular 100644/100755 blob at stage 2 and not a
 #     symlink in the worktree (reason=not_regular);
+#   - the head is not an orchestrator/project-* integration-sync branch
+#     (reason=integration_sync): a merged sub-issue fingerprint may name the
+#     file, the fingerprints load only after this block, and a deferred commit
+#     that then failed the fingerprint check would exit with no retry state;
 #   - the commit that deleted it on the base side ends in "(#N)"
 #     (reason=no_pr_number);
 #   - the PR changed at most CONFLICT_MODIFY_DELETE_MAX_CHANGED_LINES lines of
@@ -617,8 +621,9 @@ fi
 # dropped PR-side edit is recorded in RESOLVER_DROPPED_EDITS_FILE and posted
 # on the PR (modify_delete_take_base_comment.md, marker
 # <!-- ai:modify-delete-take-base:v1 pr=<n> head=<sha> -->) once the merge
-# commit exists. This block never commits: the commit tail below does, or on
-# an orchestrator/project-* head defers to the integration fingerprint check.
+# commit exists. This block never commits: the commit tail below does (its
+# orchestrator/project-* deferral to the integration fingerprint check stays
+# as a fail-closed backstop; the integration_sync skip keeps it unreached).
 # Switch: CONFLICT_MODIFY_DELETE_TAKE_BASE_ENABLED (default true; unset, empty
 # or true in any case is on, false off, anything else off with a warning).
 # Log key: "Modify/delete take-base: path=<p|redacted> deleted_by=#<n>
@@ -682,6 +687,15 @@ if [ "${_mdd_enabled}" = "true" ] && [ "${_resolver_allowlist_count}" -gt 0 ] \
           ;;
       esac
       _mdd_log="$(_conflict_prepare_mdd_log_path "${_mdd_path}")"
+      # Integration sync: a merged sub-issue's fingerprint may name this file,
+      # and the fingerprints load only after this block, so leave the path to
+      # the model (with fingerprint and stage context) as before #9886.
+      case "${TARGET_BRANCH:-${HEAD_REF:-}}" in
+        orchestrator/project-*)
+          echo "Modify/delete take-base: path=${_mdd_log} outcome=skip reason=integration_sync"
+          continue
+          ;;
+      esac
       _mdd_mode="$(git --literal-pathspecs ls-files -u -- "${_mdd_path}" 2>/dev/null | awk '$3 == "2" {print $1; exit}' || true)"
       case "${_mdd_mode}" in
         100644|100755) ;;
