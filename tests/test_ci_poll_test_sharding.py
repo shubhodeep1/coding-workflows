@@ -4163,8 +4163,9 @@ class MovedHooks9391StepsContractTest(unittest.TestCase):
 # readable, so the steps were picked by test and subprocess counts, an
 # estimate, not a measurement. The merge-train step (the job's largest step
 # that needs no git history or prepared .claude/ live copies) runs in group 0,
-# which had carried its slice, the fast-fail subset and, since #9450, the
-# check-failure triage step after #9214 (its headroom is unmeasured); the
+# which had carried its slice, the fast-fail subset, since #9450 the
+# check-failure triage step after #9214 and since #9639 the pre-push
+# affected-test gate step (its headroom is unmeasured); the
 # Semble and pre-seed steps run in group 1, which pinned only the
 # review-pipeline plumbing step.
 HOOKS_9496_SOURCE_JOB_ID = "tests-hooks-and-orchestrator"

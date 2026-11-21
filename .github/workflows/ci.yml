@@ -4158,9 +4158,10 @@ jobs:
       # Budget-watch issue #9496: tests-hooks-and-orchestrator took 16m09s of
       # its 20 minutes on main (run 43544291165), so the step moved, name and
       # body unchanged, back into orchestrate-poll, this time group 0, which
-      # had carried its slice, the fast-fail subset and, since #9450, the
-      # check-failure triage step (about 162s, estimated) after #9214. The
-      # run's step timings could not be read, so the pick is an estimate from
+      # had carried its slice, the fast-fail subset, since #9450 the
+      # check-failure triage step (about 162s, estimated) after #9214, and
+      # since #9639 the pre-push affected-test gate step (about 472 tests in
+      # 10 serial pytest runs). The run's step timings could not be read, so the pick is an estimate from
       # test and subprocess counts, not a measurement, and group 0's headroom
       # is unmeasured. The group guard keeps it to one run per CI run.
       - name: Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)
