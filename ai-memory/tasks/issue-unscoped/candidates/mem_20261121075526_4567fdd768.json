@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Print one stderr line `CLARIFY_SNAPSHOT_REJECTED reason=<token>` from a fixed token set (unsafe_path, unsafe_file, oversized, limit_exceeded, changed, missing, duplicate, undecodable, os_error)\n  expected_change_site: scripts/clarify_isolated_run.sh (embedded snapshot Python)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  EVIDENCE: No hunk touches scripts/clarify_isolated_run.sh; recorded as deferred in the PR body and changelog (severity NIT, out of heal scope)\n- requirement: Exit with a distinct code on a snapshot rejection, and have clarify.yml stop retrying on that code as well as on the fixed line\n  expected_change_site: scripts/clarify_isolated_run.sh and .github/workflows/clarify.yml\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  EVIDENCE: The helper is untouched; clarify.yml keys only on the fixed line; deferred (severity NIT)\n- requirement: Skip and count tracked paths missing from the worktree in the legacy snapshot set\n  expected_change_site: scripts/clarify_isolated_run.sh\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  EVIDENCE: The helper is untouched; deferred (severity NIT)\n- requirement: Add a snapshot regression test with a temporary git repository (oversized file skipped, symlinked parent still rejected with reason=unsafe_path)\n  expected_change_site: tests/test_clarify_isolated_run_snapshot.py\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  EVIDENCE: The test file is not in the PR; it depends on the deferred helper change; the PR adds tests/test_clarify_snapshot_reject_no_retry.py instead (severity NIT)\n- requirement: Give .github/workflows/orchestrate_clarify_respond.yml the same stop-on-rejection rule\n  expected_change_site: .github/workflows/orchestrate_clarify_respond.yml\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  EVIDENCE: The file is untouched; outside heal scope and deferred (severity NIT)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP entries:\n- Requirement: Print one stderr line `CLARIFY_SNAPSHOT_REJECTED reason=<token>` from a fixed token set.\n  Expected change site: scripts/clarify_isolated_run.sh (embedded snapshot Python)\n  Evidence of absence: No hunk touches the helper. It is out of heal scope and listed as deferred in the PR body and changelog.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: Exit with a distinct code on a snapshot rejection, and have `clarify.yml` stop retrying on that code as well as on the fixed line.\n  Expected change site: scripts/clarify_isolated_run.sh and .github/workflows/clarify.yml\n  Evidence of absence: The helper is untouched. `clarify.yml` keys only on the fixed line. This is deferred.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: Skip and count tracked paths missing from the worktree in the legacy snapshot set.\n  Expected change site: scripts/clarify_isolated_run.sh\n  Evidence of absence: The helper is untouched. This is deferred.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: Add a snapshot regression test with a temporary git repository (oversized file skipped, symlinked parent still rejected with `reason=unsafe_path`).\n  Expected change site: tests/test_clarify_isolated_run_snapshot.py\n  Evidence of absence: The test file is not in the PR. It depends on the deferred helper change. The PR instead adds `tests/test_clarify_snapshot_reject_no_retry.py` for the retry rule.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: Give `.github/workflows/orchestrate_clarify_respond.yml` the same stop-on-rejection rule.\n  Expected change site: .github/workflows/orchestrate_clarify_respond.yml\n  Evidence of absence: The file is untouched. It is outside the heal scope and deferred.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\nTASK_GAP entries:\n- Requirement: Print one stderr line `CLARIFY_SNAPSHOT_REJECTED reason=<token>` (fixed token set), without printing file content or unsanitised paths; add a distinct exit code and key the clarify.yml stop rule on it; skip/count tracked paths missing from the worktree in the legacy set too; add a snapshot regression test (`tests/test_clarify_isolated_run_snapshot.py`) proving oversized files skip and symlinked parents still reject with `reason=unsafe_path`; and give `.github/workflows/orchestrate_clarify_respond.yml` the same stop-on-rejection rule.\n  Expected change site: `scripts/clarify_isolated_run.sh`, `.github/workflows/clarify.yml`, `tests/test_clarify_isolated_run_snapshot.py` (new), `.github/workflows/orchestrate_clarify_respond.yml`.\n  Evidence of absence: PR DIFF and LAST RUN DIFF contain no hunks in `scripts/clarify_isolated_run.sh` or `.github/workflows/orchestrate_clarify_respond.yml`, and no new `tests/test_clarify_isolated_run_snapshot.py` file.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n  Note: explicitly recorded as deferred in the PR description's ai:partial-delivery:v1 block and the changelog fragment; cited as a deferral, not a gap against allowed scope.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3c566f6e8e65f5148c5c1f11218d9fc3ede85dad6432ffba1a9dd0747ef17329",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9840,
+    "run_id": "44877682816",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44877682816",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121075526_4567fdd768",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9840,
+    "run_id": "44877682816"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 5 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T07:55:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
