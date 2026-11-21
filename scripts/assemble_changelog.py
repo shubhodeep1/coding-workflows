@@ -64,7 +64,9 @@ bodies of exactly the fragments being folded to PATH (grouped under
 repos) so the release step can publish them as the GitHub release body.  The
 file is written under ``--dry-run`` too, is always (re)written — empty when no
 usable fragment exists — and is capped at RELEASE_NOTES_CHAR_LIMIT
-characters at whole-fragment boundaries.  Without the flag nothing about the
+characters at whole-fragment boundaries, except that a first fragment longer
+than the cap on its own is cut to the cap and marked
+``...(truncated; see CHANGELOG.md)``.  Without the flag nothing about the
 output changes, which keeps the consumer sync path byte-identical.
 
 Exit codes
@@ -471,7 +473,9 @@ def _render_release_notes(
 	category in CATEGORY_ORDER (the shape ``_plan_keep_a_changelog`` folds);
 	date-heading repos get the bodies as a plain list. Fragments are dropped
 	whole once the text would pass RELEASE_NOTES_CHAR_LIMIT, and an ASCII
-	trailer names how many were left out.
+	trailer names how many were left out. The one exception is a first
+	fragment that alone passes the cap: it is cut to the cap, marked
+	``...(truncated; see CHANGELOG.md)`` and counted as included.
 	"""
 	if not entries:
 		return "", 0
