@@ -2906,9 +2906,10 @@ VALIDATION_SELFTEST_MODULES = (
 )
 # VALIDATION_SELFTEST_MODULES is kept as it is for
 # MovedPollGroupThree8472StepsContractTest. It lists 21 paths while the step
-# runs 24 commands: VALIDATION_SELFTEST_COMMANDS below (budget-watch issue
+# runs 25 commands: VALIDATION_SELFTEST_COMMANDS below (budget-watch issue
 # #9362) also covers tests/test_review_conflict_resolve_terminal_record.py,
-# tests/test_review_conflict_resolve_provenance.py (#9842) and
+# tests/test_review_conflict_resolve_provenance.py (#9842),
+# tests/test_review_conflict_modify_delete.py (#9886) and
 # tests/test_epochrealtime_ms_clock.py (#9252), which this tuple leaves out.
 # The step's command table, (kind, path) in the original order: "py" runs
 # `python3 <path>` and "pytest" runs `python3 -m pytest -q -p no:cacheprovider
@@ -2932,6 +2933,7 @@ VALIDATION_SELFTEST_COMMANDS = (
 	("py", "tests/test_review_conflict_resolve_retry_state.py"),
 	("pytest", "tests/test_review_conflict_resolve_terminal_record.py"),
 	("pytest", "tests/test_review_conflict_resolve_provenance.py"),
+	("pytest", "tests/test_review_conflict_modify_delete.py"),
 	("pytest", "tests/test_epochrealtime_ms_clock.py"),
 	("pytest", "tests/test_touched_set_symlink_aware.py"),
 	("py", "tests/test_consumer_artifact_cleanup_preserves_tracked.py"),
@@ -5376,7 +5378,7 @@ class ValidationSelftestConcurrencyContractTest(unittest.TestCase):
 
 	static-checks took 14m21s of its 15 minutes on main (run 43139141266,
 	budget-watch issue #9362). The step stays in static-checks under its own
-	name and runs its 24 commands, unchanged, in four lanes: lane 0 runs the
+	name and runs its 25 commands, unchanged, in four lanes: lane 0 runs the
 	security-audit contract module alone and the others go round-robin to
 	lanes 1-3. Every lane is reaped before any command is judged, a failing
 	command or a missing or non-numeric rc fails the step, and
@@ -5404,7 +5406,7 @@ class ValidationSelftestConcurrencyContractTest(unittest.TestCase):
 		self.assertIsNotNone(array)
 		entries = [tuple(entry.split(":", 1)) for entry in array.group("entries").split()]
 		self.assertEqual(entries, list(VALIDATION_SELFTEST_COMMANDS))
-		self.assertEqual(len(entries), 24)
+		self.assertEqual(len(entries), 25)
 		for kind, path in entries:
 			with self.subTest(path=path):
 				self.assertIn(kind, ("py", "pytest"))
