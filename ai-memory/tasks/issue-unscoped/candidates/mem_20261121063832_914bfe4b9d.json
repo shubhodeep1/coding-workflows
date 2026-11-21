@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/activation_verify.sh:202-208 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The title-based reroute sets `release_pending` for a condition-less operator gap even when `source_sha` is empty or invalid, so `dormant_until` is never rewritten to `@stable contains <sha>`.\n  WHY: The gap leaves the fix-issue and operator-step lists (lines 707-708) and carries no release condition. Severity disagreement: sonnet-5_5 and glm-5_3-flash rated it NIT, gemini and luna rated it MAJOR. The highest rating (MAJOR) is mapped to high.\n- scripts/activation_verify.sh:159 (applied at 203) | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The `\\bstable\\b` alternative in RELEASE_STEP_TITLE_RE matches any release-verb title that mentions \"stable\", so a genuine human step can be rerouted to the release path.\n  WHY: The rule mirrors the writer's classifier (operator_step_issue.py:648-652), and the parity is test-locked, so the reviewer treats it as an inherited design tradeoff.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/activation_verify.sh:202-206 | severity=NIT | confidence=3\n  PROBLEM: The title rule reroutes a condition-less operator gap to `code` without checking for a valid 40-hex `source_sha`, so with an empty `MERGE_SHA` the gap becomes `kind=code`, `release_pending=true`, `dormant_until=\"\"`.\n  WHY: Lines 707-708 drop the gap from fix issues and operator steps, so it appears only in the verdict comment with no release condition. The reviewer rates the impact low because the `@stable contains` path already behaved this way.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/activation_verify.sh:202-204 | severity=MAJOR | confidence=5\n  PROBLEM: A condition-less operator gap is marked `release_pending` from its title without requiring a valid `source_sha`, and the `@stable contains <sha>` condition is added only when `source_sha` is valid.\n  WHY: In PR mode `MERGE_SHA` can be empty, so the gap becomes a `code` gap with `release_pending: true` and no valid condition. The resolver cannot auto-tick it, so it is reported in the verdict but never resolved.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/activation_verify.sh:202-208 (downstream release-gap filters at lines 707-708) | severity=MAJOR | confidence=5\n  PROBLEM: Title-based rerouting marks a gap release-pending even when `source_sha` is empty or invalid, and the release condition is added only when `source_sha` is valid.\n  WHY: The downstream filters exclude the gap from both the fix issue and the operator step, and the resolver cannot auto-tick it without a source SHA. The gap is no longer tracked for action.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/activation_verify.sh:202-206 (with 101-103, 150-151 documenting the contract; consumers at 707, 737, 765, 794) | severity=NIT | confidence=3\n  PROBLEM: The title-based reroute sets `release_pending: true` for a condition-less operator gap whether or not a valid source commit exists. With an invalid or empty sha the gap is `kind=code, release_pending=true, dormant_until=\"\"`, which contradicts the documented contract.\n  WHY: No observable failure: no consumer reads `dormant_until` for a release-pending gap. Only the stored verdict JSON carries `release_pending: true` with an empty condition, inconsistent with lines 101-103 and 150-151.\n- scripts/activation_verify.sh:159 (RELEASE_STEP_TITLE_RE, applied at 203) | severity=NIT | confidence=3\n  PROBLEM: The `\\bstable\\b` alternative makes the title rule match any release-verb title that contains \"stable\", for example \"Release the build to the stable channel\", so the gap is rerouted to the release path and never reaches a person.\n  WHY: A genuine human step with a \"stable\"-mentioning title and no dormant condition is mislabelled as release-pending. The rule mirrors the writer's classifier and is test-locked, so the reviewer treats it as an inherited tradeoff.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7b9dc7951bcf7f1fcc11cd16658c62baf5fcd900ca778e552971cd84222326a7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9872,
+    "run_id": "44875117363",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44875117363",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121063832_914bfe4b9d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9872,
+    "run_id": "44875117363"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T06:38:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
