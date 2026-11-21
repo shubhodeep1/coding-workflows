@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:27330-27337, 27393-27402 | severity=critical | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: Both later-comment guards exempt trusted comments containing the release-marker prefix without validating a complete, correctly scoped release marker, so a trusted reassertion of `ai:needs-human` can be ignored.\n  WHY: A malformed or quoted marker can bypass both guards and lead the poller to remove the label despite a later hold; severity was BLOCKER for google_gemini-3_1-flash-lite and MAJOR for minimax_minimax-m3, openai_gpt-6-luna, and z-ai_glm-5_3-flash.\n- scripts/orchestrate_poll_process.sh:27383-27412, 27353-27358 | severity=low | confidence=[3]\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The release-once check uses the stale `hl_comments` snapshot instead of `hl_refreshed_comments`, allowing concurrent runs to post duplicate release comments for the same PR and head.\n  WHY: In the described interleaving, both runs can post the marker before deletion; the duplicate marker is benign, and the finding is rated NIT.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:27330-27334 and 27393-27399 | severity=BLOCKER | confidence=4\n  PROBLEM: The reassertion guard uses an loose check for the release marker: `(contains(\"<!-- ai:needs-human-auto-release \") | not)`.\n  WHY: A trusted comment can re-assert `ai:needs-human` (e.g., \"re-adding `ai:needs-human`...\") and simultaneously include a malformed or unrelated marker, such as `<!-- ai:needs-human-auto-release invalid -->`. Because the loose check only looks for the prefix and does not validate the full marker structure, it incorrectly classifies this comment as a release marker rather than a re-assertion, causing the poller to remove `ai:needs-human` when it should have kept the PR latched.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:27330-27337 (later_needs_human_comment guard) and 27393-27402 (latch_changed_during_release comment re-check) | severity=MAJOR | confidence=4\n  PROBLEM: Both the initial later-comment exemption and the revalidation exemption use a loose prefix substring match `contains(\"<!-- ai:needs-human-auto-release \")` (with a trailing space) to identify \"this is a release comment\".\n  WHY: Any trusted comment that mentions both the literal `ai:needs-human` and the marker prefix anywhere in its body is exempted from being treated as a re-latch, so the poller can delete `ai:needs-human` even though a trusted actor just re-asserted the hold.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:27330-27334 and 27393-27399 | severity=MAJOR | confidence=4\n  PROBLEM: Both later-comment guards exempt a trusted comment if its body contains the prefix `<!-- ai:needs-human-auto-release `, without checking that it contains a valid release marker for this PR and head.\n  WHY: A trusted comment can reassert `ai:needs-human` while containing a malformed marker, such as `<!-- ai:needs-human-auto-release invalid -->`. Both guards then ignore the reassertion. If the original label event still matches the latch and the PR has moved, the poller deletes `ai:needs-human` despite the later hold.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:lines 27334 and 27398-27399 | severity=MAJOR | confidence=4\n  PROBLEM: Both trusted-comment re-assertion guards exempt any comment containing the bare prefix string `<!-- ai:needs-human-auto-release ` without validating that it is a complete release marker.\n  WHY: A trusted comment that mentions `ai:needs-human` and contains the partial prefix is exempted from both checks while not matching `already_released`, so the poller deletes `ai:needs-human` despite a trusted re-assertion.\n- scripts/orchestrate_poll_process.sh:lines 27383-27412 (revalidation block) and 27353-27358 (already_released check) | severity=NIT | confidence=3\n  PROBLEM: The `already_released` release-once check runs only against the stale comment snapshot `hl_comments`, not against `hl_refreshed_comments`.\n  WHY: Two runs can both post a release comment for the same head; the duplicate marker is benign for idempotency, so this is a residual benign-race note, not a data-loss path.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "91f740207b597812fd668827e80cf373fdc3bb5fde7b7ac62d132a88b5626d31",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9862,
+    "run_id": "44903609660",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44903609660",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121130610_fab76dc7a7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9862,
+    "run_id": "44903609660"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T13:06:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
