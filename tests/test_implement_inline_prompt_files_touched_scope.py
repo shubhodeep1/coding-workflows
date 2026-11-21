@@ -22,6 +22,14 @@ FILES_TOUCHED_RULE = (
 	" that set plus this issue's own `changelog.d/` and `agents.d/` fragments."
 )
 ADVISORY_SENTENCE = "The Expected files list is advisory and is not a scope."
+# Heal-routed runs check the verified heal-scope marker, not files_touched
+# (HEAL_SCOPE_FILE in the Preflight destructive-commit guard), so the prompt
+# names that marker too.
+HEAL_SCOPE_RULE = (
+	"On a workflow heal issue, the `ai:workflow-heal-scope:v1` marker's `paths=` list is the scope"
+	" instead, plus only this issue's own `agents.d/` fragment."
+)
+SCOPE_ACCEPTANCE_RULE = "If the issue names files only in its scope or acceptance criteria, stay inside those files."
 OLD_UNCONDITIONAL_SENTENCE = (
 	"Update the tests and registries listed under Expected files together with the"
 	" code; a pre-push gate re-runs them."
@@ -34,8 +42,10 @@ def _scope_collapsed(text: str) -> str:
 
 def _scope_inline_prompt() -> str:
 	workflow = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
-	parts = workflow.split('cat > "${PROMPT_TEMPLATE_FILE}" <<\'EOF\'', 1)[1].split("\n          EOF\n", 1)
-	assert len(parts) == 2, "inline implement prompt heredoc terminator not found"
+	opener = 'cat > "${PROMPT_TEMPLATE_FILE}" <<\'EOF\''
+	assert opener in workflow, f"inline implement prompt heredoc opener {opener!r} not found in {IMPLEMENT_WORKFLOW}"
+	parts = workflow.split(opener, 1)[1].split("\n          EOF\n", 1)
+	assert len(parts) == 2, "inline implement prompt heredoc terminator (10-space-indented EOF line) not found"
 	return parts[0]
 
 
@@ -55,11 +65,11 @@ def _restrictions_block() -> str:
 
 def test_inline_prompt_restrictions_carry_the_files_touched_rule() -> None:
 	flat = _scope_collapsed(_scope_inline_prompt())
-	assert flat.count(FILES_TOUCHED_RULE) == 1
-	assert ADVISORY_SENTENCE in flat
+	assert flat.count(FILES_TOUCHED_RULE) == 1, f"files_touched rule count {flat.count(FILES_TOUCHED_RULE)} != 1"
+	assert ADVISORY_SENTENCE in flat, "advisory Expected-files sentence missing from the inline prompt"
 	restrictions = _scope_collapsed(_restrictions_block())
-	assert FILES_TOUCHED_RULE in restrictions
-	assert ADVISORY_SENTENCE in restrictions
+	assert FILES_TOUCHED_RULE in restrictions, restrictions
+	assert ADVISORY_SENTENCE in restrictions, restrictions
 
 
 def test_inline_prompt_expected_files_bullet_is_scope_qualified() -> None:
@@ -74,16 +84,24 @@ def test_inline_prompt_expected_files_bullet_is_scope_qualified() -> None:
 
 
 def test_inline_prompt_drops_the_unconditional_expected_files_sentence() -> None:
-	assert OLD_UNCONDITIONAL_SENTENCE not in _scope_collapsed(_scope_inline_prompt())
+	assert OLD_UNCONDITIONAL_SENTENCE not in _scope_collapsed(_scope_inline_prompt()), "unconditional Expected-files sentence is back"
+
+
+def test_inline_prompt_restrictions_carry_the_heal_scope_rule() -> None:
+	restrictions = _scope_collapsed(_restrictions_block())
+	assert HEAL_SCOPE_RULE in restrictions, restrictions
+	assert SCOPE_ACCEPTANCE_RULE in restrictions, restrictions
+	assert "files_touched and heal-scope rule under Restrictions" in _scope_collapsed(_expected_files_bullet())
 
 
 def test_inline_prompt_scope_text_is_ascii() -> None:
-	assert _expected_files_bullet().isascii()
-	assert _restrictions_block().isascii()
+	assert _expected_files_bullet().isascii(), "non-ASCII text in the Expected files bullet"
+	assert _restrictions_block().isascii(), "non-ASCII text in the Restrictions block"
 
 
 if __name__ == "__main__":
 	test_inline_prompt_restrictions_carry_the_files_touched_rule()
 	test_inline_prompt_expected_files_bullet_is_scope_qualified()
 	test_inline_prompt_drops_the_unconditional_expected_files_sentence()
+	test_inline_prompt_restrictions_carry_the_heal_scope_rule()
 	test_inline_prompt_scope_text_is_ascii()
