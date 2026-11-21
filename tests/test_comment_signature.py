@@ -525,3 +525,132 @@ def test_python_child_without_gh_helpers_goes_through_the_shim(env):
 	code = "import subprocess;print(subprocess.run(['gh','api','repos/%s/issues/5/comments','--jq','.[0].user.login'],capture_output=True,text=True).stdout)" % REPO
 	result = run(env, f"python3 -c \"{code}\"")
 	assert result.stdout.strip() == "owner-login"
+
+
+# ---------------------------------------------------------------------------
+# Activation from scripts that do not load the helpers (activate-only mode)
+# ---------------------------------------------------------------------------
+
+def _bare(env, script: str) -> subprocess.CompletedProcess:
+	"""Run a script with no shim on PATH, as a job's first step would."""
+	return subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env["env"], check=False)
+
+
+def test_activate_only_mode_installs_the_shim_without_the_library(env):
+	result = _bare(env, f'''AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "{SCRIPTS}/gh_helpers.sh" >/dev/null 2>&1
+command -v gh
+type gh_retry >/dev/null 2>&1 && echo library-defined || echo library-absent
+printf "loaded=%s activate_only=%s\\n" "${{_GH_HELPERS_LOADED:-}}" "${{AI_COMMENT_SIG_ACTIVATE_ONLY:-}}"
+source "{SCRIPTS}/gh_helpers.sh"
+type gh_retry >/dev/null 2>&1 && echo library-defined || echo library-absent
+''')
+	assert result.returncode == 0, result.stderr
+	lines = result.stdout.splitlines()
+	assert "ai_comment_sig_shim." in lines[0]
+	# None of the library's functions exist yet, so a caller's own are never overridden.
+	assert lines[1] == "library-absent"
+	assert lines[2] == "loaded= activate_only="
+	# A later full source still loads the library.
+	assert lines[3] == "library-defined"
+
+
+def test_script_using_the_activate_only_line_posts_signed(env, tmp_path):
+	# The line the comment-posting scripts carry, run from a copy next to gh_helpers.sh.
+	support = tmp_path / "support"
+	support.mkdir()
+	(support / "gh_helpers.sh").write_text((SCRIPTS / "gh_helpers.sh").read_text())
+	poster = support / "poster.sh"
+	poster.write_text(
+		"#!/usr/bin/env bash\nset -euo pipefail\n"
+		'[ -z "${BASH_SOURCE[0]:-}" ] || AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" >/dev/null 2>&1 || true\n'
+		f'gh api "repos/{REPO}/issues/5/comments" -f body="## Single-issue security pass" >/dev/null\n'
+	)
+	result = _bare(env, f'bash "{poster}"')
+	assert result.returncode == 0, result.stderr
+	post = comment_calls(env)
+	assert [c["token"] for c in post] == [JOB]
+	assert cs.normalize_comment(bot_comment(post[0]["payload"]["body"]), SECRET)["user"]["login"] == "owner-login"
+
+
+ACTIVATE_LINE = '[ -z "${BASH_SOURCE[0]:-}" ] || AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" >/dev/null 2>&1 || true'
+ACTIVATED_SCRIPTS = (
+	"ai_engine_fallback_report.sh", "implement_handle_guard_block.sh", "implement_heal_preflight.sh",
+	"orchestrate_poll_process.sh", "orchestrate_poll_smoke_fixture_reap.sh", "plan_split_dispatch.sh",
+	"post_review_comment.sh", "review_autofix_step_evaluate_gate.sh", "review_conflict_resolve.sh",
+	"review_final_ci_failed.sh", "review_freshness_ci_failed.sh", "review_merge_train.sh",
+	"review_rb_judge_security_pass.sh", "review_single_issue_security_pass.sh", "security_audit.sh",
+	"unblock_judge.sh", "validate_process.sh", "workflow_failure_heal_phase_report.sh",
+	"workflow_failure_heal_pr_reconcile.sh",
+)
+
+
+@pytest.mark.parametrize("name", ACTIVATED_SCRIPTS)
+def test_comment_posting_scripts_activate_the_shim(name):
+	lines = (SCRIPTS / name).read_text().splitlines()
+	assert ACTIVATE_LINE in lines, name
+	# Before the first command that could post (right after `set -...`, or the shebang).
+	index = lines.index(ACTIVATE_LINE)
+	assert all(not line or line.startswith(("#", "set -")) for line in lines[: index - 2]), name
+
+
+PY_GH_RUNNERS = {
+	"attempt_journal": "_gh",
+	"check_triage_resolution": "_gh_api",
+	"operator_step_issue": "_gh",
+	"provider_outage": "GitHub._run",
+	"review_security_hold_sweep": "_run_gh",
+}
+
+
+@pytest.mark.parametrize("module,runner", sorted(PY_GH_RUNNERS.items()))
+def test_python_gh_runner_activates_before_running_gh(module, runner):
+	import ast
+	tree = ast.parse((SCRIPTS / f"{module}.py").read_text())
+	scopes = {node.name: node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))}
+	target = scopes[runner.split(".")[0]]
+	if "." in runner:
+		target = next(n for n in target.body if isinstance(n, ast.FunctionDef) and n.name == runner.split(".")[1])
+	body = [n for n in target.body if not (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant))]
+	first = body[0]
+	assert isinstance(first, ast.Expr) and isinstance(first.value, ast.Call), (module, runner)
+	assert getattr(first.value.func, "id", "") == "_activate_signed_comments", (module, runner)
+
+
+@pytest.mark.parametrize("module", sorted(PY_GH_RUNNERS))
+def test_python_helpers_put_the_shim_on_path(env, module, monkeypatch):
+	spec = importlib.util.spec_from_file_location(f"_sig_{module}", SCRIPTS / f"{module}.py")
+	mod = importlib.util.module_from_spec(spec)
+	monkeypatch.syspath_prepend(str(SCRIPTS))
+	spec.loader.exec_module(mod)
+	for key, value in env["env"].items():
+		monkeypatch.setenv(key, value)
+	mod._activate_signed_comments()
+	first = os.environ["PATH"].split(os.pathsep)[0]
+	assert "ai_comment_sig_shim." in first and (Path(first) / "gh").is_file()
+	# Once per process: a second call changes nothing.
+	mod._activate_signed_comments()
+	assert os.environ["PATH"].split(os.pathsep)[0] == first
+
+
+def test_python_helper_without_secret_leaves_path(env, monkeypatch):
+	spec = importlib.util.spec_from_file_location("_sig_nosecret", SCRIPTS / "attempt_journal.py")
+	mod = importlib.util.module_from_spec(spec)
+	monkeypatch.syspath_prepend(str(SCRIPTS))
+	spec.loader.exec_module(mod)
+	monkeypatch.delenv("AI_COMMENT_SIGNING_SECRET", raising=False)
+	before = os.environ["PATH"]
+	mod._activate_signed_comments()
+	assert os.environ["PATH"] == before
+
+
+def test_full_state_part_still_fits_once_signed():
+	spec = importlib.util.spec_from_file_location("_sig_state_v2", SCRIPTS / "orchestrate_state_v2.py")
+	state = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(state)
+	# Longest repository, login and ids the signature line can carry.
+	repo = ("o" * 39) + "/" + ("r" * 100)
+	login = "l" * 39
+	part = "x" * state.DEFAULT_CHUNK_SIZE
+	signed = cs.sign_body(SECRET, repo, 9_999_999_999, login, "User", part, 99_999_999_999)
+	assert len(signed) <= cs.MAX_BODY_CHARS, len(signed) - cs.MAX_BODY_CHARS
+

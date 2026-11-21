@@ -35,9 +35,31 @@
 # same `GET pulls/<n>` read, and posts no marker. That full run is named
 # `CI [pr:<n>]` without the suffix, so if it fails too the PR goes back to
 # review as usual and the hand-off cannot loop.
-# Logs: REVIEW_FINAL_CI_FAILED pr=<n> head=<sha> outcome=redispatched|already_reported|superseded|disabled|invalid_input|read_failed|marker_failed|dispatch_failed|full_suite_dispatched|full_suite_dispatch_failed [workflow=<file>] [current=<sha>]
+# Infra failures (docs/plans/final-ci-failure-ci-fix-plan.md Phase 1): before
+# the marker POST, attempt 1 of the run (FINAL_CI_FAILED_RUN_ID,
+# FINAL_CI_FAILED_RUN_ATTEMPT) is classified with
+# `scripts/ci_cancelled_rerun.py classify-run`, ignoring this job's own
+# in-progress `final-ci-failed` job. A runner shutdown, action-resolution,
+# checkout-fetch or abandoned-job verdict posts no marker and dispatches
+# nothing (outcome=infra_rerun_deferred reason=<verdict>): the review sweep's
+# "Re-run cancelled CI failed jobs once" step re-runs the failed jobs on its
+# next tick, and a second failure (attempt 2) is handed back as usual. Any
+# other verdict, a classifier error or timeout (120 s), attempt >= 2, or a
+# switch off keeps the hand-back. Switches: FINAL_CI_FAILED_INFRA_RERUN_ENABLED
+# (unset, empty or `true` = on; `false` = off; anything else = off with a
+# warning) and CI_CANCELLED_AUTO_RERUN_ENABLED (parsed like the sweep: unset
+# or `true` = on, anything else = the sweep never re-runs, so nothing is
+# deferred). Only shubhodeep1/coding-workflows defers: the sweep's re-run
+# runs nowhere else. The per-cause CI_*_RERUN_ENABLED switches
+# are read by the classifier, as in the sweep. Extra API budget: one jobs GET
+# plus at most 10 annotation GETs, only on a non-sync-quick run on the current
+# head with no marker yet.
+# Logs: REVIEW_FINAL_CI_FAILED pr=<n> head=<sha> outcome=redispatched|already_reported|superseded|disabled|invalid_input|read_failed|marker_failed|dispatch_failed|full_suite_dispatched|full_suite_dispatch_failed|infra_rerun_deferred [workflow=<file>] [current=<sha>] [reason=<verdict>]
 
 set -uo pipefail
+# Signed job-token comments (run-volume plan item 15): route this script's
+# gh comment calls through the shim even when no earlier step loaded it.
+[ -z "${BASH_SOURCE[0]:-}" ] || AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" >/dev/null 2>&1 || true
 
 REVIEW_FINAL_CI_FAILED_MARKER_PREFIX="<!-- ai:final-ci-failed:v1"
 REVIEW_FINAL_CI_FAILED_SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,6 +67,36 @@ REVIEW_FINAL_CI_FAILED_SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURC
 review_final_ci_failed_log()
 {
 	echo "REVIEW_FINAL_CI_FAILED pr=${PR_NUMBER:-?} head=${PR_HEAD_SHA:-?} outcome=$1${2:+ $2}"
+}
+
+# Print the classify-run verdict when the run may be deferred to the sweep's
+# re-run, or nothing when it must be handed back (fail toward the hand-back).
+review_final_ci_failed_infra_verdict()
+{
+	local final_ci_infra_switch final_ci_infra_verdict
+	final_ci_infra_switch="$(printf '%s' "${FINAL_CI_FAILED_INFRA_RERUN_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
+	case "${final_ci_infra_switch}" in
+		''|true) ;;
+		false) return 0 ;;
+		*)
+			echo "::warning::FINAL_CI_FAILED_INFRA_RERUN_ENABLED has an unrecognised value; infra failures are handed back to review. Use true or false." >&2
+			return 0
+			;;
+	esac
+	# Defer only where the sweep re-runs: its source repository, with its
+	# switch parsed the same way (unset = on, empty or anything but `true` = off).
+	if [ "${REPOSITORY}" != "shubhodeep1/coding-workflows" ] \
+		|| [ "$(printf '%s' "${CI_CANCELLED_AUTO_RERUN_ENABLED-true}" | tr '[:upper:]' '[:lower:]')" != "true" ] \
+		|| [ "${FINAL_CI_FAILED_RUN_ATTEMPT:-}" != "1" ] \
+		|| ! [[ "${FINAL_CI_FAILED_RUN_ID:-}" =~ ^[1-9][0-9]*$ ]]; then
+		return 0
+	fi
+	final_ci_infra_verdict="$(PYTHONDONTWRITEBYTECODE=1 timeout 120 python3 "${REVIEW_FINAL_CI_FAILED_SCRIPT_DIR}/ci_cancelled_rerun.py" classify-run \
+		--repo "${REPOSITORY}" --run-id "${FINAL_CI_FAILED_RUN_ID}" --ignore-job final-ci-failed 2>/dev/null | tail -n 1)"
+	case "${final_ci_infra_verdict}" in
+		shutdown|action_resolution|checkout_fetch|abandoned) printf '%s' "${final_ci_infra_verdict}" ;;
+	esac
+	return 0
 }
 
 review_final_ci_failed_main()
@@ -119,6 +171,14 @@ review_final_ci_failed_main()
 	if [ "${marker_seen}" != "false" ]; then
 		echo "::warning::Could not parse the comments of PR #${PR_NUMBER}; not sending it back to review this run."
 		review_final_ci_failed_log read_failed
+		return 0
+	fi
+
+	local final_ci_infra_reason
+	final_ci_infra_reason="$(review_final_ci_failed_infra_verdict)"
+	if [ -n "${final_ci_infra_reason}" ]; then
+		echo "::notice::The final CI run for PR #${PR_NUMBER} failed for an infrastructure reason (${final_ci_infra_reason}); the review sweep re-runs its failed jobs once instead of sending the PR back to review."
+		review_final_ci_failed_log infra_rerun_deferred "reason=${final_ci_infra_reason}"
 		return 0
 	fi
 

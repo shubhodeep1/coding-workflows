@@ -24,6 +24,13 @@ TRIAGE_SCRIPT_PATH = REPO_ROOT / "scripts" / "check_failure_triage.sh"
 ISOLATED_HELPER_PATH = REPO_ROOT / "scripts" / "clarify_isolated_run.sh"
 
 
+# Cases that simulate a failing commit other than the PR head to test another
+# path (routing sha_mismatch, supersede not_current_head, failing-SHA context
+# collection, #6918) turn the stale-head gate off; it is covered on its own in
+# tests/test_check_failure_triage_owned_failures.py.
+HEAD_ADVANCED_GATE_OFF = {"CHECK_TRIAGE_SKIP_HEAD_ADVANCED_ENABLED": "false"}
+
+
 def _workflow() -> dict:
 	# Imported here, not at module level (issue #9120): the pre-push gate's
 	# container has no PyYAML, and tests/test_check_failure_triage_release_download_rerun.py
@@ -293,10 +300,12 @@ esac
 			prompt = root / "prompt"
 			prompt.write_text("diagnose\n", encoding="utf-8")
 			env = os.environ.copy()
-			for name in ("BASH_ENV", "ENV", "CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS"):
+			for name in ("BASH_ENV", "ENV", "CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS", "CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED"):
 				env.pop(name, None)
 			env.update({
 				"CLARIFY_SOURCE_ROOT": str(checkout),
+				# Legacy roots/suffix filter; the all-text variant is in tests/test_clarify_isolated_run.py.
+				"CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED": "false",
 				"MODEL_EDITOR": "openai/gpt-6-sol", "MODEL_REASONING_EFFORT": "high",
 				"OPENROUTER_API_KEY": "test-key",
 				"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
@@ -1642,6 +1651,7 @@ class CheckFailureTriageFailingShaContextTests(unittest.TestCase):
 		capture: dict = {}
 		proc, outputs, _metadata = _run_collect_stage(
 			parent_body="", pr_head_sha="b" * 40, check_runs_enabled=True, capture=capture,
+			extra_env=HEAD_ADVANCED_GATE_OFF,
 		)
 		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 		self.assertEqual(outputs.get("ready"), "true")
@@ -2849,7 +2859,7 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 		no_state = json.loads(json.dumps(base))
 		del no_state["state"]
 		cases = [
-			("sha_mismatch", base, {"CHECK_TRIAGE_HEAD_SHA": "c" * 40}),
+			("sha_mismatch", base, {"CHECK_TRIAGE_HEAD_SHA": "c" * 40, **HEAD_ADVANCED_GATE_OFF}),
 			("check_sha_missing", base, {"CHECK_TRIAGE_HEAD_SHA": ""}),
 			("pr_sha_missing", no_sha, {}),
 			("pr_not_open", no_state, {}),
@@ -2892,7 +2902,7 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 		proc, outputs, metadata = _run_collect_stage(
 			parent_body="plain issue\n",
 			base={"ref": "main", "workflow_id": "9", "conclusion": "success"},
-			extra_env={"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "true", "CHECK_TRIAGE_HEAD_SHA": "c" * 40},
+			extra_env={"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "true", "CHECK_TRIAGE_HEAD_SHA": "c" * 40, **HEAD_ADVANCED_GATE_OFF},
 		)
 		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 		self.assertIn("CHECK_TRIAGE skip reason=pr_specific_failure", proc.stdout)
@@ -2904,7 +2914,7 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 	def test_collect_lineage_cap_reports_unverified_route(self) -> None:
 		proc, outputs, metadata = _run_collect_stage(
 			parent_body="<!-- check-failure-triage:gen=3 -->\n",
-			extra_env={"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "true", "CHECK_TRIAGE_HEAD_SHA": "c" * 40},
+			extra_env={"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "true", "CHECK_TRIAGE_HEAD_SHA": "c" * 40, **HEAD_ADVANCED_GATE_OFF},
 		)
 		self.assertIn("CHECK_TRIAGE escalate reason=lineage_cap", proc.stdout)
 		self.assertIn("CHECK_TRIAGE skip reason=routing_unverified detail=sha_mismatch pr=17", proc.stdout)
@@ -2916,7 +2926,7 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 		open_triage = json.dumps([{"number": 99, "body": f"<!-- check-failure-triage:fp={fp} -->"}])
 		proc, outputs, metadata = _run_collect_stage(
 			parent_body="plain issue\n",
-			extra_env={"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "true", "CHECK_TRIAGE_HEAD_SHA": "c" * 40, "MOCK_OPEN_TRIAGE": open_triage},
+			extra_env={"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "true", "CHECK_TRIAGE_HEAD_SHA": "c" * 40, **HEAD_ADVANCED_GATE_OFF, "MOCK_OPEN_TRIAGE": open_triage},
 		)
 		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 		self.assertIn("CHECK_TRIAGE skip reason=duplicate_open_issue issue=99", proc.stdout)
@@ -2934,7 +2944,7 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 	def test_collect_flag_off_never_routes_or_blocks(self) -> None:
 		for flag_env in ({}, {"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "false"}, {"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "nope"}):
 			with self.subTest(env=flag_env):
-				env = {"CHECK_TRIAGE_HEAD_SHA": "c" * 40, **flag_env}
+				env = {"CHECK_TRIAGE_HEAD_SHA": "c" * 40, **HEAD_ADVANCED_GATE_OFF, **flag_env}
 				os_flag = os.environ.pop("CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED", None)
 				try:
 					proc, outputs, metadata = _run_collect_stage(parent_body="plain\n", extra_env=env)
@@ -3716,7 +3726,7 @@ class CheckFailureTriageSupersedeTests(unittest.TestCase):
 			"old_head_unreadable": ([_stale_triage_issue(extra="- **Head SHA:** `" + "c" * 40 + "`")], {}),
 			"multiple_open": ([_stale_triage_issue(), _stale_triage_issue(number=100)], {}),
 			"disabled": ([_stale_triage_issue()], {"CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED": "false"}),
-			"not_current_head": ([_stale_triage_issue()], {"CHECK_TRIAGE_HEAD_SHA": "c" * 40}),
+			"not_current_head": ([_stale_triage_issue()], {"CHECK_TRIAGE_HEAD_SHA": "c" * 40, **HEAD_ADVANCED_GATE_OFF}),
 		}
 		for reason, (issues, env) in cases.items():
 			with self.subTest(reason=reason):

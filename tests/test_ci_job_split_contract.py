@@ -36,7 +36,9 @@ CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 AGGREGATE_JOB_ID = "lint"
 AGGREGATE_STEP_NAME = "Require every CI job to succeed"
 # Steps every job repeats to set itself up; everything else runs exactly once.
-PER_JOB_SETUP_STEPS = ("Checkout repository", "Setup Python", "Install Python CI dependencies")
+# "Verify the final-CI merge ref is current" follows every final-CI checkout
+# (scripts/ci_final_merge_ref_fresh.sh; tests/test_ci_final_merge_ref_fresh.py).
+PER_JOB_SETUP_STEPS = ("Checkout repository", "Verify the final-CI merge ref is current", "Setup Python", "Install Python CI dependencies")
 MAX_JOB_TIMEOUT_MINUTES = 20
 # Jobs deliberately outside the aggregate: they run only on pushes to main,
 # wait for the worker jobs so they can read their durations, and must never

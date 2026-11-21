@@ -105,7 +105,7 @@
 # the empty-string allow-all sentinel. Keep this string identical to the
 # orchestrate_poll_process.sh ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT
 # assignment; tests/test_pr_checks_lib_required_filter.py pins them equal.
-: "${ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT:=CI,lint,Integration PR readiness check,Lint plan-archival completeness,Lint PR body for auto-close keywords against orchestrator-tracking issues,review / gate}"
+: "${ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT:=CI,lint,Integration PR readiness check,Lint plan-archival completeness,Lint PR body for auto-close keywords against orchestrator-tracking issues,pr-body-lint,review / gate}"
 
 # jq definitions shared by the gate filters below and by
 # _summarize_final_merge_blockers (scripts/orchestrate_poll_process.sh).
@@ -114,9 +114,12 @@
 # _mark_superseded tags each check-run with `_superseded`. For most names a
 # run is superseded when a newer run of the same name exists (highest id,
 # then latest started_at), so a re-run replaces a cancelled attempt. The
-# configured CI check name is shared by jobs of other workflows (here
-# `lint` also exists in lint-pr-body-auto-close.yml and
-# lint-plan-archival.yml, which re-run on every PR body edit), so for that
+# configured CI check name can be shared by jobs of other workflows (here
+# `lint` also exists in lint-plan-archival.yml, which re-runs on every
+# body edit of a PR that changes docs/completed/**;
+# the PR-body lint job, now in pr-checks.yml, was `lint` too until it was
+# renamed `pr-body-lint` on 2026-11-18, and a branch that predates the
+# rename still reports the old name), so for that
 # name a newer run supersedes only when it comes from the same Actions run
 # (a re-run attempt) or when both runs are bound CI runs. Otherwise an
 # unrelated workflow's `lint` would hide a cancelled CI `lint`.
@@ -219,7 +222,8 @@ _pr_required_check_names_for_base()
 # Every other check-run is evaluated on its own: a failed, timed-out or
 # still-running run blocks even when a newer run of the same name exists.
 # A check-run carries no workflow identity, so a newer same-name run from
-# another workflow (this repo has three jobs named `lint`) must not hide a
+# another workflow (this repo has two jobs named `lint`: ci.yml and
+# lint-plan-archival.yml) must not hide a
 # failure or an in-progress run, nor a cancelled run of the CI check.
 # Newest is decided before the self-run
 # exclusion, so an older cancelled attempt of the caller's own job never
@@ -839,6 +843,14 @@ _pr_auto_merge_required_ci_check_name()
 # the check-run gate alone would read the head as green although CI never
 # produced a result. The wait refuses with reason=ci_run_cancelled; a
 # later re-run returns the workflow to pending.
+# A run's `name` is its run name, so a `workflow_dispatch` final CI run of
+# ci.yml is named `CI [pr:<n>]` (or `CI [pr:<n>] [<mode>]`), not `CI`
+# (cut-ci-runner-time Phase 4). A `workflow_dispatch` run whose name is a
+# listed workflow name followed by `[pr:<n>]` and an optional `[<mode>]`
+# counts as a run of that workflow (PR_CHECKS_JQ_WAIT_WORKFLOW_KEY_DEF), so
+# the final run's `lint` binds and a queued final run counts as pending.
+# Without this, a head whose only CI run is its final run never binds
+# `lint` and the wait always timed out (`ci_state=absent`).
 # Input: head SHA. Output: PR_CHECKS_RUNS_PENDING, PR_CHECKS_RUNS_UNRUN
 # (integers), PR_CHECKS_RUNS_IDS (comma-separated run ids of the listed
 # workflows on the head, self excluded) and PR_CHECKS_RUNS_READ
@@ -846,6 +858,19 @@ _pr_auto_merge_required_ci_check_name()
 # API calls: one REST `actions/runs?head_sha=` read (per_page=100); none
 # when disabled or the SHA/repository is unusable. Fail-open: a failed or
 # malformed read counts as 0 pending (the check-run gate still applies).
+# jq def shared by both _pr_head_ci_runs_pending filters: `_wait_wf_key`
+# maps a workflow run to the listed workflow name it belongs to (lowercase),
+# or "" when it belongs to none. `$wanted` is the lowercased name list.
+PR_CHECKS_JQ_WAIT_WORKFLOW_KEY_DEF='
+	def _wait_wf_key($wanted):
+		(.name // "" | ascii_downcase) as $n
+		| if ($wanted | index($n)) != null then $n
+		elif (.event // "") == "workflow_dispatch" then
+			([$n | capture("^(?<base>.+) \\[pr:[1-9][0-9]*\\]( \\[[a-z0-9-]+\\])?$")? | .base] | first) as $base
+			| if ($base != null) and (($wanted | index($base)) != null) then $base else "" end
+		else "" end;
+'
+
 _pr_head_ci_runs_pending()
 {
 	local head_sha="$1" repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" names_csv runs_json self_run
@@ -866,13 +891,13 @@ _pr_head_ci_runs_pending()
 	# instead of reading the runs again (§15).
 	PR_CHECKS_RUNS_RAW_JSON="${runs_json}"
 	local counts
-	counts="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" '
+	counts="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" "${PR_CHECKS_JQ_WAIT_WORKFLOW_KEY_DEF}"'
 		($names | split(",") | map(gsub("^\\s+|\\s+$"; "") | ascii_downcase) | map(select(length > 0))) as $wanted
 		| [(.workflow_runs // [])[]
 			| select((.id | tostring) != $self_run)
-			| select((.name // "" | ascii_downcase) as $n | $wanted | index($n))] as $runs
+			| select(_wait_wf_key($wanted) != "")] as $runs
 		| ($runs | map(select(.status != "completed")) | length) as $pending
-		| ($runs | group_by(.name // "" | ascii_downcase)
+		| ($runs | group_by(_wait_wf_key($wanted))
 			| map(select(all(.[]; .status == "completed" and (.conclusion == "cancelled" or .conclusion == "startup_failure"))))
 			| length) as $unrun
 		| "\($pending) \($unrun)"' 2>/dev/null | tail -n1)"
@@ -883,11 +908,11 @@ _pr_head_ci_runs_pending()
 	# Run ids of the listed workflows on this head (self excluded), for the
 	# named CI check binding (issue #6963). Same listing, no extra call.
 	local run_ids
-	run_ids="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" '
+	run_ids="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" "${PR_CHECKS_JQ_WAIT_WORKFLOW_KEY_DEF}"'
 		($names | split(",") | map(gsub("^\\s+|\\s+$"; "") | ascii_downcase) | map(select(length > 0))) as $wanted
 		| if (type == "object" and (.workflow_runs | type) == "array") then
 			[.workflow_runs[] | select((.id | tostring) != $self_run)
-				| select((.name // "" | ascii_downcase) as $n | $wanted | index($n)) | (.id | tostring)] | "ids:" + join(",")
+				| select(_wait_wf_key($wanted) != "") | (.id | tostring)] | "ids:" + join(",")
 		else "invalid" end' 2>/dev/null | tail -n1)"
 	if [[ "${run_ids}" =~ ^ids:[0-9,]*$ ]]; then
 		PR_CHECKS_RUNS_READ="true"
@@ -924,7 +949,10 @@ _pr_head_ci_runs_pending()
 # is dispatched once more (one `REVIEW_FINAL_CI_SYNC_QUICK pr= head=
 # outcome=dispatched|dispatch_refused` line).
 # Outputs: PR_FINAL_CI_OUTCOME = dispatched | exists | disabled |
-# dispatch_failed | invalid_input, one `REVIEW_FINAL_CI pr= head= outcome=
+# dispatch_failed | invalid_input; PR_FINAL_CI_REASON = the decision's reason
+# token (in_flight, success, failure, no_run, ...; empty when there was none);
+# PR_FINAL_CI_FAILED_AT = the newest failed full run's `updated_at` when the
+# reason is `failure` (empty otherwise); one `REVIEW_FINAL_CI pr= head= outcome=
 # reason=` line per decision (plus `outcome=read_failed action=dispatch` when
 # the listing could not be read). Always returns 0 except for invalid input
 # (1); it never fails its caller's step.
@@ -937,12 +965,34 @@ _pr_head_ci_runs_pending()
 # the full-suite dispatch is tried once more. Fail-open: a failed
 # read dispatches anyway, because a duplicate run is harmless and a missing
 # run blocks the merge (the required `lint` check never appears).
+# The final-CI decision over an `actions/.../runs` listing ($path, $sha):
+# "exists in_flight|success|failure", "dispatch sync_quick_failed|
+# only_unfinished|no_run" or "read_failed". Shared with the review sweep's
+# review_sweep_final_ci_state (scripts/review_sweep_head_gate.sh), so the two
+# cannot drift apart.
+PR_FINAL_CI_JQ_DECISION_DEF='def _pr_final_ci_decision:
+		if (type == "object" and (.workflow_runs | type) == "array") then
+			[.workflow_runs[]
+				| select(type == "object")
+				| select(((.path // "") | split("@") | .[0]) == $path)
+				| select((.head_sha // "") == $sha)] as $runs
+			| ($runs | map(select(((.display_title // "") | endswith(" [sync-quick]")) | not))) as $full_runs
+			| if any($runs[]; (.status // "") != "completed") then "exists in_flight"
+			elif any($runs[]; (.conclusion // "") == "success") then "exists success"
+			elif any($full_runs[]; (.conclusion // "") == "failure") then "exists failure"
+			elif any($runs[]; (.conclusion // "") == "failure") then "dispatch sync_quick_failed"
+			elif ($runs | length) > 0 then "dispatch only_unfinished"
+			else "dispatch no_run" end
+		else "read_failed" end;'
+
 _pr_ensure_final_ci()
 {
 	local repo="$1" pr="$2" sha="$3" ref="${4:-}"
 	local wf="${REVIEW_FINAL_CI_WORKFLOW:-}" runs_json="" decision="" reason="" pr_json="" head_repo=""
 	local final_ci_docs_only="false" final_ci_docs_only_classifier="" final_ci_docs_only_files="" final_ci_docs_only_verdict=""
 	PR_FINAL_CI_OUTCOME=""
+	PR_FINAL_CI_REASON=""
+	PR_FINAL_CI_FAILED_AT=""
 	if [ -z "${wf}" ]; then
 		PR_FINAL_CI_OUTCOME="disabled"
 		echo "REVIEW_FINAL_CI pr=${pr:-?} head=${sha:-?} outcome=disabled reason=workflow_unset"
@@ -960,27 +1010,24 @@ _pr_ensure_final_ci()
 	else
 		runs_json="$(gh_retry _safe_gh_jq "repos/${repo}/actions/workflows/${wf}/runs?head_sha=${sha}&per_page=20" 2>/dev/null || echo "")"
 	fi
-	decision="$(printf '%s' "${runs_json}" | jq -r --arg path ".github/workflows/${wf}" --arg sha "${sha}" '
-		if (type == "object" and (.workflow_runs | type) == "array") then
-			[.workflow_runs[]
-				| select(type == "object")
-				| select(((.path // "") | split("@") | .[0]) == $path)
-				| select((.head_sha // "") == $sha)] as $runs
-			| ($runs | map(select(((.display_title // "") | endswith(" [sync-quick]")) | not))) as $full_runs
-			| if any($runs[]; (.status // "") != "completed") then "exists in_flight"
-			elif any($runs[]; (.conclusion // "") == "success") then "exists success"
-			elif any($full_runs[]; (.conclusion // "") == "failure") then "exists failure"
-			elif any($runs[]; (.conclusion // "") == "failure") then "dispatch sync_quick_failed"
-			elif ($runs | length) > 0 then "dispatch only_unfinished"
-			else "dispatch no_run" end
-		else "read_failed" end' 2>/dev/null | tail -n1)"
+	decision="$(printf '%s' "${runs_json}" | jq -r --arg path ".github/workflows/${wf}" --arg sha "${sha}" "${PR_FINAL_CI_JQ_DECISION_DEF}"' _pr_final_ci_decision' 2>/dev/null | tail -n1)"
 	case "${decision}" in
 		"exists "*)
 			PR_FINAL_CI_OUTCOME="exists"
-			echo "REVIEW_FINAL_CI pr=${pr} head=${sha} outcome=exists reason=${decision#exists }"
+			PR_FINAL_CI_REASON="${decision#exists }"
+			if [ "${PR_FINAL_CI_REASON}" = "failure" ]; then
+				# Newest failed full run's completion time, for the review sweep's
+				# base sync (scripts/review_final_ci_sweep.sh); no extra read.
+				PR_FINAL_CI_FAILED_AT="$(printf '%s' "${runs_json}" | jq -r --arg path ".github/workflows/${wf}" --arg sha "${sha}" '
+					[.workflow_runs[]? | select(type == "object")
+						| select(((.path // "") | split("@") | .[0]) == $path and (.head_sha // "") == $sha)
+						| select((.conclusion // "") == "failure" and (((.display_title // "") | endswith(" [sync-quick]")) | not))
+						| (.updated_at // "")] | map(select(test("^[0-9]{4}-"))) | max // ""' 2>/dev/null | tail -n1)"
+			fi
+			echo "REVIEW_FINAL_CI pr=${pr} head=${sha} outcome=exists reason=${PR_FINAL_CI_REASON}"
 			return 0
 			;;
-		"dispatch "*) reason="${decision#dispatch }" ;;
+		"dispatch "*) reason="${decision#dispatch }"; PR_FINAL_CI_REASON="${reason}" ;;
 		*)
 			reason="read_failed"
 			echo "REVIEW_FINAL_CI pr=${pr} head=${sha} outcome=read_failed action=dispatch"
@@ -1053,6 +1100,7 @@ _pr_ensure_final_ci()
 	PR_FINAL_CI_OUTCOME="dispatch_failed"
 	# A branch created before ci.yml had its workflow_dispatch trigger
 	# cannot be dispatched; updating the branch from its base fixes that.
+	PR_FINAL_CI_REASON="dispatch_refused"
 	echo "::warning::REVIEW_FINAL_CI pr=${pr} head=${sha} outcome=dispatch_failed reason=dispatch_refused workflow=${wf} (if the branch predates the workflow's workflow_dispatch trigger, update it from its base branch)"
 	return 0
 }
@@ -1074,7 +1122,8 @@ _pr_wait_for_required_checks()
 		rc=0
 		# Bind the named CI check to a run of an AUTO_MERGE_WAIT_WORKFLOWS
 		# workflow on this head (issue #6963): other workflows also have a
-		# job named `lint` (lint-pr-body-auto-close.yml, lint-plan-archival.yml),
+		# job named `lint` (lint-plan-archival.yml; the PR-body lint job
+		# too on a branch that predates its rename to `pr-body-lint`),
 		# and their success must not stand in for CI. With the runs listing
 		# unreadable, a success is not trusted (state unknown, keep polling);
 		# with AUTO_MERGE_WAIT_WORKFLOWS=none the match is by name only.
@@ -1108,6 +1157,24 @@ _pr_wait_for_required_checks()
 				PR_CHECKS_WAIT_WAITED_S="${waited}"
 				continue
 			fi
+			# The head has no CI run and none could be started (a branch
+			# whose ci.yml predates the workflow_dispatch trigger, a fork
+			# head, an unreadable head ref): the required check cannot
+			# appear on this head, so stop now with the same timeout outcome
+			# instead of holding the runner for the whole budget (PR #9579,
+			# 2026-11-17: 45 minutes per review run, every sweep tick).
+			if [ "${PR_FINAL_CI_OUTCOME:-}" = "dispatch_failed" ] && [ "${PR_CHECKS_LAST_CI_STATE:-}" = "absent" ] \
+				&& [ "${PR_CHECKS_RUNS_PENDING:-0}" -eq 0 ]; then
+				# A refused dispatch on a branch whose CI workflow predates the
+				# workflow_dispatch trigger: update the approved branch from its
+				# base once, so the update head can get its final CI.
+				if [ "${PR_FINAL_CI_REASON:-}" = "dispatch_refused" ]; then
+					_pr_final_ci_refused_base_update "${pr_number}" "${head_sha}" "${base_ref}" || true
+				fi
+				PR_CHECKS_WAIT_OUTCOME="timeout"
+				echo "AUTOFIX_AUTO_MERGE_CHECKS pr=${pr_number} head_sha=${head_sha:-unknown} outcome=timeout waited_s=${waited} pending=0 reason=final_ci_dispatch_failed ci_check=${PR_CHECKS_LAST_CI_NAME:-none} ci_state=${PR_CHECKS_LAST_CI_STATE:-unknown}"
+				return 1
+			fi
 		fi
 		case "${PR_CHECKS_LAST_REASON}" in
 			ok|allow_all)
@@ -1128,6 +1195,7 @@ _pr_wait_for_required_checks()
 					if [ "${PR_CHECKS_RUNS_PENDING:-0}" -gt 0 ]; then
 						PR_CHECKS_WAIT_OUTCOME="timeout"
 						echo "AUTOFIX_AUTO_MERGE_CHECKS pr=${pr_number} head_sha=${head_sha:-unknown} outcome=timeout waited_s=${waited} pending=${PR_CHECKS_RUNS_PENDING} reason=ci_run_pending ci_check=${PR_CHECKS_LAST_CI_NAME:-none} ci_state=${PR_CHECKS_LAST_CI_STATE:-unknown}"
+						if [ "${max_minutes}" -gt 0 ]; then _pr_final_ci_merge_pending_mark "${pr_number}" "${head_sha}"; fi
 						return 1
 					fi
 					if [ "${PR_CHECKS_RUNS_UNRUN:-0}" -gt 0 ]; then
@@ -1150,6 +1218,7 @@ _pr_wait_for_required_checks()
 							if [ "${waited}" -ge $((max_minutes * 60)) ]; then
 								PR_CHECKS_WAIT_OUTCOME="timeout"
 								echo "AUTOFIX_AUTO_MERGE_CHECKS pr=${pr_number} head_sha=${head_sha:-unknown} outcome=timeout waited_s=${waited} pending=${PR_CHECKS_LAST_PENDING:-0} ci_check=${PR_CHECKS_LAST_CI_NAME:-none} ci_state=${PR_CHECKS_LAST_CI_STATE:-unknown}"
+								if [ "${max_minutes}" -gt 0 ]; then _pr_final_ci_merge_pending_mark "${pr_number}" "${head_sha}"; fi
 								return 1
 							fi
 							echo "  [check-runs] PR #${pr_number}: required CI check '${PR_CHECKS_LAST_CI_NAME}' is ${PR_CHECKS_LAST_CI_STATE:-unknown} on ${head_sha:0:7}; waiting ${poll_seconds}s (${waited}/$((max_minutes * 60))s)."
@@ -1199,6 +1268,7 @@ _pr_wait_for_required_checks()
 		if [ "${waited}" -ge $((max_minutes * 60)) ]; then
 			PR_CHECKS_WAIT_OUTCOME="timeout"
 			echo "AUTOFIX_AUTO_MERGE_CHECKS pr=${pr_number} head_sha=${head_sha:-unknown} outcome=timeout waited_s=${waited} pending=${PR_CHECKS_LAST_PENDING:-0} ci_check=${PR_CHECKS_LAST_CI_NAME:-none} ci_state=${PR_CHECKS_LAST_CI_STATE:-unknown}"
+			if [ "${max_minutes}" -gt 0 ]; then _pr_final_ci_merge_pending_mark "${pr_number}" "${head_sha}"; fi
 			return 1
 		fi
 		echo "  [check-runs] PR #${pr_number}: ${PR_CHECKS_LAST_PENDING:-0} required/pending check-run(s) still running; waiting ${poll_seconds}s (${waited}/$((max_minutes * 60))s)."
@@ -1277,6 +1347,10 @@ _pr_base_freshness()
 	PR_BASE_FRESHNESS_OVERLAP=""
 	PR_BASE_FRESHNESS_BASE_REF=""
 	PR_BASE_FRESHNESS_BASE_SHA=""
+	# The PR's own paths (newline-separated) and the PR they belong to, kept
+	# for the merge lease (_merge_lease_gate) so it never re-reads the files.
+	PR_BASE_FRESHNESS_PR_PATHS=""
+	PR_BASE_FRESHNESS_PR_PATHS_FOR=""
 	case "$(printf '%s' "${MERGE_BASE_FRESHNESS_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
 		true|1|yes|on) ;;
 		*)
@@ -1377,6 +1451,13 @@ _pr_base_freshness()
 		  elif ($pr_files[0] | [ .[]? | if type == "array" then .[] else . end ] | length) >= 3000 then "__capped__"
 		  else ([ $base_paths[] | select(. as $p | $pr_paths | index($p)) ] | unique | join(",")) end
 	' 2>/dev/null | tail -n1)"
+	if [ "${overlap}" != "__invalid__" ] && [ "${overlap}" != "__capped__" ]; then
+		PR_BASE_FRESHNESS_PR_PATHS="$(jq -r '
+			[ .[]? | if type == "array" then .[] else . end | select(type == "object")
+			  | (.filename // empty), (.previous_filename // empty) ] | unique | .[]
+		' "${tmp_pr_files}" 2>/dev/null || true)"
+		PR_BASE_FRESHNESS_PR_PATHS_FOR="${pr_number}"
+	fi
 	rm -f "${tmp_compare}" "${tmp_pr_files}"
 	if [ "${overlap}" = "__invalid__" ] || [ -z "${overlap+x}" ]; then
 		PR_BASE_FRESHNESS_LAST_REASON="pr_files_failed"
@@ -1453,7 +1534,11 @@ _pr_base_sync_for_fresh_ci()
 #
 # `_pr_base_sync_count <pr>` sets PR_BASE_SYNC_COUNT to the number of markers
 # (legacy and bound) for <pr> posted by the token's own login; returns 1
-# (count unknown) when either read fails.
+# (count unknown) when either read fails. It also sets
+# PR_BASE_SYNC_FINAL_CI_COUNT to how many of them the review sweep posted
+# after a failed final CI run (they carry `<!-- ai:final-ci-base-sync:v1 pr=<n> -->`
+# in their text; empty when unknown), and PR_BASE_SYNC_LOGIN to the token's
+# own login once the `user` read succeeded.
 # API budget (§15): one `user` read and one paginated issue-comments read,
 # only on the overlap path. No earlier call in this file reads comments or
 # the token's login; the review gate's own comments read happens in another
@@ -1464,8 +1549,13 @@ _pr_base_sync_count()
 	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
 	local sync_login sync_comments_json
 	PR_BASE_SYNC_COUNT=""
+	PR_BASE_SYNC_FINAL_CI_COUNT=""
+	PR_BASE_SYNC_LOGIN=""
 	sync_login="$(gh_retry _safe_gh_jq user 2>/dev/null | jq -r 'if type == "object" then (.login // "") else "" end' 2>/dev/null | tail -n1)"
 	[[ "${sync_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]] || return 1
+	# Kept for the review sweep's base sync, which trusts only this login's
+	# ai-review/head-gate status (scripts/review_final_ci_sweep.sh).
+	PR_BASE_SYNC_LOGIN="${sync_login}"
 	sync_comments_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${repo}/issues/${pr_number}/comments?per_page=100" 2>/dev/null)" || return 1
 	PR_BASE_SYNC_COUNT="$(printf '%s' "${sync_comments_json}" | jq -r --arg login "${sync_login}" --arg pr "${pr_number}" '
 		[ .[]? | if type == "array" then .[] else . end
@@ -1476,6 +1566,14 @@ _pr_base_sync_count()
 		PR_BASE_SYNC_COUNT=""
 		return 1
 	fi
+	# The subset the review sweep made after a failed final CI run
+	# (scripts/review_final_ci_sweep.sh); same read, same trust rules.
+	PR_BASE_SYNC_FINAL_CI_COUNT="$(printf '%s' "${sync_comments_json}" | jq -r --arg login "${sync_login}" --arg pr "${pr_number}" '
+		[ .[]? | if type == "array" then .[] else . end
+		  | select(type == "object" and ((.user.login // "") == $login))
+		  | (.body // "") | select(type == "string" and startswith("**Branch updated from `") and contains("<!-- ai:final-ci-base-sync:v1 pr=" + $pr + " -->") and test("<!-- ai:merge-base-sync:v1 pr=" + $pr + " from=[0-9a-f]{40} sync=[0-9]+( base=[0-9a-f]{40} merge=[0-9a-f]{40})? -->\\s*$")) ]
+		| length' 2>/dev/null | tail -n1)"
+	[[ "${PR_BASE_SYNC_FINAL_CI_COUNT}" =~ ^[0-9]+$ ]] || PR_BASE_SYNC_FINAL_CI_COUNT=""
 }
 
 # `_pr_base_sync_observe_update_commit <pr> <from head> [<base ref>]`
@@ -1585,7 +1683,7 @@ _pr_base_sync_marker_post()
 {
 	local pr_number="$1" head_sha="$2" sync_number="$3" sync_max="$4" sync_base_sha="${5:-}" sync_merge_sha="${6:-}"
 	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
-	local base_label="${PR_BASE_FRESHNESS_BASE_REF:-the base branch}" sync_body
+	local base_label="${PR_BASE_FRESHNESS_BASE_REF:-the base branch}" sync_body sync_lead
 	local overlap_label="${PR_BASE_FRESHNESS_OVERLAP:-shared paths}"
 	# Keep the comment far below GitHub's 65,536-character body limit.
 	[ "${#overlap_label}" -le 2000 ] || overlap_label="${overlap_label:0:2000}, ..."
@@ -1597,8 +1695,17 @@ _pr_base_sync_marker_post()
 		echo "MERGE_BASE_SYNC_MARKER pr=${pr_number} head_sha=${head_sha} outcome=skipped reason=unbound_update"
 		return 0
 	fi
-	sync_body="$(printf '**Branch updated from `%s` before merging** (update %s; warning threshold %s).\n\n`%s` gained %s commit(s) that touch files this PR also changes (%s), so CI must run on the combined tree first. This head was already approved for merge: the next review run for update commit `%s` only waits for CI and then merges, without running the reviewers again. Any other head is reviewed normally. If the base changes these files again before the merge, the branch is updated again and the merge waits for CI on the new combined tree.\n\n<!-- ai:merge-base-sync:v1 pr=%s from=%s sync=%s base=%s merge=%s -->' \
-		"${base_label}" "${sync_number}" "${sync_max}" "${base_label}" "${PR_BASE_FRESHNESS_BEHIND_BY:-?}" "${overlap_label}" "${sync_merge_sha}" "${pr_number}" "${head_sha}" "${sync_number}" "${sync_base_sha}" "${sync_merge_sha}")"
+	# PR_BASE_SYNC_MARKER_LEAD (optional): replaces the sentence that says why
+	# the branch was updated; the review sweep sets it for a sync after a failed
+	# final CI run. The heading and the closing marker line never change, so
+	# _pr_base_sync_count and the review gate read every marker the same way.
+	sync_lead="${PR_BASE_SYNC_MARKER_LEAD:-}"
+	if [ -z "${sync_lead}" ]; then
+		sync_lead="$(printf '`%s` gained %s commit(s) that touch files this PR also changes (%s), so CI must run on the combined tree first.' \
+			"${base_label}" "${PR_BASE_FRESHNESS_BEHIND_BY:-?}" "${overlap_label}")"
+	fi
+	sync_body="$(printf '**Branch updated from `%s` before merging** (update %s; warning threshold %s).\n\n%s This head was already approved for merge: the next review run for update commit `%s` only waits for CI and then merges, without running the reviewers again. Any other head is reviewed normally. If the base changes these files again before the merge, the branch is updated again and the merge waits for CI on the new combined tree.\n\n<!-- ai:merge-base-sync:v1 pr=%s from=%s sync=%s base=%s merge=%s -->' \
+		"${base_label}" "${sync_number}" "${sync_max}" "${sync_lead}" "${sync_merge_sha}" "${pr_number}" "${head_sha}" "${sync_number}" "${sync_base_sha}" "${sync_merge_sha}")"
 	# One attempt only: a retried POST whose first response was lost would
 	# post a duplicate marker.
 	if _safe_gh_jq -X POST "repos/${repo}/issues/${pr_number}/comments" -f "body=${sync_body}" >/dev/null 2>&1; then
@@ -1703,7 +1810,7 @@ _pr_base_sync_dispatch_final_ci()
 				# reason= stays one token: the classifier's `other <path>` is logged as overlap_other.
 				if [ "${sync_ci_verdict}" != "ci_wiring_only" ]; then
 					sync_ci_reason="overlap_other"
-				elif bash "${sync_ci_classifier}" full-ci-green "${repo}" "${pr_number}" "${sync_from_head}" "${REVIEW_FINAL_CI_WORKFLOW}"; then
+				elif bash "${sync_ci_classifier}" full-ci-green "${repo}" "${pr_number}" "${sync_from_head}" "${REVIEW_FINAL_CI_WORKFLOW:-}"; then
 					sync_ci_quick="true"
 					sync_ci_reason="ci_wiring_only"
 				else
@@ -1728,6 +1835,16 @@ _pr_base_fresh_for_merge()
 	case "${PR_BASE_FRESHNESS_OUTCOME:-unknown}" in
 		overlap)
 			echo "MERGE_BASE_FRESHNESS pr=${pr_number} head_sha=${PR_BASE_FRESHNESS_HEAD_SHA:-unknown} base=${base_ref:-unknown} outcome=overlap reason=${PR_BASE_FRESHNESS_LAST_REASON} behind_by=${PR_BASE_FRESHNESS_BEHIND_BY:--} overlap=${PR_BASE_FRESHNESS_OVERLAP:--}"
+			# Merge lease: only the lease holder for this base updates its
+			# branch. Any other PR waits without updating, so N approved PRs
+			# no longer each spend a CI run on a combined tree the next merge
+			# makes stale. A lease that cannot be read fails open (as before).
+			if ! _merge_lease_gate "${pr_number}" "${base_ref:-${PR_BASE_FRESHNESS_BASE_REF:-}}" "${PR_BASE_FRESHNESS_HEAD_SHA:-}" update; then
+				PR_BASE_FRESHNESS_OUTCOME="lease_wait"
+				PR_BASE_FRESHNESS_LAST_REASON="merge_lease_${MERGE_LEASE_REASON:-held}"
+				echo "  [merge-lease] PR #${pr_number}: the merge lease for ${base_ref:-${PR_BASE_FRESHNESS_BASE_REF:-the base}} is held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; not updating the branch. This PR is labelled ${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait} and is re-dispatched when the lease is granted to it."
+				return 1
+			fi
 			local sync_max="${MERGE_BASE_FRESHNESS_MAX_SYNCS:-2}" sync_done=""
 			[[ "${sync_max}" =~ ^[0-9]$ ]] || sync_max=2
 			if [ "${sync_max}" -eq 0 ]; then
@@ -1759,8 +1876,607 @@ _pr_base_fresh_for_merge()
 			return 1
 			;;
 		*)
+			# fresh / clean: no update is needed, but a merge that touches the
+			# lease holder's files would make the holder's combined-tree CI run
+			# stale, so it waits for the holder (Q3: A). disabled skips the lease.
+			if [ "${PR_BASE_FRESHNESS_OUTCOME}" != "disabled" ] \
+				&& ! _merge_lease_gate "${pr_number}" "${base_ref:-${PR_BASE_FRESHNESS_BASE_REF:-}}" "${PR_BASE_FRESHNESS_HEAD_SHA:-${head_sha:-}}" merge; then
+				echo "MERGE_BASE_FRESHNESS pr=${pr_number} head_sha=${PR_BASE_FRESHNESS_HEAD_SHA:-${head_sha:-unknown}} base=${base_ref:-unknown} outcome=${PR_BASE_FRESHNESS_OUTCOME} reason=${PR_BASE_FRESHNESS_LAST_REASON} behind_by=${PR_BASE_FRESHNESS_BEHIND_BY:--} action=lease_wait"
+				PR_BASE_FRESHNESS_OUTCOME="lease_wait"
+				PR_BASE_FRESHNESS_LAST_REASON="merge_lease_${MERGE_LEASE_REASON:-held}"
+				echo "  [merge-lease] PR #${pr_number}: PR #${MERGE_LEASE_BLOCKER:-?} holds the merge lease and changes a file this PR changes; merging now would make its CI run stale. Waiting under ${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}."
+				return 1
+			fi
 			echo "MERGE_BASE_FRESHNESS pr=${pr_number} head_sha=${PR_BASE_FRESHNESS_HEAD_SHA:-${head_sha:-unknown}} base=${base_ref:-unknown} outcome=${PR_BASE_FRESHNESS_OUTCOME} reason=${PR_BASE_FRESHNESS_LAST_REASON} behind_by=${PR_BASE_FRESHNESS_BEHIND_BY:--} action=proceed"
 			return 0
 			;;
 	esac
+}
+
+# Base update for a refused final-CI dispatch (operator decision Q2: A,
+# 2026-11-17; PR #9579). `gh workflow run` refuses a branch whose copy of
+# REVIEW_FINAL_CI_WORKFLOW has no workflow_dispatch trigger (branches cut
+# before cut-ci-runner-time Phase 4b, #9563), so such an approved head can
+# never get the required `lint` and never merges.
+#
+#   _pr_final_ci_refused_base_update <pr> <approved head> [<base ref>]
+#
+# Called only from _pr_wait_for_required_checks after _pr_ensure_final_ci
+# ended `dispatch_failed reason=dispatch_refused`. Every caller of that wait
+# first ran _pr_base_fresh_for_merge on the same approved head, so it acts
+# only when PR_BASE_FRESHNESS_OUTCOME is `clean` for this head (the base is
+# ahead and shares no file with the PR; `fresh` means an update cannot help).
+# It then confirms the cause: the head's workflow file must exist and name no
+# `workflow_dispatch` (one contents read), while the base's copy must have it
+# (one contents read). After one update the head carries the base's file, so
+# this runs at most once per PR for this cause. Then, exactly like the
+# freshness overlap path: head-bound update-branch, verified update commit,
+# the ai:merge-base-sync:v1 marker (so the update head skips the reviewer
+# panel and only waits for CI) and the update head's final-CI dispatch.
+# Switch: FINAL_CI_REFUSED_BASE_UPDATE_ENABLED (default true; true/1/yes/on).
+# API budget (§15): two contents reads, then the freshness path's PUT,
+# observe reads, marker POST and final-CI dispatch; nothing on other paths.
+# Always returns 0 (the wait still ends `timeout`; the synchronize run merges).
+# Log: `REVIEW_FINAL_CI_BASE_UPDATE pr=<n> head=<sha> outcome=updated|requested|skipped|failed reason=<token>`.
+_pr_final_ci_refused_base_update()
+{
+	local refused_pr="$1" refused_head="$2" refused_base="${3:-}"
+	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" refused_wf="${REVIEW_FINAL_CI_WORKFLOW:-}"
+	local refused_head_has="" refused_base_has="" refused_base_ref refused_sync_number
+	refused_log()
+	{
+		echo "REVIEW_FINAL_CI_BASE_UPDATE pr=${refused_pr:-?} head=${refused_head:-?} outcome=$1 reason=$2"
+	}
+	case "$(printf '%s' "${FINAL_CI_REFUSED_BASE_UPDATE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		true|1|yes|on) ;;
+		*) refused_log skipped disabled; return 0 ;;
+	esac
+	if ! [[ "${refused_pr}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${refused_head}" =~ ^[0-9a-f]{40}$ ]] \
+		|| ! [[ "${refused_wf}" =~ ^[A-Za-z0-9._-]+\.ya?ml$ ]] || ! [[ "${repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+		refused_log skipped invalid_input
+		return 0
+	fi
+	if [ "${PR_BASE_FRESHNESS_HEAD_SHA:-}" != "${refused_head}" ] || [ "${PR_BASE_FRESHNESS_OUTCOME:-}" != "clean" ]; then
+		refused_log skipped "freshness_${PR_BASE_FRESHNESS_OUTCOME:-unchecked}"
+		return 0
+	fi
+	refused_base_ref="${refused_base:-${PR_BASE_FRESHNESS_BASE_REF:-}}"
+	if ! [[ "${refused_base_ref}" =~ ^[A-Za-z0-9._/-]+$ ]] || [[ "${refused_base_ref}" == *..* ]]; then
+		refused_log skipped base_ref_unknown
+		return 0
+	fi
+	# `yes` when the file at <ref> declares a workflow_dispatch trigger, `no`
+	# when it does not, empty when the read failed or the file is missing.
+	refused_has_dispatch()
+	{
+		gh_retry _safe_gh_jq "repos/${repo}/contents/.github/workflows/${refused_wf}?ref=$1" 2>/dev/null \
+			| jq -r 'if type == "object" and (.encoding // "") == "base64" and ((.content // "") | type) == "string"
+				then ((.content | gsub("\\s"; "") | @base64d) | if test("(^|\\n)\\s*\"?workflow_dispatch\"?\\s*:|[\\[,{]\\s*\"?workflow_dispatch\"?\\s*[\\],}:]") then "yes" else "no" end)
+				else "" end' 2>/dev/null | tail -n1
+	}
+	refused_head_has="$(refused_has_dispatch "${refused_head}")"
+	if [ "${refused_head_has}" != "no" ]; then
+		refused_log skipped "head_workflow_${refused_head_has:-unreadable}"
+		return 0
+	fi
+	refused_base_has="$(refused_has_dispatch "${refused_base_ref}")"
+	if [ "${refused_base_has}" != "yes" ]; then
+		refused_log skipped "base_workflow_${refused_base_has:-unreadable}"
+		return 0
+	fi
+	if ! _pr_base_sync_for_fresh_ci "${refused_pr}" "${refused_head}"; then
+		refused_log failed update_branch_refused
+		return 0
+	fi
+	if _pr_base_sync_observe_update_commit "${refused_pr}" "${refused_head}" "${refused_base_ref}"; then
+		# The update number counts earlier sync markers (freshness updates
+		# included); an unreadable count falls back to 1.
+		refused_sync_number=1
+		if _pr_base_sync_count "${refused_pr}"; then
+			refused_sync_number=$(( PR_BASE_SYNC_COUNT + 1 ))
+		fi
+		PR_BASE_SYNC_MARKER_LEAD="$(printf 'This branch'"'"'s `%s` predates its `workflow_dispatch` trigger, so the final CI run that the merge requires could not be started on it; `%s` (%s commit(s) ahead, none touching files this PR changes) has the trigger.' "${refused_wf}" "${refused_base_ref}" "${PR_BASE_FRESHNESS_BEHIND_BY:-?}")" \
+			_pr_base_sync_marker_post "${refused_pr}" "${refused_head}" "${refused_sync_number}" "${MERGE_BASE_FRESHNESS_MAX_SYNCS:-2}" \
+			"${PR_BASE_SYNC_BASE_SHA}" "${PR_BASE_SYNC_MERGE_SHA}"
+		_pr_base_sync_dispatch_final_ci "${refused_pr}" "${refused_head}" "${PR_BASE_SYNC_MERGE_SHA}"
+		refused_log updated workflow_predates_dispatch
+	else
+		echo "MERGE_BASE_SYNC_MARKER pr=${refused_pr} head_sha=${refused_head} outcome=skipped reason=${PR_BASE_SYNC_OBSERVE_REASON:-head_not_observed}"
+		refused_log requested "${PR_BASE_SYNC_OBSERVE_REASON:-head_not_observed}"
+	fi
+	return 0
+}
+
+# ---------------------------------------------------------------------------
+# Merge lease (2026-11-17; follow-up to #9642, answers Q1-Q5: A).
+#
+# Why: approved PRs into `main` were updated from `main` up to six times
+# without merging (#9367 update 6, #9368 update 5). Every update made a head
+# that needed a full CI run, which took 1.5-2.5 hours on the congested runner
+# pool, and `main` moved again under a shared file before it finished. N
+# approved PRs racing meant every merge invalidated the others.
+#
+# The lease serializes the expensive part per base branch. Only the PR that
+# holds the lease for a base may update its branch from that base (and so
+# start the combined-tree CI run). Another PR that needs an update waits
+# without updating, labelled MERGE_LEASE_WAIT_LABEL. While a lease is held, a
+# PR that needs no update still merges at once unless it changes a file the
+# holder changes (that merge would make the holder's CI run stale).
+#
+# Storage: one ref per base, MERGE_LEASE_REF_PREFIX<base> (default
+# refs/merge-lease/<base>), pointing at a commit whose message is the lease
+# record:
+#   merge-lease v1 / state=held|released / base= / pr= / head= / expires=<epoch>
+#   / updated=<epoch> / paths: followed by one path per line, or `*`
+# Every write creates a child of the commit the writer read and moves the ref
+# with a fast-forward-only PATCH (force=false), so two writers that read the
+# same record cannot both win: the second PATCH is not a fast-forward and is
+# refused. That is the compare-and-swap. A ref outside refs/heads and
+# refs/tags starts no workflow. The first write creates the ref (POST
+# git/refs; a concurrent create loses with "already exists").
+#
+# Order (who gets a free lease): MERGE_TRAIN_PRIORITY_LABELS on the PR first,
+# then the lowest PR number, the merge train's rule. The merge-train release
+# step (scripts/review_merge_train.sh, every poll tick and every PR close)
+# frees a lease whose holder closed or whose expiry passed, then reserves it
+# for the first waiter and re-dispatches that waiter's review.
+#
+# Fail-open: the lease only ever delays an update or a merge. Any read or
+# write failure logs MERGE_LEASE ... outcome=unavailable and the caller
+# behaves as before the lease existed.
+#
+# Env: MERGE_LEASE_ENABLED (default true; true/1/yes/on), MERGE_LEASE_TTL_MINUTES
+# (default 240, 30-1440; renewed each time the holder updates),
+# MERGE_LEASE_MAX_HOLD_MINUTES (default 720, at least the TTL; no renewal
+# after that long since first acquisition),
+# MERGE_LEASE_REF_PREFIX (default refs/merge-lease/), MERGE_LEASE_WAIT_LABEL
+# (default ai:merge-lease-wait), MERGE_LEASE_MAX_PATHS (default 200; a holder
+# with more paths is recorded as `*`, which every PR overlaps).
+#
+# API budget (§15): a read is one `git/matching-refs` call plus one
+# `git/commits/<sha>` read when the ref exists. A write adds one `git/commits`
+# POST, one ref PATCH (or POST on first use) and, on first use only, one
+# `commits/<base>` read for a tree. The update path adds one paginated
+# `pulls?base=` listing when the lease is free (queue order). A wait adds one
+# label POST. The holder's paths come from _pr_base_freshness's existing
+# files read (PR_BASE_FRESHNESS_PR_PATHS); a merge-mode check against a
+# holder reads the PR's files only when that cache is for another PR.
+#
+# Log: `MERGE_LEASE pr=<n> base=<ref> mode=update|merge|tick outcome=<word>
+# reason=<token> holder=<n|-> blocker=<n|->`.
+# ---------------------------------------------------------------------------
+
+_merge_lease_enabled()
+{
+	case "$(printf '%s' "${MERGE_LEASE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		true|1|yes|on) return 0 ;;
+	esac
+	return 1
+}
+
+_merge_lease_ttl_seconds()
+{
+	local lease_ttl_minutes="${MERGE_LEASE_TTL_MINUTES:-240}"
+	[[ "${lease_ttl_minutes}" =~ ^[0-9]+$ ]] || lease_ttl_minutes=240
+	[ "${lease_ttl_minutes}" -ge 30 ] || lease_ttl_minutes=30
+	[ "${lease_ttl_minutes}" -le 1440 ] || lease_ttl_minutes=1440
+	echo $((lease_ttl_minutes * 60))
+}
+
+# Longest total hold from first acquisition (MERGE_LEASE_MAX_HOLD_MINUTES,
+# default 720, never below the TTL), after which the holder stops renewing.
+_merge_lease_max_hold_seconds()
+{
+	local lease_hold_minutes="${MERGE_LEASE_MAX_HOLD_MINUTES:-720}" lease_hold_ttl
+	[[ "${lease_hold_minutes}" =~ ^[0-9]+$ ]] || lease_hold_minutes=720
+	lease_hold_ttl="$(_merge_lease_ttl_seconds)"
+	[ $((lease_hold_minutes * 60)) -ge "${lease_hold_ttl}" ] || lease_hold_minutes=$((lease_hold_ttl / 60))
+	echo $((lease_hold_minutes * 60))
+}
+
+# Ref name without the leading "refs/" (the git/ref API path form).
+_merge_lease_ref_name()
+{
+	local lease_prefix="${MERGE_LEASE_REF_PREFIX:-refs/merge-lease/}"
+	case "${lease_prefix}" in
+		refs/*/) ;;
+		*) lease_prefix="refs/merge-lease/" ;;
+	esac
+	printf '%s%s' "${lease_prefix#refs/}" "$1"
+}
+
+_merge_lease_valid_base()
+{
+	[[ "${1:-}" =~ ^[A-Za-z0-9._/-]+$ ]] && [[ "$1" != *..* ]] && [[ "$1" != /* ]] && [[ "$1" != */ ]]
+}
+
+# _merge_lease_read <base>: 0 found (MERGE_LEASE_* set), 2 no lease ref yet,
+# 1 read failed. MERGE_LEASE_SHA is the record commit the next write must
+# descend from.
+_merge_lease_read()
+{
+	local lease_base="$1" lease_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	local lease_ref lease_refs_json lease_commit_json lease_message
+	MERGE_LEASE_SHA=""
+	MERGE_LEASE_TREE=""
+	MERGE_LEASE_STATE=""
+	MERGE_LEASE_PR=""
+	MERGE_LEASE_HEAD=""
+	MERGE_LEASE_EXPIRES=0
+	MERGE_LEASE_ACQUIRED=0
+	MERGE_LEASE_PATHS=""
+	lease_ref="$(_merge_lease_ref_name "${lease_base}")"
+	lease_refs_json="$(gh_retry _safe_gh_jq "repos/${lease_repo}/git/matching-refs/${lease_ref}" 2>/dev/null)" || return 1
+	jq -e 'type == "array"' >/dev/null 2>&1 <<< "${lease_refs_json}" || return 1
+	MERGE_LEASE_SHA="$(jq -r --arg r "refs/${lease_ref}" '[ .[] | select(type == "object" and .ref == $r) | .object.sha // empty ][0] // ""' <<< "${lease_refs_json}" 2>/dev/null)"
+	if [ -z "${MERGE_LEASE_SHA}" ]; then
+		return 2
+	fi
+	[[ "${MERGE_LEASE_SHA}" =~ ^[0-9a-f]{40}$ ]] || { MERGE_LEASE_SHA=""; return 1; }
+	lease_commit_json="$(gh_retry _safe_gh_jq "repos/${lease_repo}/git/commits/${MERGE_LEASE_SHA}" 2>/dev/null)" || return 1
+	MERGE_LEASE_TREE="$(jq -r '.tree.sha // ""' <<< "${lease_commit_json}" 2>/dev/null)"
+	lease_message="$(jq -r '.message // ""' <<< "${lease_commit_json}" 2>/dev/null)"
+	[[ "${MERGE_LEASE_TREE}" =~ ^[0-9a-f]{40}$ ]] || return 1
+	[ "$(printf '%s\n' "${lease_message}" | head -n1)" = "merge-lease v1" ] || return 1
+	MERGE_LEASE_STATE="$(printf '%s\n' "${lease_message}" | sed -n 's/^state=//p' | head -n1)"
+	MERGE_LEASE_PR="$(printf '%s\n' "${lease_message}" | sed -n 's/^pr=//p' | head -n1)"
+	MERGE_LEASE_HEAD="$(printf '%s\n' "${lease_message}" | sed -n 's/^head=//p' | head -n1)"
+	MERGE_LEASE_EXPIRES="$(printf '%s\n' "${lease_message}" | sed -n 's/^expires=//p' | head -n1)"
+	MERGE_LEASE_ACQUIRED="$(printf '%s\n' "${lease_message}" | sed -n 's/^acquired=//p' | head -n1)"
+	MERGE_LEASE_PATHS="$(printf '%s\n' "${lease_message}" | sed -n '/^paths:$/,$p' | tail -n +2)"
+	[[ "${MERGE_LEASE_EXPIRES}" =~ ^[0-9]+$ ]] || MERGE_LEASE_EXPIRES=0
+	[[ "${MERGE_LEASE_ACQUIRED}" =~ ^[0-9]+$ ]] || MERGE_LEASE_ACQUIRED=0
+	[[ "${MERGE_LEASE_PR}" =~ ^[1-9][0-9]*$ ]] || MERGE_LEASE_PR=""
+	case "${MERGE_LEASE_STATE}" in
+		held|released) ;;
+		*) MERGE_LEASE_STATE="released" ;;
+	esac
+	[ -n "${MERGE_LEASE_PR}" ] || MERGE_LEASE_STATE="released"
+	return 0
+}
+
+# True when the record just read is a live lease (held and not expired).
+_merge_lease_is_held()
+{
+	[ "${MERGE_LEASE_STATE:-}" = "held" ] && [ "${MERGE_LEASE_EXPIRES:-0}" -gt "$(date -u +%s)" ]
+}
+
+# _merge_lease_write <base> <state> <pr> <head> <paths> [<acquired epoch>]:
+# writes a record (acquired defaults to now; a renewal passes the original) that
+# descends from the one _merge_lease_read saw (MERGE_LEASE_SHA; empty = create
+# the ref). 0 written, 3 lost the race (re-read shows another record), 1 error.
+_merge_lease_write()
+{
+	local lease_base="$1" lease_state="$2" lease_pr="$3" lease_head="$4" lease_paths="$5" lease_acquired="${6:-}"
+	local lease_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	local lease_ref lease_now lease_expires lease_tree lease_parent lease_msg lease_new_sha lease_max_paths
+	local -a lease_commit_args=()
+	lease_ref="$(_merge_lease_ref_name "${lease_base}")"
+	lease_now="$(date -u +%s)"
+	[[ "${lease_acquired}" =~ ^[1-9][0-9]*$ ]] || lease_acquired="${lease_now}"
+	lease_expires=0
+	[ "${lease_state}" = "held" ] && lease_expires=$((lease_now + $(_merge_lease_ttl_seconds)))
+	lease_max_paths="${MERGE_LEASE_MAX_PATHS:-200}"
+	[[ "${lease_max_paths}" =~ ^[1-9][0-9]*$ ]] || lease_max_paths=200
+	lease_paths="$(printf '%s\n' "${lease_paths}" | sed '/^$/d')"
+	if [ -z "${lease_paths}" ] || [ "$(printf '%s\n' "${lease_paths}" | wc -l | tr -d ' ')" -gt "${lease_max_paths}" ]; then
+		lease_paths="*"
+	fi
+	[ "${lease_state}" = "released" ] && lease_paths=""
+	lease_msg="merge-lease v1
+state=${lease_state}
+base=${lease_base}
+pr=${lease_pr}
+head=${lease_head}
+expires=${lease_expires}
+acquired=${lease_acquired}
+updated=${lease_now}
+paths:
+${lease_paths}"
+	lease_parent="${MERGE_LEASE_SHA:-}"
+	lease_tree="${MERGE_LEASE_TREE:-}"
+	if [ -z "${lease_tree}" ]; then
+		# First use only: any existing tree will do; take the base tip's.
+		lease_tree="$(gh_retry _safe_gh_jq "repos/${lease_repo}/commits/${lease_base}" --jq '.commit.tree.sha // ""' 2>/dev/null | tail -n1)"
+		[[ "${lease_tree}" =~ ^[0-9a-f]{40}$ ]] || return 1
+	fi
+	lease_commit_args=(-X POST "repos/${lease_repo}/git/commits" -f "message=${lease_msg}" -f "tree=${lease_tree}")
+	[ -n "${lease_parent}" ] && lease_commit_args+=(-f "parents[]=${lease_parent}")
+	lease_new_sha="$(GH_RETRY_IDEMPOTENT=true gh_retry _safe_gh_jq "${lease_commit_args[@]}" --jq '.sha // ""' 2>/dev/null | tail -n1)"
+	[[ "${lease_new_sha}" =~ ^[0-9a-f]{40}$ ]] || return 1
+	if [ -n "${lease_parent}" ]; then
+		if gh_retry _safe_gh_jq -X PATCH "repos/${lease_repo}/git/refs/${lease_ref}" -f "sha=${lease_new_sha}" -F force=false >/dev/null 2>&1; then
+			MERGE_LEASE_SHA="${lease_new_sha}"
+			return 0
+		fi
+	elif gh_retry _safe_gh_jq -X POST "repos/${lease_repo}/git/refs" -f "ref=refs/${lease_ref}" -f "sha=${lease_new_sha}" >/dev/null 2>&1; then
+		MERGE_LEASE_SHA="${lease_new_sha}"
+		MERGE_LEASE_TREE="${lease_tree}"
+		return 0
+	fi
+	# Refused: a lost compare-and-swap, or an error. Re-read to tell them apart.
+	local lease_reread_rc=0
+	_merge_lease_read "${lease_base}" || lease_reread_rc=$?
+	if [ "${lease_reread_rc}" -eq 0 ] && [ "${MERGE_LEASE_SHA}" != "${lease_parent}" ]; then
+		return 3
+	fi
+	return 1
+}
+
+# Paths this PR changes, newline-separated: the freshness check's cache when
+# it is for this PR, else one paginated files read. Returns 1 on failure.
+_merge_lease_pr_paths()
+{
+	local lease_pr="$1" lease_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" lease_files_json
+	if [ "${PR_BASE_FRESHNESS_PR_PATHS_FOR:-}" = "${lease_pr}" ] && [ -n "${PR_BASE_FRESHNESS_PR_PATHS:-}" ]; then
+		printf '%s\n' "${PR_BASE_FRESHNESS_PR_PATHS}"
+		return 0
+	fi
+	lease_files_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${lease_repo}/pulls/${lease_pr}/files?per_page=100" 2>/dev/null)" || return 1
+	jq -e 'type == "array"' >/dev/null 2>&1 <<< "${lease_files_json}" || return 1
+	jq -r '[ .[]? | if type == "array" then .[] else . end | select(type == "object")
+		| (.filename // empty), (.previous_filename // empty) ] | unique | .[]' <<< "${lease_files_json}" 2>/dev/null
+}
+
+# 0 when the two newline lists share a path (`*` shares every path).
+_merge_lease_paths_intersect()
+{
+	local lease_left="$1" lease_right="$2"
+	[ "${lease_left}" = "*" ] && return 0
+	[ "${lease_right}" = "*" ] && return 0
+	[ -n "${lease_left}" ] && [ -n "${lease_right}" ] || return 1
+	grep -Fxq -f <(printf '%s\n' "${lease_left}" | sed '/^$/d') <(printf '%s\n' "${lease_right}" | sed '/^$/d')
+}
+
+# Order key for queue position: "0" for a PR carrying a priority label, "1"
+# otherwise, then the zero-padded PR number. Lower sorts first.
+_merge_lease_order_key()
+{
+	local lease_pr="$1" lease_labels="$2" lease_prio_raw lease_label lease_prio=1
+	lease_prio_raw="${MERGE_TRAIN_PRIORITY_LABELS-ai:workflow-heal,ai:security}"
+	case "$(printf '%s' "${lease_prio_raw}" | tr '[:upper:]' '[:lower:]')" in
+		""|none|off) lease_prio_raw="" ;;
+	esac
+	while IFS= read -r lease_label; do
+		[ -n "${lease_label}" ] || continue
+		if printf ',%s,' "${lease_prio_raw}" | grep -Fq ",${lease_label},"; then
+			lease_prio=0
+			break
+		fi
+	done < <(printf '%s\n' "${lease_labels}" | tr ',' '\n')
+	printf '%s%012d' "${lease_prio}" "${lease_pr}"
+}
+
+# First waiter for <base> from a `pulls` listing (array of PR objects, the
+# REST shape), or the given candidate PR when it orders before every waiter.
+# Prints a PR number; empty when nobody waits and no candidate was given.
+_merge_lease_queue_first()
+{
+	local lease_pulls_json="$1" lease_candidate="${2:-}" lease_label="${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}"
+	local lease_best="" lease_best_key="" lease_row lease_num lease_labels lease_key
+	while IFS= read -r lease_row; do
+		[ -n "${lease_row}" ] || continue
+		lease_num="${lease_row%%$'\t'*}"
+		lease_labels="${lease_row#*$'\t'}"
+		[[ "${lease_num}" =~ ^[1-9][0-9]*$ ]] || continue
+		if [ "${lease_num}" != "${lease_candidate}" ] && ! printf ',%s,' "${lease_labels}" | grep -Fq ",${lease_label},"; then
+			continue
+		fi
+		lease_key="$(_merge_lease_order_key "${lease_num}" "${lease_labels}")"
+		if [ -z "${lease_best_key}" ] || [[ "${lease_key}" < "${lease_best_key}" ]]; then
+			lease_best_key="${lease_key}"
+			lease_best="${lease_num}"
+		fi
+	done < <(jq -r '[ .[]? | if type == "array" then .[] else . end | select(type == "object" and (.draft // false) == false)
+		| "\(.number)\t\([ (.labels // [])[] | if type == "object" then .name else . end ] | join(","))" ] | .[]' <<< "${lease_pulls_json}" 2>/dev/null)
+	printf '%s' "${lease_best}"
+}
+
+_merge_lease_log()
+{
+	echo "MERGE_LEASE pr=${1:-?} base=${2:-?} mode=${3:-?} outcome=${4:-?} reason=${5:-?} holder=${MERGE_LEASE_PR:--} blocker=${MERGE_LEASE_BLOCKER:--}"
+}
+
+_merge_lease_label_wait()
+{
+	local lease_pr="$1" lease_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	GH_RETRY_IDEMPOTENT=true gh_retry _safe_gh_jq -X POST "repos/${lease_repo}/issues/${lease_pr}/labels" \
+		-f "labels[]=${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" >/dev/null 2>&1 \
+		|| echo "::warning::MERGE_LEASE pr=${lease_pr} outcome=label_failed (the merge-train release cannot find this waiter; the review sweep still re-dispatches it)"
+}
+
+_merge_lease_unlabel_wait()
+{
+	local lease_pr="$1" lease_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	gh_retry _safe_gh_jq -X DELETE "repos/${lease_repo}/issues/${lease_pr}/labels/$(printf '%s' "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" | jq -sRr @uri)" >/dev/null 2>&1 || true
+}
+
+# _merge_lease_gate <pr> <base> <head> update|merge
+# Returns 0 to proceed (MERGE_LEASE_OUTCOME acquired|renewed|free|no_overlap|
+# self|unavailable|disabled), 1 to wait (MERGE_LEASE_OUTCOME=wait,
+# MERGE_LEASE_REASON, MERGE_LEASE_BLOCKER = the PR waited on). A waiting PR is
+# labelled MERGE_LEASE_WAIT_LABEL; a PR that acquires the lease is unlabelled.
+_merge_lease_gate()
+{
+	local lease_pr="$1" lease_base="$2" lease_head="$3" lease_mode="$4"
+	local lease_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	local lease_rc=0 lease_own_paths="" lease_pulls_json="" lease_first="" lease_attempt lease_was_waiting=0
+	MERGE_LEASE_OUTCOME=""
+	MERGE_LEASE_REASON=""
+	MERGE_LEASE_BLOCKER=""
+	if ! _merge_lease_enabled; then
+		MERGE_LEASE_OUTCOME="disabled"
+		return 0
+	fi
+	if ! [[ "${lease_pr}" =~ ^[1-9][0-9]*$ ]] || ! _merge_lease_valid_base "${lease_base}"; then
+		MERGE_LEASE_OUTCOME="unavailable"
+		MERGE_LEASE_REASON="invalid_input"
+		_merge_lease_log "${lease_pr}" "${lease_base}" "${lease_mode}" unavailable invalid_input
+		return 0
+	fi
+	for lease_attempt in 1 2; do
+		lease_rc=0
+		_merge_lease_read "${lease_base}" || lease_rc=$?
+		if [ "${lease_rc}" -eq 1 ]; then
+			MERGE_LEASE_OUTCOME="unavailable"
+			MERGE_LEASE_REASON="read_failed"
+			echo "::warning::$(_merge_lease_log "${lease_pr}" "${lease_base}" "${lease_mode}" unavailable read_failed) (fail-open: proceeding as before the lease)"
+			return 0
+		fi
+		if [ "${lease_rc}" -eq 0 ] && _merge_lease_is_held && [ "${MERGE_LEASE_PR}" != "${lease_pr}" ]; then
+			MERGE_LEASE_BLOCKER="${MERGE_LEASE_PR}"
+			if [ "${lease_mode}" = "merge" ]; then
+				if [ "${MERGE_LEASE_PATHS}" != "*" ]; then
+					if ! lease_own_paths="$(_merge_lease_pr_paths "${lease_pr}")"; then
+						MERGE_LEASE_OUTCOME="unavailable"
+						MERGE_LEASE_REASON="pr_files_failed"
+						echo "::warning::$(_merge_lease_log "${lease_pr}" "${lease_base}" merge unavailable pr_files_failed) (fail-open)"
+						return 0
+					fi
+				fi
+				if ! _merge_lease_paths_intersect "${MERGE_LEASE_PATHS}" "${lease_own_paths:-*}"; then
+					MERGE_LEASE_OUTCOME="no_overlap"
+					MERGE_LEASE_REASON="no_shared_paths_with_holder"
+					_merge_lease_log "${lease_pr}" "${lease_base}" merge proceed no_shared_paths_with_holder
+					return 0
+				fi
+				MERGE_LEASE_REASON="holder_shares_paths"
+			else
+				MERGE_LEASE_REASON="held"
+			fi
+			MERGE_LEASE_OUTCOME="wait"
+			_merge_lease_log "${lease_pr}" "${lease_base}" "${lease_mode}" wait "${MERGE_LEASE_REASON}"
+			_merge_lease_label_wait "${lease_pr}"
+			return 1
+		fi
+		if [ "${lease_mode}" = "merge" ]; then
+			MERGE_LEASE_OUTCOME="free"
+			[ "${lease_rc}" -eq 0 ] && _merge_lease_is_held && MERGE_LEASE_OUTCOME="self"
+			MERGE_LEASE_REASON="${MERGE_LEASE_OUTCOME}"
+			_merge_lease_log "${lease_pr}" "${lease_base}" merge proceed "${MERGE_LEASE_OUTCOME}"
+			return 0
+		fi
+		# Update mode, lease free or already ours. A free lease goes to the
+		# first PR in queue order; ours is renewed.
+		if ! { [ "${lease_rc}" -eq 0 ] && _merge_lease_is_held && [ "${MERGE_LEASE_PR}" = "${lease_pr}" ]; }; then
+			lease_pulls_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${lease_repo}/pulls?state=open&base=$(printf '%s' "${lease_base}" | jq -sRr @uri)&per_page=100" 2>/dev/null)" || lease_pulls_json=""
+			if jq -e 'type == "array"' >/dev/null 2>&1 <<< "${lease_pulls_json}"; then
+				lease_first="$(_merge_lease_queue_first "${lease_pulls_json}" "${lease_pr}")"
+				if printf '%s' "${lease_pulls_json}" | jq -e --argjson n "${lease_pr}" --arg l "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" \
+					'[ .[]? | if type == "array" then .[] else . end | select(type == "object" and .number == $n) | (.labels // [])[] | (if type == "object" then .name else . end) | select(. == $l) ] | length > 0' >/dev/null 2>&1; then
+					lease_was_waiting=1
+				fi
+				if [ -n "${lease_first}" ] && [ "${lease_first}" != "${lease_pr}" ]; then
+					MERGE_LEASE_BLOCKER="${lease_first}"
+					MERGE_LEASE_OUTCOME="wait"
+					MERGE_LEASE_REASON="queued_behind"
+					_merge_lease_log "${lease_pr}" "${lease_base}" update wait queued_behind
+					_merge_lease_label_wait "${lease_pr}"
+					return 1
+				fi
+			fi
+			# An unreadable listing proves no queue: take the lease (fail-open).
+		fi
+		local lease_keep_acquired=""
+		if [ "${lease_rc}" -eq 0 ] && _merge_lease_is_held && [ "${MERGE_LEASE_PR}" = "${lease_pr}" ]; then
+			# Renewal. A holder past MERGE_LEASE_MAX_HOLD_MINUTES since it
+			# first acquired keeps the lease only until its current expiry,
+			# so a holder whose update keeps failing cannot hold it forever.
+			lease_keep_acquired="${MERGE_LEASE_ACQUIRED:-0}"
+			if [ "${lease_keep_acquired}" -gt 0 ] && [ $(( $(date -u +%s) - lease_keep_acquired )) -ge "$(_merge_lease_max_hold_seconds)" ]; then
+				MERGE_LEASE_OUTCOME="self"
+				MERGE_LEASE_REASON="max_hold_reached"
+				_merge_lease_log "${lease_pr}" "${lease_base}" update proceed max_hold_reached
+				return 0
+			fi
+		fi
+		[ -n "${lease_own_paths}" ] || lease_own_paths="$(_merge_lease_pr_paths "${lease_pr}" 2>/dev/null || true)"
+		lease_rc=0
+		_merge_lease_write "${lease_base}" held "${lease_pr}" "${lease_head}" "${lease_own_paths:-*}" "${lease_keep_acquired}" || lease_rc=$?
+		case "${lease_rc}" in
+			0)
+				if [ "${MERGE_LEASE_PR:-}" = "${lease_pr}" ] && [ "${MERGE_LEASE_STATE:-}" = "held" ]; then
+					MERGE_LEASE_OUTCOME="renewed"
+				else
+					MERGE_LEASE_OUTCOME="acquired"
+				fi
+				MERGE_LEASE_PR="${lease_pr}"
+				MERGE_LEASE_STATE="held"
+				MERGE_LEASE_REASON="${MERGE_LEASE_OUTCOME}"
+				_merge_lease_log "${lease_pr}" "${lease_base}" update "${MERGE_LEASE_OUTCOME}" "ttl_s=$(_merge_lease_ttl_seconds)"
+				[ "${lease_was_waiting}" = "1" ] && _merge_lease_unlabel_wait "${lease_pr}"
+				return 0
+				;;
+			3)
+				# Lost the race: decide again on the record that won.
+				_merge_lease_log "${lease_pr}" "${lease_base}" update retry lost_race
+				continue
+				;;
+			*)
+				MERGE_LEASE_OUTCOME="unavailable"
+				MERGE_LEASE_REASON="write_failed"
+				echo "::warning::$(_merge_lease_log "${lease_pr}" "${lease_base}" update unavailable write_failed) (fail-open: updating as before the lease; check that GitHub accepts ${MERGE_LEASE_REF_PREFIX:-refs/merge-lease/} refs)"
+				return 0
+				;;
+		esac
+	done
+	MERGE_LEASE_OUTCOME="unavailable"
+	MERGE_LEASE_REASON="contended"
+	echo "::warning::$(_merge_lease_log "${lease_pr}" "${lease_base}" "${lease_mode}" unavailable contended) (fail-open)"
+	return 0
+}
+
+# ---------------------------------------------------------------------------
+# Final-CI merge resume (2026-11-17, Q4: A).
+#
+# Why: the merge paths wait at most AUTO_MERGE_CHECKS_WAIT_MINUTES (45) for
+# the head's final CI run, holding a runner. With the pool congested a final
+# run took 1.5-2.5 hours, so the wait timed out (#9603 gave up 76 s before
+# its run went green) and nothing merged the PR when CI later passed: only the
+# 30-minute sweep re-dispatched a whole review run, which then queued for
+# hours behind ~66 others (#9545, #9597, #9603 on 2026-11-17).
+#
+# When a merge path's wait (AUTO_MERGE_CHECKS_WAIT_MINUTES > 0) times out,
+# _pr_final_ci_merge_pending_mark records the approval on the head itself: a
+# `pending` commit status FINAL_CI_MERGE_PENDING_CONTEXT
+# (default ai-review/final-ci-merge-pending) on that SHA, posted by the
+# pipeline token, plus the PR label FINAL_CI_MERGE_PENDING_LABEL
+# (default ai:final-ci-merge-pending) so the tick can find it with the open-PR
+# listing it already reads. The status is the authorization (SHA-bound, only
+# writers can post statuses, and the tick checks its creator); the label is
+# only an index. The merge-train release step (every poll tick) then enables
+# head-bound auto-merge once the final CI run is green (see
+# scripts/review_merge_train.sh _mt_final_ci_merge_resume).
+#
+# Env: FINAL_CI_MERGE_RESUME_ENABLED (default true). API: one status POST and
+# one label POST per timed-out wait. Log: `FINAL_CI_MERGE_PENDING pr=<n>
+# head=<sha> outcome=marked|failed|disabled|skipped reason=<token>`.
+# ---------------------------------------------------------------------------
+_pr_final_ci_merge_pending_mark()
+{
+	local pending_pr="$1" pending_head="$2" pending_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	case "$(printf '%s' "${FINAL_CI_MERGE_RESUME_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		true|1|yes|on) ;;
+		*)
+			echo "FINAL_CI_MERGE_PENDING pr=${pending_pr:-?} head=${pending_head:-?} outcome=disabled reason=switch_off"
+			return 0
+			;;
+	esac
+	if ! [[ "${pending_pr}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${pending_head}" =~ ^[0-9a-f]{40}$ ]]; then
+		echo "FINAL_CI_MERGE_PENDING pr=${pending_pr:-?} head=${pending_head:-?} outcome=skipped reason=invalid_input"
+		return 0
+	fi
+	if ! gh_retry _safe_gh_jq -X POST "repos/${pending_repo}/statuses/${pending_head}" \
+		-f state=pending -f "context=${FINAL_CI_MERGE_PENDING_CONTEXT:-ai-review/final-ci-merge-pending}" \
+		-f "description=Approved; merges when this head's final CI run passes" >/dev/null 2>&1; then
+		echo "::warning::FINAL_CI_MERGE_PENDING pr=${pending_pr} head=${pending_head} outcome=failed reason=status_post_failed (the review sweep still retries)"
+		return 0
+	fi
+	if ! GH_RETRY_IDEMPOTENT=true gh_retry _safe_gh_jq -X POST "repos/${pending_repo}/issues/${pending_pr}/labels" \
+		-f "labels[]=${FINAL_CI_MERGE_PENDING_LABEL:-ai:final-ci-merge-pending}" >/dev/null 2>&1; then
+		echo "::warning::FINAL_CI_MERGE_PENDING pr=${pending_pr} head=${pending_head} outcome=failed reason=label_post_failed (the review sweep still retries)"
+		return 0
+	fi
+	echo "FINAL_CI_MERGE_PENDING pr=${pending_pr} head=${pending_head} outcome=marked reason=checks_wait_timeout"
+	return 0
 }

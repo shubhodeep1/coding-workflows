@@ -24,8 +24,10 @@ count, so a marker quoted or forged by anyone else is ignored.
 Rules enforced here:
   - a verdict already recorded for the same stop id and fingerprint is never
     offered again, on this item or anywhere in the same project;
-  - at most MAX_ROUNDS_PER_ITEM rounds per item and MAX_ROUNDS_PER_PROJECT
-    per project; past a cap, or BLOCKED_AFTER_LAST_ROUND_HOURS after the last
+  - at most UNBLOCK_MAX_ROUNDS_PER_ITEM rounds per item (repository variable,
+    default MAX_ROUNDS_PER_ITEM = 3, integers clamped to 1-5, anything else
+    falls back to the default with a stderr warning) and
+    MAX_ROUNDS_PER_PROJECT per project; past a cap, or BLOCKED_AFTER_LAST_ROUND_HOURS after the last
     round on the same stop id and fingerprint with the item still blocked,
     the only outcome is the terminal close;
   - `override_guard` exists only for the scope and destructive latches on an
@@ -124,6 +126,7 @@ import binascii
 import datetime as dt
 import hashlib
 import json
+import os
 import re
 import sys
 import unicodedata
@@ -204,7 +207,31 @@ CANONICAL_SOURCE_RE = re.compile(
 PROTECTED_AUTOMATION_OVERRIDE_RE = re.compile(r"^(\.github|\.claude|workflow-templates)(/|$)", re.IGNORECASE)
 NO_WAIVER_STOPS = ("security-pass-failed", "validation-failed", "validate-failed", "harness-broken")
 
-MAX_ROUNDS_PER_ITEM = 2
+# The default for the UNBLOCK_MAX_ROUNDS_PER_ITEM repository variable (issue
+# #8813); resolve_max_rounds_per_item() reads the variable when decide() runs
+# and clamps it to MAX_ROUNDS_PER_ITEM_FLOOR..MAX_ROUNDS_PER_ITEM_CEILING, so a
+# bad value can neither remove the bound nor make every item terminal on sight.
+MAX_ROUNDS_PER_ITEM = 3
+MAX_ROUNDS_PER_ITEM_FLOOR = 1
+MAX_ROUNDS_PER_ITEM_CEILING = 5
+UNBLOCK_MAX_ROUNDS_ENV = "UNBLOCK_MAX_ROUNDS_PER_ITEM"
+# Chain depth cap. `reissue`, `accept_with_followup`, `descope` and
+# `operator_step` each open a new issue that restarts clarify, plan and
+# implement, and that issue (or its PR) can block and be split again:
+# #9190 -> #9261 -> PR #9283 -> #9398 / #9670 in coding-workflows, 24 such
+# issues in one week. An item's depth is the number of chain prefixes its
+# title starts with; for a trusted PR, unblock_judge.sh passes the title of
+# the issue the PR implements. At MAX_CHAIN_DEPTH those four verdicts leave
+# the menu, so the judge can only continue on the item itself (retry_budget,
+# auto_answer, override_guard, wait); once nothing is left the item is
+# terminal (`menu_exhausted`) and is parked for a person like any other
+# exhausted item. Titles are editable, so this is a brake on the pipeline's
+# own chains, not a trust boundary: removing a prefix restores the full menu,
+# adding one only shortens it.
+MAX_CHAIN_DEPTH = 2
+CHAIN_VERDICTS = ("reissue", "accept_with_followup", "descope", "operator_step")
+CHAIN_TITLE_PREFIX_PATTERN = r"(?:Re-issue of|Follow-up to|Unblock (?:descope|operator step|fix-up) for) #[1-9][0-9]*: "
+_CHAIN_TITLE_PREFIX_RE = re.compile(CHAIN_TITLE_PREFIX_PATTERN)
 MAX_ROUNDS_PER_PROJECT = 6
 BLOCKED_AFTER_LAST_ROUND_HOURS = 24
 # Refused judge answers in a row on one block before the item is terminal
@@ -862,6 +889,54 @@ def invalid_verdict_streak(comments: object, trusted_login: str, item: int, stop
 	return streak
 
 
+def resolve_max_rounds_per_item(raw: str | None = None) -> int:
+	"""The per-item round cap from UNBLOCK_MAX_ROUNDS_PER_ITEM (or `raw`).
+
+	Unset or empty gives MAX_ROUNDS_PER_ITEM. Only an ASCII decimal integer is
+	accepted; anything else falls back to the default, and an integer outside
+	the floor..ceiling range is clamped, each with one `::warning::` line on
+	stderr. stdout is never written: `decide` output is redirected into the
+	decision file. A bad value never fails `decide`, so the item is still judged.
+	"""
+	if raw is None:
+		raw = os.environ.get(UNBLOCK_MAX_ROUNDS_ENV, "")
+	value = str(raw).strip()
+	if not value:
+		return MAX_ROUNDS_PER_ITEM
+	if not re.fullmatch(r"[0-9]+", value, flags=re.ASCII):
+		shown = "".join(char for char in value[:32] if char.isprintable())
+		print(
+			f"::warning::{UNBLOCK_MAX_ROUNDS_ENV}='{shown}' is not an integer; using {MAX_ROUNDS_PER_ITEM}",
+			file=sys.stderr,
+		)
+		return MAX_ROUNDS_PER_ITEM
+	# int() refuses more than 4300 digits on Python 3.11+ (ValueError); any value
+	# longer than 3 significant digits is above the ceiling, so skip the parse.
+	digits = value.lstrip("0") or "0"
+	number = int(digits) if len(digits) <= 3 else MAX_ROUNDS_PER_ITEM_CEILING + 1
+	clamped = min(max(number, MAX_ROUNDS_PER_ITEM_FLOOR), MAX_ROUNDS_PER_ITEM_CEILING)
+	if clamped != number:
+		shown = value[:32]
+		print(
+			f"::warning::{UNBLOCK_MAX_ROUNDS_ENV}='{shown}' is out of range "
+			f"{MAX_ROUNDS_PER_ITEM_FLOOR}-{MAX_ROUNDS_PER_ITEM_CEILING}; using {clamped}",
+			file=sys.stderr,
+		)
+	return clamped
+
+
+def chain_depth(title: object) -> int:
+	"""How many chain prefixes the title starts with (0 for an ordinary title)."""
+	text = title if isinstance(title, str) else ""
+	depth, position = 0, 0
+	while True:
+		prefix = _CHAIN_TITLE_PREFIX_RE.match(text, position)
+		if prefix is None:
+			return depth
+		depth += 1
+		position = prefix.end()
+
+
 def decide(
 	item: int,
 	stop: str,
@@ -877,11 +952,20 @@ def decide(
 	holds: list[dict] | None = None,
 	wait_enabled: bool = True,
 	invalid_verdicts_in_row: int = 0,
+	max_rounds_per_item: int | None = None,
 	variable_step_placeholders: list[str] | None = None,
+	chain_title: str = "",
 ) -> dict:
-	"""What the judge may still do for this item."""
+	"""What the judge may still do for this item.
+
+	``chain_title`` is the title the item's chain depth is read from (the
+	item's own title, or for a trusted PR the title of the issue it
+	implements); see "Chain depth cap" above. Empty means depth 0.
+	"""
 	if kind not in ITEM_KINDS:
 		raise UsageError(f"unknown item kind {kind!r}; expected one of {list(ITEM_KINDS)}")
+	if max_rounds_per_item is None:
+		max_rounds_per_item = resolve_max_rounds_per_item()
 	own = [entry for entry in item_entries if entry["item"] == item]
 	# A marker posted on both the item and the tracking issue counts once.
 	seen = set()
@@ -919,6 +1003,10 @@ def decide(
 		allowed = [verdict for verdict in allowed if verdict not in ISSUE_ONLY_VERDICTS]
 	if kind == "project":
 		allowed = [verdict for verdict in allowed if verdict not in NOT_FOR_PROJECT_VERDICTS]
+	item_chain_depth = chain_depth(chain_title)
+	chain_capped = item_chain_depth >= MAX_CHAIN_DEPTH
+	if chain_capped:
+		allowed = [verdict for verdict in allowed if verdict not in CHAIN_VERDICTS]
 	# A hold is not a round, so it is bounded by its own count instead.
 	holds = [hold for hold in (holds or []) if isinstance(hold, dict)]
 	holds_met = sorted({f"{hold.get('kind')}:{hold.get('ref')}" for hold in holds if hold.get("state") == "done"})
@@ -946,7 +1034,7 @@ def decide(
 	if last_times and last_activity is not None:
 		last_times.append(last_activity)
 	terminal_reason = ""
-	if item_rounds >= MAX_ROUNDS_PER_ITEM:
+	if item_rounds >= max_rounds_per_item:
 		terminal_reason = "item_cap"
 	elif project_rounds is not None and project_rounds >= MAX_ROUNDS_PER_PROJECT:
 		terminal_reason = "project_cap"
@@ -968,10 +1056,13 @@ def decide(
 		"allowed": [TERMINAL_VERDICT] if terminal_reason else options,
 		"terminal": bool(terminal_reason),
 		"terminal_reason": terminal_reason,
+		"chain_depth": item_chain_depth,
+		"chain_capped": chain_capped,
 		"holds_used": len(holds),
 		"holds_met": holds_met,
 		"invalid_verdict_streak": invalid_verdicts_in_row,
 		"invalid_verdict_park_after": INVALID_VERDICT_PARK_AFTER,
+		"max_rounds_per_item": max_rounds_per_item,
 		# Placeholders a `wait` on placeholder_retired may name (#9484).
 		"variable_step_placeholders": sorted(
 			{name for name in (variable_step_placeholders or []) if isinstance(name, str)}
@@ -1272,6 +1363,7 @@ def build_parser() -> argparse.ArgumentParser:
 	decide_cmd.add_argument("--security-issue", action="store_true")
 	decide_cmd.add_argument("--wait-disabled", action="store_true")
 	decide_cmd.add_argument("--pending-invalid-verdicts", type=int, default=0)
+	decide_cmd.add_argument("--chain-title", default="", help="title the chain depth is read from (see MAX_CHAIN_DEPTH)")
 	validate_cmd = sub.add_parser("validate")
 	validate_cmd.add_argument("--verdict-file", required=True)
 	validate_cmd.add_argument("--decision-file", required=True)
@@ -1363,6 +1455,7 @@ def run(argv: list[str] | None = None) -> dict:
 			invalid_verdicts_in_row=invalid_verdict_streak(item_comments, args.trusted_login, item, stop, fp)
 			+ max(0, args.pending_invalid_verdicts),
 			variable_step_placeholders=variable_step_placeholders_from_comments(item_comments, args.trusted_login, item),
+			chain_title=args.chain_title,
 		)
 	if args.command == "validate":
 		return validate(
