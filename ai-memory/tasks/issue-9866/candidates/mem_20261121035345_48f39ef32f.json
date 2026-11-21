@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The suggested fix is outside this heal issue's frozen scope. How should it be delivered?\nChoices:\nA. Move the fix out of the heal pipeline: open a normal issue whose scope covers `scripts/claude_pool_token.sh`, `tools/claude-pool-broker/src/index.ts`, `tools/claude-pool-broker/wrangler.toml`, `tools/claude-pool-broker/test/broker.test.ts`, `tests/test_claude_pool_token.py` and a `changelog.d/` fragment. Close this heal issue as \"fixed elsewhere\". (RECOMMENDED)\nB. Stay inside the current scope: work around it in `.github/workflows/plan.yml` only (for example, re-run the pool-token step on `broker_refused_workflow_sha_unverifiable`), plus tests and a changelog entry. Note: this does not fix the `AI Implement` / `AI Clarify` failures, and the token script itself stays unchanged.\nC. Treat it as transient or environmental: no code change. Record a changelog note and rely on the operator setting `BROKER_GITHUB_READ_TOKEN` on the Worker. Note: if you pick this, Q2 does not apply.\nQ2: If the fix is done in code (Q1:A), which layers should it cover?\nChoices:\nA. Both layers: a bounded client retry in `scripts/claude_pool_token.sh`, gated by `CLAUDE_POOL_BROKER_RETRY_ENABLED` and limited to `000`/`429`/`5xx`/`403 workflow_sha_unverifiable`. Plus one retry of the compare call in the broker's `compareStatus` on `\"unavailable\"`, and the stale comment fix in `wrangler.toml`. The trust policy stays fail-closed. (RECOMMENDED)\nB. Client-side retry in `scripts/claude_pool_token.sh` only, plus tests. The broker is unchanged, so no Worker redeploy is needed.\nC. Broker-side retry and the `wrangler.toml` comment only. The client is unchanged.\nSources: none. No web search was used; every finding comes from files in the repository.",
+  "fingerprint": "6de45a8a0686b84772841f9d7a709f5ebb0ce23b3ad66e92bd526e8beed712ba",
+  "lineage": {
+    "issue_number": 9866,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44862610514",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44862610514",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261121035345_48f39ef32f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9866,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44862610514"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9866 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-21T03:53:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
