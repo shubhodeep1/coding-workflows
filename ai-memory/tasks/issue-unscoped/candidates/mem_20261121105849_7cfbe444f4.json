@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/9792-unblock-scan-skip-e2e-items.md | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The skip's off switch `UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED` is read only from the process environment, and no workflow file under `.github/workflows/` mentions it, unlike the sibling switch `NEEDS_HUMAN_DIGEST_ENABLED` (mapped from `vars.*` at `.github/workflows/orchestrate_poll.yml` lines 1446, 1683 and 1840; also `scripts/unblock_scan.py` lines 175-184).\n  WHY: A repository variable of that name never reaches the poller, so the switch cannot be turned off without a code or workflow change; the default (skip on) still meets the issue. Source severity was NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Put the skip behind the env var UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED as an off switch.\" (unset/empty/true on; false off; other values off with a warning)\n  expected_change_site: .github/workflows/orchestrate_poll.yml, the three poller env blocks near lines 1443, 1680 and 1839 (e.g. `UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED: ${{ vars.UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED || 'true' }}`)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: No file under .github/workflows/ references the variable (it appears only in scripts/unblock_scan.py, tests/test_unblock_scan.py and changelog.d/9792-unblock-scan-skip-e2e-items.md), while the sibling switches UNBLOCK_JUDGE_ENABLED and NEEDS_HUMAN_DIGEST_ENABLED are mapped at lines 1443-1446, 1680-1683 and 1839-1840, so a repository variable never reaches scripts/unblock_scan.py. Severity disagreement: NIT (sonnet, minimax) vs MAJOR (luna); the highest is MAJOR. The code default still satisfies the minimum spec, and the issue's files_touched list excludes the workflow file.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/9792-unblock-scan-skip-e2e-items.md | severity=low | confidence=4\n  PROBLEM: The skip's off switch `UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED` is read only from the process environment, and no workflow file under `.github/workflows/` mentions it (also `scripts/unblock_scan.py` lines 175-184 and `.github/workflows/orchestrate_poll.yml` lines 1446, 1683 and 1840).\n  WHY: A repository variable of that name never reaches the poller; the default (skip on) still holds. Source severity was NIT.\n- TASK_GAP: Requirement: \"Put the skip behind the env var UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED \u2026 only the value 'false' turns it off.\"\n  Expected change site: `.github/workflows/orchestrate_poll.yml`, the three poller `env:` blocks near lines 1443, 1680 and 1839.\n  Evidence of absence: No occurrence of the variable under `.github/workflows`; the code and unit tests are correct, and the plan grant's `files_touched` names no workflow file. Earlier editor runs deferred it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: \"Put the skip behind the env var UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED as an off switch. Unset, empty or true (any case) keeps it on; false turns it off; any other value also turns it off and logs a warning.\"\n  Expected change site: .github/workflows/orchestrate_poll.yml (the three poller env blocks at lines 1443, 1680 and 1839)\n  Evidence of absence: The variable appears only in scripts/unblock_scan.py, tests/test_unblock_scan.py and changelog.d/9792-unblock-scan-skip-e2e-items.md; the sibling switches UNBLOCK_JUDGE_ENABLED, NEEDS_HUMAN_DIGEST_ENABLED and ORPHAN_FIXUP_CLOSE_ENABLED are mapped from vars in those blocks. A usability gap rather than a behavioural defect; previous editor runs deferred it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \u201cPut the skip behind the env var UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED as an off switch.\u201d\n  Expected change site: .github/workflows/orchestrate_poll.yml, the three poller step environment blocks.\n  Evidence of absence: Those blocks map UNBLOCK_JUDGE_ENABLED and NEEDS_HUMAN_DIGEST_ENABLED at lines 1443-1446, 1680-1683, and 1839-1840, but not UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED, so operators cannot use the off switch in the poller.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d2e23942941303eae9eda2a5234f8244b7138d1c3cea57c4c201cf23efce92c3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9795,
+    "run_id": "44887168850",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44887168850",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121105849_7cfbe444f4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9795,
+    "run_id": "44887168850"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T10:58:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
