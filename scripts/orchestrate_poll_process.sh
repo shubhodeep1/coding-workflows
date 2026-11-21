@@ -27327,11 +27327,14 @@ release_head_bound_needs_human_latches() {
       echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_head_missing latch=${hl_reason}"
       continue
     fi
-    if printf '%s' "${hl_comments}" | jq -e --argjson i "${hl_latch_idx}" '
+    # Only a well-formed release comment of this sweep for this PR (the full
+    # marker, ending the body) is exempt; a bare or malformed marker prefix
+    # in a comment that re-asserts ai:needs-human keeps the hold.
+    if printf '%s' "${hl_comments}" | jq -e --argjson i "${hl_latch_idx}" --arg pr "${hl_pr}" '
         any(to_entries[];
           .key > $i
           and ((((.value.user.login // "") | test("\\[bot\\]$")) or ((.value.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))))
-          and ((.value.body // "") | contains("ai:needs-human") and (contains("<!-- ai:needs-human-auto-release ") | not)))' >/dev/null 2>&1; then
+          and ((.value.body // "") | contains("ai:needs-human") and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
       echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=later_needs_human_comment latch=${hl_reason}"
       continue
     fi
@@ -27391,12 +27394,12 @@ release_head_bound_needs_human_latches() {
       continue
     fi
     if [ "${hl_refreshed_event}" != "${hl_event}" ] \
-      || printf '%s' "${hl_refreshed_comments}" | jq -e --arg at "${hl_latch_at}" '
+      || printf '%s' "${hl_refreshed_comments}" | jq -e --arg at "${hl_latch_at}" --arg pr "${hl_pr}" '
         any(.[];
           (.created_at // "") > $at
           and ((((.user.login // "") | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))))
           and ((.body // "") | (contains("ai:needs-human") or contains("<!-- ai:workflow-heal-non-retryable:v1 ") or contains("<!-- ai:review-round-cap:v1 -->"))
-            and (contains("<!-- ai:needs-human-auto-release ") | not)))' >/dev/null 2>&1; then
+            and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
       echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_changed_during_release latch=${hl_reason}"
       continue
     fi

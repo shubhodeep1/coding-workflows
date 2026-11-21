@@ -326,6 +326,26 @@ def test_a_later_comment_reasserting_needs_human_keeps_the_label(tmp_path: Path)
 	assert "outcome=skip reason=later_needs_human_comment" in result["stdout"]
 
 
+def test_a_bare_or_malformed_release_marker_does_not_exempt_a_reassertion(tmp_path: Path) -> None:
+	for name, marker in (
+		("bare", "<!-- ai:needs-human-auto-release invalid -->"),
+		("other_pr", f"<!-- ai:needs-human-auto-release reason=non_retryable_head_moved pr=6 head={NEW_HEAD} -->"),
+		("quoted", f"<!-- ai:needs-human-auto-release reason=non_retryable_head_moved pr=5 head={NEW_HEAD} --> is the release marker shape."),
+	):
+		later = {
+			"user": {"login": "pipeline"},
+			"author_association": "OWNER",
+			"created_at": "2026-11-20T13:00:00Z",
+			"body": f"Keeping `ai:needs-human` on this PR.\n\n{marker}",
+		}
+		result = _run(tmp_path / name, comments=[_non_retryable_comment(), later])
+		assert result["deleted"] == [] and result["posted"] == [], name
+		assert "outcome=skip reason=later_needs_human_comment" in result["stdout"], (name, result["stdout"])
+		during = _run(tmp_path / f"{name}_during", comments=[_non_retryable_comment()], refreshed_comments=[_non_retryable_comment(), later])
+		assert during["deleted"] == [] and during["posted"] == [], name
+		assert "outcome=skip reason=latch_changed_during_release" in during["stdout"], (name, during["stdout"])
+
+
 def test_label_must_be_bound_to_the_latch_comment(tmp_path: Path) -> None:
 	cases = [
 		[_labeled(at="2026-11-20T11:00:00Z")],  # labelled before the latch comment
