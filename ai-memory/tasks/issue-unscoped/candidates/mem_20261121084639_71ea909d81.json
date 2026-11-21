@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_scan.py:178-183 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The parser lowercases the flag before checking it, so values such as `FALSE` are accepted as `false` and do not produce the required invalid-value warning.\n  WHY: The issue specifies that only `false` disables the skip without a warning and that any other value disables it with a warning; reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Put the skip behind the env var `UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED` as an off switch (unset/empty/true keeps it on; false turns it off; other values turn it off with a warning).\n  expected_change_site: `.github/workflows/orchestrate_poll.yml`, the three poller step `env:` blocks that run `scripts/orchestrate_poll_process.sh` (sibling `UNBLOCK_JUDGE_ENABLED` mapped at lines 1443, 1680, 1839); README variables table\n  confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: `.github/workflows/orchestrate_poll.yml` poller env blocks map `UNBLOCK_JUDGE_ENABLED` but not `UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED` (zero matches under `.github/`), README variables table has no row for it; a repository variable cannot reach the process, so the off switch is unreachable via the workflow.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP:\n  Requirement: \"Put the skip behind the env var `UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED` as an off switch... Unset, empty or `true` (any case) keeps it on; `false` turns it off; any other value also turns it off and logs a warning.\"\n  Expected change site: `.github/workflows/orchestrate_poll.yml`, the three poller step `env:` blocks that run `scripts/orchestrate_poll_process.sh` (sibling `UNBLOCK_JUDGE_ENABLED` at lines 1443, 1680, 1839); README variables table row\n  Evidence of absence: `scripts/unblock_scan.py` reads the flag (`E2E_SKIP_FLAG`, `_skip_e2e_test_items_enabled` lines 175-184) and `tests/test_unblock_scan.py` exercises it, but grep across `.github/` returns zero matches, so the off switch is unreachable via repo vars; default-on clears the #9782 block.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/unblock_scan.py:178-183 | severity=low (NIT) | confidence=4\n  PROBLEM: The parser lowercases the flag before checking it, so values such as `FALSE` are accepted as `false` and do not produce the required invalid-value warning.\n  WHY: The issue specifies that only `false` disables the skip without a warning and that any other value disables it with a warning.\n- TASK_GAP:\n  Requirement: \"Put the skip behind the env var `UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED` as an off switch.\"\n  Expected change site: `.github/workflows/orchestrate_poll.yml`, the three poller step environment blocks that run `scripts/orchestrate_poll_process.sh`.\n  Evidence of absence: The workflow maps `UNBLOCK_JUDGE_ENABLED` at lines 1443, 1680, and 1839 but not `UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED`; the scheduled poller does not pass a repository variable of that name to the process.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "563d536371bc04941e768de8694dc6cfdef5038f89c7d0323993694bff7d45f5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9795,
+    "run_id": "44879642609",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44879642609",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121084639_71ea909d81",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9795,
+    "run_id": "44879642609"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T08:46:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
