@@ -1300,12 +1300,14 @@ class Wiring(unittest.TestCase):
 		that runs the freshness gate or the lease, with the helper's default."""
 		line = ("MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || "
 			"'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}")
-		for wf, expected in ((REVIEW, 3), (POLL, 4), (CLOSE, 1), (SWEEP, 1)):
+		for wf, expected in ((REVIEW, 3), (POLL, 4), (CLOSE, 1), (SWEEP, 0)):
 			text = wf.read_text()
 			self.assertEqual(text.count(line), expected, wf.name)
 			if wf is SWEEP:
+				# The sweep's base sync treats clean and overlap alike, so its
+				# final-CI step pins the class off (no probe it cannot use).
 				step = text.split("- name: Ensure the final CI run on reviewed PR heads", 1)[1].split("\n      - name: ", 1)[0]
-				self.assertIn(line, step)
+				self.assertIn("          MERGE_LEASE_SOFT_PATHS: none\n", step)
 				continue
 			for segment in re.split(r"\n(?=\s*- name: |  [A-Za-z0-9_-]+:\n)", text):
 				if "MERGE_BASE_FRESHNESS_ENABLED:" in segment:
@@ -1404,6 +1406,23 @@ class LeaseSoftPaths(unittest.TestCase):
 				rc, out = _soft_lease_gate(False, ["README.md"], "README.md", env={"MERGE_LEASE_SOFT_PATHS": value})
 				self.assertEqual(rc, 1, out)
 				self.assertIn("reason=holder_shares_paths", out)
+
+	def test_a_soft_path_the_holder_renamed_to_a_hard_path_waits(self) -> None:
+		"""merge-ort follows the holder's README.md -> scripts/x.sh rename and
+		merges cleanly, but the merged scripts/x.sh matches neither head."""
+		repo, own, _ = _soft_heads(False)
+		_soft_git(repo, "checkout", "-q", "-b", "renamer", "main")
+		(repo / "scripts").mkdir()
+		_soft_git(repo, "mv", "README.md", "scripts/x.sh")
+		_soft_git(repo, "commit", "-q", "-m", "rename")
+		holder = _soft_git(repo, "rev-parse", "HEAD")
+		st = {"pulls": [_pull(7), _pull(8)], "files": {"7": ["README.md"]}}
+		_seed_lease(st, _record(8, paths="README.md\nscripts/x.sh").replace(f"head={'b' * 40}", f"head={holder}"))
+		res = _Harness(st).lib(f'cd {str(repo)!r} || exit 9\n_merge_lease_gate 7 main {own} merge; rc=$?; '
+			'echo "rc=$rc outcome=$MERGE_LEASE_OUTCOME reason=$MERGE_LEASE_REASON hard=$_PR_PROBE_HARD_COMBINED"',
+			{"GIT_CONFIG_NOSYSTEM": "1"})
+		self.assertEqual(res.returncode, 0, res.stderr)
+		self.assertIn("rc=1 outcome=wait reason=holder_shares_paths hard=scripts/x.sh", res.stdout, res.stdout + res.stderr)
 
 	def test_unshared_paths_keep_the_old_reason(self) -> None:
 		rc, out = _soft_lease_gate(False, ["own.py"], "README.md")

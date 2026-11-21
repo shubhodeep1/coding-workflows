@@ -1254,6 +1254,60 @@ done"""
 		self.assertEqual(rc, 1, out)
 		self.assertIn("reason=soft_paths_probe_unknown", out)
 
+	def _rename_repo(self, pr_renames: bool) -> tuple[Path, str, str]:
+		"""One side renames README.md to scripts/x.sh; the other edits README.md
+		line 10. merge-ort follows the rename and merges cleanly."""
+		if shutil.which("git") is None:
+			raise unittest.SkipTest("git binary not available in test environment")
+		repo = Path(tempfile.mkdtemp(prefix="pr_soft_rename_")) / "work"
+		repo.mkdir()
+		_soft_git(repo, "init", "-q", "-b", "main")
+		(repo / "README.md").write_text("".join(f"line {i}\n" for i in range(1, 11)), encoding="utf-8")
+		_soft_git(repo, "add", "README.md")
+		_soft_git(repo, "commit", "-q", "-m", "base")
+		shas = {}
+		for branch, renames in (("pr", pr_renames), ("tip", not pr_renames)):
+			_soft_git(repo, "checkout", "-q", "-b", branch, "main")
+			if renames:
+				(repo / "scripts").mkdir()
+				_soft_git(repo, "mv", "README.md", "scripts/x.sh")
+				_soft_git(repo, "commit", "-q", "-m", "rename")
+			else:
+				lines = (repo / "README.md").read_text(encoding="utf-8").splitlines(keepends=True)
+				lines[9] = "edited line 10\n"
+				(repo / "README.md").write_text("".join(lines), encoding="utf-8")
+				_soft_git(repo, "commit", "-q", "-am", "edit")
+			shas[branch] = _soft_git(repo, "rev-parse", "HEAD")
+		_soft_git(repo, "checkout", "-q", "main")
+		return repo, shas["pr"], shas["tip"]
+
+	def test_a_soft_path_renamed_to_a_hard_path_by_the_pr_keeps_overlap(self) -> None:
+		repo, head, tip = self._rename_repo(pr_renames=True)
+		pr_files = json.dumps([[{"filename": "scripts/x.sh", "previous_filename": "README.md"}]])
+		body = f'cd {shlex.quote(str(repo))} || exit 9\n_pr_base_fresh_for_merge 7 {head} main; rc=$?; printf "%s\\n" "rc=${{rc}}"'
+		res = _run(body, compare_json=_compare(1, ["README.md"], [tip]), pr_files_json=pr_files, env={"GIT_CONFIG_NOSYSTEM": "1"})
+		out = res.stdout + res.stderr
+		self.assertIn("rc=1", res.stdout, out)
+		self.assertIn("reason=soft_paths_probe_unknown", out)
+		self.assertNotIn("soft_paths_merge_clean", out)
+
+	def test_a_soft_path_renamed_to_a_hard_path_by_the_base_keeps_overlap(self) -> None:
+		repo, head, tip = self._rename_repo(pr_renames=False)
+		compare = json.dumps({"ahead_by": 1, "behind_by": 3, "commits": [{"sha": tip}],
+			"files": [{"filename": "scripts/x.sh", "previous_filename": "README.md"}]})
+		rc, out, _ = _soft_gate(repo, head, compare, ["README.md"])
+		self.assertEqual(rc, 1, out)
+		self.assertIn("reason=soft_paths_probe_unknown", out)
+		self.assertNotIn("soft_paths_merge_clean", out)
+
+	def test_a_shared_path_holding_a_comma_is_classified_whole(self) -> None:
+		path = "README.md,agents.d/x"
+		rc, out, _ = _soft_gate(None, HEAD, _compare(1, [path], ["c" * 40]), [path],
+			prelude='_pr_merge_tree_probe() { echo PROBE_CALLED; _PR_PROBE_RESULT=none; }\n')
+		self.assertEqual(rc, 1, out)
+		self.assertIn("reason=shared_paths", out)
+		self.assertNotIn("PROBE_CALLED", out)
+
 	def test_non_soft_clean_lines_end_with_an_empty_soft_overlap(self) -> None:
 		rc, out, _ = _gate(compare_json=_compare(2, ["docs/x.md"]), pr_files_json=_pr_files(["scripts/mine.sh"]))
 		self.assertEqual(rc, 0)
