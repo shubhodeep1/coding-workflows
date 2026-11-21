@@ -1074,6 +1074,13 @@ CHECK_TRIAGE_BLOCKED_PARAGRAPH = (
 
 
 def _run_blocked_planning_step(labels: list[str] | None) -> tuple[subprocess.CompletedProcess[str], str, list[list[str]]]:
+	result, comment, sends, _ = _run_blocked_planning_step_with_gh(labels)
+	return result, comment, sends
+
+
+def _run_blocked_planning_step_with_gh(
+	labels: list[str] | None, extra_env: dict[str, str] | None = None
+) -> tuple[subprocess.CompletedProcess[str], str, list[list[str]], list[str]]:
 	(step,) = [step for step in _steps("plan.yml") if step.get("name") == "Handle blocked planning output"]
 	script = step["run"]
 	for expression, value in (
@@ -1094,9 +1101,14 @@ def _run_blocked_planning_step(labels: list[str] | None) -> tuple[subprocess.Com
 			encoding="utf-8",
 		)
 		gh = tmp / "bin" / "gh"
-		gh.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+		gh.write_text(
+			'#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "${GH_LOG}"\n'
+			'if [ -n "${GH_FAIL_MATCH:-}" ] && [[ "$*" == *"${GH_FAIL_MATCH}"* ]]; then exit 1; fi\nexit 0\n',
+			encoding="utf-8",
+		)
 		gh.chmod(0o755)
 		env = {
+			"GH_LOG": str(tmp / "gh.log"),
 			"PATH": f"{tmp / 'bin'}:/usr/bin:/bin",
 			"ISSUE_NUMBER": "746",
 			"ISSUE_URL": "https://github.com/owner/repo/issues/746",
@@ -1110,10 +1122,12 @@ def _run_blocked_planning_step(labels: list[str] | None) -> tuple[subprocess.Com
 			env["ISSUE_META_FILE"] = str(meta)
 		else:
 			env["ISSUE_META_FILE"] = str(tmp / "missing_issue_meta.json")
+		env.update(extra_env or {})
 		result = subprocess.run(["bash", "-c", script], cwd=tmp, env=env, capture_output=True, text=True, timeout=60, check=False)
 		comment = (tmp / "comment.md").read_text(encoding="utf-8") if (tmp / "comment.md").exists() else ""
 		sends = [line.split("\t") for line in (_read(tmp / "tg.log").splitlines() if (tmp / "tg.log").exists() else [])]
-	return result, comment, sends
+		gh_calls = _read(tmp / "gh.log").splitlines() if (tmp / "gh.log").exists() else []
+	return result, comment, sends, gh_calls
 
 
 def test_blocked_check_triage_issue_alerts_at_warning_with_the_judge_paragraph() -> None:
@@ -1147,6 +1161,177 @@ def test_blocked_issue_without_check_triage_label_keeps_critical_and_text() -> N
 		assert len(sends) == 1
 		assert sends[0][:2] == ["746", "CRITICAL"], labels
 		assert sends[0][2].startswith("Planning blocked for issue #746: work is already"), labels
+
+
+# Issue #9534: a scope-only planning block is routed to the unblock judge.
+PLANNING_SCOPE_HEADER = "🚨 **files_touched scope guard rejected this planning run.**"
+SCOPE_MARKER_746 = (
+	"<!-- ai:guard-rejection:v1 item=746 guard=scope reason=out-of-scope run=1 count=1 "
+	"truncated=false paths=WyJ0ZXN0cy90ZXN0X3gucHkiXQ== -->"
+)
+UNROUTED_COMMENT = (
+	"Planning blocked: human input required.\n\n"
+	"Reason: work is already on the planning ref; nothing to implement\n\n"
+	"Auto-answer has been paused to avoid unsatisfiable clarification loops.\n"
+	"Provide the required input, then reply with /answer.\n\n"
+	"Run: https://github.com/owner/repo/actions/runs/1\n"
+)
+
+
+def test_route_scope_block_step_precedes_the_handler_with_its_condition() -> None:
+	steps = _steps("plan.yml")
+	names = [step.get("name") for step in steps]
+	route_idx = names.index("Route planning scope block")
+	handler_idx = names.index("Handle blocked planning output")
+	assert route_idx == handler_idx - 1
+	route, handler = steps[route_idx], steps[handler_idx]
+	assert route["id"] == "route_scope_block"
+	assert route["if"] == handler["if"] == "env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked == 'true'"
+	assert route["continue-on-error"] is True
+	assert route["env"]["PLAN_SCOPE_BLOCK_ROUTING_ENABLED"] == "${{ vars.PLAN_SCOPE_BLOCK_ROUTING_ENABLED || 'true' }}"
+	assert "bash scripts/plan_scope_block_route.sh route" in route["run"]
+	assert "${{" not in route["run"]
+	assert handler["env"]["SCOPE_ROUTED"] == "${{ steps.route_scope_block.outputs.scope_routed }}"
+	assert handler["env"]["SCOPE_MARKER"] == "${{ steps.route_scope_block.outputs.scope_marker }}"
+
+
+def test_unrouted_block_keeps_comment_and_labels() -> None:
+	for extra in ({}, {"SCOPE_ROUTED": "false", "SCOPE_MARKER": ""},
+			{"SCOPE_ROUTED": "true", "SCOPE_MARKER": SCOPE_MARKER_746.replace("item=746", "item=7")}):
+		result, comment, _, gh_calls = _run_blocked_planning_step_with_gh(["ai:planning"], extra)
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert comment == UNROUTED_COMMENT, extra
+		edits = [call for call in gh_calls if call.startswith("issue edit 746")]
+		assert len(edits) == 1 and "--add-label ai:blocked" in edits[0] and "ai:scope-blocked" not in edits[0]
+
+
+def test_routed_block_appends_header_and_marker_and_adds_scope_label_in_the_same_edit() -> None:
+	result, comment, sends, gh_calls = _run_blocked_planning_step_with_gh(
+		["ai:planning"], {"SCOPE_ROUTED": "true", "SCOPE_MARKER": SCOPE_MARKER_746}
+	)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert comment.startswith(UNROUTED_COMMENT)
+	lines = [line for line in comment.splitlines() if line.strip()]
+	assert lines[0] == "Planning blocked: human input required."
+	assert lines[-2:] == [PLANNING_SCOPE_HEADER, SCOPE_MARKER_746]
+	edits = [call for call in gh_calls if call.startswith("issue edit 746")]
+	assert len(edits) == 1
+	assert "--add-label ai:blocked --add-label ai:scope-blocked" in edits[0]
+	assert len(sends) == 1 and sends[0][:2] == ["746", "CRITICAL"]
+
+
+def test_wait_on_pr_block_is_never_scope_routed() -> None:
+	result, comment, _, gh_calls = _run_blocked_planning_step_with_gh(
+		["ai:planning"],
+		{"SCOPE_ROUTED": "true", "SCOPE_MARKER": SCOPE_MARKER_746,
+			"BLOCKED_REASON": "work is delivered by open PR #12; resume once it is merged"},
+	)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert PLANNING_SCOPE_HEADER not in comment and "ai:guard-rejection" not in comment
+	assert not any("ai:scope-blocked" in call for call in gh_calls)
+
+
+def test_failed_comment_post_removes_only_the_scope_label_this_run_added() -> None:
+	routed = {"SCOPE_ROUTED": "true", "SCOPE_MARKER": SCOPE_MARKER_746, "GH_FAIL_MATCH": "issues/746/comments"}
+	result, _, _, gh_calls = _run_blocked_planning_step_with_gh(["ai:planning"], routed)
+	assert result.returncode != 0
+	assert any(call.startswith("issue edit 746") and "--remove-label ai:scope-blocked" in call for call in gh_calls)
+	# A latch already on the issue (kept planning or implement-time) is never removed.
+	for labels in (["ai:planning", "ai:scope-blocked"], None):
+		result, _, _, gh_calls = _run_blocked_planning_step_with_gh(labels, routed)
+		assert result.returncode != 0
+		assert not any("--remove-label ai:scope-blocked" in call for call in gh_calls), (labels, gh_calls)
+	# An /answer release earlier in the same job removed the latch (its edit
+	# succeeded) while the job-start metadata still lists it, so the re-added
+	# label is this run's and is rolled back.
+	result, _, _, gh_calls = _run_blocked_planning_step_with_gh(
+		["ai:planning", "ai:scope-blocked"], {**routed, "PLAN_SCOPE_LATCH_RELEASED": "true"}
+	)
+	assert result.returncode != 0
+	assert any(call == "issue edit 746 --repo owner/repo --remove-label ai:scope-blocked" for call in gh_calls), gh_calls
+
+
+def test_failed_label_edit_never_removes_a_pre_existing_scope_latch() -> None:
+	routed = {"SCOPE_ROUTED": "true", "SCOPE_MARKER": SCOPE_MARKER_746, "GH_FAIL_MATCH": "--add-label ai:blocked"}
+	result, comment, _, gh_calls = _run_blocked_planning_step_with_gh(["ai:planning"], routed)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "ai:guard-rejection" not in comment
+	assert any(call == "issue edit 746 --repo owner/repo --remove-label ai:scope-blocked" for call in gh_calls)
+	result, comment, _, gh_calls = _run_blocked_planning_step_with_gh(["ai:planning", "ai:scope-blocked"], routed)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "ai:guard-rejection" not in comment
+	assert not any("--remove-label ai:scope-blocked" in call for call in gh_calls), gh_calls
+
+
+def test_answer_on_blocked_issue_releases_a_planning_scope_latch() -> None:
+	(step,) = [step for step in _steps("plan.yml") if step.get("name") == "Validate planning phase label"]
+	script = step["run"]
+	branch = script[script.index("is in ai:blocked phase"):]
+	branch = branch[: branch.index("else\n")]
+	assert "bash scripts/plan_scope_block_route.sh answer-release" in branch
+	assert "PLAN_SCOPE_RELEASE_ARGS=(--remove-label 'ai:scope-blocked')" in branch
+	assert 'echo "PLAN_SCOPE_LATCH_RELEASED=true" >> "$GITHUB_ENV"' in branch
+	assert "--add-label 'ai:planning' --remove-label 'ai:blocked'" in branch
+	# The flag is written only after the release edit succeeded.
+	assert branch.index("--add-label 'ai:planning' --remove-label 'ai:blocked'") < branch.index("PLAN_SCOPE_LATCH_RELEASED=true")
+
+
+def _run_answer_release_branch(fail_edit: bool) -> tuple[subprocess.CompletedProcess[str], str]:
+	(step,) = [step for step in _steps("plan.yml") if step.get("name") == "Validate planning phase label"]
+	script = step["run"]
+	branch = script[script.index("PLAN_SCOPE_RELEASE_ARGS=()"):]
+	branch = branch[: branch.index("else\n")].replace("${{ github.repository }}", "owner/repo")
+	assert "${{" not in branch, branch
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		(tmp / "scripts").mkdir()
+		(tmp / "bin").mkdir()
+		(tmp / "scripts" / "plan_scope_block_route.sh").write_text('echo "release=true"\n', encoding="utf-8")
+		gh = tmp / "bin" / "gh"
+		gh.write_text(
+			'#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "${GH_LOG}"\n'
+			'if [ "$1" = api ]; then echo pipeline-bot; exit 0; fi\n'
+			'if [ "${GH_FAIL_EDIT:-}" = 1 ] && [ "$1" = issue ]; then exit 1; fi\nexit 0\n',
+			encoding="utf-8",
+		)
+		gh.chmod(0o755)
+		meta = tmp / "issue_meta.json"
+		meta.write_text(json.dumps({"labels": [{"name": "ai:blocked"}, {"name": "ai:scope-blocked"}]}), encoding="utf-8")
+		github_env = tmp / "github_env"
+		github_env.write_text("", encoding="utf-8")
+		env = {
+			"PATH": f"{tmp / 'bin'}:/usr/bin:/bin",
+			"GH_LOG": str(tmp / "gh.log"),
+			"GH_FAIL_EDIT": "1" if fail_edit else "0",
+			"ISSUE_NUMBER": "746",
+			"ISSUE_META_FILE": str(meta),
+			"GITHUB_ENV": str(github_env),
+		}
+		result = subprocess.run(
+			["bash", "-c", "set -euo pipefail\ngh_retry() { \"$@\"; }\n" + branch],
+			cwd=tmp, env=env, capture_output=True, text=True, timeout=60, check=False,
+		)
+		return result, _read(github_env)
+
+
+def test_answer_release_flag_is_written_only_after_the_release_edit_succeeds() -> None:
+	result, github_env = _run_answer_release_branch(fail_edit=False)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert github_env == "PLAN_SCOPE_LATCH_RELEASED=true\n"
+	result, github_env = _run_answer_release_branch(fail_edit=True)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "PLAN_SCOPE_LATCH_RELEASED" not in github_env
+	assert "::warning::Issue #746: the /answer label edit that releases ai:scope-blocked failed" in result.stdout
+
+
+def test_prompts_carry_the_scope_missing_and_reused_job_rules() -> None:
+	for path in (PROMPT_PLAN, REPO_ROOT / "prompts" / "_templates" / "mode-plan.txt"):
+		text = _read(path)
+		assert "SCOPE_MISSING: <repo-relative path>" in text, path
+		assert "at most 20). Never emit `SCOPE_MISSING:` for any other blocker." in text, path
+	for path in (REPO_ROOT / "prompts" / "mode-judge.txt", REPO_ROOT / "prompts" / "_templates" / "mode-judge.txt"):
+		text = _read(path)
+		assert "workflow job or step, its `files_touched:` block must list every repository\nscript that job or step runs" in text, path
 
 
 def main() -> int:
