@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cAfter a day of data, post the top-10 consumers (by calls_in_job) as a comment on this issue.\u201d\n  expected_change_site: Issue #9887 discussion after the counter has collected a day of data.\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff adds the ranked report table, but the supplied issue-thread comments contain no top-10 results comment; this rollout action remains outstanding and the required post-rollout data period is not demonstrated (source SEVERITY: NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cAfter a day of data, post the top-10 consumers (by calls_in_job) as a comment on this issue.\u201d\n  Expected change site: Issue #9887 discussion after the counter has collected a day of data.\n  Evidence of absence: The PR diff adds the ranked report table, but the supplied issue-thread comments contain no top-10 results comment. This rollout action remains outstanding; the required post-rollout data period is not demonstrated here.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "545cced456cf64eb190c4598aba617aef0613b447b9a7c06ec917c82ba08e46d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9899,
+    "run_id": "44947431809",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44947431809",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121210240_6dc78427ed",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9899,
+    "run_id": "44947431809"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-21T21:02:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
