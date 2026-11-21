@@ -383,6 +383,19 @@ def test_modify_delete_context_reverse_direction_uses_commit_sha(tmp_path: Path)
 	assert f"- `e.txt`: deleted on this PR by {sha}; modified on the base branch." in result.stdout
 
 
+def test_modify_delete_context_strips_backticks_from_prompt_paths(tmp_path: Path) -> None:
+	# PR-controlled paths must not close their inline code span in the prompt.
+	odd = "x`y.yml"
+	repo = _sweep_repo(tmp_path, extra_deleted=(odd,))
+	result = _run_resolver(repo, "_resolver_modify_delete_context\ncat \"${RESOLVER_MODIFY_DELETE_PATHS_FILE}\"\necho ---\ncat \"${CONFLICT_RESOLVER_PROMPT_FILE}\"")
+	assert result.returncode == 0, result.stdout + result.stderr
+	records, prompt = result.stdout.split("---\n", 1)
+	assert f"{odd}\t1 2" in records
+	assert "Modify/delete context: path=redacted stages=1 2" in result.stdout
+	assert "- `xy.yml`: deleted on the base branch by #123" in prompt
+	assert odd not in prompt
+
+
 def test_modify_delete_context_off_writes_nothing(tmp_path: Path) -> None:
 	repo = _sweep_repo(tmp_path)
 	result = _run_resolver(
