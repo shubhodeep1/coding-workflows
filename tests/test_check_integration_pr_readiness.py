@@ -509,6 +509,32 @@ def test_post_commit_status_logs_subprocess_failures():
 		mod.subprocess.run = original_run
 
 
+def test_workflow_skips_label_events_for_every_label_but_the_override():
+	"""Run-volume plan item 10: a label change that the script never reads
+	skips the job (no runner); the override label still re-runs it."""
+	import re
+
+	import yaml
+
+	mod = _import()
+	workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "integration-pr-readiness.yml").read_text(encoding="utf-8"))
+	# Since 2026-11-18 this workflow receives label events only; the other
+	# pull request events run the same script in pr-checks.yml
+	# (tests/test_pr_checks_workflow.py).
+	types = workflow["on"]["pull_request"]["types"]
+	assert types == ["labeled", "unlabeled"]
+	condition = workflow["jobs"]["readiness"]["if"]
+	assert condition == "${{ github.event.label.name == 'ai:override-incomplete-merge' }}"
+	# The label in the expression is the one the script honours.
+	assert re.search(r"label\.name == '([^']+)'", condition).group(1) == mod.OVERRIDE_LABEL
+
+	def runs(label: str | None) -> bool:
+		return label == mod.OVERRIDE_LABEL
+
+	assert runs(mod.OVERRIDE_LABEL)
+	assert not runs("ai:review-blocked") and not runs("ai:in-progress")
+
+
 def main() -> int:
 	try:
 		import sys as _sys

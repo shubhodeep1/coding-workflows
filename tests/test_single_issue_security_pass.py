@@ -35,6 +35,8 @@ with open(os.environ["FAKE_GH_LOG"], "a") as log:
 args = sys.argv[1:]
 fail = os.environ.get("FAKE_GH_FAIL", "")
 if args[:2] == ["workflow", "run"]:
+	if "reject_delta_inputs" in fail and any(arg.startswith(("audit_diff_since=", "prior_findings=")) for arg in args):
+		sys.exit(1)
 	sys.exit(1 if "dispatch" in fail else 0)
 if args[:2] == ["api", "user"]:
 	if "identity" in fail:
@@ -53,6 +55,20 @@ if "repos/o/r/issues?labels=ai:security&state=open&per_page=100" in args:
 		sys.exit(1)
 	print(open(os.environ["FAKE_GH_SECURITY_ISSUES"]).read(), end="")
 	sys.exit(0)
+if args[0] == "api" and any(arg.startswith("repos/o/r/pulls?state=open&base=") for arg in args):
+	if "branch_prs" in fail:
+		sys.exit(1)
+	print(open(os.environ["FAKE_GH_BRANCH_PRS"]).read(), end="")
+	sys.exit(0)
+if args[0] == "api" and any(arg.startswith("repos/o/r/pulls?state=open&head=") for arg in args):
+	if "head_prs" in fail:
+		sys.exit(1)
+	print(open(os.environ["FAKE_GH_HEAD_PRS"]).read(), end="")
+	sys.exit(0)
+if "followup_comment" in fail and len(args) > 1 and args[1].startswith("repos/o/r/issues/") and args[1].endswith("/comments") and args[1] != "repos/o/r/issues/42/comments":
+	sys.exit(1)
+if args[:3] == ["api", "-X", "PATCH"]:
+	sys.exit(1 if "close" in fail else 0)
 if args[:2] == ["api", "repos/o/r/issues/42/comments"]:
 	if "comment_write" in fail and (fail != "comment_write_once" or sum(
 		json.loads(line)[:2] == args[:2] for line in open(os.environ["FAKE_GH_LOG"])
@@ -68,6 +84,33 @@ if args[:2] == ["api", "repos/o/r/issues/42/comments"]:
 		print(json.dumps({"id": 17, "body": "not the pending marker"}))
 		sys.exit(0)
 	print(json.dumps({"id": 17, "body": next((arg[5:] for arg in args if arg.startswith("body=")), "")}))
+	sys.exit(0)
+# Issue #9533 base-sync carry: the shared freshness verifier reads the head
+# commit and the base compare (the fake prints what --jq would produce).
+if len(args) > 1 and args[0] == "api" and args[1].startswith("repos/o/r/commits/") and os.environ.get("FAKE_GH_COMMIT"):
+	print(os.environ["FAKE_GH_COMMIT"])
+	sys.exit(0)
+if len(args) > 1 and args[0] == "api" and args[1].startswith("repos/o/r/compare/") and os.environ.get("FAKE_GH_COMPARE"):
+	print(os.environ["FAKE_GH_COMPARE"])
+	sys.exit(0)
+if "pr_comments" in fail and "repos/o/r/issues/77/comments?per_page=100" in args:
+	sys.exit(1)
+if "parent_comments" in fail and "repos/o/r/issues/42/comments?per_page=100" in args:
+	sys.exit(1)
+if args[0] == "api" and len(args) > 1 and args[1].startswith("repos/o/r/commits/") and os.environ.get("FAKE_GH_COMMITS"):
+	commits = json.load(open(os.environ["FAKE_GH_COMMITS"]))
+	sha = args[1].rsplit("/", 1)[1]
+	if sha not in commits:
+		sys.exit(1)
+	print(json.dumps(commits[sha]))
+	sys.exit(0)
+if args[0] == "api" and len(args) > 1 and args[1].startswith("repos/o/r/compare/") and os.environ.get("FAKE_GH_COMMITS"):
+	print(os.environ.get("FAKE_GH_COMPARE_STATUS", "ahead"))
+	sys.exit(0)
+if args[0] == "api" and any("/actions/workflows/" in arg for arg in args):
+	if "runs" in fail or not os.environ.get("FAKE_GH_RUNS"):
+		sys.exit(1)
+	print(open(os.environ["FAKE_GH_RUNS"]).read())
 	sys.exit(0)
 if args[0] == "api" and "--paginate" in args:
 	if "comments_once" in fail and sum('"--paginate"' in line for line in open(os.environ["FAKE_GH_LOG"])) == 1:
@@ -102,6 +145,10 @@ if args[:2] == ["merge-base", "--is-ancestor"]:
 	if os.environ.get("FAKE_GIT_INCOMPLETE_ANCESTRY") == "true" and not os.path.exists(os.environ.get("FAKE_GIT_UNSHALLOW_MARKER", "")):
 		sys.exit(1)
 	sys.exit(0 if args[2] in os.environ.get("FAKE_GIT_ANCESTORS", "").split(",") and args[3] == os.environ.get("FAKE_GIT_HEAD", "c" * 40) else 1)
+if args[:1] == ["diff"] and "--name-only" in args and "FAKE_GIT_DIFF_FILES" in os.environ:
+	print("\n".join(name for name in os.environ["FAKE_GIT_DIFF_FILES"].split(",") if name))
+	sys.exit(0)
+print("FAKE_GIT unmatched: " + " ".join(args), file=sys.stderr)
 sys.exit(1)
 '''
 
@@ -132,15 +179,18 @@ def _pr(base: str = "main", head_ref: str = "ai/issue-7", head_repo: str = "o/r"
 	}
 
 
-def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | None = None, env: dict | None = None, skip: bool = False, security_issues: list | str | None = None):
+def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | None = None, env: dict | None = None, skip: bool = False, security_issues: list | str | None = None, branch_prs: list | str | None = None, head_prs: list | str | None = None, cwd: Path | None = None, real_git: bool = False):
 	bin_dir = tmp_path / "bin"
 	bin_dir.mkdir(exist_ok=True)
 	gh = bin_dir / "gh"
 	gh.write_text(FAKE_GH, encoding="utf-8")
 	gh.chmod(0o755)
 	git = bin_dir / "git"
-	git.write_text(FAKE_GIT, encoding="utf-8")
-	git.chmod(0o755)
+	if real_git:
+		git.unlink(missing_ok=True)
+	else:
+		git.write_text(FAKE_GIT, encoding="utf-8")
+		git.chmod(0o755)
 	support = tmp_path / "support"
 	support.mkdir(exist_ok=True)
 	(support / "security_pass_skip.py").write_text(
@@ -149,8 +199,11 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 	(tmp_path / "pr.json").write_text(json.dumps(pr or _pr()), encoding="utf-8")
 	(tmp_path / "comments.json").write_text(json.dumps(comments or []), encoding="utf-8")
 	if security_issues is None:
-		security_issues = [[{"state": "open", "body": _followup_body(), "user": {"login": login}} for login in ("owner", "github-actions[bot]")]]
+		security_issues = [[{"number": number, "state": "open", "body": _followup_body(), "user": {"login": login}} for number, login in ((101, "owner"), (102, "github-actions[bot]"))]]
 	(tmp_path / "security_issues.json").write_text(security_issues if isinstance(security_issues, str) else json.dumps(security_issues), encoding="utf-8")
+	for name, payload in (("branch_prs.json", branch_prs), ("head_prs.json", head_prs)):
+		payload = [] if payload is None else payload
+		(tmp_path / name).write_text(payload if isinstance(payload, str) else json.dumps(payload), encoding="utf-8")
 	log = tmp_path / "calls.log"
 	log.write_text("", encoding="utf-8")
 	output = tmp_path / "output"
@@ -162,6 +215,8 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 		FAKE_GH_COMMENTS=str(tmp_path / "comments.json"),
 		FAKE_GH_SECURITY_ISSUES=str(tmp_path / "security_issues.json"),
 		FAKE_GH_PR=str(tmp_path / "pr.json"),
+		FAKE_GH_BRANCH_PRS=str(tmp_path / "branch_prs.json"),
+		FAKE_GH_HEAD_PRS=str(tmp_path / "head_prs.json"),
 		FAKE_GIT_HEAD=HEAD,
 		GITHUB_OUTPUT=str(output),
 		REPOSITORY="o/r",
@@ -174,7 +229,9 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 		SUPPORT_SCRIPTS_DIR=str(support),
 		GITHUB_WORKSPACE=str(tmp_path),
 	)
-	for name in ("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "MAX_SECURITY_PASS_CYCLES", "ORCH_INTEGRATION_BRANCH_PATTERN", "SECURITY_PASS_PENDING_STALE_HOURS", "SECURITY_PASS_FOLLOWUP_STALE_HOURS", "SECURITY_PASS_PENDING_MARKER_ATTEMPTS", "SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS", "SECURITY_PASS_AUTHOR_LOGIN_FALLBACK", "FAKE_GIT_ANCESTORS", "FAKE_GIT_SHALLOW", "FAKE_GIT_FETCH_FAIL", "FAKE_GIT_UNSHALLOW_MARKER", "FAKE_GIT_INCOMPLETE_ANCESTRY"):
+	for name in ("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "MAX_SECURITY_PASS_CYCLES", "ORCH_INTEGRATION_BRANCH_PATTERN", "SECURITY_PASS_PENDING_STALE_HOURS", "SECURITY_PASS_FOLLOWUP_STALE_HOURS", "SECURITY_PASS_PENDING_MARKER_ATTEMPTS", "SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS", "SECURITY_PASS_AUTHOR_LOGIN_FALLBACK", "FAKE_GIT_ANCESTORS", "FAKE_GIT_SHALLOW", "FAKE_GIT_FETCH_FAIL", "FAKE_GIT_UNSHALLOW_MARKER", "FAKE_GIT_INCOMPLETE_ANCESTRY", "FAKE_GIT_DIFF_FILES", "GITHUB_ENV", "SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED", "SECURITY_PASS_DELTA_SINCE", "SECURITY_PASS_PRIOR_FINDINGS_FILE", "SECURITY_PASS_FINDINGS_FILE", "SECURITY_PASS_DELTA_SINCE_INPUT", "SECURITY_PASS_PRIOR_FINDINGS_INPUT", "SECURITY_PASS_AUDIT_CHECKOUT"):
+		run_env.pop(name, None)
+	for name in ("FAKE_GH_RUNS", "SECURITY_PASS_MAX_AUDIT_ATTEMPTS", "SECURITY_PASS_MAX_CONCURRENT_AUDITS", "SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES"):
 		run_env.pop(name, None)
 	run_env["SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS"] = "0"
 	# The pass defaults to off; tests that exercise it opt in, and None unsets a name.
@@ -182,7 +239,7 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 	run_env.update(env or {})
 	for name in [key for key, value in run_env.items() if value is None]:
 		run_env.pop(name)
-	result = subprocess.run(["bash", str(SCRIPT), mode], capture_output=True, text=True, env=run_env, check=False)
+	result = subprocess.run(["bash", str(SCRIPT), mode], capture_output=True, text=True, env=run_env, check=False, cwd=str(cwd) if cwd else None)
 	calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line]
 	return result, calls, output.read_text(encoding="utf-8")
 
@@ -259,7 +316,8 @@ def test_first_clean_review_dispatches_the_audit(tmp_path: Path) -> None:
 	stale = [_comment(_marker("clean", OLD, 1)), _comment(_marker("clean", HEAD, 1), association="NONE", login="someone")]
 	result, calls, output = _run(tmp_path, "gate", comments=stale)
 	assert output == "hold=true\nhold_reason=audit_dispatched\n" and "outcome=dispatched cycle=2" in result.stdout
-	assert ["workflow", "run", "ai-security-audit.yml", "-R", "o/r", "--ref", "main", "-f", "ref=ai/issue-7", "-f", "pr_number=42"] in calls
+	# A trusted clean result for an older head requests a delta re-audit (P5a).
+	assert ["workflow", "run", "ai-security-audit.yml", "-R", "o/r", "--ref", "main", "-f", "ref=ai/issue-7", "-f", "pr_number=42", "-f", f"audit_diff_since={OLD}"] in calls
 	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
 	assert posted and posted[0][-1].endswith(_marker("pending", HEAD, 2))
 
@@ -502,10 +560,12 @@ def test_unaudited_exhaustion_label_already_present_does_not_recomment(tmp_path:
 
 
 def test_stale_pending_at_cap_does_not_consume_post_cap_budget(tmp_path: Path) -> None:
+	# An audit that never reported does not use a cycle: cycle 5 is still
+	# available, and the marker numbers the attempt (6).
 	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("pending", HEAD, 5), age_hours=7)])
-	assert output == "hold=true\nhold_reason=audit_dispatched\n" and "reason=exhausted_retry" in result.stdout
+	assert output == "hold=true\nhold_reason=audit_dispatched\n" and "reason=exhausted_retry" not in result.stdout
 	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
-	assert "head attempt 1 of 2" in posted[-1][-1]
+	assert "(cycle 5 of 5)" in posted[-1][-1] and posted[-1][-1].endswith(_marker("pending", HEAD, 6))
 	assert any(call[:2] == ["workflow", "run"] for call in calls)
 
 
@@ -645,6 +705,18 @@ def test_extension_checkout_mismatch_holds_without_granting_or_merging(tmp_path:
 	assert result.returncode == 0 and output == "hold=true\nhold_reason=extensions_unverifiable\n"
 	assert "reason=extensions_unverifiable" in result.stdout
 	assert not any(call[:2] in (["workflow", "run"], ["api", "repos/o/r/issues/42/labels"]) for call in calls)
+
+
+def test_unpushed_local_commit_without_extensions_does_not_hold(tmp_path: Path) -> None:
+	# PRs #9011 / #9134: the review job's deferred [ai-merge-resolve] commit
+	# moved the checkout past the PR head before the judge's merge gate ran.
+	# With no extension marker there is nothing to verify against the checkout.
+	comments = [_comment("ok\n" + _marker("clean", HEAD, 1))]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GIT_HEAD": OLD})
+	assert output == "hold=false\n" and "outcome=clean" in result.stdout
+	assert "extensions_unverifiable" not in result.stdout
+	result, calls, output = _run(tmp_path, "status", comments=comments, env={"FAKE_GIT_HEAD": OLD})
+	assert "SINGLE_ISSUE_SECURITY_PASS_STATE=unverifiable" not in result.stdout
 
 
 def test_missing_extension_in_shallow_checkout_holds_if_history_unavailable(tmp_path: Path) -> None:
@@ -857,7 +929,7 @@ def test_report_retries_transient_comment_listing(tmp_path: Path) -> None:
 		"SECURITY_PASS_AUDIT_OUTCOME": "success", "SECURITY_PASS_FINDINGS": "0",
 	})
 	assert "outcome=clean" in result.stdout
-	assert sum("--paginate" in call for call in calls) == 2
+	assert sum("--paginate" in call and "repos/o/r/issues/42/comments?per_page=100" in call for call in calls) == 2
 
 
 def test_last_cycle_findings_redispatch_for_exhaustion(tmp_path: Path) -> None:
@@ -1212,3 +1284,1127 @@ def test_skip_step_holds_when_python_ignores_safe_path(tmp_path: Path) -> None:
 	assert ["api", "user", "--jq", '.login // ""'] not in calls
 	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 	assert not any(any("/statuses/" in arg for arg in call) for call in calls)
+
+
+# ----- Delta re-audit with prior-finding carry-forward (stuck-states P5a) -----
+LEGACY_DISPATCH = ["workflow", "run", "ai-security-audit.yml", "-R", "o/r", "--ref", "main", "-f", "ref=ai/issue-7", "-f", "pr_number=42"]
+NEW_HEAD = "e" * 40
+
+
+def _audit_dispatches(calls: list) -> list:
+	return [call for call in calls if call[:3] == ["workflow", "run", "ai-security-audit.yml"]]
+
+
+def _audited_lines(findings: list) -> str:
+	raw = json.dumps(findings, separators=(",", ":")).encode("utf-8")
+	digest = __import__("hashlib").sha256(raw).hexdigest()
+	return f"Audited findings (base64 JSON): {base64.b64encode(raw).decode('ascii')}\nAudited findings sha256: {digest}"
+
+
+def _prior_finding(finding_id: str = "F-9", file: str = "a.py", severity: str = "high") -> dict:
+	return {
+		"finding_id": finding_id, "owasp_or_stride_category": "A01", "severity": severity, "confidence": 9,
+		"file": file, "line": 3, "exploit_scenario": "x", "recommendation": "y",
+	}
+
+
+def _findings_result(head: str, cycle: int, findings: list, payload: str | None = None) -> str:
+	ids = base64.b64encode(json.dumps([f["finding_id"] for f in findings]).encode("ascii")).decode("ascii")
+	lines = payload if payload is not None else _audited_lines(findings)
+	return f"## result\n\nFinding IDs (base64 JSON): {ids}\n\n{lines}\n\n" + f"<!-- ai:single-issue-security-pass:v1 status=findings head={head} cycle={cycle} -->"
+
+
+def test_delta_dispatch_from_a_findings_result_sends_since_and_comment_id(tmp_path: Path) -> None:
+	comments = [_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5, age_hours=2)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert _audit_dispatches(calls) == [LEGACY_DISPATCH + ["-f", f"audit_diff_since={OLD}", "-f", "prior_findings=5"]]
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert f"delta re-audit of the changes since `{OLD}`" in posted[-1][-1]
+	assert posted[-1][-1].endswith("\n\n" + _marker("pending", HEAD, 2))
+	assert f"delta_since={OLD}" in result.stdout
+
+
+@pytest.mark.parametrize("comments", [
+	[],
+	[_comment(_marker("failed", HEAD, 1))],
+	[_comment(_marker("clean", OLD, 1)), _comment(_marker("findings", HEAD, 2), comment_id=2), _comment(_marker("failed", HEAD, 3), comment_id=3)],
+])
+def test_no_older_completed_result_keeps_todays_dispatch(tmp_path: Path, comments: list) -> None:
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert _audit_dispatches(calls) == [LEGACY_DISPATCH]
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert "delta re-audit" not in posted[-1][-1]
+
+
+def test_delta_switch_off_keeps_todays_dispatch_and_comment(tmp_path: Path) -> None:
+	comments = [_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5, age_hours=2)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED": "false"})
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert _audit_dispatches(calls) == [LEGACY_DISPATCH]
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert posted[-1][-1] == (
+		"body=## Single-issue security pass\n\nAuto-merge waits for the security audit of `" + HEAD + "` (cycle 2 of 5). "
+		"Findings become follow-up issues against this branch; a clean audit re-runs the review, which then merges.\n\n" + _marker("pending", HEAD, 2)
+	)
+
+
+def test_exhausted_head_retry_stays_a_full_audit(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_findings_result(OLD, 5, [_prior_finding()]), comment_id=5)])
+	assert output == "hold=true\nhold_reason=audit_dispatched\n" and "reason=exhausted_retry" in result.stdout
+	assert _audit_dispatches(calls) == [LEGACY_DISPATCH]
+
+
+def test_rejected_delta_dispatch_falls_back_to_legacy_arguments(tmp_path: Path) -> None:
+	comments = [_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5, age_hours=2)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GH_FAIL": "reject_delta_inputs"})
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert "outcome=delta_fallback reason=dispatch_rejected" in result.stdout
+	assert _audit_dispatches(calls) == [LEGACY_DISPATCH + ["-f", f"audit_diff_since={OLD}", "-f", "prior_findings=5"], LEGACY_DISPATCH]
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert "delta re-audit" not in posted[-1][-1] and posted[-1][-1].endswith(_marker("pending", HEAD, 2))
+
+
+def test_double_dispatch_failure_takes_the_dispatch_failed_path(tmp_path: Path) -> None:
+	comments = [_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5, age_hours=2)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GH_FAIL": "dispatch"})
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=dispatch_failed\n"
+	assert "outcome=delta_fallback" in result.stdout and len(_audit_dispatches(calls)) == 2
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert posted[-1][-1].endswith(_marker("failed", HEAD, 2))
+
+
+def _delta(tmp_path: Path, comments: list, env: dict | None = None):
+	github_env = tmp_path / "github_env"
+	github_env.write_text("", encoding="utf-8")
+	run_env = {
+		"GITHUB_ENV": str(github_env), "RUNNER_TEMP": str(tmp_path),
+		"SECURITY_PASS_PR_NUMBER": "42", "SECURITY_PASS_HEAD_SHA": HEAD,
+		"SECURITY_PASS_DELTA_SINCE_INPUT": OLD, "SECURITY_PASS_PRIOR_FINDINGS_INPUT": "5",
+		"FAKE_GIT_ANCESTORS": OLD,
+	}
+	run_env.update(env or {})
+	result, calls, _ = _run(tmp_path, "delta", comments=comments, env=run_env)
+	return result, calls, github_env.read_text(encoding="utf-8")
+
+
+def test_delta_mode_narrows_after_verifying_a_trusted_findings_result(tmp_path: Path) -> None:
+	prior = [_prior_finding()]
+	result, calls, written = _delta(tmp_path, [_comment(_findings_result(OLD, 1, prior), comment_id=5)])
+	prior_file = tmp_path / "single-pass-prior-findings.json"
+	assert written == (
+		f"SECURITY_AUDIT_DIFF_SINCE={OLD}\nSECURITY_PASS_DELTA_SINCE={OLD}\n"
+		f"SECURITY_AUDIT_PRIOR_FINDINGS={prior_file}\nSECURITY_PASS_PRIOR_FINDINGS_FILE={prior_file}\n"
+	)
+	assert json.loads(prior_file.read_text(encoding="utf-8")) == prior
+	assert f"mode=delta pr=42 head={HEAD} outcome=delta since={OLD} prior_findings=1" in result.stdout
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+def test_delta_mode_clean_source_sends_since_only(tmp_path: Path) -> None:
+	result, _, written = _delta(tmp_path, [_comment(_marker("clean", OLD, 1), comment_id=5)], env={"SECURITY_PASS_PRIOR_FINDINGS_INPUT": ""})
+	assert written == f"SECURITY_AUDIT_DIFF_SINCE={OLD}\nSECURITY_PASS_DELTA_SINCE={OLD}\n"
+	assert "outcome=delta" in result.stdout
+
+
+@pytest.mark.parametrize("comments, env, reason", [
+	([_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5)], {"SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED": "false"}, "disabled"),
+	([_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5)], {"SECURITY_PASS_DELTA_SINCE_INPUT": ""}, "no_delta_input"),
+	([_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5)], {"SECURITY_PASS_DELTA_SINCE_INPUT": HEAD}, "no_delta_input"),
+	([_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5)], {"SECURITY_PASS_DELTA_SINCE_INPUT": NEW_HEAD}, "input_mismatch"),
+	([_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5)], {"SECURITY_PASS_PRIOR_FINDINGS_INPUT": "6"}, "input_mismatch"),
+	([_comment(_marker("clean", OLD, 1), comment_id=5)], {}, "input_mismatch"),
+	([_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5, login="someone")], {}, "input_mismatch"),
+	([_comment(_findings_result(OLD, 1, [_prior_finding()], payload=_audited_lines([_prior_finding()]).replace("sha256: ", "sha256: 0")[:-1]), comment_id=5)], {}, "prior_findings_unverifiable"),
+	([_comment(_findings_result(OLD, 1, [_prior_finding()], payload=_audited_lines([_prior_finding("F-10")]).split("\n")[0] + "\n" + _audited_lines([_prior_finding()]).split("\n")[1]), comment_id=5)], {}, "prior_findings_unverifiable"),
+	([_comment(_findings_result(OLD, 1, [_prior_finding()], payload=""), comment_id=5)], {}, "prior_findings_unverifiable"),
+	([_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5)], {"FAKE_GIT_ANCESTORS": ""}, "not_ancestor"),
+	([_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5)], {"FAKE_GIT_HEAD": NEW_HEAD}, "checkout_mismatch"),
+	([_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5), _comment(_marker("findings", HEAD, 2), comment_id=6)], {}, "input_mismatch"),
+])
+def test_delta_mode_fails_open_to_a_full_audit(tmp_path: Path, comments: list, env: dict, reason: str) -> None:
+	result, _, written = _delta(tmp_path, comments, env=env)
+	assert result.returncode == 0 and written == ""
+	assert f"outcome=full reason={reason}" in result.stdout
+
+
+def _carry_report(tmp_path: Path, env: dict | None = None, prior: list | None = None, current: list | None = None, security_issues=None, findings: str | None = None):
+	prior_file = tmp_path / "prior.json"
+	prior_file.write_text(json.dumps(prior if prior is not None else [_prior_finding()]), encoding="utf-8")
+	current_findings = current if current is not None else []
+	findings_file = tmp_path / "current.json"
+	findings_file.write_text(json.dumps(current_findings), encoding="utf-8")
+	count = findings if findings is not None else str(len(current_findings))
+	run_env = {
+		"SECURITY_PASS_PR_NUMBER": "42", "SECURITY_PASS_HEAD_SHA": HEAD,
+		"SECURITY_PASS_AUDIT_OUTCOME": "success", "SECURITY_PASS_FINDINGS": count,
+		"SECURITY_PASS_FINDING_IDS_B64": base64.b64encode(json.dumps([f["finding_id"] for f in current_findings]).encode("ascii")).decode("ascii"),
+		"SECURITY_PASS_DELTA_SINCE": OLD, "SECURITY_PASS_PRIOR_FINDINGS_FILE": str(prior_file),
+		"SECURITY_PASS_FINDINGS_FILE": str(findings_file), "FAKE_GIT_DIFF_FILES": "b.py",
+	}
+	run_env.update(env or {})
+	if security_issues is None:
+		security_issues = [[{"state": "open", "body": _followup_body(finding_id="F-9"), "user": {"login": "owner"}}]]
+	result, calls, _ = _run(tmp_path, "report", comments=[_comment(_marker("pending", HEAD, 2))], env=run_env, security_issues=security_issues)
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	return result, calls, posted[-1][-1][5:] if posted else ""
+
+
+def _ids_in(body: str) -> list:
+	line = next(line for line in body.splitlines() if line.startswith("Finding IDs (base64 JSON): "))
+	return json.loads(base64.b64decode(line.split(": ", 1)[1]))
+
+
+def test_untouched_open_prior_finding_is_carried_into_a_zero_finding_delta(tmp_path: Path) -> None:
+	result, calls, body = _carry_report(tmp_path)
+	assert body.endswith(_marker("findings", HEAD, 2, ()).split("\n")[-1])
+	assert "## Single-issue security pass: 1 finding(s)" in body and _ids_in(body) == ["F-9"]
+	assert f"Carried forward (file untouched since `{OLD}`, follow-up open): F-9" in body
+	assert _audited_lines([_prior_finding()]) in body
+	assert "outcome=findings cycle=2 findings=1" in result.stdout
+	# Findings below the cycle cap wait for the follow-up merge, as today.
+	assert not any(call[:3] == ["workflow", "run", "ai-review.yml"] for call in calls)
+
+
+def test_carried_result_round_trips_through_delta_and_keeps_the_gate_holding(tmp_path: Path) -> None:
+	_, _, body = _carry_report(tmp_path, current=[_prior_finding("F-1", file="b.py", severity="critical")])
+	assert _ids_in(body) == ["F-1", "F-9"]
+	stored = [_prior_finding("F-1", file="b.py", severity="critical"), _prior_finding()]
+	assert _audited_lines(stored) in body
+	delta_dir = tmp_path / "delta"
+	delta_dir.mkdir()
+	result, _, written = _delta(delta_dir, [_comment(body, comment_id=8)], env={
+		"SECURITY_PASS_HEAD_SHA": NEW_HEAD, "FAKE_GIT_HEAD": NEW_HEAD, "SECURITY_PASS_DELTA_SINCE_INPUT": HEAD,
+		"SECURITY_PASS_PRIOR_FINDINGS_INPUT": "8", "FAKE_GIT_ANCESTORS": HEAD,
+	})
+	assert f"SECURITY_AUDIT_DIFF_SINCE={HEAD}" in written and "prior_findings=2" in result.stdout
+	assert json.loads((delta_dir / "single-pass-prior-findings.json").read_text(encoding="utf-8")) == stored
+	gate_dir = tmp_path / "gate"
+	gate_dir.mkdir()
+	issues = [[{"state": "open", "body": _followup_body(finding_id=fid), "user": {"login": "owner"}} for fid in ("F-1", "F-9")]]
+	_, _, output = _run(gate_dir, "gate", comments=[_comment(_marker("pending", HEAD, 2), comment_id=1), _comment(body, comment_id=8)], security_issues=issues)
+	assert output == "hold=true\nhold_reason=awaiting_followups\n"
+
+
+@pytest.mark.parametrize("env, issues", [
+	({"FAKE_GIT_DIFF_FILES": "a.py"}, None),
+	({"FAKE_GIT_DIFF_FILES": "c.py,a.py"}, None),
+	({}, [[{"state": "open", "body": _followup_body(finding_id="F-8"), "user": {"login": "owner"}}]]),
+	({}, [[{"state": "open", "body": _followup_body(finding_id="F-9"), "user": {"login": "someone"}}]]),
+])
+def test_touched_or_closed_prior_finding_is_resolved(tmp_path: Path, env: dict, issues) -> None:
+	result, calls, body = _carry_report(tmp_path, env=env, security_issues=issues)
+	assert body.startswith("## Single-issue security pass: clean") and "Carried forward" not in body
+	assert ["workflow", "run", "ai-review.yml", "-R", "o/r", "--ref", "main", "-f", "pr_number=42"] in calls
+
+
+def test_re_reported_prior_finding_is_not_carried_twice(tmp_path: Path) -> None:
+	_, calls, body = _carry_report(tmp_path, current=[_prior_finding()])
+	assert _ids_in(body) == ["F-9"] and "Carried forward" not in body
+	assert not any("repos/o/r/issues?labels=ai:security&state=open&per_page=100" in call for call in calls)
+
+
+def test_listing_failure_carries_every_candidate(tmp_path: Path) -> None:
+	_, _, body = _carry_report(tmp_path, env={"FAKE_GH_FAIL": "followups", "FAKE_GIT_DIFF_FILES": "c.py"}, prior=[_prior_finding(), _prior_finding("F-7", file="b.py")])
+	assert sorted(_ids_in(body)) == ["F-7", "F-9"]
+	assert "follow-up state unverifiable" in body
+
+
+def test_git_failure_carries_every_prior_finding_with_an_open_followup(tmp_path: Path) -> None:
+	issues = [[{"state": "open", "body": _followup_body(finding_id=fid), "user": {"login": "owner"}} for fid in ("F-7", "F-9")]]
+	_, _, body = _carry_report(tmp_path, env={"FAKE_GIT_DIFF_FILES": None}, prior=[_prior_finding(), _prior_finding("F-7", file="b.py")], security_issues=issues)
+	assert sorted(_ids_in(body)) == ["F-7", "F-9"]
+
+
+def test_over_cap_audited_findings_are_omitted(tmp_path: Path) -> None:
+	big = dict(_prior_finding("F-1", file="b.py"), exploit_scenario="z" * 60000)
+	result, _, body = _carry_report(tmp_path, current=[big], prior=[_prior_finding("F-1", file="b.py")])
+	assert _ids_in(body) == ["F-1"] and "Audited findings" not in body
+	assert "reason=prior_findings_omitted" in result.stdout
+
+
+def test_full_audit_findings_are_stored_for_the_next_delta(tmp_path: Path) -> None:
+	current = [_prior_finding("F-1", file="b.py")]
+	_, _, body = _carry_report(tmp_path, current=current, env={"SECURITY_PASS_DELTA_SINCE": None, "SECURITY_PASS_PRIOR_FINDINGS_FILE": None})
+	assert _audited_lines(current) in body and "Carried forward" not in body
+
+
+def test_delta_switch_off_report_body_is_unchanged(tmp_path: Path) -> None:
+	_, calls, body = _carry_report(tmp_path, env={"SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED": "false"})
+	assert body == (
+		f"## Single-issue security pass: clean\n\nThe audit of `{HEAD}` found nothing to fix. The review re-runs and merges this head.\n\n"
+		+ _marker("clean", HEAD, 2)
+	)
+	findings_dir = tmp_path / "findings"
+	findings_dir.mkdir()
+	_, _, findings_body = _carry_report(findings_dir, env={"SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED": "false"}, current=[_prior_finding("F-1", file="b.py")])
+	assert "Audited findings" not in findings_body and "Carried forward" not in findings_body
+	assert findings_body.endswith(_marker("findings", HEAD, 2, ("F-1",)))
+
+
+def test_delta_audit_wiring() -> None:
+	workflow = yaml.safe_load(AUDIT.read_text(encoding="utf-8"))
+	triggers = workflow.get("on", workflow.get(True))
+	for trigger in ("workflow_dispatch", "workflow_call"):
+		for name in ("audit_diff_since", "prior_findings"):
+			assert triggers[trigger]["inputs"][name]["default"] == "" and triggers[trigger]["inputs"][name]["type"] == "string"
+	steps = _steps(AUDIT, "security-audit")
+	names = list(steps)
+	delta = steps["Resolve single-issue security pass delta"]
+	assert names.index("Verify audit data and resolve scope") + 1 == names.index("Resolve single-issue security pass delta") < names.index("Run security audit")
+	assert delta["if"] == "inputs.pr_number != '' && inputs.audit_diff_since != '' && env.SECURITY_AUDIT_TARGET_REF != ''"
+	assert delta["continue-on-error"] is True
+	assert "${{" not in delta["run"]
+	assert 'bash "${GITHUB_WORKSPACE}/scripts/review_single_issue_security_pass.sh" delta' in delta["run"]
+	assert "audit-data/scripts" not in delta["run"]
+	assert delta["env"]["SECURITY_PASS_DELTA_SINCE_INPUT"] == "${{ inputs.audit_diff_since || '' }}"
+	assert delta["env"]["SECURITY_PASS_PRIOR_FINDINGS_INPUT"] == "${{ inputs.prior_findings || '' }}"
+	assert delta["env"]["SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED"] == "${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}"
+	assert delta["env"]["SECURITY_PASS_AUTHOR_LOGIN_FALLBACK"] == "${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}"
+	run = steps["Run security audit"]
+	assert run["env"]["SECURITY_AUDIT_PASS_FINDINGS_OUT"] == "${{ inputs.pr_number != '' && format('{0}/single-pass-findings.json', runner.temp) || '' }}"
+	report = steps["Report single-issue security pass"]
+	assert report["env"]["SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED"] == delta["env"]["SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED"]
+	assert report["env"]["SECURITY_PASS_FINDINGS_FILE"] == "${{ format('{0}/single-pass-findings.json', runner.temp) }}"
+	template = AUDIT_TEMPLATE.read_text(encoding="utf-8")
+	assert "audit_diff_since: ${{ inputs.audit_diff_since || '' }}" in template
+	assert "prior_findings: ${{ inputs.prior_findings || '' }}" in template
+	template_inputs = yaml.safe_load(template)
+	template_triggers = template_inputs.get("on", template_inputs.get(True))
+	assert {"audit_diff_since", "prior_findings"} <= set(template_triggers["workflow_dispatch"]["inputs"])
+	review_text = expanded_review_autofix_text()
+	assert review_text.count("SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}") >= 4
+
+
+def test_findings_source_without_stored_payload_keeps_todays_dispatch(tmp_path: Path) -> None:
+	comments = [_comment(_findings_result(OLD, 1, [_prior_finding()], payload=""), comment_id=5, age_hours=2)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert _audit_dispatches(calls) == [LEGACY_DISPATCH]
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert "delta re-audit" not in posted[-1][-1] and "delta_since=" not in result.stdout
+
+
+def test_carry_forward_diff_lists_rename_sources() -> None:
+	text = (Path(__file__).resolve().parents[1] / "scripts" / "review_single_issue_security_pass.sh").read_text(encoding="utf-8")
+	assert 'diff --no-renames --name-only "${carry_since}..${head_sha}"' in text
+
+
+# Stuck-states P5b: one consolidated follow-up per cycle carries one leading
+# `<!-- ai:security-finding:<id> -->` line per finding.
+def _consolidated_body(finding_ids: tuple[str, ...], branch: str = "ai/issue-7", trailer: str = "") -> str:
+	markers = "".join(f"<!-- ai:security-finding:{finding_id} -->\n" for finding_id in finding_ids)
+	return f"{markers}Refs #9000\n\n- Pull request: #42\n- Integration branch: `{branch}`\n\n## Findings\n{trailer}"
+
+
+def test_consolidated_followup_covers_every_leading_marker(tmp_path: Path) -> None:
+	comments = [_comment(_marker("findings", HEAD, 2, ("F-1", "F-2")))]
+	issues = [[{"state": "open", "body": _consolidated_body(("F-1", "F-2")), "user": {"login": "owner"}}]]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=awaiting_followups\n"
+	assert len([call for call in calls if "repos/o/r/issues?labels=ai:security&state=open&per_page=100" in call]) == 1
+
+
+def test_consolidated_followup_missing_an_id_still_pages(tmp_path: Path) -> None:
+	comments = [_comment(_marker("findings", HEAD, 2, ("F-1", "F-2")))]
+	issues = [[{"state": "open", "body": _consolidated_body(("F-1",)), "user": {"login": "owner"}}]]
+	result, _, output = _run(tmp_path, "gate", comments=comments, security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=followups_missing\n"
+
+
+@pytest.mark.parametrize("trailer", [
+	"Quoted: <!-- ai:security-finding:F-2 -->\n",
+	"<!-- ai:security-finding:F-2 -->\n",
+])
+def test_marker_outside_the_leading_block_does_not_count(tmp_path: Path, trailer: str) -> None:
+	comments = [_comment(_marker("findings", HEAD, 2, ("F-1", "F-2")))]
+	issues = [[{"state": "open", "body": _consolidated_body(("F-1",), trailer=trailer), "user": {"login": "owner"}}]]
+	result, _, output = _run(tmp_path, "gate", comments=comments, security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=followups_missing\n"
+
+
+@pytest.mark.parametrize("login, state", [("other", "open"), ("owner", "closed")])
+def test_consolidated_followup_from_other_author_or_closed_does_not_count(tmp_path: Path, login: str, state: str) -> None:
+	comments = [_comment(_marker("findings", HEAD, 2, ("F-1", "F-2")))]
+	issues = [[{"state": state, "body": _consolidated_body(("F-1", "F-2")), "user": {"login": login}}]]
+	result, _, output = _run(tmp_path, "gate", comments=comments, security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=followups_missing\n"
+
+
+@pytest.mark.parametrize("issues", [
+	[[{"state": "open", "body": _consolidated_body(("F-1", "F-2")), "user": {"login": "owner"}}]],
+	[[]],
+])
+def test_findings_head_never_merges_with_or_without_consolidated_followup(tmp_path: Path, issues: list) -> None:
+	# Severity gating is unchanged: a findings result for this head holds the merge.
+	comments = [_comment(_marker("findings", HEAD, 2, ("F-1", "F-2")))]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, security_issues=issues)
+	assert result.returncode == 0 and output.startswith("hold=true\n")
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+def test_prior_finding_covered_by_second_consolidated_marker_is_carried(tmp_path: Path) -> None:
+	issues = [[{"state": "open", "body": _consolidated_body(("F-1", "F-9")), "user": {"login": "owner"}}]]
+	_, _, body = _carry_report(tmp_path, security_issues=issues)
+	assert _ids_in(body) == ["F-9"]
+	assert f"Carried forward (file untouched since `{OLD}`, follow-up open): F-9" in body
+
+
+def test_prior_finding_quoted_below_the_leading_block_is_not_carried(tmp_path: Path) -> None:
+	issues = [[{"state": "open", "body": _consolidated_body(("F-1",), trailer="<!-- ai:security-finding:F-9 -->\n"), "user": {"login": "owner"}}]]
+	_, _, body = _carry_report(tmp_path, security_issues=issues)
+	assert "## Single-issue security pass: clean" in body
+
+
+# --- Base-sync carry (issue #9533) ---------------------------------------
+# The pipeline's own freshness update (merge of main into an audited head,
+# recorded by an ai:merge-base-sync:v1 marker) carries the clean audit of
+# from= when the merge is pure; anything else audits the head as before.
+
+_CARRY_GIT_ENV = {
+	"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_AUTHOR_DATE": "2026-01-01T00:00:00Z",
+	"GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid", "GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z",
+	"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
+}
+
+
+def _carry_git(repo: Path, *args: str) -> str:
+	env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+	env.update(_CARRY_GIT_ENV)
+	return subprocess.run(["git", *args], cwd=repo, env=env, capture_output=True, text=True, check=True).stdout.strip()
+
+
+def _carry_repo(tmp_path: Path, *, evil_merge: bool = False, whitespace_merge: bool = False) -> tuple[Path, str, str, str]:
+	"""Build merge base -> PR head (from) and merge base -> main tip, then the update merge."""
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_carry_git(repo, "init", "-q", "-b", "main")
+	(repo / "a.txt").write_text("".join(f"line {n}\n" for n in range(1, 21)), encoding="utf-8")
+	(repo / "b.txt").write_text("base\n", encoding="utf-8")
+	_carry_git(repo, "add", "-A")
+	_carry_git(repo, "commit", "-q", "-m", "base")
+	_carry_git(repo, "checkout", "-q", "-b", "ai/issue-7")
+	(repo / "a.txt").write_text((repo / "a.txt").read_text(encoding="utf-8").replace("line 3\n", "line 3 fixed\n"), encoding="utf-8")
+	_carry_git(repo, "commit", "-q", "-am", "pr fix")
+	from_sha = _carry_git(repo, "rev-parse", "HEAD")
+	_carry_git(repo, "checkout", "-q", "main")
+	(repo / "a.txt").write_text((repo / "a.txt").read_text(encoding="utf-8").replace("line 17\n", "line 17 on main\n"), encoding="utf-8")
+	(repo / "b.txt").write_text("base moved\n", encoding="utf-8")
+	_carry_git(repo, "commit", "-q", "-am", "main moves")
+	base_parent = _carry_git(repo, "rev-parse", "HEAD")
+	_carry_git(repo, "checkout", "-q", "ai/issue-7")
+	_carry_git(repo, "merge", "-q", "--no-ff", "--no-edit", "main")
+	if evil_merge:
+		(repo / "a.txt").write_text((repo / "a.txt").read_text(encoding="utf-8").replace("line 10\n", "line 10 sneaked in\n"), encoding="utf-8")
+		_carry_git(repo, "commit", "-q", "--amend", "--no-edit", "-a")
+	if whitespace_merge:
+		# Indentation-only change to the PR's own line, inside the merge.
+		(repo / "a.txt").write_text((repo / "a.txt").read_text(encoding="utf-8").replace("line 3 fixed\n", "  line 3 fixed\n"), encoding="utf-8")
+		_carry_git(repo, "commit", "-q", "--amend", "--no-edit", "-a")
+	merge_sha = _carry_git(repo, "rev-parse", "HEAD")
+	return repo, from_sha, base_parent, merge_sha
+
+
+def _sync_comment(from_sha: str, base_parent: str, merge_sha: str, login: str = "owner", comment_id: int = 2) -> dict:
+	body = (
+		"**Branch updated from `main` before merging** (update 1; warning threshold 2).\n\n"
+		f"<!-- ai:merge-base-sync:v1 pr=42 from={from_sha} sync=1 base={base_parent} merge={merge_sha} -->"
+	)
+	return _comment(body, login=login, comment_id=comment_id)
+
+
+def _carry_stage_support(tmp_path: Path) -> None:
+	# Production stages review_head_gate.sh and gh_helpers.sh in
+	# SUPPORT_SCRIPTS_DIR, which also enables the freshness-sync inheritance
+	# walk; the carry tests run with both so they cover the real order.
+	support = tmp_path / "support"
+	support.mkdir(exist_ok=True)
+	(support / "review_head_gate.sh").write_text((ROOT / "scripts" / "review_head_gate.sh").read_text(encoding="utf-8"), encoding="utf-8")
+	(support / "gh_helpers.sh").write_text('gh_retry() { "$@"; }\n', encoding="utf-8")
+
+
+def _carry_run(tmp_path: Path, comments_for, *, evil_merge: bool = False, whitespace_merge: bool = False, env: dict | None = None):
+	repo, from_sha, base_parent, merge_sha = _carry_repo(tmp_path, evil_merge=evil_merge, whitespace_merge=whitespace_merge)
+	_carry_stage_support(tmp_path)
+	pr = _pr()
+	pr["head"]["sha"] = merge_sha
+	commit = json.dumps({"parents": [from_sha, base_parent], "verified": True, "committer": "web-flow"})
+	result, calls, output = _run(
+		tmp_path, "gate", pr=pr, comments=comments_for(from_sha, base_parent, merge_sha), cwd=repo, real_git=True,
+		env={"FAKE_GH_COMMIT": commit, "FAKE_GH_COMPARE": "ahead", "GH_RETRY_MAX_ATTEMPTS": "1", **(env or {})},
+	)
+	return result, calls, output, from_sha, merge_sha
+
+
+def test_base_sync_carries_the_clean_audit_of_a_pure_merge(tmp_path: Path) -> None:
+	result, calls, output, from_sha, merge_sha = _carry_run(
+		tmp_path, lambda f, b, m: [_comment(_marker("clean", f, 1)), _sync_comment(f, b, m)],
+	)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert output == "hold=false\n", result.stdout + result.stderr
+	assert f"SINGLE_ISSUE_SECURITY_PASS mode=gate pr=42 head={merge_sha} outcome=clean reason=base_sync_carry from={from_sha}" in result.stdout
+	# The carry decides before the inheritance walk, which never runs here.
+	assert "reason=freshness_sync_inherited" not in result.stdout
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+	assert any(len(call) > 1 and call[1] == f"repos/o/r/commits/{merge_sha}" for call in calls)
+
+
+def test_base_sync_that_changes_a_pr_file_is_audited(tmp_path: Path) -> None:
+	result, calls, output, _from_sha, merge_sha = _carry_run(
+		tmp_path, lambda f, b, m: [_comment(_marker("clean", f, 1)), _sync_comment(f, b, m)], evil_merge=True,
+	)
+	assert f"head={merge_sha} outcome=carry_skipped reason=patch_mismatch" in result.stdout, result.stdout + result.stderr
+	assert "reason=base_sync_carry" not in result.stdout
+	# A merge proven impure is not cleared by the inheritance walk either.
+	assert "reason=freshness_sync_inherited" not in result.stdout
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+def test_base_sync_with_a_whitespace_only_change_to_a_pr_line_is_audited(tmp_path: Path) -> None:
+	# `git patch-id --stable` ignores whitespace; the carry must not.
+	result, calls, output, _from_sha, merge_sha = _carry_run(
+		tmp_path, lambda f, b, m: [_comment(_marker("clean", f, 1)), _sync_comment(f, b, m)], whitespace_merge=True,
+	)
+	assert f"head={merge_sha} outcome=carry_skipped reason=patch_mismatch" in result.stdout, result.stdout + result.stderr
+	assert "reason=freshness_sync_inherited" not in result.stdout
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+@pytest.mark.parametrize("from_status", ["findings", "pending", None])
+def test_base_sync_of_a_head_that_was_not_clean_is_audited(tmp_path: Path, from_status: str | None) -> None:
+	def comments(f: str, b: str, m: str) -> list:
+		prior = [_comment(_marker(from_status, f, 1))] if from_status else []
+		return prior + [_sync_comment(f, b, m)]
+	result, calls, output, _from_sha, merge_sha = _carry_run(tmp_path, comments)
+	assert f"head={merge_sha} outcome=carry_skipped reason=from_not_clean" in result.stdout, result.stdout + result.stderr
+	assert "reason=base_sync_carry" not in result.stdout
+	assert output.startswith("hold=true\n")
+	assert any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+def test_base_sync_marker_by_another_author_is_ignored(tmp_path: Path) -> None:
+	result, calls, output, _from_sha, merge_sha = _carry_run(
+		tmp_path, lambda f, b, m: [_comment(_marker("clean", f, 1)), _sync_comment(f, b, m, login="intruder")],
+	)
+	assert f"head={merge_sha} outcome=carry_skipped reason=freshness_unverified" in result.stdout, result.stdout + result.stderr
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert not any(len(call) > 1 and call[1].startswith("repos/o/r/commits/") for call in calls)
+
+
+def test_base_sync_carry_never_overrides_findings_for_the_head(tmp_path: Path) -> None:
+	result, calls, output, _from_sha, _merge_sha = _carry_run(
+		tmp_path, lambda f, b, m: [_comment(_marker("clean", f, 1)), _sync_comment(f, b, m), _comment(_marker("findings", m, 2), comment_id=3)],
+	)
+	assert "reason=base_sync_carry" not in result.stdout
+	assert "carry_skipped" not in result.stdout
+	assert output.startswith("hold=true\n")
+
+
+def test_base_sync_carry_kill_switch(tmp_path: Path) -> None:
+	# The switch turns off the carry only; the existing freshness-sync
+	# inheritance walk still decides a marker-less verified update.
+	result, calls, output, from_sha, merge_sha = _carry_run(
+		tmp_path, lambda f, b, m: [_comment(_marker("clean", f, 1)), _sync_comment(f, b, m)],
+		env={"SECURITY_PASS_BASE_SYNC_CARRY_ENABLED": "false"},
+	)
+	assert f"head={merge_sha} outcome=carry_skipped reason=disabled" in result.stdout, result.stdout + result.stderr
+	assert "reason=base_sync_carry" not in result.stdout
+	assert f"head={merge_sha} outcome=clean reason=freshness_sync_inherited from={from_sha} hops=1" in result.stdout
+	assert output == "hold=false\n"
+
+
+def test_base_sync_carry_kill_switch_without_inheritance_helpers_audits(tmp_path: Path) -> None:
+	repo, from_sha, base_parent, merge_sha = _carry_repo(tmp_path)
+	pr = _pr()
+	pr["head"]["sha"] = merge_sha
+	result, calls, output = _run(
+		tmp_path, "gate", pr=pr, comments=[_comment(_marker("clean", from_sha, 1)), _sync_comment(from_sha, base_parent, merge_sha)],
+		cwd=repo, real_git=True, env={"SECURITY_PASS_BASE_SYNC_CARRY_ENABLED": "false"},
+	)
+	assert "outcome=carry_skipped reason=disabled" in result.stdout
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+
+
+# --- #9479: retire superseded follow-ups after a clean audit -----------------
+
+REVIEW_DISPATCH = ["workflow", "run", "ai-review.yml", "-R", "o/r", "--ref", "main", "-f", "pr_number=42"]
+ISSUE_CLOSE = ["-f", "state=closed", "-f", "state_reason=not_planned"]
+
+
+def _issue(number: int, body: str, login: str = "owner") -> dict:
+	return {"number": number, "state": "open", "body": body, "user": {"login": login}}
+
+
+def _branch_pr(number: int, head_ref: str, base: str = "ai/issue-7", head_repo: str = "o/r") -> dict:
+	return {"number": number, "state": "open", "base": {"ref": base}, "head": {"ref": head_ref, "sha": OLD, "repo": {"full_name": head_repo}}}
+
+
+def _patches(calls: list) -> list:
+	return [call for call in calls if call[:3] == ["api", "-X", "PATCH"]]
+
+
+def _audit_report(tmp_path: Path, outcome: str = "success", findings: str = "0", env: dict | None = None, **kwargs):
+	report_env = {
+		"SECURITY_PASS_PR_NUMBER": "42", "SECURITY_PASS_HEAD_SHA": HEAD,
+		"SECURITY_PASS_AUDIT_OUTCOME": outcome, "SECURITY_PASS_FINDINGS": findings,
+		"SECURITY_PASS_FINDING_IDS_B64": base64.b64encode(json.dumps([f"F-{n}" for n in range(1, int(findings or 0) + 1)]).encode("ascii")).decode("ascii"),
+	}
+	report_env.update(env or {})
+	return _run(tmp_path, "report", comments=[_comment(_marker("pending", HEAD, 2))], env=report_env, **kwargs)
+
+
+def test_clean_report_retires_superseded_followups(tmp_path: Path) -> None:
+	issues = [[
+		_issue(9399, _followup_body(finding_id="F-1")),
+		_issue(9400, _followup_body(branch="ai/issue-8", finding_id="F-2")),
+		_issue(9401, _followup_body(finding_id="F-3"), login="mallory"),
+		_issue(9402, "- Integration branch: `ai/issue-7`"),
+	]]
+	prs = [[
+		_branch_pr(9404, "ai/issue-9399"),
+		_branch_pr(9405, "ai/issue-9399", head_repo="fork/r"),
+		_branch_pr(9406, "ai/issue-93990"),
+		_branch_pr(9407, "ai/issue-9400"),
+		_branch_pr(9408, "ai/issue-9399-retry", base="main"),
+	]]
+	result, calls, _ = _audit_report(tmp_path, security_issues=issues, branch_prs=prs)
+	assert result.returncode == 0
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert posted[-1][-1].endswith(_marker("clean", HEAD, 2))
+	assert REVIEW_DISPATCH in calls
+	assert ["api", "--paginate", "--slurp", "repos/o/r/pulls?state=open&base=ai%2Fissue-7&per_page=100"] in calls
+	assert _patches(calls) == [
+		["api", "-X", "PATCH", "repos/o/r/pulls/9404", "-f", "state=closed"],
+		["api", "-X", "PATCH", "repos/o/r/issues/9399", *ISSUE_CLOSE],
+	]
+	for number in (9404, 9399):
+		comment = next(call for call in calls if call[:2] == ["api", f"repos/o/r/issues/{number}/comments"])
+		assert HEAD in comment[-1]
+		assert comment[-1].endswith(f"<!-- ai:single-issue-security-pass-followup-retired:v1 head={HEAD} -->")
+	# Retirement runs before the review re-dispatch.
+	assert calls.index(["api", "-X", "PATCH", "repos/o/r/issues/9399", *ISSUE_CLOSE]) < calls.index(REVIEW_DISPATCH)
+	assert "outcome=followups_retired issues=1 prs=1" in result.stdout
+	assert result.stdout.strip().splitlines()[-1].startswith("SINGLE_ISSUE_SECURITY_PASS mode=report pr=42 head=" + HEAD + " outcome=clean")
+
+
+@pytest.mark.parametrize("issue", [
+	_issue(9400, _followup_body(branch="ai/issue-8")),
+	_issue(9401, _followup_body(), login="mallory"),
+	_issue(9402, "Some text\n- Integration branch: `ai/issue-7`"),
+	{"number": 9403, "state": "open", "body": _followup_body(), "user": {"login": "owner"}, "pull_request": {"url": "x"}},
+])
+def test_clean_report_leaves_unrelated_issues_open(tmp_path: Path, issue: dict) -> None:
+	prs = [[_branch_pr(9404, f"ai/issue-{issue['number']}")]]
+	result, calls, _ = _audit_report(tmp_path, security_issues=[[issue]], branch_prs=prs)
+	assert result.returncode == 0 and "outcome=clean" in result.stdout
+	assert _patches(calls) == []
+	assert not any(any(str(arg).startswith("repos/o/r/pulls?state=open&base=") for arg in call) for call in calls)
+	assert REVIEW_DISPATCH in calls
+
+
+def test_clean_report_followup_listing_failure_still_posts_marker_and_redispatches(tmp_path: Path) -> None:
+	result, calls, _ = _audit_report(tmp_path, env={"FAKE_GH_FAIL": "followups"})
+	assert result.returncode == 0
+	assert "outcome=followup_retire_failed reason=listing_failed" in result.stdout
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert posted[-1][-1].endswith(_marker("clean", HEAD, 2))
+	assert REVIEW_DISPATCH in calls
+	assert _patches(calls) == []
+	assert "outcome=clean" in result.stdout
+
+
+def test_clean_report_pr_listing_failure_still_closes_the_issue(tmp_path: Path) -> None:
+	result, calls, _ = _audit_report(tmp_path, env={"FAKE_GH_FAIL": "branch_prs"}, security_issues=[[_issue(9399, _followup_body())]])
+	assert result.returncode == 0 and "reason=pr_listing_failed" in result.stdout
+	assert _patches(calls) == [["api", "-X", "PATCH", "repos/o/r/issues/9399", *ISSUE_CLOSE]]
+	assert REVIEW_DISPATCH in calls
+
+
+def test_clean_report_close_failures_fail_open(tmp_path: Path) -> None:
+	result, calls, _ = _audit_report(tmp_path, env={"FAKE_GH_FAIL": "close"}, security_issues=[[_issue(9399, _followup_body())]], branch_prs=[[_branch_pr(9404, "ai/issue-9399")]])
+	assert result.returncode == 0
+	assert "reason=pr_close_failed item=9404" in result.stdout
+	assert "reason=issue_close_failed item=9399" in result.stdout
+	assert "outcome=followups_retired issues=0 prs=0" in result.stdout
+	assert REVIEW_DISPATCH in calls and "outcome=clean" in result.stdout
+
+
+def test_clean_report_comment_failure_still_closes_followups(tmp_path: Path) -> None:
+	result, calls, _ = _audit_report(tmp_path, env={"FAKE_GH_FAIL": "followup_comment"}, security_issues=[[_issue(9399, _followup_body())]], branch_prs=[[_branch_pr(9404, "ai/issue-9399")]])
+	assert result.returncode == 0
+	assert "reason=comment_failed item=9404 kind=pr" in result.stdout
+	assert "reason=comment_failed item=9399 kind=issue" in result.stdout
+	assert _patches(calls) == [
+		["api", "-X", "PATCH", "repos/o/r/pulls/9404", "-f", "state=closed"],
+		["api", "-X", "PATCH", "repos/o/r/issues/9399", *ISSUE_CLOSE],
+	]
+	assert "outcome=followups_retired issues=1 prs=1" in result.stdout
+	assert REVIEW_DISPATCH in calls and "outcome=clean" in result.stdout
+
+
+@pytest.mark.parametrize("outcome, findings", [("success", "2"), ("failure", "")])
+def test_findings_or_failed_report_never_retires_followups(tmp_path: Path, outcome: str, findings: str) -> None:
+	result, calls, _ = _audit_report(tmp_path, outcome, findings, security_issues=[[_issue(9399, _followup_body())]], branch_prs=[[_branch_pr(9404, "ai/issue-9399")]])
+	assert result.returncode == 0
+	assert _patches(calls) == []
+	assert not any("repos/o/r/issues?labels=ai:security&state=open&per_page=100" in call for call in calls)
+
+
+FOLLOWUP_PR = _pr(base="ai/issue-7", head_ref="ai/issue-9399")
+PARENT_PR = {"number": 42, "state": "open", "base": {"ref": "main"}, "head": {"ref": "ai/issue-7", "sha": HEAD, "repo": {"full_name": "o/r"}}}
+HOLD_MARKER = f"<!-- ai:single-issue-security-pass-followup-hold:v1 parent=42 head={HEAD} -->"
+
+
+def _guard(tmp_path: Path, parent_comments: list, followup_comments: list | None = None, pr: dict | None = None, head_prs: list | None = None, env: dict | None = None):
+	followup_file = tmp_path / "followup_comments.json"
+	followup_file.write_text(json.dumps(followup_comments or []), encoding="utf-8")
+	guard_env = {"PR_NUMBER": "77", "PR_ISSUE_COMMENTS_FILE": str(followup_file), "GH_RETRY_MAX_ATTEMPTS": "1"}
+	guard_env.update(env or {})
+	return _run(tmp_path, "followup-guard", pr=pr or FOLLOWUP_PR, comments=parent_comments, head_prs=[PARENT_PR] if head_prs is None else head_prs, env=guard_env)
+
+
+def _hold_posts(calls: list) -> list:
+	return [call for call in calls if call[:2] == ["api", "repos/o/r/issues/77/comments"]]
+
+
+def test_followup_merge_guard_refuses_into_clean_audited_head(tmp_path: Path) -> None:
+	result, calls, _ = _guard(tmp_path, [_comment(_marker("pending", HEAD, 2)), _comment(_marker("clean", HEAD, 2), comment_id=2)])
+	assert result.returncode == 0
+	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=refuse" in result.stdout.splitlines()
+	assert "mode=followup_guard pr=77 parent=42 head=" + HEAD + " outcome=refuse reason=parent_head_clean comment=posted" in result.stdout
+	assert ["api", "--paginate", "repos/o/r/pulls?state=open&head=o:ai%2Fissue-7&per_page=100"] in calls
+	posts = _hold_posts(calls)
+	assert len(posts) == 1 and posts[0][-1].endswith(HOLD_MARKER) and HEAD in posts[0][-1]
+
+
+def test_followup_merge_guard_comments_once(tmp_path: Path) -> None:
+	result, calls, _ = _guard(
+		tmp_path,
+		[_comment(_marker("clean", HEAD, 2))],
+		followup_comments=[_comment("## Merge held\n\n" + HOLD_MARKER + "\n")],
+	)
+	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=refuse" in result.stdout.splitlines()
+	assert "comment=existing" in result.stdout
+	assert _hold_posts(calls) == []
+
+
+def test_followup_merge_guard_ignores_forged_clean_and_hold_markers(tmp_path: Path) -> None:
+	result, calls, _ = _guard(tmp_path, [_comment(_marker("clean", HEAD, 2), login="mallory")])
+	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=allow" in result.stdout.splitlines()
+	result, calls, _ = _guard(tmp_path, [_comment(_marker("clean", HEAD, 2))], followup_comments=[_comment(HOLD_MARKER, login="mallory")])
+	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=refuse" in result.stdout.splitlines()
+	assert len(_hold_posts(calls)) == 1
+
+
+def test_followup_merge_guard_allows_when_latest_marker_is_findings(tmp_path: Path) -> None:
+	comments = [_comment(_marker("clean", HEAD, 2)), _comment(_marker("pending", HEAD, 3), comment_id=2), _comment(_marker("findings", HEAD, 3), comment_id=3)]
+	result, calls, _ = _guard(tmp_path, comments)
+	assert result.returncode == 0
+	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=allow" in result.stdout.splitlines()
+	assert "reason=parent_head_findings" in result.stdout
+	assert _hold_posts(calls) == []
+	# A clean result for an older head does not cover the current one.
+	result, calls, _ = _guard(tmp_path, [_comment(_marker("clean", OLD, 1))])
+	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=allow" in result.stdout.splitlines()
+	assert "reason=parent_head_unaudited" in result.stdout
+	# A PR into the default branch makes no API call at all.
+	result, calls, _ = _guard(tmp_path, [_comment(_marker("clean", HEAD, 2))], pr=_pr())
+	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=allow" in result.stdout.splitlines()
+	assert "reason=default_base" in result.stdout and calls == []
+	# So does a PR into an orchestrator integration branch.
+	result, calls, _ = _guard(tmp_path, [], pr=_pr(base="orchestrator/project-9", head_ref="ai/issue-9399"))
+	assert "reason=integration_base" in result.stdout and calls == []
+
+
+def test_followup_merge_guard_allows_without_a_standalone_parent(tmp_path: Path) -> None:
+	parent = dict(PARENT_PR, base={"ref": "release/v1"})
+	result, calls, _ = _guard(tmp_path, [_comment(_marker("clean", HEAD, 2))], head_prs=[parent])
+	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=allow" in result.stdout.splitlines()
+	assert "reason=no_standalone_parent" in result.stdout
+
+
+@pytest.mark.parametrize("env, reason", [
+	({"FAKE_GH_FAIL": "head_prs"}, "parent_lookup_failed"),
+	({"FAKE_GH_FAIL": "identity"}, "author_unverifiable"),
+	({"FAKE_GH_FAIL": "parent_comments"}, "markers_unverifiable"),
+])
+def test_followup_merge_guard_parent_lookup_failure_is_unverifiable(tmp_path: Path, env: dict, reason: str) -> None:
+	result, calls, _ = _guard(tmp_path, [_comment(_marker("clean", HEAD, 2))], env=env)
+	assert result.returncode == 0
+	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=unverifiable" in result.stdout.splitlines()
+	assert f"reason={reason}" in result.stdout
+	assert _hold_posts(calls) == []
+
+
+def test_auto_merge_helper_runs_followup_guard_before_merge() -> None:
+	text = (ROOT / "scripts" / "review_enable_auto_merge.sh").read_text(encoding="utf-8")
+	head_bound = text.index('if [ -z "${_orch_pr_head_sha}" ] || [ "${_orch_pr_head_sha}" != "${INITIAL_HEAD_SHA}" ]; then')
+	guard = text.index('review_single_issue_security_pass.sh" followup-guard')
+	status = text.index('review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success', head_bound)
+	assert head_bound < guard < status
+	assert guard < text.index("gh_retry gh pr merge")
+	assert 'if [ "${_followup_guard_result}" != "allow" ]; then' in text[guard:status]
+	assert "exit 0" in text[guard:status]
+	# The guard runs again after the required-checks wait, before any --auto
+	# merge, even when the wait returned without polling.
+	wait = text.index("_pr_wait_for_required_checks", status)
+	recheck = text.index("\nif ! run_security_followup_guard; then\n\texit 0\nfi\n", wait)
+	assert "-gt 0 ] 2>/dev/null && ! run_security_followup_guard" not in text
+	assert recheck < text.index("gh_retry gh pr merge")
+
+
+def test_followup_merge_guard_honours_explicit_kill_switch(tmp_path: Path) -> None:
+	result, calls, _ = _guard(tmp_path, [_comment(_marker("clean", HEAD, 2))], env={"SINGLE_ISSUE_SECURITY_PASS_ENABLED": "false"})
+	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=allow" in result.stdout.splitlines()
+	assert "reason=disabled" in result.stdout and calls == []
+	# Unset keeps the guard on: the auto-merge step does not pass the variable.
+	result, _, _ = _guard(tmp_path, [_comment(_marker("clean", HEAD, 2))], env={"SINGLE_ISSUE_SECURITY_PASS_ENABLED": None})
+	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=refuse" in result.stdout.splitlines()
+
+
+def test_followup_merge_guard_refuses_without_comment_when_own_comments_unreadable(tmp_path: Path) -> None:
+	result, calls, _ = _guard(tmp_path, [_comment(_marker("clean", HEAD, 2))], env={"PR_ISSUE_COMMENTS_FILE": str(tmp_path / "missing.json"), "FAKE_GH_FAIL": "pr_comments"})
+	assert result.returncode == 0
+	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=refuse" in result.stdout.splitlines()
+	assert "reason=parent_head_clean comment=unverifiable" in result.stdout
+	assert _hold_posts(calls) == []
+	# A readable listing without the marker still posts the hold comment once.
+	result, calls, _ = _guard(tmp_path, [_comment(_marker("clean", HEAD, 2))], env={"PR_ISSUE_COMMENTS_FILE": str(tmp_path / "missing.json")})
+	assert "comment=posted" in result.stdout and len(_hold_posts(calls)) == 1
+
+
+# --- Freshness-update heads reuse the approved head's clean audit ----------
+
+SYNC_ONE = "e" * 40
+BASE_ONE = "1" * 40
+BASE_TWO = "2" * 40
+
+
+def _sync_marker(from_head: str, merge: str, base: str, sync: int = 1) -> str:
+	return (
+		"**Branch updated from `main` before merging** (update 1; warning threshold 2).\n\n"
+		f"<!-- ai:merge-base-sync:v1 pr=42 from={from_head} sync={sync} base={base} merge={merge} -->"
+	)
+
+
+def _merge_commit(first: str, second: str, committer: str = "web-flow", verified: bool = True) -> dict:
+	return {"parents": [first, second], "verified": verified, "committer": committer}
+
+
+def _inherit_run(tmp_path: Path, comments: list, commits: dict, mode: str = "gate", compare_status: str = "ahead"):
+	support = tmp_path / "support"
+	support.mkdir(exist_ok=True)
+	(support / "review_head_gate.sh").write_text((ROOT / "scripts" / "review_head_gate.sh").read_text(encoding="utf-8"), encoding="utf-8")
+	(support / "gh_helpers.sh").write_text('gh_retry() { "$@"; }\n', encoding="utf-8")
+	(tmp_path / "commits.json").write_text(json.dumps(commits), encoding="utf-8")
+	return _run(
+		tmp_path,
+		mode,
+		comments=comments,
+		env={"FAKE_GH_COMMITS": str(tmp_path / "commits.json"), "FAKE_GH_COMPARE_STATUS": compare_status},
+	)
+
+
+def test_verified_freshness_update_of_a_clean_head_needs_no_new_audit(tmp_path: Path) -> None:
+	comments = [
+		_comment("ok\n" + _marker("clean", OLD, 1), comment_id=1),
+		_comment(_sync_marker(OLD, HEAD, BASE_ONE), comment_id=2),
+	]
+	result, calls, output = _inherit_run(tmp_path, comments, {HEAD: _merge_commit(OLD, BASE_ONE)})
+	assert output == "hold=false\n", result.stdout + result.stderr
+	assert f"outcome=clean reason=freshness_sync_inherited from={OLD} hops=1" in result.stdout
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+	assert not any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
+
+
+def test_chain_of_updates_walks_back_to_the_audited_head(tmp_path: Path) -> None:
+	comments = [
+		_comment("ok\n" + _marker("clean", OLD, 1), comment_id=1),
+		_comment(_sync_marker(OLD, SYNC_ONE, BASE_ONE), comment_id=2),
+		_comment(_sync_marker(SYNC_ONE, HEAD, BASE_TWO, sync=2), comment_id=3),
+	]
+	commits = {SYNC_ONE: _merge_commit(OLD, BASE_ONE), HEAD: _merge_commit(SYNC_ONE, BASE_TWO)}
+	result, _calls, output = _inherit_run(tmp_path, comments, commits)
+	assert output == "hold=false\n", result.stdout + result.stderr
+	assert f"from={OLD} hops=2" in result.stdout
+
+
+def test_status_mode_reports_an_inherited_clean_head(tmp_path: Path) -> None:
+	comments = [
+		_comment("ok\n" + _marker("clean", OLD, 1), comment_id=1),
+		_comment(_sync_marker(OLD, HEAD, BASE_ONE), comment_id=2),
+	]
+	result, calls, _output = _inherit_run(tmp_path, comments, {HEAD: _merge_commit(OLD, BASE_ONE)}, mode="status")
+	assert "SINGLE_ISSUE_SECURITY_PASS_STATE=clean" in result.stdout
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+@pytest.mark.parametrize(
+	"case",
+	["from_findings", "not_github_merge", "unsigned", "wrong_first_parent", "base_parent_mismatch", "base_not_on_main", "foreign_marker", "unbound_marker", "commit_unreadable"],
+)
+def test_unverifiable_updates_are_audited_as_before(tmp_path: Path, case: str) -> None:
+	prior = _marker("findings" if case == "from_findings" else "clean", OLD, 1)
+	sync_body = _sync_marker(OLD, HEAD, BASE_ONE)
+	if case == "unbound_marker":
+		sync_body = "**Branch updated from `main` before merging** (update 1).\n\n" + f"<!-- ai:merge-base-sync:v1 pr=42 from={OLD} sync=1 -->"
+	commit = _merge_commit(OLD, BASE_ONE)
+	if case == "not_github_merge":
+		commit = _merge_commit(OLD, BASE_ONE, committer="someone")
+	elif case == "unsigned":
+		commit = _merge_commit(OLD, BASE_ONE, verified=False)
+	elif case == "wrong_first_parent":
+		commit = _merge_commit(SYNC_ONE, BASE_ONE)
+	elif case == "base_parent_mismatch":
+		commit = _merge_commit(OLD, BASE_TWO)
+	comments = [
+		_comment("ok\n" + prior, comment_id=1),
+		_comment(sync_body, login="intruder" if case == "foreign_marker" else "owner", comment_id=2),
+	]
+	commits = {} if case == "commit_unreadable" else {HEAD: commit}
+	result, calls, output = _inherit_run(
+		tmp_path, comments, commits, compare_status="diverged" if case == "base_not_on_main" else "ahead"
+	)
+	assert "freshness_sync_inherited" not in result.stdout
+	assert output.startswith("hold=true\n"), result.stdout + result.stderr
+	assert any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+def test_a_marker_on_the_update_head_itself_still_decides(tmp_path: Path) -> None:
+	comments = [
+		_comment("ok\n" + _marker("clean", OLD, 1), comment_id=1),
+		_comment(_sync_marker(OLD, HEAD, BASE_ONE), comment_id=2),
+		_comment(_marker("pending", HEAD, 2), comment_id=3),
+	]
+	result, calls, output = _inherit_run(tmp_path, comments, {HEAD: _merge_commit(OLD, BASE_ONE)})
+	assert output == "hold=true\nhold_reason=audit_pending\n"
+	assert "freshness_sync_inherited" not in result.stdout
+	assert not any(call[:1] == ["api"] and "commits/" in call[1] for call in calls if len(call) > 1)
+
+
+def test_missing_support_helpers_fall_back_to_an_audit(tmp_path: Path) -> None:
+	comments = [
+		_comment("ok\n" + _marker("clean", OLD, 1), comment_id=1),
+		_comment(_sync_marker(OLD, HEAD, BASE_ONE), comment_id=2),
+	]
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	assert output.startswith("hold=true\n") and "freshness_sync_inherited" not in result.stdout
+	assert any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+# --- Convergence: per-PR audits, lost-audit retry, attempt-based budget ----
+
+
+def _iso(age_minutes: float) -> str:
+	return (dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=age_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _runs(tmp_path: Path, runs: list) -> str:
+	path = tmp_path / "runs.json"
+	path.write_text(json.dumps({"workflow_runs": runs}), encoding="utf-8")
+	return str(path)
+
+
+def _audit_run(status: str, conclusion: str | None, created_minutes: float, updated_minutes: float, pr: int = 42) -> dict:
+	return {
+		"display_title": f"AI Security Audit (PR #{pr})", "status": status, "conclusion": conclusion,
+		"created_at": _iso(created_minutes), "updated_at": _iso(updated_minutes),
+	}
+
+
+def test_unreported_pending_cycles_do_not_use_the_cycle_budget(tmp_path: Path) -> None:
+	# PR #9389's history: 3 completed clean audits on older heads, 5 audits
+	# that were cancelled in the queue and never reported.
+	heads = {n: f"{n:040x}" for n in range(1, 8)}
+	comments = []
+	for n, status in [(1, "clean"), (2, "clean"), (3, "pending"), (4, "pending"), (5, "pending"), (6, "clean"), (7, "pending")]:
+		comments.append(_comment(_marker("pending", heads[n], n), comment_id=2 * n - 1, age_hours=20 - n))
+		if status != "pending":
+			comments.append(_comment(_marker(status, heads[n], n), comment_id=2 * n, age_hours=19.5 - n))
+	comments.append(_comment(_marker("pending", HEAD, 8), comment_id=99, age_hours=7))
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert "outcome=dispatched cycle=9" in result.stdout and "exhausted_retry" not in result.stdout
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert "(cycle 4 of 5)" in posted[-1][-1] and posted[-1][-1].endswith(_marker("pending", HEAD, 9))
+	assert not any(call[:2] == ["api", "repos/o/r/issues/42/labels"] for call in calls)
+
+
+def test_attempts_cap_bounds_audits_that_never_report(tmp_path: Path) -> None:
+	comments = [_comment(_marker("pending", f"{n:040x}", n), comment_id=n, age_hours=30 - n) for n in range(1, 11)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	# Ten attempts (twice the 5-cycle cap) are spent: the exhausted path runs,
+	# which still grants this head its bounded retries.
+	assert output == "hold=true\nhold_reason=audit_dispatched\n" and "reason=exhausted_retry" in result.stdout
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert "head attempt 1 of 2" in posted[-1][-1] and posted[-1][-1].endswith(_marker("pending", HEAD, 11))
+	comments += [_comment(_marker("pending", HEAD, n), comment_id=n, age_hours=7) for n in (11, 12)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	assert output == "hold=true\nhold_reason=exhausted_without_completed_audit\n"
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+@pytest.mark.parametrize("value, dispatched", [("12", True), ("10", False), ("3", False), ("abc", False)])
+def test_attempts_cap_override_is_validated(tmp_path: Path, value: str, dispatched: bool) -> None:
+	comments = [_comment(_marker("pending", f"{n:040x}", n), comment_id=n, age_hours=30 - n) for n in range(1, 11)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"SECURITY_PASS_MAX_AUDIT_ATTEMPTS": value})
+	# Below the cycle cap (3) the cap is raised to it; invalid falls back to 10.
+	assert ("reason=exhausted_retry" not in result.stdout) is dispatched
+	assert "outcome=dispatched cycle=11" in result.stdout
+
+
+def test_cancelled_audit_is_retried_before_the_stale_window(tmp_path: Path) -> None:
+	runs = _runs(tmp_path, [
+		_audit_run("completed", "cancelled", 39, 30),
+		_audit_run("completed", "success", 300, 280),
+		_audit_run("in_progress", None, 5, 1, pr=7),
+	])
+	comments = [_comment(_marker("pending", HEAD, 1), age_hours=40 / 60)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GH_RUNS": runs})
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert "reason=audit_run_lost" in result.stdout and "outcome=dispatched cycle=2" in result.stdout
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	# The lost attempt used no cycle.
+	assert "(cycle 1 of 5)" in posted[-1][-1]
+	listings = [call for call in calls if any("/actions/workflows/ai-security-audit.yml/runs" in arg for arg in call)]
+	assert len(listings) == 1
+
+
+@pytest.mark.parametrize(
+	"run_specs, marker_minutes, expected_state, listed",
+	[
+		([("queued", None, 39, 39, 42)], 40, "live", True),
+		([("completed", "cancelled", 39, 5, 42)], 40, "live", True),
+		([("completed", "cancelled", 39, 30, 7)], 40, "unknown", True),
+		([("completed", "cancelled", 200, 190, 42)], 40, "unknown", True),
+		(None, 40, "unknown", True),
+		([("completed", "cancelled", 39, 30, 42)], 10, "", False),
+	],
+)
+def test_pending_audit_holds_without_positive_evidence_of_loss(tmp_path: Path, run_specs, marker_minutes: int, expected_state: str, listed: bool) -> None:
+	# Timestamps are built here, not at collection, so a slow run cannot age them.
+	runs = None if run_specs is None else [_audit_run(*spec[:4], pr=spec[4]) for spec in run_specs]
+	env = {"FAKE_GH_RUNS": _runs(tmp_path, runs)} if runs is not None else {}
+	comments = [_comment(_marker("pending", HEAD, 1), age_hours=marker_minutes / 60)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env=env)
+	assert output == "hold=true\nhold_reason=audit_pending\n"
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+	assert (f"audit_run={expected_state}" in result.stdout) if expected_state else ("audit_run=" not in result.stdout)
+	assert any(any("/actions/workflows/" in arg for arg in call) for call in calls) is listed
+
+
+def test_cancel_check_can_be_disabled(tmp_path: Path) -> None:
+	runs = _runs(tmp_path, [_audit_run("completed", "cancelled", 39, 30)])
+	comments = [_comment(_marker("pending", HEAD, 1), age_hours=40 / 60)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GH_RUNS": runs, "SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES": "0"})
+	assert output == "hold=true\nhold_reason=audit_pending\n"
+	assert not any(any("/actions/workflows/" in arg for arg in call) for call in calls)
+
+
+@pytest.mark.parametrize(
+	"active, env, throttled",
+	[(3, {}, True), (2, {}, False), (5, {"SECURITY_PASS_MAX_CONCURRENT_AUDITS": "6"}, False), (9, {"SECURITY_PASS_MAX_CONCURRENT_AUDITS": "0"}, False)],
+)
+def test_concurrent_audits_are_throttled_without_using_a_cycle(tmp_path: Path, active: int, env: dict, throttled: bool) -> None:
+	runs = [_audit_run("in_progress" if n % 2 else "queued", None, 5, 1, pr=100 + n) for n in range(active)]
+	runs.append(_audit_run("completed", "success", 50, 30, pr=200))
+	result, calls, output = _run(tmp_path, "gate", env={"FAKE_GH_RUNS": _runs(tmp_path, runs), **env})
+	if throttled:
+		assert output == "hold=true\nhold_reason=audit_throttled\n" and f"reason=audit_throttled active={active} max=3" in result.stdout
+		assert not any(call[:2] == ["workflow", "run"] for call in calls)
+		assert not any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
+	else:
+		assert output == "hold=true\nhold_reason=audit_dispatched\n" and "outcome=dispatched cycle=1" in result.stdout
+
+
+def test_throttle_fails_open_when_runs_cannot_be_listed(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", env={"FAKE_GH_RUNS": _runs(tmp_path, []), "FAKE_GH_FAIL": "runs"})
+	assert output == "hold=true\nhold_reason=audit_dispatched\n" and "outcome=dispatched cycle=1" in result.stdout
+
+
+def test_status_mode_never_lists_audit_runs_for_a_fresh_head(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "status", env={"FAKE_GH_RUNS": _runs(tmp_path, [])})
+	assert "SINGLE_ISSUE_SECURITY_PASS_STATE=needs_audit" in result.stdout
+	assert not any(any("/actions/workflows/" in arg for arg in call) for call in calls)
+
+
+@pytest.mark.parametrize("earlier, redispatch", [("pending", False), ("clean", True)])
+def test_report_last_cycle_ignores_unreported_attempts(tmp_path: Path, earlier: str, redispatch: bool) -> None:
+	# Cycle 5 with four earlier attempts: they used the budget only if they
+	# reported. Findings on the last budget cycle re-run the review.
+	extra = []
+	for n in range(1, 5):
+		extra.append(_comment(_marker("pending", f"{n:040x}", n), comment_id=10 + n))
+		if earlier != "pending":
+			extra.append(_comment(_marker(earlier, f"{n:040x}", n), comment_id=20 + n))
+	result, calls, _ = _report(tmp_path, "success", "2", cycle=5, extra_comments=extra)
+	assert "outcome=findings cycle=5" in result.stdout
+	review = ["workflow", "run", "ai-review.yml", "-R", "o/r", "--ref", "main", "-f", "pr_number=42"]
+	assert (review in calls) is redispatch
+
+
+def _since(tmp_path: Path, comments: list, ancestors: str = "", env: dict | None = None):
+	run_env = {"SECURITY_PASS_PR_NUMBER": "42", "SECURITY_PASS_HEAD_SHA": HEAD, "FAKE_GIT_ANCESTORS": ancestors}
+	run_env.update(env or {})
+	return _run(tmp_path, "since", comments=comments, env=run_env)
+
+
+def test_since_names_the_newest_clean_ancestor(tmp_path: Path) -> None:
+	first, second, foreign = "1" * 40, "2" * 40, "3" * 40
+	comments = [
+		_comment(_marker("clean", first, 1), comment_id=1),
+		_comment(_marker("clean", second, 2), comment_id=2),
+		_comment(_marker("clean", foreign, 3), comment_id=3),
+		_comment(_marker("clean", "4" * 40, 4), login="other[bot]", comment_id=4),
+	]
+	result, calls, _ = _since(tmp_path, comments, ancestors=f"{first},{second},{'4' * 40}")
+	assert result.stdout.strip() == second
+	assert "outcome=delta" in result.stderr
+
+
+@pytest.mark.parametrize(
+	"comments, ancestors, env, reason",
+	[
+		([], "", {}, "no_clean_ancestor"),
+		([_comment(_marker("findings", "1" * 40, 1))], "1" * 40, {}, "no_clean_ancestor"),
+		([_comment(_marker("clean", "1" * 40, 1))], "", {}, "no_clean_ancestor"),
+		([_comment(_marker("clean", HEAD, 1))], HEAD, {}, "no_clean_ancestor"),
+		([_comment(_marker("clean", "1" * 40, 1))], "1" * 40, {"FAKE_GIT_HEAD": "e" * 40}, "checkout_mismatch"),
+		([_comment(_marker("clean", "1" * 40, 1))], "1" * 40, {"FAKE_GH_FAIL": "identity"}, "author_unverifiable"),
+		([_comment(_marker("clean", "1" * 40, 1))], "1" * 40, {"SECURITY_PASS_PR_NUMBER": ""}, "missing_input"),
+	],
+)
+def test_since_falls_back_to_the_full_range(tmp_path: Path, comments: list, ancestors: str, env: dict, reason: str) -> None:
+	result, _, _ = _since(tmp_path, comments, ancestors=ancestors, env=env)
+	assert result.returncode == 0 and result.stdout.strip() == ""
+	assert f"outcome=full reason={reason}" in result.stderr
+
+
+def test_audit_concurrency_is_per_pr_in_both_workflows() -> None:
+	audit = yaml.safe_load(AUDIT.read_text(encoding="utf-8"))
+	wrapper = yaml.safe_load(AUDIT_TEMPLATE.read_text(encoding="utf-8"))
+	reusable_group = audit["concurrency"]["group"]
+	wrapper_group = wrapper["concurrency"]["group"]
+	for group in (reusable_group, wrapper_group):
+		assert "inputs.pr_number" in group and "format('pr-{0}', inputs.pr_number)" in group and "'default'" in group
+	# Distinct prefixes keep the caller/callee deadlock away (see the comment
+	# above the reusable workflow's concurrency block).
+	assert reusable_group.startswith("security-audit-reusable-") and not wrapper_group.startswith("security-audit-reusable-")
+	assert audit["concurrency"]["cancel-in-progress"] is False and wrapper["concurrency"]["cancel-in-progress"] is False
+	# The gate finds the run behind a pending marker by this title suffix.
+	assert "format('Security Audit (PR #{0})', inputs.pr_number)" in audit["run-name"]
+	assert "format('AI Security Audit (PR #{0})', inputs.pr_number)" in wrapper["run-name"]
+
+
+def test_audit_scope_step_wires_the_delta_helper() -> None:
+	audit = yaml.safe_load(AUDIT.read_text(encoding="utf-8"))
+	steps = {step.get("name"): step for step in audit["jobs"]["security-audit"]["steps"]}
+	scope = steps["Verify audit data and resolve scope"]
+	assert scope["env"]["SECURITY_PASS_PR_NUMBER"] == "${{ inputs.pr_number }}"
+	assert "SECURITY_PASS_DELTA_AUDIT_ENABLED" in scope["env"]
+	assert 'review_single_issue_security_pass.sh" since' in scope["run"]
+	assert 'echo "SECURITY_AUDIT_DIFF_SINCE=${audit_since}" >> "$GITHUB_ENV"' in scope["run"]
+	assert "SECURITY_PASS_MAX_AUDIT_ATTEMPTS" in steps["Report single-issue security pass"]["env"]

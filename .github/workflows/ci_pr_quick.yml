@@ -1,0 +1,42 @@
+---
+name: CI quick
+
+# Per-push static checks for every PR (cut-ci-runner-time Phase 4,
+# docs/plans/cut-ci-runner-time-plan.md). ci.yml no longer runs on
+# pull_request: this caller runs its `static-checks` job with mode `quick`
+# on every push, and the full suite runs once per PR when review has
+# finished with a head (ci.yml's workflow_dispatch trigger, started by
+# _pr_ensure_final_ci in scripts/pr_checks_lib.sh).
+#
+# The called jobs' check-runs are named `quick / <job>`. GitHub reports a job
+# skipped by `if:` as successful for a required check of the same name, so
+# this workflow must never create a check named `lint`: the required `lint`
+# comes only from a ci.yml run that ran the full suite on that head.
+# tests/test_ci_pr_quick.py pins that.
+
+"on":
+  pull_request:
+    branches: ["**"]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# A newer push to the PR cancels its older quick run.
+concurrency:
+  group: ci-quick-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# A called workflow's jobs may not ask for more than the caller grants, even
+# when they are skipped, so this grants what ci.yml's jobs declare
+# (final-ci-failed and budget-watch never run here).
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  actions: write
+  # final-ci-failed reads check-run annotations (classify-run).
+  checks: read
+
+jobs:
+  quick:
+    uses: ./.github/workflows/ci.yml
+    with:
+      mode: quick

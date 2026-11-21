@@ -52,6 +52,87 @@ def test_job_duration_findings_match_matrix_jobs_and_skip_skipped(tmp_path: Path
 	assert findings[1]["job"] == "orchestrate-poll (2)"
 
 
+def test_job_duration_findings_ignore_jobs_that_ran_no_step(tmp_path: Path, capsys) -> None:
+	# #9559: a job cancelled while queued has started_at/completed_at 33m49s
+	# apart but no step ran; that is wait time, not a near-timeout job.
+	root = _tree(tmp_path, {}, CI)
+	timeouts = cbw.job_timeouts(root / ".github" / "workflows" / "ci.yml")
+	queued = {**_job("tests-a", 33 * 60 + 49, conclusion="cancelled"), "steps": []}
+	assert cbw.job_duration_findings([queued], timeouts, 0.75) == []
+	unstarted = {**queued, "steps": [{"name": "Set up job", "started_at": None}, {"name": "Run tests", "started_at": None}]}
+	assert cbw.job_duration_findings([unstarted], timeouts, 0.75) == []
+	assert "::notice::ci_budget_watch: job tests-a ran no step (conclusion=cancelled); duration not checked." in capsys.readouterr().out
+
+
+def test_job_duration_findings_measure_from_first_started_step(tmp_path: Path) -> None:
+	root = _tree(tmp_path, {}, CI)
+	timeouts = cbw.job_timeouts(root / ".github" / "workflows" / "ci.yml")
+	# Queued 15 minutes, then ran 5: no finding at a 20-minute timeout.
+	job = {**_job("tests-a", 20 * 60), "steps": [
+		{"name": "Run tests", "started_at": "2026-10-09T10:16:00Z"},
+		{"name": "Set up job", "started_at": "2026-10-09T10:15:00Z"},
+		{"name": "Post", "started_at": None},
+	]}
+	assert cbw.job_duration_findings([job], timeouts, 0.75) == []
+	# A job that hit its timeout ran its steps; it is still reported.
+	timed_out = {**_job("tests-a", 20 * 60, conclusion="cancelled"), "steps": [{"name": "Set up job", "started_at": "2026-10-09T10:00:00Z"}]}
+	findings = cbw.job_duration_findings([timed_out], timeouts, 0.75)
+	assert [(f["subject"], f["value"]) for f in findings] == [("tests-a", 1200)]
+
+
+def test_job_duration_findings_drop_unparsable_step_starts(tmp_path: Path, capsys) -> None:
+	# A malformed step time is dropped instead of moving the start later.
+	root = _tree(tmp_path, {}, CI)
+	timeouts = cbw.job_timeouts(root / ".github" / "workflows" / "ci.yml")
+	job = {**_job("tests-a", 19 * 60), "steps": [
+		{"name": "Run tests", "started_at": "2026-10-09T10:16:00Z"},
+		{"name": "Broken", "started_at": "not-a-time"},
+		{"name": "Set up job", "started_at": "2026-10-09T10:00:00"},
+	]}
+	findings = cbw.job_duration_findings([job], timeouts, 0.75)
+	assert [(f["subject"], f["value"]) for f in findings] == [("tests-a", 1140)]
+	# The no-step notice escapes the job name so it cannot end the command.
+	queued = {**_job("tests-a\n::error::x", 60, conclusion="cancelled"), "steps": []}
+	assert cbw.job_duration_findings([queued], {"tests-a\n::error::x": 20}, 0.75) == []
+	assert "job tests-a%0A::error::x ran no step" in capsys.readouterr().out
+	# A job still queued (no completed_at) has not run yet and is not logged.
+	pending = {"name": "tests-a", "started_at": None, "completed_at": None, "conclusion": None, "steps": []}
+	assert cbw.job_duration_findings([pending], timeouts, 0.75) == []
+	assert "ci_budget_watch" not in capsys.readouterr().out
+
+
+def test_job_duration_findings_log_jobs_with_no_usable_start(tmp_path: Path, capsys) -> None:
+	# Every step time is malformed: the job is not measured, and that is logged.
+	root = _tree(tmp_path, {}, CI)
+	timeouts = cbw.job_timeouts(root / ".github" / "workflows" / "ci.yml")
+	job = {**_job("tests-a", 19 * 60), "steps": [{"name": "Broken", "started_at": "not-a-time"}]}
+	assert cbw.job_duration_findings([job], timeouts, 0.75) == []
+	assert "::notice::ci_budget_watch: job tests-a has no usable start or completion time (conclusion=success); duration not checked." in capsys.readouterr().out
+	# A malformed completed_at, or a null started_at with no steps list, is logged the same way.
+	bad_end = {**_job("tests-a", 60), "completed_at": "not-a-time"}
+	no_start = {**_job("tests-a", 60), "started_at": None}
+	assert cbw.job_duration_findings([bad_end, no_start], timeouts, 0.75) == []
+	assert capsys.readouterr().out.count("has no usable start or completion time") == 2
+	# A non-string step start is ignored rather than crashing `_seconds`.
+	numeric = {**_job("tests-a", 60), "steps": [{"name": "Odd", "started_at": 12345}]}
+	assert cbw.job_duration_findings([numeric], timeouts, 0.75) == []
+	assert "ran no step (conclusion=success)" in capsys.readouterr().out
+	# A job still running has no completed_at and is skipped without a notice.
+	running = {"name": "tests-a", "started_at": "2026-10-09T10:00:00Z", "completed_at": None, "conclusion": None}
+	assert cbw.job_duration_findings([running], timeouts, 0.75) == []
+	assert "ci_budget_watch" not in capsys.readouterr().out
+
+
+def test_job_duration_findings_survive_non_string_job_times(tmp_path: Path, capsys) -> None:
+	# A non-string job-level time is not measured and does not crash the check.
+	root = _tree(tmp_path, {}, CI)
+	timeouts = cbw.job_timeouts(root / ".github" / "workflows" / "ci.yml")
+	odd_start = {**_job("tests-a", 60), "started_at": 12345}
+	odd_end = {**_job("tests-a", 60), "completed_at": 12345}
+	assert cbw.job_duration_findings([odd_start, odd_end, _job("tests-a", 19 * 60)], timeouts, 0.75)[0]["value"] == 1140
+	assert capsys.readouterr().out.count("has no usable start or completion time") == 2
+
+
 def test_issue_text_names_the_fix_and_carries_the_marker() -> None:
 	size = {"kind": "workflow_size", "subject": ".github/workflows/review_autofix.yml", "value": 481_287, "limit": 480_000}
 	assert cbw.issue_title(size) == "CI budget: .github/workflows/review_autofix.yml is 481,287 bytes (guard 480,000)"

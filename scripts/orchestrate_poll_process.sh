@@ -23,6 +23,153 @@ set -euo pipefail
 # gh comment calls through the shim even when no earlier step loaded it.
 [ -z "${BASH_SOURCE[0]:-}" ] || AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" >/dev/null 2>&1 || true
 
+# --- ORCH_POLL_CYCLE_SUMMARY helpers (begin) ---
+# Per-cycle timing summary (analysis/workflow-optimization-2026-10-08.md,
+# Speed #2): the EXIT trap prints exactly one ORCH_POLL_CYCLE_SUMMARY line per
+# run, and the tracking loop prints one ORCH_POLL_PROJECT_TIMING line per
+# project processed. sleep_ms sums only the sleep sites in this file that call
+# "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" (gh_retry backoff in gh_helpers.sh is
+# not counted). Fail-open: no gh/API calls, no new or longer sleeps, the trap
+# never calls exit (bash keeps the original exit status) and every step runs
+# in an `|| true` context so errexit cannot abort it. Installed here, before
+# the first `exit`, so early sweep-only and failure exits are covered too.
+# Only a directly executed run (`bash scripts/orchestrate_poll_process.sh`)
+# reports; test harnesses that `source` the poller as a library get no trap,
+# no ledger file and no extra stdout lines.
+_orch_poll_cycle_now_ms()
+{
+	local _orch_poll_cycle_now_value="" _orch_poll_cycle_now_realtime="${EPOCHREALTIME:-}"
+	# Bash's own clock first: on ubuntu-26.04 runners `date +%s%3N` (Rust
+	# coreutils) gave readings that went backwards within a run, which printed
+	# negative elapsed_ms. `date` stays as the fallback for bash < 5.
+	if [[ "${_orch_poll_cycle_now_realtime}" =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
+		printf '%s' "$(( 10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]} / 1000 ))"
+		return 0
+	fi
+	_orch_poll_cycle_now_value="$(date +%s%3N 2>/dev/null || true)"
+	if [[ "${_orch_poll_cycle_now_value}" =~ ^[0-9]{13,}$ ]]; then
+		printf '%s' "${_orch_poll_cycle_now_value}"
+		return 0
+	fi
+	_orch_poll_cycle_now_value="$(date +%s 2>/dev/null || true)"
+	if [[ "${_orch_poll_cycle_now_value}" =~ ^[0-9]+$ ]]; then
+		printf '%s' "$(( _orch_poll_cycle_now_value * 1000 ))"
+	fi
+	return 0
+}
+
+# Same arguments and exit status as `sleep`: records the requested duration
+# in the run's sleep ledger, then runs the original sleep unchanged. The
+# ledger is a file so sleeps inside $(...) subshells are counted too; nothing
+# is written once the main shell has removed it.
+_orch_poll_cycle_sleep()
+{
+	local _orch_poll_cycle_sleep_ledger="${_ORCH_POLL_CYCLE_SLEEP_LEDGER:-}"
+	if [ -n "${_orch_poll_cycle_sleep_ledger}" ] && [ -f "${_orch_poll_cycle_sleep_ledger}" ]; then
+		if [[ "${1:-}" =~ ^[0-9]{1,9}$ ]]; then
+			printf '%s\n' "$(( 10#${1} * 1000 ))" 2>/dev/null >> "${_orch_poll_cycle_sleep_ledger}" || true
+		else
+			printf 'unknown\n' 2>/dev/null >> "${_orch_poll_cycle_sleep_ledger}" || true
+		fi
+	fi
+	sleep "$@"
+}
+
+_orch_poll_cycle_project_flush()
+{
+	local _orch_poll_cycle_flush_num="" _orch_poll_cycle_flush_now="" _orch_poll_cycle_flush_elapsed="unknown"
+	if [ "${_ORCH_POLL_CYCLE_ENABLED:-false}" != "true" ] || [ -z "${_ORCH_POLL_CYCLE_PROJECT_NUM:-}" ]; then
+		return 0
+	fi
+	_orch_poll_cycle_flush_num="${_ORCH_POLL_CYCLE_PROJECT_NUM}"
+	[[ "${_orch_poll_cycle_flush_num}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_flush_num="unknown"
+	_orch_poll_cycle_flush_now="$(_orch_poll_cycle_now_ms 2>/dev/null || true)"
+	if [[ "${_orch_poll_cycle_flush_now}" =~ ^[0-9]+$ ]] && [[ "${_ORCH_POLL_CYCLE_PROJECT_START_MS:-}" =~ ^[0-9]+$ ]]; then
+		_orch_poll_cycle_flush_elapsed="$(( _orch_poll_cycle_flush_now - _ORCH_POLL_CYCLE_PROJECT_START_MS ))"
+	fi
+	# Clear first so a failed write can never print the same project twice.
+	_ORCH_POLL_CYCLE_PROJECT_NUM=""
+	_ORCH_POLL_CYCLE_PROJECT_START_MS=""
+	echo "ORCH_POLL_PROJECT_TIMING tracking_issue=${_orch_poll_cycle_flush_num} elapsed_ms=${_orch_poll_cycle_flush_elapsed}" 2>/dev/null || true
+	return 0
+}
+
+# Called at the top of each tracking-loop pass: prints the previous project's
+# timing line (so the loop's many `continue` paths need no edits), counts the
+# new project and starts its clock.
+_orch_poll_cycle_project_begin()
+{
+	if [ "${_ORCH_POLL_CYCLE_ENABLED:-false}" != "true" ]; then
+		return 0
+	fi
+	_orch_poll_cycle_project_flush || true
+	if [[ "${_ORCH_POLL_CYCLE_PROJECTS_PROCESSED:-}" =~ ^[0-9]+$ ]]; then
+		_ORCH_POLL_CYCLE_PROJECTS_PROCESSED="$(( _ORCH_POLL_CYCLE_PROJECTS_PROCESSED + 1 ))"
+	fi
+	_ORCH_POLL_CYCLE_PROJECT_NUM="${1:-unknown}"
+	_ORCH_POLL_CYCLE_PROJECT_START_MS="$(_orch_poll_cycle_now_ms 2>/dev/null || true)"
+	return 0
+}
+
+_orch_poll_cycle_on_exit()
+{
+	local _orch_poll_cycle_exit_code="${1:-}" _orch_poll_cycle_exit_now="" _orch_poll_cycle_exit_elapsed="unknown"
+	local _orch_poll_cycle_exit_sleep="unknown" _orch_poll_cycle_exit_ledger="${_ORCH_POLL_CYCLE_SLEEP_LEDGER:-}"
+	local _orch_poll_cycle_exit_seen="${_ORCH_POLL_CYCLE_PROJECTS_SEEN:-unknown}" _orch_poll_cycle_exit_processed="${_ORCH_POLL_CYCLE_PROJECTS_PROCESSED:-unknown}"
+	local _orch_poll_cycle_exit_reason="completed"
+	# Subshells never emit; the main shell emits exactly once.
+	if [ "${_ORCH_POLL_CYCLE_ENABLED:-false}" != "true" ] || [ "${BASHPID:-$$}" != "$$" ] || [ "${_ORCH_POLL_CYCLE_EMITTED:-false}" = "true" ]; then
+		return 0
+	fi
+	_ORCH_POLL_CYCLE_EMITTED="true"
+	[[ "${_orch_poll_cycle_exit_code}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_exit_code="unknown"
+	_orch_poll_cycle_project_flush || true
+	_orch_poll_cycle_exit_now="$(_orch_poll_cycle_now_ms 2>/dev/null || true)"
+	if [[ "${_orch_poll_cycle_exit_now}" =~ ^[0-9]+$ ]] && [[ "${_ORCH_POLL_CYCLE_START_MS:-}" =~ ^[0-9]+$ ]]; then
+		_orch_poll_cycle_exit_elapsed="$(( _orch_poll_cycle_exit_now - _ORCH_POLL_CYCLE_START_MS ))"
+	fi
+	if [ -n "${_orch_poll_cycle_exit_ledger}" ] && [ -f "${_orch_poll_cycle_exit_ledger}" ] && [ -r "${_orch_poll_cycle_exit_ledger}" ]; then
+		_orch_poll_cycle_exit_sleep="$(awk 'BEGIN { total = 0; bad = 0 } /^[0-9]+$/ { total += $0; next } { bad = 1 } END { if (bad) print "unknown"; else printf "%.0f\n", total }' "${_orch_poll_cycle_exit_ledger}" 2>/dev/null || true)"
+		[[ "${_orch_poll_cycle_exit_sleep}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_exit_sleep="unknown"
+	fi
+	if [ -n "${_orch_poll_cycle_exit_ledger}" ]; then
+		rm -f "${_orch_poll_cycle_exit_ledger}" 2>/dev/null || true
+	fi
+	[[ "${_orch_poll_cycle_exit_seen}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_exit_seen="unknown"
+	[[ "${_orch_poll_cycle_exit_processed}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_exit_processed="unknown"
+	if [ "${_orch_poll_cycle_exit_code}" != "0" ]; then
+		_orch_poll_cycle_exit_reason="error"
+	elif [ "${_orch_poll_cycle_exit_seen}" = "0" ]; then
+		_orch_poll_cycle_exit_reason="no_projects"
+	fi
+	echo "ORCH_POLL_CYCLE_SUMMARY elapsed_ms=${_orch_poll_cycle_exit_elapsed} projects_seen=${_orch_poll_cycle_exit_seen} projects_processed=${_orch_poll_cycle_exit_processed} sleep_ms=${_orch_poll_cycle_exit_sleep} exit_code=${_orch_poll_cycle_exit_code} terminal_reason=${_orch_poll_cycle_exit_reason}" 2>/dev/null || true
+	return 0
+}
+
+_orch_poll_cycle_install_exit_trap()
+{
+	if [ "${_ORCH_POLL_CYCLE_ENABLED:-false}" = "true" ]; then
+		trap '_orch_poll_cycle_on_exit "$?" || true' EXIT
+	fi
+}
+
+_ORCH_POLL_CYCLE_START_MS="$(_orch_poll_cycle_now_ms 2>/dev/null || true)"
+_ORCH_POLL_CYCLE_PROJECTS_SEEN="unknown"
+_ORCH_POLL_CYCLE_PROJECTS_PROCESSED="unknown"
+_ORCH_POLL_CYCLE_PROJECT_NUM=""
+_ORCH_POLL_CYCLE_PROJECT_START_MS=""
+_ORCH_POLL_CYCLE_EMITTED="false"
+_ORCH_POLL_CYCLE_ENABLED="false"
+_ORCH_POLL_CYCLE_SLEEP_LEDGER=""
+_ORCH_POLL_CYCLE_SLEEP_CMD="sleep"
+if [ "${BASH_SOURCE[0]:-}" = "${0:-}" ]; then
+	_ORCH_POLL_CYCLE_ENABLED="true"
+	_ORCH_POLL_CYCLE_SLEEP_LEDGER="$(mktemp "${TMPDIR:-/tmp}/orch_poll_cycle_sleep.XXXXXX" 2>/dev/null || true)"
+	_ORCH_POLL_CYCLE_SLEEP_CMD="_orch_poll_cycle_sleep"
+fi
+_orch_poll_cycle_install_exit_trap || true
+# --- ORCH_POLL_CYCLE_SUMMARY helpers (end) ---
+
 # ---------------------------------------------------------------
 # Helper: Telegram (tracked via tg_helpers.sh)
 # ---------------------------------------------------------------
@@ -261,6 +408,22 @@ for _orch_fp_candidate in \
   fi
 done
 unset _orch_fp_candidate
+# Stuck-states P12: deterministic db/contracts entrypoint-list union helper
+# (docs/plans/orchestrator-sync-contract-list-union-plan.md). Resolved like
+# ORCH_FINGERPRINT_VERIFIER and deliberately not a required staged script:
+# when no candidate exists the value stays empty and
+# sync_contract_list_union_merge falls open with reason=helper_missing.
+ORCH_SYNC_CONTRACT_LIST_UNION_HELPER=""
+for _orch_list_union_candidate in \
+  "${ORCH_SCRIPTS_ROOT}/sync_contract_list_union.py" \
+  "$(pwd)/.codex-workflow-src/scripts/sync_contract_list_union.py" \
+  "$(pwd)/.codex-workflow-src-main/scripts/sync_contract_list_union.py"; do
+  if [ -f "${_orch_list_union_candidate}" ]; then
+    ORCH_SYNC_CONTRACT_LIST_UNION_HELPER="${_orch_list_union_candidate}"
+    break
+  fi
+done
+unset _orch_list_union_candidate
 # shellcheck source=pr_checks_lib.sh
 # Shared PR check-runs merge gate (_pr_checks_completed /
 # _pr_required_check_names_for_base). Single source of truth shared with
@@ -2149,7 +2312,7 @@ _record_merge_conflict_telemetry()
 		fi
 		if git rev-parse --verify --quiet "refs/remotes/origin/${branch}" >/dev/null 2>&1; then
 			if ! git worktree add --quiet -B "${branch}" "${wt}" "refs/remotes/origin/${branch}" 2>/dev/null; then
-				sleep 1
+				"${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 1
 				continue
 			fi
 			worktree_registry_register "$(basename -- "${wt}")" "${wt}" "${branch}" "project-${project}" "orchestrate-poll"
@@ -2183,7 +2346,7 @@ _record_merge_conflict_telemetry()
 		fi
 		if [ "${push_rc}" -eq 2 ] && [ "${attempt}" -lt 3 ]; then
 			# Push race; sleep briefly and retry with fresh fetch.
-			sleep 1
+			"${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 1
 			continue
 		fi
 		return 0
@@ -2577,6 +2740,18 @@ if ! [[ "${COMPREHENSIVE_VERIFICATION_RETRY_MAX}" =~ ^[0-9]+$ ]]; then
   echo "::warning::COMPREHENSIVE_VERIFICATION_RETRY_MAX must be a non-negative integer; defaulting to 24"
   COMPREHENSIVE_VERIFICATION_RETRY_MAX="24"
 fi
+# Release-blocker heal reports from the promote cycle (stuck-states P4,
+# release-blocker Phase 3; Refs #8291). The poller reports promotion_failed:*,
+# verification_not_dispatched and marker_untrusted to the heal intake through
+# the same build-blocker-payload -> request-report-identity -> wrap-dispatch
+# chain auto_release_stable.sh uses. Defaults live here (CLAUDE.md §8) so a
+# staged copy run under an older workflow YAML still works.
+RELEASE_BLOCKER_HEAL_ENABLED="${RELEASE_BLOCKER_HEAL_ENABLED:-true}"
+RELEASE_BLOCKER_HEAL_PY="${RELEASE_BLOCKER_HEAL_PY:-${ORCH_SCRIPTS_ROOT}/workflow_failure_heal.py}"
+# Must match the RELEASE_BLOCKER_PRODUCER_SCOPE_PATHS key in
+# workflow_failure_heal.py: only this repository's internal poller caller
+# reports, so consumer pollers never send reports the intake would reject.
+RELEASE_BLOCKER_POLLER_PRODUCER_FILE="internal-orchestrate-poll.yml"
 
 # Advisory follow-ups for accepted (waived) findings are filed only after the
 # project's integration branch has merged into the default branch.  Filing
@@ -2608,6 +2783,27 @@ if is_truthy "${SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE:-true}"; then
   SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE="true"
 else
   SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE="false"
+fi
+
+# Automatic resume of a project parked by final-merge exhaustion (issue
+# #8984 / #9320).  After MAX_FINAL_MERGE_ATTEMPTS failed merges the project
+# went to status=failed + ai:blocked and every later tick logged "Project
+# already failed, skipping." even once the blocker cleared:
+# shubhodeep1/fun-token-multi-chain#579 parked on 2026-10-26 when final PR
+# #596 failed the workflow-integrity check, #596 went green and clean on
+# 2026-10-30 after the v1.41.0 sync, and a person merged it by hand on
+# 2026-11-02.  With the switch on, a project whose state records
+# `final_merge_failure_kind=final_merge_exhausted` is retried once per final
+# PR head SHA (`final_merge_auto_resume_head_shas`) when that PR is open,
+# mergeable/clean, its required checks are green, and the integration branch
+# is still ahead of the default branch.  A head equal to the validated SHA
+# goes straight to the merge retry; a head that moved after validation passed
+# is sent back through runtime validation first and merged only once it
+# passes.  `false` restores the park-until-a-human behaviour.
+if is_truthy "${FINAL_MERGE_AUTO_RESUME_ENABLED:-true}"; then
+  FINAL_MERGE_AUTO_RESUME_ENABLED="true"
+else
+  FINAL_MERGE_AUTO_RESUME_ENABLED="false"
 fi
 
 # One-shot recovery of projects whose validation run failed with
@@ -2664,6 +2860,21 @@ if [ -n "${VALIDATION_HARNESS_ROUTE_LOGIN}" ] \
   echo "::warning::VALIDATION_HARNESS_HOLD config=VALIDATION_HARNESS_ROUTE_LOGIN outcome=default reason=invalid_value"
   VALIDATION_HARNESS_ROUTE_LOGIN=""
 fi
+
+# Harness heal auto-revalidate (Refs #8291, stuck-states plan P7 item 1). A
+# project parked failed with ai:harness-broken and no active harness hold is
+# revalidated once, by a poller-posted /revalidate, after the heal issue its
+# newest trusted routing marker names was closed with ai:merged. The value
+# falls back to its default with a warning that never prints the value.
+#   HARNESS_HEAL_AUTO_REVALIDATE_ENABLED   unset/empty/true -> true, false -> false
+case "$(printf '%s' "${HARNESS_HEAL_AUTO_REVALIDATE_ENABLED:-}" | tr '[:upper:]' '[:lower:]')" in
+  ""|true) HARNESS_HEAL_AUTO_REVALIDATE_ENABLED="true" ;;
+  false) HARNESS_HEAL_AUTO_REVALIDATE_ENABLED="false" ;;
+  *)
+    echo "::warning::HARNESS_HEAL_AUTO_REVALIDATE config=HARNESS_HEAL_AUTO_REVALIDATE_ENABLED outcome=default reason=invalid_value"
+    HARNESS_HEAL_AUTO_REVALIDATE_ENABLED="true"
+    ;;
+esac
 
 # Put the failure labels back after an aborted stale-pin recovery (#7138).
 # Restores ai:validation-failed and ai:harness-broken, plus the legacy
@@ -2932,6 +3143,32 @@ if ! [[ "${STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS}" =~ ^[0-9]+$ ]]; then
   STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS="3"
 fi
 
+# Issue-less review retry pass (issue #9487): re-dispatches, at most this
+# many times per cycle, the review of an open same-repository PR with no
+# linked pipeline issue whose newest pipeline comment is the "will retry"
+# no-output comment, once per (head, failing review-support SHA) and only
+# after a newer review-support SHA is pinned. 0 logs decisions only.
+ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE="${ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE:-5}"
+if ! [[ "${ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE}" =~ ^[0-9]+$ ]]; then
+  echo "::warning::ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE must be a non-negative integer; defaulting to 5"
+  ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE="5"
+fi
+# Only PRs updated within this many days are candidates (0 disables the age
+# filter).
+ISSUELESS_REVIEW_RETRY_MAX_AGE_DAYS="${ISSUELESS_REVIEW_RETRY_MAX_AGE_DAYS:-7}"
+if ! [[ "${ISSUELESS_REVIEW_RETRY_MAX_AGE_DAYS}" =~ ^[0-9]+$ ]]; then
+  echo "::warning::ISSUELESS_REVIEW_RETRY_MAX_AGE_DAYS must be a non-negative integer; defaulting to 7"
+  ISSUELESS_REVIEW_RETRY_MAX_AGE_DAYS="7"
+fi
+# Constants, not env vars. The pipeline label set is a copy of the
+# function-local pipeline_labels literal in run_standalone_stall_recovery
+# (a test pins the two as equal). The exclude set covers ai:review-blocked,
+# the human gates and orchestrate_lib.STALL_RECOVERY_LATCH_LABELS.
+ISSUELESS_REVIEW_RETRY_MARKER_TAG="issueless-review-retry:v1"
+ISSUELESS_REVIEW_RETRY_REASONS_JSON='["reviewers_failed","provider_unavailable","sandbox_prepare_failed"]'
+ISSUELESS_REVIEW_RETRY_PIPELINE_LABELS_JSON='["ai:clarification","ai:planning","ai:awaiting-approval","ai:implementing","ai:done","ai:ready-to-merge","ai:review-blocked"]'
+ISSUELESS_REVIEW_RETRY_EXCLUDE_LABELS_JSON='["ai:review-blocked","ai:needs-human","ai:claude-capacity-wait","force-review","e2e-smoke-test","ai:destructive-blocked","ai:scope-blocked","ai:workflow-heal-escalated"]'
+
 # Phase-specific stall recovery cap for ai:done.
 #
 # Each ai:done "recovery" dispatches a fresh review-autofix run that itself
@@ -2954,6 +3191,37 @@ STALL_JUDGE_TRIGGER_COUNT="${STALL_JUDGE_TRIGGER_COUNT:-2}"
 if ! [[ "${STALL_JUDGE_TRIGGER_COUNT}" =~ ^[0-9]+$ ]] || [ "${STALL_JUDGE_TRIGGER_COUNT}" -lt 1 ]; then
   echo "::warning::STALL_JUDGE_TRIGGER_COUNT must be a positive integer; defaulting to 2"
   STALL_JUDGE_TRIGGER_COUNT="2"
+fi
+
+# Stuck-states P3b: failure-signature breaker + exhaustion escalation.
+# STALL_FINGERPRINT_BREAKER_ENABLED=true (default) trips a phase-failure label
+# when the same AI_FAILURE_FINGERPRINT_V1 (phase, fp) repeats
+# STALL_FINGERPRINT_REPEAT_MAX times in a row, and makes stall exhaustion
+# ("skip") label ai:needs-human and leave the issue open instead of closing
+# it. Setting it to false restores the legacy skip-and-close behaviour.
+STALL_FINGERPRINT_BREAKER_ENABLED="${STALL_FINGERPRINT_BREAKER_ENABLED:-true}"
+if is_truthy "${STALL_FINGERPRINT_BREAKER_ENABLED}"; then
+  STALL_FINGERPRINT_BREAKER_ENABLED="true"
+else
+  STALL_FINGERPRINT_BREAKER_ENABLED="false"
+fi
+# Stuck-states P12: ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED=true (default) lets
+# sync_default_into_integration_branch resolve a 409 whose conflicts are only
+# appends to db/contracts/*.yml read_entrypoints / write_entrypoints lists
+# with a deterministic union merge (sync_contract_list_union_merge) instead
+# of dispatching the LLM conflict resolver. false restores the legacy path
+# exactly. Design: docs/plans/orchestrator-sync-contract-list-union-plan.md.
+ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED="${ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED:-true}"
+if is_truthy "${ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED}"; then
+  ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED="true"
+else
+  ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED="false"
+fi
+# A value of 1 would trip on a single failure, so the floor is 2.
+STALL_FINGERPRINT_REPEAT_MAX="${STALL_FINGERPRINT_REPEAT_MAX:-2}"
+if ! [[ "${STALL_FINGERPRINT_REPEAT_MAX}" =~ ^[0-9]{1,4}$ ]] || [ "${STALL_FINGERPRINT_REPEAT_MAX}" -lt 2 ]; then
+  echo "::warning::STALL_FINGERPRINT_REPEAT_MAX must be an integer >= 2; defaulting to 2"
+  STALL_FINGERPRINT_REPEAT_MAX="2"
 fi
 
 ENABLE_STALL_JUDGE="${ENABLE_STALL_JUDGE:-true}"
@@ -3131,7 +3399,7 @@ fi
 # branch-protection contexts win) and add a sensible allowlist for the
 # bitsafe-style "main is unprotected, third-party advisory check
 # failure stalls the orchestrator" case that motivated this knob.
-ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT="CI,lint,Integration PR readiness check,Lint plan-archival completeness,Lint PR body for auto-close keywords against orchestrator-tracking issues,review / gate"
+ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT="CI,lint,Integration PR readiness check,Lint plan-archival completeness,Lint PR body for auto-close keywords against orchestrator-tracking issues,pr-body-lint,review / gate"
 ORCH_FINAL_MERGE_REQUIRED_CHECKS="${ORCH_FINAL_MERGE_REQUIRED_CHECKS-${ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT}}"
 
 # ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS bounds how long the orchestrator
@@ -9073,7 +9341,7 @@ security_pass_exhaustion_judge() {
     fi
     echo "::warning::Security-pass exhaustion judge attempt ${attempt} for tracking issue #${TRACKING_NUM} returned no usable verdict (every remaining finding needs exactly one valid decision, and fail cannot be mixed with non-fail actions)."
     if [ -z "${MOCK_SECURITY_PASS_JUDGE_JSON:-}" ]; then
-      sleep $(( 8 * attempt ))
+      "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" $(( 8 * attempt ))
     fi
   done
   if [ "${judge_success}" != "true" ]; then
@@ -9428,6 +9696,132 @@ security_pass_remove_audit_worktree() {
   return 0
 }
 
+# Stuck-states P13B / security-pass convergence plan D4 (Refs #8291): rebind
+# a clean pass across a head advance that adds no project lines.  The most
+# common invalidation of a `passed` security pass is a routine
+# `chore: sync <default> into <integration>` merge, which brings in only
+# default-branch code; re-running the whole model audit for it costs a run
+# and can surface pre-existing defects as new blockers.  When every commit in
+# `<head> ^<last_audited> ^<merge_base>` is a merge commit whose combined diff
+# (`git show --cc`) is empty -- no conflict-resolution edits -- the recorded
+# clean result still covers every project line, so the pass is moved to the
+# new head without a model run.  Any non-merge commit, any evil merge, any
+# git error, or any unusable pointer falls through to the existing audit.
+# Local git only; no GitHub API calls beyond the existing state comment and
+# hash-gated body reconcile a clean audit already pays.
+# SECURITY_PASS_REBIND_ENABLED (default true): unset, empty, true/1/yes/on
+# keeps it on, false/0/no/off turns it off, any other value warns and keeps
+# it on.  Logs SECURITY_PASS_REBOUND on success and SECURITY_PASS_REBIND_SKIPPED
+# reason=<r> when a prior clean pass could not be rebound.
+security_pass_rebind_enabled() {
+  case "$(printf '%s' "${SECURITY_PASS_REBIND_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+    ''|true|1|yes|on) return 0 ;;
+    false|0|no|off) return 1 ;;
+    *)
+      echo "::warning::SECURITY_PASS_REBIND_ENABLED has an unrecognised value; the security pass keeps rebinding clean passes across clean sync merges. Use true or false." >&2
+      return 0
+      ;;
+  esac
+}
+
+# security_pass_rebind_if_no_new_project_lines <head_sha> <merge_base_sha> <prior_security_status>
+# Returns 0 only after the pass was rebound to <head_sha>; 1 otherwise (the
+# caller then runs the audit exactly as before).
+security_pass_rebind_if_no_new_project_lines() {
+  local rebind_head_sha="${1:-}" rebind_merge_base_sha="${2:-}" rebind_prior_status="${3:-}"
+  local rebind_last_audited rebind_bound_head rebind_commits rebind_commit rebind_parents rebind_cc
+  local rebind_commit_count=0
+
+  [ "${rebind_prior_status}" = "passed" ] || return 1
+  if ! security_pass_rebind_enabled; then
+    echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=disabled"
+    return 1
+  fi
+  rebind_last_audited="$(jq -r '
+    if (.security_pass_last_audited_sha // "") != "" then .security_pass_last_audited_sha
+    elif (.security_pass_status // "") == "passed" then (.security_pass_head_sha // "")
+    else "" end' "${STATE_FILE}" 2>/dev/null || true)"
+  if ! [[ "${rebind_last_audited}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=no_last_audited_sha"
+    return 1
+  fi
+  rebind_bound_head="$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}" 2>/dev/null || true)"
+  if [ "${rebind_bound_head}" != "${rebind_last_audited}" ]; then
+    echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=pass_not_bound_to_last_audited"
+    return 1
+  fi
+  if ! [[ "${rebind_head_sha}" =~ ^[0-9a-f]{40}$ ]] || ! [[ "${rebind_merge_base_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=invalid_sha"
+    return 1
+  fi
+  if [ "${rebind_last_audited}" = "${rebind_head_sha}" ]; then
+    # The caller only reaches here when the pass is not valid at this head;
+    # a pointer already at the head means the state disagrees with itself.
+    echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=head_unchanged"
+    return 1
+  fi
+  if ! git cat-file -e "${rebind_last_audited}^{commit}" 2>/dev/null \
+    || ! git merge-base --is-ancestor "${rebind_last_audited}" "${rebind_head_sha}" 2>/dev/null; then
+    echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=last_audited_not_ancestor"
+    return 1
+  fi
+  if ! rebind_commits="$(git rev-list "${rebind_head_sha}" "^${rebind_last_audited}" "^${rebind_merge_base_sha}" 2>/dev/null)"; then
+    echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=git_error"
+    return 1
+  fi
+  if [ -z "${rebind_commits}" ]; then
+    echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=no_new_commits"
+    return 1
+  fi
+  while IFS= read -r rebind_commit; do
+    [ -n "${rebind_commit}" ] || continue
+    if ! [[ "${rebind_commit}" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=git_error"
+      return 1
+    fi
+    if ! rebind_parents="$(git rev-list --parents -n 1 "${rebind_commit}" 2>/dev/null)"; then
+      echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=git_error"
+      return 1
+    fi
+    # rev-list --parents prints "<commit> <parent>..."; a merge has 3+ words.
+    if [ "$(printf '%s\n' "${rebind_parents}" | wc -w | tr -d '[:space:]')" -lt 3 ]; then
+      echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=non_merge_commit commit=${rebind_commit}"
+      return 1
+    fi
+    # --no-ext-diff / --no-textconv: no repository-configured diff driver runs.
+    if ! rebind_cc="$(git show --no-color --no-ext-diff --no-textconv --format= --cc "${rebind_commit}" 2>/dev/null)"; then
+      echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=git_error"
+      return 1
+    fi
+    if [ -n "${rebind_cc//[[:space:]]/}" ]; then
+      echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=evil_merge commit=${rebind_commit}"
+      return 1
+    fi
+    rebind_commit_count=$((rebind_commit_count + 1))
+  done <<< "${rebind_commits}"
+  if [ "${rebind_commit_count}" -eq 0 ]; then
+    echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=no_new_commits"
+    return 1
+  fi
+  # Only the pass pointers move: .status, labels, the cycle and the findings
+  # memory stay as they are, the same contract as the "already valid" return.
+  if ! jq --arg head "${rebind_head_sha}" '
+      .security_pass_status = "passed"
+      | .security_pass_head_sha = $head
+      | .security_pass_last_audited_sha = $head' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null \
+    || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    rm -f "${STATE_FILE}.tmp"
+    echo "::warning::Could not rebind the clean security pass of tracking issue #${TRACKING_NUM} to ${rebind_head_sha}; running the audit instead."
+    echo "SECURITY_PASS_REBIND_SKIPPED tracking_issue=${TRACKING_NUM} head_sha=${rebind_head_sha} reason=state_write_failed"
+    return 1
+  fi
+  reconcile_tracking_body_after_security_pass_transition
+  post_state_comment || true
+  echo "SECURITY_PASS_REBOUND tracking_issue=${TRACKING_NUM} from=${rebind_last_audited} to=${rebind_head_sha} merge_base=${rebind_merge_base_sha} commits=${rebind_commit_count} reason=no_new_project_lines"
+  return 0
+}
+
 run_security_pass_inline() {
   local integration_branch="$1"
   local default_branch="$2"
@@ -9538,6 +9932,13 @@ run_security_pass_inline() {
   if [ -z "${merge_base_sha}" ]; then
     security_pass_fail_closed "engine_unavailable" "No merge base exists between the default branch and integration head." "${prior_security_status}"
     return 1
+  fi
+  # Stuck-states P13B (Refs #8291): a clean pass whose head advanced only by
+  # clean sync merges is rebound without a model run.  Placed after the
+  # merge base is resolved (the `^merge_base` exclusion needs the refreshed
+  # default ref), so a SECURITY_PASS_CYCLE_BUDGET_RESET line precedes it.
+  if security_pass_rebind_if_no_new_project_lines "${current_head_sha}" "${merge_base_sha}" "${prior_security_status}"; then
+    return 0
   fi
   # Audit a clean worktree of the audited head, not the poller checkout whose
   # scripts/ and prompts/ may carry the restored support copies (see
@@ -10323,8 +10724,31 @@ PY
 # judge verdict — the latter used to `continue` before reaching this loop,
 # so the findings existed only as prose in the "Project Failed" comment and
 # a human had to re-derive them (tele-funtoken-msg-scoring#3928, cycle 9).
+# judge_tracking_issue_closed_skip <type> (issue #8953): returns 0 and logs
+# ORCHESTRATE_JUDGE_ADDITION_SKIP when the tracking issue TRACKING_NUM is now
+# closed, so the judge creates no issues for a finished project. The tick's
+# tracking list is read before the judge's LLM call and cannot show a close
+# made during it, so this reads the state fresh: one GET, only when the judge
+# proposed new issues. Fail-open: get_issue_state_labels_json falls back to
+# "open" on a read error, so a transient failure keeps today's behaviour.
+# A skip also sets judge_tracking_closed_skipped=1 (the function runs in the
+# caller's shell), so the in_progress arm can stop before the wave advance.
+judge_tracking_issue_closed_skip() {
+  local judge_skip_type="${1:-judge-addition}"
+  local judge_skip_state_json judge_skip_state
+  [[ "${TRACKING_NUM:-}" =~ ^[1-9][0-9]*$ ]] || return 1
+  judge_skip_state_json="$(get_issue_state_labels_json "${TRACKING_NUM}" 2>/dev/null || true)"
+  judge_skip_state="$(printf '%s' "${judge_skip_state_json}" | jq -r '.state // ""' 2>/dev/null || true)"
+  if [ "${judge_skip_state}" = "closed" ]; then
+    echo "ORCHESTRATE_JUDGE_ADDITION_SKIP reason=tracking_closed tracking=${TRACKING_NUM} type=${judge_skip_type}"
+    judge_tracking_closed_skipped=1
+    return 0
+  fi
+  return 1
+}
+
 create_judge_fixup_issues_from_verdict() {
-      if [ "${NEW_ISSUES_COUNT}" -gt 0 ]; then
+      if [ "${NEW_ISSUES_COUNT}" -gt 0 ] && ! judge_tracking_issue_closed_skip judge-fix-up; then
         echo "Processing ${NEW_ISSUES_COUNT} judge fix-up candidate(s)..."
         echo "${JUDGE_JSON}" | jq -c '.new_issues[]? | select(type == "object")' | while read -r fix_issue; do
           FIX_TITLE="$(echo "${fix_issue}" | jq -r '.title // ""')"
@@ -11084,6 +11508,285 @@ project_is_validation_origin_terminal_failure() {
 	has_label "${tracking_labels}" "ai:validation-failed" \
 		|| has_label "${tracking_labels}" "ai:validate-failed" \
 		|| has_label "${tracking_labels}" "ai:harness-broken"
+}
+
+# FINAL_MERGE_AUTO_RESUME (issue #8984): one-line skip log for
+# maybe_auto_resume_final_merge_exhaustion.
+_final_merge_auto_resume_skip() {
+	local skip_reason="$1"
+	local skip_detail="${2:-}"
+	echo "FINAL_MERGE_AUTO_RESUME tracking_issue=${TRACKING_NUM} outcome=skip reason=${skip_reason}${skip_detail:+ detail=${skip_detail}}"
+	return 1
+}
+
+# maybe_auto_resume_final_merge_exhaustion — retry the final merge of a
+# project parked by final-merge exhaustion once its blocker has cleared
+# (issue #8984; incident shubhodeep1/fun-token-multi-chain#579 / #596).
+#
+# Runs from the terminal-state block for status=failed only.  Returns 0 only
+# when the project was moved back to status=validating with a fresh
+# final-merge budget, and sets FINAL_MERGE_AUTO_RESUME_MODE for the caller:
+#   merge      — the PR head is the validated SHA; ai:validated is set and the
+#                caller retries through mark_validation_complete, so every
+#                existing gate (security pass, history, readiness, required
+#                checks, head-bound merge, comprehensive promotion) applies.
+#   revalidate — the PR head moved after validation passed; ai:validating is
+#                set and the caller dispatches runtime validation for the new
+#                head through dispatch_validation_if_needed.  The merge only
+#                happens later through mark_validation_complete once that
+#                head has passed validation, so an unvalidated head is never
+#                merged on the strength of an older pass.
+# Every other outcome prints exactly one skip line and returns 1 with the
+# state untouched (fail closed), except a failed phase-label write: it
+# restores the parked state but keeps the head in
+# `final_merge_auto_resume_head_shas` and re-persists it, so that head's
+# retry is spent and later ticks skip it as already_resumed_on_head.
+# One automatic retry per final PR head SHA,
+# recorded in `final_merge_auto_resume_head_shas` (issue #9320 item 4: a head
+# change re-enables exactly one more retry).
+#
+# §14 API audit: the terminal block fetches no PR or check-run data for
+# failed projects (only compute_cycle_integration_ahead_by, and only for
+# ai:force-merge on a validation-origin failure, which this function skips
+# before any API call), so nothing could be reused.  The checks below run only
+# for projects carrying the exhaustion marker; the first four make no API
+# call and a head already retried stops after the single PR read.  Calls:
+# 1 PR read, the required-checks gate (branch protection + check-runs), and
+# the default-branch + compare reads of compute_cycle_integration_ahead_by.
+maybe_auto_resume_final_merge_exhaustion() {
+	local fmar_failure_kind=""
+	local fmar_validated_sha=""
+	local fmar_final_pr=""
+	local fmar_pr_json=""
+	local fmar_pr_number=""
+	local fmar_pr_state=""
+	local fmar_pr_merged=""
+	local fmar_pr_draft=""
+	local fmar_head_sha=""
+	local fmar_base_ref=""
+	local fmar_mergeable=""
+	local fmar_mergeable_state=""
+	local fmar_checks_reason=""
+	local fmar_state_backup=""
+	local fmar_revalidate="false"
+	local fmar_phase_label="ai:validated"
+	local fmar_now_ts=""
+	local fmar_label_fail_detail=""
+
+	FINAL_MERGE_AUTO_RESUME_MODE=""
+	if [ "${FINAL_MERGE_AUTO_RESUME_ENABLED:-true}" != "true" ]; then
+		_final_merge_auto_resume_skip "disabled"
+		return 1
+	fi
+	if ! fmar_failure_kind="$(jq -r '.final_merge_failure_kind // ""' "${STATE_FILE}" 2>/dev/null)"; then
+		fmar_failure_kind=""
+	fi
+	if [ "${fmar_failure_kind}" != "final_merge_exhausted" ]; then
+		_final_merge_auto_resume_skip "not_final_merge_exhausted"
+		return 1
+	fi
+	# A validation failure recorded after the exhaustion park (for example
+	# after /judge_resume) supersedes the old pass: never resume over it.
+	if project_is_validation_origin_terminal_failure "failed" "${TRACKING_LABELS:-[]}"; then
+		_final_merge_auto_resume_skip "not_final_merge_exhausted" "validation_failed"
+		return 1
+	fi
+	# The exhaustion park already ran the failed comprehensive callback
+	# (freeze released, ai:comprehensive-test-pending removed), so the
+	# promotion gate could no longer apply on a retry: fail closed.
+	if jq -e '(.comprehensive_release_callback.handled // false) == true and ((.comprehensive_release_callback.status // "") != "complete")' "${STATE_FILE}" >/dev/null 2>&1; then
+		_final_merge_auto_resume_skip "lookup_failed" "comprehensive_cycle_aborted"
+		return 1
+	fi
+	fmar_validated_sha="$(jq -r '.validation_last_passed_sha // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+	if ! [[ "${fmar_validated_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+		_final_merge_auto_resume_skip "lookup_failed" "no_validated_sha"
+		return 1
+	fi
+	fmar_final_pr="$(jq -r '.final_merge_pr // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+	if ! [[ "${fmar_final_pr}" =~ ^[0-9]+$ ]]; then
+		_final_merge_auto_resume_skip "lookup_failed" "no_final_pr"
+		return 1
+	fi
+
+	fmar_pr_json="$(_fetch_pr_json "${fmar_final_pr}")"
+	if ! printf '%s' "${fmar_pr_json}" | jq -e 'type == "object" and (.number | type == "number") and (.state | type == "string")' >/dev/null 2>&1; then
+		_final_merge_auto_resume_skip "lookup_failed" "pr_read"
+		return 1
+	fi
+	fmar_pr_number="$(printf '%s' "${fmar_pr_json}" | jq -r '.number' 2>/dev/null || echo "")"
+	fmar_pr_state="$(printf '%s' "${fmar_pr_json}" | jq -r '.state' 2>/dev/null || echo "")"
+	fmar_pr_merged="$(printf '%s' "${fmar_pr_json}" | jq -r '(.merged == true) or ((.merged_at // null) != null)' 2>/dev/null || echo "")"
+	fmar_pr_draft="$(printf '%s' "${fmar_pr_json}" | jq -r '.draft == true' 2>/dev/null || echo "")"
+	if [ "${fmar_pr_number}" != "${fmar_final_pr}" ]; then
+		_final_merge_auto_resume_skip "lookup_failed" "pr_read"
+		return 1
+	fi
+	if [ "${fmar_pr_merged}" = "true" ]; then
+		_final_merge_auto_resume_skip "pr_not_open" "merged"
+		return 1
+	fi
+	if [ "${fmar_pr_state}" != "open" ]; then
+		_final_merge_auto_resume_skip "pr_not_open" "closed"
+		return 1
+	fi
+	if [ "${fmar_pr_draft}" != "false" ]; then
+		_final_merge_auto_resume_skip "pr_not_open" "draft"
+		return 1
+	fi
+	fmar_head_sha="$(printf '%s' "${fmar_pr_json}" | jq -r '.head.sha // ""' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")"
+	if ! [[ "${fmar_head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+		_final_merge_auto_resume_skip "lookup_failed" "head_sha"
+		return 1
+	fi
+	if jq -e --arg h "${fmar_head_sha}" '(.final_merge_auto_resume_head_shas // []) | (type == "array") and (index($h) != null)' "${STATE_FILE}" >/dev/null 2>&1; then
+		_final_merge_auto_resume_skip "already_resumed_on_head"
+		return 1
+	fi
+	# A head that moved after validation passed was never validated; never
+	# merge it on the strength of an older pass.  Once the remaining gates
+	# pass, send it back through runtime validation instead (issue #9320).
+	if [ "${fmar_head_sha}" != "${fmar_validated_sha}" ]; then
+		fmar_revalidate="true"
+		fmar_phase_label="ai:validating"
+	fi
+	fmar_mergeable="$(printf '%s' "${fmar_pr_json}" | jq -r 'if .mergeable == null then "unknown" else (.mergeable | tostring) end' 2>/dev/null || echo "unknown")"
+	fmar_mergeable_state="$(printf '%s' "${fmar_pr_json}" | jq -r '.mergeable_state // ""' 2>/dev/null || echo "")"
+	if [ "${fmar_mergeable}" = "unknown" ]; then
+		_final_merge_auto_resume_skip "not_mergeable" "unknown"
+		return 1
+	fi
+	if [ "${fmar_mergeable}" != "true" ] || [ "${fmar_mergeable_state}" != "clean" ]; then
+		_final_merge_auto_resume_skip "not_mergeable" "${fmar_mergeable_state:-unknown}"
+		return 1
+	fi
+	fmar_base_ref="$(printf '%s' "${fmar_pr_json}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
+	if [ -z "${fmar_base_ref}" ]; then
+		_final_merge_auto_resume_skip "lookup_failed" "base_ref"
+		return 1
+	fi
+	if ! declare -F _pr_checks_completed >/dev/null 2>&1; then
+		_final_merge_auto_resume_skip "lookup_failed" "checks"
+		return 1
+	fi
+	# Three arguments: only the base branch's required checks count.
+	if ! _pr_checks_completed "${fmar_final_pr}" "${fmar_head_sha}" "${fmar_base_ref}"; then
+		fmar_checks_reason="${PR_CHECKS_LAST_REASON:-query_failed}"
+		case "${fmar_checks_reason}" in
+			query_failed|unresolved_head_sha)
+				_final_merge_auto_resume_skip "lookup_failed" "checks"
+				;;
+			*)
+				_final_merge_auto_resume_skip "checks_not_green" "${fmar_checks_reason}"
+				;;
+		esac
+		return 1
+	fi
+	compute_cycle_integration_ahead_by
+	if ! [[ "${CWS_AHEAD_BY:-}" =~ ^[0-9]+$ ]]; then
+		_final_merge_auto_resume_skip "lookup_failed" "compare"
+		return 1
+	fi
+	if [ "${CWS_AHEAD_BY}" -eq 0 ]; then
+		_final_merge_auto_resume_skip "not_ahead"
+		return 1
+	fi
+
+	# Every check passed.  Write the state first (local file, no label churn
+	# when it fails) and persist it, then set the phase label; a failed
+	# persist restores the saved state so the project stays parked unchanged;
+	# a failed label write restores the parked state with this head kept in
+	# the ledger (see the label-failure branch below).
+	fmar_state_backup="${STATE_FILE}.fmar.bak"
+	if ! cp "${STATE_FILE}" "${fmar_state_backup}" 2>/dev/null; then
+		rm -f "${fmar_state_backup}" 2>/dev/null || true
+		_final_merge_auto_resume_skip "lookup_failed" "state_write"
+		return 1
+	fi
+	fmar_now_ts="$(date +%s)"
+	[[ "${fmar_now_ts}" =~ ^[0-9]+$ ]] || fmar_now_ts="0"
+	# revalidate: validation_last_dispatch_cycle=0 makes
+	# dispatch_validation_if_needed dispatch a fresh run, and moving
+	# validation_last_dispatch_ts to now keeps get_last_validation_run_info
+	# from picking up the old head's successful run (its success fallback
+	# would otherwise mark the unvalidated head complete).
+	if ! { jq --arg h "${fmar_head_sha}" --arg revalidate "${fmar_revalidate}" --argjson now "${fmar_now_ts}" '
+		.status = "validating"
+		| .final_merge_status = "pending"
+		| .final_merge_attempt_count = 0
+		| .final_merge_failure_kind = null
+		| .final_merge_auto_resume_head_shas = (((((.final_merge_auto_resume_head_shas // []) | if type == "array" then . else [] end) | map(select(. != $h))) + [$h]) | .[-200:])
+		| (if $revalidate == "true" then
+			.validation_last_dispatch_cycle = 0
+			| .validation_last_dispatch_ts = $now
+			| .validation_completed_cycle = null
+		  else . end)
+	' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; }; then
+		rm -f "${STATE_FILE}.tmp" "${fmar_state_backup}" 2>/dev/null || true
+		echo "::warning::FINAL_MERGE_AUTO_RESUME could not write state for project #${TRACKING_NUM}; project stays parked."
+		_final_merge_auto_resume_skip "lookup_failed" "state_write"
+		return 1
+	fi
+	# The persisted state comment is the durable copy of the once-per-head
+	# ledger: persist it before any label change or retry, and fail closed
+	# when that write fails (the reader falls back to the last persisted
+	# state, so resuming anyway could retry the same head every tick).
+	if ! post_state_comment; then
+		mv "${fmar_state_backup}" "${STATE_FILE}" 2>/dev/null \
+			|| echo "::warning::FINAL_MERGE_AUTO_RESUME tracking_issue=${TRACKING_NUM} could not restore state after persist failure"
+		_final_merge_auto_resume_skip "lookup_failed" "state_persist"
+		return 1
+	fi
+	# The merge gate in finalize_integration_merge_if_needed needs
+	# ai:validated; a re-validation needs ai:validating so the validating
+	# branch waits for a fresh verdict.  Either phase label also drops
+	# ai:blocked and ai:needs-human (same issue_phase group).
+	if ! set_tracking_phase_label "${fmar_phase_label}"; then
+		# Restore the parked state but keep this head in the ledger: the
+		# resumed state was already persisted, and dropping the head would
+		# re-qualify it every tick (two state writes plus a queued follow-up
+		# poll per tick while the label write keeps failing).  A label
+		# failure therefore uses up this head's one automatic retry.
+		if ! { jq --arg h "${fmar_head_sha}" '.final_merge_auto_resume_head_shas = (((((.final_merge_auto_resume_head_shas // []) | if type == "array" then . else [] end) | map(select(. != $h))) + [$h]) | .[-200:])' "${fmar_state_backup}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; }; then
+			rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+			mv "${fmar_state_backup}" "${STATE_FILE}" 2>/dev/null \
+				|| echo "::warning::FINAL_MERGE_AUTO_RESUME tracking_issue=${TRACKING_NUM} could not restore state after label failure"
+		fi
+		rm -f "${fmar_state_backup}" 2>/dev/null || true
+		fmar_label_fail_detail="label_write"
+		if ! post_state_comment; then
+			fmar_label_fail_detail="label_write_repersist_failed"
+			echo "::warning::FINAL_MERGE_AUTO_RESUME tracking_issue=${TRACKING_NUM} could not re-persist parked state after label failure"
+		fi
+		_final_merge_auto_resume_skip "lookup_failed" "${fmar_label_fail_detail}"
+		return 1
+	fi
+	rm -f "${fmar_state_backup}" 2>/dev/null || true
+	TRACKING_LABELS="$(printf '%s' "${TRACKING_LABELS:-[]}" | jq -c --arg l "${fmar_phase_label}" 'map(select(. != "ai:blocked" and . != "ai:needs-human" and . != "ai:validated" and . != "ai:validating")) + [$l] | unique' 2>/dev/null || printf '%s' "${TRACKING_LABELS:-[]}")"
+	if [ "${fmar_revalidate}" = "true" ]; then
+		FINAL_MERGE_AUTO_RESUME_MODE="revalidate"
+	else
+		FINAL_MERGE_AUTO_RESUME_MODE="merge"
+	fi
+	echo "FINAL_MERGE_AUTO_RESUME tracking_issue=${TRACKING_NUM} outcome=resumed final_pr=${fmar_final_pr} head_sha=${fmar_head_sha} action=${FINAL_MERGE_AUTO_RESUME_MODE}"
+	if [ "${fmar_revalidate}" = "true" ]; then
+		post_tracking_comment "<!-- final-merge-auto-resume:${fmar_head_sha} -->
+## 🔁 Final integration merge: re-validating the new head automatically
+
+The final PR #${fmar_final_pr} is open, mergeable (\`clean\`) and its required checks are green, but its head \`${fmar_head_sha}\` moved after runtime validation last passed (on \`${fmar_validated_sha}\`). A head is never merged on the strength of an older validation pass, so the poller reset the final-merge budget and is dispatching runtime validation for the new head. The merge is retried through the normal validation-complete path only once that validation passes.
+
+The poller retries automatically at most once per final PR head SHA. If this validation or the merge after it fails, the project parks again until the PR's head changes. Set \`FINAL_MERGE_AUTO_RESUME_ENABLED=false\` to keep exhausted projects parked." || true
+		tg_notify "Project #${TRACKING_NUM}: final PR #${fmar_final_pr} green and clean at new head ${fmar_head_sha:0:7}; re-validating before the automatic merge retry." "DEBUG" || true
+		return 0
+	fi
+	post_tracking_comment "<!-- final-merge-auto-resume:${fmar_head_sha} -->
+## 🔁 Final integration merge retried automatically
+
+The final PR #${fmar_final_pr} is open, mergeable (\`clean\`), its required checks are green, and its head \`${fmar_head_sha}\` is the SHA that passed runtime validation, so the poller reset the final-merge budget and is retrying the merge through the normal validation-complete path.
+
+The poller retries automatically at most once per final PR head SHA. If this retry also fails, the project parks again until the PR's head changes; a new head is re-validated before it is merged. Set \`FINAL_MERGE_AUTO_RESUME_ENABLED=false\` to keep exhausted projects parked." || true
+	tg_notify "Project #${TRACKING_NUM}: final merge retried automatically (final PR #${fmar_final_pr} green and clean at ${fmar_head_sha:0:7})." "DEBUG" || true
+	return 0
 }
 
 maybe_apply_force_merge_bypass() {
@@ -12079,14 +12782,14 @@ _refresh_integration_resolver_tooling() {
         "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" \
         2>/dev/null; then
       echo "::warning::${log_prefix} git fetch failed (attempt ${attempt}/3); proceeding to dispatch with current tooling."
-      [ "${attempt}" -lt 3 ] && sleep 1 && continue
+      [ "${attempt}" -lt 3 ] && "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 1 && continue
       return 0
     fi
 
 	if ! git worktree add --quiet --detach "${wt}" \
 	     "refs/remotes/origin/${integration_branch}" 2>/dev/null; then
 	  echo "::warning::${log_prefix} git worktree add failed (attempt ${attempt}/3); proceeding to dispatch with current tooling."
-	  [ "${attempt}" -lt 3 ] && sleep 1 && continue
+	  [ "${attempt}" -lt 3 ] && "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 1 && continue
 	  return 0
 	fi
 	worktree_registry_register "$(basename -- "${wt}")" "${wt}" "refs/remotes/origin/${integration_branch}" "tracking-${TRACKING_NUM:-0}" "orchestrate-poll"
@@ -12328,7 +13031,7 @@ _refresh_integration_resolver_tooling() {
         # Push race (non-fast-forward).  Refetch and retry; matches
         # the pattern in _record_merge_conflict_telemetry.
         if [ "${attempt}" -lt 3 ]; then
-          sleep 1
+          "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 1
           continue
         fi
         echo "::warning::${log_prefix} push race exhausted; proceeding to dispatch with current tip."
@@ -12342,6 +13045,250 @@ _refresh_integration_resolver_tooling() {
   done
 
   return 0
+}
+
+# sync_contract_list_union_merge <integration_branch> <default_branch>
+#
+# Stuck-states P12 (Refs #8291; design
+# docs/plans/orchestrator-sync-contract-list-union-plan.md). Called by
+# sync_default_into_integration_branch after the merges API returned 409 and
+# before the conflict is recorded. Resolves a sync whose conflicts are only
+# appends to read_entrypoints / write_entrypoints lists in db/contracts/*.yml
+# without dispatching the LLM conflict resolver.
+#
+# Inputs:
+#   $1, $2                                 integration and default branch.
+#   SYNC_LIST_UNION_CONFLICT_PATHS_JSON    the caller's conflict_paths_json
+#                                          (merge_tree_conflict_paths_json).
+#   ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED  kill switch (true/false).
+#   ORCH_SYNC_CONTRACT_LIST_UNION_HELPER   resolved scripts/sync_contract_list_union.py.
+# Outputs:
+#   SYNC_LIST_UNION_RESOLVED_PATHS_JSON    JSON array of the paths the helper
+#                                          merged (set on success; [] otherwise).
+#   One SYNC_LIST_UNION_V1 log line per call that gets past the kill switch.
+# Exit codes: 0 when a merge commit was pushed to the integration branch;
+# 1 otherwise (disabled, ineligible or failed). Never exits the poller.
+#
+# API budget (unattended section 14): zero GitHub REST/GraphQL calls. It
+# uses `git fetch` with explicit refspecs and `git push`, on refs the poll
+# job already fetches with its existing credentials.
+#
+# Fail-open: every ineligible or failed attempt runs `git merge --abort`,
+# removes its worktree and returns 1, so the caller's legacy conflict path
+# (state write, conflict comment, resolver dispatch) runs exactly as before.
+# Steps: pre-filter the conflict paths (no worktree for a non-contract path),
+# fetch the default and integration refs, merge the default branch with --no-commit in a
+# detached worktree at the integration tip, run the helper for every
+# unmerged path, commit "chore: sync <default> into <integration>" and push.
+# A rejected push (race) is retried from a fresh fetch, three attempts in all.
+sync_contract_list_union_merge() {
+  local integration_branch="${1:-}"
+  local default_branch="${2:-}"
+  local log_prefix="SYNC_LIST_UNION_V1: tracking_issue=${TRACKING_NUM:-none} branch=${integration_branch}"
+  SYNC_LIST_UNION_RESOLVED_PATHS_JSON='[]'
+
+  if [ "${ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED:-true}" != "true" ]; then
+    return 1
+  fi
+  if ! [[ "${integration_branch}" =~ ^orchestrator/project-[1-9][0-9]*$ ]]; then
+    echo "${log_prefix} outcome=ineligible reason=branch_not_integration"
+    return 1
+  fi
+  if ! [[ "${default_branch}" =~ ^[A-Za-z0-9._/-]+$ ]] || [[ "${default_branch}" == -* ]]; then
+    echo "${log_prefix} outcome=ineligible reason=default_branch_invalid"
+    return 1
+  fi
+  if [ -z "${ORCH_SYNC_CONTRACT_LIST_UNION_HELPER:-}" ] || [ ! -f "${ORCH_SYNC_CONTRACT_LIST_UNION_HELPER}" ]; then
+    echo "${log_prefix} outcome=ineligible reason=helper_missing"
+    return 1
+  fi
+
+  # Pre-filter. `git merge-tree --name-only` also prints informational
+  # lines ("Auto-merging <p>", "CONFLICT (<kind>): ...") after the path
+  # list; they are not paths, so they are dropped here. Any other entry
+  # that is not a contract path makes the merge ineligible without a
+  # worktree. The real `git diff --diff-filter=U` list in the worktree is
+  # checked again below, so this filter is only an early exit.
+  local candidate_paths_json
+  candidate_paths_json="$(printf '%s' "${SYNC_LIST_UNION_CONFLICT_PATHS_JSON:-[]}" \
+    | jq -c '[.[]? | strings | select((startswith("Auto-merging ") or startswith("CONFLICT (")) | not)]' 2>/dev/null || echo '')"
+  if [ -z "${candidate_paths_json}" ] || [ "${candidate_paths_json}" = "[]" ]; then
+    echo "${log_prefix} outcome=ineligible reason=no_conflict_paths"
+    return 1
+  fi
+  if ! printf '%s' "${candidate_paths_json}" \
+      | jq -e 'all(.[]; test("^db/contracts/[^/\n\r]+\\.ya?ml$"))' >/dev/null 2>&1; then
+    echo "${log_prefix} outcome=ineligible reason=non_contract_path"
+    return 1
+  fi
+
+  local runtime_dir="${RUNTIME_DIR:-/tmp}"
+  local helper="${ORCH_SYNC_CONTRACT_LIST_UNION_HELPER}"
+  local attempt wt tmpdir subshell_rc reason
+  for attempt in 1 2 3; do
+    wt="${runtime_dir}/sync-list-union-wt-$$-${RANDOM:-0}"
+    rm -rf "${wt}" 2>/dev/null || true
+
+    if ! git fetch --no-tags origin \
+        "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" \
+        "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" \
+        >/dev/null 2>&1; then
+      echo "::warning::${log_prefix} outcome=failed reason=fetch attempt=${attempt}"
+      return 1
+    fi
+
+    tmpdir="$(mktemp -d 2>/dev/null || echo "")"
+    if [ -z "${tmpdir}" ] || [ ! -d "${tmpdir}" ]; then
+      echo "::warning::${log_prefix} outcome=failed reason=tmpdir"
+      return 1
+    fi
+
+    if ! git worktree add --quiet --detach "${wt}" \
+        "refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
+      rm -rf "${tmpdir}" 2>/dev/null || true
+      rm -rf "${wt}" 2>/dev/null || true
+      echo "::warning::${log_prefix} outcome=failed reason=worktree"
+      return 1
+    fi
+    worktree_registry_register "$(basename -- "${wt}")" "${wt}" "refs/remotes/origin/${integration_branch}" "tracking-${TRACKING_NUM:-0}" "orchestrate-poll"
+
+    subshell_rc=0
+    (
+      cd "${wt}" || exit 9
+      local -a git_ident=(-c "user.name=codex-bot" -c "user.email=codex-bot@users.noreply.invalid")
+      local merge_rc=0
+      git "${git_ident[@]}" merge --no-ff --no-commit "refs/remotes/origin/${default_branch}" >/dev/null 2>&1 || merge_rc=$?
+      if ! git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+        # Nothing to merge locally (already up to date) or the merge was
+        # refused before it started: leave the API conflict to the legacy path.
+        git merge --abort >/dev/null 2>&1 || true
+        if [ "${merge_rc}" -eq 0 ]; then
+          printf 'no_merge_head' > "${tmpdir}/reason"
+          exit 3
+        fi
+        printf 'merge' > "${tmpdir}/reason"
+        exit 1
+      fi
+
+      local -a unmerged=()
+      local p
+      while IFS= read -r -d '' p; do
+        unmerged+=("${p}")
+      done < <(git diff --name-only --diff-filter=U -z 2>/dev/null)
+      if [ "${merge_rc}" -ne 0 ] && [ "${#unmerged[@]}" -eq 0 ]; then
+        git merge --abort >/dev/null 2>&1 || true
+        printf 'merge' > "${tmpdir}/reason"
+        exit 1
+      fi
+
+      local n=0 helper_rc helper_reason
+      : > "${tmpdir}/resolved_paths"
+      for p in "${unmerged[@]}"; do
+        n=$((n + 1))
+        if ! [[ "${p}" =~ ^db/contracts/[^/]+\.ya?ml$ ]] || [[ "${p}" == *$'\n'* ]] || [[ "${p}" == *$'\r'* ]]; then
+          git merge --abort >/dev/null 2>&1 || true
+          printf 'non_contract_path' > "${tmpdir}/reason"
+          exit 3
+        fi
+        git show ":1:${p}" > "${tmpdir}/base.${n}" 2>/dev/null || : > "${tmpdir}/base.${n}"
+        if ! git show ":2:${p}" > "${tmpdir}/ours.${n}" 2>/dev/null \
+            || ! git show ":3:${p}" > "${tmpdir}/theirs.${n}" 2>/dev/null; then
+          git merge --abort >/dev/null 2>&1 || true
+          printf 'stage_missing' > "${tmpdir}/reason"
+          exit 3
+        fi
+        helper_rc=0
+        python3 "${helper}" --path "${p}" \
+          --base "${tmpdir}/base.${n}" --ours "${tmpdir}/ours.${n}" \
+          --theirs "${tmpdir}/theirs.${n}" --out "${tmpdir}/merged.${n}" \
+          2> "${tmpdir}/helper.err" || helper_rc=$?
+        cat "${tmpdir}/helper.err" >&2 2>/dev/null || true
+        if [ "${helper_rc}" -ne 0 ]; then
+          git merge --abort >/dev/null 2>&1 || true
+          helper_reason="$(sed -n 's/^SYNC_LIST_UNION_INELIGIBLE_V1: .* reason=\([a-z_]*\)$/\1/p' "${tmpdir}/helper.err" 2>/dev/null | head -n 1)"
+          if [ "${helper_rc}" -eq 3 ] && [ -n "${helper_reason}" ]; then
+            printf '%s' "${helper_reason}" > "${tmpdir}/reason"
+            exit 3
+          fi
+          printf 'helper_error' > "${tmpdir}/reason"
+          exit 1
+        fi
+        if ! cp -- "${tmpdir}/merged.${n}" "${p}" 2>/dev/null || ! git add -- "${p}" >/dev/null 2>&1; then
+          git merge --abort >/dev/null 2>&1 || true
+          printf 'stage' > "${tmpdir}/reason"
+          exit 1
+        fi
+        printf '%s\n' "${p}" >> "${tmpdir}/resolved_paths"
+      done
+
+      if [ -n "$(git diff --name-only --diff-filter=U 2>/dev/null)" ]; then
+        git merge --abort >/dev/null 2>&1 || true
+        printf 'markers_remain' > "${tmpdir}/reason"
+        exit 3
+      fi
+
+      local body=""
+      if [ -s "${tmpdir}/resolved_paths" ]; then
+        body+="Conflicting db/contracts entrypoint-list appends resolved as the union"$'\n'
+        body+="of both sides:"$'\n'
+        while IFS= read -r p; do
+          body+=" - ${p}"$'\n'
+        done < "${tmpdir}/resolved_paths"
+      else
+        body+="The local merge was clean; no path needed the list union."$'\n'
+      fi
+      body+=$'\n'
+      body+="Deterministic resolution by sync_contract_list_union_merge in"$'\n'
+      body+="scripts/orchestrate_poll_process.sh (ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED)."
+      if ! git "${git_ident[@]}" commit --quiet \
+          -m "chore: sync ${default_branch} into ${integration_branch}" \
+          -m "${body}" >/dev/null 2>&1; then
+        git merge --abort >/dev/null 2>&1 || true
+        printf 'commit' > "${tmpdir}/reason"
+        exit 1
+      fi
+      if ! git push --quiet origin "HEAD:refs/heads/${integration_branch}" >/dev/null 2>&1; then
+        printf 'push' > "${tmpdir}/reason"
+        exit 2
+      fi
+      exit 0
+    # Keep cleanup reachable under the script's global `set -e`.
+    ) || subshell_rc=$?
+    worktree_registry_deregister "$(basename -- "${wt}")"
+    git worktree remove --force "${wt}" 2>/dev/null || rm -rf "${wt}" 2>/dev/null || true
+
+    reason="$(cat "${tmpdir}/reason" 2>/dev/null || true)"
+    if [ "${subshell_rc}" -eq 0 ]; then
+      SYNC_LIST_UNION_RESOLVED_PATHS_JSON="$(jq -Rsc 'split("\n") | map(select(length > 0))' < "${tmpdir}/resolved_paths" 2>/dev/null || echo '[]')"
+      [ -n "${SYNC_LIST_UNION_RESOLVED_PATHS_JSON}" ] || SYNC_LIST_UNION_RESOLVED_PATHS_JSON='[]'
+    fi
+    rm -rf "${tmpdir}" 2>/dev/null || true
+
+    case "${subshell_rc}" in
+      0)
+        echo "${log_prefix} outcome=merged paths=$(printf '%s' "${SYNC_LIST_UNION_RESOLVED_PATHS_JSON}" | jq -r 'join(",")' 2>/dev/null || echo '')"
+        return 0
+        ;;
+      2)
+        if [ "${attempt}" -lt 3 ]; then
+          "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 1
+          continue
+        fi
+        echo "::warning::${log_prefix} outcome=failed reason=push attempts=${attempt}"
+        return 1
+        ;;
+      3)
+        echo "${log_prefix} outcome=ineligible reason=${reason:-unknown}"
+        return 1
+        ;;
+      *)
+        echo "::warning::${log_prefix} outcome=failed reason=${reason:-subshell_exit_${subshell_rc}}"
+        return 1
+        ;;
+    esac
+  done
+
+  return 1
 }
 
 # Drive one iteration of the self-healing loop for the integration
@@ -12386,7 +13333,10 @@ _list_integration_conflict_files() {
   fi
   # On conflict, modern git prints the written tree SHA on the first
   # line followed by conflict paths. Strip the SHA line when present.
-  printf '%s\n' "${out}" | sed '/^$/d' | awk 'NR==1 && /^[[:xdigit:]]{40}([[:xdigit:]]{24})?$/ {next} {print}'
+  # Use sed BREs, not an awk `{40}(...{24})?` regex: mawk 1.3.4 (Ubuntu's
+  # default awk) panics compiling that pattern and prints nothing, which
+  # returned an empty conflict list to every caller.
+  printf '%s\n' "${out}" | sed '/^$/d' | sed '1{/^[[:xdigit:]]\{40\}$/d;/^[[:xdigit:]]\{64\}$/d;}'
   return 0
 }
 
@@ -12436,6 +13386,26 @@ elif [ -f "scripts/orchestrate_stall_retired_conflict.sh" ]; then
   source scripts/orchestrate_stall_retired_conflict.sh
 fi
 unset _OPP_RETIRED_CONFLICT_DIR
+# Smoke-fixture project backstop (closes release-gate fixture projects whose
+# gate run has completed). Resolved like the retired-conflict helpers above;
+# when it is missing (an older staging list), the stub keeps every project on
+# the normal path.
+_OPP_SMOKE_REAP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "scripts")"
+if [ -f "${_OPP_SMOKE_REAP_DIR}/orchestrate_poll_smoke_fixture_reap.sh" ]; then
+  # shellcheck disable=SC1091
+  source "${_OPP_SMOKE_REAP_DIR}/orchestrate_poll_smoke_fixture_reap.sh"
+elif [ -f "scripts/orchestrate_poll_smoke_fixture_reap.sh" ]; then
+  # shellcheck disable=SC1091
+  source scripts/orchestrate_poll_smoke_fixture_reap.sh
+fi
+unset _OPP_SMOKE_REAP_DIR
+if ! type smoke_fixture_reap_if_gate_done >/dev/null 2>&1; then
+  smoke_fixture_reap_if_gate_done()
+  {
+    echo "SMOKE_FIXTURE_REAP tracking_issue=${1:-} gate_run=none outcome=skip reason=helper_unavailable"
+    return 1
+  }
+fi
 if ! type _stall_retired_host_only_conflict_check >/dev/null 2>&1; then
   _stall_retired_host_only_conflict_check() {
     echo "STALL_RETIRED_CONFLICT_REISSUE issue=${1:-} pr=${2:-} outcome=skip reason=helper_unavailable retired_paths=none"
@@ -14312,6 +15282,42 @@ Runbook (if you need to rebuild the integration branch): [Rebuild integration br
     && integration_ref="$(resolve_branch_analysis_ref "${integration_branch}")"; then
     conflict_paths_json="$(merge_tree_conflict_paths_json "${default_ref}" "${integration_ref}" 2>/dev/null || echo '[]')"
   fi
+  # Stuck-states P12: try the deterministic contract-list union before the
+  # conflict is recorded. Any ineligible or failed attempt returns 1 and
+  # the legacy conflict path below runs unchanged.
+  SYNC_LIST_UNION_CONFLICT_PATHS_JSON="${conflict_paths_json}"
+  if sync_contract_list_union_merge "${integration_branch}" "${default_branch}"; then
+    local list_union_paths_json="${SYNC_LIST_UNION_RESOLVED_PATHS_JSON:-[]}"
+    jq --argjson paths "${list_union_paths_json}" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '.sync = ((.sync // {}) + {
+        "status": "active",
+        "last_sync_outcome": "merged-deterministic",
+        "last_conflict_paths": [],
+        "last_conflict_fingerprint": "",
+        "last_list_union_paths": $paths,
+        "last_list_union_at": $now
+      })' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment || true
+    mark_integration_sync_clean "${default_branch}"
+    local list_union_paths_md
+    if [ "${list_union_paths_json}" = "[]" ]; then
+      list_union_paths_md="- None: the local merge was clean, so no path needed the list union."
+    else
+      list_union_paths_md="$(format_conflict_paths_markdown "${list_union_paths_json}")"
+    fi
+    post_tracking_comment "## ✅ Integration sync auto-resolved (contract list union)
+
+Merged \`${default_branch}\` into \`${integration_branch}\` without dispatching the conflict resolver. Every conflict was an append to a \`read_entrypoints\` or \`write_entrypoints\` list in a \`db/contracts/*.yml\` file, so the merge keeps the entries from both sides.
+
+Resolved paths:
+${list_union_paths_md}
+
+Set the repository variable \`ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED=false\` to turn this off." || true
+    _dispatch_integration_test_repair "${TRACKING_NUM:-}" "${integration_branch}" "" "${default_branch}" || true
+    return 0
+  fi
+
   conflict_fingerprint="$(merge_tree_conflict_fingerprint "${conflict_paths_json}" "${default_ref}" "${integration_ref}")"
 
   jq --arg fp "${conflict_fingerprint}" --argjson paths "${conflict_paths_json}" \
@@ -14952,6 +15958,7 @@ comprehensive_cycle_metadata_json() {
                   or ((.user.login // "") == "github-actions[bot]"));
     ([ .[] | select(is_marker and trusted) | .body ] | last // "") as $body
     | ([ .[] | select(is_marker and (trusted | not)) ] | length > 0) as $untrusted
+    | ([ .[] | select(is_marker and (trusted | not)) | (.user.login // "") ] | last // "") as $untrusted_author
     | {
         role: line($body; "apply-analysis-role"),
         doc: line($body; "apply-analysis-source-doc"),
@@ -14960,8 +15967,9 @@ comprehensive_cycle_metadata_json() {
         promote_sha: line($body; "apply-analysis-promote-sha"),
         proving_merge_sha: line($body; "apply-analysis-proving-merge-sha"),
         pinned: (line($body; "apply-analysis-pinned") == "true"),
-        untrusted_marker: $untrusted
-      }' 2>/dev/null || echo '{"role":"","doc":"","baseline_sha":"","smoke_sha":"","promote_sha":"","proving_merge_sha":"","pinned":false,"untrusted_marker":false}'
+        untrusted_marker: $untrusted,
+        untrusted_author: $untrusted_author
+      }' 2>/dev/null || echo '{"role":"","doc":"","baseline_sha":"","smoke_sha":"","promote_sha":"","proving_merge_sha":"","pinned":false,"untrusted_marker":false,"untrusted_author":""}'
 }
 
 # comprehensive_stable_tag_commit
@@ -15001,6 +16009,143 @@ comprehensive_stable_tag_commit() {
   fi
 }
 
+# poller_release_blocker_safe <text>
+# Prints the text reduced to [A-Za-z0-9_.:/@+=[]-], at most 200 bytes. Mirrors
+# release_blocker_safe in auto_release_stable.sh; brackets are kept so a
+# login such as github-actions[bot] stays readable.
+poller_release_blocker_safe() {
+  local poller_rb_safe_value
+  poller_rb_safe_value="$(printf '%s' "${1:-}" | tr -cd 'A-Za-z0-9_.:/@+=\133\135-')"
+  printf '%s' "${poller_rb_safe_value:0:200}"
+}
+
+# poller_release_blocker_evidence <reason> <age_secs> [key=value ...]
+# Prints the evidence lines of one report. The fixed first line
+# (reason=<token>) keeps the intake fingerprint stable; every line is
+# sanitised, so attacker-chosen values (a marker author's login) stay data.
+poller_release_blocker_evidence() {
+  local prb_ev_reason="${1:-}" prb_ev_age="${2:-}"
+  shift 2 || true
+  local prb_ev_line
+  printf 'reason=%s\n' "$(poller_release_blocker_safe "${prb_ev_reason}")"
+  printf 'tracking_issue=%s\n' "$(poller_release_blocker_safe "$(_gh_url "issues/${TRACKING_NUM:-0}")")"
+  printf 'age_secs=%s\n' "$(poller_release_blocker_safe "${prb_ev_age:-unknown}")"
+  for prb_ev_line in "$@"; do
+    [ -n "${prb_ev_line}" ] || continue
+    printf '%s\n' "$(poller_release_blocker_safe "${prb_ev_line}")"
+  done
+}
+
+# poller_release_blocker_report <state_key> <reason> <age_secs> <head_sha> [evidence key=value ...]
+# Sends one release_blocker heal report for a terminal promote-cycle outcome.
+# Always returns 0 and never changes the tick's outcome. Order: kill switch
+# (RELEASE_BLOCKER_HEAL_ENABLED), producer gate (GITHUB_WORKFLOW_REF must be
+# this repository's internal-orchestrate-poll.yml), once-only guard
+# (<state_key>.release_blocker_reported in STATE_FILE), then build, identity,
+# wrap and POST repos/<self>/dispatches. Any attempt past the three gates sets
+# the guard, whatever the outcome; the caller's post_state_comment persists
+# it. No EXIT trap: the poller owns its traps, so the work dir is removed
+# inline on every path.
+poller_release_blocker_report() {
+  local prb_state_key="${1:-}" prb_reason="${2:-}" prb_age="${3:-}" prb_head_sha="${4:-}"
+  shift 4 || true
+  local prb_branch prb_sha_log="none" prb_work_dir="" prb_evidence="" prb_payload="" prb_identity=""
+  local prb_envelope="" prb_error="" prb_identity_status="" prb_detail="" prb_skip="" prb_reported
+  prb_branch="$(poller_release_blocker_safe "${DEFAULT_BRANCH_TRACKING:-main}")"
+  [[ "${prb_age}" =~ ^[0-9]{1,12}$ ]] || prb_age=""
+  if ! is_truthy "${RELEASE_BLOCKER_HEAL_ENABLED}"; then
+    echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=disabled blocker=${prb_reason}"
+    return 0
+  fi
+  if [ -z "${GITHUB_REPOSITORY:-}" ] || [[ "${GITHUB_WORKFLOW_REF:-}" != "${GITHUB_REPOSITORY}/.github/workflows/${RELEASE_BLOCKER_POLLER_PRODUCER_FILE}@"* ]]; then
+    echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=disabled blocker=${prb_reason} detail=producer_unregistered"
+    return 0
+  fi
+  prb_reported="$(jq -r --arg k "${prb_state_key}" '(.[$k] // {}) | if type == "object" then (.release_blocker_reported // false) else false end' "${STATE_FILE}" 2>/dev/null || echo false)"
+  if [ "${prb_reported}" = "true" ]; then
+    echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=already_reported blocker=${prb_reason}"
+    return 0
+  fi
+  prb_work_dir="$(mktemp -d 2>/dev/null)" || prb_work_dir=""
+  if [ -z "${prb_work_dir}" ] || [ ! -d "${prb_work_dir}" ]; then
+    prb_skip="payload_invalid"
+    echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=payload_invalid blocker=${prb_reason} stage=build detail=work_dir_unavailable"
+  else
+    prb_evidence="${prb_work_dir}/evidence.txt"
+    prb_payload="${prb_work_dir}/payload.json"
+    prb_identity="${prb_work_dir}/report_identity.jwt"
+    prb_envelope="${prb_work_dir}/dispatch.json"
+    prb_error="${prb_work_dir}/error.txt"
+    poller_release_blocker_evidence "${prb_reason}" "${prb_age}" "$@" > "${prb_evidence}" 2>/dev/null || true
+    local -a prb_build_args=(
+      build-blocker-payload
+      --repo "${GITHUB_REPOSITORY}"
+      --workflow-name "${GITHUB_WORKFLOW:-AI Orchestrate Poll}"
+      --reason "${prb_reason}"
+      --evidence-file "${prb_evidence}"
+      --age-secs "${prb_age}"
+      --head-branch "${DEFAULT_BRANCH_TRACKING:-main}"
+    )
+    if [[ "${prb_head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+      prb_build_args+=(--head-sha "${prb_head_sha}")
+      prb_sha_log="${prb_head_sha}"
+    fi
+    if [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]{1,20}$ ]]; then
+      prb_build_args+=(
+        --reporter-run-id "${GITHUB_RUN_ID}"
+        --reporter-run-url "$(poller_release_blocker_safe "${GITHUB_SERVER_URL:-https://github.com}")/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+      )
+      if [[ "${GITHUB_RUN_ATTEMPT:-1}" =~ ^[0-9]{1,10}$ ]]; then
+        prb_build_args+=(--reporter-run-attempt "${GITHUB_RUN_ATTEMPT:-1}")
+      fi
+    fi
+    if ! python3 "${RELEASE_BLOCKER_HEAL_PY}" "${prb_build_args[@]}" > "${prb_payload}" 2> "${prb_error}"; then
+      prb_detail="$(poller_release_blocker_safe "$(head -c 200 "${prb_error}" 2>/dev/null | tr '\n' ' ' | tr ' ' '_')")"
+      prb_skip="payload_invalid"
+      echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=payload_invalid blocker=${prb_reason} stage=build detail=${prb_detail:-none}"
+    fi
+    if [ -z "${prb_skip}" ]; then
+      local -a prb_wrap_args=(wrap-dispatch --payload-json "${prb_payload}")
+      if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+        prb_identity_status="$(python3 "${RELEASE_BLOCKER_HEAL_PY}" request-report-identity --out "${prb_identity}" 2>/dev/null || echo "identity=absent reason=helper_failed")"
+        prb_identity_status="$(printf '%s' "${prb_identity_status}" | head -1 | tr -cd 'A-Za-z0-9_=. -')"
+        echo "Release blocker report identity: ${prb_identity_status:-identity=absent reason=unknown} blocker=${prb_reason}"
+        if [ -s "${prb_identity}" ]; then
+          prb_wrap_args+=(--report-identity-file "${prb_identity}")
+        fi
+      else
+        echo "Release blocker report identity: identity=absent reason=oidc_unavailable blocker=${prb_reason}"
+      fi
+      if ! python3 "${RELEASE_BLOCKER_HEAL_PY}" "${prb_wrap_args[@]}" > "${prb_envelope}" 2> "${prb_error}"; then
+        prb_skip="payload_invalid"
+        echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=payload_invalid blocker=${prb_reason} stage=wrap"
+      fi
+      rm -f "${prb_identity}"
+    fi
+    if [ -z "${prb_skip}" ]; then
+      if ! gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/dispatches" --input "${prb_envelope}" >/dev/null 2> "${prb_error}"; then
+        prb_detail="$(poller_release_blocker_safe "$(head -c 200 "${prb_error}" 2>/dev/null | tr '\n' ' ' | tr ' ' '_')")"
+        prb_skip="dispatch_denied"
+        echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=dispatch_denied blocker=${prb_reason} detail=${prb_detail:-none}"
+        echo "::warning::Release blocker report ${prb_reason} on ${prb_branch} could not be dispatched to ${GITHUB_REPOSITORY}."
+      fi
+    fi
+    if [ -z "${prb_skip}" ]; then
+      echo "RELEASE_BLOCKER_REPORTED reason=${prb_reason} age=${prb_age:-unknown} branch=${prb_branch} sha=${prb_sha_log} run_ref=none tracking_issue=${TRACKING_NUM:-0}"
+    fi
+    rm -rf "${prb_work_dir}"
+  fi
+  if [ -n "${prb_skip}" ]; then
+    tg_notify "Release blocker report could not be dispatched (${prb_skip}): ${prb_reason} on ${prb_branch}. Refs #8291" "WARNING" || true
+  fi
+  if jq --arg k "${prb_state_key}" '.[$k] = ((if (.[$k] | type) == "object" then .[$k] else {} end) + {release_blocker_reported: true})' "${STATE_FILE}" > "${STATE_FILE}.rb.tmp" 2>/dev/null; then
+    mv "${STATE_FILE}.rb.tmp" "${STATE_FILE}" || true
+  else
+    rm -f "${STATE_FILE}.rb.tmp" 2>/dev/null || true
+  fi
+  return 0
+}
+
 # comprehensive_promotion_hold_or_fail <reason> <now_epoch> <alert_text>
 #
 # Shared bounded hold for pre-dispatch checks that could not run this tick
@@ -15024,6 +16169,10 @@ comprehensive_promotion_hold_or_fail() {
     return 1
   fi
   jq --arg r "${reason}" '.comprehensive_promotion = {status: "failed", reason: ($r + " past the hold cap")}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  # promote_sha is the calling gate's local (bash dynamic scope); empty when
+  # unset, which the payload allows.
+  poller_release_blocker_report comprehensive_promotion "promotion_failed:${reason}" "$((now - gate_started))" "${promote_sha:-}" \
+    "gate=${reason}" "hold_max_secs=${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}" || true
   post_state_comment || true
   echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=${reason}"
   tg_notify "${alert_text}" "DEBUG"
@@ -15371,6 +16520,9 @@ comprehensive_promotion_gate_before_final_merge() {
         # whatever main is now.
         jq --arg wf "${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" '.comprehensive_promotion = {status: "failed", reason: ("pinned promotion requires promote-main-to-stable.yml, got " + $wf)}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=release_workflow_not_pinnable workflow=${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}"
+        poller_release_blocker_report comprehensive_promotion "promotion_failed:release_workflow_not_pinnable" "" "${promote_sha}" \
+          "workflow=${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" || true
+        post_state_comment || true
         post_tracking_comment "## ❌ Promotion not possible
 
 \`COMPREHENSIVE_RELEASE_WORKFLOW_FILE\` is \`${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}\`, which cannot promote a pinned commit (only promote-main-to-stable.yml takes \`target_sha\`). Nothing is promoted; the final merge proceeds."
@@ -15548,6 +16700,10 @@ ${promotion_basis} \`${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}\` was dispatched wit
       rm -f "${_dispatch_err}"
       jq --arg reason "${_dispatch_msg}" '.comprehensive_promotion = {status: "failed", reason: ("dispatch failed: " + $reason)}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=dispatch_failed"
+      # _dispatch_msg is raw gh stderr and stays out of the evidence.
+      poller_release_blocker_report comprehensive_promotion "promotion_failed:dispatch_failed" "" "${promote_sha}" \
+        "promote_sha=${promote_sha}" "smoke_sha=${smoke_sha}" "workflow=${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" || true
+      post_state_comment || true
       tg_notify "Project #${TRACKING_NUM}: could not dispatch ${COMPREHENSIVE_RELEASE_WORKFLOW_FILE} (${_dispatch_msg:-unknown error}); merge proceeds without promotion." "CRITICAL"
       comprehensive_release_cycle_freeze "${pinned}"
       return 0
@@ -15572,6 +16728,8 @@ ${promotion_basis} \`${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}\` was dispatched wit
           ;;
         failed)
           jq '.comprehensive_promotion.status = "failed" | .comprehensive_promotion.reason = "release run failed"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          poller_release_blocker_report comprehensive_promotion "promotion_failed:release_failed" "$((now - dispatched_at))" "${promote_sha}" \
+            "promote_sha=${promote_sha}" "workflow=${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" || true
           post_state_comment || true
           echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=release_failed promote_sha=${promote_sha}"
           post_tracking_comment "## ❌ Promotion failed
@@ -15584,6 +16742,8 @@ The release run for \`${promote_sha:0:7}\` did not succeed; \`stable\` is unchan
       esac
       if [ $((now - dispatched_at)) -ge "${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}" ]; then
         jq '.comprehensive_promotion.status = "failed" | .comprehensive_promotion.reason = "hold cap reached before the release finished"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        poller_release_blocker_report comprehensive_promotion "promotion_failed:hold_timeout" "$((now - dispatched_at))" "${promote_sha}" \
+          "promote_sha=${promote_sha}" "workflow=${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" "hold_max_secs=${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}" || true
         post_state_comment || true
         echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=hold_timeout"
         post_tracking_comment "## ⌛ Promotion hold expired
@@ -15883,6 +17043,14 @@ handle_comprehensive_release_callback_if_needed() {
     jq --arg status "${project_status}" --arg handled_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg outcome "${verification_outcome}" \
       '.comprehensive_release_callback = {handled: true, status: $status, handled_at: $handled_at, role: "proving", verification: $outcome}' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    # Only a transient outcome that exhausted its retries is a release
+    # blocker; a plain SKIPPED (e.g. not enough docs) is the normal
+    # "start over next cycle" path.
+    if [[ "${verification_outcome}" == *"retries_exhausted="* ]]; then
+      poller_release_blocker_report comprehensive_release_callback "verification_not_dispatched" "" \
+        "$(printf '%s' "${cycle_metadata_json}" | jq -r '.promote_sha // ""' 2>/dev/null || true)" \
+        "dispatcher_outcome=$(printf '%s' "${verification_outcome}" | tr ' ' '_')" "retries=${COMPREHENSIVE_VERIFICATION_RETRY_MAX}" || true
+    fi
     post_state_comment || true
     case "${verification_outcome}" in
       DISPATCHED*)
@@ -15919,6 +17087,10 @@ The proving run merged, but the verifying run could not be dispatched (${verific
       jq --arg alerted_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         '.comprehensive_release_callback = ((.comprehensive_release_callback // {}) + {role: "untrusted", untrusted_marker_alerted: true, untrusted_marker_alerted_at: $alerted_at})' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      local untrusted_marker_author
+      untrusted_marker_author="$(comprehensive_cycle_metadata_json "${comments_json}" | jq -r '.untrusted_author // ""' 2>/dev/null || true)"
+      poller_release_blocker_report comprehensive_release_callback "marker_untrusted" "" "" \
+        "marker_author=${untrusted_marker_author:-unknown}" || true
       post_state_comment || true
       post_tracking_comment "## ⚠️ Untrusted apply-analysis marker
 
@@ -16469,9 +17641,11 @@ validation_harness_pin() {
   printf '%s' "${vhp_pins}"
 }
 
-# validation_harness_marker owner <run_id> | route <fp>
+# validation_harness_marker owner <run_id> | route <fp> | route-latest any
 # Newest trusted marker (route login, marker on the comment's last non-empty
 # line) from COMMENTS, printed as compact JSON; prints nothing when absent.
+# `route-latest` is the newest routing marker for any fingerprint (harness
+# heal auto-revalidate, Refs #8291); its key must be the literal `any`.
 validation_harness_marker() {
   local vhm_kind="$1" vhm_key="$2" vhm_login
   vhm_login="$(validation_harness_route_login)"
@@ -16481,6 +17655,7 @@ validation_harness_marker() {
   case "${vhm_kind}" in
     owner) [[ "${vhm_key}" =~ ^[0-9]+$ ]] || return 0 ;;
     route) [[ "${vhm_key}" =~ ^[0-9a-f]{64}$ ]] || return 0 ;;
+    route-latest) [ "${vhm_key}" = "any" ] || return 0 ;;
     *) return 0 ;;
   esac
   printf '%s' "${COMMENTS:-[]}" | jq -c --arg login "${vhm_login}" --arg kind "${vhm_kind}" --arg key "${vhm_key}" '
@@ -16494,7 +17669,7 @@ validation_harness_marker() {
              | select(.run == $key)
            else
              ($last | capture("^<!-- workflow-failure-heal:validation-route:v1 fp=(?<fp>[0-9a-f]{64}) outcome=(?<outcome>opened|duplicate|already-fixed|bounced|skipped) issue=(?<issue>[0-9]+|none) classification=(?<classification>[a-z-]+) run=(?<run>[0-9]+) -->$")?)
-             | select(.fp == $key)
+             | select($kind == "route-latest" or .fp == $key)
            end)
         | {m: ., created_at: ($c.created_at // ""), id: (($c.id // 0) | tonumber? // 0)}
       ]
@@ -16598,12 +17773,13 @@ ${vhf_cause} The project stays failed with \`ai:validation-failed\` and \`ai:har
 # one pin-commit GET only when the compare lists fewer commits than it counts.
 # ---------------------------------------------------------------------------
 declare -gA _VALIDATION_HARNESS_COMPARE_CACHE=()  # "<support>...<pin>" -> "<status>|<committer date>" or "__error__"
-declare -gA _VALIDATION_HARNESS_ISSUE_CACHE=()    # "<heal issue>" -> "<state>|<state_reason>|<closed_at>" or "__error__"
+declare -gA _VALIDATION_HARNESS_ISSUE_CACHE=()    # "<heal issue>" -> "<state>|<state_reason>|<closed_at>|<merged>" or "__error__"
 VHH_COMPARE_STATUS=""
 VHH_PIN_DATE=""
 VHH_ISSUE_STATE=""
 VHH_ISSUE_STATE_REASON=""
 VHH_ISSUE_CLOSED_AT=""
+VHH_ISSUE_MERGED=""
 
 # One VALIDATION_HARNESS_HOLD log line. Args: outcome fp pin heal_issue [reason]
 _validation_harness_hold_log() {
@@ -16658,22 +17834,26 @@ _validation_harness_hold_compare() {
   return 0
 }
 
-# Sets VHH_ISSUE_STATE, VHH_ISSUE_STATE_REASON and VHH_ISSUE_CLOSED_AT for a
-# heal issue in the harness repo; returns 1 when the read fails.
+# Sets VHH_ISSUE_STATE, VHH_ISSUE_STATE_REASON, VHH_ISSUE_CLOSED_AT and
+# VHH_ISSUE_MERGED (`true` only when the issue carries ai:merged, else `false`)
+# for a heal issue in the harness repo; returns 1 when the read fails.
 _validation_harness_hold_issue_state() {
   local vhi_issue="$1" vhi_out
   VHH_ISSUE_STATE=""
   VHH_ISSUE_STATE_REASON=""
   VHH_ISSUE_CLOSED_AT=""
+  VHH_ISSUE_MERGED=""
   [[ "${vhi_issue}" =~ ^[0-9]{1,9}$ ]] || return 1
   if [ -z "${_VALIDATION_HARNESS_ISSUE_CACHE[${vhi_issue}]+set}" ]; then
     # §14/§15 API budget: at most one GET repos/shubhodeep1/coding-workflows/
     # issues/<n> per heal issue per tick, memoized in
     # _VALIDATION_HARNESS_ISSUE_CACHE, and only after the pin moved ahead of
-    # the hold's support commit. No batched read covers issues in the harness
+    # the hold's support commit, or (harness_heal_auto_revalidate, #8291) for
+    # a parked project once no once-only marker names the issue yet. Both
+    # callers share the cached entry. No batched read covers issues in the harness
     # repo (the candidate and linked-PR batches read ${GITHUB_REPOSITORY}).
     if vhi_out="$(gh_retry _safe_gh_jq "repos/shubhodeep1/coding-workflows/issues/${vhi_issue}" \
-      --jq '[(.state // ""), (.state_reason // ""), (.closed_at // "")] | join("|")' 2>/dev/null)"; then
+      --jq '[(.state // ""), (.state_reason // ""), (.closed_at // ""), ([.labels[]? | (.name? // empty)] | any(. == "ai:merged") | tostring)] | join("|")' 2>/dev/null)"; then
       _VALIDATION_HARNESS_ISSUE_CACHE[${vhi_issue}]="${vhi_out}"
     else
       _VALIDATION_HARNESS_ISSUE_CACHE[${vhi_issue}]="__error__"
@@ -16681,7 +17861,8 @@ _validation_harness_hold_issue_state() {
   fi
   vhi_out="${_VALIDATION_HARNESS_ISSUE_CACHE[${vhi_issue}]}"
   [ "${vhi_out}" != "__error__" ] || return 1
-  IFS='|' read -r VHH_ISSUE_STATE VHH_ISSUE_STATE_REASON VHH_ISSUE_CLOSED_AT <<< "${vhi_out}"
+  IFS='|' read -r VHH_ISSUE_STATE VHH_ISSUE_STATE_REASON VHH_ISSUE_CLOSED_AT VHH_ISSUE_MERGED <<< "${vhi_out}"
+  [ "${VHH_ISSUE_MERGED}" = "true" ] || VHH_ISSUE_MERGED="false"
   case "${VHH_ISSUE_STATE}" in
     open|closed) ;;
     *)
@@ -17070,6 +18251,187 @@ validation_harness_hold_tick() {
   vht_rc=0
   _validation_harness_hold_resume "${vht_fp}" "${vht_pin}" "${vht_issue}" || vht_rc=$?
   return "${vht_rc}"
+}
+
+# ---------------------------------------------------------------------------
+# Harness heal auto-revalidate (Refs #8291, docs/plans/
+# remove-unattended-pipeline-stuck-states-plan.md P7 item 1). A project parked
+# failed with ai:harness-broken and no active harness hold (the hold ended, a
+# resume cap was reached, or the source repository's self_repo park) stays
+# parked after its heal issue merges. Once the heal issue named by the newest
+# trusted routing marker is closed with ai:merged, this posts one /revalidate
+# comment whose last line is
+#   <!-- AI_HARNESS_HEAL_REVALIDATE_V1 heal=<n> -->
+# and hands it to the /revalidate block on the same tick. The once-only gate
+# is that marker on a comment by the pipeline login, read from the full
+# COMMENTS list, so the step fails closed when the comments could not be
+# fetched. A failed POST leaves no marker and the next tick retries.
+#
+# Returns 0 and always sets HHAR_POSTED_COMMENT_JSON: the posted comment as
+# {id, body, created_at, html_url, user:{login}, author_association}, or
+# empty when nothing was posted. Every check before the heal issue read is
+# local (no API call).
+# ---------------------------------------------------------------------------
+HHAR_POSTED_COMMENT_JSON=""
+declare -gA _HHAR_PIN_DATE_CACHE=()  # "<pin sha>" -> committer date (empty when unread)
+
+# One HARNESS_HEAL_AUTO_REVALIDATE log line. Args: outcome heal_issue [reason]
+_harness_heal_auto_revalidate_log() {
+  local hhl_issue="${2:-}"
+  [[ "${hhl_issue}" =~ ^[1-9][0-9]{0,8}$ ]] || hhl_issue="none"
+  echo "HARNESS_HEAL_AUTO_REVALIDATE tracking_issue=${TRACKING_NUM} outcome=$1 heal_issue=${hhl_issue}${3:+ reason=$3}"
+}
+
+harness_heal_auto_revalidate() {
+  local hhar_login hhar_marker hhar_outcome hhar_issue hhar_marker_line hhar_rc
+  local hhar_body hhar_response_file hhar_id hhar_now hhar_comment
+  local hhar_pin hhar_pin_epoch hhar_heal_epoch
+  HHAR_POSTED_COMMENT_JSON=""
+  # Switch off: silent, so the off path matches the output before #8291.
+  [ "${HARNESS_HEAL_AUTO_REVALIDATE_ENABLED:-true}" != "false" ] || return 0
+  if [ "${ENABLE_VALIDATION:-true}" != "true" ]; then
+    _harness_heal_auto_revalidate_log "skip" "" "validation_disabled"
+    return 0
+  fi
+  # An active hold owns its own resume, which also waits for the pin to move.
+  if validation_harness_hold_active; then
+    _harness_heal_auto_revalidate_log "skip" "" "hold_active"
+    return 0
+  fi
+  if [ "${COMMENTS_FETCH_OK:-false}" != "true" ] || [ "${COMMENTS_FOR_TRACKING_NUM:-}" != "${TRACKING_NUM:-}" ]; then
+    _harness_heal_auto_revalidate_log "skip" "" "comments_unavailable"
+    return 0
+  fi
+  unblock_trusted_login >/dev/null 2>&1 || true
+  hhar_login="${UNBLOCK_TRUSTED_LOGIN:-}"
+  if [ -z "${hhar_login}" ]; then
+    _harness_heal_auto_revalidate_log "skip" "" "identity_unavailable"
+    return 0
+  fi
+
+  validation_harness_route_login >/dev/null
+  hhar_marker="$(validation_harness_marker route-latest any)"
+  if [ -z "${hhar_marker}" ]; then
+    _harness_heal_auto_revalidate_log "skip" "" "no_route_marker"
+    return 0
+  fi
+  hhar_outcome="$(printf '%s' "${hhar_marker}" | jq -r '.outcome // ""' 2>/dev/null || echo '')"
+  hhar_issue="$(printf '%s' "${hhar_marker}" | jq -r '.issue // ""' 2>/dev/null || echo '')"
+  [[ "${hhar_outcome}" =~ ^[a-z-]{1,20}$ ]] || hhar_outcome="unknown"
+  if { [ "${hhar_outcome}" != "opened" ] && [ "${hhar_outcome}" != "duplicate" ]; } \
+    || ! [[ "${hhar_issue}" =~ ^[1-9][0-9]{0,8}$ ]]; then
+    _harness_heal_auto_revalidate_log "skip" "" "route_${hhar_outcome}"
+    return 0
+  fi
+
+  # Once-only gate: the marker line on a comment by the pipeline login. An
+  # unreadable COMMENTS list fails closed.
+  hhar_marker_line="<!-- AI_HARNESS_HEAL_REVALIDATE_V1 heal=${hhar_issue} -->"
+  hhar_rc=0
+  printf '%s' "${COMMENTS:-[]}" | jq -e --arg login "${hhar_login}" --arg line "${hhar_marker_line}" '
+    if type != "array" then error("comments are not an array") else . end
+    | any(.[]?;
+        type == "object"
+        and ((.user.login // "") == $login)
+        and ((.body // "") | tostring | split("\n") | map(sub("\\s+$"; "")) | any(. == $line)))
+  ' >/dev/null 2>&1 || hhar_rc=$?
+  if [ "${hhar_rc}" = "0" ]; then
+    _harness_heal_auto_revalidate_log "skip" "${hhar_issue}" "already_posted"
+    return 0
+  fi
+  if [ "${hhar_rc}" != "1" ]; then
+    _harness_heal_auto_revalidate_log "skip" "${hhar_issue}" "comments_unavailable"
+    return 0
+  fi
+
+  # Heal issue state: the hold's memoized GET (_VALIDATION_HARNESS_ISSUE_CACHE).
+  if ! _validation_harness_hold_issue_state "${hhar_issue}"; then
+    _harness_heal_auto_revalidate_log "waiting" "${hhar_issue}" "heal_read_failed"
+    return 0
+  fi
+  if [ "${VHH_ISSUE_STATE}" = "open" ]; then
+    _harness_heal_auto_revalidate_log "waiting" "${hhar_issue}" "heal_open"
+    return 0
+  fi
+  if [ "${VHH_ISSUE_MERGED}" != "true" ]; then
+    _harness_heal_auto_revalidate_log "skip" "${hhar_issue}" "heal_closed_unmerged"
+    return 0
+  fi
+  # Wait until the consumer's validate.yml pin carries the fix, as the hold
+  # resume does: the pin commit must be no older than the heal close, or the
+  # only retry would rerun the old harness. The source repository pins a
+  # branch (promote-candidate), so it skips this check.
+  if [ "${GITHUB_REPOSITORY:-}" != "shubhodeep1/coding-workflows" ]; then
+    if ! validation_harness_pin >/dev/null; then
+      _harness_heal_auto_revalidate_log "waiting" "${hhar_issue}" "pin_unresolved"
+      return 0
+    fi
+    hhar_pin="${_VALIDATION_HARNESS_PIN_VALUE}"
+    if [ -z "${_HHAR_PIN_DATE_CACHE[${hhar_pin}]+set}" ]; then
+      # §14 API budget: one GET of the pin commit per distinct pin per poller
+      # process, memoized; the compare the hold uses needs a support commit
+      # this parked project no longer has.
+      _HHAR_PIN_DATE_CACHE[${hhar_pin}]="$(gh_retry _safe_gh_jq "repos/shubhodeep1/coding-workflows/commits/${hhar_pin}" \
+        --jq '(.commit.committer.date // "")' 2>/dev/null || echo '')"
+    fi
+    hhar_pin_epoch="$(_iso8601_to_epoch "${_HHAR_PIN_DATE_CACHE[${hhar_pin}]}" || echo '')"
+    hhar_heal_epoch="$(_iso8601_to_epoch "${VHH_ISSUE_CLOSED_AT}" || echo '')"
+    if [ -z "${hhar_pin_epoch}" ] || [ -z "${hhar_heal_epoch}" ]; then
+      _harness_heal_auto_revalidate_log "waiting" "${hhar_issue}" "pin_date_unknown"
+      return 0
+    fi
+    if [ "${hhar_heal_epoch}" -gt "${hhar_pin_epoch}" ]; then
+      _harness_heal_auto_revalidate_log "waiting" "${hhar_issue}" "heal_closed_after_pin"
+      return 0
+    fi
+  fi
+
+  hhar_body="/revalidate harness heal issue shubhodeep1/coding-workflows#${hhar_issue} merged
+
+The validation harness heal issue for this project merged, so the orchestrator is resuming runtime validation once. Set \`HARNESS_HEAL_AUTO_REVALIDATE_ENABLED=false\` to turn this off.
+
+${hhar_marker_line}"
+  if ! hhar_response_file="$(mktemp "${TMPDIR:-/tmp}/harness_heal_revalidate.XXXXXX")"; then
+    echo "::warning::HARNESS_HEAL_AUTO_REVALIDATE tracking_issue=${TRACKING_NUM} outcome=post_failed heal_issue=${hhar_issue} reason=tempfile_failed"
+    return 0
+  fi
+  # §14 API budget: at most one comment POST per heal issue over its lifetime
+  # (the marker above gates it). post_tracking_comment is not reused because
+  # it does not return the posted comment, which the /revalidate block needs
+  # on this tick.
+  if ! gh_retry_to_file "${hhar_response_file}" gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+    -X POST -f body="${hhar_body}"; then
+    rm -f "${hhar_response_file}"
+    echo "::warning::HARNESS_HEAL_AUTO_REVALIDATE tracking_issue=${TRACKING_NUM} outcome=post_failed heal_issue=${hhar_issue} reason=post_error"
+    return 0
+  fi
+  hhar_id="$(jq -r '.id // empty' "${hhar_response_file}" 2>/dev/null || echo '')"
+  if ! [[ "${hhar_id}" =~ ^[0-9]+$ ]]; then
+    rm -f "${hhar_response_file}"
+    echo "::warning::HARNESS_HEAL_AUTO_REVALIDATE tracking_issue=${TRACKING_NUM} outcome=post_failed heal_issue=${hhar_issue} reason=no_comment_id"
+    return 0
+  fi
+  hhar_now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  hhar_comment="$(jq -c --arg body "${hhar_body}" --arg login "${hhar_login}" --arg now "${hhar_now}" --argjson id "${hhar_id}" '
+    {
+      id: $id,
+      body: ((.body // "") | if (type == "string" and length > 0) then . else $body end),
+      created_at: ((.created_at // "") | if (type == "string" and length > 0) then . else $now end),
+      html_url: ((.html_url // "") | if type == "string" then . else "" end),
+      user: {login: $login},
+      author_association: ((.author_association // "") | if (type == "string" and length > 0) then . else "OWNER" end)
+    }
+  ' "${hhar_response_file}" 2>/dev/null || echo '')"
+  rm -f "${hhar_response_file}"
+  if [ -z "${hhar_comment}" ]; then
+    hhar_comment="$(jq -cn --arg body "${hhar_body}" --arg login "${hhar_login}" --arg now "${hhar_now}" --argjson id "${hhar_id}" \
+      '{id: $id, body: $body, created_at: $now, html_url: "", user: {login: $login}, author_association: "OWNER"}')"
+  fi
+  HHAR_POSTED_COMMENT_JSON="${hhar_comment}"
+  COMMENTS="$(printf '%s' "${COMMENTS:-[]}" | jq -c --argjson c "${hhar_comment}" '(if type == "array" then . else [] end) + [$c]' 2>/dev/null || printf '%s' "${COMMENTS:-[]}")"
+  _harness_heal_auto_revalidate_log "posted" "${hhar_issue}"
+  tg_notify "Project #${TRACKING_NUM}: harness heal issue shubhodeep1/coding-workflows#${hhar_issue} merged; posted /revalidate to resume runtime validation once." "DEBUG"
+  return 0
 }
 
 # Unblock judge hold request (Refs #7913, P2c). The judge (Phase 3) asks the
@@ -17532,8 +18894,22 @@ mark_validation_complete() {
     # Budget exhausted — refuse to mark complete and escalate to a human.
     _final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
     _final_err="$(jq -r '.final_merge_error // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
-    jq '.status = "failed"
-        | .final_merge_status = "failed"' \
+    # Issue #8984: record why the project failed and the final PR head at
+    # that moment, so FINAL_MERGE_AUTO_RESUME can tell this park apart from
+    # every other `failed` state.  §14: reuse the PR JSON this function
+    # already fetched for the security pass; otherwise one PR read, once per
+    # exhaustion (never per tick).
+    local _exhausted_pr_json="${_security_final_pr_json}"
+    local _exhausted_head_sha=""
+    if [ -z "${_exhausted_pr_json}" ] && [[ "${_final_pr}" =~ ^[0-9]+$ ]]; then
+      _exhausted_pr_json="$(_fetch_pr_json "${_final_pr}")"
+    fi
+    _exhausted_head_sha="$(printf '%s' "${_exhausted_pr_json:-}" | jq -r 'if type == "object" then (.head.sha // "") else "" end' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")"
+    [[ "${_exhausted_head_sha}" =~ ^[0-9a-f]{40}$ ]] || _exhausted_head_sha=""
+    jq --arg sha "${_exhausted_head_sha}" '.status = "failed"
+        | .final_merge_status = "failed"
+        | .final_merge_failure_kind = "final_merge_exhausted"
+        | .final_merge_failure_head_sha = $sha' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     _final_status="failed"
     post_state_comment || true
@@ -17567,6 +18943,7 @@ Manual intervention required: resolve the blocking condition on the final PR (me
      | .validation_failure_class = null
      | .validation_last_raw_status = "pass"
      | .final_merge_attempt_count = 0
+     | .final_merge_failure_kind = null
      | .final_merge_ineligible_blocked_at_sha = ""
      | .final_merge_ineligible_first_blocked_at_utc = 0
      | .final_merge_ineligible_alert_sent_for_sha = ""' \
@@ -18760,24 +20137,28 @@ _extract_standalone_state_json_from_comments() {
     2>/dev/null || echo "")"
 
   if [ -z "${state_raw}" ] || [ "${state_raw}" = "null" ]; then
-    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{}}'
+    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{},"failure_fingerprints":[]}'
     return
   fi
 
   local extracted
   extracted="$(printf '%s' "${state_raw}" | sed -n "/^${STANDALONE_STATE_MARKER_OPEN}$/,/^${STANDALONE_STATE_MARKER_CLOSE}$/p" | sed '1d;$d')"
   if [ -z "${extracted}" ]; then
-    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{}}'
+    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{},"failure_fingerprints":[]}'
     return
   fi
 
   if ! echo "${extracted}" | jq -e . >/dev/null 2>&1; then
-    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{}}'
+    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{},"failure_fingerprints":[]}'
     return
   fi
 
+  # Stuck-states P8c: the security-dependency hold keys are kept only when
+  # present (integers; anything unparsable becomes 0) so states without a
+  # hold episode keep their existing shape.
   echo "${extracted}" | jq -c '
-    {
+    . as $sdh_src
+    | {
       schema_version: 1,
       last_seen_phase: (.last_seen_phase // ""),
       status_since_ts: ((.status_since_ts // 0) | tonumber),
@@ -18785,9 +20166,14 @@ _extract_standalone_state_json_from_comments() {
       phase_attempts: (if (.phase_attempts | type) == "object" then .phase_attempts else {} end),
       conflict_override_count: (if (.conflict_override_count | type) == "object" then .conflict_override_count else {} end),
       judge_escalate_streak: (if (.judge_escalate_streak | type) == "object" then .judge_escalate_streak else {} end),
+      failure_fingerprints: (if (.failure_fingerprints | type) == "array" then .failure_fingerprints[-5:] else [] end),
       updated_ts: ((.updated_ts // 0) | tonumber)
     }
-  ' 2>/dev/null || echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{}}'
+    + ([ "security_dependency_depends_on", "security_dependency_held_since_ts", "security_dependency_escalated_ts" ]
+      | map(select(. as $k | $sdh_src | has($k)))
+      | map({key: ., value: ($sdh_src[.] | (try (tonumber | floor) catch 0))})
+      | from_entries)
+  ' 2>/dev/null || echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{},"failure_fingerprints":[]}'
 }
 
 # Fetch the issue comments once and return the latest standalone state
@@ -18838,6 +20224,205 @@ ${STANDALONE_STATE_MARKER_CLOSE}"
   else
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
       -f body="${comment_body}" >/dev/null 2>&1 || true
+  fi
+}
+
+# Stuck-states P8c: security-dependency hold age, escalation and release
+# helpers for run_standalone_stall_recovery. The hold episode lives in the
+# standalone stall state (security_dependency_depends_on,
+# security_dependency_held_since_ts, security_dependency_escalated_ts; UTC
+# epoch seconds). Markers count only when the pipeline login wrote them.
+#
+# Prints the issue's complete comment history. The cached candidate window
+# is complete when it came from a full read ("complete") or holds fewer than
+# 100 comments ("true"); otherwise one bounded paginated read runs (the same
+# fallback the release path uses, because the GraphQL batch cannot prove a
+# marker absent beyond 100 comments). Returns 1 when that read fails.
+_security_dependency_complete_comments() {
+  local issue_num="$1"
+  local comments_json="$2"
+  local cache_available="$3"
+  local _sdc_fetched
+  if [ "${cache_available}" = "complete" ] \
+    || { [ "${cache_available}" = "true" ] && [ "$(printf '%s' "${comments_json}" | jq 'length' 2>/dev/null || echo 100)" -lt 100 ]; }; then
+    printf '%s' "${comments_json}"
+    return 0
+  fi
+  if ! _sdc_fetched="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null)" \
+    || ! printf '%s' "${_sdc_fetched}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    return 1
+  fi
+  printf '%s' "${_sdc_fetched}"
+}
+
+# True when the label-name array carries ai:needs-human. Kept local (not
+# has_label) because `$label` is a reserved word that jq 1.6 rejects.
+_security_dependency_has_needs_human() {
+  printf '%s' "${1:-[]}" | jq -e '(. // []) | map(if type == "object" then (.name // "") else . end) | index("ai:needs-human") != null' >/dev/null 2>&1
+}
+
+# Records held_since once per hold episode (reset when depends_on changes or
+# the stored value is missing, invalid or in the future) and, after
+# escalate_days, labels ai:needs-human once with a latch comment naming the
+# dependency chain. The hold itself is unchanged: the caller still skips the
+# issue. Steady state (recorded, not yet due, or already escalated) makes no
+# API call beyond the per-tick cached /user read (unblock_trusted_login).
+_security_dependency_hold_age_check() {
+  local issue_num="$1"
+  local depends_on="$2"
+  local comments_json="$3"
+  local labels_json="$4"
+  local cache_available="$5"
+  local escalate_days="$6"
+  local _sdh_now
+  local _sdh_state
+  local _sdh_fields
+  local _sdh_dep
+  local _sdh_held
+  local _sdh_esc
+  local _sdh_action="none"
+  local _sdh_pass
+  local _sdh_complete="false"
+  local _sdh_comment_id
+  local _sdh_login
+  local _sdh_age_days
+  local _sdh_held_iso
+  local _sdh_body
+  local _sdh_marker
+  local _sdh_trusted_comments
+  _sdh_now="$(date -u +%s)"
+  # The hold keys gate escalation, so they are read only from state
+  # comments the pipeline login wrote (one cached /user read per tick).
+  unblock_trusted_login >/dev/null 2>&1 || true
+  _sdh_login="${UNBLOCK_TRUSTED_LOGIN:-}"
+  if [ -z "${_sdh_login}" ]; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_identity_unavailable action=none"
+    return 0
+  fi
+  for _sdh_pass in 1 2; do
+    _sdh_trusted_comments="$(printf '%s' "${comments_json:-[]}" | jq -c --arg login "${_sdh_login}" '[(. // [])[] | select((.user.login // "") == $login)]' 2>/dev/null || echo '[]')"
+    _sdh_state="$(_extract_standalone_state_json_from_comments "${_sdh_trusted_comments}")"
+    _sdh_fields="$(printf '%s' "${_sdh_state}" | jq -r '[(.security_dependency_depends_on // 0), (.security_dependency_held_since_ts // 0), (.security_dependency_escalated_ts // 0)] | map(tostring) | join(" ")' 2>/dev/null || echo "0 0 0")"
+    read -r _sdh_dep _sdh_held _sdh_esc <<<"${_sdh_fields}"
+    [[ "${_sdh_dep:-}" =~ ^[0-9]{1,12}$ ]] || _sdh_dep=0
+    [[ "${_sdh_held:-}" =~ ^[0-9]{1,12}$ ]] || _sdh_held=0
+    [[ "${_sdh_esc:-}" =~ ^[0-9]{1,12}$ ]] || _sdh_esc=0
+    _sdh_action="none"
+    if [ "${_sdh_dep}" != "${depends_on}" ] || [ "${_sdh_held}" -le 0 ] || [ "${_sdh_held}" -gt "${_sdh_now}" ]; then
+      _sdh_action="record"
+    elif [ $((_sdh_now - _sdh_held)) -ge $((escalate_days * 86400)) ] && [ "${_sdh_esc}" -eq 0 ] \
+      && ! _security_dependency_has_needs_human "${labels_json}"; then
+      _sdh_action="escalate"
+    fi
+    [ "${_sdh_action}" != "none" ] || return 0
+    [ "${_sdh_complete}" != "true" ] || break
+    # A write is due: re-read from the complete history so a state comment
+    # or latch marker beyond the cached window is never duplicated.
+    if ! comments_json="$(_security_dependency_complete_comments "${issue_num}" "${comments_json}" "${cache_available}")"; then
+      echo "STALL_SKIP issue=${issue_num} reason=security_dependency_comments_unavailable action=none"
+      return 0
+    fi
+    _sdh_complete="true"
+  done
+  _sdh_comment_id="$(_extract_standalone_state_comment_id_from_comments "${_sdh_trusted_comments}")"
+  if [ "${_sdh_action}" = "record" ]; then
+    _sdh_state="$(printf '%s' "${_sdh_state}" | jq -c --argjson dep "${depends_on}" --argjson now "${_sdh_now}" \
+      '. + {security_dependency_depends_on: $dep, security_dependency_held_since_ts: $now, security_dependency_escalated_ts: 0}')" || return 0
+    write_standalone_state_json "${issue_num}" "${_sdh_state}" "${_sdh_comment_id}"
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_hold_recorded action=none"
+    return 0
+  fi
+  # The marker carries this episode's held_since, so a latch comment left by
+  # an earlier, released episode on the same predecessor never matches.
+  _sdh_marker="<!-- ai:needs-human-latch reason=security_dependency_wait depends_on=${depends_on} held_since=${_sdh_held} -->"
+  if printf '%s' "${comments_json}" | jq -e --arg login "${_sdh_login}" --arg marker "${_sdh_marker}" '
+    any(.[]; ((.user.login // "") == $login) and ((.body // "") | contains($marker)))' >/dev/null 2>&1; then
+    # The latch comment exists but the label does not (an earlier label edit
+    # failed, or its response was lost): add the label, then record it.
+    ensure_label_exists "ai:needs-human"
+    if ! gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:needs-human" >/dev/null 2>&1; then
+      echo "::warning::[standalone-stall] could not label security follow-up #${issue_num} ai:needs-human; retrying next tick." >&2
+      echo "STALL_SKIP issue=${issue_num} reason=security_dependency_escalation_failed action=none"
+      return 0
+    fi
+    _sdh_state="$(printf '%s' "${_sdh_state}" | jq -c --argjson now "${_sdh_now}" '. + {security_dependency_escalated_ts: $now}')" || return 0
+    write_standalone_state_json "${issue_num}" "${_sdh_state}" "${_sdh_comment_id}"
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_escalated detail=marker_present action=needs_human"
+    return 0
+  fi
+  _sdh_age_days=$(((_sdh_now - _sdh_held) / 86400))
+  _sdh_held_iso="$(date -u -d "@${_sdh_held}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "${_sdh_held}")"
+  _sdh_body="Security follow-up #${issue_num} has waited at least ${_sdh_age_days} days for its predecessor.
+
+Dependency chain: #${issue_num} -> #${depends_on} (open)
+Held since: ${_sdh_held_iso}
+
+The hold stays in place. It releases automatically when #${depends_on} is closed with \`ai:merged\` or closed without merging.
+
+${_sdh_marker}"
+  # The latch comment goes first: _security_dependency_clear_latch removes the
+  # label only when this comment exists, so a failed POST must leave no label.
+  if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${_sdh_body}" >/dev/null 2>&1; then
+    echo "::warning::[standalone-stall] could not post the security-dependency latch comment on #${issue_num}; retrying next tick." >&2
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_escalation_failed action=none"
+    return 0
+  fi
+  ensure_label_exists "ai:needs-human"
+  if ! gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:needs-human" >/dev/null 2>&1; then
+    # escalated_ts stays 0, so the next tick finds this latch comment and
+    # retries the label in the marker_present branch above.
+    echo "::warning::[standalone-stall] could not label security follow-up #${issue_num} ai:needs-human after posting its latch comment; retrying next tick." >&2
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_escalation_failed action=none"
+    return 0
+  fi
+  _sdh_state="$(printf '%s' "${_sdh_state}" | jq -c --argjson now "${_sdh_now}" '. + {security_dependency_escalated_ts: $now}')" || return 0
+  write_standalone_state_json "${issue_num}" "${_sdh_state}" "${_sdh_comment_id}"
+  echo "STALL_SKIP issue=${issue_num} reason=security_dependency_escalated action=needs_human"
+}
+
+# On release, removes ai:needs-human only when the latest latch comment the
+# pipeline login wrote is this hold's own (reason=security_dependency_wait).
+# Any other latch is left alone. Returns 1 when the removal fails, so the
+# caller skips posting its release marker and the next tick retries both
+# (once the marker exists the release path never runs again).
+_security_dependency_clear_latch() {
+  local issue_num="$1"
+  local comments_json="$2"
+  local labels_json="$3"
+  local trusted_login="$4"
+  local _sdl_latest
+  _security_dependency_has_needs_human "${labels_json}" || return 0
+  [ -n "${trusted_login}" ] || return 0
+  _sdl_latest="$(printf '%s' "${comments_json}" | jq -r --arg login "${trusted_login}" '
+    [.[] | select(((.user.login // "") == $login) and ((.body // "") | contains("<!-- ai:needs-human-latch")))]
+    | sort_by(.created_at // "") | last | .body // ""' 2>/dev/null || true)"
+  case "${_sdl_latest}" in
+    *"<!-- ai:needs-human-latch reason=security_dependency_wait "*) ;;
+    *) return 0 ;;
+  esac
+  # Only the label this hold added may be removed: when the newest
+  # `labeled` event for ai:needs-human came from anyone else (a person
+  # re-gating the issue without a latch comment), the label stays. One
+  # paginated events read, only at release time with the label present.
+  local _sdl_events
+  local _sdl_labeler
+  if ! _sdl_events="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/events?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null)" \
+    || ! printf '%s' "${_sdl_events}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    echo "::warning::[standalone-stall] could not read label events for security follow-up #${issue_num}; retrying next tick." >&2
+    return 1
+  fi
+  _sdl_labeler="$(printf '%s' "${_sdl_events}" | jq -r '
+    [.[] | select((.event // "") == "labeled" and ((.label.name // "") == "ai:needs-human"))]
+    | last | .actor.login // ""' 2>/dev/null || true)"
+  if [ "${_sdl_labeler}" != "${trusted_login}" ]; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_latch_kept detail=labeled_by_other action=none"
+    return 0
+  fi
+  if gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:needs-human" >/dev/null 2>&1; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_latch_cleared action=none"
+  else
+    echo "::warning::[standalone-stall] could not remove ai:needs-human from security follow-up #${issue_num}; retrying next tick." >&2
+    return 1
   fi
 }
 
@@ -19070,6 +20655,137 @@ _staged_support_comments_for_guard()
     | if type == "array" then sort_by(.created_at // "")
       else error("comments response is not an array") end
   ' 2>/dev/null
+}
+
+# Issue #9486: decide whether a standalone `ai:clarification` issue ever got
+# clarification output. shubhodeep1/digital_pa#146 sat labelled for 34 days
+# with no clarify comment while stall recovery kept answering questions that
+# were never asked. Args: <issue_num> <comments_json>; the comments MUST be the
+# complete history (callers never infer absence from a partial window).
+# Only trusted comments count: a login ending in `[bot]`, or an
+# author_association of OWNER, MEMBER or COLLABORATOR (the same list as
+# stall_recovery_clarify_answer). Output is a trusted comment carrying the
+# clarification-questions marker or starting `Clarification required`, or a
+# trusted comment with a line starting `/answer`. The rerun marker is a trusted
+# comment starting "/reclarify\n<!-- ai:clarify-no-output-rerun:<issue> -->".
+# Prints exactly one of: `has_output`, `no_output_unmarked`,
+# `no_output_marked <epoch>` (newest marker; an unparseable timestamp is 0, so
+# it counts as old and escalation is never blocked forever). Any jq failure
+# prints `has_output`, which keeps the legacy recovery path (fail open).
+# No GitHub API call.
+_standalone_clarify_no_output_state()
+{
+  local issue_num="$1"
+  local comments_json="$2"
+  local clarify_no_output_out=""
+
+  if ! clarify_no_output_out="$(printf '%s' "${comments_json}" | jq -r \
+    --arg marker "/reclarify
+<!-- ai:clarify-no-output-rerun:${issue_num} -->" '
+    def trusted:
+      ((.user.login // "") | tostring | test("\\[bot\\]$"))
+      or ((.author_association // "") | tostring | IN("OWNER", "MEMBER", "COLLABORATOR"));
+    if type != "array" then error("comments are not an array") else . end
+    | [ .[] | select(type == "object") | select(trusted) | .body = ((.body // "") | tostring) ] as $trusted
+    | if any($trusted[]; (.body | test("<!-- ai:clarification-questions -->|^Clarification required"))
+        or (.body | test("(^|\\n)/answer\\b"))) then "has_output"
+      else
+        [ $trusted[] | select(.body | startswith($marker))
+          | ((.created_at // "") | tostring
+            | (try (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 | floor) catch 0)) ] as $marker_epochs
+        | if ($marker_epochs | length) == 0 then "no_output_unmarked"
+          else "no_output_marked " + ($marker_epochs | max | tostring)
+          end
+      end
+  ' 2>/dev/null)"; then
+    printf 'has_output'
+    return 0
+  fi
+  if [[ "${clarify_no_output_out}" =~ ^(has_output|no_output_unmarked|no_output_marked\ [0-9]+)$ ]]; then
+    printf '%s' "${clarify_no_output_out}"
+  else
+    printf 'has_output'
+  fi
+  return 0
+}
+
+# Issue #9486 (AD-2): a security follow-up held by the same-file ordering gate
+# (security_dependency.py verdict `held`) stays held, but the poller posts one
+# advisory per (issue, dependency) pair so the hold is visible instead of
+# silent. Args: <issue_num> <verdict_json> <detail> <comments_json>
+# <cache_available>. detail is one of open | closed_without_ai_merged |
+# unverified (anything else is treated as unverified). depends_on must match
+# ^[1-9][0-9]{0,9}$ before it reaches a marker or the body. Posts only when the
+# comment history already in hand is complete (cache `true` with fewer than
+# 100 comments, or `complete`); there is no extra read (§14: held issues are
+# visited every tick). Dedup marker
+# `<!-- ai:security-dependency-held:<issue>:<depends_on> -->` counts only from
+# trusted authors (same list as _standalone_clarify_no_output_state). The body
+# never has a line starting `/reclarify` or `/answer` and never carries the
+# clarification-questions marker. API calls: zero, or one POST. Always
+# returns 0 so a failure never stops the standalone loop.
+_post_security_dependency_held_advisory()
+{
+  local issue_num="$1"
+  local held_verdict_json="$2"
+  local held_detail="$3"
+  local comments_json="$4"
+  local cache_available="$5"
+  local held_depends_on=""
+  local held_comment_count=""
+  local held_marker=""
+  local held_body=""
+
+  case "${held_detail}" in
+    open|closed_without_ai_merged|unverified) ;;
+    *) held_detail="unverified" ;;
+  esac
+  held_depends_on="$(printf '%s' "${held_verdict_json}" | jq -r '.depends_on // empty | tostring' 2>/dev/null || true)"
+  if ! [[ "${held_depends_on}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held_advisory depends_on=none detail=${held_detail} action=advisory_no_dependency"
+    return 0
+  fi
+  if [ "${cache_available}" = "true" ]; then
+    held_comment_count="$(printf '%s' "${comments_json}" | jq -er 'if type == "array" then length else error("not an array") end' 2>/dev/null || echo 100)"
+    [[ "${held_comment_count}" =~ ^[0-9]+$ ]] || held_comment_count=100
+  elif [ "${cache_available}" = "complete" ]; then
+    held_comment_count=0
+  else
+    held_comment_count=100
+  fi
+  if [ "${held_comment_count}" -ge 100 ]; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held_advisory depends_on=${held_depends_on} detail=${held_detail} action=advisory_comments_incomplete"
+    return 0
+  fi
+  held_marker="<!-- ai:security-dependency-held:${issue_num}:${held_depends_on} -->"
+  if printf '%s' "${comments_json}" | jq -e --arg marker "${held_marker}" '
+    any(.[]?; type == "object"
+      and (((.user.login // "") | tostring | test("\\[bot\\]$"))
+        or ((.author_association // "") | tostring | IN("OWNER", "MEMBER", "COLLABORATOR")))
+      and ((.body // "") | tostring | contains($marker)))' >/dev/null 2>&1; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held_advisory depends_on=${held_depends_on} detail=${held_detail} action=advisory_present"
+    return 0
+  fi
+  case "${held_detail}" in
+    open)
+      held_body="Security-dependency hold: this issue waits for #${held_depends_on} (the earlier fix to the same file) to be closed with \`ai:merged\`. Clarification then starts automatically. No action is needed."
+      ;;
+    closed_without_ai_merged)
+      held_body="Security-dependency hold: #${held_depends_on} (the earlier fix to the same file) was closed without \`ai:merged\`, so this hold will not release on its own. A maintainer must act: land the prerequisite fix, or edit this issue's \`- Depends on: #${held_depends_on}\` line."
+      ;;
+    *)
+      held_body="Security-dependency hold: the dependency on #${held_depends_on} (the earlier fix to the same file) could not be verified, so this hold will not release on its own. A maintainer must act: land the prerequisite fix, or edit this issue's \`- Depends on: #${held_depends_on}\` line."
+      ;;
+  esac
+  held_body="${held_body}
+
+${held_marker}"
+  if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${held_body}" >/dev/null 2>&1; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held_advisory depends_on=${held_depends_on} detail=${held_detail} action=advisory_posted"
+  else
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held_advisory depends_on=${held_depends_on} detail=${held_detail} action=advisory_failed"
+  fi
+  return 0
 }
 
 # Issue #6769: comments for the plan auto-approval gate. Reuses the batched
@@ -20219,6 +21935,10 @@ STALL_EOF
           # already-dispatched/active (rc=2) as success.
           local _rtr_failed_conclusion=""
           local _rtr_failed_wf=""
+          # Set once a review dispatch has been tried in this call, so the
+          # dispatch-first step before the empty commit (cut-ci-runner-time
+          # Phase 3) never dispatches twice.
+          local _rtr_dispatch_attempted="false"
           # Newest createdAt among the completed head-branch runs seen, so a
           # PR-named failure (below) that a later head-branch run already
           # superseded is not acted on.
@@ -20306,6 +22026,7 @@ STALL_EOF
           if [ -n "${_rtr_failed_conclusion}" ]; then
             echo "  Issue #${issue_num} PR #${pr_num} last ${_rtr_failed_wf} run concluded '${_rtr_failed_conclusion}' — dispatching review workflow directly instead of pushing an empty commit."
             local _rtr_dispatch_rc=0
+            _rtr_dispatch_attempted="true"
             _dispatch_review_for_conflicts "${pr_num}" "${head_ref}" || _rtr_dispatch_rc=$?
             if [ "${_rtr_dispatch_rc}" -eq 0 ]; then
               tg_notify "Stall recovery: re-dispatched review workflow for PR #${pr_num} (issue #${issue_num}, last run='${_rtr_failed_conclusion}', stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
@@ -20440,6 +22161,35 @@ STALL_EOF
             STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
             return 1
           fi
+          # Dispatch first (cut-ci-runner-time Phase 3, plan D3): with no
+          # failed last run, re-trigger review by dispatching the review
+          # workflow, behind the same merge-train, capacity, conflict and
+          # in-flight guards the empty commit uses. An empty commit started a
+          # full CI run on identical code; it is now only the fallback when
+          # the dispatch itself fails (rc other than 0 and 2).
+          # §15 audit: the in-flight checks above read the cached runs blob and
+          # one branch-scoped listing; neither can be passed to the helper, whose
+          # _has_active_autofix_run guard reads up to three branch listings (plus
+          # the PR-named dispatch lookup) before one workflow_dispatch. That
+          # replaces the empty commit, which cost a full CI run.
+          if [ "${_rtr_dispatch_attempted}" != "true" ]; then
+            local _rtr_first_dispatch_rc=0
+            _rtr_dispatch_attempted="true"
+            _dispatch_review_for_conflicts "${pr_num}" "${head_ref}" || _rtr_first_dispatch_rc=$?
+            if [ "${_rtr_first_dispatch_rc}" -eq 0 ]; then
+              echo "  Issue #${issue_num} PR #${pr_num} dispatched the review workflow instead of pushing an empty commit."
+              tg_notify "Stall recovery: re-dispatched review workflow for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
+              STALL_RECOVERY_SHOULD_INCREMENT="true"
+              STALL_RECOVERY_EFFECTIVE_ACTION="redispatch_review_autofix"
+              return 0
+            fi
+            if [ "${_rtr_first_dispatch_rc}" -eq 2 ]; then
+              echo "  Issue #${issue_num} PR #${pr_num} dispatch helper skipped (already active or already dispatched this cycle); not incrementing stall recovery."
+              STALL_RECOVERY_EFFECTIVE_ACTION="redispatch_review_autofix"
+              return 0
+            fi
+            echo "  Issue #${issue_num} PR #${pr_num} dispatch helper returned rc=${_rtr_first_dispatch_rc}; falling back to empty-commit push."
+          fi
           if git fetch origin "+refs/heads/${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
             _rtr_origin_head_sha="$(git rev-parse --verify "refs/remotes/origin/${head_ref}" 2>/dev/null || echo "")"
             if [[ "${_rtr_head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${_rtr_origin_head_sha}" =~ ^[0-9a-f]{40}$ ]] && \
@@ -20452,6 +22202,8 @@ STALL_EOF
               git config user.email "codex-bot@users.noreply.invalid"
               git commit --allow-empty -m "[orchestrator] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
               if git push origin "HEAD:${head_ref}" 2>/dev/null; then
+                STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_empty_commit_fallback"
+                echo "  Issue #${issue_num} PR #${pr_num} pushed the empty-commit fallback (action=retrigger_review_empty_commit_fallback)."
                 tg_notify "Stall recovery: re-triggered review for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
                 _rtr_push_succeeded="true"
               fi
@@ -20697,6 +22449,38 @@ REISSUE_EOF
           STALL_RECOVERY_SHOULD_INCREMENT="true"
           return 0
         fi
+      fi
+
+      if [ "${STALL_FINGERPRINT_BREAKER_ENABLED}" = "true" ]; then
+        # Stuck-states P3b (G3): exhaustion never closes the issue or its
+        # linked PR. Label ai:needs-human, verify it, and leave the issue
+        # open for the unblock judge. An unverified label returns 1 so the
+        # attempt is not recorded and the next tick retries.
+        local _skip_limit="${MAX_STALL_RECOVERIES_PER_ISSUE}"
+        if [ "${phase}" = "ai:done" ]; then
+          _skip_limit="${MAX_STALL_RECOVERIES_DONE}"
+        fi
+        ensure_label_exists "ai:needs-human"
+        gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:needs-human" >/dev/null 2>&1 || true
+        local _skip_escalated_labels
+        _skip_escalated_labels="$(get_issue_labels_json "${issue_num}")"
+        if ! has_label "${_skip_escalated_labels}" "ai:needs-human"; then
+          echo "STALL_EXHAUSTED_ESCALATED issue=${issue_num} scope=managed phase=${phase} attempts=${recovery_count} limit=${_skip_limit} outcome=label_failed"
+          STALL_RECOVERY_EFFECTIVE_ACTION="skip_escalate_label_failed"
+          return 1
+        fi
+        echo "  Escalating issue #${issue_num} after ${recovery_count} recovery attempts (left open with ai:needs-human)."
+        post_tracking_comment "## ⏸️ Issue #${issue_num} escalated (stall recovery exhausted)
+
+- **Phase:** \`${phase}\`
+- **Stalled for:** ${stall_minutes} minutes
+- **Recovery attempts:** ${recovery_count} (limit ${_skip_limit})
+- **Local ID:** \`${local_id}\`
+
+The issue and its linked PR stay open with \`ai:needs-human\`; the unblock judge will pick it up."
+        echo "STALL_EXHAUSTED_ESCALATED issue=${issue_num} scope=managed phase=${phase} attempts=${recovery_count} limit=${_skip_limit} outcome=labelled"
+        tg_notify "Issue #${issue_num} escalated after ${recovery_count} stall recovery attempts (${stall_minutes}m in '${phase}'). Left open with ai:needs-human for the unblock judge."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
+        return 0
       fi
 
       echo "  Skipping issue #${issue_num} after ${recovery_count} recovery attempts."
@@ -22188,7 +23972,7 @@ invoke_stall_judge() {
         judge_success="true"
         break
       fi
-      sleep $(( 8 * attempt ))
+      "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" $(( 8 * attempt ))
     done
   fi
 
@@ -24589,8 +26373,11 @@ unblock_handover_merge_deferral() {
 # Needs-human digest (docs/plans/unattended-claude-pipeline-completion-plan.md
 # item 4a, decision D6). When a project's automated budgets are spent it is
 # parked in the repository's single needs-human digest issue
-# (scripts/operator_step_issue.py needs-human park) with one CRITICAL alert per
-# newly parked project; nothing is closed by an exhausted budget. While the
+# (scripts/operator_step_issue.py needs-human park) with at most one persisted
+# CRITICAL alert attempt per parking (stuck-states P6b, Refs #8291: a trusted
+# ai:unblock-park-alert claim on the tracking issue is written before the one
+# Telegram send and confirmed with its message id; the send is never retried);
+# nothing is closed by an exhausted budget. While the
 # unblock judge is enabled it still has rounds for a failed project, so the
 # poller defers to it and the judge parks the project when its own rounds run
 # out. Kill switch NEEDS_HUMAN_DIGEST_ENABLED (default true). Labels and state
@@ -24631,9 +26418,62 @@ needs_human_park_project() {
     echo "NEEDS_HUMAN item=${TRACKING_NUM} kind=project reason=${reason} outcome=skip detail=park_failed"
     return 0
   fi
-  if jq -e '.newly_parked == true' <<< "${park_json}" >/dev/null 2>&1; then
-    digest="$(jq -r '.issue // "?"' <<< "${park_json}" 2>/dev/null || echo '?')"
-    tg_notify "Project #${TRACKING_NUM} parked in needs-human digest #${digest} (${reason}): every automated budget is spent and a person must decide." "CRITICAL" || true
+  local park_parking="" claim_json="" claim_id="" msg_id="" alert_msg="" alert_url=""
+  park_parking="$(jq -r '.parking // empty' <<< "${park_json}" 2>/dev/null || true)"
+  [ -n "${park_parking}" ] || return 0
+  # Smoke fixtures and an unconfigured Telegram never claim: the claim is the
+  # only attempt this parking gets, so it is kept for a run that can send.
+  if declare -F _smoke_fixture_alert_silenced >/dev/null 2>&1 && _smoke_fixture_alert_silenced CRITICAL; then
+    echo "NEEDS_HUMAN_ALERT item=${TRACKING_NUM} parking=${park_parking} outcome=skip reason=smoke_silenced"
+    return 0
+  fi
+  if ! declare -F tg_alert_configured >/dev/null 2>&1 || ! declare -F tg_send_msg >/dev/null 2>&1; then
+    echo "NEEDS_HUMAN_ALERT item=${TRACKING_NUM} parking=${park_parking} outcome=skip reason=helper_missing"
+    return 0
+  fi
+  if ! tg_alert_configured CRITICAL; then
+    echo "NEEDS_HUMAN_ALERT item=${TRACKING_NUM} parking=${park_parking} outcome=skip reason=telegram_unconfigured"
+    return 0
+  fi
+  if ! claim_json="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/operator_step_issue.py needs-human alert-claim \
+    --repo "${GITHUB_REPOSITORY}" --item "${TRACKING_NUM}" --parking "${park_parking}" \
+    --trusted-login "${UNBLOCK_TRUSTED_LOGIN}")"; then
+    echo "NEEDS_HUMAN_ALERT item=${TRACKING_NUM} parking=${park_parking} outcome=failed reason=claim_failed"
+    return 0
+  fi
+  # Not claimed (already attempted, lost race, unverified): the helper logged why.
+  jq -e '.claimed == true' <<< "${claim_json}" >/dev/null 2>&1 || return 0
+  claim_id="$(jq -r '.comment_id // empty' <<< "${claim_json}" 2>/dev/null || true)"
+  if ! [[ "${claim_id}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+    echo "NEEDS_HUMAN_ALERT item=${TRACKING_NUM} parking=${park_parking} outcome=failed reason=claim_id_missing"
+    return 0
+  fi
+  digest="$(jq -r '.issue // "?"' <<< "${park_json}" 2>/dev/null || echo '?')"
+  # Same text tg_notify built: base message plus the Tracking and Run links.
+  alert_msg="Project #${TRACKING_NUM} parked in needs-human digest #${digest} (${reason}): every automated budget is spent and a person must decide."
+  if declare -F _gh_url >/dev/null 2>&1; then
+    alert_url="$(_gh_url "issues/${TRACKING_NUM}")"
+    [ -z "${alert_url}" ] || alert_msg+=$'\n'"Tracking: ${alert_url}"
+    if [ -n "${GITHUB_RUN_ID:-}" ]; then
+      alert_url="$(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+      [ -z "${alert_url}" ] || alert_msg+=$'\n'"Run: ${alert_url}"
+    fi
+  fi
+  # stderr kept: tg_send_msg logs why a send returned no message id (curl stderr stays silenced inside).
+  msg_id="$(tg_send_msg "${alert_msg}" CRITICAL || true)"
+  if [[ "${msg_id}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+    # Keep the tg_send_tracked cleanup record on the tracking issue.
+    if declare -F tg_store_msg_id >/dev/null 2>&1; then
+      tg_store_msg_id "${TRACKING_NUM}" "${msg_id}" >/dev/null 2>&1 || true
+    fi
+    if ! PYTHONDONTWRITEBYTECODE=1 python3 scripts/operator_step_issue.py needs-human alert-confirm \
+      --repo "${GITHUB_REPOSITORY}" --item "${TRACKING_NUM}" --parking "${park_parking}" \
+      --comment-id "${claim_id}" --message-id "${msg_id}" >/dev/null; then
+      echo "NEEDS_HUMAN_ALERT item=${TRACKING_NUM} parking=${park_parking} outcome=failed reason=confirm_write_failed"
+    fi
+  else
+    # The claim stays state=attempted; the send is never retried for this parking.
+    echo "NEEDS_HUMAN_ALERT item=${TRACKING_NUM} parking=${park_parking} outcome=unconfirmed reason=send_failed_or_ambiguous"
   fi
   return 0
 }
@@ -25369,6 +27209,303 @@ _Orchestrator: released the \`ai:needs-human\` latch that the staged-support res
   done
 }
 
+# ---------------------------------------------------------------
+# Stuck-states P3b: failure-signature breaker
+# ---------------------------------------------------------------
+# Evaluates AI_FAILURE_FINGERPRINT_V1 markers (emitted by the plan/clarify
+# failure handlers) through `orchestrate_lib.py failure-fingerprint-breaker`.
+# Comment history is authoritative: only comments authored by the pipeline's
+# verified login (unblock_trusted_login) count, and the newest trusted
+# AI_FAILURE_FINGERPRINT_BREAKER_V1 comment is the consumption point.
+#
+# GitHub API cost (§14): zero calls when no cached comment carries a marker;
+# otherwise the per-tick cached `user` read from unblock_trusted_login, plus at
+# most one paginated comments read (_staged_support_comments_for_guard) when
+# the last-100 cache truncates a streak that is still building. Every failure
+# fails open to the legacy stall ladder (no trip is ever inferred).
+
+# Prints the evaluator's JSON for <comments_json> <login> <complete>.
+_failure_fingerprint_breaker_eval()
+{
+  local ffb_eval_comments="$1"
+  local ffb_eval_login="$2"
+  local ffb_eval_complete="$3"
+  local ffb_eval_file=""
+  local ffb_eval_result=""
+
+  if ! ffb_eval_file="$(mktemp "${TMPDIR:-/tmp}/ffb_comments.XXXXXX")"; then
+    printf '%s' '{"decision":"unavailable"}'
+    return 0
+  fi
+  printf '%s' "${ffb_eval_comments}" > "${ffb_eval_file}"
+  ffb_eval_result="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_lib.py failure-fingerprint-breaker \
+    --comments-file "${ffb_eval_file}" \
+    --trusted-login "${ffb_eval_login}" \
+    --repeat-max "${STALL_FINGERPRINT_REPEAT_MAX}" \
+    --comments-complete "${ffb_eval_complete}" 2>/dev/null || true)"
+  rm -f "${ffb_eval_file}"
+  if ! printf '%s' "${ffb_eval_result}" | jq -e 'type == "object" and ((.decision // null) | type) == "string"' >/dev/null 2>&1; then
+    ffb_eval_result='{"decision":"unavailable"}'
+  fi
+  printf '%s' "${ffb_eval_result}"
+}
+
+# _failure_fingerprint_breaker_check <issue_num> <cached_comments_json> <cache_available> <scope>
+# cache_available: "complete" (full history), "true" (last-100 cache) or
+# "false". Sets FFB_DECISION (trip|none|identity_unavailable|
+# history_unavailable|unavailable), FFB_LABEL, FFB_PHASE, FFB_FP, FFB_RUNS
+# (csv) and FFB_RECENT_JSON (last <=5 markers). Always returns 0.
+_failure_fingerprint_breaker_check()
+{
+  local issue_num="$1"
+  local cached_comments_json="${2:-[]}"
+  local cache_available="${3:-false}"
+  local ffb_scope="${4:-standalone}"
+  local ffb_login=""
+  local ffb_complete="false"
+  local ffb_count=""
+  local ffb_result=""
+  local ffb_full_comments=""
+
+  FFB_DECISION="none"
+  FFB_LABEL=""
+  FFB_PHASE=""
+  FFB_FP=""
+  FFB_RUNS=""
+  FFB_RECENT_JSON='[]'
+
+  [ "${STALL_FINGERPRINT_BREAKER_ENABLED}" = "true" ] || return 0
+  if ! printf '%s' "${cached_comments_json}" | jq -e 'type == "array" and any(.[]?; ((.body // "") | tostring | contains("AI_FAILURE_FINGERPRINT_V1")))' >/dev/null 2>&1; then
+    return 0
+  fi
+
+  unblock_trusted_login >/dev/null
+  ffb_login="${UNBLOCK_TRUSTED_LOGIN:-}"
+  if [ -z "${ffb_login}" ]; then
+    FFB_DECISION="identity_unavailable"
+    return 0
+  fi
+
+  # Same completeness rule as _staged_support_comments_for_guard.
+  if [ "${cache_available}" = "complete" ]; then
+    ffb_complete="true"
+  elif [ "${cache_available}" = "true" ] \
+    && ffb_count="$(printf '%s' "${cached_comments_json}" | jq -er 'length' 2>/dev/null)" \
+    && [[ "${ffb_count}" =~ ^[0-9]+$ ]] && [ "${ffb_count}" -lt 100 ]; then
+    ffb_complete="true"
+  fi
+
+  ffb_result="$(_failure_fingerprint_breaker_eval "${cached_comments_json}" "${ffb_login}" "${ffb_complete}")"
+  if [ "$(printf '%s' "${ffb_result}" | jq -r '.decision' 2>/dev/null)" = "needs_full_history" ]; then
+    if ! ffb_full_comments="$(_staged_support_comments_for_guard "${issue_num}" "${cached_comments_json}" "false")"; then
+      FFB_DECISION="history_unavailable"
+      return 0
+    fi
+    ffb_result="$(_failure_fingerprint_breaker_eval "${ffb_full_comments}" "${ffb_login}" "true")"
+  fi
+
+  FFB_DECISION="$(printf '%s' "${ffb_result}" | jq -r '.decision // "unavailable"' 2>/dev/null || echo unavailable)"
+  case "${FFB_DECISION}" in
+    trip|none|identity_unavailable|unavailable) ;;
+    *) FFB_DECISION="unavailable" ;;
+  esac
+  FFB_RECENT_JSON="$(printf '%s' "${ffb_result}" | jq -c '(.recent // []) | if type == "array" then .[-5:] else [] end' 2>/dev/null || echo '[]')"
+  [ -n "${FFB_RECENT_JSON}" ] || FFB_RECENT_JSON='[]'
+  if [ "${FFB_DECISION}" = "trip" ]; then
+    FFB_PHASE="$(printf '%s' "${ffb_result}" | jq -r '.phase // ""' 2>/dev/null || true)"
+    FFB_FP="$(printf '%s' "${ffb_result}" | jq -r '.fp // ""' 2>/dev/null || true)"
+    FFB_LABEL="$(printf '%s' "${ffb_result}" | jq -r '.label // ""' 2>/dev/null || true)"
+    FFB_RUNS="$(printf '%s' "${ffb_result}" | jq -r '(.runs // []) | map(tostring) | join(",")' 2>/dev/null || true)"
+    # Defence in depth: the evaluator already validated these fields.
+    if ! [[ "${FFB_PHASE}" =~ ^[a-z][a-z0-9-]{0,31}$ ]] \
+      || ! [[ "${FFB_FP}" =~ ^[0-9a-f]{12}$ ]] \
+      || ! [[ "${FFB_RUNS}" =~ ^[1-9][0-9]{0,19}(,[1-9][0-9]{0,19})+$ ]]; then
+      FFB_DECISION="unavailable"
+    fi
+    case "${FFB_LABEL}" in
+      ai:plan-failed|ai:clarify-failed|ai:needs-human) ;;
+      *) FFB_DECISION="unavailable" ;;
+    esac
+    if [ "${FFB_DECISION}" != "trip" ]; then
+      FFB_LABEL=""
+      FFB_PHASE=""
+      FFB_FP=""
+      FFB_RUNS=""
+      echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=unavailable reason=invalid_trip_payload" >&2
+    fi
+  fi
+  return 0
+}
+
+# _failure_fingerprint_breaker_apply <issue_num> <scope>
+# Adds FFB_LABEL, verifies it by re-reading labels (like escalate_human), and
+# posts the breaker comment that carries the consumption-point marker.
+# Returns 1 (no comment, no state change) when the label cannot be verified
+# or the breaker comment could not be posted and the label was rolled back,
+# so the next tick retries idempotently. Returns 2 when the label state is
+# unknown or still applied: the label read after the add failed, or the
+# comment failed and the rollback could not be verified (the issue stays
+# stopped; callers must not run the stall ladder on it this tick).
+_ffb_read_issue_labels()
+{
+  # Unlike get_issue_labels_json, a failed read is reported (rc=1) instead
+  # of being turned into "[]", which would read as "label absent".
+  local ffb_read_out=""
+  ffb_read_out="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/$1/labels" --jq '[.[].name]' 2>/dev/null)" || return 1
+  printf '%s' "${ffb_read_out}" | jq -e 'type == "array"' >/dev/null 2>&1 || return 1
+  printf '%s' "${ffb_read_out}"
+}
+
+_failure_fingerprint_breaker_apply()
+{
+  local issue_num="$1"
+  local ffb_scope="${2:-standalone}"
+  local ffb_labels_after=""
+  local ffb_runs_base=""
+  local ffb_rows=""
+  local ffb_body=""
+
+  ensure_label_exists "${FFB_LABEL}"
+  gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label "${FFB_LABEL}" >/dev/null 2>&1 || true
+  if ! ffb_labels_after="$(_ffb_read_issue_labels "${issue_num}")"; then
+    echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=label_failed label=${FFB_LABEL} reason=label_read_failed (label state unknown; ladder skipped this tick)"
+    return 2
+  fi
+  if ! has_label "${ffb_labels_after}" "${FFB_LABEL}"; then
+    echo "STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=label_failed phase=${FFB_PHASE} fp=${FFB_FP} runs=${FFB_RUNS} label=${FFB_LABEL}"
+    echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=label_failed label=${FFB_LABEL}"
+    return 1
+  fi
+
+  ffb_runs_base="$(_gh_url "actions/runs")"
+  ffb_rows="$(printf '%s' "${FFB_RECENT_JSON}" | jq -r --arg base "${ffb_runs_base}" '
+    .[]? | "| `\(.phase)` | `\(.fp)` | " + (if $base != "" then "[\(.run)](\($base)/\(.run))" else (.run | tostring) end) + " |"
+  ' 2>/dev/null || true)"
+  ffb_body="<!-- AI_FAILURE_FINGERPRINT_BREAKER_V1 phase=${FFB_PHASE} fp=${FFB_FP} runs=${FFB_RUNS} -->
+## 🛑 Repeated failure detected: automatic retries stopped
+
+The \`${FFB_PHASE}\` phase failed with the same failure signature (\`${FFB_FP}\`) in runs ${FFB_RUNS//,/, }. Stall recovery will not retrigger it again; this issue now carries \`${FFB_LABEL}\`.
+
+| Phase | Fingerprint | Run |
+|---|---|---|
+${ffb_rows}
+
+The unblock judge will pick this up on its next scan."
+  if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${ffb_body}" >/dev/null 2>&1; then
+    # The breaker comment is the only consumption point for the marker
+    # history. Without it, a later unblock-judge resume would re-trip on the
+    # same markers, so roll the label back (both callers only reach here
+    # when the issue did not carry it) and let the next tick retry. Return 2
+    # when the rollback cannot be verified, so callers do not run the legacy
+    # ladder on an issue that still carries the failure label.
+    gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --remove-label "${FFB_LABEL}" >/dev/null 2>&1 || true
+    if ! ffb_labels_after="$(_ffb_read_issue_labels "${issue_num}")"; then
+      echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=comment_failed label=${FFB_LABEL} rollback=unverified (label read failed; breaker comment not posted)"
+      return 2
+    fi
+    if has_label "${ffb_labels_after}" "${FFB_LABEL}"; then
+      echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=comment_failed label=${FFB_LABEL} rollback=failed (label applied; breaker comment not posted)"
+      return 2
+    fi
+    echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=comment_failed label=${FFB_LABEL} rollback=done (breaker comment not posted; next tick retries)"
+    return 1
+  fi
+  echo "STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=tripped phase=${FFB_PHASE} fp=${FFB_FP} runs=${FFB_RUNS} label=${FFB_LABEL}"
+  tg_notify_issue "${issue_num}" "Failure-signature breaker tripped for issue #${issue_num}: phase '${FFB_PHASE}' failed with the same fingerprint ${FFB_FP} in runs ${FFB_RUNS}. Labelled ${FFB_LABEL} for the unblock judge." "WARNING"
+  return 0
+}
+
+# run_managed_failure_fingerprint_breaker: per-project managed loop pass.
+# Runs before check-stalls on every tick (inside the INVOKE_JUDGE_FOR_STUCK
+# != true block) over the current wave's open issues, reading comments only
+# from the batched _current_wave_details_json cache. On a trip it patches
+# LABELS_JSON so check-stalls sees the new label this tick and mirrors the
+# recent markers into the wave issue's failure_fingerprints. Sets
+# FFB_MANAGED_STATE_CHANGED=true when STATE_FILE was rewritten.
+run_managed_failure_fingerprint_breaker()
+{
+  local ffb_entry=""
+  local ffb_issue=""
+  local ffb_local_id=""
+  local ffb_comments=""
+  local ffb_issue_labels=""
+  local ffb_gate=""
+  local ffb_new_labels=""
+  local ffb_labels_map=""
+
+  FFB_MANAGED_STATE_CHANGED="false"
+  [ "${STALL_FINGERPRINT_BREAKER_ENABLED}" = "true" ] || return 0
+  [ -f "${STATE_FILE:-}" ] || return 0
+  [[ "${WAVE_IDX:-}" =~ ^[0-9]+$ ]] || return 0
+
+  while IFS= read -r ffb_entry; do
+    [ -n "${ffb_entry}" ] || continue
+    ffb_issue="$(printf '%s' "${ffb_entry}" | jq -r '.github_issue // empty' 2>/dev/null || true)"
+    ffb_local_id="$(printf '%s' "${ffb_entry}" | jq -r '.id // empty' 2>/dev/null || true)"
+    [[ "${ffb_issue}" =~ ^[0-9]+$ ]] || continue
+    if ! printf '%s' "${_current_wave_details_json:-}" | jq -e --arg n "${ffb_issue}" \
+      '(.[$n].comments_available == true) and ((.[$n].comments | type) == "array")' >/dev/null 2>&1; then
+      continue
+    fi
+    ffb_comments="$(printf '%s' "${_current_wave_details_json}" | jq -c --arg n "${ffb_issue}" '.[$n].comments' 2>/dev/null || echo '[]')"
+    if ! printf '%s' "${ffb_comments}" | jq -e 'any(.[]?; ((.body // "") | tostring | contains("AI_FAILURE_FINGERPRINT_V1")))' >/dev/null 2>&1; then
+      continue
+    fi
+    ffb_labels_map="${LABELS_JSON:-}"
+    [ -n "${ffb_labels_map}" ] || ffb_labels_map='{}'
+    ffb_issue_labels="$(printf '%s' "${ffb_labels_map}" | jq -c --arg n "${ffb_issue}" '.[$n] // [] | if type == "array" then . else [] end' 2>/dev/null || echo '[]')"
+    ffb_gate="$(PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import json, sys
+sys.path.insert(0, "scripts")
+from orchestrate_lib import DEDICATED_HANDLER_PHASES, TERMINAL_PHASES, determine_phase, stall_recovery_latch_label
+labels = json.loads(sys.argv[1])
+phase = determine_phase(labels)
+if phase in TERMINAL_PHASES or phase in DEDICATED_HANDLER_PHASES or stall_recovery_latch_label(labels):
+    print("skip")
+else:
+    print("eligible")
+' "${ffb_issue_labels}" 2>/dev/null || echo skip)"
+    [ "${ffb_gate}" = "eligible" ] || continue
+
+    _failure_fingerprint_breaker_check "${ffb_issue}" "${ffb_comments}" "true" "managed"
+    case "${FFB_DECISION}" in
+      trip)
+        # Managed wave issues get ai:needs-human (a dedicated-handler phase)
+        # instead of ai:plan-failed / ai:clarify-failed: those are
+        # TERMINAL_PHASES, which reconcile_wave_issue_status would record as
+        # a permanent "closed" wave status (the skip-and-close P3b removes).
+        FFB_LABEL="ai:needs-human"
+        local ffb_apply_rc=0
+        _failure_fingerprint_breaker_apply "${ffb_issue}" "managed" || ffb_apply_rc=$?
+        # rc=1: nothing applied; check-stalls sees the issue as before.
+        [ "${ffb_apply_rc}" -eq 1 ] && continue
+        # rc=0 and rc=2 (label applied or state unknown): patch the in-memory
+        # snapshot so check-stalls skips the issue this tick.
+        ffb_new_labels="$(printf '%s' "${ffb_issue_labels}" | jq -c --arg l "${FFB_LABEL}" 'if index($l) == null then . + [$l] else . end' 2>/dev/null || echo "${ffb_issue_labels}")"
+        LABELS_JSON="$(printf '%s' "${ffb_labels_map}" | jq -c --arg key "${ffb_issue}" --argjson labels "${ffb_new_labels}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
+        [ "${ffb_apply_rc}" -eq 0 ] || continue
+        if [ -n "${ffb_local_id}" ] \
+          && jq --argjson w "${WAVE_IDX}" --arg id "${ffb_local_id}" --argjson recent "${FFB_RECENT_JSON}" \
+            '(.waves[$w].issues[]? | select(.id == $id)) |= (.failure_fingerprints = $recent)' \
+            "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null; then
+          mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          FFB_MANAGED_STATE_CHANGED="true"
+        else
+          rm -f "${STATE_FILE}.tmp"
+        fi
+        ;;
+      identity_unavailable|history_unavailable|unavailable)
+        echo "STALL_FINGERPRINT_BREAKER issue=${ffb_issue} scope=managed outcome=${FFB_DECISION}"
+        ;;
+    esac
+  done < <(jq -c --argjson w "${WAVE_IDX}" '
+    .waves[$w].issues[]?
+    | select(.github_issue != null)
+    | select(((.status // "") as $s | ["merged", "closed", "skipped", "not_created"] | index($s)) | not)
+  ' "${STATE_FILE}" 2>/dev/null || true)
+  return 0
+}
+
 run_standalone_stall_recovery() {
   if [ "${ENABLE_STANDALONE_STALL_RECOVERY}" != "true" ]; then
     echo "Standalone stall recovery disabled by ENABLE_STANDALONE_STALL_RECOVERY=${ENABLE_STANDALONE_STALL_RECOVERY}."
@@ -25489,9 +27626,29 @@ run_standalone_stall_recovery() {
   local _standalone_staged_support_latch_rc
   local _standalone_staged_support_cache_available
   local _standalone_staged_support_comments_unavailable
+  local _std_clarify_no_output_rerun="false"
   local _security_dependency_issue_file="${RUNTIME_DIR}/standalone_security_dependency_issue.json"
   local _security_dependency_verdict
   local _security_dependency_status
+  local _security_dependency_reason
+  local _security_dependency_depends_on
+  local _security_dependency_login
+  local _security_dependency_release_marker
+  # Stuck-states P8c: parsed once per sweep. The switch is exported so the
+  # security_dependency.py verdict below uses the same value.
+  local _security_dependency_resume_enabled="true"
+  local _security_dependency_escalate_days="7"
+  case "$(printf '%s' "${DEPENDENCY_WAIT_RESUME_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+    true|1|yes|on) _security_dependency_resume_enabled="true" ;;
+    false|0|no|off) _security_dependency_resume_enabled="false" ;;
+    *) echo "::warning::DEPENDENCY_WAIT_RESUME_ENABLED is not a boolean; using true." ;;
+  esac
+  export DEPENDENCY_WAIT_RESUME_ENABLED="${_security_dependency_resume_enabled}"
+  if [[ "${DEPENDENCY_WAIT_ESCALATE_DAYS:-7}" =~ ^[0-9]{1,4}$ ]] && [ "$((10#${DEPENDENCY_WAIT_ESCALATE_DAYS:-7}))" -ge 1 ]; then
+    _security_dependency_escalate_days="$((10#${DEPENDENCY_WAIT_ESCALATE_DAYS:-7}))"
+  else
+    echo "::warning::DEPENDENCY_WAIT_ESCALATE_DAYS must be an integer from 1 to 9999; using 7."
+  fi
   local _pr_dependency_verdict
   local _pr_dependency_status
   local _pr_dependency_reason
@@ -25559,10 +27716,64 @@ run_standalone_stall_recovery() {
         'dependency closed without ai:merged') _security_dependency_status="closed_without_ai_merged" ;;
         *) _security_dependency_status="unverified" ;;
       esac
+      # Stuck-states P8c: only a verified open predecessor ages the hold;
+      # unverified verdicts neither start nor advance the clock.
+      if [ "${_security_dependency_status}" = "open" ] && [ "${_security_dependency_resume_enabled}" = "true" ]; then
+        _security_dependency_depends_on="$(printf '%s' "${_security_dependency_verdict}" | jq -r '.depends_on // empty' 2>/dev/null || true)"
+        if [[ "${_security_dependency_depends_on}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+          _security_dependency_hold_age_check "${issue_num}" "${_security_dependency_depends_on}" "${comments_json}" \
+            "${labels_json}" "${_standalone_staged_support_cache_available}" "${_security_dependency_escalate_days}" || true
+        fi
+      fi
       echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held detail=${_security_dependency_status} action=none"
+      # Issue #9486 (AD-2): the hold stays, but make it visible once.
+      _post_security_dependency_held_advisory "${issue_num}" "${_security_dependency_verdict}" \
+        "${_security_dependency_status}" "${comments_json}" "${_standalone_staged_support_cache_available}" || true
       continue
     fi
     if [ "${_security_dependency_status}" = "ready" ]; then
+      _security_dependency_reason="$(printf '%s' "${_security_dependency_verdict}" | jq -r '.reason // empty' 2>/dev/null || true)"
+      _security_dependency_depends_on="$(printf '%s' "${_security_dependency_verdict}" | jq -r '.depends_on // empty' 2>/dev/null || true)"
+    fi
+    if [ "${_security_dependency_status}" = "ready" ] && [ "${_security_dependency_reason}" = "dependency closed without ai:merged" ]; then
+      # Stuck-states P8c: the predecessor was closed without ai:merged, so it
+      # can no longer race this follow-up. Post one trusted /reclarify with
+      # the AI_SECURITY_DEPENDENCY_RELEASED_V1 marker; clarify then re-checks
+      # whether the finding still applies. Nothing is posted when the
+      # pipeline login or the complete comment history cannot be read.
+      if [ "${_security_dependency_resume_enabled}" != "true" ] || ! [[ "${_security_dependency_depends_on}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+        echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held detail=closed_without_ai_merged action=none"
+        continue
+      fi
+      unblock_trusted_login >/dev/null 2>&1 || true
+      _security_dependency_login="${UNBLOCK_TRUSTED_LOGIN:-}"
+      if [ -z "${_security_dependency_login}" ]; then
+        echo "STALL_SKIP issue=${issue_num} reason=security_dependency_identity_unavailable action=none"
+        continue
+      fi
+      if ! comments_json="$(_security_dependency_complete_comments "${issue_num}" "${comments_json}" "${_standalone_staged_support_cache_available}")"; then
+        comments_json='[]'
+        echo "STALL_SKIP issue=${issue_num} reason=security_dependency_comments_unavailable action=none"
+        continue
+      fi
+      _security_dependency_release_marker="<!-- AI_SECURITY_DEPENDENCY_RELEASED_V1 reason=predecessor_unmerged issue=${issue_num} depends_on=${_security_dependency_depends_on} -->"
+      if ! printf '%s' "${comments_json}" | jq -e --arg marker "${_security_dependency_release_marker}" --arg login "${_security_dependency_login}" '
+        any(.[]; ((.user.login // "") == $login)
+          and ((.body // "") | startswith("/reclarify\n" + $marker)))' >/dev/null 2>&1; then
+        if ! _security_dependency_clear_latch "${issue_num}" "${comments_json}" "${labels_json}" "${_security_dependency_login}"; then
+          echo "STALL_SKIP issue=${issue_num} reason=security_dependency_retrigger_failed detail=latch_clear_failed action=none"
+          continue
+        fi
+        if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+          -f body="/reclarify
+${_security_dependency_release_marker}" >/dev/null; then
+          echo "STALL_SKIP issue=${issue_num} reason=security_dependency_released_unmerged action=reclarify"
+        else
+          echo "STALL_SKIP issue=${issue_num} reason=security_dependency_retrigger_failed action=none"
+        fi
+        continue
+      fi
+    elif [ "${_security_dependency_status}" = "ready" ]; then
       # An unavailable or full comment window cannot prove the release
       # marker absent. Fetch complete history only on that rare path.
       if [ "${_standalone_staged_support_cache_available}" != "true" ] || [ "$(printf '%s' "${comments_json}" | jq 'length' 2>/dev/null || echo 100)" -ge 100 ]; then
@@ -25574,6 +27785,20 @@ run_standalone_stall_recovery() {
       if ! printf '%s' "${comments_json}" | jq -e --arg marker "<!-- ai:security-dependency-released:${issue_num} -->" '
         any(.[]; ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
           and ((.body // "") | startswith("/reclarify\n" + $marker)))' >/dev/null 2>&1; then
+        # Stuck-states P8c: drop this hold's own ai:needs-human latch first.
+        if [ "${_security_dependency_resume_enabled}" = "true" ] && _security_dependency_has_needs_human "${labels_json}"; then
+          unblock_trusted_login >/dev/null 2>&1 || true
+          # The latch clear is a no-op without the login; posting the marker
+          # then would strand ai:needs-human, so wait for the next tick.
+          if [ -z "${UNBLOCK_TRUSTED_LOGIN:-}" ]; then
+            echo "STALL_SKIP issue=${issue_num} reason=security_dependency_identity_unavailable action=none"
+            continue
+          fi
+          if ! _security_dependency_clear_latch "${issue_num}" "${comments_json}" "${labels_json}" "${UNBLOCK_TRUSTED_LOGIN:-}"; then
+            echo "STALL_SKIP issue=${issue_num} reason=security_dependency_retrigger_failed detail=latch_clear_failed action=none"
+            continue
+          fi
+        fi
         if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
           -f body="/reclarify
 <!-- ai:security-dependency-released:${issue_num} -->" >/dev/null; then
@@ -25717,7 +27942,8 @@ PY
     # dispatch_rb_judge action (see execute_stall_recovery_action).
     # ai:split-to-project (Q152): the orchestrator project owns the plan and
     # close_plan_split_source_if_needed closes the issue at completion.
-    if [ "${phase}" = "ai:needs-human" ] || [ "${phase}" = "ai:split-to-project" ] || [ "${phase}" = "ai:blocked" ] || [ "${phase}" = "ai:implementation-failed" ] || [ "${phase}" = "ai:validating" ] || [ "${phase}" = "ai:validation-fixing" ] || [ "${phase}" = "ai:merged" ] || [ "${phase}" = "ai:closed" ] || [ "${phase}" = "ai:validated" ] || [[ "${phase}" == ai:*-failed ]]; then
+    # ai:waiting-on-dependency (stuck-states P8): the dependency-wait resume scan owns it.
+    if [ "${phase}" = "ai:needs-human" ] || [ "${phase}" = "ai:split-to-project" ] || [ "${phase}" = "ai:blocked" ] || [ "${phase}" = "ai:waiting-on-dependency" ] || [ "${phase}" = "ai:implementation-failed" ] || [ "${phase}" = "ai:validating" ] || [ "${phase}" = "ai:validation-fixing" ] || [ "${phase}" = "ai:merged" ] || [ "${phase}" = "ai:closed" ] || [ "${phase}" = "ai:validated" ] || [[ "${phase}" == ai:*-failed ]]; then
       continue
     fi
 
@@ -25739,10 +27965,56 @@ if phase != last:
 elif not state.get("status_since_ts"):
     state["status_since_ts"] = now
     state["updated_ts"] = now
+# Stuck-states P8c: an issue reaches this point only when it is not held, so
+# the next ordinary state write ends any security-dependency hold episode.
+for _sdh_key in ("security_dependency_depends_on", "security_dependency_held_since_ts", "security_dependency_escalated_ts"):
+    state.pop(_sdh_key, None)
 state["schema_version"] = 1
 print(json.dumps(state, separators=(",", ":")))
 PY
 )"
+
+    # Stuck-states P3b: failure-signature breaker. Runs before the
+    # capacity-wait and threshold checks so a phase that fails the same way
+    # twice is stopped on the next tick, even though a failing plan flips the
+    # issue back to ai:clarification and restarts the stall clock. The
+    # failure_fingerprints state key only mirrors the trusted comment
+    # history (observation only; never an input to a trip).
+    local _std_ffb_cache_available="false"
+    if [ "${_standalone_staged_support_cache_available}" = "complete" ]; then
+      _std_ffb_cache_available="complete"
+    elif [ "${_standalone_staged_support_cache_available}" = "true" ]; then
+      _std_ffb_cache_available="true"
+    fi
+    _failure_fingerprint_breaker_check "${issue_num}" "${comments_json}" "${_std_ffb_cache_available}" "standalone"
+    case "${FFB_DECISION}" in
+      trip)
+        local _std_ffb_apply_rc=0
+        _failure_fingerprint_breaker_apply "${issue_num}" "standalone" || _std_ffb_apply_rc=$?
+        if [ "${_std_ffb_apply_rc}" -eq 0 ]; then
+          updated_state="$(printf '%s' "${updated_state}" | jq -c --argjson recent "${FFB_RECENT_JSON}" --argjson now "$(date +%s)" '
+            .failure_fingerprints = $recent | .updated_ts = $now
+          ' 2>/dev/null || echo "${updated_state}")"
+          write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+          continue
+        fi
+        # rc=2: the failure label is still on the issue; skip the ladder.
+        # rc=1: nothing applied; fall through so the legacy ladder still runs.
+        if [ "${_std_ffb_apply_rc}" -ne 1 ]; then
+          continue
+        fi
+        ;;
+      identity_unavailable|history_unavailable|unavailable)
+        echo "STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=standalone outcome=${FFB_DECISION}"
+        ;;
+      *)
+        if [ "${FFB_RECENT_JSON}" != "[]" ]; then
+          updated_state="$(printf '%s' "${updated_state}" | jq -c --argjson recent "${FFB_RECENT_JSON}" '
+            if (.failure_fingerprints // []) == $recent then . else .failure_fingerprints = $recent end
+          ' 2>/dev/null || echo "${updated_state}")"
+        fi
+        ;;
+    esac
 
     # ai:claude-capacity-wait (issue #7251) is owned by the capacity-wait
     # resume pass, like DEDICATED_HANDLER_PHASES in orchestrate_lib.py, so no
@@ -25823,6 +28095,56 @@ PY
       action="run_stall_judge"
     else
       action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
+    fi
+
+    # Issue #9486: an ai:clarification issue with no clarification output
+    # gets one marked /reclarify (retrigger_pipeline arm below) instead of an
+    # answer to questions that were never asked; a second miss, at least one
+    # stall threshold after the trusted marker, escalates to a human directly
+    # (D2: even with ENABLE_STALL_HUMAN_TERMINALIZATION=false). The override
+    # sits before the active-workflow, merged-PR, fresh-push and phase-cap
+    # guards so they still gate the overridden action, and never replaces
+    # `skip`, so the recovery caps still apply. Absence of output is only
+    # inferred from a complete comment history.
+    _std_clarify_no_output_rerun="false"
+    if [ "${phase}" = "ai:clarification" ] && [ "${action}" != "skip" ]; then
+      local _std_clarify_comments=""
+      local _std_clarify_comments_ok="false"
+      local _std_clarify_state=""
+      local _std_clarify_marker_epoch=""
+      if [ "${_standalone_staged_support_cache_available}" = "complete" ]; then
+        _std_clarify_comments="${comments_json}"
+        _std_clarify_comments_ok="true"
+      elif [ "${_standalone_staged_support_cache_available}" = "true" ] \
+        && _std_clarify_comments="$(_staged_support_comments_for_guard "${issue_num}" "${comments_json}" "true")"; then
+        _std_clarify_comments_ok="true"
+      fi
+      if [ "${_std_clarify_comments_ok}" != "true" ]; then
+        echo "::warning::[standalone-stall] clarify-output check skipped for issue #${issue_num}: comment history incomplete" >&2
+      else
+        _std_clarify_state="$(_standalone_clarify_no_output_state "${issue_num}" "${_std_clarify_comments}")"
+        case "${_std_clarify_state}" in
+          no_output_unmarked)
+            echo "STALL_RECOVERY issue=${issue_num} reason=clarify_no_output phase=${phase} action=retrigger_pipeline override_from=${action}"
+            action="retrigger_pipeline"
+            _std_clarify_no_output_rerun="true"
+            ;;
+          no_output_marked\ *)
+            _std_clarify_marker_epoch="${_std_clarify_state#no_output_marked }"
+            [[ "${_std_clarify_marker_epoch}" =~ ^[0-9]+$ ]] || _std_clarify_marker_epoch=0
+            if [ "$(( $(date +%s) - _std_clarify_marker_epoch ))" -lt "$(( threshold_minutes * 60 ))" ]; then
+              echo "STALL_SKIP issue=${issue_num} reason=clarify_no_output_rerun_pending phase=${phase} action=none"
+              if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+                write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+              fi
+              continue
+            fi
+            echo "STALL_RECOVERY issue=${issue_num} reason=clarify_no_output_second_miss phase=${phase} action=escalate_human override_from=${action}"
+            action="escalate_human"
+            ;;
+          *) ;;
+        esac
+      fi
     fi
     echo "  [standalone-stall] Issue #${issue_num} stuck in '${phase}' for ${elapsed_minutes}m (attempt $((recovery_count + 1))). Action: ${action}"
 
@@ -26072,7 +28394,7 @@ PY
               break
             fi
             if [ "${_std_attempt}" -lt 4 ]; then
-              sleep "${_std_backoff_sleeps[${_std_attempt}]}"
+              "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" "${_std_backoff_sleeps[${_std_attempt}]}"
             fi
           done
         fi
@@ -26225,6 +28547,14 @@ PY
         ;;
       retrigger_pipeline)
         local _std_retrigger_pipeline_rc=0
+        if [ "${_std_clarify_no_output_rerun}" = "true" ]; then
+          # Issue #9486: the marker must stay on the second line exactly so
+          # _standalone_clarify_no_output_state's startswith check matches.
+          gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="/reclarify
+<!-- ai:clarify-no-output-rerun:${issue_num} -->
+
+_Standalone stall recovery: this issue has been in \`ai:clarification\` for ${elapsed_minutes}m with no clarification output. Re-running clarification once; if it still produces nothing, the issue is escalated to a human._" >/dev/null 2>&1 || _std_retrigger_pipeline_rc=$?
+        else
         gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
 /reclarify
 
@@ -26232,6 +28562,7 @@ _Standalone stall recovery: this issue did not enter the AI pipeline.
 Re-triggering clarification._
 STALL_EOF
 )" >/dev/null 2>&1 || _std_retrigger_pipeline_rc=$?
+        fi
         if [ "${_std_retrigger_pipeline_rc}" -eq 0 ]; then
           phase_cap_note_dispatch "ai:clarification"
         fi
@@ -26357,6 +28688,9 @@ STALL_EOF
         local pr_json
         local _std_rtr_inflight_blob _std_rtr_inflight_id _std_rtr_direct_inflight_id _std_rtr_now_epoch _std_rtr_stall_secs _std_rtr_origin_head_sha _std_rtr_push_succeeded
         _std_rtr_push_succeeded="false"
+        # Return code of the dispatch-first review dispatch (cut-ci-runner-time
+        # Phase 3); -1 means it was not tried.
+        local _std_rtr_dispatch_rc=-1
         if [[ "${_STD_ITER_PR_NUM_CACHED:-}" =~ ^[0-9]+$ ]]; then
           pr_num="${_STD_ITER_PR_NUM_CACHED}"
           pr_lookup_ok="true"
@@ -26504,25 +28838,57 @@ STALL_EOF
 			elif [ -n "${_std_rtr_direct_inflight_id}" ]; then
               echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} has in-flight review run #${_std_rtr_direct_inflight_id} on ${head_ref} (direct check — cached scan missed it); skipping empty-commit push to avoid invalidating its stale-base gate."
               STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
-            elif git fetch origin "+refs/heads/${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
-              _std_rtr_origin_head_sha="$(git rev-parse --verify "refs/remotes/origin/${head_ref}" 2>/dev/null || echo "")"
-              if [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${_std_rtr_origin_head_sha}" =~ ^[0-9a-f]{40}$ ]] && \
-                 [ "${_std_rtr_origin_head_sha}" != "${head_sha}" ]; then
-                echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} head advanced from ${head_sha} to ${_std_rtr_origin_head_sha} after the PR-state snapshot; skipping empty-commit push to avoid racing newer review work."
-              elif git checkout "origin/${head_ref}" 2>/dev/null; then
-                git config user.name "codex-bot"
-                git config user.email "codex-bot@users.noreply.invalid"
-                git commit --allow-empty -m "[standalone] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
-                if git push origin "HEAD:${head_ref}" 2>/dev/null; then
-                  _std_rtr_push_succeeded="true"
-                fi
-                git checkout --detach HEAD 2>/dev/null || true
+            else
+              # Dispatch first (cut-ci-runner-time Phase 3, plan D3): re-trigger
+              # review by dispatching the review workflow, behind the same
+              # wrong-PR and in-flight guards as the empty commit. The empty
+              # commit, which started a full CI run on identical code, is only
+              # the fallback when the dispatch itself fails (rc other than 0/2).
+              # §15 audit: see the managed arm; the helper's active-run guard
+              # (up to three branch listings plus the PR-named lookup) and one
+              # workflow_dispatch replace the empty commit's full CI run.
+              _std_rtr_dispatch_rc=0
+              _dispatch_review_for_conflicts "${pr_num}" "${head_ref}" || _std_rtr_dispatch_rc=$?
+              if [ "${_std_rtr_dispatch_rc}" -eq 0 ]; then
+                echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} dispatched the review workflow instead of pushing an empty commit."
+                STALL_RECOVERY_EFFECTIVE_ACTION="redispatch_review_autofix"
+              elif [ "${_std_rtr_dispatch_rc}" -eq 2 ]; then
+                echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} dispatch helper skipped (already active or already dispatched this cycle); not incrementing stall recovery."
+                STALL_RECOVERY_EFFECTIVE_ACTION="redispatch_review_autofix"
               else
-                echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} checkout origin/${head_ref} failed after fetch; skipping empty-commit push."
+                echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} dispatch helper returned rc=${_std_rtr_dispatch_rc}; falling back to empty-commit push."
+              fi
+              if [ "${_std_rtr_dispatch_rc}" -ne 0 ] && [ "${_std_rtr_dispatch_rc}" -ne 2 ] \
+                && git fetch origin "+refs/heads/${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
+                _std_rtr_origin_head_sha="$(git rev-parse --verify "refs/remotes/origin/${head_ref}" 2>/dev/null || echo "")"
+                if [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${_std_rtr_origin_head_sha}" =~ ^[0-9a-f]{40}$ ]] && \
+                   [ "${_std_rtr_origin_head_sha}" != "${head_sha}" ]; then
+                  echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} head advanced from ${head_sha} to ${_std_rtr_origin_head_sha} after the PR-state snapshot; skipping empty-commit push to avoid racing newer review work."
+                elif git checkout "origin/${head_ref}" 2>/dev/null; then
+                  git config user.name "codex-bot"
+                  git config user.email "codex-bot@users.noreply.invalid"
+                  git commit --allow-empty -m "[standalone] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
+                  if git push origin "HEAD:${head_ref}" 2>/dev/null; then
+                    _std_rtr_push_succeeded="true"
+                    STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_empty_commit_fallback"
+                    echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} pushed the empty-commit fallback (action=retrigger_review_empty_commit_fallback)."
+                  fi
+                  git checkout --detach HEAD 2>/dev/null || true
+                else
+                  echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} checkout origin/${head_ref} failed after fetch; skipping empty-commit push."
+                fi
               fi
             fi
           fi
-          if [ "${_std_rtr_push_succeeded}" = "true" ]; then
+          if [ "${_std_rtr_dispatch_rc}" -eq 0 ]; then
+            tg_notify_issue "${issue_num}" "Standalone stall recovery: re-dispatched the review workflow (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "DEBUG"
+            STALL_RECOVERY_SHOULD_INCREMENT="true"
+            took_action="true"
+          elif [ "${_std_rtr_dispatch_rc}" -eq 2 ]; then
+            # A live or already-dispatched review run: reset the stall clock
+            # without spending recovery budget, like the managed arm's rc 2.
+            took_action="true"
+          elif [ "${_std_rtr_push_succeeded}" = "true" ]; then
             tg_notify_issue "${issue_num}" "Standalone stall recovery: re-triggered review flow (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "DEBUG"
             STALL_RECOVERY_SHOULD_INCREMENT="true"
             took_action="true"
@@ -26761,13 +29127,66 @@ REISSUE_EOF
         if [ "${phase_attempts_count}" -gt "${_std_exhausted_attempts}" ]; then
           _std_exhausted_attempts="${phase_attempts_count}"
         fi
-        close_linked_pr "${issue_num}" "Closed by standalone stall recovery: max recovery attempts exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries})."
-        ensure_label_exists "ai:closed"
-        gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label 'ai:closed' 2>/dev/null || true
-        gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" -c "Closing: standalone stall recovery exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries}; stuck ${elapsed_minutes} minutes this time)." 2>/dev/null || true
-        tg_notify_issue "${issue_num}" "Standalone stall recovery exhausted for issue #${issue_num} (${_std_exhausted_attempts} attempts in '${phase}', limit ${effective_max_recoveries}). Issue closed with ai:closed." "CRITICAL"
-        STALL_RECOVERY_SHOULD_INCREMENT="false"
-        took_action="true"
+        if [ "${STALL_FINGERPRINT_BREAKER_ENABLED}" = "true" ]; then
+          # Stuck-states P3b (G3): exhaustion never closes the issue or its
+          # linked PR. Label ai:needs-human, verify it, and leave the issue
+          # open for the unblock judge (unblock_scan BLOCK_LABELS).
+          local _std_exhausted_counter="phase_attempts"
+          if [ "${recovery_count}" -ge "${effective_max_recoveries}" ]; then
+            _std_exhausted_counter="stall_recovery_count"
+          fi
+          ensure_label_exists "ai:needs-human"
+          gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label 'ai:needs-human' >/dev/null 2>&1 || true
+          local _std_exhausted_labels
+          _std_exhausted_labels="$(get_issue_labels_json "${issue_num}")"
+          if has_label "${_std_exhausted_labels}" "ai:needs-human"; then
+            local _std_exhausted_history
+            _std_exhausted_history="$(printf '%s' "${updated_state}" | jq -r '
+              ((.failure_fingerprints // []) | if type == "array" then .[-5:] else [] end)[]?
+              | select(type == "object")
+              | select(((.phase // "") | tostring | test("^[a-z][a-z0-9-]{0,31}$"))
+                and ((.fp // "") | tostring | test("^[0-9a-f]{12}$"))
+                and ((.run // "") | tostring | test("^[1-9][0-9]{0,19}$")))
+              | "| `\(.phase)` | `\(.fp)` | \(.run) |"
+            ' 2>/dev/null || true)"
+            if [ -n "${_std_exhausted_history}" ]; then
+              _std_exhausted_history="| Phase | Fingerprint | Run |
+|---|---|---|
+${_std_exhausted_history}"
+            else
+              _std_exhausted_history="_No failure fingerprints recorded._"
+            fi
+            gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="## ⏸️ Stall recovery exhausted: escalated for the unblock judge
+
+Standalone stall recovery exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries}; stuck ${elapsed_minutes} minutes this time).
+
+- **Phase:** \`${phase}\`
+- **Exhausted counter:** \`${_std_exhausted_counter}\` (stall_recovery_count=${recovery_count}, phase_attempts=${phase_attempts_count})
+- **Limit:** ${effective_max_recoveries}
+- **Stuck this time:** ${elapsed_minutes} minutes
+
+**Recent failure fingerprints:**
+
+${_std_exhausted_history}
+
+This issue and its linked PR stay open with \`ai:needs-human\`; the unblock judge will pick it up." >/dev/null 2>&1 || true
+            echo "STALL_EXHAUSTED_ESCALATED issue=${issue_num} scope=standalone phase=${phase} attempts=${_std_exhausted_attempts} limit=${effective_max_recoveries} counter=${_std_exhausted_counter} outcome=labelled"
+            tg_notify_issue "${issue_num}" "Standalone stall recovery exhausted for issue #${issue_num} (${_std_exhausted_attempts} attempts in '${phase}', limit ${effective_max_recoveries}). Issue left open with ai:needs-human for the unblock judge." "CRITICAL"
+            took_action="true"
+          else
+            echo "STALL_EXHAUSTED_ESCALATED issue=${issue_num} scope=standalone phase=${phase} attempts=${_std_exhausted_attempts} limit=${effective_max_recoveries} outcome=label_failed"
+            took_action="false"
+          fi
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
+        else
+          close_linked_pr "${issue_num}" "Closed by standalone stall recovery: max recovery attempts exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries})."
+          ensure_label_exists "ai:closed"
+          gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label 'ai:closed' 2>/dev/null || true
+          gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" -c "Closing: standalone stall recovery exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries}; stuck ${elapsed_minutes} minutes this time)." 2>/dev/null || true
+          tg_notify_issue "${issue_num}" "Standalone stall recovery exhausted for issue #${issue_num} (${_std_exhausted_attempts} attempts in '${phase}', limit ${effective_max_recoveries}). Issue closed with ai:closed." "CRITICAL"
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
+          took_action="true"
+        fi
         ;;
       dispatch_rb_judge)
         # Autonomous escape from ai:review-blocked: dispatch the
@@ -28292,18 +30711,33 @@ else
   TRACKING_ISSUES="$(cat "${RUNTIME_DIR}/tracking_issues.json")"
 fi
 COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
+if [[ "${COUNT}" =~ ^[0-9]+$ ]]; then _ORCH_POLL_CYCLE_PROJECTS_SEEN="${COUNT}"; _ORCH_POLL_CYCLE_PROJECTS_PROCESSED=0; fi || true
 FEATURE_SWEEP_DONE="false"
 # Smoke-gate fixture projects in this tick; tg_notify stays silent for them
 # whatever TRACKING_NUM currently names (Q42: A).
 SMOKE_FIXTURE_TRACKING_NUMS=""
+# Fixture projects the smoke-fixture backstop closed (or must retry) this tick;
+# they are dropped from TRACKING_ISSUES below so the loop does not drive them.
+SMOKE_FIXTURE_REAPED_NUMS_JSON='[]'
 for ((smoke_idx=0; smoke_idx<COUNT; smoke_idx++)); do
   smoke_candidate_num="$(echo "${TRACKING_ISSUES}" | jq -r ".[${smoke_idx}].number")"
   [[ "${smoke_candidate_num}" =~ ^[1-9][0-9]*$ ]] || continue
-  if tracking_issue_is_smoke_fixture "$(echo "${TRACKING_ISSUES}" | jq -r ".[${smoke_idx}].title // \"\"")" "$(echo "${TRACKING_ISSUES}" | jq -c ".[${smoke_idx}].labels // []")"; then
+  smoke_candidate_title="$(echo "${TRACKING_ISSUES}" | jq -r ".[${smoke_idx}].title // \"\"")"
+  smoke_candidate_labels="$(echo "${TRACKING_ISSUES}" | jq -c ".[${smoke_idx}].labels // []")"
+  if tracking_issue_is_smoke_fixture "${smoke_candidate_title}" "${smoke_candidate_labels}"; then
     SMOKE_FIXTURE_TRACKING_NUMS+=" ${smoke_candidate_num}"
     echo "SMOKE_FIXTURE_PROJECT tracking_issue=${smoke_candidate_num} alerts=silenced"
+    if smoke_fixture_reap_if_gate_done "${smoke_candidate_num}" "${smoke_candidate_title}" "${smoke_candidate_labels}"; then
+      SMOKE_FIXTURE_REAPED_NUMS_JSON="$(jq -c --argjson n "${smoke_candidate_num}" '. + [$n]' <<<"${SMOKE_FIXTURE_REAPED_NUMS_JSON}")"
+    fi
   fi
 done
+if [ "${SMOKE_FIXTURE_REAPED_NUMS_JSON}" != "[]" ]; then
+  if smoke_fixture_remaining="$(jq -c --argjson drop "${SMOKE_FIXTURE_REAPED_NUMS_JSON}" 'map(select((.number as $n | $drop | index($n)) | not))' <<<"${TRACKING_ISSUES}")"; then
+    TRACKING_ISSUES="${smoke_fixture_remaining}"
+    COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
+  fi
+fi
 if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then
   prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
 fi
@@ -28311,6 +30745,7 @@ write_state_snapshot_actions_runs_export || true
 
 for ((tidx=0; tidx<COUNT; tidx++)); do
   TRACKING_NUM="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].number")"
+  _orch_poll_cycle_project_begin "${TRACKING_NUM}" || true
   TRACKING_TITLE="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].title")"
   unset FORCE_MERGE_LABEL_EVENT_JSON_CACHE
   unset _INTEGRATION_BACKPRESSURE_EFFECTIVE_THRESHOLD_CACHE
@@ -29767,6 +32202,22 @@ The security pass that parked this project ran on workflow engine \`${SP_AUTO_RE
       | last // empty
     ')"
 
+    # Harness heal auto-revalidate (Refs #8291): with no pending /revalidate,
+    # a parked ai:harness-broken project whose heal issue merged gets one
+    # poller-posted /revalidate, handled below on this tick. A pending human
+    # /revalidate always wins. §14 API budget: at most one GET
+    # repos/shubhodeep1/coding-workflows/issues/<n> per tracker per tick
+    # (shared with the hold via _VALIDATION_HARNESS_ISSUE_CACHE, and only
+    # when a trusted routing marker names the issue and no once-only marker
+    # exists), plus at most one comment POST per heal issue ever.
+    if { [ -z "${REVALIDATE_COMMENT_JSON}" ] || [ "${REVALIDATE_COMMENT_JSON}" = "null" ]; } \
+      && has_label "${TRACKING_LABELS}" "ai:harness-broken"; then
+      harness_heal_auto_revalidate || true
+      if [ -n "${HHAR_POSTED_COMMENT_JSON:-}" ]; then
+        REVALIDATE_COMMENT_JSON="${HHAR_POSTED_COMMENT_JSON}"
+      fi
+    fi
+
     if [ -n "${REVALIDATE_COMMENT_JSON}" ] && [ "${REVALIDATE_COMMENT_JSON}" != "null" ]; then
       REVALIDATE_COMMENT_BODY="$(printf '%s' "${REVALIDATE_COMMENT_JSON}" | jq -r '.body // ""' 2>/dev/null || echo "")"
       REVALIDATE_COMMENT_ID="$(printf '%s' "${REVALIDATE_COMMENT_JSON}" | jq -r '.id // ""' 2>/dev/null || echo "")"
@@ -30168,6 +32619,7 @@ This recovery runs once per project. Validation counters were kept (cycle ${VSP_
         '.status = "in_progress" |
          .judge_stall_cycles = $new_judge_stall |
          .recovery_count = $new_recovery |
+         .final_merge_failure_kind = null |
          (if $reset_recovery == "true" then .judge_failed_fingerprints = [] else . end)' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment || true
@@ -30234,6 +32686,27 @@ The poller will resume processing on the next cycle."
           compute_cycle_integration_ahead_by
           maybe_apply_force_merge_bypass "${_terminal_force_merge_final_pr}" "${CWS_INTEGRATION_BRANCH}" "${CWS_AHEAD_BY}" || true
         fi
+      fi
+      # Issue #8984: a project parked by final-merge exhaustion gets one
+      # automatic retry per final PR head once its blocker has cleared.
+      if [ "${PROJECT_STATUS}" = "failed" ] && maybe_auto_resume_final_merge_exhaustion; then
+        PROJECT_STATUS="validating"
+        VALIDATION_CYCLE="$(jq -r '.validation_cycle // 1' "${STATE_FILE}" 2>/dev/null || echo 1)"
+        if ! [[ "${VALIDATION_CYCLE}" =~ ^[0-9]+$ ]] || [ "${VALIDATION_CYCLE}" -lt 1 ]; then
+          VALIDATION_CYCLE="1"
+        fi
+        LAST_VAL_RAW_STATUS=''
+        LAST_VAL_CONCLUSION=''
+        if [ "${FINAL_MERGE_AUTO_RESUME_MODE:-}" = "revalidate" ]; then
+          # The final PR head moved after validation passed: validate the new
+          # head first; the validating branch merges it once it passes.
+          if ! dispatch_validation_if_needed "${VALIDATION_CYCLE}"; then
+            mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} after final-merge auto-resume re-validation. Error: ${VALIDATION_DISPATCH_ERROR:-unknown}"
+          fi
+          continue
+        fi
+        mark_validation_complete "${VALIDATION_CYCLE}"
+        continue
       fi
     fi
     echo "Project already ${PROJECT_STATUS}, skipping."
@@ -32305,7 +34778,7 @@ ${FOLLOWUP_BLOCK_REASON}"
             break
           fi
           if [ "${attempt}" -lt 2 ]; then
-            sleep 10
+            "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 10
           fi
         done
       fi
@@ -33714,6 +36187,9 @@ fi
     fi
 
     if [ "${INVOKE_JUDGE_FOR_STUCK}" != "true" ]; then
+    # Stuck-states P3b: failure-signature breaker for managed wave issues.
+    # Runs before check-stalls so a tripped label is visible this tick.
+    run_managed_failure_fingerprint_breaker
     # Grouping repeated failures (issue #8427, P8): items whose newest failure
     # shares a failure key with another open item of this wave are paused
     # under one owner. Switch off, this only removes leftover state fields.
@@ -33899,8 +36375,10 @@ fi
 
     # Issues check-stalls skipped because they carry a human-gated latch
     # label (orchestrate_lib.STALL_RECOVERY_LATCH_LABELS —
-    # ai:destructive-blocked / ai:scope-blocked).  implement.yml refuses
-    # to redispatch those until a human removes the label, so no recovery
+    # ai:destructive-blocked / ai:scope-blocked / ai:workflow-heal-escalated).
+    # Stall recovery never clears or redispatches those; the latch lifts
+    # only when the label is removed (by a human, or by an unblock-judge
+    # remove_label op), so no stall-recovery
     # action can move them; log one stable line per issue so the pause
     # is visible in the poll log instead of silent.  `.latched` is
     # additive on the check-stalls payload — older payloads (or the
@@ -33917,6 +36395,9 @@ fi
 
     STALL_STATE_CHANGED=false
     STALL_HEALING_CHANGED=false
+    if [ "${FFB_MANAGED_STATE_CHANGED:-false}" = "true" ]; then
+      STALL_STATE_CHANGED=true
+    fi
 
     if [ "${STALL_COUNT}" -gt 0 ]; then
       echo "Detected ${STALL_COUNT} stalled issue(s). Checking for active workflow runs..."
@@ -34525,7 +37006,7 @@ ${PR_DIFF}
     fi
     judge_silent_rounds=$((judge_silent_rounds + 1))
     if [ "${attempt}" -lt "${max_attempts}" ]; then
-      sleep $(( 10 * attempt + RANDOM % 10 ))
+      "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" $(( 10 * attempt + RANDOM % 10 ))
     fi
   done
 
@@ -34922,7 +37403,9 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
       # Create new issues if judge found gaps
       WAVE_ISSUE_COUNT_BEFORE="$(jq --argjson widx "${WAVE_IDX}" '.waves[$widx].issues | length' "${STATE_FILE}")"
       WAVE_ISSUE_TRACKING_BEFORE="$(jq -c --argjson widx "${WAVE_IDX}" '.waves[$widx].issues | map({id, github_issue, status}) | sort_by(.id)' "${STATE_FILE}")"
-      if [ "${NEW_ISSUES_COUNT}" -gt 0 ]; then
+      # Closed tracking issue => no judge-addition issues (issue #8953).
+      judge_tracking_closed_skipped=0
+      if [ "${NEW_ISSUES_COUNT}" -gt 0 ] && ! judge_tracking_issue_closed_skip judge-addition; then
         echo "Processing ${NEW_ISSUES_COUNT} new issue candidate(s) from judge..."
         echo "${JUDGE_JSON}" | jq -c '.new_issues[]? | select(type == "object")' | while read -r new_issue; do
           NEW_TITLE="$(echo "${new_issue}" | jq -r '.title // ""')"
@@ -34995,7 +37478,14 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
       # ---------------------------------------------------------------
       WAVE_ISSUE_COUNT_AFTER="$(jq --argjson widx "${WAVE_IDX}" '.waves[$widx].issues | length' "${STATE_FILE}")"
       WAVE_ISSUE_TRACKING_AFTER="$(jq -c --argjson widx "${WAVE_IDX}" '.waves[$widx].issues | map({id, github_issue, status}) | sort_by(.id)' "${STATE_FILE}")"
-      if [ "${WAVE_ISSUE_COUNT_AFTER}" -gt "${WAVE_ISSUE_COUNT_BEFORE}" ] || [ "${WAVE_ISSUE_TRACKING_AFTER}" != "${WAVE_ISSUE_TRACKING_BEFORE}" ]; then
+      # Closed tracking issue => no wave advance either (issue #8953): the
+      # advance creates the next wave's sub-issues. At most one state read
+      # per arm: the judge-addition guard above already read it when the
+      # judge proposed issues.
+      if [ "${judge_tracking_closed_skipped}" = "1" ] \
+        || { [ "${NEW_ISSUES_COUNT}" -eq 0 ] && judge_tracking_issue_closed_skip wave-advance; }; then
+        echo "Tracking issue #${TRACKING_NUM} is closed; not advancing past wave ${CURRENT_WAVE} and creating no issues."
+      elif [ "${WAVE_ISSUE_COUNT_AFTER}" -gt "${WAVE_ISSUE_COUNT_BEFORE}" ] || [ "${WAVE_ISSUE_TRACKING_AFTER}" != "${WAVE_ISSUE_TRACKING_BEFORE}" ]; then
         if [ "${WAVE_ISSUE_COUNT_AFTER}" -gt "${WAVE_ISSUE_COUNT_BEFORE}" ]; then
           ADDED_COUNT=$(( WAVE_ISSUE_COUNT_AFTER - WAVE_ISSUE_COUNT_BEFORE ))
           echo "Current wave gained ${ADDED_COUNT} new issue(s) from judge. Staying on wave ${CURRENT_WAVE} until they complete."
@@ -35131,7 +37621,7 @@ The next poll tick will re-run the gate against the cleaned state. If an underly
 
             _gate_fp_file=""
             _gate_log_file=""
-            trap 'rm -f "${_gate_fp_file:-}" "${_gate_log_file:-}" 2>/dev/null || true' EXIT
+            trap '_orch_poll_cycle_exit_rc=$?; rm -f "${_gate_fp_file:-}" "${_gate_log_file:-}" 2>/dev/null || true; _orch_poll_cycle_on_exit "${_orch_poll_cycle_exit_rc}" || true' EXIT
             _gate_fp_file="$(mktemp "${TMPDIR:-/tmp}/wave_dispatch_fp.XXXXXX")"
             _gate_log_file="$(mktemp "${TMPDIR:-/tmp}/wave_dispatch_log.XXXXXX")"
             jq -c '.merged_issue_fingerprints // {}' "${STATE_FILE}" > "${_gate_fp_file}"
@@ -35157,6 +37647,7 @@ The next poll tick will re-run the gate against the cleaned state. If an underly
             fi
             rm -f "${_gate_fp_file}" "${_gate_log_file}" 2>/dev/null || true
             trap - EXIT
+            _orch_poll_cycle_install_exit_trap || true
           else
             echo "::warning::Wave-dispatch gate: could not resolve a fresh verification ref for integration branch '${_gate_integration_branch}'; gate fails open and dispatch proceeds."
           fi
@@ -35307,6 +37798,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       ;;
   esac
 done
+_orch_poll_cycle_project_flush || true
 
 if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then
   run_standalone_stall_recovery
@@ -35499,6 +37991,9 @@ DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.defau
 # per batch; errors, missing aliases, unknown state or changed head fail open
 # to the legacy live REST read. DIRTY candidates always get a fresh REST
 # payload before update-branch/dispatch (including expected-head guard).
+# The same aliases also return updatedAt, labels and closingIssuesReferences
+# (with their labels) for _STANDALONE_ISSUELESS_RETRY_STATE below, so the
+# issue-less review retry pass (issue #9487) adds no read call.
 declare -A _STANDALONE_CLEAN_PRS=()
 declare -A _STANDALONE_NOOP_CLEAR_PRS=()
 # Conflict-attempt markers per PR, read from the same batch (no extra call):
@@ -35509,6 +38004,18 @@ declare -A _STANDALONE_NOOP_CLEAR_PRS=()
 # exist, so only a marker found in the window counts.
 declare -A _STANDALONE_CONFLICT_ATTEMPTS_STATE=()
 declare -A _STANDALONE_CONFLICT_STATE_LOADED=()
+# Issue-less review retry input (issue #9487), filled from the same batch:
+# one compact JSON value per PR whose alias node is OPEN at the snapshot
+# head ({oid, ref, updated_at, draft, cross, owner, labels, closing_total,
+# closing_seen, linked_pipeline, comments: [{a, fail, retry}]}, comments
+# oldest first). Only own-line markers are parsed; author trust is applied
+# later by run_issueless_review_retry_pass. A failed list or batch leaves
+# its PRs out and sets _STANDALONE_ISSUELESS_RETRY_PREFETCH_FAILED (fail open).
+declare -A _STANDALONE_ISSUELESS_RETRY_STATE=()
+_STANDALONE_ISSUELESS_RETRY_PREFETCH_FAILED="false"
+if [ "${_conflict_sweep_list_failed:-false}" = "true" ]; then
+	_STANDALONE_ISSUELESS_RETRY_PREFETCH_FAILED="true"
+fi
 if [[ "${GITHUB_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
 	_standalone_owner="${GITHUB_REPOSITORY%%/*}"
 	_standalone_name="${GITHUB_REPOSITORY#*/}"
@@ -35524,7 +38031,7 @@ if [[ "${GITHUB_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
 			fi
 			_standalone_num="$(printf '%s' "${STANDALONE_PRS}" | jq -r ".[${_standalone_i}].number // empty")"
 			[[ "${_standalone_num}" =~ ^[1-9][0-9]*$ ]] || continue
-			_standalone_aliases+="p${_standalone_num}: pullRequest(number: ${_standalone_num}) { number state headRefName headRefOid isDraft mergeStateStatus comments(last: 100) { pageInfo { hasPreviousPage } nodes { body databaseId author { login } } } } "
+			_standalone_aliases+="p${_standalone_num}: pullRequest(number: ${_standalone_num}) { number state headRefName headRefOid isDraft mergeStateStatus updatedAt labels(first: 30) { nodes { name } } closingIssuesReferences(first: 10) { totalCount nodes { number labels(first: 30) { nodes { name } } } } comments(last: 100) { pageInfo { hasPreviousPage } nodes { body databaseId author { login } } } } "
 		done
 		[ -n "${_standalone_aliases}" ] || continue
 		_standalone_query="query { repository(owner: \"${_standalone_owner}\", name: \"${_standalone_name}\") { ${_standalone_aliases} } }"
@@ -35559,9 +38066,47 @@ if [[ "${GITHUB_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
 						| ((.body // "") | capture("head=(?<h>[0-9a-f]{40}) attempts=(?<a>[0-9]+) alerted=(?<al>[01])") // {h: "", a: "0", al: "0"}) as $m
 						| "\(.databaseId // "")|\(.author.login // "")|\($m.h)|\($m.a)|\($m.al)"' 2>/dev/null || true)"
 				fi
+				_standalone_issueless_row="$(printf '%s' "${STANDALONE_PRS}" | jq -c --argjson num "${_standalone_num}" '[.[] | select(.number == $num)][0] // {}' 2>/dev/null || echo '{}')"
+				[ -n "${_standalone_issueless_row}" ] || _standalone_issueless_row='{}'
+				_standalone_issueless_entry="$(printf '%s' "${_standalone_response}" | jq -c --arg key "p${_standalone_num}" --arg ref "${_standalone_head}" --arg oid "${_standalone_list_oid}" --argjson num "${_standalone_num}" \
+					--argjson row "${_standalone_issueless_row}" --argjson pipeline "${ISSUELESS_REVIEW_RETRY_PIPELINE_LABELS_JSON}" \
+					--arg fail_tag "review-autofix-failure:v1" --arg retry_tag "${ISSUELESS_REVIEW_RETRY_MARKER_TAG}" '
+					def own_marker($tag):
+						[capture("(^|\n)<!-- " + $tag + " (?<f>[^>\n]*?) -->[ \r]*(\n|$)"; "g") | .f] | last
+						| if . == null then null else
+							reduce ([splits(" +")] | .[] | select(test("^[a-z_]+=")) | capture("^(?<k>[a-z_]+)=(?<v>.*)$")) as $kv ({}; . + {($kv.k): $kv.v})
+						end;
+					.data.repository[$key] as $n
+					| if ($n | type) == "object" and $n.number == $num and $n.headRefName == $ref and $n.headRefOid == $oid and ($oid | test("^[0-9a-f]{40}$")) and $n.state == "OPEN" then
+						(($n.closingIssuesReferences.nodes // []) | if type == "array" then . else [] end) as $closing
+						| {
+							oid: $oid,
+							ref: $ref,
+							updated_at: (($n.updatedAt // "") | if type == "string" then . else "" end),
+							draft: ($n.isDraft != false),
+							cross: ($row.isCrossRepository | if type == "boolean" then tostring else "unknown" end),
+							owner: (($row.headRepositoryOwner.login // "") | if type == "string" then . else "" end),
+							labels: [($n.labels.nodes // [])[]? | .name? | strings],
+							closing_total: ($n.closingIssuesReferences.totalCount | if type == "number" then . else 2147483647 end),
+							closing_seen: ($closing | length),
+							linked_pipeline: any($closing[]; any((.labels.nodes // [])[]?; (.name? // "") as $l | $pipeline | index($l) != null)),
+							comments: [($n.comments.nodes // [])[]? | (.body // "" | if type == "string" then . else "" end) as $b | {
+								a: ((.author.login // "") | if type == "string" then . else "" end),
+								fail: ($b | own_marker($fail_tag) | if . == null then null else {head: (.head // ""), reason: (.reason // ""), support: (.support // ""), fp: (.fp // "")} end),
+								retry: ($b | own_marker($retry_tag) | if . == null then null else {head: (.head // ""), support: (.support // "")} end)
+							}]
+						}
+					else empty end' 2>/dev/null || true)"
+				if [ -n "${_standalone_issueless_entry}" ]; then
+					_STANDALONE_ISSUELESS_RETRY_STATE["${_standalone_num}"]="${_standalone_issueless_entry}"
+				fi
 			done < <(printf '%s' "${_standalone_response}" | jq -r '.data.repository | keys[] | select(test("^p[1-9][0-9]*$")) | ltrimstr("p")' 2>/dev/null)
+		else
+			_STANDALONE_ISSUELESS_RETRY_PREFETCH_FAILED="true"
 		fi
 	done
+else
+	_STANDALONE_ISSUELESS_RETRY_PREFETCH_FAILED="true"
 fi
 
 for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
@@ -36518,4 +39063,164 @@ done
 write_state_snapshot_actions_runs_export || true
 echo "Noop-suspicious recovery complete. Dispatched: ${NOOP_RECOVERY_DISPATCHED}, force-merged: ${NOOP_FORCE_MERGED}, blocked: ${NOOP_RECOVERY_BLOCKED}."
 echo "Noop-suspicious recovery skipped (fingerprint cap already applied on head): ${NOOP_RECOVERY_CAP_SKIPPED}."
+
+# ---------------------------------------------------------------
+# Issue-less review retry pass (issue #9487)
+# ---------------------------------------------------------------
+# A review run that fails before the editor (reviewers_failed,
+# provider_unavailable, sandbox_prepare_failed) posts "AI review/autofix
+# produced no output - will retry" with a review-autofix-failure:v1 marker.
+# The standalone stall pass only follows labelled issues, so a PR with no
+# linked pipeline issue was never retried (tele-funtoken-msg-scoring PR #5219
+# sat three days). This pass reads _STANDALONE_ISSUELESS_RETRY_STATE (filled
+# by the conflict sweep's existing GraphQL batch, no extra read) and
+# re-dispatches such a PR through _dispatch_review_for_conflicts (default
+# branch only, #4701; cycle tracker and in-flight guard) at most once per
+# (head, failing review-support SHA), and only after the locally pinned
+# review-support SHA (_noop_cap_review_support_sha) differs from the failing
+# one. Same-repository heads only; both marker families count only when the
+# pipeline's own login (unblock_trusted_login) wrote them, on their own line.
+# Writes per eligible PR (capped by ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE):
+# the dispatch helper's in-flight read and dispatch, plus one marker comment.
+# Log prefix: ISSUELESS_REVIEW_RETRY.
+# Issue #9533: when the two newest trusted failure markers name this head,
+# reason reviewers_failed, one fp and one support SHA that is still the pinned
+# one, the crash is deterministic under the current support and the pass
+# reports reason=repeated_reviewer_failure (the review run's own block labels
+# it) instead of waiting_for_release (same cached comments, no extra read).
+# The fingerprint cap counts per support version, so a newer pinned support
+# SHA still re-dispatches as before. The rule reads
+# REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED (default true; false turns it off)
+# only when the caller's environment sets it: orchestrate_poll.yml does not
+# map that repository variable today, so the poller applies the rule. Either
+# way it only relabels a waiting_for_release skip; no dispatch changes.
+
+# _issueless_review_retry_decide <entry_json> <trusted_login> <pinned_support_sha> <support_state> <now_epoch> <max_age_days>
+# Pure: prints one line "<decision>|<reason>|<head>|<failing_support>" where
+# decision is none, skipped, waiting_for_release, already_retried or
+# eligible. Malformed input prints "none|||" (fail closed).
+_issueless_review_retry_decide() {
+	local entry="${1:-}" login="${2:-}" pinned="${3:-}" state="${4:-}" now="${5:-0}" max_age="${6:-0}" result
+	[[ "${now}" =~ ^[0-9]+$ ]] || now=0
+	[[ "${max_age}" =~ ^[0-9]+$ ]] || max_age=0
+	result="$(printf '%s' "${entry}" | jq -r --arg login "${login}" --arg pinned "${pinned}" --arg state "${state}" \
+		--argjson now "${now}" --argjson max_age "${max_age}" --arg repo_owner "${GITHUB_REPOSITORY%%/*}" \
+		--arg cap_enabled "${REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED:-true}" \
+		--argjson reasons "${ISSUELESS_REVIEW_RETRY_REASONS_JSON}" --argjson exclude "${ISSUELESS_REVIEW_RETRY_EXCLUDE_LABELS_JSON}" '
+		def sha: (type == "string") and test("^[0-9a-f]{40}$");
+		. as $e
+		| if ($e | type) != "object" or $login == "" then "none|||" else
+		[($e.comments // [])[]? | select((.a // "") == $login)] as $trusted
+		| [$trusted[] | select(.retry == null)] as $plain
+		| [$trusted[] | .retry | select(. != null)] as $retries
+		| ($plain | last) as $newest
+		| [$plain[] | .fail | select(type == "object")] as $fails
+		| (if ($fails | length) >= 2 then $fails[-2] else null end) as $prior_fail
+		| if $newest == null or ($newest.fail | type) != "object" then "none|||"
+		else $newest.fail as $f
+		| if ($e.oid | sha | not) or $f.head != $e.oid or (($f.reason | type) != "string") or ($reasons | index($f.reason)) == null then "none|||"
+		else (if ($f.support | sha) then $f.support else "" end) as $fs
+		| "|\($f.head)|\($fs)" as $tail
+		| if ($e.cross != "false") or (($e.owner // "") == "") or (($e.owner | ascii_downcase) != ($repo_owner | ascii_downcase)) then "skipped|fork_or_unknown_head\($tail)"
+		elif $e.draft != false then "skipped|draft\($tail)"
+		elif $e.linked_pipeline != false or (($e.closing_total // 2147483647) > ($e.closing_seen // 0)) then "skipped|linked_pipeline_issue\($tail)"
+		elif any(($e.labels // [])[]; . as $l | $exclude | index($l) != null) then "skipped|excluded_label\($tail)"
+		elif $max_age > 0 and ((($e.updated_at // "") | try fromdateiso8601 catch null) as $u | $u == null or $u < ($now - $max_age * 86400)) then "skipped|too_old\($tail)"
+		elif $state != "ok" or ($pinned | sha | not) then "skipped|support_unresolved\($tail)"
+		elif $fs == "" then "skipped|marker_support_missing\($tail)"
+		elif $cap_enabled != "false" and $fs == $pinned and $f.reason == "reviewers_failed" and ($prior_fail | type) == "object" and $prior_fail.reason == "reviewers_failed"
+			and $prior_fail.head == $e.oid and $prior_fail.support == $fs and (($f.fp // "") | test("^[0-9a-f]{64}$")) and $prior_fail.fp == $f.fp then "skipped|repeated_reviewer_failure\($tail)"
+		elif $fs == $pinned then "waiting_for_release|\($tail)"
+		elif any($retries[]; .head == $f.head and .support == $fs) then "already_retried|\($tail)"
+		else "eligible|\($tail)" end
+		end end end' 2>/dev/null || true)"
+	[ -n "${result}" ] || result="none|||"
+	printf '%s\n' "${result}"
+}
+
+# run_issueless_review_retry_pass: one pass per cycle; always returns 0.
+run_issueless_review_retry_pass() {
+	local repo="${GITHUB_REPOSITORY:-}" login pinned="" state now pr entry decision reason head failing head_ref
+	local dispatch_rc body attempts=0 retriggered=0 log_head log_support log_pinned log_line
+	echo ""
+	echo "========================================"
+	echo "Issue-less review retry pass"
+	echo "========================================"
+	if [ "${_STANDALONE_ISSUELESS_RETRY_PREFETCH_FAILED:-false}" = "true" ]; then
+		echo "ISSUELESS_REVIEW_RETRY outcome=skipped reason=prefetch_unavailable repo=${repo}"
+	fi
+	if [ "${#_STANDALONE_ISSUELESS_RETRY_STATE[@]}" -eq 0 ]; then
+		echo "Issue-less review retry pass complete. Retriggered: 0."
+		return 0
+	fi
+	unblock_trusted_login >/dev/null || true
+	login="${UNBLOCK_TRUSTED_LOGIN:-}"
+	if [ -z "${login}" ]; then
+		echo "ISSUELESS_REVIEW_RETRY outcome=skipped reason=trusted_login_unresolved repo=${repo}"
+		echo "Issue-less review retry pass complete. Retriggered: 0."
+		return 0
+	fi
+	_noop_cap_review_support_sha || true
+	state="${NOOP_CAP_REVIEW_SUPPORT_STATE:-unresolved}"
+	if [ "${state}" = "ok" ]; then
+		pinned="${NOOP_CAP_REVIEW_SUPPORT_SHA:-}"
+	fi
+	now="$(date -u +%s)"
+	while IFS= read -r pr; do
+		[[ "${pr}" =~ ^[1-9][0-9]*$ ]] || continue
+		entry="${_STANDALONE_ISSUELESS_RETRY_STATE["${pr}"]:-}"
+		decision="" reason="" head="" failing=""
+		IFS='|' read -r decision reason head failing < <(_issueless_review_retry_decide "${entry}" "${login}" "${pinned}" "${state}" "${now}" "${ISSUELESS_REVIEW_RETRY_MAX_AGE_DAYS}") || true
+		if [ "${decision:-none}" = "none" ]; then
+			continue
+		fi
+		log_head="${head:-}"; [[ "${log_head}" =~ ^[0-9a-f]{40}$ ]] || log_head="unknown"
+		log_support="${failing:-}"; [[ "${log_support}" =~ ^[0-9a-f]{40}$ ]] || log_support="none"
+		log_pinned="${pinned:-}"; [[ "${log_pinned}" =~ ^[0-9a-f]{40}$ ]] || log_pinned="none"
+		log_line="pr=${pr} repo=${repo} head=${log_head} support=${log_support} pinned=${log_pinned}"
+		case "${decision}" in
+			skipped)
+				echo "ISSUELESS_REVIEW_RETRY outcome=skipped ${log_line} reason=${reason:-unknown}"
+				continue
+				;;
+			waiting_for_release|already_retried)
+				echo "ISSUELESS_REVIEW_RETRY outcome=${decision} ${log_line}"
+				continue
+				;;
+			eligible) ;;
+			*) continue ;;
+		esac
+		if [ "${attempts}" -ge "${ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE}" ]; then
+			echo "ISSUELESS_REVIEW_RETRY outcome=skipped ${log_line} reason=cycle_cap"
+			continue
+		fi
+		attempts=$((attempts + 1))
+		head_ref="$(printf '%s' "${entry}" | jq -r '.ref // ""' 2>/dev/null || true)"
+		dispatch_rc=0
+		_dispatch_review_for_conflicts "${pr}" "${head_ref}" || dispatch_rc=$?
+		case "${dispatch_rc}" in
+			0)
+				retriggered=$((retriggered + 1))
+				body="Issue-less review retry: re-dispatched the review of \`${log_head}\`; review support \`${log_support}\` → \`${log_pinned}\`.
+
+<!-- ${ISSUELESS_REVIEW_RETRY_MARKER_TAG} head=${log_head} support=${log_support} -->"
+				if gh_retry gh api "repos/${repo}/issues/${pr}/comments" -f body="${body}" >/dev/null 2>&1; then
+					echo "ISSUELESS_REVIEW_RETRY outcome=retriggered ${log_line}"
+				else
+					echo "ISSUELESS_REVIEW_RETRY outcome=retriggered ${log_line} marker=write_failed"
+				fi
+				;;
+			2)
+				echo "ISSUELESS_REVIEW_RETRY outcome=in_flight ${log_line}"
+				;;
+			*)
+				echo "ISSUELESS_REVIEW_RETRY outcome=skipped ${log_line} reason=dispatch_failed"
+				;;
+		esac
+	done < <(printf '%s\n' "${!_STANDALONE_ISSUELESS_RETRY_STATE[@]}" | sort -n)
+	echo "Issue-less review retry pass complete. Retriggered: ${retriggered}."
+	return 0
+}
+
+run_issueless_review_retry_pass || echo "ISSUELESS_REVIEW_RETRY outcome=skipped reason=error rc=$?"
 _standalone_sweep_alert_level_restore

@@ -9,7 +9,10 @@ default branch, after the test jobs. It checks:
   tests/test_workflow_file_size_limit.py fails at 480,000 and GitHub stops
   starting runs above 512,000, CLAUDE.md §27);
 * CI job duration: any job of this CI run whose duration reached
-  CI_BUDGET_JOB_WARN_RATIO (default 0.75) of its `timeout-minutes`.
+  CI_BUDGET_JOB_WARN_RATIO (default 0.75) of its `timeout-minutes`. The
+  duration runs from the job's first started step to its completion, so time
+  spent waiting for a runner is not counted, and a job that ran no step (for
+  example one cancelled while queued) is not reported (#9559).
 
 For every finding it prints a `::warning::` and makes sure exactly one open
 issue labelled `ai:ci-budget` exists for it (deduplicated by a hidden marker
@@ -87,27 +90,85 @@ def job_timeouts(ci_workflow: Path) -> dict[str, int]:
 
 
 def _seconds(start: str | None, end: str | None) -> int | None:
-	if not start or not end:
+	# A non-string value (only possible with malformed API data) would raise
+	# AttributeError at `.replace` and stop the duration check for every job.
+	if not isinstance(start, str) or not isinstance(end, str) or not start or not end:
 		return None
 	try:
 		a = datetime.fromisoformat(start.replace("Z", "+00:00"))
 		b = datetime.fromisoformat(end.replace("Z", "+00:00"))
-	except ValueError:
+		return max(0, int((b - a).total_seconds()))
+	except (TypeError, ValueError):
+		# TypeError: a naive time mixed with an aware one; not checked.
 		return None
-	return max(0, int((b - a).total_seconds()))
+
+
+def _job_run_start(job: dict[str, Any]) -> str | None:
+	"""When the job actually started running, excluding the wait for a runner.
+
+	No `steps` list in the response (older data, partial responses): the job's
+	own `started_at`, as before. A `steps` list: the earliest non-empty step
+	`started_at`. A `steps` list in which no step started: None, because the
+	job never ran (#9559: jobs cancelled while queued reported 33m49s of a
+	20-minute timeout).
+	"""
+	steps = job.get("steps")
+	if not isinstance(steps, list):
+		return job.get("started_at")
+	# Only non-empty string times count as a started step, so a malformed
+	# (for example numeric) start is not mistaken for one.
+	starts = [step.get("started_at") for step in steps if isinstance(step, dict) and isinstance(step.get("started_at"), str) and step.get("started_at")]
+	if not starts:
+		return None
+	# Compare parsed times, not strings, so mixed offsets order correctly. Each
+	# start is parsed on its own and an unparsable one is dropped, so one
+	# malformed step time cannot move the start later. A naive time is taken as
+	# UTC (GitHub emits `Z` times). When no start parses, the first is returned
+	# and `_seconds` rejects it, so the duration is not checked.
+	_parsed_starts: list[datetime] = []
+	for value in starts:
+		try:
+			when = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+		except ValueError:
+			continue
+		_parsed_starts.append(when if when.tzinfo else when.replace(tzinfo=timezone.utc))
+	if not _parsed_starts:
+		return starts[0]
+	return min(_parsed_starts).isoformat()
 
 
 def job_duration_findings(jobs: list[dict[str, Any]], timeouts: dict[str, int], ratio: float) -> list[dict[str, Any]]:
-	"""Jobs whose duration reached ratio * timeout. Matrix jobs `name (x)` use the base name's timeout."""
+	"""Jobs whose duration reached ratio * timeout. Matrix jobs `name (x)` use the base name's timeout.
+
+	The duration runs from the first started step to the job's completion; jobs
+	that ran no step are not reported (they hit no timeout while running).
+	"""
 	findings = []
 	for job in jobs:
 		name = str(job.get("name") or "")
 		base = name.split(" (", 1)[0]
 		minutes = timeouts.get(name) or timeouts.get(base)
-		took = _seconds(job.get("started_at"), job.get("completed_at"))
-		if not minutes or took is None:
+		if not minutes:
 			continue
 		if job.get("conclusion") == "skipped":
+			continue
+		run_start = _job_run_start(job)
+		if run_start is None and isinstance(job.get("steps"), list):
+			# Only a finished job is logged: a job still queued (no
+			# completed_at) has not run yet rather than "ran no step".
+			if job.get("completed_at"):
+				# Escape workflow-command data so a name cannot end the command line.
+				safe_name = name.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+				print(f"::notice::ci_budget_watch: job {safe_name} ran no step (conclusion={job.get('conclusion')}); duration not checked.")
+			continue
+		took = _seconds(run_start, job.get("completed_at"))
+		if took is None:
+			# A finished job whose start or completion time is missing or does
+			# not parse is logged rather than skipped silently; a job still
+			# running (no completed_at) is not.
+			if job.get("completed_at"):
+				unmeasured_name = name.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+				print(f"::notice::ci_budget_watch: job {unmeasured_name} has no usable start or completion time (conclusion={job.get('conclusion')}); duration not checked.")
 			continue
 		if took >= ratio * minutes * 60:
 			findings.append({"kind": "job_duration", "subject": base, "value": took, "limit": minutes * 60, "job": name})

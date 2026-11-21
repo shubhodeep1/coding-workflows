@@ -1400,6 +1400,27 @@ def _assert_detect_stalls_skips_latch_label(latch_label: str) -> None:
 	assert stalls[0]["recovery_action"] == "auto_approve"
 
 
+def test_detect_stalls_skips_workflow_heal_escalated_latch():
+	"""Issue #9248: a heal issue the workflow-failure heal intake escalated
+	(ai:workflow-heal-escalated) must not be retried or auto-answered by
+	stall recovery; the poller reports it as a human-gated latch instead.
+	"""
+	_assert_detect_stalls_skips_latch_label("ai:workflow-heal-escalated")
+
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	labels = {"10": ["ai:awaiting-approval", "ai:workflow-heal-escalated"]}
+	latched = orchestrate_lib.detect_stall_latched_issues(state, labels)
+	assert latched == [
+		{
+			"id": "issue-1",
+			"github_issue": 10,
+			"phase": "ai:awaiting-approval",
+			"latch_label": "ai:workflow-heal-escalated",
+		}
+	]
+
+
 def test_stall_recovery_latch_label_helper():
 	assert orchestrate_lib.stall_recovery_latch_label(["ai:awaiting-approval"]) is None
 	assert orchestrate_lib.stall_recovery_latch_label([]) is None
@@ -1412,6 +1433,15 @@ def test_stall_recovery_latch_label_helper():
 	assert (
 		orchestrate_lib.stall_recovery_latch_label(["ai:scope-blocked", "ai:implementing"])
 		== "ai:scope-blocked"
+	)
+	assert (
+		orchestrate_lib.stall_recovery_latch_label(["ai:awaiting-approval", "ai:workflow-heal-escalated"])
+		== "ai:workflow-heal-escalated"
+	)
+	# Appended last: first-match order for the older latch labels holds.
+	assert (
+		orchestrate_lib.stall_recovery_latch_label(["ai:workflow-heal-escalated", "ai:destructive-blocked"])
+		== "ai:destructive-blocked"
 	)
 	# Every latch label is a plain marker, never a phase label, so the
 	# phase machine keeps reporting the underlying pipeline phase.
@@ -2339,6 +2369,41 @@ def test_split_to_project_label_is_a_dedicated_phase():
 	assert '[ "${phase}" = "ai:split-to-project" ]' in skip
 
 
+def test_waiting_on_dependency_label_priority_and_dedicated_handler():
+	# Stuck-states P8 / confine plan Phase 4a: the dependency-wait label sits
+	# right after ai:blocked, so human latches still win but it outranks every
+	# failure and stage label. The resume scan owns it, so stall recovery
+	# (managed and standalone) leaves it alone.
+	assert orchestrate_lib.determine_phase(["ai:planning", "ai:waiting-on-dependency"]) == "ai:waiting-on-dependency"
+	assert orchestrate_lib.determine_phase(["ai:plan-failed", "ai:waiting-on-dependency"]) == "ai:waiting-on-dependency"
+	assert orchestrate_lib.determine_phase(["ai:waiting-on-dependency", "ai:blocked"]) == "ai:blocked"
+	assert orchestrate_lib.determine_phase(["ai:waiting-on-dependency", "ai:needs-human"]) == "ai:needs-human"
+	priority = orchestrate_lib.PHASE_LABELS_PRIORITY
+	assert priority.index("ai:waiting-on-dependency") == priority.index("ai:blocked") + 1
+	assert "ai:waiting-on-dependency" in orchestrate_lib.DEDICATED_HANDLER_PHASES
+	assert "ai:waiting-on-dependency" not in orchestrate_lib.TERMINAL_PHASES
+	text = (Path(__file__).resolve().parent.parent / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	skip = next(line for line in text.splitlines() if '[ "${phase}" = "ai:needs-human" ] || ' in line and "ai:validation-fixing" in line)
+	assert '[ "${phase}" = "ai:waiting-on-dependency" ]' in skip
+
+
+def test_detect_stalls_skips_waiting_on_dependency_phase():
+	state = _make_state()
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["status_since_ts"] = 1
+	issue["last_seen_phase"] = "ai:waiting-on-dependency"
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels={"10": ["ai:planning", "ai:waiting-on-dependency"], "11": []},
+		threshold_minutes=1,
+		now_ts=10_000,
+	)
+
+	assert stalls == []
+
+
 def test_detect_stalls_skips_capacity_wait_phase():
 	state = _make_state()
 	issue = state["waves"][0]["issues"][0]
@@ -2496,7 +2561,7 @@ def test_validate_decomposition_rejects_empty_path_in_files_touched():
 def test_validate_decomposition_caps_files_touched_length():
 	data = _make_decomposition(issues=[
 		{"id": "a", "title": "T", "body": "b", "priority": 1,
-		 "files_touched": [f"f{i}.py" for i in range(51)]},
+			"files_touched": [f"f{i}.py" for i in range(51)]},
 	])
 	try:
 		orchestrate_lib.validate_decomposition(data)
@@ -3281,6 +3346,48 @@ def test_unrouted_ignores_claude_code_status_notes():
 	assert _unrouted(_unrouted_issue([plain]))[0]["comment_id"] == 7
 
 
+def test_unrouted_ignores_unblock_judge_status_notes():
+	# fun-token-multi-chain#821: the judge's unmarked "belongs in the harness"
+	# note, posted a second after its verdict comment, was flagged twice.
+	import unblock_actions
+	# Every opening must still appear in the note text unblock_actions posts,
+	# so a reworded note fails here instead of paging the operator again.
+	source = Path(unblock_actions.__file__).read_text(encoding="utf-8").lower()
+	for prefix in orchestrate_lib._UNROUTED_PIPELINE_PREFIXES:
+		assert prefix in source, prefix
+	verdict = _unrouted_comment(2, "## Unblock judge: `operator_step` (round 1)\n\n<!-- ai:unblock:v1 item=7 -->", 20)
+	for index, call in enumerate((
+		lambda: unblock_actions._harness_ops(
+			{"item": 7, "stop": "blocked", "labels": ["ai:blocked"], "kind": "issue", "tracking": 0},
+			{"instructions": "Change the implement workflow.", "reason": "Wrong checkout.", "fingerprint": ""},
+			{"reason": "target_repo", "harness_paths": [], "project_paths": []}),
+		lambda: unblock_actions._untrusted_pr_ops({"item": 7}, "reissue"),
+	)):
+		bodies = [op["body"] for op in call() if op.get("op") == "comment"]
+		assert bodies, index
+		for body in bodies:
+			assert _unrouted(_unrouted_issue([verdict, _unrouted_comment(3, body, 19.98)], [("ai:blocked", 120)])) == [], body
+	for body in (
+		"The unblock judge has no verdicts left for this security finding. It stays open until a linked fix is merged.\n\nWhy: x",
+		"Next attempt, per the unblock judge: retry with the cache cleared",
+		"This security finding stays open: its finding marker could not be carried.",
+		"This pull request stays open: its linked issue's security finding marker could not be carried.",
+		"Superseded: owning PR #5 merged with its required checks passing at head `abc`. No re-issue was created.",
+	):
+		assert _unrouted(_unrouted_issue([_unrouted_comment(3, body, 20)])) == [], body
+	# A judge note after a human reply does not hide that reply.
+	answer = _unrouted_comment(4, "Pick option B.", 40)
+	note = _unrouted_comment(5, "The unblock judge found this work belongs in `o/r` (the shared workflow harness).", 30)
+	assert _unrouted(_unrouted_issue([answer, note])) == [
+		{"issue": 7, "comment_id": 4, "reason": "no_command", "age_minutes": 40}]
+	# A human reply that opens with the bare "stays open" words still counts.
+	for index, body in enumerate(("This security finding stays open until B lands.", "This pull request stays open; use B.")):
+		assert _unrouted(_unrouted_issue([_unrouted_comment(8 + index, body, 20)]))[0]["comment_id"] == 8 + index
+	# A human who merely mentions the judge is still a human reply.
+	plain = _unrouted_comment(6, "I think the unblock judge found this work belongs in the harness; use B.", 20)
+	assert _unrouted(_unrouted_issue([plain]))[0]["comment_id"] == 6
+
+
 def test_unrouted_bookkeeping_after_a_reply_does_not_hide_it():
 	answer = _unrouted_comment(2, "Pick option B.", 40)
 	cleanup = _unrouted_comment(3, "<!-- tg_cleanup:1 -->", 30)
@@ -3753,7 +3860,7 @@ def test_render_expected_files_section_has_no_allowlist():
 		staged_file.write_text("scripts/a.py\n", encoding="utf-8")
 		guard = subprocess.run(
 			[sys.executable, str(REPO_ROOT / "scripts" / "files_touched_scope_guard.py"),
-			 "--issue-body-file", str(body_file), "--staged-file", str(staged_file)],
+				"--issue-body-file", str(body_file), "--staged-file", str(staged_file)],
 			capture_output=True, text=True, check=False,
 		)
 		assert guard.returncode == 10, (guard.returncode, guard.stdout, guard.stderr)
@@ -4158,6 +4265,202 @@ def main() -> int:
 
 	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
 	return 1 if failed > 0 else 0
+
+
+
+# ---------------------------------------------------------------
+# Stuck-states P3b: failure-signature breaker evaluator
+# ---------------------------------------------------------------
+_FFB_LOGIN = "github-actions[bot]"
+_FP_A = "0123456789ab"
+_FP_B = "ba9876543210"
+
+
+def _ffb_marker(phase: str, fp: str, run: int) -> str:
+	return f"Plan failed.\n<!-- AI_FAILURE_FINGERPRINT_V1 phase={phase} fp={fp} run={run} -->"
+
+
+def _ffb_comment(cid: int, body: str, login: str = _FFB_LOGIN) -> dict:
+	return {"id": cid, "body": body, "created_at": f"2026-10-29T08:{cid:02d}:00Z", "user": {"login": login}}
+
+
+def test_ffb_two_identical_trusted_markers_trip_with_plan_label():
+	comments = [_ffb_comment(1, _ffb_marker("plan", _FP_A, 101)), _ffb_comment(2, _ffb_marker("plan", _FP_A, 102))]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert result["decision"] == "trip"
+	assert result["label"] == "ai:plan-failed"
+	assert result["phase"] == "plan"
+	assert result["fp"] == _FP_A
+	assert result["runs"] == ["101", "102"]
+	assert result["tail_comment_id"] == 2
+	assert [m["run"] for m in result["recent"]] == ["101", "102"]
+
+
+def test_ffb_trips_across_phase_flip_with_unrelated_comments_between():
+	comments = [
+		_ffb_comment(1, _ffb_marker("plan", _FP_A, 101)),
+		_ffb_comment(2, "/answer auto"),
+		_ffb_comment(3, "Some human note", login="octocat"),
+		_ffb_comment(4, "## Clarification questions"),
+		_ffb_comment(5, _ffb_marker("plan", _FP_A, 102)),
+	]
+	assert orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)["decision"] == "trip"
+
+
+def test_ffb_different_fingerprints_do_not_trip():
+	comments = [_ffb_comment(1, _ffb_marker("plan", _FP_A, 101)), _ffb_comment(2, _ffb_marker("plan", _FP_B, 102))]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert result["decision"] == "none"
+	assert result["streak"] == 1
+
+
+def test_ffb_untrusted_login_markers_are_ignored():
+	comments = [
+		_ffb_comment(1, _ffb_marker("plan", _FP_A, 101), login="mallory"),
+		_ffb_comment(2, _ffb_marker("plan", _FP_A, 102), login="mallory"),
+	]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert result == {"decision": "none", "streak": 0, "recent": []}
+
+
+def test_ffb_malformed_marker_is_skipped():
+	comments = [
+		_ffb_comment(1, _ffb_marker("plan", _FP_A, 101)),
+		_ffb_comment(2, "<!-- AI_FAILURE_FINGERPRINT_V1 phase=plan fp=XYZ run=102 -->"),
+		_ffb_comment(3, "<!-- AI_FAILURE_FINGERPRINT_V1 phase=plan fp=0123456789ab run=0 -->"),
+	]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert result["decision"] == "none"
+	assert result["streak"] == 1
+
+
+def test_ffb_comment_with_two_markers_is_skipped():
+	two = _ffb_marker("plan", _FP_A, 101) + "\n" + _ffb_marker("plan", _FP_A, 102)
+	comments = [_ffb_comment(1, two), _ffb_comment(2, _ffb_marker("plan", _FP_A, 103))]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert result["decision"] == "none"
+	assert [m["run"] for m in result["recent"]] == ["103"]
+
+
+def test_ffb_duplicate_run_id_counts_once():
+	comments = [_ffb_comment(1, _ffb_marker("plan", _FP_A, 101)), _ffb_comment(2, _ffb_marker("plan", _FP_A, 101))]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert result["decision"] == "none"
+	assert result["streak"] == 1
+
+
+def test_ffb_trusted_breaker_comment_is_consumption_point():
+	breaker = f"<!-- AI_FAILURE_FINGERPRINT_BREAKER_V1 phase=plan fp={_FP_A} runs=101,102 -->\n## stopped"
+	comments = [
+		_ffb_comment(1, _ffb_marker("plan", _FP_A, 101)),
+		_ffb_comment(2, _ffb_marker("plan", _FP_A, 102)),
+		_ffb_comment(3, breaker),
+		_ffb_comment(4, _ffb_marker("plan", _FP_A, 103)),
+	]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert result["decision"] == "none"
+	assert result["streak"] == 1
+	comments.append(_ffb_comment(5, _ffb_marker("plan", _FP_A, 104)))
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert result["decision"] == "trip"
+	assert result["runs"] == ["103", "104"]
+
+
+def test_ffb_forged_breaker_comment_is_ignored():
+	breaker = f"<!-- AI_FAILURE_FINGERPRINT_BREAKER_V1 phase=plan fp={_FP_A} runs=1,2 -->"
+	comments = [
+		_ffb_comment(1, _ffb_marker("plan", _FP_A, 101)),
+		_ffb_comment(2, breaker, login="mallory"),
+		_ffb_comment(3, _ffb_marker("plan", _FP_A, 102)),
+	]
+	assert orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)["decision"] == "trip"
+
+
+def test_ffb_incomplete_window_with_streak_at_start_needs_full_history():
+	comments = [_ffb_comment(1, "noise"), _ffb_comment(2, _ffb_marker("clarify", _FP_A, 101))]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, False)
+	assert result["decision"] == "needs_full_history"
+	# Complete history: a lone marker is simply no trip.
+	assert orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)["decision"] == "none"
+	# A different older fingerprint inside the window bounds the streak.
+	older = _ffb_comment(3, _ffb_marker("clarify", _FP_B, 99))
+	older["created_at"] = "2026-10-29T07:00:00Z"
+	assert orchestrate_lib.evaluate_failure_fingerprint_breaker([older, *comments], _FFB_LOGIN, 2, False)["decision"] == "none"
+
+
+def test_ffb_repeat_max_three():
+	comments = [_ffb_comment(1, _ffb_marker("plan", _FP_A, 101)), _ffb_comment(2, _ffb_marker("plan", _FP_A, 102))]
+	assert orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 3, True)["decision"] == "none"
+	comments.append(_ffb_comment(3, _ffb_marker("plan", _FP_A, 103)))
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 3, True)
+	assert result["decision"] == "trip"
+	assert result["runs"] == ["101", "102", "103"]
+
+
+def test_ffb_empty_login_is_identity_unavailable():
+	comments = [_ffb_comment(1, _ffb_marker("plan", _FP_A, 101))]
+	assert orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, "", 2, True) == {"decision": "identity_unavailable"}
+
+
+def test_ffb_repeat_max_below_two_is_rejected():
+	try:
+		orchestrate_lib.evaluate_failure_fingerprint_breaker([], _FFB_LOGIN, 1, True)
+	except ValueError:
+		return
+	raise AssertionError("repeat_max=1 must be rejected")
+
+
+def test_ffb_phase_label_mapping():
+	assert orchestrate_lib.failure_fingerprint_label_for_phase("plan") == "ai:plan-failed"
+	assert orchestrate_lib.failure_fingerprint_label_for_phase("clarify") == "ai:clarify-failed"
+	assert orchestrate_lib.failure_fingerprint_label_for_phase("implement") == "ai:needs-human"
+	comments = [_ffb_comment(1, _ffb_marker("review-autofix", _FP_A, 1)), _ffb_comment(2, _ffb_marker("review-autofix", _FP_A, 2))]
+	assert orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)["label"] == "ai:needs-human"
+
+
+def test_ffb_recent_is_capped_at_five():
+	comments = [_ffb_comment(i, _ffb_marker("plan", _FP_A if i % 2 else _FP_B, 100 + i)) for i in range(1, 9)]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert len(result["recent"]) == 5
+	assert result["recent"][-1]["run"] == "108"
+
+
+def _ffb_run_cli(argv: list[str]) -> tuple[int, dict]:
+	import contextlib
+	import io
+	buffer = io.StringIO()
+	with contextlib.redirect_stdout(buffer):
+		rc = orchestrate_lib.main(["failure-fingerprint-breaker", *argv])
+	return rc, json.loads(buffer.getvalue().strip())
+
+
+def test_ffb_cli_valid_and_invalid_input():
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		comments_file = tmp_path / "comments.json"
+		comments_file.write_text(json.dumps([
+			_ffb_comment(1, _ffb_marker("clarify", _FP_A, 101)),
+			_ffb_comment(2, _ffb_marker("clarify", _FP_A, 102)),
+		]), encoding="utf-8")
+		rc, payload = _ffb_run_cli([
+			"--comments-file", str(comments_file),
+			"--trusted-login", _FFB_LOGIN, "--repeat-max", "2", "--comments-complete", "true",
+		])
+		assert rc == 0
+		assert payload["decision"] == "trip"
+		assert payload["label"] == "ai:clarify-failed"
+
+		bad_file = tmp_path / "bad.json"
+		bad_file.write_text("{not json", encoding="utf-8")
+		for argv in (
+			["--comments-file", str(bad_file), "--trusted-login", _FFB_LOGIN],
+			["--comments-file", str(tmp_path / "missing.json"), "--trusted-login", _FFB_LOGIN],
+			["--comments-file", str(comments_file), "--trusted-login", _FFB_LOGIN, "--repeat-max", "1"],
+			["--comments-file", str(comments_file), "--trusted-login", _FFB_LOGIN, "--comments-complete", "maybe"],
+		):
+			rc, payload = _ffb_run_cli(argv)
+			assert rc == 0
+			assert payload == {"decision": "unavailable"}
 
 
 def test_linked_pr_evidence_ignores_merge_into_non_target_base():

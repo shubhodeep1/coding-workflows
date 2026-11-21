@@ -164,6 +164,21 @@ def test_verify_run_binds_a_self_dispatched_review_run_by_its_marker_head() -> N
 			raise AssertionError(f"head mismatch accepted: {case}")
 
 
+def test_verify_run_binds_a_pull_request_run_by_its_own_head() -> None:
+	# Issue #9250: a pull_request run whose PR head moved while it ran has
+	# `pull_requests: []` and its own head. The reporter now sends that head,
+	# and verify_run (unchanged) binds the run only when the heads are equal.
+	run = {"id": 500, "repository": {"full_name": CONSUMER_REPO}, "event": "pull_request", "head_sha": SHA_A,
+		"display_title": "AI Review", "pull_requests": [], "conclusion": "failure", "path": ".github/workflows/ai-review.yml"}
+	assert heal.verify_run(run, repo=CONSUMER_REPO, kind="autofix_failure", head_sha=SHA_A, pr_number=4174)["run_id"] == 500
+	try:
+		heal.verify_run(run, repo=CONSUMER_REPO, kind="autofix_failure", head_sha=SHA_B, pr_number=4174)
+	except ValueError as exc:
+		assert str(exc) == "run head mismatch"
+	else:
+		raise AssertionError("a pull_request run on another head was bound")
+
+
 def test_verify_run_provenance_lists_runs_a_trusted_marker_binds_to_the_pr_head() -> None:
 	payload = heal.validate_payload(_autofix_payload())
 	assert payload["head_sha"] == SHA_B
@@ -375,6 +390,8 @@ def test_intake_workflow_triggers_and_release_names() -> None:
 	assert set(heal.RELEASE_WORKFLOW_NAMES) == actual_names
 	job = intake["jobs"]["intake"]
 	assert "failure" in job["if"] and "timed_out" in job["if"]
+	# Release-blocker occurrence throttle (stuck-states P4): bound through env only, with a default.
+	assert job["env"]["WORKFLOW_HEAL_OCCURRENCE_THROTTLE_SECS"] == "${{ vars.WORKFLOW_HEAL_OCCURRENCE_THROTTLE_SECS || '86400' }}"
 	# Each run gets its own group and waits in the report queue; the shared
 	# group (#7333) comes back only with HEAL_INTAKE_QUEUE_ENABLED=false
 	# (tests/test_workflow_failure_heal_queue.py).
@@ -1122,6 +1139,148 @@ def test_filter_log_keeps_runtime_lines_outside_tail() -> None:
 	report = ["filler"] * 100
 	report[0] = "AI_ENGINE_FALLBACK_REPORT role=IMPLEMENT entries=2"
 	assert "AI_ENGINE_FALLBACK_REPORT" not in heal.filter_log("\n".join(report), max_lines=10)
+
+
+# The chained argparse crash of scripts/render_prompt.py on Python 3.14 (plan
+# run 42929246385, heal issues #9190 / #9200): filter_log used to keep only the
+# two bare `Traceback (most recent call last):` lines, so the heal was filed as
+# inconclusive.
+CHAINED_VALUEERROR_TRACEBACK_LINES = (
+	"2026-11-11T00:15:15.5012084Z Traceback (most recent call last):",
+	'2026-11-11T00:15:15.5013904Z   File "/usr/lib/python3.14/argparse.py", line 1759, in _check_help',
+	"2026-11-11T00:15:15.5019025Z ValueError: unsupported format character '.' (0x2e) at index 237",
+	"2026-11-11T00:15:15.5020164Z The above exception was the direct cause of the following exception:",
+	"2026-11-11T00:15:15.5021014Z Traceback (most recent call last):",
+	'2026-11-11T00:15:15.5033125Z   File "/home/runner/work/coding-workflows/coding-workflows/scripts/render_prompt.py", line 1414, in <module>',
+	"2026-11-11T00:15:15.5043693Z ValueError: badly formed help string",
+	"2026-11-11T00:15:15.5227737Z ##[error]Process completed with exit code 1.",
+)
+
+
+def test_filter_log_keeps_chained_traceback_frames_and_exception_lines_outside_tail() -> None:
+	# The traceback sits before the 400-line tail, so only the signal match
+	# can keep it.
+	filler = [f"2026-11-11T00:16:00.0000000Z step output {i}" for i in range(600)]
+	log = "\n".join(list(CHAINED_VALUEERROR_TRACEBACK_LINES) + filler) + "\n"
+	filtered = heal.filter_log(log)
+	for kept_line in CHAINED_VALUEERROR_TRACEBACK_LINES:
+		assert kept_line in filtered
+	assert "ValueError: unsupported format character '.' (0x2e) at index 237" in filtered
+	assert "ValueError: badly formed help string" in filtered
+	# The block ends at the first line after the exception that is not part of
+	# the traceback, so the filler before the tail is still dropped.
+	assert "step output 0\n" not in filtered and "step output 150\n" not in filtered
+	assert "step output 599" in filtered
+
+
+def test_filter_log_keeps_the_innermost_lines_of_a_long_traceback() -> None:
+	frames = [f'  File "/srv/app/mod{i}.py", line {i}, in f{i}' for i in range(80)]
+	traceback_lines = ["Traceback (most recent call last):", *frames, "RecursionError: too deep"]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert "Traceback (most recent call last):" in filtered
+	assert "RecursionError: too deep" in filtered
+	kept_frames = [line for line in filtered if line.startswith('  File "/srv/app/')]
+	assert len(kept_frames) == heal._TRACEBACK_CONTEXT_MAX_LINES - 1
+	assert frames[-1] in kept_frames and frames[0] not in kept_frames
+	assert "later output 0" not in filtered
+
+
+def test_filter_log_keeps_the_exception_line_of_a_traceback_longer_than_the_scan_window() -> None:
+	# Mutual recursion is not collapsed by CPython, so its traceback can run
+	# past _TRACEBACK_SCAN_MAX_LINES before the exception line.
+	frames: list[str] = []
+	for i in range(heal._TRACEBACK_SCAN_MAX_LINES):
+		frames += [f'  File "/srv/app/ping.py", line {i}, in ping{i}', f"    pong{i}()"]
+	traceback_lines = ["Traceback (most recent call last):", *frames, "RecursionError: maximum recursion depth exceeded"]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert "RecursionError: maximum recursion depth exceeded" in filtered
+	assert frames[-1] in filtered and frames[0] not in filtered
+	kept_frames = [line for line in filtered if line in set(frames)]
+	assert len(kept_frames) == heal._TRACEBACK_CONTEXT_MAX_LINES - 1
+	assert "later output 0" not in filtered
+
+
+def test_filter_log_keeps_the_chain_marker_after_a_traceback_longer_than_the_scan_window() -> None:
+	# A long mutual-recursion traceback caught and re-raised: the walk past
+	# _TRACEBACK_SCAN_MAX_LINES must keep the chain marker after the first
+	# exception line, as the in-window scan does.
+	frames: list[str] = []
+	for i in range(heal._TRACEBACK_SCAN_MAX_LINES):
+		frames += [f'  File "/srv/app/ping.py", line {i}, in ping{i}', f"    pong{i}()"]
+	marker = "The above exception was the direct cause of the following exception:"
+	traceback_lines = [
+		"Traceback (most recent call last):",
+		*frames,
+		"RecursionError: maximum recursion depth exceeded",
+		"",
+		marker,
+		"",
+		"Traceback (most recent call last):",
+		'  File "/srv/app/main.py", line 9, in <module>',
+		"RuntimeError: ping failed",
+	]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert "RecursionError: maximum recursion depth exceeded" in filtered
+	assert marker in filtered
+	assert "RuntimeError: ping failed" in filtered
+	assert frames[-1] in filtered and frames[0] not in filtered
+	assert "later output 0" not in filtered
+
+
+def test_filter_log_keeps_the_chain_marker_after_an_exception_line_at_the_scan_window_edge() -> None:
+	# The exception line is the last line of the scan window, so the chain
+	# marker sits just past it and must still be kept.
+	frames = [f'  File "/srv/app/mod{i}.py", line {i}, in f{i}' for i in range(heal._TRACEBACK_SCAN_MAX_LINES - 1)]
+	marker = "The above exception was the direct cause of the following exception:"
+	traceback_lines = [
+		"Traceback (most recent call last):",
+		*frames,
+		"ValueError: inner failure",
+		marker,
+		"Traceback (most recent call last):",
+		'  File "/srv/app/main.py", line 9, in <module>',
+		"RuntimeError: outer failure",
+	]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert "ValueError: inner failure" in filtered
+	assert marker in filtered
+	assert "RuntimeError: outer failure" in filtered
+	assert "later output 0" not in filtered
+
+
+def test_filter_log_keeps_the_exception_line_before_many_continuation_lines() -> None:
+	# A pydantic ValidationError prints every error indented after the
+	# exception line, so more than _TRACEBACK_CONTEXT_MAX_LINES continuation
+	# lines can follow it; the cut must still keep the exception line.
+	frames = [f'  File "/srv/app/mod{i}.py", line {i}, in f{i}' for i in range(40)]
+	details = [f"  field_{i}\n    Field required [type=missing]" for i in range(30)]
+	exception_line = "pydantic_core._pydantic_core.ValidationError: 30 validation errors for Settings"
+	marker = "During handling of the above exception, another exception occurred:"
+	traceback_lines = [
+		"Traceback (most recent call last):",
+		*frames,
+		exception_line,
+		*"\n".join(details).split("\n"),
+		"",
+		marker,
+		"",
+		"Traceback (most recent call last):",
+		'  File "/srv/app/main.py", line 9, in <module>',
+		"RuntimeError: settings failed",
+	]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert exception_line in filtered
+	assert frames[-1] in filtered and frames[0] not in filtered
+	assert marker in filtered
+	assert "RuntimeError: settings failed" in filtered
+	first_block = set(frames) | {exception_line} | set("\n".join(details).split("\n"))
+	assert len([line for line in filtered if line in first_block]) <= heal._TRACEBACK_CONTEXT_MAX_LINES
+	assert "later output 0" not in filtered
 
 
 def test_drop_step_script_lines_drops_unstyled_echoed_script() -> None:
@@ -2236,6 +2395,9 @@ def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[s
 					"pull_requests": [{"number": payload.get("issue_number")}],
 				} for ref in payload.get("run_refs", [])
 			}
+		# extra_run_details adds runs (e.g. the intake's own run) on top of
+		# the default fixtures without replacing them.
+		state["run_details"].update(state.pop("extra_run_details", {}))
 		state_file.write_text(json.dumps(state), encoding="utf-8")
 		payload_file = tmp / "payload_raw.json"
 		payload_file.write_text(json.dumps(payload), encoding="utf-8")
@@ -3227,8 +3389,9 @@ def test_intake_report_without_runs_skips_quietly_instead_of_paging(tmp_path: Pa
 		assert "skip reason=scope_marker_unresolved" not in result.stdout
 	# A report that named a run still pages: there the unresolved scope is a fault.
 	intake = INTAKE_SCRIPT.read_text(encoding="utf-8")
-	# Three call sites: the engine_fallback pre-diagnosis skip, the marker guard and the creation gate.
-	assert intake.count("_heal_report_claimed_no_runs; then") == 3
+	# Four call sites: the engine_fallback and release_blocker pre-diagnosis
+	# skips, the marker guard and the creation gate.
+	assert intake.count("_heal_report_claimed_no_runs; then") == 4
 	# Claimed runs that validate-payload drops (here a foreign repository) still
 	# page: the raw report named runs, so the missing scope is a fault.
 	tg_log = tmp_path / "tg-dropped.log"
@@ -4331,6 +4494,42 @@ def test_gate_stops_a_head_with_three_identical_failure_markers() -> None:
 		assert sum(1 for call in state["calls"] if "user" in call) == 1
 
 
+def test_gate_stops_a_head_after_two_identical_reviewers_failed_markers() -> None:
+	# Issue #9533: a reviewer-stage crash that repeats with one fingerprint on
+	# one head is deterministic; the cap trips at 2 for that reason only.
+	fp = _cap_fp("reviewers_failed")
+	two = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), reason="reviewers_failed") for run in (101, 102)]
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-reviewers-") as tmp_name:
+		result, outputs, _state = _run_gate(Path(tmp_name), comments=two)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"AUTOFIX_FINGERPRINT_CAP_TRIPPED pr=4259 head={SHA_A} fp={fp} reason=reviewers_failed count=2 max=2 already_applied=false" in result.stdout
+		assert outputs["should_run"] == "false" and outputs["skip_reason"] == "fingerprint_cap"
+		assert outputs["fingerprint_cap"] == "true" and outputs["fingerprint_cap_max"] == "2"
+	# One failure still retries.
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-reviewers-one-") as tmp_name:
+		result, outputs, _state = _run_gate(Path(tmp_name), comments=two[:1])
+		assert outputs["fingerprint_cap"] == "false" and outputs["should_run"] == "true", result.stdout
+		assert f"AUTOFIX_FINGERPRINT cap=not_tripped pr=4259 head={SHA_A} fp={fp} reason=reviewers_failed count=1 max=2" in result.stdout
+	# A different fingerprint or another head resets the count.
+	other_fp = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run="101", reason="reviewers_failed", fp="e" * 64), two[1]]
+	other_head = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run="101", reason="reviewers_failed", head="f" * 40), two[1]]
+	for name, comments in (("fp", other_fp), ("head", other_head)):
+		with tempfile.TemporaryDirectory(prefix=f"heal-gate-cap-reviewers-{name}-") as tmp_name:
+			result, outputs, _state = _run_gate(Path(tmp_name), comments=comments)
+			assert outputs["fingerprint_cap"] == "false" and outputs["should_run"] == "true", (name, result.stdout)
+	# Other reasons keep the global threshold of 3; the reason-scoped value is configurable.
+	editor_two = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run)) for run in (101, 102)]
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-editor-two-") as tmp_name:
+		_result, outputs, _state = _run_gate(Path(tmp_name), comments=editor_two)
+		assert outputs["fingerprint_cap"] == "false" and outputs["fingerprint_cap_max"] == "3"
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-reviewers-max3-") as tmp_name:
+		_result, outputs, _state = _run_gate(Path(tmp_name), comments=two, extra_env={"REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED": "3"})
+		assert outputs["fingerprint_cap"] == "false" and outputs["fingerprint_cap_max"] == "3"
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-reviewers-bad-") as tmp_name:
+		_result, outputs, _state = _run_gate(Path(tmp_name), comments=two, extra_env={"REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED": "x"})
+		assert outputs["fingerprint_cap"] == "true" and outputs["fingerprint_cap_max"] == "2"
+
+
 def test_gate_cap_already_applied_threshold_bypass_and_fail_open() -> None:
 	fp = _cap_fp()
 	three = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run)) for run in (101, 102, 103)]
@@ -5205,6 +5404,118 @@ def test_autofix_payload_lists_the_trusted_failed_runs_first() -> None:
 	assert [ref["run_id"] for ref in plain["run_refs"]] == ["500"]
 
 
+def test_build_autofix_failure_payload_prefers_run_head_sha() -> None:
+	# Issue #9250: the failed run's own head replaces the PR's current head in
+	# head_sha and in the failure-marker lookup; head_branch stays the PR's.
+	kwargs = dict(
+		repo=CONSUMER_REPO,
+		pr=_pr(),
+		comments=[],
+		workflow_name="AI Review",
+		failure_reason="editor_empty_noop",
+		failure_evidence="::error::PR diff unavailable\n",
+		failure_streak=1,
+		run_id="500",
+		run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+		wrapper_sha=SHA_A,
+		reporter_run_url=None,
+	)
+	for run_head in (SHA_A, SHA_A.upper(), f"  {SHA_A}\n"):
+		payload = heal.validate_payload(heal.build_autofix_failure_payload(**kwargs, run_head_sha=run_head))
+		assert payload["head_sha"] == SHA_A, run_head
+		assert payload["head_branch"] == "ai/issue-4173"
+	for run_head in (None, "", "abc", "g" * 40, SHA_A + "a"):
+		payload = heal.validate_payload(heal.build_autofix_failure_payload(**kwargs, run_head_sha=run_head))
+		assert payload["head_sha"] == SHA_B, run_head
+	assert heal.build_autofix_failure_payload(**kwargs)["head_sha"] == SHA_B
+	# Markers are looked up by the run head, not by the PR head.
+	comments = [*_trusted_failure_comments(["101"], head=SHA_A), *_trusted_failure_comments(["102"], head=SHA_B)]
+	by_run_head = heal.build_autofix_failure_payload(**{**kwargs, "comments": comments}, failure_marker_author=CAP_AUTHOR, run_head_sha=SHA_A)
+	assert [ref["run_id"] for ref in by_run_head["run_refs"]] == ["101", "500"]
+	by_pr_head = heal.build_autofix_failure_payload(**{**kwargs, "comments": comments}, failure_marker_author=CAP_AUTHOR)
+	assert [ref["run_id"] for ref in by_pr_head["run_refs"]] == ["102", "500"]
+
+
+def _autofix_report_event_env(tmp: Path, env: dict[str, str], *, event_name: str, event: object | None) -> None:
+	env["GITHUB_EVENT_NAME"] = event_name
+	event_path = tmp / "event.json"
+	if event is not None:
+		event_path.write_text(json.dumps(event), encoding="utf-8")
+	env["GITHUB_EVENT_PATH"] = str(event_path)
+
+
+def test_autofix_report_sends_the_pull_request_event_head() -> None:
+	# Issue #9250: the PR head moved (SHA_B) while the pull_request run went on
+	# its own head (SHA_A); the report carries the run head, read from the event
+	# file on disk with no GitHub read.
+	event = {"pull_request": {"number": 4174, "head": {"sha": SHA_A.upper()}}}
+	for override, expected, source in ((None, SHA_A, "event"), (SHA_C.upper(), SHA_C, "override")):
+		with tempfile.TemporaryDirectory(prefix="heal-autofix-run-head-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true", "AUTOFIX_STREAK_AUTHOR_LOGIN": "workflow-bot"})
+			_autofix_report_event_env(tmp, env, event_name="pull_request", event=event)
+			if override is not None:
+				env["REPORT_RUN_HEAD_SHA"] = override
+			result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert f"run_head={expected} run_head_source={source} pr_head={SHA_B}" in result.stdout, result.stdout
+			state = _state(state_file)
+			assert len(state["dispatches"]) == 1
+			payload = heal.validate_payload(state["dispatches"][0]["body"]["client_payload"]["report"])
+			assert payload["head_sha"] == expected and payload["head_branch"] == "ai/issue-4173"
+			assert all(call[:1] != ["api"] or "/dispatches" in " ".join(call) for call in state["calls"])
+
+
+def test_autofix_report_keeps_pr_head_without_a_usable_event_head() -> None:
+	good = {"pull_request": {"number": 4174, "head": {"sha": SHA_A}}}
+	cases = [
+		("workflow_dispatch", "workflow_dispatch", good, {}),
+		("pull_request_target", "pull_request_target", good, {}),
+		("non_hex", "pull_request", {"pull_request": {"number": 4174, "head": {"sha": "z" * 40}}}, {}),
+		("short", "pull_request", {"pull_request": {"number": 4174, "head": {"sha": "abc"}}}, {}),
+		("other_pr", "pull_request", {"pull_request": {"number": 4175, "head": {"sha": SHA_A}}}, {}),
+		("not_json", "pull_request", "not an object", {}),
+		("missing_file", "pull_request", None, {}),
+		("invalid_override", "workflow_dispatch", None, {"REPORT_RUN_HEAD_SHA": "not-a-sha"}),
+		# The identical-failure cap keeps the PR (gate) head its counted markers carry.
+		("identical_failure_cap", "pull_request", good, {"AUTOFIX_FAILURE_REASON": "identical_failure_cap", "REPORT_RUN_HEAD_SHA": SHA_C}),
+	]
+	for name, event_name, event, extra in cases:
+		with tempfile.TemporaryDirectory(prefix=f"heal-autofix-run-head-{name}-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true", **extra})
+			_autofix_report_event_env(tmp, env, event_name=event_name, event=event)
+			result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert f"run_head=none run_head_source=none pr_head={SHA_B}" in result.stdout, (name, result.stdout)
+			payload = heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])
+			assert payload["head_sha"] == SHA_B, name
+	# An event path that is a directory, not a file, is ignored.
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-run-head-dir-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+		env["GITHUB_EVENT_NAME"] = "pull_request"
+		env["GITHUB_EVENT_PATH"] = str(tmp)
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert "run_head=none run_head_source=none" in result.stdout, result.stdout
+		assert heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])["head_sha"] == SHA_B
+	# A staged helper that predates --run-head-sha still reports, with the PR head.
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-run-head-old-helper-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+		_autofix_report_event_env(tmp, env, event_name="pull_request", event=good)
+		staged_helper = work / "scripts" / "workflow_failure_heal.py"
+		old_text = staged_helper.read_text(encoding="utf-8")
+		old_text = re.sub(r'\tp\.add_argument\(\n\t\t"--run-head-sha",\n(?:\t\t.*\n)*?\t\)\n', "", old_text)
+		old_text = old_text.replace("\t\trun_head_sha=args.run_head_sha or None,\n", "")
+		assert "run-head-sha" not in old_text
+		staged_helper.write_text(old_text, encoding="utf-8")
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "dispatched pr=4174 failure=editor_empty_noop" in result.stdout and "run_head=none" in result.stdout, result.stdout + result.stderr
+		assert heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])["head_sha"] == SHA_B
+
+
 def test_autofix_report_cap_links_the_failed_runs_and_counts_only_them() -> None:
 	with tempfile.TemporaryDirectory(prefix="heal-autofix-cap-runs-") as tmp_name:
 		tmp = Path(tmp_name)
@@ -5456,6 +5767,77 @@ def test_failure_headline_names_the_first_specific_error() -> None:
 	assert headline == "Conflict resolver edited files outside the conflicted set: workflow-templates/CLAUDE.md"
 	assert heal.failure_headline(["no errors here\n", "##[error]Process completed with exit code 2."]) == ""
 	assert heal.failure_headline([]) == ""
+
+
+RENDER_PROMPT_CRASH = "/home/runner/work/_temp/support/scripts/render_prompt.sh: line 306: 1abc: invalid variable name\n"
+
+
+def test_failure_headline_falls_back_to_a_bash_diagnostic_line() -> None:
+	# Issue #9533: the reviewer step crashed in its own shell and printed no
+	# ::error:: line; the headline names the crash, directory stripped.
+	assert heal.failure_headline(["starting\n", RENDER_PROMPT_CRASH]) == "render_prompt.sh: line 306: 1abc: invalid variable name"
+	assert heal.failure_headline(["ERROR: reviewer prompt missing\n"]) == "reviewer prompt missing"
+	# A specific ::error:: line anywhere still wins over the fallback.
+	assert heal.failure_headline([RENDER_PROMPT_CRASH, "::error::Reviewer slot crashed\n"]) == "Reviewer slot crashed"
+	# Review text that only looks like a location is not a diagnostic.
+	assert heal.failure_headline(["src/app.py: line 12: consider renaming\n"]) == ""
+
+
+def test_reviewer_failure_evidence_keeps_the_bash_diagnostic_line() -> None:
+	evidence = heal.reviewer_failure_evidence([], [RENDER_PROMPT_CRASH, "  | other/path/render_prompt.sh: line 307: 2abc: invalid variable name\n"])
+	assert evidence.splitlines() == ["reviewers_failed=true", "render_prompt.sh: line 306: 1abc: invalid variable name"]
+	assert heal.failure_headline([evidence]) == "render_prompt.sh: line 306: 1abc: invalid variable name"
+	assert "line 12" not in heal.reviewer_failure_evidence(["review.sh: line 12: looks fine\n"])
+	# Spec item 3: the first plain `ERROR:` line of the step's own stderr also
+	# reaches the evidence the headline reads; later ones are dropped and
+	# secrets are redacted.
+	plain = heal.reviewer_failure_evidence([], ["starting\n", "ERROR: reviewer prompt missing\n", "ERROR: second failure\n"])
+	assert plain.splitlines() == ["reviewers_failed=true", "ERROR: reviewer prompt missing"]
+	assert heal.failure_headline([plain]) == "reviewer prompt missing"
+	assert "ghp_secret" not in heal.reviewer_failure_evidence([], ["ERROR: token ghp_secretvalue123 rejected\n"])
+	# A slot log's ERROR line (model-CLI stderr or review prose) is never kept,
+	# so it can neither name the failure nor feed the fingerprint; the stage
+	# stderr's bash diagnostic still names the crash.
+	slot_noise = "  | ERROR 2026-11-16 request abcxyz rejected\nERROR: missing regression test for X\n"
+	assert heal.reviewer_failure_evidence([slot_noise]) == "reviewers_failed=true\n"
+	mixed = heal.reviewer_failure_evidence([slot_noise], ["starting\n", RENDER_PROMPT_CRASH])
+	assert mixed.splitlines() == ["reviewers_failed=true", "render_prompt.sh: line 306: 1abc: invalid variable name"]
+	assert heal.failure_headline([mixed]) == "render_prompt.sh: line 306: 1abc: invalid variable name"
+	# A diagnostic-shaped slot-log line (raw model-CLI stderr) is never kept.
+	assert heal.reviewer_failure_evidence(["bash: line 3: foo: command not found\n", RENDER_PROMPT_CRASH]) == "reviewers_failed=true\n"
+	# review_run_reviewers.sh re-emits the model CLI's stderr tail to the
+	# step's stderr indented `  | `: neither its ERROR line nor its diagnostic
+	# is kept, so the crash line still names the failure.
+	indented = heal.reviewer_failure_evidence([], [
+		"  | ERROR 2026-11-16 request abcxyz rejected\n",
+		"  | bash: line 3: foo: command not found\n",
+		RENDER_PROMPT_CRASH,
+	])
+	assert indented.splitlines() == ["reviewers_failed=true", "render_prompt.sh: line 306: 1abc: invalid variable name"]
+	# A kept bash diagnostic is redacted like the plain ERROR line.
+	assert "ghp_secret" not in heal.reviewer_failure_evidence([], ["deploy.sh: line 12: invalid token ghp_secretvalue123\n"])
+
+
+def test_reviewer_crash_fingerprint_carries_the_bash_diagnostic() -> None:
+	# Issue #9533 (spec item 3): the fingerprint names the cause, so two
+	# different shell crashes do not collapse to one "no-error-lines" fp and
+	# trip the 2-strike reviewers_failed cap together.
+	crash = heal.reviewer_failure_evidence([], [RENDER_PROMPT_CRASH])
+	other = heal.reviewer_failure_evidence([], ["/x/scripts/review_run_reviewers.sh: line 88: SLOT_ID: unbound variable\n"])
+	assert heal.error_signature(crash) != "no-error-lines"
+	fp_crash = heal.autofix_failure_fingerprint(failure_reason="reviewers_failed", evidence_text=crash)["fp"]
+	fp_other = heal.autofix_failure_fingerprint(failure_reason="reviewers_failed", evidence_text=other)["fp"]
+	assert fp_crash != fp_other
+	# The same crash under another runner path keeps one fingerprint.
+	moved = heal.reviewer_failure_evidence([], [RENDER_PROMPT_CRASH.replace("/home/runner/work/_temp/support", "/opt/elsewhere")])
+	assert heal.autofix_failure_fingerprint(failure_reason="reviewers_failed", evidence_text=moved)["fp"] == fp_crash
+	# Review text shaped like a location is not a crash and stays out.
+	assert heal.error_signature("src/review.sh: line 12: looks fine\n") == "no-error-lines"
+	# A diagnostic whose message only says "errors" / "fail" still names itself.
+	assert heal.error_signature("x.sh: line 3: network errors detected\n") != "no-error-lines"
+	assert heal.error_signature("x.sh: line 5: upload failing\n") != "no-error-lines"
+	# An earlier bucket still wins, so existing signatures keep their value.
+	assert heal.error_signature("::error::boom\n" + RENDER_PROMPT_CRASH) == heal.error_signature("::error::boom\n")
 
 
 def test_failure_headline_redacts_credentials_and_stays_one_line() -> None:
@@ -5914,6 +6296,45 @@ def test_intake_verifies_report_identity_and_rejects_a_forged_repository() -> No
 
 	result, state, _ = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REPORT_IDENTITY_STATE": "malformed"})
 	assert "report_auth=rejected reason=identity_malformed" in result.stdout
+	assert _api_writes(state) == []
+
+
+def test_intake_credits_runner_queue_wait_against_a_stale_identity() -> None:
+	# 2026-11-14: six reports sat ~3h50m waiting for a runner and were all
+	# rejected identity_stale; the age limit applies at arrival (run_started_at).
+	payload = _consumer_payload(reporter_run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/{_ID_RUN_ID}")
+	own_run_path = f"repos/{SELF_REPO}/actions/runs/777"
+
+	def _iso(epoch: int) -> str:
+		return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+	def _stale_run(run_started_at: str | None) -> tuple[subprocess.CompletedProcess[str], dict]:
+		with tempfile.TemporaryDirectory(prefix="heal-identity-wait-") as tmp_name:
+			# Token minted two hours ago (iat = now - 7200 - 60).
+			token_file, jwks_file, token = _fresh_identity(Path(tmp_name), iat=int(time.time()) - 7260, nbf=int(time.time()) - 7260)
+			extra = {} if run_started_at is None else {own_run_path: {"id": 777, "run_attempt": 1, "run_started_at": run_started_at}}
+			result, state, _ = _run_intake(payload, _intake_state(extra_run_details=extra), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=_identity_env(token_file, jwks_file))
+			assert token not in result.stdout + result.stderr
+			return result, state
+
+	# The run started when the dispatch arrived, right after the token was minted.
+	result, state = _stale_run(_iso(int(time.time()) - 7230))
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL report_identity_age_credit arrival_waited_seconds=" in result.stdout
+	assert "report_auth=verified reason=bound" in result.stdout
+	assert len(_composed_issues(state)) == 1
+	# A recent start (e.g. a re-run of an old report) earns no credit.
+	result, state = _stale_run(_iso(int(time.time()) - 30))
+	assert "report_auth=rejected reason=identity_stale" in result.stdout
+	assert _api_writes(state) == []
+	# The own-run read failing keeps the rejection (fails closed).
+	result, state = _stale_run(None)
+	assert "report_identity_age_credit arrival_waited_seconds=0" in result.stdout
+	assert "report_auth=rejected reason=identity_stale" in result.stdout
+	assert _api_writes(state) == []
+	# A malformed timestamp earns no credit either.
+	result, state = _stale_run("yesterday")
+	assert "report_auth=rejected reason=identity_stale" in result.stdout
 	assert _api_writes(state) == []
 
 
@@ -6757,18 +7178,90 @@ def test_intake_phase_failure_deduplicates_on_source_issue_and_falls_back_withou
 	assert "issues_created" not in _state_after
 
 
-def test_intake_escalates_a_heal_issue_that_fails_its_own_run() -> None:
-	# A heal issue (#6413-style, in this repository) whose plan run fails with
-	# the failure it was filed for: the pipeline cannot run its own fix.
+def _run_heal_self_escalation_intake(labels: list[str] | None, *, raw_labels: object = None) -> tuple[subprocess.CompletedProcess[str], dict, str, list[str]]:
+	"""Run the intake for heal issue #42 failing its own plan run.
+
+	*labels* become the report payload's issue labels (``None`` drops the
+	payload's ``labels`` field entirely). A non-``None`` *raw_labels* is
+	written to the payload's ``labels`` field verbatim instead, so a
+	malformed value can be injected. Returns the intake result, the
+	fake-gh state, the heal fingerprint and every ``level|text`` line the
+	stubbed ``tg_send_msg`` recorded.
+	"""
 	first, _state_first, _ = _run_intake(_phase_payload(repo=SELF_REPO), _plan_intake_state(repo=SELF_REPO), diagnosis=DIAG_WORKFLOW_DEFECT)
 	fp = re.search(r"fingerprint fp=([0-9a-f]{64})", first.stdout).group(1)
 	heal_issue = _sourced_heal_issue(42, state="open", fp=fp, source=f"{SELF_REPO}#6208")
-	body = heal_issue["body"]
-	payload = _phase_payload(repo=SELF_REPO, issue=_issue(body=body, labels=["ai:planning", heal.HEAL_LABEL]))
+	payload = _phase_payload(repo=SELF_REPO, issue=_issue(body=heal_issue["body"], labels=labels or []))
+	if raw_labels is not None:
+		payload["labels"] = raw_labels
+	elif labels is None:
+		payload.pop("labels", None)
 	state = _plan_intake_state(repo=SELF_REPO, heal_issues=[heal_issue])
-	result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	tg_dir = Path(tempfile.mkdtemp(prefix="heal-tg-"))
+	try:
+		def setup(tmp: Path, work: Path) -> None:
+			(work / "scripts" / "tg_helpers.sh").write_text(
+				f'tg_send_msg() {{ printf \'%s|%s\\n\' "${{2:-}}" "$1" >> {str(tg_dir / "calls.txt")!r}; }}\n', encoding="utf-8")
+		result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=setup)
+		calls_file = tg_dir / "calls.txt"
+		calls = calls_file.read_text(encoding="utf-8").splitlines() if calls_file.exists() else []
+	finally:
+		shutil.rmtree(tg_dir, ignore_errors=True)
+	return result, state_after, fp, calls
+
+
+def _heal_self_escalation_alerts(calls: list[str]) -> list[str]:
+	return [line for line in calls if line.startswith("CRITICAL|") and "heal issue" in line and "failed its own plan run" in line]
+
+
+def test_intake_heal_self_escalation_alerts_once() -> None:
+	# Issue #9248: heal issue #9200 sent a CRITICAL alert on each of its four
+	# self-failures. Once the payload shows the escalated label, a repeat still
+	# re-adds the label, logs `escalate` and posts the occurrence, but replaces
+	# the alert with a stable `escalate_repeat ... alert=suppressed` line.
+	result, state_after, fp, calls = _run_heal_self_escalation_intake(["ai:planning", heal.HEAL_LABEL, heal.ESCALATED_LABEL])
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert f"WORKFLOW_HEAL escalate reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed" in result.stdout
+	assert f"WORKFLOW_HEAL escalate_repeat reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed alert=suppressed" in result.stdout
+	assert not [line for line in calls if line.startswith("CRITICAL|")], calls
+	assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
+	assert any(c["path"] == f"repos/{SELF_REPO}/issues/42/comments" for c in state_after["comments_posted"])
+	# Fail open: with no label list in the payload the alert is sent as before.
+	result, state_after, fp, calls = _run_heal_self_escalation_intake(None)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL escalate reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed" in result.stdout
+	assert "escalate_repeat" not in result.stdout
+	assert len(_heal_self_escalation_alerts(calls)) == 1, calls
+	assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
+	# Fail open on a malformed label list too: a bare string (not a list) and
+	# object entries are not a readable label list: validate-payload
+	# (workflow_failure_heal.py) keeps only string entries, so the escalated
+	# label never reaches the intake's jq check and the alert is still sent.
+	# A dict keyed by the label itself survives validate-payload as its keys,
+	# so the intake also requires the raw report's labels to be an array.
+	for malformed in (heal.ESCALATED_LABEL, [{"name": heal.ESCALATED_LABEL}], {"name": heal.ESCALATED_LABEL}, {heal.ESCALATED_LABEL: True}):
+		result, state_after, fp, calls = _run_heal_self_escalation_intake(None, raw_labels=malformed)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"WORKFLOW_HEAL escalate reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed" in result.stdout
+		assert "escalate_repeat" not in result.stdout, malformed
+		assert len(_heal_self_escalation_alerts(calls)) == 1, (malformed, calls)
+		# Only the dict keyed by the label would have suppressed without the
+		# raw-shape check, so only it logs the overturned suppression.
+		assert ("WORKFLOW_HEAL warn heal_self_labels_unreadable issue=42" in result.stdout) == (malformed == {heal.ESCALATED_LABEL: True}), malformed
+		assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
+
+
+def test_intake_escalates_a_heal_issue_that_fails_its_own_run() -> None:
+	# A heal issue (#6413-style, in this repository) whose plan run fails with
+	# the failure it was filed for: the pipeline cannot run its own fix. The
+	# first escalation sends exactly one CRITICAL alert (issue #9248).
+	result, state_after, fp, calls = _run_heal_self_escalation_intake(["ai:planning", heal.HEAL_LABEL])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL escalate reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed" in result.stdout
+	assert "escalate_repeat" not in result.stdout
+	assert len(_heal_self_escalation_alerts(calls)) == 1, calls
+	assert len([line for line in calls if line.startswith("CRITICAL|")]) == 1, calls
+	payload = _phase_payload(repo=SELF_REPO, issue=_issue(body=_sourced_heal_issue(42, state="open", fp=fp, source=f"{SELF_REPO}#6208")["body"], labels=["ai:planning", heal.HEAL_LABEL]))
 	assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
 	assert "issues_created" not in state_after
 	assert any(c["path"] == f"repos/{SELF_REPO}/issues/42/comments" for c in state_after["comments_posted"])
@@ -7556,6 +8049,42 @@ def test_non_retryable_route_explains_sandbox_excluded_editor_stop() -> None:
 	assert "review editor sandbox does not admit" in body
 	assert "conflicted path(s) could not be read" not in body
 	assert body.rstrip().endswith(f"{NR_DIAG_MARKER_PREFIX} pr=4174 head={SHA_B} reason={SANDBOX_EXCLUDED_REASON} -->")
+
+
+def test_provenance_accepts_a_green_sandbox_excluded_run_bound_by_its_trusted_marker() -> None:
+	"""PR #9112 / intake run 42583232747: the #8321 marker run and the cap run both end
+	`success`, so the cap report was rejected as no_verified_runs and never diagnosed."""
+	cap_ref = _autofix_payload()["run_refs"][0]
+	payload = heal.validate_payload(_autofix_payload(
+		failure_reason="identical_failure_cap",
+		run_refs=[{**cap_ref, "run_id": "801", "url": f"https://github.com/{CONSUMER_REPO}/actions/runs/801"}, cap_ref],
+	))
+	marker_run = _provenance_run(801, path="ai-review.yml", conclusion="success", event="pull_request")
+	cap_run = _provenance_run(500, path="ai-review.yml", conclusion="success", pull_requests=[{"number": 4174}])
+
+	def check(comment: dict, run: dict = marker_run) -> dict:
+		return heal.verify_run_provenance(payload, runs={"801": run, "500": cap_run}, comments=[comment], trusted_login=NR_LOGIN, self_repo=SELF_REPO)
+
+	trusted = _sandbox_excluded_summary_comment(head=SHA_B, author=NR_LOGIN)
+	verdict = check(trusted)
+	assert verdict["status"] == "ok" and [ref["run_id"] for ref in verdict["run_refs"]] == ["801"]
+	assert verdict["rejections"] == [{"run_id": "500", "reason": "not_failed"}] and verdict["marker_head_run_ids"] == ["801"]
+	routed = heal.non_retryable_route(dict(payload, run_refs=verdict["run_refs"]), comments=[trusted], trusted_login=NR_LOGIN)
+	assert routed["route"] is True and routed["reason"] == SANDBOX_EXCLUDED_REASON
+	# Before the fix this was the outcome for every such report; it still is
+	# whenever the marker does not bind this run, head and reason.
+	retryable_marker = heal.render_failure_marker(SHA_B, "workflow_failure", FP_HEX, False, "801", None)
+	for comment, run in (
+		(_sandbox_excluded_summary_comment(head=SHA_B, author="attacker"), marker_run),
+		(_sandbox_excluded_summary_comment(head=SHA_A, author=NR_LOGIN), marker_run),
+		(_sandbox_excluded_summary_comment(head=SHA_B, run="802", author=NR_LOGIN), marker_run),
+		(dict(trusted, body=trusted["body"] + "\n\nquoted after the marker"), marker_run),
+		({"author_login": NR_LOGIN, "body": "AI review/autofix failed\n\n" + retryable_marker}, marker_run),
+		(trusted, dict(marker_run, conclusion="cancelled")),
+	):
+		assert check(comment, run)["reason"] == "no_verified_runs", comment
+	# The green-run exemption never relaxes the workflow-path check.
+	assert check(trusted, dict(marker_run, path=".github/workflows/evil.yml"))["rejections"][0] == {"run_id": "801", "reason": "unexpected_workflow_path"}
 
 
 def test_skip_reason_and_label_suppression_for_non_retryable_diagnosis() -> None:
@@ -10055,6 +10584,784 @@ def test_synced_check_issue_and_occurrence_carry_no_free_text() -> None:
 	assert heal.check_synced_check_managed_paths(payload["paths"], {}) == "release_unavailable"
 
 
+# --- phase failure-fingerprint markers (stuck-states P3a, Refs #8291) ---------------
+
+_PFF_RUNNER = "GitHub Actions 7"
+
+
+def _pff_jobs(step: str = "Run Codex planning", runner: str = _PFF_RUNNER) -> dict:
+	return {
+		"jobs": [
+			{"id": 11, "runner_name": "GitHub Actions 1", "steps": [{"name": "Other job step", "conclusion": "failure"}]},
+			{
+				"id": 22,
+				"runner_name": runner,
+				"steps": [
+					{"name": "Checkout repository", "conclusion": "success"},
+					{"name": "Soft step", "conclusion": "success"},
+					{"name": step, "conclusion": "failure"},
+					{"name": "Comment on issue failure", "conclusion": None},
+				],
+			},
+		]
+	}
+
+
+def _pff_annotations(message: str = "codex planning failed for /tmp/run-123/x at 2026-11-03 (sha deadbeefcafe0123456789abcdef012345678901)") -> list:
+	return [
+		{"annotation_level": "warning", "message": "just a warning"},
+		{"annotation_level": "failure", "message": "Process completed with exit code 1."},
+		{"annotation_level": "failure", "message": message + "\nsecond line"},
+	]
+
+
+def _pff(**overrides) -> dict:
+	kwargs = {"phase": "plan", "run_id": "123456789", "runner_name": _PFF_RUNNER, "jobs": _pff_jobs(), "annotations": _pff_annotations()}
+	kwargs.update(overrides)
+	return heal.phase_failure_fingerprint(**kwargs)
+
+
+def _pff_orchestrate_lib():
+	import importlib
+
+	if str(SCRIPTS_DIR) not in sys.path:
+		sys.path.append(str(SCRIPTS_DIR))
+	return importlib.import_module("orchestrate_lib")
+
+
+def test_phase_failure_fingerprint_is_stable_across_volatile_tokens() -> None:
+	first = _pff()
+	second = _pff(
+		run_id="987654321",
+		annotations=_pff_annotations("codex planning failed for /tmp/run-999/y at 2027-01-09 (sha 0123456789abcdef0123456789abcdef01234567)"),
+	)
+	assert first["reason"] == "ok" and first["error_present"] is True
+	assert re.fullmatch(r"[0-9a-f]{12}", first["fp"])
+	assert first["fp"] == second["fp"]
+	assert first["marker"] == f"<!-- AI_FAILURE_FINGERPRINT_V1 phase=plan fp={first['fp']} run=123456789 -->"
+	assert second["marker"].endswith("run=987654321 -->")
+	# Material is phase|lowercased step|normalized first error (D4).
+	expected = hashlib.sha256(
+		"|".join(["plan", "run codex planning", heal.normalize_error_line(_pff_annotations()[2]["message"].split("\n")[0])]).encode("utf-8")
+	).hexdigest()[:12]
+	assert first["fp"] == expected
+
+
+def test_phase_failure_fingerprint_differs_by_step_error_and_phase() -> None:
+	base = _pff()["fp"]
+	assert _pff(jobs=_pff_jobs("Parse plan output"))["fp"] != base
+	assert _pff(annotations=_pff_annotations("a completely different failure"))["fp"] != base
+	assert _pff(phase="clarify")["fp"] != base
+	assert _pff(phase="clarify")["marker"].startswith("<!-- AI_FAILURE_FINGERPRINT_V1 phase=clarify ")
+
+
+def test_phase_failure_fingerprint_skips_generic_annotations_and_falls_back() -> None:
+	generic_only = [
+		{"annotation_level": "failure", "message": "Process completed with exit code 2."},
+		{"annotation_level": "failure", "message": "Merge failed. Aborting."},
+	]
+	none = _pff(annotations=[])
+	generic = _pff(annotations=generic_only)
+	malformed = _pff(annotations={"not": "a list"})
+	assert none["error_present"] is False and none["reason"] == "ok" and none["marker"]
+	assert none["fp"] == generic["fp"] == malformed["fp"]
+	assert generic["error_present"] is False
+	expected = hashlib.sha256(
+		f"plan|run codex planning|{heal.PHASE_FAILURE_FINGERPRINT_NO_ERROR}".encode()
+	).hexdigest()[:12]
+	assert none["fp"] == expected
+
+
+@pytest.mark.parametrize(
+	"jobs",
+	[
+		None,
+		[],
+		{"jobs": "nope"},
+		{"jobs": [{"runner_name": "someone else", "steps": [{"name": "x", "conclusion": "failure"}]}]},
+		{"jobs": [{"runner_name": _PFF_RUNNER, "steps": [{"name": "x", "conclusion": "success"}]}]},
+		{"jobs": [{"runner_name": _PFF_RUNNER, "steps": "bad"}]},
+		{"jobs": [{"runner_name": _PFF_RUNNER, "steps": [{"name": 7, "conclusion": "failure"}]}]},
+	],
+)
+def test_phase_failure_fingerprint_unknown_step_emits_no_marker(jobs) -> None:
+	result = _pff(jobs=jobs)
+	assert result["marker"] == "" and result["fp"] == "" and result["reason"] == "step_unknown"
+
+
+def test_phase_failure_fingerprint_rejects_bad_phase_and_run_id() -> None:
+	assert _pff(phase="implement")["reason"] == "invalid_phase"
+	assert _pff(phase=None)["reason"] == "invalid_phase"
+	for bad in ("0", "abc", "1" * 21, "", "12 34", True, None, "-5"):
+		result = _pff(run_id=bad)
+		assert result["reason"] == "invalid_run_id" and result["marker"] == "", bad
+	assert _pff(run_id=42)["marker"].endswith("run=42 -->")
+
+
+def test_phase_failure_fingerprint_never_leaks_step_or_error_text() -> None:
+	result = _pff(jobs=_pff_jobs("Secret Step Name ghp_abc"), annotations=_pff_annotations("leaky token ghp_abcdef payload"))
+	blob = json.dumps(result)
+	for needle in ("Secret", "ghp_", "leaky", "payload"):
+		assert needle not in blob
+
+
+def test_phase_failure_fingerprint_marker_regex_matches_consumer() -> None:
+	lib = _pff_orchestrate_lib()
+	assert heal.PHASE_FAILURE_FINGERPRINT_MARKER_RE.pattern == lib.FAILURE_FINGERPRINT_MARKER_RE.pattern
+	assert set(heal.PHASE_FAILURE_FINGERPRINT_PHASES) <= set(lib.FAILURE_FINGERPRINT_PHASE_LABELS)
+	for phase in heal.PHASE_FAILURE_FINGERPRINT_PHASES:
+		marker = _pff(phase=phase)["marker"]
+		assert lib.FAILURE_FINGERPRINT_MARKER_RE.fullmatch(marker)
+		assert marker.startswith(lib.FAILURE_FINGERPRINT_MARKER_PREFIX)
+
+
+def test_phase_failure_fingerprint_markers_trip_the_breaker_end_to_end() -> None:
+	lib = _pff_orchestrate_lib()
+	login = "pipeline-bot"
+
+	def comment(cid: int, marker: str, author: str = login) -> dict:
+		return {
+			"id": cid,
+			"user": {"login": author},
+			"created_at": f"2026-11-03T00:0{cid}:00Z",
+			"body": "AI planning workflow failed.\n\nWorkflow: AI Plan\n\n" + marker,
+		}
+
+	same = [comment(1, _pff(run_id="101")["marker"]), comment(2, _pff(run_id="202")["marker"])]
+	decision = lib.evaluate_failure_fingerprint_breaker(same, login, 2, True)
+	assert decision["decision"] == "trip" and decision["phase"] == "plan"
+	assert decision["runs"] == ["101", "202"]
+	assert lib.failure_fingerprint_label_for_phase("plan") == "ai:plan-failed"
+	different = [comment(1, _pff(run_id="101")["marker"]), comment(2, _pff(run_id="202", jobs=_pff_jobs("Parse plan output"))["marker"])]
+	assert lib.evaluate_failure_fingerprint_breaker(different, login, 2, True)["decision"] != "trip"
+	# A re-run of the same run id counts once.
+	rerun = [comment(1, _pff(run_id="101")["marker"]), comment(2, _pff(run_id="101")["marker"])]
+	assert lib.evaluate_failure_fingerprint_breaker(rerun, login, 2, True)["decision"] != "trip"
+
+
+def _pff_cli(tmp_path: Path, *extra: str) -> tuple[int, dict]:
+	proc = subprocess.run(
+		[sys.executable, str(LIB_PATH), "phase-failure-fingerprint", *extra],
+		check=False,
+		capture_output=True,
+		text=True,
+		env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+		cwd=tmp_path,
+	)
+	fields = dict(line.split("=", 1) for line in proc.stdout.splitlines() if "=" in line)
+	return proc.returncode, fields
+
+
+def test_phase_failure_fingerprint_cli_prints_key_values_and_fails_open(tmp_path: Path) -> None:
+	jobs = tmp_path / "jobs.json"
+	jobs.write_text(json.dumps(_pff_jobs()), encoding="utf-8")
+	annotations = tmp_path / "ann.json"
+	annotations.write_text(json.dumps(_pff_annotations()), encoding="utf-8")
+	base = ("--phase", "plan", "--run-id", "555", "--runner-name", _PFF_RUNNER, "--jobs-json")
+	rc, fields = _pff_cli(tmp_path, *base, str(jobs), "--annotations-json", str(annotations))
+	assert rc == 0 and fields["reason"] == "ok" and fields["error_present"] == "1"
+	assert fields["marker"] == _pff(run_id="555")["marker"] and fields["fp"] == _pff()["fp"]
+	assert set(fields) == {"marker", "fp", "error_present", "reason"}
+	# A supplied annotations file the workflow could not fetch (deleted, garbled
+	# or not a list) posts no marker, so an annotations outage cannot merge
+	# distinct failures into one phase+step fingerprint.
+	not_list = tmp_path / "ann_dict.json"
+	not_list.write_text(json.dumps({"message": "Server Error"}), encoding="utf-8")
+	garbled = tmp_path / "ann_bad.json"
+	garbled.write_text("{not json", encoding="utf-8")
+	for path in (tmp_path / "missing.json", not_list, garbled):
+		rc, fields = _pff_cli(tmp_path, *base, str(jobs), "--annotations-json", str(path))
+		assert rc == 0 and fields["reason"] == "annotations_unavailable" and fields["marker"] == "" and fields["fp"] == "", path
+	# No job matched the runner, so the workflow never wrote the annotations
+	# file: the reason names the unknown step, not an annotations outage.
+	rc, fields = _pff_cli(tmp_path, "--phase", "plan", "--run-id", "555", "--runner-name", "someone else", "--jobs-json", str(jobs), "--annotations-json", str(tmp_path / "missing.json"))
+	assert rc == 0 and fields["reason"] == "step_unknown" and fields["marker"] == ""
+	empty = tmp_path / "ann_empty.json"
+	empty.write_text("[]", encoding="utf-8")
+	rc, fields = _pff_cli(tmp_path, *base, str(jobs), "--annotations-json", str(empty))
+	assert rc == 0 and fields["reason"] == "ok" and fields["error_present"] == "0" and fields["marker"]
+	rc, fields = _pff_cli(tmp_path, *base, str(jobs))
+	assert rc == 0 and fields["error_present"] == "0" and fields["marker"]
+	bad = tmp_path / "bad.json"
+	bad.write_text("{not json", encoding="utf-8")
+	for path in (bad, tmp_path / "absent.json"):
+		rc, fields = _pff_cli(tmp_path, *base, str(path), "--annotations-json", str(annotations))
+		assert rc == 0 and fields["marker"] == "" and fields["reason"] == "jobs_unavailable"
+	rc, fields = _pff_cli(tmp_path, "--phase", "clarify", "--run-id", "0", "--runner-name", _PFF_RUNNER, "--jobs-json", str(jobs))
+	assert rc == 0 and fields["marker"] == "" and fields["reason"] == "invalid_run_id"
+
+
+_PFF_WORKFLOWS = {
+	"plan": REPO_ROOT / ".github" / "workflows" / "plan.yml",
+	"clarify": REPO_ROOT / ".github" / "workflows" / "clarify.yml",
+}
+
+
+def _pff_failure_step(phase: str) -> dict:
+	doc = yaml.safe_load(_PFF_WORKFLOWS[phase].read_text(encoding="utf-8"))
+	steps = [step for job in doc["jobs"].values() for step in (job.get("steps") or []) if step.get("name") == "Comment on issue failure"]
+	assert len(steps) == 1, phase
+	return steps[0]
+
+
+@pytest.mark.parametrize("phase", ["plan", "clarify"])
+def test_phase_failure_comment_steps_append_fingerprint_marker(phase: str) -> None:
+	step = _pff_failure_step(phase)
+	env = step["env"]
+	assert env["STALL_FINGERPRINT_BREAKER_ENABLED"] == "${{ vars.STALL_FINGERPRINT_BREAKER_ENABLED || 'true' }}"
+	assert env["FP_JOB_STATUS"] == "${{ job.status }}"
+	assert env["FP_RUN_ID"] == "${{ github.run_id }}"
+	assert env["FP_RUN_ATTEMPT"] == "${{ github.run_attempt }}"
+	assert env["FP_REPOSITORY"] == "${{ github.repository }}"
+	assert env["GH_TOKEN"] == "${{ secrets.GH_PAT }}"
+	run = step["run"]
+	assert f'python3 "${{FP_HELPER}}" phase-failure-fingerprint --phase {phase} ' in run
+	assert 'FP_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workflow_failure_heal.py"' in run
+	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true' in run
+	assert 'if [ "${FP_JOB_STATUS:-}" = "cancelled" ]; then' in run
+	assert 'elif [ "${FP_JOB_STATUS:-}" != "failure" ]; then' in run
+	assert 'elif [ "${STALL_FINGERPRINT_BREAKER_ENABLED:-true}" != "true" ]; then' in run
+	# The jobs call sits after every skip gate, so a disabled or cancelled run
+	# makes no extra API call.
+	assert run.index("STALL_FINGERPRINT_BREAKER_ENABLED:-true") < run.index("/jobs?per_page=100")
+	assert run.index('"${FP_JOB_STATUS:-}" != "failure"') < run.index("/jobs?per_page=100")
+	assert f"PHASE_FAILURE_FINGERPRINT phase={phase} " in run
+	assert run.count("FP_MARKER_SUFFIX=$'\\n\\n'") == 1
+	# The marker goes last, after the body prefix the heal streak counter reads.
+	prefix = heal.PHASE_FAILURE_COMMENT_PREFIXES[phase][0]
+	if phase == "plan":
+		assert "-f body=$'" + prefix in run and '${PLAN_CANCELLED_SUFFIX}${FP_MARKER_SUFFIX}"' in run
+	else:
+		assert f'REASON="{prefix}' in run and '-f body="${REASON}${FP_MARKER_SUFFIX}"' in run
+	assert run.index("PHASE_FAILURE_FINGERPRINT phase=") < run.index("/issues/${ISSUE_NUMBER}/comments")
+
+
+def _pff_run_step(tmp_path: Path, phase: str, *, job_status: str = "failure", enabled: str = "true", jobs_fail: bool = False, annotations_fail: bool = False) -> tuple[subprocess.CompletedProcess, str, str]:
+	run = _pff_failure_step(phase)["run"]
+	values = {
+		"github.server_url": "https://github.example",
+		"github.repository": "o/r",
+		"github.run_id": "4242",
+		"job.status": job_status,
+	}
+	script = re.sub(r"\$\{\{\s*([a-z_.]+)\s*\}\}", lambda m: values[m.group(1)], run)
+	assert "${{" not in script
+	support = tmp_path / "support"
+	support.mkdir(exist_ok=True)
+	shutil.copy(LIB_PATH, support / "workflow_failure_heal.py")
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir(exist_ok=True)
+	(tmp_path / "jobs.json").write_text(json.dumps(_pff_jobs()), encoding="utf-8")
+	(tmp_path / "ann.json").write_text(json.dumps(_pff_annotations()), encoding="utf-8")
+	stub = bin_dir / "gh"
+	stub.write_text(
+		textwrap.dedent(
+			"""\
+			#!/usr/bin/env bash
+			printf '%s\\n' "$2" >> "${GH_STUB_LOG}"
+			case "$2" in
+				*/jobs\\?*) [ "${GH_STUB_JOBS_FAIL:-0}" = 1 ] && exit 1; cat "${GH_STUB_DIR}/jobs.json" ;;
+				*/annotations\\?*) [ "${GH_STUB_ANN_FAIL:-0}" = 1 ] && exit 1; cat "${GH_STUB_DIR}/ann.json" ;;
+				*/comments) for a in "$@"; do case "$a" in body=*) printf '%s' "${a#body=}" > "${GH_STUB_DIR}/body.txt" ;; esac; done ;;
+			esac
+			"""
+		),
+		encoding="utf-8",
+	)
+	stub.chmod(0o755)
+	env = {
+		"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+		"HOME": str(tmp_path),
+		"GH_STUB_LOG": str(tmp_path / "gh.log"),
+		"GH_STUB_DIR": str(tmp_path),
+		"GH_STUB_JOBS_FAIL": "1" if jobs_fail else "0",
+		"GH_STUB_ANN_FAIL": "1" if annotations_fail else "0",
+		"SUPPORT_SCRIPTS_DIR": str(support),
+		"RUNNER_TEMP": str(tmp_path),
+		"RUNNER_NAME": _PFF_RUNNER,
+		"ISSUE_NUMBER": "77",
+		"ISSUE_URL": "https://github.example/o/r/issues/77",
+		"PLAN_FAILURE_CONTEXT": "ctx",
+		"STALL_FINGERPRINT_BREAKER_ENABLED": enabled,
+		"FP_JOB_STATUS": job_status,
+		"FP_RUN_ID": "4242",
+		"FP_RUN_ATTEMPT": "1",
+		"FP_REPOSITORY": "o/r",
+	}
+	proc = subprocess.run(["bash", "-c", script], check=False, capture_output=True, text=True, env=env, cwd=tmp_path)
+	body_path = tmp_path / "body.txt"
+	log_path = tmp_path / "gh.log"
+	return proc, body_path.read_text(encoding="utf-8") if body_path.exists() else "", log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+
+
+@pytest.mark.parametrize("phase", ["plan", "clarify"])
+def test_phase_failure_comment_step_smoke_with_stub_gh(tmp_path: Path, phase: str) -> None:
+	if shutil.which("jq") is None:
+		pytest.skip("jq is not installed")
+	(tmp_path / "ok").mkdir()
+	proc, body, log = _pff_run_step(tmp_path / "ok", phase)
+	assert proc.returncode == 0, proc.stderr
+	marker = _pff(phase=phase, run_id="4242")["marker"]
+	assert body.startswith(heal.PHASE_FAILURE_COMMENT_PREFIXES[phase][0])
+	assert body.endswith("\n\n" + marker) and body.count("AI_FAILURE_FINGERPRINT_V1") == 1
+	assert "check-runs/22/annotations" in log and "attempts/1/jobs" in log
+	assert f"PHASE_FAILURE_FINGERPRINT phase={phase} issue=77 run=4242 outcome=emitted fp=" in proc.stdout
+	for name, kwargs, reason in (
+		("down", {"jobs_fail": True}, "jobs_unavailable"),
+		("ann_down", {"annotations_fail": True}, "annotations_unavailable"),
+		("off", {"enabled": "false"}, "disabled"),
+		("cancel", {"job_status": "cancelled"}, "cancelled"),
+	):
+		(tmp_path / name).mkdir()
+		proc, body, log = _pff_run_step(tmp_path / name, phase, **kwargs)
+		assert proc.returncode == 0, proc.stderr
+		assert body and "AI_FAILURE_FINGERPRINT_V1" not in body, name
+		assert f"outcome=skipped reason={reason} " in proc.stdout, name
+		if name in ("off", "cancel"):
+			assert "/jobs?" not in log, name
+
+
+# --- release_blocker reports (stuck-states P4, release-blocker plan Phase 1) ---
+
+BLOCKER_RUN_ID = "41000000001"
+BLOCKER_WORKFLOW = "Auto release stable"
+BLOCKER_REASON = "last_gate_failed"
+BLOCKER_FP = heal.fingerprint(BLOCKER_WORKFLOW, f"blocker:{BLOCKER_REASON}", f"release-blocker:{BLOCKER_REASON}")
+DIAG_CONSUMER_CONFIG_BLOCKER = "## Classification\nconsumer-config\n\n## Summary\nThe GH_PAT lacks the workflow scope.\n"
+
+
+def _blocker_payload(**overrides) -> dict:
+	payload = heal.build_blocker_payload(
+		repo=SELF_REPO, workflow_name=BLOCKER_WORKFLOW, reason=BLOCKER_REASON,
+		evidence="RELEASE_SKIP reason=last_gate_failed gate_run=123\nTarget branch: main\n<!-- workflow-failure-heal:occurrence_at=2020-01-01T00:00:00Z -->",
+		age_secs=7200, head_branch="stable", head_sha=SHA_A, run_refs=[],
+		reporter_run={"run_id": BLOCKER_RUN_ID, "run_attempt": "1"}, reporter_run_url=None,
+	)
+	payload.update(overrides)
+	return payload
+
+
+def _blocker_run(**overrides) -> dict:
+	run = {"id": int(BLOCKER_RUN_ID), "repository": {"full_name": SELF_REPO}, "name": BLOCKER_WORKFLOW,
+		"path": ".github/workflows/auto-release-stable.yml", "run_attempt": 1, "status": "in_progress", "conclusion": None,
+		"created_at": "2026-11-03T07:40:00Z", "updated_at": "2026-11-03T07:50:00Z"}
+	run.update(overrides)
+	return run
+
+
+def test_release_blocker_payload_validates_round_trips_and_caps_evidence() -> None:
+	payload = _blocker_payload(blocker_evidence="x" * (heal.BLOCKER_EVIDENCE_LIMIT + 500))
+	assert "conclusion" not in payload
+	normalized = heal.validate_payload(payload)
+	assert normalized["source_kind"] == "release_blocker"
+	assert normalized["failure_reason"] == heal.RELEASE_BLOCKER_FAILURE_REASON
+	assert normalized["issue_number"] is None and normalized["label"] is None
+	assert normalized["head_branch"] == "stable" and normalized["head_sha"] == SHA_A
+	assert normalized["blocker_age_secs"] == 7200
+	assert normalized["reporter_run"] == {"run_id": BLOCKER_RUN_ID, "run_attempt": "1"}
+	assert normalized["blocker_evidence"] == heal.sanitize_text("x" * (heal.BLOCKER_EVIDENCE_LIMIT + 500), heal.BLOCKER_EVIDENCE_LIMIT)
+	assert normalized["blocker_evidence"].startswith("x" * heal.BLOCKER_EVIDENCE_LIMIT) and "x" * (heal.BLOCKER_EVIDENCE_LIMIT + 1) not in normalized["blocker_evidence"]
+	assert heal.unwrap_dispatch(heal.wrap_dispatch(normalized)["client_payload"])["blocker_reason"] == BLOCKER_REASON
+	# The intake re-validates the normalised payload (compose-issue / compose-occurrence).
+	assert heal.validate_payload(normalized) == normalized
+	with pytest.raises(ValueError):
+		heal.validate_payload(dict(normalized, issue_excerpt="free text"))
+	# The builder drops malformed optional values instead of failing.
+	built = heal.build_blocker_payload(repo=SELF_REPO, workflow_name=BLOCKER_WORKFLOW, reason=BLOCKER_REASON, evidence="",
+		age_secs="soon", head_branch="main", head_sha="nope", run_refs=["7", {"run_id": 8}, "bad", 9, 10],
+		reporter_run={"run_id": "x"}, reporter_run_url=None)
+	checked = heal.validate_payload(built)
+	assert checked["head_sha"] is None and checked["blocker_age_secs"] is None and checked["reporter_run"] is None
+	assert [ref["run_id"] for ref in checked["run_refs"]] == ["7", "8", "9"]
+
+
+@pytest.mark.parametrize("overrides", [
+	{"head_branch": None},
+	{"head_branch": "feature/x"},
+	{"head_branch": "release"},
+	{"blocker_reason": "Bad Reason"},
+	{"blocker_reason": "x" * 81},
+	{"blocker_reason": None},
+	{"workflow_name": ""},
+	{"issue_excerpt": "free text"},
+	{"label": "ai:needs-human"},
+	{"head_sha": "zz"},
+	{"blocker_age_secs": -1},
+	{"run_refs": [{"repo": SELF_REPO, "run_id": str(n)} for n in range(1, 6)]},
+])
+def test_release_blocker_payload_rejects_malformed_fields(overrides: dict) -> None:
+	with pytest.raises(ValueError):
+		heal.validate_payload(_blocker_payload(**overrides))
+
+
+def test_release_blocker_builder_refuses_bad_reason_or_branch() -> None:
+	with pytest.raises(ValueError):
+		heal.build_blocker_payload(repo=SELF_REPO, workflow_name=BLOCKER_WORKFLOW, reason="Nope!", evidence="", age_secs=1,
+			head_branch="stable", head_sha=None, run_refs=[], reporter_run=None, reporter_run_url=None)
+	with pytest.raises(ValueError):
+		heal.build_blocker_payload(repo=SELF_REPO, workflow_name=BLOCKER_WORKFLOW, reason=BLOCKER_REASON, evidence="", age_secs=1,
+			head_branch="develop", head_sha=None, run_refs=[], reporter_run=None, reporter_run_url=None)
+
+
+def test_release_blocker_build_payload_cli(tmp_path: Path) -> None:
+	evidence = tmp_path / "evidence.txt"
+	evidence.write_text("gate skipped\n", encoding="utf-8")
+	result = subprocess.run([sys.executable, str(SCRIPTS_DIR / "workflow_failure_heal.py"), "build-blocker-payload",
+		"--repo", SELF_REPO, "--workflow-name", BLOCKER_WORKFLOW, "--reason", BLOCKER_REASON, "--evidence-file", str(evidence),
+		"--age-secs", "3600", "--head-branch", "main", "--run-id", "55", "--reporter-run-id", BLOCKER_RUN_ID, "--reporter-run-attempt", "2"],
+		capture_output=True, text=True, check=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+	payload = json.loads(result.stdout)
+	normalized = heal.validate_payload(payload)
+	assert normalized["head_branch"] == "main" and normalized["blocker_evidence"] == "gate skipped\n"
+	assert normalized["reporter_run"] == {"run_id": BLOCKER_RUN_ID, "run_attempt": "2"}
+	assert normalized["reporter_run_url"] == f"https://github.com/{SELF_REPO}/actions/runs/{BLOCKER_RUN_ID}"
+	assert [ref["run_id"] for ref in normalized["run_refs"]] == ["55"]
+
+
+def test_release_blocker_fingerprint_keys_on_the_reason_only() -> None:
+	text = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	start = text.index('elif [ "${SOURCE_KIND}" = "release_blocker" ] && [ "${READ_JOB_LOG_COUNT}" -eq 0 ]; then')
+	branch = text[start:text.index('elif [ "${SOURCE_KIND}" = "validation_failure" ]; then', start)]
+	assert 'FIRST_WORKFLOW_NAME="${PAYLOAD_WORKFLOW_NAME}"' in branch
+	assert 'FIRST_FAILING_STEP="blocker:${BLOCKER_REASON}"' in branch
+	assert 'SIGNATURE="release-blocker:${BLOCKER_REASON}"' in branch
+	# Before the generic log-signature branch, so a readable gate log still wins.
+	assert start < text.index('elif [ "${#LOG_FILES[@]}" -gt 0 ] && { [ "${READ_JOB_LOG_COUNT}" -gt 0 ]')
+	other = heal.fingerprint(BLOCKER_WORKFLOW, "blocker:candidate_stale", "release-blocker:candidate_stale")
+	assert BLOCKER_FP != other
+
+
+def test_release_blocker_reporter_run_verification() -> None:
+	payload = heal.validate_payload(_blocker_payload())
+	now = datetime(2026, 11, 3, 8, 0, tzinfo=timezone.utc)
+	ok = heal.verify_release_blocker_reporter_run(payload, _blocker_run(), max_age=3600, now=now)
+	assert ok["ok"] and ok["run_ref"] == f"{SELF_REPO}:{BLOCKER_RUN_ID}"
+	assert ok["scope_paths"] == list(heal.RELEASE_BLOCKER_PRODUCER_SCOPE_PATHS["auto-release-stable.yml"])
+	poller = heal.verify_release_blocker_reporter_run(dict(payload, workflow_name="Internal: AI Orchestrate Poller"),
+		_blocker_run(name="Internal: AI Orchestrate Poller", path=".github/workflows/internal-orchestrate-poll.yml"), max_age=3600, now=now)
+	assert poller["ok"] and "scripts/orchestrate_poll_process.sh" in poller["scope_paths"]
+	cases = {
+		"workflow_path_mismatch": _blocker_run(path=".github/workflows/ci.yml"),
+		"workflow_name_mismatch": _blocker_run(name="CI"),
+		"run_stale": _blocker_run(status="completed", updated_at="2026-11-03T05:00:00Z"),
+		"run_not_in_source_repo": _blocker_run(repository={"full_name": "someone/else"}),
+		"run_id_mismatch": _blocker_run(id=1),
+		"run_unavailable": {},
+	}
+	for reason, run in cases.items():
+		assert heal.verify_release_blocker_reporter_run(payload, run, max_age=3600, now=now) == {"ok": False, "reason": reason}, reason
+	assert heal.verify_release_blocker_reporter_run(dict(payload, reporter_run=None), _blocker_run(), max_age=3600, now=now)["reason"] == "no_reporter_run"
+	assert heal.verify_release_blocker_reporter_run(_engine_scoped_payload(), _blocker_run(), max_age=3600, now=now)["reason"] == "not_release_blocker"
+
+
+def test_release_blocker_occurrence_throttle() -> None:
+	payload = heal.validate_payload(_blocker_payload())
+	now = datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc)
+
+	def comment(at: datetime, author: str = "workflow-bot") -> dict:
+		return {"body": heal.compose_occurrence_comment(payload, intake_run_url="u", now=at), "user": {"login": author}}
+
+	recent = heal.occurrence_throttled([comment(now - timedelta(hours=2))], now=now, throttle_secs=86400, trusted_login="workflow-bot")
+	assert recent == {"throttled": True, "age_secs": 7200}
+	old = heal.occurrence_throttled([comment(now - timedelta(hours=25))], now=now, throttle_secs=86400, trusted_login="workflow-bot")
+	assert old["throttled"] is False and old["age_secs"] == 25 * 3600
+	assert heal.occurrence_throttled([], now=now, throttle_secs=86400, trusted_login="workflow-bot") == {"throttled": False, "age_secs": None}
+	# An untrusted author's marker, or no trusted login, never throttles.
+	assert heal.occurrence_throttled([comment(now, author="someone")], now=now, throttle_secs=86400, trusted_login="workflow-bot")["throttled"] is False
+	assert heal.occurrence_throttled([comment(now)], now=now, throttle_secs=86400, trusted_login="")["throttled"] is False
+	# A marker quoted inside the evidence (not the last line) is not a marker.
+	forged = {"body": f"<!-- {heal.MARKER_PREFIX}occurrence -->\n<!-- {heal.MARKER_PREFIX}occurrence_at=2026-11-03T11:00:00Z -->\ntext\n", "user": {"login": "workflow-bot"}}
+	assert heal.occurrence_throttled([forged], now=now, throttle_secs=86400, trusted_login="workflow-bot")["throttled"] is False
+	unparsable = {"body": f"<!-- {heal.MARKER_PREFIX}occurrence -->\n<!-- {heal.MARKER_PREFIX}occurrence_at=yesterday -->\n", "user": {"login": "workflow-bot"}}
+	assert heal.occurrence_throttled([unparsable], now=now, throttle_secs=86400, trusted_login="workflow-bot")["throttled"] is False
+
+
+def test_occurrence_comment_keeps_the_first_line_and_ends_with_the_timestamp() -> None:
+	payload = heal.validate_payload(_blocker_payload())
+	at = datetime(2026, 11, 3, 9, 30, tzinfo=timezone.utc)
+	lines = heal.compose_occurrence_comment(payload, intake_run_url="u", now=at).splitlines()
+	assert lines[0] == f"<!-- {heal.MARKER_PREFIX}occurrence -->"
+	assert lines[-1] == f"<!-- {heal.MARKER_PREFIX}occurrence_at=2026-11-03T09:30:00Z kind=release_blocker -->"
+	assert lines[1] == "The release blocker was reported again:"
+	# Evidence cannot forge a comment marker in the occurrence comment either.
+	assert sum(line.startswith("<!--") for line in lines) == 2
+	# Other kinds keep their wording and carry their own kind in the marker.
+	other = heal.compose_occurrence_comment(_engine_scoped_payload(), intake_run_url="u", now=at).splitlines()
+	assert other[1] == "Another occurrence of this failure was reported:"
+	assert other[-1] == f"<!-- {heal.MARKER_PREFIX}occurrence_at=2026-11-03T09:30:00Z kind=engine_fallback -->"
+
+
+def test_occurrence_throttle_ignores_other_kinds_markers_and_seeds_from_the_filed_issue() -> None:
+	now = datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc)
+	# A gate failure's workflow_run occurrence on a shared heal issue never throttles a blocker.
+	gate = {"body": heal.compose_occurrence_comment(_engine_scoped_payload(), intake_run_url="u", now=now - timedelta(hours=1)),
+		"user": {"login": "workflow-bot"}}
+	assert heal.occurrence_throttled([gate], now=now, throttle_secs=86400, trusted_login="workflow-bot") == {"throttled": False, "age_secs": None}
+	# A release_blocker issue the pipeline filed opens the window itself.
+	filed = {"author": "workflow-bot", "title": f"Release blocker: {BLOCKER_REASON} on stable ({BLOCKER_WORKFLOW})", "created_at": "2026-11-03T11:00:00Z"}
+	assert heal.occurrence_throttled([], now=now, throttle_secs=86400, trusted_login="workflow-bot", issue=filed) == {"throttled": True, "age_secs": 3600}
+	assert heal.occurrence_throttled([], now=now, throttle_secs=1800, trusted_login="workflow-bot", issue=filed)["throttled"] is False
+	# A gate issue, another author's issue, or no trusted login does not.
+	for issue, login in ((dict(filed, title="Workflow heal: gate failed"), "workflow-bot"), (dict(filed, author="someone"), "workflow-bot"), (filed, "")):
+		assert heal.occurrence_throttled([], now=now, throttle_secs=86400, trusted_login=login, issue=issue)["throttled"] is False
+
+
+def test_intake_release_blocker_first_repeat_after_filing_is_throttled(tmp_path: Path) -> None:
+	tg_log = tmp_path / "tg.log"
+	issue = _heal_issue(812, state="open", fp=BLOCKER_FP, created=datetime.now(timezone.utc) - timedelta(hours=1))
+	issue.update({"title": f"Release blocker: {BLOCKER_REASON} on stable ({BLOCKER_WORKFLOW})", "author": "workflow-bot"})
+	state = _intake_state(heal_issues=[issue])
+	state["comments"][f"repos/{SELF_REPO}/issues/812/comments"] = []
+	result, state, _ = _run_intake(_blocker_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT,
+		setup_git=_blocker_intake_setup(tg_log), scope_marker_guard=True, extra_env=SCOPE_GUARD_ON)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL duplicate_throttled existing_issue=812 existing_repo={SELF_REPO} fp={BLOCKER_FP} age=" in result.stdout
+	assert not state.get("comments_posted")
+	assert not [line for line in _tg_lines(tg_log) if "Release blocker" in line]
+
+
+def test_intake_release_blocker_read_failure_still_throttles_on_the_filed_issue(tmp_path: Path) -> None:
+	# The comment read fails, but the pipeline filed the issue within the window.
+	tg_log = tmp_path / "tg.log"
+	issue = _heal_issue(812, state="open", fp=BLOCKER_FP, created=datetime.now(timezone.utc) - timedelta(hours=1))
+	issue.update({"title": f"Release blocker: {BLOCKER_REASON} on stable ({BLOCKER_WORKFLOW})", "author": "workflow-bot"})
+	result, state, _ = _run_intake(_blocker_payload(), _intake_state(heal_issues=[issue], comments_fetch_fail=True), diagnosis=DIAG_WORKFLOW_DEFECT,
+		setup_git=_blocker_intake_setup(tg_log), scope_marker_guard=True, extra_env=SCOPE_GUARD_ON)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "warn occurrence_throttle_unavailable existing_issue=812" in result.stdout
+	assert f"WORKFLOW_HEAL duplicate_throttled existing_issue=812 existing_repo={SELF_REPO} fp={BLOCKER_FP} age=" in result.stdout
+	assert not state.get("comments_posted")
+	assert not [line for line in _tg_lines(tg_log) if "Release blocker" in line]
+
+
+def test_intake_release_blocker_consumer_app_defect_warns(tmp_path: Path) -> None:
+	tg_log = tmp_path / "tg.log"
+	state = _intake_state(run_details={BLOCKER_RUN_ID: _blocker_run()})
+	result, state, _ = _run_intake(_blocker_payload(), state, diagnosis=DIAG_CONSUMER_APP_SCOPE,
+		setup_git=_blocker_intake_setup(tg_log), scope_marker_guard=True, extra_env=SCOPE_GUARD_ON)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert len(state.get("issues_created") or []) == 1
+	assert any(f"Release blocker filed: {BLOCKER_REASON} on stable (" in line for line in _tg_lines(tg_log, "WARNING")), _tg_lines(tg_log)
+	assert not [line for line in _tg_lines(tg_log, "DEBUG") if "consumer-side defect" in line]
+
+
+def test_release_blocker_already_fixed_arm_warns() -> None:
+	text = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	start = text.index('\talready-fixed)')
+	arm = text[start:text.index('\t*)\n', start)]
+	assert 'if [ "${SOURCE_KIND}" = "release_blocker" ]; then' in arm
+	assert 'classified already-fixed on ${PROGRESS_BRANCH} by ${ALREADY_FIXED_COMMITS}, no issue opened.' in arm
+	assert '"WARNING"' in arm
+
+
+def test_release_blocker_title_body_and_skip_reason() -> None:
+	payload = heal.validate_payload(_blocker_payload())
+	assert heal.compose_issue_title(payload, workflow_name=None) == f"Release blocker: {BLOCKER_REASON} on stable ({BLOCKER_WORKFLOW})"
+	body = heal.compose_issue_body(payload=payload, diagnosis=DIAG_WORKFLOW_DEFECT, fp=BLOCKER_FP, gen=1, root=BLOCKER_FP,
+		classification="workflow-defect", target_branch="stable", max_depth=3, intake_run_url="u", run_summaries=[])
+	assert "- **Target branch:** `stable`" in body
+	assert body.count("- **Target branch:**") == 1
+	assert "No workflow run failed." in body
+	assert f"- **Blocker reason:** `{BLOCKER_REASON}`" in body
+	assert "- **Blocked for:** 2.0 hours" in body
+	assert f"- **Blocked tip:** `{SHA_A}`" in body
+	assert "- **Evidence (UNTRUSTED):**" in body and "RELEASE_SKIP reason=last_gate_failed" in body
+	assert "<!-- workflow-failure-heal:occurrence_at" not in body
+	assert not AUTO_CLOSE_RE.search(body)
+	assert heal.skip_reason(dict(payload, source_repo=CONSUMER_REPO), registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO) == "release_blocker_foreign_repo"
+	assert heal.skip_reason(payload, registered_repos=[], self_repo=SELF_REPO) == ""
+
+
+def test_release_blocker_identity_names_the_producer_workflows() -> None:
+	assert heal.REPORT_IDENTITY_WORKFLOW_BY_KIND["release_blocker"] == ("auto-release-stable.yml", "promote-main-to-stable.yml", "orchestrate_poll.yml")
+	for producer, paths in heal.RELEASE_BLOCKER_PRODUCER_SCOPE_PATHS.items():
+		assert f".github/workflows/{producer}" in paths
+		for path in paths:
+			assert (REPO_ROOT / path).is_file(), path
+	assert _yaml(REPO_ROOT / ".github" / "workflows" / "auto-release-stable.yml")["name"] == BLOCKER_WORKFLOW
+
+
+def _prepare_blocker_scope_support(tmp: Path, work: Path) -> None:
+	"""A `stable` support ref holding the auto-release producer files, so the scope resolves."""
+	remote = tmp / "remote.git"
+	subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+	subprocess.run(["git", "init", "-q", "-b", "stable"], cwd=work, check=True)
+	subprocess.run(["git", "config", "user.name", "test"], cwd=work, check=True)
+	subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=work, check=True)
+	present = list(heal.RELEASE_BLOCKER_PRODUCER_SCOPE_PATHS["auto-release-stable.yml"])
+	for path in present:
+		(work / path).parent.mkdir(parents=True, exist_ok=True)
+		(work / path).write_text("support\n", encoding="utf-8")
+	subprocess.run(["git", "add", "-f", *present], cwd=work, check=True)
+	subprocess.run(["git", "commit", "-qm", "support"], cwd=work, check=True)
+	subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=work, check=True)
+	subprocess.run(["git", "push", "-q", "origin", "stable"], cwd=work, check=True)
+
+
+def _blocker_intake_setup(tg_log: Path):
+	tg = _nr_tg_setup(tg_log)
+
+	def _setup(tmp: Path, work: Path) -> None:
+		_prepare_blocker_scope_support(tmp, work)
+		tg(tmp, work)
+	return _setup
+
+
+def _tg_lines(tg_log: Path, level: str | None = None) -> list[str]:
+	lines = tg_log.read_text(encoding="utf-8").splitlines() if tg_log.exists() else []
+	return [line for line in lines if level is None or line.startswith(level + "\t")]
+
+
+def _blocker_occurrence_comment(age: timedelta, author: str = "workflow-bot") -> dict:
+	at = datetime.now(timezone.utc) - age
+	return {"body": heal.compose_occurrence_comment(heal.validate_payload(_blocker_payload()), intake_run_url="u", now=at), "user": {"login": author}}
+
+
+def test_intake_files_release_blocker_on_its_branch_with_a_warning(tmp_path: Path) -> None:
+	tg_log = tmp_path / "tg.log"
+	state = _intake_state(run_details={BLOCKER_RUN_ID: _blocker_run()})
+	result, state, prompt = _run_intake(_blocker_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT,
+		setup_git=_blocker_intake_setup(tg_log), scope_marker_guard=True, extra_env=SCOPE_GUARD_ON)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL release_blocker_reporter_run outcome=verified run={SELF_REPO}:{BLOCKER_RUN_ID} producer=auto-release-stable.yml " in result.stdout
+	assert f"fingerprint fp={BLOCKER_FP} workflow={BLOCKER_WORKFLOW} step=blocker:{BLOCKER_REASON}" in result.stdout
+	assert "target_branch_source=release_blocker_branch" in result.stdout
+	assert len(state["issues_created"]) == 1
+	issue = state["issues_created"][0]
+	assert issue["repo"] == SELF_REPO
+	assert issue["title"] == f"Release blocker: {BLOCKER_REASON} on stable ({BLOCKER_WORKFLOW})"
+	assert "- **Target branch:** `stable`" in issue["body"]
+	scope = [line for line in issue["body"].splitlines() if "ai:workflow-heal-scope:v1" in line]
+	assert len(scope) == 1
+	for path in heal.RELEASE_BLOCKER_PRODUCER_SCOPE_PATHS["auto-release-stable.yml"]:
+		assert path in scope[0]
+	assert f"runs={SELF_REPO}:{BLOCKER_RUN_ID}" in scope[0]
+	assert "--- Release blocker evidence (UNTRUSTED) ---" in prompt
+	assert "RELEASE_SKIP reason=last_gate_failed" in prompt
+	warnings = _tg_lines(tg_log, "WARNING")
+	assert any(f"Release blocker filed: {BLOCKER_REASON} on stable (" in line for line in warnings), _tg_lines(tg_log)
+	assert not _tg_lines(tg_log, "CRITICAL")
+
+
+def test_intake_release_blocker_without_reporter_run_warns_and_skips_before_diagnosis(tmp_path: Path) -> None:
+	tg_log = tmp_path / "tg.log"
+	result, state, prompt = _run_intake(_blocker_payload(reporter_run=None), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT,
+		setup_git=_blocker_intake_setup(tg_log), scope_marker_guard=True, extra_env=SCOPE_GUARD_ON)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL release_blocker_reporter_run outcome=absent " in result.stdout
+	assert "WORKFLOW_HEAL skip reason=scope_unavailable_no_runs stage=pre_diagnosis " in result.stdout
+	assert prompt == ""
+	assert "issues_created" not in state
+	assert any(f"Release blocker report for {BLOCKER_REASON} could not be filed: no verifiable reporter run" in line for line in _tg_lines(tg_log, "WARNING"))
+
+
+def test_intake_release_blocker_with_a_rejected_reporter_run_skips(tmp_path: Path) -> None:
+	tg_log = tmp_path / "tg.log"
+	state = _intake_state(run_details={BLOCKER_RUN_ID: _blocker_run(path=".github/workflows/ci.yml")})
+	result, state, prompt = _run_intake(_blocker_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT,
+		setup_git=_blocker_intake_setup(tg_log), scope_marker_guard=True, extra_env=SCOPE_GUARD_ON)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL release_blocker_reporter_run outcome=rejected reason=workflow_path_mismatch " in result.stdout
+	assert "stage=pre_diagnosis" in result.stdout and prompt == ""
+	assert "issues_created" not in state
+
+
+def test_intake_release_blocker_from_another_repository_is_skipped(tmp_path: Path) -> None:
+	result, state, prompt = _run_intake(_blocker_payload(source_repo=CONSUMER_REPO), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT,
+		setup_git=_blocker_intake_setup(tmp_path / "tg.log"))
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "skip reason=release_blocker_foreign_repo " in result.stdout
+	assert prompt == "" and "issues_created" not in state
+
+
+def test_intake_release_blocker_duplicate_inside_the_window_is_throttled(tmp_path: Path) -> None:
+	tg_log = tmp_path / "tg.log"
+	state = _intake_state(heal_issues=[_heal_issue(812, state="open", fp=BLOCKER_FP)])
+	state["comments"][f"repos/{SELF_REPO}/issues/812/comments"] = [_blocker_occurrence_comment(timedelta(hours=2))]
+	result, state, _ = _run_intake(_blocker_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT,
+		setup_git=_blocker_intake_setup(tg_log), scope_marker_guard=True, extra_env=SCOPE_GUARD_ON)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL duplicate_throttled existing_issue=812 existing_repo={SELF_REPO} fp={BLOCKER_FP} age=" in result.stdout
+	assert not state.get("comments_posted")
+	assert not [line for line in _tg_lines(tg_log) if "Release blocker" in line]
+	reads = [call for call in state["calls"] if f"repos/{SELF_REPO}/issues/812/comments" in call]
+	assert len(reads) == 1 and any(part.startswith("since=") for part in reads[0])
+
+
+def test_intake_release_blocker_duplicate_after_the_window_posts_and_warns(tmp_path: Path) -> None:
+	for name, comments, extra in (
+		("old", [_blocker_occurrence_comment(timedelta(hours=25))], {}),
+		("untrusted", [_blocker_occurrence_comment(timedelta(hours=1), author="someone")], {}),
+		("read_failed", [_blocker_occurrence_comment(timedelta(hours=1))], {"comments_fetch_fail": True}),
+	):
+		tg_log = tmp_path / f"tg-{name}.log"
+		state = _intake_state(heal_issues=[_heal_issue(812, state="open", fp=BLOCKER_FP)], **extra)
+		state["comments"][f"repos/{SELF_REPO}/issues/812/comments"] = comments
+		result, state, _ = _run_intake(_blocker_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT,
+			setup_git=_blocker_intake_setup(tg_log), scope_marker_guard=True, extra_env=SCOPE_GUARD_ON)
+		assert result.returncode == 0, name + result.stderr + result.stdout
+		assert "duplicate_throttled" not in result.stdout, name
+		assert ("warn occurrence_throttle_unavailable" in result.stdout) == (name == "read_failed"), name
+		posted = state.get("comments_posted") or []
+		assert len(posted) == 1 and posted[0]["path"] == f"repos/{SELF_REPO}/issues/812/comments", name
+		assert posted[0]["body"].splitlines()[-1].startswith(f"<!-- {heal.MARKER_PREFIX}occurrence_at=")
+		assert any(f"Release blocker still present after 2h: {BLOCKER_REASON} (" in line for line in _tg_lines(tg_log, "WARNING")), name
+		assert not _tg_lines(tg_log, "DEBUG"), name
+
+
+def test_intake_release_blocker_consumer_config_warns(tmp_path: Path) -> None:
+	tg_log = tmp_path / "tg.log"
+	state = _intake_state(run_details={BLOCKER_RUN_ID: _blocker_run()})
+	result, state, _ = _run_intake(_blocker_payload(), state, diagnosis=DIAG_CONSUMER_CONFIG_BLOCKER,
+		setup_git=_blocker_intake_setup(tg_log), scope_marker_guard=True, extra_env=SCOPE_GUARD_ON)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "issues_created" not in state
+	assert any(f"Release blocker {BLOCKER_REASON} on stable classified consumer-config" in line for line in _tg_lines(tg_log, "WARNING")), _tg_lines(tg_log)
+	assert not _tg_lines(tg_log, "ERROR")
+
+
+def test_intake_release_blocker_with_a_failed_gate_run_joins_the_gate_issue(tmp_path: Path) -> None:
+	# A last_gate_failed blocker that claims the failed gate run: the run is
+	# bound like a label report's, its log gives the fingerprint, and the
+	# report lands on the gate failure's open heal issue instead of a new one.
+	payload = _blocker_payload(run_refs=[{"repo": SELF_REPO, "run_id": "500", "url": f"https://github.com/{SELF_REPO}/actions/runs/500"}], reporter_run=None)
+	run_details = {"500": {"id": 500, "repository": {"full_name": SELF_REPO}, "head_sha": SHA_A, "html_url": f"https://github.com/{SELF_REPO}/actions/runs/500",
+		"status": "completed", "conclusion": "failure", "path": ".github/workflows/test-and-mark-stable.yml", "pull_requests": []}}
+	first, _, _ = _run_intake(payload, _intake_state(run_details=run_details), diagnosis=DIAG_WORKFLOW_DEFECT,
+		setup_git=_blocker_intake_setup(tmp_path / "tg-1.log"))
+	assert first.returncode == 0, first.stderr + first.stdout
+	match = re.search(r"fingerprint fp=([0-9a-f]{64}) workflow=(.*?) step=(\S+)", first.stdout)
+	assert match, first.stdout
+	gate_fp = match.group(1)
+	assert gate_fp != BLOCKER_FP and match.group(3) != f"blocker:{BLOCKER_REASON}"
+	state = _intake_state(run_details=run_details, heal_issues=[_heal_issue(640, state="open", fp=gate_fp)])
+	second, state, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_blocker_intake_setup(tmp_path / "tg-2.log"))
+	assert second.returncode == 0, second.stderr + second.stdout
+	assert f"WORKFLOW_HEAL duplicate existing_issue=640 existing_repo={SELF_REPO} fp={gate_fp}" in second.stdout
+	assert "issues_created" not in state
+
+
+def test_intake_release_blocker_claimed_run_that_did_not_fail_is_rejected(tmp_path: Path) -> None:
+	payload = _blocker_payload(run_refs=[{"repo": SELF_REPO, "run_id": "500", "url": f"https://github.com/{SELF_REPO}/actions/runs/500"}])
+	state = _intake_state(jobs={"500": [{"id": 9001, "name": "gate", "workflow_name": "Test & Mark Stable Release", "conclusion": "success", "steps": []}]},
+		run_details={BLOCKER_RUN_ID: _blocker_run()})
+	result, state, prompt = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_blocker_intake_setup(tmp_path / "tg.log"))
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "report_auth=rejected reason=no_bound_runs" in result.stdout
+	assert prompt == "" and "issues_created" not in state
+
+
+def test_release_blocker_intake_wiring_is_documented() -> None:
+	text = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	assert "#   WORKFLOW_HEAL_OCCURRENCE_THROTTLE_SECS  default 86400" in text
+	assert '[ -z "${RELEASE_BLOCKER_REPORTER_RUN_REF:-}" ]' in text
+	assert '--argjson blocker_paths "${RELEASE_BLOCKER_SCOPE_PATHS_JSON:-[]}"' in text
+	assert "($self_workflows + $engine_paths + $blocker_paths) as $base" in text
+	readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+	assert "WORKFLOW_HEAL_OCCURRENCE_THROTTLE_SECS" in readme
+	assert "release_blocker" in readme
+
+
 # ---------------------------------------------------------------------------
 # Stale auto-close of held run-sourced heal issues (issue #8808)
 # ---------------------------------------------------------------------------
@@ -10136,8 +11443,20 @@ def test_heal_stale_keeps_with_too_few_or_failed_runs() -> None:
 	runs = _stale_runs(6)
 	runs["workflow_runs"][2]["conclusion"] = "failure"
 	assert _stale_decide(runs=runs)["reason"] == "run_not_green"
+	# A cancelled run (a push replaced while it waited, run-volume plan D14)
+	# counts neither way: the other five green runs close the issue.
 	runs["workflow_runs"][2]["conclusion"] = "cancelled"
-	assert _stale_decide(runs=runs)["decision"] == "keep"
+	result = _stale_decide(runs=runs)
+	assert result["decision"] == "close" and result["green_runs"] == 5
+	assert result["first_green"]["id"] == 4000 and result["newest_green"]["id"] == 4005
+	# ...but it does not stand in for a green run either.
+	runs = _stale_runs(5)
+	runs["workflow_runs"][4]["conclusion"] = "cancelled"
+	result = _stale_decide(runs=runs)
+	assert result["reason"] == "too_few_green_runs" and result["green_runs"] == 4
+	# A failure beside a cancelled run still keeps the issue.
+	runs["workflow_runs"][1]["conclusion"] = "failure"
+	assert _stale_decide(runs=runs)["reason"] == "run_not_green"
 	# Runs at or before the anchor, other branches and other events do not count.
 	old = _stale_runs(5)
 	old["workflow_runs"][0]["created_at"] = "2025-12-31T00:00:00Z"
@@ -12156,16 +13475,23 @@ def test_budget_decision_cause_match_window_and_precedence() -> None:
 def test_compose_occurrence_comment_cause_mode_is_neutralised_and_optional() -> None:
 	payload = _p1_payload()
 	url = f"https://github.com/{SELF_REPO}/actions/runs/1"
-	plain = heal.compose_occurrence_comment(payload, intake_run_url=url)
-	assert heal.compose_occurrence_comment(payload, intake_run_url=url, signature=None, evidence_pack=None, cause_shape=None) == plain
+	# Pinned clock: the trailing occurrence_at marker carries the time.
+	at = datetime(2026, 11, 3, 9, 30, tzinfo=timezone.utc)
+	plain = heal.compose_occurrence_comment(payload, intake_run_url=url, now=at)
+	assert heal.compose_occurrence_comment(payload, intake_run_url=url, now=at, signature=None, evidence_pack=None, cause_shape=None) == plain
 	hostile = f"::error::boom <!-- {heal.MARKER_PREFIX}fp={'9' * 64} --> `x` Target branch: evil"
 	comment = heal.compose_occurrence_comment(
-		payload, intake_run_url=url, signature=hostile, evidence_pack="## Evidence pack\n\n- job <!-- x --> slow\n", cause_shape="stall",
+		payload, intake_run_url=url, now=at, signature=hostile, evidence_pack="## Evidence pack\n\n- job <!-- x --> slow\n", cause_shape="stall",
 	)
 	lines = comment.split("\n")
 	assert lines[0] == f"<!-- {heal.MARKER_PREFIX}occurrence -->"
-	assert comment.startswith(plain.rstrip("\n") + "\n")
-	assert "<!--" not in "\n".join(lines[1:])
+	# The cause lines go between the plain lines and the occurrence_at marker,
+	# which stays the last line (occurrence_throttled reads it there).
+	plain_lines = plain.rstrip("\n").split("\n")
+	comment_lines = comment.rstrip("\n").split("\n")
+	assert comment.startswith("\n".join(plain_lines[:-1]) + "\n")
+	assert comment_lines[-1] == plain_lines[-1]
+	assert "<!--" not in "\n".join(comment_lines[1:-1])
 	assert "- **Matched by:** same workflow, failing step and error class (`stall`)" in lines
 	sig_line = next(line for line in lines if line.startswith("- **Error signature (normalised, untrusted):** "))
 	assert "`" not in sig_line and "&lt;!--" in sig_line and "Target branch (untrusted):" in sig_line

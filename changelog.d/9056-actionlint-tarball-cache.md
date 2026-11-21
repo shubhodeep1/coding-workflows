@@ -1,0 +1,4 @@
+<!-- changelog: changed -->
+- **The CI job `static-checks` now caches the actionlint release tarball, so most runs skip the github.com download.** The download returned HTTP 504 in CI runs 35615284953, 42465389350 and 42470227946, the last time for longer than the whole retry window. A new `Restore actionlint tarball cache` step (`actions/cache@v5`) restores the tarball under an exact key built from `ACTIONLINT_VERSION` and `ACTIONLINT_SHA256`, and `Install actionlint` runs the unchanged `curl` only when the tarball is missing. The sha256 check still runs on every run, on a cache hit as well as a miss, so a corrupt or poisoned cache entry fails closed. The retry window (`--retry 5 --retry-delay 15 --retry-max-time 300`) and the pinned version are unchanged; operators have nothing to do. `tests/test_ci_actionlint_cache.py` pins the cache step, the unconditional checksum and the exact retry flags.
+
+Refs #9053.

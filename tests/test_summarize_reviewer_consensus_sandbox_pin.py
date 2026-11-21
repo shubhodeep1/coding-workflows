@@ -81,7 +81,31 @@ def test_review_utility_roles_never_start_host_opencode() -> None:
 	allowlist = next(line for line in sandbox.splitlines() if line.startswith('case "${claude_role}" in REVIEW_EDITOR|'))
 	for role in ("SUMMARISER", "BEHAVIOURAL_SMOKE", "JUDGE_INTERIM"):
 		assert f"|{role}" in allowlist, role
-	assert "WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE|SUMMARISER|BEHAVIOURAL_SMOKE|JUDGE_INTERIM)" in sandbox
+	# Role-set check on the read-only `case` arm. The arm is found by the set
+	# of roles it contains, not by which role comes first: adding or
+	# reordering read-only roles must not break this test, but dropping a
+	# required one must (zero matches), and so must a duplicated arm.
+	required_read_only_roles = (
+		"WAVE_JUDGE",
+		"STALL_JUDGE",
+		"INTEGRATION_JUDGE",
+		"SECURITY_JUDGE",
+		"SUMMARISER",
+		"BEHAVIOURAL_SMOKE",
+		"JUDGE_INTERIM",
+		"PANEL_REVIEWER",
+	)
+	read_only_arms = [
+		stripped
+		for stripped in (sandbox_line.strip() for sandbox_line in sandbox.splitlines())
+		if stripped.endswith(")")
+		and not stripped.startswith("case ")
+		and set(required_read_only_roles) <= set(stripped[:-1].split("|"))
+	]
+	assert len(read_only_arms) == 1, read_only_arms
+	read_only_roles = set(read_only_arms[0][:-1].split("|"))
+	for required_role in required_read_only_roles:
+		assert required_role in read_only_roles, required_role
 	assert '"SUMMARISER", "BEHAVIOURAL_SMOKE", "JUDGE_INTERIM"}' in sandbox
 	assert 'if [ "${claude_role}" = JUDGE_INTERIM ] && [ "${engine}" != codex ]; then' in sandbox
 

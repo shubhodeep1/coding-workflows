@@ -3328,9 +3328,391 @@ def test_root_failure_class_ignores_echoed_summary_and_untrusted_rows():
 	assert collector._root_failure_class_from_value("editor_changes_lost") == "editor_changes_lost"
 
 
+def _success_reserve_runs(failed_count: int, success_count: int) -> list[dict]:
+	# Failures are slower than every success, so the slow bucket holds only
+	# failures and every success sits outside the notable buckets.
+	failed = [
+		{
+			"repository": "owner/repo",
+			"run_id": 1000 + i,
+			"conclusion": "failure",
+			"retries": 0,
+			"duration_seconds": 600,
+			"created_at": f"2026-04-10T12:{i:02d}:00Z",
+		}
+		for i in range(failed_count)
+	]
+	successes = [
+		{
+			"repository": "owner/repo",
+			"run_id": 2000 + i,
+			"conclusion": "success",
+			"retries": 0,
+			"duration_seconds": 10,
+			"created_at": f"2026-04-10T10:{i:02d}:00Z",
+		}
+		for i in range(success_count)
+	]
+	return failed + successes
+
+
+def test_select_notable_runs_reserves_success_slot_when_failures_fill_cap():
+	runs = _success_reserve_runs(15, 25)
+	selected = collector.select_notable_runs_for_logs(runs, max_log_runs=15, success_sample_rate=0.07)
+	sampled = [item for item in selected if item.get("_success_sampled")]
+	# reserve = min(ceil(25 * 0.07) = 2, max(1, floor(15 * 0.1) = 1)) = 1
+	assert len(selected) == 15
+	assert len(sampled) == 1
+	assert all(item["conclusion"] == "success" for item in sampled)
+	assert all(item["conclusion"] == "failure" for item in selected[:14])
+	assert not any(item.get("_success_sampled") for item in selected[:14])
+	# Failures still lead, newest first.
+	assert [item["run_id"] for item in selected[:14]] == [1000 + i for i in range(14, 0, -1)]
+
+
+def test_select_notable_runs_reserve_disabled_when_rate_zero():
+	runs = _success_reserve_runs(15, 25)
+	selected = collector.select_notable_runs_for_logs(runs, max_log_runs=15, success_sample_rate=0.0)
+	assert len(selected) == 15
+	assert not any(item.get("_success_sampled") for item in selected)
+	assert all(item["conclusion"] == "failure" for item in selected)
+
+
+def test_select_notable_runs_reserve_skipped_for_single_slot():
+	runs = _success_reserve_runs(5, 25)
+	selected = collector.select_notable_runs_for_logs(runs, max_log_runs=1, success_sample_rate=0.07)
+	assert [item["run_id"] for item in selected] == [1004]
+	assert not selected[0].get("_success_sampled")
+
+
+def test_select_notable_runs_unused_reserve_returns_to_notable():
+	runs = _success_reserve_runs(25, 1)
+	# reserve = min(ceil(1 * 3.0) = 3, max(1, floor(20 * 0.1) = 2)) = 2, but the
+	# pool holds 1 success, so the unused reserve slot goes back to a failure.
+	selected = collector.select_notable_runs_for_logs(runs, max_log_runs=20, success_sample_rate=3.0)
+	sampled = [item for item in selected if item.get("_success_sampled")]
+	notable = [item for item in selected if not item.get("_success_sampled")]
+	assert len(selected) == 20
+	assert [item["run_id"] for item in sampled] == [2000]
+	assert len(notable) == 19
+	assert all(item["conclusion"] == "failure" for item in notable)
+	assert [item["run_id"] for item in notable] == [1000 + i for i in range(24, 5, -1)]
+	assert selected[-1]["run_id"] == 2000
+
+
+def test_select_notable_runs_reserve_is_deterministic():
+	import copy
+
+	runs = _success_reserve_runs(15, 25)
+	first = collector.select_notable_runs_for_logs(copy.deepcopy(runs), max_log_runs=15, success_sample_rate=0.07)
+	second = collector.select_notable_runs_for_logs(copy.deepcopy(runs), max_log_runs=15, success_sample_rate=0.07)
+	assert [item["run_id"] for item in first] == [item["run_id"] for item in second]
+	assert any(item.get("_success_sampled") for item in first)
+	assert [item["run_id"] for item in first if item.get("_success_sampled")] == [
+		item["run_id"] for item in second if item.get("_success_sampled")
+	]
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
+
+
+def _coverage_run(run_id: int) -> dict:
+	return {
+		"id": run_id,
+		"name": "AI Validate",
+		"path": ".github/workflows/validate.yml",
+		"status": "completed",
+		"conclusion": "success",
+		"event": "push",
+		"run_attempt": 1,
+		"created_at": "2026-04-10T12:00:00Z",
+		"run_started_at": "2026-04-10T12:00:30Z",
+		"updated_at": "2026-04-10T12:05:30Z",
+		"_workflow_family": "validate",
+	}
+
+
+def _run_collector_main_for_coverage(argv: list[str], listing) -> tuple[int, dict]:
+	with tempfile.TemporaryDirectory(prefix="collector-coverage-test-") as td:
+		report_file = Path(td) / "report.json"
+		with patch.object(collector, "_cache_read_context", return_value=({"repositories": {}}, None, None)), \
+			patch.object(collector, "_cache_write_context", return_value=True), \
+			patch.object(collector, "list_runs_for_repo", side_effect=listing), \
+			patch.object(collector, "list_jobs_for_run", return_value=[]), \
+			patch.object(collector, "_fetch_run_log_archive", side_effect=RuntimeError("no archive")):
+			rc = collector.main(argv + ["--output", str(report_file), "--max-log-runs", "0"])
+		return rc, json.loads(report_file.read_text(encoding="utf-8"))
+
+
+def test_main_reports_coverage_for_failed_and_truncated_repos() -> None:
+	raw_error = "HTTP 403 Forbidden\nsecret=abc " + ("x" * 600)
+
+	def listing(repo: str, **kwargs):
+		if repo == "owner/denied":
+			raise RuntimeError(raw_error)
+		if repo == "owner/capped":
+			return [_coverage_run(1)], True, {"not_modified": False, "etag": None}
+		if repo == "owner/paged":
+			return [_coverage_run(2)], False, {"not_modified": False, "etag": None, "page_limit_reached": True}
+		return [_coverage_run(3)], False, {"not_modified": False, "etag": None}
+
+	argv = ["--since", "2026-04-01T00:00:00Z", "--max-runs", "1"]
+	for repo in ("owner/denied", "owner/capped", "owner/paged", "owner/ok", "owner/capped"):
+		argv += ["--repo", repo]
+	rc, report = _run_collector_main_for_coverage(argv, listing)
+
+	assert rc == 0
+	coverage = report["coverage"]
+	assert coverage["repositories_requested"] == ["owner/denied", "owner/capped", "owner/paged", "owner/ok"]
+	assert [item["repository"] for item in coverage["repositories_failed"]] == ["owner/denied"]
+	message = coverage["repositories_failed"][0]["message"]
+	assert "\n" not in message and "=" not in message
+	assert len(message) <= collector.COVERAGE_MESSAGE_MAX_CHARS
+	assert message.startswith("HTTP 403 Forbidden secret:abc")
+	assert coverage["repositories_truncated"] == ["owner/capped", "owner/paged"]
+	assert coverage["page_limit_reached"] is True
+	# Existing errors[] entries keep the raw message and their scope.
+	run_errors = [item for item in report["errors"] if item.get("scope") == "runs"]
+	assert {"repository": "owner/denied", "scope": "runs", "message": raw_error} in run_errors
+	assert any(
+		item["repository"] == "owner/capped" and "max-runs=1" in item["message"] for item in run_errors
+	)
+	assert report["schema_version"] == collector.SCHEMA_VERSION
+
+
+def test_main_coverage_all_repos_failed_still_exits_1() -> None:
+	def listing(repo: str, **kwargs):
+		raise RuntimeError("HTTP 500")
+
+	rc, report = _run_collector_main_for_coverage(
+		["--since", "2026-04-01T00:00:00Z", "--repo", "owner/a", "--repo", "owner/b"], listing
+	)
+	assert rc == 1
+	assert report["coverage"] == {
+		"repositories_requested": ["owner/a", "owner/b"],
+		"repositories_failed": [
+			{"repository": "owner/a", "message": "HTTP 500"},
+			{"repository": "owner/b", "message": "HTTP 500"},
+		],
+		"repositories_truncated": [],
+		"page_limit_reached": False,
+	}
+
+
+def test_main_coverage_pat_budget_partial_listing_is_truncated_not_failed() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		budget_output = Path(td) / "daily.md"
+		first_file = next(iter(collector.PAT_BUDGET_WORKFLOWS))
+
+		def listing(repo: str, **kwargs):
+			if kwargs.get("workflow_file") == first_file:
+				raise RuntimeError("HTTP 502")
+			return [], False, {}
+
+		rc, report = _run_collector_main_for_coverage(
+			["--repo", "owner/repo", "--since", "2026-10-04T00:00:00Z",
+				"--pat-budget-day", "2026-10-05", "--pat-budget-output", str(budget_output)],
+			listing,
+		)
+	assert rc == 0
+	assert report["coverage"]["repositories_failed"] == []
+	assert report["coverage"]["repositories_truncated"] == ["owner/repo"]
+	assert report["coverage"]["page_limit_reached"] is False
+
+
+def test_main_does_not_cache_etag_of_truncated_listing() -> None:
+	"""A 304 must never restore a truncated snapshot as a complete listing."""
+	written: list[dict] = []
+
+	def capture_write(**kwargs):
+		written.append(kwargs["payload"])
+		return True
+
+	def listing(repo: str, **kwargs):
+		meta = {"not_modified": False, "etag": f'W/"etag-{repo}"'}
+		if repo == "owner/capped":
+			return [_coverage_run(1)], True, meta
+		if repo == "owner/paged":
+			return [_coverage_run(2)], False, dict(meta, page_limit_reached=True)
+		return [_coverage_run(3)], False, meta
+
+	argv = ["--since", "2026-04-01T00:00:00Z", "--max-runs", "1", "--max-log-runs", "0"]
+	for repo in ("owner/capped", "owner/paged", "owner/ok"):
+		argv += ["--repo", repo]
+	with tempfile.TemporaryDirectory(prefix="collector-coverage-etag-") as td:
+		argv += ["--output", str(Path(td) / "report.json")]
+		with patch.object(collector, "_cache_read_context", return_value=({"repositories": {}}, None, None)), \
+			patch.object(collector, "_cache_write_context", side_effect=capture_write), \
+			patch.object(collector, "list_runs_for_repo", side_effect=listing), \
+			patch.object(collector, "list_jobs_for_run", return_value=[]), \
+			patch.object(collector, "_fetch_run_log_archive", side_effect=RuntimeError("no archive")):
+			rc = collector.main(argv)
+	assert rc == 0
+	assert written, "cache payload was not written"
+	repos = written[-1]["repositories"]
+	assert repos["owner/capped"]["runs_etag"] is None
+	assert repos["owner/paged"]["runs_etag"] is None
+	assert repos["owner/ok"]["runs_etag"] == 'W/"etag-owner/ok"'
+
+
+def test_main_refetches_legacy_partial_snapshot_on_304() -> None:
+	"""A cached snapshot at the run cap is refetched, not reused after a 304."""
+	snapshot = [collector._run_snapshot_for_cache(dict(_coverage_run(1), event="push"))]
+	cache = {"repositories": {"owner/legacy": {"runs_etag": 'W/"legacy"', "runs_snapshot": snapshot}}}
+	calls: list = []
+
+	def listing(repo: str, **kwargs):
+		calls.append(kwargs.get("etag"))
+		if kwargs.get("etag"):
+			return [], False, {"not_modified": True, "etag": 'W/"legacy"'}
+		return [_coverage_run(1)], True, {"not_modified": False, "etag": 'W/"fresh"'}
+
+	written: list[dict] = []
+	with tempfile.TemporaryDirectory(prefix="collector-coverage-legacy-") as td:
+		report_file = Path(td) / "report.json"
+		with patch.object(collector, "_cache_read_context", return_value=(cache, None, None)), \
+			patch.object(collector, "_cache_write_context", side_effect=lambda **kw: written.append(kw["payload"]) or True), \
+			patch.object(collector, "list_runs_for_repo", side_effect=listing), \
+			patch.object(collector, "list_jobs_for_run", return_value=[]), \
+			patch.object(collector, "_fetch_run_log_archive", side_effect=RuntimeError("no archive")):
+			rc = collector.main([
+				"--since", "2026-04-01T00:00:00Z", "--max-runs", "1", "--max-log-runs", "0",
+				"--repo", "owner/legacy", "--output", str(report_file),
+			])
+		report = json.loads(report_file.read_text(encoding="utf-8"))
+	assert rc == 0
+	assert calls == ['W/"legacy"', None]
+	assert report["coverage"]["repositories_truncated"] == ["owner/legacy"]
+	assert written[-1]["repositories"]["owner/legacy"]["runs_etag"] is None
+
+
+def test_main_refetches_snapshot_within_a_page_of_page_cap_on_304() -> None:
+	"""Drift duplicates can leave a page-limited snapshot just below the cap."""
+	snapshot = [
+		collector._run_snapshot_for_cache(dict(_coverage_run(run_id), event="push"))
+		for run_id in (1, 2, 3)
+	]
+	cache = {"repositories": {"owner/drift": {"runs_etag": 'W/"drift"', "runs_snapshot": snapshot}}}
+	calls: list = []
+
+	def listing(repo: str, **kwargs):
+		calls.append(kwargs.get("etag"))
+		if kwargs.get("etag"):
+			return [], False, {"not_modified": True, "etag": 'W/"drift"'}
+		runs = [_coverage_run(run_id) for run_id in (1, 2, 3)]
+		return runs, False, {"not_modified": False, "etag": 'W/"fresh"', "page_limit_reached": True}
+
+	with tempfile.TemporaryDirectory(prefix="collector-coverage-drift-") as td:
+		report_file = Path(td) / "report.json"
+		with patch.object(collector, "_cache_read_context", return_value=(cache, None, None)), \
+			patch.object(collector, "_cache_write_context", return_value=True), \
+			patch.object(collector, "list_runs_for_repo", side_effect=listing), \
+			patch.object(collector, "list_jobs_for_run", return_value=[]), \
+			patch.object(collector, "_fetch_run_log_archive", side_effect=RuntimeError("no archive")):
+			rc = collector.main([
+				"--since", "2026-04-01T00:00:00Z", "--per-page", "2", "--max-pages", "2",
+				"--max-log-runs", "0", "--repo", "owner/drift", "--output", str(report_file),
+			])
+		report = json.loads(report_file.read_text(encoding="utf-8"))
+	assert rc == 0
+	assert calls == ['W/"drift"', None]
+	assert report["coverage"]["repositories_truncated"] == ["owner/drift"]
+
+
+def test_main_does_not_cache_etag_of_complete_listing_in_refetch_band() -> None:
+	"""A complete listing a later 304 would refetch anyway keeps no ETag."""
+	written: list[dict] = []
+
+	def listing(repo: str, **kwargs):
+		runs = [_coverage_run(run_id) for run_id in (1, 2, 3)]
+		return runs, False, {"not_modified": False, "etag": 'W/"band"'}
+
+	with tempfile.TemporaryDirectory(prefix="collector-coverage-band-") as td:
+		report_file = Path(td) / "report.json"
+		with patch.object(collector, "_cache_read_context", return_value=({"repositories": {}}, None, None)), \
+			patch.object(collector, "_cache_write_context", side_effect=lambda **kw: written.append(kw["payload"]) or True), \
+			patch.object(collector, "list_runs_for_repo", side_effect=listing), \
+			patch.object(collector, "list_jobs_for_run", return_value=[]), \
+			patch.object(collector, "_fetch_run_log_archive", side_effect=RuntimeError("no archive")):
+			rc = collector.main([
+				"--since", "2026-04-01T00:00:00Z", "--per-page", "2", "--max-pages", "2",
+				"--max-log-runs", "0", "--repo", "owner/band", "--output", str(report_file),
+			])
+		report = json.loads(report_file.read_text(encoding="utf-8"))
+	assert rc == 0
+	assert report["coverage"]["repositories_truncated"] == []
+	assert written[-1]["repositories"]["owner/band"]["runs_etag"] is None
+
+
+def test_main_reuses_snapshot_on_304_with_single_page() -> None:
+	"""With --max-pages 1 there is no drift margin, so a small snapshot is reused."""
+	snapshot = [
+		collector._run_snapshot_for_cache(dict(_coverage_run(run_id), event="push"))
+		for run_id in (1, 2)
+	]
+	cache = {"repositories": {"owner/one": {"runs_etag": 'W/"one"', "runs_snapshot": snapshot}}}
+	calls: list = []
+
+	def listing(repo: str, **kwargs):
+		calls.append(kwargs.get("etag"))
+		return [], False, {"not_modified": True, "etag": 'W/"one"'}
+
+	with tempfile.TemporaryDirectory(prefix="collector-coverage-onepage-") as td:
+		report_file = Path(td) / "report.json"
+		with patch.object(collector, "_cache_read_context", return_value=(cache, None, None)), \
+			patch.object(collector, "_cache_write_context", return_value=True), \
+			patch.object(collector, "list_runs_for_repo", side_effect=listing), \
+			patch.object(collector, "list_jobs_for_run", return_value=[]), \
+			patch.object(collector, "_fetch_run_log_archive", side_effect=RuntimeError("no archive")):
+			rc = collector.main([
+				"--since", "2026-04-01T00:00:00Z", "--per-page", "5", "--max-pages", "1",
+				"--max-log-runs", "0", "--repo", "owner/one", "--output", str(report_file),
+			])
+		report = json.loads(report_file.read_text(encoding="utf-8"))
+	assert rc == 0
+	assert calls == ['W/"one"']
+	assert report["coverage"]["repositories_truncated"] == []
+	assert len(report["runs"]) == 2
+
+
+def test_main_pat_budget_run_does_not_keep_cached_etag() -> None:
+	"""A PAT-budget subset snapshot must never be stored next to a full-listing ETag."""
+	cache = {"repositories": {"owner/repo": {"runs_etag": 'W/"full"', "runs_snapshot": []}}}
+	written: list[dict] = []
+
+	def listing(repo: str, **kwargs):
+		return [], False, {}
+
+	with tempfile.TemporaryDirectory(prefix="collector-coverage-budget-etag-") as td:
+		with patch.object(collector, "_cache_read_context", return_value=(cache, None, None)), \
+			patch.object(collector, "_cache_write_context", side_effect=lambda **kw: written.append(kw["payload"]) or True), \
+			patch.object(collector, "list_runs_for_repo", side_effect=listing), \
+			patch.object(collector, "list_jobs_for_run", return_value=[]), \
+			patch.object(collector, "_fetch_run_log_archive", side_effect=RuntimeError("no archive")):
+			rc = collector.main([
+				"--repo", "owner/repo", "--since", "2026-10-04T00:00:00Z",
+				"--pat-budget-day", "2026-10-05", "--pat-budget-output", str(Path(td) / "daily.md"),
+				"--max-log-runs", "0", "--output", str(Path(td) / "report.json"),
+			])
+	assert rc == 0
+	assert written, "cache payload was not written"
+	assert written[-1]["repositories"]["owner/repo"]["runs_etag"] is None
+
+
+def test_build_report_omits_coverage_when_not_supplied() -> None:
+	report = collector.build_report(["owner/repo"], [], [])
+	assert "coverage" not in report
+	supplied = {
+		"repositories_requested": ["owner/repo"],
+		"repositories_failed": [],
+		"repositories_truncated": [],
+		"page_limit_reached": False,
+	}
+	with_coverage = collector.build_report(["owner/repo"], [], [], coverage=supplied)
+	assert with_coverage["coverage"] == supplied
+	assert set(with_coverage) - set(report) == {"coverage"}
 
 
 def main() -> int:

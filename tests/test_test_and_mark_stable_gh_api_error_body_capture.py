@@ -67,16 +67,17 @@ def _step(job: str, step_id: str) -> str:
 
 def _run_step(body: str, runs_mode: str) -> dict[str, str]:
 	with tempfile.TemporaryDirectory() as tmp:
-		bindir = Path(tmp) / "bin"
-		bindir.mkdir()
-		gh = bindir / "gh"
+		# The fake gh is a shell function that runs the stub through bash, not
+		# an executable on PATH: the pre-push gate container mounts the temp
+		# dir noexec, and bash reading a file is not blocked by noexec.
+		gh = Path(tmp) / "stub_gh.sh"
 		gh.write_text(STUB_GH, encoding="utf-8")
-		gh.chmod(0o755)
+		body = 'gh() { bash "$STUB_GH_SH" "$@"; }\n' + body
 		out = Path(tmp) / "github_output"
 		out.write_text("", encoding="utf-8")
 		env = {
 			**os.environ,
-			"PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
+			"STUB_GH_SH": str(gh),
 			"GITHUB_OUTPUT": str(out),
 			"GITHUB_RUN_ID": "1",
 			"TEST_REPO": "owner/repo",

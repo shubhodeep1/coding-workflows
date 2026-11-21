@@ -121,7 +121,7 @@ def _poller_stdout_tail(result: dict) -> str:
 
 def _assert_in_poller_stdout(needle: str, result: dict) -> None:
 	"""Assert ``needle`` is in the poller stdout; on a miss show the stdout tail."""
-	if needle not in result["stdout"]:
+	if needle not in str(result.get("stdout", "")):
 		raise AssertionError(f"missing {needle!r} in poller stdout\n{_poller_stdout_tail(result)}")
 
 
@@ -880,6 +880,76 @@ def _read_task_files(sandbox: Path) -> dict[str, dict]:
 	return task_files
 
 
+_CONTRACT_LIST_BASE = (
+	"collection: x\n"
+	"purpose: Poller sandbox contract.\n"
+	"read_entrypoints:\n"
+	"  - backend/a.py:read_a\n"
+	"write_entrypoints:\n"
+	"  - backend/a.py:write_a\n"
+)
+
+
+def _add_contract_list_conflict(sandbox: Path) -> None:
+	"""Commit a db/contracts/x.yml base on main, merge it into the sandbox
+	integration branch, then append a different read entrypoint on each
+	branch (stuck-states P12 fixture). Leaves ``main`` checked out."""
+	env = _git_test_env()
+	contract = sandbox / "db" / "contracts" / "x.yml"
+	contract.parent.mkdir(parents=True, exist_ok=True)
+
+	def _git(*args: str) -> None:
+		subprocess.run(["git", "-C", str(sandbox), "-c", "commit.gpgsign=false", *args], check=True, env=env,
+			stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+	_git("checkout", "-q", "main")
+	contract.write_text(_CONTRACT_LIST_BASE, encoding="utf-8")
+	_git("add", "db/contracts/x.yml")
+	_git("commit", "-qm", "contract base")
+	_git("checkout", "-q", "orchestrator/project-192")
+	_git("merge", "-q", "--no-edit", "main")
+	for branch_name, entry in (("orchestrator/project-192", "backend/b.py:read_b"), ("main", "backend/c.py:read_c")):
+		_git("checkout", "-q", branch_name)
+		contract.write_text(_CONTRACT_LIST_BASE.replace(
+			"  - backend/a.py:read_a\n", "  - backend/a.py:read_a\n  - " + entry + "\n"), encoding="utf-8")
+		_git("add", "db/contracts/x.yml")
+		_git("commit", "-qm", branch_name + " contract append")
+	_git("checkout", "-q", "main")
+
+
+def _add_security_pass_sync_merge(sandbox: Path, mode: str) -> str:
+	"""Stuck-states P13B fixture: commit a new default-branch file on ``main``
+	and merge ``main`` into the sandbox integration branch with ``--no-ff``.
+	``mode="clean"`` records a plain merge (empty ``git show --cc``);
+	``mode="evil"`` also edits a project file inside the merge commit.
+	Returns the integration head before the sync merge. Leaves ``main``
+	checked out."""
+	assert mode in ("clean", "evil"), mode
+	env = _git_test_env()
+
+	def _git(*args: str) -> str:
+		return subprocess.run(["git", "-C", str(sandbox), "-c", "commit.gpgsign=false", *args], check=True, env=env,
+			capture_output=True, text=True).stdout.strip()
+
+	pre_sync_head = _git("rev-parse", "refs/heads/orchestrator/project-192")
+	_git("checkout", "-q", "main")
+	(sandbox / "docs").mkdir(parents=True, exist_ok=True)
+	(sandbox / "docs" / "default_branch_sync_fixture.txt").write_text("default-branch change\n", encoding="utf-8")
+	_git("add", "docs/default_branch_sync_fixture.txt")
+	_git("commit", "-qm", "default-branch change")
+	_git("checkout", "-q", "orchestrator/project-192")
+	if mode == "clean":
+		_git("merge", "-q", "--no-ff", "--no-edit", "main")
+	else:
+		_git("merge", "-q", "--no-ff", "--no-commit", "main")
+		sentinel = sandbox / ".orchestrator_judge_context_sentinel.txt"
+		sentinel.write_text(sentinel.read_text(encoding="utf-8") + "code added inside the merge\n", encoding="utf-8")
+		_git("add", ".orchestrator_judge_context_sentinel.txt")
+		_git("commit", "-qm", "chore: sync main into orchestrator/project-192")
+	_git("checkout", "-q", "main")
+	return pre_sync_head
+
+
 def _run_poller(
 	*,
 	state: dict,
@@ -911,6 +981,10 @@ def _run_poller(
 	existing_branches: list[str] | None = None,
 	merge_conflict_on_sync: bool = False,
 	mock_local_integration_content_conflict: bool = False,
+	mock_local_contract_list_conflict: bool = False,
+	# Stuck-states P13B: "clean" or "evil" sync merge of main into the
+	# integration branch; exposes `__pre_sync_integration_head__`.
+	mock_security_pass_sync_merge: str | None = None,
 	blocked_check_shas: list[str] | None = None,
 	validation_workflow_runs: list[dict] | None = None,
 	issue_closed: dict[int, bool] | None = None,
@@ -1094,6 +1168,14 @@ def _run_poller(
 				conflict_fixture_path.write_text(branch_content + "\n", encoding="utf-8")
 				subprocess.run(["git", "-C", str(sandbox), "add", "scripts/integration_conflict_fixture.txt"], check=True, env=_git_test_env())
 				subprocess.run(["git", "-C", str(sandbox), "commit", "-qm", branch_name + " conflict"], check=True, env=_git_test_env())
+		if mock_local_contract_list_conflict:
+			# Stuck-states P12: both branches append a different entry to the
+			# same read_entrypoints list of db/contracts/x.yml after a shared
+			# base, so the local `git merge` conflicts only on that list.
+			_add_contract_list_conflict(sandbox)
+		security_pass_pre_sync_head_sha = ""
+		if mock_security_pass_sync_merge is not None:
+			security_pass_pre_sync_head_sha = _add_security_pass_sync_merge(sandbox, mock_security_pass_sync_merge)
 		if mock_rb_judge_prompt_cap is not None:
 			# Exercise the same skip branch without passing a >1 MiB issue
 			# body through the fixture's executable gh/jq wrappers (ARG_MAX).
@@ -1160,6 +1242,8 @@ esac
 				env=_git_test_env(),
 			).stdout.strip(),
 		}
+		if security_pass_pre_sync_head_sha:
+			sandbox_sha_aliases["__pre_sync_integration_head__"] = security_pass_pre_sync_head_sha
 		integration_head_sha = sandbox_sha_aliases["__integration_head__"]
 		integration_tree_sha = subprocess.run(
 			["git", "-C", str(sandbox), "rev-parse", f"{integration_head_sha}^{{tree}}"],
@@ -1473,6 +1557,7 @@ esac
 			"label_create_responses": {str(k): dict(v) for k, v in label_create_responses.items()},
 			"validation_dispatches": [],
 			"release_dispatches": [],
+			"heal_dispatches": [],
 			"review_dispatches": [],
 			"issue_body_edit_calls": [],
 			"commit_status_posts": [],
@@ -2181,6 +2266,21 @@ if args[0] == 'api':
 		print('{}')
 		sys.exit(0)
 	store.setdefault('api_calls', []).append(path)
+	# Release-blocker heal reports (Refs #8291): POST repos/<o>/<r>/dispatches
+	# with the wrap-dispatch envelope as --input. Recorded so a test cannot
+	# pass silently through the generic `{}` fallback below.
+	if (method or '').upper() == 'POST' and re.fullmatch(r'repos/[^/]+/[^/]+/dispatches', path):
+		if store.get('fail_heal_dispatch'):
+			save()
+			print('HTTP 403: Resource not accessible by integration', file=sys.stderr)
+			sys.exit(1)
+		heal_envelope = {}
+		if input_file:
+			with open(input_file, encoding='utf-8') as heal_envelope_fh:
+				heal_envelope = json.load(heal_envelope_fh)
+		store.setdefault('heal_dispatches', []).append(heal_envelope)
+		save()
+		sys.exit(0)
 	if path == 'user':
 		save()
 		if store.get('fail_user_lookup'):
@@ -2667,7 +2767,8 @@ if args[0] == 'api':
 				'state': issue_state,
 				'state_reason': issue_ext.get('state_reason', issue.get('state_reason', '')),
 				'closed_at': issue_ext.get('closed_at'),
-				'labels': [{'name': l} for l in issue.get('labels', [])],
+				# Opt-in heal-issue labels (harness heal auto-revalidate, #8291).
+				'labels': [{'name': l} for l in issue_ext.get('labels', issue.get('labels', []))],
 			}
 			import subprocess as _sp
 			p = _sp.run(['jq', '-rc', jq], input=json.dumps(issue_obj), capture_output=True, text=True)
@@ -3520,8 +3621,10 @@ print(json.dumps(parsed))
 
 		_write_exec(
 			bin_dir / "python3",
-			r'''#!/usr/bin/python3
-import json
+			# Use the interpreter running the tests (not a hardcoded /usr/bin/python3);
+			# an env shebang would resolve to this shim itself on PATH and recurse.
+			f"#!{sys.executable}\n"
+			+ r'''import json
 import os
 import subprocess
 import sys
@@ -3976,6 +4079,10 @@ sys.exit(proc.returncode)
 		# Exercise the script default of the automation-path plan gate (#7181)
 		# unless a test sets the flag through env_overrides.
 		env.pop("AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED", None)
+		# A CI runner's own Actions identity must not turn on the poller's
+		# release-blocker reporter (producer gate, OIDC) unless a test asks.
+		for actions_identity_var in ("GITHUB_WORKFLOW_REF", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "RELEASE_BLOCKER_HEAL_ENABLED", "RELEASE_BLOCKER_HEAL_PY"):
+			env.pop(actions_identity_var, None)
 		env.update(
 			{
 				"HOME": str(home_dir),
@@ -4072,6 +4179,7 @@ sys.exit(proc.returncode)
 		result["label_create_calls"] = result.get("label_create_calls", [])
 		result["api_calls"] = result.get("api_calls", [])
 		result["release_dispatches"] = result.get("release_dispatches", [])
+		result["heal_dispatches"] = result.get("heal_dispatches", [])
 		result["issue_body_edit_calls"] = result.get("issue_body_edit_calls", [])
 		result["commit_status_posts"] = result.get("commit_status_posts", [])
 		result["pr_ready_calls"] = result.get("pr_ready_calls", [])
@@ -4446,6 +4554,14 @@ def test_security_pass_audit_worktree_wiring_contract() -> None:
 	assert judge.count("poller_claude_judge SECURITY_JUDGE") == 1
 	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
 	assert "SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED: ${{ vars.SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED || 'true' }}" in workflow
+	# Stuck-states P13B: the rebind kill switch reaches both poll env blocks,
+	# and the rebind runs after the merge base and before the audit worktree.
+	assert workflow.count("SECURITY_PASS_REBIND_ENABLED: ${{ vars.SECURITY_PASS_REBIND_ENABLED || 'true' }}") == 2
+	rebind_call = 'security_pass_rebind_if_no_new_project_lines "${current_head_sha}" "${merge_base_sha}" "${prior_security_status}"'
+	assert security_runner.count(rebind_call) == 1
+	assert security_runner.index('merge_base_sha="$(git merge-base') < security_runner.index(rebind_call)
+	assert security_runner.index(rebind_call) < security_runner.index("security_pass_prepare_audit_worktree")
+	assert security_runner.index("SECURITY_PASS_CYCLE_BUDGET_RESET") < security_runner.index(rebind_call)
 
 
 def test_security_pass_findings_create_one_consolidated_managed_fix_issue() -> None:
@@ -4823,6 +4939,11 @@ def test_security_pass_head_advance_after_clean_pass_restores_fix_cycle_budget()
 	combined_log = result["stdout"] + result["stderr"]
 	assert "SECURITY_PASS_CYCLE_BUDGET_RESET" in combined_log
 	assert "reason=head_advanced_after_clean_pass" in combined_log
+	# Stuck-states P13B: the seeded pointer is not a commit SHA, so the rebind
+	# skips fail-safe and the audit runs as before.
+	assert "SECURITY_PASS_REBIND_SKIPPED tracking_issue=192" in combined_log
+	assert "reason=no_last_audited_sha" in combined_log
+	assert "SECURITY_PASS_REBOUND" not in combined_log
 	assert "SECURITY_PASS_FAILED reason=cycle_exhausted" not in combined_log
 	assert not any(
 		"security pass FAILED" in notification["message"]
@@ -5134,9 +5255,111 @@ def test_security_pass_head_advance_after_clean_pass_reaudits_only_the_delta() -
 	assert "SECURITY_PASS_CYCLE_BUDGET_RESET" in combined_log
 	assert f"mode=delta reason=head_advanced_since_last_audit base_sha={capture['diff_base']} since_sha={passed_sha}" in combined_log
 	assert latest_state["security_pass_cycle"] == 0
+	# Stuck-states P13B: the advanced head is a single-parent commit, so the
+	# rebind skips and the delta audit runs.
+	assert "SECURITY_PASS_REBIND_SKIPPED tracking_issue=192" in combined_log
+	assert "reason=non_merge_commit" in combined_log
+	assert "SECURITY_PASS_REBOUND" not in combined_log
 	assert latest_state["security_pass_status"] == "blocked"
 	assert latest_state["security_pass_last_audited_sha"] == capture["diff_head"]
 	assert [finding["finding_id"] for finding in latest_state["security_pass_reported_findings"]] == ["SEC-TEST-1"]
+
+
+def _security_pass_sync_merge_state() -> dict:
+	state = _base_state(status="security-pass")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 2,
+			"security_pass_status": "passed",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "__pre_sync_integration_head__",
+			"security_pass_last_audited_sha": "__pre_sync_integration_head__",
+		}
+	)
+	return state
+
+
+def test_security_pass_clean_sync_merge_after_clean_pass_rebinds_without_audit() -> None:
+	"""Stuck-states P13B / convergence plan D4: a clean pass invalidated only
+	by a clean `chore: sync main into <integration>` merge is rebound to the
+	new head without a model run (SECURITY_PASS_REBOUND)."""
+	result = _run_poller(
+		state=_security_pass_sync_merge_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		mock_security_pass_sync_merge="clean",
+	)
+
+	aliases = result["sandbox_sha_aliases"]
+	pre_sync = aliases["__pre_sync_integration_head__"]
+	merge_head = aliases["__integration_head__"]
+	assert pre_sync != merge_head
+	combined_log = result["stdout"] + result["stderr"]
+	assert (
+		f"SECURITY_PASS_REBOUND tracking_issue=192 from={pre_sync} to={merge_head} "
+		f"merge_base={aliases['__default_head__']} commits=1 reason=no_new_project_lines"
+	) in combined_log
+	assert "SECURITY_PASS_REBIND_SKIPPED" not in combined_log
+	assert result["security_audit_capture"] is None
+	assert "SECURITY_PASS_SCOPE" not in combined_log
+	assert "SECURITY_PASS_BLOCKED" not in combined_log
+	latest_state = result["latest_state"]
+	assert latest_state["security_pass_status"] == "passed"
+	assert latest_state["security_pass_head_sha"] == merge_head
+	assert latest_state["security_pass_last_audited_sha"] == merge_head
+	assert latest_state["security_pass_active_fix_issues"] == []
+
+
+def test_security_pass_evil_sync_merge_after_clean_pass_reaudits() -> None:
+	"""A sync merge that edits project code in its resolution is audited."""
+	result = _run_poller(
+		state=_security_pass_sync_merge_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		mock_security_pass_sync_merge="evil",
+	)
+
+	merge_head = result["sandbox_sha_aliases"]["__integration_head__"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_CYCLE_BUDGET_RESET" in combined_log
+	assert f"SECURITY_PASS_REBIND_SKIPPED tracking_issue=192 head_sha={merge_head} reason=evil_merge commit={merge_head}" in combined_log
+	assert "SECURITY_PASS_REBOUND" not in combined_log
+	capture = result["security_audit_capture"]
+	assert capture is not None
+	assert capture["diff_head"] == merge_head
+	assert combined_log.index("SECURITY_PASS_CYCLE_BUDGET_RESET") < combined_log.index("SECURITY_PASS_REBIND_SKIPPED")
+
+
+def test_security_pass_rebind_disabled_reaudits_clean_sync_merge() -> None:
+	"""SECURITY_PASS_REBIND_ENABLED=false restores today's re-audit exactly."""
+	result = _run_poller(
+		state=_security_pass_sync_merge_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		mock_security_pass_sync_merge="clean",
+		env_overrides={"SECURITY_PASS_REBIND_ENABLED": "false"},
+	)
+
+	merge_head = result["sandbox_sha_aliases"]["__integration_head__"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"SECURITY_PASS_REBIND_SKIPPED tracking_issue=192 head_sha={merge_head} reason=disabled" in combined_log
+	assert "SECURITY_PASS_REBOUND" not in combined_log
+	capture = result["security_audit_capture"]
+	assert capture is not None
+	assert capture["diff_head"] == merge_head
 
 
 def test_security_pass_unusable_last_audited_sha_falls_back_to_full_range() -> None:
@@ -6329,10 +6552,14 @@ def test_standalone_stall_recovery_no_longer_skips_claude_labelled_issues() -> N
 
 def test_standalone_security_followup_releases_only_after_prerequisite_merges() -> None:
 	dependent_body = "<!-- ai:security-finding:SEC-TEST -->\n- Depends on: #701\n"
-	for closed, labels, expected in (
-		(False, [], "security_dependency_held"),
-		(True, [], "security_dependency_held"),
-		(True, ["ai:merged"], "security_dependency_released"),
+	# Stuck-states P8c: a predecessor closed without ai:merged now releases
+	# the hold by default; DEPENDENCY_WAIT_RESUME_ENABLED=false keeps the
+	# previous hold.
+	for closed, labels, resume, expected, release_count in (
+		(False, [], None, "security_dependency_held", 0),
+		(True, [], None, "security_dependency_released_unmerged", 1),
+		(True, [], "false", "security_dependency_held", 0),
+		(True, ["ai:merged"], None, "security_dependency_released", 1),
 	):
 		state = _base_state(status="in_progress")
 		state["waves"][0]["issues"][0]["status"] = "merged"
@@ -6341,12 +6568,19 @@ def test_standalone_security_followup_releases_only_after_prerequisite_merges() 
 			issue_labels={10: ["ai:merged"], 700: ["ai:clarification", "ai:security"], 701: labels},
 			issue_bodies={700: dependent_body}, issue_closed={701: closed},
 			issue_comments={700: []}, mock_gh_issue_list_label_filter=True,
+			env_overrides={"DEPENDENCY_WAIT_RESUME_ENABLED": resume} if resume else None,
 		)
 		assert f"STALL_SKIP issue=700 reason={expected}" in result["stdout"] + result["stderr"]
-		if closed and not labels:
+		if closed and not labels and resume == "false":
 			assert "detail=closed_without_ai_merged" in result["stdout"] + result["stderr"]
+			_strip_security_hold_advisories(result)
+			assert result["issues"]["700"]["comments"] == []
 		releases = [c for c in result["issues"]["700"]["comments"] if c["body"].startswith("/reclarify")]
-		assert len(releases) == (1 if closed and labels else 0)
+		assert len(releases) == release_count
+		if closed and not labels and resume is None:
+			assert releases[0]["body"] == (
+				"/reclarify\n<!-- AI_SECURITY_DEPENDENCY_RELEASED_V1 reason=predecessor_unmerged issue=700 depends_on=701 -->"
+			)
 
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status"] = "merged"
@@ -6372,6 +6606,506 @@ def test_standalone_security_followup_releases_only_after_prerequisite_merges() 
 		mock_gh_issue_list_label_filter=True,
 	)
 	assert len([c for c in result["issues"]["700"]["comments"] if c["body"].startswith("/reclarify")]) == 2
+
+
+_SECURITY_HOLD_BODY = "<!-- ai:security-finding:SEC-TEST -->\n- Depends on: #701\n"
+# The latch marker ends with the episode's held_since (`held_since=<ts> -->`).
+_SECURITY_HOLD_LATCH = "<!-- ai:needs-human-latch reason=security_dependency_wait depends_on=701 "
+_SECURITY_HOLD_PIPELINE_LOGIN = "github-actions[bot]"
+
+
+def _security_hold_state_comment(held_since: object, *, depends_on: int = 701, escalated: object = 0) -> dict:
+	return {
+		"body": "<!-- AI_STANDALONE_STALL_STATE_V1\n" + json.dumps({
+			"schema_version": 1, "last_seen_phase": "", "status_since_ts": 0, "stall_recovery_count": 0,
+			"security_dependency_depends_on": depends_on,
+			"security_dependency_held_since_ts": held_since,
+			"security_dependency_escalated_ts": escalated,
+		}) + "\nAI_STANDALONE_STALL_STATE_V1 -->",
+		"user": {"login": _SECURITY_HOLD_PIPELINE_LOGIN}, "author_association": "OWNER",
+		"created_at": "2026-01-01T00:00:01Z",
+	}
+
+
+def _security_hold_latch_comment(reason: str = "security_dependency_wait", *, login: str = _SECURITY_HOLD_PIPELINE_LOGIN, created_at: str = "2026-01-01T00:00:02Z", held_since: object = 1) -> dict:
+	marker = f"{_SECURITY_HOLD_LATCH}held_since={held_since} -->" if reason == "security_dependency_wait" else f"<!-- ai:needs-human-latch reason={reason} -->"
+	return {"body": f"Waiting.\n\n{marker}", "user": {"login": login}, "author_association": "OWNER", "created_at": created_at}
+
+
+def _run_security_hold_tick(*, comments=None, labels=None, closed=False, predecessor_labels=None, env=None, fail_get=None, fail_comment_post=False, fail_edit=False, store_extra=None, tracking_issues_override=None, events=None) -> dict:
+	"""One standalone tick for security follow-up #700 that depends on #701 (stuck-states P8c)."""
+	# By default the pipeline login added the latch label, as the escalation does.
+	if events is None:
+		events = [{"event": "labeled", "label": {"name": "ai:needs-human"}, "actor": {"login": _SECURITY_HOLD_PIPELINE_LOGIN}, "created_at": "2026-01-01T00:00:03Z"}]
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	kwargs = {}
+	if env:
+		kwargs["env_overrides"] = env
+	if fail_get:
+		kwargs["fail_issue_get_for"] = fail_get
+	if fail_comment_post:
+		kwargs["fail_issue_comment_post_for"] = [700]
+	if fail_edit:
+		kwargs["fail_issue_edit_for"] = [700]
+	if store_extra:
+		kwargs["mock_store_extra"] = store_extra
+	if tracking_issues_override is not None:
+		kwargs["tracking_issues_override"] = tracking_issues_override
+	return _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 700: ["ai:clarification", "ai:security", *(labels or [])], 701: list(predecessor_labels or [])},
+		issue_bodies={700: _SECURITY_HOLD_BODY}, issue_closed={701: closed},
+		issue_comments={700: list(comments or [])}, mock_gh_issue_list_label_filter=True,
+		issue_events={700: list(events)},
+		**kwargs,
+	)
+
+
+def _security_hold_log(result: dict) -> str:
+	return result["stdout"] + result["stderr"]
+
+
+def _security_hold_latches(result: dict) -> list[dict]:
+	return [c for c in result["issues"]["700"]["comments"] if _SECURITY_HOLD_LATCH in c["body"]]
+
+
+def _security_hold_state_comments(result: dict) -> list[dict]:
+	return [c for c in result["issues"]["700"]["comments"] if c["body"].startswith("<!-- AI_STANDALONE_STALL_STATE_V1\n")]
+
+
+_SECURITY_HOLD_ADVISORY_MARKER = "<!-- ai:security-dependency-held:700:701 -->"
+
+
+def _strip_security_hold_advisories(result: dict) -> None:
+	"""Drop the #9486 held advisory so P8c assertions count only their own writes."""
+	result["issues"]["700"]["comments"] = [
+		c for c in result["issues"]["700"]["comments"] if _SECURITY_HOLD_ADVISORY_MARKER not in c["body"]
+	]
+
+
+def test_security_hold_records_held_since_once_per_episode() -> None:
+	import time
+
+	now = int(time.time())
+	first = _run_security_hold_tick()
+	log = _security_hold_log(first)
+	assert "STALL_SKIP issue=700 reason=security_dependency_hold_recorded action=none" in log
+	assert "STALL_SKIP issue=700 reason=security_dependency_held detail=open action=none" in log
+	_strip_security_hold_advisories(first)
+	assert len(first["issues"]["700"]["comments"]) == 1
+	recorded = _extract_latest_standalone_state(first["issues"]["700"]["comments"])
+	assert recorded["security_dependency_depends_on"] == 701
+	assert now - 5 <= recorded["security_dependency_held_since_ts"] <= int(time.time()) + 5
+	assert recorded["security_dependency_escalated_ts"] == 0
+
+	# A recorded, not-yet-due hold costs no write.
+	recent = _run_security_hold_tick(comments=[_security_hold_state_comment(now - 86400)])
+	log = _security_hold_log(recent)
+	assert "security_dependency_hold_recorded" not in log
+	assert "security_dependency_escalated" not in log
+	_strip_security_hold_advisories(recent)
+	assert len(recent["issues"]["700"]["comments"]) == 1
+	assert "ai:needs-human" not in recent["issues"]["700"]["labels"]
+
+	# Missing, invalid or future values and a changed dependency restart the episode in place.
+	for seeded in (
+		_security_hold_state_comment(now + 30 * 86400),
+		_security_hold_state_comment("abc"),
+		_security_hold_state_comment(-5),
+		_security_hold_state_comment(now - 8 * 86400, depends_on=650),
+	):
+		reset = _run_security_hold_tick(comments=[seeded])
+		log = _security_hold_log(reset)
+		assert "STALL_SKIP issue=700 reason=security_dependency_hold_recorded action=none" in log, seeded
+		assert "security_dependency_escalated" not in log, seeded
+		states = _security_hold_state_comments(reset)
+		assert len(states) == 1, seeded
+		restarted = _extract_latest_standalone_state(states)
+		assert restarted["security_dependency_depends_on"] == 701
+		assert now - 5 <= restarted["security_dependency_held_since_ts"] <= int(time.time()) + 5
+
+
+def test_security_hold_escalates_once_after_escalate_days() -> None:
+	import time
+
+	now = int(time.time())
+	due = _run_security_hold_tick(comments=[_security_hold_state_comment(now - 8 * 86400)])
+	log = _security_hold_log(due)
+	assert "STALL_SKIP issue=700 reason=security_dependency_escalated action=needs_human" in log
+	assert "STALL_SKIP issue=700 reason=security_dependency_held detail=open action=none" in log
+	assert "ai:needs-human" in due["issues"]["700"]["labels"]
+	latches = _security_hold_latches(due)
+	assert len(latches) == 1
+	assert "#700 -> #701 (open)" in latches[0]["body"]
+	assert "waited at least 8 days" in latches[0]["body"]
+	assert latches[0]["body"].rstrip().endswith(f"held_since={now - 8 * 86400} -->")
+	assert not any(c["body"].startswith("/reclarify") for c in due["issues"]["700"]["comments"])
+	assert _extract_latest_standalone_state(_security_hold_state_comments(due))["security_dependency_escalated_ts"] >= now
+
+	# The next tick sees the label (and escalated_ts) and stays quiet.
+	again = _run_security_hold_tick(comments=due["issues"]["700"]["comments"], labels=["ai:needs-human"])
+	assert "security_dependency_escalated" not in _security_hold_log(again)
+	assert len(_security_hold_latches(again)) == 1
+	labelled = _run_security_hold_tick(comments=[_security_hold_state_comment(now - 8 * 86400)], labels=["ai:needs-human"])
+	assert "security_dependency_escalated" not in _security_hold_log(labelled)
+	assert _security_hold_latches(labelled) == []
+
+	# After a human removed the label, the recorded escalated_ts keeps the episode quiet.
+	removed = _run_security_hold_tick(comments=[_security_hold_state_comment(now - 8 * 86400, escalated=now - 86400), _security_hold_latch_comment(held_since=now - 8 * 86400)])
+	assert "security_dependency_escalated" not in _security_hold_log(removed)
+	assert "ai:needs-human" not in removed["issues"]["700"]["labels"]
+	assert len(_security_hold_latches(removed)) == 1
+
+	# A latch comment for this episode without the label (a lost label edit) gets the label, no second comment.
+	held = now - 8 * 86400
+	marker_only = _run_security_hold_tick(comments=[_security_hold_state_comment(held), _security_hold_latch_comment(held_since=held)])
+	log = _security_hold_log(marker_only)
+	assert "STALL_SKIP issue=700 reason=security_dependency_escalated detail=marker_present action=needs_human" in log
+	assert "ai:needs-human" in marker_only["issues"]["700"]["labels"]
+	assert len(_security_hold_latches(marker_only)) == 1
+	assert _extract_latest_standalone_state(_security_hold_state_comments(marker_only))["security_dependency_escalated_ts"] >= now
+
+	# A latch comment left by an earlier, released episode does not suppress this one.
+	stale = _run_security_hold_tick(comments=[_security_hold_state_comment(held), _security_hold_latch_comment(held_since=held - 30 * 86400)])
+	assert "STALL_SKIP issue=700 reason=security_dependency_escalated action=needs_human" in _security_hold_log(stale)
+	assert "ai:needs-human" in stale["issues"]["700"]["labels"]
+	assert len(_security_hold_latches(stale)) == 2
+
+	# A marker copied by another account does not.
+	forged = _run_security_hold_tick(comments=[_security_hold_state_comment(now - 8 * 86400), _security_hold_latch_comment(login="stranger", held_since=now - 8 * 86400)])
+	assert "STALL_SKIP issue=700 reason=security_dependency_escalated action=needs_human" in _security_hold_log(forged)
+	assert "ai:needs-human" in forged["issues"]["700"]["labels"]
+
+
+def test_security_hold_escalation_failures_retry_and_forged_state_is_ignored() -> None:
+	import time
+
+	now = int(time.time())
+	held = now - 8 * 86400
+	# A failed latch comment POST leaves no label and no escalated_ts.
+	no_comment = _run_security_hold_tick(comments=[_security_hold_state_comment(held)], fail_comment_post=True)
+	log = _security_hold_log(no_comment)
+	assert "STALL_SKIP issue=700 reason=security_dependency_escalation_failed action=none" in log
+	assert "ai:needs-human" not in no_comment["issues"]["700"]["labels"]
+	assert _security_hold_latches(no_comment) == []
+	assert _extract_latest_standalone_state(_security_hold_state_comments(no_comment))["security_dependency_escalated_ts"] == 0
+
+	# A failed label edit after the comment posted leaves escalated_ts at 0 ...
+	no_label = _run_security_hold_tick(comments=[_security_hold_state_comment(held)], fail_edit=True)
+	log = _security_hold_log(no_label)
+	assert "STALL_SKIP issue=700 reason=security_dependency_escalation_failed action=none" in log
+	assert "reason=security_dependency_escalated " not in log
+	assert "ai:needs-human" not in no_label["issues"]["700"]["labels"]
+	assert len(_security_hold_latches(no_label)) == 1
+	assert _extract_latest_standalone_state(_security_hold_state_comments(no_label))["security_dependency_escalated_ts"] == 0
+	# ... so the next tick adds the label without a second latch comment.
+	retried = _run_security_hold_tick(comments=no_label["issues"]["700"]["comments"])
+	assert "STALL_SKIP issue=700 reason=security_dependency_escalated detail=marker_present action=needs_human" in _security_hold_log(retried)
+	assert "ai:needs-human" in retried["issues"]["700"]["labels"]
+	assert len(_security_hold_latches(retried)) == 1
+
+	# A newer state comment written by another account cannot mark the hold escalated.
+	forged_state = _security_hold_state_comment(held, escalated=now)
+	forged_state["user"] = {"login": "stranger"}
+	forged_state["created_at"] = "2026-01-01T00:00:09Z"
+	forged = _run_security_hold_tick(comments=[_security_hold_state_comment(held), forged_state])
+	assert "STALL_SKIP issue=700 reason=security_dependency_escalated action=needs_human" in _security_hold_log(forged)
+	assert "ai:needs-human" in forged["issues"]["700"]["labels"]
+
+
+def test_security_hold_escalate_days_config_and_unverified_reads() -> None:
+	import time
+
+	now = int(time.time())
+	longer = _run_security_hold_tick(comments=[_security_hold_state_comment(now - 8 * 86400)], env={"DEPENDENCY_WAIT_ESCALATE_DAYS": "10"})
+	assert "security_dependency_escalated" not in _security_hold_log(longer)
+	for invalid in ("abc", "0", "12345"):
+		fallback = _run_security_hold_tick(comments=[_security_hold_state_comment(now - 8 * 86400)], env={"DEPENDENCY_WAIT_ESCALATE_DAYS": invalid})
+		log = _security_hold_log(fallback)
+		assert "::warning::DEPENDENCY_WAIT_ESCALATE_DAYS must be an integer from 1 to 9999; using 7." in log, invalid
+		assert "STALL_SKIP issue=700 reason=security_dependency_escalated action=needs_human" in log, invalid
+
+	# An unverifiable predecessor read neither starts nor advances the clock.
+	unverified = _run_security_hold_tick(fail_get=[701])
+	log = _security_hold_log(unverified)
+	assert "STALL_SKIP issue=700 reason=security_dependency_held detail=unverified action=none" in log
+	_strip_security_hold_advisories(unverified)
+	assert unverified["issues"]["700"]["comments"] == []
+
+	# Switch off: the open hold writes nothing.
+	off = _run_security_hold_tick(comments=[_security_hold_state_comment(now - 8 * 86400)], env={"DEPENDENCY_WAIT_RESUME_ENABLED": "false"})
+	assert "security_dependency_escalated" not in _security_hold_log(off)
+	_strip_security_hold_advisories(off)
+	assert len(off["issues"]["700"]["comments"]) == 1
+
+
+def test_security_hold_unmerged_release_dedupe_and_latch_removal() -> None:
+	release_marker = "/reclarify\n<!-- AI_SECURITY_DEPENDENCY_RELEASED_V1 reason=predecessor_unmerged issue=700 depends_on=701 -->"
+
+	def releases(result: dict) -> list[dict]:
+		return [c for c in result["issues"]["700"]["comments"] if c["body"].startswith("/reclarify")]
+
+	trusted = _run_security_hold_tick(closed=True, comments=[{"body": release_marker, "user": {"login": _SECURITY_HOLD_PIPELINE_LOGIN}, "author_association": "OWNER"}])
+	assert len(releases(trusted)) == 1
+	assert "security_dependency_released_unmerged" not in _security_hold_log(trusted)
+	untrusted = _run_security_hold_tick(closed=True, comments=[{"body": release_marker, "user": {"login": "stranger"}, "author_association": "OWNER"}])
+	assert len(releases(untrusted)) == 2
+	assert "STALL_SKIP issue=700 reason=security_dependency_released_unmerged action=reclarify" in _security_hold_log(untrusted)
+
+	# Release removes this hold's own latch.
+	cleared = _run_security_hold_tick(closed=True, labels=["ai:needs-human"], comments=[_security_hold_latch_comment()])
+	log = _security_hold_log(cleared)
+	assert "STALL_SKIP issue=700 reason=security_dependency_latch_cleared action=none" in log
+	assert "ai:needs-human" not in cleared["issues"]["700"]["labels"]
+	assert len(releases(cleared)) == 1
+	# A failed latch removal posts no release marker, so the next tick retries both.
+	failed = _run_security_hold_tick(closed=True, labels=["ai:needs-human"], comments=[_security_hold_latch_comment()], fail_edit=True)
+	log = _security_hold_log(failed)
+	assert "STALL_SKIP issue=700 reason=security_dependency_retrigger_failed detail=latch_clear_failed action=none" in log
+	assert "ai:needs-human" in failed["issues"]["700"]["labels"]
+	assert releases(failed) == []
+	retried = _run_security_hold_tick(closed=True, labels=["ai:needs-human"], comments=failed["issues"]["700"]["comments"])
+	assert "STALL_SKIP issue=700 reason=security_dependency_latch_cleared action=none" in _security_hold_log(retried)
+	assert "ai:needs-human" not in retried["issues"]["700"]["labels"]
+	assert len(releases(retried)) == 1
+	merged = _run_security_hold_tick(closed=True, predecessor_labels=["ai:merged"], labels=["ai:needs-human"], comments=[_security_hold_latch_comment()])
+	assert "STALL_SKIP issue=700 reason=security_dependency_latch_cleared action=none" in _security_hold_log(merged)
+	assert "ai:needs-human" not in merged["issues"]["700"]["labels"]
+
+	# A later latch for another reason, or one written by another account, is left alone.
+	for comments in (
+		[_security_hold_latch_comment(), _security_hold_latch_comment("staged_support_rebase_conflict", created_at="2026-01-01T00:00:05Z")],
+		[_security_hold_latch_comment(login="stranger")],
+	):
+		kept = _run_security_hold_tick(closed=True, labels=["ai:needs-human"], comments=comments)
+		assert "security_dependency_latch_cleared" not in _security_hold_log(kept)
+		assert "ai:needs-human" in kept["issues"]["700"]["labels"]
+		assert len(releases(kept)) == 1
+
+	# A person re-added ai:needs-human after the hold's latch: the label stays, the release still posts.
+	relabelled = _run_security_hold_tick(
+		closed=True, labels=["ai:needs-human"], comments=[_security_hold_latch_comment()],
+		events=[
+			{"event": "labeled", "label": {"name": "ai:needs-human"}, "actor": {"login": _SECURITY_HOLD_PIPELINE_LOGIN}, "created_at": "2026-01-01T00:00:03Z"},
+			{"event": "unlabeled", "label": {"name": "ai:needs-human"}, "actor": {"login": "workflow-owner"}, "created_at": "2026-01-02T00:00:00Z"},
+			{"event": "labeled", "label": {"name": "ai:needs-human"}, "actor": {"login": "workflow-owner"}, "created_at": "2026-01-03T00:00:00Z"},
+		],
+	)
+	log = _security_hold_log(relabelled)
+	assert "STALL_SKIP issue=700 reason=security_dependency_latch_kept detail=labeled_by_other action=none" in log
+	assert "security_dependency_latch_cleared" not in log
+	assert "ai:needs-human" in relabelled["issues"]["700"]["labels"]
+	assert len(releases(relabelled)) == 1
+
+	# Switch off: the unmerged closure stays held and the latch stays.
+	off = _run_security_hold_tick(closed=True, labels=["ai:needs-human"], comments=[_security_hold_latch_comment()], env={"DEPENDENCY_WAIT_RESUME_ENABLED": "off"})
+	log = _security_hold_log(off)
+	assert "STALL_SKIP issue=700 reason=security_dependency_held detail=closed_without_ai_merged action=none" in log
+	assert "ai:needs-human" in off["issues"]["700"]["labels"]
+	assert releases(off) == []
+
+
+def test_security_hold_merged_release_waits_for_the_pipeline_login() -> None:
+	"""Without the pipeline login the latch cannot be checked, so no release marker strands ai:needs-human.
+
+	An idle tick (no tracking issue) reaches the release without the sweep-level identity guard.
+	"""
+	no_identity = _run_security_hold_tick(
+		closed=True, predecessor_labels=["ai:merged"], labels=["ai:needs-human"],
+		comments=[_security_hold_latch_comment()], store_extra={"fail_user_lookup": True},
+		tracking_issues_override=[],
+	)
+	assert "STALL_SKIP issue=700 reason=security_dependency_identity_unavailable action=none" in _security_hold_log(no_identity)
+	assert "ai:needs-human" in no_identity["issues"]["700"]["labels"]
+	assert not any(c["body"].startswith("/reclarify") for c in no_identity["issues"]["700"]["comments"])
+	# Without the latch label the merged release does not need the login.
+	unlabelled = _run_security_hold_tick(closed=True, predecessor_labels=["ai:merged"], store_extra={"fail_user_lookup": True}, tracking_issues_override=[])
+	assert "STALL_SKIP issue=700 reason=security_dependency_released action=reclarify" in _security_hold_log(unlabelled)
+
+
+_CLARIFY_NO_OUTPUT_RERUN_PREFIX = "/reclarify\n<!-- ai:clarify-no-output-rerun:700 -->"
+
+
+def _standalone_clarification_state_comment(recovery_count: int = 0) -> str:
+	return (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:clarification",
+			"status_since_ts": 1,
+			"stall_recovery_count": recovery_count,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+
+
+def _run_standalone_clarification_tick(comments: list[str | dict], **extra) -> dict:
+	"""One standalone poller tick for issue #700 sitting in ai:clarification (issue #9486)."""
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	return _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 700: ["ai:clarification"]},
+		issue_comments={700: list(comments)}, mock_gh_issue_list_label_filter=True,
+		**extra,
+	)
+
+
+def test_standalone_clarification_without_output_reruns_clarify_once() -> None:
+	"""shubhodeep1/digital_pa#146: labelled ai:clarification with no clarify output.
+
+	The first miss posts one marked /reclarify instead of answering questions
+	that were never asked.
+	"""
+	result = _run_standalone_clarification_tick([_standalone_clarification_state_comment()])
+	log = result["stdout"] + result["stderr"]
+	comments = result["issues"]["700"]["comments"]
+	reruns = [c for c in comments if c["body"].startswith(_CLARIFY_NO_OUTPUT_RERUN_PREFIX)]
+	assert len(reruns) == 1
+	assert "no clarification output" in reruns[0]["body"]
+	assert not any(c["body"].startswith("/answer [auto-answered-by-poller]") for c in comments)
+	assert "STALL_RECOVERY issue=700 reason=clarify_no_output phase=ai:clarification action=retrigger_pipeline" in log
+	assert "ai:needs-human" not in result["issues"]["700"]["labels"]
+
+	# A forged marker from an untrusted commenter does not count as the first
+	# miss: the real rerun is still posted, and no escalation happens.
+	forged = {
+		"body": _CLARIFY_NO_OUTPUT_RERUN_PREFIX + "\n",
+		"author_association": "NONE", "user": {"login": "stranger"},
+		"created_at": "2026-01-01T00:00:01Z",
+	}
+	forged_result = _run_standalone_clarification_tick([_standalone_clarification_state_comment(), forged])
+	forged_reruns = [
+		c for c in forged_result["issues"]["700"]["comments"]
+		if c["body"].startswith(_CLARIFY_NO_OUTPUT_RERUN_PREFIX)
+	]
+	assert len(forged_reruns) == 2
+	assert "reason=clarify_no_output phase=" in forged_result["stdout"] + forged_result["stderr"]
+	assert "ai:needs-human" not in forged_result["issues"]["700"]["labels"]
+
+	# An untrusted /answer is not clarify output either.
+	spam = {"body": "/answer whatever", "author_association": "NONE", "user": {"login": "stranger"}}
+	spam_result = _run_standalone_clarification_tick([_standalone_clarification_state_comment(), spam])
+	assert len([
+		c for c in spam_result["issues"]["700"]["comments"]
+		if c["body"].startswith(_CLARIFY_NO_OUTPUT_RERUN_PREFIX)
+	]) == 1
+
+
+def test_standalone_clarification_without_output_escalates_on_second_miss() -> None:
+	old_marker = {
+		"body": _CLARIFY_NO_OUTPUT_RERUN_PREFIX + "\n\n_rerun_",
+		"author_association": "NONE", "user": {"login": "github-actions[bot]"},
+		"created_at": "2026-01-01T00:00:01Z",
+	}
+	result = _run_standalone_clarification_tick([_standalone_clarification_state_comment(1), old_marker])
+	log = result["stdout"] + result["stderr"]
+	assert "STALL_RECOVERY issue=700 reason=clarify_no_output_second_miss phase=ai:clarification action=escalate_human" in log
+	assert "ai:needs-human" in result["issues"]["700"]["labels"]
+	assert "Action: escalate_human" in log
+	comments = result["issues"]["700"]["comments"]
+	assert len([c for c in comments if c["body"].startswith(_CLARIFY_NO_OUTPUT_RERUN_PREFIX)]) == 1
+	assert not any(c["body"].startswith("/answer [auto-answered-by-poller]") for c in comments)
+
+	# A marker younger than the stall threshold holds escalation: the rerun
+	# clarify gets one full threshold to produce output.
+	fresh_marker = {
+		**old_marker,
+		"author_association": "OWNER", "user": {"login": "workflow-owner"},
+		"created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+	}
+	pending = _run_standalone_clarification_tick([_standalone_clarification_state_comment(1), fresh_marker])
+	pending_log = pending["stdout"] + pending["stderr"]
+	assert "STALL_SKIP issue=700 reason=clarify_no_output_rerun_pending phase=ai:clarification action=none" in pending_log
+	assert "reason=clarify_no_output_second_miss" not in pending_log
+	assert "ai:needs-human" not in pending["issues"]["700"]["labels"]
+	pending_comments = pending["issues"]["700"]["comments"]
+	assert len([c for c in pending_comments if c["body"].startswith(_CLARIFY_NO_OUTPUT_RERUN_PREFIX)]) == 1
+	assert not any(c["body"].startswith("/answer [auto-answered-by-poller]") for c in pending_comments)
+
+
+def test_standalone_clarification_with_questions_keeps_auto_respond() -> None:
+	questions = {
+		"body": "<!-- ai:clarification-questions -->\nClarification required\n\nQ1: Pick one?\nA) yes (RECOMMENDED)\nB) no",
+		"author_association": "NONE", "user": {"login": "github-actions[bot]"},
+	}
+	result = _run_standalone_clarification_tick([_standalone_clarification_state_comment(), questions])
+	log = result["stdout"] + result["stderr"]
+	comments = result["issues"]["700"]["comments"]
+	assert any(c["body"].startswith("/answer [auto-answered-by-poller]") for c in comments)
+	assert not any(c["body"].startswith(_CLARIFY_NO_OUTPUT_RERUN_PREFIX) for c in comments)
+	assert "reason=clarify_no_output" not in log
+
+	# Without the complete comment history, absence is never inferred: the
+	# legacy action runs and a warning is logged.
+	unavailable = _run_standalone_clarification_tick(
+		[_standalone_clarification_state_comment()], gql_comments_unavailable_for=[700],
+	)
+	unavailable_log = unavailable["stdout"] + unavailable["stderr"]
+	assert "reason=clarify_no_output phase=" not in unavailable_log
+	assert not any(
+		c["body"].startswith(_CLARIFY_NO_OUTPUT_RERUN_PREFIX)
+		for c in unavailable["issues"]["700"]["comments"]
+	)
+
+
+def test_standalone_security_dependency_hold_posts_one_advisory() -> None:
+	dependent_body = "<!-- ai:security-finding:SEC-TEST -->\n- Depends on: #701\n"
+	marker = "<!-- ai:security-dependency-held:700:701 -->"
+
+	def _tick(*, closed: bool, comments: list, **extra) -> dict:
+		state = _base_state(status="in_progress")
+		state["waves"][0]["issues"][0]["status"] = "merged"
+		return _run_poller(
+			state=state, enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:merged"], 700: ["ai:clarification", "ai:security"], 701: []},
+			issue_bodies={700: dependent_body}, issue_closed={701: closed},
+			issue_comments={700: list(comments)}, mock_gh_issue_list_label_filter=True,
+			**extra,
+		)
+
+	def _advisories(result: dict) -> list[str]:
+		return [c["body"] for c in result["issues"]["700"]["comments"] if marker in c["body"]]
+
+	def _assert_inert(result: dict) -> None:
+		for comment in result["issues"]["700"]["comments"]:
+			lines = comment["body"].split("\n")
+			assert not any(line.startswith(("/reclarify", "/answer")) for line in lines)
+			assert "<!-- ai:clarification-questions -->" not in comment["body"]
+
+	held_open = _tick(closed=False, comments=[])
+	log = held_open["stdout"] + held_open["stderr"]
+	assert "STALL_SKIP issue=700 reason=security_dependency_held detail=open action=none" in log
+	assert "STALL_SKIP issue=700 reason=security_dependency_held_advisory depends_on=701 detail=open action=advisory_posted" in log
+	advisories = _advisories(held_open)
+	assert len(advisories) == 1
+	assert "#701" in advisories[0] and "No action is needed" in advisories[0]
+	assert advisories[0].rstrip().endswith(marker)
+	_assert_inert(held_open)
+
+	held_closed = _tick(closed=True, comments=[], env_overrides={"DEPENDENCY_WAIT_RESUME_ENABLED": "false"})
+	closed_advisories = _advisories(held_closed)
+	assert len(closed_advisories) == 1
+	assert "A maintainer must act" in closed_advisories[0]
+	assert "detail=closed_without_ai_merged action=advisory_posted" in held_closed["stdout"] + held_closed["stderr"]
+	_assert_inert(held_closed)
+
+	existing = {"body": "advisory\n\n" + marker, "author_association": "NONE", "user": {"login": "github-actions[bot]"}}
+	present = _tick(closed=False, comments=[existing])
+	assert len(_advisories(present)) == 1
+	assert "action=advisory_present" in present["stdout"] + present["stderr"]
+
+	# A forged marker from an untrusted commenter does not suppress the advisory.
+	forged = {"body": marker, "author_association": "NONE", "user": {"login": "stranger"}}
+	forged_result = _tick(closed=False, comments=[forged])
+	assert len(_advisories(forged_result)) == 2
+	assert "action=advisory_posted" in forged_result["stdout"] + forged_result["stderr"]
+
+	incomplete = _tick(closed=False, comments=[], gql_comments_unavailable_for=[700])
+	assert _advisories(incomplete) == []
+	assert "depends_on=701 detail=open action=advisory_comments_incomplete" in incomplete["stdout"] + incomplete["stderr"]
+	_assert_inert(incomplete)
 
 
 def _run_pr_dependency_tick(*, merged: bool, files: dict[str, str], comments: list[dict] | None = None, extra: dict | None = None) -> dict:
@@ -15653,6 +16387,9 @@ def test_standalone_retrigger_review_retargets_verified_implementation_pr():
 			},
 		],
 		mock_git_push_success=True,
+		# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+		# dispatch reaches the guarded empty-commit fallback this test covers.
+		review_dispatch_fail_for_prs=[416],
 	)
 	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
 	assert standalone_state is not None
@@ -15664,6 +16401,77 @@ def test_standalone_retrigger_review_retargets_verified_implementation_pr():
 		"/approved" in str(comment.get("body", ""))
 		for comment in result["issues"]["501"]["comments"]
 	)
+
+
+def _standalone_dispatch_first_run(**extra) -> dict:
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	return _run_poller(
+		state=_base_state(status="complete"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 503: ["ai:done"]},
+		issue_comments={503: [standalone_state_comment]},
+		issue_linked_prs={503: 418},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 418,
+				"body": "Automated implementation.",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-503",
+				"headRefFromApi": "ai/issue-503",
+				"headSha": "sha418",
+				"mergeable": True,
+				"mergeable_state": "clean",
+			},
+		],
+		mock_git_push_success=True,
+		**extra,
+	)
+
+
+def test_standalone_retrigger_review_dispatches_review_first():
+	# cut-ci-runner-time Phase 3: the standalone arm dispatches the review
+	# workflow instead of pushing an empty commit.
+	result = _standalone_dispatch_first_run()
+	assert any(d.get("pr_number") == 418 for d in result.get("review_dispatches", [])), result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	standalone_state = _extract_latest_standalone_state(result["issues"]["503"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert "Issue #503 PR #418 dispatched the review workflow instead of pushing an empty commit." in result["stdout"]
+
+
+def test_standalone_retrigger_review_falls_back_to_empty_commit_when_dispatch_fails():
+	result = _standalone_dispatch_first_run(review_dispatch_fail_for_prs=[418])
+	assert ["origin", "HEAD:ai/issue-503"] in result.get("git_push_calls", []), result["stdout"]
+	standalone_state = _extract_latest_standalone_state(result["issues"]["503"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert "Issue #503 PR #418 dispatch helper returned rc=1; falling back to empty-commit push." in result["stdout"]
+	assert "action=retrigger_review_empty_commit_fallback" in result["stdout"]
+
+
+def test_standalone_retrigger_review_dispatch_skip_spends_no_budget():
+	# A queued review run on the branch: no dispatch, no push, no budget.
+	result = _standalone_dispatch_first_run(active_autofix_runs=[
+		{"workflow": "review_autofix.yml", "branch": "ai/issue-503", "status": "queued", "conclusion": ""},
+	])
+	assert [d for d in result.get("review_dispatches", []) if d.get("pr_number") == 418] == []
+	assert result.get("git_push_calls", []) == []
+	assert "Issue #503 PR #418 dispatch helper skipped (already active or already dispatched this cycle)" in result["stdout"]
+	standalone_state = _extract_latest_standalone_state(result["issues"]["503"]["comments"])
+	assert standalone_state is None or standalone_state["stall_recovery_count"] == 0
 
 
 def _standalone_pr_ai_hold_run(pr_extra: dict, recovery_count: int = 0, **extra) -> dict:
@@ -15769,15 +16577,13 @@ def test_standalone_retrigger_review_rechecks_hold_on_resolved_pr_payload():
 
 
 def test_standalone_retrigger_review_dispatches_for_unheld_pr():
-	# Stable-only adaptation (backport of #9750): stable's standalone
-	# retrigger_review arm retriggers with an empty-commit push; the
-	# review-dispatch-first path is main-only (cut-ci-runner-time Phase 3).
-	# An unheld PR must still pass the #9750 hold check and reach that
-	# retrigger path instead of the pr_ai_hold skip.
 	for title in ("AI implementation for issue #504", "Mentions skip ai without brackets"):
 		result = _standalone_pr_ai_hold_run({"title": title, "draft": False})
+		assert any(str(d.get("pr_number")) == "419" for d in result.get("review_dispatches", [])), result["stdout"]
 		assert "reason=pr_ai_hold" not in result["stdout"]
-		assert "Issue #504 PR #419 empty-commit retrigger" in result["stdout"] or "Issue #504 PR #419 head advanced" in result["stdout"], result["stdout"]
+		standalone_state = _extract_latest_standalone_state(result["issues"]["504"]["comments"])
+		assert standalone_state is not None
+		assert standalone_state["stall_recovery_count"] == 1
 
 
 def test_standalone_retrigger_review_mixed_fetch_failure_counts_conclusive_rejection():
@@ -16058,6 +16864,8 @@ def test_standalone_stall_recovery_skips_when_phase_attempts_exhausted():
 		issue_labels={10: ["ai:merged"], 501: ["ai:review-blocked"]},
 		issue_comments={501: [standalone_state_comment]},
 		mock_gh_issue_list_label_filter=True,
+		# Switch-off parity: the legacy skip-and-close path (stuck-states P3b).
+		env_overrides={"STALL_FINGERPRINT_BREAKER_ENABLED": "false"},
 	)
 	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
 	assert standalone_state is not None
@@ -16092,6 +16900,8 @@ def test_standalone_stall_exhaustion_reports_phase_attempts_not_reset_counter():
 		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
 		issue_comments={501: [standalone_state_comment]},
 		mock_gh_issue_list_label_filter=True,
+		# Switch-off parity: the legacy skip-and-close path (stuck-states P3b).
+		env_overrides={"STALL_FINGERPRINT_BREAKER_ENABLED": "false"},
 	)
 	assert "ai:closed" in result["issues"]["501"]["labels"]
 	close_comments = [
@@ -16102,6 +16912,297 @@ def test_standalone_stall_exhaustion_reports_phase_attempts_not_reset_counter():
 	assert close_comments, result.get("issue_close_short_comments")
 	assert "(5 attempts in 'ai:awaiting-approval' phase, limit 5;" in close_comments[-1]
 	assert "(0 attempts" not in close_comments[-1]
+
+
+
+# ---------------------------------------------------------------
+# Stuck-states P3b: failure-signature breaker + exhaustion escalation
+# ---------------------------------------------------------------
+_FFB_FP = "0123456789ab"
+
+
+def _ffb_marker_comment(run: int, login: str = "github-actions[bot]", phase: str = "plan", fp: str = _FFB_FP) -> dict:
+	return {
+		"body": f"Plan phase failed.\n<!-- AI_FAILURE_FINGERPRINT_V1 phase={phase} fp={fp} run={run} -->",
+		"user": {"login": login},
+	}
+
+
+def _ffb_stale_clarification_state_comment() -> str:
+	return (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:clarification",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+
+
+def _ffb_breaker_comments(comments: list[dict]) -> list[str]:
+	return [
+		str(comment.get("body", ""))
+		for comment in comments
+		if "<!-- AI_FAILURE_FINGERPRINT_BREAKER_V1 " in str(comment.get("body", ""))
+	]
+
+
+def test_standalone_failure_fingerprint_breaker_trips_on_two_identical_trusted_markers():
+	state = _base_state(status="complete")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:clarification"]},
+		issue_comments={501: [
+			_ffb_stale_clarification_state_comment(),
+			_ffb_marker_comment(9001),
+			"## Clarification questions",
+			_ffb_marker_comment(9002),
+		]},
+		mock_gh_issue_list_label_filter=True,
+	)
+	issue = result["issues"]["501"]
+	assert "ai:plan-failed" in issue["labels"]
+	breaker_bodies = _ffb_breaker_comments(issue["comments"])
+	assert len(breaker_bodies) == 1
+	assert f"<!-- AI_FAILURE_FINGERPRINT_BREAKER_V1 phase=plan fp={_FFB_FP} runs=9001,9002 -->" in breaker_bodies[0]
+	assert "unblock judge" in breaker_bodies[0]
+	assert not any(str(comment.get("body", "")).startswith("/answer") for comment in issue["comments"])
+	assert (
+		f"STALL_FINGERPRINT_BREAKER issue=501 scope=standalone outcome=tripped phase=plan fp={_FFB_FP} runs=9001,9002 label=ai:plan-failed"
+		in result["stdout"]
+	)
+	assert issue.get("closed", False) is False
+	standalone_state = _extract_latest_standalone_state(issue["comments"])
+	assert standalone_state is not None
+	assert [entry["run"] for entry in standalone_state["failure_fingerprints"]] == ["9001", "9002"]
+
+
+def test_standalone_failure_fingerprint_breaker_ignores_outsider_markers():
+	state = _base_state(status="complete")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:clarification"]},
+		issue_comments={501: [
+			_ffb_stale_clarification_state_comment(),
+			_ffb_marker_comment(9001, login="mallory"),
+			_ffb_marker_comment(9002, login="mallory"),
+		]},
+		mock_gh_issue_list_label_filter=True,
+	)
+	issue = result["issues"]["501"]
+	assert "ai:plan-failed" not in issue["labels"]
+	assert _ffb_breaker_comments(issue["comments"]) == []
+	assert "outcome=tripped" not in result["stdout"]
+
+
+def test_standalone_failure_fingerprint_breaker_disabled_keeps_legacy_path():
+	state = _base_state(status="complete")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:clarification"]},
+		issue_comments={501: [
+			_ffb_stale_clarification_state_comment(),
+			_ffb_marker_comment(9001),
+			_ffb_marker_comment(9002),
+		]},
+		mock_gh_issue_list_label_filter=True,
+		env_overrides={"STALL_FINGERPRINT_BREAKER_ENABLED": "false"},
+	)
+	issue = result["issues"]["501"]
+	assert "ai:plan-failed" not in issue["labels"]
+	assert _ffb_breaker_comments(issue["comments"]) == []
+	assert "STALL_FINGERPRINT_BREAKER" not in result["stdout"]
+
+
+def test_standalone_failure_fingerprint_breaker_truncated_cache_reads_full_history_once():
+	state = _base_state(status="complete")
+	comments: list = []
+	marker = _ffb_marker_comment(9001)
+	marker["created_at"] = "2026-01-01T00:00:00Z"
+	comments.append(marker)
+	for idx in range(99):
+		comments.append({
+			"body": f"noise {idx}",
+			"user": {"login": "octocat"},
+			"created_at": f"2026-01-01T{1 + idx // 60:02d}:{idx % 60:02d}:00Z",
+		})
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:clarification"]},
+		issue_comments={501: comments},
+		mock_gh_issue_list_label_filter=True,
+	)
+	full_reads = [
+		path for path in result.get("api_calls", [])
+		if "/issues/501/comments?sort=created&direction=asc" in str(path)
+	]
+	assert len(full_reads) == 1, full_reads
+	assert "ai:plan-failed" not in result["issues"]["501"]["labels"]
+
+
+def test_standalone_stall_exhaustion_escalates_needs_human_and_keeps_issue_open():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:awaiting-approval",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+			"phase_attempts": {"ai:awaiting-approval": 5},
+			"failure_fingerprints": [{"phase": "plan", "fp": _FFB_FP, "run": "9001", "id": 7}],
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
+		issue_comments={501: [standalone_state_comment]},
+		mock_gh_issue_list_label_filter=True,
+	)
+	issue = result["issues"]["501"]
+	assert "ai:needs-human" in issue["labels"]
+	assert "ai:closed" not in issue["labels"]
+	assert issue.get("closed", False) is False
+	assert not any(call["issue"] == 501 for call in result.get("issue_close_short_comments", []))
+	escalation = [
+		str(comment.get("body", "")) for comment in issue["comments"]
+		if "Stall recovery exhausted: escalated for the unblock judge" in str(comment.get("body", ""))
+	]
+	assert len(escalation) == 1
+	assert "(5 attempts in 'ai:awaiting-approval' phase, limit 5;" in escalation[0]
+	assert "`phase_attempts`" in escalation[0]
+	assert _FFB_FP in escalation[0]
+	assert (
+		"STALL_EXHAUSTED_ESCALATED issue=501 scope=standalone phase=ai:awaiting-approval attempts=5 limit=5 counter=phase_attempts outcome=labelled"
+		in result["stdout"]
+	)
+
+
+def test_standalone_stall_exhaustion_label_failure_posts_nothing_and_keeps_state():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:awaiting-approval",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+			"phase_attempts": {"ai:awaiting-approval": 5},
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
+		issue_comments={501: [standalone_state_comment]},
+		mock_gh_issue_list_label_filter=True,
+		fail_issue_edit_for=[501],
+	)
+	issue = result["issues"]["501"]
+	assert "ai:needs-human" not in issue["labels"]
+	assert issue.get("closed", False) is False
+	assert not any(
+		"Stall recovery exhausted: escalated" in str(comment.get("body", ""))
+		for comment in issue["comments"]
+	)
+	assert "STALL_EXHAUSTED_ESCALATED issue=501 scope=standalone" in result["stdout"]
+	assert "outcome=label_failed" in result["stdout"]
+	standalone_state = _extract_latest_standalone_state(issue["comments"])
+	assert standalone_state is not None
+	assert standalone_state["status_since_ts"] == 1
+	assert standalone_state["phase_attempts"]["ai:awaiting-approval"] == 5
+
+
+def test_managed_failure_fingerprint_breaker_trips_and_label_survives_next_tick():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:clarification"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:clarification"]},
+		issue_comments={10: [_ffb_marker_comment(9001), _ffb_marker_comment(9002)]},
+	)
+	# Managed scope uses the non-terminal ai:needs-human, never the
+	# terminal ai:plan-failed (which would close the wave issue for good).
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+	assert "ai:plan-failed" not in result["issues"]["10"]["labels"]
+	assert len(_ffb_breaker_comments(result["issues"]["10"]["comments"])) == 1
+	assert "STALL_FINGERPRINT_BREAKER issue=10 scope=managed outcome=tripped" in result["stdout"]
+	assert "label=ai:needs-human" in result["stdout"]
+	wave_issue = result["latest_state"]["waves"][0]["issues"][0]
+	assert [entry["run"] for entry in wave_issue["failure_fingerprints"]] == ["9001", "9002"]
+	assert not any(str(comment.get("body", "")).startswith("/answer") for comment in result["issues"]["10"]["comments"])
+
+	second = _run_poller(
+		state=result["latest_state"],
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: list(result["issues"]["10"]["labels"])},
+		issue_comments={10: list(result["issues"]["10"]["comments"])},
+	)
+	assert "ai:needs-human" in second["issues"]["10"]["labels"]
+	assert len(_ffb_breaker_comments(second["issues"]["10"]["comments"])) == 1
+	assert "outcome=tripped" not in second["stdout"]
+	assert second["latest_state"]["waves"][0]["issues"][0]["status"] not in ("closed", "skipped")
+
+
+def test_managed_stall_exhaustion_escalates_needs_human_without_closing():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 1
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		env_overrides={"MAX_STALL_RECOVERIES_DONE": "1"},
+	)
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+	assert "ai:closed" not in result["issues"]["10"]["labels"]
+	assert result["issues"]["10"].get("closed", False) is False
+	assert "STALL_EXHAUSTED_ESCALATED issue=10 scope=managed phase=ai:done attempts=1 limit=1 outcome=labelled" in result["stdout"]
+
+
+def test_managed_stall_exhaustion_switch_off_closes_as_before():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 1
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		env_overrides={"MAX_STALL_RECOVERIES_DONE": "1", "STALL_FINGERPRINT_BREAKER_ENABLED": "false"},
+	)
+	assert "ai:closed" in result["issues"]["10"]["labels"]
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	assert "STALL_EXHAUSTED_ESCALATED" not in result["stdout"]
 
 
 def test_standalone_stall_recovery_honors_ai_done_phase_attempt_override():
@@ -16204,6 +17305,9 @@ def test_standalone_retrigger_review_does_not_increment_when_empty_commit_checko
 			},
 		],
 		mock_git_push_success=True,
+		# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+		# dispatch reaches the guarded empty-commit fallback this test covers.
+		review_dispatch_fail_for_prs=[417],
 		mock_git_checkout_fail=True,
 	)
 	standalone_state = _extract_latest_standalone_state(result["issues"]["502"]["comments"])
@@ -17309,6 +18413,361 @@ def test_validation_harness_hold_tick_runs_after_stale_pin_block_and_documents_a
 	for fn in ("_validation_harness_hold_compare() {", "_validation_harness_hold_issue_state() {"):
 		body = _extract_bash_function(script, fn)
 		assert "§14/§15 API budget" in body and "memoized" in body
+
+
+# ---------------------------------------------------------------------------
+# Tests: harness heal auto-revalidate (stuck-states P7b, Refs #8291)
+# ---------------------------------------------------------------------------
+
+_HHAR_MARKER = f"<!-- AI_HARNESS_HEAL_REVALIDATE_V1 heal={_HOLD_HEAL_ISSUE} -->"
+_HHAR_MERGED = {"closed": True, "state_reason": "completed", "closed_at": "2026-02-01T11:00:00Z", "labels": ["ai:merged"]}
+_HHAR_PREFIX = "HARNESS_HEAL_AUTO_REVALIDATE tracking_issue=192 "
+
+
+def _run_parked_harness_tick(
+	*, comments: list | None = None, heal: dict | None = _HHAR_MERGED, env: dict | None = None,
+	store: dict | None = None, hold: bool = False, pin: str | None = _HOLD_PIN_NEW,
+	pin_date: str | None = _HOLD_PIN_DATE,
+) -> dict:
+	"""A project parked failed with ai:harness-broken; no hold unless `hold`."""
+	extra: dict = {}
+	if pin:
+		extra["git_show_blobs"] = {
+			_HOLD_WRAPPER_PATH: (
+				"jobs:\n  v:\n    uses: shubhodeep1/coding-workflows/.github/workflows/"
+				f"validate.yml@{pin} # stable\n"
+			),
+		}
+		if pin_date:
+			extra["commit_dates"] = {pin: pin_date}
+	if heal is not None:
+		extra["issue_extra_fields"] = {_HOLD_HEAL_ISSUE: heal}
+	extra.update(store or {})
+	overrides = {
+		"VALIDATION_HARNESS_ROUTE_LOGIN": _HARNESS_ROUTE_LOGIN,
+		"VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED": "false",
+		"CWS_DEFAULT_BRANCH": "main",
+	}
+	overrides.update(env or {})
+	return _run_poller(
+		state=_harness_held_failed_state(with_hold=hold),
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed", "ai:harness-broken"],
+		tracking_comments=[_harness_route_comment()] if comments is None else comments,
+		capture_telegram_calls=True,
+		env_overrides=overrides,
+		mock_store_extra=extra,
+	)
+
+
+def _hhar_auto_comments(result: dict) -> list[str]:
+	return [b for b in _harness_comment_bodies(result) if _HHAR_MARKER in b and b.startswith("/revalidate")]
+
+
+def _assert_hhar_still_parked(result: dict) -> None:
+	output = result["stdout"] + result["stderr"]
+	ls = result.get("latest_state") or result["state_on_disk"]
+	assert ls["status"] == "failed", output
+	assert result["validation_dispatches"] == [], output
+	assert "ai:harness-broken" in result["tracking_labels"]
+	assert _hhar_auto_comments(result) == [], output
+
+
+def test_harness_heal_auto_revalidate_posts_and_resets_on_merged_heal_issue():
+	result = _run_parked_harness_tick()
+	output = result["stdout"] + result["stderr"]
+	auto = _hhar_auto_comments(result)
+	assert len(auto) == 1, output
+	assert auto[0].startswith(f"/revalidate harness heal issue shubhodeep1/coding-workflows#{_HOLD_HEAL_ISSUE} merged")
+	assert auto[0].rstrip().splitlines()[-1] == _HHAR_MARKER
+	ls = result["latest_state"]
+	assert ls["status"] == "validating", output
+	assert ls["validation_cycle"] == 1
+	assert "validation_last_raw_status" not in ls
+	assert len(result["validation_dispatches"]) == 1, output
+	assert "ai:harness-broken" not in result["tracking_labels"]
+	assert "ai:validation-failed" not in result["tracking_labels"]
+	assert "ai:validating" in result["tracking_labels"]
+	assert any("## 🔁 Validation reset via /revalidate" in b for b in _harness_comment_bodies(result))
+	assert f"{_HHAR_PREFIX}outcome=posted heal_issue={_HOLD_HEAL_ISSUE}" in output, output
+	assert _harness_api_reads(result) == (0, 1), result["api_calls"]
+	assert any(n["level"] == "DEBUG" and "posted /revalidate" in n["message"] for n in result["telegram_notifications"])
+
+
+def test_harness_heal_auto_revalidate_once_only_marker_is_trusted_only():
+	earlier = {
+		"body": f"Validation was resumed after the harness fix.\n\n{_HHAR_MARKER}\n",
+		"user": {"login": "github-actions[bot]"},
+		"author_association": "NONE",
+	}
+	result = _run_parked_harness_tick(comments=[_harness_route_comment(), earlier])
+	output = result["stdout"] + result["stderr"]
+	assert f"{_HHAR_PREFIX}outcome=skip heal_issue={_HOLD_HEAL_ISSUE} reason=already_posted" in output, output
+	assert _harness_api_reads(result) == (0, 0), result["api_calls"]
+	_assert_hhar_still_parked(result)
+
+	forged = {**earlier, "user": {"login": "outsider"}}
+	untrusted = _run_parked_harness_tick(comments=[_harness_route_comment(), forged])
+	out2 = untrusted["stdout"] + untrusted["stderr"]
+	assert f"{_HHAR_PREFIX}outcome=posted heal_issue={_HOLD_HEAL_ISSUE}" in out2, out2
+	assert len(_hhar_auto_comments(untrusted)) == 1
+	assert len(untrusted["validation_dispatches"]) == 1
+
+
+def test_harness_heal_auto_revalidate_waits_for_open_or_skips_unmerged_heal_issue():
+	open_result = _run_parked_harness_tick(heal={"closed": False})
+	out = open_result["stdout"] + open_result["stderr"]
+	assert f"{_HHAR_PREFIX}outcome=waiting heal_issue={_HOLD_HEAL_ISSUE} reason=heal_open" in out, out
+	assert _harness_api_reads(open_result) == (0, 1), open_result["api_calls"]
+	_assert_hhar_still_parked(open_result)
+
+	unmerged = _run_parked_harness_tick(heal={**_HHAR_MERGED, "labels": []})
+	out = unmerged["stdout"] + unmerged["stderr"]
+	assert f"{_HHAR_PREFIX}outcome=skip heal_issue={_HOLD_HEAL_ISSUE} reason=heal_closed_unmerged" in out, out
+	_assert_hhar_still_parked(unmerged)
+
+	unread = _run_parked_harness_tick(store={"fail_issue_get_for": [int(_HOLD_HEAL_ISSUE)]})
+	out = unread["stdout"] + unread["stderr"]
+	assert f"{_HHAR_PREFIX}outcome=waiting heal_issue={_HOLD_HEAL_ISSUE} reason=heal_read_failed" in out, out
+	_assert_hhar_still_parked(unread)
+
+
+def test_harness_heal_auto_revalidate_skips_active_hold_and_switch_off():
+	held = _run_parked_harness_tick(hold=True)
+	out = held["stdout"] + held["stderr"]
+	assert f"{_HHAR_PREFIX}outcome=skip heal_issue=none reason=hold_active" in out, out
+	assert _harness_api_reads(held) == (0, 0), held["api_calls"]
+	assert _hhar_auto_comments(held) == []
+	assert held["validation_dispatches"] == []
+
+	for value in ("false", "FALSE"):
+		off = _run_parked_harness_tick(env={"HARNESS_HEAL_AUTO_REVALIDATE_ENABLED": value})
+		out = off["stdout"] + off["stderr"]
+		assert "HARNESS_HEAL_AUTO_REVALIDATE" not in out, out
+		assert _harness_api_reads(off) == (0, 0), off["api_calls"]
+		_assert_hhar_still_parked(off)
+
+
+def test_harness_heal_auto_revalidate_needs_a_trusted_routable_marker():
+	cases = (
+		([], "no_route_marker"),
+		([_harness_route_comment(login="outsider")], "no_route_marker"),
+		([_harness_route_comment(outcome="bounced")], "route_bounced"),
+		([_harness_route_comment(outcome="already-fixed")], "route_already-fixed"),
+		([_harness_route_comment(issue="none")], "route_opened"),
+	)
+	for comments, reason in cases:
+		result = _run_parked_harness_tick(comments=comments)
+		out = result["stdout"] + result["stderr"]
+		assert f"{_HHAR_PREFIX}outcome=skip heal_issue=none reason={reason}" in out, (reason, out)
+		assert _harness_api_reads(result) == (0, 0), result["api_calls"]
+		_assert_hhar_still_parked(result)
+
+
+def test_harness_heal_auto_revalidate_waits_for_the_pin_to_carry_the_fix():
+	# The heal merged after the consumer's pinned release was cut: the only
+	# retry must wait, or it would rerun the old harness.
+	cases = (
+		({"pin_date": "2026-02-01T10:00:00Z"}, "heal_closed_after_pin"),
+		({"pin": None}, "pin_unresolved"),
+		({"pin_date": None}, "pin_date_unknown"),
+	)
+	for kwargs, reason in cases:
+		result = _run_parked_harness_tick(**kwargs)
+		out = result["stdout"] + result["stderr"]
+		assert f"{_HHAR_PREFIX}outcome=waiting heal_issue={_HOLD_HEAL_ISSUE} reason={reason}" in out, (reason, out)
+		_assert_hhar_still_parked(result)
+
+
+def test_harness_heal_auto_revalidate_post_failure_keeps_project_parked():
+	result = _run_parked_harness_tick(store={"fail_issue_comment_post_for": [192]})
+	out = result["stdout"] + result["stderr"]
+	assert f"::warning::{_HHAR_PREFIX}outcome=post_failed heal_issue={_HOLD_HEAL_ISSUE} reason=post_error" in out, out
+	assert result["state_on_disk"]["status"] == "failed"
+	assert result["validation_dispatches"] == []
+	assert "ai:harness-broken" in result["tracking_labels"]
+
+
+def test_harness_heal_auto_revalidate_pending_human_revalidate_wins():
+	result = _run_parked_harness_tick(comments=[_harness_route_comment(), "/revalidate"])
+	out = result["stdout"] + result["stderr"]
+	assert "HARNESS_HEAL_AUTO_REVALIDATE" not in out, out
+	assert _hhar_auto_comments(result) == []
+	assert result["latest_state"]["status"] == "validating", out
+	assert _harness_api_reads(result) == (0, 0), result["api_calls"]
+
+
+_HHAR_STUBS = """
+set -euo pipefail
+TRACKING_NUM=192
+GITHUB_REPOSITORY="${STUB_REPO:-owner/repo}"
+validation_harness_hold_active() { return 1; }
+unblock_trusted_login() { UNBLOCK_TRUSTED_LOGIN="${STUB_LOGIN}"; printf '%s' "${UNBLOCK_TRUSTED_LOGIN}"; }
+validation_harness_route_login() { printf 'pipeline-bot'; }
+validation_harness_marker() { printf '%s' "${STUB_MARKER}"; }
+_validation_harness_hold_issue_state() { echo "ISSUE_READ $1"; VHH_ISSUE_STATE=closed; VHH_ISSUE_MERGED=true; VHH_ISSUE_CLOSED_AT=2026-02-01T11:00:00Z; return 0; }
+declare -gA _HHAR_PIN_DATE_CACHE=()
+validation_harness_pin() { _VALIDATION_HARNESS_PIN_VALUE="${STUB_PIN}"; [ -n "${STUB_PIN}" ]; }
+gh_retry() { printf '%s' "${STUB_PIN_DATE}"; }
+gh_retry_to_file() { local out="$1"; shift; echo "POST_CALL" >&2; printf '%s' "${STUB_POST_RESPONSE}" > "${out}"; return "${STUB_POST_RC}"; }
+tg_notify() { :; }
+"""
+
+
+def _run_hhar_unit(**env: str) -> subprocess.CompletedProcess:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	fns = (
+		_extract_bash_function(script, "_iso8601_to_epoch() {")
+		+ _extract_bash_function(script, "_harness_heal_auto_revalidate_log() {")
+		+ _extract_bash_function(script, "harness_heal_auto_revalidate() {")
+	)
+	snippet = _HHAR_STUBS + fns + (
+		'\nharness_heal_auto_revalidate\n'
+		'echo "POSTED=${HHAR_POSTED_COMMENT_JSON}"\n'
+		'echo "COMMENTS=${COMMENTS}"\n'
+	)
+	base = {
+		"HARNESS_HEAL_AUTO_REVALIDATE_ENABLED": "true",
+		"ENABLE_VALIDATION": "true",
+		"COMMENTS_FETCH_OK": "true",
+		"COMMENTS_FOR_TRACKING_NUM": "192",
+		"COMMENTS": "[]",
+		"STUB_LOGIN": "github-actions[bot]",
+		"STUB_MARKER": json.dumps({"outcome": "opened", "issue": _HOLD_HEAL_ISSUE}),
+		"STUB_POST_RESPONSE": json.dumps({"id": 55}),
+		"STUB_POST_RC": "0",
+		"STUB_PIN": "c" * 40,
+		"STUB_PIN_DATE": "2026-02-01T12:00:00Z",
+	}
+	base.update(env)
+	return _run_bash_snippet(snippet, base)
+
+
+def test_harness_heal_auto_revalidate_fails_closed_without_comments_or_identity():
+	for env, reason, heal in (
+		({"COMMENTS_FETCH_OK": "false"}, "comments_unavailable", "none"),
+		({"COMMENTS_FOR_TRACKING_NUM": "7"}, "comments_unavailable", "none"),
+		({"STUB_LOGIN": ""}, "identity_unavailable", "none"),
+		({"COMMENTS": "{}"}, "comments_unavailable", _HOLD_HEAL_ISSUE),
+		({"ENABLE_VALIDATION": "false"}, "validation_disabled", "none"),
+	):
+		result = _run_hhar_unit(**env)
+		assert result.returncode == 0, result.stderr
+		assert f"{_HHAR_PREFIX}outcome=skip heal_issue={heal} reason={reason}" in result.stdout, (env, result.stdout)
+		assert "ISSUE_READ" not in result.stdout
+		assert "POST_CALL" not in result.stderr
+		assert "POSTED=\n" in result.stdout
+
+
+def test_harness_heal_auto_revalidate_post_outcomes_unit():
+	ok = _run_hhar_unit()
+	assert ok.returncode == 0, ok.stderr
+	assert f"ISSUE_READ {_HOLD_HEAL_ISSUE}" in ok.stdout
+	posted_line = next(out_line for out_line in ok.stdout.splitlines() if out_line.startswith("POSTED="))
+	posted = json.loads(posted_line[len("POSTED="):])
+	assert posted["id"] == 55
+	assert posted["user"] == {"login": "github-actions[bot]"}
+	assert posted["author_association"] == "OWNER"
+	assert posted["body"].rstrip().splitlines()[-1] == _HHAR_MARKER
+	assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", posted["created_at"])
+	comments_line = next(out_line for out_line in ok.stdout.splitlines() if out_line.startswith("COMMENTS="))
+	assert json.loads(comments_line[len("COMMENTS="):]) == [posted]
+	assert f"{_HHAR_PREFIX}outcome=posted heal_issue={_HOLD_HEAL_ISSUE}" in ok.stdout
+
+	for env, reason in (({"STUB_POST_RC": "1"}, "post_error"), ({"STUB_POST_RESPONSE": "{}"}, "no_comment_id")):
+		failed = _run_hhar_unit(**env)
+		assert failed.returncode == 0, failed.stderr
+		assert f"::warning::{_HHAR_PREFIX}outcome=post_failed heal_issue={_HOLD_HEAL_ISSUE} reason={reason}" in failed.stdout
+		assert "POSTED=\n" in failed.stdout
+		assert "COMMENTS=[]\n" in failed.stdout
+
+
+def test_harness_heal_auto_revalidate_pin_wait_unit():
+	for env, reason in (
+		({"STUB_PIN_DATE": "2026-02-01T10:00:00Z"}, "heal_closed_after_pin"),
+		({"STUB_PIN": ""}, "pin_unresolved"),
+		({"STUB_PIN_DATE": ""}, "pin_date_unknown"),
+	):
+		result = _run_hhar_unit(**env)
+		assert result.returncode == 0, result.stderr
+		assert f"{_HHAR_PREFIX}outcome=waiting heal_issue={_HOLD_HEAL_ISSUE} reason={reason}" in result.stdout, (env, result.stdout)
+		assert "POST_CALL" not in result.stderr
+		assert "POSTED=\n" in result.stdout
+	# The source repository pins a branch, so it skips the pin check.
+	own = _run_hhar_unit(STUB_REPO="shubhodeep1/coding-workflows", STUB_PIN="")
+	assert f"{_HHAR_PREFIX}outcome=posted heal_issue={_HOLD_HEAL_ISSUE}" in own.stdout, own.stdout
+
+
+def test_harness_heal_auto_revalidate_config_defaults_and_invalid_value():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = script.index("# Harness heal auto-revalidate (Refs #8291, stuck-states plan P7 item 1)")
+	block = script[start:script.index("\nesac\n", start) + len("\nesac\n")]
+	report = '\necho "auto=${HARNESS_HEAL_AUTO_REVALIDATE_ENABLED}"\n'
+	for value, expected, warned in (
+		(None, "true", False), ("", "true", False), ("TRUE", "true", False),
+		("False", "false", False), ("maybe-secret", "true", True),
+	):
+		env = {} if value is None else {"HARNESS_HEAL_AUTO_REVALIDATE_ENABLED": value}
+		run_env = {k: v for k, v in os.environ.items() if k != "HARNESS_HEAL_AUTO_REVALIDATE_ENABLED"}
+		run_env.update(env)
+		result = subprocess.run(["bash", "-c", block + report], env=run_env, capture_output=True, text=True, check=False)
+		assert result.returncode == 0, result.stderr
+		assert f"auto={expected}" in result.stdout, (value, result.stdout)
+		warning = "::warning::HARNESS_HEAL_AUTO_REVALIDATE config=HARNESS_HEAL_AUTO_REVALIDATE_ENABLED outcome=default reason=invalid_value"
+		assert (warning in result.stdout) is warned
+		assert "secret" not in result.stdout
+
+
+def test_validation_harness_issue_state_reads_four_field_cache():
+	fn = _extract_bash_function(POLLER_SCRIPT.read_text(encoding="utf-8"), "_validation_harness_hold_issue_state() {")
+	snippet = (
+		'declare -gA _VALIDATION_HARNESS_ISSUE_CACHE=()\n'
+		'_VALIDATION_HARNESS_ISSUE_CACHE[900]="closed|completed|2026-02-01T11:00:00Z|true"\n'
+		'_VALIDATION_HARNESS_ISSUE_CACHE[901]="closed|not_planned|2026-02-02T00:00:00Z|false"\n'
+		'_VALIDATION_HARNESS_ISSUE_CACHE[902]="open|||junk"\n'
+		+ fn
+		+ '\nfor n in 900 901 902; do _validation_harness_hold_issue_state "$n"; '
+		'echo "$n rc=$? ${VHH_ISSUE_STATE}|${VHH_ISSUE_STATE_REASON}|${VHH_ISSUE_CLOSED_AT}|${VHH_ISSUE_MERGED}"; done\n'
+	)
+	result = _run_bash_snippet(snippet, {})
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.splitlines() == [
+		"900 rc=0 closed|completed|2026-02-01T11:00:00Z|true",
+		"901 rc=0 closed|not_planned|2026-02-02T00:00:00Z|false",
+		"902 rc=0 open|||false",
+	], result.stdout
+
+
+def test_validation_harness_marker_route_latest_ignores_fingerprint():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	fn = _extract_bash_function(script, "validation_harness_marker() {")
+	other_fp = "e" * 64
+	comments = [
+		{**_harness_route_comment(issue="800"), "id": 1, "created_at": "2026-01-01T00:00:01Z"},
+		{**_harness_route_comment(issue="900", fp=other_fp), "id": 2, "created_at": "2026-01-01T00:00:02Z"},
+		{**_harness_route_comment(issue="999", login="outsider"), "id": 3, "created_at": "2026-01-01T00:00:03Z"},
+	]
+	snippet = (
+		'validation_harness_route_login() { printf "pipeline-bot"; }\n' + fn
+		+ '\nvalidation_harness_marker route-latest any | jq -r .issue'
+		+ f'\nvalidation_harness_marker route {_HARNESS_OWNER_FP} | jq -r .issue'
+		+ '\nvalidation_harness_marker route-latest other; echo "[$?]"\n'
+	)
+	result = _run_bash_snippet(snippet, {"COMMENTS": json.dumps(comments)})
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.splitlines() == ["900", "800", "[0]"], result.stdout
+
+
+def test_harness_heal_auto_revalidate_runs_inside_revalidate_gate():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	gate = script.index("# /revalidate — manual reset from validation-failed")
+	call = script.index("harness_heal_auto_revalidate || true", gate)
+	handoff = script.index('REVALIDATE_COMMENT_JSON="${HHAR_POSTED_COMMENT_JSON}"', call)
+	consume = script.index('REVALIDATE_COMMENT_BODY="$(printf', gate)
+	assert gate < call < handoff < consume
+	assert script.index("harness_heal_auto_revalidate() {") > script.index("validation_harness_hold_tick() {")
+	assert "§14 API budget" in script[gate:call]
 
 
 # ---------------------------------------------------------------------------
@@ -22480,6 +23939,9 @@ def test_candidate_and_linked_status_helpers_share_repo_filter():
 
 
 def test_retrigger_review_keeps_empty_commit_path_when_no_prior_autofix_failure():
+	# cut-ci-runner-time Phase 3: with no prior failed review run the review
+	# workflow is dispatched first; the empty commit stays as the fallback
+	# when that dispatch fails, and is logged as the fallback action.
 	state = _base_state(status="in_progress")
 	issue = state["waves"][0]["issues"][0]
 	issue["status"] = "in_progress"
@@ -22506,18 +23968,90 @@ def test_retrigger_review_keeps_empty_commit_path_when_no_prior_autofix_failure(
 			},
 		],
 		mock_git_push_success=True,
+		review_dispatch_fail_for_prs=[78],
 	)
 	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "78"]
-	assert dispatches_for_pr == [], (
-		f"expected no review_autofix redispatch when no prior failed autofix run exists; "
-		f"got: {dispatches_for_pr}"
-	)
+	assert dispatches_for_pr == [], dispatches_for_pr
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 1
 	assert result.get("git_push_calls", []), (
-		"expected the no-prior-failure case to exercise the empty-commit push path"
+		"expected a failed dispatch to fall back to the empty-commit push"
 	)
+	assert "Issue #10 PR #78 dispatch helper returned rc=1; falling back to empty-commit push." in result["stdout"]
+	assert "action=retrigger_review_empty_commit_fallback" in result["stdout"]
 
+
+def test_retrigger_review_dispatches_review_first_when_last_review_succeeded():
+	# cut-ci-runner-time Phase 3 (plan D3): a stalled PR whose last review run
+	# succeeded is re-triggered by a review dispatch, not an empty commit.
+	state, prs = _retrigger_review_pr_state(97, "claude/retrigger-review-dispatch-first")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 97}, prs=prs,
+		active_autofix_runs=[
+			{"workflow": "internal-review.yml", "branch": "claude/retrigger-review-dispatch-first",
+				"status": "completed", "conclusion": "success", "createdAt": "2026-11-15T01:00:00Z"},
+		],
+		mock_git_push_success=True,
+	)
+	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if d.get("pr_number") == 97]
+	assert len(dispatches_for_pr) == 1, result.get("review_dispatches")
+	assert result.get("git_push_calls", []) == [], "dispatch-first must not push an empty commit"
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 1
+	assert "Issue #10 PR #97 dispatched the review workflow instead of pushing an empty commit." in result["stdout"]
+	assert "action=retrigger_review_empty_commit_fallback" not in result["stdout"]
+
+
+def test_retrigger_review_dispatch_first_with_no_review_history():
+	# No review run at all on the branch: still dispatch first, no empty commit.
+	state, prs = _retrigger_review_pr_state(98, "claude/retrigger-review-dispatch-first-none")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 98}, prs=prs,
+		mock_git_push_success=True,
+	)
+	assert any(d.get("pr_number") == 98 for d in result.get("review_dispatches", [])), result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 1
+
+
+def test_retrigger_review_dispatch_first_skip_does_not_push_or_increment():
+	# A queued review run on the branch: neither the dispatch (rc 2 / in-flight
+	# guard) nor the empty commit fires, and no recovery budget is spent.
+	state, prs = _retrigger_review_pr_state(99, "claude/retrigger-review-dispatch-first-active")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 99}, prs=prs,
+		active_autofix_runs=[
+			{"workflow": "review_autofix.yml", "branch": "claude/retrigger-review-dispatch-first-active",
+				"status": "queued", "conclusion": ""},
+		],
+		mock_git_push_success=True,
+	)
+	assert [d for d in result.get("review_dispatches", []) if d.get("pr_number") == 99] == []
+	assert result.get("git_push_calls", []) == []
+	assert "Issue #10 PR #99 dispatch helper skipped (already active or already dispatched this cycle)" in result["stdout"]
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
+
+
+def test_retrigger_review_failed_redispatch_falls_back_once_without_second_dispatch():
+	# Last run failed and its redispatch failed: the empty-commit fallback
+	# runs and the dispatch-first step is not tried a second time.
+	state, prs = _retrigger_review_pr_state(100, "claude/retrigger-review-failed-then-fallback")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 100}, prs=prs,
+		active_autofix_runs=[
+			{"workflow": "review_autofix.yml", "branch": "claude/retrigger-review-failed-then-fallback",
+				"status": "completed", "conclusion": "failure"},
+		],
+		mock_git_push_success=True,
+		review_dispatch_fail_for_prs=[100],
+	)
+	assert result.get("git_push_calls", []), result["stdout"]
+	assert result["stdout"].count("Issue #10 PR #100 dispatch helper returned rc=1; falling back to empty-commit push.") == 1, result["stdout"]
+	assert "action=retrigger_review_empty_commit_fallback" in result["stdout"]
 
 def test_retrigger_review_retries_inconclusive_pr_lookup_without_reimplementing():
 	state = _base_state(status="in_progress")
@@ -22804,6 +24338,9 @@ def test_retrigger_review_ignores_pr_named_dispatch_run_of_another_pr():
 			},
 		],
 		mock_git_push_success=True,
+		# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+		# dispatch reaches the guarded empty-commit fallback this test covers.
+		review_dispatch_fail_for_prs=[91],
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 1, issue_entry
@@ -22854,6 +24391,9 @@ def test_retrigger_review_pushes_past_spoofed_pr_named_run():
 			prs=prs,
 			actions_runs_workflow_runs=[_retrigger_review_spoof_run(93, **overrides)],
 			mock_git_push_success=True,
+			# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+			# dispatch reaches the guarded empty-commit fallback this test covers.
+			review_dispatch_fail_for_prs=[93],
 		)
 		issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 		assert issue_entry["stall_recovery_count"] == 1, (overrides, issue_entry)
@@ -23084,6 +24624,9 @@ def test_retrigger_review_ignores_pr_named_failure_superseded_by_newer_head_bran
 			},
 		],
 		mock_git_push_success=True,
+		# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+		# dispatch reaches the guarded empty-commit fallback this test covers.
+		review_dispatch_fail_for_prs=[93],
 	)
 	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "93"]
 	assert dispatches_for_pr == [], dispatches_for_pr
@@ -23185,6 +24728,9 @@ def test_retrigger_review_ignores_inflight_run_on_unrelated_branch():
 			},
 		],
 		mock_git_push_success=True,
+		# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+		# dispatch reaches the guarded empty-commit fallback this test covers.
+		review_dispatch_fail_for_prs=[81],
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 1, (
@@ -23240,6 +24786,9 @@ def test_retrigger_review_inflight_guard_treats_zombie_run_as_eligible():
 			},
 		],
 		mock_git_push_success=True,
+		# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+		# dispatch reaches the guarded empty-commit fallback this test covers.
+		review_dispatch_fail_for_prs=[82],
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 1, (
@@ -23347,6 +24896,9 @@ def test_retrigger_review_skips_empty_commit_when_pr_head_advanced_after_snapsho
 			},
 		],
 		mock_git_push_success=True,
+		# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+		# dispatch reaches the guarded empty-commit fallback this test covers.
+		review_dispatch_fail_for_prs=[83],
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 0, (
@@ -23387,6 +24939,9 @@ def test_retrigger_review_does_not_increment_when_empty_commit_checkout_fails():
 			},
 		],
 		mock_git_push_success=True,
+		# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+		# dispatch reaches the guarded empty-commit fallback this test covers.
+		review_dispatch_fail_for_prs=[85],
 		mock_git_checkout_fail=True,
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
@@ -26617,16 +28172,20 @@ def test_wave_dispatch_gate_invokes_verifier_against_integration_ref():
 	assert "verifier exited ${_gate_exit} (unexpected)" in script, (
 		"wave-dispatch gate warning must surface unexpected verifier exit codes while preserving fail-open dispatch"
 	)
-	assert "trap 'rm -f \"${_gate_fp_file:-}\" \"${_gate_log_file:-}\" 2>/dev/null || true' EXIT" in script, (
-		"wave-dispatch gate must protect temp-file cleanup with an EXIT trap"
+	assert "trap '_orch_poll_cycle_exit_rc=$?; rm -f \"${_gate_fp_file:-}\" \"${_gate_log_file:-}\" 2>/dev/null || true; _orch_poll_cycle_on_exit \"${_orch_poll_cycle_exit_rc}\" || true' EXIT" in script, (
+		"wave-dispatch gate must protect temp-file cleanup with an EXIT trap chained to the "
+		"ORCH_POLL_CYCLE_SUMMARY exit handler"
 	)
 	assert script.index(
-		"trap 'rm -f \"${_gate_fp_file:-}\" \"${_gate_log_file:-}\" 2>/dev/null || true' EXIT"
+		"trap '_orch_poll_cycle_exit_rc=$?; rm -f \"${_gate_fp_file:-}\" \"${_gate_log_file:-}\" 2>/dev/null || true; _orch_poll_cycle_on_exit \"${_orch_poll_cycle_exit_rc}\" || true' EXIT"
 	) < script.index('_gate_fp_file="$(mktemp'), (
 		"wave-dispatch gate must register cleanup before allocating temp files"
 	)
 	assert 'trap - EXIT' in script, (
 		"wave-dispatch gate must clear its temporary EXIT trap after explicit cleanup"
+	)
+	assert "            trap - EXIT\n            _orch_poll_cycle_install_exit_trap || true\n" in script, (
+		"wave-dispatch gate must reinstall the ORCH_POLL_CYCLE_SUMMARY EXIT trap right after clearing its own"
 	)
 	# Failure-path side effects: stall cycle bump, tracking comment,
 	# telegram alert.
@@ -27166,8 +28725,10 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 		'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh '
 		'workflow_failure_heal.py workflow_failure_heal_autofix_report.sh '
 		'ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl provider_outage.py ai_engine_fallback_report.sh '
-		'implement_step_prepush_test_gate.sh prepush_test_gate_run.sh validate_changed_files_syntax.sh"'
+		'implement_step_prepush_test_gate.sh prepush_test_gate_run.sh validate_changed_files_syntax.sh chatgpt_codex_relay.py"'
 	) in stage_helper_body
+	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} ci_docs_only_paths.sh"' in stage_helper_body
+	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} ci_sync_quick.sh"' in stage_helper_body
 	assert "for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do" in stage_helper_body
 	assert 'src=".codex-workflow-src/scripts/${f}"' in stage_helper_body
 	assert "Bootstrapped ${f} from main snapshot (branch copy ignored)." not in stage_helper_body
@@ -28452,6 +30013,20 @@ def test_poller_sandbox_bounds_agents_md_copy():
 		small_src.write_bytes(small_payload)
 		_copy_sandbox_agents_md(small_src, small_dst)
 		assert small_dst.read_bytes() == small_payload
+		# Synthetic oversized inputs exercise the cut whatever the live size is.
+		big_payload = ("line é " * 40 + "\n").encode("utf-8") * 3000
+		assert len(big_payload) > _SANDBOX_AGENTS_MD_MAX_BYTES
+		small_src.write_bytes(big_payload)
+		_copy_sandbox_agents_md(small_src, small_dst)
+		big_copy = small_dst.read_bytes()
+		assert big_copy.endswith(marker)
+		assert len(big_copy) <= _SANDBOX_AGENTS_MD_MAX_BYTES + len(marker)
+		big_body = big_copy[: -len(marker)]
+		assert big_body.endswith(b"\n") and big_payload.startswith(big_body)
+		assert big_body.decode("utf-8")
+		small_src.write_bytes(b"x" * (_SANDBOX_AGENTS_MD_MAX_BYTES + 1))
+		_copy_sandbox_agents_md(small_src, small_dst)
+		assert small_dst.read_bytes() == marker
 
 
 def _extract_bash_function(script: str, signature: str) -> str:
@@ -29825,7 +31400,14 @@ def _run_needs_human_park(tmp: Path, **env_extra: str) -> tuple[subprocess.Compl
 	(tmp / "scripts" / "operator_step_issue.py").write_text(
 		"import json, os, sys\n"
 		"open(os.environ['FAKE_PARK_CALLS'], 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
-		"print(json.dumps({'issue': 900, 'newly_parked': True}))\n",
+		"sub = sys.argv[2]\n"
+		"if sub == 'park':\n"
+		"    print(json.dumps({'issue': 900, 'newly_parked': True, 'parking': '2026-10-08T00:00:00Z'}))\n"
+		"elif sub == 'alert-claim':\n"
+		"    claimed = os.environ.get('FAKE_ALERT_CLAIMED', 'true') == 'true'\n"
+		"    print(json.dumps({'claimed': claimed, 'comment_id': 5000} if claimed else {'claimed': False, 'reason': 'already_attempted'}))\n"
+		"else:\n"
+		"    print(json.dumps({'confirmed': True}))\n",
 		encoding="utf-8",
 	)
 	harness = tmp / "harness.sh"
@@ -29833,7 +31415,11 @@ def _run_needs_human_park(tmp: Path, **env_extra: str) -> tuple[subprocess.Compl
 		"set -uo pipefail\n"
 		'UNBLOCK_TRUSTED_LOGIN=""\n'
 		'unblock_trusted_login() { UNBLOCK_TRUSTED_LOGIN="pipeline-bot"; printf "%s" "$UNBLOCK_TRUSTED_LOGIN"; }\n'
-		'tg_notify() { printf "%s %s\\n" "$2" "$1" >> "$FAKE_ALERTS"; }\n'
+		'tg_alert_configured() { [ "${FAKE_TG_UNCONFIGURED:-}" != "true" ]; }\n'
+		'tg_send_msg() { printf "%s %s\\n" "$2" "$1" >> "$FAKE_ALERTS"; printf "777"; }\n'
+		'tg_store_msg_id() { printf "%s %s\\n" "$1" "$2" >> "$FAKE_ALERTS.store"; }\n'
+		'_gh_url() { printf "https://github.com/%s/%s" "$GITHUB_REPOSITORY" "$1"; }\n'
+		'_smoke_fixture_alert_silenced() { [ "${FAKE_SMOKE_SILENCED:-}" = "true" ]; }\n'
 		+ park + '\nneeds_human_park_project "recovery_exhausted"\n',
 		encoding="utf-8",
 	)
@@ -29868,6 +31454,45 @@ def test_needs_human_digest_parks_the_project_when_the_judge_is_off():
 			assert args[args.index(flag) + 1] == value, flag
 		if shutil.which("jq"):
 			assert alerts.read_text(encoding="utf-8").startswith("CRITICAL Project #40 parked in needs-human digest #900")
+
+
+def test_needs_human_project_park_alert_claims_sends_once_and_confirms():
+	if not shutil.which("jq"):
+		raise unittest.SkipTest("jq is required")
+	with tempfile.TemporaryDirectory() as tmp:
+		result, calls, alerts = _run_needs_human_park(Path(tmp), UNBLOCK_JUDGE_ENABLED="false", GITHUB_RUN_ID="123")
+		assert result.returncode == 0, result.stderr
+		lines = calls.read_text(encoding="utf-8").splitlines()
+		assert [line.split()[1] for line in lines] == ["park", "alert-claim", "alert-confirm"]
+		claim = lines[1].split()
+		assert claim[claim.index("--parking") + 1] == "2026-10-08T00:00:00Z" and claim[claim.index("--item") + 1] == "40"
+		assert claim[claim.index("--trusted-login") + 1] == "pipeline-bot"
+		confirm = lines[2].split()
+		assert confirm[confirm.index("--comment-id") + 1] == "5000" and confirm[confirm.index("--message-id") + 1] == "777"
+		text = alerts.read_text(encoding="utf-8")
+		assert text.count("CRITICAL Project #40 parked in needs-human digest #900") == 1
+		assert "Tracking: https://github.com/o/r/issues/40" in text and "Run: https://github.com/o/r/actions/runs/123" in text
+		assert (Path(tmp) / "alerts.txt.store").read_text(encoding="utf-8").strip() == "40 777"
+
+
+def test_needs_human_project_park_alert_never_sends_without_a_won_claim():
+	# The custom runner calls each test as func(), so the cases loop here
+	# instead of using pytest.mark.parametrize.
+	if not shutil.which("jq"):
+		raise unittest.SkipTest("jq is required")
+	cases = [
+		({"FAKE_ALERT_CLAIMED": "false"}, ["park", "alert-claim"], None),
+		({"FAKE_SMOKE_SILENCED": "true"}, ["park"], "reason=smoke_silenced"),
+		({"FAKE_TG_UNCONFIGURED": "true"}, ["park"], "reason=telegram_unconfigured"),
+	]
+	for env, subcommands, log in cases:
+		with tempfile.TemporaryDirectory() as tmp:
+			result, calls, alerts = _run_needs_human_park(Path(tmp), UNBLOCK_JUDGE_ENABLED="false", **env)
+			assert result.returncode == 0, result.stderr
+			assert [line.split()[1] for line in calls.read_text(encoding="utf-8").splitlines()] == subcommands, env
+			assert not alerts.exists(), env
+			if log:
+				assert f"NEEDS_HUMAN_ALERT item=40 parking=2026-10-08T00:00:00Z outcome=skip {log}" in result.stdout
 
 
 def test_needs_human_digest_park_never_triggers_the_staged_support_latch_release():
@@ -30783,7 +32408,13 @@ def test_integration_test_repair_wiring_and_poll_workflow_forwarding():
 	assert fn.count("gh workflow run") == 1
 	assert "_has_active_autofix_run" not in fn and "_safe_gh_jq" not in fn and "gh api" not in fn
 	calls = script.count('_dispatch_integration_test_repair "${TRACKING_NUM:-}"')
-	assert calls == 4, calls
+	assert calls == 5, calls
+	# Stuck-states P12: the fifth dispatch is the contract-list-union success
+	# path, which runs test repair like the plain merge (Refs #9432).
+	union = script[script.index('if sync_contract_list_union_merge "${integration_branch}" "${default_branch}"; then'):]
+	union = union[:union.index("    return 0")]
+	assert 'mark_integration_sync_clean "${default_branch}"' in union
+	assert '_dispatch_integration_test_repair "${TRACKING_NUM:-}" "${integration_branch}" "" "${default_branch}"' in union
 	clean_calls = re.findall(r'mark_integration_sync_clean "\$\{default_branch\}"\n\s+_dispatch_integration_test_repair ', script)
 	assert len(clean_calls) == 3, len(clean_calls)
 	rtm = script[script.index('echo "  PR #${RTM_PR} merged directly."'):]
@@ -32594,6 +34225,461 @@ def test_no_automation_reopens_closed_heal_issues() -> None:
 		text = (REPO_ROOT / relative).read_text(encoding="utf-8")
 		assert "reopen" not in text.lower(), relative
 		assert not re.search(r"PATCH[^\n]*state=open|state=open[^\n]*PATCH", text), relative
+
+
+def _contract_list_union_run(**kwargs) -> dict:
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	return _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+		mock_local_contract_list_conflict=True,
+		mock_git_push_success=True,
+		**kwargs,
+	)
+
+
+def test_integration_sync_contract_list_union_merges_without_dispatch():
+	# Stuck-states P12: a 409 whose only conflict is an append to a
+	# db/contracts entrypoint list is merged and pushed by the poller
+	# itself; the conflict resolver is not dispatched.
+	try:
+		import yaml  # noqa: F401
+	except ImportError:
+		raise unittest.SkipTest("PyYAML not available in test environment")
+	result = _contract_list_union_run(merge_tree_conflict_paths=["db/contracts/x.yml"])
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SYNC_LIST_UNION_V1:" in combined_log and "outcome=merged" in combined_log, combined_log[-3000:]
+	assert result["review_dispatches"] == []
+	assert any("HEAD:refs/heads/orchestrator/project-192" in call for call in result.get("git_push_calls", []))
+	sync = result["latest_state"]["sync"]
+	assert sync["last_sync_outcome"] == "merged-deterministic"
+	assert sync["status"] == "active"
+	assert sync["last_list_union_paths"] == ["db/contracts/x.yml"]
+	assert sync["last_conflict_paths"] == []
+	assert sync["last_list_union_at"]
+	assert int(result["latest_state"].get("integration_conflict_unresolved_ticks", 0) or 0) == 0
+	bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	resolved = [b for b in bodies if "## ✅ Integration sync auto-resolved (contract list union)" in b]
+	assert len(resolved) == 1
+	assert "- `db/contracts/x.yml`" in resolved[0]
+	assert not any("## ⚠️ Integration sync conflict" in b for b in bodies)
+
+
+def test_integration_sync_contract_list_union_mixed_paths_falls_open():
+	# A conflict on any non-contract path keeps the legacy conflict path,
+	# without creating a worktree or pushing.
+	result = _contract_list_union_run(merge_tree_conflict_paths=["db/contracts/x.yml", "backend/app.py"])
+	combined_log = result["stdout"] + result["stderr"]
+	assert "outcome=ineligible reason=non_contract_path" in combined_log
+	assert not any("HEAD:refs/heads/orchestrator/project-192" in call for call in result.get("git_push_calls", []))
+	assert not any("sync-list-union-wt-" in " ".join(call) for call in result.get("git_worktree_add_calls", []))
+	sync = result["latest_state"]["sync"]
+	assert sync["status"] == "conflict"
+	assert sync["last_sync_outcome"] == "conflict"
+	assert "last_list_union_paths" not in sync
+	bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert any("## ⚠️ Integration sync conflict" in b for b in bodies)
+	assert not any("contract list union" in b for b in bodies)
+
+
+def test_integration_sync_contract_list_union_disabled_matches_legacy():
+	# ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED=false restores the legacy path
+	# exactly: no union attempt, no log line, the conflict comment.
+	result = _contract_list_union_run(
+		merge_tree_conflict_paths=["db/contracts/x.yml"],
+		env_overrides={"ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED": "false"},
+	)
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SYNC_LIST_UNION_V1" not in combined_log
+	assert not any("HEAD:refs/heads/orchestrator/project-192" in call for call in result.get("git_push_calls", []))
+	sync = result["latest_state"]["sync"]
+	assert sync["status"] == "conflict"
+	assert sync["last_conflict_paths"] == ["db/contracts/x.yml"]
+	assert "last_list_union_paths" not in sync
+	bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert any("## ⚠️ Integration sync conflict" in b and "- `db/contracts/x.yml`" in b for b in bodies)
+	assert not any("contract list union" in b for b in bodies)
+
+
+def test_integration_sync_contract_list_union_wiring_contract():
+	# The flag defaults to true in the poller and both poll env blocks, the
+	# helper is resolved fail-open (not a required staged script), and the
+	# union attempt runs before the conflict state is recorded.
+	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED="${ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED:-true}"' in poller
+	assert '"${ORCH_SCRIPTS_ROOT}/sync_contract_list_union.py"' in poller
+	sync_body = poller.split("sync_default_into_integration_branch() {", 1)[1].split("\n}\n", 1)[0]
+	assert sync_body.index('if sync_contract_list_union_merge "${integration_branch}" "${default_branch}"; then') \
+		< sync_body.index('"last_sync_outcome": "conflict"')
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	line = "ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED: ${{ vars.ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED || 'true' }}"
+	assert workflow.count(line) == workflow.count(
+		"INTEGRATION_CONFLICT_PARK_ENABLED: ${{ vars.INTEGRATION_CONFLICT_PARK_ENABLED || 'true' }}") == 2
+	assert "python3 -m pip install --quiet 'pyyaml==6.0.2'" in workflow
+
+
+# ---------------------------------------------------------------------------
+# Issue #8984: FINAL_MERGE_AUTO_RESUME — a project parked by final-merge
+# exhaustion is retried once per final PR head once its blocker clears
+# (incident shubhodeep1/fun-token-multi-chain#579 / #596).
+# ---------------------------------------------------------------------------
+
+_FMAR_PR = 352
+_FMAR_BRANCH = "orchestrator/project-192"
+
+
+def _final_merge_exhausted_state(**extra: object) -> dict:
+	state = _base_state(status="failed")
+	state.update(
+		{
+			"integration_branch": _FMAR_BRANCH,
+			"validation_cycle": 2,
+			"final_merge_pr": _FMAR_PR,
+			"final_merge_status": "failed",
+			"final_merge_attempt_count": 3,
+			"final_merge_error": "required status check coding-workflows/workflow-integrity failed",
+			"final_merge_failure_kind": "final_merge_exhausted",
+			"final_merge_failure_head_sha": "",
+			"validation_last_passed_sha": "__integration_head__",
+		}
+	)
+	state.update(extra)
+	return state
+
+
+def _final_merge_open_pr(**extra: object) -> dict:
+	pr = {
+		"number": _FMAR_PR,
+		"state": "open",
+		"draft": False,
+		"baseRefName": "main",
+		"headRefName": _FMAR_BRANCH,
+		"headSha": "__integration_head__",
+		"mergeable": True,
+		"mergeable_state": "clean",
+	}
+	pr.update(extra)
+	return pr
+
+
+def _fmar_history_payload() -> dict:
+	return _validation_history_payload(
+		integration_sha="__integration_head__",
+		entries=[_extfin_history_entry("passed")],
+	)
+
+
+def _run_final_merge_exhausted_tick(
+	state: dict,
+	*,
+	prs: list[dict] | None = None,
+	env_overrides: dict[str, str] | None = None,
+	tracking_labels: list[str] | None = None,
+	**poller_kwargs: object,
+) -> dict:
+	poller_kwargs.setdefault("compare_ahead_by", 1)
+	# validation passed and was recorded for the parked head.
+	poller_kwargs.setdefault("mock_validation_history_payload", _fmar_history_payload())
+	return _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:blocked"] if tracking_labels is None else tracking_labels,
+		issue_labels={10: ["ai:merged"]},
+		prs=[_final_merge_open_pr()] if prs is None else prs,
+		existing_branches=["main", _FMAR_BRANCH],
+		pull_ref_shas={_FMAR_PR: "__integration_head__"},
+		capture_telegram_calls=True,
+		env_overrides=env_overrides or {},
+		**poller_kwargs,
+	)
+
+
+def _fmar_log(result: dict) -> str:
+	return result["stdout"] + result["stderr"]
+
+
+def _fmar_marker_comments(result: dict) -> list[str]:
+	return [
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if "<!-- final-merge-auto-resume:" in comment["body"]
+	]
+
+
+def test_final_merge_auto_resume_retries_green_mergeable_pr() -> None:
+	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state())
+	head = result["sandbox_sha_aliases"]["__integration_head__"]
+	log = _fmar_log(result)
+	assert f"FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=resumed final_pr={_FMAR_PR} head_sha={head}" in log
+	assert _FMAR_PR in result.get("merged_prs", [])
+	latest = result["latest_state"]
+	assert latest["status"] == "complete"
+	assert latest["final_merge_attempt_count"] == 0
+	assert latest["final_merge_failure_kind"] is None
+	assert latest["final_merge_auto_resume_head_shas"] == [head]
+	assert "ai:validated" in result["tracking_labels"]
+	assert "ai:blocked" not in result["tracking_labels"]
+	assert "ai:needs-human" not in result["tracking_labels"]
+	markers = _fmar_marker_comments(result)
+	assert len(markers) == 1
+	assert markers[0].startswith(f"<!-- final-merge-auto-resume:{head} -->")
+	assert "FINAL_MERGE_AUTO_RESUME_ENABLED=false" in markers[0]
+	assert "Project already failed, skipping." not in log
+
+
+def test_final_merge_exhaustion_records_failure_kind_and_head_sha() -> None:
+	state = _base_state(status="validating")
+	state.update(
+		{
+			"integration_branch": _FMAR_BRANCH,
+			"validation_cycle": 2,
+			"final_merge_pr": _FMAR_PR,
+			"final_merge_status": "pending",
+			"final_merge_attempt_count": 0,
+			"validation_last_dispatch_ts": 0,
+			"validation_last_dispatch_cycle": 2,
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validating", "ai:validated"],
+		validation_workflow_runs=[{
+			"status": "completed",
+			"conclusion": "success",
+			"created_at": "2026-01-01T00:00:00Z",
+			"display_title": "Internal: AI Validate [tracking:192]",
+		}],
+		issue_labels={10: ["ai:merged"]},
+		prs=[_final_merge_open_pr(merge_error="merge refused by branch protection")],
+		existing_branches=["main", _FMAR_BRANCH],
+		pull_ref_shas={_FMAR_PR: "__integration_head__"},
+		compare_ahead_by=1,
+		mock_validation_history_payload=_fmar_history_payload(),
+		capture_telegram_calls=True,
+		env_overrides={"MAX_FINAL_MERGE_ATTEMPTS": "1"},
+	)
+	head = result["sandbox_sha_aliases"]["__integration_head__"]
+	latest = result["latest_state"]
+	assert latest["status"] == "failed", _fmar_log(result)[-4000:]
+	assert latest["final_merge_status"] == "failed"
+	assert latest["final_merge_failure_kind"] == "final_merge_exhausted"
+	assert latest["final_merge_failure_head_sha"] == head
+	assert "ai:blocked" in result["tracking_labels"]
+	assert _FMAR_PR not in result.get("merged_prs", [])
+
+
+def test_final_merge_auto_resume_once_per_head_sha() -> None:
+	first = _run_final_merge_exhausted_tick(
+		_final_merge_exhausted_state(),
+		prs=[_final_merge_open_pr(merge_error="merge refused by branch protection")],
+		env_overrides={"MAX_FINAL_MERGE_ATTEMPTS": "1"},
+	)
+	head = first["sandbox_sha_aliases"]["__integration_head__"]
+	assert "FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=resumed" in _fmar_log(first)
+	first_state = first["latest_state"]
+	# The retry was refused again: the project re-parks with the marker.
+	assert first_state["status"] == "failed"
+	assert first_state["final_merge_failure_kind"] == "final_merge_exhausted"
+	assert first_state["final_merge_auto_resume_head_shas"] == [head]
+	assert "ai:blocked" in first["tracking_labels"]
+	assert _FMAR_PR not in first.get("merged_prs", [])
+
+	# Next tick, same final PR head (each harness run builds a fresh sandbox,
+	# so pin the head to the literal SHA the first tick recorded).
+	second_state = dict(first_state)
+	second_state["validation_last_passed_sha"] = head
+	second = _run_final_merge_exhausted_tick(second_state, prs=[_final_merge_open_pr(headSha=head)])
+	log = _fmar_log(second)
+	assert "FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=skip reason=already_resumed_on_head" in log
+	assert "outcome=resumed" not in log
+	assert "Project already failed, skipping." in log
+	assert _FMAR_PR not in second.get("merged_prs", [])
+	assert second["latest_state"]["status"] == "failed"
+	assert second["tracking_labels"] == ["ai:blocked"]
+	assert not _fmar_marker_comments(second)
+
+
+def _assert_final_merge_auto_resume_skipped(result: dict, expected: str) -> None:
+	log = _fmar_log(result)
+	assert f"FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=skip {expected}" in log, log[-4000:]
+	assert "outcome=resumed" not in log
+	assert "Project already failed, skipping." in log
+	assert _FMAR_PR not in result.get("merged_prs", [])
+	latest = result["latest_state"]
+	assert latest["status"] == "failed"
+	assert latest["final_merge_attempt_count"] == 3
+	assert latest["final_merge_failure_kind"] == "final_merge_exhausted"
+	assert latest.get("final_merge_auto_resume_head_shas", []) == []
+	assert result["tracking_labels"] == ["ai:blocked"]
+	assert not _fmar_marker_comments(result)
+
+
+def test_final_merge_auto_resume_skip_reasons() -> None:
+	# Red required checks on the PR head (blocked_check_shas takes a literal SHA).
+	red_head = "d" * 40
+	result = _run_final_merge_exhausted_tick(
+		_final_merge_exhausted_state(validation_last_passed_sha=red_head),
+		prs=[_final_merge_open_pr(headSha=red_head)],
+		blocked_check_shas=[red_head],
+	)
+	_assert_final_merge_auto_resume_skipped(result, "reason=checks_not_green detail=blocking")
+	# GitHub reports the PR not cleanly mergeable.
+	result = _run_final_merge_exhausted_tick(
+		_final_merge_exhausted_state(), prs=[_final_merge_open_pr(mergeable=False, mergeable_state="dirty")]
+	)
+	_assert_final_merge_auto_resume_skipped(result, "reason=not_mergeable detail=dirty")
+	# Mergeability still computing.
+	result = _run_final_merge_exhausted_tick(
+		_final_merge_exhausted_state(), prs=[_final_merge_open_pr(mergeable=None, mergeable_state="unknown")]
+	)
+	_assert_final_merge_auto_resume_skipped(result, "reason=not_mergeable detail=unknown")
+	# Closed PR.
+	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(), prs=[_final_merge_open_pr(state="closed")])
+	_assert_final_merge_auto_resume_skipped(result, "reason=pr_not_open detail=closed")
+	# Draft PR.
+	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(), prs=[_final_merge_open_pr(draft=True)])
+	_assert_final_merge_auto_resume_skipped(result, "reason=pr_not_open detail=draft")
+	# Failed PR lookup (the fake returns {} for an unknown PR).
+	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(), prs=[])
+	_assert_final_merge_auto_resume_skipped(result, "reason=lookup_failed detail=pr_read")
+	# Failed compare lookup.
+	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(), compare_ahead_by_force_error=True)
+	_assert_final_merge_auto_resume_skipped(result, "reason=lookup_failed detail=compare")
+	# Integration branch no longer ahead of the default branch.
+	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(), compare_ahead_by=0)
+	_assert_final_merge_auto_resume_skipped(result, "reason=not_ahead")
+	# Head moved after validation passed, but the new head is not clean:
+	# the moved-head path applies every gate before re-validating.
+	result = _run_final_merge_exhausted_tick(
+		_final_merge_exhausted_state(),
+		prs=[_final_merge_open_pr(headSha="__advanced_integration_head__", mergeable=False, mergeable_state="dirty")],
+	)
+	_assert_final_merge_auto_resume_skipped(result, "reason=not_mergeable detail=dirty")
+	# No validation pass recorded.
+	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(validation_last_passed_sha=""))
+	_assert_final_merge_auto_resume_skipped(result, "reason=lookup_failed detail=no_validated_sha")
+	# The exhaustion park already aborted the comprehensive cycle, so the
+	# promotion gate could not apply on a retry.
+	result = _run_final_merge_exhausted_tick(
+		_final_merge_exhausted_state(
+			comprehensive_release_callback={"handled": True, "status": "failed", "handled_at": "2026-01-01T00:00:00Z"}
+		)
+	)
+	_assert_final_merge_auto_resume_skipped(result, "reason=lookup_failed detail=comprehensive_cycle_aborted")
+	assert result.get("pr_get_calls", {}).get(str(_FMAR_PR), 0) == 0
+
+
+def test_final_merge_auto_resume_state_persist_failure_keeps_project_parked() -> None:
+	# The state comment is the durable copy of the once-per-head ledger: when
+	# it cannot be written the resume is abandoned before any label change.
+	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(), fail_issue_comment_post_for=[192])
+	_assert_final_merge_auto_resume_skipped(result, "reason=lookup_failed detail=state_persist")
+
+
+def test_final_merge_auto_resume_label_failure_parks_and_spends_head() -> None:
+	# The resumed state was already persisted when the label write fails: the
+	# parked state is restored and re-persisted with the head kept in the
+	# ledger, so later ticks do not re-qualify it (no write/restore churn).
+	first = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(), fail_issue_edit_for=[192])
+	head = first["sandbox_sha_aliases"]["__integration_head__"]
+	log = _fmar_log(first)
+	assert "FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=skip reason=lookup_failed detail=label_write" in log, log[-4000:]
+	assert "outcome=resumed" not in log
+	assert "Project already failed, skipping." in log
+	assert _FMAR_PR not in first.get("merged_prs", [])
+	latest = first["latest_state"]
+	assert latest["status"] == "failed"
+	assert latest["final_merge_status"] == "failed"
+	assert latest["final_merge_attempt_count"] == 3
+	assert latest["final_merge_failure_kind"] == "final_merge_exhausted"
+	assert latest["final_merge_auto_resume_head_shas"] == [head]
+	assert first["tracking_labels"] == ["ai:blocked"]
+	assert not _fmar_marker_comments(first)
+
+	second_state = dict(latest)
+	second_state["validation_last_passed_sha"] = head
+	second = _run_final_merge_exhausted_tick(second_state, prs=[_final_merge_open_pr(headSha=head)])
+	log = _fmar_log(second)
+	assert "FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=skip reason=already_resumed_on_head" in log
+	assert "outcome=resumed" not in log
+	assert _FMAR_PR not in second.get("merged_prs", [])
+
+
+def test_final_merge_auto_resume_revalidates_moved_head() -> None:
+	# Issue #9320 item 4: a head change re-enables one automatic retry, but an
+	# unvalidated head is never merged on an older pass: it is re-validated.
+	result = _run_final_merge_exhausted_tick(
+		_final_merge_exhausted_state(), prs=[_final_merge_open_pr(headSha="__advanced_integration_head__")]
+	)
+	log = _fmar_log(result)
+	new_head = result["sandbox_sha_aliases"]["__advanced_integration_head__"]
+	assert (
+		f"FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=resumed final_pr={_FMAR_PR} head_sha={new_head} action=revalidate"
+		in log
+	), log[-4000:]
+	assert _FMAR_PR not in result.get("merged_prs", [])
+	assert len(result["validation_dispatches"]) == 1, log[-4000:]
+	latest = result["latest_state"]
+	assert latest["status"] == "validating"
+	assert latest["final_merge_attempt_count"] == 0
+	assert latest["final_merge_failure_kind"] is None
+	assert latest["final_merge_auto_resume_head_shas"] == [new_head]
+	assert "ai:validating" in result["tracking_labels"]
+	assert "ai:validated" not in result["tracking_labels"]
+	assert "ai:blocked" not in result["tracking_labels"]
+	markers = _fmar_marker_comments(result)
+	assert len(markers) == 1
+	assert markers[0].startswith(f"<!-- final-merge-auto-resume:{new_head} -->")
+	assert "Project already failed, skipping." not in log
+
+
+def test_final_merge_auto_resume_disabled_keeps_project_parked() -> None:
+	for value in ("false", "0", "off"):
+		result = _run_final_merge_exhausted_tick(
+			_final_merge_exhausted_state(), env_overrides={"FINAL_MERGE_AUTO_RESUME_ENABLED": value}
+		)
+		_assert_final_merge_auto_resume_skipped(result, "reason=disabled")
+		assert result.get("pr_get_calls", {}).get(str(_FMAR_PR), 0) == 0, value
+
+
+def test_final_merge_auto_resume_ignores_other_failed_projects() -> None:
+	# Parked before the marker existed, or failed for another reason: untouched.
+	legacy = _final_merge_exhausted_state()
+	legacy.pop("final_merge_failure_kind")
+	legacy.pop("final_merge_failure_head_sha")
+	result = _run_final_merge_exhausted_tick(legacy)
+	log = _fmar_log(result)
+	assert "FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=skip reason=not_final_merge_exhausted" in log
+	assert "outcome=resumed" not in log
+	assert "Project already failed, skipping." in log
+	assert _FMAR_PR not in result.get("merged_prs", [])
+	assert result["latest_state"]["status"] == "failed"
+	assert result["tracking_labels"] == ["ai:blocked"]
+	assert result.get("pr_get_calls", {}).get(str(_FMAR_PR), 0) == 0
+
+	# A validation-failed project never reaches the check at all.
+	validation_failed = _final_merge_exhausted_state(status="validation-failed")
+	result = _run_final_merge_exhausted_tick(validation_failed, tracking_labels=["ai:validation-failed"])
+	log = _fmar_log(result)
+	assert "FINAL_MERGE_AUTO_RESUME" not in log
+	assert "Project already validation-failed, skipping." in log
+	assert result["latest_state"]["status"] == "validation-failed"
+
+	# Security-pass-failed projects keep their own path (engine unchanged).
+	sp_failed = _security_pass_failed_state_for_auto_reset("b" * 40)
+	result = _run_failed_project_tick(sp_failed, {"ORCHESTRATE_ENGINE_SHA": "b" * 40})
+	log = _fmar_log(result)
+	assert "FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=skip reason=not_final_merge_exhausted" in log
+	assert "Project already failed, skipping." in log
+	assert result["latest_state"]["status"] == "failed"
 
 
 if __name__ == "__main__":
