@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/update_workflows.yml:2480-2610 | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `verify_head_gate` step calls `review_head_gate_updater_exempt` without sourcing `scripts/review_head_gate.sh`, where the function is defined.\n  WHY: The function is undefined in the workflow step's shell environment, so with `set -uo pipefail` the step aborts before posting the head gate and fails.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add a drift alarm that pages when a consumer ... stays behind ... for more than 24 hours.\"\n  expected_change_site: tests/test_audit_consumer_drift.py\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer says the new pin-age drift alarm tests around lines 1520-1757 are included in `main()` at line 1766; the requirement is met and the claim that these tests are skipped in CI was incorrect.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/update_workflows.yml:2480-2610 | confidence=5\n  PROBLEM: The shell script block in the `verify_head_gate` step calls `review_head_gate_updater_exempt` without sourcing the script (`scripts/review_head_gate.sh`) where this function is defined.\n  WHY: The shell environment in this workflow step does not have the `review_head_gate_updater_exempt` function defined. Because the script uses `set -uo pipefail`, it will abort immediately upon attempting to call this function, preventing the head gate from ever being posted and causing the verify job step to fail.\n- TASK_GAP: Requirement: \"Add a drift alarm that pages when a consumer ... stays behind ... for more than 24 hours.\" (This requirement is intended to be covered by the new drift-alarm tests.)\n  Expected change site: tests/test_audit_consumer_drift.py\n  Evidence of absence: The new pin-age drift alarm tests added in the PR (around lines 1520-1757 of the test file) are actually included in the test file's `main()` function (line 1766), so the consensus finding regarding these tests being skipped in CI was incorrect. This requirement is met.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7cea3e599fb2046e5997385d2cbb750709bef49cc3293855f05c5c559b67d2d2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9505,
+    "run_id": "44903690433",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44903690433",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121135117_fc6faf4725",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9505,
+    "run_id": "44903690433"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-21T13:51:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
