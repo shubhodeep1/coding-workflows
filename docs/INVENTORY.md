@@ -218,6 +218,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/generate_resource_id.py` — Generate stable-format resource IDs via the ai-memory record-ID helper.
 - `scripts/generate_symbol_diff_summary.py` — Generate a symbol-level diff summary from a unified diff and changed files list.
 - `scripts/gh_api_retry.py` — Rate-limit-aware `gh api` retry helper; Python twin of `gh_api_retry` in gh_helpers.sh.
+- `scripts/gh_call_counter/gh` — `gh` PATH shim that logs one allowlisted-subcommand/paginate/token-kind line per GitHub CLI call (never arguments or values) and then execs the next `gh` on PATH unchanged; installed by `gh_call_counter_install` in gh_helpers.sh (issue #9887).
+- `scripts/gh_call_counter/gh-call-counter-summary` — Summarises the `gh_call_counter` shim log into the `calls_in_job=` / `paginated_in_job=` / `calls_by_token=` keys of the `GH_PAT_BUDGET phase=end` line.
 - `scripts/gh_helpers.sh` — gh_helpers.sh — Rate-limit-aware GitHub API retry helpers.
 - `scripts/git_ref_health_check.sh` — Shell helper for git ref health check.
 - `scripts/heal_isolated_implement.sh` — Run a heal editor and validator in disposable credential-free containers and scope-check transfer.
