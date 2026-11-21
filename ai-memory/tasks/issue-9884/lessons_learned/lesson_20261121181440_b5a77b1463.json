@@ -1,0 +1,23 @@
+{
+  "discovered_at": "2026-11-21T18:14:40Z",
+  "issue_number": 9884,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=scripts/review_merge_train.sh:1-1; cited_path=scripts/review_merge_train.sh; files_touched=.github/workflows/cancel_on_pr_close.yml, .github/workflows/orchestrate_poll.yml, .github/workflows/review_autofix.yml, .github/workflows/review_autofix_sweep.yml, README.md, agents.d/merge-lease-parallel-p4-soft-paths.md, changelog.d/merge-lease-parallel-p4-soft-paths.md, scripts/pr_checks_lib.sh, tests/test_merge_lease.py, tests/test_pr_base_freshness_gate.py.",
+  "phase": "review_autofix",
+  "pr_number": 9890,
+  "record_id": "lesson_20261121181440_b5a77b1463",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/review_merge_train.sh",
+    ".github/workflows/cancel_on_pr_close.yml",
+    ".github/workflows/orchestrate_poll.yml",
+    ".github/workflows/review_autofix.yml",
+    ".github/workflows/review_autofix_sweep.yml",
+    "README.md",
+    "agents.d/merge-lease-parallel-p4-soft-paths.md",
+    "changelog.d/merge-lease-parallel-p4-soft-paths.md",
+    "scripts/pr_checks_lib.sh",
+    "tests/test_merge_lease.py",
+    "tests/test_pr_base_freshness_gate.py"
+  ]
+}
