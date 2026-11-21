@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should the Phase 4b e2e failure be handled, given that `scripts/stable_e2e_step_verify_bait_removed.sh` is outside the heal scope (`ai:workflow-heal-scope` lists only the workflow, `scripts/orchestrate_poll_process.sh`, `tests/**` and `changelog.d/*.md`)?\nChoices:\nA) Leave the Phase 4b code unchanged. Record the failure in the plan as transient (a runner queue of more than 68 minutes plus the shared PAT running out of core quota), which the fix constraints allow. Recommend re-running the gate once the quota resets. (RECOMMENDED)\nB) Widen the scope to `scripts/stable_e2e_step_verify_bait_removed.sh` and its tests. When the deadline runs out during `wait_for_gh_rate_limit`, log the new `status=retry_rate_limited` instead of `retry_timeout`. No timeout or budget goes up, and existing statuses and log prefixes stay as they are.\nC) Keep this issue to the unit test only, and file a separate follow-up issue for the Phase 4b rate-limit labelling and the unexplained failure of review run 44846790119.\nQ2: The failing assertion in `test_security_pass_external_finalize_uses_verified_pr_head_when_integration_branch_is_deleted` is unknown, and nothing confirms a regression in `scripts/orchestrate_poll_process.sh`. What should this issue deliver for the unit-test failure?\nChoices:\nA) Add a message to each of the six asserts (lines 10401-10406) that prints the actual value (`latest_state` fields, `pr_get_calls`, `git_fetch_calls`, the matching stdout/stderr lines), plus a changelog fragment. The plan says outright that it doesn't know whether the failure is flaky or real, and leaves `scripts/orchestrate_poll_process.sh` unchanged. If the failure is real, the release gate stays red until a follow-up fixes it. (RECOMMENDED)\nB) Do A, and also have the plan check the git-fetch stub in the test harness (`tests/test_orchestrate_poll_process.py` around lines 3509-3535, the `git_fetch_calls` / `missing_git_branch_fetches` counting). If it finds a nondeterministic input that explains the exact `== 2` fetch count, it makes that input deterministic. The assertions themselves are not weakened.\nC) Do A, and also change the external-finalize `branch_deleted` / security-pass PR-head fallback in `scripts/orchestrate_poll_process.sh` on the assumption that it regressed. **Note:** the evidence doesn't confirm this, and it may conflict with the fix constraint against inventing a code fix for a cause that may be transient.",
+  "fingerprint": "38d19efa1021fc83d7a8546f753011fac12e20c1b2b152b90763bd2ce08382c0",
+  "lineage": {
+    "issue_number": 9869,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44871881002",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44871881002",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261121054444_e26b599b92",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9869,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44871881002"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #9869 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-21T05:44:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
