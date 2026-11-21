@@ -522,10 +522,10 @@ def _editor_summary(status: str = "not-edited", ignored: str = "- none") -> str:
 	)
 
 
-def _run_writer(tmp_path: Path, summary: str, *, committed: str = "- none\n", **env_overrides: str) -> tuple[subprocess.CompletedProcess, str]:
+def _run_writer(tmp_path: Path, summary: str, *, committed: str = "- none\n", gh_func: str = FAKE_GH_FUNC, **env_overrides: str) -> tuple[subprocess.CompletedProcess, str]:
 	support_dir = tmp_path / "support"
 	support_dir.mkdir(exist_ok=True)
-	(support_dir / "gh_helpers.sh").write_text(FAKE_GH_FUNC, encoding="utf-8")
+	(support_dir / "gh_helpers.sh").write_text(gh_func, encoding="utf-8")
 	summary_file = tmp_path / "editor_summary.txt"
 	summary_file.write_text(summary, encoding="utf-8")
 	committed_file = tmp_path / "committed.txt"
@@ -587,6 +587,190 @@ def test_writer_skips_the_marker_for_the_fallback_summary(tmp_path: Path) -> Non
 	assert result.returncode == 0, result.stderr
 	assert "review-autofix-clean:v1" not in body
 	assert "AUTOFIX_CLEAN_SAME_HEAD_MARKER outcome=not_written reason=fallback" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Stale ai:review-blocked clear after a clean review (issue #9369 / #9716)
+# ---------------------------------------------------------------------------
+
+FAKE_GH_STALE_FUNC = """gh() {
+  local prev="" arg
+  printf '%s ' "${@//$'\\n'/ }" >> "${FAKE_GH_LOG}"
+  printf '\\n' >> "${FAKE_GH_LOG}"
+  for arg in "$@"; do
+    if [ "${prev}" = "-f" ] && [ "${arg#body=}" != "${arg}" ]; then
+      printf '%s' "${arg#body=}" > "${FAKE_GH_BODY_FILE}"
+    fi
+    prev="${arg}"
+  done
+  if [ "${1:-}" = "api" ] && [ "${2:-}" = "user" ]; then
+    [ -n "${FAKE_GH_USER_LOGIN:-}" ] || return 1
+    printf '%s\\n' "${FAKE_GH_USER_LOGIN}"
+    return 0
+  fi
+  if [ "${2:-}" = "-X" ] && [ "${3:-}" = "DELETE" ]; then
+    case "${FAKE_GH_DELETE_MODE:-ok}" in
+      ok) return 0 ;;
+      404) echo "gh: Not Found (HTTP 404)" >&2; return 1 ;;
+      notfound) echo "gh: not found (AI_COMMENT_SIG shim)" >&2; return 127 ;;
+      *) printf '%s\\n' "::error::gh command failed after 5 attempts: api -X DELETE" "::warning::  stderr: gh: Server Error (HTTP 500)" >&2; return 1 ;;
+    esac
+  fi
+  return 0
+}
+gh_retry() { "$@"; }
+"""
+
+STALE_LINE = "REVIEW_BLOCKED_STALE_CLEAR "
+DELETE_URL = "repos/o/r/issues/42/labels/ai%3Areview-blocked"
+
+
+def _cap_comment(head: str = OTHER_HEAD, support: str | None = SUPPORT, *, comment_id: int = 20, author: str = PIPELINE,
+		pr_label: bool = True, inline: bool = False) -> dict[str, object]:
+	support_field = f" support={support}" if support else ""
+	marker = f"<!-- review-autofix-failure-cap:v1 head={head} fp={'b' * 16} reason=reviewers_failed count=3{support_field} -->"
+	labeled = "this pull request (no linked issue found)" if pr_label else "linked issue(s) #7"
+	body = f"**AI review/autofix stopped: identical failure repeated**\n\nLabeled `ai:review-blocked`: {labeled}.\n\n"
+	body += f"Quoted from an older run: {marker} (see above)" if inline else marker
+	return {"id": comment_id, "user": {"login": author, "type": "User"}, "body": body}
+
+
+def _run_stale_clear(tmp_path: Path, comments: list[dict[str, object]], *, labels: tuple[str, ...] = ("ai:review-blocked",),
+		user_login: str = PIPELINE, delete_mode: str = "ok", **env_overrides: str) -> tuple[subprocess.CompletedProcess, list[str], list[str]]:
+	payload = tmp_path / "pr_payload.json"
+	payload.write_text(json.dumps({"number": 42, "labels": [{"name": name} for name in labels]}), encoding="utf-8")
+	comments_file = tmp_path / "pr_issue_comments.json"
+	comments_file.write_text(json.dumps(comments), encoding="utf-8")
+	log = tmp_path / "gh_calls.log"
+	log.write_text("", encoding="utf-8")
+	env = {"PR_PAYLOAD_FILE": str(payload), "PR_ISSUE_COMMENTS_FILE": str(comments_file), "FAKE_GH_LOG": str(log),
+		"FAKE_GH_USER_LOGIN": user_login, "FAKE_GH_DELETE_MODE": delete_mode}
+	env.update(env_overrides)
+	result, _ = _run_writer(tmp_path, _editor_summary(), gh_func=FAKE_GH_STALE_FUNC, **env)
+	stale_lines = [line for line in result.stdout.splitlines() if line.startswith(STALE_LINE)]
+	calls = [line for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
+	return result, stale_lines, calls
+
+
+def _stale_line(outcome: str, reason: str, *, cap_head: str = "none", cap_support: str = "none", clean_support: str = SUPPORT) -> str:
+	return (f"{STALE_LINE}pr=42 outcome={outcome} reason={reason} cap_head={cap_head} cap_support={cap_support} "
+		f"clean_head={HEAD} clean_support={clean_support}")
+
+
+def _user_calls(calls: list[str]) -> int:
+	return sum(1 for call in calls if call.startswith("api user "))
+
+
+def _delete_calls(calls: list[str]) -> int:
+	return sum(1 for call in calls if call.startswith("api -X DELETE ") and DELETE_URL in call)
+
+
+def test_stale_clear_removes_label_after_head_change(tmp_path: Path) -> None:
+	result, lines, calls = _run_stale_clear(tmp_path, [_cap_comment()])
+	assert result.returncode == 0, result.stderr
+	assert lines == [_stale_line("removed", "cap_head_mismatch", cap_head=OTHER_HEAD, cap_support=SUPPORT)], result.stdout
+	assert _user_calls(calls) == 1 and _delete_calls(calls) == 1, calls
+	# The clean marker still ends the posted comment.
+	assert "AUTOFIX_CLEAN_SAME_HEAD_MARKER outcome=written" in result.stdout
+	# A trusted author differing only in case still matches.
+	_, lines, calls = _run_stale_clear(tmp_path, [_cap_comment(author=PIPELINE.upper())])
+	assert lines[0].split(" ")[2] == "outcome=removed" and _delete_calls(calls) == 1
+
+
+def test_stale_clear_removes_label_on_support_mismatch(tmp_path: Path) -> None:
+	result, lines, calls = _run_stale_clear(tmp_path, [_cap_comment(head=HEAD, support=OTHER_SUPPORT)])
+	assert result.returncode == 0, result.stderr
+	assert lines == [_stale_line("removed", "cap_support_mismatch", cap_head=HEAD, cap_support=OTHER_SUPPORT)], result.stdout
+	assert _user_calls(calls) == 1 and _delete_calls(calls) == 1
+
+
+def test_stale_clear_removes_label_when_cap_support_missing(tmp_path: Path) -> None:
+	result, lines, calls = _run_stale_clear(tmp_path, [_cap_comment(head=HEAD, support=None)])
+	assert result.returncode == 0, result.stderr
+	assert lines == [_stale_line("removed", "cap_support_mismatch", cap_head=HEAD)], result.stdout
+	assert _delete_calls(calls) == 1
+	# With no review-support SHA the clean marker says support=none: heads only.
+	result, lines, calls = _run_stale_clear(tmp_path, [_cap_comment(head=HEAD, support=None)], REVIEW_SUPPORT_SHA="")
+	assert lines == [_stale_line("kept", "same_head_same_support", cap_head=HEAD, clean_support="none")], result.stdout
+	assert _user_calls(calls) == 0 and _delete_calls(calls) == 0
+
+
+def test_stale_clear_keeps_label_same_head_same_support(tmp_path: Path) -> None:
+	result, lines, calls = _run_stale_clear(tmp_path, [_cap_comment(head=HEAD, support=SUPPORT)])
+	assert result.returncode == 0, result.stderr
+	assert lines == [_stale_line("kept", "same_head_same_support", cap_head=HEAD, cap_support=SUPPORT)], result.stdout
+	assert _user_calls(calls) == 0 and _delete_calls(calls) == 0
+
+
+def test_stale_clear_keeps_label_without_cap_marker(tmp_path: Path) -> None:
+	result, lines, calls = _run_stale_clear(tmp_path, [_summary_comment(comment_id=5)])
+	assert result.returncode == 0, result.stderr
+	assert lines == [_stale_line("kept", "no_cap_marker")], result.stdout
+	assert _user_calls(calls) == 0 and _delete_calls(calls) == 0
+	# A marker quoted inline, not on its own line, does not count.
+	_, lines, calls = _run_stale_clear(tmp_path, [_cap_comment(inline=True)])
+	assert lines == [_stale_line("kept", "no_cap_marker")]
+	assert _user_calls(calls) == 0 and _delete_calls(calls) == 0
+
+
+def test_stale_clear_keeps_label_for_untrusted_cap_author(tmp_path: Path) -> None:
+	result, lines, calls = _run_stale_clear(tmp_path, [_cap_comment(author="intruder")])
+	assert result.returncode == 0, result.stderr
+	assert lines == [_stale_line("kept", "untrusted_cap_author", cap_head=OTHER_HEAD, cap_support=SUPPORT)], result.stdout
+	assert _user_calls(calls) == 1 and _delete_calls(calls) == 0
+	# The newest trusted marker wins: a newer marker from another author does
+	# not shadow the older trusted stale one.
+	_, lines, calls = _run_stale_clear(tmp_path, [_cap_comment(comment_id=20), _cap_comment(comment_id=30, author="intruder")])
+	assert lines == [_stale_line("removed", "cap_head_mismatch", cap_head=OTHER_HEAD, cap_support=SUPPORT)]
+	assert _user_calls(calls) == 1 and _delete_calls(calls) == 1
+	# A newer stale forged marker cannot remove a label the trusted marker holds.
+	_, lines, calls = _run_stale_clear(tmp_path, [_cap_comment(head=HEAD, comment_id=20), _cap_comment(comment_id=30, author="intruder")])
+	assert lines == [_stale_line("kept", "same_head_same_support", cap_head=HEAD, cap_support=SUPPORT)]
+	assert _user_calls(calls) == 1 and _delete_calls(calls) == 0
+	# Without a trusted login nothing is removed.
+	_, lines, calls = _run_stale_clear(tmp_path, [_cap_comment()], user_login="")
+	assert lines[0].split(" ")[2:4] == ["outcome=kept", "reason=marker_author_unavailable"] and _delete_calls(calls) == 0
+
+
+def test_stale_clear_delete_failure_logs_error_and_exits_zero(tmp_path: Path) -> None:
+	result, lines, calls = _run_stale_clear(tmp_path, [_cap_comment()], delete_mode="fail")
+	assert result.returncode == 0, result.stderr
+	assert lines == [_stale_line("error", "delete_failed", cap_head=OTHER_HEAD, cap_support=SUPPORT)], result.stdout
+	assert "::warning::Could not remove stale ai:review-blocked from PR #42: gh: Server Error (HTTP 500)" in result.stdout
+	assert _delete_calls(calls) == 1
+	assert "EDITOR_SUMMARY_POSTED=true" in (tmp_path / "github_env").read_text(encoding="utf-8")
+	# A 404 means the label is already gone.
+	result, lines, _ = _run_stale_clear(tmp_path, [_cap_comment()], delete_mode="404")
+	assert result.returncode == 0 and lines == [_stale_line("removed", "cap_head_mismatch", cap_head=OTHER_HEAD, cap_support=SUPPORT)]
+	# Other "not found" text without HTTP 404 is a failure, not "already gone".
+	result, lines, _ = _run_stale_clear(tmp_path, [_cap_comment()], delete_mode="notfound")
+	assert result.returncode == 0 and lines == [_stale_line("error", "delete_failed", cap_head=OTHER_HEAD, cap_support=SUPPORT)]
+
+
+def test_stale_clear_keeps_label_when_absent_or_from_another_path(tmp_path: Path) -> None:
+	result, lines, calls = _run_stale_clear(tmp_path, [_cap_comment()], labels=("bug",))
+	assert result.returncode == 0, result.stderr
+	assert lines == [_stale_line("kept", "label_absent")], result.stdout
+	assert calls == [call for call in calls if "/comments" in call]
+	# A cap that labelled linked issues did not put the label on this PR.
+	_, lines, calls = _run_stale_clear(tmp_path, [_cap_comment(pr_label=False)])
+	assert lines == [_stale_line("kept", "cap_not_pr_label", cap_head=OTHER_HEAD, cap_support=SUPPORT)]
+	assert _user_calls(calls) == 0 and _delete_calls(calls) == 0
+
+
+def test_stale_clear_runs_only_after_a_clean_marker(tmp_path: Path) -> None:
+	result, lines, calls = _run_stale_clear(tmp_path, [_cap_comment()], DID_COMMIT="true")
+	assert result.returncode == 0, result.stderr
+	assert "AUTOFIX_CLEAN_SAME_HEAD_MARKER outcome=not_written reason=committed" in result.stdout
+	assert lines == [] and _user_calls(calls) == 0 and _delete_calls(calls) == 0
+
+
+def test_stale_clear_falls_back_to_one_read_without_a_snapshot(tmp_path: Path) -> None:
+	result, lines, calls = _run_stale_clear(tmp_path, [_cap_comment()], PR_PAYLOAD_FILE=str(tmp_path / "missing.json"))
+	assert result.returncode == 0, result.stderr
+	# The stub's PR read returns no labels.
+	assert lines == [_stale_line("kept", "label_absent")], result.stdout
+	assert sum(1 for call in calls if call.startswith("api repos/o/r/pulls/42 ")) == 1
 
 
 # ---------------------------------------------------------------------------
