@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.9,
+  "details": "Recent merge-train work touched `scripts/pr_checks_lib.sh` and `scripts/review_merge_train.sh`, with coverage in both merge-lease and review-merge-train tests. When changing lease behavior, inspect both shared checks and train orchestration rather than treating either in isolation.",
+  "fingerprint": "710cc227e9fcd3751dc143fe78a2a2b333b71811d0d9ed1476d0227e80ef4416",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44847816684",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44847816684",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9575",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9706",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9809",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9823",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9844",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9602",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9712",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9811",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9834",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9845"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261121011215_f44033c4ae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Merge-train and merge-lease changes commonly involve shared PR-check helpers and coordinated tests.",
+  "timestamps": {
+    "created_at": "2026-11-21T01:12:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
