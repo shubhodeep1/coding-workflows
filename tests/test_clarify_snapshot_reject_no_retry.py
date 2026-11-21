@@ -120,7 +120,9 @@ def test_helper_and_workflow_use_the_same_rejection_line() -> None:
 
 def test_every_runner_call_is_inside_the_stderr_capture_pair() -> None:
 	loop = _loop_only()
-	call_indexes = [i for i, line in enumerate(loop) if "bash scripts/clarify_isolated_run.sh" in line]
+	# The loop calls the helper as `bash "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_isolated_run.sh"
+	# "${CODEX_PROMPT_FILE}" ...`; match on the helper name plus its prompt argument.
+	call_indexes = [i for i, line in enumerate(loop) if 'clarify_isolated_run.sh" "${CODEX_PROMPT_FILE}"' in line]
 	assert len(call_indexes) == 2, loop
 	for i in call_indexes:
 		assert loop[i - 1].strip() == "_clarify_attempt_stderr_capture_start || true", loop[i - 1]
