@@ -92,7 +92,20 @@ def test_attestation_subject_is_the_built_manifest(workflow_path: Path) -> None:
 @pytest.mark.parametrize("workflow_path", WORKFLOWS, ids=lambda p: p.name)
 def test_permissions_add_exactly_attestation_scopes(workflow_path: Path) -> None:
 	workflow = _load(workflow_path)
-	assert workflow["permissions"] == {"contents": "write"}
+	expected_workflow_permissions = {"contents": "write"}
+	if workflow_path.name == "test-and-mark-stable.yml":
+		# Read-only job-token scopes for the GH_READ_TOKEN polling reads (#9888).
+		# Exact match: any extra workflow-level scope, write or read, still fails.
+		expected_workflow_permissions = {
+			"contents": "write",
+			"actions": "read",
+			"pull-requests": "read",
+			"issues": "read",
+		}
+	assert workflow["permissions"] == expected_workflow_permissions
+	for scope, level in workflow["permissions"].items():
+		if scope != "contents":
+			assert level == "read", scope
 	# The release job keeps its existing CI-gate scopes (checks/actions read,
 	# #6797) and adds exactly the two attestation scopes (#6943).
 	assert workflow["jobs"]["release"]["permissions"] == {
