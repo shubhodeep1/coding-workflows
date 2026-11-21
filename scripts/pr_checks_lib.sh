@@ -67,7 +67,11 @@
 #                            non-self check-run with that exact name:
 #                            failure (any completed run whose conclusion is
 #                            not success, so skipped/neutral/cancelled count
-#                            as failure) > pending > success > absent;
+#                            as failure) > pending > success > absent.
+#                            When bound (PR_CHECKS_CI_RUN_IDS), two kinds of
+#                            run are left out: a cancelled run superseded by
+#                            a newer run, and a completed non-success run
+#                            older than the newest successful run (PR #9839);
 #                            unknown when the check-runs could not be read;
 #                            disabled when the name is `none`. Computed from
 #                            the check-runs listing the gate already fetched
@@ -793,8 +797,12 @@ _pr_ruleset_required_check_blockers()
 # exactly that name exists on the reviewed head and every such run
 # succeeded: absent/pending/unknown keep polling until the budget is spent
 # (outcome timeout), and a failed, skipped, neutral or cancelled run ends
-# the wait with outcome failed. The zero-check-runs grace applies only when
-# the requirement is off. Every AUTOFIX_AUTO_MERGE_CHECKS line ends with
+# the wait with outcome failed. With bound runs (PR_CHECKS_CI_RUN_IDS) a
+# cancelled run superseded by a newer run, or a completed non-success run
+# older than a newer successful run of that name (PR #9839), does not count;
+# a newer failure or a still-running run still does. The zero-check-runs
+# grace applies only when the requirement is off. Every
+# AUTOFIX_AUTO_MERGE_CHECKS line ends with
 # `ci_check=<name> ci_state=<state>`. Actions pull_request CI records its
 # check-runs on the PR head SHA (the job checks out the test-merge ref), so
 # the reviewed-head binding and the callers' --match-head-commit stay as
