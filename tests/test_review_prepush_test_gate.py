@@ -394,6 +394,7 @@ def test_review_loop_repair_that_erases_a_passing_change_keeps_the_editor_edit(t
 	assert (repo / "lib" / "a.py").read_text(encoding="utf-8") == "X = 2\n"
 	assert _editor_calls(tmp_path) == 1 and _docker_runs(tmp_path) == 1
 	assert "outcome=repair_reverted reason=passing_change_erased" in proc.stderr
+	assert "passing_change_restore_empty" not in proc.stderr
 	assert "lint_only_change_erased" not in proc.stderr
 	assert "PERSIST repair_loop outcome=pass turns=0 stop=reverted acceptance=unmet" in proc.stderr
 	assert "repair=reverted_it_removed_the_whole_change_though_no_test_failed" in proc.stderr
