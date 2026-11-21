@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3576,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3576\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9913\",\"pr_number\":9913,\"branch\":\"ai/issue-3576\",\"run_id\":\"44955730411\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/44955730411\",\"changed_files\":[\"agents.d/3576-security-audit-tracker-pipeline-exclude.md\",\"changelog.d/3576-security-audit-tracker-pipeline-exclude.md\",\"scripts/orchestrate_poll_process.sh\",\"scripts/unblock_scan.py\",\"tests/test_security_audit_tracker_pipeline_exclude.py\",\"tests/test_unblock_scan.py\"]}",
+  "fingerprint": "3a9210fbd046630d15a6af348d76908e5fc66e60fc8c03d8b9104f64b9a7b05b",
+  "lineage": {
+    "issue_number": 3576,
+    "parent_ids": [],
+    "pr_number": 9913,
+    "run_id": "44955730411",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44955730411",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9913"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261121230604_db95781e81",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3576,
+    "level": "run",
+    "pr_number": 9913,
+    "run_id": "44955730411"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3576: https://github.com/shubhodeep1/coding-workflows/pull/9913",
+  "timestamps": {
+    "created_at": "2026-11-21T23:06:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
