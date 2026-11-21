@@ -76,7 +76,12 @@
 #   `ai:needs-human` is the pipeline's existing hand-over label: the
 #   workflow-failure-heal reporter, the unblock scan and the merge train all
 #   read it, so the escalation reaches the same consumers as every other
-#   needs-human hold. Nothing here removes the label; a person does.
+#   needs-human hold. Nothing here removes the label. When the optional 8th
+#   argument <head sha> is a 40-hex SHA, the comment also carries
+#   `<!-- ai:review-round-cap-head:v1 head=<sha> -->`, and the poller's
+#   `release_head_bound_needs_human_latches` removes the label once the PR's
+#   head has moved past that SHA (the count is head-scoped, so a new head
+#   starts at zero). Without it, a person removes the label.
 #   API: 1 label write + 1 comment, once per escalation. Never fails the tick.
 #
 # Logs (stderr for the counts, stdout for the escalation):
@@ -178,8 +183,11 @@ review_sweep_round_counts()
 
 review_sweep_round_cap_escalate()
 {
-	local cap_repo="${1:-}" cap_pr="${2:-}" cap_rounds="${3:-}" cap_max="${4:-}" cap_window_hours="${5:-}" cap_labels="${6:-[]}" cap_dry_run="${7:-false}"
-	local cap_fields="pr=#${cap_pr} rounds=${cap_rounds} max=${cap_max} window_hours=${cap_window_hours}" cap_body
+	local cap_repo="${1:-}" cap_pr="${2:-}" cap_rounds="${3:-}" cap_max="${4:-}" cap_window_hours="${5:-}" cap_labels="${6:-[]}" cap_dry_run="${7:-false}" cap_head_sha="${8:-}"
+	local cap_fields="pr=#${cap_pr} rounds=${cap_rounds} max=${cap_max} window_hours=${cap_window_hours}" cap_body cap_head_marker=""
+	if [[ "${cap_head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+		cap_head_marker="<!-- ai:review-round-cap-head:v1 head=${cap_head_sha} -->"$'\n'
+	fi
 	if ! [[ "${cap_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || [[ "${cap_repo}" == *..* ]] || ! [[ "${cap_pr}" =~ ^[1-9][0-9]*$ ]] \
 		|| ! [[ "${cap_rounds}" =~ ^[0-9]+$ ]] || ! [[ "${cap_max}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${cap_window_hours}" =~ ^[1-9][0-9]{0,3}$ ]]; then
 		echo "::warning::REVIEW_SWEEP_ROUND_CAP outcome=escalate_failed reason=invalid_input ${cap_fields}"
@@ -195,9 +203,9 @@ review_sweep_round_cap_escalate()
 	fi
 	cap_body="The review sweep has stopped dispatching reviews for this PR: it had ${cap_rounds} dispatched review rounds in the last ${cap_window_hours} hours (limit ${cap_max}), its head is still not approved, and another round is unlikely to change that. The PR is labelled \`${REVIEW_SWEEP_ROUND_CAP_LABEL}\`.
 
-What to do: read the latest review and CI results, then fix or close the PR. A new push is reviewed as usual, and \`Internal: AI Review & Autofix\` can be dispatched by hand for this PR. The sweep dispatches again by itself once fewer than ${cap_max} rounds fall inside the last ${cap_window_hours} hours. The label stays until a person removes it; removing it while the PR is still over the limit makes the next sweep tick add it back.
+What to do: read the latest review and CI results, then fix or close the PR. A new push is reviewed as usual, and \`Internal: AI Review & Autofix\` can be dispatched by hand for this PR. The sweep dispatches again by itself once fewer than ${cap_max} rounds fall inside the last ${cap_window_hours} hours. The label stays until a person removes it or the PR moves to a new head (the poller then removes it, because the count starts again for that head); removing it while the PR is still over the limit makes the next sweep tick add it back.
 
-${REVIEW_SWEEP_ROUND_CAP_MARKER}"
+${cap_head_marker}${REVIEW_SWEEP_ROUND_CAP_MARKER}"
 	# Comment first, label second: the label is what stops the next tick from
 	# commenting again, so a failed comment write leaves nothing behind and
 	# the next tick retries both (a label-first order left a bare label whose
