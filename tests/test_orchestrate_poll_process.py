@@ -15803,6 +15803,40 @@ def test_stall_judge_closed_non_implementation_cross_ref_kept_by_closed_unmerged
 	assert "ai:needs-human" in result["issues"]["823"]["labels"]
 
 
+def test_stall_judge_merged_target_base_non_implementation_cross_ref_keeps_normalisation():
+	# The last cross-reference is a mention-only PR merged into a target base
+	# (main). Neither keep applies: the #9481 keep returns 1 for a target-base
+	# merge, and the #9482 elif needs the issue's implementation PR. A merged
+	# PR that only mentions the issue says nothing about the PR attempt_merge
+	# resolves (#3816 / #3828 mis-target), so the escalation is normalised as
+	# before; the MAX_JUDGE_REPLAY backstop bounds any repeat.
+	result = _run_standalone_ready_to_merge_tick_9482(
+		pr_overrides={
+			**_MERGED_PR_9482,
+			"baseRefName": "main",
+			"body": "Refs #823",
+			"headRefName": "feature/unrelated",
+			"headRefFromApi": "feature/unrelated",
+		},
+		stall_recovery_count=2,
+		env_overrides={"ENABLE_STALL_MERGED_PR_GUARD": "false"},
+		mock_stall_judge_json={
+			"action": "escalate_human",
+			"justification": "cannot tell what happened to PR #825",
+			"target_pr": None,
+			"head_ref": None,
+		},
+	)
+	assert any(
+		"Stall Judge" in str(comment.get("body", ""))
+		for comment in result["issues"]["823"]["comments"]
+	), result["stdout"]
+	assert "Stall judge action 'escalate_human' kept" not in result["stdout"]
+	assert "reason=judge_escalate_kept" not in result["stdout"]
+	assert "Stall judge action 'escalate_human' normalized to 'attempt_merge' for issue #823." in result["stdout"]
+	assert "ai:needs-human" not in result["issues"]["823"]["labels"]
+
+
 def test_standalone_ready_to_merge_open_linked_pr_still_attempts_merge():
 	result = _run_standalone_ready_to_merge_tick_9482(
 		pr_overrides={
