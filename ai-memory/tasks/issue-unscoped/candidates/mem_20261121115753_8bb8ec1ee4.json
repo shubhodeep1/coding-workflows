@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  expected_change_site: `.github/workflows/ci.yml` and `tests/test_ci_poll_test_sharding.py`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: `.github/workflows/ci.yml:3755-3768` documents the move as \"an estimate from test and subprocess counts, not a measurement\"; `.github/workflows/ci.yml:3755-3769` says run 43993691500 provided no step durations and describes the selection of group 0 as an estimate based on test and subprocess counts; the placement contract does not establish measured step durations or that group 0 had the most headroom.\n- requirement: \"Move its slowest steps\" (plural)\n  expected_change_site: `.github/workflows/ci.yml` (the group-3 poll job steps list)\n  confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Only the `Pre-push affected-test gate tests` step moved out of group 3; the `SINGLE_FILE_MODULES_STEP` was left in place.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: `.github/workflows/ci.yml:3755-3768` (the rationale comment) and the placement contract in `tests/test_ci_poll_test_sharding.py`\n  Evidence of absence: Run `43993691500` exposed only step statuses, not durations. The change therefore documents the move as \"an estimate from test and subprocess counts, not a measurement\" (`.github/workflows/ci.yml:3755-3768`). No diff hunk in `.github/workflows/ci.yml` or the placement contract records measured step durations or proof that group 0 had the most headroom \u2014 both decisions are documented as estimates. The \"measure before next move\" instruction is in place but the current move is not actually driven by the run's step timings.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Move its slowest steps\" (plural)\n  Expected change site: `.github/workflows/ci.yml` (the group-3 poll job steps list)\n  Evidence of absence: Only the `Pre-push affected-test gate tests` step moved out of group 3. Group 3's other pinned step, the `SINGLE_FILE_MODULES_STEP`, was left in place. The workflow comment justifies leaving it (its three modules run in parallel so moving it would shift load to another group), but the issue text uses \"steps\" (plural) and the PR moves only one.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cMove its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\u201d\n  Expected change site: `.github/workflows/ci.yml`, with placement verification in `tests/test_ci_poll_test_sharding.py`.\n  Evidence of absence: `.github/workflows/ci.yml:3755-3769` says run 43993691500 provided no step durations and describes the selection of group 0 as an estimate based on test and subprocess counts. The contract tests verify the resulting group-0 placement, but do not establish that the step was selected using measured timings or that group 0 had the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8ee8bdf501a4f654a30b6858b77fae6fcb08e6f5d3db30caa198719b9a29815d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9641,
+    "run_id": "44896942727",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44896942727",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121115753_8bb8ec1ee4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9641,
+    "run_id": "44896942727"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T11:57:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
