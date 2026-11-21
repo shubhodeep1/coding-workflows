@@ -115,6 +115,9 @@ def test_changed_event_head_marks_both_heads_pending(tmp_path: Path) -> None:
 @pytest.mark.parametrize("overrides,expected", [
 	({"GATE_HEAD_SHA": "invalid", "PR_EVENT_HEAD_SHA": "invalid", "GATE_AUTO_MERGE_ENABLED": "false"}, 0),
 	({"REVIEW_HEAD_GATE_STATUS_ENABLED": "false", "GATE_AUTO_MERGE_ENABLED": "false"}, 0),
+	# Read case-insensitively, like the updater exemption (#9483).
+	({"REVIEW_HEAD_GATE_STATUS_ENABLED": "FALSE", "GATE_AUTO_MERGE_ENABLED": "false"}, 0),
+	({"REVIEW_HEAD_GATE_STATUS_ENABLED": "False", "GATE_AUTO_MERGE_ENABLED": "false"}, 0),
 	({"FAKE_FAIL": "status", "GATE_AUTO_MERGE_ENABLED": "false"}, 1),
 	({"REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED": "false"}, 1),
 ])
@@ -298,6 +301,215 @@ def test_a_ci_failed_marker_for_another_head_pr_or_author_is_ignored(tmp_path: P
 	result, _calls = _freshness(tmp_path, [_marker(), marker])
 	assert result.returncode == 0, result.stdout + result.stderr
 	assert "reason=freshness_sync" in result.stdout
+
+
+# ── Updater-PR exemption (#9483) ─────────────────────────────────────────
+
+
+UPDATER_REF = "auto/update-workflows-0123456789ab"
+UPDATER_FAKE_GH = '''#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ["FAKE_GH_LOG"], "a") as out:
+    out.write(json.dumps(args) + "\\n")
+joined = " ".join(args)
+if "/statuses/" in joined:
+    sys.exit(1 if os.environ.get("FAKE_FAIL") == "post" else 0)
+if args[:2] == ["api", "repos/o/r/pulls/42"]:
+    if os.environ.get("FAKE_FAIL") == "read": sys.exit(1)
+    print(os.environ["FAKE_PR_JSON"]); sys.exit(0)
+if len(args) >= 2 and args[0] == "api" and args[1].startswith("repos/o/r/commits/") and "/status" in args[1]:
+    if os.environ.get("FAKE_FAIL") == "status_read": sys.exit(1)
+    print(os.environ["FAKE_STATUS_JSON"]); sys.exit(0)
+sys.exit(1)
+'''
+
+
+def _updater_pr(**overrides: object) -> dict:
+	pr = {
+		"state": "open",
+		"head": {"ref": UPDATER_REF, "sha": HEAD, "repo": {"full_name": "o/r"}},
+		"base": {"ref": "main", "repo": {"full_name": "o/r"}},
+		"auto_merge": None,
+	}
+	pr.update(overrides)
+	return pr
+
+
+def _status(verify: str | None = "success", integrity: str | None = "success", total: int | None = None) -> dict:
+	statuses = []
+	if verify is not None:
+		statuses.append({"context": "ai-update-workflows/verify", "state": verify})
+	if integrity is not None:
+		statuses.append({"context": "coding-workflows/workflow-integrity", "state": integrity})
+	statuses.append({"context": "ai-review/head-gate", "state": "pending"})
+	return {"state": "pending", "total_count": len(statuses) if total is None else total, "statuses": statuses}
+
+
+def _run_exempt(tmp_path: Path, hint: str = UPDATER_REF, pr: object = None, status: object = None,
+	pass_json: bool = False, **env_overrides: str) -> tuple[subprocess.CompletedProcess[str], list[list[str]]]:
+	if shutil.which("jq") is None:
+		pytest.skip("jq is required by the updater exemption")
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	gh_path = bin_dir / "gh"
+	gh_path.write_text(UPDATER_FAKE_GH, encoding="utf-8")
+	gh_path.chmod(0o755)
+	log_path = tmp_path / "gh.log"
+	pr_json = json.dumps(_updater_pr() if pr is None else pr)
+	env = {
+		**{k: v for k, v in os.environ.items() if not k.startswith(("REVIEW_HEAD_GATE_", "FAKE_"))},
+		"PATH": f"{bin_dir}:{os.environ['PATH']}",
+		"FAKE_GH_LOG": str(log_path),
+		"FAKE_PR_JSON": pr_json,
+		"FAKE_STATUS_JSON": json.dumps(_status() if status is None else status),
+		"GH_RETRY_MAX_ATTEMPTS": "1",
+		"PR_NUMBER": "42",
+		**env_overrides,
+	}
+	script = (
+		f'source "{ROOT}/scripts/gh_helpers.sh"; source "{HELPER}"; '
+		f'review_head_gate_updater_exempt o/r 42 "{HEAD}" "$1" "$2"'
+	)
+	result = subprocess.run(
+		["bash", "-c", script, "exempt", hint, pr_json if pass_json else ""],
+		env=env, capture_output=True, text=True, check=False,
+	)
+	calls = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()] if log_path.exists() else []
+	return result, calls
+
+
+def test_updater_pr_with_green_verify_and_integrity_gets_success(tmp_path: Path) -> None:
+	result, calls = _run_exempt(tmp_path)
+	assert result.returncode == 0, result.stderr
+	posts = _statuses(calls)
+	assert len(posts) == 1
+	assert posts[0][:4] == ["api", "-X", "POST", f"repos/o/r/statuses/{HEAD}"]
+	assert "state=success" in posts[0]
+	assert "context=ai-review/head-gate" in posts[0]
+	assert f"REVIEW_HEAD_GATE mode=updater_exempt pr=42 head={HEAD} outcome=posted reason=verified" in result.stdout
+	assert [call[1] for call in calls if call[:2] != ["api", "-X"]] == ["repos/o/r/pulls/42", f"repos/o/r/commits/{HEAD}/status?per_page=100"]
+
+
+def test_updater_resend_branch_gets_success(tmp_path: Path) -> None:
+	# Resend branches (-r2..-r5) are updater PRs too; the other review guards
+	# accept them, so the head gate must not stay pending on them (#9483).
+	resend = UPDATER_REF + "-r2"
+	pr = _updater_pr(head={"ref": resend, "sha": HEAD, "repo": {"full_name": "o/r"}})
+	result, calls = _run_exempt(tmp_path, hint=resend, pr=pr)
+	assert result.returncode == 0, result.stderr
+	assert len(_statuses(calls)) == 1
+	assert "outcome=posted reason=verified" in result.stdout
+
+
+def test_updater_exemption_reports_a_failed_post(tmp_path: Path) -> None:
+	result, calls = _run_exempt(tmp_path, FAKE_FAIL="post")
+	assert result.returncode == 1
+	assert len(_statuses(calls)) == 1
+	assert "outcome=skipped reason=post_failed" in result.stdout
+	assert "outcome=posted reason=verified" not in result.stdout
+
+
+def test_judge_updater_hold_rechecks_the_exemption() -> None:
+	text = (ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
+	branch = text.index('echo "judge_action=updater_verify_hold" >> "$GITHUB_OUTPUT"')
+	section = text[branch:text.index("exit 0", branch)]
+	assert 'review_head_gate_updater_exempt "${REPOSITORY}" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA:-}" "${POST_REVIEW_HEAD_REF}" || true' in section
+	assert "gh pr merge" not in section
+
+
+def test_review_tail_passes_its_pr_read_and_skips_the_pr_call(tmp_path: Path) -> None:
+	result, calls = _run_exempt(tmp_path, pass_json=True)
+	assert result.returncode == 0, result.stderr
+	assert not any(call[:2] == ["api", "repos/o/r/pulls/42"] for call in calls)
+	assert len(_statuses(calls)) == 1
+
+
+@pytest.mark.parametrize("kwargs,reason", [
+	({"status": _status(verify=None)}, "verify_missing"),
+	({"status": _status(verify="failure")}, "verify_not_success"),
+	({"status": _status(verify="pending")}, "verify_not_success"),
+	({"status": _status(integrity=None)}, "integrity_missing"),
+	({"status": _status(integrity="failure")}, "integrity_not_success"),
+	({"status": _status(integrity=None, total=150)}, "status_page_incomplete"),
+	({"status": {"statuses": "nope"}}, "invalid_response"),
+	({"pr": _updater_pr(head={"ref": "ai/issue-1", "sha": HEAD, "repo": {"full_name": "o/r"}})}, "not_updater_branch"),
+	({"pr": _updater_pr(head={"ref": UPDATER_REF, "sha": HEAD, "repo": None})}, "fork_head"),
+	({"pr": _updater_pr(head={"ref": UPDATER_REF, "sha": HEAD, "repo": {"full_name": "evil/r"}})}, "fork_head"),
+	({"pr": _updater_pr(head={"ref": UPDATER_REF, "sha": NEW_HEAD, "repo": {"full_name": "o/r"}})}, "head_moved"),
+	({"pr": _updater_pr(state="closed")}, "pr_not_open"),
+	({"pr": ["not", "an", "object"]}, "invalid_response"),
+	({"FAKE_FAIL": "read"}, "pr_read_failed"),
+	({"FAKE_FAIL": "status_read"}, "status_read_failed"),
+])
+def test_updater_exemption_fails_closed(tmp_path: Path, kwargs: dict, reason: str) -> None:
+	result, calls = _run_exempt(tmp_path, **kwargs)
+	assert result.returncode == 1
+	assert not _statuses(calls)
+	assert f"outcome=skipped reason={reason}" in result.stdout
+
+
+@pytest.mark.parametrize("hint,env,reason", [
+	("", {}, "head_ref_unavailable"),
+	("auto/update-workflows-0123", {}, "not_updater_branch"),
+	("ai/issue-9483", {}, "not_updater_branch"),
+	(UPDATER_REF + "-r6", {}, "not_updater_branch"),
+	(UPDATER_REF, {"REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED": "false"}, "disabled"),
+	(UPDATER_REF, {"REVIEW_HEAD_GATE_STATUS_ENABLED": "false"}, "status_disabled"),
+	(UPDATER_REF, {"REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED": "FALSE"}, "disabled"),
+	(UPDATER_REF, {"REVIEW_HEAD_GATE_STATUS_ENABLED": "False"}, "status_disabled"),
+])
+def test_updater_exemption_prefilter_makes_no_api_call(tmp_path: Path, hint: str, env: dict, reason: str) -> None:
+	result, calls = _run_exempt(tmp_path, hint=hint, **env)
+	assert result.returncode == 1
+	assert calls == []
+	assert f"outcome=skipped reason={reason}" in result.stdout
+
+
+def test_gate_main_runs_the_exemption_after_pending(tmp_path: Path) -> None:
+	if shutil.which("jq") is None:
+		pytest.skip("jq is required by the updater exemption")
+	result, calls = _run(tmp_path, GATE_HEAD_REF="ai/issue-1", GATE_AUTO_MERGE_ENABLED="false")
+	assert result.returncode == 0, result.stderr
+	assert "mode=updater_exempt" in result.stdout and "reason=not_updater_branch" in result.stdout
+	assert len(_statuses(calls)) == 1
+
+
+def test_gate_main_without_a_head_ref_skips_the_exemption_silently(tmp_path: Path) -> None:
+	# The early gate call passes no GATE_HEAD_REF: no updater_exempt log line.
+	result, _calls = _run(tmp_path, GATE_HEAD_REF="", GATE_AUTO_MERGE_ENABLED="false")
+	assert result.returncode == 0, result.stderr
+	assert "mode=updater_exempt" not in result.stdout
+
+
+def test_gate_main_skips_the_exemption_on_deterministic_skip(tmp_path: Path) -> None:
+	result, calls = _run(tmp_path, GATE_HEAD_REF=UPDATER_REF, DETERMINISTIC_SKIP="true", GATE_AUTO_MERGE_ENABLED="false")
+	assert result.returncode == 0, result.stderr
+	assert "mode=updater_exempt" not in result.stdout
+
+
+def test_review_tail_calls_the_exemption_before_its_updater_exit() -> None:
+	text = (ROOT / "scripts" / "review_enable_auto_merge.sh").read_text(encoding="utf-8")
+	branch = text.index('if [[ "${_orch_pr_head_ref}" =~ ^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$ ]]; then')
+	section = text[branch:text.index("exit 0", branch)]
+	assert 'review_head_gate_updater_exempt "${GITHUB_REPOSITORY}" "${PR_NUMBER}" "${INITIAL_HEAD_SHA:-}" "${_orch_pr_head_ref}" "${_ORCH_PR_META_JSON}" || true' in section
+	assert "reason=updater_pr_verify_job_owns_merge" in section
+	assert "gh pr merge" not in section
+
+
+def test_review_autofix_passes_head_ref_and_switch_to_the_gate() -> None:
+	text = (ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	step = text[text.index("        id: head_gate\n"):]
+	step = step[:step.index("        run: |")]
+	assert "GATE_HEAD_REF: ${{ steps.evaluate.outputs.head_ref }}" in step
+	assert "REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED: ${{ vars.REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED || 'true' }}" in step
+	tail = text[:text.index('bash "${SUPPORT_SCRIPTS_DIR}/review_enable_auto_merge.sh"')]
+	tail = tail[tail.rindex("        env:\n"):]
+	assert "REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED: ${{ vars.REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED || 'true' }}" in tail
+	# The review-blocked judge re-checks the exemption, so it needs the switch too.
+	judge = text[text.index("        id: rb_judge\n"):]
+	judge = judge[:judge.index("        run: |")]
+	assert "REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED: ${{ vars.REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED || 'true' }}" in judge
 
 
 # --- freshness-sync exposes from= to a sourcing caller (issue #9533) ---
