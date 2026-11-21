@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:3183-3190 | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The scope/acceptance restriction says to stay inside the named files but omits the exception for the issue\u2019s own changelog.d/ and agents.d/ fragments, potentially preventing required fragments from being added.\n  WHY: Gemini rated this MAJOR while Minimax and OpenAI rated it NIT; using the highest severity, the restriction may cause an implement run to omit a required changelog fragment.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/implement.yml:3186 | severity=MAJOR | confidence=3\n  PROBLEM: The restriction rule \"If the issue names files only in its scope or acceptance criteria, stay inside those files\" omits the exception that allows the issue's own changelog.d/ and agents.d/ fragments, which are explicitly allowed in the general rule immediately preceding it.\n  WHY: An AI editor might interpret \"stay inside those files\" as a strict exclusionary rule, failing to include required changelog or agents updates for issues that only define scope/acceptance files.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/implement.yml: lines 3183-3190 (third sentence: \"If the issue names files only in its scope or acceptance criteria, stay inside those files.\") | severity=NIT | confidence=3\n  PROBLEM: The third sentence of the Restrictions rule lacks the fragment exception that the first sentence (\"stay inside that set plus this issue's own changelog.d/ and agents.d/ fragments\") and the second sentence (\"plus only this issue's own agents.d/ fragment\") both carry. An editor that reads sentence 3 in isolation may skip the issue's own `changelog.d/<N>-*.md` (and, on a non-heal issue, `agents.d/<N>-*.md` fragment, even though `prompts/mode-implement.txt:88-99` and `scripts/files_touched_scope_guard.py:1189-1194` (`heal_own_agents_fragment_entry`) confirm the guard always allows the issue's own fragments.\n  WHY: an editor that strictly interprets sentence 3 produces no changelog fragment, which fails `tests/test_changelog_fragment_contract.py` for any observable-behavior change whose issue body names files only in scope/acceptance. Most LLMs will generalize correctly from sentences 1-2, so this is a clarity/consistency gap rather than a deterministic failure.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/implement.yml: 3187-3189 | severity=NIT | confidence=3\n  PROBLEM: The scope/acceptance rule says to \u201cstay inside those files\u201d without preserving the allowed issue-owned changelog fragment exception. The adjacent rules explicitly preserve only the issue\u2019s own agents fragment for workflow-heal issues.\n  WHY: An implement run whose scope or acceptance criteria names source files but not a changelog fragment is instructed not to create that fragment, even when the change requires one under the changelog discipline. The resulting change set can omit the required changelog entry.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "f53adffc7cbf93008e53cc6c9b095dd7130278bd8399f4cd9bbd12a660f89dae",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9860,
+    "run_id": "44879596644",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44879596644",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121081405_e979f0cebf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9860,
+    "run_id": "44879596644"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T08:14:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
