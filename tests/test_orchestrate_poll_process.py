@@ -6343,6 +6343,10 @@ def test_staged_support_latch_release_is_source_only_and_compensates_comment_fai
 		env_overrides={
 			"GITHUB_REPOSITORY": "owner/consumer",
 			"ORCHESTRATE_ENGINE_SHA": engine_sha,
+			# The PR-only head-bound latch release (PR #9839) lists
+			# ai:needs-human in every repository; off here so the listing
+			# check below still proves the staged-support sweep is source-only.
+			"NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED": "false",
 		},
 	)
 	assert "ai:needs-human" in consumer["issues"]["700"]["labels"]
