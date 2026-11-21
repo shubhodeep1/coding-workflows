@@ -746,6 +746,7 @@ jobs:
             py:tests/test_review_conflict_resolve_retry_state.py
             pytest:tests/test_review_conflict_resolve_terminal_record.py
             pytest:tests/test_review_conflict_resolve_provenance.py
+            pytest:tests/test_review_conflict_modify_delete.py
             pytest:tests/test_epochrealtime_ms_clock.py
             pytest:tests/test_touched_set_symlink_aware.py
             py:tests/test_consumer_artifact_cleanup_preserves_tracked.py
