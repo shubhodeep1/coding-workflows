@@ -721,6 +721,11 @@ def test_hold_reason_lease_wait_lapses_on_label_age_and_logs_once():
 		_bootstrap(tmp)
 		payload = _pr_payload(9402, "open", "ai/issue-9398", labels=["ai:merge-lease-wait"])
 		q = _bash_single_quote(payload)
+		# updated_at is a lower bound on the label's age (labelling updates the PR).
+		q_quiet = _bash_single_quote(_pr_payload(9402, "open", "ai/issue-9398", labels=["ai:merge-lease-wait"], updated_at="2026-01-01T00:00:00Z"))
+		import datetime
+		fresh = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+		q_fresh = _bash_single_quote(_pr_payload(9402, "open", "ai/issue-9398", labels=["ai:merge-lease-wait"], updated_at=fresh))
 		r = _invoke(
 			body=f"""
 			_stall_merge_lease_label_age_minutes() {{ [ -z "${{LABEL_RC:-}}" ] || return "${{LABEL_RC}}"; [ -n "${{LABEL_AGE:-}}" ] || return 1; printf '%s\\n' "${{LABEL_AGE}}"; }}
@@ -733,10 +738,11 @@ def test_hold_reason_lease_wait_lapses_on_label_age_and_logs_once():
 			e="$(STALL_MERGE_LEASE_WAIT_MAX_MINUTES=0 LABEL_AGE=1 _stall_pr_ai_hold_reason {q} 1)"
 			f="$(LABEL_AGE= _stall_pr_ai_hold_reason {q} 121)"
 			g="$(LABEL_AGE= _stall_pr_ai_hold_reason {q} 0)"
-			h="$(LABEL_RC=2 _stall_pr_ai_hold_reason {q} 240)"
-			i="$(LABEL_RC=2 _stall_pr_ai_hold_reason {q} 241)"
-			j="$(LABEL_RC=2 _stall_pr_ai_hold_reason {q} 0)"
-			echo "A=[$a] B=[$b] C=[$c] D=[$d] E=[$e] F=[$f] G=[$g] H=[$h] I=[$i] J=[$j]"
+			h="$(LABEL_RC=2 _stall_pr_ai_hold_reason {q} 5000)"
+			i="$(LABEL_RC=2 _stall_pr_ai_hold_reason {q_quiet} 1)"
+			j="$(LABEL_RC=2 _stall_pr_ai_hold_reason {q_quiet} 0)"
+			k="$(LABEL_RC=2 _stall_pr_ai_hold_reason {q_fresh} 5000)"
+			echo "A=[$a] B=[$b] C=[$c] D=[$d] E=[$e] F=[$f] G=[$g] H=[$h] I=[$i] J=[$j] K=[$k]"
 			""",
 			cwd=tmp,
 		)
@@ -744,12 +750,14 @@ def test_hold_reason_lease_wait_lapses_on_label_age_and_logs_once():
 		# D: no readable age (rc 1), stall clock at 2x max -> hold kept. F: no
 		# readable age (rc 1), stall clock past 2x max -> backstop lapse. G: the
 		# review-blocked `0` form never hits the backstop. H: a read error (rc 2)
-		# keeps the hold up to 4x max. I: a read error that persists past 4x
-		# max lapses (deduped: #9402 already logged). J: the `0` form keeps
-		# the hold on a read error.
+		# with no updated_at keeps the hold whatever the issue's stall clock
+		# says. I: a read error on a PR not updated for longer than the max
+		# lapses (deduped: #9402 already logged). J: the `0` form keeps the
+		# hold on a read error. K: a freshly updated (young) PR keeps the hold
+		# on a read error even with a huge stall clock.
 		assert (
 			"A=[merge_lease_wait] B=[] C=[] D=[merge_lease_wait] E=[] F=[] G=[merge_lease_wait] H=[merge_lease_wait]"
-			" I=[] J=[merge_lease_wait]"
+			" I=[] J=[merge_lease_wait] K=[merge_lease_wait]"
 			in r.stdout
 		), (r.stdout, r.stderr)
 		lapse_lines = [ln for ln in r.stderr.splitlines() if ln.startswith("STALL_MERGE_LEASE_HOLD_LAPSED")]
@@ -791,12 +799,14 @@ def test_label_age_reads_the_newest_labeled_event():
 def test_hold_reason_backstop_lapse_logs_unknown_age():
 	"""A label age that can never be read (rc 1: event outside the last 50)
 	lapses once the stall clock is past twice the maximum, logged as
-	unknown. A read error (rc 2) keeps the hold until the stall clock is
-	past four times the maximum, then lapses logged as read_error."""
+	unknown. A read error (rc 2) never lapses on the issue's stall clock;
+	it lapses, logged as read_error, only when the PR's own updated_at is
+	more than the maximum ago."""
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
 		_bootstrap(tmp)
 		q = _bash_single_quote(_pr_payload(9402, "open", "ai/issue-9398", labels=["ai:merge-lease-wait"]))
+		q_quiet = _bash_single_quote(_pr_payload(9402, "open", "ai/issue-9398", labels=["ai:merge-lease-wait"], updated_at="2026-01-01T00:00:00Z"))
 		r = _invoke(
 			body=f"""
 			_stall_merge_lease_label_age_minutes() {{ return 1; }}
@@ -806,16 +816,20 @@ def test_hold_reason_backstop_lapse_logs_unknown_age():
 			_stall_merge_lease_label_age_minutes() {{ return 2; }}
 			err="$(_stall_pr_ai_hold_reason {q} 200)"
 			echo "ERR=[$err]"
-			persist="$(_stall_pr_ai_hold_reason {q} 241)"
+			persist="$(_stall_pr_ai_hold_reason {q} 100000)"
 			echo "PERSIST=[$persist]"
+			quiet="$(_stall_pr_ai_hold_reason {q_quiet} 241)"
+			echo "QUIET=[$quiet]"
 			""",
 			cwd=tmp,
 		)
 		assert r.returncode == 0, r.stderr
 		assert "OUT=[]" in r.stdout, (r.stdout, r.stderr)
 		assert "ERR=[merge_lease_wait]" in r.stdout, (r.stdout, r.stderr)
-		# A read error that persists past four times the maximum lapses too.
-		assert "PERSIST=[]" in r.stdout, (r.stdout, r.stderr)
+		# A read error never lapses on the issue's stall clock alone...
+		assert "PERSIST=[merge_lease_wait]" in r.stdout, (r.stdout, r.stderr)
+		# ...only when the PR has not been updated for longer than the maximum.
+		assert "QUIET=[]" in r.stdout, (r.stdout, r.stderr)
 		assert "STALL_MERGE_LEASE_HOLD_LAPSED pr=9402 label_age_minutes=read_error max_minutes=60" in r.stderr, r.stderr
 		assert "STALL_MERGE_LEASE_HOLD_LAPSED pr=9402 label_age_minutes=unknown max_minutes=60" in r.stderr, r.stderr
 

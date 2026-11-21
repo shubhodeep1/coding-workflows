@@ -283,6 +283,22 @@ def test_guard_refuses_merge_lease_wait_without_api_reads(tmp: Path):
 
 
 @_with_tmp
+def test_guard_refuses_when_lease_hold_lapsed_on_a_read_error(tmp: Path):
+	"""A lease hold that lapsed with label_age_minutes=read_error (the PR has
+	not been updated for longer than the max, and the label-age GraphQL read
+	fails) must not let the close go ahead on a non-green head: the guard
+	fails closed with check_unavailable."""
+	r = _guard(
+		tmp,
+		"export STALL_MERGE_LEASE_WAIT_MAX_MINUTES=60\n",
+		prs={9402: _pr(9402, "ai/issue-9398", labels=["ai:merge-lease-wait"], updated_at="2026-01-01T00:00:00Z")},
+		statuses=_statuses("failure"),
+	)
+	assert "label_age_minutes=read_error" in r.stderr, (r.stdout, r.stderr)
+	assert "RC=1 PR=9402 REASON=check_unavailable" in r.stdout, (r.stdout, r.stderr)
+
+
+@_with_tmp
 def test_guard_refuses_draft(tmp: Path):
 	r = _guard(tmp, prs={9402: _pr(9402, "ai/issue-9398", draft=True)})
 	assert "RC=1 PR=9402 REASON=draft" in r.stdout, (r.stdout, r.stderr)

@@ -5424,6 +5424,19 @@ _stall_reissue_green_pr_guard()
 			_stall_reissue_guard_refuse "${issue_num}" "${_srg_pr}" "${_srg_hold}"
 			return 1
 		fi
+		# A lease hold that lapsed while the label-age read fails
+		# (label_age_minutes=read_error) must not let the close go ahead: the
+		# guard fails closed on any read error. A successful read is cached,
+		# so this re-read costs an API call only when the read failed.
+		if [ -n "${stall_minutes}" ] && [ "${STALL_MERGE_LEASE_WAIT_MAX_MINUTES:-1440}" != "0" ] \
+			&& printf '%s' "${_srg_json}" | jq -e --arg l "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" '[(.labels // [])[]? | if type == "string" then . else (.name // empty) end] | index($l) != null' >/dev/null 2>&1; then
+			local _srg_age_rc=0
+			_stall_merge_lease_label_age_minutes "${_srg_pr}" "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" >/dev/null 2>&1 || _srg_age_rc=$?
+			if [ "${_srg_age_rc}" -eq 2 ]; then
+				_stall_reissue_guard_refuse "${issue_num}" "${_srg_pr}" "check_unavailable"
+				return 1
+			fi
+		fi
 		_srg_sha="$(printf '%s' "${_srg_json}" | jq -r '.head.sha // ""' 2>/dev/null || echo "")"
 		_srg_base="$(printf '%s' "${_srg_json}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
 		if ! [[ "${_srg_sha}" =~ ^[0-9a-f]{40}$ ]]; then
@@ -25145,13 +25158,15 @@ _stall_merge_lease_label_age_minutes()
 # the last 50 labeled events, or no PR number / repository): once the
 # caller's stall clock exceeds twice the maximum the hold lapses anyway
 # (logged with label_age_minutes=unknown), so such a PR cannot park an
-# issue forever. A read error that keeps recurring (return 2 on every
-# check, e.g. a permission error gh_retry treats as permanent) gets a wider
-# bound: the hold lapses once the stall clock exceeds four times the
-# maximum (logged with label_age_minutes=read_error). A single failed read
-# therefore never ends a young hold, and the close guard still refuses a
-# green head after a lapse. The review-blocked arm passes `0`, so neither
-# backstop fires there. Without the second argument (the conflict sweep) output is exactly
+# issue forever. A read error (return 2, e.g. a permission error gh_retry
+# treats as permanent) is never bounded by the issue's stall clock, which
+# says nothing about the label: the hold lapses (logged with
+# label_age_minutes=read_error) only when the payload's own updated_at /
+# updatedAt is more than the maximum ago. Adding a label updates the PR, so
+# that is a lower bound on the label's age; a payload without it keeps the
+# hold. A failed read therefore never ends a young hold, and the close
+# guard refuses (check_unavailable) whenever the label-age read fails. The
+# review-blocked arm passes `0`, so neither backstop fires there. Without the second argument (the conflict sweep) output is exactly
 # as before.
 _stall_pr_ai_hold_reason()
 {
@@ -25172,15 +25187,18 @@ _stall_pr_ai_hold_reason()
                 elif type == "object" then (.name // empty)
                 else empty
                 end] | index($lease_label)) != null then "lease" else "" end),
-        ((.number // "") | tostring | gsub("[^0-9]"; "")) ]
+        ((.number // "") | tostring | gsub("[^0-9]"; "")),
+        ((.updated_at // .updatedAt // "")
+          | if type == "string" and . != "" then (try (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 | floor | tostring) catch "") else "" end) ]
     | join("\n")
   ' 2>/dev/null)" || return 0
   [ -n "${_spahr_fields}" ] || return 0
-  local _spahr_draft _spahr_title _spahr_lease _spahr_number
+  local _spahr_draft _spahr_title _spahr_lease _spahr_number _spahr_updated
   _spahr_draft="$(printf '%s\n' "${_spahr_fields}" | sed -n '1p')"
   _spahr_title="$(printf '%s\n' "${_spahr_fields}" | sed -n '2p')"
   _spahr_lease="$(printf '%s\n' "${_spahr_fields}" | sed -n '3p')"
   _spahr_number="$(printf '%s\n' "${_spahr_fields}" | sed -n '4p')"
+  _spahr_updated="$(printf '%s\n' "${_spahr_fields}" | sed -n '5p')"
   if [ "${_spahr_draft}" = "draft" ]; then
     printf 'draft\n'
   elif [[ "${_spahr_title}" == *"[skip ai]"* ]]; then
@@ -25197,14 +25215,19 @@ _stall_pr_ai_hold_reason()
       _spahr_age_rc=0
       _spahr_label_age="$(_stall_merge_lease_label_age_minutes "${_spahr_number}" "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" 2>/dev/null)" || _spahr_age_rc=$?
     fi
-    # Backstop for "no age can ever be read" (rc 1) past 2x the maximum; a
-    # read error (rc 2) keeps the hold until the stall clock passes 4x, so a
-    # permanently failing read cannot park the issue forever.
+    # Backstop for "no age can ever be read" (rc 1) past 2x the maximum. A
+    # read error (rc 2) lapses only when the PR itself has not been updated
+    # for more than the maximum (a lower bound on the label's age; never the
+    # issue's stall clock), so a young hold survives any failed read.
     if ! [[ "${_spahr_label_age}" =~ ^[0-9]+$ ]] && [[ "${_spahr_stall_minutes}" =~ ^[0-9]+$ ]]; then
       if [ "${_spahr_age_rc}" -ne 2 ] && [ "$((10#${_spahr_stall_minutes}))" -gt "$((10#${_spahr_max} * 2))" ]; then
         _spahr_label_age="unknown"
-      elif [ "${_spahr_age_rc}" -eq 2 ] && [ "$((10#${_spahr_stall_minutes}))" -gt "$((10#${_spahr_max} * 4))" ]; then
-        _spahr_label_age="read_error"
+      elif [ "${_spahr_age_rc}" -eq 2 ] && [ "$((10#${_spahr_stall_minutes}))" -gt 0 ] && [[ "${_spahr_updated}" =~ ^[0-9]+$ ]]; then
+        local _spahr_now=""
+        _spahr_now="$(date -u +%s 2>/dev/null || echo "")"
+        if [[ "${_spahr_now}" =~ ^[0-9]+$ ]] && [ "$(( (10#${_spahr_now} - 10#${_spahr_updated}) / 60 ))" -gt "${_spahr_max}" ]; then
+          _spahr_label_age="read_error"
+        fi
       fi
     fi
     if [ "${_spahr_label_age}" = "unknown" ] || [ "${_spahr_label_age}" = "read_error" ] || { [[ "${_spahr_label_age}" =~ ^[0-9]+$ ]] && [ "${_spahr_label_age}" -gt "${_spahr_max}" ]; }; then
