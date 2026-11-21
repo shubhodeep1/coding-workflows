@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9858,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9858\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9864\",\"pr_number\":9864,\"branch\":\"ai/issue-9858\",\"run_id\":\"44852471664\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/44852471664\",\"changed_files\":[\".github/workflows/implement.yml\",\"changelog.d/9858-implement-fetch-comments-rate-limit.md\",\"tests/test_workflow_gh_retry_fallback_contract.py\"]}",
+  "fingerprint": "9c7349e9579c0ba75da0f650a15c114eb01ba18199178f59026876b7ecae39a3",
+  "lineage": {
+    "issue_number": 9858,
+    "parent_ids": [],
+    "pr_number": 9864,
+    "run_id": "44852471664",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44852471664",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9864"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261121021810_19073a1e2c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9858,
+    "level": "run",
+    "pr_number": 9864,
+    "run_id": "44852471664"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9858: https://github.com/shubhodeep1/coding-workflows/pull/9864",
+  "timestamps": {
+    "created_at": "2026-11-21T02:18:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
