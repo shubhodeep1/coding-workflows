@@ -1889,7 +1889,12 @@ jobs:
               fi
             fi
             if [ "${CLARIFY_ENGINE}" != "claude" ]; then
+              # Issue #9837: capture this path's stderr too. The source snapshot
+              # is taken before the engine is picked, so codex runs can be
+              # rejected the same way.
+              _clarify_attempt_stderr_capture_start || true
               bash "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_isolated_run.sh" "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" || rc=$?
+              _clarify_attempt_stderr_capture_stop || true
             fi
             if [ "${rc}" -eq 0 ]; then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
@@ -1901,6 +1906,14 @@ jobs:
             else
               echo "::warning::${clarify_engine_name} exited with code $rc on attempt ${attempt}."
               _clarify_emit_attempt_failed "${rc}" nonzero_exit || true
+              # Issue #9837: scripts/clarify_isolated_run.sh prints this fixed
+              # line and exits 1 when it rejects the source snapshot. The
+              # checkout does not change between attempts, so a retry gets the
+              # same result; stop now. Exact whole-line match only.
+              if grep -a -qx 'clarify source snapshot rejected' "${clarify_attempt_stderr_file}" 2>/dev/null; then
+                echo "::error::${clarify_engine_name} clarify stopped after attempt ${attempt}: scripts/clarify_isolated_run.sh rejected the source snapshot, and a retry gets the same result."
+                exit 1
+              fi
             fi
             if [ "${attempt}" -lt "${max_attempts}" ]; then
               sleep_secs=$(( 10 * (2 ** (attempt - 1)) + RANDOM % 10 ))
