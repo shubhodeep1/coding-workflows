@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stable_e2e_step_wait_plan.sh:201-202 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: `LABELS_RECHECK=$(gh api ... 2>/dev/null || echo \"\")` puts the fallback inside the command substitution, so on a `gh api` error the error body is captured into `LABELS_RECHECK`. The original inline body used the compliant `2>/dev/null) || LABELS_RECHECK=\"\"` form.\n  WHY: The contract test `test_no_gh_api_capture_puts_its_fallback_inside_the_substitution` fails at expanded line 1377, turning `tests-release-and-log-analysis`, `tests-system-python (17)` and the aggregate `lint` red on head 288a6c97. All five reviewers rated it BLOCKER, which is mapped here to critical because the schema has no BLOCKER level.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The Phase 2 body moved to the script must be ported unchanged from #9497/#9473 (PR description: \"byte-identical ... except ... `PLAN_CREATED_AFTER`\"), keeping the original `gh api` capture shape and leaving CI green.\n  expected_change_site: scripts/stable_e2e_step_wait_plan.sh lines 201-202 (`LABELS_RECHECK` assignment)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  EVIDENCE: scripts/stable_e2e_step_wait_plan.sh uses the in-substitution fallback `LABELS_RECHECK=$(... || echo \"\")` instead of the original compliant `2>/dev/null) || LABELS_RECHECK=\"\"`, and the expanded-workflow contract test fails at expanded line 1377 (CI run 44885776279).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/stable_e2e_step_wait_plan.sh:201-202 | severity=BLOCKER | confidence=5\n  PROBLEM: The `|| echo \"\"` fallback sits inside the command substitution, unlike the original inline form. On a `gh api` error, the error body can be captured into `LABELS_RECHECK`, which feeds the `grep -qE` check and the `::error::` message.\n  WHY: The contract test flags expanded line 1377. In run 44885776279 it fails `tests-release-and-log-analysis` and `tests-system-python (17)`, and `lint` goes red. The suggested fix is `... 2>/dev/null) || LABELS_RECHECK=\"\"`.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/stable_e2e_step_wait_plan.sh:201-202 | severity=BLOCKER | confidence=5\n  PROBLEM: The fallback is inside the `LABELS_RECHECK=$(gh api ... || echo \"\")` subshell.\n  WHY: On an API error, the captured error body could wrongly match the grep filter. This violates the contract checked by `tests/test_test_and_mark_stable_gh_api_error_body_capture.py`.\n- TASK_GAP: severity=BLOCKER | confidence=5\n  Requirement: The implementation of issue #9473 in #9497 must be ported unchanged, except for making it mergeable by byte-reducing the workflow.\n  Expected change site: The `LABELS_RECHECK` assignment in the moved Phase 2 step script.\n  Evidence of absence: scripts/stable_e2e_step_wait_plan.sh uses the in-substitution fallback `LABELS_RECHECK=$(... || echo \"\")`, whereas the original in `test-and-mark-stable.yml` used `2>/dev/null) || LABELS_RECHECK=\"\"`. This is a regression during the move.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/stable_e2e_step_wait_plan.sh:201-202 | severity=BLOCKER | confidence=5\n  PROBLEM: The multi-line capture puts `|| echo \"\"` inside the command substitution. The original inline body in `.github/workflows/test-and-mark-stable.yml` assigned the fallback outside, so the move regressed the byte-identical semantics the PR claims.\n  WHY: `test_no_gh_api_capture_puts_its_fallback_inside_the_substitution` fails on head 288a6c97 in run 44885776279 with `gh api captures with an in-substitution fallback at lines [1377]`. That turns `tests-release-and-log-analysis`, `tests-system-python (17)` and `lint` red. On a `gh api` failure the error body is captured before `echo \"\"` runs, and it then feeds the `grep -qE 'ai:awaiting-approval|ai:implementing'` check.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/stable_e2e_step_wait_plan.sh:201-202 | severity=BLOCKER | confidence=5\n  PROBLEM: The API failure fallback is inside the command substitution, and the contract test rejects this form in the expanded workflow.\n  WHY: The test fails in CI, so `tests-release-and-log-analysis`, `tests-system-python` and the aggregate `lint` check fail on the PR head.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/stable_e2e_step_wait_plan.sh:201-202 | severity=BLOCKER | confidence=5\n  PROBLEM: The `gh api` fallback sits inside the command substitution, which `tests/test_test_and_mark_stable_gh_api_error_body_capture.py:163-191` forbids. The original inline body used the compliant outside form, so the move was not byte-identical. The captured error body is fed to `grep -qE` (line 203) and can leak into the `::error::` message.\n  WHY: CI on head 288a6c97 fails with `AssertionError: gh api captures with an in-substitution fallback at lines [1377]` in `tests-release-and-log-analysis` and `tests-system-python (17)`, and `lint` fails. The fix is a two-line revert to `2>/dev/null) || LABELS_RECHECK=\"\"`.\n- TASK_GAP: severity=BLOCKER | confidence=5\n  Requirement: \"The body is byte-identical to the one in #9497 except that its three inline `steps.create-issue.outputs.created_after` expressions read `PLAN_CREATED_AFTER`\" (PR description), and the moved body must keep the original `gh api` capture shape and leave CI green.\n  Expected change site: scripts/stable_e2e_step_wait_plan.sh lines 201-202.\n  Evidence of absence: The compliant `2>/dev/null) || LABELS_RECHECK=\"\"` form is not present anywhere in the moved script. The only `LABELS_RECHECK=` assignment is the in-substitution form at line 201, and the contract test fails at expanded line 1377 (run 44885776279).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9ec2f544c7716063a1c2b06f39ae329309a1ac0cb04f43ae9fd93730c8346243",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9711,
+    "run_id": "44891126518",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44891126518",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121114017_90da2bff64",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9711,
+    "run_id": "44891126518"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T11:40:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
