@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/9678-implement-step-scripts.md:4 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The changelog sentence \"Only the legacy staging loop fails at staging itself (`::error::Missing required support script`).\" is too absolute, because the legacy loop falls back to `.codex-workflow-src-main/scripts/${f}` when `SCRIPT_REF == 'stable'` and so can stage the new scripts.\n  WHY: The error is reached only when both the support ref and the main snapshot lack the scripts, so readers get the wrong rollout failure mode. Severity was reported as NIT by all reviewers. Gemini rated it a hardening suggestion with risk score 1.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/9678-implement-step-scripts.md:last sentence | severity=NIT | confidence=3\n  PROBLEM: The sentence \"Only the legacy staging loop fails at staging itself (`::error::Missing required support script`).\" is too absolute. `implement.yml` lines 1478-1487 check out `main` into `.codex-workflow-src-main` when `SCRIPT_REF == 'stable'`, and the legacy loop falls back to it (lines 1585-1587). The error branch (line 1590) is reached only when both copies are missing.\n  WHY: The changelog misstates rollout behavior. Nothing fails at runtime.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/9678-implement-step-scripts.md:4 | hardening suggestion | HARDENING_RISK_SCORE=1\n  PROBLEM: The changelog description of old support refs is slightly misleading. The legacy staging loop may stage the scripts through the `.codex-workflow-src-main` fallback and fail only later at the wrapper check.\n  WHY: Suggested fix: clarify that legacy staging may stage the scripts if `.codex-workflow-src-main` is available, but the run still fails at the wrapper check (about 2 lines changed).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/9678-implement-step-scripts.md:4 | severity=NIT | confidence=4\n  PROBLEM: The legacy staging loop in `implement.yml` (hunk at lines 1584-1591) falls back to `.codex-workflow-src-main/scripts/${f}`. Staging therefore succeeds, and the failure happens at the \"Preflight destructive-commit guard\" wrapper. `::error::Missing required support script` appears only if both the pinned ref and `main` lack the scripts.\n  WHY: An operator reading the changelog expects a staging-time error. The real error is wrapper-time (`::error::Trusted pre-editor copy of implement_step_preflight_destructive_guard.sh is missing`), so the \"only\" contrast is factually wrong.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/9678-implement-step-scripts.md:4 | severity=NIT | confidence=4\n  PROBLEM: \"Only the legacy staging loop fails at staging itself.\" is too broad. When `SCRIPT_REF` is `stable` and the main snapshot checkout succeeds, the legacy loop falls back to `.codex-workflow-src-main` and stages the missing scripts.\n  WHY: `implement.yml` lines 1478-1487 check out the main snapshot, lines 1585-1593 use it as the fallback, line 1744 sets `support_run_src=\"scripts\"`, and lines 1957-1964 populate the trusted run-directory copy. Staging does not fail for these scripts in that case.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/9678-implement-step-scripts.md:4 | severity=NIT | confidence=4\n  PROBLEM: The clause \"Only the legacy staging loop fails at staging itself (`::error::Missing required support script`).\" claims the legacy loop fails at staging whenever the support ref predates the new scripts. That holds only for a pinned `SCRIPT_REF`. With `SCRIPT_REF == 'stable'`, `implement.yml:1478-1487` checks out main into `.codex-workflow-src-main` (continue-on-error: true), and `implement.yml:1585-1593` falls back to it before emitting the error.\n  WHY: No runtime failure. The user-facing changelog misstates the compatibility window (unified staging disabled, `SCRIPT_REF=stable`, pre-release stable ref), so operators get the wrong answer about rollout failure modes.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0a53061c29f0700f6d4401a118e0920f49afb8cae210ad0e1bf8f2198e989c0d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9894,
+    "run_id": "44930551251",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44930551251",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121180631_9d4ad366fc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9894,
+    "run_id": "44930551251"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T18:06:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
