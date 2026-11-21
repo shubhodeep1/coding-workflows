@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_prepush_test_gate.py:397 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The `passing_change_restore_empty` warning branch in scripts/review_autofix_step_prepush_test_gate.sh (lines 836-841 / 839-841) has no test that makes it fire; the only coverage is the negative assertion `assert \"passing_change_restore_empty\" not in proc.stderr` at line 397.\n  WHY: If the branch regresses (the re-read result is discarded, the condition is inverted, or the log call is removed), no test fails, and this warning is the only signal that the editor's change was not restored. Both reviewers rated it SEVERITY: NIT, mapped here to low. anthropic_claude-sonnet-5_5, minimax_minimax-m3 and openai_gpt-6-luna raised the same point as a hardening suggestion, not as a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION: tests/test_review_prepush_test_gate.py:next to test_review_loop_repair_that_erases_a_passing_change_keeps_the_editor_edit (around line 385)\n  PROBLEM: No test makes the passing_change_restore_empty branch fire; only its absence is asserted, at line 397.\n  WHY: Suggested fix (8-10 lines): the editor's whole change is a new untracked file, the repair deletes it, and the backup tar under runtime/ is made unreadable or removed before the revert; assert \"outcome=warning reason=passing_change_restore_empty\" is logged. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_prepush_test_gate.py:397 (assertion for not passing_change_restore_empty) | severity=NIT | confidence=4\n  PROBLEM: The warning branch passing_change_restore_empty in scripts/review_autofix_step_prepush_test_gate.sh (lines 836-841) is not directly tested; the only coverage is a negative assertion (\"passing_change_restore_empty\" not in proc.stderr).\n  WHY: If the warning path regresses (e.g. the condition is inverted or the re-read result is mishandled), no test fails, because the negative assertion only checks that the warning does not fire in successful cases.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- HARDENING_SUGGESTION: tests/test_review_prepush_test_gate.py:alongside test_review_loop_repair_that_erases_a_passing_change_keeps_the_editor_edit (around line 397)\n  PROBLEM: The new passing_change_restore_empty warning branch added in scripts/review_autofix_step_prepush_test_gate.sh lines 836-841 is covered only by a negative assertion; no test drives the branch itself.\n  WHY: The warning is the only observable signal that the editor's change was not restored, so a regression would mask a real \"Editor changes lost\" recovery failure. Suggested fix (8-10 lines): the editor's only change is an untracked file the repair deletes, and the backup tar is unreadable or the restore is stubbed out; assert outcome=warning reason=passing_change_restore_empty appears and the result stays final. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n- HARDENING_SUGGESTION: tests/test_review_prepush_test_gate.py:test_review_loop_repair_that_erases_a_passing_change_keeps_the_editor_edit, lines 385-409 | severity=NIT | confidence=4\n  PROBLEM: The test asserts that `passing_change_restore_empty` is absent, but no test exercises the new warning branch at `scripts/review_autofix_step_prepush_test_gate.sh:839-840`.\n  WHY: Suggested fix (8-10 lines): add a focused test where the repair deletes an untracked editor change and its backup is unavailable; assert that `passing_change_restore_empty` is logged. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_review_prepush_test_gate.py:line 397 (paired with scripts/review_autofix_step_prepush_test_gate.sh:839-841) | severity=NIT | confidence=4\n  PROBLEM: The `passing_change_restore_empty` warning branch is covered only by the negative assertion `assert \"passing_change_restore_empty\" not in proc.stderr`; no test drives it, whether through a failed post-revert read (`review_prepush_test_gate_changed_checked` returning 1) or a revert that restores nothing. A repo-wide grep confirms line 397 is the only test reference to the reason token.\n  WHY: If the branch regresses (the re-read result is discarded, the `! ... || [ -z ... ]` condition is inverted, or the log call is removed), no test fails, and this removes the only signal for the issue's \u00a78 \"diagnostics first\" best-effort-restore case.\n- HARDENING_SUGGESTION: tests/test_review_prepush_test_gate.py:near test_review_loop_repair_that_erases_a_passing_change_keeps_the_editor_edit (line 385)\n  PROBLEM: the new `passing_change_restore_empty` branch (scripts/review_autofix_step_prepush_test_gate.sh:839-841) has no positive test.\n  WHY: Suggested fix (8-10 lines): the editor's change is an untracked file, the repair deletes it, and the revert brings nothing back (or the post-revert read fails); assert `outcome=warning reason=passing_change_restore_empty` appears and the main `reason=passing_change_erased` line still does. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e88a53fe2fe8351a42437190f9e61e194bab1cc998a704c035e932ee544a8e6c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9562,
+    "run_id": "44931423994",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44931423994",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121180921_f39c3d9b8a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9562,
+    "run_id": "44931423994"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T18:09:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
