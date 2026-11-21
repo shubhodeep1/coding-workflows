@@ -1165,7 +1165,7 @@ GROUP_PINNED_STEPS = {
 	"Check-failure triage workflow security tests": 0,
 	# "Pre-push affected-test gate tests" (moved from
 	# tests-hooks-and-orchestrator to group 3 in #9391, and from group 3 to
-	# group 0 in #9639) left the matrix for tests-heal-plan-and-validation in
+	# group 0 in #9639) left the matrix for tests-hooks-and-orchestrator in
 	# #9895; see MOVED_POLL_GROUP_ZERO_9895_STEPS.
 }
 # The only steps pinned to the last matrix group (#8118; #8772's step moved
@@ -4053,7 +4053,8 @@ class MovedHooks9078StepsContractTest(unittest.TestCase):
 # repos, no Node, no git history beyond HEAD and no prepared .claude/ live
 # copies, so #9391 pinned it to orchestrate-poll group 3, then the group with
 # the lightest pinned load. #9639 moved it on to group 0, and #9895 out of the
-# poll matrix to tests-heal-plan-and-validation; it still runs once per CI run.
+# poll matrix back to tests-hooks-and-orchestrator; it still runs once per CI
+# run.
 HOOKS_9391_SOURCE_JOB_ID = "tests-hooks-and-orchestrator"
 HOOKS_9391_TARGET_JOB_ID = POLL_JOB_ID
 # The poll group #9391 pinned the step to (kept as the record of #9391; the
@@ -4080,7 +4081,7 @@ MOVED_HOOKS_9391_STEPS = {
 
 
 class MovedHooks9391StepsContractTest(unittest.TestCase):
-	"""The step moved out of tests-hooks-and-orchestrator runs once (#9391; group 0 since #9639; tests-heal-plan-and-validation since #9895)."""
+	"""The step moved out of tests-hooks-and-orchestrator runs once (#9391; group 0 since #9639; back in tests-hooks-and-orchestrator since #9895)."""
 
 	def jobs(self) -> dict:
 		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
@@ -4095,7 +4096,7 @@ class MovedHooks9391StepsContractTest(unittest.TestCase):
 
 	def test_each_step_is_owned_only_by_the_poll_job(self) -> None:
 		# Name kept for history (#9391 moved the step into the poll job); #9895
-		# moved it on to tests-heal-plan-and-validation, so the owner is read
+		# moved it back to tests-hooks-and-orchestrator, so the owner is read
 		# from MOVED_POLL_GROUP_ZERO_9895_STEPS.
 		for name in MOVED_HOOKS_9391_STEPS:
 			with self.subTest(step=name):
@@ -4106,8 +4107,8 @@ class MovedHooks9391StepsContractTest(unittest.TestCase):
 
 	def test_each_step_runs_in_group_three(self) -> None:
 		# Name kept for history (#9391 pinned the step to group 3); the step
-		# moved on to group 0 in #9639, and out of the poll matrix to
-		# tests-heal-plan-and-validation in #9895
+		# moved on to group 0 in #9639, and out of the poll matrix back to
+		# tests-hooks-and-orchestrator in #9895
 		# (MovedPollGroupZero9895StepsContractTest). The target job has no
 		# matrix, so the step is no longer group-pinned and carries no guard.
 		for name in MOVED_HOOKS_9391_STEPS:
@@ -4129,10 +4130,15 @@ class MovedHooks9391StepsContractTest(unittest.TestCase):
 					self.assertIn(module, run)
 
 	def test_moved_steps_left_the_hooks_job(self) -> None:
-		source_names = {step.get("name") for step in self.jobs()[HOOKS_9391_SOURCE_JOB_ID]["steps"]}
+		# Name kept for history (#9391 moved the step out of this job). #9895
+		# moved it back, the only job with a recorded total that includes the
+		# step (15m32s, #9391), so the step must now appear here exactly once,
+		# and nowhere in this job when its #9895 owner is another job.
+		source_names = [step.get("name") for step in self.jobs()[HOOKS_9391_SOURCE_JOB_ID]["steps"]]
 		for name in MOVED_HOOKS_9391_STEPS:
 			with self.subTest(step=name):
-				self.assertNotIn(name, source_names)
+				expected = 1 if MOVED_POLL_GROUP_ZERO_9895_STEPS.get(name) == HOOKS_9391_SOURCE_JOB_ID else 0
+				self.assertEqual(source_names.count(name), expected)
 
 	def test_moved_steps_run_after_the_poll_job_setup(self) -> None:
 		# Name kept for history; since #9895 the setup order is checked in the
@@ -4157,8 +4163,8 @@ class MovedHooks9391StepsContractTest(unittest.TestCase):
 # review-pipeline plumbing step (about 367 tests, 145 subprocess sites), which
 # #8805 kept apart from another heavy step (POLL_GROUP_ONE_8805_KEPT_STEP_NAME).
 # Name and body unchanged; the step still runs once per CI run.
-# #9895 then moved the step out of the poll matrix to
-# tests-heal-plan-and-validation; POLL_GROUP_THREE_9639_TARGET_GROUP is kept as
+# #9895 then moved the step out of the poll matrix back to
+# tests-hooks-and-orchestrator; POLL_GROUP_THREE_9639_TARGET_GROUP is kept as
 # the record of #9639.
 POLL_GROUP_THREE_9639_SOURCE_GROUP = 3
 POLL_GROUP_THREE_9639_TARGET_GROUP = 0
@@ -4169,7 +4175,7 @@ MOVED_POLL_GROUP_THREE_9639_STEPS = {
 
 
 class MovedPollGroupThree9639StepsContractTest(unittest.TestCase):
-	"""The pre-push gate step left orchestrate-poll group 3 (#9639) and runs once (tests-heal-plan-and-validation since #9895)."""
+	"""The pre-push gate step left orchestrate-poll group 3 (#9639) and runs once (tests-hooks-and-orchestrator since #9895)."""
 
 	def jobs(self) -> dict:
 		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
@@ -4236,24 +4242,36 @@ class MovedPollGroupThree9639StepsContractTest(unittest.TestCase):
 	def test_step_stays_apart_from_the_plumbing_step(self) -> None:
 		# Group 1 keeps the review-pipeline plumbing step (#8805), and the
 		# heavy pre-push gate step must not be put in the same leg with it.
+		# Since #9895 the step is in no poll leg, so this reads the workflow:
+		# the plumbing step keeps its group 1 guard and the pre-push gate step
+		# is absent from the poll job, so the two can share no leg.
 		plumbing_group = GROUP_PINNED_STEPS.get(POLL_GROUP_ONE_8805_KEPT_STEP_NAME)
 		self.assertEqual(plumbing_group, 1)
-		for name, group in MOVED_POLL_GROUP_THREE_9639_STEPS.items():
+		self.assertEqual(
+			poll_job_step(POLL_GROUP_ONE_8805_KEPT_STEP_NAME).get("if"),
+			f"strategy.job-index == {plumbing_group}",
+		)
+		poll_names = {step.get("name") for step in load_poll_job()["steps"]}
+		for name in MOVED_POLL_GROUP_THREE_9639_STEPS:
 			with self.subTest(step=name):
-				self.assertNotEqual(group, plumbing_group)
+				self.assertNotIn(name, poll_names)
+				self.assertNotIn(name, GROUP_PINNED_STEPS)
 
 
 # Step moved out of the orchestrate-poll matrix (group 0), which took 20m02s of
 # its 20 minutes on main (run 44909097036, budget-watch issue #9895), so it
 # was cancelled at its timeout. The step arrived in group 0 with #9639 the
 # same day; before that, six CI runs were cancelled mid-step while it sat in
-# group 3. The run's step results carry statuses only, so the pick is an
-# estimate, not a measurement. The target is the 20-minute job budget-watch
-# flagged least recently under its own subject (#9018, #9045), with the same
-# checkout, Python 3.12 and pip set. Name and body unchanged; the target job
-# has no matrix, so the step runs unguarded, once per CI run.
+# group 3. The run's step results carry statuses only, so the pick uses
+# recorded job totals, not step timings. The target is the 20-minute job with
+# the most recorded room for this step: tests-hooks-and-orchestrator is the
+# only job with a recorded total that includes it (15m32s, run 43220859648,
+# #9391), and no step has moved in since. tests-heal-plan-and-validation was
+# rejected: it took 17m00s without the step (#9045) and then gained three
+# steps (#9363). Name and body unchanged; the target job has no matrix, so the
+# step runs unguarded, once per CI run, after the same pip install.
 POLL_GROUP_ZERO_9895_SOURCE_JOB_ID = POLL_JOB_ID
-POLL_GROUP_ZERO_9895_TARGET_JOB_ID = "tests-heal-plan-and-validation"
+POLL_GROUP_ZERO_9895_TARGET_JOB_ID = "tests-hooks-and-orchestrator"
 POLL_GROUP_ZERO_9895_SETUP_STEP = "Install Python CI dependencies"
 POLL_GROUP_ZERO_9895_TIMEOUT_MINUTES = 20
 MOVED_POLL_GROUP_ZERO_9895_STEPS = {
@@ -4262,7 +4280,7 @@ MOVED_POLL_GROUP_ZERO_9895_STEPS = {
 
 
 class MovedPollGroupZero9895StepsContractTest(unittest.TestCase):
-	"""The pre-push gate step moved out of orchestrate-poll group 0 runs once, in tests-heal-plan-and-validation (#9895)."""
+	"""The pre-push gate step moved out of orchestrate-poll group 0 runs once, in tests-hooks-and-orchestrator (#9895)."""
 
 	def jobs(self) -> dict:
 		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
@@ -4669,7 +4687,7 @@ class MovedPollGroupZero9214StepsContractTest(unittest.TestCase):
 		# Issue #9450 pinned the check-failure triage step to group 0, after the
 		# fast-fail step; #9639 pinned the pre-push gate step there, between
 		# the two in workflow order, and #9895 moved it out of the poll matrix
-		# to tests-heal-plan-and-validation.
+		# back to tests-hooks-and-orchestrator.
 		self.assertEqual(
 			group_zero_guarded,
 			[POLL_GROUP_ZERO_9214_FAST_FAIL_STEP, RELEASE_9450_STEP_NAME],
