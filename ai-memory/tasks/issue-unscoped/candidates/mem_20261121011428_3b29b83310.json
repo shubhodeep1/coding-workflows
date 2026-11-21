@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "Recent unblock changes touched `scripts/unblock_judge.sh` and, for routing behavior, `scripts/unblock_actions.py`, with coverage in unblock-judge and routing-specific tests. When changing unblock decisions or destinations, trace the handoff between these components and test the relevant path.",
+  "fingerprint": "d0cc912ce9e274dbac3dd3f705267dc693988a51321fc6c44e94f53f6df31cc0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44847816684",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44847816684",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9575",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9706",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9809",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9823",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9844",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9602",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9712",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9811",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9834",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9845"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261121011428_3b29b83310",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Unblock routing and judgment logic is split across shell and Python components.",
+  "timestamps": {
+    "created_at": "2026-11-21T01:14:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
