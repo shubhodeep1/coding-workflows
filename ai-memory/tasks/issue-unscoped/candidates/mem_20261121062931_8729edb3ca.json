@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_prepush_test_gate.sh:736-737 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The python precheck accepts `{}` or any dict lacking a `status` key as a valid result, so `status` prints `unverified 0 0` and the guard fires on a pr_caused of 0, reverting the repair.\n  WHY: The precheck was meant to skip the guard when the status is unreadable. Severity disagreement: minimax reported MAJOR with confidence 4; glm reported only a hardening suggestion with risk score 1, and sonnet reviewed and rejected this concern.\n- scripts/review_autofix_step_prepush_test_gate.sh:379-385 | severity=low | confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: A git failure inside `review_prepush_test_gate_changed` yields an empty list, which the guard reads as \"change erased\".\n  WHY: The reviewer found no demonstrated failing path and the revert is safe, so it reported this as a NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Log `PREPUSH_TEST_GATE ... outcome=repair_reverted reason=passing_change_erased`\n  expected_change_site: scripts/review_autofix_step_prepush_test_gate.sh in review_prepush_test_gate_repair()\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, anthropic_claude-sonnet-5_5]\n  EVIDENCE: google said the call lacks the mandatory \"PREPUSH_TEST_GATE\" prefix. anthropic found the prefix is present, because review_prepush_test_gate_log (lines 110-113) prepends it, and reported it as not absent (NIT, confidence 1). z-ai_glm-5_3-flash found the same and reported no gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_autofix_step_prepush_test_gate.sh:379-385 (and the `repair_changed_after` read at about line 697) | severity=low (NIT) | confidence=1\n  PROBLEM: A git failure inside `review_prepush_test_gate_changed` yields an empty list, which the guard reads as \"change erased\".\n  WHY: No concrete failing path is demonstrated, so this is not a defect to fix.\n- TASK_GAP: Requirement: log `PREPUSH_TEST_GATE ... outcome=repair_reverted reason=passing_change_erased`\n  Expected change site: `review_prepush_test_gate_repair`\n  Evidence of absence: not absent. `review_prepush_test_gate_log` (line 110-113) emits the prefix. SEVERITY: NIT, ISSUE_CONFIDENCE: 1\n- Hardening: none. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP: Requirement: Log PREPUSH_TEST_GATE ... outcome=repair_reverted reason=passing_change_erased\n  Expected change site: scripts/review_autofix_step_prepush_test_gate.sh in review_prepush_test_gate_repair()\n  Evidence of absence: The implementation calls review_prepush_test_gate_log \"outcome=repair_reverted reason=passing_change_erased\", which lacks the mandatory \"PREPUSH_TEST_GATE\" prefix. SEVERITY: NIT, ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_autofix_step_prepush_test_gate.sh:736-737 | severity=high (MAJOR) | confidence=4\n  PROBLEM: The python precheck uses `isinstance(json.load(...), dict)`, which accepts `{}`. `status` then prints \"unverified 0 0\", pr_caused is 0, and the guard reverts an otherwise-valid repair turn.\n  WHY: `{}` is the load() fallback shape, not a genuine unverified result, so the precheck does not separate unreadable results from real ones.\n- Hardening: tighten the precheck to require non-empty content (append `and obj`). Estimated lines changed: 1. HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_autofix_step_prepush_test_gate.sh:736 (with fallback at lines 132-137 and 145-147) | hardening suggestion, no severity stated\n  PROBLEM: The precheck accepts any JSON object, including `{}` or one without a `status` key, so `status` prints `unverified 0 0` and the guard sees pr_caused=0. This is reachable only if the result file is externally replaced, since host-written results always carry `status`.\n  WHY: This is the same false \"no failure was caused by it\" reading the precheck was added to prevent.\n  Suggested fix: exit 0 only on a truthy object, or require `status` in a known set. Estimated lines changed: \u22643. HARDENING_RISK_SCORE: 1\n- Task completeness: none. The `PREPUSH_TEST_GATE` prefix is supplied by `review_prepush_test_gate_log` (lines 110-113), so the missing-prefix gap is already satisfied.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e4d2d4fda94bfc1d167d12aee01d6accd77b9747b7b3122c0cc2711215d6796e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9731,
+    "run_id": "44866517425",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44866517425",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121062931_8729edb3ca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9731,
+    "run_id": "44866517425"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T06:29:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
