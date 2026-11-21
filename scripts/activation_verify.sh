@@ -202,6 +202,10 @@ for gap in match["gaps"]:
 	release_pending = bool(RELEASE_CONDITION_RE.match(dormant_until)) or (
 		gap["kind"] == "operator" and not dormant_until and bool(RELEASE_STEP_TITLE_RE.match(title))
 		and not HUMAN_OBJECT_TITLE_RE.search(re.sub(r"(?<=[a-z])(?=[A-Z])", "_", title)))
+	# Deliberately not gated on source_sha: without a valid merge commit the
+	# writer's resolve skips an entry (outcome=no_source_sha), so keeping the
+	# gap as an operator step would leave a step nobody auto-ticks. Like the
+	# `@stable contains` path, the gap stays release-pending (verdict only).
 	if release_pending and source_sha:
 		dormant_until = "@stable contains " + source_sha
 	gaps.append({
