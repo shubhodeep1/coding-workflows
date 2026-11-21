@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cFile a separate normal (non-heal) issue for the helper changes and snapshot regression test.\u201d\n  expected_change_site: GitHub issue tracker, with the follow-up issue referenced in the PR artifacts\n  confidence=[3]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR description and `changelog.d/9837-clarify-snapshot-reject-no-retry.md` defer the helper work and say it still needs its own issue, but provide no follow-up issue ID or URL; the supplied linked-issue and PR-comment context contains no follow-up issue reference.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cFile a separate normal (non-heal) issue for the helper changes and snapshot regression test.\u201d\n  Expected change site: GitHub issue tracker, with the follow-up issue referenced in the PR artifacts.\n  Evidence of absence: The PR description and `changelog.d/9837-clarify-snapshot-reject-no-retry.md` defer the helper work and say it still needs its own issue, but provide no follow-up issue ID or URL; the supplied linked-issue and PR-comment context contains no follow-up issue reference.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "67c6fa332a06482f0c38e22b68546de5731acdcd9747026a396f977ee6c90595",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9840,
+    "run_id": "44903639823",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44903639823",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121132640_123add83b9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9840,
+    "run_id": "44903639823"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-21T13:26:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
