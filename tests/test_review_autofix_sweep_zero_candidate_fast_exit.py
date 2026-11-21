@@ -167,6 +167,11 @@ GH_CALL_COUNTER_TRUSTED_HELPERS = {
 GH_CALL_COUNTER_NO_CONTINUE_ON_ERROR_JOBS = {("review_autofix.yml", "post-merge-validate-dispatch")}
 # Jobs that hold no GH_PAT: their budget steps must make no gh call (#9887 D6).
 GH_PAT_BUDGET_NO_PAT_JOBS = {("test-and-mark-stable.yml", "validate")}
+# Release-gate jobs whose budget steps make no gh call at all (issue #9887:
+# no added GitHub request); their quota keys always read unknown.
+GH_PAT_BUDGET_NO_API_CALL_JOBS = {key for key in GH_CALL_COUNTER_TRUSTED_HELPERS if key[0] == "test-and-mark-stable.yml"}
+# Jobs whose budget end step must stay the last step, so every gh call is counted.
+GH_PAT_BUDGET_END_LAST_JOBS = {("clarify.yml", "clarify"), ("orchestrate_poll.yml", "poll"), ("review_autofix_sweep.yml", "sweep")}
 
 
 def test_pat_budget_steps_bracket_every_active_job() -> None:
@@ -212,7 +217,12 @@ fi
 					assert "GH_TOKEN" not in job.get("env", {}), (file, name)
 					assert all("GH_TOKEN" not in step.get("env", {}) for step in budget), (file, name)
 				else:
-					assert budget[0]["env"].get("GH_TOKEN", job.get("env", {}).get("GH_TOKEN")) == "${{ secrets.GH_PAT }}"
+					assert budget[0].get("env", {}).get("GH_TOKEN", job.get("env", {}).get("GH_TOKEN")) == "${{ secrets.GH_PAT }}"
+				if (file, name) in GH_PAT_BUDGET_END_LAST_JOBS:
+					assert steps[-1] is budget[1], (file, name)
+				no_api = (file, name) in GH_PAT_BUDGET_NO_API_CALL_JOBS
+				if no_api:
+					assert all("rate_limit" not in step["run"] for step in budget), (file, name)
 				installs = [step for step in steps if step.get("name") == "Install gh call counter"]
 				assert len(installs) == 1, (file, name)
 				install_step = installs[0]
@@ -229,7 +239,7 @@ fi
 				assert "skip-pr-head" not in helpers and "secrets." not in str(install_step["env"])
 				assert "gh_call_counter_install" in install_step["run"]
 				for phase, step in zip(("start", "end"), budget):
-					path_dirs = f"{no_gh_dir}" if no_pat else f"{bin_dir}"
+					path_dirs = f"{no_gh_dir}" if (no_pat or no_api) else f"{bin_dir}"
 					env = {**os.environ, "PATH": f"{path_dirs}:{os.environ['PATH']}",
 						"GH_PAT_BUDGET_FILE": str(bin_dir / f"budget-{file}-{name}"), "GH_TOKEN": "fake"}
 					result = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=REPO_ROOT,
@@ -249,7 +259,7 @@ fi
 					assert counted.returncode == 0, (file, name, counted.stderr)
 					assert (" calls_in_job=2 paginated_in_job=1 calls_by_token=pat:1,github_token:1,other:0"
 						in counted.stdout), (file, name, counted.stdout)
-		assert not (bin_dir / "forbidden-calls").exists(), "a no-PAT budget step called gh"
+		assert not (bin_dir / "forbidden-calls").exists(), "a no-PAT or no-API budget step called gh"
 
 
 def test_install_gh_call_counter_step_installs_and_tolerates_missing_helper(tmp_path: Path) -> None:

@@ -664,18 +664,10 @@ jobs:
 
     steps:
       - name: Record GH_PAT budget at e2e-smoke-test start
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_e2e-smoke-test
+        # Issue #9887: no rate_limit read, so the release gate adds no GitHub
+        # request; the quota keys read unknown (same pattern as validate).
         run: |
-          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
-          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
-            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
-            read -r remaining reset <<< "${reading}"
-          else
-            remaining=unknown; reset=unknown
-          fi
-          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=e2e-smoke-test remaining=${remaining} reset=${reset} used_in_job=unknown"
+          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=e2e-smoke-test remaining=unknown reset=unknown used_in_job=unknown"
 
       # Checkout repo at the start so `if: always()` steps (per-phase
       # soft-error analyser invocations, Cleanup test artifacts) can find
@@ -3458,23 +3450,11 @@ jobs:
 
       - name: Record GH_PAT budget at e2e-smoke-test end
         if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_e2e-smoke-test
+        # Issue #9887: no rate_limit read (no added GitHub request); only the
+        # job's own gh call count.
         run: |
           counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
-          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
-          remaining=unknown; reset=unknown; used=unknown
-          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
-            read -r remaining reset <<< "${reading}"
-            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
-              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
-              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
-                used=$((initial - remaining))
-              fi
-            fi
-          fi
-          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=e2e-smoke-test remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
+          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=e2e-smoke-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
 
   # ──────────────────────────────────────────────────────────────────
   # Job 1b: Script correctness validation — runs parallel with E2E
@@ -3916,18 +3896,10 @@ jobs:
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
     steps:
       - name: Record GH_PAT budget at workflow-log-analysis-test start
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_workflow-log-analysis-test
+        # Issue #9887: no rate_limit read, so the release gate adds no GitHub
+        # request; the quota keys read unknown (same pattern as validate).
         run: |
-          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
-          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
-            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
-            read -r remaining reset <<< "${reading}"
-          else
-            remaining=unknown; reset=unknown
-          fi
-          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=workflow-log-analysis-test remaining=${remaining} reset=${reset} used_in_job=unknown"
+          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=workflow-log-analysis-test remaining=unknown reset=unknown used_in_job=unknown"
 
       - name: Validate prerequisites
         run: |
@@ -4066,23 +4038,11 @@ jobs:
 
       - name: Record GH_PAT budget at workflow-log-analysis-test end
         if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_workflow-log-analysis-test
+        # Issue #9887: no rate_limit read (no added GitHub request); only the
+        # job's own gh call count.
         run: |
           counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
-          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
-          remaining=unknown; reset=unknown; used=unknown
-          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
-            read -r remaining reset <<< "${reading}"
-            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
-              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
-              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
-                used=$((initial - remaining))
-              fi
-            fi
-          fi
-          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=workflow-log-analysis-test remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
+          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=workflow-log-analysis-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
   # ──────────────────────────────────────────────────────────────────
   # Job 1c-2: Orphan workflows live-dispatch test
   # Dispatches each user-facing workflow that the e2e smoke test does
@@ -4126,18 +4086,10 @@ jobs:
       DISPATCH_WATCH_CANCEL_ON_TIMEOUT: ${{ vars.DISPATCH_WATCH_CANCEL_ON_TIMEOUT || 'true' }}
     steps:
       - name: Record GH_PAT budget at orphan-workflows-test start
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_orphan-workflows-test
+        # Issue #9887: no rate_limit read, so the release gate adds no GitHub
+        # request; the quota keys read unknown (same pattern as validate).
         run: |
-          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
-          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
-            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
-            read -r remaining reset <<< "${reading}"
-          else
-            remaining=unknown; reset=unknown
-          fi
-          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=orphan-workflows-test remaining=${remaining} reset=${reset} used_in_job=unknown"
+          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=orphan-workflows-test remaining=unknown reset=unknown used_in_job=unknown"
 
       - name: Validate prerequisites
         run: |
@@ -4451,23 +4403,11 @@ jobs:
 
       - name: Record GH_PAT budget at orphan-workflows-test end
         if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_orphan-workflows-test
+        # Issue #9887: no rate_limit read (no added GitHub request); only the
+        # job's own gh call count.
         run: |
           counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
-          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
-          remaining=unknown; reset=unknown; used=unknown
-          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
-            read -r remaining reset <<< "${reading}"
-            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
-              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
-              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
-                used=$((initial - remaining))
-              fi
-            fi
-          fi
-          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=orphan-workflows-test remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
+          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=orphan-workflows-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
 
   # ──────────────────────────────────────────────────────────────────
   # Job 1d: Orchestrate decompose end-to-end test
@@ -4492,18 +4432,10 @@ jobs:
       child_issues: ${{ steps.dispatch.outputs.child_issues }}
     steps:
       - name: Record GH_PAT budget at orchestrate-decompose-test start
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_orchestrate-decompose-test
+        # Issue #9887: no rate_limit read, so the release gate adds no GitHub
+        # request; the quota keys read unknown (same pattern as validate).
         run: |
-          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
-          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
-            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
-            read -r remaining reset <<< "${reading}"
-          else
-            remaining=unknown; reset=unknown
-          fi
-          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=orchestrate-decompose-test remaining=${remaining} reset=${reset} used_in_job=unknown"
+          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=orchestrate-decompose-test remaining=unknown reset=unknown used_in_job=unknown"
 
       - name: Validate prerequisites
         run: |
@@ -4906,23 +4838,11 @@ jobs:
 
       - name: Record GH_PAT budget at orchestrate-decompose-test end
         if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_orchestrate-decompose-test
+        # Issue #9887: no rate_limit read (no added GitHub request); only the
+        # job's own gh call count.
         run: |
           counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
-          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
-          remaining=unknown; reset=unknown; used=unknown
-          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
-            read -r remaining reset <<< "${reading}"
-            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
-              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
-              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
-                used=$((initial - remaining))
-              fi
-            fi
-          fi
-          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=orchestrate-decompose-test remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
+          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=orchestrate-decompose-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
 
   # ──────────────────────────────────────────────────────────────────
   # Job 1e: Validate (reusable) standalone fixture dispatch
@@ -4951,18 +4871,10 @@ jobs:
       DISPATCH_WATCH_CANCEL_ON_TIMEOUT: ${{ vars.DISPATCH_WATCH_CANCEL_ON_TIMEOUT || 'true' }}
     steps:
       - name: Record GH_PAT budget at validate-standalone-test start
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_validate-standalone-test
+        # Issue #9887: no rate_limit read, so the release gate adds no GitHub
+        # request; the quota keys read unknown (same pattern as validate).
         run: |
-          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
-          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
-            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
-            read -r remaining reset <<< "${reading}"
-          else
-            remaining=unknown; reset=unknown
-          fi
-          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=validate-standalone-test remaining=${remaining} reset=${reset} used_in_job=unknown"
+          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=validate-standalone-test remaining=unknown reset=unknown used_in_job=unknown"
 
       - name: Validate prerequisites
         run: |
@@ -5085,23 +4997,11 @@ jobs:
 
       - name: Record GH_PAT budget at validate-standalone-test end
         if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_validate-standalone-test
+        # Issue #9887: no rate_limit read (no added GitHub request); only the
+        # job's own gh call count.
         run: |
           counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
-          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
-          remaining=unknown; reset=unknown; used=unknown
-          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
-            read -r remaining reset <<< "${reading}"
-            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
-              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
-              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
-                used=$((initial - remaining))
-              fi
-            fi
-          fi
-          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=validate-standalone-test remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
+          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=validate-standalone-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
 
   # ──────────────────────────────────────────────────────────────────
   # Job 1f: Clarify-rejects-unsolvable negative test
@@ -5121,18 +5021,10 @@ jobs:
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
     steps:
       - name: Record GH_PAT budget at clarify-rejects-unsolvable-test start
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_clarify-rejects-unsolvable-test
+        # Issue #9887: no rate_limit read, so the release gate adds no GitHub
+        # request; the quota keys read unknown (same pattern as validate).
         run: |
-          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
-          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
-            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
-            read -r remaining reset <<< "${reading}"
-          else
-            remaining=unknown; reset=unknown
-          fi
-          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=clarify-rejects-unsolvable-test remaining=${remaining} reset=${reset} used_in_job=unknown"
+          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=clarify-rejects-unsolvable-test remaining=unknown reset=unknown used_in_job=unknown"
 
       - name: Validate prerequisites
         run: |
@@ -5382,23 +5274,11 @@ jobs:
 
       - name: Record GH_PAT budget at clarify-rejects-unsolvable-test end
         if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_clarify-rejects-unsolvable-test
+        # Issue #9887: no rate_limit read (no added GitHub request); only the
+        # job's own gh call count.
         run: |
           counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
-          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
-          remaining=unknown; reset=unknown; used=unknown
-          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
-            read -r remaining reset <<< "${reading}"
-            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
-              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
-              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
-                used=$((initial - remaining))
-              fi
-            fi
-          fi
-          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=clarify-rejects-unsolvable-test remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
+          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=clarify-rejects-unsolvable-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
 
   # ──────────────────────────────────────────────────────────────────
   # Job 1g: Alternate-model happy-path run
@@ -5461,18 +5341,10 @@ jobs:
       ALT_EDITOR_MODEL: ${{ vars.ALT_EDITOR_MODEL || 'openai/gpt-6-sol' }}
     steps:
       - name: Record GH_PAT budget at e2e-alt-model-test start
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_e2e-alt-model-test
+        # Issue #9887: no rate_limit read, so the release gate adds no GitHub
+        # request; the quota keys read unknown (same pattern as validate).
         run: |
-          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
-          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
-            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
-            read -r remaining reset <<< "${reading}"
-          else
-            remaining=unknown; reset=unknown
-          fi
-          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=e2e-alt-model-test remaining=${remaining} reset=${reset} used_in_job=unknown"
+          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=e2e-alt-model-test remaining=unknown reset=unknown used_in_job=unknown"
 
       # Required for the run-soft-error-analyzer composite action below.
       - name: Checkout repository (for soft-error analyser)
@@ -5847,23 +5719,11 @@ jobs:
 
       - name: Record GH_PAT budget at e2e-alt-model-test end
         if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_e2e-alt-model-test
+        # Issue #9887: no rate_limit read (no added GitHub request); only the
+        # job's own gh call count.
         run: |
           counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
-          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
-          remaining=unknown; reset=unknown; used=unknown
-          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
-            read -r remaining reset <<< "${reading}"
-            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
-              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
-              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
-                used=$((initial - remaining))
-              fi
-            fi
-          fi
-          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=e2e-alt-model-test remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
+          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=e2e-alt-model-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
 
   # ──────────────────────────────────────────────────────────────────
   # Job 2: Validate release prerequisites (same as mark-stable.yml)
