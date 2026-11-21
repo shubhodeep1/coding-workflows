@@ -21678,7 +21678,12 @@ def test_stall_judge_keeps_escalation_when_linked_pr_merged_into_non_target_base
 	body = script[start:script.index("\n}\n", start)]
 	normalize = body.index('effective_action="$(normalize_stall_recovery_action')
 	keep = body.index('_stall_judge_linked_pr_keeps_escalation "${issue_num}" "${linked_pr_json}"')
-	assert normalize < keep < body.index("**Decision (effective):** ${effective_action}")
+	# Issue #9520 renders the effective decision through _judge_effective_label
+	# (so a held escalation reads "escalate_human (held: ...)"); the label must
+	# still be computed from effective_action after the keep-escalation override.
+	label = body.index('local _judge_effective_label="${effective_action}"')
+	decision = body.index("**Decision (effective):** ${_judge_effective_label}")
+	assert normalize < keep < label < decision
 	assert '[ "${judge_action}" = "escalate_human" ] && [ "${effective_action}" = "attempt_merge" ]' in body
 	assert '"${_keep_escalation_managed}" "${_keep_escalation_declared}"; then' in body
 	assert "extract-integration-branch" in body[normalize:keep]
