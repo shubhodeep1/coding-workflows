@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should the two new step scripts (`implement_step_preflight_destructive_guard.sh`, `implement_step_post_codex_syntax_repair.sh`) be registered as required staged support?\nChoices:\nA) In both places: the legacy `for f in gh_helpers.sh ...` list in \"Stage workflow support files\" and `stage_support_required_scripts` in the `implement)` case of `scripts/stage_support_for_phase.sh`. The new contract test pins both lists. (RECOMMENDED)\nB) Only in the legacy `for f in gh_helpers.sh ...` list, exactly as the issue says. **Note:** with the current unified stager, normal runs would not stage the scripts, and the wrapper fails closed (exit 1) on every implement run.\nC) Only in `stage_support_for_phase.sh`'s `implement)` required list. This leaves the legacy fallback without the scripts, so runs fail when the support ref has no unified stager.",
+  "fingerprint": "8a50e2b3734ec84f822881673d018911021239c936ca2c44072c6a376e2e7b25",
+  "lineage": {
+    "issue_number": 9889,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44903720264",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44903720264",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261121123521_9b47fa6339",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9889,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "44903720264"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9889 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-21T12:35:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
