@@ -84,6 +84,7 @@ case "$1" in
 		if [ -n "${FAKE_PASS_AUDITED_HEAD:-}" ]; then
 			echo "SINGLE_ISSUE_SECURITY_PASS_AUDITED_HEAD=${FAKE_PASS_AUDITED_HEAD}"
 		fi
+		printf '%b' "${FAKE_PASS_STATUS_LOG:-}"
 		exit "${FAKE_PASS_STATUS_RC:-0}"
 		;;
 	gate)
@@ -497,6 +498,26 @@ def test_security_mode_merges_reverify_audited_head(tmp_path: Path, state: str, 
 	assert pass_calls == ["status"]
 
 
+@pytest.mark.parametrize(
+	"status_log, hold_reason",
+	[
+		(f"SINGLE_ISSUE_SECURITY_PASS mode=gate pr=42 head={HEAD} checkout={'d' * 40} outcome=hold reason=head_unpushed\\n", "head_unpushed"),
+		(f"SINGLE_ISSUE_SECURITY_PASS mode=gate pr=42 head={HEAD} outcome=hold reason=extensions_unverifiable\\n", "security_mode_unverified"),
+	],
+)
+def test_security_mode_unpushed_checkout_holds_as_head_unpushed(tmp_path: Path, status_log: str, hold_reason: str) -> None:
+	# PRs #9338/#9283 on the security-exhaustion path: status reports the
+	# conflict resolver's unpushed commit as unverifiable. The merge holds, but
+	# with the self-clearing head_unpushed reason, not security_mode_unverified.
+	result, _, pass_calls = _run(tmp_path, 'RB_SECURITY_MODE=true; if rb_security_merge_gate; then echo ALLOW; else echo HOLD; fi; echo "HOLD_REASON=${RB_SECURITY_HOLD_REASON}"', {
+		"FAKE_PASS_STATE": "unverifiable", "RB_JUDGED_HEAD_SHA": HEAD, "FAKE_PASS_STATUS_LOG": status_log,
+	})
+	assert result.returncode == 0, result.stderr
+	assert "HOLD" in result.stdout.splitlines()
+	assert f"HOLD_REASON={hold_reason}" in result.stdout.splitlines()
+	assert pass_calls == ["status"]
+
+
 def test_missing_pass_script_holds_security_mode_merge(tmp_path: Path) -> None:
 	result, _, pass_calls = _run(tmp_path, 'RB_SECURITY_MODE=true; if rb_security_merge_gate; then echo ALLOW; else echo HOLD; fi', with_pass=False)
 	assert result.returncode == 0 and "HOLD" in result.stdout.splitlines()
@@ -571,8 +592,8 @@ def test_failed_findings_lookup_withdraws_auto_merge_before_exiting() -> None:
 	end = text.index('  echo "Security pass exhausted for PR', start)
 	result = subprocess.run(
 		["bash", "-c", 'set -euo pipefail; TARGET_BRANCH=branch; RB_SECURITY_FINDINGS_FILE=/dev/null; PR_ALREADY_MERGED=false; '
-		 'rb_security_findings_render() { return 1; }; rb_security_disable_auto_merge() { echo "DISABLED=$1"; }; '
-		 + text[start:end] + 'echo UNEXPECTED_MERGE'],
+		'rb_security_findings_render() { return 1; }; rb_security_disable_auto_merge() { echo "DISABLED=$1"; }; '
+		+ text[start:end] + 'echo UNEXPECTED_MERGE'],
 		cwd=ROOT, capture_output=True, text=True, check=False,
 	)
 	assert result.returncode == 1
@@ -627,8 +648,8 @@ def test_merge_path_hold_emits_the_gate_hold_reason(tmp_path: Path) -> None:
 	output.write_text("", encoding="utf-8")
 	result = subprocess.run(
 		["bash", "-c", 'set -euo pipefail; gh_retry() { :; }; '
-		 'rb_security_merge_gate() { RB_SECURITY_HOLD_REASON=dispatch_failed; return 1; }; '
-		 + text[start:end] + 'echo UNEXPECTED_MERGE'],
+		'rb_security_merge_gate() { RB_SECURITY_HOLD_REASON=dispatch_failed; return 1; }; '
+		+ text[start:end] + 'echo UNEXPECTED_MERGE'],
 		env={"PATH": os.environ["PATH"], "GITHUB_OUTPUT": str(output), "RB_ACTION": "merge", "IS_FINAL": "false",
 			"PR_NUMBER": "42", "REPOSITORY": "o/r"},
 		capture_output=True, text=True, check=False,
@@ -662,7 +683,7 @@ def _run_telegram_step(tmp_path: Path, judge_action: str, judge_skip_reason: str
 	return result, sent.read_text(encoding="utf-8") if sent.exists() else ""
 
 
-@pytest.mark.parametrize("hold_reason", ["audit_dispatched", "audit_pending", "awaiting_followups"])
+@pytest.mark.parametrize("hold_reason", ["audit_dispatched", "audit_pending", "awaiting_followups", "head_unpushed"])
 def test_self_resolving_security_hold_sends_no_alert(tmp_path: Path, hold_reason: str) -> None:
 	# PRs #6288 and #6209: the judge chose merge, the gate dispatched a retry
 	# audit, and the generic fallback paged "Review-blocked judge action:
