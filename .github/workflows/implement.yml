@@ -2409,13 +2409,19 @@ jobs:
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+          type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
           found_approval_comment="false"
+          issue_comments_read_ok="false"
+          # gh_api_retry waits for the rate-limit reset GitHub reports (#9858);
+          # this outer loop only covers the approval comment becoming visible.
           for attempt in 1 2 3 4 5; do
-            if ! { gh api --paginate "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?per_page=100" | jq -s 'add // []' > "${ISSUE_COMMENTS_FILE}"; } 2>/dev/null; then
+            if ! { gh_api_retry --paginate "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?per_page=100" | jq -s 'add // []' > "${ISSUE_COMMENTS_FILE}"; }; then
               echo "Attempt ${attempt}: API call failed, retrying..."
               sleep $((attempt * 2))
               continue
             fi
+            issue_comments_read_ok="true"
             if jq -e --arg approval_comment_id "${APPROVAL_COMMENT_ID}" 'any(.[]; (.id | tostring) == $approval_comment_id)' "${ISSUE_COMMENTS_FILE}" >/dev/null; then
               found_approval_comment="true"
               break
@@ -2424,6 +2430,9 @@ jobs:
           done
 
           if [ "${found_approval_comment}" != "true" ]; then
+            if [ "${issue_comments_read_ok}" != "true" ]; then
+              echo "::error::Unable to read issue comments (GitHub API unavailable or rate-limited)."
+            fi
             echo "Unable to fetch triggering approval comment from issue comments."
             exit 1
           fi
