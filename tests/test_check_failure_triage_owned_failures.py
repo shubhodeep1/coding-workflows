@@ -136,6 +136,42 @@ class FinalCiOwnedGateTests(unittest.TestCase):
 				self.assertNotIn("reason=final_ci_repair_owns", proc.stdout)
 				self.assertEqual(outputs.get("ready"), "true", proc.stdout + proc.stderr)
 
+	def test_real_workflow_run_inputs_use_the_run_title(self) -> None:
+		# Issue #9812: internal-check-failure-triage.yml passes the workflow name
+		# (`CI`) as check_name; `CI [pr:<n>]` is only the run's display title.
+		for title in ("CI [pr:17]", "CI [pr:17] [sync-quick]"):
+			with self.subTest(title=title):
+				proc, outputs, metadata, calls = _collect(env={"CHECK_TRIAGE_RUN_TITLE": title})
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertIn(
+					"CHECK_TRIAGE skip reason=final_ci_repair_owns pr=17 check=CI title_source=run_title", proc.stdout,
+				)
+				self.assertNotIn("ready", outputs)
+				self.assertEqual(metadata, {})
+				self.assertFalse([call for call in calls if "/actions/" in call or "/issues" in call], calls)
+
+	def test_run_title_for_another_pr_is_triaged(self) -> None:
+		for title in ("CI [pr:18]", "CI", "Fix CI [pr:17]", "CI [pr:17] extra"):
+			with self.subTest(title=title):
+				proc, outputs, _metadata, _calls = _collect(env={"CHECK_TRIAGE_RUN_TITLE": title})
+				self.assertNotIn("reason=final_ci_repair_owns", proc.stdout)
+				self.assertEqual(outputs.get("ready"), "true", proc.stdout + proc.stderr)
+		# The title wins over the check name when both are set.
+		proc, outputs, _metadata, _calls = _collect(check_name="CI [pr:17]", env={"CHECK_TRIAGE_RUN_TITLE": "CI [pr:18]"})
+		self.assertNotIn("reason=final_ci_repair_owns", proc.stdout)
+		self.assertEqual(outputs.get("ready"), "true", proc.stdout + proc.stderr)
+
+	def test_empty_run_title_falls_back_to_the_check_name(self) -> None:
+		proc, _outputs, _metadata, _calls = _collect(check_name="CI [pr:17]", env={"CHECK_TRIAGE_RUN_TITLE": ""})
+		self.assertIn("skip reason=final_ci_repair_owns pr=17 check=CI [pr:17] title_source=check_name", proc.stdout)
+
+	def test_run_title_respects_the_switches(self) -> None:
+		for env in ({"CHECK_TRIAGE_SKIP_FINAL_CI_ENABLED": "false"}, {"FINAL_CI_FAILED_REDISPATCH_ENABLED": "false"}):
+			with self.subTest(env=env):
+				proc, outputs, _metadata, _calls = _collect(env={"CHECK_TRIAGE_RUN_TITLE": "CI [pr:17]", **env})
+				self.assertNotIn("reason=final_ci_repair_owns", proc.stdout)
+				self.assertEqual(outputs.get("ready"), "true", proc.stdout + proc.stderr)
+
 	def test_stale_head_is_reported_first(self) -> None:
 		proc, _outputs, _metadata, _calls = _collect(pr_head_sha=NEW_HEAD, check_name="CI [pr:17]")
 		self.assertIn("reason=head_advanced", proc.stdout)
@@ -151,6 +187,26 @@ class WiringTests(unittest.TestCase):
 			"FINAL_CI_FAILED_REDISPATCH_ENABLED: ${{ vars.FINAL_CI_FAILED_REDISPATCH_ENABLED || 'true' }}",
 		):
 			self.assertIn(line, text)
+
+	def test_reusable_workflow_passes_the_run_title_to_collect_only(self) -> None:
+		# Text-based so it runs without PyYAML. Issue #9812: dispatch runs only,
+		# so a pull_request run's PR-controlled title never reaches the skip.
+		text = (REPO_ROOT / ".github" / "workflows" / "check_failure_triage.yml").read_text(encoding="utf-8")
+		line = (
+			"          CHECK_TRIAGE_RUN_TITLE: ${{ github.event_name == 'workflow_run' && "
+			"github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.display_title || '' }}"
+		)
+		self.assertEqual(text.count(line), 1)
+		collect = text.index("      - name: Collect check-failure context")
+		next_step = text.index("      - name: ", collect + 1)
+		self.assertTrue(collect < text.index(line) < next_step)
+
+	def test_wrapper_keeps_the_workflow_name_as_check_name(self) -> None:
+		text = (REPO_ROOT / ".github" / "workflows" / "internal-check-failure-triage.yml").read_text(encoding="utf-8")
+		job = text[text.index("  triage-final-ci-run:"):]
+		self.assertIn("check_name: ${{ github.event.workflow_run.name }}", job)
+		# No input the reusable workflow does not declare (it is called at a branch ref).
+		self.assertNotIn("run_title:", job)
 
 	def test_gates_run_before_any_base_or_issue_read(self) -> None:
 		script = (REPO_ROOT / "scripts" / "check_failure_triage.sh").read_text(encoding="utf-8")

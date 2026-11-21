@@ -17,10 +17,9 @@ import os
 import re
 import subprocess
 import tempfile
+import json
 import unittest
 from pathlib import Path
-
-import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -48,7 +47,25 @@ STUB_TG_HELPERS = (
 )
 
 
+def _step_run_from_text() -> str:
+	# No PyYAML (the pre-push gate's container): cut the step's `run: |` block
+	# out of the workflow text and strip its indentation.
+	lines = PLAN_WF.read_text(encoding="utf-8").splitlines()
+	start = lines.index(f"      - name: {STEP_NAME}")
+	run_at = next(i for i in range(start + 1, len(lines)) if lines[i] == "        run: |")
+	body: list[str] = []
+	for line in lines[run_at + 1:]:
+		if line.strip() and not line.startswith(" " * 10):
+			break
+		body.append(line[10:])
+	return "\n".join(body).rstrip("\n") + "\n"
+
+
 def _step_run() -> str:
+	try:
+		import yaml
+	except ModuleNotFoundError:
+		return _step_run_from_text()
 	workflow = yaml.safe_load(PLAN_WF.read_text(encoding="utf-8"))
 	for job in workflow["jobs"].values():
 		for step in job.get("steps", []):
@@ -71,7 +88,15 @@ def _render(script: str) -> str:
 
 
 class PlanBlockedWaitOnPrTests(unittest.TestCase):
-	def _run(self, reason: str, *, unblock_judge_enabled: str = "true", unblock_judge_wait_enabled: str = "true") -> tuple[str, str, str]:
+	def _run(
+		self,
+		reason: str,
+		*,
+		unblock_judge_enabled: str = "true",
+		unblock_judge_wait_enabled: str = "true",
+		resolved_gate_enabled: str | None = None,
+		labels: list[str] | None = None,
+	) -> tuple[str, str, str]:
 		with tempfile.TemporaryDirectory() as tmp:
 			root = Path(tmp)
 			scripts_dir = root / "scripts"
@@ -85,6 +110,9 @@ class PlanBlockedWaitOnPrTests(unittest.TestCase):
 			gh.write_text(STUB_GH, encoding="utf-8")
 			gh.chmod(0o755)
 			(root / "step.sh").write_text(_render(_step_run()), encoding="utf-8")
+			meta_file = root / "issue_meta.json"
+			if labels is not None:
+				meta_file.write_text(json.dumps({"labels": [{"name": name} for name in labels]}), encoding="utf-8")
 			env = {
 				**os.environ,
 				"PATH": f"{bin_dir}:{os.environ['PATH']}",
@@ -98,7 +126,11 @@ class PlanBlockedWaitOnPrTests(unittest.TestCase):
 				"STUB_LOG": str(root / "gh.log"),
 				"STUB_BODY": str(root / "body.md"),
 				"STUB_TG": str(root / "tg.txt"),
+				"ISSUE_META_FILE": str(meta_file) if labels is not None else "",
 			}
+			env.pop("CHECK_TRIAGE_RESOLVED_GATE_ENABLED", None)
+			if resolved_gate_enabled is not None:
+				env["CHECK_TRIAGE_RESOLVED_GATE_ENABLED"] = resolved_gate_enabled
 			result = subprocess.run(
 				["bash", str(root / "step.sh")],
 				cwd=root,
@@ -173,6 +205,40 @@ class PlanBlockedWaitOnPrTests(unittest.TestCase):
 		body, tg, _ = self._run(WAIT_REASON, unblock_judge_wait_enabled="")
 		self.assertEqual(body.splitlines()[0], "Planning blocked: waiting on open PR #9246.")
 		self.assertTrue(tg.startswith("level=WARNING\n"), tg)
+
+	def test_check_triage_issue_promises_closure_only_while_the_judge_and_gate_run(self) -> None:
+		# Issue #9812: scripts/unblock_judge.sh closes a blocked ai:check-triage
+		# issue only while the judge runs and CHECK_TRIAGE_RESOLVED_GATE_ENABLED
+		# is not false; otherwise the issue keeps the human-input text at CRITICAL.
+		triage_sentence = "This is a CI-failure triage issue."
+		for gate in (None, "true", "TRUE", ""):
+			with self.subTest(gate=gate):
+				body, tg, _ = self._run("missing API key", resolved_gate_enabled=gate, labels=["ai:check-triage"])
+				self.assertIn(triage_sentence, body)
+				self.assertTrue(tg.startswith("level=WARNING\n"), tg)
+				self.assertIn("(CI triage; the unblock judge will re-check)", tg)
+		for gate, judge in (("false", "true"), ("FALSE", "true"), (" false ", "true"), ("true", "false"), (None, "false")):
+			with self.subTest(gate=gate, judge=judge):
+				body, tg, _ = self._run(
+					"missing API key", unblock_judge_enabled=judge, resolved_gate_enabled=gate, labels=["ai:check-triage"],
+				)
+				self.assertEqual(body.splitlines()[0], "Planning blocked: human input required.")
+				self.assertNotIn(triage_sentence, body)
+				self.assertIn("Provide the required input, then reply with /answer.", body)
+				self.assertTrue(tg.startswith("level=CRITICAL\n"), tg)
+				self.assertNotIn("CI triage", tg)
+		# Without the label nothing changes.
+		body, tg, _ = self._run("missing API key", labels=["bug"])
+		self.assertNotIn(triage_sentence, body)
+		self.assertTrue(tg.startswith("level=CRITICAL\n"), tg)
+
+	def test_workflow_passes_the_resolved_gate_switch(self) -> None:
+		text = PLAN_WF.read_text(encoding="utf-8")
+		step = text[text.index(f"      - name: {STEP_NAME}"):]
+		step = step[:step.index("        run: |")]
+		self.assertIn(
+			"CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}", step,
+		)
 
 	def test_wait_comment_keeps_the_automation_prefix(self) -> None:
 		# orchestrate_lib.py skips comments opening with "planning blocked:" when

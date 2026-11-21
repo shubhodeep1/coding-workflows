@@ -50,6 +50,9 @@ RUN_URL = "https://github.com/owner/repo/actions/runs/1"
 RUN_GET = "api repos/owner/repo/actions/runs/1"
 JOBS_GET = "api -X GET repos/owner/repo/actions/runs/1/attempts/1/jobs -f per_page=100"
 RERUN_POST = "api -i -X POST repos/owner/repo/actions/runs/1/rerun-failed-jobs"
+# Issue #9812: the check_run path re-runs only the classified job.
+JOB_RERUN_POST = "api -i -X POST repos/owner/repo/actions/jobs/555/rerun"
+PR_JOBS_LATEST_GET = "api repos/owner/repo/actions/runs/1/jobs?filter=latest&per_page=100"
 # The base gate reads the run as `--jq [(.workflow_id ...), (.path ...)]`.
 BASE_RUN_GET_PREFIX = "api repos/owner/repo/actions/runs/1 --jq "
 
@@ -103,11 +106,11 @@ def _run_payload(**overrides) -> str:
 
 def _jobs_payload(failed_ids: list[int], passed_ids: list[int] | None = None) -> str:
 	jobs = [
-		{"id": job_id, "status": "completed", "conclusion": "failure", "check_run_url": f"https://api.github.com/repos/owner/repo/check-runs/{job_id}"}
+		{"id": job_id, "name": f"job {job_id}", "status": "completed", "conclusion": "failure", "check_run_url": f"https://api.github.com/repos/owner/repo/check-runs/{job_id}"}
 		for job_id in failed_ids
 	]
 	jobs += [
-		{"id": job_id, "status": "completed", "conclusion": "success", "check_run_url": f"https://api.github.com/repos/owner/repo/check-runs/{job_id}"}
+		{"id": job_id, "name": f"job {job_id}", "status": "completed", "conclusion": "success", "check_run_url": f"https://api.github.com/repos/owner/repo/check-runs/{job_id}"}
 		for job_id in passed_ids or []
 	]
 	return json.dumps({"total_count": len(jobs), "jobs": jobs})
@@ -145,9 +148,9 @@ def _annotation_gets(calls: list[str]) -> list[str]:
 
 
 class ReleaseDownloadRerunGateTests(unittest.TestCase):
-	def _assert_rerun(self, proc, outputs, calls) -> None:
+	def _assert_rerun(self, proc, outputs, calls, post: str = RERUN_POST) -> None:
 		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-		self.assertEqual(calls.count(RERUN_POST), 1, calls)
+		self.assertEqual(calls.count(post), 1, calls)
 		self.assertIn("RELEASE_DOWNLOAD_RERUN outcome=rerun run=1 ", proc.stdout)
 		self.assertIn("CHECK_TRIAGE skip reason=release_download_rerun run=1 pr=17", proc.stdout)
 		self.assertNotIn("ready", outputs)
@@ -238,9 +241,27 @@ class ReleaseDownloadRerunGateTests(unittest.TestCase):
 			{555: FOUNDRY},
 			extra={"CHECK_TRIAGE_CHECK_RUN_ID": "555", "CHECK_TRIAGE_DETAILS_URL": f"{RUN_URL}/job/555"},
 		)
-		self._assert_rerun(proc, outputs, calls)
+		self._assert_rerun(proc, outputs, calls, post=JOB_RERUN_POST)
+		# Issue #9812: never rerun-failed-jobs, which would also re-run sibling
+		# failed jobs the gate never classified.
+		self.assertNotIn(RERUN_POST, calls)
 		self.assertNotIn(JOBS_GET, calls)
 		self.assertEqual(len(_annotation_gets(calls)), 1)
+
+	def test_check_run_path_failed_job_rerun_files_the_issue(self) -> None:
+		proc, outputs, calls = _collect(
+			{555: FOUNDRY},
+			extra={
+				"CHECK_TRIAGE_CHECK_RUN_ID": "555", "CHECK_TRIAGE_DETAILS_URL": f"{RUN_URL}/job/555",
+				"MOCK_RD_RERUN_STATUS": "403", "MOCK_RD_RERUN_EXIT": "1",
+			},
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertEqual(calls.count(JOB_RERUN_POST), 1, calls)
+		self.assertNotIn(RERUN_POST, calls)
+		self.assertIn("RELEASE_DOWNLOAD_RERUN outcome=skip reason=rerun_failed run=1", proc.stdout)
+		self.assertEqual(outputs.get("ready"), "true", proc.stdout + proc.stderr)
+		self.assertNotIn("rerun-secret-body", proc.stdout + proc.stderr)
 
 	def test_check_run_path_with_another_job_id_is_unparseable(self) -> None:
 		proc, _outputs, calls = _collect(
@@ -257,9 +278,38 @@ class ReleaseDownloadRerunGateTests(unittest.TestCase):
 		self.assertNotIn(RUN_GET, calls)
 		self.assertNotIn(RERUN_POST, calls)
 
-	def test_full_page_of_100_jobs_is_read(self) -> None:
+	def test_full_page_of_100_jobs_is_not_classified(self) -> None:
+		# Issue #9812: bounded like list_run_jobs() in scripts/ci_cancelled_rerun.py
+		# (a page of 100 or more may be truncated), so the failure is triaged.
 		proc, outputs, calls = _collect({5: FOUNDRY}, jobs=_jobs_payload([5], list(range(1000, 1099))))
+		self._assert_normal_path(proc, outputs, calls, "jobs_unreadable")
+		self.assertEqual(_annotation_gets(calls), [])
+
+	def test_page_of_99_jobs_is_read(self) -> None:
+		proc, outputs, calls = _collect({5: FOUNDRY}, jobs=_jobs_payload([5], list(range(1000, 1098))))
 		self._assert_rerun(proc, outputs, calls)
+
+	def test_job_without_a_name_or_id_is_not_classified(self) -> None:
+		# Validated like list_run_jobs() in scripts/ci_cancelled_rerun.py, which
+		# requires a positive integer id and a string name.
+		for drop in ("name", "id"):
+			with self.subTest(drop=drop):
+				payload = json.loads(_jobs_payload([5]))
+				del payload["jobs"][0][drop]
+				proc, outputs, calls = _collect({5: FOUNDRY}, jobs=json.dumps(payload))
+				self._assert_normal_path(proc, outputs, calls, "jobs_unreadable")
+				self.assertEqual(_annotation_gets(calls), [])
+		# positive_number() accepts integers only, so a fractional id is rejected too.
+		payload = json.loads(_jobs_payload([5]))
+		payload["jobs"][0]["id"] = 5.5
+		proc, outputs, calls = _collect({5: FOUNDRY}, jobs=json.dumps(payload))
+		self._assert_normal_path(proc, outputs, calls, "jobs_unreadable")
+		self.assertEqual(_annotation_gets(calls), [])
+
+	def test_full_page_of_100_annotations_is_not_classified(self) -> None:
+		# Bounded like failure_annotations() in scripts/ci_cancelled_rerun.py.
+		self._assert_normal_path(*_collect({5: FOUNDRY * 100}), "not_release_download")
+		self._assert_rerun(*_collect({5: FOUNDRY * 99}))
 
 	def test_unparseable_or_foreign_details_url_is_filed(self) -> None:
 		for url in ("https://example.com/not-a-run", "https://github.com/other/repo/actions/runs/1", f"{RUN_URL}/job/9"):
@@ -315,6 +365,61 @@ class ReleaseDownloadRerunGateTests(unittest.TestCase):
 		self.assertLessEqual(len(_annotation_gets(calls)), 3)
 		self.assertNotIn(RERUN_POST, calls)
 
+	def _tracked_collect(self, jobs: str, *, switch: str = "true"):
+		harness = _harness()
+		base = {"ref": "main", "default_branch": "main", "conclusion": "failure", "base_run_id": "2"}
+		if switch == "false":
+			base.update({"workflow_id": "9", "workflow_path": ".github/workflows/ci.yml"})
+		return _collect(
+			{5: PLAIN_FAILURE},
+			jobs=jobs,
+			run=_run_payload(path=".github/workflows/ci.yml"),
+			switch=switch,
+			base=base,
+			extra={
+				"MOCK_HEAL_ISSUES": json.dumps([harness._heal_issue(9215)]),
+				"MOCK_PR_JOBS": harness._jobs(("lint", "success"), ("tests (ubuntu)", "failure")),
+				"MOCK_BASE_JOBS": harness._jobs(("tests (ubuntu)", "failure")),
+			},
+		)
+
+	@staticmethod
+	def _named_jobs(*jobs: tuple[int, str, str], total: int | None = None) -> str:
+		return json.dumps({
+			"total_count": len(jobs) if total is None else total,
+			"jobs": [
+				{"id": job_id, "name": name, "status": "completed", "conclusion": conclusion,
+					"check_run_url": f"https://api.github.com/repos/owner/repo/check-runs/{job_id}"}
+				for job_id, name, conclusion in jobs
+			],
+		})
+
+	def test_base_tracked_check_reuses_the_gate_jobs_read(self) -> None:
+		# Issue #9812: the PR run's jobs are read once per triage invocation.
+		jobs = self._named_jobs((4, "lint", "success"), (5, "tests (ubuntu)", "failure"), (6, "e2e", "cancelled"))
+		proc, outputs, calls = self._tracked_collect(jobs)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("RELEASE_DOWNLOAD_RERUN outcome=skip reason=not_release_download", proc.stdout)
+		self.assertIn("skip reason=base_failure_tracked heal_issue=9215", proc.stdout)
+		self.assertEqual(outputs.get("base_failure_tracked"), "9215")
+		self.assertEqual(calls.count(JOBS_GET), 1, calls)
+		self.assertNotIn(PR_JOBS_LATEST_GET, calls)
+		self.assertEqual(sum("/actions/runs/1/" in call and "/jobs" in call for call in calls), 1, calls)
+		self.assertIn("api repos/owner/repo/actions/runs/2/jobs?filter=latest&per_page=100", calls)
+
+	def test_base_tracked_check_reads_the_jobs_when_the_gate_has_none(self) -> None:
+		# A rejected gate payload is not reused; the check reads the jobs itself.
+		jobs = self._named_jobs((5, "tests (ubuntu)", "failure"), total=100)
+		proc, _outputs, calls = self._tracked_collect(jobs)
+		self.assertIn("RELEASE_DOWNLOAD_RERUN outcome=skip reason=jobs_unreadable", proc.stdout)
+		self.assertEqual(calls.count(PR_JOBS_LATEST_GET), 1, calls)
+		self.assertIn("skip reason=base_failure_tracked heal_issue=9215", proc.stdout)
+		# Gate off: no gate read, so the check reads the jobs as before.
+		proc, _outputs, calls = self._tracked_collect(jobs, switch="false")
+		self.assertNotIn(JOBS_GET, calls)
+		self.assertEqual(calls.count(PR_JOBS_LATEST_GET), 1, calls)
+		self.assertIn("skip reason=base_failure_tracked heal_issue=9215", proc.stdout)
+
 	def test_base_gate_reads_the_run_itself_when_the_gate_is_off(self) -> None:
 		proc, _outputs, calls = _collect(
 			{5: PLAIN_FAILURE}, switch="false", base={"ref": "main", "workflow_id": "9", "conclusion": "failure"}
@@ -356,6 +461,7 @@ class ReleaseDownloadRerunWiringTests(unittest.TestCase):
 		self.assertLess(call, script.index("base_gate_conclusion=\"\""))
 		# The re-run POST is a write: never wrapped in gh_retry.
 		self.assertIn('gh api -i -X POST "repos/${REPO}/actions/runs/${rd_run}/rerun-failed-jobs"', script)
+		self.assertIn('gh api -i -X POST "repos/${REPO}/actions/jobs/${CHECK_RUN_ID}/rerun"', script)
 		self.assertNotIn("gh_retry gh api -i -X POST", script)
 
 
