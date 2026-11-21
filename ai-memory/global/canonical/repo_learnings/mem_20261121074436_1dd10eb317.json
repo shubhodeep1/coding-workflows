@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "Treat a changelog.d entry as part of the normal change set, including for workflow, script, test, and documentation changes. Check the repository\u2019s existing fragment naming conventions when planning a change.",
+  "fingerprint": "9819b280fc76eda34bbf1662c00fd0563273706fb2a35b9c57093a67e682b112",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44881001944",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44881001944",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9363",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9575",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9821",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9844",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9858",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9367",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9602",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9822",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9845",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9864"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261121074436_1dd10eb317",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Merged changes consistently include a changelog fragment under changelog.d/.",
+  "timestamps": {
+    "created_at": "2026-11-21T07:44:36Z",
+    "promoted_at": "2026-11-21T07:45:15Z",
+    "superseded_at": null
+  }
+}
