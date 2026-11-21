@@ -1,0 +1,65 @@
+# DigitalOcean App Platform spec for the runner scaler
+# (docs/plans/digitalocean-runners-for-consumer-pipelines-plan.md, rollout R3).
+# Creating the app from this spec, and setting its secrets, are ask-first
+# operations (CLAUDE.md §22.B). Once created, every push to `stable` that
+# changes the repository redeploys it (deploy_on_push), so a scaler change
+# ships only after the release workflows pass. Secrets are declared here
+# without values; they are set as encrypted env vars on the app.
+name: runner-scaler
+region: nyc
+services:
+  - name: runner-scaler
+    github:
+      repo: shubhodeep1/coding-workflows
+      branch: stable
+      deploy_on_push: true
+    source_dir: tools/runner_scaler
+    dockerfile_path: tools/runner_scaler/Dockerfile
+    http_port: 8080
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    health_check:
+      http_path: /healthz
+      initial_delay_seconds: 20
+      period_seconds: 30
+      failure_threshold: 4
+    envs:
+      - key: RUNNER_SCALER_REPOS
+        scope: RUN_TIME
+        value: ""
+      - key: RUNNER_SCALER_DRY_RUN
+        scope: RUN_TIME
+        value: "true"
+      - key: RUNNER_SCALER_DROPLET_SIZE
+        scope: RUN_TIME
+        value: s-4vcpu-8gb
+      - key: RUNNER_SCALER_REGION
+        scope: RUN_TIME
+        value: nyc3
+      - key: RUNNER_SCALER_IMAGE
+        scope: RUN_TIME
+        value: ubuntu-26-04-x64
+      - key: RUNNER_SCALER_VPC_UUID
+        scope: RUN_TIME
+        value: ""
+      - key: RUNNER_SCALER_MAX_DROPLETS
+        scope: RUN_TIME
+        value: "60"
+      - key: RUNNER_SCALER_DO_TOKEN
+        scope: RUN_TIME
+        type: SECRET
+      - key: RUNNER_SCALER_GH_APP_ID
+        scope: RUN_TIME
+        type: SECRET
+      - key: RUNNER_SCALER_GH_APP_PRIVATE_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: RUNNER_SCALER_WEBHOOK_SECRET
+        scope: RUN_TIME
+        type: SECRET
+      - key: TG_BOT_SECRET
+        scope: RUN_TIME
+        type: SECRET
+      - key: TG_ADMIN_CHAT_ID
+        scope: RUN_TIME
+        type: SECRET
