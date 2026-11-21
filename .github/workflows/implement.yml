@@ -3168,7 +3168,13 @@ jobs:
           - For `npm test`, treat "Missing script" errors as a pass; treat any
             other test failure as a real error.
           - Update the tests and registries listed under Expected files together
-            with the code; a pre-push gate re-runs them.
+            with the code, but only those inside the issue's scope (see the
+            files_touched and heal-scope rule under Restrictions); a pre-push
+            gate re-runs them.
+            When a listed test, or a test your change breaks, falls outside
+            that scope, do not edit it: the commit-time scope guard refuses
+            out-of-scope paths. Leave it unchanged and report the conflict in
+            your final summary (the path and why it needs changing).
 
           Pinned-SHA test discipline: never write a test that asserts a specific
           upstream commit SHA in a file the workflow sync manages, such as a wrapper's
@@ -3183,6 +3189,14 @@ jobs:
           - Do not ask clarification questions (unattended runtime).
           {{WORKFLOW_EDIT_RESTRICTION}}
           - Do not modify ai_pipeline.md, unattended_system_instructions.md, or CLAUDE.md.
+          - If the issue body lists `files_touched:` (machine or prose form),
+            stay inside that set plus this issue's own `changelog.d/` and
+            `agents.d/` fragments. On a workflow heal issue, the
+            `ai:workflow-heal-scope:v1` marker's `paths=` list is the scope
+            instead, plus only this issue's own `agents.d/` fragment. If the
+            issue names files only in its scope or acceptance criteria, stay
+            inside those files. The Expected files list is advisory and is
+            not a scope.
 
           <completeness_contract>
           The deliverable is a worktree change set — modifications written to
