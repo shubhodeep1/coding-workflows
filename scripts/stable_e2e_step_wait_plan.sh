@@ -199,7 +199,7 @@ while true; do
     # Give one more cycle in case labels are delayed
     sleep "$POLL_INTERVAL"
     LABELS_RECHECK=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
-      --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+      --jq '[.labels[].name] | join(",")' 2>/dev/null) || LABELS_RECHECK=""
     if echo "$LABELS_RECHECK" | grep -qE 'ai:awaiting-approval|ai:implementing'; then
       continue
     fi
