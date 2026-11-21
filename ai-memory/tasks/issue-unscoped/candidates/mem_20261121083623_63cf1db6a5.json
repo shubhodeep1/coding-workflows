@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml, placement of `Pre-push affected-test gate tests` in the orchestrate-poll job and selection of its target group\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: Run 43993691500 gave step statuses but no durations, and the diff does not establish that this is the slowest step or that group 0 has the most headroom. The ci.yml comment (lines 3753-3773), the changelog fragment and the test comment (tests/test_ci_poll_test_sharding.py:4009) say the pick is an estimate. The step moved unchanged with its name kept, and no job or `timeout-minutes` change was made. Severity disagreement: openai_gpt-6-luna rated MAJOR, the others NIT. The NIT reviewers treat it as a documented residual that an edit cannot fix.\n- requirement: The issue says \"steps\" (plural).\n  expected_change_site: .github/workflows/ci.yml, group 3's other pinned step `Orchestrate poll single-file module tests`\n  confidence=[1]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: Only the pre-push gate step moved. Group 3's other pinned step already runs its three modules in parallel, so moving it would only shift load to another group.\n- requirement: The changelog filename `changelog.d/9639-ci-prepush-step-to-poll-group-1.md` ends in `group-1`, but its body describes the move to group 0.\n  expected_change_site: the changelog fragment filename\n  confidence=[1]\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  EVIDENCE: The name has no runtime effect, the body is correct, and the plan grant lists this exact path. A rename would conflict with \u00a710 naming immutability. z-ai_glm-5_3-flash skipped it as an accepted residual and gave no confidence.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: `.github/workflows/ci.yml`, the placement of `Pre-push affected-test gate tests` in the orchestrate-poll job.\nEvidence of absence: Run 43993691500 gave step statuses but no durations. No measured timings or headroom data exist in the diff or the repo. The `ci.yml` comment (lines 3753-3773), the changelog fragment and the test comment all say the pick is an estimate. The step moved unchanged with its name kept. This is a documented residual.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n\nTASK_GAP:\nRequirement: The issue says \"steps\" (plural).\nExpected change site: `.github/workflows/ci.yml`, group 3's other pinned step, `Orchestrate poll single-file module tests`.\nEvidence of absence: Only the pre-push gate step moved. Group 3's only other pinned step already runs its three modules in parallel.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 1\n\nTASK_GAP:\nRequirement: The changelog filename `changelog.d/9639-ci-prepush-step-to-poll-group-1.md` ends in `group-1`, but its body describes the move to group 0.\nExpected change site: the changelog fragment filename.\nEvidence of absence: The name has no runtime effect, the body is correct, and the plan grant lists this exact path. Renaming would conflict with \u00a710 naming immutability.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\nExpected change site: `.github/workflows/ci.yml`, placement of `Pre-push affected-test gate tests` and selection of its target group.\nEvidence of absence: The workflow diff says run 43993691500 provided statuses but no durations, and describes the step and group 0 selection as estimates. The diff does not establish that this is the slowest step or that group 0 has the most headroom.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: .github/workflows/ci.yml orchestrate-poll job (Pre-push affected-test gate tests placement and target-group selection)\nEvidence of absence: All hard constraints are met. The step moved unchanged with its name kept, `timeout-minutes` unchanged, no job added, matrix size unchanged. The \"see the run's step timings\" and \"most headroom\" aspects are documented residuals: run 43993691500 gave step statuses with no durations, and all three rationale sites (ci.yml comment lines 3753-3773, changelog fragment, test comment at tests/test_ci_poll_test_sharding.py:4009) say the pick is an estimate. No edit in this PR can supply the missing duration data.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n\n(Skipped per anti-rules: the changelog.d/9639-ci-prepush-step-to-poll-group-1.md filename ending in `group-1`, a cosmetic mismatch with the group-0 body previously accepted as residual.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "55ccaa53581baeaa029240ee73f4ce503b4021dfa7c7e23541514eb320715c42",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9641,
+    "run_id": "44879658560",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44879658560",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121083623_63cf1db6a5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9641,
+    "run_id": "44879658560"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T08:36:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
