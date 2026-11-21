@@ -1,0 +1,33 @@
+{
+  "discovered_at": "2026-11-21T21:03:48Z",
+  "issue_number": 9887,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=scripts/collect_workflow_logs.py:1912-1931; cited_path=Issue #9887 discussion comment (post-rollout action, not a repository file); files_touched=.github/workflows/clarify.yml, .github/workflows/orchestrate_poll.yml, .github/workflows/review_autofix.yml, .github/workflows/review_autofix_sweep.yml, .github/workflows/test-and-mark-stable.yml, .github/workflows/validation-improvements-intake.yml, .github/workflows/workflow-failure-heal-intake.yml, README.md, agents.d/9887-gh-call-counter.md, changelog.d/9887-gh-call-counter.md, scripts/collect_workflow_logs.py, scripts/gh_call_counter/gh, scripts/gh_call_counter/gh-call-counter-summary, scripts/gh_helpers.sh, tests/test_collect_workflow_logs.py, tests/test_gh_call_counter.py, tests/test_gh_retry_stdout_isolation.py, tests/test_review_autofix_sweep_zero_candidate_fast_exit.py, tests/test_workflow_failure_heal_non_retryable_backfill.py, tests/test_workflow_failure_heal_verify.py.",
+  "phase": "review_autofix",
+  "pr_number": 9899,
+  "record_id": "lesson_20261121210348_5322b256a7",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "Issue #9887 discussion comment (post-rollout action, not a repository file)",
+    "scripts/collect_workflow_logs.py",
+    ".github/workflows/clarify.yml",
+    ".github/workflows/orchestrate_poll.yml",
+    ".github/workflows/review_autofix.yml",
+    ".github/workflows/review_autofix_sweep.yml",
+    ".github/workflows/test-and-mark-stable.yml",
+    ".github/workflows/validation-improvements-intake.yml",
+    ".github/workflows/workflow-failure-heal-intake.yml",
+    "README.md",
+    "agents.d/9887-gh-call-counter.md",
+    "changelog.d/9887-gh-call-counter.md",
+    "scripts/gh_call_counter/gh",
+    "scripts/gh_call_counter/gh-call-counter-summary",
+    "scripts/gh_helpers.sh",
+    "tests/test_collect_workflow_logs.py",
+    "tests/test_gh_call_counter.py",
+    "tests/test_gh_retry_stdout_isolation.py",
+    "tests/test_review_autofix_sweep_zero_candidate_fast_exit.py",
+    "tests/test_workflow_failure_heal_non_retryable_backfill.py",
+    "tests/test_workflow_failure_heal_verify.py"
+  ]
+}
