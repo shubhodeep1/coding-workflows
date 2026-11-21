@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1582 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The step `Pre-push affected-test gate tests` was placed at the end of `tests-hooks-and-orchestrator` using recorded job totals (15m32s, run 43220859648), not step timings.\n  WHY: The reviewer rated it NIT, saying it does not fail on the available evidence. The job could hit its 20-minute timeout only if it grows, and nothing in the repository shows that.\n- changelog.d/9895-ci-prepush-step-to-heal-job.md:filename | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The filename slug `heal-job` names the earlier target job `tests-heal-plan-and-validation`, but the fragment now describes the move to `tests-hooks-and-orchestrator`.\n  WHY: The reviewer rated it NIT with no runtime effect. It only affects readers who look for the fragment by slug.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:1582 | severity=low | confidence=2\n  PROBLEM: The step `Pre-push affected-test gate tests` was placed at the end of `tests-hooks-and-orchestrator` using recorded job totals, not step timings.\n  WHY: The reviewer rated it NIT. It does not fail on the available evidence.\n- changelog.d/9895-ci-prepush-step-to-heal-job.md:filename | severity=low | confidence=3\n  PROBLEM: The filename slug `heal-job` names the earlier target job, but the fragment now describes `tests-hooks-and-orchestrator`.\n  WHY: The reviewer rated it NIT with no runtime effect.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9c871a25f889830a31397843248f94082eec2c798b2e077fd75bb348c09080f4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9898,
+    "run_id": "44930557586",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44930557586",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121180928_76cbb0fc2c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9898,
+    "run_id": "44930557586"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-21T18:09:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
