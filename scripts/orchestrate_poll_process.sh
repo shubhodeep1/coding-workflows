@@ -27426,9 +27426,15 @@ release_head_bound_needs_human_latches() {
     # label that was already there (no event), so the DELETE removed its hold
     # and the next tick's listing would never see the PR again. Both writers
     # comment first, so one comments read after the DELETE sees that latch;
-    # put the label back for it. A read failure keeps the release (fail open).
-    if hl_post_delete_comments="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${hl_pr}/comments?sort=created&direction=asc&per_page=100" | jq -s 'add // []' 2>/dev/null)" \
-      && printf '%s' "${hl_post_delete_comments}" | jq -e --arg at "${hl_latch_at}" --arg pr "${hl_pr}" '
+    # put the label back for it. A read failure keeps the release (fail open):
+    # re-adding the label blind would record a fresh `labeled` event that no
+    # longer binds to any latch, so the PR could never be released again. The
+    # skipped check is logged so the release is not mistaken for a checked one.
+    if ! hl_post_delete_comments="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${hl_pr}/comments?sort=created&direction=asc&per_page=100" | jq -s 'add // []' 2>/dev/null)" \
+      || ! printf '%s' "${hl_post_delete_comments}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+      echo "::warning::Removed ai:needs-human on PR #${hl_pr}, but the comments read after the removal failed, so a latch that raced the removal could not be checked."
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=post_release_check_unavailable latch=${hl_reason} head=${hl_head:0:12}"
+    elif printf '%s' "${hl_post_delete_comments}" | jq -e --arg at "${hl_latch_at}" --arg pr "${hl_pr}" '
         any(.[];
           (.created_at // "") > $at
           and ((((.user.login // "") | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))))

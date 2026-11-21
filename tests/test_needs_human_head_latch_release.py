@@ -89,6 +89,8 @@ FAKE_GH = textwrap.dedent(
 			sys.exit(1)
 		if "comments_refresh" in fail and nth() > 1:
 			sys.exit(1)
+		if "comments_post_delete" in fail and nth() > 2:
+			sys.exit(1)
 		out(load_seq("comments.json", []))
 	if m and fields:
 		if "comment_post" in fail:
@@ -332,6 +334,19 @@ def test_a_latch_that_races_the_label_removal_gets_its_label_back(tmp_path: Path
 	}
 	released = _run(tmp_path / "own", comments=[_non_retryable_comment()], post_delete_comments=[_non_retryable_comment(), own])
 	assert released["added"] == [] and len(released["posted"]) == 1
+
+
+def test_a_failed_read_after_the_label_removal_keeps_the_release_and_logs_it(tmp_path: Path) -> None:
+	# Fail open: the label is already gone and a blind re-add would never bind
+	# to a latch again, so the release goes ahead, but the skipped check is logged.
+	result = _run(tmp_path, comments=[_non_retryable_comment()], fail="comments_post_delete")
+	assert result["rc"] == 0, result["stderr"]
+	assert result["deleted"] == ["5 ai:needs-human"]
+	assert result["added"] == []
+	assert len(result["posted"]) == 1
+	assert "::warning::" in result["stdout"]
+	assert f"NEEDS_HUMAN_HEAD_LATCH pr=5 outcome=post_release_check_unavailable latch=non_retryable_head_moved head={NEW_HEAD[:12]}" in result["stdout"]
+	assert "outcome=released latch=non_retryable_head_moved" in result["stdout"]
 
 
 def test_a_head_or_label_change_during_the_release_is_kept(tmp_path: Path) -> None:
