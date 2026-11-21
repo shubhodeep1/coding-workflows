@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_audit_consumer_drift.py:1766 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new pin-age alarm tests are not registered in the main() function, so they are not executed during the direct python3 test run in CI.\n  WHY: The new pin-age detection logic is not verified by the CI suite despite being part of the PR, leading to a risk of silent regressions.\n- .github/workflows/update_workflows.yml:2692 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The verify_head_gate step's poll window (6 reads, 20s apart) can expire while integrity is still pending, causing the gate to remain pending without posting success.\n  WHY: This can lead to the silent stall the PR aims to resolve if the gate remains in a pending state.\n- scripts/review_head_gate.sh:102 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The integrity context string and updater-branch regex are hardcoded here and duplicated in the update_workflows.yml verify_head_gate step.\n  WHY: Future updates to these contexts in the workflows won't be automatically reflected here, leading to potential gate failures or bypasses.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The pin-age alarm tests (added in this PR) must be run in CI.\n  expected_change_site: tests/test_audit_consumer_drift.py\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The new tests are not listed in the file's main() (line 1766), so the direct python3 run in CI (ci.yml:696) skips them and they are not covered by the CI suite.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_audit_consumer_drift.py:1766 | severity=MAJOR | confidence=5\n  PROBLEM: The new pin-age alarm tests are not registered in the main() function, so they are not executed during the direct python3 test run in CI.\n  WHY: The new pin-age detection logic is not verified by the CI suite despite being part of the PR, leading to a risk of silent regressions.\n- .github/workflows/update_workflows.yml:2692 | severity=NIT | confidence=4\n  PROBLEM: The verify_head_gate step's poll window (6 reads, 20s apart) can expire while integrity is still pending, causing the gate to remain pending without posting success.\n  WHY: This can lead to the silent stall the PR aims to resolve if the gate remains in a pending state.\n- scripts/review_head_gate.sh:102 | severity=NIT | confidence=4\n  PROBLEM: The integrity context string and updater-branch regex are hardcoded here and duplicated in the update_workflows.yml verify_head_gate step.\n  WHY: Future updates to these contexts in the workflows won't be automatically reflected here, leading to potential gate failures or bypasses.\n- TASK_GAP\n  Requirement: The pin-age alarm tests (added in this PR) must be run in CI.\n  Expected change site: tests/test_audit_consumer_drift.py\n  Evidence of absence: The new tests are not listed in the file's main() (line 1766), so the direct python3 run in CI (ci.yml:696) skips them and they are not covered by the CI suite.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c8d49f982391fdb48b1d038c91d4ced3a4b7854d4da5eecca4ccb3f1bc302ac0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9505,
+    "run_id": "44875177044",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44875177044",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121063616_0d81023c10",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9505,
+    "run_id": "44875177044"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-21T06:36:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
