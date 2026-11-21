@@ -877,6 +877,18 @@ def test_parked_close_is_judged_again_once_something_material_changes() -> None:
 	assert _select([_item(639, ["ai:scope-blocked", "ai:blocked"])], details)["dispatch"] == issue
 
 
+def test_park_alert_claim_comment_is_not_new_evidence() -> None:
+	# Stuck-states P6b: the trusted alert claim posted on a parked item must not
+	# re-arm it; a forged one from another login still counts as a human comment.
+	search, details = _dropped_park_case()
+	claim = "Needs-human alert attempt recorded for this parking.\n\n<!-- ai:unblock-park-alert:v1 item=639 parked=2026-10-04T10:00:00Z state=confirmed message=42 -->"
+	details["639"]["comments"].append({"login": BOT, "body": claim, "created_at": _iso(2)})
+	result = _select(search, details)
+	assert result["dispatch"] == [] and result["skipped"] == {"terminal_unchanged": 1}
+	details["639"]["comments"][-1]["login"] = "mallory"
+	assert _select(search, details)["dispatch"] == [{"item": 639, "kind": "issue"}]
+
+
 def test_parked_close_skip_needs_proof_the_park_ran_and_stays_off_for_other_cases(monkeypatch: pytest.MonkeyPatch) -> None:
 	search, details = _dropped_park_case()
 	issue = [{"item": 639, "kind": "issue"}]

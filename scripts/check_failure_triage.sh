@@ -57,6 +57,16 @@
 #   CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED      "false" keeps a blocked triage issue from an
 #                                             older PR head as a duplicate instead of
 #                                             superseding it (default true; issue #8671)
+#   CHECK_TRIAGE_SKIP_HEAD_ADVANCED_ENABLED   "false" files an issue even when the failing
+#                                             commit is no longer the PR head (default
+#                                             true: skip reason=head_advanced)
+#   CHECK_TRIAGE_SKIP_FINAL_CI_ENABLED        "false" files an issue for a failed final CI
+#                                             run (`CI [pr:<n>]`) even while the final-CI
+#                                             hand-back owns it (default true: skip
+#                                             reason=final_ci_repair_owns)
+#   FINAL_CI_FAILED_REDISPATCH_ENABLED        the final-CI hand-back's own switch (repo
+#                                             variable; unset/empty/true = on); when
+#                                             it is off, final CI runs are triaged again
 #   CHECK_FAILURE_TRIAGE_RELEASE_DOWNLOAD_RERUN_ENABLED
 #                                             "false" stops the collect stage re-running a
 #                                             first-attempt run whose failed jobs only hit a
@@ -1211,6 +1221,46 @@ if [ -n "${HEAD_REPO_FULL_NAME}" ] && [ "${HEAD_REPO_FULL_NAME}" != "${REPO}" ];
 	fi
 	exit 0
 fi
+
+# --- Failures another path already owns (2026-11-18) -----------------------
+# Measured on the triage issues behind fix PRs #9597, #9598, #9601, #9603,
+# #9614 and #9621 (2026-11-16/17): five of the six came from one of these two
+# cases, and each fix PR landed on another PR's branch. Neither gate makes an
+# API call; both run before diagnosis and are off in historical mode (the PR
+# is closed there and its head no longer matters).
+#  1. Stale head (CHECK_TRIAGE_SKIP_HEAD_ADVANCED_ENABLED, default true): the
+#     failing commit is no longer the PR head, so the new head gets its own
+#     CI, and its failure (if any) is triaged then. Issues #9580, #9581 and
+#     #9582 were filed against heads that had moved on, three near-duplicate
+#     issues within three minutes (log `pr_head_advanced=true`).
+#  2. Final CI run (CHECK_TRIAGE_SKIP_FINAL_CI_ENABLED, default true): a failed
+#     `CI [pr:<n>]` run (ci.yml's workflow_dispatch final run, also
+#     `CI [pr:<n>] [<mode>]`) for this PR goes back to review/autofix through
+#     ci.yml's `final-ci-failed` job (scripts/review_final_ci_failed.sh), and
+#     the review sweep syncs a head that is behind its base
+#     (scripts/review_final_ci_sweep.sh). While that hand-back is on
+#     (FINAL_CI_FAILED_REDISPATCH_ENABLED unset, empty or true, the same rule
+#     the hand-back reads), triage leaves the run to it: issues #9608, #9618 and
+#     #9662 came from such runs.
+# Log: `skip reason=head_advanced|final_ci_repair_owns ...`.
+if [ "${HISTORICAL_MODE}" != "true" ]; then
+	if [ "$(printf '%s' "${CHECK_TRIAGE_SKIP_HEAD_ADVANCED_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" = "true" ] &&
+		[[ "${HEAD_SHA}" =~ ^[0-9a-fA-F]{40}$ ]] && [ -n "${PR_HEAD_SHA_CURRENT}" ] &&
+		[ "${HEAD_SHA,,}" != "${PR_HEAD_SHA_CURRENT,,}" ]; then
+		# A deliberate skip, not a routing failure: no routing_unverified page.
+		log "skip reason=head_advanced failing_sha=${HEAD_SHA,,} pr_head_sha=${PR_HEAD_SHA_CURRENT,,} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+		exit 0
+	fi
+	triage_final_ci_handback="$(printf '%s' "${FINAL_CI_FAILED_REDISPATCH_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
+	if [ "$(printf '%s' "${CHECK_TRIAGE_SKIP_FINAL_CI_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" = "true" ] &&
+		{ [ -z "${triage_final_ci_handback}" ] || [ "${triage_final_ci_handback}" = "true" ]; } &&
+		[[ "${CHECK_NAME}" =~ ^CI\ \[pr:([1-9][0-9]*)\](\ \[[a-z0-9-]+\])?$ ]] &&
+		[ "${BASH_REMATCH[1]}" = "${PR_NUMBER}" ]; then
+		log "skip reason=final_ci_repair_owns pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+		exit 0
+	fi
+fi
+
 printf '%s' "${PR_JSON}" | jq -r '.body // ""' > "${RUNTIME_DIR}/pr_body.txt" 2>/dev/null || : > "${RUNTIME_DIR}/pr_body.txt"
 # Issue #9120: a first-attempt run that failed only on a github.com
 # release-download 5xx is re-run once and no issue is filed (exits 0 here).

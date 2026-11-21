@@ -1,6 +1,8 @@
 # IMPORTANT: This file is managed by coding-workflows and will be overwritten
 # by the update process. Do not add custom logic here.
 name: AI Security Audit
+# The PR number lets the single-issue security pass find a cancelled audit.
+run-name: "${{ inputs.pr_number != '' && format('AI Security Audit (PR #{0})', inputs.pr_number) || 'AI Security Audit' }}"
 on:
   schedule:
     - cron: '0 8 * * 0'
@@ -16,6 +18,16 @@ on:
         required: false
         default: ""
         type: string
+      audit_diff_since:
+        description: "Single-issue security pass delta re-audit: last audited PR head (verified by the audit); empty = full audit"
+        required: false
+        default: ""
+        type: string
+      prior_findings:
+        description: "Single-issue security pass delta re-audit: findings result comment id (verified by the audit); empty = none"
+        required: false
+        default: ""
+        type: string
 permissions:
   contents: read
   issues: write
@@ -23,8 +35,10 @@ permissions:
   actions: write
   # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
   id-token: write
+# One group per PR so audits for different PRs never cancel each other while
+# queued; keep the prefix distinct from the reusable workflow's group.
 concurrency:
-  group: security-audit-${{ github.repository }}
+  group: security-audit-${{ github.repository }}-${{ inputs.pr_number != '' && format('pr-{0}', inputs.pr_number) || 'default' }}
   cancel-in-progress: false
 jobs:
   security-audit:
@@ -32,6 +46,8 @@ jobs:
     with:
       ref: ${{ inputs.ref || '' }}
       pr_number: ${{ inputs.pr_number || '' }}
+      audit_diff_since: ${{ inputs.audit_diff_since || '' }}
+      prior_findings: ${{ inputs.prior_findings || '' }}
     # Least privilege: forward only the secrets the reusable workflow
     # declares, never inherit them all (consumer repos hold other secrets).
     secrets:
