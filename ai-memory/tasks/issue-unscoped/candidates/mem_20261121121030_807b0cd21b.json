@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:527 | severity=low | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The supplied `review / gate` run failed when the support-branch lookup received HTTP 403 after exhausting its retry budget.\n  WHY: The review gate exits before completing support-source resolution; the check log attributes this to API rate limiting, and this line is outside the PR diff, so it is not a regression from this change.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/review_autofix.yml:527 | severity=low | confidence=5\n  PROBLEM: The supplied `review / gate` run failed when this support-branch lookup received HTTP 403 after exhausting its retry budget.\n  WHY: The review gate exits before completing support-source resolution, so that run does not finish reviewing the PR head. The check log attributes this to API rate limiting; this line is outside the PR diff, so it is not a regression from this change.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "383a2e67ae66ce8fd0acd0db5ed37be744734aaf7cd34abedf8e26988dac6f3c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9872,
+    "run_id": "44898463627",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44898463627",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121121030_807b0cd21b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9872,
+    "run_id": "44898463627"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-21T12:10:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
