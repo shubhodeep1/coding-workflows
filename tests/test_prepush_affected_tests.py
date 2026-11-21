@@ -1089,6 +1089,161 @@ def test_wrapper_mounts_node_modules_read_only_on_both_trees(tmp_path):
 	assert f"src={node_modules.resolve()},dst=/baseline/node_modules,readonly" in run_line
 
 
+# --- PR tree built from git, like the baseline (PR #9666 reproduction) -------
+
+def _capture_source(tmp_path: Path) -> Path:
+	"""Make the fake docker copy the mounted /source tree to tmp_path/captured."""
+	capture = tmp_path / "captured"
+	fake = tmp_path / "bin" / "docker"
+	fake.write_text(fake.read_text(encoding="utf-8").replace(
+		'\tprintf \'{"schema"',
+		'\tcp -a "${results%/results}/source" "__CAP__"\n\tprintf \'{"schema"',
+	).replace("__CAP__", str(capture)), encoding="utf-8")
+	return capture
+
+
+def _git_state(root: Path) -> tuple[bytes, list[str]]:
+	git_dir = root / ".git"
+	return (git_dir / "index").read_bytes(), sorted(str(p.relative_to(git_dir)) for p in git_dir.rglob("*"))
+
+
+def test_wrapper_builds_the_pr_tree_from_git_with_tracked_dotfiles_and_filtered_untracked(tmp_path):
+	root = _repo(tmp_path, {
+		"lib/a.py": "X = 1\n", "tests/test_a.py": "# lib/a.py\n",
+		".gitattributes": "CHANGELOG.md merge=union\n", ".gitignore": "ignored.txt\ntests/test_tracked_ignored.py\n",
+		"tests/test_tracked_ignored.py": "# tracked although ignored\n",
+		".github/ai/label_contract.v1.json": "{}\n", ".github/ai/dropped.json": "{}\n",
+		".claude/settings.json": "{}\n", "scripts/propagate_consumer_secrets.sh": "true\n",
+		"changelog.d/.gitkeep": "", "gone.txt": "gone\n", "old.txt": "old\n",
+	}, name="worktree")
+	# Tracked although a .gitignore rule matches it (git add -f).
+	_git(root, "add", "-f", "tests/test_tracked_ignored.py")
+	_commit(root, {"lib/a.py": "X = 2\n"})
+	(root / "tests" / "test_a.py").write_text("# unstaged edit\n", encoding="utf-8")
+	(root / "old.txt").write_text("staged\n", encoding="utf-8")
+	_git(root, "add", "old.txt")
+	(root / "old.txt").write_text("staged then edited\n", encoding="utf-8")
+	_git(root, "rm", "-q", "gone.txt")
+	(root / "staged_new.py").write_text("NEW = 1\n", encoding="utf-8")
+	_git(root, "add", "staged_new.py")
+	# Untracked again (rm --cached): the credential filter decides, and drops it.
+	_git(root, "rm", "-q", "--cached", ".github/ai/dropped.json")
+	for name, text in {".env": "TOKEN=x\n", "credentials.json": "{}\n", "untracked_ok.py": "OK = 1\n", "ignored.txt": "x\n"}.items():
+		(root / name).write_text(text, encoding="utf-8")
+	before = _git_state(root)
+	env, _ = _wrapper_env(tmp_path)
+	capture = _capture_source(tmp_path)
+	proc, out = _run_wrapper(tmp_path, root, MODULE_PATH, env)
+	assert proc.returncode == 0, proc.stderr
+	assert json.loads((out / "result.json").read_text(encoding="utf-8"))["status"] == "pass", proc.stderr
+	for name in (".gitattributes", ".gitignore", ".github/ai/label_contract.v1.json", ".claude/settings.json",
+			"scripts/propagate_consumer_secrets.sh", "changelog.d/.gitkeep", "lib/a.py", "staged_new.py", "untracked_ok.py"):
+		assert (capture / name).is_file(), name
+	assert (capture / "tests" / "test_a.py").read_text(encoding="utf-8") == "# unstaged edit\n"
+	assert (capture / "old.txt").read_text(encoding="utf-8") == "staged then edited\n"
+	for name in ("gone.txt", ".env", "credentials.json", "ignored.txt", ".github/ai/dropped.json"):
+		assert not os.path.lexists(capture / name), name
+	# /source carries a fresh one-commit repository of its own files (as the old
+	# snapshot did), never the checkout's .git or its objects.
+	assert _git(capture, "rev-list", "--count", "HEAD") == "1"
+	assert not (capture / ".git" / "objects" / "info" / "alternates").exists()
+	synthetic_files = set(_git(capture, "ls-files").splitlines())
+	assert {".gitattributes", "staged_new.py", "untracked_ok.py"} <= synthetic_files
+	# A tracked file a .gitignore rule matches stays listed in the synthetic index.
+	assert "tests/test_tracked_ignored.py" in synthetic_files
+	assert not {".env", "credentials.json", "gone.txt"} & synthetic_files
+	# The real index and the checkout's .git are only read.
+	assert _git_state(root) == before
+
+
+def test_wrapper_fails_closed_when_the_source_git_repository_cannot_be_built(tmp_path):
+	# Without /source's one-commit repository, git-dependent tests would fail on
+	# both trees and be classified as inherited (a false pass), so the run must
+	# stop as unverified instead of carrying on without it.
+	root = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	shim = tmp_path / "bin" / "git"
+	real_git = os.path.realpath(shim)
+	shim.unlink()
+	# Only the wrapper's commit at /source fails (the credential-filter snapshot
+	# commits from its own cwd, without -C); every other git call is real.
+	shim.write_text(f'#!/usr/bin/env bash\ncase " $* " in *" -C "*"/source "*" -qm snapshot "*) exit 1 ;; esac\nexec "{real_git}" "$@"\n', encoding="utf-8")
+	shim.chmod(0o755)
+	proc, out = _run_wrapper(tmp_path, root, MODULE_PATH, env)
+	assert proc.returncode == 0, proc.stderr
+	assert "outcome=error reason=source_git_init_failed" in proc.stderr
+	result = json.loads((out / "result.json").read_text(encoding="utf-8"))
+	assert result["status"] == "unverified"
+	assert result["reason"] == "snapshot_failed"
+	assert not log.exists() or not any(line.startswith("run ") for line in log.read_text(encoding="utf-8").splitlines())
+
+
+def test_wrapper_baseline_keeps_export_ignored_files(tmp_path):
+	# export-ignore already at the merge-base: git archive would drop tests/
+	# from /baseline only, so a failure there could never be classified as inherited.
+	root = _repo(tmp_path, {"lib/a.py": "X = 1\n", "tests/test_a.py": "# lib/a.py\n",
+		".gitattributes": "tests/** export-ignore\n"}, name="worktree")
+	_commit(root, {"lib/a.py": "X = 2\n"})
+	capture = tmp_path / "captured_baseline"
+	env, _ = _wrapper_env(tmp_path)
+	fake = tmp_path / "bin" / "docker"
+	fake.write_text(fake.read_text(encoding="utf-8").replace(
+		'\tprintf \'{"schema"',
+		f'\tcp -a "${{results%/results}}/baseline" "{capture}"\n\tprintf \'{{"schema"',
+	), encoding="utf-8")
+	proc, out = _run_wrapper(tmp_path, root, MODULE_PATH, env)
+	assert proc.returncode == 0, proc.stderr
+	assert json.loads((out / "result.json").read_text(encoding="utf-8"))["status"] == "pass", proc.stderr
+	assert (capture / "tests" / "test_a.py").read_text(encoding="utf-8") == "# lib/a.py\n"
+	assert (capture / "lib" / "a.py").read_text(encoding="utf-8") == "X = 1\n"
+	assert not os.path.lexists(capture / ".git")
+
+
+def test_wrapper_pr_tree_ignores_global_filters_and_export_ignore(tmp_path):
+	root = _repo(tmp_path, {"lib/a.py": "X = 1\n", "tests/test_a.py": "# lib/a.py\n"}, name="worktree")
+	# A clean filter would change the blob, a smudge filter leaves a marker.
+	# (The changed-file diff, unchanged here, may still run the clean filter.)
+	marker = tmp_path / "smudge_ran"
+	home = tmp_path / "home"
+	home.mkdir()
+	(home / ".gitconfig").write_text(
+		f'[filter "evil"]\n\tclean = "sed s/3/CLEANED/"\n\tsmudge = "touch {marker}; cat"\n', encoding="utf-8")
+	_commit(root, {".gitattributes": "*.py filter=evil\n*.bin filter=lfs\ntests/** export-ignore\n", "lib/a.py": "X = 2\n", "data.bin": "3\n"})
+	(root / "lib" / "a.py").write_text("X = 3\n", encoding="utf-8")
+	# A repository-local git-lfs driver (actions/checkout lfs: true) is switched off.
+	_git(root, "config", "filter.lfs.clean", "sed s/3/CLEANED/")
+	_git(root, "config", "filter.lfs.smudge", f"touch {tmp_path / 'lfs_smudge_ran'}; cat")
+	(root / "data.bin").write_text("3 edited\n", encoding="utf-8")
+	env, _ = _wrapper_env(tmp_path)
+	env["HOME"] = str(home)
+	capture = _capture_source(tmp_path)
+	proc, _ = _run_wrapper(tmp_path, root, MODULE_PATH, env)
+	assert proc.returncode == 0, proc.stderr
+	assert (capture / "lib" / "a.py").read_text(encoding="utf-8") == "X = 3\n"
+	assert (capture / "tests" / "test_a.py").is_file()
+	assert not marker.exists()
+	assert (capture / "data.bin").read_text(encoding="utf-8") == "3 edited\n"
+	assert not (tmp_path / "lfs_smudge_ran").exists()
+
+
+def test_wrapper_skips_a_tracked_node_modules_symlink_in_the_pr_tree(tmp_path):
+	root = _repo(tmp_path, {"lib/a.py": "X = 1\n", "tests/test_a.py": "# lib/a.py\n"}, name="worktree")
+	outside = tmp_path / "outside"
+	outside.mkdir()
+	(root / "node_modules").symlink_to(outside / "made")
+	_commit(root, {"lib/a.py": "X = 2\n"})
+	node_modules = tmp_path / "prep" / "node_modules"
+	node_modules.mkdir(parents=True)
+	env, log = _wrapper_env(tmp_path)
+	base = _git(root, "rev-parse", "HEAD~1")
+	proc = subprocess.run(["bash", str(WRAPPER), "--worktree", str(root), "--module", str(MODULE_PATH), "--image", "gate-image:test",
+		"--base", base, "--out-dir", str(tmp_path / "out"), "--node-modules", str(node_modules)], capture_output=True, text=True, env=env, timeout=120)
+	assert proc.returncode == 0, proc.stderr
+	assert "reason=node_modules_missing" in proc.stderr
+	assert "dst=/source/node_modules" not in log.read_text(encoding="utf-8")
+	assert not (outside / "made").exists()
+
+
 # --- run --tests-only (issue #8461) -----------------------------------------
 
 TF_PR_A = "def test_ok():\n\tpass\n\n\ndef test_new_break():\n\tassert False\n\n\ndef test_old_break():\n\tassert False\n"
