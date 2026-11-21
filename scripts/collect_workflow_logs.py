@@ -2155,7 +2155,7 @@ def main(argv: list[str] | None = None) -> int:
             if pat_budget_day_utc is not None:
                 # The unfiltered created search can hit GitHub's 1,000-run
                 # ceiling in a day. Split the two-day window by day and query
-                # only the nine instrumented workflow paths; dedupe boundaries.
+                # only the PAT_BUDGET_WORKFLOWS paths (ten); dedupe boundaries.
                 budget_window_edges = (effective_since, pat_budget_day_utc, pat_budget_day_utc + timedelta(days=1))
                 budget_runs_by_id: dict[int, dict[str, Any]] = {}
                 budget_listing_successes = 0

@@ -2775,6 +2775,8 @@ jobs:
         if: env.CLAUDE_CAPACITY_WAIT != 'true' && (failure() && github.event_name == 'issue_comment' && github.event.comment.user.type == 'User' && steps.parse_codex.outputs.blocked != 'true' && steps.clarify_route.outputs.is_closed != 'true' && steps.clarify_route.outputs.skip_codex != 'true' && steps.post_questions.outcome != 'success' && steps.post_clear.outcome != 'success')
         env:
           GH_TOKEN: ${{ github.token }}
+          # Issue #9887: GH_TOKEN carries the job token here, not GH_PAT.
+          GH_CALL_COUNTER_TOKEN_KIND: github_token
           SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
           SOURCE_COMMENT_BODY: ${{ github.event.comment.body }}
           SOURCE_ASSOCIATION: ${{ github.event.comment.author_association }}

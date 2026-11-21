@@ -922,6 +922,8 @@ jobs:
       - name: Re-run cancelled CI failed jobs once
         env:
           GH_TOKEN: ${{ github.token }}
+          # Issue #9887: GH_TOKEN carries the job token here, not GH_PAT.
+          GH_CALL_COUNTER_TOKEN_KIND: github_token
           REPOSITORY: ${{ github.repository }}
           CI_CANCELLED_AUTO_RERUN_ENABLED: ${{ vars.CI_CANCELLED_AUTO_RERUN_ENABLED || 'true' }}
           CI_ACTION_RESOLUTION_RERUN_ENABLED: ${{ vars.CI_ACTION_RESOLUTION_RERUN_ENABLED || 'true' }}

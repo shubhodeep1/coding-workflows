@@ -156,6 +156,10 @@ GH_CALL_COUNTER_TRUSTED_HELPERS = {
 	("test-and-mark-stable.yml", "e2e-smoke-test"): "scripts/gh_helpers.sh",
 	("test-and-mark-stable.yml", "e2e-alt-model-test"): "scripts/gh_helpers.sh",
 	("test-and-mark-stable.yml", "validate-standalone-test"): "scripts/gh_helpers.sh",
+	("test-and-mark-stable.yml", "workflow-log-analysis-test"): "scripts/gh_helpers.sh",
+	("test-and-mark-stable.yml", "orphan-workflows-test"): "scripts/gh_helpers.sh",
+	("test-and-mark-stable.yml", "orchestrate-decompose-test"): "scripts/gh_helpers.sh",
+	("test-and-mark-stable.yml", "clarify-rejects-unsolvable-test"): "scripts/gh_helpers.sh",
 	("test-and-mark-stable.yml", "validate"): "scripts/gh_helpers.sh",
 }
 # The review pipeline contract forbids continue-on-error in this job; the

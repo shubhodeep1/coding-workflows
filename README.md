@@ -623,7 +623,9 @@ job-end line gains three keys after `used_in_job=`:
 consumers by `calls_in_job`" table ranked by these per-job counts, which,
 unlike `used_in_job`, exclude concurrent jobs. The release-gate jobs in
 `test-and-mark-stable.yml` (`e2e-smoke-test`, `e2e-alt-model-test`,
-`validate-standalone-test`, `validate`) print the same start/end lines; the
+`validate-standalone-test`, `workflow-log-analysis-test`,
+`orphan-workflows-test`, `orchestrate-decompose-test`,
+`clarify-rejects-unsolvable-test`, `validate`) print the same start/end lines; the
 `validate` job holds no PAT, so its quota keys stay `unknown`. The counter
 adds no GitHub request. Set the repository variable
 `GH_CALL_COUNTER_ENABLED=false` to turn it off.

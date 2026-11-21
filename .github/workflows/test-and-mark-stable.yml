@@ -3915,6 +3915,20 @@ jobs:
       AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
     steps:
+      - name: Record GH_PAT budget at workflow-log-analysis-test start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_workflow-log-analysis-test
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=workflow-log-analysis-test remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Validate prerequisites
         run: |
           set -euo pipefail
@@ -3944,6 +3958,19 @@ jobs:
         run: |
           [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
           source scripts/gh_helpers.sh
+
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
 
       - name: Dispatch & snapshot — workflow-log-analysis
         id: dispatch_log_analysis
@@ -4036,6 +4063,26 @@ jobs:
             RESULT=cancelled
           fi
           echo "result=${RESULT}" >> "$GITHUB_OUTPUT"
+
+      - name: Record GH_PAT budget at workflow-log-analysis-test end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_workflow-log-analysis-test
+        run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
+          remaining=unknown; reset=unknown; used=unknown
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r remaining reset <<< "${reading}"
+            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
+              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
+              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
+                used=$((initial - remaining))
+              fi
+            fi
+          fi
+          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=workflow-log-analysis-test remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
   # ──────────────────────────────────────────────────────────────────
   # Job 1c-2: Orphan workflows live-dispatch test
   # Dispatches each user-facing workflow that the e2e smoke test does
@@ -4078,6 +4125,20 @@ jobs:
       # set the repo variable to false to skip the cancel (the shell default stays true).
       DISPATCH_WATCH_CANCEL_ON_TIMEOUT: ${{ vars.DISPATCH_WATCH_CANCEL_ON_TIMEOUT || 'true' }}
     steps:
+      - name: Record GH_PAT budget at orphan-workflows-test start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_orphan-workflows-test
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=orphan-workflows-test remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Validate prerequisites
         run: |
           set -euo pipefail
@@ -4107,6 +4168,19 @@ jobs:
         run: |
           [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
           source scripts/gh_helpers.sh
+
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
 
       # Generic helper: dispatch a workflow_dispatch workflow by file name
       # and capture the resulting run id, then wait for completion. Each
@@ -4375,6 +4449,26 @@ jobs:
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
+      - name: Record GH_PAT budget at orphan-workflows-test end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_orphan-workflows-test
+        run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
+          remaining=unknown; reset=unknown; used=unknown
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r remaining reset <<< "${reading}"
+            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
+              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
+              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
+                used=$((initial - remaining))
+              fi
+            fi
+          fi
+          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=orphan-workflows-test remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
+
   # ──────────────────────────────────────────────────────────────────
   # Job 1d: Orchestrate decompose end-to-end test
   # Exercises the orchestrate root: project-description → tracking issue
@@ -4397,6 +4491,20 @@ jobs:
       tracking_issue: ${{ steps.dispatch.outputs.tracking_issue }}
       child_issues: ${{ steps.dispatch.outputs.child_issues }}
     steps:
+      - name: Record GH_PAT budget at orchestrate-decompose-test start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_orchestrate-decompose-test
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=orchestrate-decompose-test remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Validate prerequisites
         run: |
           set -euo pipefail
@@ -4425,6 +4533,19 @@ jobs:
         run: |
           [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
           source scripts/gh_helpers.sh
+
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
 
       - name: Dispatch internal-orchestrate.yml with multi-issue project
         id: dispatch
@@ -4783,6 +4904,26 @@ jobs:
           fi
           true  # ensure step exits 0 even if some closes failed
 
+      - name: Record GH_PAT budget at orchestrate-decompose-test end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_orchestrate-decompose-test
+        run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
+          remaining=unknown; reset=unknown; used=unknown
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r remaining reset <<< "${reading}"
+            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
+              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
+              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
+                used=$((initial - remaining))
+              fi
+            fi
+          fi
+          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=orchestrate-decompose-test remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
+
   # ──────────────────────────────────────────────────────────────────
   # Job 1e: Validate (reusable) standalone fixture dispatch
   # Dispatches internal-validate.yml in standalone mode (tracking_issue=0)
@@ -4979,6 +5120,20 @@ jobs:
       AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
     steps:
+      - name: Record GH_PAT budget at clarify-rejects-unsolvable-test start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_clarify-rejects-unsolvable-test
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=clarify-rejects-unsolvable-test remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Validate prerequisites
         run: |
           set -euo pipefail
@@ -5005,6 +5160,19 @@ jobs:
         run: |
           [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
           source scripts/gh_helpers.sh
+
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
 
       - name: Create unsolvable issue
         id: create
@@ -5212,6 +5380,26 @@ jobs:
           echo "::warning::Could not close issue #${ISSUE_NUMBER} after 3 attempts (manual cleanup may be required)"
           exit 0
 
+      - name: Record GH_PAT budget at clarify-rejects-unsolvable-test end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_clarify-rejects-unsolvable-test
+        run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
+          remaining=unknown; reset=unknown; used=unknown
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r remaining reset <<< "${reading}"
+            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
+              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
+              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
+                used=$((initial - remaining))
+              fi
+            fi
+          fi
+          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=clarify-rejects-unsolvable-test remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
+
   # ──────────────────────────────────────────────────────────────────
   # Job 1g: Alternate-model happy-path run
   # Re-runs a minimal happy path with WORKFLOW_EDITOR_MODEL overridden
@@ -5272,7 +5460,6 @@ jobs:
       # production default in implement.yml's MODEL_EDITOR.
       ALT_EDITOR_MODEL: ${{ vars.ALT_EDITOR_MODEL || 'openai/gpt-6-sol' }}
     steps:
-      # Required for the run-soft-error-analyzer composite action below.
       - name: Record GH_PAT budget at e2e-alt-model-test start
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -5287,6 +5474,7 @@ jobs:
           fi
           echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=e2e-alt-model-test remaining=${remaining} reset=${reset} used_in_job=unknown"
 
+      # Required for the run-soft-error-analyzer composite action below.
       - name: Checkout repository (for soft-error analyser)
         uses: actions/checkout@v5
         with:
@@ -5792,6 +5980,8 @@ jobs:
       - name: Verify CI passed on source branch
         env:
           GH_TOKEN: ${{ github.token }}
+          # Issue #9887: GH_TOKEN carries the job token here, not GH_PAT.
+          GH_CALL_COUNTER_TOKEN_KIND: github_token
           SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
           GATE_REPO: ${{ github.repository }}
           GATE_ONLY: ${{ inputs.gate_only }}
