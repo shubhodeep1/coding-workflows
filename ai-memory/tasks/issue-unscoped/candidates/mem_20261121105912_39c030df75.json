@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:27383-27414 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: A fresh head-bound latch comment posted after the comments/events revalidation can go unnoticed, allowing the release path to delete `ai:needs-human`.\n  WHY: The final pull re-read checks PR state, head, and labels but not comments; a new latch comment can arrive before deletion, and adding an already-present label creates no new label event.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh: revalidation block in release_head_bound_needs_human_latches (around lines 27388\u201327416); the gap between the comment and label-event revalidation check (~line 27397) and the newly added pulls/<n> re-read (lines 27400\u201327411). | severity=MAJOR | confidence=3\n  PROBLEM: A newer head-bound latch comment can be posted after the events check but before the pull re-read returns, going unseen while the subsequent DELETE removes `ai:needs-human`.\n  WHY: The pull re-read still sees the same open PR, head, and label, so the new latch comment is orphaned until the heal re-runs; in the meantime the PR can pass review and merge.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh: 27383-27414, especially the refreshed comments/events read at 27383-27399, the final PR read at 27406-27410, and label deletion at 27414 | severity=MAJOR | confidence=4\n  PROBLEM: A new head-bound latch comment posted after the final comments/events check but before label deletion is not detected by the PR read.\n  WHY: The final PR read still sees the same open PR, head, and label, so the poller deletes `ai:needs-human` and clears the newer latch.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh: release_head_bound_needs_human_latches, lines 27383-27414 \u2014 the comments/events revalidation (27383-27402) runs before the `pulls/<n>` re-read (27403-27412), and the `ai:needs-human` DELETE runs at 27414 | severity=MAJOR | confidence=4\n  PROBLEM: A trusted head-bound latch comment posted after the comments re-read but before the DELETE is never observed, so the function deletes `ai:needs-human` while a fresh latch comment naming the current head exists.\n  WHY: The events comparison cannot catch adding a label the PR already carries, and the pull re-read does not inspect comments; the fresh non-retryable latch is erased and nothing re-asserts it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3575a9a3d8f804346d15c7cb9ee7f301c98fe3ac3bff7a29e169e599aa16420f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9862,
+    "run_id": "44887366909",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44887366909",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121105912_39c030df75",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9862,
+    "run_id": "44887366909"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T10:59:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
