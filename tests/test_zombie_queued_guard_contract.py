@@ -89,6 +89,24 @@ def test_kill_switch_is_wired(workflow: str) -> None:
 	assert WIRING in _text(f".github/workflows/{workflow}")
 
 
+@pytest.mark.parametrize("workflow", WIRED_WORKFLOWS)
+def test_wired_workflows_have_no_duplicate_mapping_keys(workflow: str) -> None:
+	"""Issue #9901: a second ZOMBIE_RUN_MAX_QUEUED_HOURS in one env: block
+	failed yamllint key-duplicates; the presence check above cannot see it."""
+	yaml = pytest.importorskip("yaml")
+
+	class _ZombieGuardUniqueKeyLoader(yaml.SafeLoader):
+		def construct_mapping(self, node, deep=False):
+			seen = set()
+			for key_node, _value_node in node.value:
+				key = self.construct_object(key_node, deep=deep)
+				assert key not in seen, (workflow, key, key_node.start_mark.line + 1)
+				seen.add(key)
+			return super().construct_mapping(node, deep=deep)
+
+	yaml.load(_text(f".github/workflows/{workflow}"), Loader=_ZombieGuardUniqueKeyLoader)
+
+
 @pytest.mark.parametrize("rel", ["scripts/workflow_failure_heal.py", ".github/workflows/cancel_on_pr_close.yml"])
 def test_documented_exclusions_stay_unchanged(rel: str) -> None:
 	text = _text(rel)
