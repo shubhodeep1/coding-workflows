@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_head_gate.sh:106-183 | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The function uses `gh_retry gh api` to check statuses. If `gh_retry` is not sourced or available in the environment where this script runs, the check might fail inappropriately.\n  WHY: Reviewer pipelines may not always have `gh_retry` in the path, which would cause `command not found`; the script sources `gh_helpers.sh`, which contains `gh_retry`, but the reviewer says it still needs checking that every caller runs where sourcing works. The source gave no severity.\n- .github/workflows/update_workflows.yml:2520-2615 | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The verify_head_gate step logs a warning when the poll window expires, but it does not proactively handle the case where `workflow-integrity` is still pending or definitively missing before it decides to skip the post.\n  WHY: The gate could stay pending even if the integrity check would have passed seconds later, and another review run would then be needed to unblock it. The source gave no severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add a drift alarm that pages when a consumer in .github/ai/consumer_repos.json stays behind the latest @stable tag for more than 24 hours.\n  expected_change_site: scripts/audit_consumer_drift.py and .github/workflows/audit_consumer_drift.yml\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer says the implementation uses `PIN_BEHIND_ALERT_AFTER_SECONDS`, which is configurable and defaults to 24 hours, and that the drift audit now fetches release tags and compares wrapper pins against them. The reviewer's own conclusion: \"This requirement appears to be met.\"\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_head_gate.sh:review_head_gate_updater_exempt function (lines 106-183) | confidence=3\n  PROBLEM: The function uses `gh_retry gh api` to check statuses. If `gh_retry` is not sourced or available in the environment where this script runs, the check might fail inappropriately.\n  WHY: Reviewer pipelines may not always have `gh_retry` in the path, which would cause `command not found`. The script sources `gh_helpers.sh`, which contains `gh_retry`, but the reviewer says it must be checked that every caller runs where sourcing works as expected.\n- .github/workflows/update_workflows.yml:verify_head_gate step (lines 2520-2615) | confidence=2\n  PROBLEM: The step logs a warning when the poll window expires, but it does not proactively handle the case where `workflow-integrity` is still pending or definitively missing before it decides to skip the post.\n  WHY: The gate could stay pending even if the integrity check would have passed seconds later, and another review run would then be needed to unblock it.\n- TASK_GAP\n  Requirement: Add a drift alarm that pages when a consumer in .github/ai/consumer_repos.json stays behind the latest @stable tag for more than 24 hours.\n  Expected change site: scripts/audit_consumer_drift.py and .github/workflows/audit_consumer_drift.yml\n  Evidence of absence: The implementation uses `PIN_BEHIND_ALERT_AFTER_SECONDS` which is configurable and defaults to 24 hours. The drift audit now fetches release tags and compares wrapper pins against them. This requirement appears to be met.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2be0359ee4908a87efce1512af3714904b2759558a531ccd1e73d3d48545cca0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9505,
+    "run_id": "44879674019",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44879674019",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121083937_bdeb89bc65",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9505,
+    "run_id": "44879674019"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-21T08:39:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
