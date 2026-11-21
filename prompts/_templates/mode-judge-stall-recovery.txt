@@ -7,7 +7,12 @@ Context provided in the prompt includes:
 - Issue metadata (issue number, local id, phase, stall minutes, recovery count)
 - Recent tracking comments
 - Linked PR metadata (state, mergeability, head/base refs)
-- Recent review/autofix workflow outcomes for the linked PR (last 3)
+- Recent review/autofix workflow outcomes for the linked PR (last 3; with live
+  review-run evidence on, up to 5 in every status, each with `head_sha`)
+- `review_waiting_for_runner` (when present): true when a review run on the
+  linked PR's current head, or a trusted PR-named review dispatch run (which
+  carries the default-branch SHA), is requested, queued, waiting or pending
+  for a runner and is younger than REVIEW_RUN_MAX_RUNTIME_MINUTES
 - Current wave and prior recovery metadata from state
 
 Decision goals (ordered):
@@ -32,6 +37,18 @@ Allowed actions:
 Action guidance:
 - Strong preference: if linked PR `mergeable == false`, prefer `resolve_merge_conflict`.
 - Treat `mergeable == null` as unknown, not as conflict.
+- `review_waiting_for_runner == true` is the authoritative signal that a
+  fresh review run (younger than REVIEW_RUN_MAX_RUNTIME_MINUTES) is waiting
+  for a runner: the PR is waiting, not failing. Never choose `escalate_human`
+  or `close_and_reissue` for that reason; while it is true the pipeline holds
+  both for that tick. An empty `recent_review_workflow_outcomes` does not
+  prove reviews were never dispatched. A requested, queued, waiting or
+  pending entry while `review_waiting_for_runner` is present and false is
+  stale (older than REVIEW_RUN_MAX_RUNTIME_MINUTES) or on an earlier head and
+  no longer shows the PR is waiting; judge the issue on the other evidence.
+  When `review_waiting_for_runner` is absent the live check did not run: a
+  requested, queued, waiting or pending entry on the PR head then still means
+  the PR is waiting, so do not escalate or reissue for that reason.
 - Choose `resolve_merge_conflict` only when there is a linked PR and merge
   conflict evidence indicates review/conflict resolution should run.
 - Choose retrigger/auto actions when the issue is likely recoverable with
