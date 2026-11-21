@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:2471-2475 | severity=high | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The new `GH_READ_FALLBACK` replay in `gh_retry`'s failed-attempt path changes runtime behavior in a shared helper. The linked issue (#9907) and the PR body say the PR is test-only.\n  WHY: The declared scope (tests only, no runtime change) and the effective scope (`gh_retry` stderr contract changed for every caller) diverge, and no changelog.d fragment records the change. The reviewer rated it MAJOR, which is mapped here to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/gh_helpers.sh:2471-2475 | severity=MAJOR | confidence=4\n  PROBLEM: The last autofix run added a `GH_READ_FALLBACK` replay inside `gh_retry`'s failed-attempt path. This is a runtime behavior change in a shared helper, made under an issue (#9907) and PR body that promise only test changes. The reviewer also says no changelog.d fragment records it.\n  WHY: The change is contractual, not a crash. The helper's declared state (test-only PR) and effective state (`gh_retry` stderr gains a new line class for every caller) diverge. Release and consumer-sync tooling that keys off the declared scope will miss it, and operators get no recorded explanation. The reviewer's recommended fix is to either declare the change in the PR body plus a changelog.d fragment, or revert `scripts/gh_helpers.sh` and `tests/test_gh_read.py` so the PR stays test-only.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1609c5def20a4b97af6c38f59dace6500ebc72d0ca4b2dd576c4fa1e8c4e260c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9914,
+    "run_id": "44960535309",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44960535309",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121233620_3bf4a90078",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9914,
+    "run_id": "44960535309"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-21T23:36:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
