@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Report dropped edits on the PR: the existing resolver success summary lists each path with its deleting PR and a 10-line excerpt of the dropped diff. That reuses the existing comment; there is no new comment.\" (Phase 4 plan, point 2)\n  expected_change_site: scripts/review_conflict_resolve.sh, the resolver's success-summary comment body (around the take-base comment loop at ~5470s)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The PR creates and posts a separate `modify_delete_take_base_comment.md` comment via `scripts/review_conflict_prepare.sh` (`_conflict_prepare_post_modify_delete_comment`, called by `_conflict_prepare_commit_deterministic_merge` after `git commit`) and adds that file to the separate take-base comment loop at `scripts/review_conflict_resolve.sh:5476-5491`, with a new marker `<!-- ai:modify-delete-take-base:v1 pr=<n> head=<sha> -->` (changelog.d/9886-modify-delete-take-base.md:1, agents.d/9886-modify-delete-take-base.md:3), and no diff hunk adds the dropped-edit details to an existing success-summary comment; gemini notes that, as documented in prior review rounds, no success-summary comment exists to be extended, but the requirement is not marked as explicitly deferred in the issue; all three reviewers rated it SEVERITY: NIT; anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash explicitly declined to re-raise it as an accepted deviation (no success-summary comment exists; CONFLICT_RESOLVER_SUMMARY_FILE is only written at scripts/review_conflict_resolve.sh:4873 and is never posted to the PR)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"The existing resolver success summary lists each path with its deleting PR and a 10-line excerpt of the dropped diff. That reuses the existing comment; there is no new comment.\" (Phase 4 plan, point 2)\n  Expected change site: `scripts/review_conflict_resolve.sh` resolver success-summary comment (around line 4057 / 5470s).\n  Evidence of absence: The PR creates and posts a separate `modify_delete_take_base_comment.md` comment via `scripts/review_conflict_prepare.sh` and adds that file to the separate take-base comment loop in `scripts/review_conflict_resolve.sh`, rather than appending dropped edit details into an existing success-summary comment. (Note: As documented in prior review rounds, no success-summary comment exists to be extended, but the requirement is not marked as explicitly deferred in the issue).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Report dropped edits on the PR: the existing resolver success summary lists each path with its deleting PR and a 10-line excerpt of the dropped diff. That reuses the existing comment; there is no new comment.\" (Phase 4 plan, point 2)\n  Expected change site: scripts/review_conflict_resolve.sh, the resolver's success-summary comment body (around the take-base comment loop at ~5470s), where the existing comment body should be extended with the modify/delete dropped-edits section instead of a new comment template.\n  Evidence of absence: The PR adds a new comment marker `<!-- ai:modify-delete-take-base:v1 pr=<n> head=<sha> -->` and a separate `modify_delete_take_base_comment.md` payload (changelog.d/9886-modify-delete-take-base.md:1, agents.d/9886-modify-delete-take-base.md:3, scripts/review_conflict_prepare.sh new function `_conflict_prepare_post_modify_delete_comment` and `scripts/review_conflict_resolve.sh:5476`, which adds the third take-base-comment entry). No hunk adds the dropped modify/delete edits to an existing resolver comment body. `_conflict_prepare_commit_deterministic_merge` calls the new poster after `git commit`, and scripts/review_conflict_resolve.sh posts the comment through its own take-base comment loop. This deviates from the plan's \"no new comment\" rule, and the PR description's note \"the dropped edit is posted on the PR\" depends on the new marker and comment.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Report dropped edits on the PR: the existing resolver success summary lists each path with its deleting PR and a 10-line excerpt of the dropped diff. That reuses the existing comment; there is no new comment.\"\n  Expected change site: The resolver's success-summary comment in `scripts/review_conflict_resolve.sh`.\n  Evidence of absence: The PR creates a separate `modify_delete_take_base_comment.md` and posts it through `_conflict_prepare_post_modify_delete_comment` and the take-base comment loop at `scripts/review_conflict_resolve.sh:5476-5491`. No diff hunk adds the dropped-edit details to an existing success-summary comment.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "69b148ada5af5143434e5b57be6722f1300ac1b31808558784f834c4ce46a3cf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9896,
+    "run_id": "44959900781",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44959900781",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121232226_e358821203",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9896,
+    "run_id": "44959900781"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T23:22:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
