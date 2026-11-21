@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The existing resolver success summary lists each path with its deleting PR and a 10-line excerpt of the dropped diff. That reuses the existing comment; there is no new comment.\"\n  expected_change_site: The resolver success-summary output in `scripts/review_conflict_resolve.sh`\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The PR adds a separate modify_delete_take_base_comment.md and posts it as a new PR comment from scripts/review_conflict_prepare.sh and scripts/review_conflict_resolve.sh. The resolver posts it as an additional comment in the take-base comment loop at lines 5476-5491. The success path at lines 4953-4962 does not add the dropped path, deleting PR, or diff excerpt to the existing summary. Both reviewers rated it SEVERITY: NIT. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash chose not to re-flag it: they found no success-summary comment to extend, the only match being a log line at line 4953, and three earlier editor rounds had accepted this as a deviation.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: The existing resolver success summary lists each path with its deleting PR and a 10-line excerpt of the dropped diff. That reuses the existing comment; there is no new comment.\n  Expected change site: The existing resolver success-summary/comment path in scripts/review_conflict_resolve.sh.\n  Evidence of absence: The PR adds a separate modify_delete_take_base_comment.md and posts it as a new PR comment from scripts/review_conflict_prepare.sh and scripts/review_conflict_resolve.sh; it does not extend the existing resolver success summary with the dropped-edit details.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"The existing resolver success summary lists each path with its deleting PR and a 10-line excerpt of the dropped diff. That reuses the existing comment; there is no new comment.\"\n  Expected change site: The resolver success-summary output in `scripts/review_conflict_resolve.sh`.\n  Evidence of absence: The PR creates and posts a separate `modify_delete_take_base_comment.md` (the resolver posts it as an additional comment in the take-base comment loop at lines 5476-5491). The success path at lines 4953-4962 does not add the dropped path, deleting PR, or diff excerpt to the existing summary.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "84624a566631cd3ce861fad401a3badf6604fafac9081a9999e7eb9c7b9f6699",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9896,
+    "run_id": "44950202819",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44950202819",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121212827_a4334dfc66",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9896,
+    "run_id": "44950202819"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T21:28:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
