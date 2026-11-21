@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cMove its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\u201d\n  expected_change_site: `.github/workflows/ci.yml`, placement of `Pre-push affected-test gate tests` and selection of its target group\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The workflow comment at `.github/workflows/ci.yml` lines 3755-3756 explicitly states \"The run's step results gave statuses only, with no durations, so this pick is an estimate from test and subprocess counts, not a measurement.\"; `.github/workflows/ci.yml:3755-3756` states that run 43993691500 provided statuses only, with no durations, and that the selection is an estimate rather than a measurement. The diff does not establish from run timings that this is among the slowest steps or that group 0 has the most headroom.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\" (linked issue #9639)\n  Expected change site: `.github/workflows/ci.yml` placement rationale and the actual selection of which step to move; the PR must establish from measured run timings that the moved step is among the slowest and that the chosen target group has the most headroom.\n  Evidence of absence: The workflow comment at `.github/workflows/ci.yml` lines 3755-3756 explicitly states \"The run's step results gave statuses only, with no durations, so this pick is an estimate from test and subprocess counts, not a measurement.\" The step is pinned to group 0 on the basis of test/subprocess counts (about 472 tests in 10 serial pytest runs vs group 1's ~367 tests and 145 subprocess sites), not measured step timings. The PR's placement is defensible, but it does not satisfy the issue's \"see the run's step timings\" clause because the source run 43993691500 has no step durations and the PR comments require measuring before the next move.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cMove its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\u201d\n  Expected change site: `.github/workflows/ci.yml`, the placement of `Pre-push affected-test gate tests` and the selection of its target group.\n  Evidence of absence: The step is moved from group 3 to group 0, but `.github/workflows/ci.yml:3755-3756` states that run 43993691500 provided statuses only, with no durations, and that the selection is an estimate rather than a measurement. The diff does not establish from run timings that this is among the slowest steps or that group 0 has the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "126f4a731f31ca0d740fa270317a7bb822d7937202d96b154c2497a0db729ea9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9641,
+    "run_id": "44875162464",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44875162464",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121063329_b41a8aea6a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9641,
+    "run_id": "44875162464"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-21T06:33:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
