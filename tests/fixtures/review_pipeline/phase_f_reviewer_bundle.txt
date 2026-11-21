@@ -1,0 +1,9 @@
+FILE_PATH: reviewer_1.txt
+=== FINDINGS FROM reviewer_1 ===
+- src/module.py:2-3
+  severity: high
+  evidence: same accepted-residual finding still appears in the rerun bundle
+- src/module.py:6
+  severity: low
+  evidence: reviewer re-raised the previously overridden performance note
+=== END FINDINGS FROM reviewer_1 ===

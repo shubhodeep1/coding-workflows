@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/fingerprint_quarantine.v1.json",
+  "title": "FingerprintQuarantineV1",
+  "description": "Per-repository quarantine state for persistent pre-existing integration fingerprint drift.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "entries"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "fp_key",
+          "issue_key",
+          "first_seen_run_id",
+          "last_seen_run_id",
+          "consecutive_unchanged_runs"
+        ],
+        "properties": {
+          "fp_key": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          },
+          "issue_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "first_seen_run_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "^[A-Za-z0-9_.:-]+$"
+          },
+          "last_seen_run_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "^[A-Za-z0-9_.:-]+$"
+          },
+          "consecutive_unchanged_runs": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""Contract tests for review_autofix shared phase-label helper usage."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+
+
+META_FALLBACK = 'PR_DATA="$(jq -r \'[.title // "", .body // ""] | join(" ")\' "${PR_META_FILE}" 2>/dev/null || echo "")"'
+JQ_FALLBACK_EXPR = "--jq '.title + \" \" + (.body // \"\")'"
+GH_FETCH_CALL = 'gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"'
+SAFE_FETCH_CALL = '_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}"'
+SHARED_FALLBACK_ENV = 'LINKED_ISSUE_FALLBACK_NUMBERS_JSON'
+SHARED_HELPER_PREFIX = 'extract_repo_scoped_issue_refs_from_text "${REPOSITORY}"'
+BROAD_ISSUE_MENTION = 'issue[[:space:]]*#[[:space:]]*[0-9]+'
+BROAD_ISSUES_PATH = '(^|[^[:alnum:]_/-])issues/[0-9]+'
+COLON_FALLBACK = '(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+'
+POST_MERGE_PR_OUTPUT = 'post_merge_pr_text_json: ${{ steps.evaluate.outputs.post_merge_pr_text_json }}'
+POST_MERGE_LINKED_OUTPUT = 'post_merge_linked_issues_json: ${{ steps.evaluate.outputs.post_merge_linked_issues_json }}'
+POST_MERGE_EMPTY_OUTPUT = 'post_merge_validate_context_definitely_empty: ${{ steps.evaluate.outputs.post_merge_validate_context_definitely_empty }}'
+POST_MERGE_PR_ENV = 'POST_MERGE_PR_TEXT_JSON: ${{ needs.gate.outputs.post_merge_pr_text_json }}'
+POST_MERGE_LINKED_ENV = 'POST_MERGE_LINKED_ISSUES_JSON: ${{ needs.gate.outputs.post_merge_linked_issues_json }}'
+POST_MERGE_EMPTY_EMIT = 'echo "post_merge_validate_context_definitely_empty=${POST_MERGE_VALIDATE_CONTEXT_DEFINITELY_EMPTY}"'
+POST_MERGE_EMPTY_GUARD = "needs.gate.outputs.post_merge_validate_context_definitely_empty != 'true'"
+POST_MERGE_FORCE_POLL_JOB = 'post-merge-force-poll:'
+POST_MERGE_FORCE_POLL_IF = "needs.gate.outputs.post_merge_dispatch == 'true' && needs.gate.outputs.claude_branch_review != 'true'"
+POST_MERGE_GH_RETRY_NOOP = 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }'
+
+
+def _workflow_text() -> str:
+	# Step bodies moved to scripts/review_autofix_step_*.sh are inlined again.
+	return expanded_review_autofix_text()
+
+
+def _step_block(text: str, step_name: str) -> str:
+	marker = f"- name: {step_name}"
+	start = text.find(marker)
+	assert start != -1, f"Missing workflow step: {step_name}"
+	next_step = text.find("\n      - name:", start + len(marker))
+	if next_step == -1:
+		return text[start:]
+	return text[start:next_step]
+
+
+def test_target_steps_use_shared_helper_and_remove_inline_phase_array() -> None:
+	text = _workflow_text()
+
+	assert "_AI_PHASE_LABELS='[\"ai:done\"" not in text
+	assert POST_MERGE_PR_OUTPUT in text
+	assert POST_MERGE_LINKED_OUTPUT in text
+	assert POST_MERGE_EMPTY_OUTPUT in text
+	assert POST_MERGE_PR_ENV in text
+	assert POST_MERGE_LINKED_ENV in text
+	assert POST_MERGE_EMPTY_EMIT in text
+	assert POST_MERGE_EMPTY_GUARD in text
+	assert POST_MERGE_FORCE_POLL_JOB in text
+	assert POST_MERGE_FORCE_POLL_IF in text
+	assert 'set_issue_phase_label_resilient "${issue_number}" "ai:ready-to-merge" "${REPOSITORY}"' in text
+	assert text.count('set_issue_phase_label_resilient "${issue_number}" "ai:review-blocked" "${REPOSITORY}"') >= 2
+
+	for step_name in (
+		"Mark linked issues ready to merge",
+		"Mark linked issues review-blocked (autofix exhaustion)",
+		"Mark linked issues review-blocked (workflow failure)",
+	):
+		block = _step_block(text, step_name)
+		assert SHARED_FALLBACK_ENV in block, f"{step_name}: missing shared fallback env reuse"
+		assert SHARED_HELPER_PREFIX in block, f"{step_name}: missing shared strict fallback helper"
+		assert BROAD_ISSUE_MENTION not in block, f"{step_name}: bare issue mentions must stay non-actionable"
+		assert BROAD_ISSUES_PATH not in block, f"{step_name}: bare issues/N paths must stay non-actionable"
+		assert COLON_FALLBACK not in block, f"{step_name}: colon-form closing fallback must stay disabled"
+
+	validate_block = _step_block(text, "Dispatch standalone validate for orchestrator short-circuit issues")
+	assert "POST_MERGE_PR_TEXT_JSON" in validate_block
+	assert "POST_MERGE_LINKED_ISSUES_JSON" in validate_block
+	assert SHARED_HELPER_PREFIX in validate_block, "post-merge validate dispatch must use the shared strict fallback helper"
+	assert BROAD_ISSUE_MENTION not in validate_block
+	assert BROAD_ISSUES_PATH not in validate_block
+	assert COLON_FALLBACK not in validate_block
+	assert 'gh_retry gh api graphql' in validate_block
+	assert 'gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"' in validate_block
+	assert "gh_retry gh issue view \"${issue_number}\" --repo \"${REPOSITORY}\" --json labels --jq '.labels[].name'" in validate_block
+	assert POST_MERGE_GH_RETRY_NOOP not in validate_block
+	assert 'if ! type gh_retry >/dev/null 2>&1; then' in validate_block
+	assert 'local n=0 max=4 delay=2' in validate_block
+	assert "--jq '.data.repository.pullRequest.closingIssuesReferences.nodes // [] | map({number: .number, labels: ((.labels.nodes // []) | map(.name))})' || true" not in validate_block
+	assert "gh api \"repos/${REPOSITORY}/pulls/${PR_NUMBER}\" --jq '.title + \" \" + (.body // \"\")' 2>/dev/null || echo \"\"" not in validate_block
+	assert "gh issue view \"${issue_number}\" --repo \"${REPOSITORY}\" --json labels --jq '.labels[].name' 2>/dev/null || true" not in validate_block
+	assert validate_block.find("POST_MERGE_LINKED_ISSUES_JSON") < validate_block.find("gh api graphql"), (
+		"post-merge validate dispatch must consume cached linked-issue labels before the live GraphQL fallback"
+	)
+	assert validate_block.find("POST_MERGE_PR_TEXT_JSON") < validate_block.find('gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"'), (
+		"post-merge validate dispatch must consume cached PR title/body before the live /pulls fallback"
+	)
+
+
+def test_pr_meta_fallback_precedes_pull_fetch_in_target_steps() -> None:
+	text = _workflow_text()
+	checks = [
+		("Mark linked issues ready to merge", GH_FETCH_CALL),
+		("Mark linked issues review-blocked (autofix exhaustion)", SAFE_FETCH_CALL),
+		("Mark linked issues review-blocked (workflow failure)", GH_FETCH_CALL),
+	]
+
+	for step_name, fetch_call in checks:
+		block = _step_block(text, step_name)
+		meta_pos = block.find(META_FALLBACK)
+		fetch_call_pos = block.find(fetch_call)
+		fetch_jq_pos = block.find(JQ_FALLBACK_EXPR)
+		assert meta_pos != -1, f"{step_name}: missing PR_META_FILE fallback"
+		assert fetch_call_pos != -1, f"{step_name}: missing fallback GH PR fetch call"
+		assert fetch_jq_pos != -1, f"{step_name}: missing fallback GH PR fetch jq expression"
+		assert meta_pos < fetch_call_pos, f"{step_name}: expected PR_META_FILE fallback before GH fetch"
+
+
+if __name__ == "__main__":
+	test_target_steps_use_shared_helper_and_remove_inline_phase_array()
+	test_pr_meta_fallback_precedes_pull_fetch_in_target_steps()
+	print("PASS")

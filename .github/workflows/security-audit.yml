@@ -1,0 +1,656 @@
+name: Security Audit
+# The PR number in the run title lets the single-issue security pass gate
+# (scripts/review_single_issue_security_pass.sh) find the run behind its
+# pending marker and retry an audit that was cancelled without a result.
+# A called workflow's run-name is ignored; the consumer wrapper sets its own.
+run-name: "${{ inputs.pr_number != '' && format('Security Audit (PR #{0})', inputs.pr_number) || 'Security Audit' }}"
+
+"on":
+  schedule:
+    # GitHub Actions schedules are literal YAML, not repo-variable driven.
+    # Keep README's SECURITY_AUDIT_CRON row aligned with this value.
+    - cron: "0 8 * * 0"
+  # `ref` is set by /implement-plan-claude when it audits a project branch;
+  # scheduled runs and a bare dispatch leave it empty and audit the default
+  # branch exactly as before.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch to audit instead of the default branch (empty = default branch). Scope is the branch's changes since its merge-base with the default branch; follow-up issues target the branch."
+        required: false
+        default: ""
+        type: string
+      pr_number:
+        description: "Pull request whose head branch `ref` is (single-issue security pass, port P1). The result is posted on the PR and its review re-runs. Empty = no PR."
+        required: false
+        default: ""
+        type: string
+      audit_diff_since:
+        description: "Single-issue security pass delta re-audit (stuck-states P5a): last audited head of the PR. A request only; the audit verifies it against the pipeline's PR markers and otherwise audits in full. Empty = full audit."
+        required: false
+        default: ""
+        type: string
+      prior_findings:
+        description: "Single-issue security pass delta re-audit: id of the pipeline's findings result comment whose stored findings are verified again. A request only, verified like audit_diff_since. Empty = none."
+        required: false
+        default: ""
+        type: string
+  # Consumer repos run this workflow through the synced
+  # workflow-templates/ai-security-audit.yml wrapper (called @stable).
+  workflow_call:
+    inputs:
+      ref:
+        required: false
+        default: ""
+        type: string
+      pr_number:
+        required: false
+        default: ""
+        type: string
+      audit_diff_since:
+        required: false
+        default: ""
+        type: string
+      prior_findings:
+        required: false
+        default: ""
+        type: string
+    secrets:
+      GH_PAT:
+        required: false
+      OPENROUTER_API_KEY:
+        required: true
+      TG_BOT_SECRET:
+        required: false
+      # Signed job-token comments (run-volume plan item 15): optional; see scripts/comment_signature.py.
+      AI_COMMENT_SIGNING_SECRET:
+        required: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+  actions: write
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
+
+# The consumer wrapper (workflow-templates/ai-security-audit.yml) already
+# serialises runs under `security-audit-<repo>`. A called workflow that
+# declares the SAME group as its caller deadlocks: the caller holds the
+# group while this workflow waits for it, and GitHub cancels the run at
+# startup with zero jobs ("Canceling since a deadlock was detected for
+# concurrency group ... between a top level workflow and 'security-audit'").
+# Keep a distinct group so this repo's own scheduled runs stay serialised
+# without contending with a wrapper's group.
+#
+# One group per PR (single-issue security pass). GitHub keeps one pending
+# run per group and cancels the older pending one, so a repo-wide group made
+# audits for different PRs cancel each other: 39 of 91 dispatched audits
+# from 2026-11-16 ended `cancelled` without a result, and each PR then waited
+# 6 hours on its pending marker. Now only a newer audit of the same PR
+# replaces a waiting one. The gate bounds how many audits run at once
+# (SECURITY_PASS_MAX_CONCURRENT_AUDITS); scheduled and project-branch runs
+# without pr_number share the `default` group as before.
+concurrency:
+  group: security-audit-reusable-${{ github.repository }}-${{ inputs.pr_number != '' && format('pr-{0}', inputs.pr_number) || 'default' }}
+  cancel-in-progress: false
+
+env:
+  # Claude capacity wait (issue #7370): a capacity fallback waits for the
+  # hourly capacity-resume pass instead of running codex/OpenCode. Off for the
+  # `core` install profile, which has no orchestrate-poll wrapper to resume
+  # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
+  # Signed job-token comments (run-volume plan item 15, D16; see
+  # scripts/comment_signature.py). The opt-in secret and the job token sit
+  # next to each step's GH_PAT, never here, so a step without the PAT never
+  # sees them. Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false
+  # posts with GH_PAT again while signed comments already posted still verify.
+  AI_COMMENT_SIGNING_POST: ${{ vars.AI_COMMENT_SIGNING_POST || 'true' }}
+
+jobs:
+  security-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      AI_ENGINE_FALLBACK_POLICY: ${{ vars.AI_ENGINE_FALLBACK_POLICY || 'capacity' }}
+    steps:
+      - name: Bootstrap GitHub API retry helper
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+        run: |
+          # Trusted pre-support copy of scripts/gh_helpers.sh for gh_api_retry
+          # (issue #6634): main in this repo, stable in consumers, never the PR
+          # head or the caller checkout. emit_event.sh is fetched next to it so
+          # the helper never sources a checkout copy. Git transport spends no
+          # REST budget. On failure the steps below fall back to plain gh api.
+          # A consumer run whose job workflow_ref pins a coding-workflows file
+          # to a commit fetches that commit instead, never stable
+          # (tele-funtoken-msg-scoring#4566); a fetch that does not land
+          # exactly on it leaves the helper unset.
+          ghr_ref=stable
+          if [ "${GITHUB_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then ghr_ref=main; fi
+          ghr_pin=""
+          ghr_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+          if [ "${ghr_ref}" = "stable" ] && [[ "${ghr_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/[A-Za-z0-9_.-]+\.yml@[0-9a-f]{40}$ ]]; then
+            ghr_pin="${ghr_workflow_ref##*@}"
+            ghr_ref="${ghr_pin}"
+          fi
+          ghr_dir="${RUNNER_TEMP}/gh-api-retry-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ghr_auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          for ghr_try in 1 2 3; do
+            rm -rf "${ghr_dir}"
+            mkdir -p "${ghr_dir}"
+            if { if [ -n "${ghr_pin}" ]; then
+                  git init -q "${ghr_dir}/src" 2>/dev/null \
+                    && git -C "${ghr_dir}/src" remote add origin https://github.com/shubhodeep1/coding-workflows \
+                    && git -c http.extraHeader="${ghr_auth}" -C "${ghr_dir}/src" fetch -q --no-tags --depth 1 --filter=blob:none origin "${ghr_pin}" 2>/dev/null \
+                    && [ "$(git -C "${ghr_dir}/src" rev-parse FETCH_HEAD 2>/dev/null)" = "${ghr_pin}" ] \
+                    && git -C "${ghr_dir}/src" update-ref HEAD FETCH_HEAD
+                else
+                  git -c http.extraHeader="${ghr_auth}" clone -q --no-tags --depth 1 --filter=blob:none --no-checkout \
+                    --branch "${ghr_ref}" https://github.com/shubhodeep1/coding-workflows "${ghr_dir}/src" 2>/dev/null
+                fi; } \
+              && git -c http.extraHeader="${ghr_auth}" -C "${ghr_dir}/src" show HEAD:scripts/gh_helpers.sh > "${ghr_dir}/gh_helpers.sh" 2>/dev/null \
+              && git -c http.extraHeader="${ghr_auth}" -C "${ghr_dir}/src" show HEAD:scripts/emit_event.sh > "${ghr_dir}/emit_event.sh" 2>/dev/null; then
+              break
+            fi
+            if [ "${ghr_try}" -lt 3 ]; then sleep $(( ghr_try * 5 )); fi
+          done
+          if grep -q '^gh_api_retry()' "${ghr_dir}/gh_helpers.sh" 2>/dev/null && [ -s "${ghr_dir}/emit_event.sh" ]; then
+            echo "GH_API_RETRY_HELPERS=${ghr_dir}/gh_helpers.sh" >> "${GITHUB_ENV}"
+          else
+            echo "::warning::GH_API_RETRY bootstrap unavailable (ref=${ghr_ref}); steps use plain gh api."
+          fi
+
+      - name: Resolve trusted audit support commit
+        id: resolve_support
+        env:
+          WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          CALLER_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+          type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+          support_workflow_repository="$(jq -r '.workflow_repository // ""' <<< "${WORKFLOW_JOB_JSON}")"
+          support_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${WORKFLOW_JOB_JSON}")"
+          source_ref='^shubhodeep1/coding-workflows/\.github/workflows/security-audit\.yml@refs/heads/[^[:space:]]+$'
+          stable_ref='^shubhodeep1/coding-workflows/\.github/workflows/security-audit\.yml@refs/tags/stable$'
+          consumer_pin='^shubhodeep1/coding-workflows/\.github/workflows/security-audit\.yml@[0-9a-f]{40}$'
+          if [ "${support_workflow_repository}" != "shubhodeep1/coding-workflows" ] ||
+             { [ "${CALLER_REPOSITORY}" = "shubhodeep1/coding-workflows" ] && [[ ! "${support_workflow_ref}" =~ ${source_ref} ]]; } ||
+             { [ "${CALLER_REPOSITORY}" != "shubhodeep1/coding-workflows" ] &&
+               [[ ! "${support_workflow_ref}" =~ ${stable_ref} ]] && [[ ! "${support_workflow_ref}" =~ ${consumer_pin} ]]; }; then
+            echo "::error::Security audit support workflow identity is unapproved."
+            exit 1
+          fi
+          if [ "${CALLER_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then
+            # The event/workflow SHA can follow a dispatched source branch.
+            # No earlier step has read the protected main branch in this job.
+            if ! support_main_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/main)" ||
+               ! jq -e '.protected == true' <<< "${support_main_json}" >/dev/null; then
+              echo "::error::Security audit support main branch is not confirmed protected."
+              exit 1
+            fi
+            support_sha="$(jq -r '.commit.sha // ""' <<< "${support_main_json}")"
+          elif [[ "${support_workflow_ref}" =~ ${consumer_pin} ]]; then
+            support_sha="${support_workflow_ref##*@}"
+          else
+            # No existing lookup in this job resolves the release tag. A
+            # commits/stable read is ambiguous when a branch shares its name.
+            if ! support_tag_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/git/ref/tags/stable)"; then
+              echo "::error::Security audit support stable tag is unavailable."
+              exit 1
+            fi
+            support_tag_type="$(jq -r '.object.type // ""' <<< "${support_tag_json}")"
+            support_sha="$(jq -r '.object.sha // ""' <<< "${support_tag_json}")"
+            if [ "${support_tag_type}" = "tag" ] && [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+              if ! support_tag_json="$(gh_api_retry "repos/shubhodeep1/coding-workflows/git/tags/${support_sha}")"; then
+                echo "::error::Security audit support annotated tag is unavailable."
+                exit 1
+              fi
+              support_tag_type="$(jq -r '.object.type // ""' <<< "${support_tag_json}")"
+              support_sha="$(jq -r '.object.sha // ""' <<< "${support_tag_json}")"
+            fi
+            if [ "${support_tag_type}" != "commit" ]; then
+              echo "::error::Security audit support stable tag is not a commit."
+              exit 1
+            fi
+          fi
+          if [[ ! "${support_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Security audit support did not resolve to a commit SHA."
+            exit 1
+          fi
+          echo "support_sha=${support_sha}" >> "$GITHUB_OUTPUT"
+          if [ "${CALLER_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then
+            echo "protected_main_sha=${support_sha}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout trusted audit support
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ steps.resolve_support.outputs.support_sha }}
+          token: ${{ secrets.GH_PAT || github.token }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify trusted audit support
+        env:
+          SUPPORT_SHA: ${{ steps.resolve_support.outputs.support_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${SUPPORT_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
+             [ "$(git rev-parse HEAD 2>/dev/null)" != "${SUPPORT_SHA}" ] ||
+             [ "$(git rev-parse --show-toplevel 2>/dev/null)" != "${GITHUB_WORKSPACE}" ]; then
+            echo "::error::Security audit support checkout is not the approved commit."
+            exit 1
+          fi
+
+      - name: Resolve audit target
+        env:
+          AUDIT_TARGET_REF_INPUT: ${{ inputs.ref || '' }}
+          AUDIT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          AUDIT_EVENT_REPO_PRIVATE: ${{ github.event.repository.private }}
+          PROTECTED_MAIN_SHA: ${{ steps.resolve_support.outputs.protected_main_sha }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+          type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+          audit_branch="${AUDIT_TARGET_REF_INPUT:-${AUDIT_DEFAULT_BRANCH}}"
+          if [ -z "${AUDIT_DEFAULT_BRANCH}" ] ||
+             ! git check-ref-format --branch "${AUDIT_DEFAULT_BRANCH}" >/dev/null 2>&1 ||
+             ! git check-ref-format --branch "${audit_branch}" >/dev/null 2>&1 ||
+             [ -e "${GITHUB_WORKSPACE}/audit-data" ] || [ -L "${GITHUB_WORKSPACE}/audit-data" ]; then
+            echo "::error::Security audit branch or checkout path is invalid."
+            exit 1
+          fi
+          if [ "${GITHUB_REPOSITORY}" = "shubhodeep1/coding-workflows" ] &&
+             [ "${audit_branch}" = "main" ] && [[ "${PROTECTED_MAIN_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            # The earlier protected-main lookup already supplied this exact
+            # branch head. On a missing cache value use the branch API below.
+            audit_sha="${PROTECTED_MAIN_SHA}"
+          else
+            # No other read supplies this head. Require a heads/ ref, never a
+            # tag or prefix match; URL-encode even valid slash-bearing names.
+            encoded_branch="$(jq -nr --arg ref "${audit_branch}" '$ref | @uri')"
+            if ! audit_ref_json="$(gh_api_retry "repos/${GITHUB_REPOSITORY}/git/ref/heads/${encoded_branch}")"; then
+              echo "::error::Security audit branch head is unavailable."
+              exit 1
+            fi
+            audit_ref="$(jq -r '.ref // ""' <<< "${audit_ref_json}")"
+            audit_type="$(jq -r '.object.type // ""' <<< "${audit_ref_json}")"
+            audit_sha="$(jq -r '.object.sha // ""' <<< "${audit_ref_json}")"
+            if [ "${audit_ref}" != "refs/heads/${audit_branch}" ] ||
+               [ "${audit_type}" != "commit" ] || [[ ! "${audit_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::Security audit branch head is not an exact commit ref."
+              exit 1
+            fi
+          fi
+          # Repository visibility gates the rejected-reply upload (Refs #8204).
+          # The event payload's repository object normally reports it (this
+          # step already needs that object for default_branch). The single
+          # repository read is only a defensive fallback for a payload that
+          # does not carry a boolean; no earlier call in this job returns it.
+          # Anything but a confirmed true counts as public (fails closed).
+          repo_private="${AUDIT_EVENT_REPO_PRIVATE:-}"
+          if [ "${repo_private}" != "true" ] && [ "${repo_private}" != "false" ]; then
+            repo_private=""
+            if repo_json="$(gh_api_retry "repos/${GITHUB_REPOSITORY}" 2>/dev/null)"; then
+              repo_private="$(jq -r 'if .private == true then "true" else "false" end' <<< "${repo_json}" 2>/dev/null || true)"
+            fi
+          fi
+          [ "${repo_private}" = "true" ] || repo_private=false
+          {
+            echo "AUDIT_DATA_SHA=${audit_sha}"
+            echo "AUDIT_DEFAULT_BRANCH=${AUDIT_DEFAULT_BRANCH}"
+            echo "AUDIT_BRANCH=${audit_branch}"
+            echo "SECURITY_AUDIT_REPO_PRIVATE=${repo_private}"
+          } >> "$GITHUB_ENV"
+
+      - name: Checkout audit data
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AUDIT_DATA_SHA }}
+          path: audit-data
+          persist-credentials: false
+          # The incremental scope resolver needs the last audited commit and
+          # the default branch's remote-tracking ref for merge-base.
+          fetch-depth: 0
+
+      - name: Verify audit data and resolve scope
+        env:
+          # Delta audit for the single-issue security pass: the trusted
+          # support script names the PR's last clean-audited ancestor head.
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SECURITY_PASS_PR_NUMBER: ${{ inputs.pr_number }}
+          SECURITY_PASS_AUTHOR_LOGIN_FALLBACK: ${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}
+          SECURITY_PASS_DELTA_AUDIT_ENABLED: ${{ vars.SECURITY_PASS_DELTA_AUDIT_ENABLED || 'true' }}
+        run: |
+          set -euo pipefail
+          if [ "$(git -C audit-data rev-parse --show-toplevel 2>/dev/null)" != "${GITHUB_WORKSPACE}/audit-data" ] ||
+             [ "$(git -C audit-data rev-parse HEAD 2>/dev/null)" != "${AUDIT_DATA_SHA}" ]; then
+            echo "::error::Security audit data checkout does not match the resolved branch head."
+            exit 1
+          fi
+          if [ "${AUDIT_BRANCH}" = "${AUDIT_DEFAULT_BRANCH}" ]; then
+            echo "SECURITY_AUDIT_TARGET: default branch ${AUDIT_DEFAULT_BRANCH} commit ${AUDIT_DATA_SHA}"
+            exit 0
+          fi
+          if ! audit_diff_base="$(git -C audit-data merge-base "refs/remotes/origin/${AUDIT_DEFAULT_BRANCH}" "${AUDIT_DATA_SHA}")"; then
+            echo "::error::Could not compute the security audit branch merge-base."
+            exit 1
+          fi
+          echo "SECURITY_AUDIT_TARGET: branch ${AUDIT_BRANCH} range ${audit_diff_base}..${AUDIT_DATA_SHA}"
+          {
+            echo "SECURITY_AUDIT_TARGET_REF=${AUDIT_BRANCH}"
+            echo "SECURITY_AUDIT_DIFF_BASE=${audit_diff_base}"
+            echo "SECURITY_AUDIT_DIFF_HEAD=${AUDIT_DATA_SHA}"
+          } >> "$GITHUB_ENV"
+          # A later cycle of the single-issue security pass audits only range
+          # files changed since the PR's last clean audit (security_audit.sh
+          # SECURITY_AUDIT_DIFF_SINCE). The helper prints nothing on any
+          # doubt (no clean ancestor, failed read, force-push), which keeps
+          # the full range. SECURITY_PASS_DELTA_AUDIT_ENABLED=false turns it off.
+          audit_since=""
+          if [ -n "${SECURITY_PASS_PR_NUMBER}" ] && [ "${SECURITY_PASS_DELTA_AUDIT_ENABLED}" != "false" ] \
+            && [ -f "${GITHUB_WORKSPACE}/scripts/review_single_issue_security_pass.sh" ]; then
+            audit_since="$(SECURITY_PASS_HEAD_SHA="${AUDIT_DATA_SHA}" SECURITY_PASS_AUDIT_CHECKOUT="${GITHUB_WORKSPACE}/audit-data" \
+              bash "${GITHUB_WORKSPACE}/scripts/review_single_issue_security_pass.sh" since || true)"
+          fi
+          if [[ "${audit_since}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "SECURITY_AUDIT_TARGET: delta since last clean audit ${audit_since}"
+            echo "SECURITY_AUDIT_DIFF_SINCE=${audit_since}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Resolve single-issue security pass delta
+        # Stuck-states P5a: a review gate that already has a completed audit of
+        # an older PR head requests a delta re-audit. The trusted support copy
+        # of the helper verifies the request against the pipeline's PR markers
+        # (ancestry, author, stored-findings sha256) and only then narrows the
+        # scope via GITHUB_ENV; on any doubt it writes nothing and the audit
+        # runs in full. Never runs a script from audit-data.
+        if: inputs.pr_number != '' && inputs.audit_diff_since != '' && env.SECURITY_AUDIT_TARGET_REF != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SECURITY_PASS_PR_NUMBER: ${{ inputs.pr_number }}
+          SECURITY_PASS_DELTA_SINCE_INPUT: ${{ inputs.audit_diff_since || '' }}
+          SECURITY_PASS_PRIOR_FINDINGS_INPUT: ${{ inputs.prior_findings || '' }}
+          SECURITY_PASS_AUTHOR_LOGIN_FALLBACK: ${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}
+          SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}
+        run: |
+          set -uo pipefail
+          SECURITY_PASS_HEAD_SHA="${AUDIT_DATA_SHA}"
+          SECURITY_PASS_AUDIT_CHECKOUT="${GITHUB_WORKSPACE}/audit-data"
+          export SECURITY_PASS_HEAD_SHA SECURITY_PASS_AUDIT_CHECKOUT
+          if [ ! -f "${GITHUB_WORKSPACE}/scripts/review_single_issue_security_pass.sh" ]; then
+            echo "::warning::review_single_issue_security_pass.sh is not in the audit support checkout; auditing in full."
+            exit 0
+          fi
+          bash "${GITHUB_WORKSPACE}/scripts/review_single_issue_security_pass.sh" delta
+
+      - name: Install Codex CLI
+        uses: ./.github/actions/install-codex
+
+      - name: Create Codex config
+        run: |
+          set -euo pipefail
+          # The catalog path MUST be absolute: codex resolves a relative
+          # model_catalog_json against CODEX_HOME (~/.codex) and exits with
+          # "No such file or directory (os error 2)".
+          bash "${GITHUB_WORKSPACE}/scripts/write_codex_config.sh" \
+            --model "openai/gpt-6-sol" \
+            --reasoning xhigh \
+            --catalog-path "${GITHUB_WORKSPACE}/scripts/codex_model_catalog.json"
+          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+
+      # Claude engine: the SECURITY_AUDIT role (.github/ai/claude_engine.json)
+      # runs on Claude unless AI_ENGINE_SECURITY_AUDIT or AI_ENGINE says codex.
+      # The CLI and the account pool are fetched only then; any Claude failure,
+      # including every account at the usage gate (reason all_gated), falls
+      # back to the unchanged codex path in scripts/security_audit.sh.
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          AUDIT_ENABLED: ${{ vars.SECURITY_AUDIT_ENABLED || 'true' }}
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_SECURITY_AUDIT: ${{ vars.AI_ENGINE_SECURITY_AUDIT || '' }}
+        run: |
+          set -euo pipefail
+          engine="codex"
+          case "${AUDIT_ENABLED,,}" in
+            1|true|yes|on)
+              if [ -f scripts/ai_engine.sh ]; then
+                # shellcheck disable=SC1091
+                source scripts/ai_engine.sh
+                engine="$(ai_engine_for_role SECURITY_AUDIT || echo codex)"
+              fi
+              ;;
+          esac
+          [ "${engine}" = "claude" ] || engine="codex"
+          echo "engine=${engine}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        id: claude_pool
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Resolve trusted security audit exclusions
+        env:
+          AUDIT_ENABLED: ${{ vars.SECURITY_AUDIT_ENABLED || 'true' }}
+          AUDIT_EXCLUSIONS_CONFIG: ${{ vars.SECURITY_AUDIT_FP_EXCLUSIONS || 'scripts/security_audit_fp_exclusions.json' }}
+        run: |
+          set -euo pipefail
+          # Preserve the audit script's disabled-run behavior: no catalog is
+          # needed when it exits before loading exclusions.
+          case "${AUDIT_ENABLED,,}" in
+            1|true|yes|on) ;;
+            *) exit 0 ;;
+          esac
+          # The audit-data checkout is nested inside the support checkout.
+          # Resolve both the spelling and the destination before handing the
+          # catalog to the audit script, which otherwise prefers audit-data.
+          support_root="$(realpath -e -- "${GITHUB_WORKSPACE}")"
+          if [[ "${AUDIT_EXCLUSIONS_CONFIG}" = /* ]]; then
+            catalog_candidate="${AUDIT_EXCLUSIONS_CONFIG}"
+          else
+            catalog_candidate="${support_root}/${AUDIT_EXCLUSIONS_CONFIG}"
+          fi
+          if [[ "${catalog_candidate}" == *$'\n'* || "${catalog_candidate}" == *$'\r'* ]] ||
+             [[ "${catalog_candidate}" == "${support_root}/audit-data" || "${catalog_candidate}" == "${support_root}/audit-data/"* ]] ||
+             ! catalog_path="$(realpath -e -- "${catalog_candidate}" 2>/dev/null)" ||
+             [[ "${catalog_path}" != "${support_root}/"* || "${catalog_path}" == "${support_root}/audit-data/"* ]] ||
+             [ ! -f "${catalog_path}" ]; then
+            echo "::error::Security audit exclusion catalog must be a regular file in trusted support (not audit data)."
+            exit 1
+          fi
+          catalog_relative="${catalog_path#"${support_root}/"}"
+          if ! git -C "${support_root}" ls-files --error-unmatch -- "${catalog_relative}" >/dev/null 2>&1 ||
+             ! git -C "${support_root}" diff --quiet HEAD -- "${catalog_relative}"; then
+            echo "::error::Security audit exclusion catalog is not unchanged tracked support content."
+            exit 1
+          fi
+          echo "SECURITY_AUDIT_FP_EXCLUSIONS=${catalog_path}" >> "$GITHUB_ENV"
+
+      - name: Run security audit
+        id: run_security_audit
+        working-directory: ./audit-data
+        env:
+          SECURITY_AUDIT_SUPPORT_DIR: ${{ github.workspace }}
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          # The tracker report comment posts with the job token, so it starts no
+          # issue_comment workflows (run-volume plan item 6).
+          SECURITY_AUDIT_COMMENT_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          # Codex version baked into the isolated audit agent's image (scripts/codex_isolated_exec.sh).
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+          SECURITY_AUDIT_ENABLED: ${{ vars.SECURITY_AUDIT_ENABLED || 'true' }}
+          SECURITY_AUDIT_CONFIDENCE_GATE: ${{ vars.SECURITY_AUDIT_CONFIDENCE_GATE || '8' }}
+          SECURITY_AUDIT_SIMILAR_FINDING_LINE_WINDOW: ${{ vars.SECURITY_AUDIT_SIMILAR_FINDING_LINE_WINDOW || '25' }}
+          SECURITY_AUDIT_SKIP_IF_UNCHANGED: ${{ vars.SECURITY_AUDIT_SKIP_IF_UNCHANGED || 'true' }}
+          SECURITY_AUDIT_INCREMENTAL: ${{ vars.SECURITY_AUDIT_INCREMENTAL || 'true' }}
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_SECURITY_AUDIT: ${{ steps.ai_engine.outputs.engine || 'codex' }}
+          CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || '' }}
+          # A refused Claude reply (malformed_output / schema_mismatch) keeps its
+          # first 64 KiB here for diagnosis (Refs #8204). runner.temp is outside
+          # both checkouts, so the audited branch cannot pre-create this path.
+          SECURITY_AUDIT_CLAUDE_REJECTED_OUT: ${{ runner.temp }}/security-audit-claude-rejected.txt
+          # Single-issue security pass (stuck-states P5a): surviving findings
+          # for the PR report, which stores them for the next delta re-audit.
+          SECURITY_AUDIT_PASS_FINDINGS_OUT: ${{ inputs.pr_number != '' && format('{0}/single-pass-findings.json', runner.temp) || '' }}
+          # Single-issue security pass (stuck-states P5b): a PR audit files one
+          # consolidated follow-up per cycle; the helper re-validates the PR
+          # number and falls back to one issue per finding. 'false' restores
+          # one issue per finding.
+          SECURITY_AUDIT_PASS_PR_NUMBER: ${{ inputs.pr_number || '' }}
+          SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED || 'true' }}
+        run: |
+          set -euo pipefail
+          # The single-issue security pass reads the summary line from this log.
+          security_audit_rc=0
+          bash "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/security_audit.sh" 2>&1 | tee "${RUNNER_TEMP}/security_audit_run.log" || security_audit_rc=$?
+          if [ "${security_audit_rc}" -eq 80 ]; then
+            # Claude capacity wait (issue #7370): no codex and no result. The
+            # report step skips, so a single-issue pass stays pending and is
+            # re-dispatched once its pending marker goes stale; the scheduled
+            # audit runs again on its next trigger.
+            echo "AI_ENGINE_CAPACITY_WAIT role=SECURITY_AUDIT outcome=deferred stage=security_audit"
+            echo "CLAUDE_CAPACITY_WAIT=true" >> "${GITHUB_ENV}"
+            exit 0
+          fi
+          exit "${security_audit_rc}"
+
+      - name: Upload rejected Claude audit reply
+        # Diagnostics for a refused malformed_output / schema_mismatch reply
+        # (Refs #8204). The kept reply is raw model text about this repository's
+        # code, so it is uploaded only for private repositories, only when the
+        # job failed, and kept for at most 3 days. SECURITY_AUDIT_REPO_PRIVATE is
+        # set by "Resolve audit target" from the event payload's repository
+        # object, with one repository read only as a fail-closed fallback.
+        if: failure() && env.SECURITY_AUDIT_REPO_PRIVATE == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: security-audit-claude-rejected-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/security-audit-claude-rejected.txt
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Report single-issue security pass
+        # Port P1 (replace-claude-sessions plan, Phase 8a): an audit dispatched
+        # for a standalone PR posts its result on the PR (clean, findings or
+        # failed, for the audited commit) and re-runs that PR's review on
+        # clean, failed or unverifiable finding IDs. Never fails the run.
+        if: always() && inputs.pr_number != '' && env.AUDIT_DATA_SHA != '' && env.CLAUDE_CAPACITY_WAIT != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ env.AUDIT_DEFAULT_BRANCH }}
+          SECURITY_PASS_PR_NUMBER: ${{ inputs.pr_number }}
+          SECURITY_PASS_AUDIT_OUTCOME: ${{ steps.run_security_audit.outcome }}
+          SECURITY_PASS_AUDIT_BRANCH: ${{ env.AUDIT_BRANCH }}
+          SECURITY_PASS_AUTHOR_LOGIN_FALLBACK: ${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}
+          MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
+          # Stuck-states P5a delta carry-forward. SECURITY_PASS_DELTA_SINCE and
+          # SECURITY_PASS_PRIOR_FINDINGS_FILE arrive through GITHUB_ENV from
+          # "Resolve single-issue security pass delta".
+          SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}
+          SECURITY_PASS_FINDINGS_FILE: ${{ format('{0}/single-pass-findings.json', runner.temp) }}
+          SECURITY_PASS_MAX_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_MAX_AUDIT_ATTEMPTS || '' }}
+        run: |
+          set -uo pipefail
+          SECURITY_PASS_HEAD_SHA="${AUDIT_DATA_SHA}"
+          SECURITY_PASS_FINDINGS=""
+          SECURITY_PASS_FINDING_IDS_B64=""
+          audit_log="${RUNNER_TEMP}/security_audit_run.log"
+          if [ -s "${audit_log}" ]; then
+            audit_summary="$(sed -n '/^security-audit: tracker=#[0-9]* findings=[0-9][0-9]* followups_created=/p' "${audit_log}" | tail -n 1)"
+            SECURITY_PASS_FINDINGS="$(printf '%s\n' "${audit_summary}" | sed -n 's/^security-audit: tracker=#[0-9]* findings=\([0-9][0-9]*\) followups_created=.*$/\1/p')"
+            SECURITY_PASS_FINDING_IDS_B64="$(printf '%s\n' "${audit_summary}" | sed -n 's/^security-audit: tracker=#[0-9]* findings=[0-9][0-9]* followups_created=[0-9][0-9]* finding_ids_b64=\([A-Za-z0-9+/=]*\)$/\1/p')"
+          fi
+          export SECURITY_PASS_HEAD_SHA SECURITY_PASS_FINDINGS SECURITY_PASS_FINDING_IDS_B64
+          if [ ! -f "${GITHUB_WORKSPACE}/scripts/review_single_issue_security_pass.sh" ]; then
+            echo "::warning::review_single_issue_security_pass.sh is not in the audit support checkout; PR #${SECURITY_PASS_PR_NUMBER} gets no result."
+            exit 0
+          fi
+          bash "${GITHUB_WORKSPACE}/scripts/review_single_issue_security_pass.sh" report
+      # Synced-file security findings (issue #7623, project #7604 Phase 2): in a
+      # consumer repository, send the audit's high/critical findings on synced
+      # files that are byte-identical to the release to coding-workflows' heal
+      # intake, as one OIDC-bound report with six fields per finding. Runs only
+      # the copy in the trusted support checkout; never fails the audit.
+      - name: Report synced-file security findings upstream
+        if: always() && github.repository != 'shubhodeep1/coding-workflows' && env.CLAUDE_CAPACITY_WAIT != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+          SECURITY_AUDIT_UPSTREAM_REPORT_ENABLED: ${{ vars.SECURITY_AUDIT_UPSTREAM_REPORT_ENABLED || 'true' }}
+          REPORT_WRAPPER_SHA: ${{ steps.resolve_support.outputs.support_sha }}
+          WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+        run: |
+          upstream_report="${GITHUB_WORKSPACE}/scripts/security_audit_upstream_report.sh"
+          if [ -f "${upstream_report}" ] && [ ! -L "${upstream_report}" ]; then
+            bash "${upstream_report}" || true
+          else
+            echo "::warning::SECURITY_AUDIT_UPSTREAM_REPORT skip reason=support_missing"
+          fi
+      # Plan item 3e (D1): report every refused (non-capacity) Claude fallback
+      # recorded by scripts/ai_engine.sh in this job's RUNNER_TEMP as a
+      # workflow-failure-heal dispatch plus one Telegram WARNING. Runs only
+      # the copy in the trusted support checkout, never a PR-head script.
+      - name: Report refused AI engine fallbacks
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+          REPORT_WORKFLOW_NAME: ${{ github.workflow }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+        run: |
+          fallback_support_dir="${GITHUB_WORKSPACE}"
+          fallback_report="${fallback_support_dir}/scripts/ai_engine_fallback_report.sh"
+          if [ -n "${fallback_support_dir}" ] && [ -f "${fallback_report}" ] && [ ! -L "${fallback_report}" ]; then
+            REPORT_WRAPPER_SHA="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${fallback_support_dir}" rev-parse HEAD 2>/dev/null || true)" \
+              bash "${fallback_report}" || true
+          else
+            echo "::warning::AI_ENGINE_FALLBACK_REPORT skip reason=support_missing"
+          fi

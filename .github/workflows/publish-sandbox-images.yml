@@ -1,0 +1,95 @@
+name: Publish sandbox images
+
+# Prebuilds the sandbox images that scripts/sandbox_image.sh pulls (clarify,
+# review and codex_isolated_exec.sh's generated context, each with and
+# without the Claude CLI) and pushes them to
+# ghcr.io/shubhodeep1/coding-workflows-sandbox, tagged by an input hash.
+#
+# - push to main or stable that touches an image input: publish the tags
+#   that ref's scripts resolve; existing tags are left alone.
+# - weekly schedule: rebuild and re-push main's and stable's tags (--force)
+#   so the images pick up Debian and base-image security updates.
+# - workflow_dispatch: either ref set, optionally forced.
+#
+# Consumer repos run the scripts from the @stable ref, so stable's inputs are
+# published too. A job that finds no tag builds locally, as before.
+# The package must be public for consumer repos to pull anonymously.
+
+"on":
+  push:
+    branches: [main, stable]
+    paths:
+      - scripts/sandbox_image.sh
+      - scripts/sandbox_images_publish.sh
+      - scripts/clarify_sandbox/**
+      - scripts/review_sandbox/**
+      - scripts/codex_isolated_exec.sh
+      - scripts/claude_engine.py
+      - .github/ai/claude_engine.json
+      - .github/workflows/publish-sandbox-images.yml
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild and re-push tags that already exist
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-sandbox-images
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # workflow_dispatch runs the workflow file from the dispatched ref and
+    # takes no `branches:` filter, so a dispatch from any branch other than
+    # main would run unreviewed steps with packages: write. Only main's copy
+    # may publish on dispatch. (Branch protection and package access remain
+    # the boundary against a writer who adds a new workflow of their own.)
+    if: github.repository == 'shubhodeep1/coding-workflows' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        ref: ${{ github.event_name == 'push' && fromJSON(format('["{0}"]', github.ref_name)) || fromJSON('["main","stable"]') }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ matrix.ref }}
+          persist-credentials: false
+
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_USER: ${{ github.actor }}
+        run: printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin
+
+      - name: Publish sandbox images
+        env:
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          OPENCODE_VERSION: ${{ vars.OPENCODE_VERSION || '1.18.23' }}
+          PUBLISH_FORCE: ${{ github.event_name == 'schedule' || inputs.force == true }}
+          PUBLISH_REF: ${{ matrix.ref }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          if [ ! -f scripts/sandbox_images_publish.sh ]; then
+            echo "::notice::${PUBLISH_REF} has no scripts/sandbox_images_publish.sh yet; nothing to publish."
+            exit 0
+          fi
+          if [ "${PUBLISH_FORCE}" = true ]; then
+            bash scripts/sandbox_images_publish.sh --force
+          else
+            bash scripts/sandbox_images_publish.sh
+          fi
+
+      - name: Log out of GHCR
+        if: always()
+        run: docker logout ghcr.io || true

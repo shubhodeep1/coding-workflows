@@ -1,0 +1,18 @@
+{
+  "name": "child_integration_wins_over_target_alias",
+  "issues": {
+    "101": {
+      "body": "**Target branch:** `orchestrator/project-alias`\n\n- Tracking issue: #1047\n- Integration branch: `orchestrator/project-canonical`\n"
+    },
+    "1047": {
+      "body": "## Project: Tracking\n**Integration branch:** `orchestrator/project-tracking`\n"
+    }
+  },
+  "branch_exists": {
+    "orchestrator/project-alias": true,
+    "orchestrator/project-canonical": true,
+    "orchestrator/project-tracking": true
+  },
+  "expected_stdout": "orchestrator/project-canonical",
+  "expected_exit_code": 0
+}

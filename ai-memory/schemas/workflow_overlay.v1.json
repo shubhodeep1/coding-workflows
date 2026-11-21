@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/workflow_overlay.v1.json",
+  "title": "WorkflowOverlayV1",
+  "description": "YAML front-matter payload for .github/ai/WORKFLOW.md prompt overrides.",
+  "$comment": "An empty object is valid so a WORKFLOW.md file may contain body-only Markdown without changing runtime behavior.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "workflow_overlay.v1"
+    },
+    "prompt_overrides": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "mode"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$"
+          },
+          "append_path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "replace_path": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "append_path"
+            ],
+            "not": {
+              "required": [
+                "replace_path"
+              ]
+            }
+          },
+          {
+            "required": [
+              "replace_path"
+            ],
+            "not": {
+              "required": [
+                "append_path"
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "minProperties": 1
+      },
+      "then": {
+        "required": [
+          "schema_version"
+        ]
+      }
+    }
+  ]
+}

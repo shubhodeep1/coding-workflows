@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CANARY_TOOLS=(
+{% for tool in slots.canary_tools %}
+	'{{ tool | replace("'", "'\"'\"'") }}'
+{% endfor %}
+)
+echo "1..{{ slots.canary_tools | length }}"
+
+test_id=1
+for tool in "${CANARY_TOOLS[@]}"; do
+	if ! command -v "${tool}" >/dev/null 2>&1; then
+		echo "not ok ${test_id} - canary tool available: ${tool}"
+		echo "# missing required canary tool: ${tool}"
+		exit 1
+	fi
+	echo "ok ${test_id} - canary tool available: ${tool}"
+	test_id=$((test_id + 1))
+done

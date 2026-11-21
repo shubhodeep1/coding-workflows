@@ -1,0 +1,321 @@
+#!/usr/bin/env bash
+# Refuse heal implementation unless the intake-authored, unedited scope is verifiable.
+set -euo pipefail
+# Signed job-token comments (run-volume plan item 15): route this script's
+# gh comment calls through the shim even when no earlier step loaded it.
+[ -z "${BASH_SOURCE[0]:-}" ] || AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" >/dev/null 2>&1 || true
+
+# Resolve the sibling helper from this script's own directory (the verified
+# support bundle, or the checkout's scripts/ under the kill switch), never the cwd.
+heal_py="${WORKFLOW_HEAL_PY:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/workflow_failure_heal.py}"
+issue_json="${ISSUE_META_FILE:?}"
+
+# Extra key=value log fields set by the support-ref check (expected/actual
+# ref and SHA). Only script-validated values are ever placed here.
+refuse_context=""
+# Extra markdown appended to the refusal comment after the marker. Empty for
+# every reason except repro_not_fixed, so existing comments are unchanged.
+refuse_body_extra=""
+
+refuse()
+{
+	local reason="$1"
+	# `detail` is always a fixed word chosen by this script; it splits the
+	# broad `unavailable` reason into distinct causes without renaming it.
+	local detail="${2:-}"
+	local detail_field="" detail_text="${reason}" context_field=""
+	if [ -n "${detail}" ]; then
+		detail_field=" detail=${detail}"
+		detail_text="${reason}: ${detail}"
+	fi
+	if [ -n "${refuse_context}" ]; then
+		context_field=" ${refuse_context}"
+	fi
+	echo "HEAL_SCOPE_REFUSED issue=${ISSUE_NUMBER:-unknown} reason=${reason}${detail_field}${context_field}"
+	# errexit is suspended in a function reached through `|| refuse`, so each
+	# write is checked: a missing skip flag, marker or latch must fail the job.
+	# Never allow another editor path to run after a failed authorization read.
+	if ! echo 'SKIP_IMPLEMENT=true' >> "${GITHUB_ENV}"; then
+		echo "::error::HEAL_SCOPE_REFUSED issue=${ISSUE_NUMBER:-unknown} reason=${reason} outcome=skip_flag_failed" >&2
+		exit 1
+	fi
+	if ! gh issue comment "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body "Workflow heal scope verification failed (${detail_text}); implementation was refused. <!-- ai:workflow-heal-scope-unverified:v1 reason=${reason}${detail_field} -->${refuse_body_extra}" >/dev/null; then
+		echo "::error::HEAL_SCOPE_REFUSED issue=${ISSUE_NUMBER:-unknown} reason=${reason} outcome=comment_failed" >&2
+		exit 1
+	fi
+	# Comment first: the label event starts the reporter immediately, which
+	# must already see the authenticated refusal marker to skip re-healing.
+	if ! gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --add-label 'ai:needs-human' >/dev/null; then
+		echo "::error::HEAL_SCOPE_REFUSED issue=${ISSUE_NUMBER:-unknown} reason=${reason} outcome=label_failed" >&2
+		exit 1
+	fi
+	exit 0
+}
+
+if [ "${1:-}" = refuse ] && [ "${2:-}" = out_of_heal_scope ]; then
+	refuse out_of_heal_scope
+fi
+# Heal reproduction check (Refs #8434, P2 step 8): heal_isolated_implement.sh
+# exits 43 when a [repro-required] heal's tests do not fail at the failing SHA
+# and pass on the edited tree; implement.yml maps that to this refusal. The
+# result file (heal_implement_repro.v1) is trusted runner temp written by that
+# script, but its test ids come from the model-written plan: every value is
+# reduced to a fixed token, a 40-hex SHA or an escaped, truncated test id.
+if [ "${1:-}" = refuse ] && [ "${2:-}" = repro_not_fixed ]; then
+	repro_result_file="${HEAL_REPRO_RESULT_FILE:-${RUNNER_TEMP:-/tmp}/heal-repro-result-${GITHUB_RUN_ID:-local}.json}"
+	repro_detail=result_unavailable
+	repro_rendered=""
+	if [ -f "${repro_result_file}" ] && [ ! -L "${repro_result_file}" ]; then
+		repro_rendered="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c '
+import json, re, sys
+try:
+	with open(sys.argv[1], encoding="utf-8") as handle:
+		data = json.load(handle)
+except (OSError, ValueError):
+	sys.exit(1)
+if not isinstance(data, dict) or data.get("schema") != "heal_implement_repro.v1":
+	sys.exit(1)
+outcome = data.get("outcome")
+if outcome not in ("not_fixed", "unverified"):
+	sys.exit(1)
+def tok(value):
+	text = re.sub(r"[^a-z0-9_]", "", value if isinstance(value, str) else "")[:64]
+	return text or "unknown"
+def tid(value):
+	text = value if isinstance(value, str) else ""
+	text = re.sub(r"[`<>@|\x00-\x1f\x7f\u200b-\u200f\u2028\u2029\ufeff]", "", text)[:200]
+	return text or "(empty)"
+sha = data.get("failing_sha")
+sha = sha if isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{40}", sha) else "unknown"
+tests = [t for t in data.get("tests") or [] if isinstance(t, dict)] if isinstance(data.get("tests"), list) else []
+lines = [outcome, "", "", "**Heal reproduction check**", "",
+	"- Outcome: `%s`" % outcome, "- Reason: `%s`" % tok(data.get("reason")), "- Failing SHA: `%s`" % sha]
+for item in tests[:20]:
+	lines.append("- `%s` - at failing SHA: %s; on edited tree: %s" % (tid(item.get("test")), tok(item.get("at_failing_sha")), tok(item.get("on_edited_tree"))))
+if len(tests) > 20:
+	lines.append("- ... and %d more" % (len(tests) - 20))
+print("\n".join(lines))
+' "${repro_result_file}" 2>/dev/null)" || repro_rendered=""
+	fi
+	case "${repro_rendered%%$'\n'*}" in
+		not_fixed|unverified)
+			repro_detail="${repro_rendered%%$'\n'*}"
+			refuse_body_extra="${repro_rendered#*$'\n'}"
+			;;
+		*)
+			refuse_body_extra=$'\n\n**Heal reproduction check**\n\n- Outcome: `result_unavailable`'
+			;;
+	esac
+	refuse repro_not_fixed "${repro_detail}"
+fi
+echo 'HEAL_ROUTE=false' >> "${GITHUB_ENV:?}"
+# The checkout-context step empties ISSUE_META_FILE when its metadata fetch
+# fails transiently (and continues). Re-read the issue once here so ordinary
+# issues are not refused for a blip; a failed re-read still fails closed below.
+if [ ! -s "${issue_json}" ] && [[ "${ISSUE_NUMBER:-}" =~ ^[1-9][0-9]*$ ]] && [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+	refetched_issue_json="$(mktemp "${RUNNER_TEMP:-/tmp}/heal-issue-meta.XXXXXXXX")"
+	if gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" > "${refetched_issue_json}" 2>/dev/null; then
+		issue_json="${refetched_issue_json}"
+	fi
+fi
+# Capture the classifier's exit status: a crash must not read as "not a heal
+# issue" and send a heal issue down the ordinary host-editor route.
+if ! heal_route="$(PYTHONDONTWRITEBYTECODE=1 python3 "${heal_py}" heal-route --issue-json "${issue_json}")"; then
+	echo "::error::HEAL_SCOPE_REFUSED issue=${ISSUE_NUMBER:-unknown} reason=classification_failed" >&2
+	echo 'SKIP_IMPLEMENT=true' >> "${GITHUB_ENV}"
+	exit 1
+fi
+if [ "${heal_route}" != true ]; then
+	exit 0
+fi
+
+[[ "${ISSUE_NUMBER:-}" =~ ^[1-9][0-9]*$ ]] || refuse malformed
+[[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || refuse malformed
+identity="$(gh api user --jq .login 2>/dev/null)" || refuse unavailable identity_unavailable
+[ -n "${identity}" ] || refuse unavailable identity_empty
+owner="${GITHUB_REPOSITORY%%/*}"
+repo="${GITHUB_REPOSITORY#*/}"
+# REST issues/<n> cannot provide lastEditedAt. This single GraphQL read binds
+# body, labels, author and edit status to the same authoritative snapshot.
+live="$(gh api graphql -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){body lastEditedAt author{login} labels(first:100){nodes{name}}}}}' -f owner="${owner}" -f repo="${repo}" -F number="${ISSUE_NUMBER}" 2>/dev/null)" || refuse unavailable issue_read_failed
+verified="$(printf '%s' "${live}" | jq -c --arg login "${identity}" '{body: .data.repository.issue.body, last_edited_at: .data.repository.issue.lastEditedAt, author_login: .data.repository.issue.author.login, labels: [.data.repository.issue.labels.nodes[].name], pipeline_login: $login}' | PYTHONDONTWRITEBYTECODE=1 python3 "${heal_py}" heal-scope verify --input-json /dev/stdin)" || refuse unavailable scope_verify_failed
+status="$(printf '%s' "${verified}" | jq -r '.status')"
+# Unblock fix-up #7444 (for #7434): the plan gate's pipeline grant (Q108) or the
+# poller's PATCH edits the heal issue body, which sets lastEditedAt and made
+# every such issue `edited`. With HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED on
+# (unset, empty or `true`), an edited body is accepted only when its whole edit
+# history was written by the pipeline login and every revision carries the
+# identical scope marker. Anything else, including a failed read, still
+# refuses with reason=edited and a fixed-word detail.
+heal_edit_fix_enabled()
+{
+	local value
+	value="$(printf '%s' "${HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
+	case "${value}" in
+		''|true) return 0 ;;
+		false) return 1 ;;
+		*)
+			echo "::warning::HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED has invalid value; treating as off"
+			return 1
+			;;
+	esac
+}
+if [ "${status}" = edited ] && heal_edit_fix_enabled; then
+	# §14: REST exposes no edit history, and the read above does not request it,
+	# so issues that are not edited keep their single read. Re-reading the body
+	# in this call binds the verified body to the same history snapshot.
+	edits_live="$(gh api graphql -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){body lastEditedAt author{login} labels(first:100){nodes{name}} userContentEdits(first:100){totalCount pageInfo{hasNextPage} nodes{editor{login} deletedAt diff}}}}}' -f owner="${owner}" -f repo="${repo}" -F number="${ISSUE_NUMBER}" 2>/dev/null)" || refuse edited edit_history_unavailable
+	edits_verified="$(printf '%s' "${edits_live}" | jq -c --arg login "${identity}" '.data.repository.issue as $i | {body: $i.body, author_login: $i.author.login, labels: [$i.labels.nodes[].name], pipeline_login: $login, edits: $i.userContentEdits.nodes, edits_total: $i.userContentEdits.totalCount, edits_has_next_page: $i.userContentEdits.pageInfo.hasNextPage}' | PYTHONDONTWRITEBYTECODE=1 python3 "${heal_py}" heal-scope verify-edits --input-json /dev/stdin)" || refuse edited edit_history_unavailable
+	edits_status="$(printf '%s' "${edits_verified}" | jq -r '.status // ""' 2>/dev/null)" || refuse edited edit_history_unavailable
+	if [ "${edits_status}" = verified ]; then
+		edits_count="$(printf '%s' "${edits_verified}" | jq -r '.pipeline_edits // ""' 2>/dev/null || true)"
+		[[ "${edits_count}" =~ ^[0-9]+$ ]] || refuse edited edit_history_unavailable
+		verified="${edits_verified}"
+		status=verified
+		echo "HEAL_SCOPE_PIPELINE_EDIT_ACCEPTED issue=${ISSUE_NUMBER} edits=${edits_count}"
+	else
+		edits_detail="$(printf '%s' "${edits_verified}" | jq -r '.detail // ""' 2>/dev/null || true)"
+		case "${edits_detail}" in
+			edit_history_unavailable|edit_history_redacted|editor_untrusted|marker_changed) ;;
+			*) edits_detail=unknown ;;
+		esac
+		refuse edited "${edits_detail}"
+	fi
+fi
+[ "${status}" = verified ] || refuse "${status}"
+
+scope_file="${RUNNER_TEMP:-/tmp}/heal-scope-${GITHUB_RUN_ID:-local}.txt"
+printf '%s' "${verified}" | jq -r '.paths[]' > "${scope_file}"
+# The issue's own agents.md fragment (CLAUDE.md §30, #8064): the marker only
+# carries tests/** and changelog.d/*.md. Same entry as the heal plan gate's
+# heal_own_agents_fragment_entry; review_untrusted_workspace.py accepts it.
+if [[ "${ISSUE_NUMBER:-}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+	printf 'agents.d/%s-*.md\n' "${ISSUE_NUMBER}" >> "${scope_file}"
+fi
+# Test-only heal approval lock (#8809). When the latest plan was auto-approved
+# as test-only, a trusted <!-- ai:heal-test-only-approval:v1 --> marker names
+# its exact tests/ and changelog.d/*.md paths. The scope file is narrowed to
+# those paths (already intersected with the verified heal scope), so the
+# isolated editor's transfer and the commit guard both bind to them, and
+# HEAL_TEST_ONLY_LOCK_FILE turns on heal_isolated_implement.sh's weakening
+# check. No marker keeps the heal scope as before; an unreadable comments
+# file or an invalid marker refuses. ISSUE_COMMENTS_FILE unset (legacy
+# callers) skips the lock: implement.yml always fills it before this step.
+scope_guard_py="${FILES_TOUCHED_SCOPE_GUARD_PY:-scripts/files_touched_scope_guard.py}"
+if [ -n "${ISSUE_COMMENTS_FILE:-}" ]; then
+	jq -e 'type == "array"' "${ISSUE_COMMENTS_FILE}" >/dev/null 2>&1 || refuse unavailable comments_unreadable
+	test_only_lock_file="${RUNNER_TEMP:-/tmp}/heal-test-only-lock-${GITHUB_RUN_ID:-local}.txt"
+	rm -f "${test_only_lock_file}"
+	test_only_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${scope_guard_py}" --heal-test-only-lock-scope \
+		--comments-file "${ISSUE_COMMENTS_FILE}" --issue-number "${ISSUE_NUMBER}" --pipeline-login "${identity}" \
+		--heal-scope-file "${scope_file}" --lock-out "${test_only_lock_file}" 2>/dev/null)" || refuse unavailable test_only_lock_invalid
+	test_only_status="$(printf '%s' "${test_only_json}" | jq -r '.status // ""' 2>/dev/null || true)"
+	case "${test_only_status}" in
+		none)
+			echo "AI_PHASE_GATE_V1 phase=implement gate=heal_test_only outcome=none issue=${ISSUE_NUMBER}"
+			;;
+		locked)
+			test_only_plan="$(printf '%s' "${test_only_json}" | jq -r '.plan_comment // ""' 2>/dev/null | tr -cd '0-9' || true)"
+			test_only_count="$(printf '%s' "${test_only_json}" | jq -r '.count // ""' 2>/dev/null | tr -cd '0-9' || true)"
+			[ -s "${test_only_lock_file}" ] || refuse unavailable test_only_lock_invalid
+			cp "${test_only_lock_file}" "${scope_file}" || refuse unavailable test_only_lock_invalid
+			chmod 0444 "${test_only_lock_file}" || refuse unavailable test_only_lock_invalid
+			echo "HEAL_TEST_ONLY_LOCK_FILE=${test_only_lock_file}" >> "${GITHUB_ENV}" || refuse unavailable test_only_lock_env_failed
+			echo "AI_PHASE_GATE_V1 phase=implement gate=heal_test_only outcome=locked plan_comment=${test_only_plan:-unknown} paths=${test_only_count:-0} issue=${ISSUE_NUMBER}"
+			;;
+		*)
+			refuse unavailable test_only_lock_invalid
+			;;
+	esac
+fi
+chmod 0444 "${scope_file}"
+# The support checkout is separate from the editor's writable source copy.
+support="${GITHUB_WORKSPACE:?}/.codex-workflow-src"
+[ -d "${support}/scripts" ] || refuse unavailable support_missing
+# Read the support checkout itself (#7193). implement.yml's "Activate
+# workspace shell context" step exports GIT_DIR / GIT_WORK_TREE for the
+# primary workspace, and an exported GIT_DIR overrides `git -C` discovery, so
+# every read below would otherwise see the workspace branch, not
+# .codex-workflow-src. Same variable set tests/conftest.py strips.
+support_git()
+{
+	env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR \
+		-u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
+		-u GIT_CEILING_DIRECTORIES git -C "${support}" "$@"
+}
+# A support directory without its own .git would let discovery walk up to the
+# workspace repository; require the support checkout to be its own top level.
+support_top="$(support_git rev-parse --show-toplevel 2>/dev/null)" || refuse unavailable support_not_repository
+support_real="$(cd "${support}" && pwd -P)" || refuse unavailable support_not_repository
+if [ -z "${support_top}" ] || [ "${support_top}" != "${support_real}" ]; then
+	refuse unavailable support_not_repository
+fi
+support_head="$(support_git rev-parse HEAD 2>/dev/null)" || refuse unavailable support_head_unreadable
+expected_ref="${SCRIPT_REF:-main}"
+# Only a charset-checked ref is ever logged; anything else shows as `invalid`.
+if [[ "${expected_ref}" =~ ^[A-Za-z0-9._/-]{1,100}$ ]]; then
+	expected_ref_shown="${expected_ref}"
+else
+	expected_ref_shown="invalid"
+fi
+actual_sha_shown="unresolved"
+if [[ "${support_head}" =~ ^[0-9a-f]{40}$ ]]; then
+	actual_sha_shown="${support_head}"
+fi
+# The primary checkout of a SHA leaves a detached HEAD and a checkout of
+# `stable` creates only refs/heads/stable, so a local `main` branch exists only
+# when implement.yml's "Checkout workflow support source fallback" step ran.
+# Report that fallback; it is still refused unless the SHAs really match.
+support_fallback=false
+if [ "${expected_ref}" != main ] && support_git rev-parse --verify -q "refs/heads/main^{commit}" >/dev/null 2>&1; then
+	support_fallback=true
+fi
+set_support_context()
+{
+	local expected_sha_shown="unresolved"
+	if [[ "${1:-}" =~ ^[0-9a-f]{40}$ ]]; then
+		expected_sha_shown="$1"
+	fi
+	refuse_context="expected_ref=${expected_ref_shown} expected_sha=${expected_sha_shown} actual_sha=${actual_sha_shown} fallback=${support_fallback}"
+}
+refuse_support_ref()
+{
+	local detail="$1"
+	if [ "${support_fallback}" = true ]; then
+		detail=support_ref_fallback
+	fi
+	echo "::error::Heal support ref check failed detail=${detail} ${refuse_context}" >&2
+	refuse unavailable "${detail}"
+}
+expected_head=""
+set_support_context ""
+case "${expected_ref}" in
+	# `stable` is both a branch and a release tag in coding-workflows, and
+	# actions/checkout fetches both; a bare `stable` resolves to the tag
+	# (refs/tags precedes refs/heads), which lags the checked-out branch tip.
+	# Resolve the local branch actions/checkout created, unambiguously.
+	main|stable) expected_head="$(support_git rev-parse --verify -q "refs/heads/${expected_ref}^{commit}" 2>/dev/null)" || refuse_support_ref support_ref_unresolved ;;
+	*)
+		if [[ ! "${expected_ref}" =~ ^[0-9a-f]{40}$ ]]; then
+			echo "::error::Heal support ref check failed detail=support_ref_invalid ${refuse_context}" >&2
+			refuse unavailable support_ref_invalid
+		fi
+		expected_head="${expected_ref}"
+		;;
+esac
+set_support_context "${expected_head}"
+[ "${support_head}" = "${expected_head}" ] || refuse_support_ref support_ref_mismatch
+echo "::notice::Heal support ref verified ${refuse_context}"
+if [ "${support_fallback}" = true ]; then
+	echo "::warning::Heal support source came from the main fallback checkout ${refuse_context}"
+fi
+trusted_root="${RUNNER_TEMP:-/tmp}/heal-trusted-support-${GITHUB_RUN_ID:-local}"
+mkdir -p "${trusted_root}"
+cp -a "${support}/scripts" "${trusted_root}/scripts"
+chmod -R a-w "${trusted_root}/scripts"
+echo 'HEAL_ROUTE=true' >> "${GITHUB_ENV}"
+echo "HEAL_SCOPE_FILE=${scope_file}" >> "${GITHUB_ENV}"
+echo "HEAL_TRUSTED_SUPPORT_DIR=${trusted_root}/scripts" >> "${GITHUB_ENV}"
+HEAL_EVIDENCE_FILE="${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}/heal_evidence.md" \
+	WORKFLOW_HEAL_PY="${trusted_root}/scripts/workflow_failure_heal.py" \
+	bash "${trusted_root}/scripts/workflow_failure_heal_evidence.sh"

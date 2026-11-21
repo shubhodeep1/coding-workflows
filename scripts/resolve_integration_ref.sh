@@ -1,0 +1,1030 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+FIXTURE_DIR="${REPO_ROOT}/tests/fixtures/integration_ref_resolver"
+CI_TRIAGE_FIXTURE_DIR="${REPO_ROOT}/tests/fixtures/integration_ref_resolver_ci_triage"
+
+# Rate-limit-aware reads (issue #5873 / #6634): use gh_api_retry from the
+# sibling gh_helpers.sh (the same trusted staged copy as this script) when it
+# is present; otherwise fall back to a plain `gh api` call. A read that stays
+# rate-limited exits 75 so callers fail loudly instead of resolving to the
+# default branch.
+if [ -f "${SCRIPT_DIR}/gh_helpers.sh" ]; then
+	# shellcheck disable=SC1091
+	source "${SCRIPT_DIR}/gh_helpers.sh" || true
+fi
+
+_resolver_rate_limited() {
+	echo "::error::INTEGRATION_REF_RESOLVE outcome=rate_limited what=$1" >&2
+	exit 75
+}
+
+extract_integration_branch() {
+	local body="${1:-}"
+	printf '%s\n' "${body}" | python3 -c '
+import re
+import sys
+
+body = sys.stdin.read()
+pattern = re.compile(r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$", re.MULTILINE)
+match = pattern.search(body)
+if match:
+	print(match.group(1).strip())
+	sys.exit(0)
+# "Target branch:" is an accepted alias for human-authored issues that name
+# the branch they must be planned and implemented against (issue #4075 used
+# `**Target branch:** `orchestrator/project-3965` (integration branch ...)`,
+# which the canonical parser above does not recognise, so planning checked
+# out main and blocked). The backticked form may carry trailing prose; the
+# plain form is a single whitespace-free token. The canonical
+# "Integration branch:" line always wins when both are present. Keep in
+# sync with TARGET_BRANCH_LINE_RE in scripts/orchestrate_lib.py.
+alias_pattern = re.compile(r"^\s*(?:-\s*)?(?:\*\*Target branch:\*\*|Target branch:)\s*(?:`\s*([^`\n]+?)\s*`(?:\s.*)?|([^`\s]+))\s*$", re.MULTILINE)
+alias_match = alias_pattern.search(body)
+if not alias_match:
+	sys.exit(0)
+print((alias_match.group(1) or alias_match.group(2) or "").strip())
+'
+}
+
+extract_tracking_issue() {
+	local body="${1:-}"
+	printf '%s\n' "${body}" | python3 -c '
+import re
+import sys
+
+body = sys.stdin.read()
+pattern = re.compile(r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$", re.MULTILINE)
+match = pattern.search(body)
+if not match:
+	sys.exit(0)
+print(match.group(1))
+'
+}
+
+get_issue_body() {
+	local issue_num="$1" body rc=0
+	if ! type gh_api_retry >/dev/null 2>&1; then
+		gh api "repos/${REPO}/issues/${issue_num}" --jq '.body // ""'
+		return $?
+	fi
+	body="$(gh_api_retry "repos/${REPO}/issues/${issue_num}" --jq '.body // ""')" || rc=$?
+	if [ "${rc}" -eq 75 ]; then
+		_resolver_rate_limited "issue-${issue_num}"
+	fi
+	if [ "${rc}" -ne 0 ]; then
+		# Exit 2 = API failure (transient retries exhausted or a permanent
+		# error), like branch_exists; exit 1 stays "declared branch missing".
+		echo "::error::INTEGRATION_REF_RESOLVE outcome=api_unavailable what=issue-${issue_num} rc=${rc}" >&2
+		exit 2
+	fi
+	printf '%s\n' "${body}"
+}
+
+branch_exists() {
+	local ref_name="$1"
+	local encoded_ref
+	local err
+	encoded_ref="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${ref_name}")"
+	if type gh_api_retry >/dev/null 2>&1; then
+		# Called outside a subshell so GH_API_RETRY_LAST_STATUS is visible.
+		local err_file rc=0
+		err_file="$(mktemp)"
+		gh_api_retry "repos/${REPO}/git/ref/heads/${encoded_ref}" >/dev/null 2>"${err_file}" || rc=$?
+		err="$(cat "${err_file}" 2>/dev/null || true)"
+		rm -f "${err_file}"
+		if [ "${rc}" -eq 0 ]; then
+			return 0
+		fi
+		if [ "${GH_API_RETRY_LAST_STATUS:-}" = "404" ]; then
+			return 1
+		fi
+		if [ "${rc}" -eq 75 ]; then
+			_resolver_rate_limited "branch"
+		fi
+		echo "::error::Failed to verify integration branch '${ref_name}': ${err}" >&2
+		exit 2
+	fi
+	if err="$(gh api "repos/${REPO}/git/ref/heads/${encoded_ref}" 2>&1)"; then
+		return 0
+	fi
+	if printf '%s' "${err}" | grep -Eq '404|Not Found'; then
+		return 1
+	fi
+
+	echo "::error::Failed to verify integration branch '${ref_name}': ${err}" >&2
+	exit 2
+}
+
+# --- CI-triage PR-branch routing (CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED) ------
+# On by default: unset, empty, `true`, `1`, `yes` or `on` route; `false`,
+# `0`, `no` or `off` turn it off; any other value turns it off with a
+# ::warning::. When on, an `ai:check-triage` issue filed by
+# scripts/check_failure_triage.sh resolves to the head branch of the PR whose
+# check failed, after verifying the label, the canonical marker header, a
+# trusted author, the body's PR line, the live PR (open, same repository,
+# matching head ref) and the branch itself. Any verification failure returns
+# 3: callers must fail closed instead of falling back to the default branch.
+# Log prefix: CI_TRIAGE_PR_BRANCH_ROUTING.
+CI_TRIAGE_REFUSED_RC=3
+
+ci_triage_routing_enabled() {
+	local raw="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}"
+	case "${raw,,}" in
+		true|1|yes|on) return 0 ;;
+		false|0|no|off) return 1 ;;
+		*)
+			echo "::warning::CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED has an unrecognised value; CI-triage PR-branch routing is off. Use true or false." >&2
+			return 1
+			;;
+	esac
+}
+
+# --- CI-triage prose-marker skip (CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED) -----
+# On by default (#8671): unset, empty or `true` (any case) keeps it on;
+# `false` turns it off; any other value turns it off with a ::warning::.
+# When on, an issue with no `ai:check-triage` label whose body only mentions
+# check-failure-triage markers in prose (its first line is not a marker) is
+# treated as an ordinary issue instead of being refused as label_missing.
+# Issues filed by scripts/check_failure_triage.sh always open with the fp=
+# header, so a label-stripped real triage issue is still refused. Off
+# restores the label_missing refusal. The skip itself logs nothing.
+ci_triage_prose_marker_skip_enabled() {
+	local raw="${CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED:-true}"
+	case "${raw,,}" in
+		true) return 0 ;;
+		false) return 1 ;;
+		*)
+			echo "::warning::CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED has an unrecognised value; the CI-triage prose-marker skip is off. Use true or false." >&2
+			return 1
+			;;
+	esac
+}
+
+# --- Merged-PR reissue base-branch routing (CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED)
+# On by default (#9170): unset, empty or `true` (any case) keeps it on;
+# `false` turns it off; any other value turns it off with a ::warning::. It
+# only matters while CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED is on (with that off
+# the resolver never reads the issue JSON), and it turns off only the
+# unblock-judge reissue routing, never the labelled ai:check-triage routing.
+# Off keeps the default branch for every reissue (reason=flag_off). The
+# resolver reads it from its own environment, like the prose-marker flag.
+ci_triage_reissue_base_routing_enabled() {
+	local raw="${CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED:-true}"
+	case "${raw,,}" in
+		true) return 0 ;;
+		false) return 1 ;;
+		*)
+			echo "::warning::CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED has an unrecognised value; merged-PR reissue base-branch routing is off. Use true or false." >&2
+			return 1
+			;;
+	esac
+}
+
+# Fail-open skip for the unblock-judge reissue path (#9170, plan: "Fail-open,
+# not fail-closed"): before this routing such a reissue always kept the
+# default branch, so a lookup that cannot be verified keeps it too. Logs one
+# warning line; the caller prints nothing and returns 0.
+ci_reissue_skip() {
+	local reason="$1"
+	local pr="${2:-none}"
+	echo "::warning::CI_TRIAGE_PR_BRANCH_ROUTING issue=${ISSUE} pr=${pr} outcome=skipped reason=${reason}; keeping the default branch" >&2
+}
+
+get_issue_json() {
+	local issue_num="$1"
+	# Same rate-limit-aware read as get_issue_body(); the caller maps any
+	# failure to a CI-triage refusal (exit 3), never to the default branch.
+	if type gh_api_retry >/dev/null 2>&1; then
+		gh_api_retry "repos/${REPO}/issues/${issue_num}"
+		return $?
+	fi
+	gh api "repos/${REPO}/issues/${issue_num}"
+}
+
+# Rate-limit-aware GET for the PR and branch reads below; falls back to a
+# plain `gh api` when gh_helpers.sh is not staged. Any failure still refuses.
+ci_triage_gh_get() {
+	if type gh_api_retry >/dev/null 2>&1; then
+		gh_api_retry "$@"
+		return $?
+	fi
+	gh api "$@"
+}
+
+ci_triage_refuse() {
+	local reason="$1"
+	local pr="${2:-none}"
+	echo "::error::CI_TRIAGE_PR_BRANCH_ROUTING issue=${ISSUE} pr=${pr} outcome=refused reason=${reason}" >&2
+}
+
+# Reads the issue JSON on stdin; argv[1] is REPO and the optional argv[2] is
+# "1" when the prose-marker skip is on (missing or "0" keeps it off). Prints
+# one line:
+# `skip` (not a triage issue), `refuse <reason> <pr|none>`,
+# `verify <pr> <ref>` or `reissue <pr>` (an unblock-judge CI-failure reissue
+# whose PR may have merged into a non-default branch, #9170). Mirrors the header check in check_failure_triage.sh.
+CI_TRIAGE_PARSE_PY='
+import json
+import re
+import sys
+
+repo = sys.argv[1]
+prose_marker_skip = len(sys.argv) > 2 and sys.argv[2] == "1"
+try:
+	data = json.load(sys.stdin)
+except Exception:
+	data = None
+if not isinstance(data, dict):
+	print("refuse issue_json_invalid none")
+	sys.exit(0)
+body = data.get("body")
+body = body if isinstance(body, str) else ""
+body = body.replace("\r\n", "\n")
+names = set()
+labels = data.get("labels")
+for label in labels if isinstance(labels, list) else []:
+	name = label.get("name") if isinstance(label, dict) else label
+	if isinstance(name, str):
+		names.add(name)
+has_label = "ai:check-triage" in names
+has_marker = re.search(r"<!--\s*check-failure-triage:", body) is not None
+if not has_label and not has_marker:
+	print("skip")
+	sys.exit(0)
+tracking_line = re.compile(r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$", re.MULTILINE)
+# The unblock judge CI-failure reissue (scripts/unblock_actions.py, #7032)
+# carries only a `check-failure-triage:pr=<n>` lineage marker and no label.
+# It is not a triage issue to route. Only the exact unblock-judge shape
+# (marker on line 1, "Re-issued by the unblock judge from #N." on line 2),
+# from a trusted author, on an issue that is not managed and has no tracking
+# line, prints `reissue <pr>` (#9170): when that PR merged into a non-default
+# branch of this repository the reissue resolves to that base branch. Every
+# other body keeps the default-branch behaviour.
+if not has_label and re.search(r"<!--\s*check-failure-triage:(?!pr=)", body) is None:
+	reissue_markers = re.findall(r"check-failure-triage:pr=([^\s>]*)", body)
+	reissue_lines = body.split("\n")
+	if (len(reissue_markers) == 1 and re.fullmatch(r"[1-9][0-9]{0,9}", reissue_markers[0])
+			and len(reissue_lines) >= 2
+			and reissue_lines[0] == "<!-- check-failure-triage:pr=" + reissue_markers[0] + " -->"
+			and re.fullmatch(r"Re-issued by the unblock judge from #[1-9][0-9]*\.", reissue_lines[1])
+			and data.get("pull_request") is None
+			and data.get("author_association") in {"OWNER", "MEMBER", "COLLABORATOR"}
+			and "ai:orchestrator-managed" not in names
+			and not tracking_line.search(body)):
+		print("reissue " + reissue_markers[0])
+		sys.exit(0)
+	print("skip")
+	sys.exit(0)
+# An ai:orchestrator-managed child whose body copies a triage header
+# (#7511 / #7512) but has no ai:check-triage label is not a triage issue
+# to route: it resolves through its tracking issue, like any managed child.
+# Keep the pattern identical to extract_tracking_issue(); tracking_line is
+# compiled above the reissue check. Without a tracking line it is still
+# refused as label_missing (fail closed).
+if not has_label and "ai:orchestrator-managed" in names and tracking_line.search(body):
+	print("skip")
+	sys.exit(0)
+# An issue written by a person that only mentions check-failure-triage
+# markers in prose (#8671) is not a triage issue. Issues filed by
+# scripts/check_failure_triage.sh always open with the fp= header, and a
+# label-stripped real triage issue keeps that header, so it still falls
+# through to refuse("label_missing"). One anchored pass first drops any mix
+# of leading whitespace, a BOM and invisible format characters (U+200B-U+200F,
+# U+202A-U+202E, U+2060-U+2064, U+180E, U+00AD, U+034F), interleaved or not,
+# which can only make more bodies count as triage issues. An
+# ai:orchestrator-managed child without a tracking line keeps the fail-closed
+# label_missing refusal above.
+first_line = re.sub(r"^[\s\ufeff\u200b-\u200f\u202a-\u202e\u2060-\u2064\u180e\u00ad\u034f]+", "", body).split("\n", 1)[0]
+if prose_marker_skip and not has_label and "ai:orchestrator-managed" not in names and re.match(r"<!--\s*check-failure-triage:", first_line) is None:
+	print("skip")
+	sys.exit(0)
+pr_markers = re.findall(r"check-failure-triage:pr=([^\s>]*)", body)
+pr = pr_markers[0] if len(pr_markers) == 1 and re.fullmatch(r"[1-9][0-9]{0,9}", pr_markers[0]) else "none"
+
+def refuse(reason):
+	print(f"refuse {reason} {pr}")
+	sys.exit(0)
+
+if not has_label:
+	refuse("label_missing")
+lines = body.split("\n")
+header = (
+	r"<!-- check-failure-triage:fp=[0-9a-f]{64} -->",
+	r"<!-- check-failure-triage:gen=[0-9]+ -->",
+	r"<!-- check-failure-triage:root=[0-9a-f]{64} -->",
+	r"<!-- check-failure-triage:pr=[1-9][0-9]{0,9} -->",
+)
+if (len(lines) < 4 or len(pr_markers) != 1 or pr == "none"
+		or not all(re.fullmatch(pattern, lines[i]) for i, pattern in enumerate(header))):
+	refuse("marker_invalid")
+if data.get("pull_request") is not None:
+	refuse("not_an_issue")
+if data.get("author_association") not in {"OWNER", "MEMBER", "COLLABORATOR"}:
+	refuse("author_untrusted")
+pr_line = next((line for line in lines if line.startswith("- **Pull request:**")), None)
+match = re.fullmatch(r"- \*\*Pull request:\*\* (\S+) \(`([^`\n]+)`\)\s*", pr_line or "")
+if not match:
+	refuse("pr_association_mismatch")
+url = re.fullmatch(r"https://[^/\s]+/([^/\s]+/[^/\s]+)/pull/([1-9][0-9]*)", match.group(1))
+if not url or url.group(1).lower() != repo.lower() or url.group(2) != pr:
+	refuse("pr_association_mismatch")
+ref = match.group(2)
+if (not re.fullmatch(r"[A-Za-z0-9._/-]+", ref) or ".." in ref or "//" in ref
+		or ref.startswith(("-", "/")) or ref.endswith(("/", ".lock")) or ref == "HEAD"):
+	refuse("head_ref_invalid")
+print(f"verify {pr} {ref}")
+'
+
+# Reads the pull request JSON on stdin; argv: REPO, PR number, expected ref.
+# Prints nothing when the PR matches, else one refusal reason token.
+CI_TRIAGE_VERIFY_PR_PY='
+import json
+import sys
+
+repo, pr, ref = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+	data = json.load(sys.stdin)
+except Exception:
+	data = None
+if not isinstance(data, dict):
+	print("pr_lookup_failed")
+	sys.exit(0)
+
+def full_name(side):
+	part = data.get(side)
+	repo_obj = part.get("repo") if isinstance(part, dict) else None
+	name = repo_obj.get("full_name") if isinstance(repo_obj, dict) else None
+	return name if isinstance(name, str) else ""
+
+number = data.get("number")
+head = data.get("head") if isinstance(data.get("head"), dict) else {}
+if number is not None and str(number) != pr:
+	print("pr_association_mismatch")
+elif data.get("state") != "open" or data.get("merged") is True:
+	print("pr_not_open")
+elif full_name("head").lower() != repo.lower() or full_name("base").lower() != repo.lower():
+	print("pr_cross_repository")
+elif head.get("ref") != ref:
+	print("pr_association_mismatch")
+'
+
+# Reads the pull request JSON on stdin for an unblock-judge reissue (#9170);
+# argv: REPO, PR number. Prints one line: `skip` (the PR did not merge, or
+# merged into the default branch), `refuse <reason>` or
+# `route <base ref> <default branch>`.
+# The base ref passes the same safety rules as a triage head ref.
+CI_TRIAGE_REISSUE_BASE_PY='
+import json
+import re
+import sys
+
+repo, pr = sys.argv[1], sys.argv[2]
+try:
+	data = json.load(sys.stdin)
+except Exception:
+	data = None
+if not isinstance(data, dict):
+	print("refuse pr_lookup_failed")
+	sys.exit(0)
+
+def side(name):
+	part = data.get(name)
+	return part if isinstance(part, dict) else {}
+
+def side_repo(name):
+	repo_obj = side(name).get("repo")
+	return repo_obj if isinstance(repo_obj, dict) else {}
+
+def full_name(name):
+	value = side_repo(name).get("full_name")
+	return value if isinstance(value, str) else ""
+
+number = data.get("number")
+if number is not None and str(number) != pr:
+	print("refuse pr_association_mismatch")
+	sys.exit(0)
+if data.get("merged") is not True:
+	print("skip")
+	sys.exit(0)
+if full_name("head").lower() != repo.lower() or full_name("base").lower() != repo.lower():
+	print("refuse pr_cross_repository")
+	sys.exit(0)
+default_branch = side_repo("base").get("default_branch")
+if not isinstance(default_branch, str) or not default_branch:
+	print("refuse pr_lookup_failed")
+	sys.exit(0)
+ref = side("base").get("ref")
+if (not isinstance(ref, str) or not re.fullmatch(r"[A-Za-z0-9._/-]+", ref) or ".." in ref or "//" in ref
+		or ref.startswith(("-", "/")) or ref.endswith(("/", ".lock")) or ref == "HEAD"):
+	print("refuse base_ref_invalid")
+	sys.exit(0)
+if ref == default_branch:
+	print("skip")
+	sys.exit(0)
+print("route " + ref + " " + default_branch)
+'
+
+CI_TRIAGE_REF_MATCH_PY='
+import json
+import sys
+
+try:
+	data = json.load(sys.stdin)
+except Exception:
+	sys.exit(1)
+sys.exit(0 if isinstance(data, dict) and data.get("ref") == "refs/heads/" + sys.argv[1] else 1)
+'
+
+# Prints the verified PR head branch (rc 0), prints nothing when the issue is
+# not a CI-triage issue (rc 0), or logs exactly one refusal and returns 3.
+# Every error is handled explicitly: callers run this inside `|| rc=$?`,
+# where `set -e` does not apply.
+resolve_ci_triage_branch() {
+	local issue_json="$1"
+	local parsed verdict pr ref reason pr_json encoded_ref ref_json ref_err ref_err_file prose_marker_skip
+	# Evaluated once per resolve, so an unrecognised value warns only once.
+	prose_marker_skip=0
+	if ci_triage_prose_marker_skip_enabled; then
+		prose_marker_skip=1
+	fi
+	if ! parsed="$(printf '%s' "${issue_json}" | python3 -I -c "${CI_TRIAGE_PARSE_PY}" "${REPO}" "${prose_marker_skip}")"; then
+		ci_triage_refuse "issue_parse_failed" "none"
+		return "${CI_TRIAGE_REFUSED_RC}"
+	fi
+	verdict=""
+	pr=""
+	ref=""
+	read -r verdict pr ref <<< "${parsed}" || true
+	case "${verdict}" in
+		skip)
+			return 0
+			;;
+		refuse)
+			# `refuse <reason> <pr>`: the second and third words.
+			ci_triage_refuse "${pr:-unknown}" "${ref:-none}"
+			return "${CI_TRIAGE_REFUSED_RC}"
+			;;
+		verify)
+			;;
+		reissue)
+			# `reissue <pr>`: the PR number is the second word.
+			if ! ci_triage_reissue_base_routing_enabled; then
+				echo "CI_TRIAGE_PR_BRANCH_ROUTING issue=${ISSUE} pr=${pr} outcome=skipped reason=flag_off" >&2
+				return 0
+			fi
+			resolve_ci_reissue_base_branch "${pr}"
+			return $?
+			;;
+		*)
+			ci_triage_refuse "issue_parse_failed" "none"
+			return "${CI_TRIAGE_REFUSED_RC}"
+			;;
+	esac
+
+	if ! pr_json="$(ci_triage_gh_get "repos/${REPO}/pulls/${pr}" 2>/dev/null)"; then
+		ci_triage_refuse "pr_lookup_failed" "${pr}"
+		return "${CI_TRIAGE_REFUSED_RC}"
+	fi
+	if ! reason="$(printf '%s' "${pr_json}" | python3 -I -c "${CI_TRIAGE_VERIFY_PR_PY}" "${REPO}" "${pr}" "${ref}")"; then
+		reason="pr_lookup_failed"
+	fi
+	if [ -n "${reason}" ]; then
+		ci_triage_refuse "${reason}" "${pr}"
+		return "${CI_TRIAGE_REFUSED_RC}"
+	fi
+
+	# Unlike branch_exists(), never exit 2 here: callers map 2 to the
+	# default-branch fallback this routing must not reach.
+	if ! encoded_ref="$(python3 -I -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${ref}")"; then
+		ci_triage_refuse "branch_lookup_failed" "${pr}"
+		return "${CI_TRIAGE_REFUSED_RC}"
+	fi
+	# stderr goes to a file so retry/log lines never reach the JSON check.
+	if ! ref_err_file="$(mktemp)"; then
+		ci_triage_refuse "branch_lookup_failed" "${pr}"
+		return "${CI_TRIAGE_REFUSED_RC}"
+	fi
+	if ! ref_json="$(ci_triage_gh_get "repos/${REPO}/git/ref/heads/${encoded_ref}" 2>"${ref_err_file}")"; then
+		ref_err="$(cat "${ref_err_file}" 2>/dev/null || true)"
+		rm -f "${ref_err_file}"
+		if printf '%s' "${ref_err}" | grep -Eq 'status=404|HTTP 404|Not Found'; then
+			ci_triage_refuse "branch_missing" "${pr}"
+		else
+			ci_triage_refuse "branch_lookup_failed" "${pr}"
+		fi
+		return "${CI_TRIAGE_REFUSED_RC}"
+	fi
+	rm -f "${ref_err_file}"
+	if ! printf '%s' "${ref_json}" | python3 -I -c "${CI_TRIAGE_REF_MATCH_PY}" "${ref}"; then
+		ci_triage_refuse "branch_missing" "${pr}"
+		return "${CI_TRIAGE_REFUSED_RC}"
+	fi
+
+	echo "CI_TRIAGE_PR_BRANCH_ROUTING issue=${ISSUE} pr=${pr} outcome=routed branch=${ref}" >&2
+	printf '%s\n' "${ref}"
+	return 0
+}
+
+# Reads refs/heads/<ref> for the reissue path (#9170). Returns 0 when the
+# branch exists, 1 on a confirmed 404, 2 on any other failure and 3 when the
+# response names another ref; exits 75 when the read stays rate limited.
+# Called outside $(...) so GH_API_RETRY_LAST_STATUS stays visible.
+_ci_reissue_branch_state() {
+	local ref="$1" encoded_ref out_file err_file rc=0
+	encoded_ref="$(python3 -I -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${ref}")" || return 2
+	out_file="$(mktemp)" || return 2
+	if ! err_file="$(mktemp)"; then
+		rm -f "${out_file}"
+		return 2
+	fi
+	GH_API_RETRY_LAST_STATUS=""
+	# stderr goes to a file so retry/log lines never reach the JSON check.
+	ci_triage_gh_get "repos/${REPO}/git/ref/heads/${encoded_ref}" >"${out_file}" 2>"${err_file}" || rc=$?
+	if [ "${rc}" -eq 0 ]; then
+		python3 -I -c "${CI_TRIAGE_REF_MATCH_PY}" "${ref}" <"${out_file}" || rc=3
+	elif [ "${rc}" -eq 75 ]; then
+		rm -f "${out_file}" "${err_file}"
+		_resolver_rate_limited "branch"
+	# The text fallback matches only gh's own `(HTTP 404)` status suffix (as
+	# retarget_merged_base.sh does) or the retry log's `status=404 ` field, so
+	# an error body that merely quotes "HTTP 404" is not read as a deleted branch.
+	elif [ "${GH_API_RETRY_LAST_STATUS:-}" = "404" ] || grep -Eq 'status=404 |\(HTTP 404\)' "${err_file}"; then
+		rc=1
+	else
+		rc=2
+	fi
+	rm -f "${out_file}" "${err_file}"
+	return "${rc}"
+}
+
+# Merged-PR base-branch routing for an unblock-judge CI-failure reissue
+# (#9170). Prints the verified base branch of a PR that merged into a
+# non-default branch of this repository (rc 0). Every other outcome prints
+# nothing and returns 0, so the reissue keeps the default branch it used
+# before this routing (plan: "Fail-open, not fail-closed"):
+# - the PR did not merge or merged into the default branch: silent skip;
+# - the base branch was deleted after being merged into the default branch
+#   (retarget_merged_base.sh): ::notice:: reason=base_branch_merged_into_default;
+# - anything that cannot be verified (pr_lookup_failed,
+#   pr_association_mismatch, pr_cross_repository, base_ref_invalid,
+#   branch_missing, branch_lookup_failed, issue_parse_failed): one
+#   ::warning:: ... outcome=skipped reason=<token> line (ci_reissue_skip).
+# A rate-limited read still exits 75. Never returns 2 or 3.
+resolve_ci_reissue_base_branch() {
+	local pr="$1"
+	local pr_json pr_rc pr_err_file classified verdict ref default_branch branch_state target helper_err helper_state
+	pr_rc=0
+	pr_err_file="$(mktemp 2>/dev/null)" || pr_err_file=""
+	if [ -n "${pr_err_file}" ]; then
+		pr_json="$(ci_triage_gh_get "repos/${REPO}/pulls/${pr}" 2>"${pr_err_file}")" || pr_rc=$?
+	else
+		pr_json="$(ci_triage_gh_get "repos/${REPO}/pulls/${pr}" 2>/dev/null)" || pr_rc=$?
+	fi
+	if [ "${pr_rc}" -eq 75 ]; then
+		[ -z "${pr_err_file}" ] || rm -f "${pr_err_file}"
+		_resolver_rate_limited "pr-${pr}"
+	fi
+	if [ "${pr_rc}" -ne 0 ]; then
+		# Keep the gh detail so a deleted PR can be told from an outage.
+		[ -z "${pr_err_file}" ] || cat "${pr_err_file}" >&2 || true
+		[ -z "${pr_err_file}" ] || rm -f "${pr_err_file}"
+		ci_reissue_skip "pr_lookup_failed" "${pr}"
+		return 0
+	fi
+	[ -z "${pr_err_file}" ] || rm -f "${pr_err_file}"
+	if ! classified="$(printf '%s' "${pr_json}" | python3 -I -c "${CI_TRIAGE_REISSUE_BASE_PY}" "${REPO}" "${pr}")"; then
+		classified="refuse pr_lookup_failed"
+	fi
+	verdict=""
+	ref=""
+	default_branch=""
+	read -r verdict ref default_branch <<< "${classified}" || true
+	case "${verdict}" in
+		skip)
+			return 0
+			;;
+		refuse)
+			ci_reissue_skip "${ref:-pr_lookup_failed}" "${pr}"
+			return 0
+			;;
+		route)
+			if [ -z "${ref}" ]; then
+				ci_reissue_skip "issue_parse_failed" "${pr}"
+				return 0
+			fi
+			;;
+		*)
+			ci_reissue_skip "issue_parse_failed" "${pr}"
+			return 0
+			;;
+	esac
+
+	branch_state=0
+	_ci_reissue_branch_state "${ref}" || branch_state=$?
+	case "${branch_state}" in
+		0)
+			;;
+		1)
+			# Finalize merges an integration branch into the default branch
+			# and deletes it (gh pr merge --delete-branch). Follow the deleted
+			# branch to the base its own merged PR went into, only to name the
+			# skip reason: every outcome here keeps the default branch.
+			# The helper's switches are pinned so every workflow gets the same
+			# answer whatever RETARGET_MERGED_BASE_ENABLED the caller exports.
+			# A missing helper, a failed lookup (the helper logs
+			# reason=lookup_failed and fails open) or no output skips as
+			# branch_lookup_failed; branch_missing means the lookup worked and
+			# found no merge into the default branch (an abandoned branch).
+			target=""
+			helper_err=""
+			helper_state="lookup_failed"
+			if [ -n "${default_branch}" ] && [ -f "${SCRIPT_DIR}/retarget_merged_base.sh" ] && helper_err="$(mktemp)"; then
+				target="$(RETARGET_MERGED_BASE_ENABLED=true RETARGET_MERGED_BASE_MAX_HOPS=3 bash "${SCRIPT_DIR}/retarget_merged_base.sh" resolve "${REPO}" "${ref}" "${default_branch}" 2>"${helper_err}")" || target=""
+				cat "${helper_err}" >&2 || true
+				if [ -n "${target}" ] && ! grep -q 'reason=lookup_failed' "${helper_err}"; then
+					helper_state="ok"
+				fi
+				rm -f "${helper_err}"
+			fi
+			if [ "${helper_state}" = ok ] && [ "${target}" = "${default_branch}" ]; then
+				echo "::notice::CI_TRIAGE_PR_BRANCH_ROUTING issue=${ISSUE} pr=${pr} outcome=skipped reason=base_branch_merged_into_default branch=${ref}" >&2
+				return 0
+			fi
+			if [ "${helper_state}" != ok ]; then
+				ci_reissue_skip "branch_lookup_failed" "${pr}"
+				return 0
+			fi
+			ci_reissue_skip "branch_missing" "${pr}"
+			return 0
+			;;
+		3)
+			ci_reissue_skip "branch_missing" "${pr}"
+			return 0
+			;;
+		*)
+			ci_reissue_skip "branch_lookup_failed" "${pr}"
+			return 0
+			;;
+	esac
+
+	echo "CI_TRIAGE_PR_BRANCH_ROUTING issue=${ISSUE} pr=${pr} outcome=routed branch=${ref}" >&2
+	printf '%s\n' "${ref}"
+	return 0
+}
+
+resolve_ref() {
+	local child_body child_branch tracking_issue tracking_body tracking_branch
+	local child_json="" triage_branch triage_rc
+	# Evaluate the flag once so an unrecognised value warns only once.
+	local routing_on=0
+	if ci_triage_routing_enabled; then
+		routing_on=1
+	fi
+	if [ "${routing_on}" -eq 1 ]; then
+		# One full issue read supplies body, labels, author and PR flag. With
+		# routing on, an unreadable issue might be a CI-triage issue, so a
+		# failed read or parse refuses (exit 3) instead of returning a code
+		# that callers map to the default-branch fallback. A rate-limited
+		# read keeps the resolver's retry-later exit 75, as without routing.
+		local read_rc=0
+		child_json="$(get_issue_json "${ISSUE}")" || read_rc=$?
+		if [ "${read_rc}" -eq 75 ]; then
+			_resolver_rate_limited "issue-${ISSUE}"
+		fi
+		if [ "${read_rc}" -ne 0 ]; then
+			ci_triage_refuse "issue_read_failed" "none"
+			return "${CI_TRIAGE_REFUSED_RC}"
+		fi
+		if ! child_body="$(printf '%s' "${child_json}" | python3 -I -c '
+import json, sys
+data = json.load(sys.stdin)
+body = data.get("body") if isinstance(data, dict) else ""
+print(body if isinstance(body, str) else "")
+')"; then
+			ci_triage_refuse "issue_parse_failed" "none"
+			return "${CI_TRIAGE_REFUSED_RC}"
+		fi
+	else
+		child_body="$(get_issue_body "${ISSUE}")"
+	fi
+	child_branch="$(extract_integration_branch "${child_body}")"
+	if [ -n "${child_branch}" ]; then
+		if ! branch_exists "${child_branch}"; then
+			echo "::error::Integration branch '${child_branch}' declared in child issue #${ISSUE} does not exist." >&2
+			return 1
+		fi
+		printf '%s\n' "${child_branch}"
+		return 0
+	fi
+
+	if [ "${routing_on}" -eq 1 ]; then
+		triage_rc=0
+		triage_branch="$(resolve_ci_triage_branch "${child_json}")" || triage_rc=$?
+		# A rate-limited read on the reissue base-branch path (#9170) has
+		# already logged INTEGRATION_REF_RESOLVE outcome=rate_limited; keep 75.
+		if [ "${triage_rc}" -eq 75 ]; then
+			return 75
+		fi
+		if [ "${triage_rc}" -ne 0 ]; then
+			return "${CI_TRIAGE_REFUSED_RC}"
+		fi
+		if [ -n "${triage_branch}" ]; then
+			printf '%s\n' "${triage_branch}"
+			return 0
+		fi
+	fi
+
+	tracking_issue="$(extract_tracking_issue "${child_body}")"
+	if [ -z "${tracking_issue}" ]; then
+		printf '\n'
+		return 0
+	fi
+
+	tracking_body="$(get_issue_body "${tracking_issue}")"
+	tracking_branch="$(extract_integration_branch "${tracking_body}")"
+	if [ -z "${tracking_branch}" ]; then
+		printf '\n'
+		return 0
+	fi
+
+	if ! branch_exists "${tracking_branch}"; then
+		echo "::error::Integration branch '${tracking_branch}' declared in tracking issue #${tracking_issue} does not exist." >&2
+		return 1
+	fi
+
+	printf '%s\n' "${tracking_branch}"
+	return 0
+}
+
+run_case() {
+	local fixture_file="$1"
+	local bin_dir="$2"
+	local out_file err_file actual_stdout actual_rc
+
+	local routing_flag prose_marker_flag reissue_base_flag
+	out_file="$(mktemp)"
+	err_file="$(mktemp)"
+	# Always set the routing flag explicitly so an outer value cannot leak
+	# into a fixture; fixtures opt in through `env`. A JSON null unsets it, so
+	# a fixture can exercise the resolver's own default.
+	routing_flag="$(python3 -c '
+import json, pathlib, sys
+fixture = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+env = fixture.get("env") if isinstance(fixture.get("env"), dict) else {}
+value = env.get("CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED", "false")
+print("__unset__" if value is None else str(value))
+' "${fixture_file}")"
+	# The prose-marker skip flag: a missing key or JSON null unsets it, so
+	# fixtures run with the resolver's default and an outer value cannot leak.
+	prose_marker_flag="$(python3 -c '
+import json, pathlib, sys
+fixture = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+env = fixture.get("env") if isinstance(fixture.get("env"), dict) else {}
+value = env.get("CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED")
+print("__unset__" if value is None else str(value))
+' "${fixture_file}")"
+	# The reissue base-branch flag: same rules as the prose-marker flag.
+	reissue_base_flag="$(python3 -c '
+import json, pathlib, sys
+fixture = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+env = fixture.get("env") if isinstance(fixture.get("env"), dict) else {}
+value = env.get("CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED")
+print("__unset__" if value is None else str(value))
+' "${fixture_file}")"
+	(
+		export PATH="${bin_dir}:${PATH}"
+		export GH_FIXTURE_FILE="${fixture_file}"
+		export GH_MOCK_MODE="assert"
+		export REPO="owner/repo"
+		export ISSUE="101"
+		export GH_TOKEN="test-token"
+		if [ "${routing_flag}" = "__unset__" ]; then
+			unset CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED
+		else
+			export CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${routing_flag}"
+		fi
+		if [ "${prose_marker_flag}" = "__unset__" ]; then
+			unset CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED
+		else
+			export CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED="${prose_marker_flag}"
+		fi
+		if [ "${reissue_base_flag}" = "__unset__" ]; then
+			unset CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED
+		else
+			export CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED="${reissue_base_flag}"
+		fi
+		if resolve_ref >"${out_file}" 2>"${err_file}"; then
+			echo 0 >"${out_file}.rc"
+		else
+			echo $? >"${out_file}.rc"
+		fi
+	)
+	actual_stdout="$(cat "${out_file}")"
+	actual_rc="$(cat "${out_file}.rc")"
+
+	python3 - <<'PY' "${fixture_file}" "${actual_stdout}" "${actual_rc}" "${err_file}"
+import json
+import pathlib
+import sys
+
+fixture = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+actual_stdout = sys.argv[2]
+actual_rc = int(sys.argv[3])
+err_text = pathlib.Path(sys.argv[4]).read_text(encoding="utf-8")
+expected_stdout = fixture["expected_stdout"]
+expected_rc = int(fixture["expected_exit_code"])
+
+if actual_stdout != expected_stdout:
+	print(f"self-test mismatch stdout for {fixture['name']}: expected {expected_stdout!r}, got {actual_stdout!r}", file=sys.stderr)
+	sys.exit(1)
+if actual_rc != expected_rc:
+	print(f"self-test mismatch exit for {fixture['name']}: expected {expected_rc}, got {actual_rc}", file=sys.stderr)
+	sys.exit(1)
+if expected_rc != 0 and "::error::" not in err_text:
+	print(f"self-test expected ::error:: in stderr for {fixture['name']}", file=sys.stderr)
+	sys.exit(1)
+expected_reason = fixture.get("expected_error_reason")
+routing_errors = [line for line in err_text.splitlines() if "::error::CI_TRIAGE_PR_BRANCH_ROUTING" in line]
+if expected_reason:
+	if len(routing_errors) != 1 or f"outcome=refused reason={expected_reason}" not in routing_errors[0]:
+		print(f"self-test expected one CI_TRIAGE_PR_BRANCH_ROUTING refusal reason={expected_reason} for {fixture['name']}, got {routing_errors!r}", file=sys.stderr)
+		sys.exit(1)
+elif routing_errors:
+	print(f"self-test unexpected CI_TRIAGE_PR_BRANCH_ROUTING refusal for {fixture['name']}: {routing_errors!r}", file=sys.stderr)
+	sys.exit(1)
+expected_warning = fixture.get("expected_warning")
+if expected_warning:
+	warnings = [line for line in err_text.splitlines() if line.startswith("::warning::") and expected_warning in line]
+	if len(warnings) != 1:
+		print(f"self-test expected exactly one ::warning:: containing {expected_warning!r} for {fixture['name']}, got {warnings!r}", file=sys.stderr)
+		sys.exit(1)
+PY
+
+	rm -f "${out_file}" "${err_file}" "${out_file}.rc"
+}
+
+run_self_test() {
+	if [ ! -d "${FIXTURE_DIR}" ]; then
+		echo "self-test fixture directory not found: ${FIXTURE_DIR}" >&2
+		exit 1
+	fi
+
+	local bin_dir
+	bin_dir="$(mktemp -d)"
+	cat > "${bin_dir}/gh" <<'GHMOCK'
+#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import sys
+
+def _load_fixture() -> dict:
+	path = os.environ.get("GH_FIXTURE_FILE", "")
+	if not path:
+		print("GH_FIXTURE_FILE is required", file=sys.stderr)
+		sys.exit(2)
+	return json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+
+
+def _parse_issue(endpoint: str):
+	parts = endpoint.split("/")
+	if len(parts) < 5:
+		return None
+	if parts[0] != "repos" or parts[3] != "issues":
+		return None
+	try:
+		return int(parts[4])
+	except ValueError:
+		return None
+
+
+def main() -> int:
+	args = [a for a in sys.argv[1:] if a != "-i"]
+	if len(args) < 2 or args[0] != "api":
+		print("mock gh only supports: gh api ...", file=sys.stderr)
+		return 2
+
+	fixture = _load_fixture()
+	endpoint = args[1]
+	if endpoint.startswith("repos/") and "/issues/" in endpoint:
+		issue_num = _parse_issue(endpoint)
+		if issue_num is None:
+			print("invalid issue endpoint", file=sys.stderr)
+			return 2
+		issue = fixture.get("issues", {}).get(str(issue_num), {})
+		if issue.get("read_error"):
+			print("gh: Not Found (HTTP 404)", file=sys.stderr)
+			return 1
+		if "raw_response" in issue:
+			print(issue["raw_response"])
+			return 0
+		body = issue.get("body", "")
+		if "--jq" in args:
+			jq_expr = args[args.index("--jq") + 1]
+			if jq_expr == '.body // ""':
+				print(body)
+				return 0
+		payload = {"number": issue_num, "body": body}
+		for key in ("labels", "author_association", "user", "pull_request"):
+			if key in issue:
+				payload[key] = issue[key]
+		print(json.dumps(payload))
+		return 0
+
+	if endpoint.startswith("repos/") and "/pulls?" in endpoint:
+		# retarget_merged_base.sh closed-PR-by-head lookup; the fixture holds
+		# the already-shaped `{number, base, head_sha}` the --jq would print.
+		from urllib.parse import parse_qs, urlsplit
+		head = parse_qs(urlsplit(endpoint).query).get("head", [""])[0]
+		# A head listed with null is a lookup that worked and found no merged
+		# PR (the --jq prints nothing); an unlisted head fails the lookup.
+		merged_map = fixture.get("merged_pulls_by_head", {})
+		head_key = head.split(":", 1)[-1]
+		if head_key not in merged_map:
+			print(f"unsupported endpoint: {endpoint}", file=sys.stderr)
+			return 2
+		merged = merged_map[head_key]
+		if merged is not None:
+			print(json.dumps(merged))
+		return 0
+
+	if endpoint.startswith("repos/") and "/pulls/" in endpoint:
+		pr_num = endpoint.split("/pulls/", 1)[1]
+		pull = fixture.get("pulls", {}).get(pr_num)
+		if pull is None:
+			print("gh: Not Found (HTTP 404)", file=sys.stderr)
+			return 1
+		print(json.dumps(pull))
+		return 0
+
+	if endpoint.startswith("repos/") and "/git/ref/heads/" in endpoint:
+		ref = endpoint.split("/git/ref/heads/", 1)[1]
+		from urllib.parse import unquote
+		ref_name = unquote(ref)
+		branch_error = fixture.get("branch_errors", {}).get(ref_name)
+		if branch_error:
+			print(branch_error, file=sys.stderr)
+			return 1
+		exists_map = fixture.get("branch_exists", {})
+		exists = bool(exists_map.get(ref_name, False))
+		if exists:
+			print(json.dumps({"ref": f"refs/heads/{ref_name}"}))
+			return 0
+		print("gh: Not Found (HTTP 404)", file=sys.stderr)
+		return 1
+
+	print(f"unsupported endpoint: {endpoint}", file=sys.stderr)
+	return 2
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
+GHMOCK
+	chmod +x "${bin_dir}/gh"
+
+	local fixture
+	if [ "$#" -gt 0 ]; then
+		# --self-test-case: run only the named fixture files.
+		for fixture in "$@"; do
+			run_case "${fixture}" "${bin_dir}"
+		done
+	else
+		for fixture in "${FIXTURE_DIR}"/*.json; do
+			run_case "${fixture}" "${bin_dir}"
+		done
+		if [ -d "${CI_TRIAGE_FIXTURE_DIR}" ]; then
+			for fixture in "${CI_TRIAGE_FIXTURE_DIR}"/*.json; do
+				run_case "${fixture}" "${bin_dir}"
+			done
+		fi
+	fi
+
+	rm -rf "${bin_dir}"
+	echo "self-test passed"
+}
+
+main() {
+	if [ "${1:-}" = "--self-test" ]; then
+		run_self_test
+		exit 0
+	fi
+	if [ "${1:-}" = "--self-test-case" ]; then
+		if [ -z "${2:-}" ] || [ ! -f "${2}" ]; then
+			echo "--self-test-case requires an existing fixture file" >&2
+			exit 2
+		fi
+		run_self_test "${2}"
+		exit 0
+	fi
+
+	: "${REPO:?REPO is required}"
+	: "${ISSUE:?ISSUE is required}"
+	: "${GH_TOKEN:?GH_TOKEN is required}"
+
+	resolve_ref
+}
+
+main "$@"

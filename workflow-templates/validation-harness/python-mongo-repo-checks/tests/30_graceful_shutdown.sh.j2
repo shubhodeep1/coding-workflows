@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "${SCRIPT_DIR}/../_lib/tap_helpers.sh"
+
+SHUTDOWN_TIMEOUT_SECONDS="${SHUTDOWN_TIMEOUT_SECONDS:-30}"
+SHUTDOWN_POLL_SECONDS="${SHUTDOWN_POLL_SECONDS:-1}"
+GRACEFUL_SHUTDOWN_LOG_TAIL_LINES="${GRACEFUL_SHUTDOWN_LOG_TAIL_LINES:-40}"
+
+echo "1..1"
+
+set +e
+python3 "${SCRIPT_DIR}/_lib/graceful_shutdown.py" \
+	--timeout-seconds "${SHUTDOWN_TIMEOUT_SECONDS}" \
+	--poll-seconds "${SHUTDOWN_POLL_SECONDS}" \
+	--log-tail-lines "${GRACEFUL_SHUTDOWN_LOG_TAIL_LINES}"
+shutdown_rc=$?
+set -e
+
+if [ "${shutdown_rc}" -ne 0 ]; then
+	tap_not_ok 1 "graceful shutdown helper contract"
+	echo "# graceful shutdown helper failed"
+	exit 1
+fi
+
+tap_ok 1 "graceful shutdown helper contract"

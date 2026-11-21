@@ -1,0 +1,1377 @@
+#!/usr/bin/env python3
+"""Contract checks for the release gate's review-blocked E2E budget and run pinning."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import textwrap
+from pathlib import Path
+from runpy import run_path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text, expanded_test_and_mark_stable_text  # noqa: E402
+from agents_doc import agents_text  # noqa: E402
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
+MARK_STABLE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "mark-stable.yml"
+extract_refs = run_path(str(REPO_ROOT / "scripts" / "check_workflow_script_refs.py"))["extract_refs"]
+
+
+def _read_workflow() -> str:
+	# Phase 4 / 4b bodies live in scripts/stable_e2e_step_*.sh (#7991).
+	return expanded_test_and_mark_stable_text()
+
+
+def _slice_between(text: str, start_marker: str, end_marker: str) -> str:
+	start = text.find(start_marker)
+	assert start != -1, f"Missing marker: {start_marker}"
+	end = text.find(end_marker, start)
+	assert end != -1, f"Missing marker after {start_marker}: {end_marker}"
+	return text[start:end]
+
+
+def _e2e_job(workflow: str) -> str:
+	return _slice_between(workflow, "  e2e-smoke-test:\n", "  validate-scripts:\n")
+
+
+def _phase6(workflow: str) -> str:
+	return _slice_between(
+		workflow,
+		'# ── Phase 6: Review-blocked simulation test',
+		'# ── Deep verification: inspect every step in every workflow run',
+	)
+
+
+def _phase4b_retry(workflow: str) -> str:
+	return _slice_between(
+		workflow,
+		'# ── Retry: adopt active work or redispatch ${REVIEW_WORKFLOW_FILE}',
+		'# ── Attempt 2',
+	)
+
+
+def _integer_contract_value(job: str, name: str) -> int:
+	match = re.search(rf"^\s+{re.escape(name)}:\s+(\d+)\s*$", job, re.MULTILINE)
+	assert match is not None, f"Missing integer contract value: {name}"
+	return int(match.group(1))
+
+
+def _workflow_dispatch_integer_default(workflow: str, input_name: str) -> int:
+	match = re.search(
+		rf"^      {re.escape(input_name)}:\s*$.*?^        default:\s+(\d+)\s*$",
+		workflow,
+		re.MULTILINE | re.DOTALL,
+	)
+	assert match is not None, f"Missing workflow_dispatch integer default: {input_name}"
+	return int(match.group(1))
+
+
+def test_reference_extraction_ignores_only_full_line_comments() -> None:
+	workflow_text = """
+      # scripts/yaml_comment_only.sh
+      run: |
+        # ${SUPPORT_SCRIPTS_DIR}/shell_comment_only.py
+        # COMMENTED_SCRIPTS="commented_assignment.sh"
+        # for f in ${COMMENTED_SCRIPTS}; do
+        #   cp "scripts/${f}" /tmp/
+        # done
+        scripts/active_reference.sh # scripts/inline_comment_reference.sh
+        printf '%s\\n' '# scripts/quoted_hash_reference.sh'
+"""
+	refs = extract_refs(workflow_text)
+	assert "yaml_comment_only.sh" not in refs
+	assert "shell_comment_only.py" not in refs
+	assert "commented_assignment.sh" not in refs
+	assert "active_reference.sh" in refs
+	assert "inline_comment_reference.sh" in refs
+	assert "quoted_hash_reference.sh" in refs
+
+
+def test_release_workflows_use_canonical_reference_checker() -> None:
+	checker_call = "PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py"
+	raw_scanner = "grep -rhoE 'scripts/[a-zA-Z0-9_.-]+\\.(sh|py|json)'"
+	for workflow_path in (WORKFLOW, MARK_STABLE_WORKFLOW):
+		workflow = workflow_path.read_text(encoding="utf-8")
+		check_step = _slice_between(
+			workflow,
+			"      - name: Script-workflow cross-reference\n",
+			"\n      - name:",
+		)
+		assert checker_call in check_step
+		assert raw_scanner not in check_step
+		assert "OPTIONAL_SCRIPTS=" not in check_step
+
+
+def test_default_serial_budget_leaves_required_headroom() -> None:
+	workflow = _read_workflow()
+	job = _e2e_job(workflow)
+	timeout_match = re.search(r"^\s+timeout-minutes:\s+(\d+)\s*$", job, re.MULTILINE)
+	assert timeout_match is not None
+	job_timeout = int(timeout_match.group(1))
+	# 360 is GitHub's hosted-runner maximum (#9480).
+	assert job_timeout == _integer_contract_value(job, "E2E_JOB_TIMEOUT_MINUTES") == 360
+
+	phase_timeout = _workflow_dispatch_integer_default(workflow, "phase_timeout")
+	plan_timeout = _workflow_dispatch_integer_default(workflow, "plan_timeout")
+	review_timeout = _workflow_dispatch_integer_default(workflow, "review_timeout")
+	review_step_timeout = _workflow_dispatch_integer_default(workflow, "review_step_timeout")
+	review_handoff_budget = _integer_contract_value(job, "REVIEW_PHASE_HANDOFF_BUDGET_MINUTES")
+	finalization_reserve = _integer_contract_value(job, "E2E_FINALIZATION_RESERVE_MINUTES")
+	review_effective_budget = max(review_timeout, min(review_step_timeout, 90) + review_handoff_budget)
+	serial_budget = (
+		(2 * phase_timeout)
+		+ plan_timeout
+		+ review_effective_budget
+		+ _integer_contract_value(job, "EDITOR_RETRY_BUDGET_MINUTES")
+		+ phase_timeout
+		+ _integer_contract_value(job, "PHASE7_WAIT_BUDGET_MINUTES")
+		+ finalization_reserve
+		# Issue #8244: the pre-push gate step's extra Phase 3b wait.
+		+ max(0, _integer_contract_value(job, "PREPUSH_GATE_STEP_STALL_MINUTES") - phase_timeout)
+	)
+	assert review_handoff_budget == 15
+	assert review_effective_budget == 90
+	assert serial_budget == 300
+	assert serial_budget <= job_timeout
+	assert job_timeout - (serial_budget - finalization_reserve) >= finalization_reserve
+
+
+def test_budget_guard_runs_before_artifact_creation() -> None:
+	job = _e2e_job(_read_workflow())
+	guard = 'if [ "${E2E_SERIAL_BUDGET_MINUTES}" -gt "${E2E_JOB_TIMEOUT_MINUTES}" ]; then'
+	create_issue = "- name: Create E2E test issue"
+	assert guard in job
+	assert 'echo "::error::Configured E2E phase budgets require' in job
+	assert "exit 1" in job[job.index(guard) : job.index(create_issue)]
+	assert job.index(guard) < job.index(create_issue)
+	assert "(2 * PHASE_TIMEOUT)" in job
+	assert "REVIEW_EFFECTIVE_BUDGET_MINUTES" in job
+	assert "REVIEW_EFFECTIVE_BUDGET_MINUTES=$((REVIEW_EFFECTIVE_BUDGET_MINUTES + REVIEW_PHASE_HANDOFF_BUDGET_MINUTES))" in job
+	assert "REVIEW_PHASE_WALL_BUDGET_MINUTES=$((REVIEW_STEP_TIMEOUT + REVIEW_PHASE_HANDOFF_BUDGET_MINUTES))" in job
+	assert 'REVIEW_PHASE_DEADLINE=$((REVIEW_PHASE_STARTED_AT + (REVIEW_PHASE_WALL_BUDGET_MINUTES * 60)))' in job
+	assert 'if [ "$NOW" -ge "$REVIEW_PHASE_DEADLINE" ]; then' in job
+
+
+def test_budget_guard_clamps_review_step_timeout_before_serial_math() -> None:
+	workflow = _read_workflow()
+	job = _e2e_job(workflow)
+	prerequisites = _slice_between(job, "- name: Validate prerequisites", "# Fast-fail the hottest")
+	step_budget = 'REVIEW_EFFECTIVE_BUDGET_MINUTES="${REVIEW_STEP_TIMEOUT}"'
+	cap_guard = 'if [ "${REVIEW_EFFECTIVE_BUDGET_MINUTES}" -gt 90 ]; then'
+	handoff_budget = "REVIEW_EFFECTIVE_BUDGET_MINUTES=$((REVIEW_EFFECTIVE_BUDGET_MINUTES + REVIEW_PHASE_HANDOFF_BUDGET_MINUTES))"
+	review_max = 'if [ "${REVIEW_TIMEOUT}" -gt "${REVIEW_EFFECTIVE_BUDGET_MINUTES}" ]; then'
+	assert prerequisites.index(step_budget) < prerequisites.index(cap_guard) < prerequisites.index(handoff_budget)
+	assert prerequisites.index(handoff_budget) < prerequisites.index(review_max)
+	assert 'REVIEW_EFFECTIVE_BUDGET_MINUTES=90' in prerequisites
+	assert 'REVIEW_STEP_TIMEOUT_MAX=90' in job
+
+	phase_timeout = _workflow_dispatch_integer_default(workflow, "phase_timeout")
+	plan_timeout = _workflow_dispatch_integer_default(workflow, "plan_timeout")
+	review_timeout = _workflow_dispatch_integer_default(workflow, "review_timeout")
+	review_step_override = _workflow_dispatch_integer_default(workflow, "review_step_timeout") + 90
+	review_handoff_budget = _integer_contract_value(job, "REVIEW_PHASE_HANDOFF_BUDGET_MINUTES")
+	shared_budget = (
+		(2 * phase_timeout)
+		+ plan_timeout
+		+ _integer_contract_value(job, "EDITOR_RETRY_BUDGET_MINUTES")
+		+ phase_timeout
+		+ _integer_contract_value(job, "PHASE7_WAIT_BUDGET_MINUTES")
+		+ _integer_contract_value(job, "E2E_FINALIZATION_RESERVE_MINUTES")
+	)
+	job_timeout = _integer_contract_value(job, "E2E_JOB_TIMEOUT_MINUTES")
+	# Unclamped, the override would exceed the 360-minute job limit (#9480);
+	# the 90-minute clamp keeps it inside.
+	assert shared_budget + max(review_timeout, review_step_override) > job_timeout
+	assert shared_budget + max(review_timeout, min(review_step_override, 90) + review_handoff_budget) <= job_timeout
+
+
+def _prerequisites_budget_block(workflow: str) -> str:
+	job = _e2e_job(workflow)
+	prerequisites = _slice_between(job, "- name: Validate prerequisites", "# Fast-fail the hottest")
+	return _slice_between(prerequisites, "for timeout_value in", 'echo "Target repo:')
+
+
+def _run_prerequisites_budget(**overrides: str) -> subprocess.CompletedProcess[str]:
+	workflow = _read_workflow()
+	job = _e2e_job(workflow)
+	env = dict(os.environ)
+	env.update({
+		"PHASE_TIMEOUT": str(_workflow_dispatch_integer_default(workflow, "phase_timeout")),
+		"PLAN_PHASE_TIMEOUT": str(_workflow_dispatch_integer_default(workflow, "plan_timeout")),
+		"REVIEW_TIMEOUT": str(_workflow_dispatch_integer_default(workflow, "review_timeout")),
+		"REVIEW_STEP_TIMEOUT": str(_workflow_dispatch_integer_default(workflow, "review_step_timeout")),
+	})
+	for name in (
+		"E2E_JOB_TIMEOUT_MINUTES",
+		"REVIEW_PHASE_HANDOFF_BUDGET_MINUTES",
+		"EDITOR_RETRY_BUDGET_MINUTES",
+		"PHASE7_WAIT_BUDGET_MINUTES",
+		"PHASE7_QUEUE_WAIT_CAP_MINUTES",
+		"E2E_FINALIZATION_RESERVE_MINUTES",
+		"PREPUSH_GATE_STEP_STALL_MINUTES",
+	):
+		env[name] = str(_integer_contract_value(job, name))
+	env.update(overrides)
+	body = "set -euo pipefail\n" + _prerequisites_budget_block(workflow)
+	return subprocess.run(["bash", "-c", body], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=30)
+
+
+def test_prepush_gate_stall_minutes_is_validated_and_budgeted() -> None:
+	# Issue #8244: the extended Phase 3b limit for the pre-push gate step is a
+	# positive integer and its extra minutes count toward the serial budget.
+	block = _prerequisites_budget_block(_read_workflow())
+	loop = block[: block.index("done")]
+	assert '"${PREPUSH_GATE_STEP_STALL_MINUTES}"' in loop
+	assert "PREPUSH_GATE_EXTRA_BUDGET_MINUTES=$((PREPUSH_GATE_STEP_STALL_MINUTES - PHASE_TIMEOUT))" in block
+	assert "E2E_FINALIZATION_RESERVE_MINUTES +\n            PREPUSH_GATE_EXTRA_BUDGET_MINUTES" in block
+	assert "prepush-gate-extra(${PREPUSH_GATE_EXTRA_BUDGET_MINUTES})" in block
+
+
+def test_prepush_gate_stall_budget_defaults_fit_and_bad_values_fail() -> None:
+	result = _run_prerequisites_budget()
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "E2E conservative serial budget: 300/360 minutes" in result.stdout
+
+	result = _run_prerequisites_budget(PREPUSH_GATE_STEP_STALL_MINUTES="abc")
+	assert result.returncode == 1
+	assert "positive integers" in result.stdout
+
+	result = _run_prerequisites_budget(PREPUSH_GATE_STEP_STALL_MINUTES="96")
+	assert result.returncode == 1
+	assert "require 361m" in result.stdout
+	assert "prepush-gate-extra(66)" in result.stdout
+
+	# The guard still fails closed against a smaller job limit.
+	result = _run_prerequisites_budget(PREPUSH_GATE_STEP_STALL_MINUTES="36", E2E_JOB_TIMEOUT_MINUTES="300")
+	assert result.returncode == 1
+	assert "require 301m" in result.stdout
+	assert "prepush-gate-extra(6)" in result.stdout
+
+	# A value at or below PHASE_TIMEOUT adds nothing.
+	result = _run_prerequisites_budget(PREPUSH_GATE_STEP_STALL_MINUTES="10")
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "E2E conservative serial budget: 295/360 minutes" in result.stdout
+
+
+def test_named_retry_and_phase7_budgets_replace_literal_deadlines() -> None:
+	job = _e2e_job(_read_workflow())
+	assert "DEADLINE=$(( $(date +%s) + (EDITOR_RETRY_BUDGET_MINUTES * 60) ))" in job
+	# The open-PR wait starts from the named budget; both Phase 7 waits then
+	# take their deadline from phase7_wait_deadline, which derives it from
+	# the same budget (#9794).
+	assert job.count("(PHASE7_WAIT_BUDGET_MINUTES * 60)") == 1
+	assert job.count("budget_secs=$(( PHASE7_WAIT_BUDGET_MINUTES * 60 ))") == 1
+	assert job.count('phase7_wait_deadline "${PHASE7_WAIT_START}" "${EXISTING_STATUS}"') == 2
+	assert job.count('phase7_wait_deadline "${POLL_START}" "${STATUS:-}"') == 1
+
+
+def test_phase4b_adopts_the_oldest_eligible_active_review_run() -> None:
+	retry = _phase4b_retry(_read_workflow())
+	prior_validation = 'if ! [[ "${PRIOR_REVIEW_RUN}" =~ ^[0-9]+$ ]]'
+	discovery = 'if ! RETRY_RUNS_JSON=$(gh_api_with_retry "${RETRY_RUNS_QUERY}"); then'
+	dispatch = 'if ! gh workflow run "${REVIEW_WORKFLOW_FILE}"'
+	assert retry.index(prior_validation) < retry.index(discovery) < retry.index(dispatch)
+	assert "`Inject editor bait commit on PR branch` step" in retry
+	assert "lines ~1101-1109" not in retry
+	assert 'runs?branch=${BRANCH}&per_page=100' in retry
+	assert '(.workflow_runs | type == "array")' in retry
+	assert '(.id | type == "number") and .id > 0 and .id == (.id | floor)' in retry
+	assert 'select(.id != $prior_run_id)' in retry
+	assert 'select(.status != "completed")' in retry
+	assert 'select(.head_sha == $bait_sha or .head_sha == $retry_sha)' in retry
+	assert 'sort_by(.created_at, .id)' in retry
+	assert 'if [ -n "${RETRY_ACTIVE_RUN}" ]; then' in retry
+	assert 'Adopting active review run #${RETRY_RUN_ID} instead of dispatching duplicate work' in retry
+
+
+def test_phase4b_dispatches_only_without_active_work_and_pins_one_run() -> None:
+	retry = _phase4b_retry(_read_workflow())
+	active_branch = _slice_between(
+		retry,
+		'if [ -n "${RETRY_ACTIVE_RUN}" ]; then',
+		'          else\n',
+	)
+	dispatch_branch = _slice_between(
+		retry,
+		'          else\n',
+		'          fi\n\n          # EDITOR_RETRY_BUDGET_MINUTES',
+	)
+	assert 'gh workflow run "${REVIEW_WORKFLOW_FILE}"' not in active_branch
+	assert 'gh workflow run "${REVIEW_WORKFLOW_FILE}"' in dispatch_branch
+	assert "RETRY_BASELINE_ID=" in retry
+	assert 'select(.id > $baseline_id and .id != $prior_run_id)' in retry
+	registration_selection = retry[retry.index('select(.id > $baseline_id and .id != $prior_run_id)') :]
+	assert ".head_sha == $bait_sha" not in registration_selection
+	assert ".head_sha == $retry_sha" not in registration_selection
+	assert 'RETRY_REGISTRATION_DEADLINE=$(( $(date +%s) + 90 ))' in retry
+	assert '"repos/${TEST_REPO}/actions/runs/${RETRY_RUN_ID}"' in retry
+	assert 'select(.head_sha == "${RETRY_DISPATCH_SHA}")' not in retry
+	assert 'actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?event=workflow_dispatch' not in retry
+	assert 'echo "status=retry_timeout" >> "$GITHUB_OUTPUT"' in retry
+	assert 'echo "status=pr_closed_during_retry" >> "$GITHUB_OUTPUT"' in retry
+	assert 'echo "status=pr_state_check_failed" >> "$GITHUB_OUTPUT"' in retry
+
+
+def _run_phase4b_with_pr_states(
+	states: list[str], *, reset: str = "retry-after: 1", probe: str = "",
+	run_states: list[str] | None = None, adopt: bool = True, extra_env: dict[str, str] | None = None,
+) -> tuple[subprocess.CompletedProcess[str], str, str]:
+	workflow = _read_workflow()
+	step = _slice_between(workflow, '      - name: "Phase 4b: Verify editor restored canary (pytest + retry)"', '      # ── Phase 5:')
+	body = textwrap.dedent(step.split("        run: |\n", 1)[1])
+	# Keep the actual API wrapper, retry selection and poll loop; substitute
+	# only the dependency install and pytest invocation (not the gate logic).
+	begin = body.index("PYTEST_INSTALL_LOG=")
+	end = body.index("# gh api wrapper", begin)
+	body = body[:begin] + body[end:]
+	begin = body.index("run_pytest() {")
+	end = body.index("# When pytest fails", begin)
+	body = body[:begin] + textwrap.dedent("""\
+	run_pytest() {
+	  if [ ! -f "${RUNNER_TEMP}/pytest_first" ]; then
+	    touch "${RUNNER_TEMP}/pytest_first"
+	    echo 'FAILED tests/test_e2e_editor_smoke_canary.py::test_canary_matches_issue_spec_byte_for_byte'
+	    return 1
+	  fi
+	  return 0
+	}
+	""") + body[end:]
+	stub = textwrap.dedent("""\
+	date() { cat "${RUNNER_TEMP}/clock"; }
+	sleep() {
+	  echo "$1" >> "${RUNNER_TEMP}/sleeps"
+	  echo $(( $(cat "${RUNNER_TEMP}/clock") + $1 )) > "${RUNNER_TEMP}/clock"
+	}
+	gh() {
+	  if [ "$1" = workflow ]; then return 0; fi
+	  if [ "$1" = api ] && [ "$2" = /rate_limit ]; then
+	    echo probe >> "${RUNNER_TEMP}/requests"
+	    printf '%s\\n' "${PROBE_RESET}"
+	    return 0
+	  fi
+	  if [ "$1" != api ] || [ "$2" != -i ]; then return 1; fi
+	  case "$3" in
+	    */contents/*)
+	      printf 'HTTP/2 200\\n\\n{"content":"%s"}\\n' "$(printf 'restored' | base64 -w0)" ;;
+	    */git/refs/heads/*)
+	      printf 'HTTP/2 200\\n\\n%s\\n' "${BAIT_SHA}" ;;
+	    */actions/workflows/*/runs?*)
+	      if [ "${ADOPT}" = 1 ]; then
+	        printf 'HTTP/2 200\\n\\n{"workflow_runs":[{"id":20,"head_sha":"%s","status":"in_progress","created_at":"2026-10-03T00:00:00Z","conclusion":null}]}\\n' "${BAIT_SHA}"
+	      else
+	        printf 'HTTP/2 200\\n\\n{"workflow_runs":[]}\\n'
+	      fi ;;
+	    */actions/runs/20)
+	      echo run >> "${RUNNER_TEMP}/requests"
+	      local run_count
+	      run_count=$(wc -l < "${RUNNER_TEMP}/run_reads")
+	      echo x >> "${RUNNER_TEMP}/run_reads"
+	      local run_state
+	      run_state=$(sed -n "$((run_count + 1))p" "${RUNNER_TEMP}/run_states")
+	      if [ "${run_state}" = limit ]; then
+	        printf 'HTTP/2 403\\n%s\\n\\n{"message":"API rate limit exceeded"}\\n' "${RESET_HEADER}"
+	        echo 'gh: API rate limit exceeded (HTTP 403)' >&2
+	        return 1
+	      fi
+	      case "${run_state}" in
+	        queued|in_progress)
+	          printf 'HTTP/2 200\\n\\n{"id":20,"status":"%s","conclusion":null,"run_started_at":"2026-10-03T00:00:00Z"}\\n' "${run_state}"
+	          return 0 ;;
+	      esac
+	      printf 'HTTP/2 200\\n\\n{"id":20,"status":"completed","conclusion":"success"}\\n' ;;
+	    */pulls/*)
+	      echo pr >> "${RUNNER_TEMP}/requests"
+	      local count
+	      count=$(wc -l < "${RUNNER_TEMP}/pr_reads")
+	      echo x >> "${RUNNER_TEMP}/pr_reads"
+	      local state
+	      state=$(sed -n "$((count + 1))p" "${RUNNER_TEMP}/states")
+	      case "${state}" in
+	        limit)
+	          printf 'HTTP/2 403\\n%s\\n\\n{"message":"API rate limit exceeded"}\\n' "${RESET_HEADER}"
+	          echo 'gh: API rate limit exceeded (HTTP 403)' >&2
+	          return 1 ;;
+	        unknown)
+	          printf 'HTTP/2 403\\n\\n{"message":"Forbidden"}\\n'
+	          echo 'gh: Forbidden (HTTP 403)' >&2
+	          return 1 ;;
+	        open|closed)
+	          if [ "${4:-}" = --jq ]; then
+	            printf 'HTTP/2 200\\n\\n%s\\n' "${state}"
+	          else
+	            printf 'HTTP/2 200\\n\\n{"head":{"sha":"%s"}}\\n' "${FIX_SHA}"
+	          fi ;;
+	        *) return 1 ;;
+	      esac ;;
+	    *) return 1 ;;
+	  esac
+	}
+	""")
+	body = body.replace('PYTEST_OUTPUT="${RUNNER_TEMP:-/tmp}/e2e_pytest_output.txt"', 'PYTEST_OUTPUT="${RUNNER_TEMP:-/tmp}/e2e_pytest_output.txt"\n' + stub, 1)
+	with tempfile.TemporaryDirectory() as temp:
+		root = Path(temp)
+		(root / "clock").write_text("1000\n", encoding="utf-8")
+		(root / "states").write_text("\n".join(states) + "\n", encoding="utf-8")
+		(root / "pr_reads").touch()
+		(root / "run_states").write_text("\n".join(run_states or []) + "\n", encoding="utf-8")
+		(root / "run_reads").touch()
+		env = os.environ.copy()
+		env.update({"RUNNER_TEMP": temp, "GITHUB_OUTPUT": str(root / "output"), "GITHUB_RUN_ID": "1",
+			"TEST_REPO": "owner/repo", "ISSUE_NUMBER": "12", "PR_NUMBER": "13", "PRIOR_REVIEW_RUN": "10",
+			"BAIT_SHA": "a" * 40, "FIX_SHA": "b" * 40, "EDITOR_RETRY_BUDGET_MINUTES": "25",
+			"REVIEW_WORKFLOW_FILE": "internal-review.yml", "RESET_HEADER": reset, "PROBE_RESET": probe,
+			"ADOPT": "1" if adopt else "0"})
+		env.pop("E2E_JOB_STARTED_EPOCH", None)
+		env.update(extra_env or {})
+		result = subprocess.run(["bash", "-c", body], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=30)
+		return result, (root / "output").read_text(encoding="utf-8"), (root / "requests").read_text(encoding="utf-8") if (root / "requests").exists() else ""
+
+
+def test_phase4b_rate_limits_recheck_pr_before_accepting_adopted_run() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(["limit", "limit", "open", "open"])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "status=success_after_retry" in output
+	assert requests.splitlines() == ["pr", "pr", "pr", "run", "pr"]
+	assert "PR state unresolvable" not in result.stderr
+
+
+def test_phase4b_rate_limit_wait_catches_closed_pr() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(["limit", "closed"])
+	assert result.returncode != 0
+	assert "status=pr_closed_during_retry" in output
+	assert "run" not in requests
+
+
+def test_phase4b_run_rate_limit_rechecks_pr_before_accepting_run() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(["open", "closed"], run_states=["limit"])
+	assert result.returncode != 0
+	assert "status=pr_closed_during_retry" in output
+	assert requests.splitlines() == ["pr", "run", "pr"]
+
+
+def test_phase4b_registration_rate_limit_keeps_ninety_second_bound() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(["limit"], reset="x-ratelimit-reset: 99999", adopt=False)
+	assert result.returncode != 0
+	assert "status=retry_dispatch_failed" in output
+	assert "run" not in requests
+
+
+def test_phase4b_unknown_state_cannot_authorize_completed_run() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(["limit", "unknown", "open", "open"])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "status=success_after_retry" in output
+	assert requests.splitlines() == ["pr", "pr", "pr", "run", "pr"]
+
+
+def test_phase4b_reset_beyond_deadline_fails_closed() -> None:
+	# The adopted run was never read (the PR read stayed rate-limited), so it
+	# was never seen queued either: an API stall is not reported as a
+	# runner-queue timeout, with the queued grace on (default) or off.
+	result, output, requests = _run_phase4b_with_pr_states(["limit"], reset="x-ratelimit-reset: 99999")
+	assert result.returncode != 0
+	assert "status=retry_timeout" in output
+	assert "status=retry_queued_timeout" not in output
+	assert "stayed queued" not in result.stdout
+	assert "run" not in requests
+	result, output, requests = _run_phase4b_with_pr_states(
+		["limit"], reset="x-ratelimit-reset: 99999", extra_env=_LEGACY_QUEUE_ENV,
+	)
+	assert result.returncode != 0
+	assert "status=retry_timeout" in output
+	assert "run" not in requests
+
+
+def test_phase4b_malformed_reset_probes_once_and_waits_before_retrying() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(["limit", "limit", "open", "open"], reset="retry-after: invalid", probe="bad-reset")
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "status=success_after_retry" in output
+	assert requests.splitlines().count("probe") == 1
+	assert "waiting 60s" in result.stderr
+
+
+def test_phase4b_four_ordinary_state_failures_still_break() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(["unknown"] * 12)
+	assert result.returncode != 0
+	assert "status=pr_state_check_failed" in output
+	assert "run" not in requests
+
+
+_QUEUE_BUDGET_ENV = {"E2E_JOB_TIMEOUT_MINUTES": "300", "PHASE_TIMEOUT": "30",
+	"PHASE7_WAIT_BUDGET_MINUTES": "10", "E2E_FINALIZATION_RESERVE_MINUTES": "20"}
+# The legacy queued-poll extension (pre stuck-states P4) runs only with the
+# queued grace switched off.
+_LEGACY_QUEUE_ENV = {"E2E_PHASE4B_QUEUED_GRACE_ENABLED": "false"}
+
+
+def test_phase4b_queued_retry_run_extends_the_deadline() -> None:
+	# Gate run 37395952357: the retry run waited for a runner most of its
+	# 25 minutes. 110 queued polls (~27 min) then completion must pass.
+	result, output, _ = _run_phase4b_with_pr_states(
+		["open"] * 400, run_states=["queued"] * 110 + ["completed"],
+		extra_env={**_QUEUE_BUDGET_ENV, **_LEGACY_QUEUE_ENV, "E2E_JOB_STARTED_EPOCH": "1000"},
+	)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "status=success_after_retry" in output
+
+
+def test_phase4b_queue_extension_needs_a_recorded_job_start() -> None:
+	result, output, _ = _run_phase4b_with_pr_states(
+		["open"] * 400, run_states=["queued"] * 110 + ["completed"],
+		extra_env={**_QUEUE_BUDGET_ENV, **_LEGACY_QUEUE_ENV},
+	)
+	assert result.returncode != 0
+	assert "status=retry_timeout" in output
+	assert "deadline extended by 0s (cap 0s)" in result.stdout
+
+
+def test_phase4b_queue_extension_stops_at_the_job_budget_ceiling() -> None:
+	# Ceiling = start + (105 - 30 - 10 - 20) min = 2700 on the fake clock,
+	# which starts at 1000: about 200 s beyond the 25-minute base deadline.
+	result, output, _ = _run_phase4b_with_pr_states(
+		["open"] * 400, run_states=["queued"] * 300,
+		extra_env={**_QUEUE_BUDGET_ENV, **_LEGACY_QUEUE_ENV, "E2E_JOB_TIMEOUT_MINUTES": "105", "E2E_JOB_STARTED_EPOCH": "0"},
+	)
+	assert result.returncode != 0
+	assert "status=retry_timeout" in output
+	match = re.search(r"deadline extended by (\d+)s \(cap (\d+)s\)", result.stdout)
+	assert match, result.stdout
+	extended, cap = int(match.group(1)), int(match.group(2))
+	assert 0 < cap <= 200
+	assert extended == cap
+
+
+# ── Stuck states P4 (Refs #8291): queued grace, default on ──
+# The fake clock starts at 1000, so the retry wait starts at 1000 and the
+# base deadline (EDITOR_RETRY_BUDGET_MINUTES=25) is 2500.
+_GRACE_JOB_ENV = {**_QUEUE_BUDGET_ENV, "E2E_JOB_STARTED_EPOCH": "1000"}
+
+
+def _queued_seconds(stdout: str) -> int:
+	match = re.search(r"stayed queued for (\d+)s, past E2E_RETRY_QUEUED_GRACE_MINUTES=(\d+)", stdout)
+	assert match, stdout
+	return int(match.group(1))
+
+
+def test_phase4b_queued_grace_budget_starts_when_the_run_leaves_the_queue() -> None:
+	# 100 queued polls (25 min) then a 25-minute run: the legacy extension
+	# (deadline 3985) would time out; the run budget counts from 2515 (4015).
+	result, output, _ = _run_phase4b_with_pr_states(
+		["open"] * 400, run_states=["queued"] * 100 + ["in_progress"] * 99 + ["completed"],
+		extra_env=_GRACE_JOB_ENV,
+	)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "status=success_after_retry" in output
+	assert ("Retry review run #20 left the queue after 1515s (run_started_at=2026-10-03T00:00:00Z); "
+		"EDITOR_RETRY_BUDGET_MINUTES=25 now counts from here") in result.stdout
+	assert result.stdout.count("left the queue") == 1
+	result, output, _ = _run_phase4b_with_pr_states(
+		["open"] * 400, run_states=["queued"] * 100 + ["in_progress"] * 99 + ["completed"],
+		extra_env={**_GRACE_JOB_ENV, **_LEGACY_QUEUE_ENV},
+	)
+	assert "status=retry_timeout" in output
+
+
+def test_phase4b_queued_grace_cap_has_its_own_reason() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(
+		["open"] * 400, run_states=["queued"] * 300, extra_env=_GRACE_JOB_ENV,
+	)
+	assert result.returncode != 0
+	assert "status=retry_queued_timeout" in output
+	assert "status=retry_timeout" not in output
+	assert _queued_seconds(result.stdout) == 1800
+	assert "(deadline capped at 1800s)" in result.stdout
+	assert "deadline extended by" not in result.stdout
+	assert "did not complete within" not in result.stdout
+	# No extra API call: one run GET per poll, and each poll reads the PR once.
+	lines = requests.splitlines()
+	assert lines.count("run") == lines.count("pr") == 119
+
+
+def test_phase4b_queued_grace_running_budget_still_reports_retry_timeout() -> None:
+	result, output, _ = _run_phase4b_with_pr_states(
+		["open"] * 400, run_states=["queued"] * 10 + ["in_progress"] * 300, extra_env=_GRACE_JOB_ENV,
+	)
+	assert result.returncode != 0
+	assert "status=retry_timeout" in output
+	assert "status=retry_queued_timeout" not in output
+	assert "Retry review run did not complete within 25 minutes" in result.stdout
+	assert "Retry review run #20 queued 165s, ran 1500s." in result.stdout
+
+
+def test_phase4b_queued_grace_latch_is_never_reset() -> None:
+	# A run that flips back to queued after starting cannot stretch the deadline.
+	result, output, _ = _run_phase4b_with_pr_states(
+		["open"] * 400, run_states=["in_progress"] + ["queued", "in_progress"] * 200, extra_env=_GRACE_JOB_ENV,
+	)
+	assert result.returncode != 0
+	assert "status=retry_timeout" in output
+	assert result.stdout.count("left the queue") == 1
+	assert "Retry review run #20 queued 15s, ran 1500s." in result.stdout
+
+
+def test_phase4b_queued_grace_stops_at_the_job_ceiling() -> None:
+	# Ceiling = 0 + (105 - 30 - 10 - 20) min = 2700: between base 2500 and grace 2800.
+	result, output, _ = _run_phase4b_with_pr_states(
+		["open"] * 400, run_states=["queued"] * 300,
+		extra_env={**_QUEUE_BUDGET_ENV, "E2E_JOB_TIMEOUT_MINUTES": "105", "E2E_JOB_STARTED_EPOCH": "0"},
+	)
+	assert result.returncode != 0
+	assert "status=retry_queued_timeout" in output
+	# 1700 is not a multiple of the 15 s poll, so the last sleep ends at 1710.
+	assert 1700 <= _queued_seconds(result.stdout) < 1715
+	assert "(deadline capped at 1700s)" in result.stdout
+
+
+def test_phase4b_queued_grace_without_job_start_keeps_the_base_deadline() -> None:
+	result, output, _ = _run_phase4b_with_pr_states(
+		["open"] * 400, run_states=["queued"] * 300, extra_env=_QUEUE_BUDGET_ENV,
+	)
+	assert result.returncode != 0
+	assert "status=retry_queued_timeout" in output
+	assert _queued_seconds(result.stdout) == 1500
+
+
+def test_phase4b_queued_grace_minutes_validation() -> None:
+	for bad in ("abc", "0", "-5", "123456", "07"):
+		result, output, _ = _run_phase4b_with_pr_states(
+			["open"] * 400, run_states=["queued"] * 300,
+			extra_env={**_GRACE_JOB_ENV, "E2E_RETRY_QUEUED_GRACE_MINUTES": bad},
+		)
+		assert "::warning::E2E_RETRY_QUEUED_GRACE_MINUTES must be a positive integer" in result.stdout, bad
+		assert "falling back to 30" in result.stdout
+		warning = next(line for line in result.stdout.splitlines() if "::warning::E2E_RETRY_QUEUED_GRACE_MINUTES" in line)
+		# The raw repo-variable value never reaches the workflow-command line.
+		assert bad not in warning or bad == "0"
+		assert "status=retry_queued_timeout" in output
+		assert _queued_seconds(result.stdout) == 1800, bad
+	# A valid value below the editor budget never shortens the base deadline.
+	for value, seconds in (("5", 1500), ("40", 2400)):
+		result, output, _ = _run_phase4b_with_pr_states(
+			["open"] * 400, run_states=["queued"] * 300,
+			extra_env={**_GRACE_JOB_ENV, "E2E_RETRY_QUEUED_GRACE_MINUTES": value},
+		)
+		assert "::warning::E2E_RETRY_QUEUED_GRACE_MINUTES" not in result.stdout
+		assert _queued_seconds(result.stdout) == seconds
+
+
+def test_phase4b_queued_grace_switch_parsing() -> None:
+	for value in ("TRUE", "true", "1", "yes", "On", ""):
+		result, output, _ = _run_phase4b_with_pr_states(
+			["open"] * 400, run_states=["queued"] * 300,
+			extra_env={**_QUEUE_BUDGET_ENV, "E2E_PHASE4B_QUEUED_GRACE_ENABLED": value},
+		)
+		assert "status=retry_queued_timeout" in output, value
+		assert "deadline extended by" not in result.stdout
+	for value in ("false", "0", "off", "no", "nonsense"):
+		result, output, _ = _run_phase4b_with_pr_states(
+			["open"] * 400, run_states=["queued"] * 300,
+			extra_env={**_QUEUE_BUDGET_ENV, "E2E_PHASE4B_QUEUED_GRACE_ENABLED": value,
+				"E2E_RETRY_QUEUED_GRACE_MINUTES": "abc"},
+		)
+		assert "status=retry_timeout" in output, value
+		assert "deadline extended by 0s (cap 0s)" in result.stdout
+		assert "left the queue" not in result.stdout
+		# Legacy output is unchanged: the grace value is not even validated.
+		assert "E2E_RETRY_QUEUED_GRACE_MINUTES" not in result.stdout
+
+
+def test_phase4b_queued_grace_static_contract() -> None:
+	workflow = _read_workflow()
+	job = _e2e_job(workflow)
+	assert "      E2E_PHASE4B_QUEUED_GRACE_ENABLED: ${{ vars.E2E_PHASE4B_QUEUED_GRACE_ENABLED || 'true' }}\n" in job
+	assert "      E2E_RETRY_QUEUED_GRACE_MINUTES: ${{ vars.E2E_RETRY_QUEUED_GRACE_MINUTES || '30' }}\n" in job
+	assert "#   retry_queued_timeout     — retry run still queued past E2E_RETRY_QUEUED_GRACE_MINUTES" in job
+	script = (REPO_ROOT / "scripts" / "stable_e2e_step_verify_bait_removed.sh").read_text(encoding="utf-8")
+	assert '"${E2E_PHASE4B_QUEUED_GRACE_ENABLED:-true}"' in script
+	assert '"${E2E_RETRY_QUEUED_GRACE_MINUTES:-30}"' in script
+	assert script.count("actions/runs/${RETRY_RUN_ID}") == 1
+	assert 'echo "status=retry_queued_timeout" >> "$GITHUB_OUTPUT"' in script
+	# run_started_at is only logged after a strict ISO-8601 match.
+	assert "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" in script
+
+
+def test_phase0a_installs_pytest_before_running_the_hot_poller_test() -> None:
+	# tests/test_orchestrate_poll_process.py imports pytest (#6187); gate run
+	# 37554001238 failed Phase 0a with ModuleNotFoundError before any phase ran.
+	step = _slice_between(_read_workflow(), '      - name: "Phase 0a: Hot orchestrate-poll regression guard"', "      # ── Phase 0:")
+	assert "python3 -m pip install --quiet pytest" in step
+	assert step.index("pip install --quiet pytest") < step.index("python3 tests/test_orchestrate_poll_process.py")
+	# The merged step (#6669) reports the pip + apt fallback failure as
+	# pytest_unavailable, the same status Phase 4b uses.
+	assert 'echo "status=pytest_unavailable" >> "$GITHUB_OUTPUT"' in step
+
+
+def test_phase6_registers_once_and_polls_only_the_pinned_run() -> None:
+	phase6 = _phase6(_read_workflow())
+	branch_query = "runs?event=workflow_dispatch&branch=${POLLER_DISPATCH_REF}&per_page=10"
+	dispatch = 'gh workflow run "${workflow_file}" --repo "${TEST_REPO}" --ref "${POLLER_DISPATCH_REF}"'
+	assert branch_query in phase6
+	assert dispatch in phase6
+	assert phase6.index(branch_query) < phase6.index(dispatch)
+	assert phase6.count('echo "poller_run_id=${POLLER_RUN_ID}" >> "$GITHUB_OUTPUT"') == 1
+	assert '"repos/${TEST_REPO}/actions/runs/${POLLER_RUN_ID}"' in phase6
+	assert 'actions/workflows/${workflow_file}/dispatches' not in phase6
+	assert "workflow_run_id" not in phase6
+	assert "actions/runs?per_page=5&event=workflow_dispatch" not in phase6
+	assert "POLLER_LATEST_ID" not in phase6
+
+
+def test_phase6_rejects_a_newer_foreign_ref_dispatch() -> None:
+	phase6 = _phase6(_read_workflow())
+	assert '--arg dispatch_ref "${POLLER_DISPATCH_REF}"' in phase6
+	assert '.head_branch == $dispatch_ref' in phase6
+	assert '.id > $baseline_id' in phase6
+	assert 'fromdateiso8601? // 0) >= ($dispatch_started_epoch - 5)' in phase6
+	assert 'if [ "${candidate_count}" -gt 1 ]; then' in phase6
+	assert 'Ambiguous ${workflow_file} registration' in phase6
+
+
+def test_phase6_transient_api_errors_remain_bounded() -> None:
+	phase6 = _phase6(_read_workflow())
+	assert phase6.count("retrying within the inactivity window") == 3
+	assert 'echo "status=timeout" >> "$GITHUB_OUTPUT"' in phase6
+	labels_read = 'if ! LABELS=$(gh_api_safe_quiet_print'
+	assert labels_read in phase6
+	labels_block = phase6[phase6.index(labels_read) : phase6.index("# If rate-limited")]
+	assert '|| echo ""' not in labels_block
+	assert 'sleep "$POLL_INTERVAL"' in labels_block
+	assert "continue" in labels_block
+	assert 'issues/${TRACKING_NUMBER}' in labels_block
+	assert "exit 0" in labels_block
+	assert "exit 1" not in labels_block
+	transient_read = 'if ! POLLER_RUN=$(gh_api_safe_quiet_print'
+	label_progress = 'if [ "$LABELS" != "$PREV_LABELS" ]; then'
+	success_guard = 'if [ "$REVIEW_BLOCKED_PRESENT" -eq 0 ] || [ "$TERMINAL_LABEL_PRESENT" -eq 1 ]; then'
+	assert phase6.index(label_progress) < phase6.index(transient_read)
+	assert phase6.index(success_guard) < phase6.index(transient_read)
+	read_complete = 'POLLER_STATUS=$(printf'
+	read_block = phase6[phase6.index(transient_read) : phase6.index(read_complete)]
+	assert 'echo "status=poller_failed"' not in read_block
+	assert read_block.count('issues/${TRACKING_NUMBER}') == 2
+	assert read_block.count("exit 0") == 2
+	assert "exit 1" not in read_block
+
+
+def test_reviewer_majority_is_progress_only() -> None:
+	job = _e2e_job(_read_workflow())
+	progress_block = _slice_between(
+		job,
+		'if [ "$SUCCEEDED" -ge 3 ] && [ $((SUCCEEDED * 2)) -gt "$TOTAL_DONE" ]; then',
+		'elif [ "$TOTAL_DONE" -gt 0 ]; then',
+	)
+	assert "waiting for authoritative review completion and editor verification" in progress_block
+	assert "status=success" not in progress_block
+	assert "review_run_id=" not in progress_block
+	assert "exit 0" not in progress_block
+	assert 'if [ "$RUN_STATUS" = "completed" ]; then' in job
+	assert 'if [ "$RUN_CONCLUSION" = "success" ]; then' in job
+	assert 'echo "status=success" >> "$GITHUB_OUTPUT"' in job
+	assert 'if [ "${PR_HEAD}" = "${BAIT_SHA}" ]; then' in job
+
+
+def _run_phase4_wait_review(
+	checked_out: str | None, *, compare_status: str = "behind", fail_first_log: bool = False,
+	fail_all_logs: bool = False,
+	run_status: str = "completed", run_conclusion: str = "success",
+) -> tuple[subprocess.CompletedProcess[str], str, int]:
+	workflow = _read_workflow()
+	step = _slice_between(workflow, '      - name: "Phase 4: Wait for review & autofix to complete"', '      # Per-phase soft-error analysis: review_autofix.')
+	body = textwrap.dedent(step.split("        run: |\n", 1)[1])
+	stub = textwrap.dedent('''\
+	date() { printf '%s\\n' "$(<"${RUNNER_TEMP}/clock")"; }
+	sleep() { printf '%s\\n' "$(( $(<"${RUNNER_TEMP}/clock") + $1 ))" > "${RUNNER_TEMP}/clock"; }
+	gh_api_safe_quiet_print() {
+	  local response=""
+	  case "$1" in
+	    */actions/runs?branch=*)
+	      if [ -n "$BAIT_UNCOVERED_RUN_IDS" ]; then
+	        response="$(<"${RUNNER_TEMP}/after.json")"
+	      else
+	        response="$(<"${RUNNER_TEMP}/before.json")"
+	      fi ;;
+	    */actions/runs/10/jobs?*) response='{"total_count":1,"jobs":[{"id":100,"status":"completed","conclusion":"success","steps":[{"conclusion":"failure"}]}]}' ;;
+	    */actions/jobs/100/logs)
+	      local count
+	      count=$(wc -l < "${RUNNER_TEMP}/log_reads")
+	      echo x >> "${RUNNER_TEMP}/log_reads"
+	      if [ "${FAIL_FIRST_LOG}" = 1 ] && [ "$count" = 0 ]; then return 1; fi
+	      if [ "${FAIL_ALL_LOGS}" = 1 ]; then return 1; fi
+	      response="$(<"${RUNNER_TEMP}/job.log")" ;;
+	    */compare/*) response="{\\"status\\":\\"${COMPARE_STATUS}\\"}" ;;
+	    *) echo "Unexpected API read: $1" >&2; return 1 ;;
+	  esac
+	  if [ "${2:-}" = --jq ]; then
+	    printf '%s' "$response" | jq -cr "$3"
+	  else
+	    printf '%s' "$response"
+	  fi
+	}
+	''')
+	body = body.replace('. ./scripts/comprehensive_test_and_release_gh_api.sh', stub, 1)
+	bait = "a" * 40
+	pre_bait = "b" * 40
+	base_run = {"id": 10, "name": "Internal Review", "path": "internal-review.yml", "event": "pull_request",
+		"head_sha": pre_bait, "created_at": "2026-10-06T00:00:00Z", "updated_at": "2026-10-06T00:02:00Z",
+		"status": run_status, "conclusion": run_conclusion}
+	bait_run = {**base_run, "id": 20, "head_sha": bait, "created_at": "2026-10-06T00:03:00Z",
+		"updated_at": "2026-10-06T00:04:00Z", "status": "queued", "conclusion": None}
+	with tempfile.TemporaryDirectory() as temp:
+		root = Path(temp)
+		(root / "clock").write_text("1000\n", encoding="utf-8")
+		(root / "before.json").write_text(json.dumps({"workflow_runs": [base_run, bait_run]}), encoding="utf-8")
+		(root / "after.json").write_text(json.dumps({"workflow_runs": [{**bait_run, "status": "completed", "conclusion": "success"}]}), encoding="utf-8")
+		(root / "job.log").write_text(f"Captured INITIAL_HEAD_SHA={checked_out} for stale-base detection.\n" if checked_out else "No checkout performed\n", encoding="utf-8")
+		(root / "log_reads").touch()
+		env = os.environ.copy()
+		env.update({"RUNNER_TEMP": temp, "GITHUB_OUTPUT": str(root / "output"), "TEST_REPO": "owner/repo",
+			"ISSUE_NUMBER": "12", "PR_NUMBER": "13", "BAIT_SHA": bait, "BAIT_CREATED_AT": "2026-10-06T00:01:00Z",
+			"REVIEW_TIMEOUT": "60", "REVIEW_STEP_TIMEOUT": "75", "REVIEW_PHASE_HANDOFF_BUDGET_MINUTES": "15",
+			"POLL_INTERVAL": "10", "COMPARE_STATUS": compare_status, "FAIL_FIRST_LOG": "1" if fail_first_log else "0",
+			"FAIL_ALL_LOGS": "1" if fail_all_logs else "0"})
+		result = subprocess.run(["bash", "-c", body], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=30)
+		return result, (root / "output").read_text(encoding="utf-8") if (root / "output").exists() else "", len((root / "log_reads").read_text(encoding="utf-8").splitlines())
+
+
+def test_phase4_pre_bait_success_does_not_beat_queued_bait_review() -> None:
+	result, output, reads = _run_phase4_wait_review("b" * 40)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "review_run_id=10" not in output
+	assert output.splitlines() == ["status=success", "review_run_id=20"]
+	assert "E2E_BAIT_REVIEW_COVERAGE run=10 verdict=not_covered" in result.stdout
+	assert reads == 1
+
+
+def test_phase4_valid_inflight_checkout_is_accepted() -> None:
+	for checked, status in (("a" * 40, "behind"), ("c" * 40, "ahead")):
+		result, output, reads = _run_phase4_wait_review(checked, compare_status=status)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert output.splitlines() == ["status=success", "review_run_id=10"]
+		assert "verdict=covered" in result.stdout
+		assert reads == 1
+
+
+def test_phase4_unavailable_log_retries_without_accepting() -> None:
+	result, output, reads = _run_phase4_wait_review("b" * 40, fail_first_log=True)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "verdict=unknown" in result.stdout
+	assert "verdict=not_covered" in result.stdout
+	assert output.splitlines() == ["status=success", "review_run_id=20"]
+	assert reads == 2
+
+
+def test_phase4_persistently_unavailable_log_falls_through_to_bait_review() -> None:
+	result, output, reads = _run_phase4_wait_review("a" * 40, fail_all_logs=True)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "verdict=covered" not in result.stdout
+	assert output.splitlines() == ["status=success", "review_run_id=20"]
+	assert reads == 3
+
+
+def test_phase4_no_checkout_marker_excludes_run() -> None:
+	result, output, _ = _run_phase4_wait_review(None)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "reason=no_checkout_marker" in result.stdout
+	assert output.splitlines() == ["status=success", "review_run_id=20"]
+
+
+def test_phase4_failure_and_early_failed_steps_are_not_accepted_without_bait() -> None:
+	for status, conclusion in (("completed", "failure"), ("in_progress", None)):
+		result, output, _ = _run_phase4_wait_review("b" * 40, run_status=status, run_conclusion=conclusion)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert output.splitlines() == ["status=success", "review_run_id=20"]
+		assert "verdict=not_covered" in result.stdout
+
+
+def test_phase4_checkout_marker_and_every_early_exit_are_covered() -> None:
+	workflow = _read_workflow()
+	phase4 = _slice_between(workflow, '      - name: "Phase 4: Wait for review & autofix to complete"', '      # Per-phase soft-error analysis: review_autofix.')
+	# The marker lives in the moved "Checkout PR head branch" step body.
+	assert 'Captured INITIAL_HEAD_SHA=${INITIAL_HEAD_SHA}' in expanded_review_autofix_text()
+	assert "Captured INITIAL_HEAD_SHA=[0-9a-fA-F]{40}" in phase4
+	assert "BAIT_UNCOVERED_RUN_IDS" in phase4
+	assert phase4.count('if ! require_bait_review_coverage; then') == 4
+	assert phase4.count('review_run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"') == 4
+
+
+_PHASE4_EXT_BEGIN = "# BEGIN phase4 review deadline extension (#8004)"
+_PHASE4_EXT_END = "# END phase4 review deadline extension (#8004)"
+_PHASE4_BASE = 100_000
+_PHASE4_JOB_START = 90_000
+_PHASE4_DEFAULT_CEILING = _PHASE4_JOB_START + (300 - 25 - 30 - 10 - 20) * 60
+_PHASE4_BUDGET_ENV = {
+	"E2E_JOB_TIMEOUT_MINUTES": "300", "EDITOR_RETRY_BUDGET_MINUTES": "25", "PHASE_TIMEOUT": "30",
+	"PHASE7_WAIT_BUDGET_MINUTES": "10", "E2E_FINALIZATION_RESERVE_MINUTES": "20",
+}
+
+
+def _phase4_step(workflow: str) -> str:
+	return _slice_between(workflow, '      - name: "Phase 4: Wait for review & autofix to complete"', '      # Per-phase soft-error analysis: review_autofix.')
+
+
+def _phase4_deadline_extension_block(workflow: str) -> str:
+	step = _phase4_step(workflow)
+	block = _slice_between(step, _PHASE4_EXT_BEGIN, _PHASE4_EXT_END)
+	return textwrap.dedent("          " + block)
+
+
+def _run_phase4_deadline_logic(**env: str) -> dict[str, str]:
+	block = _phase4_deadline_extension_block(_read_workflow())
+	script = "set -euo pipefail\n" + block + textwrap.dedent("""\
+	REVIEW_PHASE_HANDOFF_PENDING="${TEST_HANDOFF_PENDING:-0}"
+	rc=0
+	review_phase_deadline_extension_allowed || rc=$?
+	echo "base=${REVIEW_PHASE_BASE_DEADLINE}"
+	echo "ceiling=${REVIEW_PHASE_DEADLINE_CEILING}"
+	echo "rc=${rc}"
+	""")
+	full_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "TZ": "UTC",
+		"REVIEW_PHASE_DEADLINE": str(_PHASE4_BASE), "INACTIVITY_LIMIT": "3600",
+		"STEP_INACTIVITY_LIMIT": "4500"}
+	full_env.update(env)
+	full_env = {key: value for key, value in full_env.items() if value is not None}
+	result = subprocess.run(["bash", "-c", script], env=full_env, capture_output=True, text=True, timeout=30)
+	assert result.returncode == 0, result.stderr + result.stdout
+	values = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+	return values
+
+
+def _phase4_iso(epoch: int) -> str:
+	return subprocess.run(["date", "-u", "-d", f"@{epoch}", "+%Y-%m-%dT%H:%M:%SZ"],
+		capture_output=True, text=True, check=True).stdout.strip()
+
+
+def _phase4_active(**overrides: str) -> dict[str, str]:
+	env = {**_PHASE4_BUDGET_ENV, "E2E_JOB_STARTED_EPOCH": str(_PHASE4_JOB_START),
+		"NOW": str(_PHASE4_BASE + 600), "RUN_ID": "20", "RUN_STATUS": "in_progress", "IDLE": "30",
+		"BAIT_UNCOVERED_RUN_IDS": "", "CURRENT_STEP_STARTED_AT": ""}
+	env.update(overrides)
+	return _run_phase4_deadline_logic(**env)
+
+
+def test_phase4_deadline_ceiling_formula_and_base_never_shortened() -> None:
+	step = _phase4_step(_read_workflow())
+	assert "REVIEW_PHASE_DEADLINE=$((REVIEW_PHASE_STARTED_AT + (REVIEW_PHASE_WALL_BUDGET_MINUTES * 60)))" in step
+	assert ("REVIEW_PHASE_DEADLINE_CEILING=$(( E2E_JOB_STARTED_EPOCH + (E2E_JOB_TIMEOUT_MINUTES - EDITOR_RETRY_BUDGET_MINUTES"
+		" - PHASE_TIMEOUT - PHASE7_WAIT_BUDGET_MINUTES - E2E_FINALIZATION_RESERVE_MINUTES) * 60 ))") in step
+	assert step.index("REVIEW_PHASE_DEADLINE=$((") < step.index(_PHASE4_EXT_BEGIN)
+	values = _phase4_active()
+	assert values["base"] == str(_PHASE4_BASE)
+	assert values["ceiling"] == str(_PHASE4_DEFAULT_CEILING)
+	# A ceiling below the base is raised to the base, never below it.
+	values = _phase4_active(E2E_JOB_STARTED_EPOCH="1000")
+	assert values["ceiling"] == str(_PHASE4_BASE)
+	assert values["rc"] == "1"
+	# No (or a non-numeric) job start: the ceiling equals the base.
+	for start in ("", "abc"):
+		values = _phase4_active(E2E_JOB_STARTED_EPOCH=start)
+		assert values["ceiling"] == str(_PHASE4_BASE)
+		assert values["rc"] == "1"
+	values = _phase4_active(PHASE_TIMEOUT="x")
+	assert values["ceiling"] == str(_PHASE4_BASE)
+
+
+def test_phase4_active_in_progress_candidate_waits_past_base_deadline() -> None:
+	assert _phase4_active()["rc"] == "0"
+	for status in ("queued", "pending", "waiting", "requested"):
+		assert _phase4_active(RUN_STATUS=status, IDLE="9999")["rc"] == "0"
+	now = _PHASE4_BASE + 600
+	step_start = _phase4_iso(now - 600)
+	assert _phase4_active(IDLE="9999", CURRENT_STEP_STARTED_AT=step_start)["rc"] == "0"
+
+
+def test_phase4_stalled_or_uncovered_candidate_times_out_at_base_deadline() -> None:
+	now = _PHASE4_BASE + 600
+	assert _phase4_active(IDLE="9999", CURRENT_STEP_STARTED_AT=_phase4_iso(now - 5000))["rc"] == "1"
+	assert _phase4_active(IDLE="9999", CURRENT_STEP_STARTED_AT="not-a-date")["rc"] == "1"
+	assert _phase4_active(IDLE="9999", CURRENT_STEP_STARTED_AT=_phase4_iso(now + 600))["rc"] == "1"
+	assert _phase4_active(IDLE="9999")["rc"] == "1"
+	assert _phase4_active(BAIT_UNCOVERED_RUN_IDS="10,20")["rc"] == "1"
+	assert _phase4_active(BAIT_UNCOVERED_RUN_IDS="20")["rc"] == "1"
+	assert _phase4_active(BAIT_UNCOVERED_RUN_IDS="200,2")["rc"] == "0"
+	for status in ("none", "completed", "unknown", ""):
+		assert _phase4_active(RUN_STATUS=status)["rc"] == "1"
+	values = _run_phase4_deadline_logic(**_PHASE4_BUDGET_ENV, E2E_JOB_STARTED_EPOCH=str(_PHASE4_JOB_START),
+		NOW=str(now), IDLE="30")
+	assert values["rc"] == "1"
+	for run_id in ("unknown", "", "20x"):
+		assert _phase4_active(RUN_ID=run_id)["rc"] == "1"
+
+
+def test_phase4_nothing_waits_past_the_ceiling() -> None:
+	for now in (_PHASE4_DEFAULT_CEILING, _PHASE4_DEFAULT_CEILING + 1):
+		assert _phase4_active(NOW=str(now), RUN_STATUS="queued")["rc"] == "1"
+		assert _phase4_active(NOW=str(now))["rc"] == "1"
+	assert _phase4_active(NOW=str(_PHASE4_DEFAULT_CEILING - 1))["rc"] == "0"
+	# A poll (and its sleep) must end by the ceiling, so the check keeps a
+	# POLL_INTERVAL margin; a malformed interval counts as no margin.
+	assert _phase4_active(NOW=str(_PHASE4_DEFAULT_CEILING - 10), POLL_INTERVAL="10")["rc"] == "1"
+	assert _phase4_active(NOW=str(_PHASE4_DEFAULT_CEILING - 11), POLL_INTERVAL="10")["rc"] == "0"
+	assert _phase4_active(NOW=str(_PHASE4_DEFAULT_CEILING - 1), POLL_INTERVAL="x")["rc"] == "0"
+
+
+def test_phase4_handoff_polls_the_next_run_past_the_base_deadline() -> None:
+	# A run just dropped as not covering the bait, or a just-advanced pin,
+	# still gets the poll that finds its successor (until the ceiling).
+	assert _phase4_active(TEST_HANDOFF_PENDING="1", RUN_STATUS="completed", BAIT_UNCOVERED_RUN_IDS="20")["rc"] == "0"
+	assert _phase4_active(TEST_HANDOFF_PENDING="1", RUN_STATUS="none", RUN_ID="unknown")["rc"] == "0"
+	assert _phase4_active(TEST_HANDOFF_PENDING="1", NOW=str(_PHASE4_DEFAULT_CEILING), RUN_STATUS="completed")["rc"] == "1"
+	assert _phase4_active(TEST_HANDOFF_PENDING="1", E2E_JOB_STARTED_EPOCH="", RUN_STATUS="completed")["rc"] == "1"
+	step = _phase4_step(_read_workflow())
+	coverage = _slice_between(step, "require_bait_review_coverage() {", "# Give the review workflow a moment to start")
+	# Set only where a run is actually dropped, never for an in-progress
+	# run whose coverage is still unknown (it is not dropped).
+	assert coverage.count("REVIEW_PHASE_HANDOFF_PENDING=1") == 2
+	for drop in re.finditer(r'BAIT_UNCOVERED_RUN_IDS="\$\{BAIT_UNCOVERED_RUN_IDS:\+', coverage):
+		assert coverage[drop.end():].lstrip().split("\n", 2)[1].strip() == "REVIEW_PHASE_HANDOFF_PENDING=1"
+	assert "REVIEW_PHASE_HANDOFF_PENDING=1" not in coverage[coverage.rindex("fi"):]
+	# One-shot: consumed right after the deadline check, so it allows one poll.
+	check = _slice_between(step, 'if [ "$NOW" -ge "$REVIEW_PHASE_DEADLINE" ]; then', "# Find the review workflow run")
+	assert check.rstrip().endswith("REVIEW_PHASE_HANDOFF_PENDING=0")
+	pin_advance = _slice_between(step, 'PIN_SHA="${PIN_HEAD_NOW}"', "continue")
+	assert "REVIEW_PHASE_HANDOFF_PENDING=1" in pin_advance
+	assert 'if [[ "$RUN_ID" =~ ^[0-9]+$ ]]; then REVIEW_PHASE_HANDOFF_PENDING=0; fi' in step
+
+
+def test_phase4_deadline_check_uses_extension_and_logs_once() -> None:
+	step = _phase4_step(_read_workflow())
+	check = _slice_between(step, 'if [ "$NOW" -ge "$REVIEW_PHASE_DEADLINE" ]; then', "# Find the review workflow run")
+	assert "if review_phase_deadline_extension_allowed; then" in check
+	assert step.count("E2E_REVIEW_DEADLINE_EXTENDED") == 1
+	log_index = check.index("E2E_REVIEW_DEADLINE_EXTENDED")
+	assert check.index('if [ "$REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED" = "0" ]; then') < log_index
+	assert "REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED=1" in check[log_index:]
+	timeout_path = check[check.index("          else\n"):]
+	assert "Review phase exceeded its ${REVIEW_PHASE_WALL_BUDGET_MINUTES}-minute total wall-clock budget" in timeout_path
+	assert 'echo "status=timeout" >> "$GITHUB_OUTPUT"' in timeout_path
+	assert "exit 1" in timeout_path
+	# The extension never bypasses the inactivity or per-step stall checks.
+	assert 'if [ $IDLE -ge $INACTIVITY_LIMIT ]; then' in step
+	assert 'REVIEW_STEP_TIMEOUT_MAX=90' in step
+	# The prefix stays registered as a stable log prefix (fragment or folded agents.md).
+	agents = agents_text()
+	assert "- `E2E_REVIEW_DEADLINE_EXTENDED`" in agents
+	assert "LOG_PREFIX.name=E2E_REVIEW_DEADLINE_EXTENDED" in agents
+
+
+# ── Phase 4 runner wait (#9480) ──────────────────────────────────────────
+_RW_START = 1_000_000
+# Ceiling = start + (115 - 25 - 30 - 10 - 20) min = start + 30 min; the base
+# deadline is start + max(5, 5 + 5) min = start + 10 min.
+_RW_ENV = {
+	"E2E_JOB_TIMEOUT_MINUTES": "115", "EDITOR_RETRY_BUDGET_MINUTES": "25", "PHASE_TIMEOUT": "30",
+	"PHASE7_WAIT_BUDGET_MINUTES": "10", "E2E_FINALIZATION_RESERVE_MINUTES": "20",
+	"REVIEW_TIMEOUT": "5", "REVIEW_STEP_TIMEOUT": "5", "REVIEW_PHASE_HANDOFF_BUDGET_MINUTES": "5",
+	"POLL_INTERVAL": "60", "E2E_JOB_STARTED_EPOCH": str(_RW_START),
+}
+# The clock stubs go before the body: the base deadline and ceiling are
+# computed before the gh API helper is sourced.
+_RW_CLOCK_STUB = r"""
+date() {
+  if [ "${1:-}" = -d ]; then command date "$@"; return; fi
+  printf '%s\n' "$(<"${RUNNER_TEMP}/clock")"
+}
+sleep() { printf '%s\n' "$(( $(<"${RUNNER_TEMP}/clock") + $1 ))" > "${RUNNER_TEMP}/clock"; }
+"""
+_RW_STUB = r"""
+gh_api_safe_quiet_print() {
+  local response="" entry=""
+  entry=$(jq -c --argjson now "$(<"${RUNNER_TEMP}/clock")" '(map(select($now < .until)) | first) // last' "${RUNNER_TEMP}/timeline.json")
+  case "$1" in
+    */actions/runs?branch=*) response=$(printf '%s' "$entry" | jq -c '{workflow_runs: ([.run] | map(select(. != null)))}') ;;
+    */actions/runs/*/jobs?*)
+      if [ "$(printf '%s' "$entry" | jq -r '.jobs == null')" = true ]; then return 1; fi
+      response=$(printf '%s' "$entry" | jq -c '.jobs') ;;
+    */actions/jobs/*/logs) response="static log" ;;
+    */pulls/*/comments) response='[]' ;;
+    */pulls/*) response='{"head":{"sha":"cccccccccccccccccccccccccccccccccccccccc"}}' ;;
+    *) echo "Unexpected API read: $1" >&2; return 1 ;;
+  esac
+  if [ "${2:-}" = --jq ]; then
+    printf '%s' "$response" | jq -cr "$3"
+  else
+    printf '%s' "$response"
+  fi
+}
+"""
+
+
+def _rw_run(status: str, conclusion: str | None = None) -> dict:
+	return {"id": 30, "name": "Internal Review", "path": "internal-review.yml", "event": "pull_request",
+		"head_sha": "c" * 40, "created_at": "2026-11-14T00:00:00Z", "updated_at": "2026-11-14T00:00:00Z",
+		"status": status, "conclusion": conclusion}
+
+
+def _rw_jobs(*jobs: dict) -> dict:
+	return {"total_count": len(jobs), "jobs": list(jobs)}
+
+
+def _rw_queued_job() -> dict:
+	return {"id": 300, "name": "review / gate", "status": "queued", "conclusion": None, "steps": []}
+
+
+def _rw_active_job(started_epoch: int) -> dict:
+	started = _phase4_iso(started_epoch)
+	return {"id": 301, "name": "review / codex-agent", "status": "in_progress", "conclusion": None,
+		"steps": [{"name": "Run reviewer models", "status": "in_progress", "conclusion": None, "started_at": started}]}
+
+
+def _run_phase4_runner_wait(timeline: list[dict]) -> tuple[subprocess.CompletedProcess[str], str]:
+	"""Run the real Phase 4 body against a fake clock; ``timeline`` entries apply until ``until``."""
+	step = _phase4_step(_read_workflow())
+	body = textwrap.dedent(step.split("        run: |\n", 1)[1])
+	body = _RW_CLOCK_STUB + body.replace(". ./scripts/comprehensive_test_and_release_gh_api.sh", _RW_STUB, 1)
+	with tempfile.TemporaryDirectory() as temp:
+		root = Path(temp)
+		(root / "clock").write_text(f"{_RW_START}\n", encoding="utf-8")
+		(root / "timeline.json").write_text(json.dumps(timeline), encoding="utf-8")
+		env = os.environ.copy()
+		for name in ("BAIT_SHA", "BAIT_CREATED_AT", "E2E_JOB_STARTED_EPOCH", "JOBS_JSON", "RUN_ID", "RUN_STATUS"):
+			env.pop(name, None)
+		env.update({"RUNNER_TEMP": temp, "GITHUB_OUTPUT": str(root / "output"), "TEST_REPO": "owner/repo",
+			"ISSUE_NUMBER": "12", "PR_NUMBER": "13", "TZ": "UTC", **_RW_ENV})
+		result = subprocess.run(["bash", "-c", body], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=60, check=False)
+		output = (root / "output").read_text(encoding="utf-8") if (root / "output").exists() else ""
+		return result, output
+
+
+def test_phase4_runner_wait_helper_and_extension() -> None:
+	queued = json.dumps(_rw_jobs(_rw_queued_job()))
+	assert _phase4_active(IDLE="9999", JOBS_JSON=queued)["rc"] == "0"
+	both = json.dumps(_rw_jobs(_rw_queued_job(), {"id": 2, "status": "in_progress", "steps": []}))
+	assert _phase4_active(IDLE="9999", JOBS_JSON=both)["rc"] == "1"
+	done = json.dumps(_rw_jobs({"id": 2, "status": "completed", "steps": []}))
+	assert _phase4_active(IDLE="9999", JOBS_JSON=done)["rc"] == "1"
+	for broken in ("", "not json", "{}", '{"jobs":null}'):
+		assert _phase4_active(IDLE="9999", JOBS_JSON=broken)["rc"] == "1"
+	assert _phase4_active(IDLE="9999", JOBS_JSON=queued, BAIT_UNCOVERED_RUN_IDS="20")["rc"] == "1"
+	assert _phase4_active(IDLE="9999", JOBS_JSON=queued, NOW=str(_PHASE4_DEFAULT_CEILING))["rc"] == "1"
+	block = _phase4_deadline_extension_block(_read_workflow())
+	assert block.index("review_waiting_for_runner() {") < block.index("review_phase_deadline_extension_allowed() {")
+	assert "JOBS_STEP_JSON" not in block[block.index("review_waiting_for_runner() {"):block.index("review_phase_deadline_extension_allowed() {")]
+
+
+def test_phase4_pending_run_waiting_for_runner_is_not_a_stall() -> None:
+	# Pending for 20 minutes (4x REVIEW_TIMEOUT, past the base deadline),
+	# then completes successfully before the ceiling.
+	result, output = _run_phase4_runner_wait([
+		{"until": _RW_START + 1200, "run": _rw_run("pending"), "jobs": _rw_jobs(_rw_queued_job())},
+		{"until": _RW_START + 99999, "run": _rw_run("completed", "success"), "jobs": _rw_jobs()},
+	])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert output.splitlines() == ["status=success", "review_run_id=30"]
+	assert "Review phase stalled" not in result.stdout
+	assert f"E2E_REVIEW_RUNNER_WAIT run=30 status=pending outcome=waiting since={_RW_START + 5}" in result.stdout
+	assert re.search(r"E2E_REVIEW_RUNNER_WAIT run=30 outcome=started waited_seconds=\d+", result.stdout)
+	assert "(waiting for runner " in result.stdout
+	assert result.stdout.count("outcome=waiting") == 1
+
+
+def test_phase4_in_progress_run_with_only_queued_jobs_is_not_a_stall() -> None:
+	result, output = _run_phase4_runner_wait([
+		{"until": _RW_START + 1200, "run": _rw_run("in_progress"), "jobs": _rw_jobs(_rw_queued_job())},
+		# Active for 3 minutes, inside the harness's 5-minute inactivity limit.
+		{"until": _RW_START + 1380, "run": _rw_run("in_progress"), "jobs": _rw_jobs(_rw_active_job(_RW_START + 1200))},
+		{"until": _RW_START + 99999, "run": _rw_run("completed", "success"), "jobs": _rw_jobs()},
+	])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert output.splitlines() == ["status=success", "review_run_id=30"]
+	assert "Review phase stalled" not in result.stdout
+	assert "E2E_REVIEW_RUNNER_WAIT run=30 status=in_progress outcome=waiting" in result.stdout
+	assert re.search(r"E2E_REVIEW_RUNNER_WAIT run=30 outcome=started waited_seconds=1[12]\d\d", result.stdout)
+
+
+def test_phase4_runner_wait_past_ceiling_names_the_queue() -> None:
+	result, output = _run_phase4_runner_wait([
+		{"until": _RW_START + 99999, "run": _rw_run("pending"), "jobs": _rw_jobs(_rw_queued_job())},
+	])
+	assert result.returncode == 1, result.stderr + result.stdout
+	assert output.splitlines() == ["status=timeout"]
+	assert re.search(r"E2E_REVIEW_RUNNER_WAIT run=30 outcome=ceiling waited_seconds=\d+", result.stdout)
+	assert re.search(r"::error::Review run 30 was still waiting for a runner after 2\d minutes \(ceiling reached\); "
+		r"the hosted-runner queue, not the review, blocked the release", result.stdout)
+	assert "Review phase exceeded its 10-minute total wall-clock budget" in result.stdout
+	assert "Review phase stalled" not in result.stdout
+	assert "E2E_REVIEW_DEADLINE_EXTENDED run=30 status=pending" in result.stdout
+
+
+def test_phase4_runner_wait_ceiling_after_unanswered_poll_still_names_the_queue() -> None:
+	# Polls land at start+5+60k; the one at start+1685 is the last before the
+	# ceiling (start+1800) and its jobs read fails, so the stretch stays open
+	# but review_waiting_for_runner returns 1 at the ceiling check.
+	result, output = _run_phase4_runner_wait([
+		{"until": _RW_START + 1680, "run": _rw_run("in_progress"), "jobs": _rw_jobs(_rw_queued_job())},
+		{"until": _RW_START + 99999, "run": _rw_run("in_progress"), "jobs": None},
+	])
+	assert result.returncode == 1, result.stderr + result.stdout
+	assert output.splitlines() == ["status=timeout"]
+	assert re.search(r"E2E_REVIEW_RUNNER_WAIT run=30 outcome=ceiling waited_seconds=\d+", result.stdout)
+	assert re.search(r"::error::Review run 30 had been waiting for a runner for 2\d minutes when the ceiling was reached "
+		r"\(the last poll did not answer, so the wait is unconfirmed\); the hosted-runner queue", result.stdout)
+	assert "was still waiting for a runner" not in result.stdout
+	assert "Review phase exceeded its 10-minute total wall-clock budget" in result.stdout
+	assert "Review phase stalled" not in result.stdout
+
+
+def test_phase4_runner_wait_survives_an_empty_runs_lookup_past_base_deadline() -> None:
+	# Pending past the base deadline (start+600), then one runs lookup comes
+	# back empty (poll at start+725) far below the ceiling (start+1800): the
+	# extension holds, no false outcome=ceiling, and the run then completes.
+	result, output = _run_phase4_runner_wait([
+		{"until": _RW_START + 700, "run": _rw_run("pending"), "jobs": _rw_jobs(_rw_queued_job())},
+		{"until": _RW_START + 760, "run": None, "jobs": None},
+		{"until": _RW_START + 900, "run": _rw_run("pending"), "jobs": _rw_jobs(_rw_queued_job())},
+		{"until": _RW_START + 99999, "run": _rw_run("completed", "success"), "jobs": _rw_jobs()},
+	])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert output.splitlines() == ["status=success", "review_run_id=30"]
+	assert "outcome=ceiling" not in result.stdout
+	assert "Review phase exceeded its" not in result.stdout
+	assert result.stdout.count("outcome=waiting") == 1
+	assert result.stdout.count("outcome=started") == 1
+	assert re.search(r"E2E_REVIEW_RUNNER_WAIT run=30 outcome=started waited_seconds=9\d\d", result.stdout)
+	assert "(runner wait unconfirmed this poll, " in result.stdout
+
+
+def test_phase4_runner_wait_lasting_empty_runs_lookup_falls_back_to_timeout() -> None:
+	# Pending past the base deadline (start+600), then the runs lookup stays
+	# empty (polls at start+725, 785, 845). Two empty polls keep the
+	# extension; the third refuses it, far below the ceiling (start+1800),
+	# so the generic wall-clock timeout fires instead of an hour of empty
+	# polls ending in a misattributed status.
+	result, output = _run_phase4_runner_wait([
+		{"until": _RW_START + 700, "run": _rw_run("pending"), "jobs": _rw_jobs(_rw_queued_job())},
+		{"until": _RW_START + 99999, "run": None, "jobs": None},
+	])
+	assert result.returncode == 1, result.stderr + result.stdout
+	assert output.splitlines() == ["status=timeout"]
+	assert "Review phase exceeded its 10-minute total wall-clock budget" in result.stdout
+	assert "outcome=ceiling" not in result.stdout
+	assert "Review phase stalled" not in result.stdout
+	assert result.stdout.count("(runner wait unconfirmed this poll, ") == 3
+
+
+def test_phase4_active_step_without_state_change_still_stalls() -> None:
+	result, output = _run_phase4_runner_wait([
+		{"until": _RW_START + 99999, "run": _rw_run("in_progress"), "jobs": _rw_jobs(_rw_active_job(_RW_START))},
+	])
+	assert result.returncode == 1, result.stderr + result.stdout
+	assert output.splitlines() == ["status=timeout"]
+	assert "Review phase stalled" in result.stdout
+	assert "E2E_REVIEW_RUNNER_WAIT" not in result.stdout
+
+
+def test_phase4_runner_wait_missing_jobs_json_keeps_inactivity_rules() -> None:
+	result, output = _run_phase4_runner_wait([
+		{"until": _RW_START + 99999, "run": _rw_run("in_progress"), "jobs": None},
+	])
+	assert result.returncode == 1, result.stderr + result.stdout
+	assert output.splitlines() == ["status=timeout"]
+	assert "Review phase stalled" in result.stdout
+	assert "E2E_REVIEW_RUNNER_WAIT" not in result.stdout
+
+
+def test_phase4_runner_wait_survives_a_failed_jobs_read() -> None:
+	# A failed jobs read in the middle of a runner wait says nothing about
+	# the runner: the stretch is kept, so there is one waiting line and one
+	# started line, not a false start followed by a second stretch.
+	result, output = _run_phase4_runner_wait([
+		{"until": _RW_START + 180, "run": _rw_run("in_progress"), "jobs": _rw_jobs(_rw_queued_job())},
+		{"until": _RW_START + 300, "run": _rw_run("in_progress"), "jobs": None},
+		{"until": _RW_START + 480, "run": _rw_run("in_progress"), "jobs": _rw_jobs(_rw_queued_job())},
+		{"until": _RW_START + 99999, "run": _rw_run("completed", "success"), "jobs": _rw_jobs()},
+	])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert output.splitlines() == ["status=success", "review_run_id=30"]
+	assert result.stdout.count("E2E_REVIEW_RUNNER_WAIT run=30 status=in_progress outcome=waiting") == 1
+	assert result.stdout.count("outcome=started") == 1
+	assert re.search(r"E2E_REVIEW_RUNNER_WAIT run=30 outcome=started waited_seconds=4\d\d", result.stdout)
+	assert "(runner wait unconfirmed this poll, " in result.stdout
+
+
+def test_phase4_runner_wait_survives_an_unreadable_jobs_response() -> None:
+	# A non-empty jobs body without a jobs array is not an answer either.
+	result, output = _run_phase4_runner_wait([
+		{"until": _RW_START + 180, "run": _rw_run("in_progress"), "jobs": _rw_jobs(_rw_queued_job())},
+		{"until": _RW_START + 300, "run": _rw_run("in_progress"), "jobs": "not json"},
+		{"until": _RW_START + 480, "run": _rw_run("in_progress"), "jobs": _rw_jobs(_rw_queued_job())},
+		{"until": _RW_START + 99999, "run": _rw_run("completed", "success"), "jobs": _rw_jobs()},
+	])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert output.splitlines() == ["status=success", "review_run_id=30"]
+	assert result.stdout.count("E2E_REVIEW_RUNNER_WAIT run=30 status=in_progress outcome=waiting") == 1
+	assert result.stdout.count("outcome=started") == 1
+	assert re.search(r"E2E_REVIEW_RUNNER_WAIT run=30 outcome=started waited_seconds=4\d\d", result.stdout)
+
+
+def test_phase4_runner_wait_prefix_is_registered() -> None:
+	agents = agents_text()
+	assert "- `E2E_REVIEW_RUNNER_WAIT`" in agents
+	assert "LOG_PREFIX.name=E2E_REVIEW_RUNNER_WAIT" in agents
+
+
+def test_success_transitions_and_unconditional_cleanup_are_preserved() -> None:
+	workflow = _read_workflow()
+	phase6 = _phase6(workflow)
+	assert 'if [ "$REVIEW_BLOCKED_PRESENT" -eq 0 ] || [ "$TERMINAL_LABEL_PRESENT" -eq 1 ]; then' in phase6
+	assert "ai:merged|ai:ready-to-merge" in phase6
+	cleanup = _slice_between(workflow, "- name: Cleanup test artifacts", "# Temporary: reveal which git invocation")
+	assert "if: always()" in cleanup
+	assert 'issues/${TRACKING_NUMBER}' in cleanup
+
+
+def test_hot_poller_guard_installs_and_verifies_pytest_before_running() -> None:
+	job = _e2e_job(_read_workflow())
+	step = _slice_between(
+		job,
+		'- name: "Phase 0a: Hot orchestrate-poll regression guard"',
+		"- name: Create E2E test issue",
+	)
+	test_call = step.index("tests/test_orchestrate_poll_process.py")
+	install = step.find("python3 -m pip install --quiet pytest")
+	import_check = step.find('python3 -c "import pytest"')
+	unavailable = step.find("status=pytest_unavailable")
+	assert -1 < install < import_check < unavailable < test_call
+	assert "exit 1" in step[import_check:test_call]
+	assert "python3-pytest" in step[install:import_check]
+
+
+def test_validate_standalone_job_budget_exceeds_watcher_wait() -> None:
+	workflow = _read_workflow()
+	job = _slice_between(workflow, "  validate-standalone-test:\n", "  clarify-rejects-unsolvable-test:\n")
+	job_match = re.search(r"^    timeout-minutes:\s+(\d+)\s*$", job, re.MULTILINE)
+	assert job_match is not None
+	job_timeout = int(job_match.group(1))
+	step = _slice_between(
+		job,
+		"- name: Dispatch internal-validate.yml standalone",
+		'- name: "Soft-error analyser (validate-standalone)"',
+	)
+	step_match = re.search(r"^        timeout-minutes:\s+(\d+)\s*$", step, re.MULTILINE)
+	assert step_match is not None, "dispatch step must carry its own timeout-minutes"
+	step_timeout = int(step_match.group(1))
+	reg = re.search(r"--registration-timeout-secs\s+(\d+)", step)
+	completion = re.search(r"--completion-timeout-secs\s+(\d+)", step)
+	assert reg is not None and completion is not None
+	watcher_wait = max(int(reg.group(1)), int(completion.group(1)))
+	assert step_timeout * 60 >= watcher_wait + 180
+	assert job_timeout >= step_timeout + 10
+
+
+def main() -> int:
+	tests = [value for name, value in sorted(globals().items()) if name.startswith("test_") and callable(value)]
+	for test in tests:
+		test()
+	print(f"{len(tests)} passed")
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

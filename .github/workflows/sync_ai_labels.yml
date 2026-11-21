@@ -1,0 +1,315 @@
+---
+name: AI Sync Labels
+
+"on":
+  workflow_call:
+    inputs:
+      dry_run:
+        description: "Preview label changes without mutating repository labels"
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      GH_PAT:
+        required: false
+      TG_BOT_SECRET:
+        required: false
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Preview label changes without mutating repository labels"
+        required: false
+        default: false
+        type: boolean
+
+env:
+  ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
+
+# Kept at contents: read + issues: write on purpose. A called workflow cannot
+# request more than its caller grants, and the consumer template
+# (workflow-templates/ai-sync-labels.yml) grants no pull-requests scope, so
+# adding pull-requests: write here would stop every consumer label sync from
+# starting. This block also caps the job token whatever the caller grants, so
+# the github.token fallback never has pull-requests scope: draining a retired
+# label from PRs needs GH_PAT. Without it each PR item fails as drain_comment /
+# drain_close and keeps the label (issues still drain with github.token).
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  sync-labels:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Resolve workflow support ref
+        env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          wf_source="shubhodeep1/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+          else
+            # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
+            # take the support scripts from that same commit, never a newer
+            # stable or main (issue tele-funtoken#4566). Tags, branches and any
+            # other identity keep stable.
+            support_ref_pin="stable"
+            support_ref_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            if [[ "${support_ref_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/sync_ai_labels\.yml@[0-9a-f]{40}$ ]]; then
+              support_ref_pin="${support_ref_workflow_ref##*@}"
+            fi
+            echo "SUPPORT_REF ref=${support_ref_pin} workflow_ref=${support_ref_workflow_ref:-unknown}"
+            echo "SCRIPT_REF=${support_ref_pin}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Checkout workflow support source
+        id: checkout_support_source
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ env.SCRIPT_REF }}
+          token: ${{ secrets.GH_PAT || github.token }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+
+      - name: Checkout workflow support source fallback
+        if: ${{ steps.checkout_support_source.outcome == 'failure' && env.SCRIPT_REF == 'stable' }}
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: main
+          token: ${{ secrets.GH_PAT || github.token }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+
+      - name: Ensure workflow support source checkout
+        run: |
+          set -euo pipefail
+          if [ ! -d .codex-workflow-src ]; then
+            echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
+            exit 1
+          fi
+          # A pinned support ref must be exactly the commit the caller pinned;
+          # never run support code from a moving ref in its place.
+          if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${SCRIPT_REF}" ]; then
+            echo "::error::Workflow support checkout does not match the pinned commit ${SCRIPT_REF}; refusing to run support code from another ref."
+            exit 1
+          fi
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Sync AI labels from contract
+        id: sync
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          PYTHONDONTWRITEBYTECODE: "1"
+          # Drain (comment on and close) open items that still carry a retired
+          # label before deleting it; scripts/ai_labels.py also defaults to true.
+          # Set vars.RETIRED_LABEL_DRAIN_ENABLED=false for warn-only deletes.
+          RETIRED_LABEL_DRAIN_ENABLED: ${{ vars.RETIRED_LABEL_DRAIN_ENABLED || 'true' }}
+        run: |
+          set -euo pipefail
+
+          SCRIPT_PATH=".codex-workflow-src/scripts/ai_labels.py"
+          CONTRACT_PATH=".codex-workflow-src/.github/ai/label_contract.v1.json"
+          if [ ! -f "${SCRIPT_PATH}" ] || [ ! -f "${CONTRACT_PATH}" ]; then
+            echo "::error::Missing workflow support files in .codex-workflow-src"
+            exit 1
+          fi
+
+          RESULT_JSON="${RUNNER_TEMP}/sync-ai-labels-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          STDERR_LOG="${RUNNER_TEMP}/sync-ai-labels-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.stderr.log"
+          CMD=(
+            python3
+            "${SCRIPT_PATH}"
+            sync-labels
+            --contract-file
+            "${CONTRACT_PATH}"
+            --repo
+            "${GITHUB_REPOSITORY}"
+          )
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            CMD+=(--dry-run)
+          fi
+
+          rc=0
+          if "${CMD[@]}" > "${RESULT_JSON}" 2> >(tee "${STDERR_LOG}" >&2); then
+            rc=0
+          else
+            rc=$?
+          fi
+
+          if [ ! -s "${RESULT_JSON}" ]; then
+          python3 - <<'PY' "${RESULT_JSON}" "${rc}"
+          import json
+          import sys
+          from pathlib import Path
+
+          result_path = Path(sys.argv[1])
+          exit_code = int(sys.argv[2])
+          payload = {
+              "created": 0,
+              "updated": 0,
+              "unchanged": 0,
+              "errors": [
+                  {
+                      "label": "*",
+                      "action": "command",
+                      "message": f"sync-labels produced no JSON output (exit={exit_code})",
+                  }
+              ],
+          }
+          result_path.write_text(json.dumps(payload, ensure_ascii=True, sort_keys=True), encoding="utf-8")
+          PY
+          fi
+
+          echo "result_json=${RESULT_JSON}" >> "${GITHUB_OUTPUT}"
+          echo "stderr_log=${STDERR_LOG}" >> "${GITHUB_OUTPUT}"
+          echo "exit_code=${rc}" >> "${GITHUB_OUTPUT}"
+
+      - name: Summarize results
+        id: summarize
+        if: always()
+        env:
+          RESULT_JSON: ${{ steps.sync.outputs.result_json }}
+          EXIT_CODE: ${{ steps.sync.outputs.exit_code }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY' "${RESULT_JSON}" "${EXIT_CODE}" "${DRY_RUN}" "${GITHUB_OUTPUT}" "${GITHUB_STEP_SUMMARY}"
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          result_path = Path(sys.argv[1])
+          exit_code = int(sys.argv[2] or "0")
+          dry_run = sys.argv[3] == "true"
+          github_output = Path(sys.argv[4])
+          summary_path = Path(sys.argv[5])
+
+          parse_failed = False
+          try:
+              payload = json.loads(result_path.read_text(encoding="utf-8"))
+          except (OSError, json.JSONDecodeError) as exc:
+              parse_failed = True
+              payload = {
+                  "created": 0,
+                  "updated": 0,
+                  "unchanged": 0,
+                  "errors": [
+                      {
+                          "label": "*",
+                          "action": "summary",
+                          "message": f"Could not parse sync result JSON: {exc}",
+                      }
+                  ],
+              }
+
+          created = int(payload.get("created", 0) or 0)
+          updated = int(payload.get("updated", 0) or 0)
+          unchanged = int(payload.get("unchanged", 0) or 0)
+          errors = payload.get("errors") if isinstance(payload.get("errors"), list) else []
+          error_count = len(errors)
+
+          if exit_code != 0 or parse_failed:
+              alert_level = "ERROR"
+          elif error_count > 0:
+              alert_level = "WARNING"
+          else:
+              alert_level = "DEBUG"
+
+          summary_lines = [
+              "## AI Label Sync Summary",
+              "",
+              f"- Repository: `{os.environ.get('GITHUB_REPOSITORY', Path.cwd().name)}`",
+              f"- Dry run: `{str(dry_run).lower()}`",
+              "",
+              "| Created | Updated | Unchanged | Errors | Exit code |",
+              "| --- | --- | --- | --- | --- |",
+              f"| {created} | {updated} | {unchanged} | {error_count} | {exit_code} |",
+          ]
+          if errors:
+              summary_lines.extend(["", "### Errors"])
+              for error in errors[:20]:
+                  label = str(error.get("label", "<unknown>"))
+                  action = str(error.get("action", "unknown"))
+                  message = str(error.get("message", "unknown error"))
+                  status = error.get("status")
+                  status_suffix = f" (status={status})" if status is not None else ""
+                  summary_lines.append(f"- `{label}` / `{action}`{status_suffix}: {message}")
+              if len(errors) > 20:
+                  summary_lines.append(f"- ... {len(errors) - 20} more")
+          summary_path.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
+
+          with github_output.open("a", encoding="utf-8") as handle:
+              handle.write(f"created={created}\n")
+              handle.write(f"updated={updated}\n")
+              handle.write(f"unchanged={unchanged}\n")
+              handle.write(f"error_count={error_count}\n")
+              handle.write(f"alert_level={alert_level}\n")
+              handle.write(f"should_fail={'true' if exit_code != 0 or parse_failed else 'false'}\n")
+          PY
+
+      - name: Telegram status
+        if: always()
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          CREATED: ${{ steps.summarize.outputs.created }}
+          UPDATED: ${{ steps.summarize.outputs.updated }}
+          UNCHANGED: ${{ steps.summarize.outputs.unchanged }}
+          ERROR_COUNT: ${{ steps.summarize.outputs.error_count }}
+          ALERT_LEVEL: ${{ steps.summarize.outputs.alert_level }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          # The clean-run ping (created=0/updated=0/errors=0, emitted at DEBUG)
+          # fires on every @stable release dispatch in every consumer repo, so
+          # it is pure noise by default. AI_LABEL_SYNC_SUCCESS_ALERT_LEVEL is a
+          # step-scoped ALERT_MSG_LEVEL override applied ONLY when the run
+          # outcome is DEBUG; it defaults to SILENT so tg_helpers.sh's
+          # _tg_should_send drops the ping unless a consumer opts back in via
+          # vars.AI_LABEL_SYNC_SUCCESS_ALERT_LEVEL=DEBUG. WARNING (per-label
+          # errors) and ERROR (sync failed) pings are unaffected and keep
+          # honouring the global ALERT_MSG_LEVEL. Mirrors PR_PROCESSED_ALERT_LEVEL
+          # in review_autofix.yml. Dry-runs are treated the same as real runs.
+          AI_LABEL_SYNC_SUCCESS_ALERT_LEVEL: ${{ vars.AI_LABEL_SYNC_SUCCESS_ALERT_LEVEL || 'SILENT' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-}" ]; then
+            echo "Telegram notification skipped (missing TG_BOT_SECRET or TG_ADMIN_CHAT_ID)."
+            exit 0
+          fi
+
+          TG_HELPERS_PATH=".codex-workflow-src/scripts/tg_helpers.sh"
+          if [ ! -f "${TG_HELPERS_PATH}" ]; then
+            echo "Telegram notification skipped (missing ${TG_HELPERS_PATH})."
+            exit 0
+          fi
+
+          source "${TG_HELPERS_PATH}"
+          suffix=""
+          if [ "${DRY_RUN}" = "true" ]; then
+            suffix=" (dry-run)"
+          fi
+          msg="AI label sync${suffix} for ${GITHUB_REPOSITORY}: created=${CREATED:-0}, updated=${UPDATED:-0}, unchanged=${UNCHANGED:-0}, errors=${ERROR_COUNT:-0}"
+          # Only the DEBUG (clean-run) outcome is re-thresholded; see the
+          # AI_LABEL_SYNC_SUCCESS_ALERT_LEVEL comment in this step's env block.
+          if [ "${ALERT_LEVEL:-ERROR}" = "DEBUG" ]; then
+            export ALERT_MSG_LEVEL="${AI_LABEL_SYNC_SUCCESS_ALERT_LEVEL:-SILENT}"
+          fi
+          tg_send_msg "${msg}" "${ALERT_LEVEL:-ERROR}" >/dev/null || true
+
+      - name: Fail on total sync failure
+        if: always() && steps.summarize.outputs.should_fail == 'true'
+        run: |
+          set -euo pipefail
+          echo "::error::AI label sync failed. See the step summary for details."
+          exit 1

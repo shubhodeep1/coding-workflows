@@ -1,0 +1,39 @@
+name: Install Codex CLI
+description: |
+  Install the @openai/codex CLI deterministically by pinning both the entry
+  package (which ships bin/codex.js) and the platform-specific binary tarball
+  under the alias name the entry script resolves at runtime
+  (@openai/codex-linux-x64). This avoids the npm CLI bug where global installs
+  silently skip optionalDependencies (npm/cli#4828), which produced
+  "Missing optional dependency @openai/codex-linux-x64" failures across
+  reusable workflows.
+
+inputs:
+  codex_version:
+    description: Pinned Codex CLI version (e.g. v0.114.0).
+    required: false
+    default: v0.114.0
+
+runs:
+  using: composite
+  steps:
+    - name: Install Codex CLI (entry + platform binary)
+      shell: bash
+      env:
+        CODEX_VERSION: ${{ inputs.codex_version }}
+      run: |
+        set -euo pipefail
+
+        # Strip a leading "v" if the caller supplied a tag-style version, since
+        # the platform tarball is published without it (e.g. 0.114.0-linux-x64).
+        version="${CODEX_VERSION#v}"
+
+        # Install both packages explicitly so the platform binary is never
+        # left to npm's optionalDependencies resolution.
+        npm install -g \
+          "@openai/codex@${CODEX_VERSION}" \
+          "@openai/codex-linux-x64@npm:@openai/codex@${version}-linux-x64" \
+          --no-audit --no-fund
+
+        # Fail fast if the install did not produce a runnable binary.
+        codex --version

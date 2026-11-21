@@ -1,0 +1,1254 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+stage_review_runtime_support()
+{
+
+WORKFLOW_SOURCE_REPO="${WORKFLOW_SOURCE_REPO:-shubhodeep1/coding-workflows}"
+CURRENT_REPOSITORY="${CURRENT_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+SCRIPT_REF="${SCRIPT_REF:-unknown}"
+
+# The caller verifies this immutable workflow checkout before running us.
+# Never stage executable support from the reviewed worktree or a moving ref.
+if [[ ! "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] ||
+   [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF}" ]; then
+  echo "::error::Unverified workflow support checkout." >&2
+  exit 1
+fi
+
+if [ -z "${RUNNER_TEMP:-}" ] || [ -z "${GITHUB_RUN_ID:-}" ] || [ -z "${GITHUB_RUN_ATTEMPT:-}" ] || [ -z "${GITHUB_ENV:-}" ]; then
+  echo "::error::stage_workflow_support.sh requires RUNNER_TEMP, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, and GITHUB_ENV."
+  exit 1
+fi
+if [ -z "${CURRENT_REPOSITORY}" ]; then
+  echo "::error::stage_workflow_support.sh requires CURRENT_REPOSITORY or GITHUB_REPOSITORY for trusted overlay staging." >&2
+  exit 1
+fi
+
+wf_source="${WORKFLOW_SOURCE_REPO}"
+workspace_root="${GITHUB_WORKSPACE:-$PWD}"
+
+# Always stage runtime support files out of tree so main-primary
+# bootstrap helpers never overwrite the source-repo PR worktree
+# before reviewer/editor snapshots are taken.
+SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"
+SUPPORT_PROMPTS_DIR="${SUPPORT_ROOT_DIR}/prompts"
+SUPPORT_AI_MEMORY_DIR="${SUPPORT_ROOT_DIR}/ai-memory"
+if [ "${CURRENT_REPOSITORY}" = "${wf_source}" ]; then
+  IS_WORKFLOW_SOURCE_REPO="true"
+else
+  IS_WORKFLOW_SOURCE_REPO="false"
+fi
+mkdir -p "${SUPPORT_SCRIPTS_DIR}" "${SUPPORT_PROMPTS_DIR}" "${SUPPORT_AI_MEMORY_DIR}/schemas"
+{
+  echo "SUPPORT_ROOT_DIR=${SUPPORT_ROOT_DIR}"
+  echo "SUPPORT_SCRIPTS_DIR=${SUPPORT_SCRIPTS_DIR}"
+  echo "SUPPORT_PROMPTS_DIR=${SUPPORT_PROMPTS_DIR}"
+  echo "SUPPORT_AI_MEMORY_DIR=${SUPPORT_AI_MEMORY_DIR}"
+  echo "IS_WORKFLOW_SOURCE_REPO=${IS_WORKFLOW_SOURCE_REPO}"
+  echo "SUPPORT_INSTRUCTIONS_FILE=${SUPPORT_ROOT_DIR}/unattended_system_instructions.md"
+  echo "SUPPORT_CODEX_INSTRUCTIONS_FILE=${SUPPORT_ROOT_DIR}/unattended_system_instructions.md"
+  echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
+  echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${PROMPT_PRELUDE_REFACTOR_ENABLED:-false}"
+  echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}"
+} >> "$GITHUB_ENV"
+
+REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh attempt_journal.py gh_api_retry.py review_head_gate.sh pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh assemble_prompt.sh nag_reminder.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py cost_audit.py codex_helpers.sh codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh opencode_helpers.sh write_opencode_config.sh review_run_reviewers.sh review_apply_fixes.sh review_untrusted_sandbox.sh sandbox_image.sh review_untrusted_workspace.py clarify_openrouter_broker.py review_reject_verify.sh review_rb_judge.sh dependency_registry_proxy.py review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh review_merge_train.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh review_resolve_review_threads.sh review_resolve_review_threads_plan.py workspace_init.sh workspace_safety_check.sh review_autofix_step_merge_topology_gate.sh review_autofix_step_editor_uncommitted_changes.sh review_autofix_step_detect_merge_conflicts.sh review_autofix_step_partial_finalize.sh review_autofix_step_iteration_summary.sh review_autofix_step_post_commit_retrigger.sh review_autofix_step_changes_lost_redispatch.sh review_single_issue_security_pass.sh security_pass_skip.py review_rb_judge_security_pass.sh review_autofix_step_count_iterations.sh review_autofix_step_assemble_failure_evidence.sh review_autofix_step_failure_comment.sh review_autofix_step_provider_outage_record.sh review_autofix_step_mark_review_blocked_workflow_failure.sh review_autofix_step_claude_pool_capacity.sh review_autofix_step_claude_capacity_wait.sh workflow_failure_heal.py review_autofix_step_apply_fixes_editor.sh review_autofix_step_restore_partial_resume.sh review_autofix_step_generate_diff_context.sh review_autofix_step_preflight_required_files.sh review_autofix_step_partial_finalize_safety.sh review_autofix_step_editor_noop_disposition.sh review_autofix_step_stage_codex_logs.sh review_autofix_step_init_runtime_workspace.sh files_touched_scope_guard.py unblock_judge.sh unblock_actions.py security_dependency.py review_autofix_step_post_editor_summary.sh review_autofix_step_post_review_blocked_comment.sh review_autofix_step_detect_smoke_test.sh review_autofix_step_evaluate_gate.sh review_autofix_step_deterministic_skip_security_pass.sh review_autofix_step_mark_ready_to_merge.sh review_autofix_step_prepush_test_gate.sh review_floor_rules.sh review_consolidate.sh review_parse_consolidator.sh review_issue_ledger.sh ledger_emit_substate.sh codex_thread_reuse.sh acceptance_check.py partial_delivery.py review_autofix_step_checkout_pr_head_branch.sh build_static_context.sh assemble_agents.py"
+# Keep this registry for compatibility, but all runtime files now come from
+# the same verified workflow commit as the required bootstrap scripts.
+#
+# render_prompt.py is main-primary because it validates arbitrary embedded
+# PR-diff text before every reviewer/editor call. A false-positive in that
+# validator (e.g. a lone `${{` in the diff tripping the unmatched-delimiter
+# check, fixed on main by #3593) otherwise wedges the review of any in-flight
+# PR whose branch predates the fix — the very PR that surfaced the bug can
+# never carry the fix on its own branch. Sourcing it main-primary lets a
+# render_prompt fix on main immediately protect wedged branches, matching the
+# resolver-safety rationale above. It stays fail-open: some refs still ship a
+# self-contained render_prompt.sh, so when the backend is absent from both refs
+# bootstrap preserves that ref's bundled bash renderer instead of hard-failing.
+#
+# opencode_helpers.sh / write_opencode_config.sh are main-primary because
+# review_conflict_resolve.sh (already main-primary above) sources them from
+# SUPPORT_SCRIPTS_DIR and hard-fails with failure_class=helpers_missing when
+# absent. Staging them from the same snapshot as the resolver keeps the
+# resolver and its dependencies in lockstep, so a main-side resolver change
+# can never land in a bundle whose helpers came from an older ref.
+MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh review_conflict_prepare.sh render_prompt.py opencode_helpers.sh write_opencode_config.sh"
+# Optional bootstrap scripts: allowed to be missing from both
+# refs.  The bootstrap emits a warning and continues — callers
+# that depend on these must themselves tolerate absence.  Keep
+# this list empty unless a genuinely optional helper is added;
+# the default should always be "required".
+# workflow_failure_heal.py + workflow_failure_heal_autofix_report.sh: the
+# review/autofix failure reporter (README "Workflow Failure Heal"). Optional so
+# a consumer pinned to a release that predates them still bootstraps; the
+# reporting step skips with a stable log line when they are absent.
+# ai_engine.sh + claude_engine.py + claude_anthropic_relay.py +
+# claude_settings.json.tmpl: the Claude engine of the review write roles
+# (replace-claude-sessions plan Phase 5c). Optional: without them every review
+# role runs its unchanged OpenCode path (plan D1).
+# chatgpt_codex_relay.py: the ChatGPT account reviewer slot's host relay
+# (Refs #8969). Optional: a staging miss only skips that slot
+# (chatgpt_pool_unavailable).
+OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh workflow_failure_heal.py workflow_failure_heal_autofix_report.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl provider_outage.py ai_engine_fallback_report.sh implement_step_prepush_test_gate.sh prepush_test_gate_run.sh validate_changed_files_syntax.sh chatgpt_codex_relay.py"
+# ci_docs_only_paths.sh: the docs-only path classifier (from the default
+# branch). Appended on its own line so the list above stays verbatim.
+OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} ci_docs_only_paths.sh"
+# ci_sync_quick.sh: the sync-quick CI helper (from the default branch),
+# appended the same way.
+OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} ci_sync_quick.sh"
+for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
+  src=".codex-workflow-src/scripts/${f}"
+  if [ ! -f "${src}" ]; then
+    echo "::error::Required bootstrap script '${f}' is missing from verified support commit ${SCRIPT_REF}." >&2
+    exit 1
+  fi
+  install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
+done
+mkdir -p "${SUPPORT_SCRIPTS_DIR}/review_sandbox"
+install -m 0644 ".codex-workflow-src/scripts/review_sandbox/Dockerfile" "${SUPPORT_SCRIPTS_DIR}/review_sandbox/Dockerfile" || {
+  echo "::error::Required trusted review sandbox Dockerfile is missing from verified support commit ${SCRIPT_REF}." >&2
+  exit 1
+}
+for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do
+  src=".codex-workflow-src/scripts/${f}"
+  if [ ! -f "${src}" ]; then
+    echo "::error::Required workflow support script '${f}' is missing from verified support commit ${SCRIPT_REF}." >&2
+    exit 1
+  fi
+  # Keep the established divergence diagnostic, but never execute the PR
+  # copy: the compared worktree bytes are review data only.
+  if [ "${IS_WORKFLOW_SOURCE_REPO}" = "true" ] && [ -f "scripts/${f}" ] && ! cmp -s "scripts/${f}" "${src}"; then
+    echo "::notice::STAGE_MAIN_PINNED_DIVERGENCE script=${f} script_ref=${SCRIPT_REF:-unknown}"
+  fi
+  install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
+done
+for f in ${OPTIONAL_BOOTSTRAP_SCRIPTS}; do
+  src=".codex-workflow-src/scripts/${f}"
+  if [ ! -f "${src}" ]; then
+    echo "::warning::Optional bootstrap script '${f}' not available in checked-out support sources; downstream features relying on this helper will be unavailable."
+    continue
+  fi
+  install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
+done
+
+for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do
+  src=".codex-workflow-src/scripts/${f}"
+  if [ ! -f "${src}" ]; then
+    echo "::warning::Optional Serena support asset ${f} is unavailable in checked-out support sources; Serena bootstrap remains disabled."
+    continue
+  fi
+  install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
+done
+
+	for f in emit_event.sh emit_event.py; do
+	  src=".codex-workflow-src/scripts/${f}"
+  if [ ! -f "${src}" ]; then
+    echo "::warning::Optional events mirror helper ${f} is unavailable in checked-out support sources; stable text-prefix mirroring remains disabled."
+    continue
+	  fi
+	  install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
+	done
+
+	for f in transcript_archive.sh; do
+	  src=".codex-workflow-src/scripts/${f}"
+	  if [ ! -f "${src}" ]; then
+	    echo "::warning::Optional transcript archive helper ${f} is unavailable in checked-out support sources; transcript archiving remains disabled."
+	    continue
+	  fi
+	  install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
+	done
+
+mkdir -p "${SUPPORT_SCRIPTS_DIR}/templates"
+serena_template_src=".codex-workflow-src/scripts/templates/serena_project.yml.j2"
+if [ ! -f "${serena_template_src}" ]; then
+  echo "::warning::Optional Serena template scripts/templates/serena_project.yml.j2 is unavailable in checked-out support sources; Serena bootstrap remains disabled."
+else
+  install -m 0644 "${serena_template_src}" "${SUPPORT_SCRIPTS_DIR}/templates/serena_project.yml.j2"
+fi
+
+for sf in memory_record.v1.json lessons_learned_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json actions_runs_cache.v1.json workflow_log_analysis_cache.v1.json fingerprint_quarantine.v1.json validation_history.v1.json operator_bypass_audit.v1.json revalidate_events.v1.json validation_discovery.v1.json workflow_overlay.v1.json; do
+  src=".codex-workflow-src/ai-memory/schemas/${sf}"
+  if [ ! -f "${SUPPORT_AI_MEMORY_DIR}/schemas/${sf}" ] && [ -f "${src}" ]; then
+    install -m 0644 "${src}" "${SUPPORT_AI_MEMORY_DIR}/schemas/${sf}"
+  fi
+done
+
+# Read the overlay from the pinned default branch, never the PR head.
+PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/load_workflow_overlay.py" \
+  --repo-root "${workspace_root}" \
+  --trusted-source-repo "${CURRENT_REPOSITORY}" \
+  --trusted-root "${SUPPORT_ROOT_DIR}/workflow-overlay" \
+  --schema-path "${SUPPORT_AI_MEMORY_DIR}/schemas/workflow_overlay.v1.json" \
+  --github-env "${GITHUB_ENV}"
+
+# Mirror the schema install above for the retrieval profiles
+# config so consumer repos that do not vendor ai-memory/config/
+# still get a workflow-source copy.  The memory library's
+# _sync_memory_reference_files reads SUPPORT_AI_MEMORY_DIR as a
+# fallback when the consumer-repo source path lacks the file.
+retrieval_profiles_src=".codex-workflow-src/ai-memory/config/retrieval_profiles.v1.json"
+mkdir -p "${SUPPORT_AI_MEMORY_DIR}/config"
+if [ ! -f "${SUPPORT_AI_MEMORY_DIR}/config/retrieval_profiles.v1.json" ] && [ -f "${retrieval_profiles_src}" ]; then
+  install -m 0644 "${retrieval_profiles_src}" "${SUPPORT_AI_MEMORY_DIR}/config/retrieval_profiles.v1.json"
+fi
+
+catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"
+if [ -f "${catalog_src}" ]; then
+  install -m 0644 "${catalog_src}" "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
+else
+  echo "::error::Model catalog is missing from verified support commit ${SCRIPT_REF}." >&2
+  exit 1
+fi
+
+if [ ! -f "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json" ]; then
+  failback_src=".codex-workflow-src/scripts/reviewer_failback_chains.json"
+  if [ -f "${failback_src}" ]; then
+    install -m 0644 "${failback_src}" "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json"
+  else
+    echo "::warning::reviewer_failback_chains.json not found in checked-out support sources for ${SCRIPT_REF}; reviewer failback will fail open even when REVIEWER_CIRCUIT_BREAKER_ENABLED=true."
+    rm -f "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json"
+  fi
+fi
+
+for f in unattended_system_instructions.md; do
+  target_path="${SUPPORT_ROOT_DIR}/${f}"
+  if [ ! -f "${target_path}" ]; then
+    src=".codex-workflow-src/${f}"
+    if [ ! -f "${src}" ]; then
+      echo "::error::Missing required support file ${f}"
+      exit 1
+    fi
+    install -m 0644 "${src}" "${target_path}"
+  fi
+done
+
+# Soft install: agents.md is checked by preflight via check_soft_file
+# (review_autofix.yml's preflight step), so absence warns but does
+# not fail.  Install when available so downstream tooling that reads
+# SUPPORT_AGENTS_FILE has the canonical workflow-source copy.
+# Note: SUPPORT_AGENTS_FILE is only exported via $GITHUB_ENV, so it
+# is not set as a shell variable in this step.  Reference
+# ${SUPPORT_ROOT_DIR}/agents.md directly to avoid an unbound
+# variable error under set -u.
+if [ ! -f "${SUPPORT_ROOT_DIR}/agents.md" ]; then
+  src=".codex-workflow-src/agents.md"
+  if [ -f "${src}" ]; then
+    install -m 0644 "${src}" "${SUPPORT_ROOT_DIR}/agents.md"
+  else
+    echo "::warning::agents.md not available in checked-out support sources for ${SCRIPT_REF}; downstream features that reference SUPPORT_AGENTS_FILE will see SOFT_MISSING."
+  fi
+fi
+
+# Soft install: probably_unnecessary_but_read_if_stuck.md holds the
+# operator-runbook overflow split out of agents.md (env var ref,
+# autofix internals, orchestrator auto-heal, validation self-heal,
+# workflow-log-analysis runbook, etc.). Editor inliners point at it
+# when included; if absent the pointer line is suppressed.
+if [ ! -f probably_unnecessary_but_read_if_stuck.md ]; then
+  src=".codex-workflow-src/probably_unnecessary_but_read_if_stuck.md"
+  if [ -f "${src}" ]; then
+    install -m 0644 "${src}" probably_unnecessary_but_read_if_stuck.md
+  fi
+fi
+
+if [ ! -f "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" ]; then
+  src=".codex-workflow-src/prompts/mode-judge-review-blocked.txt"
+  if [ ! -f "${src}" ]; then
+    echo "::error::Missing required support file prompts/mode-judge-review-blocked.txt"
+    exit 1
+  fi
+  install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
+fi
+if [ ! -f "${SUPPORT_PROMPTS_DIR}/mode-judge-interim.txt" ]; then
+  src=".codex-workflow-src/prompts/mode-judge-interim.txt"
+  if [ ! -f "${src}" ]; then
+    echo "::error::Missing required support file prompts/mode-judge-interim.txt"
+    exit 1
+  fi
+  install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/mode-judge-interim.txt"
+fi
+# The judge / reviewer prompts staged into the runtime bundle embed REFERENCE_*
+# placeholders (REFERENCE_OUTPUT_CONTRACT, REFERENCE_SEVERITY_CLASSIFICATION)
+# that render_prompt.py hydrates from <prompt-root>/prompts/references/<name>.txt.
+# review_rb_judge.sh and review_run_judge_interim.sh cd into SUPPORT_ROOT_DIR
+# before rendering, so the prompt root is SUPPORT_ROOT_DIR and the only path
+# render_prompt.py can resolve is SUPPORT_PROMPTS_DIR/references/ — the cwd /
+# .codex-workflow-src fallbacks point under SUPPORT_ROOT_DIR, where the support
+# checkout does not exist. Stage the reference assets here; without them the
+# review-blocked / interim judges fail with "Reference file for placeholder
+# 'REFERENCE_OUTPUT_CONTRACT' not found" and degrade to the recovery path.
+# Warn (do not exit 1) when a reference is unavailable so older support refs
+# keep degrading gracefully instead of hard-failing the whole bundle.
+for reference_asset in output-contract.txt severity-classification.txt; do
+  if [ ! -f "${SUPPORT_PROMPTS_DIR}/references/${reference_asset}" ]; then
+    src=".codex-workflow-src/prompts/references/${reference_asset}"
+    if [ -f "${src}" ]; then
+      mkdir -p "${SUPPORT_PROMPTS_DIR}/references"
+      install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/references/${reference_asset}"
+    else
+      echo "::warning::prompts/references/${reference_asset} not found in checked-out support sources for ${SCRIPT_REF}; review-blocked/interim judge will degrade (REFERENCE_* placeholder left unhydrated)."
+    fi
+  fi
+done
+# When the shared-prelude refactor is enabled, the staged judge prompts resolve
+# sibling templates under prompts/_templates/, shared fragments under
+# prompts/_prelude*.txt, and default persona prefixes from the checked-in
+# prompts/_prelude_role_persona.txt map. Stage the exact assets those support-
+# bundle renders need so the assembled path works from SUPPORT_ROOT_DIR without
+# a support checkout on disk.
+for prompt_assembly_asset in _identity_recall.txt _prelude_common.txt _prelude_role_persona.txt _prelude_semble.txt _prelude_output_contract.txt _templates/mode-judge.txt _templates/mode-judge-interim.txt _templates/mode-judge-review-blocked.txt _templates/mode-judge-stall-recovery.txt _templates/mode-orchestrate-poll-judge.txt; do
+  if [ ! -f "${SUPPORT_PROMPTS_DIR}/${prompt_assembly_asset}" ]; then
+    src=".codex-workflow-src/prompts/${prompt_assembly_asset}"
+    if [ ! -f "${src}" ]; then
+      echo "::error::Missing required support file prompts/${prompt_assembly_asset}"
+      exit 1
+    fi
+    mkdir -p "$(dirname -- "${SUPPORT_PROMPTS_DIR}/${prompt_assembly_asset}")"
+    install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/${prompt_assembly_asset}"
+  fi
+done
+if [ ! -f "${SUPPORT_PROMPTS_DIR}/behavioural-smoke-synthesise.txt" ]; then
+  src=".codex-workflow-src/prompts/behavioural-smoke-synthesise.txt"
+  if [ ! -f "${src}" ]; then
+    echo "::error::Missing required support file prompts/behavioural-smoke-synthesise.txt"
+    exit 1
+  fi
+  install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/behavioural-smoke-synthesise.txt"
+fi
+if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-consolidator.txt" ]; then
+  src=".codex-workflow-src/prompts/review-consolidator.txt"
+  if [ -f "${src}" ]; then
+    install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/review-consolidator.txt"
+  else
+    echo "::warning::review-consolidator.txt not found in checked-out support sources for ${SCRIPT_REF}; review consolidation will fail open even when REVIEW_CONSOLIDATOR_ENABLED=true."
+    rm -f "${SUPPORT_PROMPTS_DIR}/review-consolidator.txt"
+  fi
+fi
+if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ]; then
+  src=".codex-workflow-src/prompts/review-reviewer-checklist.txt"
+  if [ -f "${src}" ]; then
+    install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt"
+  else
+    echo "::warning::review-reviewer-checklist.txt not found in checked-out support sources for ${SCRIPT_REF}; reviewer prompts will keep the checklist disabled even when REVIEW_REVIEWER_CHECKLIST_ENABLED=true."
+    rm -f "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt"
+  fi
+fi
+if [ ! -f "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt" ]; then
+  src=".codex-workflow-src/prompts/_nag_reminders.txt"
+  if [ -f "${src}" ]; then
+    install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt"
+  else
+    echo "::warning::_nag_reminders.txt not found in checked-out support sources for ${SCRIPT_REF}; nag reminders will fail open even when UNATTENDED_NAG_REMINDER_ENABLED=true."
+    rm -f "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt"
+  fi
+fi
+if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh" ]; then
+  src=".codex-workflow-src/scripts/review_filter_uninteresting_files.sh"
+  if [ -f "${src}" ]; then
+    install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh"
+  else
+    echo "::warning::review_filter_uninteresting_files.sh not found in checked-out support sources for ${SCRIPT_REF}; reviewer diff filtering will fail open even when REVIEWER_FILTER_UNINTERESTING_ENABLED=true."
+    rm -f "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh"
+  fi
+fi
+if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" ]; then
+  src=".codex-workflow-src/scripts/review_agents_md_materiality.sh"
+  if [ -f "${src}" ]; then
+    install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"
+  else
+    echo "::warning::review_agents_md_materiality.sh not found in checked-out support sources for ${SCRIPT_REF}; AGENTS.md materiality advisories will fail open even when AGENTS_MD_MATERIALITY_ENABLED=true."
+    rm -f "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"
+  fi
+fi
+if [ ! -f "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" ]; then
+  src=".codex-workflow-src/prompts/conflict-resolver.txt"
+  if [ -f "${src}" ]; then
+    install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
+  else
+    echo "::warning::conflict-resolver.txt not found in checked-out support sources for ${SCRIPT_REF}; downstream conflict resolution will fail with a specific missing-template error."
+    rm -f "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
+  fi
+fi
+if [ ! -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver.txt" ]; then
+  src=".codex-workflow-src/prompts/integration-sync-conflict-resolver.txt"
+  if [ -f "${src}" ]; then
+    install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver.txt"
+  else
+    echo "::warning::integration-sync-conflict-resolver.txt not found in checked-out support sources for ${SCRIPT_REF}; orchestrator/project-* runs will fall back to the generic conflict-resolver template (intent-injection disabled)."
+    rm -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver.txt"
+  fi
+fi
+if [ ! -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-prelude.txt" ]; then
+  src=".codex-workflow-src/prompts/integration-sync-conflict-resolver-retry-prelude.txt"
+  if [ -f "${src}" ]; then
+    install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-prelude.txt"
+  else
+    echo "::warning::integration-sync-conflict-resolver-retry-prelude.txt not found in checked-out support sources for ${SCRIPT_REF}; resolver retries on integration-sync runs will use the original prompt verbatim (no reflexion guidance)."
+    rm -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-prelude.txt"
+  fi
+fi
+if [ ! -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt" ]; then
+  src=".codex-workflow-src/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
+  if [ -f "${src}" ]; then
+    install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
+  else
+    echo "::warning::integration-sync-conflict-resolver-retry-timeout-prelude.txt not found in checked-out support sources for ${SCRIPT_REF}; resolver timeout-induced retries on integration-sync runs will fall back to the original prompt verbatim (no timeout-aware reflexion guidance)."
+    rm -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
+  fi
+fi
+}
+
+WORKFLOW_SUPPORT_SOURCE_REPO_DEFAULT="shubhodeep1/coding-workflows"
+# Directory of this helper. Callers run it from a trusted support checkout
+# (validate.yml clones the default branch; review_autofix.yml verifies
+# .codex-workflow-src), so its sibling scripts match its own CLI flags.
+STAGE_SUPPORT_HELPER_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P || true)"
+
+usage()
+{
+	cat <<'EOF' >&2
+Usage: scripts/stage_workflow_support.sh validate --manifest <path>
+EOF
+	exit 64
+}
+
+require_command()
+{
+	local cmd="$1"
+	if ! command -v "${cmd}" >/dev/null 2>&1; then
+		echo "::error::Required command '${cmd}' is unavailable." >&2
+		exit 1
+	fi
+}
+
+cleanup_support_stage()
+{
+	if [ -n "${SUPPORT_STAGE_ROOT:-}" ] && [ -d "${SUPPORT_STAGE_ROOT}" ]; then
+		rm -rf "${SUPPORT_STAGE_ROOT}"
+	fi
+}
+
+parse_args()
+{
+	TARGET_NAME="${1:-}"
+	shift || true
+	MANIFEST_PATH=""
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--manifest)
+				if [ "$#" -lt 2 ]; then
+					usage
+				fi
+				MANIFEST_PATH="$2"
+				shift 2
+				;;
+			*)
+				usage
+				;;
+		esac
+	done
+
+	if [ -z "${TARGET_NAME}" ] || [ -z "${MANIFEST_PATH}" ]; then
+		usage
+	fi
+	if [ "${TARGET_NAME}" != "validate" ]; then
+		echo "::error::Unsupported workflow support target '${TARGET_NAME}'." >&2
+		exit 1
+	fi
+	if [ ! -f "${MANIFEST_PATH}" ]; then
+		echo "::error::Workflow support manifest '${MANIFEST_PATH}' does not exist." >&2
+		exit 1
+	fi
+}
+
+setup_context()
+{
+	require_command git
+	require_command jq
+	require_command python3
+
+	REPO_ROOT="${GITHUB_WORKSPACE:-$(pwd)}"
+	cd "${REPO_ROOT}"
+
+	WORKFLOW_SOURCE_REPO="${WORKFLOW_SUPPORT_SOURCE_REPO:-${WORKFLOW_SUPPORT_SOURCE_REPO_DEFAULT}}"
+	ORIGINAL_SCRIPT_REF="${WORKFLOW_SUPPORT_REF:-}"
+	if [ -z "${ORIGINAL_SCRIPT_REF}" ]; then
+		if [ "${GITHUB_REPOSITORY:-}" = "${WORKFLOW_SOURCE_REPO}" ]; then
+			ORIGINAL_SCRIPT_REF="${GITHUB_SHA:-}"
+		else
+			ORIGINAL_SCRIPT_REF="stable"
+		fi
+	fi
+	# Explicit targets must never select executable support from their checkout.
+	if [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
+		[[ "${ORIGINAL_SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] || {
+			echo "::error::Explicit validation requires an immutable support ref." >&2
+			exit 1
+		}
+	fi
+	RESOLVED_SCRIPT_REF="${ORIGINAL_SCRIPT_REF}"
+
+	IS_SELF_REPO="false"
+	if [ "${GITHUB_REPOSITORY:-}" = "${WORKFLOW_SOURCE_REPO}" ]; then
+		IS_SELF_REPO="true"
+	fi
+
+	declare -ga FETCHED_SCRIPT_PATHS=()
+	SUPPORT_STAGE_ROOT="$(mktemp -d "${RUNNER_TEMP:-/tmp}/stage-workflow-support-XXXXXX")"
+	trap cleanup_support_stage EXIT
+}
+
+checkout_support_ref()
+{
+	local ref="$1"
+	local dest="$2"
+	local server_host remote_url
+
+	if [ -z "${GH_TOKEN:-}" ]; then
+		echo "::error::GH_TOKEN is required to stage workflow support files." >&2
+		return 1
+	fi
+
+	server_host="${GITHUB_SERVER_URL:-https://github.com}"
+	server_host="${server_host#https://}"
+	server_host="${server_host#http://}"
+	server_host="${server_host%/}"
+	remote_url="https://x-access-token:${GH_TOKEN}@${server_host}/${WORKFLOW_SOURCE_REPO}"
+
+	rm -rf "${dest}"
+	mkdir -p "$(dirname "${dest}")"
+	if [[ "${ref}" =~ ^[0-9a-f]{40}$ ]]; then
+		if git clone --quiet --no-tags --depth 1 --branch main "${remote_url}" "${dest}" 2>/dev/null &&
+		   git -C "${dest}" fetch --quiet --depth 1 origin "${ref}" 2>/dev/null &&
+		   git -C "${dest}" checkout --quiet --detach FETCH_HEAD 2>/dev/null &&
+		   [ "$(git -C "${dest}" rev-parse HEAD)" = "${ref}" ]; then
+			return 0
+		fi
+	elif git clone --quiet --no-tags --depth 1 --branch "${ref}" "${remote_url}" "${dest}" 2>/dev/null; then
+		return 0
+	fi
+	rm -rf "${dest}"
+	return 1
+}
+
+bootstrap_support_roots()
+{
+	SUPPORT_PRIMARY_ROOT=""
+	SUPPORT_MAIN_ROOT=""
+	SELF_REPO_TRUSTED_TEMPLATE_ROOT=""
+	SELF_REPO_TRUSTED_TEMPLATE_STAGED_COUNT=0
+	SELF_REPO_TRUSTED_SUPPORT_STAGED_COUNT=0
+
+	if [ "${IS_SELF_REPO}" = "true" ] && [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
+		SUPPORT_PRIMARY_ROOT="${REPO_ROOT}"
+	elif checkout_support_ref "${ORIGINAL_SCRIPT_REF}" "${SUPPORT_STAGE_ROOT}/primary"; then
+		SUPPORT_PRIMARY_ROOT="${SUPPORT_STAGE_ROOT}/primary"
+	elif [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ] && checkout_support_ref "main" "${SUPPORT_STAGE_ROOT}/primary"; then
+		echo "::warning::Support checkout ref ${ORIGINAL_SCRIPT_REF} is unavailable; using main."
+		SUPPORT_PRIMARY_ROOT="${SUPPORT_STAGE_ROOT}/primary"
+		RESOLVED_SCRIPT_REF="main"
+	else
+		echo "::error::Failed to stage workflow support files from ${WORKFLOW_SOURCE_REPO} (${ORIGINAL_SCRIPT_REF} and main fallback)." >&2
+		exit 1
+	fi
+
+	if [ "${RESOLVED_SCRIPT_REF}" != "main" ] && [ -n "${GH_TOKEN:-}" ] && checkout_support_ref "main" "${SUPPORT_STAGE_ROOT}/main"; then
+		SUPPORT_MAIN_ROOT="${SUPPORT_STAGE_ROOT}/main"
+	fi
+}
+
+copy_from_ref_or_local()
+{
+	local repo_path="$1"
+	local target_path="$2"
+	local require_remote="${3:-false}"
+	local allow_main_fallback="${4:-true}"
+	local source_path=""
+	if [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
+		require_remote="true"
+		allow_main_fallback="false"
+	fi
+
+	mkdir -p "$(dirname "${target_path}")"
+
+	if [ -n "${SUPPORT_PRIMARY_ROOT}" ] && [ -f "${SUPPORT_PRIMARY_ROOT}/${repo_path}" ]; then
+		source_path="${SUPPORT_PRIMARY_ROOT}/${repo_path}"
+	elif [ "${allow_main_fallback}" = "true" ] && [ -n "${SUPPORT_MAIN_ROOT}" ] && [ -f "${SUPPORT_MAIN_ROOT}/${repo_path}" ]; then
+		echo "::warning::${repo_path} not found on ${RESOLVED_SCRIPT_REF}; falling back to main"
+		source_path="${SUPPORT_MAIN_ROOT}/${repo_path}"
+	fi
+
+	if [ -n "${source_path}" ]; then
+		if [ -e "${target_path}" ] && [ "${source_path}" -ef "${target_path}" ]; then
+			return 0
+		fi
+		cp "${source_path}" "${target_path}" || {
+			echo "Failed to copy ${repo_path} from ${source_path} to ${target_path}" >&2
+			return 1
+		}
+		return 0
+	fi
+
+	if [ "${require_remote}" != "true" ] && [ -f "${target_path}" ]; then
+		echo "Using local fallback for ${target_path} (not found on ${RESOLVED_SCRIPT_REF}: ${repo_path})"
+		return 0
+	fi
+
+	if [ "${require_remote}" = "true" ]; then
+		echo "Missing required remote file: ${repo_path} (${RESOLVED_SCRIPT_REF}); local fallback is disabled for this file." >&2
+	else
+		echo "Missing required file: ${repo_path} (${RESOLVED_SCRIPT_REF}) and local fallback ${target_path}" >&2
+	fi
+	return 1
+}
+
+json_array_lines()
+{
+	local key="$1"
+	jq -r --arg key "${key}" '.[$key][]? // empty' "${MANIFEST_PATH}"
+}
+
+json_string_value()
+{
+	local key="$1"
+	jq -r --arg key "${key}" '.[$key] // empty' "${MANIFEST_PATH}"
+}
+
+record_fetched_script()
+{
+	local relative_path="$1"
+	if [ -n "${relative_path}" ]; then
+		FETCHED_SCRIPT_PATHS+=("${relative_path}")
+	fi
+}
+
+emit_optional_missing_notice()
+{
+	local repo_path="$1"
+	case "${repo_path}" in
+		scripts/render_prompt.py)
+			echo "render_prompt.py backend not on ${ORIGINAL_SCRIPT_REF} yet; render_prompt.sh shim (if present) resolves it elsewhere or the bundled bash renderer is used."
+			;;
+		scripts/render_validation_templates.py)
+			echo "Template renderer not on ${ORIGINAL_SCRIPT_REF} yet; template mode may not be available."
+			;;
+		scripts/templates/slot_manifest.schema.json)
+			echo "Validation slot manifest schema not on ${ORIGINAL_SCRIPT_REF} yet; template mode may not be available."
+			;;
+		scripts/codex_heartbeat.sh)
+			echo "Codex heartbeat helper not on ${ORIGINAL_SCRIPT_REF} yet; validation will continue without live heartbeat logging."
+			;;
+		scripts/codex_stall_guard.sh)
+			echo "Codex stall guard helper not on ${ORIGINAL_SCRIPT_REF} yet; validation will continue without idle-kill wrapping."
+			;;
+		scripts/codex_thread_reuse.sh)
+			echo "Codex thread reuse helper not on ${ORIGINAL_SCRIPT_REF} yet; validation will continue without same-run thread reuse."
+			;;
+		scripts/install_semble.sh)
+			echo "Semble installer not on ${ORIGINAL_SCRIPT_REF} yet; validation will continue without Semble bootstrap."
+			;;
+		scripts/semble_helpers.sh)
+			echo "Semble helper library not on ${ORIGINAL_SCRIPT_REF} yet; validation prompts will continue without Semble context."
+			;;
+		scripts/build_semble_wrapper.sh)
+			echo "Semble BM25 wrapper builder not on ${ORIGINAL_SCRIPT_REF} yet; validation prompts will continue without Semble context."
+			;;
+		scripts/self_heal_validation.sh)
+			echo "Self-heal helper not on ${ORIGINAL_SCRIPT_REF} yet; self-heal will be a no-op."
+			;;
+		scripts/setup_serena.sh|scripts/serena_stats_emit.py|scripts/mcp_handshake_probe.py)
+			echo "Optional Serena support asset ${repo_path} not on ${ORIGINAL_SCRIPT_REF} yet; validation will continue without that helper."
+			;;
+		scripts/emit_event.sh|scripts/emit_event.py)
+			echo "Optional events mirror helper ${repo_path} not on ${ORIGINAL_SCRIPT_REF} yet; stable text-prefix mirroring remains disabled."
+			;;
+		scripts/templates/serena_project.yml.j2)
+			echo "Optional Serena template scripts/templates/serena_project.yml.j2 not on ${ORIGINAL_SCRIPT_REF} yet; validation will continue without Serena project templating."
+			;;
+		prompts/mode-validate-self-heal.txt)
+			echo "Self-heal prompt not on ${ORIGINAL_SCRIPT_REF} yet; self-heal will be a no-op."
+			;;
+		prompts/mode-validate-self-heal-continuation.txt)
+			echo "Self-heal continuation prompt not on ${ORIGINAL_SCRIPT_REF} yet; validation will continue with the full prompt path."
+			;;
+		prompts/contracts/mode-validate-self-heal-continuation.yml)
+			echo "Self-heal continuation contract not on ${ORIGINAL_SCRIPT_REF} yet; validation will continue with the full prompt path."
+			;;
+		*)
+			return 1
+			;;
+		esac
+	return 0
+}
+
+stage_required_entry()
+{
+	local repo_path="$1"
+	local executable="$2"
+	local track_path="$3"
+	local require_remote="$4"
+
+	copy_from_ref_or_local "${repo_path}" "${repo_path}" "${require_remote}" "true"
+	if [ "${executable}" = "true" ]; then
+		chmod +x "${repo_path}"
+	fi
+	record_fetched_script "${track_path}"
+}
+
+stage_optional_preserve_entry()
+{
+	local repo_path="$1"
+	local executable="$2"
+	local track_path="$3"
+	local emit_notice="${4:-true}"
+	local tmp_path
+
+	if [ -f "${repo_path}" ] && [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
+		if [ "${executable}" = "true" ]; then
+			chmod +x "${repo_path}"
+		fi
+		record_fetched_script "${track_path}"
+		return 0
+	fi
+
+	tmp_path="${repo_path}.tmp"
+	rm -f "${tmp_path}"
+	if copy_from_ref_or_local "${repo_path}" "${tmp_path}" "false" "true"; then
+		if [ -f "${tmp_path}" ]; then
+			mv "${tmp_path}" "${repo_path}"
+			if [ "${executable}" = "true" ]; then
+				chmod +x "${repo_path}"
+			fi
+			record_fetched_script "${track_path}"
+		else
+			rm -f "${tmp_path}"
+			if [ "${emit_notice}" = "true" ]; then
+				emit_optional_missing_notice "${repo_path}" || true
+			fi
+		fi
+	else
+		rm -f "${tmp_path}"
+		if [ "${emit_notice}" = "true" ]; then
+			emit_optional_missing_notice "${repo_path}" || true
+		fi
+	fi
+}
+
+stage_optional_copy_entry()
+{
+	local repo_path="$1"
+	copy_from_ref_or_local "${repo_path}" "${repo_path}" "false" "true" || true
+}
+
+# Issue #6578: in this repository the validation checkout (an integration
+# branch) is the primary support root, so copy_from_ref_or_local left its
+# possibly stale validation-harness templates in place. Runs 37315007990 and
+# 37492941663 rendered an older 20_import_audit.sh.j2 that ran the import audit
+# with the runner's Python (ModuleNotFoundError: yaml) instead of the app
+# container's. Templates become host-executed tests, so stage them from the
+# verified support commit and fail closed when that commit is unavailable.
+ensure_self_repo_trusted_template_root()
+{
+	if [ -n "${SELF_REPO_TRUSTED_TEMPLATE_ROOT:-}" ] && [ -d "${SELF_REPO_TRUSTED_TEMPLATE_ROOT}" ]; then
+		return 0
+	fi
+	if [ -n "${ORIGINAL_SCRIPT_REF}" ] &&
+	   checkout_support_ref "${ORIGINAL_SCRIPT_REF}" "${SUPPORT_STAGE_ROOT}/trusted-templates"; then
+		SELF_REPO_TRUSTED_TEMPLATE_ROOT="${SUPPORT_STAGE_ROOT}/trusted-templates"
+		return 0
+	fi
+	echo "::error::Trusted validation-harness templates are unavailable from ${WORKFLOW_SOURCE_REPO}@${ORIGINAL_SCRIPT_REF}; refusing to render templates from the validation checkout." >&2
+	exit 1
+}
+
+stage_self_repo_validation_template_entry()
+{
+	local repo_path="$1"
+	local trusted_path inspected_template_path
+
+	case "${repo_path}" in
+		/*|..|../*|*/..|*/../*)
+			echo "::error::Refusing unsafe validation-harness template path '${repo_path}'." >&2
+			exit 1
+			;;
+		workflow-templates/validation-harness/*)
+			;;
+		*)
+			echo "::error::Path '${repo_path}' is not a validation-harness template." >&2
+			exit 1
+			;;
+	esac
+
+	ensure_self_repo_trusted_template_root
+	trusted_path="${SELF_REPO_TRUSTED_TEMPLATE_ROOT}/${repo_path}"
+	if [ ! -f "${trusted_path}" ]; then
+		echo "::error::Required trusted validation-harness template ${repo_path} is missing from ${ORIGINAL_SCRIPT_REF}." >&2
+		exit 1
+	fi
+	inspected_template_path="${repo_path}"
+	while :; do
+		if [ -L "${inspected_template_path}" ]; then
+			echo "::error::Refusing symlinked validation-harness template path '${repo_path}'." >&2
+			exit 1
+		fi
+		[[ "${inspected_template_path}" == */* ]] || break
+		inspected_template_path="${inspected_template_path%/*}"
+	done
+	if [ -e "${repo_path}" ] && [ ! -f "${repo_path}" ]; then
+		echo "::error::Refusing non-file validation-harness template path '${repo_path}'." >&2
+		exit 1
+	fi
+	if [ -e "${repo_path}" ] && ! cmp -s "${repo_path}" "${trusted_path}"; then
+		echo "VALIDATE_TRUSTED_TEMPLATE_OVERRIDE path=${repo_path} ref=${ORIGINAL_SCRIPT_REF}"
+	fi
+	mkdir -p "$(dirname -- "${repo_path}")"
+	cp --remove-destination -- "${trusted_path}" "${repo_path}"
+	SELF_REPO_TRUSTED_TEMPLATE_STAGED_COUNT=$((SELF_REPO_TRUSTED_TEMPLATE_STAGED_COUNT + 1))
+}
+
+# The renderer and the templates are one unit: a template is only valid
+# against the renderer that defines its filters. The self-repo path above
+# stages templates from the verified support commit while
+# optional_preserve_scripts_before_templates kept the validation checkout's
+# own scripts/render_validation_templates.py, so an integration branch that
+# had not synced the default branch rendered a template using the
+# `shell_quote` filter (#6569) with a renderer that did not define it: run
+# 37925800341 failed with "No filter named 'shell_quote'", project #6664 was
+# marked ai:harness-broken, and its validation stopped. Under the same
+# condition the templates use, the renderer is staged from the same commit,
+# and a missing trusted copy fails closed exactly like a missing template.
+stage_self_repo_validation_renderer_entry()
+{
+	local repo_path="$1"
+	local executable="$2"
+	local track_path="$3"
+	local trusted_path inspected_renderer_path
+
+	ensure_self_repo_trusted_template_root
+	trusted_path="${SELF_REPO_TRUSTED_TEMPLATE_ROOT}/${repo_path}"
+	if [ ! -f "${trusted_path}" ]; then
+		echo "::error::Required trusted validation renderer ${repo_path} is missing from ${ORIGINAL_SCRIPT_REF}." >&2
+		exit 1
+	fi
+	# Like the template path above, refuse a symlink at any component
+	# (e.g. a checked-out `scripts` symlink), so mkdir/cp cannot write the
+	# trusted renderer outside the validation workspace.
+	inspected_renderer_path="${repo_path}"
+	while :; do
+		if [ -L "${inspected_renderer_path}" ]; then
+			echo "::error::Refusing non-file or symlinked validation renderer path '${repo_path}'." >&2
+			exit 1
+		fi
+		[[ "${inspected_renderer_path}" == */* ]] || break
+		inspected_renderer_path="${inspected_renderer_path%/*}"
+	done
+	if [ -e "${repo_path}" ] && [ ! -f "${repo_path}" ]; then
+		echo "::error::Refusing non-file or symlinked validation renderer path '${repo_path}'." >&2
+		exit 1
+	fi
+	if [ -e "${repo_path}" ] && ! cmp -s "${repo_path}" "${trusted_path}"; then
+		echo "VALIDATE_TRUSTED_RENDERER_OVERRIDE path=${repo_path} ref=${ORIGINAL_SCRIPT_REF}"
+	fi
+	mkdir -p "$(dirname -- "${repo_path}")"
+	cp --remove-destination -- "${trusted_path}" "${repo_path}"
+	if [ "${executable}" = "true" ]; then
+		chmod +x "${repo_path}"
+	fi
+	record_fetched_script "${track_path}"
+	echo "VALIDATE_TRUSTED_RENDERER path=${repo_path} ref=${ORIGINAL_SCRIPT_REF} source=${WORKFLOW_SOURCE_REPO}"
+}
+
+# Issue #6865: the renderer above was not the only executable safety asset an
+# integration checkout could supply. Its slot schema (the project_name
+# allowlist), validate_process.sh (run on the host with GH_TOKEN and the model
+# key), validate_driver.sh (the per-test credential scrub) and
+# validation_harness_sandbox.sh (the isolation boundary) came from the
+# validation checkout too, so a project PR that weakened one of them took
+# effect in its own validation run. Self-repo runs without an explicit target
+# stage them from the same verified support commit as the templates and the
+# renderer, and fail closed when a trusted copy is unavailable.
+stage_self_repo_validation_safety_entry()
+{
+	local repo_path="$1"
+	local executable="$2"
+	local trusted_path inspected_safety_path
+
+	case "${repo_path}" in
+		/*|..|../*|*/..|*/../*)
+			echo "::error::Refusing unsafe validation safety asset path '${repo_path}'." >&2
+			exit 1
+			;;
+		scripts/*)
+			;;
+		*)
+			echo "::error::Path '${repo_path}' is not a validation safety asset under scripts/." >&2
+			exit 1
+			;;
+	esac
+
+	ensure_self_repo_trusted_template_root
+	trusted_path="${SELF_REPO_TRUSTED_TEMPLATE_ROOT}/${repo_path}"
+	if [ ! -f "${trusted_path}" ] || [ -L "${trusted_path}" ]; then
+		echo "::error::Required trusted validation safety asset ${repo_path} is missing from ${ORIGINAL_SCRIPT_REF}." >&2
+		exit 1
+	fi
+	inspected_safety_path="${repo_path}"
+	while :; do
+		if [ -L "${inspected_safety_path}" ]; then
+			echo "::error::Refusing non-file or symlinked validation safety asset path '${repo_path}'." >&2
+			exit 1
+		fi
+		[[ "${inspected_safety_path}" == */* ]] || break
+		inspected_safety_path="${inspected_safety_path%/*}"
+	done
+	if [ -e "${repo_path}" ] && [ ! -f "${repo_path}" ]; then
+		echo "::error::Refusing non-file or symlinked validation safety asset path '${repo_path}'." >&2
+		exit 1
+	fi
+	if [ -e "${repo_path}" ] && ! cmp -s "${repo_path}" "${trusted_path}"; then
+		echo "VALIDATE_TRUSTED_SUPPORT_OVERRIDE path=${repo_path} ref=${ORIGINAL_SCRIPT_REF}"
+	fi
+	mkdir -p "$(dirname -- "${repo_path}")"
+	cp --remove-destination -- "${trusted_path}" "${repo_path}"
+	if [ "${executable}" = "true" ]; then
+		chmod +x "${repo_path}"
+	fi
+	SELF_REPO_TRUSTED_SUPPORT_STAGED_COUNT=$((SELF_REPO_TRUSTED_SUPPORT_STAGED_COUNT + 1))
+}
+
+# The renderer fix above generalised (Q39: C): self-repo runs without an
+# explicit target take every support script from the validation checkout (an
+# integration branch), so a branch that had not synced the default branch ran
+# the harness with its own older infrastructure. Project #6664 revalidated at
+# 21:10 with an integration-branch scripts/validation_harness_sandbox.sh that
+# lacked the rootless-package fix (#6959) and could not provision the sandbox;
+# the branch synced only at 21:34. The scripts listed under the manifest's
+# `self_repo_trusted_scripts` run or isolate the harness rather than being the
+# project's subject, so they come from the verified support commit, like the
+# templates and the renderer, and a missing trusted copy fails closed.
+stage_self_repo_trusted_support_entry()
+{
+	local repo_path="$1"
+	local trusted_path inspected_support_path
+
+	case "${repo_path}" in
+		scripts/*) ;;
+		*)
+			echo "::error::Refusing trusted support path '${repo_path}' outside scripts/." >&2
+			exit 1
+			;;
+	esac
+	case "/${repo_path}/" in
+		*/../*|*/./*|*//*)
+			echo "::error::Refusing unsafe trusted support path '${repo_path}'." >&2
+			exit 1
+			;;
+	esac
+	ensure_self_repo_trusted_template_root
+	trusted_path="${SELF_REPO_TRUSTED_TEMPLATE_ROOT}/${repo_path}"
+	if [ ! -f "${trusted_path}" ] || [ -L "${trusted_path}" ]; then
+		echo "::error::Required trusted validation support script ${repo_path} is missing from ${ORIGINAL_SCRIPT_REF}." >&2
+		exit 1
+	fi
+	inspected_support_path="${repo_path}"
+	while :; do
+		if [ -L "${inspected_support_path}" ]; then
+			echo "::error::Refusing non-file or symlinked validation support path '${repo_path}'." >&2
+			exit 1
+		fi
+		[[ "${inspected_support_path}" == */* ]] || break
+		inspected_support_path="${inspected_support_path%/*}"
+	done
+	if [ -e "${repo_path}" ] && [ ! -f "${repo_path}" ]; then
+		echo "::error::Refusing non-file or symlinked validation support path '${repo_path}'." >&2
+		exit 1
+	fi
+	if [ -e "${repo_path}" ] && ! cmp -s "${repo_path}" "${trusted_path}"; then
+		echo "VALIDATE_TRUSTED_SUPPORT_OVERRIDE path=${repo_path} ref=${ORIGINAL_SCRIPT_REF}"
+	fi
+	mkdir -p "$(dirname -- "${repo_path}")"
+	cp --remove-destination -- "${trusted_path}" "${repo_path}"
+	chmod +x "${repo_path}"
+	echo "VALIDATE_TRUSTED_SUPPORT path=${repo_path} ref=${ORIGINAL_SCRIPT_REF} source=${WORKFLOW_SOURCE_REPO}"
+}
+
+stage_copy_if_missing_silent_entry()
+{
+	local repo_path="$1"
+	local tmp_path
+
+	if [ -f "${repo_path}" ]; then
+		return 0
+	fi
+
+	tmp_path="${repo_path}.tmp"
+	rm -f "${tmp_path}"
+	if copy_from_ref_or_local "${repo_path}" "${tmp_path}" "false" "true"; then
+		if [ -f "${tmp_path}" ]; then
+			mv "${tmp_path}" "${repo_path}"
+		else
+			rm -f "${tmp_path}"
+		fi
+	else
+		rm -f "${tmp_path}"
+	fi
+}
+
+stage_required_if_missing_entry()
+{
+	local repo_path="$1"
+	if [ ! -f "${repo_path}" ]; then
+		copy_from_ref_or_local "${repo_path}" "${repo_path}" "false" "true"
+	fi
+}
+
+stage_model_catalog_entry()
+{
+	local repo_path="$1"
+	local tmp_path="${repo_path}.tmp"
+
+	rm -f "${tmp_path}"
+	if copy_from_ref_or_local "${repo_path}" "${tmp_path}" "false" "false"; then
+		if [ -s "${tmp_path}" ]; then
+			mv "${tmp_path}" "${repo_path}"
+			record_fetched_script "${repo_path#scripts/}"
+		else
+			rm -f "${tmp_path}"
+			echo "Model catalog not on ${ORIGINAL_SCRIPT_REF} yet; using local copy."
+		fi
+	else
+		rm -f "${tmp_path}"
+		echo "Model catalog not on ${ORIGINAL_SCRIPT_REF} yet; using local copy."
+	fi
+}
+
+stage_serena_template_entry()
+{
+	local repo_path="$1"
+	local tmp_path
+
+	if [ "${IS_SELF_REPO}" != "true" ] && git ls-files --error-unmatch -- "${repo_path}" >/dev/null 2>&1; then
+		echo "::notice::Consumer repo already tracks ${repo_path}; preserving caller-owned Serena template."
+		return 0
+	fi
+
+	if [ -f "${repo_path}" ]; then
+		record_fetched_script "${repo_path#scripts/}"
+		return 0
+	fi
+
+	tmp_path="${repo_path}.tmp"
+	rm -f "${tmp_path}"
+	if copy_from_ref_or_local "${repo_path}" "${tmp_path}" "false" "true"; then
+		if [ -f "${tmp_path}" ]; then
+			mv "${tmp_path}" "${repo_path}"
+			record_fetched_script "${repo_path#scripts/}"
+		else
+			rm -f "${tmp_path}"
+			emit_optional_missing_notice "${repo_path}" || true
+		fi
+	else
+		rm -f "${tmp_path}"
+		emit_optional_missing_notice "${repo_path}" || true
+	fi
+}
+
+emit_consumer_gitignore()
+{
+	if [ "${IS_SELF_REPO}" = "true" ]; then
+		return 0
+	fi
+
+	mkdir -p scripts
+	{
+		echo "# Auto-generated by coding-workflows — DO NOT EDIT"
+		echo "# Prevents runtime-fetched support scripts from being committed."
+		if [ "${#FETCHED_SCRIPT_PATHS[@]}" -gt 0 ]; then
+			printf '%s\n' "${FETCHED_SCRIPT_PATHS[@]}"
+		fi
+		echo ".gitignore"
+	} > scripts/.gitignore
+}
+
+run_overlay_loader()
+{
+	: "${GITHUB_ENV:?GITHUB_ENV must be set}"
+	if [ -z "${RUNNER_TEMP:-}" ] || [ -z "${GITHUB_RUN_ID:-}" ] || [ -z "${GITHUB_RUN_ATTEMPT:-}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
+		echo "::error::Trusted overlay staging requires RUNNER_TEMP, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, and GITHUB_REPOSITORY." >&2
+		return 1
+	fi
+	local overlay_schema_path="ai-memory/schemas/workflow_overlay.v1.json"
+	if [ -f "${SUPPORT_PRIMARY_ROOT}/ai-memory/schemas/workflow_overlay.v1.json" ]; then
+		overlay_schema_path="${SUPPORT_PRIMARY_ROOT}/ai-memory/schemas/workflow_overlay.v1.json"
+	fi
+	# Run the loader that ships with this helper, not the target checkout's
+	# copy: in the source repo SUPPORT_PRIMARY_ROOT is the target checkout,
+	# and a target branch older than the helper rejects the trusted-overlay
+	# flags below (#6031: unrecognized --trusted-source-repo, exit 2). The
+	# relative path stays as the fallback when the sibling copy is absent.
+	local overlay_loader_path="scripts/load_workflow_overlay.py"
+	if [ -n "${STAGE_SUPPORT_HELPER_DIR:-}" ] && [ -f "${STAGE_SUPPORT_HELPER_DIR}/load_workflow_overlay.py" ]; then
+		overlay_loader_path="${STAGE_SUPPORT_HELPER_DIR}/load_workflow_overlay.py"
+	fi
+	# The default-branch copy must outlive SUPPORT_STAGE_ROOT's EXIT cleanup.
+	PYTHONDONTWRITEBYTECODE=1 python3 "${overlay_loader_path}" \
+		--repo-root "${REPO_ROOT}" \
+		--trusted-source-repo "${GITHUB_REPOSITORY}" \
+		--trusted-root "${RUNNER_TEMP}/workflow-overlay-trusted-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+		--schema-path "${overlay_schema_path}" \
+		--github-env "${GITHUB_ENV}"
+}
+
+stage_validate_support()
+{
+	local repo_path require_remote_when_external model_catalog_path serena_template_path
+	if [ -n "${GITHUB_ENV:-}" ]; then
+		echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${PROMPT_PRELUDE_REFACTOR_ENABLED:-false}" >> "$GITHUB_ENV"
+		echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}" >> "$GITHUB_ENV"
+	fi
+
+	while IFS= read -r repo_path; do
+		[ -n "${repo_path}" ] || continue
+		stage_required_entry "${repo_path}" "true" "${repo_path#scripts/}" "false"
+	done < <(json_array_lines "required_scripts")
+
+	while IFS= read -r repo_path; do
+		[ -n "${repo_path}" ] || continue
+		# Same condition as the trusted-template path below: the renderer
+		# must come from the commit its templates come from.
+		if [ "${IS_SELF_REPO}" = "true" ] && [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ] &&
+		   [ "${repo_path}" = "scripts/render_validation_templates.py" ]; then
+			stage_self_repo_validation_renderer_entry "${repo_path}" "true" "${repo_path#scripts/}"
+		else
+			stage_optional_preserve_entry "${repo_path}" "true" "${repo_path#scripts/}" "true"
+		fi
+	done < <(json_array_lines "optional_preserve_scripts_before_templates")
+
+	while IFS= read -r repo_path; do
+		[ -n "${repo_path}" ] || continue
+		stage_optional_preserve_entry "${repo_path}" "false" "" "true"
+	done < <(json_array_lines "optional_preserve_files_before_templates")
+
+	# Self-repo runs without an explicit target take validation-harness
+	# templates from the verified support commit (issue #6578); consumers and
+	# explicit targets keep the existing path.
+	while IFS= read -r repo_path; do
+		[ -n "${repo_path}" ] || continue
+		if [ "${IS_SELF_REPO}" = "true" ] && [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ] &&
+		   [[ "${repo_path}" == workflow-templates/validation-harness/* ]]; then
+			stage_self_repo_validation_template_entry "${repo_path}"
+		else
+			stage_optional_copy_entry "${repo_path}"
+		fi
+	done < <(json_array_lines "optional_copy_files")
+	if [ "${SELF_REPO_TRUSTED_TEMPLATE_STAGED_COUNT}" -gt 0 ]; then
+		echo "VALIDATE_TRUSTED_TEMPLATES staged=${SELF_REPO_TRUSTED_TEMPLATE_STAGED_COUNT} ref=${ORIGINAL_SCRIPT_REF} source=${WORKFLOW_SOURCE_REPO}"
+	fi
+
+	while IFS= read -r repo_path; do
+		[ -n "${repo_path}" ] || continue
+		require_remote_when_external="false"
+		if [ "${IS_SELF_REPO}" != "true" ]; then
+			require_remote_when_external="true"
+		fi
+		stage_required_entry "${repo_path}" "true" "${repo_path#scripts/}" "${require_remote_when_external}"
+	done < <(json_array_lines "required_remote_when_external_scripts")
+
+	# Issue #6865: overwrite the safety assets the lists above took from the
+	# validation checkout with the verified support commit's copies (see
+	# stage_self_repo_validation_safety_entry). Consumers and explicit targets
+	# already stage from a trusted root and skip this pass.
+	while IFS= read -r repo_path; do
+		[ -n "${repo_path}" ] || continue
+		if [ "${IS_SELF_REPO}" != "true" ] || [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
+			continue
+		fi
+		case "${repo_path}" in
+			*.sh|*.py) stage_self_repo_validation_safety_entry "${repo_path}" "true" ;;
+			*) stage_self_repo_validation_safety_entry "${repo_path}" "false" ;;
+		esac
+	done < <(json_array_lines "self_repo_trusted_support_files")
+	if [ "${SELF_REPO_TRUSTED_SUPPORT_STAGED_COUNT}" -gt 0 ]; then
+		echo "VALIDATE_TRUSTED_SUPPORT staged=${SELF_REPO_TRUSTED_SUPPORT_STAGED_COUNT} ref=${ORIGINAL_SCRIPT_REF} source=${WORKFLOW_SOURCE_REPO}"
+	fi
+
+	# Harness infrastructure comes from the verified support commit on
+	# self-repo runs without an explicit target (see
+	# stage_self_repo_trusted_support_entry). The loops above already staged
+	# these paths, so other runs keep exactly what they staged.
+	if [ "${IS_SELF_REPO}" = "true" ] && [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
+		while IFS= read -r repo_path; do
+			[ -n "${repo_path}" ] || continue
+			stage_self_repo_trusted_support_entry "${repo_path}"
+		done < <(json_array_lines "self_repo_trusted_scripts")
+	fi
+
+	while IFS= read -r repo_path; do
+		[ -n "${repo_path}" ] || continue
+		stage_copy_if_missing_silent_entry "${repo_path}"
+	done < <(json_array_lines "schema_files_if_missing")
+
+	run_overlay_loader
+
+	model_catalog_path="$(json_string_value "model_catalog_path")"
+	if [ -n "${model_catalog_path}" ]; then
+		stage_model_catalog_entry "${model_catalog_path}"
+	fi
+
+	while IFS= read -r repo_path; do
+		[ -n "${repo_path}" ] || continue
+		stage_optional_preserve_entry "${repo_path}" "true" "${repo_path#scripts/}" "true"
+	done < <(json_array_lines "optional_preserve_scripts_after_schemas")
+
+	serena_template_path="$(json_string_value "serena_template_path")"
+	if [ -n "${serena_template_path}" ]; then
+		stage_serena_template_entry "${serena_template_path}"
+	fi
+
+	emit_consumer_gitignore
+
+	while IFS= read -r repo_path; do
+		[ -n "${repo_path}" ] || continue
+		stage_required_entry "${repo_path}" "false" "" "false"
+	done < <(json_array_lines "required_prompts")
+
+	while IFS= read -r repo_path; do
+		[ -n "${repo_path}" ] || continue
+		stage_optional_preserve_entry "${repo_path}" "false" "" "true"
+	done < <(json_array_lines "optional_preserve_files_after_prompts")
+
+	while IFS= read -r repo_path; do
+		[ -n "${repo_path}" ] || continue
+		stage_required_if_missing_entry "${repo_path}"
+	done < <(json_array_lines "required_root_files_if_missing")
+
+	while IFS= read -r repo_path; do
+		[ -n "${repo_path}" ] || continue
+		stage_copy_if_missing_silent_entry "${repo_path}"
+	done < <(json_array_lines "optional_root_files_if_missing")
+}
+
+main_validate()
+{
+	parse_args "$@"
+	setup_context
+	bootstrap_support_roots
+
+	case "${TARGET_NAME}" in
+		validate)
+			stage_validate_support
+			;;
+		*)
+			usage
+			;;
+	esac
+}
+
+if [ "${1:-}" = "validate" ]; then
+	main_validate "$@"
+else
+	stage_review_runtime_support
+fi

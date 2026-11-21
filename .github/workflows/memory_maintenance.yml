@@ -1,0 +1,227 @@
+name: AI Memory Maintenance (Reusable)
+
+on:
+  workflow_call:
+    secrets:
+      GH_PAT:
+        required: true
+      OPENROUTER_API_KEY:
+        required: false
+
+jobs:
+  memory_maintenance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Resolve workflow support ref
+        id: promote_candidate_ref
+        env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          CALLER_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Runs of this repository pinned to the protected promote-candidate
+          # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)
+          # check out its tip. Every other run leaves ref empty, which is
+          # actions/checkout's default (today's behaviour).
+          promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+          if [ "${CALLER_REPOSITORY}" = "shubhodeep1/coding-workflows" ] &&
+             [[ "${promote_candidate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/memory_maintenance\.yml@refs/heads/promote-candidate$ ]]; then
+            # One branches read, only on this path.
+            promote_candidate_json="$(gh api repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+            promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+            if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "ref=${promote_candidate_sha}" >> "$GITHUB_OUTPUT"
+              echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+            else
+              echo "SUPPORT_REF source=promote_candidate_unprotected"
+            fi
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.promote_candidate_ref.outputs.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Configure git auth for memory helper clones
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
+          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
+          SERVER_HOST="${SERVER_HOST#http://}"
+          SERVER_HOST="${SERVER_HOST%/}"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Extract repository learnings (fail-open)
+        # Without a step cap a slow extraction used the whole 20-minute job
+        # budget and the job was cancelled (run 40752760153), so
+        # continue-on-error never applied and compaction never ran.
+        timeout-minutes: 10
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          MEMORY_LEARNINGS_EXTRACT_ENABLED: ${{ vars.MEMORY_LEARNINGS_EXTRACT_ENABLED || 'true' }}
+          AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED: ${{ vars.AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED || '' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+
+          case "$(printf '%s' "${MEMORY_LEARNINGS_EXTRACT_ENABLED}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on)
+              ;;
+            *)
+              echo "::notice::Repository learnings extraction disabled by MEMORY_LEARNINGS_EXTRACT_ENABLED=${MEMORY_LEARNINGS_EXTRACT_ENABLED}"
+              exit 0
+              ;;
+          esac
+
+          if [ -z "${OPENROUTER_API_KEY:-}" ]; then
+            echo "::warning::OPENROUTER_API_KEY unavailable; skipping repository learnings extraction"
+            exit 0
+          fi
+
+          if ! [ -f scripts/memory_helpers.sh ]; then
+            echo "::warning::memory_helpers.sh unavailable; skipping repository learnings extraction"
+            exit 0
+          fi
+
+          source scripts/memory_helpers.sh
+          if ! declare -F memory_bootstrap >/dev/null 2>&1 \
+            || ! declare -F memory_record_candidate >/dev/null 2>&1 \
+            || ! declare -F memory_promote >/dev/null 2>&1; then
+            echo "::warning::memory_helpers.sh missing required helpers; skipping repository learnings extraction"
+            exit 0
+          fi
+
+          memory_bootstrap --ensure-branch --require memory_record_candidate
+
+          work_dir="$(mktemp -d)"
+          cleanup() {
+            rm -rf "${work_dir}"
+          }
+          trap cleanup EXIT
+
+          set +e
+          python3 scripts/memory_maintenance_extract_learnings.py \
+            --source-output "${work_dir}/merged_learnings_source.json" \
+            --learning-output "${work_dir}/repo_learnings.json"
+          extract_status=$?
+          set -e
+
+          case "${extract_status}" in
+            0)
+              ;;
+            10)
+              echo "::warning::Repository learnings source discovery failed; continuing without extraction"
+              exit 0
+              ;;
+            11)
+              echo "::warning::Repository learnings prompt render failed; continuing without extraction"
+              exit 0
+              ;;
+            12)
+              echo "::warning::Repository learnings model extraction failed; continuing without extraction"
+              exit 0
+              ;;
+            *)
+              echo "::warning::Repository learnings helper failed; continuing without extraction"
+              exit 0
+              ;;
+          esac
+
+          if ! jq -e '(.items // []) | length > 0' "${work_dir}/merged_learnings_source.json" >/dev/null 2>&1; then
+            echo "::notice::No merged task summaries available for repository learnings extraction"
+            exit 0
+          fi
+
+          if ! jq -e 'type == "array" and length > 0' "${work_dir}/repo_learnings.json" >/dev/null 2>&1; then
+            echo "::notice::Repository learnings extractor returned no learnings"
+            exit 0
+          fi
+
+          source_refs_csv="$(jq -r '(.source_refs // []) | map(select(type == "string" and length > 0)) | .[:10] | join(",")' "${work_dir}/merged_learnings_source.json")"
+          promoted_count=0
+
+          while IFS= read -r learning_json; do
+            [ -n "${learning_json}" ] || continue
+
+            summary="$(printf '%s' "${learning_json}" | jq -r '.summary // ""')"
+            details="$(printf '%s' "${learning_json}" | jq -r '.details // ""')"
+            confidence="$(printf '%s' "${learning_json}" | jq -r '.confidence // empty')"
+            if [ -z "${summary}" ] || [ -z "${details}" ] || [ -z "${confidence}" ]; then
+              echo "::warning::Skipping malformed repository learning item"
+              continue
+            fi
+
+            candidate_result="$(memory_record_candidate \
+              --category "repo_learnings" \
+              --summary "${summary}" \
+              --details "${details}" \
+              --confidence "${confidence}" \
+              --workflow "memory_maintenance" \
+              --run-id "${{ github.run_id }}" \
+              --run-attempt "${{ github.run_attempt }}" \
+              --actor "${{ github.actor }}" \
+              --source-refs "${source_refs_csv}" \
+              --scope-level "global")"
+
+            record_id="$(printf '%s' "${candidate_result}" | jq -r '.operation_result.record.record_id // empty' 2>/dev/null || true)"
+            if [ -z "${record_id}" ]; then
+              echo "::warning::Repository learning candidate write produced no record id; skipping promotion"
+              continue
+            fi
+
+            if ! promote_result="$(memory_promote \
+              --record-id "${record_id}" \
+              --run-id "${{ github.run_id }}" \
+              --workflow "memory_maintenance" \
+              --actor "${{ github.actor }}")"; then
+              echo "::warning::Repository learning promotion failed for ${record_id}; continuing"
+              continue
+            fi
+
+            if printf '%s' "${promote_result}" | jq -e --arg record_id "${record_id}" '(.operation_result.promoted // []) | index($record_id) != null' >/dev/null 2>&1; then
+              promoted_count=$((promoted_count + 1))
+            else
+              echo "::notice::Repository learning ${record_id} was not promoted (duplicate or governance rejection)"
+            fi
+          done < <(jq -c '.[]' "${work_dir}/repo_learnings.json")
+
+          echo "::notice::Repository learnings extraction complete; promoted_count=${promoted_count}"
+
+      - name: Run memory compaction
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          BATCH_API_DISABLED: ${{ vars.BATCH_API_DISABLED || 'false' }}
+          BATCH_API_PROVIDER: ${{ vars.BATCH_API_PROVIDER || 'auto' }}
+          BATCH_API_POLL_TIMEOUT_HOURS: ${{ vars.BATCH_API_POLL_TIMEOUT_HOURS || '24' }}
+          AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED: ${{ vars.AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED || '' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+
+          # Calculate the previous month for archival
+          ARCHIVE_MONTH="$(date -d 'last month' '+%Y-%m' 2>/dev/null || date -v-1m '+%Y-%m')"
+
+          echo "Running memory compaction for month: ${ARCHIVE_MONTH}"
+
+          echo "INFO: {\"event\":\"batch_noop\",\"workflow\":\"memory_maintenance\",\"reason\":\"no_llm_path\",\"batch_api_disabled\":\"${BATCH_API_DISABLED}\",\"provider_hint\":\"${BATCH_API_PROVIDER}\",\"poll_timeout_hours\":\"${BATCH_API_POLL_TIMEOUT_HOURS}\"}"
+          # Contract guard: this workflow currently has no Codex execution path.
+          # AI_PHASE_FAILURE_V1 markers and ai:memory-maintenance-failed labels
+          # are therefore intentionally no-op unless Codex execution is added.
+          echo "INFO: {\"event\":\"codex_contract_noop\",\"workflow\":\"memory_maintenance\",\"reason\":\"no_codex_execution_path\"}"
+
+          python3 scripts/ai_memory.py compact \
+            --month "${ARCHIVE_MONTH}" \
+            --prune true

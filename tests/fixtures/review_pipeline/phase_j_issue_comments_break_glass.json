@@ -1,0 +1,29 @@
+[
+  {
+    "id": 101,
+    "created_at": "2026-05-29T18:00:00Z",
+    "body": "@codex break-glass please post as a comment only",
+    "user": {
+      "login": "alice",
+      "type": "User"
+    }
+  },
+  {
+    "id": 102,
+    "created_at": "2026-05-29T18:01:00Z",
+    "body": "please @codex break-glass later",
+    "user": {
+      "login": "carol",
+      "type": "User"
+    }
+  },
+  {
+    "id": 103,
+    "created_at": "2026-05-29T18:02:00Z",
+    "body": "@codex break-glass from a bot should be ignored",
+    "user": {
+      "login": "github-actions[bot]",
+      "type": "Bot"
+    }
+  }
+]

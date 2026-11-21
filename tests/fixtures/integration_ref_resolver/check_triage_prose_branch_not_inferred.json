@@ -1,0 +1,13 @@
+{
+  "name": "check_triage_prose_branch_not_inferred",
+  "issues": {
+    "101": {
+      "body": "<!-- check-failure-triage:fp=0000000000000000000000000000000000000000000000000000000000000000 -->\n\n## Automated CI failure triage\n\nThe failing PR targets orchestrator/project-77 and must be fixed there.\n\nBase branch: orchestrator/project-77\n"
+    }
+  },
+  "branch_exists": {
+    "orchestrator/project-77": true
+  },
+  "expected_stdout": "",
+  "expected_exit_code": 0
+}

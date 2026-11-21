@@ -1,0 +1,34 @@
+# claude-pool-broker: hands the Claude account pool to trusted Actions jobs
+# (docs/plans/replace-claude-sessions-with-cli-engine-plan.md, Phase 4).
+# Account: FT_GAMES_CF (CLAUDE.md §24). Route: workers.dev only.
+# The CLAUDE_POOL_TOKENS secret is written only by
+# shubhodeep1/claude-workers' claude-pool-key-sync.yml, never here.
+# Optional secret BROKER_GITHUB_READ_TOKEN (read-only, set with
+# `wrangler secret put`): authenticates the GitHub compare calls that verify a
+# SHA-pinned job_workflow_ref. Unset means unauthenticated reads; a rate-limited
+# check is refused (403 workflow_sha_unverifiable) and the job runs codex.
+# ChatGPT account store (docs/plans/chatgpt-account-reviewer-trial-plan.md,
+# Phase 1): the CHATGPT_ACCOUNTS Durable Object namespace is written only by
+# shubhodeep1/claude-workers' chatgpt-pool-refresh.yml through
+# PUT /v1/chatgpt/refresh/<NAME>; the broker never refreshes a token itself.
+# Every CHATGPT_* var below has the same default in src/index.ts. A later
+# Durable Object migration needs a new, unique tag.
+name = "claude-pool-broker"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+[vars]
+PROBE_MODEL = "claude-haiku-4-5-20251001"
+GATE = "0.9"
+CHATGPT_GATE = "0.9"
+CHATGPT_WRITER_REPOSITORY = "shubhodeep1/claude-workers"
+CHATGPT_WRITER_WORKFLOW = "chatgpt-pool-refresh.yml"
+
+[[durable_objects.bindings]]
+name = "CHATGPT_ACCOUNTS"
+class_name = "ChatgptAccount"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ChatgptAccount"]

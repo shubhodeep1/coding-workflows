@@ -1,0 +1,46 @@
+name: Structured task
+description: File a task with explicit acceptance criteria for the AI pipeline.
+title: "[task] "
+labels: ["ai:clarification"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for tasks you want the AI pipeline to pick
+        up directly. The free-form issue path still works; this
+        form lets clarify skip straight to `STATUS: CLEAR` when
+        the fields below are complete.
+  - type: textarea
+    id: task_description
+    attributes:
+      label: Task description
+      description: What needs to change, in 2-4 sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance criteria
+      description: How to know the task is done. Use bullet points.
+    validations:
+      required: true
+  - type: textarea
+    id: scope_in
+    attributes:
+      label: In scope
+      description: What this task does cover. Optional.
+  - type: textarea
+    id: scope_out
+    attributes:
+      label: Out of scope
+      description: What this task explicitly does not cover. Optional.
+  - type: input
+    id: target_files
+    attributes:
+      label: Target files / modules
+      description: Comma-separated paths if you know them. Optional.
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Links to issues, PRs, docs, or prior plans. Optional.

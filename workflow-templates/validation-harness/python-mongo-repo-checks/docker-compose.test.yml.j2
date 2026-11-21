@@ -1,0 +1,46 @@
+services:
+  mongo:
+    init: true
+    image: "{{ slots.get('mongo_image', 'mongo:7') }}"
+    # The image declares VOLUME /data/db and /data/configdb. Without these
+    # tmpfs mounts Docker creates anonymous volumes and copies the image
+    # content into them, xattrs included; the validation sandbox's rootless
+    # daemon cannot set `system.posix_acl_default` there and container
+    # creation fails ("failed to copy xattrs ... invalid argument"). The test
+    # database is throwaway, so memory-backed mounts lose nothing.
+    tmpfs:
+      - /data/db
+      - /data/configdb
+    environment:
+      MONGO_INITDB_DATABASE: "{{ slots.get('mongo_db_name', 'validation') }}"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - '/bin/sh -c "mongosh --quiet --eval \"db.runCommand({ ping: 1 }).ok\" \"mongodb://127.0.0.1:27017/{{ slots.get('mongo_db_name', 'validation') }}\" >/dev/null"'
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  app:
+    init: true
+    build:
+      context: ..
+      dockerfile: {{ output_root_name }}/Dockerfile.app
+    working_dir: /workspace
+    env_file:
+      - validate.env
+    environment:
+      APP_SERVICE: "${APP_SERVICE:-app}"
+      APP_URL: "${APP_URL:-}"
+      MONGO_URL: "${MONGO_URL:-mongodb://mongo:27017/{{ slots.get('mongo_db_name', 'validation') }}}"
+      HEALTH_TIMEOUT_SECONDS: "${HEALTH_TIMEOUT_SECONDS:-120}"
+      HEALTH_POLL_INTERVAL_SECONDS: "${HEALTH_POLL_INTERVAL_SECONDS:-2}"
+      TAIL_LINES: "${TAIL_LINES:-60}"
+      CUSTOM_TESTS_JSON: '${CUSTOM_TESTS_JSON:-{{ manifest.get("custom_tests", []) | tojson }}}'
+      SKIP_TESTS_JSON: '${SKIP_TESTS_JSON:-{{ manifest.get("skip_tests", []) | tojson }}}'
+      CUSTOM_TESTS: "${CUSTOM_TESTS:-{{ manifest.get('custom_tests', []) | join(' && ') | replace('\\', '\\\\') | replace('"', '\\"') }}}"
+      SKIP_TESTS: "${SKIP_TESTS:-{{ manifest.get('skip_tests', []) | join(' ') }}}"
+    depends_on:
+      mongo:
+        condition: service_healthy
