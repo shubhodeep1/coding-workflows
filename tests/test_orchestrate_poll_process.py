@@ -22407,6 +22407,37 @@ def test_stall_judge_escalate_human_explains_on_the_issue_itself():
 	assert "STALL_ESCALATE_HUMAN_COMMENT issue=10 phase=ai:implementing source=stall_judge outcome=posted" in result["stdout"]
 
 
+def test_stall_judge_escalate_human_comment_write_failure_is_fail_open():
+	"""#9821: a failed issue-side comment write logs outcome=write_failed and
+	leaves the escalation (ai:needs-human label, tracking decision) intact."""
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:implementing"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		enable_stall_human_terminalization="true",
+		mock_stall_judge_json={
+			"action": "escalate_human",
+			"justification": "needs operator: the deploy token is missing",
+			"target_pr": None,
+			"head_ref": None,
+		},
+		fail_issue_comment_post_for=[10],
+	)
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert not any("<!-- ai:stall-escalate-human:v1" in body for body in issue_comments)
+	assert "STALL_ESCALATE_HUMAN_COMMENT issue=10 phase=ai:implementing source=stall_judge outcome=write_failed" in result["stdout"]
+	tracking_comments = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert any("**Decision (effective):** escalate_human" in body for body in tracking_comments)
+
+
 def test_stall_escalate_human_comment_helper_is_fail_open_and_clears_justification():
 	text = POLLER_SCRIPT.read_text(encoding="utf-8")
 	start = text.index("_post_stall_escalate_human_comment() {")

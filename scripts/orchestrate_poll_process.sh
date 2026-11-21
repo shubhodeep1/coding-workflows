@@ -20593,7 +20593,7 @@ ${seh_actor} labelled this issue \`ai:needs-human\` after it stayed in \`${seh_p
 
 ${seh_where}
 
-**To resume:** handle the reason above, then remove \`ai:needs-human\`. Stall recovery picks the issue up again on the next poll.
+**To resume:** handle the reason above, then remove \`ai:needs-human\`. Escalation restarted this phase's stall timer, so stall recovery picks the issue up again once the phase's stall threshold has passed.
 
 <!-- ai:stall-escalate-human:v1 issue=${seh_issue} phase=${seh_phase} -->"
   if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${seh_issue}/comments" -f body="${seh_body}" >/dev/null 2>&1; then
