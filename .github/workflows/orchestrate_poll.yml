@@ -2389,21 +2389,6 @@ jobs:
 
           tg_send_msg "${msg}" "ERROR" >/dev/null || true
 
-      - name: Record GH_PAT budget at poll end
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
-          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
-          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_poll
-        run: |
-          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
-            source scripts/gh_helpers.sh
-            gh_pat_budget end orchestrate_poll poll "${GH_PAT_BUDGET_FILE}"
-          else
-            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
-            echo "GH_PAT_BUDGET phase=end workflow=orchestrate_poll job=poll remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
-          fi
       # Plan item 3e (D1): report every refused (non-capacity) Claude fallback
       # recorded by scripts/ai_engine.sh in this job's RUNNER_TEMP as a
       # workflow-failure-heal dispatch plus one Telegram WARNING. Runs only
@@ -2427,6 +2412,22 @@ jobs:
               bash "${fallback_report}" || true
           else
             echo "::warning::AI_ENGINE_FALLBACK_REPORT skip reason=support_missing"
+          fi
+
+      - name: Record GH_PAT budget at poll end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_poll
+        run: |
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget end orchestrate_poll poll "${GH_PAT_BUDGET_FILE}"
+          else
+            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+            echo "GH_PAT_BUDGET phase=end workflow=orchestrate_poll job=poll remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
           fi
 
   # Daily Claude pool usage report: one Telegram message with every pool

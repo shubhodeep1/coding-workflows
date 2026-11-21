@@ -2853,21 +2853,6 @@ jobs:
           # pick this up and page when a person is needed.
           tg_send_phase_failure clarify "${MSG}" "DEBUG" "${ISSUE_NUMBER}"
 
-      - name: Record GH_PAT budget at clarify end
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
-          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
-          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_clarify
-        run: |
-          if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" ] && grep -q '^gh_pat_budget()' "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh"; then
-            source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh"
-            gh_pat_budget end clarify clarify "${GH_PAT_BUDGET_FILE}"
-          else
-            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
-            echo "GH_PAT_BUDGET phase=end workflow=clarify job=clarify remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
-          fi
       # Plan item 3e (D1): report every refused (non-capacity) Claude fallback
       # recorded by scripts/ai_engine.sh in this job's RUNNER_TEMP as a
       # workflow-failure-heal dispatch plus one Telegram WARNING. Runs only
@@ -2891,6 +2876,22 @@ jobs:
               bash "${fallback_report}" || true
           else
             echo "::warning::AI_ENGINE_FALLBACK_REPORT skip reason=support_missing"
+          fi
+
+      - name: Record GH_PAT budget at clarify end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_clarify
+        run: |
+          if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" ] && grep -q '^gh_pat_budget()' "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh"; then
+            source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh"
+            gh_pat_budget end clarify clarify "${GH_PAT_BUDGET_FILE}"
+          else
+            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+            echo "GH_PAT_BUDGET phase=end workflow=clarify job=clarify remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
           fi
   heal-report:
     # Workflow failure heal (README "Workflow Failure Heal"): report a failed

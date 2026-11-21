@@ -462,7 +462,9 @@ def test_sweep_step_wiring() -> None:
 	names = [step.get("name", "") for step in job["steps"]]
 	index = names.index("Backfill non-retryable autofix failure reports")
 	assert names[index - 1] == "Enumerate open PRs and dispatch internal-review.yml"
-	assert names[index + 1] == "Record GH_PAT budget at sweep end"
+	assert names[index + 1] == "Re-run cancelled CI failed jobs once"
+	# Issue #9887: the budget end step is last, so it counts every later gh call.
+	assert names[-1] == "Record GH_PAT budget at sweep end"
 	step = job["steps"][index]
 	assert step["continue-on-error"] is True
 	# !cancelled() drops the implicit success() check, so a failed enumerate

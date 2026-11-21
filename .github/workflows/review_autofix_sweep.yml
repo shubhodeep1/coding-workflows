@@ -903,22 +903,6 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
         run: bash .ci-rerun-support/scripts/workflow_failure_heal_non_retryable_backfill.sh
 
-      - name: Record GH_PAT budget at sweep end
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
-          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
-          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_sweep
-        run: |
-          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
-            source scripts/gh_helpers.sh
-            gh_pat_budget end review_autofix_sweep sweep "${GH_PAT_BUDGET_FILE}"
-          else
-            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
-            echo "GH_PAT_BUDGET phase=end workflow=review_autofix_sweep job=sweep remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
-          fi
-
       - name: Re-run cancelled CI failed jobs once
         env:
           GH_TOKEN: ${{ github.token }}
@@ -975,3 +959,19 @@ jobs:
           # The PR-named wrapper keeps the judge run visible to the active-run guards.
           SECURITY_HOLD_REVIEW_WORKFLOW: internal-review.yml
         run: PYTHONDONTWRITEBYTECODE=1 python3 .ci-rerun-support/scripts/review_security_hold_sweep.py
+
+      - name: Record GH_PAT budget at sweep end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_sweep
+        run: |
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget end review_autofix_sweep sweep "${GH_PAT_BUDGET_FILE}"
+          else
+            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+            echo "GH_PAT_BUDGET phase=end workflow=review_autofix_sweep job=sweep remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
+          fi
