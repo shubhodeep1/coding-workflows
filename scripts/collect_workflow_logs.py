@@ -111,12 +111,19 @@ PAT_BUDGET_WORKFLOWS = {
     "review_autofix_sweep.yml": "review_autofix_sweep",
     "workflow-failure-heal-intake.yml": "workflow-failure-heal-intake",
     "validation-improvements-intake.yml": "validation-improvements-intake",
+    # Issue #9887: release-gate jobs print GH_PAT_BUDGET too.
+    "test-and-mark-stable.yml": "test-and-mark-stable",
 }
 PAT_BUDGET_LINE = re.compile(
     r"^(?:(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z) )?"
-    r"GH_PAT_BUDGET phase=end workflow=([a-z_-]+) job=([a-z_-]+) "
-    r"remaining=(?:[0-9]+|unknown) reset=(?:[0-9]+|unknown) used_in_job=([0-9]+|unknown)$"
+    r"GH_PAT_BUDGET phase=end workflow=([a-z0-9_-]+) job=([a-z0-9_-]+) "
+    r"remaining=(?:[0-9]+|unknown) reset=(?:[0-9]+|unknown) used_in_job=([0-9]+|unknown)"
+    # Issue #9887: optional per-job gh call counter keys appended after
+    # used_in_job=. Groups 1-4 keep their indices, so older lines parse as before.
+    r"(?: calls_in_job=([0-9]+|unknown) paginated_in_job=([0-9]+|unknown) "
+    r"calls_by_token=((?:[a-z_]+:[0-9]+)(?:,[a-z_]+:[0-9]+)*|unknown))?$"
 )
+PAT_BUDGET_TOP_CONSUMERS_LIMIT = 20
 PAT_BUDGET_MAX_RUN_ARCHIVES = 1500
 # Review/autofix run summary (scripts/review_autofix_step_iteration_summary.sh).
 # Anchored so echoed script text (structured_summary_line='...') never matches;
@@ -1811,6 +1818,9 @@ def build_pat_budget_report(
     ]
     eligible.sort(key=lambda run: (_to_int(run.get("run_id"), 0), _to_int(run.get("run_attempt"), 1)))
     totals: dict[tuple[str, str, str], list[int]] = defaultdict(lambda: [0, 0])
+    # (workflow, job) -> [calls, paginated, pat, github_token, other, jobs]
+    call_totals: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0, 0, 0, 0, 0])
+    without_calls = 0
     missing = 0
     unmeasured = 0
     unknown = 0
@@ -1827,7 +1837,7 @@ def build_pat_budget_report(
             )
             # Read only budget lines, not arbitrary raw workflow output into the report.
             with zipfile.ZipFile(io.BytesIO(archive)) as log_zip:
-                measured: dict[str, tuple[datetime, int | None, bool]] = {}
+                measured: dict[str, tuple[datetime, int | None, bool, int | None, int, dict[str, int]]] = {}
                 for member in log_zip.infolist():
                     if member.is_dir() or member.file_size > 64 * 1024 * 1024:
                         continue
@@ -1843,10 +1853,29 @@ def build_pat_budget_report(
                             if end_time is None or not day <= end_time < day_end:
                                 continue
                             amount = int(match.group(4)) if match.group(4) != "unknown" else None
-                            measured[match.group(3)] = (end_time, amount, timestamp is None)
+                            calls = int(match.group(5)) if match.group(5) not in (None, "unknown") else None
+                            paginated = int(match.group(6)) if match.group(6) not in (None, "unknown") else 0
+                            by_token: dict[str, int] = {}
+                            if match.group(7) not in (None, "unknown"):
+                                for token_part in match.group(7).split(","):
+                                    token_name, token_count = token_part.split(":", 1)
+                                    by_token[token_name] = by_token.get(token_name, 0) + int(token_count)
+                            measured[match.group(3)] = (end_time, amount, timestamp is None, calls, paginated, by_token)
                 if not measured:
                     unmeasured += 1
-                for job, (end_time, amount, used_fallback) in measured.items():
+                for job, (end_time, amount, used_fallback, calls, paginated, by_token) in measured.items():
+                    if calls is None:
+                        without_calls += 1
+                    else:
+                        call_entry = call_totals[(PAT_BUDGET_WORKFLOWS[filename], job)]
+                        call_entry[0] += calls
+                        call_entry[1] += paginated
+                        call_entry[2] += by_token.get("pat", 0)
+                        call_entry[3] += by_token.get("github_token", 0)
+                        call_entry[4] += sum(
+                            count for name, count in by_token.items() if name not in ("pat", "github_token")
+                        )
+                        call_entry[5] += 1
                     if amount is None:
                         unknown += 1
                         continue
@@ -1880,6 +1909,26 @@ def build_pat_budget_report(
             lines.append(f"| {hour} | {rank} | {workflow} / {job} | {amount} | {count} |")
     if not totals:
         lines.append("| No measured job-end deltas | | | | |")
+    # Issue #9887: rank jobs by their own gh invocations (calls_in_job), which,
+    # unlike used_in_job, do not include concurrent jobs' usage.
+    lines.extend([
+        "",
+        f"### Top consumers by calls_in_job (UTC {day:%Y-%m-%d})",
+        "",
+        "Each job's own gh invocations; a --paginate call counts once (see Paginated).",
+        f"Coverage: {without_calls} job-end lines without calls_in_job.",
+        "",
+        "| Rank | Workflow / job | gh calls | Paginated | PAT | GITHUB_TOKEN | Other | Measured jobs |",
+        "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ])
+    ranked_consumers = sorted(call_totals.items(), key=lambda item: (-item[1][0], item[0][0], item[0][1]))
+    for rank, ((workflow, job), values) in enumerate(ranked_consumers[:PAT_BUDGET_TOP_CONSUMERS_LIMIT], start=1):
+        calls, paginated, pat_calls, token_calls, other_calls, job_count = values
+        lines.append(
+            f"| {rank} | {workflow} / {job} | {calls} | {paginated} | {pat_calls} | {token_calls} | {other_calls} | {job_count} |"
+        )
+    if not call_totals:
+        lines.append("| No jobs reported calls_in_job | | | | | | | |")
     return "\n".join(lines) + "\n"
 
 

@@ -98,6 +98,7 @@ deployment fallback.
 |---|---|---|---|---|
 | `WORKFLOW_EDITOR_MODEL` | No | `openai/gpt-6-sol` (every phase: clarify, plan, orchestrate, orchestrate_poll judge, orchestrate_clarify_respond, validate, workflow-log-analysis, implement, review_autofix editor, orchestrate_poll conflict resolver) | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate, workflow-log-analysis | Model for code editing / reasoning tasks. The pipeline standardises on `gpt-6-sol` (unified reasoning + coding) so a single setting changes every phase; the previous legacy editor split (patch-heavy phases on a separate older slug) was retired after the announce-without-emit regression ([openai/codex#11151](https://github.com/openai/codex/issues/11151)) drove repeat no-edit failures, and the underlying `apply_patch_tool_type: "freeform"` interaction with the OpenRouter Responses path was identified by the 2026-05-07 ablation suite (now flipped to `function` in `scripts/codex_model_catalog.json`). Setting this var overrides the default; use per-workflow vars (`WORKFLOW_ORCHESTRATE_MODEL`, `WORKFLOW_VALIDATE_MODEL`, `WORKFLOW_LOG_ANALYSIS_MODEL`) for finer control. |
 | `WORKFLOW_VALIDATE_MODEL` | No | (falls back to `WORKFLOW_EDITOR_MODEL`) | validate | Model override for validation harness generation/diagnosis |
+| `GH_CALL_COUNTER_ENABLED` | No | `true` | clarify, orchestrate_poll, review_autofix, review_autofix_sweep, workflow-failure-heal-intake, validation-improvements-intake, test-and-mark-stable | Per-job `gh` call counter behind the `GH_PAT_BUDGET` end-line keys `calls_in_job`, `paginated_in_job` and `calls_by_token` (issue #9887). `false` installs no shim and the keys read `unknown`. |
 | `WORKFLOW_EDITOR_FALLBACK_MODEL` | No | `openai/gpt-5.6-sol` | plan, implement, review_autofix (editor) | Capacity-fallback editor model. Each codex editor retry loop switches `--model` to this slug on its **final** attempt only, so a sustained OpenRouter/OpenAI per-model TPM saturation on the primary (`WORKFLOW_EDITOR_MODEL`, `gpt-6-sol`) can be ridden out — the fallback sits in a different capacity bucket (issue #3515 / run 28640359211). The default `openai/gpt-5.6-sol` (the previous primary) is declared in `scripts/codex_model_catalog.json` (fields mirror the primary's OpenAI generation), so `apply_patch`/verbosity resolution stays intact when the switch fires. Set to the primary slug (or clear it) to disable the switch; point at any catalog-declared slug to change the fallback. The implement **repair** pass and the parallel reviewer models are unaffected. |
 | `AI_COMMENT_SIGNING_POST` | No | `true` | every workflow that reads `AI_COMMENT_SIGNING_SECRET` | Rollback switch for signed job-token comments. `false` posts new pipeline comments with `GH_PAT` again (each starts the four `issue_comment` wrappers, as before) while reads keep verifying comments already signed. Has no effect while `AI_COMMENT_SIGNING_SECRET` is unset. |
 | `AUTO_IMPLEMENT_ON_CLEAR_PLAN` | No | `true` | plan | Auto-trigger implementation when plan is clear |
@@ -608,6 +609,24 @@ zero usage. The daily source-repo reads use the job-scoped `github.token`, not
 the measured PAT. Shared-PAT deltas include concurrent jobs and cannot be used as
 exact per-job API request counts; unknown deltas and incomplete listings are
 excluded from the rankings and called out in the report. No credentials change.
+
+Each instrumented job also counts its own `gh` invocations (issue #9887). An
+`Install gh call counter` step sources the job's trusted `gh_helpers.sh` copy
+and runs `gh_call_counter_install`, which puts a small `gh` shim (canonical
+copy: `scripts/gh_call_counter/gh`) first on `PATH` for the rest of the job.
+The shim writes one line per call to `${RUNNER_TEMP}/gh_call_counter.log`
+(the subcommand, a `--paginate` bit and the token kind, decided by variable
+name; never an argument or a token value) and then runs the next `gh`. The
+job-end line gains three keys after `used_in_job=`:
+`calls_in_job=<n> paginated_in_job=<n> calls_by_token=pat:<n>,github_token:<n>,other:<n>`
+(`unknown` when the counter is not installed). The daily report adds a "Top
+consumers by `calls_in_job`" table ranked by these per-job counts, which,
+unlike `used_in_job`, exclude concurrent jobs. The release-gate jobs in
+`test-and-mark-stable.yml` (`e2e-smoke-test`, `e2e-alt-model-test`,
+`validate-standalone-test`, `validate`) print the same start/end lines; the
+`validate` job holds no PAT, so its quota keys stay `unknown`. The counter
+adds no GitHub request. Set the repository variable
+`GH_CALL_COUNTER_ENABLED=false` to turn it off.
 
 **`.github/workflows/ai-clarify.yml`** — Triages new issues automatically
 ```yaml

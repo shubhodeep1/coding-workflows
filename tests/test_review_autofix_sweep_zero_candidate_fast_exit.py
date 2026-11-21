@@ -136,16 +136,39 @@ def test_budget_steps_tolerate_older_support_without_helper(tmp_path: Path) -> N
 			assert f"GH_PAT_BUDGET phase={phase} workflow={workflow_name.removesuffix('.yml')} job={job_name} remaining=unknown" in result.stdout
 
 
+# Issue #9887: the trusted gh_helpers.sh copy each instrumented job's
+# "Install gh call counter" step may source. Never a PR-head checkout.
+GH_CALL_COUNTER_TRUSTED_HELPERS = {
+	("clarify.yml", "clarify"): "${{ env.SUPPORT_SCRIPTS_DIR || 'scripts' }}/gh_helpers.sh",
+	("clarify.yml", "heal-report"): ".codex-workflow-src/scripts/gh_helpers.sh",
+	("orchestrate_poll.yml", "poll"): "scripts/gh_helpers.sh",
+	("review_autofix_sweep.yml", "sweep"): "scripts/gh_helpers.sh",
+	("workflow-failure-heal-intake.yml", "intake"): "scripts/gh_helpers.sh",
+	("workflow-failure-heal-intake.yml", "recovery-scan"): "scripts/gh_helpers.sh",
+	("workflow-failure-heal-intake.yml", "heal-verify"): "scripts/gh_helpers.sh",
+	("validation-improvements-intake.yml", "intake"): "scripts/gh_helpers.sh",
+	("review_autofix.yml", "gate"): "${{ env.GH_API_RETRY_HELPERS }}",
+	("review_autofix.yml", "codex-agent"): "${{ env.SUPPORT_SCRIPTS_DIR }}/gh_helpers.sh",
+	("review_autofix.yml", "post-merge-validate-dispatch"): ".codex-workflow-src/scripts/gh_helpers.sh",
+	("review_autofix.yml", "post-merge-force-poll"): ".codex-workflow-src/scripts/gh_helpers.sh",
+	("review_autofix.yml", "deterministic-skip-merge"): ".codex-freshness-src/scripts/gh_helpers.sh",
+	("review_autofix.yml", "fingerprint-cap-block"): ".codex-workflow-src/scripts/gh_helpers.sh",
+	("test-and-mark-stable.yml", "e2e-smoke-test"): "scripts/gh_helpers.sh",
+	("test-and-mark-stable.yml", "e2e-alt-model-test"): "scripts/gh_helpers.sh",
+	("test-and-mark-stable.yml", "validate-standalone-test"): "scripts/gh_helpers.sh",
+	("test-and-mark-stable.yml", "validate"): "scripts/gh_helpers.sh",
+}
+# The review pipeline contract forbids continue-on-error in this job; the
+# install body still ends every path in exit 0.
+GH_CALL_COUNTER_NO_CONTINUE_ON_ERROR_JOBS = {("review_autofix.yml", "post-merge-validate-dispatch")}
+# Jobs that hold no GH_PAT: their budget steps must make no gh call (#9887 D6).
+GH_PAT_BUDGET_NO_PAT_JOBS = {("test-and-mark-stable.yml", "validate")}
+
+
 def test_pat_budget_steps_bracket_every_active_job() -> None:
-	workflows = {
-		"clarify.yml": ("clarify", "heal-report"),
-		"orchestrate_poll.yml": ("poll",),
-		"review_autofix_sweep.yml": ("sweep",),
-		"workflow-failure-heal-intake.yml": ("intake", "heal-verify"),
-		"validation-improvements-intake.yml": ("intake",),
-		"review_autofix.yml": ("gate", "codex-agent", "post-merge-validate-dispatch",
-			"post-merge-force-poll", "deterministic-skip-merge", "fingerprint-cap-block"),
-	}
+	workflows: dict[str, list[str]] = {}
+	for file, name in GH_CALL_COUNTER_TRUSTED_HELPERS:
+		workflows.setdefault(file, []).append(name)
 	with tempfile.TemporaryDirectory() as test_dir:
 		bin_dir = Path(test_dir)
 		gh = bin_dir / "gh"
@@ -157,24 +180,95 @@ else
 fi
 ''')
 		gh.chmod(0o755)
+		no_gh_dir = bin_dir / "no-gh"
+		no_gh_dir.mkdir()
+		forbidden = no_gh_dir / "gh"
+		forbidden.write_text(f'#!/usr/bin/env bash\necho called >> "{bin_dir}/forbidden-calls"\nexit 1\n')
+		forbidden.chmod(0o755)
+		# A counter dir staged by the real installer, used to check the end keys.
+		runner_temp = bin_dir / "runner"
+		runner_temp.mkdir()
+		install = subprocess.run(["bash", "-c", f'source "{REPO_ROOT}/scripts/gh_helpers.sh"; gh_call_counter_install'],
+			env={**os.environ, "RUNNER_TEMP": str(runner_temp), "GITHUB_PATH": ""}, capture_output=True, text=True)
+		assert install.returncode == 0, install.stderr
+		counter_dir = next(path for path in runner_temp.glob("gh_call_counter.*") if path.is_dir())
+		counter_log = bin_dir / "counter.log"
 		for file, jobs in workflows.items():
 			workflow = yaml.safe_load((REPO_ROOT / ".github/workflows" / file).read_text())
 			for name in jobs:
-				steps = workflow["jobs"][name]["steps"]
-				budget = [step for step in steps if step["name"].startswith("Record GH_PAT budget at ")]
+				job = workflow["jobs"][name]
+				steps = job["steps"]
+				budget = [step for step in steps if step.get("name", "").startswith("Record GH_PAT budget at ")]
 				assert len(budget) == 2, (file, name)
 				if file.endswith("-intake.yml"):
 					assert steps[0] is budget[0], (file, name)
 				assert budget[1]["if"] == "always()"
-				assert budget[0]["env"].get("GH_TOKEN", workflow["jobs"][name].get("env", {}).get("GH_TOKEN")) == "${{ secrets.GH_PAT }}"
+				no_pat = (file, name) in GH_PAT_BUDGET_NO_PAT_JOBS
+				if no_pat:
+					assert "GH_TOKEN" not in job.get("env", {}), (file, name)
+					assert all("GH_TOKEN" not in step.get("env", {}) for step in budget), (file, name)
+				else:
+					assert budget[0]["env"].get("GH_TOKEN", job.get("env", {}).get("GH_TOKEN")) == "${{ secrets.GH_PAT }}"
+				installs = [step for step in steps if step.get("name") == "Install gh call counter"]
+				assert len(installs) == 1, (file, name)
+				install_step = installs[0]
+				assert steps.index(install_step) < steps.index(budget[1]), (file, name)
+				if (file, name) in GH_CALL_COUNTER_NO_CONTINUE_ON_ERROR_JOBS:
+					assert "continue-on-error" not in install_step, (file, name)
+				else:
+					assert install_step["continue-on-error"] is True, (file, name)
+				assert install_step["run"].rstrip().endswith("exit 0"), (file, name)
+				assert set(install_step["env"]) == {"GH_CALL_COUNTER_ENABLED", "GH_CALL_COUNTER_HELPERS"}, (file, name)
+				assert install_step["env"]["GH_CALL_COUNTER_ENABLED"] == "${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}"
+				helpers = install_step["env"]["GH_CALL_COUNTER_HELPERS"]
+				assert helpers == GH_CALL_COUNTER_TRUSTED_HELPERS[(file, name)], (file, name, helpers)
+				assert "skip-pr-head" not in helpers and "secrets." not in str(install_step["env"])
+				assert "gh_call_counter_install" in install_step["run"]
 				for phase, step in zip(("start", "end"), budget):
-					env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
+					path_dirs = f"{no_gh_dir}" if no_pat else f"{bin_dir}"
+					env = {**os.environ, "PATH": f"{path_dirs}:{os.environ['PATH']}",
 						"GH_PAT_BUDGET_FILE": str(bin_dir / f"budget-{file}-{name}"), "GH_TOKEN": "fake"}
 					result = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=REPO_ROOT,
 						env=env, capture_output=True, text=True)
 					assert result.returncode == 0, (file, name, phase, result.stderr)
 					assert f"GH_PAT_BUDGET phase={phase} workflow={file.removesuffix('.yml')} job={name} remaining=" in result.stdout
 					assert " reset=" in result.stdout and " used_in_job=" in result.stdout
+					if phase == "start":
+						assert "calls_in_job=" not in result.stdout, (file, name)
+						continue
+					assert " calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown" in result.stdout, (file, name)
+					# With the counter first on PATH the end line carries this job's count.
+					counter_log.write_text("v1 cmd=api paginate=0 token=pat\nv1 cmd=pr paginate=1 token=github_token\n")
+					counted = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=REPO_ROOT,
+						env={**env, "PATH": f"{counter_dir}:{env['PATH']}", "GH_CALL_COUNTER_LOG": str(counter_log)},
+						capture_output=True, text=True)
+					assert counted.returncode == 0, (file, name, counted.stderr)
+					assert (" calls_in_job=2 paginated_in_job=1 calls_by_token=pat:1,github_token:1,other:0"
+						in counted.stdout), (file, name, counted.stdout)
+		assert not (bin_dir / "forbidden-calls").exists(), "a no-PAT budget step called gh"
+
+
+def test_install_gh_call_counter_step_installs_and_tolerates_missing_helper(tmp_path: Path) -> None:
+	workflow = yaml.safe_load((REPO_ROOT / ".github/workflows/orchestrate_poll.yml").read_text())
+	step = next(item for item in workflow["jobs"]["poll"]["steps"] if item.get("name") == "Install gh call counter")
+	github_path = tmp_path / "github_path"
+	github_path.write_text("")
+	(tmp_path / "runner").mkdir()
+	base = {**os.environ, "RUNNER_TEMP": str(tmp_path / "runner"), "GITHUB_PATH": str(github_path),
+		"GH_CALL_COUNTER_ENABLED": "true"}
+	missing = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=tmp_path,
+		env={**base, "GH_CALL_COUNTER_HELPERS": str(tmp_path / "nope.sh")}, capture_output=True, text=True)
+	assert missing.returncode == 0 and github_path.read_text() == ""
+	(tmp_path / "old.sh").write_text("# Older support without gh_call_counter_install\n")
+	older = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=tmp_path,
+		env={**base, "GH_CALL_COUNTER_HELPERS": str(tmp_path / "old.sh")}, capture_output=True, text=True)
+	assert older.returncode == 0 and github_path.read_text() == ""
+	result = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=tmp_path,
+		env={**base, "GH_CALL_COUNTER_HELPERS": str(REPO_ROOT / "scripts/gh_helpers.sh")}, capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	persisted = github_path.read_text().splitlines()
+	assert len(persisted) == 1 and "/gh_call_counter." in persisted[0]
+	assert (Path(persisted[0]) / "gh").is_file()
 
 
 def test_heal_intake_budget_end_with_older_helper(tmp_path: Path) -> None:
@@ -308,6 +402,8 @@ if __name__ == "__main__":
 	with tempfile.TemporaryDirectory() as test_dir:
 		test_budget_steps_tolerate_older_support_without_helper(Path(test_dir))
 	test_pat_budget_steps_bracket_every_active_job()
+	with tempfile.TemporaryDirectory() as test_dir:
+		test_install_gh_call_counter_step_installs_and_tolerates_missing_helper(Path(test_dir))
 	with tempfile.TemporaryDirectory() as test_dir:
 		test_heal_intake_budget_end_with_older_helper(Path(test_dir))
 	test_sweep_batches_only_verified_current_head_handoffs()

@@ -589,10 +589,10 @@ def test_heal_verify_job_wiring() -> None:
 	assert env["GH_TOKEN"] == "${{ secrets.GH_PAT }}"
 	names = [step["name"] for step in job["steps"]]
 	assert names == ["Record GH_PAT budget at heal-verify start", "Checkout repository",
-		"Run heal post-merge verification", "Record GH_PAT budget at heal-verify end"]
+		"Install gh call counter", "Run heal post-merge verification", "Record GH_PAT budget at heal-verify end"]
 	assert job["steps"][-1]["if"] == "always()"
 	assert job["steps"][1]["with"]["persist-credentials"] is False
-	assert "bash scripts/workflow_failure_heal_verify.sh" in job["steps"][2]["run"]
+	assert "bash scripts/workflow_failure_heal_verify.sh" in job["steps"][3]["run"]
 
 
 def test_workflow_text_wires_the_script() -> None:

@@ -82,7 +82,7 @@ _ai_comment_sig_activate()
 	IFS=":"
 	for _acs_entry in ${PATH}; do
 		case "${_acs_entry}" in
-			*/ai_comment_sig_shim.*) continue ;;
+			*/ai_comment_sig_shim.*|*/gh_call_counter.*) continue ;;
 		esac
 		if [ -n "${_acs_entry}" ] && [ -x "${_acs_entry}/gh" ] && [ ! -d "${_acs_entry}/gh" ]; then
 			_acs_real="${_acs_entry}/gh"
@@ -108,7 +108,7 @@ if [ -z "${AI_COMMENT_SIG_REAL_GH:-}" ] || [ ! -x "${AI_COMMENT_SIG_REAL_GH}" ];
 	IFS=":"
 	for _shim_entry in ${PATH}; do
 		case "${_shim_entry}" in
-			"${_shim_self_dir}"|*/ai_comment_sig_shim.*) continue ;;
+			"${_shim_self_dir}"|*/ai_comment_sig_shim.*|*/gh_call_counter.*) continue ;;
 		esac
 		if [ -n "${_shim_entry}" ] && [ -x "${_shim_entry}/gh" ]; then
 			AI_COMMENT_SIG_REAL_GH="${_shim_entry}/gh"
@@ -160,6 +160,11 @@ AI_COMMENT_SIG_SHIM
 	# in a later step that does not hold AI_COMMENT_SIGNING_SECRET.
 	if [ -n "${GITHUB_PATH:-}" ] && [ -w "${GITHUB_PATH}" ]; then
 		printf '%s\n' "${_acs_dir}" >> "${GITHUB_PATH}" || true
+	fi
+	# Issue #9887: a gh call counter installed earlier must stay first on PATH
+	# (it execs the next gh, this shim, so signing is never bypassed).
+	if declare -F _gh_call_counter_refront >/dev/null 2>&1; then
+		_gh_call_counter_refront
 	fi
 	echo "AI_COMMENT_SIG outcome=active shim=${_acs_dir}" >&2
 }
@@ -955,6 +960,213 @@ if __name__ == "__main__":
 	sys.exit(main(sys.argv[1:]))
 AI_COMMENT_SIGNER_PY
 }
+# ---------------------------------------------------------------
+# Per-job gh call counter (issue #9887, GH_PAT budget part A).
+#
+# gh_call_counter_install writes a tiny `gh` shim and its summary command
+# into ${RUNNER_TEMP}/gh_call_counter.XXXXXX, puts that dir first on PATH and
+# appends only the dir to GITHUB_PATH, so every later step of the job goes
+# through it. The shim logs one line per invocation (allowlisted subcommand,
+# --paginate bit, token kind by variable name; never an argument or value)
+# to ${GH_CALL_COUNTER_LOG:-${RUNNER_TEMP}/gh_call_counter.log} and execs the
+# next gh on PATH. gh_pat_budget end appends the summary keys
+#   calls_in_job=<n> paginated_in_job=<n> calls_by_token=pat:<n>,github_token:<n>,other:<n>
+# after used_in_job=. Canonical copies of the embedded scripts live in
+# scripts/gh_call_counter/ (kept byte-identical by tests/test_gh_call_counter.py).
+# Kill switch: GH_CALL_COUNTER_ENABLED=false (default true). No API calls.
+# Defined above the activate-only early return so _ai_comment_sig_activate
+# can keep the counter outermost.
+# ---------------------------------------------------------------
+_gh_call_counter_write_shim()
+{
+	cat > "$1" 2>/dev/null <<'GH_CALL_COUNTER_SHIM'
+#!/usr/bin/env bash
+# gh call counter shim (issue #9887). Canonical copy of the shim that
+# scripts/gh_helpers.sh (gh_call_counter_install) writes into a
+# ${RUNNER_TEMP}/gh_call_counter.XXXXXX dir put first on PATH; the two are
+# kept byte-identical by tests/test_gh_call_counter.py.
+#
+# One line per invocation goes to the job's counter log: the first
+# subcommand when it is a known gh command (else `other`), whether
+# --paginate was given, and which token variable is in effect. The token is
+# classified by variable name only; no argument, token or other value is
+# ever written. Then the next gh on PATH is exec'd (the comment-signing shim
+# or the real binary), so exit code, stdout, stderr and stdin pass through.
+# The target is found on every call and skips counter dirs, so the shim can
+# never exec itself and never bypasses the comment-signing shim.
+_gcc_self_dir="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+_gcc_target=""
+_gcc_oldifs="${IFS}"
+IFS=":"
+for _gcc_entry in ${PATH}; do
+	case "${_gcc_entry}" in
+		""|"${_gcc_self_dir}"|*/gh_call_counter.*) continue ;;
+	esac
+	if [ -f "${_gcc_entry}/gh" ] && [ -x "${_gcc_entry}/gh" ]; then
+		_gcc_target="${_gcc_entry}/gh"
+		break
+	fi
+done
+IFS="${_gcc_oldifs}"
+if [ -z "${_gcc_target}" ]; then
+	echo "gh: not found (GH_CALL_COUNTER shim)" >&2
+	exit 127
+fi
+if [ "${GH_CALL_COUNTER_ENABLED:-true}" = "false" ]; then
+	exec "${_gcc_target}" "$@"
+fi
+case "${1:-}" in
+	api|pr|issue|run|workflow|release|label|repo|search|gist|secret|variable|cache|project|ruleset|auth|status|browse|extension|alias|config|codespace|attestation|org|ssh-key|gpg-key|completion|help|version)
+		_gcc_cmd="$1" ;;
+	*) _gcc_cmd="other" ;;
+esac
+_gcc_paginate=0
+for _gcc_arg in "$@"; do
+	if [ "${_gcc_arg}" = "--paginate" ]; then
+		_gcc_paginate=1
+		break
+	fi
+done
+case "${GH_CALL_COUNTER_TOKEN_KIND:-}" in
+	pat|github_token|other) _gcc_token="${GH_CALL_COUNTER_TOKEN_KIND}" ;;
+	*)
+		if [ -n "${GH_TOKEN:-}" ]; then
+			_gcc_token="pat"
+		elif [ -n "${GITHUB_TOKEN:-}" ]; then
+			_gcc_token="github_token"
+		else
+			_gcc_token="other"
+		fi
+		;;
+esac
+{ printf 'v1 cmd=%s paginate=%s token=%s\n' "${_gcc_cmd}" "${_gcc_paginate}" "${_gcc_token}" \
+	>> "${GH_CALL_COUNTER_LOG:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/gh_call_counter.log}"; } 2>/dev/null || true
+exec "${_gcc_target}" "$@"
+GH_CALL_COUNTER_SHIM
+}
+_gh_call_counter_write_summary()
+{
+	cat > "$1" 2>/dev/null <<'GH_CALL_COUNTER_SUMMARY'
+#!/usr/bin/env bash
+# gh call counter summary (issue #9887). Canonical copy of the command that
+# scripts/gh_helpers.sh (gh_call_counter_install) writes next to the gh
+# shim; kept byte-identical by tests/test_gh_call_counter.py.
+# Prints one line of GH_PAT_BUDGET end-line keys from the job's counter log:
+#   calls_in_job=<n> paginated_in_job=<n> calls_by_token=pat:<n>,github_token:<n>,other:<n>
+# Lines that do not match the shim's exact format are skipped. A missing or
+# unreadable log prints the three keys as `unknown`. Always exits 0.
+_gcc_unknown='calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown'
+_gcc_log="${GH_CALL_COUNTER_LOG:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/gh_call_counter.log}"
+if [ ! -f "${_gcc_log}" ] || [ ! -r "${_gcc_log}" ]; then
+	printf '%s\n' "${_gcc_unknown}"
+	exit 0
+fi
+_gcc_out="$(awk '
+	/^v1 cmd=[a-z-]+ paginate=[01] token=(pat|github_token|other)$/ {
+		calls++
+		if ($3 == "paginate=1") paginated++
+		sub(/^token=/, "", $4)
+		tokens[$4]++
+	}
+	END {
+		printf "calls_in_job=%d paginated_in_job=%d calls_by_token=pat:%d,github_token:%d,other:%d\n", \
+			calls, paginated, tokens["pat"], tokens["github_token"], tokens["other"]
+	}' "${_gcc_log}" 2>/dev/null)" || _gcc_out=""
+case "${_gcc_out}" in
+	calls_in_job=[0-9]*) printf '%s\n' "${_gcc_out}" ;;
+	*) printf '%s\n' "${_gcc_unknown}" ;;
+esac
+exit 0
+GH_CALL_COUNTER_SUMMARY
+}
+# Move a counter dir already on PATH to the front (and re-persist it through
+# GITHUB_PATH) when something else was prepended after it. No-op otherwise.
+_gh_call_counter_refront()
+{
+	local _gcr_entry _gcr_dir="" _gcr_oldifs="${IFS}"
+	IFS=":"
+	for _gcr_entry in ${PATH}; do
+		case "${_gcr_entry}" in
+			*/gh_call_counter.*)
+				if [ -x "${_gcr_entry}/gh" ]; then
+					_gcr_dir="${_gcr_entry}"
+					break
+				fi
+				;;
+		esac
+	done
+	IFS="${_gcr_oldifs}"
+	[ -n "${_gcr_dir}" ] || return 0
+	[ "${PATH%%:*}" = "${_gcr_dir}" ] && return 0
+	export PATH="${_gcr_dir}:${PATH}"
+	hash -r 2>/dev/null || true
+	if [ -n "${GITHUB_PATH:-}" ] && [ -w "${GITHUB_PATH}" ]; then
+		printf '%s\n' "${_gcr_dir}" >> "${GITHUB_PATH}" || true
+	fi
+	return 0
+}
+gh_call_counter_install()
+{
+	if [ "${GH_CALL_COUNTER_ENABLED:-true}" = "false" ]; then
+		echo "GH_CALL_COUNTER outcome=disabled" >&2
+		return 0
+	fi
+	local _gci_entry _gci_dir="" _gci_oldifs="${IFS}" _gci_log
+	# A later step (or a second source) of the job: reuse the dir already on
+	# PATH, so the log is truncated only by the first install of the job.
+	IFS=":"
+	for _gci_entry in ${PATH}; do
+		case "${_gci_entry}" in
+			*/gh_call_counter.*)
+				if [ -x "${_gci_entry}/gh" ] && [ -x "${_gci_entry}/gh-call-counter-summary" ]; then
+					_gci_dir="${_gci_entry}"
+					break
+				fi
+				;;
+		esac
+	done
+	IFS="${_gci_oldifs}"
+	if [ -n "${_gci_dir}" ]; then
+		_gh_call_counter_refront
+		echo "GH_CALL_COUNTER outcome=active dir=${_gci_dir}" >&2
+		return 0
+	fi
+	if ! _gci_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/gh_call_counter.XXXXXX" 2>/dev/null)" || [ -z "${_gci_dir}" ]; then
+		echo "::warning::GH_CALL_COUNTER outcome=inactive reason=mktemp_failed" >&2
+		return 0
+	fi
+	if ! _gh_call_counter_write_shim "${_gci_dir}/gh" \
+		|| ! _gh_call_counter_write_summary "${_gci_dir}/gh-call-counter-summary" \
+		|| ! chmod 0755 "${_gci_dir}/gh" "${_gci_dir}/gh-call-counter-summary" 2>/dev/null; then
+		echo "::warning::GH_CALL_COUNTER outcome=inactive reason=write_failed" >&2
+		rm -rf "${_gci_dir}" 2>/dev/null || true
+		return 0
+	fi
+	_gci_log="${GH_CALL_COUNTER_LOG:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/gh_call_counter.log}"
+	{ : > "${_gci_log}"; } 2>/dev/null || true
+	export PATH="${_gci_dir}:${PATH}"
+	hash -r 2>/dev/null || true
+	# Only the dir is persisted (no variables, no credentials).
+	if [ -n "${GITHUB_PATH:-}" ] && [ -w "${GITHUB_PATH}" ]; then
+		printf '%s\n' "${_gci_dir}" >> "${GITHUB_PATH}" || true
+	fi
+	echo "GH_CALL_COUNTER outcome=active dir=${_gci_dir}" >&2
+	return 0
+}
+# Print the counter keys for a GH_PAT_BUDGET end line (always one line).
+gh_call_counter_summary()
+{
+	local _gcs_out=""
+	if command -v gh-call-counter-summary >/dev/null 2>&1; then
+		_gcs_out="$(gh-call-counter-summary 2>/dev/null)" || _gcs_out=""
+	fi
+	if [[ "${_gcs_out}" =~ ^calls_in_job=[0-9a-z]+\ paginated_in_job=[0-9a-z]+\ calls_by_token=[a-z_:0-9,]+$ ]]; then
+		printf '%s\n' "${_gcs_out}"
+	else
+		printf '%s\n' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown'
+	fi
+	return 0
+}
 _ai_comment_sig_activate
 # Activate-only mode: a script that posts comments but does not otherwise use
 # these helpers runs `AI_COMMENT_SIG_ACTIVATE_ONLY=1 source .../gh_helpers.sh`
@@ -969,8 +1181,13 @@ fi
 # concurrently. /rate_limit does not debit the primary REST allowance.
 gh_pat_budget()
 {
-	local phase="$1" workflow="$2" job="$3" snapshot_file="$4" response payload header_resource header_remaining header_reset remaining reset used="unknown" previous_remaining previous_reset
+	local phase="$1" workflow="$2" job="$3" snapshot_file="$4" response payload header_resource header_remaining header_reset remaining reset used="unknown" previous_remaining previous_reset counter_keys=""
 	case "${phase}" in start|end) ;; *) return 1 ;; esac
+	# Issue #9887: read the job's own gh call count before the rate_limit
+	# read below, so the budget read itself is not counted.
+	if [ "${phase}" = "end" ]; then
+		counter_keys="$(gh_call_counter_summary)"
+	fi
 	remaining="unknown"
 	reset="unknown"
 	if response="$(gh api -i rate_limit 2>/dev/null)"; then
@@ -1009,6 +1226,11 @@ gh_pat_budget()
 		   [ "${previous_remaining}" -ge "${remaining}" ]; then
 			used=$((previous_remaining - remaining))
 		fi
+	fi
+	if [ "${phase}" = "end" ]; then
+		printf 'GH_PAT_BUDGET phase=%s workflow=%s job=%s remaining=%s reset=%s used_in_job=%s %s\n' \
+			"${phase}" "${workflow}" "${job}" "${remaining}" "${reset}" "${used}" "${counter_keys}"
+		return 0
 	fi
 	printf 'GH_PAT_BUDGET phase=%s workflow=%s job=%s remaining=%s reset=%s used_in_job=%s\n' \
 		"${phase}" "${workflow}" "${job}" "${remaining}" "${reset}" "${used}"

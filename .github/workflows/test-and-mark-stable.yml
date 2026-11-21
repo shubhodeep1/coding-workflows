@@ -663,6 +663,20 @@ jobs:
       REVIEW_WORKFLOW_FILE: ${{ inputs.review_workflow_file || 'internal-review.yml' }}
 
     steps:
+      - name: Record GH_PAT budget at e2e-smoke-test start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_e2e-smoke-test
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=e2e-smoke-test remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       # Checkout repo at the start so `if: always()` steps (per-phase
       # soft-error analyser invocations, Cleanup test artifacts) can find
       # scripts/ even when an earlier phase exits non-zero. The original
@@ -689,6 +703,19 @@ jobs:
         run: |
           [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
           source scripts/gh_helpers.sh
+
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
 
       # Phase 4 and Phase 4b run step bodies moved to scripts/ (#7991,
       # workflow file size guard). They are read from this run's own commit,
@@ -3429,6 +3456,26 @@ jobs:
       # Remove after root-cause is identified and a targeted fix lands.
       - *git-checkout-diag
 
+      - name: Record GH_PAT budget at e2e-smoke-test end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_e2e-smoke-test
+        run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
+          remaining=unknown; reset=unknown; used=unknown
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r remaining reset <<< "${reading}"
+            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
+              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
+              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
+                used=$((initial - remaining))
+              fi
+            fi
+          fi
+          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=e2e-smoke-test remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
+
   # ──────────────────────────────────────────────────────────────────
   # Job 1b: Script correctness validation — runs parallel with E2E
   # ──────────────────────────────────────────────────────────────────
@@ -4762,6 +4809,20 @@ jobs:
       # set the repo variable to false to skip the cancel (the shell default stays true).
       DISPATCH_WATCH_CANCEL_ON_TIMEOUT: ${{ vars.DISPATCH_WATCH_CANCEL_ON_TIMEOUT || 'true' }}
     steps:
+      - name: Record GH_PAT budget at validate-standalone-test start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_validate-standalone-test
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=validate-standalone-test remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Validate prerequisites
         run: |
           set -euo pipefail
@@ -4788,6 +4849,19 @@ jobs:
         run: |
           [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
           source scripts/gh_helpers.sh
+
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
 
       - name: Dispatch internal-validate.yml standalone
         id: dispatch
@@ -4867,6 +4941,26 @@ jobs:
           gh_token: ${{ secrets.GH_PAT }}
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+
+      - name: Record GH_PAT budget at validate-standalone-test end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_validate-standalone-test
+        run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
+          remaining=unknown; reset=unknown; used=unknown
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r remaining reset <<< "${reading}"
+            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
+              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
+              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
+                used=$((initial - remaining))
+              fi
+            fi
+          fi
+          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=validate-standalone-test remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
 
   # ──────────────────────────────────────────────────────────────────
   # Job 1f: Clarify-rejects-unsolvable negative test
@@ -5179,6 +5273,20 @@ jobs:
       ALT_EDITOR_MODEL: ${{ vars.ALT_EDITOR_MODEL || 'openai/gpt-6-sol' }}
     steps:
       # Required for the run-soft-error-analyzer composite action below.
+      - name: Record GH_PAT budget at e2e-alt-model-test start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_e2e-alt-model-test
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=e2e-alt-model-test remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Checkout repository (for soft-error analyser)
         uses: actions/checkout@v5
         with:
@@ -5195,6 +5303,19 @@ jobs:
         run: |
           [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
           source scripts/gh_helpers.sh
+
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
 
       - name: Validate prerequisites
         run: |
@@ -5536,6 +5657,26 @@ jobs:
           done
           true  # ensure step exits 0 even on failed branch delete
 
+      - name: Record GH_PAT budget at e2e-alt-model-test end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_e2e-alt-model-test
+        run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || reading=""
+          remaining=unknown; reset=unknown; used=unknown
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r remaining reset <<< "${reading}"
+            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
+              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
+              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
+                used=$((initial - remaining))
+              fi
+            fi
+          fi
+          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=e2e-alt-model-test remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
+
   # ──────────────────────────────────────────────────────────────────
   # Job 2: Validate release prerequisites (same as mark-stable.yml)
   # ──────────────────────────────────────────────────────────────────
@@ -5564,6 +5705,11 @@ jobs:
       checks: read
       actions: read
     steps:
+      - name: Record GH_PAT budget at validate start
+        # This job holds no GH_PAT (issue #9887, D6): no API call, quota unknown.
+        run: |
+          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=validate remaining=unknown reset=unknown used_in_job=unknown"
+
       - name: Validate version format
         run: |
           set -euo pipefail
@@ -5581,6 +5727,19 @@ jobs:
           # (the one the promote cycle records as the smoke-tested revision).
           ref: ${{ github.sha }}
           fetch-depth: 0
+
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
 
       - name: Validate existing version tag
         run: |
@@ -5669,6 +5828,13 @@ jobs:
       # produces `The process '/usr/bin/git' failed with exit code 128`.
       # Remove after root-cause is identified and a targeted fix lands.
       - *git-checkout-diag
+
+      - name: Record GH_PAT budget at validate end
+        if: always()
+        # No GH_PAT and no API call; only the job's own gh call count.
+        run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=validate remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
 
   # ──────────────────────────────────────────────────────────────────
   # Job 3: Create release (same as mark-stable.yml)

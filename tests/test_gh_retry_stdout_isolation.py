@@ -453,6 +453,36 @@ gh_pat_budget "$PHASE" review_autofix gate "{snapshot}"
 		result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
 		assert result.returncode == 0, result.stderr
 		assert f"GH_PAT_BUDGET phase={phase} workflow=review_autofix job=gate remaining={remaining} reset={reset} {expected}" in result.stdout
+		line = next(item for item in result.stdout.splitlines() if item.startswith("GH_PAT_BUDGET "))
+		if phase == "start":
+			# Issue #9887: start lines stay byte-identical (no counter keys).
+			assert line.endswith(f" {expected}")
+		else:
+			# Without an installed counter the appended keys read unknown.
+			assert line.endswith(f" {expected} calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown")
+	# Issue #9887: with the counter installed, the end line carries the job's own
+	# gh count, read before gh_pat_budget's own rate_limit call.
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	fake_gh = bin_dir / "gh"
+	fake_gh.write_text('#!/usr/bin/env bash\nprintf \'%s\\n\' "${FAKE_BUDGET}"\n')
+	fake_gh.chmod(0o755)
+	(tmp_path / "runner").mkdir()
+	counted = f'''source "{helper}"
+gh_call_counter_install 2>/dev/null
+gh pr list --paginate >/dev/null
+gh_pat_budget end review_autofix gate "{snapshot}"
+gh_call_counter_summary
+'''
+	result = subprocess.run(["bash", "-c", counted], env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
+		"RUNNER_TEMP": str(tmp_path / "runner"), "GH_CALL_COUNTER_LOG": str(tmp_path / "counter.log"),
+		"GH_TOKEN": "fake", "FAKE_BUDGET": json.dumps({"resources": {"core": {"remaining": 80, "reset": 1000}}})},
+		capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	lines = result.stdout.splitlines()
+	assert lines[0] == ("GH_PAT_BUDGET phase=end workflow=review_autofix job=gate remaining=80 reset=1000 used_in_job=20 "
+		"calls_in_job=1 paginated_in_job=1 calls_by_token=pat:1,github_token:0,other:0")
+	assert lines[1].startswith("calls_in_job=2 ")
 	headers = ("HTTP/2 200\r\nx-ratelimit-resource: core\r\nx-ratelimit-remaining: 65\r\n"
 		"x-ratelimit-reset: 3000\r\n\r\n" + json.dumps({"resources": {"core": {"remaining": 20, "reset": 4000}}}))
 	result = subprocess.run(["bash", "-c", script], env={**os.environ, "PHASE": "start", "FAKE_BUDGET": headers},

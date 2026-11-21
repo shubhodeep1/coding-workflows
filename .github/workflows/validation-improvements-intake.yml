@@ -165,6 +165,19 @@ jobs:
             fi
           done
 
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
+
       - name: Configure git identity
         run: |
           set -euo pipefail
@@ -535,5 +548,6 @@ jobs:
             source scripts/gh_helpers.sh
             gh_pat_budget end validation-improvements-intake intake "${GH_PAT_BUDGET_FILE}"
           else
-            echo 'GH_PAT_BUDGET phase=end workflow=validation-improvements-intake job=intake remaining=unknown reset=unknown used_in_job=unknown'
+            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+            echo "GH_PAT_BUDGET phase=end workflow=validation-improvements-intake job=intake remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
           fi
