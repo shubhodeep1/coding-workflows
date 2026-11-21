@@ -22372,6 +22372,51 @@ def test_stall_judge_escalate_human_allowed_when_human_terminalization_enabled()
 	assert any("**Decision (judge):** escalate_human" in body and "**Decision (effective):** escalate_human" in body for body in tracking_comments)
 
 
+def test_stall_judge_escalate_human_explains_on_the_issue_itself():
+	"""#9821: for an orchestrator-managed issue the judge decision goes to the
+	tracking issue only, so the escalated issue carried a bare ai:needs-human
+	label. escalate_human now posts one explanation on the issue itself."""
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:implementing"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		enable_stall_human_terminalization="true",
+		mock_stall_judge_json={
+			"action": "escalate_human",
+			"justification": "needs operator: the deploy token is missing",
+			"target_pr": None,
+			"head_ref": None,
+		},
+	)
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	explained = [body for body in issue_comments if "<!-- ai:stall-escalate-human:v1 issue=10 phase=ai:implementing -->" in body]
+	assert len(explained) == 1, issue_comments
+	body = explained[0]
+	assert "**Reason:** needs operator: the deploy token is missing" in body
+	assert "The stall judge labelled this issue `ai:needs-human`" in body
+	assert "project tracking issue #192" in body
+	assert "then remove `ai:needs-human`" in body
+	assert "STALL_ESCALATE_HUMAN_COMMENT issue=10 phase=ai:implementing source=stall_judge outcome=posted" in result["stdout"]
+
+
+def test_stall_escalate_human_comment_helper_is_fail_open_and_clears_justification():
+	text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = text.index("_post_stall_escalate_human_comment() {")
+	helper = text[start:text.index("\n}\n", start)]
+	assert "outcome=write_failed" in helper
+	assert "return 0" in helper
+	assert 'STALL_ESCALATE_HUMAN_JUSTIFICATION="${judge_justification}"' in text
+	assert 'STALL_ESCALATE_HUMAN_JUSTIFICATION=""' in text
+
+
 def test_stall_judge_escalate_human_issue_not_redetected_after_needs_human():
 	state = _base_state(status="in_progress")
 	issue = state["waves"][0]["issues"][0]

@@ -20556,6 +20556,54 @@ _plan_auto_approval_hold_notify()
   return 0
 }
 
+# _post_stall_escalate_human_comment <issue> <phase> <stall minutes> <local id>
+#
+# Posts one explanation on the escalated issue itself after escalate_human
+# has applied ai:needs-human. For an orchestrator-managed issue the stall
+# judge's decision comment goes to the tracking issue (post_tracking_comment),
+# so the issue showed a bare ai:needs-human label with no reason (#9821,
+# labelled 2026-11-20 21:44 with no comment). The comment carries the judge's
+# justification when a judge decision led here
+# (STALL_ESCALATE_HUMAN_JUSTIFICATION, set by the judge's dispatch arm) and the
+# resume step: remove ai:needs-human once the cause is handled.
+# Marker: <!-- ai:stall-escalate-human:v1 issue=<n> phase=<label> -->
+# API (§15): one comment write per escalation, no read. Fail-open: a failed
+# write logs STALL_ESCALATE_HUMAN_COMMENT outcome=write_failed and the
+# escalation continues unchanged.
+_post_stall_escalate_human_comment() {
+  local seh_issue="$1" seh_phase="$2" seh_minutes="$3" seh_local_id="$4"
+  local seh_reason="${STALL_ESCALATE_HUMAN_JUSTIFICATION:-}"
+  local seh_source="stall_recovery" seh_actor="Stall recovery"
+  if [ -n "${seh_reason}" ]; then
+    seh_source="stall_judge"
+    seh_actor="The stall judge"
+  else
+    seh_reason="Stall recovery ran out of automatic actions for this phase."
+  fi
+  local seh_where=""
+  if [ -n "${seh_local_id}" ] && [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
+    seh_where="The full decision and diagnostics are on the project tracking issue #${TRACKING_NUM}."
+  fi
+  local seh_body
+  seh_body="## Stall recovery: human input needed
+
+${seh_actor} labelled this issue \`ai:needs-human\` after it stayed in \`${seh_phase}\` for ${seh_minutes} minutes. Stall recovery is paused for this issue.
+
+**Reason:** ${seh_reason}
+
+${seh_where}
+
+**To resume:** handle the reason above, then remove \`ai:needs-human\`. Stall recovery picks the issue up again on the next poll.
+
+<!-- ai:stall-escalate-human:v1 issue=${seh_issue} phase=${seh_phase} -->"
+  if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${seh_issue}/comments" -f body="${seh_body}" >/dev/null 2>&1; then
+    echo "STALL_ESCALATE_HUMAN_COMMENT issue=${seh_issue} phase=${seh_phase} source=${seh_source} outcome=posted"
+  else
+    echo "STALL_ESCALATE_HUMAN_COMMENT issue=${seh_issue} phase=${seh_phase} source=${seh_source} outcome=write_failed"
+  fi
+  return 0
+}
+
 execute_stall_recovery_action() {
   local issue_num="$1"
   local phase="$2"
@@ -21425,6 +21473,7 @@ The judge will evaluate this gap when the wave completes and decide whether to r
       local escalated_labels
       escalated_labels="$(get_issue_labels_json "${issue_num}")"
       if has_label "${escalated_labels}" "ai:needs-human"; then
+        _post_stall_escalate_human_comment "${issue_num}" "${phase}" "${stall_minutes}" "${local_id}"
         tg_notify "Stall judge escalated issue #${issue_num} for human intervention (phase ${phase}, stuck ${stall_minutes}m)."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "CRITICAL"
       else
         echo "::warning::Stall judge could not verify ai:needs-human label on #${issue_num}; continuing bounded recovery retries." >&2
@@ -23036,8 +23085,14 @@ ${diagnostics}
 
   case "${effective_action}" in
     retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement|retrigger_review|attempt_merge|close_and_reissue|escalate_human|skip)
-      execute_stall_recovery_action "${issue_num}" "${phase}" "${effective_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
-      return $?
+      # Read by the escalate_human arm's issue-side comment
+      # (_post_stall_escalate_human_comment); cleared right after so a
+      # deterministic escalation later in the tick cannot reuse it.
+      STALL_ESCALATE_HUMAN_JUSTIFICATION="${judge_justification}"
+      local _stall_judge_action_rc=0
+      execute_stall_recovery_action "${issue_num}" "${phase}" "${effective_action}" "${recovery_count}" "${local_id}" "${stall_minutes}" || _stall_judge_action_rc=$?
+      STALL_ESCALATE_HUMAN_JUSTIFICATION=""
+      return "${_stall_judge_action_rc}"
       ;;
     resolve_merge_conflict)
       if ! [[ "${STALL_JUDGE_TARGET_PR}" =~ ^[0-9]+$ ]]; then
