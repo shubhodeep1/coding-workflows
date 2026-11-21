@@ -836,6 +836,83 @@ def test_open_head_needs_trusted_header_head_sha(tmp_path, monkeypatch):
 	assert result["status"] == "unverified" and result["reason"] == "triage_head_unavailable"
 
 
+# --- re-run on an unchanged open head (issue #9387) --------------------------
+
+RERUN_RUNS_KEY = rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?head_sha={PR_HEAD_SHA}&event=pull_request&per_page=1"
+RERUN_CHECKS_KEY = rf"repos/{REPO}/commits/{PR_HEAD_SHA}/check-runs\?check_name=CI&filter=latest&per_page=100"
+RERUN_JOBS_KEY = rf"repos/{REPO}/actions/runs/{RUN_ID}/jobs\?filter=latest&per_page=100"
+
+
+def _rerun_run(**overrides):
+	# The triaged run itself, re-run on the same head.
+	run = _open_run(id=RUN_ID, head_sha=PR_HEAD_SHA, run_attempt=2,
+		html_url=f"https://github.com/{REPO}/actions/runs/{RUN_ID}")
+	run.update(overrides)
+	return run
+
+
+def _rerun_routes(**overrides):
+	# After the passing re-run the triaged run's latest jobs all succeeded.
+	routes = _open_routes(**{
+		rf"repos/{REPO}/pulls/{PR}": _open_pr(head_sha=PR_HEAD_SHA),
+		RERUN_RUNS_KEY: {"workflow_runs": [_rerun_run()]},
+		RERUN_JOBS_KEY: _jobs(BASE_JOBS, id_base=1),
+	})
+	routes.update(overrides)
+	return routes
+
+
+def test_open_head_rerun_resolves_on_unchanged_head(tmp_path, monkeypatch):
+	result, rc, fake = _gate(tmp_path, monkeypatch, routes=_rerun_routes(), dry_run=False)
+	assert rc == 0 and result["status"] == "resolved" and result["reason"] == "verified", result
+	assert result["path"] == "open_head_rerun" and result["pr_state"] == "open"
+	assert result["evidence_sha"] == PR_HEAD_SHA and result["triage_head_sha"] == PR_HEAD_SHA
+	assert [w[0][:3] for w in fake.writes] == [
+		["-X", "POST", f"repos/{REPO}/issues/{ISSUE}/comments"],
+		["-X", "POST", f"repos/{REPO}/issues/{ISSUE}/labels"],
+		["-X", "PATCH", f"repos/{REPO}/issues/{ISSUE}"],
+	]
+	body = fake.writes[0][1]["body"]
+	assert "is still open on the same head" in body and "a re-run of the failing check on that head passed" in body
+	assert "has merged" not in body
+	assert body.splitlines()[-1] == f"<!-- ai:check-triage-resolved:v1 issue={ISSUE} pr={PR} sha={PR_HEAD_SHA} -->"
+	assert f"actions/runs/{RUN_ID}" in body
+	assert not any("/compare/" in call[-1] or "branch=main" in call[-1] for call in fake.calls)
+
+
+@pytest.mark.parametrize("overrides", [
+	{RERUN_RUNS_KEY: {"workflow_runs": [_rerun_run(run_attempt=1)]}},
+	{RERUN_RUNS_KEY: {"workflow_runs": [_rerun_run(run_attempt=None)]}},
+	{RERUN_RUNS_KEY: {"workflow_runs": [_rerun_run(run_attempt="2")]}},
+	{RERUN_RUNS_KEY: {"workflow_runs": [_rerun_run(status="in_progress", conclusion=None)]}},
+	{RERUN_RUNS_KEY: {"workflow_runs": [_rerun_run(conclusion="failure")]}},
+	{RERUN_RUNS_KEY: {"workflow_runs": []}},
+	{RERUN_RUNS_KEY: mod.GhApiError("rc=1")},
+	# A passing re-run of another run on the same head is not evidence.
+	{RERUN_RUNS_KEY: {"workflow_runs": [_rerun_run(id=OPEN_RUN_ID)]}, OPEN_JOBS_KEY: _jobs(BASE_JOBS, id_base=1)},
+	# The triaged run's latest attempt still has a failed job.
+	{RERUN_JOBS_KEY: _jobs(PR_JOBS)},
+	{RERUN_JOBS_KEY: _jobs({"static-checks": "cancelled"}, id_base=1)},
+	{RERUN_JOBS_KEY: _jobs({"static-checks": "skipped"}, id_base=1)},
+	{RERUN_JOBS_KEY: {"total_count": 0, "jobs": []}},
+])
+def test_open_head_rerun_misses_keep_open_head_unchanged(tmp_path, monkeypatch, overrides):
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_rerun_routes(**overrides))
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "open_head_unchanged", result
+	assert "path" not in result
+	assert not any(w["method"] == "PATCH" or w["path"].endswith("/labels") for w in result["writes"])
+
+
+def test_open_head_rerun_check_run_triage(tmp_path, monkeypatch):
+	issue = _issue(body=_body(check_run_id=FAILED_JOB_ID))
+	passed = {"total_count": 1, "check_runs": [{"head_sha": PR_HEAD_SHA, "status": "completed", "conclusion": "success"}]}
+	result, rc, _ = _gate(tmp_path, monkeypatch, issue=issue, routes=_rerun_routes(**{RERUN_CHECKS_KEY: passed}))
+	assert rc == 0 and result["status"] == "resolved" and result["path"] == "open_head_rerun", result
+	failed = {"total_count": 1, "check_runs": [{"head_sha": PR_HEAD_SHA, "status": "completed", "conclusion": "failure"}]}
+	result, rc, _ = _gate(tmp_path, monkeypatch, issue=issue, routes=_rerun_routes(**{RERUN_CHECKS_KEY: failed}))
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "open_head_unchanged", result
+
+
 def test_closed_pr_reports_pr_state(tmp_path, monkeypatch):
 	result, _, _ = _gate(tmp_path, monkeypatch, routes=_open_routes(**{rf"repos/{REPO}/pulls/{PR}": _open_pr(state="closed")}))
 	assert result["pr_state"] == "closed"
