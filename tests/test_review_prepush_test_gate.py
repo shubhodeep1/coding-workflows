@@ -409,6 +409,24 @@ def test_review_loop_repair_that_erases_a_passing_change_keeps_the_editor_edit(t
 	assert diag[0]["truncated"] == "0"
 
 
+def test_review_loop_restore_that_brings_nothing_back_logs_restore_empty(tmp_path):
+	# The untracked-file backup is best-effort: when the editor's only change
+	# is a new file and its backup is gone, the revert restores nothing, and
+	# the gate must say so instead of implying the change came back.
+	repo, env = _setup(tmp_path, [PASS_UNMET, PASS])
+	_seed_unmet_done_check(tmp_path, env)
+	(repo / "lib" / "a.py").write_text("X = 1\n", encoding="utf-8")
+	(repo / "lib" / "new.py").write_text("Y = 1\n", encoding="utf-8")
+	backup = tmp_path / "runtime" / "prepush_gate_pre_untracked.tar"
+	(_work(tmp_path) / "edit.sh").write_text(f"rm -f lib/new.py '{backup}'\n", encoding="utf-8")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert "outcome=repair_reverted reason=passing_change_erased" in proc.stderr
+	assert "outcome=warning reason=passing_change_restore_empty" in proc.stderr
+	assert "stop=reverted" in proc.stderr and _docker_runs(tmp_path) == 1
+	assert not (repo / "lib" / "new.py").exists()
+
+
 def test_review_loop_repair_erased_by_the_syntax_validator_keeps_the_editor_edit(tmp_path):
 	# The syntax validator rewrites files in place (full-file fence strip), so
 	# a repair whose only change it undoes leaves a clean tree; the guard must
