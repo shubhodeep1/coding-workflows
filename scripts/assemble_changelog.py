@@ -501,6 +501,12 @@ def _render_release_notes(
 		chunk = "\n".join(chunk_lines)
 		separator = 1 if parts else 0
 		if length + separator + len(chunk) > RELEASE_NOTES_CHAR_LIMIT:
+			if not parts:
+				# One fragment alone passes the cap: publish its head, marked as
+				# cut, rather than a trailer-only body (and count it as written).
+				head = chunk[:RELEASE_NOTES_CHAR_LIMIT].rstrip()
+				parts.append(f"{head}\n\n...(truncated; see CHANGELOG.md)")
+				included = 1
 			break
 		parts.append(chunk)
 		length += separator + len(chunk)

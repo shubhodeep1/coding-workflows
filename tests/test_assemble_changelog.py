@@ -503,6 +503,18 @@ def test_notes_out_truncates_oversized_notes() -> None:
 	assert len(text) < 125000
 	assert module._render_release_notes(module.LAYOUT_DATE_HEADINGS, []) == ("", 0)
 
+	# A single fragment over the cap publishes its truncated head, not only
+	# the trailer, and is counted as written.
+	huge = ["- " + "y" * 130000]
+	text, included = module._render_release_notes(
+		module.LAYOUT_KEEP_A_CHANGELOG, [("Fixed", huge), ("Fixed", ["- small"])]
+	)
+	assert included == 1
+	assert text.startswith("### Fixed\n\n- yyy")
+	assert "...(truncated; see CHANGELOG.md)" in text
+	assert text.endswith("...and 1 more; see CHANGELOG.md.")
+	assert len(text) < 125000
+
 
 def test_notes_out_failed_write_only_warns() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
