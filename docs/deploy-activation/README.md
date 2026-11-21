@@ -19,5 +19,11 @@ the previous session stopped instead of restarting the runbook. After each
 confirmed step the command marks it done, refreshes the timestamp, and commits
 & pushes the log.
 
+One session keeps all its log updates in one pull request: a draft titled
+`chore: activation log updates`, opened with the first log commit, updated by
+later pushes, and marked ready for review once when the session's runbook work
+ends. Nothing is committed onto a branch whose PR has already merged
+(CLAUDE.md §21).
+
 See the **Activation Log** section of `.claude/commands/deploy-activate.md` for
 the full file format and the read/update/persist contract.
