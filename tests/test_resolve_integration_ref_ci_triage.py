@@ -461,3 +461,125 @@ def test_resolver_workflows_forward_reissue_base_routing_flag(workflow: str) -> 
 	assert step.index(REISSUE_FLAG_FORWARD_LINE) < step.index('bash "${resolver_script}"'), (
 		f"{workflow}: the flag must prefix the resolver call"
 	)
+
+
+# --- Issue #9674: base-keyed triage issues keep the default branch ----------
+
+BASE_KEYED_FP = "c" * 64
+BASE_KEYED_HEADER = (
+	f"<!-- check-failure-triage:fp={BASE_KEYED_FP} -->\n"
+	"<!-- check-failure-triage:gen=1 -->\n"
+	f"<!-- check-failure-triage:root={'d' * 64} -->\n"
+	"<!-- check-failure-triage:pr=6564 -->\n"
+)
+BASE_KEYED_REST = (
+	"\n## Automated CI failure triage (generation 1 of max 3)\n\n"
+	"- **Repository:** `owner/repo`\n"
+	"- **Base branch:** `main` (failing; first seen on PR #6564)\n"
+	"- **Pull request:** https://github.com/owner/repo/pull/6564 (`ai/issue-6564`)\n"
+	"- **Failing check:** `CI / lint` (conclusion: `failure`)\n\n---\n\nDiagnosis text.\n"
+)
+BASE_KEYED_OPEN_PULL = {
+	"number": 6564, "state": "open", "merged": False,
+	"head": {"ref": "ai/issue-6564", "repo": {"full_name": "owner/repo"}},
+	"base": {"ref": "main", "repo": {"full_name": "owner/repo"}},
+}
+
+
+def _base_keyed_fixture(name: str, body: str, *, stdout: str, rc: int = 0, reason: str | None = None,
+		labels: list | None = None, author: str = "OWNER", pulls: dict | None = None) -> dict:
+	data = {
+		"name": name,
+		"env": {"CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED": "true"},
+		"issues": {"101": {
+			"body": body,
+			"labels": [{"name": "ai:check-triage"}] if labels is None else labels,
+			"author_association": author,
+			"user": {"login": "owner"},
+		}},
+		"pulls": pulls or {},
+		"branch_exists": {"ai/issue-6564": True, "main": True},
+		"expected_stdout": stdout,
+		"expected_exit_code": rc,
+	}
+	if reason:
+		data["expected_error_reason"] = reason
+	return data
+
+
+BASE_KEYED_CASES = {
+	# The trusted base-keyed shape: no PR or branch read, default branch kept.
+	"trusted_base_marker_keeps_default": dict(body=BASE_KEYED_HEADER + "<!-- check-failure-triage:base=main -->\n" + BASE_KEYED_REST, stdout=""),
+	# A base marker anywhere but line 5 is not read: today's verify path routes.
+	"base_marker_on_line_six_routes_as_before": dict(
+		body=BASE_KEYED_HEADER + "\n<!-- check-failure-triage:base=main -->" + BASE_KEYED_REST,
+		stdout="ai/issue-6564", pulls={"6564": BASE_KEYED_OPEN_PULL},
+	),
+	"invalid_base_ref_routes_as_before": dict(
+		body=BASE_KEYED_HEADER + "<!-- check-failure-triage:base=ma..in -->\n" + BASE_KEYED_REST,
+		stdout="ai/issue-6564", pulls={"6564": BASE_KEYED_OPEN_PULL},
+	),
+	"unlabelled_base_keyed_body_still_refuses": dict(
+		body=BASE_KEYED_HEADER + "<!-- check-failure-triage:base=main -->\n" + BASE_KEYED_REST,
+		stdout="", rc=3, reason="label_missing", labels=[],
+	),
+	"untrusted_author_base_keyed_body_still_refuses": dict(
+		body=BASE_KEYED_HEADER + "<!-- check-failure-triage:base=main -->\n" + BASE_KEYED_REST,
+		stdout="", rc=3, reason="author_untrusted", author="NONE",
+	),
+}
+
+
+@pytest.mark.parametrize("case", sorted(BASE_KEYED_CASES))
+def test_base_keyed_triage_issue_cases(tmp_path: Path, case: str) -> None:
+	path = tmp_path / f"{case}.json"
+	path.write_text(json.dumps(_base_keyed_fixture(case, **BASE_KEYED_CASES[case])), encoding="utf-8")
+	result = _run_case(path)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "self-test passed" in result.stdout
+
+
+def test_base_keyed_committed_fixture_matches_the_trusted_shape() -> None:
+	data = json.loads((FIXTURE_DIR / "base_keyed_triage_issue_keeps_default.json").read_text(encoding="utf-8"))
+	lines = data["issues"]["101"]["body"].split("\n")
+	assert lines[4] == "<!-- check-failure-triage:base=main -->"
+	assert data["expected_stdout"] == "" and data["expected_exit_code"] == 0
+	assert data["pulls"] == {}, "the base verdict must not need a PR read"
+
+
+def test_base_keyed_verdict_logs_reason_and_prints_no_branch(tmp_path: Path) -> None:
+	issue = {
+		"number": 101,
+		"body": BASE_KEYED_HEADER + "<!-- check-failure-triage:base=main -->\n" + BASE_KEYED_REST,
+		"labels": [{"name": "ai:check-triage"}], "author_association": "OWNER", "user": {"login": "owner"},
+	}
+	issue_file = tmp_path / "issue.json"
+	issue_file.write_text(json.dumps(issue), encoding="utf-8")
+	calls = tmp_path / "calls.txt"
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	fake_gh = bin_dir / "gh"
+	fake_gh.write_text(
+		"#!/usr/bin/env bash\n"
+		'printf "%s\\n" "$*" >> "${FAKE_GH_CALLS}"\n'
+		'case "$*" in\n'
+		'  *"repos/owner/repo/issues/101"*) cat "${FAKE_GH_ISSUE}" ;;\n'
+		'  *) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;\n'
+		"esac\n",
+		encoding="utf-8",
+	)
+	fake_gh.chmod(0o755)
+	env = dict(os.environ)
+	env.update({
+		"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+		"REPO": "owner/repo", "ISSUE": "101", "GH_TOKEN": "test-token",
+		"CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED": "true",
+		"FAKE_GH_ISSUE": str(issue_file), "FAKE_GH_CALLS": str(calls),
+		"GH_RETRY_MAX_ATTEMPTS": "1",
+	})
+	result = subprocess.run(["bash", str(RESOLVER)], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=120, check=False)
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.strip() == ""
+	assert "CI_TRIAGE_PR_BRANCH_ROUTING issue=101 pr=6564 outcome=skipped reason=base_keyed branch=main" in result.stderr
+	assert "::error::" not in result.stderr
+	assert all("issues/101" in line for line in calls.read_text(encoding="utf-8").splitlines()), calls.read_text()
