@@ -22,7 +22,7 @@ POLLER = ROOT / "scripts" / "orchestrate_poll_process.sh"
 POLL_WORKFLOW = ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
 if str(ROOT / "tests") not in sys.path:
 	sys.path.insert(0, str(ROOT / "tests"))
-from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+from review_autofix_step_scripts import expanded_implement_text, expanded_review_autofix_text  # noqa: E402
 
 SPEC = importlib.util.spec_from_file_location("unblock_scan", SCRIPT)
 scan = importlib.util.module_from_spec(SPEC)
@@ -179,7 +179,7 @@ def test_cli_accepts_the_raw_api_shapes(tmp_path: Path) -> None:
 	(tmp_path / "runs.json").write_text(json.dumps({"workflow_runs": []}), encoding="utf-8")
 	result = subprocess.run(
 		[sys.executable, str(SCRIPT), "select", "--search-file", str(tmp_path / "search.json"), "--details-file", str(tmp_path / "details.json"),
-		 "--runs-file", str(tmp_path / "runs.json"), "--trusted-login", BOT, "--now", "2026-10-04T12:00:00Z"],
+		"--runs-file", str(tmp_path / "runs.json"), "--trusted-login", BOT, "--now", "2026-10-04T12:00:00Z"],
 		capture_output=True, text=True, check=False,
 	)
 	assert result.returncode == 0, result.stdout
@@ -715,7 +715,8 @@ def test_poll_workflow_stages_the_scan_and_passes_its_knobs() -> None:
 
 @pytest.mark.parametrize("path", [".github/workflows/implement.yml", "scripts/implement_commit_changes.sh"])
 def test_bulk_override_never_covers_canonical_deletions(path: str) -> None:
-	text = (ROOT / path).read_text(encoding="utf-8")
+	# implement.yml sources the preflight guard from scripts/ (#9678); inline it.
+	text = expanded_implement_text() if path == ".github/workflows/implement.yml" else (ROOT / path).read_text(encoding="utf-8")
 	assert 'if [ "${UNBLOCK_BULK_DELETE_OVERRIDE:-false}" = "true" ] && [ -z "${canonical_deletions}" ] &&' in text
 	assert 'unblock_protected_deletions="$(printf \'%s\\n\' "${deleted_staged}" | grep -iE \'^(\\.github|\\.claude|workflow-templates)(/|$)\' || true)"' in text
 	assert '[ -z "${unblock_protected_deletions}" ] &&' in text

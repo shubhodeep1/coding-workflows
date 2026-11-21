@@ -23,6 +23,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_implement_text  # noqa: E402
 from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 IMPLEMENT_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
@@ -32,7 +33,8 @@ FILES_TOUCHED_SCOPE_GUARD = REPO_ROOT / "scripts" / "files_touched_scope_guard.p
 
 
 def _workflow_text() -> str:
-	return IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+	# Two step bodies live in scripts/implement_step_*.sh (#9678); inline them.
+	return expanded_implement_text()
 
 
 def _implement_commit_script_text() -> str:
@@ -50,7 +52,7 @@ def test_generated_manifest_staging_excludes_modifications_but_accepts_deletion(
 	preflight_stage = preflight[preflight.index(start):preflight.index('while IFS= read -r -d \'\' untracked_candidate', preflight.index(start))]
 	for stage in (commit_stage, preflight_stage):
 		assert stage.count(f"':!{path}'") == 2
-		assert f'git add -u -- "${{add_u_excludes[@]}}"' in stage
+		assert 'git add -u -- "${add_u_excludes[@]}"' in stage
 		assert f'git rm --cached --quiet -- {path}' in stage
 		assert f'IMPLEMENT_GENERATED_MANIFEST_UNTRACKED path={path}' in stage
 
@@ -1064,7 +1066,7 @@ def test_resolve_checkout_ref_ignores_prior_pr_baseline_branch_when_present() ->
 				- prior_pr_baseline_branch: {baseline_branch}
 				- files_touched:
 				  - src/app.py
-				"""
+				"""  # noqa: E101 - the two-space nested list item is fixture content.
 			),
 			default_checkout_ref="orchestrator/project-829",
 			branch_exists={baseline_branch: True},
@@ -5626,10 +5628,10 @@ def test_validator_offending_bytes_redacts_secrets() -> None:
 
 	Two layered guards (per Copilot review):
 	(a) Path denylist: skip the dump for files whose names match
-	    common secret-bearing patterns (.env, *secret*, *.pem, ...).
+		common secret-bearing patterns (.env, *secret*, *.pem, ...).
 	(b) Per-line redaction: replace lines whose key contains
-	    secret-like keywords (token/password/api_key/...) or whose
-	    value contains a long opaque token with a redaction marker.
+		secret-like keywords (token/password/api_key/...) or whose
+		value contains a long opaque token with a redaction marker.
 	"""
 	with tempfile.TemporaryDirectory(prefix="test_validator_redact_") as td:
 		repo_dir = Path(td)

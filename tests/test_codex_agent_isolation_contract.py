@@ -23,6 +23,8 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_implement_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO_ROOT / "scripts"
@@ -112,7 +114,9 @@ def test_thread_reuse_launches_through_the_isolated_launcher():
 	],
 )
 def test_each_agent_site_uses_the_helper(relative, needle):
-	assert needle in (REPO_ROOT / relative).read_text(encoding="utf-8")
+	# implement.yml sources two step bodies from scripts/ (#9678); inline them.
+	text = expanded_implement_text() if relative == ".github/workflows/implement.yml" else (REPO_ROOT / relative).read_text(encoding="utf-8")
+	assert needle in text
 
 
 @pytest.mark.parametrize(
@@ -169,7 +173,7 @@ def test_dependency_containers_require_the_registry_proxy():
 				assert "--network none" in line, helper_name
 	stage = (SCRIPTS / "stage_workflow_support.sh").read_text(encoding="utf-8")
 	assert "dependency_registry_proxy.py" in stage.split('REQUIRED_BOOTSTRAP_SCRIPTS="', 1)[1].split('"', 1)[0].split()
-	implement = (WORKFLOWS / "implement.yml").read_text(encoding="utf-8")
+	implement = expanded_implement_text()
 	assert "dependency_registry_proxy.py" in implement.split("for f in ", 1)[1].split("; do", 1)[0].split()
 	for workflow, minimum in (("implement.yml", 2), ("review_autofix.yml", 2)):
 		text = (WORKFLOWS / workflow).read_text(encoding="utf-8")
@@ -186,7 +190,7 @@ def step_block(workflow_text: str, name: str) -> str:
 
 
 def test_implement_runs_privileged_helpers_from_the_trusted_copy():
-	text = (WORKFLOWS / "implement.yml").read_text(encoding="utf-8")
+	text = expanded_implement_text()
 	stage = step_block(text, "Stage workflow support files")
 	# The trusted run copy exists in every repo, not only coding-workflows.
 	run_dir_line = 'IMPLEMENT_STAGED_SUPPORT_RUN_DIR="${RUNTIME_DIR}/staged_support_run/scripts"'
@@ -216,7 +220,7 @@ def test_implement_runs_privileged_helpers_from_the_trusted_copy():
 
 
 def test_isolated_runs_carry_no_serena_hints():
-	text = (WORKFLOWS / "implement.yml").read_text(encoding="utf-8")
+	text = expanded_implement_text()
 	assert "Serena MCP is available in this run" not in text
 	for script in ("validate_process.sh", "self_heal_validation.sh"):
 		body = (SCRIPTS / script).read_text(encoding="utf-8")
@@ -710,7 +714,7 @@ IMAGE_BUILD_RETRY_PREPARE = 'CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS=3 bash "${CODEX
 
 @pytest.mark.parametrize("step", ["Run Codex implementation", "Attempt post-Codex syntax repair"])
 def test_implement_prepare_retries_only_the_image_build_and_fails_closed(step):
-	block = step_block((WORKFLOWS / "implement.yml").read_text(encoding="utf-8"), step)
+	block = step_block(expanded_implement_text(), step)
 	assert block.count(IMAGE_BUILD_RETRY_PREPARE) == 1
 	after = block[block.index(IMAGE_BUILD_RETRY_PREPARE):]
 	assert after.index('echo "::error::CODEX_ISOLATION sandbox preparation failed; Codex is never run on the host."') < after.index("exit 1")
@@ -719,7 +723,7 @@ def test_implement_prepare_retries_only_the_image_build_and_fails_closed(step):
 
 
 def test_image_build_retry_knob_is_never_exported_by_implement():
-	text = (WORKFLOWS / "implement.yml").read_text(encoding="utf-8")
+	text = expanded_implement_text()
 	assert text.count("CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS") == 2
 	assert text.count(IMAGE_BUILD_RETRY_PREPARE) == 2
 	assert not re.search(r"^\s*CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS:", text, re.M)
