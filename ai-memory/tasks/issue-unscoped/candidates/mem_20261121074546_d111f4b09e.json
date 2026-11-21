@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "When changing orchestration or CI behavior, inspect both the workflow definition and the script it invokes; updating only one can leave configuration and implementation out of sync. Add or update focused tests for the behavior, especially where workflow inputs or environment wiring are involved.",
+  "fingerprint": "30b4ad4e9a3e3d4efba4f811d12a8e0f66a6df47bc673e1388418779f53d4d85",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "44881001944",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44881001944",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9363",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9575",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9821",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9844",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9858",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9367",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9602",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9822",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9845",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9864"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261121074546_d111f4b09e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow behavior is often implemented across GitHub Actions YAML and companion scripts, with tests covering their contract.",
+  "timestamps": {
+    "created_at": "2026-11-21T07:45:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
