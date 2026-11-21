@@ -2220,6 +2220,9 @@ _resilient_phase_swap() {{ :; }}
 _safe_gh_jq() {{ gh api "$@"; }}
 sleep() {{ :; }}
 review_head_gate_post_status() {{ :; }}
+# The security follow-up guard (#9671) has its own tests in
+# test_review_rb_judge_head_binding.py; these cases cover the follow-up issue.
+rb_judge_followup_merge_guard() {{ return 0; }}
 source "{pr_checks_lib_path}"
 {merge_err_helpers}
 GITHUB_OUTPUT="{github_output}"
