@@ -73,6 +73,8 @@
 # UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED (default true; #8470): once a
 # fix-up is done, a standalone issue whose planning stop was "nothing to
 # implement" is closed as completed instead of resumed; `false` resumes it.
+# The same switch covers the no-wait close (#9518): such an issue with no
+# pending fix-up wait is closed instead of judged; `false` judges it as before.
 # UNBLOCK_FIXUP_DELIVERED_CLOSE_ENABLED (default true; #8530): once a fix-up
 # merged into the default branch and changed every file a standalone
 # pipeline-authored ai:workflow-heal issue lists under `## Affected files`,
@@ -654,11 +656,24 @@ unblock_nothing_to_implement_blocked()
 # as usual; it sets UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT to `closed` after a
 # close. UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED=false (default true)
 # restores the resume.
+# #9518: unblock_main also calls it with an empty <fixup> when no fix-up wait
+# is pending (no wait, or one that was already done before the block), so a
+# standalone issue blocked as nothing-to-implement is closed instead of
+# judged and escalated (#9215). The comment then names no fix-up, the log and
+# marker say `fixup=none`, and a `fixup=none` marker only counts as already
+# posted when it is no older than the newest block (a re-block after a reopen
+# gets its own comment). The optional <block after> timestamp (when the newest
+# fix-up wait ended) requires the newest block to be newer than it, so a block
+# the judge already filed a fix-up for, or one filed while that fix-up was
+# still unresolved, stays with the judge.
+# Signature: <fixup> <done text> <tracking> [<block after>].
 # API budget: at most three writes (comment, label, close), no reads; the
-# caller then marks the fix-up wait `done` (one more write, not retried).
+# fix-up caller then marks the fix-up wait `done` (one more write, not
+# retried); the no-wait caller makes no further write.
 unblock_nothing_to_implement_close()
 {
-	local fixup="$1" done_text="$2" tracking_issue="$3" marker
+	local fixup="$1" done_text="$2" tracking_issue="$3" block_after="${4:-}" marker block_at fixup_label comment_body marker_since
+	fixup_label="${fixup:-none}"
 	UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT=""
 	if [ "$(printf '%s' "${UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "false" ]; then
 		return 1
@@ -667,27 +682,48 @@ unblock_nothing_to_implement_close()
 	# A trusted implementation plan (the has_plan rule in unblock_main) posted
 	# after that block means planning moved on, so the stale block never closes
 	# the issue: it resumes as usual (`/approved`).
-	unblock_nothing_to_implement_blocked || return 1
-	marker="<!-- ai:unblock-nothing-to-implement:v1 item=${ITEM} fixup=${fixup} -->"
-	if jq -e --arg login "${UNBLOCK_LOGIN}" --arg marker "${marker}" \
-		'any(.[]; (.user.login // "") == $login and ((.body // "") | sub("\\s+$"; "") | endswith($marker)))' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; then
+	block_at="$(jq -er --arg login "${UNBLOCK_LOGIN}" --arg reason "Reason: ${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}" --arg after "${block_after}" '
+		([.[] | select((.user.login // "") == $login)
+			| ((.body // "") | split("\n") | map(rtrimstr("\r"))) as $lines
+			| select(($lines | map(select(test("\\S"))) | first // "") == "Planning blocked: human input required.")
+			| {at: (.created_at // ""), match: ($lines | index($reason) != null)}]
+		| sort_by(.at) | last // {at: "", match: false}) as $block
+		| ([.[] | select(((.body // "") | test("(?im)^\\s*implementation\\s+plan\\b")) and (((.user.type // "") == "Bot") or ((.author_association // "") as $a | ["OWNER", "MEMBER", "COLLABORATOR"] | index($a)) or ((.user.login // "") == $login)))
+			| (.created_at // "")] | max // "") as $plan
+		| if $block.match and ($plan == "" or $plan < $block.at) and ($after == "" or $block.at > $after) then $block.at else false end
+	' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null)" || return 1
+	# Fail closed: a block without a UTC timestamp would disable the
+	# `fixup=none` marker age check below.
+	[[ "${block_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || return 1
+	marker="<!-- ai:unblock-nothing-to-implement:v1 item=${ITEM} fixup=${fixup_label} -->"
+	marker_since=""
+	if [ -n "${fixup}" ]; then
+		comment_body="Closing as completed: planning found nothing to implement for this issue (\`${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}\`), and fix-up #${fixup} ${done_text}. A resume command would only stop planning again, so the unblock judge closed the issue instead. Reopen it and reply with \`/reclarify\` if work is still missing."
+	else
+		comment_body="Closing as completed: planning found nothing to implement for this issue (\`${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}\`), and no fix-up is pending. A resume command would only stop planning again, so the unblock judge closed the issue instead. Reopen it and reply with \`/reclarify\` if work is still missing."
+		# #9518: the `fixup=none` marker only counts when it is no older than
+		# the newest block; the fix-up marker counts wherever it is.
+		marker_since="${block_at}"
+	fi
+	if jq -e --arg login "${UNBLOCK_LOGIN}" --arg marker "${marker}" --arg since "${marker_since}" \
+		'any(.[]; (.user.login // "") == $login and ((.body // "") | sub("\\s+$"; "") | endswith($marker)) and ($since == "" or (.created_at // "") >= $since))' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; then
 		:
-	elif ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="Closing as completed: planning found nothing to implement for this issue (\`${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}\`), and fix-up #${fixup} ${done_text}. A resume command would only stop planning again, so the unblock judge closed the issue instead. Reopen it and reply with \`/reclarify\` if work is still missing.
+	elif ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="${comment_body}
 
 ${marker}" >/dev/null 2>&1; then
-		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup} op=nothing_to_implement outcome=skip reason=comment_failed"
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup_label} op=nothing_to_implement outcome=skip reason=comment_failed"
 		return 0
 	fi
 	if ! gh api -X POST "repos/${REPOSITORY}/issues/${ITEM}/labels" -f "labels[]=ai:closed" >/dev/null 2>&1; then
-		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup} op=nothing_to_implement outcome=skip reason=label_failed"
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup_label} op=nothing_to_implement outcome=skip reason=label_failed"
 		return 0
 	fi
 	if ! gh api -X PATCH "repos/${REPOSITORY}/issues/${ITEM}" -f state=closed -f state_reason=completed >/dev/null 2>&1; then
-		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup} op=nothing_to_implement outcome=skip reason=close_failed"
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup_label} op=nothing_to_implement outcome=skip reason=close_failed"
 		return 0
 	fi
 	UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT="closed"
-	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup} op=nothing_to_implement outcome=closed"
+	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup_label} op=nothing_to_implement outcome=closed"
 	return 0
 }
 
@@ -2076,14 +2112,41 @@ unblock_main()
 
 	# A pending fix-up comes first (Q11): wait for it, or run its follow-up.
 	local last_activity="" wait_id wait_fixup wait_state wait_at wait_updated fixup_json
+	# #9518: when the latest fix-up wait ended (its last update if it was
+	# already done, or the fix-up close time that done wait recorded; this run,
+	# or the fix-up's closed_at, when it is patched done below). The no-wait
+	# nothing-to-implement close only takes a block newer than this.
+	# wait_fixup_unresolved=true when that wait timed out while its fix-up was
+	# still open (or its end time is not a UTC timestamp): the fix-up was never
+	# resolved, so the no-wait close stays off and the judge decides.
+	local wait_ended_at="" wait_fixup_unresolved=""
 	wait=""
 	[ "${untrusted_project_pr}" = "true" ] || wait="$(unblock_latest_wait)"
 	if [ -n "${wait}" ]; then
 		read -r wait_id wait_fixup wait_state wait_at wait_updated <<< "${wait}"
 		if [ "${wait_state}" = "done" ]; then
 			last_activity="${wait_updated}"
+			wait_ended_at="${wait_updated}"
+			# #9518: a wait closed because its fix-up closed without merging
+			# records that close time; it may only move the end earlier.
+			local wait_recorded_end
+			wait_recorded_end="$(jq -r --arg login "${UNBLOCK_LOGIN}" --arg id "${wait_id}" '
+				[.[] | select((.user.login // "") == $login and ((.id // "") | tostring) == $id)
+					| (.body // "") | split("\n")[] | rtrimstr("\r")
+					| capture("^<!-- ai:unblock-wait-ended:v1 at=(?<at>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z) -->$")? | .at]
+				| first // ""' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null || true)"
+			if [[ "${wait_recorded_end}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] && [[ "${wait_recorded_end}" < "${wait_updated}" ]]; then
+				wait_ended_at="${wait_recorded_end}"
+			fi
+			if ! [[ "${wait_updated}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
+				|| jq -e --arg login "${UNBLOCK_LOGIN}" --arg id "${wait_id}" '
+					any(.[]; (.user.login // "") == $login and ((.id // "") | tostring) == $id
+						and ((.body // "") | split("\n") | map(rtrimstr("\r")) | index("<!-- ai:unblock-wait-unresolved:v1 -->") != null))' \
+					"${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; then
+				wait_fixup_unresolved="true"
+			fi
 		else
-			fixup_json="$(gh api "repos/${REPOSITORY}/issues/${wait_fixup}" --jq '{state, state_reason, labels: [.labels[]?.name]}' 2>/dev/null || echo '{}')"
+			fixup_json="$(gh api "repos/${REPOSITORY}/issues/${wait_fixup}" --jq '{state, state_reason, closed_at, labels: [.labels[]?.name]}' 2>/dev/null || echo '{}')"
 			if ! jq -e '.state == "open" or .state == "closed"' <<< "${fixup_json}" >/dev/null 2>&1; then
 				unblock_log "item=${ITEM} fixup=${wait_fixup} outcome=skip reason=fixup_unavailable"
 				return 0
@@ -2299,8 +2362,33 @@ ${step_escalation_marker}" >/dev/null 2>&1; then
 				return 0
 			fi
 			# Closed without merging, or waited too long: judge again.
+			# A block filed while this fix-up was still unresolved stays with the judge.
+			# A fix-up closed without merging was resolved when it closed, so a
+			# block filed after its closed_at (same lookup, no extra read) counts.
+			wait_ended_at="${now}"
+			local wait_ended_line=""
+			if [ "$(jq -r '.state // ""' <<< "${fixup_json}")" = "closed" ]; then
+				local fixup_closed_at
+				fixup_closed_at="$(jq -r '.closed_at // ""' <<< "${fixup_json}" 2>/dev/null || true)"
+				if [[ "${fixup_closed_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] && [[ "${fixup_closed_at}" < "${now}" ]]; then
+					wait_ended_at="${fixup_closed_at}"
+					# Recorded in the done wait comment so a later run (after a failed
+					# or skipped close below) still compares the block with closed_at,
+					# not with this patch time. Not the last line, so the wait marker
+					# parse is unchanged.
+					wait_ended_line="
+<!-- ai:unblock-wait-ended:v1 at=${fixup_closed_at} -->"
+				fi
+			else
+				# Timed out while the fix-up is still open: it has no resolution
+				# time, so later runs must not treat a newer block as having no
+				# fix-up pending. Recorded above the wait marker (parse unchanged).
+				wait_fixup_unresolved="true"
+				wait_ended_line="
+<!-- ai:unblock-wait-unresolved:v1 -->"
+			fi
 			unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} did not merge in time; the unblock judge decides again.
-
+${wait_ended_line}
 <!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
 			last_activity="${now}"
 		fi
@@ -2439,6 +2527,17 @@ Still waiting for an operator; last checked ${now}.
 			unblock_escalate_fixup "${fixup_origin}"
 			return 0
 		fi
+	fi
+
+	# #9518: a nothing-to-implement block with no pending fix-up wait is closed
+	# too. When a wait exists, the block must be newer than the time that wait
+	# ended (wait_ended_at): an older block is the one the judge already filed
+	# that fix-up for, or one filed while the fix-up was still unresolved.
+	# Fail closed: a wait with no derivable end time would turn the age guard off,
+	# and a wait whose fix-up timed out still open never ended with it resolved.
+	if [ "${ITEM_KIND}" = "issue" ] && { [ -z "${wait}" ] || { [ "${wait_fixup_unresolved}" != "true" ] && [ -n "${wait_ended_at:-${wait_updated:-}}" ]; }; } \
+		&& unblock_nothing_to_implement_close "" "" "${tracking}" "${wait:+${wait_ended_at:-${wait_updated:-}}}"; then
+		return 0
 	fi
 
 	# Evidence and fingerprint.
