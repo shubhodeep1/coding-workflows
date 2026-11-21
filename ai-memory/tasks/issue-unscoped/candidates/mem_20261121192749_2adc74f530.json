@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:around line 4656 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The call to gh_review_pr_state sends its stderr to /dev/null, which throws away the GH_READ_FALLBACK log line.\n  WHY: When the job-token read fails and falls back to the PAT, gh_helpers.sh writes the required GH_READ_FALLBACK line, but this redirect discards it, so nobody can track how often this polling loop falls back to the token. The source rated this MAJOR. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash noted the same thing but did not raise it, because the previous editor run deferred it and the file is outside files_touched.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cOn a 401/403/404 or a rate limit, [the helper] falls back once to the PAT, logging `GH_READ_FALLBACK`.\u201d\n  expected_change_site: scripts/review_run_reviewers.sh, reviewer watchdog call to `gh_review_pr_state`\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: scripts/gh_helpers.sh emits the fallback log, but the call to gh_review_pr_state in scripts/review_run_reviewers.sh redirects stderr to /dev/null, so fallback events for this polling loop never show up in the job logs, which violates the logging requirement.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- Note (not a finding): Pass-1 task gap: scripts/review_run_reviewers.sh:4656 sends the watchdog's stderr to /dev/null. The reviewer says this is real but did not raise it again: the file is outside files_touched, the previous editor run deferred it (TASK_GAP_DEFERRED), and the issue only affects logging.\n- Note (not a finding): the skip list in _gh_api_safe_job_token_read_run (scripts/comprehensive_test_and_release_gh_api.sh) leaves out -f/-F. Not raised because the code predates the last run and no current call site passes field flags.\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_run_reviewers.sh:Call to gh_review_pr_state (around line 4656) | severity=MAJOR | confidence=5\n  PROBLEM: The stderr of the call to gh_review_pr_state is redirected to /dev/null, which suppresses the GH_READ_FALLBACK log.\n  WHY: The fallback log that gh_helpers.sh generates is discarded right away, so nobody can track how often this polling loop falls back to the token.\n- TASK_GAP\n  Requirement: \u201cOn a 401/403/404 or a rate limit, [the helper] falls back once to the PAT, logging `GH_READ_FALLBACK`.\u201d\n  Expected change site: scripts/review_run_reviewers.sh, reviewer watchdog call to `gh_review_pr_state`\n  Evidence of absence: scripts/gh_helpers.sh emits the fallback log, but the call to gh_review_pr_state in scripts/review_run_reviewers.sh redirects stderr to /dev/null, so fallback events for this polling loop never reach the job logs.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- HARDENING: scripts/gh_helpers.sh | _gh_read_args_are_read, the skip list in the arg parsing loop\n  Issue: the skip list leaves out the field flags (-f, -F, --field, --raw-field), so a command that uses them could have an argument taken as the endpoint.\n  Suggested minimal fix: Add `-f|-F|--field|--raw-field` to the skip-value pattern (estimated 1 line changed).\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- Note: the output is cut off partway through the heading \"IMPLICIT-EXECUTION & TRUST-BOUND\". Every section from SECURITY & INPUT VALIDATION through NAMING / BACKWARD COMPATIBILITY reported NONE. No task-gap or hardening sections are present.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n- Note (not a finding): the reviewer says the outer stderr suppression in the reviewer watchdog is unchanged and was already accepted as out of scope.\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- Note (task gap skipped, deferred by pipeline): the pass-1 gap at `scripts/review_run_reviewers.sh:4656` (watchdog stderr redirected to /dev/null, so the GH_READ_FALLBACK line is lost on that one path) was deferred in the previous editor run. The file is outside files_touched, the read already uses the job token through `gh_review_pr_state` (gh_helpers.sh:1032,1048), and the line is logged at `review_apply_fixes.sh:2294`. The reviewer found no other unmet requirements from issue #9888.\n- HARDENING: scripts/comprehensive_test_and_release_gh_api.sh | `_gh_api_safe_job_token_read_run`, the endpoint-scan `case` list (`-X|--method|-q|--jq|-t|--template|-H|--header|-p|--preview|--hostname|--cache`)\n  Issue: the skip list leaves out `-f|-F|--field|--raw-field`, so a read that uses field flags would take the field value as the endpoint and silently route to the PAT (rc 3). This fails open, and no current call site passes field flags.\n  Suggested minimal fix: add `-f|-F|--field|--raw-field` to the skip-value pattern so the scan matches the gh_helpers.sh twin (estimated 1 line changed).\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "08ae7fd112704739f56c78ce9b020edc1ad3f6eb493de0f97f0eafba9d633d42",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9897,
+    "run_id": "44937048003",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44937048003",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261121192749_2adc74f530",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9897,
+    "run_id": "44937048003"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-21T19:27:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
