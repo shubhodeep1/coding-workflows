@@ -37,7 +37,7 @@ GATED_JOBS = (
 	"tests-system-python",
 	"tests-sandbox-python",
 )
-GATED_IF = "inputs.mode != 'quick' && inputs.docs_only != 'true'"
+GATED_IF = "inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'"
 AGGREGATE_STEP_NAME = "Require every CI job to succeed"
 
 

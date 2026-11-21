@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import unittest
 from pathlib import Path
 
 
@@ -113,6 +114,14 @@ def _issue_block(
 	return "\n".join(lines)
 
 
+def _skip_unless_gawk() -> None:
+	# review_parse_consolidator.sh uses gawk-only match() capture arrays; mawk
+	# (the default awk in some containers) cannot run it. GitHub's ubuntu
+	# runners ship gawk, so CI still runs these tests.
+	if shutil.which("gawk") is None:
+		raise unittest.SkipTest("gawk is required by the review ledger/parser scripts")
+
+
 def _run_parser(
 	workspace_dir: Path,
 	runtime_dir: Path,
@@ -120,6 +129,7 @@ def _run_parser(
 	raw_text: str,
 	schema_enabled: str,
 ) -> subprocess.CompletedProcess[str]:
+	_skip_unless_gawk()
 	(runtime_dir / "consolidator_raw.txt").write_text(raw_text, encoding="utf-8")
 	env = os.environ.copy()
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -859,17 +869,21 @@ def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0
 	failed = 0
+	skipped = 0
 	for func in test_funcs:
 		name = func.__name__
 		try:
 			func()
 			print(f"  PASS  {name}")
 			passed += 1
+		except unittest.SkipTest as exc:
+			print(f"  SKIP  {name}: {exc}")
+			skipped += 1
 		except Exception as exc:
 			print(f"  FAIL  {name}: {exc}")
 			failed += 1
 
-	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	print(f"\n{passed} passed, {failed} failed, {skipped} skipped, {passed + failed + skipped} total")
 	return 1 if failed > 0 else 0
 
 

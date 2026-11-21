@@ -298,3 +298,142 @@ def test_a_ci_failed_marker_for_another_head_pr_or_author_is_ignored(tmp_path: P
 	result, _calls = _freshness(tmp_path, [_marker(), marker])
 	assert result.returncode == 0, result.stdout + result.stderr
 	assert "reason=freshness_sync" in result.stdout
+
+
+# --- freshness-sync exposes from= to a sourcing caller (issue #9533) ---
+
+def _freshness_sourced(tmp_path: Path, comments: list[dict], *, commit: str | None = None) -> subprocess.CompletedProcess[str]:
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir(exist_ok=True)
+	gh_path = bin_dir / "gh"
+	gh_path.write_text(FRESHNESS_FAKE_GH, encoding="utf-8")
+	gh_path.chmod(0o755)
+	comments_file = tmp_path / "comments.json"
+	comments_file.write_text(json.dumps(comments), encoding="utf-8")
+	env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FAKE_GH_LOG": str(tmp_path / "gh.log"),
+		"GH_RETRY_MAX_ATTEMPTS": "1", "FAKE_COMMIT": commit or _commit()}
+	script = (
+		f'source "{ROOT}/scripts/gh_helpers.sh"; source "{HELPER}"; '
+		'REVIEW_HEAD_GATE_FRESHNESS_FROM=stale; REVIEW_HEAD_GATE_FRESHNESS_BASE_PARENT=stale; '
+		f'review_head_gate_freshness_sync o/r 42 {MERGE_HEAD} main workflow-bot "{comments_file}"; rc=$?; '
+		'echo "RC=${rc} FROM=${REVIEW_HEAD_GATE_FRESHNESS_FROM} BASE_PARENT=${REVIEW_HEAD_GATE_FRESHNESS_BASE_PARENT}"'
+	)
+	return subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=False)
+
+
+def test_freshness_sync_exports_from_and_base_parent_on_skip(tmp_path: Path) -> None:
+	result = _freshness_sourced(tmp_path, [_marker()])
+	assert f"RC=0 FROM={APPROVED} BASE_PARENT={MAIN_TIP}" in result.stdout, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("comments,commit", (
+	([], None),
+	([_marker()], _commit(verified=False)),
+))
+def test_freshness_sync_clears_exports_on_review(tmp_path: Path, comments: list[dict], commit: str | None) -> None:
+	result = _freshness_sourced(tmp_path, comments, commit=commit)
+	assert "RC=1 FROM= BASE_PARENT=" in result.stdout, result.stdout + result.stderr
+
+
+# --- final-ci-repair: review a final-CI repair commit on its own diff -------------
+# (docs/plans/final-ci-failure-ci-fix-plan.md Phase 3)
+
+REPAIR_FROM = "c" * 40
+REPAIR_HEAD = "f" * 40
+REPAIR_FAKE_GH = '''#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ["FAKE_GH_LOG"], "a") as out:
+    out.write(json.dumps(args) + "\\n")
+path = args[1] if len(args) > 1 else ""
+if path.startswith("repos/o/r/commits/") and "/statuses" in path:
+    if os.environ.get("FAKE_FAIL") == "statuses": sys.exit(1)
+    print(os.environ.get("FAKE_GATE", "success workflow-bot"))
+    sys.exit(0)
+if path.startswith("repos/o/r/commits/"):
+    if os.environ.get("FAKE_FAIL") == "commit": sys.exit(1)
+    print(os.environ["FAKE_COMMIT"])
+    sys.exit(0)
+sys.exit(1)
+'''
+
+
+def _repair_marker(*, pr: int = 42, frm: str = REPAIR_FROM, repair: str = REPAIR_HEAD, author: str = "workflow-bot") -> dict:
+	return {"author_login": author, "body": f"**Final CI repair.** x\n\n<!-- ai:final-ci-repair:v1 pr={pr} from={frm} repair={repair} attempt=1 -->"}
+
+
+def _repair_commit(parents: list[str] | None = None, *, name: str = "codex-bot", email: str | None = None) -> str:
+	return json.dumps({"parents": parents if parents is not None else [REPAIR_FROM], "name": name,
+		"email": email if email is not None else f"{name}@users.noreply.invalid"})
+
+
+def _final_ci_repair(tmp_path: Path, comments: list[dict], *, commit: str | None = None, **overrides: str) -> tuple[subprocess.CompletedProcess[str], list[list[str]]]:
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir(exist_ok=True)
+	gh_path = bin_dir / "gh"
+	gh_path.write_text(REPAIR_FAKE_GH, encoding="utf-8")
+	gh_path.chmod(0o755)
+	log_path = tmp_path / "gh.log"
+	comments_file = tmp_path / "comments.json"
+	comments_file.write_text(json.dumps(comments), encoding="utf-8")
+	env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FAKE_GH_LOG": str(log_path),
+		"GH_RETRY_MAX_ATTEMPTS": "1", "FAKE_COMMIT": commit or _repair_commit(), **overrides}
+	result = subprocess.run(["bash", str(HELPER), "final-ci-repair", "o/r", "42", REPAIR_HEAD, "workflow-bot", str(comments_file)],
+		env=env, capture_output=True, text=True, check=False)
+	calls = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()] if log_path.exists() else []
+	return result, calls
+
+
+@pytest.mark.parametrize("committer", ["codex-bot", "claude-bot"])
+def test_a_verified_repair_commit_gets_a_delta_review(tmp_path: Path, committer: str) -> None:
+	result, calls = _final_ci_repair(tmp_path, [_repair_marker()], commit=_repair_commit(name=committer))
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert f"REVIEW_HEAD_GATE mode=final_ci_repair pr=42 head={REPAIR_HEAD} outcome=delta reason=final_ci_repair from={REPAIR_FROM}" in result.stdout
+	assert result.stdout.rstrip().endswith(f"final_ci_repair_from={REPAIR_FROM}")
+	assert [call[1] for call in calls] == [f"repos/o/r/commits/{REPAIR_HEAD}", f"repos/o/r/commits/{REPAIR_FROM}/statuses?per_page=100"]
+
+
+@pytest.mark.parametrize("comments, reason", [
+	([], "no_repair_marker"),
+	([_repair_marker(author="mallory")], "no_repair_marker"),
+	([_repair_marker(pr=43)], "no_repair_marker"),
+	([_repair_marker(repair="9" * 40)], "no_repair_marker"),
+	([_repair_marker(repair="none")], "no_repair_marker"),
+])
+def test_no_trusted_repair_marker_means_a_full_review_and_no_api_call(tmp_path: Path, comments: list[dict], reason: str) -> None:
+	result, calls = _final_ci_repair(tmp_path, comments)
+	assert result.returncode == 1 and f"outcome=review reason={reason}" in result.stdout
+	assert "final_ci_repair_from=" not in result.stdout and calls == []
+
+
+@pytest.mark.parametrize("commit, reason", [
+	(_repair_commit([REPAIR_FROM, "d" * 40]), "head_is_not_the_repair"),
+	(_repair_commit(["d" * 40]), "head_is_not_the_repair"),
+	(_repair_commit([]), "head_is_not_the_repair"),
+	(_repair_commit(name="mallory"), "committer_not_pipeline"),
+	(_repair_commit(email="codex-bot@example.com"), "committer_not_pipeline"),
+])
+def test_a_head_that_is_not_the_pipeline_repair_is_reviewed_in_full(tmp_path: Path, commit: str, reason: str) -> None:
+	result, _calls = _final_ci_repair(tmp_path, [_repair_marker()], commit=commit)
+	assert result.returncode == 1 and f"outcome=review reason={reason}" in result.stdout
+	assert "final_ci_repair_from=" not in result.stdout
+
+
+@pytest.mark.parametrize("overrides, reason", [
+	({"FAKE_GATE": "pending workflow-bot"}, "from_not_approved"),
+	({"FAKE_GATE": "success mallory"}, "from_not_approved"),
+	({"FAKE_GATE": "none -"}, "from_not_approved"),
+	({"FAKE_FAIL": "commit"}, "commit_read_failed"),
+	({"FAKE_FAIL": "statuses"}, "from_gate_read_failed"),
+])
+def test_an_unapproved_from_or_a_failed_read_fails_safe(tmp_path: Path, overrides: dict[str, str], reason: str) -> None:
+	result, _calls = _final_ci_repair(tmp_path, [_repair_marker()], **overrides)
+	assert result.returncode == 1 and f"outcome=review reason={reason}" in result.stdout
+	assert "final_ci_repair_from=" not in result.stdout
+
+
+def test_final_ci_repair_invalid_inputs_are_reviewed(tmp_path: Path) -> None:
+	for args in (["bad repo", "42", REPAIR_HEAD, "workflow-bot", "/nonexistent"], ["o/r", "x", REPAIR_HEAD, "workflow-bot", "/nonexistent"],
+			["o/r", "42", "short", "workflow-bot", "/nonexistent"], ["o/r", "42", REPAIR_HEAD, "", "/nonexistent"]):
+		result = subprocess.run(["bash", str(HELPER), "final-ci-repair", *args], capture_output=True, text=True, check=False)
+		assert result.returncode == 1 and "reason=invalid_input" in result.stdout, args

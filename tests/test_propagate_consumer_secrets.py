@@ -106,7 +106,7 @@ def _run(
 		log = tmp / "gh.log"
 		env = {
 			name: value for name, value in os.environ.items()
-			if name not in ("GH_TOKEN", "BASH_ENV") and name not in SECRET_NAMES
+			if name not in ("GH_TOKEN", "BASH_ENV", "AI_COMMENT_SIGNING_SECRET") and name not in SECRET_NAMES
 		}
 		env.update({
 			"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
@@ -187,6 +187,20 @@ class PropagateConsumerSecretsScriptTests(unittest.TestCase):
 		self.assertIn("repo=o/a secret=TG_BOT_SECRET status=skipped_empty", proc.stdout)
 		self.assertNotIn("|TG_BOT_SECRET|", "\n".join(calls))
 		self.assertIn("summary targets=1 set=3 skipped=1 failed=0", proc.stdout)
+
+	def test_optional_signing_secret_is_copied_only_when_set(self) -> None:
+		values = dict(FIXTURE_VALUES, AI_COMMENT_SIGNING_SECRET="fixture-sig-31d0")
+		proc, calls = _run(registry=["o/a"], values=values)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("set|o/a|AI_COMMENT_SIGNING_SECRET|" + _sha("fixture-sig-31d0"), calls)
+		self.assertIn("summary targets=1 set=5 skipped=0 failed=0", proc.stdout)
+		self.assertNotIn("fixture-sig-31d0", proc.stdout + proc.stderr)
+
+	def test_unset_optional_signing_secret_is_left_out_silently(self) -> None:
+		proc, calls = _run(registry=["o/a"], values=FIXTURE_VALUES)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertNotIn("AI_COMMENT_SIGNING_SECRET", proc.stdout + proc.stderr + "\n".join(calls))
+		self.assertIn("summary targets=1 set=4 skipped=0 failed=0", proc.stdout)
 
 	def test_failure_on_one_repo_continues_and_exits_red(self) -> None:
 		proc, calls = _run(registry=["o/a", "o/b"], values={"GH_PAT": "x"}, names="GH_PAT", fail_repos="o/a")

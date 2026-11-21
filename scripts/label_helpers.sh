@@ -48,6 +48,7 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:needs-human"]="e11d48"
 	["ai:claude-capacity-wait"]="fbca04"
 	["ai:blocked"]="b60205"
+	["ai:waiting-on-dependency"]="fbca04"
 	["ai:merged"]="5319e7"
 	["ai:review-blocked"]="e11d48"
 	["ai:resolver-escalated"]="b60205"
@@ -68,6 +69,8 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:review-skipped"]="c2e0c6"
 	["ai:skip-activation-verify"]="c2e0c6"
 	["ai:merge-queued"]="c5def5"
+	["ai:merge-lease-wait"]="c5def5"
+	["ai:final-ci-merge-pending"]="c5def5"
 	["ai:retro"]="5319e7"
 	["ai:security-audit"]="5319e7"
 	["ai:security"]="0e8a16"
@@ -115,6 +118,7 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:needs-human"]="Escalated for human intervention; autonomous stall recovery is paused"
 	["ai:claude-capacity-wait"]="Claude pool at capacity; work is waiting for the hourly resume pass"
 	["ai:blocked"]="Orchestrator auto-answer loop blocked pending human intervention"
+	["ai:waiting-on-dependency"]="Waiting on a PR, issue or release dependency; the poller resumes it when the dependency lands"
 	["ai:merged"]="Linked PR merged"
 	["ai:review-blocked"]="PR review/autofix could not resolve all issues — needs human intervention"
 	["ai:resolver-escalated"]="Integration conflict resolver hit the escape threshold; redispatch waits for a new PR head"
@@ -135,6 +139,8 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:review-skipped"]="Reviewer panel + editor cycle skipped by deterministic gate (doc-only or under size threshold)"
 	["ai:skip-activation-verify"]="Activation verification skips this merged PR (no verdict, no fix issue)"
 	["ai:merge-queued"]="Review queued behind an older open PR that edits the same files (merge train)"
+	["ai:merge-lease-wait"]="Approved; waits for the merge lease on its base before updating or merging (merge lease)"
+	["ai:final-ci-merge-pending"]="Approved; the poll tick enables auto-merge when this head's final CI run passes"
 	["ai:retro"]="Stable tracker issue for weekly workflow retrospectives"
 	["ai:security-audit"]="Stable tracker issue for periodic default-branch security audits"
 	["ai:security"]="Follow-up issue opened by the periodic security audit workflow"
@@ -154,7 +160,7 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:verify-pending"]="Merged; waiting for the check after merge"
 )
 
-_AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:validating","ai:validated","ai:validation-failed","ai:validation-fixing","ai:validation-recovery","ai:security-pass","ai:security-pass-fixing","ai:security-pass-failed","ai:ready-to-merge","ai:needs-human","ai:blocked","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
+_AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:validating","ai:validated","ai:validation-failed","ai:validation-fixing","ai:validation-recovery","ai:security-pass","ai:security-pass-fixing","ai:security-pass-failed","ai:ready-to-merge","ai:needs-human","ai:blocked","ai:waiting-on-dependency","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
 
 # Process-local cache of labels confirmed to exist, keyed "<repo>|<label>".
 # Holds only confirmed outcomes (create succeeded, or GitHub said the label

@@ -1,0 +1,6 @@
+<!-- changelog: fixed -->
+- **A transient GitHub error on the `stable` fast-forward push no longer fails the promotion.** The `Fast-forward stable to main` step of `promote-main-to-stable.yml` now retries its push up to twice (after 5 s, then 10 s) when GitHub answers with a server error (HTTP 5xx), a `remote rejected ... (failed)` or a network error. Before each retry, and once more before giving up, it reads `refs/heads/stable` and treats a push that landed anyway as done, so the release still runs.
+
+Run 41819783609 lost a whole daily promotion cycle to one HTTP 500 on that push. Protected-branch and repository-rule rejections, and a non-fast-forward rejection, still fail at once, and the push never uses `--force` or a rebase. The existing check that `origin/stable` equals the target commit still runs after the push. Each retry decision is logged as a `PROMOTE_STABLE_PUSH_RETRY attempt=<i>/2 class=server_error|remote_rejected_failed|network outcome=retry|landed|gave_up` warning, and a failed `ls-remote` read before a decision logs its own warning with the exit status. Set the `PROMOTE_STABLE_PUSH_TRANSIENT_RETRY_ENABLED` repository variable to `false` to turn the retry off.
+
+Refs #8822.

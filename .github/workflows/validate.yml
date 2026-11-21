@@ -41,6 +41,9 @@ name: AI Validate (Reusable)
         required: true
       TG_BOT_SECRET:
         required: false
+      # Signed job-token comments (run-volume plan item 15): optional; see scripts/comment_signature.py.
+      AI_COMMENT_SIGNING_SECRET:
+        required: false
     outputs:
       status:
         description: "Validation status (pass|fail|error)"
@@ -107,6 +110,12 @@ env:
   SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
   WORKSPACE_HOOK_TIMEOUT_SECONDS: ${{ vars.WORKSPACE_HOOK_TIMEOUT_SECONDS || '600' }}
   WORKSPACE_REUSE_ENABLED: ${{ vars.WORKSPACE_REUSE_ENABLED || 'false' }}
+  # Signed job-token comments (run-volume plan item 15, D16; see
+  # scripts/comment_signature.py). The opt-in secret and the job token sit
+  # next to each step's GH_PAT, never here, so a step without the PAT never
+  # sees them. Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false
+  # posts with GH_PAT again while signed comments already posted still verify.
+  AI_COMMENT_SIGNING_POST: ${{ vars.AI_COMMENT_SIGNING_POST || 'true' }}
 
 jobs:
   validate:
@@ -144,6 +153,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
         run: |
           # Trusted pre-support copy of scripts/gh_helpers.sh for gh_api_retry
@@ -195,7 +206,10 @@ jobs:
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'true' }}
+          CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED || 'true' }}
           TRACKING_ISSUE: ${{ inputs.tracking_issue }}
         run: |
           set -euo pipefail
@@ -324,6 +338,7 @@ jobs:
             ISSUE="${issue_number}" \
             GH_TOKEN="${GH_TOKEN}" \
             CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" \
+            CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED:-true}" \
             bash "${resolver_script}"
           })" || resolver_rc=$?
           if [ "${resolver_rc}" -eq 0 ]; then
@@ -355,6 +370,8 @@ jobs:
         id: authorized_target
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           VALIDATE_TARGET_REF: ${{ inputs.target_ref }}
           VALIDATE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
@@ -464,6 +481,8 @@ jobs:
         id: support_staging
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           VALIDATE_AUTHORIZED_TARGET_SHA: ${{ steps.authorized_target.outputs.sha }}
           VALIDATE_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           VALIDATE_PROMOTE_CANDIDATE_SHA: ${{ steps.refctx.outputs.promote_candidate_sha }}
@@ -760,6 +779,8 @@ jobs:
         id: ai_engine
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           TRACKING_ISSUE_INPUT: ${{ inputs.tracking_issue }}
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
           AI_ENGINE_VALIDATE: ${{ vars.AI_ENGINE_VALIDATE || '' }}
@@ -1024,6 +1045,8 @@ jobs:
         if: steps.behavioural_smoke_gate.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           INPUT_PR_NUMBER: ${{ inputs.pr_number || '0' }}
           TRACKING_ISSUE: ${{ inputs.tracking_issue }}
           PR_EVENT_NUMBER: ${{ github.event.pull_request.number || '' }}
@@ -1123,6 +1146,8 @@ jobs:
         env:
           TRACKING_ISSUE: ${{ inputs.tracking_issue }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -1356,6 +1381,8 @@ jobs:
         env:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -1594,6 +1621,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           TRACKING_ISSUE: ${{ inputs.tracking_issue }}
           STATUS_FILE_PATH: ${{ steps.collect_status.outputs.status_file }}
           STATUS_VALUE: ${{ steps.collect_status.outputs.status }}
@@ -1718,6 +1747,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           TRACKING_ISSUE: ${{ inputs.tracking_issue }}
           STATUS_FILE_PATH: ${{ steps.collect_status.outputs.status_file }}
           STATUS_VALUE: ${{ steps.collect_status.outputs.status }}
@@ -1785,6 +1816,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           SINK_STATUS: ${{ steps.collect_status.outputs.status }}
           SINK_RAW_STATUS: ${{ steps.collect_status.outputs.raw_status }}
           SINK_SUMMARY: ${{ steps.collect_status.outputs.summary }}
@@ -1814,6 +1847,8 @@ jobs:
         if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always()) && steps.authorized_target.outcome == 'success' && steps.support_staging.outcome == 'success'
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE: ${{ inputs.tracking_issue }}
         run: |
@@ -1867,6 +1902,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
           REPORT_WORKFLOW_NAME: ${{ github.workflow }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -1912,6 +1949,8 @@ jobs:
       id-token: write
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+      AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
       VALIDATION_HARNESS_HEAL_ENABLED: ${{ vars.VALIDATION_HARNESS_HEAL_ENABLED || 'true' }}
       WORKFLOW_HEAL_PHASE: validate
@@ -1926,6 +1965,8 @@ jobs:
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           # Expression values reach the script only through env (never run: source).
           SUPPORT_REF_REPOSITORY: ${{ github.repository }}
           SUPPORT_REF_HEAD_SHA: ${{ github.sha }}
