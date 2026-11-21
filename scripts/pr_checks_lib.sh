@@ -117,7 +117,7 @@
 # configured CI check name can be shared by jobs of other workflows (here
 # `lint` also exists in lint-plan-archival.yml, which re-runs on every
 # body edit of a PR that changes docs/completed/**;
-# lint-pr-body-auto-close.yml's job was `lint` too until it was
+# the PR-body lint job, now in pr-checks.yml, was `lint` too until it was
 # renamed `pr-body-lint` on 2026-11-18, and a branch that predates the
 # rename still reports the old name), so for that
 # name a newer run supersedes only when it comes from the same Actions run
@@ -1122,7 +1122,7 @@ _pr_wait_for_required_checks()
 		rc=0
 		# Bind the named CI check to a run of an AUTO_MERGE_WAIT_WORKFLOWS
 		# workflow on this head (issue #6963): other workflows also have a
-		# job named `lint` (lint-plan-archival.yml; lint-pr-body-auto-close.yml
+		# job named `lint` (lint-plan-archival.yml; the PR-body lint job
 		# too on a branch that predates its rename to `pr-body-lint`),
 		# and their success must not stand in for CI. With the runs listing
 		# unreadable, a success is not trusted (state unknown, keep polling);

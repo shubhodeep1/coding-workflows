@@ -366,7 +366,8 @@ LINT_REQUIRED_ENV = {
 def test_cancelled_ci_check_not_superseded_by_other_workflow_same_name() -> None:
 	"""The CI check name (`lint` here) is shared with lint-plan-archival
 	(and, on branches that predate its rename to `pr-body-lint`, with
-	lint-pr-body-auto-close), which re-runs on PR body edits. A newer
+	the PR-body lint, now a step group of pr-checks.yml), which re-runs on
+	PR body edits. A newer
 	`lint` from another Actions run must not hide a cancelled CI `lint`,
 	in either filter mode, when the runs are not bound to CI run ids."""
 	runs = _page([_lint_run("555", "cancelled", 1), _lint_run("777", "success", 2)])
@@ -377,7 +378,8 @@ def test_cancelled_ci_check_not_superseded_by_other_workflow_same_name() -> None
 
 
 def test_failed_pr_body_lint_blocks_under_the_default_required_set() -> None:
-	"""lint-pr-body-auto-close.yml's job is `pr-body-lint` (it was `lint`,
+	"""pr-checks.yml's job is `pr-body-lint`, the name the PR-body lint job
+	had in lint-pr-body-auto-close.yml before the fold (earlier it was `lint`,
 	and blocked only through that shared name). A failed run must still
 	block with the built-in default set; a passing one must not."""
 	ci_lint_ok = _lint_run("555", "success", 1)

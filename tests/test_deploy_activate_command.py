@@ -206,3 +206,47 @@ def test_mac_setup_steps_are_skipped_unless_output_needs_them(command: Path) -> 
 	assert "Right before the first step that needs the latest repo files locally" in procedure
 	assert "`git pull --ff-only`" in procedure
 	assert "**Assume my Mac is set up.**" in text.split("## Rules", 1)[1]
+
+
+@pytest.mark.parametrize("command", COMMANDS, ids=("live", "template"))
+def test_one_session_keeps_its_log_updates_in_one_pull_request(command: Path) -> None:
+	text = command.read_text(encoding="utf-8")
+	section = text.split("\n## Activation Log\n", 1)[1].split("\n## ", 1)[0]
+	section = " ".join(section.split())
+	for required in (
+		"**One log PR per session.**",
+		"goes to a single pull request",
+		"open one PR for it as a **draft**",
+		"titled `chore: activation log updates`",
+		"never open a second PR while that one is open",
+		"then mark it ready for review once",
+		"If it has merged or been closed in the meantime, do not commit onto its branch",
+		"CLAUDE.md §21.A",
+		"then open one new draft PR for the updates that remain",
+		"If it was closed without merging, its log commits never reached the default branch, so do not drop them",
+		"skip that `git checkout -B` reset and instead rebase the branch onto the latest default branch",
+		"if that rebase conflicts, run `git rebase --abort`, stop, and tell me before you commit or open any PR.",
+		"after committing the pending log edit locally (do not push it yet: `git rebase` refuses a dirty working tree)",
+		"publish the rebased branch with `git push --force-with-lease origin <branch>`",
+		"then open one new draft PR from it for the updates that remain.",
+		"merge that branch into your working branch before your first log commit",
+		"closing it yourself is ask-first (CLAUDE.md §23.C)",
+		"**commit and push the log** to the session's one log PR (below)",
+		"look for an earlier session's open log PR",
+		"look for it before emitting any step",
+		"plus at most the agents-file ID records",
+		"whose head branch is not your working branch",
+		"If that merge conflicts, run `git merge --abort`, stop, and tell me before you commit or open any PR.",
+	):
+		assert required in section, (command, required)
+	tool_access = text.split("\n## Tool Access\n", 1)[1].split("\n## ", 1)[0]
+	tool_access = " ".join(tool_access.split())
+	for required in (
+		"The one exception is the session's log PR, below.",
+		"**The session's log PR**",
+		"`gh pr create --draft`",
+		"`gh pr ready`",
+		"never merge or close any PR with it.",
+		"except the log-branch git commands the [Activation Log](#activation-log) names",
+	):
+		assert required in tool_access, (command, required)
