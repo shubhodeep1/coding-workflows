@@ -312,12 +312,13 @@ class ClarifyNegativeOutputsTest(unittest.TestCase):
 		)
 		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 		outputs = self._outputs()
-		# The step also writes non-numeric `created_after` and `title` lines,
-		# so only run ids and the issue number must be digits. Every line must
-		# still be `key=value`, which a multi-line error body would break.
+		# The step also writes non-numeric `created_after=` and `title=`, so
+		# every line must be a `key=value` line (a leaked multi-line error
+		# body would add lines without one), and only the run-id and issue
+		# number keys guarded by #9797 must hold digits or nothing.
 		for line in outputs:
 			self.assertRegex(line, r"^[a-z_]+=")
-			if line.startswith(("pre_", "issue_number=")):
+			if line.startswith("pre_") or line.startswith("issue_number="):
 				self.assertRegex(line, r"^[a-z_]+=[0-9]*$")
 		self.assertIn("pre_clarify_run_id=", outputs)
 		self.assertIn("issue_number=9790", outputs)

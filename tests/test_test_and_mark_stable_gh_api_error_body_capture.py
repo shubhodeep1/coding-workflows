@@ -148,10 +148,9 @@ def test_clarify_negative_create_keeps_real_run_id():
 
 
 def test_alt_model_create_leaves_baseline_empty_on_error_body():
-	# A failed read leaves the baseline empty, not "0": the capture step
-	# treats an empty clarify/plan baseline as "read failed" and skips that
-	# phase, because `id > 0` could match an older, unrelated run on main
-	# (#9797). The error body must never reach the output either way.
+	# Stable keeps #9800's (#9797) rule for the alt-model baselines: a failed
+	# read leaves pre_<wf>_run_id empty, never 0, so the capture step skips
+	# instead of matching an older, unrelated run with `id > 0`.
 	outputs = _run_step(_step("e2e-alt-model-test", "create"), "error")
 	for wf in ("clarify", "plan", "implement", "review_autofix"):
 		assert outputs[f"pre_{wf}_run_id"] == ""
