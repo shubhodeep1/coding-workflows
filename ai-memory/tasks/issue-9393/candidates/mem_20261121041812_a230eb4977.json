@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9393,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9393\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9872\",\"pr_number\":9872,\"branch\":\"ai/issue-9393\",\"run_id\":\"44861015304\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/44861015304\",\"changed_files\":[\".github/workflows/orchestrate_poll.yml\",\"changelog.d/9393-operator-step-release-routing.md\",\"scripts/activation_verify.sh\",\"tests/test_activation_verify.py\",\"tests/test_operator_step_issue.py\"]}",
+  "fingerprint": "bc53d53a873ff5c0698dcc6b2c40a9b1721e322fab3bf9204868b158bab44a49",
+  "lineage": {
+    "issue_number": 9393,
+    "parent_ids": [],
+    "pr_number": 9872,
+    "run_id": "44861015304",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44861015304",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9872"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261121041812_a230eb4977",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9393,
+    "level": "run",
+    "pr_number": 9872,
+    "run_id": "44861015304"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9393: https://github.com/shubhodeep1/coding-workflows/pull/9872",
+  "timestamps": {
+    "created_at": "2026-11-21T04:18:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
