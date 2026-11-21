@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-21T11:01:44Z",
+  "issue_number": 9837,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=scripts/clarify_isolated_run.sh:311; cited_path=scripts/clarify_isolated_run.sh, .github/workflows/orchestrate_clarify_respond.yml, tests/test_clarify_isolated_run_snapshot.py; files_touched=.github/workflows/clarify.yml, changelog.d/9837-clarify-snapshot-reject-no-retry.md, tests/test_clarify_snapshot_reject_no_retry.py, tests/test_plan_clarify_blocked_output.py.",
+  "phase": "review_autofix",
+  "pr_number": 9840,
+  "record_id": "lesson_20261121110144_79488ad75a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/clarify_isolated_run.sh, .github/workflows/orchestrate_clarify_respond.yml, tests/test_clarify_isolated_run_snapshot.py",
+    "scripts/clarify_isolated_run.sh",
+    ".github/workflows/clarify.yml",
+    "changelog.d/9837-clarify-snapshot-reject-no-retry.md",
+    "tests/test_clarify_snapshot_reject_no_retry.py",
+    "tests/test_plan_clarify_blocked_output.py"
+  ]
+}
