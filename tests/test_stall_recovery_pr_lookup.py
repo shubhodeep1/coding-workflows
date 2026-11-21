@@ -207,6 +207,8 @@ def _bootstrap(tmp_dir: Path) -> Path:
 	extract_fn '_stall_judge_pick_linked_pr'   >> helpers.sh
 	echo                                       >> helpers.sh
 	extract_fn '_stall_pr_ai_hold_reason'      >> helpers.sh
+	echo                                       >> helpers.sh
+	extract_fn '_stall_merge_lease_label_age_minutes' >> helpers.sh
 	""")
 	r = _run_bash(script, cwd=tmp_dir)
 	assert r.returncode == 0, f"extraction failed: {r.stderr}\n{r.stdout}"
@@ -592,8 +594,32 @@ def test_stall_judge_pick_falls_back_to_last_cross_ref_without_implementation_pr
 		)
 		assert r.returncode == 0, r.stderr
 		assert "PICK=3991 SRC=cross_ref_last CANDS=[3991]" in r.stdout, r.stdout
-		assert "PICKED_JSON=no" in r.stdout, r.stdout
+		# The loop already fetched #3991, so its payload is reused (no
+		# second pulls/<n> read in invoke_stall_judge).
+		assert "PICKED_JSON=yes" in r.stdout, r.stdout
 		assert "STALL_JUDGE_LINKED_PR issue=3990 pr=3991 source=cross_ref_last candidates=3991" in r.stderr, r.stderr
+
+
+def test_stall_judge_pick_tries_branch_hits_before_many_cross_refs():
+	"""25 lower-numbered PRs that only cite the issue must not push the
+	`ai/issue-<n>` PR past the 20-fetch cap: branch hits are fetched first."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap(tmp)
+		xrefs = "\\n".join(str(n) for n in range(100, 125))
+		r = _invoke(
+			body=_PICK_FETCH_STUB + f"""
+			ISSUE=9398
+			CROSS_REF_PR_NUMBERS=$'{xrefs}'
+			CROSS_REF_LAST=124
+			export GH_PR_LIST_HEAD_JSON='[{{"number":9402}}]'
+			export GH_PR_LIST_SEARCH_JSON='[]'
+			PR_JSON_MAP[9402]={_bash_single_quote(_pr_payload(9402, "open", "ai/issue-9398"))}
+			""" + _PICK_REPORT,
+			cwd=tmp,
+		)
+		assert r.returncode == 0, r.stderr
+		assert "PICK=9402 SRC=implementation" in r.stdout, (r.stdout, r.stderr)
 
 
 def test_stall_judge_pick_reports_none_when_nothing_is_linked():
@@ -687,26 +713,63 @@ def test_hold_reason_ignores_closed_or_merged_prs():
 		assert "HOLD=[]" in r.stdout, r.stdout
 
 
-def test_hold_reason_lease_wait_lapses_after_max_minutes_and_logs_once():
+def test_hold_reason_lease_wait_lapses_on_label_age_and_logs_once():
+	"""The lapse is measured on the label's age, not on the stall clock: a
+	huge stall clock with a young label holds, an old label lapses."""
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
 		_bootstrap(tmp)
 		payload = _pr_payload(9402, "open", "ai/issue-9398", labels=["ai:merge-lease-wait"])
+		q = _bash_single_quote(payload)
 		r = _invoke(
 			body=f"""
+			_stall_merge_lease_label_age_minutes() {{ [ -n "${{LABEL_AGE:-}}" ] || return 1; printf '%s\\n' "${{LABEL_AGE}}"; }}
 			export STALL_MERGE_LEASE_WAIT_MAX_MINUTES=60
 			export _STALL_MERGE_LEASE_LAPSE_LOG_FILE="{tmp}/lapse.log"
-			a="$(_stall_pr_ai_hold_reason {_bash_single_quote(payload)} 60)"
-			b="$(_stall_pr_ai_hold_reason {_bash_single_quote(payload)} 61)"
-			c="$(_stall_pr_ai_hold_reason {_bash_single_quote(payload)} 90)"
-			echo "A=[$a] B=[$b] C=[$c]"
+			a="$(LABEL_AGE=60 _stall_pr_ai_hold_reason {q} 5000)"
+			b="$(LABEL_AGE=61 _stall_pr_ai_hold_reason {q} 1)"
+			c="$(LABEL_AGE=90 _stall_pr_ai_hold_reason {q} 1)"
+			d="$(LABEL_AGE= _stall_pr_ai_hold_reason {q} 5000)"
+			e="$(STALL_MERGE_LEASE_WAIT_MAX_MINUTES=0 LABEL_AGE=1 _stall_pr_ai_hold_reason {q} 1)"
+			echo "A=[$a] B=[$b] C=[$c] D=[$d] E=[$e]"
 			""",
 			cwd=tmp,
 		)
 		assert r.returncode == 0, r.stderr
-		assert "A=[merge_lease_wait] B=[] C=[]" in r.stdout, (r.stdout, r.stderr)
+		assert "A=[merge_lease_wait] B=[] C=[] D=[merge_lease_wait] E=[]" in r.stdout, (r.stdout, r.stderr)
 		lapse_lines = [ln for ln in r.stderr.splitlines() if ln.startswith("STALL_MERGE_LEASE_HOLD_LAPSED")]
-		assert lapse_lines == ["STALL_MERGE_LEASE_HOLD_LAPSED pr=9402 stall_minutes=61 max_minutes=60"], r.stderr
+		assert lapse_lines == ["STALL_MERGE_LEASE_HOLD_LAPSED pr=9402 label_age_minutes=61 max_minutes=60"], r.stderr
+
+
+def test_label_age_reads_the_newest_labeled_event():
+	import datetime
+
+	now = datetime.datetime.now(datetime.timezone.utc)
+	older = (now - datetime.timedelta(minutes=300)).strftime("%Y-%m-%dT%H:%M:%SZ")
+	newer = (now - datetime.timedelta(minutes=120)).strftime("%Y-%m-%dT%H:%M:%SZ")
+	resp = json.dumps({"data": {"repository": {"pullRequest": {"timelineItems": {"nodes": [
+		{"createdAt": older, "label": {"name": "ai:merge-lease-wait"}},
+		{"createdAt": newer, "label": {"name": "ai:merge-lease-wait"}},
+		{"createdAt": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "label": {"name": "other"}},
+	]}}}}})
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap(tmp)
+		r = _invoke(
+			body=f"""
+			gh() {{ [ "$1 $2" = "api graphql" ] || return 1; [ -n "${{GQL_FAIL:-}}" ] && return 1; printf '%s' {_bash_single_quote(resp)}; }}
+			a="$(_stall_merge_lease_label_age_minutes 9402 ai:merge-lease-wait)"; echo "A=[$a]"
+			rc=0; b="$(_stall_merge_lease_label_age_minutes 9402 missing-label)" || rc=$?; echo "B=[$b] RC=$rc"
+			rc=0; c="$(GQL_FAIL=1 _stall_merge_lease_label_age_minutes 9402 ai:merge-lease-wait)" || rc=$?; echo "C=[$c] RC=$rc"
+			""",
+			cwd=tmp,
+			extra_env={"GITHUB_REPOSITORY": "owner/repo"},
+		)
+		assert r.returncode == 0, r.stderr
+		m = re.search(r"A=\[(\d+)\]", r.stdout)
+		assert m and 119 <= int(m.group(1)) <= 121, (r.stdout, r.stderr)
+		assert "B=[] RC=1" in r.stdout, r.stdout
+		assert "C=[] RC=1" in r.stdout, r.stdout
 
 
 def test_hold_reason_honours_custom_label_and_invalid_max():

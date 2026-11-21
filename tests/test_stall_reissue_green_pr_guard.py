@@ -45,6 +45,7 @@ _FUNCTIONS = (
 	"_stall_reissue_guard_refuse",
 	"_stall_reissue_green_pr_guard",
 	"_stall_pr_ai_hold_reason",
+	"_stall_merge_lease_label_age_minutes",
 	"close_linked_pr",
 	"invoke_stall_judge",
 	"execute_stall_recovery_action",
@@ -96,6 +97,7 @@ gh() {
 				[ -n "${GH_PR_LIST_HEAD_FAIL:-}" ] && return 1
 				payload="${GH_PR_LIST_HEAD_JSON:-[]}"
 			elif [ "${use_search}" = 1 ]; then
+				[ -n "${GH_PR_LIST_SEARCH_FAIL:-}" ] && return 1
 				payload="${GH_PR_LIST_SEARCH_JSON:-[]}"
 			fi
 			if [ -n "${jq_filter}" ]; then
@@ -349,6 +351,63 @@ def test_guard_fails_closed_on_read_errors(tmp: Path):
 
 
 @_with_tmp
+def test_guard_fails_closed_when_body_search_fails(tmp: Path):
+	"""A failed body close-keyword search must refuse, not look like "no
+	body-linked PRs" (the shared helper's fail-open `[]`)."""
+	r = _invoke(
+		tmp,
+		"""
+		CROSS_REF_PR_NUMBERS=""
+		export GH_PR_LIST_HEAD_JSON='[]'
+		export GH_PR_LIST_SEARCH_FAIL=1
+		"""
+		+ _GUARD,
+	)
+	assert "RC=1 PR= REASON=check_unavailable" in r.stdout, (r.stdout, r.stderr)
+
+
+@_with_tmp
+def test_guard_review_blocked_form_holds_lease_wait(tmp: Path):
+	"""The review-blocked judge arm passes `0`: a lease-labelled PR whose
+	head is not green is still refused with merge_lease_wait."""
+	r = _invoke(
+		tmp,
+		_IMPL_ONLY
+		+ """
+		rc=0
+		_stall_reissue_green_pr_guard 9398 0 || rc=$?
+		echo "RC=${rc} PR=${STALL_REISSUE_REFUSED_PR} REASON=${STALL_REISSUE_REFUSED_REASON}"
+		""",
+		prs={9402: _pr(9402, "ai/issue-9398", labels=["ai:merge-lease-wait"])},
+		statuses=_statuses("failure"),
+	)
+	assert "RC=1 PR=9402 REASON=merge_lease_wait" in r.stdout, (r.stdout, r.stderr)
+
+
+@_with_tmp
+def test_judge_does_not_hold_on_cross_ref_last_fallback(tmp: Path):
+	"""A draft PR that only cites the issue (the cross_ref_last fallback) is
+	not the issue's PR: it must not skip the judge on every tick."""
+	r = _invoke(
+		tmp,
+		"""
+		CROSS_REF_PR_NUMBERS="9700"
+		CROSS_REF_LAST=9700
+		export GH_PR_LIST_HEAD_JSON='[]'
+		export GH_PR_LIST_SEARCH_JSON='[]'
+		judge_rc=0
+		invoke_stall_judge 9398 "ai:implementing" 2 130 "" </dev/null >judge.out 2>judge.err || judge_rc=$?
+		cat judge.out
+		""",
+		prs={9700: _pr(9700, "claude/tooling", draft=True, body="Refs #9398")},
+	)
+	err = (tmp / "judge.err").read_text(encoding="utf-8")
+	assert "STALL_JUDGE_LINKED_PR issue=9398 pr=9700 source=cross_ref_last" in err, err
+	assert "source=judge_pick" not in r.stdout, r.stdout
+	assert "run_stall_judge_skipped_pr_ai_hold" not in r.stdout, r.stdout
+
+
+@_with_tmp
 def test_guard_ignores_cross_reference_only_and_closed_prs(tmp: Path):
 	r = _invoke(
 		tmp,
@@ -443,7 +502,7 @@ def test_close_and_reissue_arms_call_the_guard():
 	text = POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert text.count('_stall_reissue_green_pr_guard "${issue_num}" "${stall_minutes}"') == 1
 	assert text.count('_stall_reissue_green_pr_guard "${issue_num}" "${elapsed_minutes}"') == 1
-	assert text.count('_stall_reissue_green_pr_guard "${rb_issue}"') == 1
+	assert text.count('_stall_reissue_green_pr_guard "${rb_issue}" "0"') == 1
 	assert text.count('STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue_refused"') == 2
 
 
