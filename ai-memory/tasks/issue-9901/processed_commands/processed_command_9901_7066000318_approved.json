@@ -5,13 +5,23 @@
   "entry_id": "processed_command_9901_7066000318_approved",
   "issue_number": 9901,
   "metadata": {
+    "branch": "ai/issue-9901",
+    "changed_files": [
+      ".github/workflows/review_autofix_sweep.yml",
+      "tests/test_zombie_queued_guard_contract.py"
+    ],
+    "issue_number": 9901,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9901",
+    "pr_number": 9904,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9904",
+    "run_attempt": "1",
+    "run_id": "44926930149",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/44926930149"
   },
   "run_attempt": 1,
   "run_id": "44926930149",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-21T16:54:24Z",
+  "status": "completed",
+  "timestamp": "2026-11-21T17:03:41Z",
   "workflow": "implement"
 }
