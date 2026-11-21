@@ -5,13 +5,28 @@
   "entry_id": "processed_command_9892_7064925848_approved",
   "issue_number": 9892,
   "metadata": {
+    "branch": "ai/issue-9892",
+    "changed_files": [
+      ".github/workflows/orchestrate_poll.yml",
+      "README.md",
+      "agents.d/9892-stall-recovery-keeps-green-lease-waiting-prs.md",
+      "changelog.d/9892-stall-recovery-keeps-green-lease-waiting-prs.md",
+      "scripts/orchestrate_poll_process.sh",
+      "tests/test_stall_recovery_pr_lookup.py",
+      "tests/test_stall_reissue_green_pr_guard.py"
+    ],
+    "issue_number": 9892,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9892",
+    "pr_number": 9902,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9902",
+    "run_attempt": "1",
+    "run_id": "44919504377",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/44919504377"
   },
   "run_attempt": 1,
   "run_id": "44919504377",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-21T15:41:46Z",
+  "status": "completed",
+  "timestamp": "2026-11-21T16:43:45Z",
   "workflow": "implement"
 }
