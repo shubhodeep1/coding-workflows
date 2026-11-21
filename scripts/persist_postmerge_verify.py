@@ -103,7 +103,7 @@ PHASE_LABELS = (
 	"ai:done", "ai:implementing", "ai:awaiting-approval", "ai:planning", "ai:clarification",
 	"ai:validating", "ai:validated", "ai:validation-failed", "ai:validation-fixing", "ai:validation-recovery",
 	"ai:security-pass", "ai:security-pass-fixing", "ai:security-pass-failed", "ai:ready-to-merge",
-	"ai:needs-human", "ai:blocked", "ai:review-blocked", "ai:implementation-failed", "ai:merged", "ai:closed",
+	"ai:needs-human", "ai:blocked", "ai:waiting-on-dependency", "ai:review-blocked", "ai:implementation-failed", "ai:merged", "ai:closed",
 )
 IGNORED_CONCLUSIONS = ("cancelled", "skipped", "neutral", "stale", "action_required")
 FAIL_CONCLUSIONS = ("failure", "timed_out", "startup_failure")
