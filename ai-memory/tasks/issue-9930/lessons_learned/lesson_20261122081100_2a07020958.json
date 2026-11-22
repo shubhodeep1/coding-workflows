@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-22T08:11:00Z",
+  "issue_number": 9930,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=.github/workflows/review_autofix.yml:527; cited_path=.github/workflows/review_autofix.yml; files_touched=agents.d/9930-fingerprint-base-deletion-supersede.md, changelog.d/9930-fingerprint-base-deletion-supersede.md, scripts/verify_integration_fingerprints.py, tests/test_verify_integration_fingerprints_post_capture_evolution.py.",
+  "phase": "review_autofix",
+  "pr_number": 9932,
+  "record_id": "lesson_20261122081100_2a07020958",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/review_autofix.yml",
+    "agents.d/9930-fingerprint-base-deletion-supersede.md",
+    "changelog.d/9930-fingerprint-base-deletion-supersede.md",
+    "scripts/verify_integration_fingerprints.py",
+    "tests/test_verify_integration_fingerprints_post_capture_evolution.py"
+  ]
+}
