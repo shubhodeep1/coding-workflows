@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Noop sweep. Read comments once per PR per cycle (:38590 / :38799).\" The issue's Tests section also says \"The noop sweep makes one comments read per PR per cycle.\"\n  expected_change_site: scripts/orchestrate_poll_process.sh, the noop force-merge sweep's two comments reads (plus a matching test in tests/test_orchestrate_poll_process.py)\n  confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  EVIDENCE: No hunk in the PR diff or the last-run diff touches the noop sweep's comment reads, no test asserts one comments read per PR, the linked issue does not defer this item and only the PR description defers it in its \"Deferred scope (not delivered by this PR)\" block, changelog.d/9927-orchestrate-poll-cycle-caches.md says the second read is kept because it is Gate B's fail-closed fresh snapshot; both reviewers rated it SEVERITY: NIT and call it an intent decision, not a code defect.\n- requirement: \"At least a 25% drop in the poller's REST calls per run for the same state, measured with #9887's calls_in_job before and after on comparable cycles.\"\n  expected_change_site: Post-merge comparison using #9887's `calls_in_job` measurements\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The PR adds cache-hit counters in ORCH_POLL_CYCLE_SUMMARY but its diff contains no before-and-after `calls_in_job` measurements or evidence that the 25% target was met, and the PR description does not defer this measurement (openai_gpt-6-luna); the target is acceptable as a deferred post-merge verification step because the required telemetry is in place (google_gemini-3_1-flash-lite); severity disagreement: SEVERITY: NIT (google_gemini-3_1-flash-lite) vs SEVERITY: MAJOR (openai_gpt-6-luna); anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash explicitly excluded this gap as a post-merge item that no diff could deliver.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"Noop sweep. Read comments once per PR per cycle (:38590 / :38799).\" The issue's Tests section also says \"The noop sweep makes one comments read per PR per cycle.\"\n  Expected change site: the noop force-merge sweep's two comment reads in scripts/orchestrate_poll_process.sh, plus a matching test in tests/test_orchestrate_poll_process.py.\n  Evidence of absence: No hunk in the PR diff or the last-run diff touches the noop sweep's comment reads, and no test asserts one comments read per PR. The linked issue does not defer this item; only the PR description's \"Deferred scope (not delivered by this PR)\" block does. The changelog keeps the second read as Gate B's fail-closed fresh snapshot. The reviewer calls that a reasonable safety call that still leaves Goal 4 and its test unmet, and lists the gap for visibility rather than as a code defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- Excluded, not a finding: the \"at least a 25% drop ... measured with #9887's calls_in_job\" gap is a post-merge comparison that no code change in this PR could satisfy. The `cache_hits_*` counters needed to measure it are already shipped.\n- No code findings. The reviewer checked `_orch_poll_labels_fill_missing` against `_fetch_issue_labels_batch_graphql` (scripts/orchestrate_poll_process.sh:5432-5500) and found that a one-item batch works correctly and falls back to REST.\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Measurable outcome: at least a 25% drop in the poller's REST calls per run for the same state, measured with #9887's calls_in_job before and after on comparable cycles.\"\n  Expected change site: Post-merge analysis using #9887 tools.\n  Evidence of absence: The PR adds the infrastructure needed to measure this outcome (cache hit counters in ORCH_POLL_CYCLE_SUMMARY), but the diff contains no evidence that the 25% target has been confirmed. The reviewer finds this acceptable as a deferred post-merge verification step.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"At least a 25% drop in the poller's REST calls per run for the same state, measured with #9887's calls_in_job before and after on comparable cycles.\"\n  Expected change site: Post-merge comparison using #9887's `calls_in_job` measurements.\n  Evidence of absence: The PR adds cache-hit counters, but its diff contains no before-and-after `calls_in_job` measurements or evidence that the 25% target was met. The PR description defers the noop-sweep comment read but does not defer this measurement.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: \"Noop sweep. Read comments once per PR per cycle (:38590 / :38799).\" The issue's Tests section also asks that \"The noop sweep makes one comments read per PR per cycle.\"\n  Expected change site: scripts/orchestrate_poll_process.sh, the noop force-merge sweep's two comments reads (plus a matching test in tests/test_orchestrate_poll_process.py).\n  Evidence of absence: No hunk in the PR diff or the last-run diff touches either comments read, and no test pins a single comments read per PR. The PR body defers this item in its \"Deferred scope (not delivered by this PR)\" section. changelog.d/9927-orchestrate-poll-cycle-caches.md states the second read stays as Gate B's fail-closed fresh snapshot. The reviewer records the gap for visibility and calls the deferral an intent decision, not a code defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- Skipped, deferral cited: the \"At least a 25% drop in the poller's REST calls per run\" item. The issue's Rollout section places it after merge, and the PR ships the `cache_hits_pr_json` / `cache_hits_default_branch` / `cache_hits_labels` counters in `ORCH_POLL_CYCLE_SUMMARY`. The reviewer judged it not deliverable in a diff.\n- No code findings. The reviewer checked `-ge 1` at scripts/orchestrate_poll_process.sh:5390, `_fetch_issue_labels_batch_graphql` (scripts/orchestrate_poll_process.sh:5432-5500), the REST fallback at :5407-5414 and the hit-count loop (:5398-5403), and found no defect in the last-run diff.\n- HARDENING_SUGGESTIONS: NONE\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bedeed5ea8f262045f942714ffd5958eeececc80a8659fed16b84abf983eb544",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9934,
+    "run_id": "45016089764",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45016089764",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122114154_31027a4814",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9934,
+    "run_id": "45016089764"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T11:41:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
