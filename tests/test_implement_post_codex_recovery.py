@@ -1702,18 +1702,18 @@ def test_commit_helper_treats_unset_fetched_manifest_as_empty() -> None:
 		assert "did_commit=false" in github_output.read_text(encoding="utf-8")
 
 
-def _run_commit_helper_with_tracked_symlink(tmp_path: Path, *, remove_link: bool, manifest_lists_link: bool) -> subprocess.CompletedProcess:
-	"""#9940: commit docs/CLAUDE.md -> ../README.md, then run the commit helper."""
+def _run_commit_helper_with_tracked_symlink(tmp_path: Path, *, remove_link: bool, manifest_lists_link: bool, link_name: str = "CLAUDE.md") -> subprocess.CompletedProcess:
+	"""#9940: commit docs/<link_name> -> ../README.md, then run the commit helper."""
 	repo_dir = tmp_path / "repo"
 	_bootstrap_git_repo(repo_dir)
 	(repo_dir / "scripts").mkdir()
 	shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
 	(repo_dir / "docs").mkdir()
-	os.symlink("../README.md", repo_dir / "docs" / "CLAUDE.md")
-	_git(["git", "add", "scripts/implement_commit_changes.sh", "docs/CLAUDE.md"], cwd=repo_dir)
+	os.symlink("../README.md", repo_dir / "docs" / link_name)
+	_git(["git", "add", "scripts/implement_commit_changes.sh", f"docs/{link_name}"], cwd=repo_dir)
 	_git(["git", "commit", "-m", "add helper and link"], cwd=repo_dir)
 	if remove_link:
-		(repo_dir / "docs" / "CLAUDE.md").unlink()
+		(repo_dir / "docs" / link_name).unlink()
 	github_output = tmp_path / "github_output.txt"
 	github_output.write_text("", encoding="utf-8")
 	runtime_dir = tmp_path / "runtime"
@@ -1755,6 +1755,14 @@ def test_commit_helper_logs_symlink_removed_by_artifact_cleanup() -> None:
 		proc = _run_commit_helper_with_tracked_symlink(Path(td), remove_link=False, manifest_lists_link=True)
 		assert "stage=pre_cleanup" not in proc.stdout, proc.stdout + proc.stderr
 		assert "IMPLEMENT_SYMLINK_DELETE path=docs/CLAUDE.md stage=post_cleanup" in proc.stdout, proc.stdout + proc.stderr
+
+
+def test_commit_helper_symlink_delete_path_masks_whitespace_and_control_chars() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_symlink_sanitize_") as td:
+		proc = _run_commit_helper_with_tracked_symlink(Path(td), remove_link=True, manifest_lists_link=False, link_name="my link\x1bx")
+		assert "IMPLEMENT_SYMLINK_DELETE path=docs/my?link?x stage=pre_cleanup" in proc.stdout, proc.stdout + proc.stderr
+		assert "IMPLEMENT_SYMLINK_DELETE path=docs/my?link?x stage=post_cleanup" in proc.stdout, proc.stdout + proc.stderr
+		assert "\x1b" not in proc.stdout
 
 
 def test_commit_helper_logs_no_symlink_delete_for_intact_links() -> None:

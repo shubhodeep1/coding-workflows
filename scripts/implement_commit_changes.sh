@@ -60,10 +60,10 @@ implement_log_tracked_symlink_deletes() {
       continue
     fi
     if [ ! -L "${symlink_path}" ] && [ ! -e "${symlink_path}" ]; then
-      symlink_safe_path="${symlink_path//[$'\n\r\t']/?}"
+      symlink_safe_path="${symlink_path//[[:space:][:cntrl:]]/?}"
       echo "IMPLEMENT_SYMLINK_DELETE path=${symlink_safe_path} stage=${symlink_stage}"
     fi
-  done < <(git ls-tree -r -z --full-tree HEAD 2>/dev/null || true)
+  done < <(git ls-tree -r -z --full-tree HEAD 2>/dev/null | grep -z '^120000 ' || true)
   return 0
 }
 
