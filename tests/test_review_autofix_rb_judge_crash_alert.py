@@ -585,6 +585,9 @@ def test_security_hold_dedupe_skips_reads_when_telegram_cannot_send():
 	assert "dedupe skipped for PR #7: Telegram cannot send CRITICAL" in stdout
 	assert "repeat=unchecked level=CRITICAL" in stdout
 	assert _posted_security_markers(gh_calls) == []
+	# Nothing can page, so no false "the next round pages again" warning.
+	assert "page not sent for PR #7: Telegram cannot send CRITICAL; no marker." in stdout
+	assert "::warning::rb-judge-security-hold page not confirmed" not in stdout
 
 
 def test_security_hold_marker_post_reaches_real_gh_unsigned_through_active_shim():
