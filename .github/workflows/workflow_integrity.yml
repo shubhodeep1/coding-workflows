@@ -33,7 +33,7 @@ env:
 jobs:
   integrity:
     runs-on: ubuntu-latest
-    # 10 min of work + up to 20 min manifest-fetch rate-limit wait + headroom (#9937).
+    # 10 min of work + up to 25 min manifest-fetch rate-limit wait (1500 s clamp) (#9937).
     timeout-minutes: 35
     env:
       PYTHONDONTWRITEBYTECODE: "1"
