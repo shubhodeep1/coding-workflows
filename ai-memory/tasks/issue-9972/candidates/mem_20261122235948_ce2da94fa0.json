@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should a granted `override_guard` post as its resume command? The issue says a grant resumes \"through the existing guard-stop reset (`/reclarify` when there is no plan yet)\", and the ledger test expects `edit_files_touched` plus `/reclarify`. In `scripts/unblock_actions.py` (about line 1157), the `override_guard` branch always calls `_approve(...)`, which adds `ai:awaiting-approval` and posts `/approved` whether or not a plan exists. Only `reset_ops` (about lines 874\u2013878) checks `has_plan` and falls back to `/reclarify`. Today's implement-time scope blocks always have a plan, but a planning-time block never does.\nChoices:\n- A: In `scripts/unblock_actions.py`, make the `override_guard` scope-blocked branch resume like `reset_ops` does for `GUARD_STOPS`: `/approved` when `has_plan`, otherwise `/reclarify` and remove the `ai:scope-blocked` label. Implement-time grants behave exactly as today because they always have a plan. The file is already in `files_touched`. (RECOMMENDED)\n- B: Keep `override_guard` unchanged, so it always posts `/approved`. The issue's `/reclarify` test expectation is dropped, and a grant on a planning block may not restart planning.\n- C: Keep implement-time `override_guard` unchanged and add a separate resume path only for rejections that carry the new planning header.\nQ2: Where should the new header line go in the planning-blocked comment? The issue says the new header is added to `GUARD_REJECTION_HEADERS` \"so the ledger's malformed-marker check still covers it\". Step 6 puts the header and marker as the comment's last two lines. In `scripts/unblock_ledger.py` (about lines 611\u2013630), the marker is read from the last line, which works. The header, however, is only checked as `lines[0]`, the comment's first non-empty line. With the header appended near the end, a comment that has the header but a broken marker would come back as `missing`, not `malformed`, so the stated check would not apply to real comments.\nChoices:\n- A: Make the header the comment's first line and the marker its last line. Every existing line of the blocked comment stays, unchanged, in between. No ledger logic changes beyond the header tuple entry. (RECOMMENDED)\n- B: Keep Step 6 as written (header second-to-last, marker last) and accept that the malformed check does not cover the new header. The tuple entry is still added, and the \"header without marker \u2192 malformed\" test uses a fixture whose first line is the header.\n- C: Keep Step 6's layout and change the ledger so it also finds the header on the second-to-last line. **Note:** this goes against the issue's \"make no other ledger change\" constraint.",
+  "fingerprint": "1aeb9a68c319c2e45b0dfb289b0630f89c2a3f4aac2857c928f12716c7231a58",
+  "lineage": {
+    "issue_number": 9972,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45083644635",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45083644635",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261122235948_ce2da94fa0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9972,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45083644635"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9972 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-22T23:59:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
