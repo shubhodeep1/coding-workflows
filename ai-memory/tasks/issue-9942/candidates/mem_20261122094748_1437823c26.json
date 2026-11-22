@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Should the fix also classify markers whose audit runs are older than the 24-hour run listing, such as PR #9283's runs from 2026-11-16?\nChoices:\nA: Keep the existing 24-hour listing unchanged. Markers whose runs fall outside it are counted, as they are today (fail closed). Only losses the gate sees within 24 hours are excluded from the count, and PR #9283 still needs a `/re-run` or a new push to clear.\nB: Keep it to one call, but move the existing listing's `created>=` start back to the oldest pending marker on the current head, so older lost runs can be identified and PR #9283 gets another audit on its next review round. If the listing comes back incomplete (more than 100 runs, so older runs are cut off) or fails, the affected markers are counted, as the issue already specifies. (RECOMMENDED)\nC: Same as B, but cap how far back the start can move with a new env var (default 7 days). Markers older than the cap are counted.",
+  "fingerprint": "96d52379dafc187d9c45a7422fa2fa1f9745dd2cd2f9108ffb7e93a9830c606c",
+  "lineage": {
+    "issue_number": 9942,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45007091775",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45007091775",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261122094748_1437823c26",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9942,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45007091775"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9942 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-22T09:47:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
