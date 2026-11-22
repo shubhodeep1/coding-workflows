@@ -77,7 +77,8 @@ def test_failed_label_removal_still_skips(tmp_path: Path) -> None:
 	result, calls = _guard(tmp_path, ["ai:security-audit", "ai:blocked"], {"GH_FAIL": "true"})
 	assert "GUARD=skip" in result.stdout
 	assert len(calls) == 1
-	assert "outcome=remove_failed" in result.stdout
+	assert "removed=none outcome=remove_failed" in result.stdout
+	assert "could not remove ai:blocked" in result.stdout
 
 
 def test_ordinary_issue_and_kill_switch_unaffected(tmp_path: Path) -> None:

@@ -27575,6 +27575,8 @@ _security_audit_tracker_stall_guard() {
     else
       outcome="remove_failed"
       echo "::warning::[standalone-stall] could not remove ${removed} from security-audit tracker #${issue_num}; retrying next tick."
+      # Nothing was removed; the warning above names the attempted labels.
+      removed="none"
     fi
   fi
   echo "STALL_RECOVERY_SKIP issue=${issue_num} reason=security_audit_tracker removed=${removed} outcome=${outcome} action=none"
