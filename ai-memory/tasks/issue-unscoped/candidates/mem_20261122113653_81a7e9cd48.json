@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/9895-ci-prepush-step-to-heal-job.md:1 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The filename slug \"heal-job\" names the earlier target job `tests-heal-plan-and-validation`, but the fragment body names `tests-hooks-and-orchestrator`.\n  WHY: Reported as a NIT. Nothing refers to the filename and the content is correct, so it does not fail at runtime. Earlier autofix passes declined the rename on purpose.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml (orchestrate-poll group 0 step selection; `Pre-push affected-test gate tests` placement)\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: Only one step (\"Pre-push affected-test gate tests\") was moved. The workflow comment (ci.yml lines 1567-1580) and changelog fragment changelog.d/9895-ci-prepush-step-to-heal-job.md say run 44909097036 recorded statuses only, with no step durations. The step was therefore chosen from job totals and test counts, not step timings. Both reviewers rated this a NIT. minimax_minimax-m3 gave confidence 2 and openai_gpt-6-luna gave confidence 4.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/9895-ci-prepush-step-to-heal-job.md:1 | severity=low | confidence=2\n  PROBLEM: The filename slug \"heal-job\" names the earlier target job `tests-heal-plan-and-validation`, but the fragment body names `tests-hooks-and-orchestrator`.\n  WHY: Reported as a NIT. Nothing refers to the filename and the content is correct, so it does not fail at runtime. Earlier autofix passes declined the rename on purpose.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: .github/workflows/ci.yml, tests/test_ci_poll_test_sharding.py | severity=NIT | confidence=2\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: one or more step moves out of orchestrate-poll group 0, identified via run 44909097036's step timings.\n  Evidence of absence: Only one step (\"Pre-push affected-test gate tests\") was moved. The ci.yml comment (lines 1578-1580) and the changelog fragment (changelog.d/9895-ci-prepush-step-to-heal-job.md:2) say the run's step results carried statuses only, with no durations. The step was chosen as the heaviest group-0 load (about 472 tests) and the one cancelled mid-execution across six runs. No diff hunk documents or attempts a second step move.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: .github/workflows/ci.yml, the step-selection rationale and placement for `Pre-push affected-test gate tests` | severity=NIT | confidence=4\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, the step-selection rationale and placement for `Pre-push affected-test gate tests`.\n  Evidence of absence: The workflow comment at lines 1567\u20131580 says the run had no step durations and that the target was selected using recorded job totals. The preceding rationale says the step was selected by test and subprocess counts. The requested timing-based selection is therefore not reflected in the diff.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ea97b997151db617c218a7fff932df078f24fa2c2743d7e6a828014dafeb8902",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9898,
+    "run_id": "45010934757",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45010934757",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122113653_81a7e9cd48",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9898,
+    "run_id": "45010934757"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T11:36:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
