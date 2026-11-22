@@ -5128,6 +5128,7 @@ jobs:
           JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
           RB_JUDGE_STATUS: ${{ steps.rb_judge.outputs.rb_judge_status }}
           RB_JUDGE_PROVIDER_UNAVAILABLE: ${{ steps.rb_judge.outputs.rb_judge_provider_unavailable }}
+          JUDGE_MERGE_LEASE_BLOCKER: ${{ steps.rb_judge.outputs.judge_merge_lease_blocker }}
           AUTOFIX_ITERATION: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
           AUTOFIX_STEP_SERVER_URL: ${{ github.server_url }}
           AUTOFIX_STEP_REPOSITORY: ${{ github.repository }}
@@ -5812,6 +5813,8 @@ jobs:
           RB_JUDGE_EXIT_CODE: ${{ steps.rb_judge.outputs.rb_judge_exit_code }}
           AUTOFIX_ITERATION: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
           RB_BLOCKED_REPEAT: ${{ steps.rb_blocked_comment.outputs.rb_judge_crash_repeat }}
+          RB_BLOCKED_FRESHNESS_REPEAT: ${{ steps.rb_blocked_comment.outputs.rb_judge_freshness_repeat }}
+          JUDGE_MERGE_LEASE_BLOCKER: ${{ steps.rb_judge.outputs.judge_merge_lease_blocker }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '5' }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
@@ -5934,6 +5937,19 @@ jobs:
                 # synchronize run re-validates the PR without a person.
                 MSG="$(printf 'PR review blocked — merge_with_followup approved but the base moved under its files; branch update requested\nThe synchronize run re-validates automatically')"
                 JUDGE_ALERT_LEVEL="DEBUG" ;;
+              base_freshness_unknown)
+                # #9502: the freshness gate could not verify the base (merge
+                # lease held, or the check failed). Not autofix exhaustion;
+                # a stuck lease is real, so WARNING, once per head (the
+                # comment step's rb-judge-base-freshness marker).
+                if [ "${RB_BLOCKED_FRESHNESS_REPEAT:-}" = "true" ]; then
+                  echo "RB_JUDGE_FRESHNESS_ALERT pr=${PR_NUMBER} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} repeat=true level=SUPPRESSED"
+                  exit 0
+                fi
+                LEASE_HOLDER_LINE=""
+                [[ ! "${JUDGE_MERGE_LEASE_BLOCKER:-}" =~ ^[0-9]+$ ]] || LEASE_HOLDER_LINE=" (lease holder: PR #${JUDGE_MERGE_LEASE_BLOCKER})"
+                MSG="$(printf 'PR review blocked — merge_with_followup approved, but base freshness could not be verified (merge lease held or freshness check failed); merge deferred%s\nThe merge retries when the lease frees; if this persists, check the lease holder PR' "${LEASE_HOLDER_LINE}")"
+                JUDGE_ALERT_LEVEL="WARNING" ;;
               stale_head)
                 # A push landed during the judge call; the push re-runs review.
                 MSG="$(printf 'PR review blocked — PR head moved during the judge call; judge took no action\nThe new push re-runs review automatically')"

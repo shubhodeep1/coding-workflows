@@ -76,6 +76,15 @@ case "${JUDGE_SKIP_REASON:-}" in
     BODY_HEADING="AI review/autofix — mergeability still computing"
     BODY_DETAIL="The review-blocked judge could not act because GitHub was still computing the PR's mergeability state when the gate ran. Stall recovery will re-fire the judge shortly; no action is required unless the state remains unknown for an extended period."
     ;;
+  base_freshness_unknown)
+    # review_rb_judge.sh: the merge-base freshness gate could not verify the
+    # base (merge lease held by another PR, or the freshness check failed).
+    # Not autofix exhaustion; the judge re-fires and merges once it can.
+    RB_LEASE_HOLDER_TEXT=""
+    [[ ! "${JUDGE_MERGE_LEASE_BLOCKER:-}" =~ ^[0-9]+$ ]] || RB_LEASE_HOLDER_TEXT=" The merge lease is held by or queued for PR #${JUDGE_MERGE_LEASE_BLOCKER}."
+    BODY_HEADING="AI review/autofix — merge deferred: base freshness could not be verified"
+    BODY_DETAIL="The review-blocked judge approved \`merge_with_followup\`, but the merge-base freshness gate could not verify this PR's base (the merge lease is held by another PR, or the freshness check failed), so the merge was deferred and no branch update was requested.${RB_LEASE_HOLDER_TEXT} This is not autofix exhaustion. The merge retries when the lease frees; if this persists, check the lease holder PR. Linked issues remain labelled \`ai:review-blocked\`."
+    ;;
   followup_issue_create_failed)
     BODY_HEADING="AI review/autofix — merge landed but follow-up issue creation failed"
     BODY_DETAIL="The review-blocked judge approved \`merge_with_followup\` and the PR merge succeeded, but GitHub failed while creating the follow-up issue. The deferred gap is not yet tracked; please create the follow-up manually if needed, or let stall recovery / a subsequent judge run retry issue creation."
@@ -123,40 +132,67 @@ if [ "${RB_JUDGE_PROVIDER_UNAVAILABLE:-}" != "true" ] && [[ "${AUTOFIX_ITERATION
 		[[ ! "${JUDGE_SKIP_REASON}" =~ ^[a-z0-9_]+$ ]] || RB_JUDGE_CRASH_REASON="${JUDGE_SKIP_REASON}"
 	fi
 fi
-if [ -n "${RB_JUDGE_CRASH_REASON}" ] && [[ "${AUTOFIX_FAILURE_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
-	RB_JUDGE_CRASH_MARKER="<!-- rb-judge-crash:v1 head=${AUTOFIX_FAILURE_HEAD_SHA} reason=${RB_JUDGE_CRASH_REASON} -->"
-	BODY+=$'\n\n'"${RB_JUDGE_CRASH_MARKER}"
+# A merge_with_followup deferred because base freshness could not be
+# verified (judge_skip_reason=base_freshness_unknown, e.g. a held merge
+# lease) re-fires the judge until the lease frees. It uses the same per-head
+# dedupe with its own marker (head only, so a changed freshness detail on
+# the same head does not re-post), and rb_judge_freshness_repeat=true tells
+# the alert step to log only. Same fail-open rules as the crash marker.
+RB_JUDGE_FRESHNESS_REPEAT="false"
+RB_BLOCKED_DEDUPE_MARKER=""
+RB_BLOCKED_DEDUPE_TAG=""
+RB_BLOCKED_DEDUPE_REPEAT="false"
+if [[ "${AUTOFIX_FAILURE_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+	if [ -n "${RB_JUDGE_CRASH_REASON}" ]; then
+		RB_JUDGE_CRASH_MARKER="<!-- rb-judge-crash:v1 head=${AUTOFIX_FAILURE_HEAD_SHA} reason=${RB_JUDGE_CRASH_REASON} -->"
+		RB_BLOCKED_DEDUPE_MARKER="${RB_JUDGE_CRASH_MARKER}"
+		RB_BLOCKED_DEDUPE_TAG="rb-judge-crash"
+	elif [ "${RB_JUDGE_PROVIDER_UNAVAILABLE:-}" != "true" ] && [ "${JUDGE_SKIP_REASON:-}" = "base_freshness_unknown" ]; then
+		RB_BLOCKED_DEDUPE_MARKER="<!-- rb-judge-base-freshness:v1 head=${AUTOFIX_FAILURE_HEAD_SHA} -->"
+		RB_BLOCKED_DEDUPE_TAG="rb-judge-base-freshness"
+	fi
+fi
+if [ -n "${RB_BLOCKED_DEDUPE_MARKER}" ]; then
+	BODY+=$'\n\n'"${RB_BLOCKED_DEDUPE_MARKER}"
 	# Only a body that ends with the marker on its own line (as this step
 	# writes it: last, after a line break, trailing whitespace ignored)
 	# counts, so a trusted comment that merely quotes the marker, even as
 	# its final text, cannot suppress the alert.
 	# API audit (§14): this step has no comment snapshot (the gate job's is
 	# in another job), so the newest page is read through tg_helpers.sh,
-	# only on judge-crash runs.
+	# only on judge-crash and base-freshness-deferral runs.
 	if [ -f "${SUPPORT_SCRIPTS_DIR:-}/tg_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" \
 		&& type _tg_newest_comments_json >/dev/null 2>&1 && type _tg_tracking_author_login >/dev/null 2>&1; then
 		_tg_tracking_author_login
 		rb_judge_crash_login="${_TG_TRACKING_AUTHOR_CURRENT:-github-actions[bot]}"
 		# Read the same repository the POST below writes to.
 		if rb_judge_crash_comments="$(GITHUB_REPOSITORY="${AUTOFIX_STEP_REPOSITORY:-${GITHUB_REPOSITORY:-}}" _tg_newest_comments_json "${PR_NUMBER}")"; then
-			rb_judge_crash_count="$(printf '%s' "${rb_judge_crash_comments}" | jq -r --arg login "${rb_judge_crash_login}" --arg marker "${RB_JUDGE_CRASH_MARKER}" \
+			rb_judge_crash_count="$(printf '%s' "${rb_judge_crash_comments}" | jq -r --arg login "${rb_judge_crash_login}" --arg marker "${RB_BLOCKED_DEDUPE_MARKER}" \
 				"${_TG_TRACKING_JQ_DEFS}"'[.[]? | select(tg_trusted($login) and (.body | sub("\\s+\\z"; "") | endswith("\n" + $marker)))] | length' 2>/dev/null)" || rb_judge_crash_count=""
 			if [[ "${rb_judge_crash_count}" =~ ^[0-9]+$ ]]; then
-				[ "${rb_judge_crash_count}" -lt 1 ] || RB_JUDGE_CRASH_REPEAT="true"
+				[ "${rb_judge_crash_count}" -lt 1 ] || RB_BLOCKED_DEDUPE_REPEAT="true"
 			else
-				echo "::warning::rb-judge-crash dedupe could not parse the comments of PR #${PR_NUMBER}; posting"
+				echo "::warning::${RB_BLOCKED_DEDUPE_TAG} dedupe could not parse the comments of PR #${PR_NUMBER}; posting"
 			fi
 		else
-			echo "::warning::rb-judge-crash dedupe read failed for PR #${PR_NUMBER}; posting"
+			echo "::warning::${RB_BLOCKED_DEDUPE_TAG} dedupe read failed for PR #${PR_NUMBER}; posting"
 		fi
 	else
-		echo "::warning::rb-judge-crash dedupe unavailable (tg_helpers.sh missing from the support bundle, failed to load, or lacks the comment helpers) for PR #${PR_NUMBER}; posting"
+		echo "::warning::${RB_BLOCKED_DEDUPE_TAG} dedupe unavailable (tg_helpers.sh missing from the support bundle, failed to load, or lacks the comment helpers) for PR #${PR_NUMBER}; posting"
 	fi
 fi
+if [ "${RB_BLOCKED_DEDUPE_TAG}" = "rb-judge-crash" ]; then
+	RB_JUDGE_CRASH_REPEAT="${RB_BLOCKED_DEDUPE_REPEAT}"
+elif [ "${RB_BLOCKED_DEDUPE_TAG}" = "rb-judge-base-freshness" ]; then
+	RB_JUDGE_FRESHNESS_REPEAT="${RB_BLOCKED_DEDUPE_REPEAT}"
+fi
 echo "rb_judge_crash_repeat=${RB_JUDGE_CRASH_REPEAT}" >> "${GITHUB_OUTPUT:-/dev/null}"
+echo "rb_judge_freshness_repeat=${RB_JUDGE_FRESHNESS_REPEAT}" >> "${GITHUB_OUTPUT:-/dev/null}"
 
 if [ "${RB_JUDGE_CRASH_REPEAT}" = "true" ]; then
 	echo "Review-blocked comment for this judge crash (head ${AUTOFIX_FAILURE_HEAD_SHA}, reason ${RB_JUDGE_CRASH_REASON}) already exists on PR #${PR_NUMBER}; not posting a duplicate."
+elif [ "${RB_JUDGE_FRESHNESS_REPEAT}" = "true" ]; then
+	echo "Review-blocked comment for this base-freshness merge deferral (head ${AUTOFIX_FAILURE_HEAD_SHA}) already exists on PR #${PR_NUMBER}; not posting a duplicate."
 elif ! gh api "repos/${AUTOFIX_STEP_REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null; then
   echo "::warning::Failed to post review-blocked comment on PR #${PR_NUMBER}."
 fi

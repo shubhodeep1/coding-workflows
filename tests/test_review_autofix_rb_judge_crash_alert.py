@@ -423,6 +423,127 @@ def test_alert_handled_judge_is_not_a_crash():
 
 
 # ---------------------------------------------------------------------------
+# (c2) merge_with_followup deferred: base freshness unknown (issue #9502)
+# ---------------------------------------------------------------------------
+
+FRESHNESS_ENV = {"RB_JUDGE_STATUS": "ok", "JUDGE_SKIP_REASON": "base_freshness_unknown", "AUTOFIX_ITERATION": "4"}
+
+
+def _freshness_marker(head: str) -> str:
+	return f"<!-- rb-judge-base-freshness:v1 head={head} -->"
+
+
+def test_workflow_wires_freshness_outputs():
+	workflow = _workflow_text()
+	assert "JUDGE_MERGE_LEASE_BLOCKER: ${{ steps.rb_judge.outputs.judge_merge_lease_blocker }}" in _step(workflow, COMMENT_STEP_NAME)
+	alert = _step(workflow, ALERT_STEP_NAME)
+	assert "RB_BLOCKED_FRESHNESS_REPEAT: ${{ steps.rb_blocked_comment.outputs.rb_judge_freshness_repeat }}" in alert
+	assert "JUDGE_MERGE_LEASE_BLOCKER: ${{ steps.rb_judge.outputs.judge_merge_lease_blocker }}" in alert
+	script = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
+	anchor = 'echo "judge_skip_reason=base_freshness_unknown" >> "$GITHUB_OUTPUT"\n'
+	start = script.index(anchor)
+	assert script[start + len(anchor):].lstrip(" ").startswith("rb_judge_emit_lease_blocker\n")
+	fn_start = script.index("rb_judge_emit_lease_blocker()\n{\n")
+	fn = script[fn_start:script.index("\n}\n", fn_start) + 3]
+	for reason, blocker, expected in (
+		("merge_lease_held", "9402", "judge_merge_lease_blocker=9402\n"),
+		("merge_lease_queued_behind", "12", "judge_merge_lease_blocker=12\n"),
+		("compare_failed", "9402", ""),
+		("merge_lease_held", "", ""),
+		("merge_lease_held", "9402; x", ""),
+	):
+		with tempfile.TemporaryDirectory() as tmp:
+			output = Path(tmp) / "output"
+			output.write_text("", encoding="utf-8")
+			env = {"PATH": "/usr/bin:/bin", "GITHUB_OUTPUT": str(output), "PR_BASE_FRESHNESS_LAST_REASON": reason, "MERGE_LEASE_BLOCKER": blocker}
+			result = subprocess.run(["bash", "-c", fn + "rb_judge_emit_lease_blocker"], env=env, capture_output=True, text=True, check=False)
+			assert result.returncode == 0, result.stderr
+			assert output.read_text(encoding="utf-8") == expected, (reason, blocker)
+
+
+def test_alert_freshness_unknown_is_warning_not_exhaustion():
+	sends, stdout = _judge_alert({**FRESHNESS_ENV, "JUDGE_MERGE_LEASE_BLOCKER": "9402"})
+	assert len(sends) == 1
+	level, message = sends[0]
+	assert level == "WARNING"
+	assert message.startswith(
+		"PR review blocked — merge_with_followup approved, but base freshness could not be verified "
+		"(merge lease held or freshness check failed); merge deferred (lease holder: PR #9402) "
+		"The merge retries when the lease frees; if this persists, check the lease holder PR"
+	), message
+	assert "autofix exhausted" not in message
+	assert "Needs human intervention" not in message
+	assert "RB_JUDGE_CRASH_ALERT" not in stdout
+
+
+def test_alert_freshness_unknown_without_holder_omits_it():
+	for blocker in ("", "?", "9402; rm"):
+		sends, _ = _judge_alert({**FRESHNESS_ENV, "JUDGE_MERGE_LEASE_BLOCKER": blocker})
+		assert len(sends) == 1 and sends[0][0] == "WARNING", blocker
+		assert "merge deferred The merge retries" in sends[0][1], blocker
+		assert "lease holder: PR" not in sends[0][1], blocker
+
+
+def test_alert_freshness_repeat_for_same_head_sends_nothing():
+	sends, stdout = _judge_alert({**FRESHNESS_ENV, "RB_BLOCKED_FRESHNESS_REPEAT": "true"})
+	assert sends == []
+	assert f"RB_JUDGE_FRESHNESS_ALERT pr=7 head={HEAD_A} repeat=true level=SUPPRESSED" in stdout
+	# The freshness repeat flag never silences another reason.
+	sends, _ = _judge_alert({"RB_JUDGE_STATUS": "ok", "JUDGE_SKIP_REASON": "sync_merge_failed", "AUTOFIX_ITERATION": "1", "RB_BLOCKED_FRESHNESS_REPEAT": "true"})
+	assert len(sends) == 1 and sends[0][0] == "CRITICAL"
+
+
+def test_alert_freshness_unknown_with_judge_crash_still_pages_crash():
+	sends, stdout = _judge_alert({**FRESHNESS_ENV, "RB_JUDGE_STATUS": "failed", "RB_JUDGE_EXIT_CODE": "1"})
+	assert len(sends) == 1 and sends[0][0] == "CRITICAL"
+	assert "review-blocked judge failed" in sends[0][1]
+	assert "reason=judge_crashed" in stdout
+
+
+def test_comment_freshness_unknown_has_accurate_text_and_marker():
+	out = _run_comment_script({**FRESHNESS_ENV, "JUDGE_MERGE_LEASE_BLOCKER": "9402"})
+	assert len(out["comment_posts"]) == 1
+	post = out["comment_posts"][0]
+	assert "merge deferred: base freshness could not be verified" in post
+	assert "held by or queued for PR #9402" in post
+	assert "maximum number of autofix iterations" not in post
+	assert _freshness_marker(HEAD_A) in post
+	assert "rb-judge-crash:v1" not in post
+	assert "rb_judge_freshness_repeat=false" in out["output"]
+	assert "rb_judge_crash_repeat=false" in out["output"]
+	assert out["label_posts"] == []
+	out = _run_comment_script(FRESHNESS_ENV)
+	assert "held by or queued for PR #" not in out["comment_posts"][0]
+
+
+def test_comment_freshness_unknown_dedupes_per_head():
+	comments = [_trusted_comment("deferred\n\n" + _freshness_marker(HEAD_A))]
+	out = _run_comment_script(FRESHNESS_ENV, comments=comments)
+	assert out["comment_posts"] == []
+	assert "rb_judge_freshness_repeat=true" in out["output"]
+	assert "rb_judge_crash_repeat=false" in out["output"]
+	# A new head posts again; a crash marker for the same head does not count.
+	for body in ("deferred\n\n" + _freshness_marker(HEAD_B), "blocked\n\n" + _marker(HEAD_A, "judge_crashed")):
+		out = _run_comment_script(FRESHNESS_ENV, comments=[_trusted_comment(body)])
+		assert len(out["comment_posts"]) == 1, body
+		assert "rb_judge_freshness_repeat=false" in out["output"], body
+
+
+def test_comment_freshness_unknown_read_failure_fails_open():
+	out = _run_comment_script(FRESHNESS_ENV, curl_fail=True)
+	assert len(out["comment_posts"]) == 1
+	assert "rb_judge_freshness_repeat=false" in out["output"]
+	assert "rb-judge-base-freshness dedupe read failed for PR #7; posting" in out["stdout"] + out["stderr"]
+
+
+def test_comment_freshness_unknown_provider_outage_leaves_no_marker():
+	out = _run_comment_script({**FRESHNESS_ENV, "RB_JUDGE_PROVIDER_UNAVAILABLE": "true"}, comments=[_trusted_comment("x\n\n" + _freshness_marker(HEAD_A))])
+	assert len(out["comment_posts"]) == 1
+	assert "rb-judge-base-freshness:v1" not in out["comment_posts"][0]
+	assert out["urls"] == []
+
+
+# ---------------------------------------------------------------------------
 # (d) Parity between the comment script and the alert step
 # ---------------------------------------------------------------------------
 
