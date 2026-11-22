@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/9502-rb-judge-lease-wait-alert.md:9-17 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The operator paragraph (\"shows up once as a WARNING\") and the table row (\"1 (was one per re-fire)\") still claim one alert per head without the qualifier. The \"Known residual\" sentence later says security-pass-only runs skip the dedupe and repeat the WARNING on each same-head re-fire.\n  WHY: The operator-facing claims are false on the documented security-pass-exhausted path (alert step at review_autofix.yml:5800, comment step guard at line 5122), so the changelog contradicts itself. All three reviewers rated it NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/9502-rb-judge-lease-wait-alert.md:9-13 | severity=low | confidence=4\n  PROBLEM: The lead paragraph was qualified, but the operator paragraph (\"shows up once as a WARNING with the holder PR\") and the table row (\"1 (was one per re-fire)\") still assert once per re-fire without the qualifier.\n  WHY: On security-pass-exhausted runs (workflow line 5800) the comment step is skipped (line 5122), so the WARNING repeats on each same-head re-fire. The \"Known residual\" sentence contradicts the unqualified claims. The reviewer rated it NIT.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/9502-rb-judge-lease-wait-alert.md:9-17 | severity=low | confidence=5\n  PROBLEM: The changelog says alerts and comments occur once per head and that a waiting PR \"shows up once\". It later documents that security-pass-only runs skip the dedupe and send a WARNING on every same-head re-fire.\n  WHY: Operators relying on the earlier statements will expect repeat alerts to be suppressed on those runs. The reviewer rated it NIT.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/9502-rb-judge-lease-wait-alert.md:13 | severity=low | confidence=5\n  PROBLEM: Line 13 (\"a PR waiting on the merge lease shows up once as a WARNING with the holder PR\") is unconditional. Line 2 and the contributors paragraph at line 17 were qualified.\n  WHY: On security-pass-exhausted runs (alert step at review_autofix.yml:5800, comment step at line 5122) RB_BLOCKED_FRESHNESS_REPEAT is empty and the WARNING repeats per re-fire, as line 17 documents. This is a changelog inconsistency, not a runtime failure. The reviewer rated it NIT.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "274be3578f756356852823cecb137a28dd1d2d1d97b00e47d1deb9f2d2bf5ecb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9944,
+    "run_id": "45020191735",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45020191735",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122135234_57272b4f19",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9944,
+    "run_id": "45020191735"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T13:52:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
