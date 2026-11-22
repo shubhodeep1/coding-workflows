@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/9895-ci-prepush-step-to-heal-job.md:filename | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The filename slug \"heal-job\" is stale because the step now runs in `tests-hooks-and-orchestrator`.\n  WHY: It has no runtime effect, but it misleads grep-driven discovery. All three reviewers rated it NIT. The severity is mapped to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: `.github/workflows/ci.yml` (target job selection), `tests/test_ci_poll_test_sharding.py`, `changelog.d/9895-*.md`\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: Run 44909097036 recorded step statuses only, with no durations. The target job was therefore chosen from historical job totals rather than step timings. `ci.yml` comments at lines 1529-1532 and 1567-1581 say so. The step was moved unchanged, no timeout was raised and no job was added. All three rated it NIT. Two reviewers say no code change can close it. The third says the timing-based comparison is not reflected in the implementation.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/9895-ci-prepush-step-to-heal-job.md:filename slug \"heal-job\" | severity=NIT | confidence=5\n  PROBLEM: The slug says \"heal-job\", but the step now runs in `tests-hooks-and-orchestrator`. The file's body names the right job.\n  WHY: It has no runtime effect. It only misleads someone searching for the fragment.\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, `tests/test_ci_poll_test_sharding.py` and `changelog.d/9895-*.md`\n  Evidence of absence: The step was moved unchanged with its name kept, with no timeout raised and no job added. Run 44909097036 recorded step statuses only, so the target job was chosen from recorded job totals. No code change can close this.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- The reviewer also checked that the step runs once and unguarded in `tests-hooks-and-orchestrator`, and that the job timeouts are unchanged. No issues were found there.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/9895-ci-prepush-step-to-heal-job.md:Filename | severity=NIT | confidence=5\n  PROBLEM: The filename slug `heal-job` is misleading because the step was moved to `tests-hooks-and-orchestrator`.\n  WHY: It does not affect runtime, but it hampers grep-driven discovery and codebase exploration.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/9895-ci-prepush-step-to-heal-job.md:filename (slug \"ci-prepush-step-to-heal-job\") | severity=NIT | confidence=4\n  PROBLEM: The slug says `heal-job`, but the step was relocated into `tests-hooks-and-orchestrator`. Only the filename still points at the rejected heal job.\n  WHY: It is a discovery NIT, not a runtime defect. `scripts/assemble_changelog.py` reads the body, not the filename. Previous editors declined the rename as churn.\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml` (target job selection); documented in `changelog.d/9895-*.md` and `tests/test_ci_poll_test_sharding.py`.\n  Evidence of absence: The step was moved and every constraint is met and locked by `MovedPollGroupZero9895StepsContractTest`. The \"see the run's step timings\" sub-clause cannot be met in code, because run 44909097036 recorded only step statuses. The documented job totals are 15m32s, 17m00s and 21m25s.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, where the step and target job are selected.\n  Evidence of absence: The workflow comments at lines 1529\u20131532 say the step was selected using test and subprocess counts because its timings could not be read. Lines 1567\u20131579 select the target using historical job totals. The requested timing-based comparison is therefore not reflected in the implementation.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a0185aaa857dd956a240e4e45c44979f7903bf674162d442a887dcddff142f7f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9898,
+    "run_id": "45052726428",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45052726428",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122191253_8e0a41f4f2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9898,
+    "run_id": "45052726428"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T19:12:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
