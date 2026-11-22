@@ -35078,8 +35078,9 @@ def test_rb_label_reread_uses_one_batch_call():
 		assert len(rest(result["calls"])) == 1
 		assert 'OUT {"10":["keep"],"11":["gql-11"],"12":["gql-12"],"13":["rest-13"]}' in result["stdout"]
 	with tempfile.TemporaryDirectory() as tmp:
-		# A failed batch falls back to REST per issue; a single number never
-		# uses the batch; an invalid input object is returned unchanged.
+		# A failed batch falls back to REST per issue (a single missing number
+		# also tries the batch first); an invalid input object is returned
+		# unchanged with no call.
 		body = (
 			"echo \"A $(_orch_poll_labels_fill_missing '{}' 11 12 | jq -cS .)\"\n"
 			"echo \"B $(_orch_poll_labels_fill_missing '{}' 14 | jq -cS .)\"\n"
@@ -35090,8 +35091,16 @@ def test_rb_label_reread_uses_one_batch_call():
 		assert 'A {"11":["rest-11"],"12":["rest-12"]}' in result["stdout"]
 		assert 'B {"14":["rest-14"]}' in result["stdout"]
 		assert "C not-json" in result["stdout"]
-		assert len(gql(result["calls"])) == 1
+		assert len(gql(result["calls"])) == 2
 		assert len(rest(result["calls"])) == 3
+	with tempfile.TemporaryDirectory() as tmp:
+		# A single missing number uses the batch and makes no REST read.
+		body = "echo \"OUT $(_orch_poll_labels_fill_missing '{\"10\":[\"keep\"]}' 10 14 | jq -cS .)\"\n"
+		result = _pd_harness(body, Path(tmp))
+		assert result["rc"] == 0, result["stderr"]
+		assert len(gql(result["calls"])) == 1 and rest(result["calls"]) == []
+		assert 'OUT {"10":["keep"],"14":["gql-14"]}' in result["stdout"]
+		assert _pd_hits(result["summary"])["labels"] == "1"
 
 
 def test_default_branch_fetched_once_per_run():

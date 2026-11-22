@@ -5359,12 +5359,13 @@ PY
 # _orch_poll_labels_fill_missing <labels_json> <issue numbers…>
 # Issue #9927. Adds the labels of every numeric issue not yet a key of
 # <labels_json> ({"<n>":[names]}) and prints the result.
-#   * 2+ missing numbers: one _fetch_issue_labels_batch_graphql call
-#     (ceil(N/25) GraphQL requests); each issue it serves counts as a
-#     `labels` cache hit in the cycle summary.
-#   * Numbers the batch did not return, or a single missing number: the
-#     legacy per-issue REST read with its '[]' fallback, so the call count
-#     never grows.
+#   * 1+ missing numbers: one _fetch_issue_labels_batch_graphql call
+#     (ceil(N/25) GraphQL requests, billed outside the REST core budget);
+#     each issue it serves counts as a `labels` cache hit in the cycle
+#     summary.
+#   * Numbers the batch did not return (including a failed batch): the
+#     legacy per-issue REST read with its '[]' fallback, so REST is spent
+#     only on batch misses.
 #   * <labels_json> that is not a JSON object is printed unchanged with no
 #     call (the legacy per-key merge could not have changed it either).
 _orch_poll_labels_fill_missing()
@@ -5386,7 +5387,7 @@ _orch_poll_labels_fill_missing()
 		fi
 		_olfm_missing+=("${_olfm_n}")
 	done
-	if [ "${#_olfm_missing[@]}" -ge 2 ]; then
+	if [ "${#_olfm_missing[@]}" -ge 1 ]; then
 		_olfm_missing_json="$(printf '%s\n' "${_olfm_missing[@]}" | jq -R 'tonumber' | jq -s -c '.' 2>/dev/null || echo '[]')"
 		_olfm_batch="$(_fetch_issue_labels_batch_graphql "${_olfm_missing_json}" 2>/dev/null || echo '{}')"
 		if printf '%s' "${_olfm_batch}" | jq -e 'type == "object"' >/dev/null 2>&1; then
@@ -36185,7 +36186,7 @@ ${RB_FIX_DESC}
       echo "Re-checking wave status after review-blocked handling..."
       # Re-read labels since we may have changed them (issue #9927: one
       # batched GraphQL read for this wave's issues plus any reissued
-      # numbers; per-issue REST only for batch misses or a single issue).
+      # numbers; per-issue REST only for numbers the batch did not return).
       REISSUED_NUMS="$(jq -r '.waves['"${WAVE_IDX}"'].issues[].github_issue' "${STATE_FILE}" 2>/dev/null | sort -u)"
       # shellcheck disable=SC2086
       LABELS_JSON="$(_orch_poll_labels_fill_missing '{}' ${ISSUE_NUMS} ${REISSUED_NUMS})"
