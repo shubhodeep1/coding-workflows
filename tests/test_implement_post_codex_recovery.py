@@ -50,7 +50,7 @@ def test_generated_manifest_staging_excludes_modifications_but_accepts_deletion(
 	preflight_stage = preflight[preflight.index(start):preflight.index('while IFS= read -r -d \'\' untracked_candidate', preflight.index(start))]
 	for stage in (commit_stage, preflight_stage):
 		assert stage.count(f"':!{path}'") == 2
-		assert f'git add -u -- "${{add_u_excludes[@]}}"' in stage
+		assert 'git add -u -- "${add_u_excludes[@]}"' in stage
 		assert f'git rm --cached --quiet -- {path}' in stage
 		assert f'IMPLEMENT_GENERATED_MANIFEST_UNTRACKED path={path}' in stage
 
@@ -1064,7 +1064,7 @@ def test_resolve_checkout_ref_ignores_prior_pr_baseline_branch_when_present() ->
 				- prior_pr_baseline_branch: {baseline_branch}
 				- files_touched:
 				  - src/app.py
-				"""
+				"""  # noqa: E101
 			),
 			default_checkout_ref="orchestrator/project-829",
 			branch_exists={baseline_branch: True},
@@ -1700,6 +1700,68 @@ def test_commit_helper_treats_unset_fetched_manifest_as_empty() -> None:
 		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
 		assert "No repository changes were produced by Codex implementation" in proc.stdout
 		assert "did_commit=false" in github_output.read_text(encoding="utf-8")
+
+
+def _run_commit_helper_with_tracked_symlink(tmp_path: Path, *, remove_link: bool, manifest_lists_link: bool) -> subprocess.CompletedProcess:
+	"""#9940: commit docs/CLAUDE.md -> ../README.md, then run the commit helper."""
+	repo_dir = tmp_path / "repo"
+	_bootstrap_git_repo(repo_dir)
+	(repo_dir / "scripts").mkdir()
+	shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+	(repo_dir / "docs").mkdir()
+	os.symlink("../README.md", repo_dir / "docs" / "CLAUDE.md")
+	_git(["git", "add", "scripts/implement_commit_changes.sh", "docs/CLAUDE.md"], cwd=repo_dir)
+	_git(["git", "commit", "-m", "add helper and link"], cwd=repo_dir)
+	if remove_link:
+		(repo_dir / "docs" / "CLAUDE.md").unlink()
+	github_output = tmp_path / "github_output.txt"
+	github_output.write_text("", encoding="utf-8")
+	runtime_dir = tmp_path / "runtime"
+	runtime_dir.mkdir()
+	env_overrides = {
+		"ENFORCE_FILES_TOUCHED": "false",
+		"GITHUB_OUTPUT": str(github_output),
+		"GITHUB_REPOSITORY": "owner/repo",
+		"ISSUE_NUMBER": "9940",
+		"RUNTIME_DIR": str(runtime_dir),
+		"SERENA_PROJECT_BOOTSTRAP_HASH": "",
+		"SERENA_PROJECT_PREEXISTED": "false",
+		"TMPDIR": str(runtime_dir),
+	}
+	if manifest_lists_link:
+		fetched_manifest = tmp_path / "fetched_manifest.txt"
+		fetched_manifest.write_text("docs/CLAUDE.md\n", encoding="utf-8")
+		env_overrides["FETCHED_MANIFEST"] = str(fetched_manifest)
+	env = _isolated_test_env(env_overrides, cwd=repo_dir)
+	return subprocess.run(
+		["bash", "scripts/implement_commit_changes.sh"],
+		cwd=str(repo_dir),
+		env=env,
+		text=True,
+		capture_output=True,
+		timeout=60,
+	)
+
+
+def test_commit_helper_logs_tracked_symlink_delete_stages() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_symlink_delete_") as td:
+		proc = _run_commit_helper_with_tracked_symlink(Path(td), remove_link=True, manifest_lists_link=False)
+		assert "IMPLEMENT_SYMLINK_DELETE path=docs/CLAUDE.md stage=pre_cleanup" in proc.stdout, proc.stdout + proc.stderr
+		assert "IMPLEMENT_SYMLINK_DELETE path=docs/CLAUDE.md stage=post_cleanup" in proc.stdout, proc.stdout + proc.stderr
+
+
+def test_commit_helper_logs_symlink_removed_by_artifact_cleanup() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_symlink_cleanup_") as td:
+		proc = _run_commit_helper_with_tracked_symlink(Path(td), remove_link=False, manifest_lists_link=True)
+		assert "stage=pre_cleanup" not in proc.stdout, proc.stdout + proc.stderr
+		assert "IMPLEMENT_SYMLINK_DELETE path=docs/CLAUDE.md stage=post_cleanup" in proc.stdout, proc.stdout + proc.stderr
+
+
+def test_commit_helper_logs_no_symlink_delete_for_intact_links() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_symlink_intact_") as td:
+		proc = _run_commit_helper_with_tracked_symlink(Path(td), remove_link=False, manifest_lists_link=False)
+		assert proc.returncode == 0, proc.stdout + proc.stderr
+		assert "IMPLEMENT_SYMLINK_DELETE" not in proc.stdout
 
 
 def test_commit_helper_rolls_back_post_commit_scope_lock_violation() -> None:
@@ -5626,10 +5688,10 @@ def test_validator_offending_bytes_redacts_secrets() -> None:
 
 	Two layered guards (per Copilot review):
 	(a) Path denylist: skip the dump for files whose names match
-	    common secret-bearing patterns (.env, *secret*, *.pem, ...).
+		common secret-bearing patterns (.env, *secret*, *.pem, ...).
 	(b) Per-line redaction: replace lines whose key contains
-	    secret-like keywords (token/password/api_key/...) or whose
-	    value contains a long opaque token with a redaction marker.
+		secret-like keywords (token/password/api_key/...) or whose
+		value contains a long opaque token with a redaction marker.
 	"""
 	with tempfile.TemporaryDirectory(prefix="test_validator_redact_") as td:
 		repo_dir = Path(td)
