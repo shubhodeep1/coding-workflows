@@ -278,7 +278,10 @@ def test_multi_line_curl_to_the_api_host_warns_on_the_curl_line() -> None:
 
 
 def test_global_options_before_the_subcommand_still_match() -> None:
-	for call in ("gh -R o/r pr view 1", "gh --repo=o/r issue list", "gh --hostname h.example api x"):
+	for call in (
+		"gh -R o/r pr view 1", "gh --repo=o/r issue list", "gh --hostname h.example api x",
+		"gh -R 'o/r' pr view 1", "gh --repo='o/r' issue list", 'gh --repo="o/r" issue list',
+	):
 		assert _warned_lines("a.sh", f"for n in 1; do\n  {call}\ndone\n") == [2], call
 
 
@@ -289,6 +292,10 @@ def test_suppression_needs_a_real_comment_or_a_wrapping_helper() -> None:
 	assert _warned_lines("a.sh", helper_after) == [2]
 	helper_other_command = f"for n in 1; do\n  out=\"$(gh_read x)\"; {GH_API} y\ndone\n"
 	assert _warned_lines("a.sh", helper_other_command) == [2]
+	sibling_substitution = f"for n in 1; do\n  if [ \"$(gh_read x)\" = \"$({GH_API} y)\" ]; then :; fi\ndone\n"
+	assert _warned_lines("a.sh", sibling_substitution) == [2]
+	helper_as_argument = f"for n in 1; do\n  printf '%s' gh_read \"$({GH_API} y)\"\ndone\n"
+	assert _warned_lines("a.sh", helper_as_argument) == [2]
 
 
 def test_one_unreadable_path_keeps_other_findings(tmp_path: Path, monkeypatch) -> None:
@@ -305,4 +312,4 @@ def test_one_unreadable_path_keeps_other_findings(tmp_path: Path, monkeypatch) -
 	warnings, files, skip = lint_mod.lint(repo, base, head)
 	assert skip is None
 	assert [(w.path, w.line) for w in warnings] == [("b.sh", 1)]
-	assert files == 2
+	assert files == 1, "the unreadable a.sh is not counted as scanned"

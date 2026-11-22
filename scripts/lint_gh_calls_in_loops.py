@@ -51,9 +51,10 @@ SNIPPET_MAX_CHARS = 80
 
 # A GitHub API call. `gh` must not follow a word character or `-`; the helper
 # names must not be a function definition (`gh_retry() {`). Global options
-# `-R` / `--repo` / `--hostname` may come before the subcommand.
+# `-R` / `--repo` / `--hostname` may come before the subcommand; a quoted
+# value is matched whole (single-quoted text reaches the regex masked to spaces).
 API_CALL_RE = re.compile(
-	r"(?<![\w-])gh\s+(?:(?:-R|--repo|--hostname)(?:\s+|=)\S+\s+)*(?:api\b|pr\s+(?:view|list|checks)\b|issue\s+(?:view|list)\b|run\s+(?:list|view)\b)"
+	r"(?<![\w-])gh\s+(?:(?:-R|--repo|--hostname)(?:\s+|=)(?:'[^']*'|\"[^\"]*\"|\S+)\s+)*(?:api\b|pr\s+(?:view|list|checks)\b|issue\s+(?:view|list)\b|run\s+(?:list|view)\b)"
 	r"|(?<![\w-])(?:_safe_gh_jq|gh_retry|gh_api_retry)\b(?!\s*\(\))"
 )
 CURL_RE = re.compile(r"(?<![\w-])curl\b")
@@ -345,9 +346,13 @@ def workflow_run_blocks(lines: list[str]) -> list[tuple[int, list[str]]]:
 
 
 def _helper_wraps(code: str, call_start: int) -> bool:
-	"""An allow-listed helper earlier in the same command runs the call."""
+	"""An allow-listed helper earlier in the same command runs the call.
+
+	A parenthesis is a boundary too: a helper in one `$(...)` does not wrap a
+	call in a sibling `$(...)` or in a substitution passed to it as an argument.
+	"""
 	for helper in ALLOWED_HELPER_RE.finditer(code, 0, call_start):
-		if not any(separator in code[helper.end():call_start] for separator in ";&|"):
+		if not any(separator in code[helper.end():call_start] for separator in ";&|()"):
 			return True
 	return False
 
@@ -437,6 +442,8 @@ def lint(repo_root: Path, base: str, head: str) -> tuple[list[LoopCallFinding], 
 			return [], 0, "no_head"
 		added = added_lines_by_file(repo_root, base, head)
 		warnings: list[LoopCallFinding] = []
+		# Only files actually read and scanned count toward `files=<n>`.
+		files_scanned = 0
 		for path in sorted(added):
 			try:
 				text = _git(repo_root, "show", f"{head}:{path}")
@@ -446,9 +453,10 @@ def lint(repo_root: Path, base: str, head: str) -> tuple[list[LoopCallFinding], 
 				print(f"::warning::{LOG_PREFIX} could not read {_escape_data(path)}; skipped", flush=True)
 				continue
 			warnings.extend(scan_file(path, text, added[path]))
+			files_scanned += 1
 	except (RuntimeError, OSError, subprocess.TimeoutExpired):
 		return [], 0, "git_error"
-	return warnings, len(added), None
+	return warnings, files_scanned, None
 
 
 def main(argv: list[str] | None = None) -> int:
