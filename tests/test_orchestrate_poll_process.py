@@ -12776,6 +12776,8 @@ def test_review_blocked_merged_fix_target_rejects_unrelated_followup():
 		try:
 			_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=head_repo_mismatch", cached)
 			assert cached.get("git_push_calls", []) == [] and cached.get("review_blocked_fix_commit_calls", []) == []
+			# Pin that the cache really served a read (not a repeat of the TTL=0 run).
+			assert re.search(r"^ORCH_POLL_CYCLE_SUMMARY .* cache_hits_pr_json=[1-9]\d* ", str(cached.get("stdout", "")), re.MULTILINE), _poller_stdout_tail(cached)
 		except AssertionError as exc:
 			failures.append((reason + "/cache_on", str(exc)))
 	assert not failures, failures
