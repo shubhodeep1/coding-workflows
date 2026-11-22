@@ -1588,6 +1588,39 @@ class MultiHolderLease(unittest.TestCase):
 		self.assertEqual(rc, 0, out)
 		self.assertIn("outcome=self", out)
 
+	def test_holder_that_grew_onto_an_earlier_holder_waits_in_merge_mode(self) -> None:
+		def run(pr: int, files: dict[str, list[str]], fail: list[str] | None = None) -> tuple[int, str, _Harness]:
+			st = {"pulls": [_pull(8), _pull(9)], "files": files}
+			if fail:
+				st["fail"] = fail
+			_seed_lease(st, _multi_record([_row(8, ["a.py"]), _row(9, ["b.py"])]))
+			h = _Harness(st)
+			rc, out = _gate(h, pr, "merge")
+			return rc, out, h
+		rc, out, h = run(9, {"9": ["a.py", "b.py"]})
+		self.assertEqual(rc, 1, out)
+		self.assertIn("outcome=wait reason=holder_shares_paths blocker=8", out)
+		self.assertIn("ai:merge-lease-wait", h.state["labels"]["9"])
+		# The earlier holder proceeds without a files read, so they never deadlock.
+		rc, out, h = run(8, {"8": ["a.py", "b.py"]})
+		self.assertEqual(rc, 0, out)
+		self.assertIn("outcome=self", out)
+		self.assertFalse(any("pulls/8/files" in c for c in h.calls), h.calls)
+		# An unreadable files list fails open as before.
+		rc, out, _ = run(9, {}, fail=["pulls/9/files"])
+		self.assertEqual(rc, 0, out)
+		self.assertIn("outcome=self", out)
+
+	def test_renewal_keeps_the_recorded_paths_when_the_files_read_fails(self) -> None:
+		st = {"pulls": [_pull(8), _pull(9)], "fail": ["pulls/9/files"]}
+		_seed_lease(st, _multi_record([_row(8, ["a.py"]), _row(9, ["b.py"])]))
+		h = _Harness(st)
+		rc, out = _gate(h, 9, "update", {MAXH: "2"})
+		self.assertEqual(rc, 0, out)
+		self.assertIn("outcome=renewed", out)
+		rec = h.record()
+		self.assertIn("holder_path=8 a.py\nholder_path=9 b.py\npaths:\na.py\nb.py", rec)
+
 	def test_queue_walk_passes_over_a_waiter_that_overlaps_a_holder(self) -> None:
 		def run(waiter_files: list[str]) -> tuple[int, str]:
 			st = {"pulls": [_pull(5), _pull(7), _pull(8)], "labels": {"5": [WAIT]}, "files": {"5": waiter_files, "7": ["c.py"]}}

@@ -3277,7 +3277,9 @@ _merge_lease_gate_multi_wait()
 # single-holder ones; MERGE_LEASE_BLOCKER is one PR: the first holder (record
 # order) sharing a path, the primary at the holder cap, or the first waiter
 # ahead in queue order whose paths are disjoint from every holder.
-# - merge: a holder proceeds (self); another PR waits on the first holder it
+# - merge: a holder proceeds (self) unless its current files now share a path
+#   with an earlier holder in record order (then it waits holder_shares_paths
+#   on that holder); another PR waits on the first holder it
 #   shares a path with (_merge_lease_paths_intersect with both heads, so the
 #   Phase 4 soft class applies), else proceeds. Its own unreadable files fail
 #   open (pr_files_failed), as in the single-holder path.
@@ -3298,6 +3300,29 @@ _merge_lease_gate_multi()
 	gm_own_row="$(_merge_lease_holder_row "${gm_pr}" "${gm_rows}")"
 	if [ "${gm_mode}" = "merge" ]; then
 		if [ -n "${gm_own_row}" ]; then
+			# A holder whose PR grew onto an earlier holder's paths (record
+			# order) after it joined waits on that holder; a later holder waits
+			# on it instead, so two holders never block each other. One files
+			# read, only when an earlier holder exists; an unreadable or empty
+			# list proceeds as before (fail-open).
+			for gm_line in ${gm_row_arr[@]+"${gm_row_arr[@]}"}; do
+				read -r gm_h gm_h_head _ <<< "${gm_line}"
+				[ "${gm_h}" != "${gm_pr}" ] || break
+				[ "${gm_h_head}" != "-" ] || gm_h_head=""
+				if [ "${gm_own_read}" = 0 ]; then
+					gm_own_read=1
+					gm_own_paths="$(_merge_lease_pr_paths "${gm_pr}" 2>/dev/null)" || break
+					[ -n "${gm_own_paths}" ] || break
+				fi
+				MERGE_LEASE_SOFT_SHARED=""
+				if _merge_lease_paths_intersect "$(_merge_lease_holder_paths "${gm_h}")" "${gm_own_paths}" "${gm_head}" "${gm_h_head}"; then
+					MERGE_LEASE_BLOCKER="${gm_h}"
+					MERGE_LEASE_SOFT_SHARED=""
+					_merge_lease_gate_multi_wait "${gm_pr}" "${gm_base}" merge holder_shares_paths "${gm_h}"
+					return 1
+				fi
+			done
+			MERGE_LEASE_SOFT_SHARED=""
 			MERGE_LEASE_OUTCOME="self"
 			MERGE_LEASE_REASON="self"
 			_merge_lease_log "${gm_pr}" "${gm_base}" merge proceed self
@@ -3351,7 +3376,11 @@ _merge_lease_gate_multi()
 			return 0
 		fi
 		[ "${gm_keep_acq}" -gt 0 ] || gm_keep_acq="${gm_now}"
-		gm_own_paths="$(_merge_lease_pr_paths "${gm_pr}" 2>/dev/null || true)"
+		# An unreadable files list keeps the paths already recorded for this
+		# holder instead of widening it to `*`.
+		if ! gm_own_paths="$(_merge_lease_pr_paths "${gm_pr}" 2>/dev/null)"; then
+			gm_own_paths="$(_merge_lease_holder_paths "${gm_pr}")"
+		fi
 		_merge_lease_holder_paths_set "${gm_pr}" "${gm_own_paths:-*}"
 		gm_new_rows="$(printf '%s\n' "${gm_rows}" | awk -v p="${gm_pr}" -v row="${gm_pr} ${gm_row_head} $((gm_now + gm_ttl)) ${gm_keep_acq} ${gm_now}" 'NF { if ($1 == p) print row; else print }')"
 		_merge_lease_write_holders "${gm_base}" "${gm_new_rows}" || gm_rc=$?
