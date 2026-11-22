@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: `.github/workflows/ci.yml` \u2014 the moved-step selection and target-job placement (steps at lines 1345-1565; provenance comment at lines 1330-1344).\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The steps were picked using estimated costs (test and subprocess counts), not measured step timings, because the step timings for run 43314513853 were not available. The provenance comment at `.github/workflows/ci.yml:1332-1334` says \"That run's step timings could not be read, so the pick is an estimate from planning-sandbox timings and test and subprocess counts, not a measurement\". The workflow comment at lines 1332-1344 says the six steps were selected by estimate. The diff has no measured comparison showing that these six steps are the slowest in `tests-heal-plan-and-validation`, or that `tests-hooks-and-orchestrator` has the most headroom. The workflow comments and the changelog fragment both state this limit. The last run's comment-only diff does not introduce or worsen the gap. Severity disagreement: NIT per google_gemini-3_1-flash-lite and minimax_minimax-m3, MAJOR per openai_gpt-6-luna. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash chose not to re-flag it because it is a residual accepted in earlier rounds.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\n  Expected change site: .github/workflows/ci.yml, step selection and target-job placement.\n  Evidence of absence: The PR moves steps based on estimated costs (test and subprocess counts) because actual step-timing data for run 43314513853 was unavailable and could not be retrieved. The PR appropriately cites this limitation in the workflow comments and changelog fragment, fulfilling the deferral condition.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml` \u2014 the moved-step selection and target-job placement (steps at lines 1345-1565; provenance comment at lines 1330-1344).\n  Evidence of absence: The provenance comment at `.github/workflows/ci.yml:1332-1334` says the step timings could not be read and the pick is an estimate, not a measurement. The diff has no measurement-based comparison showing that the six moved steps are the slowest in `tests-heal-plan-and-validation`, or that `tests-hooks-and-orchestrator` is the job with the most headroom. The PR states this openly, and the \u00a726 matrix-job reasoning gives a defensible selection. The last run's diff does not introduce or worsen the gap, which remains a documented residual at the original-PR level.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, the moved-step selection and target-job placement.\n  Evidence of absence: The workflow comment at lines 1332-1344 says run 43314513853's step timings could not be read and the six steps were selected by estimate, not measurement. The PR diff contains no measured comparison establishing that these were the slowest steps or that `tests-hooks-and-orchestrator` had the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c9f0cd099c50332760e6da597de55ef2f6d304d9cc5cc67a3ffe9f19a55dde2b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9702,
+    "run_id": "44986119190",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44986119190",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122055402_009973bd07",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9702,
+    "run_id": "44986119190"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T05:54:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
