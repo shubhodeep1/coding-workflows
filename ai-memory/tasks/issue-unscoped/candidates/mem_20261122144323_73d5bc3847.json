@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u00a75 (\"port only the diff listed above. No unrelated refactors.\") and the issue's \"Files & Modules\" list, which does not include tests/test_review_chatgpt_reviewer_slot.py.\n  expected_change_site: tests/test_review_chatgpt_reviewer_slot.py \u2014 `test_lite_floor_runs_one_seeded_live_reviewer` (lines 510-517) and `test_no_floor_when_an_account_slot_succeeded` (lines 520-524)\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: Out-of-scope relax-order assertion changes (strict call-order to sorted-equality) in tests/test_review_chatgpt_reviewer_slot.py lines 513\u2013523 are not in the source diff `git diff 9789e0c4 0e7beb94`, the Implementation Steps, the Files & Modules list or the Tests section of issue #9949; no paragraph of the issue links ChatGPT/pool background-job ordering to invalid-UTF-8 handling; the LAST RUN DIFF re-applies the change; severity disagreement: MAJOR (google_gemini-3_1-flash-lite, minimax_minimax-m3) vs NIT (openai_gpt-6-luna, z-ai_glm-5_3-flash, mitigated as test-only, covered by the `tests/**` plan grant, and matching the background jobs at `scripts/review_run_reviewers.sh:6099-6101`); anthropic_claude-sonnet-5_5 explicitly declined this as a gap (at most a scope NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (HARDENING_RISK_SCORE: 0): changelog.d/9261-prompt-invalid-utf8.md \u2014 the phrase \"it falls back to the plain byte cut if `python3` fails\" does not mention the new fallback when mktemp cannot create the count file. Suggested fix: change it to \"if `python3` fails or the count temp file cannot be created\" (1 line).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \u00a75 (\"port only the diff listed above. No unrelated refactors.\") and the issue's \"Files & Modules\" list, which does not include tests/test_review_chatgpt_reviewer_slot.py.\n  Expected change site: tests/test_review_chatgpt_reviewer_slot.py \u2014 `test_lite_floor_runs_one_seeded_live_reviewer` (line 514) and `test_no_floor_when_an_account_slot_succeeded` (line 523)\n  Evidence of absence: No paragraph or changelog reference in issue #9949 links the ChatGPT reviewer-slot scheduling or background-job ordering to invalid-UTF-8 handling. The test changes are not in the source diff `git diff 9789e0c4 0e7beb94` and remain in the PR after the last-run autofix, which makes them an out-of-scope change.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \u00a75 (\"port only the diff listed above. No unrelated refactors.\") and the linked issue's \"Files & Modules\" list and \"Implementation Steps\", which both enumerate the exact set of files; `tests/test_review_chatgpt_reviewer_slot.py` is in neither.\n  Expected change site: tests/test_review_chatgpt_reviewer_slot.py \u2014 `test_lite_floor_runs_one_seeded_live_reviewer` (~line 514) and `test_no_floor_when_an_account_slot_succeeded` (~line 523), which relax the strict call-order assertions on `result[\"calls\"]` to a sorted-equality check.\n  Evidence of absence: Issue #9949 is only about porting invalid-UTF-8 handling from PR #9283; it never mentions the ChatGPT reviewer slot, pool background-job ordering or this test file. The file is not in the source diff `git diff 9789e0c4 0e7beb94`. The LAST RUN DIFF re-applies the relaxed-order assertions verbatim, and the non-goals warn against scope expansion.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cPort only the diff listed above. No unrelated refactors.\u201d\n  Expected change site: `tests/test_review_chatgpt_reviewer_slot.py`; this file is not among the issue\u2019s listed deliverables.\n  Evidence of absence: The PR changes assertions in `test_lite_floor_runs_one_seeded_live_reviewer` and `test_no_floor_when_an_account_slot_succeeded` (lines 513\u2013523). These reviewer-slot ordering changes are unrelated to the invalid-UTF-8 port and are not part of the specified source diff.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: \"\u00a75: port only the diff listed above. No unrelated refactors.\" and the issue's \"Files & Modules\" list, which does not include tests/test_review_chatgpt_reviewer_slot.py.\n  Expected change site: tests/test_review_chatgpt_reviewer_slot.py \u2014 `test_lite_floor_runs_one_seeded_live_reviewer` (lines 510-517) and `test_no_floor_when_an_account_slot_succeeded` (lines 520-524).\n  Evidence of absence: The PR diff and the re-applied last-run commit change these assertions from strict call-order checks to sorted-set checks. Issue #9949's source diff (`git diff 9789e0c4 0e7beb94`), Implementation Steps, Files & Modules and Tests sections never mention reviewer-slot scheduling. Mitigating context: the change is test-only, `tests/**` is covered by the plan grant, and `scripts/review_run_reviewers.sh:6099-6101` launches `run_pool_reviewer`/`run_chatgpt_reviewer` with `&`, so the strict-order assertions were flaky.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b183c5c5484c2e982764f6d57aba586cdbefcf58a13aecd3514ee7a25fab2f5f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9953,
+    "run_id": "45021662997",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45021662997",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122144323_73d5bc3847",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9953,
+    "run_id": "45021662997"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T14:43:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
