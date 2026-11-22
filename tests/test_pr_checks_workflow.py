@@ -188,6 +188,9 @@ def test_gh_loop_call_lint_step_is_warning_only_and_makes_no_api_call() -> None:
 	assert _expression_body(step["if"]) == "!cancelled() && steps.checkout.outcome == 'success'"
 	assert "github.event.action" not in step["if"]
 	assert step.get("continue-on-error") is True
+	# scripts/lint_gh_calls_in_loops.py stops reading files after one
+	# `git show` timeout so its summary line prints inside this step timeout.
+	assert step["timeout-minutes"] == 5
 	assert "env" not in step, "no GH_TOKEN: the lint makes no GitHub API call"
 	run = step["run"]
 	assert "python3 scripts/lint_gh_calls_in_loops.py" in run

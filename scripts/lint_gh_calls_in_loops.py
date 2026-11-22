@@ -447,9 +447,16 @@ def lint(repo_root: Path, base: str, head: str) -> tuple[list[LoopCallFinding], 
 		for path in sorted(added):
 			try:
 				text = _git(repo_root, "show", f"{head}:{path}")
-			except (RuntimeError, OSError, subprocess.TimeoutExpired):
-				# One unreadable path (e.g. a non-UTF-8 name, a timed-out or
-				# failed `git show`) must not drop the findings of every other
+			except subprocess.TimeoutExpired:
+				# A stalled `git show` tends to stall again, and each try costs
+				# GIT_TIMEOUT_SECONDS. Stop reading here (keeping the findings
+				# so far) so the summary line still prints within the step's
+				# 5-minute `timeout-minutes` in pr-checks.yml.
+				print(f"::warning::{LOG_PREFIX} timed out reading {_escape_data(path)}; remaining files skipped", flush=True)
+				break
+			except (RuntimeError, OSError):
+				# One unreadable path (e.g. a non-UTF-8 name or a failed
+				# `git show`) must not drop the findings of every other
 				# changed file.
 				print(f"::warning::{LOG_PREFIX} could not read {_escape_data(path)}; skipped", flush=True)
 				continue

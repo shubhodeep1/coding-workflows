@@ -316,18 +316,24 @@ def test_one_unreadable_path_keeps_other_findings(tmp_path: Path, monkeypatch) -
 
 
 def test_per_file_timeout_or_os_error_keeps_other_findings(tmp_path: Path, monkeypatch) -> None:
+	loop = f"for n in 1; do {GH_API} x; done\n"
 	repo, base = _repo(tmp_path, {})
-	head = _commit(repo, {"a.sh": f"for n in 1; do {GH_API} x; done\n", "b.sh": f"for n in 1; do {GH_API} x; done\n"})
+	head = _commit(repo, {"a.sh": loop, "b.sh": loop, "c.sh": loop})
 	real_git = lint_mod._git
-	for error in (OSError("io"), subprocess.TimeoutExpired(["git", "show"], 1)):
+	# An OS error skips only b.sh. A timeout stops reading at b.sh, so each
+	# stall costs one GIT_TIMEOUT_SECONDS at most, but a.sh's finding is kept.
+	for error, expected in (
+		(OSError("io"), [("a.sh", 1), ("c.sh", 1)]),
+		(subprocess.TimeoutExpired(["git", "show"], 1), [("a.sh", 1)]),
+	):
 
 		def flaky(root: Path, *args: str, _error: BaseException = error) -> str:
-			if args[:1] == ("show",) and args[1].endswith(":a.sh"):
+			if args[:1] == ("show",) and args[1].endswith(":b.sh"):
 				raise _error
 			return real_git(root, *args)
 
 		monkeypatch.setattr(lint_mod, "_git", flaky)
 		warnings, files, skip = lint_mod.lint(repo, base, head)
 		assert skip is None, error
-		assert [(w.path, w.line) for w in warnings] == [("b.sh", 1)], error
-		assert files == 1, error
+		assert [(w.path, w.line) for w in warnings] == expected, error
+		assert files == len(expected), error
