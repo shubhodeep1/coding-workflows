@@ -298,6 +298,23 @@ _fetch_blocked_issue_routing_graphql() {
 # quiet. Fails open on every path; never exits non-zero. One rate-limit read,
 # one issue listing, then ceil(N/25) GraphQL calls; a comment POST and a
 # Telegram WARNING only for flagged issues.
+# Issue #3576: the long-lived security-audit tracker (label ai:security-audit)
+# is not a work item, so the unrouted-comment detector skips it like
+# ai:orchestrator-tracking. SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED=false
+# restores the previous filter. Input: the `gh issue list --json number,labels`
+# array; output: a JSON array of issue numbers. No API calls.
+_unrouted_blocked_candidate_numbers() {
+  # The sweep-only path exits before is_truthy is defined, so the same
+  # 1|true|yes|on vocabulary is parsed inline here.
+  local exclude_tracker="false"
+  case "$(printf '%s' "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) exclude_tracker="true" ;;
+  esac
+  printf '%s' "${1:-[]}" | jq -c --argjson exclude_tracker "${exclude_tracker}" '[.[]? | select(any(.labels[]?; .name == "ai:orchestrator-tracking" or .name == "ai:reclarify-requeue") | not)
+    | select(($exclude_tracker and any(.labels[]?; .name == "ai:security-audit")) | not)
+    | .number | select(type == "number" and . > 0)] | unique' 2>/dev/null
+}
+
 detect_unrouted_blocked_comments() {
   [ "${RECLARIFY_UNROUTED_DETECT_ENABLED:-true}" = "true" ] || return 0
   local grace="${RECLARIFY_UNROUTED_GRACE_MINUTES:-15}" max_age="${RECLARIFY_UNROUTED_MAX_AGE_HOURS:-168}"
@@ -314,8 +331,7 @@ detect_unrouted_blocked_comments() {
     echo "RECLARIFY_UNROUTED outcome=skip reason=issue_list_unavailable"
     return 0
   }
-  numbers="$(printf '%s' "${blocked}" | jq -c '[.[]? | select(any(.labels[]?; .name == "ai:orchestrator-tracking" or .name == "ai:reclarify-requeue") | not)
-    | .number | select(type == "number" and . > 0)] | unique' 2>/dev/null)" || numbers="[]"
+  numbers="$(_unrouted_blocked_candidate_numbers "${blocked}")" || numbers="[]"
   [ "$(printf '%s' "${numbers}" | jq 'length' 2>/dev/null || echo 0)" -gt 0 ] 2>/dev/null || return 0
   work_dir="$(mktemp -d "${TMPDIR:-/tmp}/reclarify_unrouted_work.XXXXXX")" || return 0
   if ! _fetch_blocked_issue_routing_graphql "${numbers}" "${work_dir}/details.json"; then
@@ -3251,6 +3267,18 @@ if is_truthy "${ENABLE_STANDALONE_STALL_RECOVERY}"; then
 else
   ENABLE_STANDALONE_STALL_RECOVERY="false"
 fi
+
+# Issue #3576: keep the security-audit tracker (ai:security-audit) out of
+# standalone stall recovery, the unblock scan and the unrouted-comment detector.
+# Exported so scripts/unblock_scan.py sees the same value; false restores the
+# previous behaviour.
+SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED="${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}"
+if is_truthy "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED}"; then
+  SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED="true"
+else
+  SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED="false"
+fi
+export SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED
 
 ENABLE_CLOSE_MERGED_ISSUES="${ENABLE_CLOSE_MERGED_ISSUES:-true}"
 if is_truthy "${ENABLE_CLOSE_MERGED_ISSUES}"; then
@@ -26925,10 +26953,12 @@ run_unblock_scan() {
       echo "UNBLOCK_SCAN item=${_scan_pr_dependency_item} kind=issue outcome=skip reason=pr_dependency_held"
       _scan_pr_dependency_held="$(printf '%s' "${_scan_pr_dependency_held}" | jq -c --argjson n "${_scan_pr_dependency_item}" '. + [$n]')"
     fi
-  done < <(jq -r --slurpfile details "${work_dir}/details.json" --slurpfile failed "${work_dir}/failed_projects.json" '
+  done < <(jq -r --slurpfile details "${work_dir}/details.json" --slurpfile failed "${work_dir}/failed_projects.json" \
+      --argjson exclude_tracker "$(is_truthy "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}" && echo true || echo false)" '
       .[]? | select(((.pull_request // false) != true) and ((.number | type) == "number"))
       | .number as $n
       | select(any((.labels // [])[]?; . == "ai:orchestrator-tracking") | not)
+      | select(($exclude_tracker and any((.labels // [])[]?; . == "ai:security-audit")) | not)
       | select(any(($failed[0] // [])[]?; . == $n) | not)
       | select(($details[0][($n | tostring)].body // "") | test("(^|\n)[ \t]*-?[ \t]*(Depends[ \t]+on[ \t]+PR|Requires[ \t]+on[ \t]+main)[ \t]*:"; "i"))
       | $n' "${work_dir}/search.json" 2>/dev/null || true)
@@ -27506,6 +27536,53 @@ else:
   return 0
 }
 
+# Issue #3576: the security-audit tracker (label ai:security-audit) never
+# enters the AI pipeline. When standalone stall recovery meets it, strip
+# ai:blocked and any pipeline phase label in one edit, log
+# STALL_RECOVERY_SKIP and tell the caller to skip the issue. It never closes
+# the tracker, edits its body or posts a command. Args: issue number, labels
+# JSON (names or {name} objects), pipeline phase labels JSON. Returns 0 when
+# the issue was handled (caller continues), 1 otherwise. A failed label edit
+# warns and still skips; the next tick retries.
+_security_audit_tracker_stall_guard() {
+  local issue_num="$1" labels_json="${2:-[]}" phase_labels="${3:-[]}"
+  local removable removed outcome
+  # Same 1|true|yes|on vocabulary as is_truthy, parsed inline so the guard
+  # does not depend on the normalisation block having run.
+  case "$(printf '%s' "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) ;;
+    *) return 1 ;;
+  esac
+  [[ "${issue_num}" =~ ^[1-9][0-9]*$ ]] || return 1
+  printf '%s' "${labels_json}" | jq -e \
+    '[.[]? | if type == "object" then (.name // "") else . end] | index("ai:security-audit") != null' \
+    >/dev/null 2>&1 || return 1
+  removable="$(printf '%s' "${labels_json}" | jq -r --argjson phase "${phase_labels}" \
+    '[.[]? | if type == "object" then (.name // "") else . end] | unique
+     | map(select(. == "ai:blocked" or (. as $l | $phase | index($l) != null))) | .[]' 2>/dev/null)" || removable=""
+  if [ -z "${removable}" ]; then
+    removed="none"
+    outcome="clean"
+  else
+    local -a remove_args=()
+    local label
+    while IFS= read -r label; do
+      [ -n "${label}" ] && remove_args+=(--remove-label "${label}")
+    done <<< "${removable}"
+    removed="$(printf '%s' "${removable}" | paste -sd, -)"
+    if gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" "${remove_args[@]}" >/dev/null 2>&1; then
+      outcome="cleaned"
+    else
+      outcome="remove_failed"
+      echo "::warning::[standalone-stall] could not remove ${removed} from security-audit tracker #${issue_num}; retrying next tick."
+      # Nothing was removed; the warning above names the attempted labels.
+      removed="none"
+    fi
+  fi
+  echo "STALL_RECOVERY_SKIP issue=${issue_num} reason=security_audit_tracker removed=${removed} outcome=${outcome} action=none"
+  return 0
+}
+
 run_standalone_stall_recovery() {
   if [ "${ENABLE_STANDALONE_STALL_RECOVERY}" != "true" ]; then
     echo "Standalone stall recovery disabled by ENABLE_STANDALONE_STALL_RECOVERY=${ENABLE_STANDALONE_STALL_RECOVERY}."
@@ -27558,19 +27635,28 @@ run_standalone_stall_recovery() {
   local pipeline_labels='["ai:clarification","ai:planning","ai:awaiting-approval","ai:implementing","ai:done","ai:ready-to-merge","ai:review-blocked"]'
   local labeled_issues='[]'
   local lbl
+  # Issue #3576: with the exclusion on, ai:security-audit joins the same
+  # label batch (one more alias, no extra API call) so a tracker that only
+  # carries ai:blocked still reaches _security_audit_tracker_stall_guard,
+  # which strips the label and skips it. pipeline_labels itself is unchanged.
+  local _sat_discovery_labels="${pipeline_labels}"
+  if is_truthy "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}"; then
+    _sat_discovery_labels="$(printf '%s' "${pipeline_labels}" | jq -c 'if index("ai:security-audit") then . else . + ["ai:security-audit"] end' 2>/dev/null)" || _sat_discovery_labels="${pipeline_labels}"
+    [ -n "${_sat_discovery_labels}" ] || _sat_discovery_labels="${pipeline_labels}"
+  fi
   # One aliased GraphQL request lists every pipeline label; the REST
   # listing below runs only for labels the batch could not cover.
   local _pls_resp
   local _pls_fallback
   local _pls_ok="true"
-  _pls_resp="$(_fetch_standalone_pipeline_label_issues_graphql "${pipeline_labels}")" || _pls_resp=""
+  _pls_resp="$(_fetch_standalone_pipeline_label_issues_graphql "${_sat_discovery_labels}")" || _pls_resp=""
   [ -n "${_pls_resp}" ] || _pls_ok="false"
   labeled_issues="$(printf '%s' "${_pls_resp}" | jq -c 'if (.issues | type) == "array" then .issues else [] end' 2>/dev/null || echo '[]')"
   [ -n "${labeled_issues}" ] || labeled_issues='[]'
   _pls_fallback="$(printf '%s' "${_pls_resp}" | jq -r 'if (.fallback_labels | type) == "array" then .fallback_labels[] else error("no fallback list") end' 2>/dev/null)" || _pls_ok="false"
   if [ "${_pls_ok}" != "true" ]; then
     labeled_issues='[]'
-    _pls_fallback="$(jq -r '.[]' <<<"${pipeline_labels}")"
+    _pls_fallback="$(jq -r '.[]' <<<"${_sat_discovery_labels}")"
   fi
   if [ -n "${_pls_fallback}" ]; then
     echo "::notice::Standalone stall recovery: label GraphQL batch fell back to REST for: $(printf '%s' "${_pls_fallback}" | tr '\n' ' ')"
@@ -27683,6 +27769,9 @@ run_standalone_stall_recovery() {
       else
         _standalone_staged_support_cache_available="complete"
       fi
+    fi
+    if _security_audit_tracker_stall_guard "${issue_num}" "${labels_json}" "${pipeline_labels}"; then
+      continue
     fi
     has_pipeline_label="$(echo "${labels_json}" | jq -r --argjson wanted "${pipeline_labels}" '[.[] | select($wanted | index(.))] | length')"
     has_marker="$(echo "${comments_json}" | jq -r '[.[] | select((.body // "") | test("<!-- AI_STANDALONE_STALL_STATE_V1|<!-- ai:clarification-questions -->"))] | length')"

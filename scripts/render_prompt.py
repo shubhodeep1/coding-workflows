@@ -179,15 +179,25 @@ def load_prompt(prompt_path: Path) -> str:
 	if not prompt_path.is_file():
 		raise PromptLoadError(f"Prompt file not found: {prompt_path}")
 	try:
-		return _normalize_prompt_text(prompt_path.read_text(encoding="utf-8"))
-	except OSError as exc:
+		raw_prompt_bytes = prompt_path.read_bytes()
+		try:
+			decoded_prompt_text = raw_prompt_bytes.decode("utf-8")
+		except UnicodeDecodeError as decode_exc:
+			# Prompt files can embed PR/issue-derived bytes (untrusted). A single
+			# invalid byte used to abort the whole render with a traceback; keep
+			# valid UTF-8 byte-identical and replace only the bad bytes (U+FFFD).
+			# The warning names the path and offset only, never file content.
+			decoded_prompt_text = raw_prompt_bytes.decode("utf-8", errors="replace")
+			print(
+				f"WARNING: prompt file '{prompt_path}' contains invalid UTF-8 at byte "
+				f"{decode_exc.start}; replaced with U+FFFD",
+				file=sys.stderr,
+			)
+		return _normalize_prompt_text(decoded_prompt_text)
+	except (OSError, UnicodeDecodeError) as exc:
+		# Invalid UTF-8 in the prompt body is replaced above (#9261), so this
+		# handler names read failures; it supersedes #9341's exit-1 decode branch.
 		raise PromptLoadError(f"Unable to read prompt file '{prompt_path}': {exc}") from exc
-	except UnicodeDecodeError as exc:
-		# UnicodeDecodeError is a ValueError, not an OSError, so without this
-		# branch a non-UTF-8 prompt escaped as a raw traceback (#9341).
-		raise PromptLoadError(
-			f"Unable to decode prompt file '{prompt_path}' as UTF-8 at byte offset {exc.start}: {exc.reason}"
-		) from exc
 
 
 def _find_prompt_root(prompt_path: Path) -> Path | None:
