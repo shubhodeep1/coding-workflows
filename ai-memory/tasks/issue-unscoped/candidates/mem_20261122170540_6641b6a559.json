@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:457-474 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The reviewer pre-flight uses the cached pull state instead of the live PR-closed check required by the task.\n  WHY: If the PR closes after an \"open\" pull is cached, this check can reuse that state for up to 120 seconds and proceed with reviewer fan-out instead of skipping it (source severity MAJOR mapped to high; no other reviewer flagged this).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"codex-agent call sites read through it\" includes `scripts/review_enable_auto_merge.sh:119` and `:242`.\n  expected_change_site: `scripts/review_enable_auto_merge.sh`, especially the `reviewed_head_is_current_for_labels` PR read.\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: That file is absent from the PR changed-files list, and both PR reads remain direct `gh_retry gh api` calls; no diff routes either read through `gh_pr_cached_read`.\n- requirement: \"Every PR write in the job evicts the affected kinds,\" including comment posts.\n  expected_change_site: `scripts/review_autofix_step_prepush_test_gate.sh`, `review_prepush_test_gate_final_ci_marker`.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The marker is posted with a bare `gh api -X POST` at line 1237 and has no cache eviction afterward. The PR diff adds no eviction there or test covering that write.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_run_reviewers.sh:lines 457-474 | severity=MAJOR | confidence=5\n  PROBLEM: The reviewer pre-flight uses the cached pull state instead of the live PR-closed check required by the task.\n  WHY: If the PR closes after an \"open\" pull is cached, this check can reuse that state for up to 120 seconds and proceed with reviewer fan-out instead of skipping it.\n- TASK_GAP | severity=NIT | confidence=4\n  Requirement: \"codex-agent call sites read through it\" includes `scripts/review_enable_auto_merge.sh:119` and `:242`.\n  Expected change site: `scripts/review_enable_auto_merge.sh`, especially the `reviewed_head_is_current_for_labels` PR read.\n  Evidence of absence: That file is absent from the PR changed-files list, and both PR reads remain direct `gh_retry gh api` calls; no diff routes either read through `gh_pr_cached_read`.\n- TASK_GAP | severity=NIT | confidence=5\n  Requirement: \"Every PR write in the job evicts the affected kinds,\" including comment posts.\n  Expected change site: `scripts/review_autofix_step_prepush_test_gate.sh`, `review_prepush_test_gate_final_ci_marker`.\n  Evidence of absence: The marker is posted with a bare `gh api -X POST` at line 1237 and has no cache eviction afterward. The PR diff adds no eviction there or test covering that write.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c5b3c55bded206dc00c785e84495095d18fa64d91afd452447961b5c6b909679",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9935,
+    "run_id": "45042730780",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45042730780",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122170540_6641b6a559",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9935,
+    "run_id": "45042730780"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-22T17:05:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
