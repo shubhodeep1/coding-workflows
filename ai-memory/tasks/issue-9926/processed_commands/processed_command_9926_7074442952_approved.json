@@ -5,13 +5,28 @@
   "entry_id": "processed_command_9926_7074442952_approved",
   "issue_number": 9926,
   "metadata": {
+    "branch": "ai/issue-9926",
+    "changed_files": [
+      ".github/workflows/review_autofix.yml",
+      "README.md",
+      "agents.d/9926-required-checks-wait-backoff.md",
+      "changelog.d/9926-required-checks-wait-backoff.md",
+      "scripts/pr_checks_lib.sh",
+      "tests/test_pr_base_freshness_gate.py",
+      "tests/test_pr_checks_lib_wait_backoff.py"
+    ],
+    "issue_number": 9926,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9926",
+    "pr_number": 9933,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9933",
+    "run_attempt": "1",
+    "run_id": "44987067712",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/44987067712"
   },
   "run_attempt": 1,
   "run_id": "44987067712",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-22T04:56:32Z",
+  "status": "completed",
+  "timestamp": "2026-11-22T06:19:14Z",
   "workflow": "implement"
 }
