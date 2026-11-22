@@ -3191,7 +3191,8 @@ jobs:
       # vitest), not measured. It went to a different job from "Regression
       # tests wired by the CI wiring guard (part 1)", so no single job took
       # both moves; issue #9363 later moved part 1 to this job
-      # (tests-release-and-log-analysis) as well.
+      # (tests-release-and-log-analysis) as well, and issue #9966 moved part 1
+      # on to orchestrate-poll group 1.
       # The pair needs no git history and moves as a pair: the Node setup runs
       # first and the vitest step keeps its working directory. Names and
       # bodies unchanged.
@@ -3213,8 +3214,9 @@ jobs:
       # "Regression tests wired by the CI wiring guard (part 1)", moved to
       # static-checks with it, moved on to tests-release-and-log-analysis in
       # #7382, was in tests-heal-plan-and-validation from #7406, was in
-      # tests-promote-stall-and-review from #9018 and is in
-      # tests-release-and-log-analysis since #9363.
+      # tests-promote-stall-and-review from #9018, was in
+      # tests-release-and-log-analysis from #9363 and is in orchestrate-poll
+      # group 1 since #9966.
       # Moved on from static-checks, which took 11m17s of its 15 minutes on
       # main (run 40954844196, budget-watch issue #8394). The pick is an
       # estimate from test and subprocess counts, not measured; the run's step
@@ -4045,8 +4047,16 @@ jobs:
       # group 1. The run's step timings were not readable, so the pick is an
       # estimate from test and subprocess counts: this step and the wiring
       # guard part 1 step below were the only arrivals since that job measured
-      # 15m19s. Group 1 had the fewest pinned steps, and this job has the only
-      # 30-minute budget. Name and body unchanged; only the group guard is new.
+      # 15m19s. This job has the only 30-minute budget. Group choice: the
+      # newest recorded overruns (#9916 above) name shards 0 and 3, which hit
+      # 20.2 minutes; group 1 has not been named by budget-watch since #8805
+      # moved a step out after it took 16m44s (its 20m12s in #8396 predates
+      # that and the step it carried then now runs in group 3). Groups 2 and 4
+      # pin four and three steps. Group 1 still pins the review-pipeline
+      # plumbing step, which #8805 and #9639 kept apart from other heavy steps
+      # under the old 20-minute cap, so if budget-watch flags group 1 next,
+      # measure the step timings before moving anything again. Name and body
+      # unchanged; only the group guard is new.
       # In the older text below, "this job" means tests-release-and-log-analysis.
       # Moved from tests-promote-stall-and-review, which took 21m25s of its 20
       # minutes on main (run 43138350536, budget-watch issue #9363). The run's
