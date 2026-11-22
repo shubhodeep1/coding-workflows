@@ -733,6 +733,124 @@ _pr_ruleset_required_check_blockers()
 }
 
 # ---------------------------------------------------------------------------
+# _pr_sync_merge_blocked_guard <pr_json|pr_number> [base_ref] [blockers_hint]
+#
+# Issue #9939. Refuses a synchronous (non --auto) `gh pr merge` while GitHub
+# reports the PR as mergeable_state=blocked. The pipeline merges with the
+# owner's admin GH_PAT, and a direct merge of a blocked PR by an admin is a
+# ruleset bypass: every merge on main from 2026-11-21 12:23 UTC landed that
+# way (rule-suite log: `Required status check "lint" is expected.`), because
+# _pr_ruleset_required_check_blockers matches by name and counted the
+# dispatched final CI's `lint` check-run, which GitHub never evaluates for
+# the PR. Callers defer to their existing retry (next poll, the judge firing
+# again, or GitHub's own auto-merge) instead.
+#
+# Input:  $1 the PR's REST JSON (a value starting with `{`, used as it is),
+#         or a PR number (digits; then 1 GET pulls/<n>).
+#         $2 optional base ref; wins over .base.ref.
+#         $3 optional blockers summary the caller already computed; when
+#         given, no ruleset lookup is made.
+# Output: SYNC_MERGE_BLOCKED_GUARD_STATE (mergeable_state, or none /
+#         unreadable), SYNC_MERGE_BLOCKED_GUARD_BLOCKERS.
+# Return: 0 proceed, 1 defer.
+# Decision:
+#   blocked                  -> defer; blockers from $3, else from
+#                               _pr_ruleset_required_check_blockers
+#                               (rc 1 -> its summary, else `unknown`).
+#   unknown / null / missing -> defer (GitHub is still computing it).
+#   unreadable input         -> defer (fails closed: merging past a rule is
+#                               security-sensitive).
+#   anything else (clean, unstable, has_hooks, behind, dirty, draft)
+#                            -> proceed, no output; GitHub itself refuses
+#                               dirty and draft.
+# Deferral log (one line; blockers last because the summary has spaces):
+#   SYNC_MERGE_BLOCKED_GUARD outcome=deferred pr=<n> head=<sha|unknown>
+#     state=<blocked|unknown|none|unreadable> blockers=<summary|unknown|none>
+# Switch: PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED (default true). Only false / 0 /
+# no / off (any case) disables it; then it logs
+# `SYNC_MERGE_BLOCKED_GUARD outcome=disabled pr=<n>` and returns 0 with no
+# API call. A consumer that relies on admin-bypass merges sets it to false.
+# API calls (§15): 0 for JSON input, 1 GET for a PR number, plus the 1-3
+# GETs of _pr_ruleset_required_check_blockers only when the state is
+# blocked and no hint is given.
+# ---------------------------------------------------------------------------
+_pr_sync_merge_blocked_guard()
+{
+	local guard_input="${1:-}"
+	local guard_base_ref="${2:-}"
+	local guard_blockers_hint="${3:-}"
+	local guard_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	local guard_pr_json="" guard_pr="" guard_head="" guard_state="" guard_blockers=""
+	SYNC_MERGE_BLOCKED_GUARD_STATE=""
+	SYNC_MERGE_BLOCKED_GUARD_BLOCKERS=""
+
+	if [[ "${guard_input}" =~ ^[0-9]+$ ]]; then
+		guard_pr="${guard_input}"
+	fi
+
+	local guard_enabled="${PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED:-true}"
+	case "$(printf '%s' "${guard_enabled}" | tr '[:upper:]' '[:lower:]')" in
+		false|0|no|off)
+			if [ -z "${guard_pr}" ] && [ "${guard_input:0:1}" = "{" ]; then
+				guard_pr="$(printf '%s' "${guard_input}" | jq -r '.number // empty' 2>/dev/null || true)"
+			fi
+			echo "SYNC_MERGE_BLOCKED_GUARD outcome=disabled pr=${guard_pr:-unknown}"
+			return 0
+			;;
+	esac
+
+	if [ -n "${guard_pr}" ]; then
+		if [ -n "${guard_repo}" ]; then
+			guard_pr_json="$(gh_retry _safe_gh_jq "repos/${guard_repo}/pulls/${guard_pr}" 2>/dev/null)" || guard_pr_json=""
+		fi
+	elif [ "${guard_input:0:1}" = "{" ]; then
+		guard_pr_json="${guard_input}"
+	fi
+
+	if [ -z "${guard_pr_json}" ] || ! printf '%s' "${guard_pr_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+		guard_state="unreadable"
+	else
+		[ -n "${guard_pr}" ] || guard_pr="$(printf '%s' "${guard_pr_json}" | jq -r '(.number // empty) | tostring' 2>/dev/null || true)"
+		guard_head="$(printf '%s' "${guard_pr_json}" | jq -r '.head.sha // empty' 2>/dev/null || true)"
+		[[ "${guard_head}" =~ ^[0-9a-f]{40}$ ]] || guard_head=""
+		[ -n "${guard_base_ref}" ] || guard_base_ref="$(printf '%s' "${guard_pr_json}" | jq -r '.base.ref // empty' 2>/dev/null || true)"
+		guard_state="$(printf '%s' "${guard_pr_json}" | jq -r '.mergeable_state // empty' 2>/dev/null || true)"
+		[[ "${guard_state}" =~ ^[a-z_]+$ ]] || guard_state=""
+		[ -n "${guard_state}" ] || guard_state="none"
+	fi
+
+	case "${guard_state}" in
+		blocked)
+			if [ -n "${guard_blockers_hint}" ]; then
+				guard_blockers="${guard_blockers_hint}"
+			elif [ -n "${guard_head}" ] && declare -F _pr_ruleset_required_check_blockers >/dev/null 2>&1; then
+				local guard_ruleset_rc=0
+				_pr_ruleset_required_check_blockers "${guard_head}" "${guard_base_ref}" || guard_ruleset_rc=$?
+				if [ "${guard_ruleset_rc}" = "1" ] && [ -n "${PR_RULESET_BLOCKERS_SUMMARY:-}" ]; then
+					guard_blockers="${PR_RULESET_BLOCKERS_SUMMARY}"
+				else
+					guard_blockers="unknown"
+				fi
+			else
+				guard_blockers="unknown"
+			fi
+			;;
+		unknown|none|unreadable)
+			guard_blockers="unknown"
+			;;
+		*)
+			SYNC_MERGE_BLOCKED_GUARD_STATE="${guard_state}"
+			return 0
+			;;
+	esac
+
+	SYNC_MERGE_BLOCKED_GUARD_STATE="${guard_state}"
+	SYNC_MERGE_BLOCKED_GUARD_BLOCKERS="${guard_blockers}"
+	echo "SYNC_MERGE_BLOCKED_GUARD outcome=deferred pr=${guard_pr:-unknown} head=${guard_head:-unknown} state=${guard_state} blockers=${guard_blockers}"
+	return 1
+}
+
+# ---------------------------------------------------------------------------
 # Required-checks wait before enabling auto-merge (2026-10-09).
 #
 # `gh pr merge --auto` merges as soon as the base branch's required status

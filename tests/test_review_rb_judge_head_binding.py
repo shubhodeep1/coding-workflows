@@ -420,6 +420,24 @@ OLD_WARNINGS = {
 }
 
 
+# #9939: the merge sites call rb_judge_sync_merge_guard, which wraps
+# _pr_sync_merge_blocked_guard from scripts/pr_checks_lib.sh. The harness
+# stubs that helper: it proceeds unless GUARD_STUB_DEFER=1, and logs each
+# call's first argument to GUARD_STUB_LOG when set.
+GUARD_STUB = (
+	"_pr_sync_merge_blocked_guard() {\n"
+	'  if [ -n "${GUARD_STUB_LOG:-}" ]; then printf \'%s\\n\' "${1:-}" >> "${GUARD_STUB_LOG}"; fi\n'
+	'  if [ "${GUARD_STUB_DEFER:-0}" = "1" ]; then\n'
+	"    SYNC_MERGE_BLOCKED_GUARD_STATE=blocked\n"
+	'    SYNC_MERGE_BLOCKED_GUARD_BLOCKERS="ci/final (missing)"\n'
+	'    echo "SYNC_MERGE_BLOCKED_GUARD outcome=deferred pr=42 head=stub state=blocked blockers=ci/final (missing)"\n'
+	"    return 1\n"
+	"  fi\n"
+	"  return 0\n"
+	"}\n"
+)
+
+
 def _merge_err_helpers() -> str:
 	text = _script_text()
 	start = text.index(MERGE_ERR_BEGIN)
@@ -477,6 +495,7 @@ def _run_merge_site(
 		harness.write_text(
 			"set -euo pipefail\n"
 			"review_head_gate_post_status() { :; }\n"
+			+ GUARD_STUB
 			+ _merge_err_helpers()
 			+ "\n"
 			+ _merge_site_snippet(path)
@@ -589,6 +608,38 @@ def test_mktemp_failure_keeps_previous_behaviour(path: str) -> None:
 		assert "RB_MERGE_STATUS=merge_failed" in stdout.splitlines()
 
 
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_blocked_guard_defers_the_direct_merge(path: str) -> None:
+	"""#9939: a PR GitHub reports blocked is never merged directly."""
+	proc, output, calls, _scratch, stdout = _run_merge_site(
+		path, [1, 1], extra_env={"GUARD_STUB_DEFER": "1"}
+	)
+	assert proc.returncode == 0, proc.stderr
+	direct = [c for c in calls if c[:2] == ["pr", "merge"] and "--auto" not in c]
+	assert direct == [], calls
+	assert "SYNC_MERGE_BLOCKED_GUARD outcome=deferred pr=42" in stdout
+	assert _error_lines(stdout) == []
+	if path == "sync":
+		assert calls == []
+		assert "judge_skip_reason=mergeability_pending" in output.splitlines()
+		assert "judge_skip_reason=sync_merge_failed" not in output.splitlines()
+	else:
+		assert calls == _expected_calls(path)[:1]
+		assert "RB_MERGE_STATUS=mergeability_pending" in stdout.splitlines()
+
+
+@pytest.mark.parametrize("path", ("merge", "terminal"))
+def test_auto_merge_success_skips_the_blocked_guard(path: str) -> None:
+	"""#9939: auto-merge stays first; GitHub merges once the PR is green."""
+	proc, _output, calls, _scratch, stdout = _run_merge_site(
+		path, [0], extra_env={"GUARD_STUB_DEFER": "1"}
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert calls == _expected_calls(path)[:1]
+	assert "SYNC_MERGE_BLOCKED_GUARD" not in stdout
+	assert "RB_MERGE_STATUS=merge_requested" in stdout.splitlines()
+
+
 def test_no_merge_command_discards_stderr() -> None:
 	text = _script_text()
 	for line in text.splitlines():
@@ -654,6 +705,7 @@ def _run_merge_site_scripted(
 		harness.write_text(
 			"set -euo pipefail\n"
 			"review_head_gate_post_status() { :; }\n"
+			+ GUARD_STUB
 			+ _merge_err_helpers()
 			+ "\n"
 			+ _merge_site_snippet(path)
@@ -719,7 +771,7 @@ def test_transient_merge_error_is_retried_and_succeeds(path: str) -> None:
 	assert sleeps == ["10"]
 	expected = _expected_calls(path)
 	assert calls[: len(expected)] == expected
-	assert calls[len(expected)] == ["api", "repos/o/r/pulls/42", "--jq", "[.state, (.merged // false), (.auto_merge != null), .head.sha] | @tsv"]
+	assert calls[len(expected)] == ["api", "repos/o/r/pulls/42", "--jq", '[.state, (.merged // false), (.auto_merge != null), .head.sha, (.mergeable_state // ""), (.base.ref // "")] | @tsv']
 	assert calls[len(expected) + 1 :] == expected[:1]
 	retry = _retry_lines(proc.stdout)
 	assert retry == [f"RB_JUDGE_MERGE_RETRY pr=42 head={JUDGED} path={path} attempt=1/3 delay_s=10 reason=transient"]
