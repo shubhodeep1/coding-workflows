@@ -1697,7 +1697,7 @@ _mt_merge_lease_tick()
 # automatic merge (incident: #9891 sat green until a human merged it). They
 # pass every gate below and are gated by FORWARD_MERGE_FALLBACK_AUTO_MERGE
 # (default true; any other value drops them with
-# reason=forward_merge_auto_merge_disabled before any read).
+# reason=forward_merge_auto_merge_disabled before the statuses read).
 #
 # Input: as _mt_merge_lease_tick.
 # API calls per labelled PR: 1 statuses read, the checks read(s) of
@@ -1770,7 +1770,7 @@ _mt_final_ci_merge_resume()
 			continue
 		fi
 		# The forward-merge fallback's own kill switch (same exact `true`
-		# comparison as review_autofix.yml); checked before any read.
+		# comparison as review_autofix.yml); checked before the statuses read.
 		if [ "${resume_merge_method}" = "merge" ] && [ "${FORWARD_MERGE_FALLBACK_AUTO_MERGE:-true}" != "true" ]; then
 			_mt_final_ci_pending_unlabel "${resume_num}" "${resume_label}"
 			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=dropped reason=forward_merge_auto_merge_disabled"
