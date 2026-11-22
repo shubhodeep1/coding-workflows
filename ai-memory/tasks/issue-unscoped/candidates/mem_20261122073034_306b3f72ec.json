@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:527 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The only failed check on head e17dabe2 is `review / gate` (run 44978235387). It exited with code 75 after `GH_API_RETRY outcome=gave_up kind=primary bucket=core status=403` on `support_main_json=\"$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/main)\"`, which followed `SUPPORT_REF source=promote_candidate_unprotected`.\n  WHY: GitHub's shared core rate limit ran out across the account. This PR does not touch this file or code path, stopping when the read fails is the intended behaviour, and the check should pass on re-run after the limit resets. The source severity is NIT, mapped here to low. z-ai_glm-5_3-flash described the same failure in narration but said it was \"Not reported as a defect\".\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/review_autofix.yml:line 527, support_main_json=\"$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/main)\" | severity=NIT | confidence=2\n  PROBLEM: The only failed check on head e17dabe2 is `review / gate` (run 44978235387). It exited with code 75 after the log line `GH_API_RETRY outcome=gave_up kind=primary bucket=core status=403` on this read, which followed `SUPPORT_REF source=promote_candidate_unprotected`.\n  WHY: GitHub's shared core rate limit ran out across the account. This PR does not touch this file or code path, and stopping when the read fails is the intended behaviour. No code change in this PR applies, and the check should pass on re-run after the limit resets. It is reported only because every failed check has to be surfaced.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d712b59e69fe759d75494fd2e4227628b552c237569e285415c430ba87ebe9e9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9922,
+    "run_id": "44994261148",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44994261148",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122073034_306b3f72ec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9922,
+    "run_id": "44994261148"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-22T07:30:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
