@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_actions.py:940-945 | severity=high | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The new `- Integration branch: \\`<head>\\`` line in `_fixup_body` is added for any trusted PR item, with no check that the PR is open (compare the reissue guard at lines 1195-1199).\n  WHY: For an already-merged trusted PR the head branch is typically deleted, so `resolve_integration_ref.sh` `resolve_ref` (lines 713-720) reports the declared branch as missing and a descope fix-up that used to plan now blocks. The reviewer labelled this MAJOR; it is mapped to high, and no other reviewer raised it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/unblock_actions.py:940-945 | severity=high | confidence=4\n  PROBLEM: The new `- Integration branch: \\`<head>\\`` line in `_fixup_body` is added for any trusted PR item, with no check that the PR is open (compare the reissue guard at lines 1195-1199).\n  WHY: For an already-merged trusted PR the head branch is typically deleted, so `resolve_integration_ref.sh` `resolve_ref` (lines 713-720) reports the declared branch as missing and a descope fix-up that used to plan now blocks. The reviewer labelled this MAJOR; it is mapped to high, and no other reviewer raised it.\n- HARDENING_SUGGESTION: scripts/unblock_judge.sh `unblock_main` lines 2068-2072. Read `.state` in the existing `pr_json` jq read (no new API call) and set `pr_context_head_ref` only when `pr_trusted=true` and the PR state is open. HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "401bfa3f0c560bae35f714ae87f87c9e89219b1545f9b5ad59d329b91566a6cf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9943,
+    "run_id": "45032212944",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45032212944",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122151204_95e7e23543",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9943,
+    "run_id": "45032212944"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-22T15:12:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
