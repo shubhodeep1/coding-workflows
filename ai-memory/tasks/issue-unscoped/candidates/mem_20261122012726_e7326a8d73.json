@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Do not normalize a judge `escalate_human` to `attempt_merge` when the linked PR is not open.\" (issue #9482, Proposed fix, third bullet)\n  expected_change_site: `invoke_stall_judge` in `scripts/orchestrate_poll_process.sh` (escalation-keep chain, lines 23037-23056)\n  confidence=5\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The escalation-keep branch requires `_pr_json_is_issue_implementation_pr` to accept the linked PR, so a merged PR that only mentions the issue and targets `main` matches neither keep: the #9481 keep (`_stall_judge_linked_pr_keeps_escalation` at 24666, which covers closed-unmerged and merged-non-target-base PRs) and the #9482 elif at 23051-23053, which also requires the implementation-PR check. The normalisation at 23008/23096 therefore still fires, and `test_stall_judge_merged_target_base_non_implementation_cross_ref_keeps_normalisation` (tests/test_orchestrate_poll_process.py) asserts that normalisation, including `\"ai:needs-human\" not in labels`. z-ai_glm-5_3-flash notes this is a deliberate, documented deviation: the #3816 / #3828 mis-target guard is the reason, and the MAX_JUDGE_REPLAY backstop at 23004-23006 bounds any repeat. It says the rationale should be preserved, not reverted. Reported severities: MAJOR (openai_gpt-6-luna) and NIT (z-ai_glm-5_3-flash). anthropic_claude-sonnet-5_5 explicitly rejected this gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cDo not normalize a judge `escalate_human` to `attempt_merge` when the linked PR is not open.\u201d\n  Expected change site: `invoke_stall_judge` in `scripts/orchestrate_poll_process.sh`\n  Evidence of absence: The escalation-keep branch requires `_pr_json_is_issue_implementation_pr` to accept the linked PR. For a merged PR that only mentions the issue and targets `main`, that condition does not apply; `test_stall_judge_merged_target_base_non_implementation_cross_ref_keeps_normalisation` explicitly verifies that `escalate_human` is normalized to `attempt_merge`.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: \"Do not normalize a judge `escalate_human` to `attempt_merge` when the linked PR is not open.\" (issue #9482, Proposed fix, third bullet)\n  Expected change site: `invoke_stall_judge` in `scripts/orchestrate_poll_process.sh` (escalation-keep chain, lines 23037-23056)\n  Evidence of absence: The keep chain only retains `escalate_human` for (a) the #9481 keep (closed-unmerged or merged into a non-target base, `_stall_judge_linked_pr_keeps_escalation` at 24666) and (b) the #9482 elif at 23051-23053, which additionally requires `_pr_json_is_issue_implementation_pr` to accept the linked PR. A merged PR that only mentions the issue fails both keeps, so the normalisation at 23008/23096 still fires. The last run's new test `test_stall_judge_merged_target_base_non_implementation_cross_ref_keeps_normalisation` (tests/test_orchestrate_poll_process.py) actively asserts this normalisation, including `\"ai:needs-human\" not in labels`.\n  Context: The reviewer calls this a deliberate, documented deviation, not an oversight. The agents.d and changelog.d fragments cite the #3816 / #3828 mis-target and the MAX_JUDGE_REPLAY backstop, and `judge_escalate_streak >= MAX_JUDGE_REPLAY` forces `escalate_human` (23004-23006). The residual impact is at most MAX_JUDGE_REPLAY (default 2) extra ticks. The reviewer reports it because the literal requirement is still unimplemented for this one case. If the gap is promoted, the narrowing rationale should be preserved, not reverted.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f35846fe6d194a3be6f4d91dd5940da4fc4085122732d1eae69f8a7eb34d324e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9502,
+    "run_id": "44968214445",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44968214445",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122012726_e7326a8d73",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9502,
+    "run_id": "44968214445"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T01:27:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
