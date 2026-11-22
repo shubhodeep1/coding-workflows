@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The base SHA is missing in a shallow checkout. Fetch only the base SHA.\"\n  expected_change_site: `.github/workflows/pr-checks.yml`, the `gh_loop_call_lint` fetch step.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The step fetches `\"${head_commit}\"` with `--depth=2` at line 299, while the lint uses `\"${head_commit}^1\"` as its base at line 301. It does not fetch only the base SHA as specified. (Reviewer severity: NIT)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"The base SHA is missing in a shallow checkout. Fetch only the base SHA.\"\n  Expected change site: `.github/workflows/pr-checks.yml`, the `gh_loop_call_lint` fetch step.\n  Evidence of absence: The step fetches `\"${head_commit}\"` with `--depth=2` at line 299, while the lint uses `\"${head_commit}^1\"` as its base at line 301. It does not fetch only the base SHA as specified.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e2c3bbc1a2ff95906fffd94127023d598172fd73106029c1b758ee9096f5976f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9936,
+    "run_id": "45032215127",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45032215127",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122152607_0286089240",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9936,
+    "run_id": "45032215127"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-22T15:26:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
