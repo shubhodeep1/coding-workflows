@@ -425,13 +425,14 @@ OLD_WARNINGS = {
 # stubs that helper: it proceeds unless GUARD_STUB_DEFER=1 or the PR JSON it
 # gets carries mergeable_state "none" / "blocked" (the real guard's defer
 # arms), and logs each call's first argument to GUARD_STUB_LOG when set.
+# GUARD_STUB_STATE overrides the deferral's mergeable_state (default blocked).
 GUARD_STUB = (
 	"_pr_sync_merge_blocked_guard() {\n"
 	'  if [ -n "${GUARD_STUB_LOG:-}" ]; then printf \'%s\\n\' "${1:-}" >> "${GUARD_STUB_LOG}"; fi\n'
 	'  local _stub_defer="${GUARD_STUB_DEFER:-0}"\n'
 	'  case "${1:-}" in *\'"mergeable_state":"none"\'*|*\'"mergeable_state":"blocked"\'*) _stub_defer=1 ;; esac\n'
 	'  if [ "${_stub_defer}" = "1" ]; then\n'
-	"    SYNC_MERGE_BLOCKED_GUARD_STATE=blocked\n"
+	'    SYNC_MERGE_BLOCKED_GUARD_STATE="${GUARD_STUB_STATE:-blocked}"\n'
 	'    SYNC_MERGE_BLOCKED_GUARD_BLOCKERS="ci/final (missing)"\n'
 	'    echo "SYNC_MERGE_BLOCKED_GUARD outcome=deferred pr=42 head=stub state=blocked blockers=ci/final (missing)"\n'
 	"    return 1\n"
@@ -627,11 +628,30 @@ def test_blocked_guard_defers_the_direct_merge(path: str) -> None:
 		assert "judge_skip_reason=mergeability_pending" in output.splitlines()
 		assert "judge_skip_reason=sync_merge_failed" not in output.splitlines()
 	else:
-		# The failed --auto request is the reason nothing merges: reported once.
+		# The failed --auto request is the reason nothing merges: reported
+		# once, without a direct part (the direct merge never ran). A draft
+		# refusal on a blocked PR is not transient, so it is a failure (#9939).
 		lines = _error_lines(stdout)
 		assert len(lines) == 1 and f"path={path} error=auto: " in lines[0], lines
+		assert "direct: " not in lines[0], lines
 		assert calls == _expected_calls(path)[:1]
-		assert "RB_MERGE_STATUS=mergeability_pending" in stdout.splitlines()
+		assert "RB_MERGE_STATUS=merge_failed" in stdout.splitlines()
+		warnings = [line for line in stdout.splitlines() if line.startswith("::warning::")]
+		assert len(warnings) == 1 and warnings[0].startswith(OLD_WARNINGS[path]), warnings
+
+
+@pytest.mark.parametrize("path", ("merge", "terminal"))
+def test_auto_refusal_while_mergeability_is_unknown_stays_pending(path: str) -> None:
+	"""#9939: while GitHub has not computed mergeable_state yet, a refused
+	--auto request may only reflect that; the judge waits instead of paging."""
+	proc, _output, calls, _scratch, stdout = _run_merge_site(
+		path, [1, 1], extra_env={"GUARD_STUB_DEFER": "1", "GUARD_STUB_STATE": "unknown"}
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert calls == _expected_calls(path)[:1]
+	assert "RB_MERGE_STATUS=mergeability_pending" in stdout.splitlines()
+	assert len(_error_lines(stdout)) == 1
+	assert not any(line.startswith("::warning::") for line in stdout.splitlines())
 
 
 @pytest.mark.parametrize("path", ("merge", "terminal"))
@@ -839,13 +859,33 @@ def test_transient_auto_error_is_retried_after_a_site_deferral(path: str) -> Non
 
 @pytest.mark.parametrize("path", ("merge", "terminal"))
 def test_non_transient_auto_error_after_a_site_deferral_is_not_retried(path: str) -> None:
+	"""#9939: --auto was the only merge path left and GitHub refused it for a
+	reason that will not go away, so the site reports merge_failed (paging
+	warning), not a self-healing mergeability_pending."""
 	responses = [_fail(DRAFT_MESSAGE)]
 	proc, _output, calls, sleeps = _run_merge_site_scripted(path, responses, extra_env={"GUARD_STUB_DEFER": "1"})
 	assert proc.returncode == 0, proc.stderr
 	assert sleeps == []
 	assert calls == _expected_calls(path)[:1]
-	assert "RB_MERGE_STATUS=mergeability_pending" in proc.stdout.splitlines()
+	assert "RB_MERGE_STATUS=merge_failed" in proc.stdout.splitlines()
+	assert "RB_MERGE_STATUS=mergeability_pending" not in proc.stdout.splitlines()
 	assert len(_error_lines(proc.stdout)) == 1
+
+
+@pytest.mark.parametrize("path", ("merge", "terminal"))
+@pytest.mark.parametrize("pr_read", ["head_moved", "not_open"])
+def test_head_moved_or_closed_after_a_site_deferral_is_a_failure(path: str, pr_read: str) -> None:
+	"""#9939: the retry stopped because the PR can no longer merge at the
+	judged head; that is merge_failed, not a blocked-mergeability wait."""
+	read = _pr_state(head=OTHER) if pr_read == "head_moved" else _pr_state(state="closed")
+	responses = [_fail(), read]
+	proc, _output, calls, sleeps = _run_merge_site_scripted(path, responses, extra_env={"GUARD_STUB_DEFER": "1"})
+	assert proc.returncode == 0, proc.stderr
+	assert sleeps == ["10"]
+	assert [c for c in calls if c[:2] == ["pr", "merge"]] == _expected_calls(path)[:1], calls
+	assert f"outcome={pr_read}" in proc.stdout
+	assert "RB_MERGE_STATUS=merge_failed" in proc.stdout.splitlines()
+	assert "RB_MERGE_STATUS=mergeability_pending" not in proc.stdout.splitlines()
 
 
 @pytest.mark.parametrize("path", MERGE_SITE_ORDER)

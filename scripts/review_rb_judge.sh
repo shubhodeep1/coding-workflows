@@ -2489,17 +2489,23 @@ rb_judge_sync_merge_guard() {
 # guard has deferred the direct merge (at the site or inside this loop),
 # --auto is the only merge path left: auto mode then retries only --auto,
 # and only while the --auto stderr is transient; direct mode returns 1.
+# Sets RB_MERGE_RETRY_GIVEUP to why it returned 1: non_transient, head_moved,
+# not_open, deferred (direct mode only) or exhausted; read by
+# rb_judge_deferred_merge_pending.
 rb_judge_merge_retry_transient() {
   local _rb_retry_mode="${1:-direct}" _rb_retry_path="${2:-unknown}"
   local _rb_retry_attempt=0 _rb_retry_delay="" _rb_retry_pr=""
   local _rb_retry_state="" _rb_retry_merged="" _rb_retry_auto="" _rb_retry_head=""
   local _rb_retry_mergeable_state="" _rb_retry_base_ref="" _rb_retry_guard_json=""
   local _rb_retry_auto_only="false"
+  RB_MERGE_RETRY_GIVEUP=""
   if [ "${RB_SYNC_MERGE_DEFERRED:-false}" = "true" ]; then
+    RB_MERGE_RETRY_GIVEUP="deferred"
     [ "${_rb_retry_mode}" = "auto" ] || return 1
     _rb_retry_auto_only="true"
   fi
   for _rb_retry_delay in 10 20 40; do
+    RB_MERGE_RETRY_GIVEUP="non_transient"
     if [ "${_rb_retry_auto_only}" = "true" ]; then
       # The direct merge never ran: judge the --auto attempt's stderr.
       RB_MERGE_ERR_DIRECT_FILE="${RB_MERGE_ERR_AUTO_FILE:-/dev/null}" rb_judge_merge_err_is_transient || return 1
@@ -2526,6 +2532,7 @@ rb_judge_merge_retry_transient() {
     # judge's merge, so it stays a failure (head_moved).
     if [ -n "${_rb_retry_head}" ] && [ "${_rb_retry_head}" != "${RB_JUDGED_HEAD_SHA:-}" ]; then
       echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=head_moved"
+      RB_MERGE_RETRY_GIVEUP="head_moved"
       return 1
     fi
     if [ "${_rb_retry_merged}" = "true" ]; then
@@ -2534,6 +2541,7 @@ rb_judge_merge_retry_transient() {
     fi
     if [ -n "${_rb_retry_state}" ] && [ "${_rb_retry_state}" != "open" ]; then
       echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=not_open"
+      RB_MERGE_RETRY_GIVEUP="not_open"
       return 1
     fi
     if [ "${_rb_retry_mode}" = "auto" ] && [ "${_rb_retry_auto}" = "true" ] && [ "${_rb_retry_head}" = "${RB_JUDGED_HEAD_SHA:-}" ]; then
@@ -2553,13 +2561,43 @@ rb_judge_merge_retry_transient() {
         '{number: ($n | tonumber? // $n), head: {sha: $sha}, base: {ref: $base}, mergeable_state: (if $ms == "" then null else $ms end)}' 2>/dev/null)" || _rb_retry_guard_json="{}"
     fi
     if ! rb_judge_sync_merge_guard "${_rb_retry_guard_json:-"{}"}"; then
+      RB_MERGE_RETRY_GIVEUP="deferred"
       [ "${_rb_retry_mode}" = "auto" ] || return 1
       _rb_retry_auto_only="true"
       continue
     fi
     gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_DIRECT_FILE}" && return 0
   done
+  RB_MERGE_RETRY_GIVEUP="exhausted"
   return 1
+}
+
+# #9939: the `merge` / `terminal` chains call this only after the
+# blocked-merge guard deferred the direct merge and the --auto request (the
+# only merge path left) failed too. Returns 0 when that is a wait
+# (RB_MERGE_STATUS=mergeability_pending, stall recovery re-fires the judge):
+# the retry ran out on transient --auto errors, the --auto request left no
+# stderr, or GitHub had not computed mergeable_state yet. Returns 1 (the
+# site's merge_failed branch and its warning) when the PR closed or its head
+# moved during the retry, or GitHub refused --auto for a non-transient
+# reason while it reported the PR blocked: no later pass can merge it then.
+# Empties the direct stderr first: a direct attempt before a deferral inside
+# the retry is stale, so the error report names only the --auto refusal.
+rb_judge_deferred_merge_pending() {
+  if [ -n "${RB_MERGE_ERR_DIR:-}" ] && [ -f "${RB_MERGE_ERR_DIRECT_FILE:-/dev/null}" ] && [ ! -L "${RB_MERGE_ERR_DIRECT_FILE}" ]; then
+    : > "${RB_MERGE_ERR_DIRECT_FILE}" 2>/dev/null || true
+  fi
+  case "${RB_MERGE_RETRY_GIVEUP:-}" in
+    head_moved|not_open)
+      return 1
+      ;;
+    non_transient)
+      if [ "${SYNC_MERGE_BLOCKED_GUARD_STATE:-}" = "blocked" ] && [ -s "${RB_MERGE_ERR_AUTO_FILE:-/dev/null}" ]; then
+        return 1
+      fi
+      ;;
+  esac
+  return 0
 }
 # END rb-judge merge error capture (#7659)
 
@@ -2675,7 +2713,7 @@ case "${RB_ACTION}" in
             rb_judge_merge_err_close
             RB_MERGE_READY_LABEL_ALLOWED="true"
             RB_MERGE_STATUS="merge_requested"
-          elif [ "${RB_SYNC_MERGE_DEFERRED:-false}" = "true" ]; then
+          elif [ "${RB_SYNC_MERGE_DEFERRED:-false}" = "true" ] && rb_judge_deferred_merge_pending; then
             # The --auto request failed too (#9939): it was the only merge
             # path left, so record why before the stderr files go away.
             if [ -s "${RB_MERGE_ERR_AUTO_FILE:-/dev/null}" ]; then
@@ -2787,7 +2825,7 @@ case "${RB_ACTION}" in
             rb_judge_merge_err_close
             RB_MERGE_READY_LABEL_ALLOWED="true"
             RB_MERGE_STATUS="merge_requested"
-          elif [ "${RB_SYNC_MERGE_DEFERRED:-false}" = "true" ]; then
+          elif [ "${RB_SYNC_MERGE_DEFERRED:-false}" = "true" ] && rb_judge_deferred_merge_pending; then
             # The --auto request failed too (#9939): it was the only merge
             # path left, so record why before the stderr files go away.
             if [ -s "${RB_MERGE_ERR_AUTO_FILE:-/dev/null}" ]; then
