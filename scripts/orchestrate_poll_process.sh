@@ -26839,7 +26839,7 @@ run_unblock_scan() {
   if ! search_items="$(gh_retry gh api --method GET "search/issues" \
     -f q="repo:${GITHUB_REPOSITORY} is:open label:${labels_q}" \
     -f sort=updated -f order=asc -f per_page=30 \
-    --jq '[.items[]? | {number, labels: [.labels[]?.name], pull_request: (.pull_request != null), created_at, updated_at}]' 2>/dev/null)"; then
+    --jq '[.items[]? | {number, title, labels: [.labels[]?.name], pull_request: (.pull_request != null), created_at, updated_at}]' 2>/dev/null)"; then
     echo "UNBLOCK_SCAN outcome=skip reason=search_failed"
     return 0
   fi
@@ -26884,6 +26884,7 @@ run_unblock_scan() {
     [[ "${n}" =~ ^[0-9]+$ ]] || continue
     fragment+=$'\n'"    i${n}: issueOrPullRequest(number: ${n}) {
       ... on Issue {
+        title
         body
         author { login }
         authorAssociation
@@ -26891,6 +26892,7 @@ run_unblock_scan() {
         comments(last: 30) { totalCount nodes { body createdAt updatedAt author { login } } }
       }
       ... on PullRequest {
+        title
         timelineItems(last: 30, itemTypes: [LABELED_EVENT]) { nodes { ... on LabeledEvent { createdAt label { name } } } }
         comments(last: 30) { totalCount nodes { body createdAt updatedAt author { login } } }
       }
@@ -26912,6 +26914,7 @@ run_unblock_scan() {
         comments: [.value.comments.nodes[]? | {login: (.author.login // ""), body: (.body // ""), created_at: ((.updatedAt // .createdAt) // "")}],
         comment_count: .value.comments.totalCount,
         body: (.value.body // null),
+        title: (.value.title // null),
         author_login: (.value.author.login // ""),
         author_association: (.value.authorAssociation // ""),
         history_incomplete: ((.value.comments.totalCount | type) != "number" or (.value.comments.nodes | type) != "array" or .value.comments.totalCount > (.value.comments.nodes | length))
