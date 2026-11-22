@@ -3021,6 +3021,9 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_initial_state_v2.py
+          # Stable-only wiring (backport of #9695): main runs this file through its
+          # tests-system-python catch-all, which stable does not have.
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_orchestrate_state_v2_compression.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state_unblock.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_blocker_check.py
@@ -3525,8 +3528,9 @@ jobs:
   orchestrate-poll:
     # tests/test_orchestrate_poll_process.py was the old job's critical path
     # (about 20 minutes on 4 local shards). Each matrix group runs one
-    # fifth of it on CI_POLL_TEST_SHARDS local shards; 20 minutes leaves
-    # room for a cold runner, whose shards can be slower than a warm one's.
+    # fifth of it on CI_POLL_TEST_SHARDS local shards; the timeout below
+    # leaves room for a cold runner, whose shards can be slower than a warm
+    # one's.
     # The matrix grew from 4 to 5 groups after group 0 took 16m45s of its
     # 20 minutes (run 40165437476, budget-watch issue #8113). Group 4 runs
     # its slice and, since #8118, the unblock judge step; every other
@@ -3557,6 +3561,16 @@ jobs:
     # from group 3).
     # Since #9895, the pre-push affected-test gate step runs in
     # tests-hooks-and-orchestrator instead of group 0.
+    # On 2026-11-21, after #9641 moved the pre-push gate step out of group
+    # 3, shards still ran 15.0-17.1 minutes on a passing run (#9867, run
+    # 44914391485) and were cancelled at the 20-minute cap in runs
+    # 44915291684 (#9839, shards 0 and 3 at 20.2 min) and 44917124015
+    # (#9854, shard 0). Moving steps (#9639 / #9641) did not leave enough
+    # headroom, so the repository owner chose 30 minutes (#9916). This
+    # deliberately overrides the budget-watch advice not to raise
+    # `timeout-minutes`, for this job only; budget-watch still warns at
+    # 0.75 of the limit (22m30s). tests/test_ci_job_split_contract.py pins
+    # this job as the only exception to the 20-minute cap.
     # Skipped in quick mode (Phase 4): only static-checks runs there.
     if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
     runs-on: ubuntu-latest
@@ -3565,7 +3579,7 @@ jobs:
       fail-fast: false
       matrix:
         poll-group: [0, 1, 2, 3, 4]
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -4321,6 +4335,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_clarify_isolated_run.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_post_stage.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_transient_rerun.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_owned_failures.py
 
   tests-system-python:
