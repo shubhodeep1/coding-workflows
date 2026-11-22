@@ -461,7 +461,12 @@ if [ -n "${PR_NUMBER:-}" ] && [ -n "${REPOSITORY:-}" ] && command -v gh >/dev/nu
     fi
   fi
   if [[ ! "${preflight_state}" =~ ^(open|closed|merged)$ ]]; then
-    preflight_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
+    # Issue #9928: the run-local PR read cache (fail-open) when available.
+    if type gh_pr_cached_read >/dev/null 2>&1; then
+      preflight_state="$(gh_pr_cached_read pull "${REPOSITORY}" "${PR_NUMBER}" 2>/dev/null | jq -r '.state // ""' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
+    else
+      preflight_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
+    fi
   fi
   if [ "${preflight_state}" != "open" ]; then
     echo "Pre-flight: PR #${PR_NUMBER} is ${preflight_state} — skipping reviewer fan-out."

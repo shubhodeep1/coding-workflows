@@ -1425,7 +1425,13 @@ _pr_base_freshness()
 	# The PR's own paths: `--paginate --slurp` yields an array of pages,
 	# each an array of file objects; renames count under both names.
 	local pr_files_json tmp_compare tmp_pr_files overlap
-	pr_files_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${repo}/pulls/${pr_number}/files?per_page=100" 2>/dev/null || echo "{}")"
+	# Issue #9928: in the review job (GH_PR_READ_CACHE_JOB set) the files list
+	# comes from the run-local PR read cache, one flat array keyed by head.
+	if [ -n "${GH_PR_READ_CACHE_JOB:-}" ] && type gh_pr_cached_read >/dev/null 2>&1; then
+		pr_files_json="$(gh_pr_cached_read files "${repo}" "${pr_number}" "${head_sha}" 2>/dev/null || echo "{}")"
+	else
+		pr_files_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${repo}/pulls/${pr_number}/files?per_page=100" 2>/dev/null || echo "{}")"
+	fi
 	if ! tmp_compare="$(mktemp "${TMPDIR:-/tmp}/pr_base_compare.XXXXXX" 2>/dev/null)"; then
 		PR_BASE_FRESHNESS_LAST_REASON="tmp_failed"
 		PR_BASE_FRESHNESS_OUTCOME="unknown"
@@ -1542,7 +1548,9 @@ _pr_base_sync_for_fresh_ci()
 # API budget (§15): one `user` read and one paginated issue-comments read,
 # only on the overlap path. No earlier call in this file reads comments or
 # the token's login; the review gate's own comments read happens in another
-# job and cannot be shared.
+# job and cannot be shared. In the review job (GH_PR_READ_CACHE_JOB set) the
+# comments read goes through the run-local PR read cache (issue #9928; keyed
+# with no head SHA, so it expires after 120 s and PR writes evict it).
 _pr_base_sync_count()
 {
 	local pr_number="$1"
@@ -1556,7 +1564,11 @@ _pr_base_sync_count()
 	# Kept for the review sweep's base sync, which trusts only this login's
 	# ai-review/head-gate status (scripts/review_final_ci_sweep.sh).
 	PR_BASE_SYNC_LOGIN="${sync_login}"
-	sync_comments_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${repo}/issues/${pr_number}/comments?per_page=100" 2>/dev/null)" || return 1
+	if [ -n "${GH_PR_READ_CACHE_JOB:-}" ] && type gh_pr_cached_read >/dev/null 2>&1; then
+		sync_comments_json="$(gh_pr_cached_read issue_comments "${repo}" "${pr_number}" 2>/dev/null)" || return 1
+	else
+		sync_comments_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${repo}/issues/${pr_number}/comments?per_page=100" 2>/dev/null)" || return 1
+	fi
 	PR_BASE_SYNC_COUNT="$(printf '%s' "${sync_comments_json}" | jq -r --arg login "${sync_login}" --arg pr "${pr_number}" '
 		[ .[]? | if type == "array" then .[] else . end
 		  | select(type == "object" and ((.user.login // "") == $login))
