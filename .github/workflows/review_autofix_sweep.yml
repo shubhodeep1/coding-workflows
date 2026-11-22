@@ -248,6 +248,7 @@ jobs:
           ZOMBIE_RUN_REAPER_TOKEN: ${{ github.token }}
           MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
           MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
+          MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
           # Smoke-PR backstop age limit in hours (issue #8953); 0 disables
           # the age rule (an issue_closed match still closes).
           SWEEP_SMOKE_PR_MAX_AGE_HOURS: ${{ vars.SWEEP_SMOKE_PR_MAX_AGE_HOURS || '6' }}
@@ -962,6 +963,11 @@ jobs:
           FINAL_CI_SWEEP_HELPERS_DIR: .ci-rerun-support/scripts
           HEAD_REF_FILTER: ${{ inputs.head_ref_filter }}
           DRY_RUN: ${{ inputs.dry_run }}
+          # Soft path class off here (merge-lease Phase 4, Refs #9781): the
+          # sweep's base sync treats `clean` and `overlap` alike, so a
+          # merge-tree probe (private repository plus a fetch per PR) could
+          # never change its decision.
+          MERGE_LEASE_SOFT_PATHS: none
         run: bash .ci-rerun-support/scripts/review_final_ci_sweep.sh
 
       - name: Re-dispatch stale security holds

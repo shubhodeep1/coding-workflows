@@ -9,6 +9,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -989,6 +990,63 @@ def test_missing_orchestrate_lib_sibling_keeps_queued_runs_active(tmp_path: Path
 	wedged = {"id": 9, "display_title": "Unblock judge #5", "status": "queued", "created_at": _iso(200)}
 	assert isolated._busy_items([wedged], NOW, dt.timedelta(minutes=60)) == {5}
 	assert isolated._zombie_lib() is None
+
+
+# --- E2E fixture issues (#9782: the clarify negative test is blocked by design) ---
+
+def _titled(number: int, title: str) -> dict:
+	return dict(_item(number, ["ai:blocked"]), title=title)
+
+
+def test_e2e_titled_items_are_skipped_and_the_flag_restores_dispatch(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+	monkeypatch.delenv("UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED", raising=False)
+	e2e = [_titled(9782, "[E2E Clarify Negative Test] Make it better")]
+	details = {"9782": _details("ai:blocked", 8), "5": _details("ai:blocked", 8)}
+	result = _select(e2e, details)
+	assert result["dispatch"] == [] and result["skipped"] == {"e2e_test_item": 1}
+	# A normal blocked issue is still dispatched.
+	assert _select([_titled(5, "Add a retry to the merge probe")], details)["dispatch"] == [{"item": 5, "kind": "issue"}]
+	# The title is read from the details entry when the search item has none.
+	from_details = {"9782": dict(_details("ai:blocked", 8), title="[e2e smoke test] fixture")}
+	assert _select([_item(9782, ["ai:blocked"])], from_details)["skipped"] == {"e2e_test_item": 1}
+	# A missing title never skips.
+	assert _select([_item(9782, ["ai:blocked"])], details)["dispatch"] == [{"item": 9782, "kind": "issue"}]
+	# `TRUE` and empty keep the skip on.
+	for value in ("TRUE", ""):
+		monkeypatch.setenv("UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED", value)
+		assert _select(e2e, details)["skipped"] == {"e2e_test_item": 1}, value
+	# `false` turns it off: the E2E issue is dispatched again.
+	monkeypatch.setenv("UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED", "false")
+	assert _select(e2e, details)["dispatch"] == [{"item": 9782, "kind": "issue"}]
+	assert "warning=invalid_flag" not in capsys.readouterr().err
+	# Any other value also turns it off and warns once on stderr.
+	monkeypatch.setenv("UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED", "bogus")
+	assert _select(e2e + [_titled(5, "[E2E Smoke Test] x")], details)["dispatch"] == [{"item": 5, "kind": "issue"}]
+	err = capsys.readouterr().err
+	assert err.count("UNBLOCK_SCAN warning=invalid_flag name=UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED") == 1
+	assert "e2e_skip=off" in err
+
+
+def test_e2e_title_pattern_matches_the_heal_smoke_pattern() -> None:
+	heal = (ROOT / "scripts" / "workflow_failure_heal.py").read_text(encoding="utf-8")
+	found = re.search(r'^_SMOKE_TITLE_RE = re\.compile\(r"(?P<pattern>[^"]+)", re\.IGNORECASE\)$', heal, re.MULTILINE)
+	assert found, "_SMOKE_TITLE_RE not found in scripts/workflow_failure_heal.py"
+	assert scan.E2E_TEST_TITLE_RE.pattern == found.group("pattern")
+	assert scan.E2E_TEST_TITLE_RE.flags & re.IGNORECASE
+	for title in ("[E2E Smoke Test] a", "[E2E Orchestrate Smoke] b", "[e2e clarify negative test] c"):
+		assert scan.E2E_TEST_TITLE_RE.search(title), title
+	assert not scan.E2E_TEST_TITLE_RE.search("[E2E Smoke Tests] a")
+	assert not scan.E2E_TEST_TITLE_RE.search("Fix the E2E smoke test")
+
+
+def test_poller_search_projection_carries_the_title() -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	body = text[text.index("run_unblock_scan() {"):text.index("\n}\n", text.index("run_unblock_scan() {"))]
+	assert "--jq '[.items[]? | {number, title, labels: [.labels[]?.name]," in body
+	# The details fallback (`_item_title`) needs `title` in the batched GraphQL query and its jq step.
+	assert re.search(r"\.\.\. on Issue \{\s*title\s", body), "Issue fragment lacks title"
+	assert re.search(r"\.\.\. on PullRequest \{\s*title\s", body), "PullRequest fragment lacks title"
+	assert "title: (.value.title // null)," in body
 
 
 # --- issue #3576: the security-audit tracker is not a work item ---------------

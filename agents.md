@@ -1155,7 +1155,7 @@ Consumer sync verification (#7128): the `release` jobs of `test-and-mark-stable.
 
 In `update_workflows.yml`, the step "Verify signed sync manifest" (`verify_manifest`) runs directly after the fetch and before any upstream script. It performs four checks:
 - the `vX.Y.Z` tag whose peeled commit equals the fetched `stable` SHA;
-- `gh release download` of that tag's `sync-manifest.json`;
+- a REST release lookup and asset download of that tag's `sync-manifest.json` (rate-limit aware);
 - `gh attestation verify` with the identity regex for the two release workflows on `refs/heads/stable` and `--deny-self-hosted-runners`;
 - the manifest's commit, version and exact file set, compared by an inline verifier that imports nothing from the tree it checks.
 
