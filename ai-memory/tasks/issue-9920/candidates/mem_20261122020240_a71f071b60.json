@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9920,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9920\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9923\",\"pr_number\":9923,\"branch\":\"ai/issue-9920\",\"run_id\":\"44969312871\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/44969312871\",\"changed_files\":[\".github/workflows/implement.yml\",\".github/workflows/review_autofix.yml\",\"README.md\",\"agents.d/9920-github-ai-plan-grant-write.md\",\"changelog.d/9920-github-ai-plan-grant-write.md\",\"scripts/heal_isolated_implement.sh\",\"scripts/implement_commit_changes.sh\",\"scripts/review_collect_pr_metadata.sh\",\"scripts/review_commit_changes.sh\",\"scripts/review_untrusted_sandbox.sh\",\"scripts/review_untrusted_workspace.py\",\"scripts/workflow_failure_heal.py\",\"tests/test_files_touched_scope_guard.py\",\"tests/test_github_ai_plan_grant_write.py\",\"tests/test_implement_post_codex_recovery.py\",\"tests/test_review_chatgpt_reviewer_slot.py\"]}",
+  "fingerprint": "b559acb73276d81efcbc825e5f8b705cc5b93feace98153795bdff0dcf153919",
+  "lineage": {
+    "issue_number": 9920,
+    "parent_ids": [],
+    "pr_number": 9923,
+    "run_id": "44969312871",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44969312871",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9923"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261122020240_a71f071b60",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9920,
+    "level": "run",
+    "pr_number": 9923,
+    "run_id": "44969312871"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9920: https://github.com/shubhodeep1/coding-workflows/pull/9923",
+  "timestamps": {
+    "created_at": "2026-11-22T02:02:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
