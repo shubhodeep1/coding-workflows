@@ -2165,7 +2165,8 @@ _pr_probe_repo_init()
 	# falls back to the defaults.
 	[[ "${probe_log}" =~ ^[A-Za-z0-9_]+$ ]] || probe_log="PR_MERGE_TREE_PROBE_REPO"
 	[[ "${probe_prefix}" =~ ^[A-Za-z0-9_-]+$ ]] || probe_prefix="pr-merge-tree-probe"
-	if ! [[ "${probe_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+	# `..` is rejected as in _pr_ensure_final_ci: the slug becomes part of the origin URL.
+	if ! [[ "${probe_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || [[ "${probe_repo}" == *..* ]]; then
 		_pr_probe_repo_log "${probe_log} outcome=unavailable reason=invalid_repository"
 		return 1
 	fi
