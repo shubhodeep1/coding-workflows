@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:527-531 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `review / gate` check on head e17dabe2 is red because the protected-main lookup `gh_api_retry repos/shubhodeep1/coding-workflows/branches/main` got HTTP 403 from GitHub's core rate limit (`GH_API_RETRY outcome=gave_up kind=primary bucket=core status=403`), and the step exited with code 75.\n  WHY: The gate stays red and the PR cannot merge until a re-run succeeds after the rate limit resets; all three reviewers say this is a shared-infrastructure rate-limit failure that no hunk in this PR causes and that no code change fixes; severity disagreement: openai_gpt-6-luna=MAJOR, anthropic_claude-sonnet-5_5=NIT, z-ai_glm-5_3-flash=NIT; the highest (MAJOR\u2192high) is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/review_autofix.yml:line 527, support_main_json=\"$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/main)\", in the `review / gate` support-ref step | severity=NIT | confidence=5\n  PROBLEM: The one failed check run on head e17dabe2 is `review / gate`; its log shows \"GH_API_RETRY outcome=gave_up kind=primary bucket=core status=403 ... endpoint=repos/shubhodeep1/coding-workflows/branches/main\" and the step exits with code 75, which means GitHub's shared core rate limit ran out; the PR does not touch this file or code path.\n  WHY: The gate check stays red on this head until it is re-run after the rate limit resets; no code change in this PR fixes it, and it is listed only because the failed check has to be accounted for.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/review_autofix.yml:527-531 | severity=MAJOR | confidence=5\n  PROBLEM: The reported `review / gate` run failed when the protected-main lookup returned HTTP 403; `gh_api_retry` failed and the step exited with code 75.\n  WHY: The review gate remains red until a run can verify the protected main branch; the recorded failure comes from GitHub API rate limiting, not from this PR's changes, and the fail-closed behavior is appropriate for this check.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/review_autofix.yml:gate job, protected-main lookup (~line 527 region, `gh_api_retry repos/shubhodeep1/coding-workflows/branches/main` in the check-run log for head e17dabe252f7af4750a361054ca9951862db537c) | severity=NIT | confidence=5\n  PROBLEM: The `review / gate` check on the current head is red: the `branches/main` lookup got HTTP 403 from GitHub's core rate limit and the step exited 75 (`GH_API_RETRY outcome=gave_up kind=primary bucket=core status=403`).\n  WHY: Until a gate run succeeds on this head the PR cannot merge; the failure is infrastructure (shared rate limit), not any hunk in this PR, and the prior autofix round already investigated and ignored it with justification (same head SHA, no new evidence since); the remedy is a re-run after the limit resets.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6d713594be2f7d6b857b296371176638062894ef33b393c242d7494c84cc0b9c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9922,
+    "run_id": "44984942685",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44984942685",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122050613_6741e80aed",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9922,
+    "run_id": "44984942685"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T05:06:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
