@@ -325,7 +325,12 @@ def test_review_scripts_read_through_the_cache() -> None:
 	collect = COLLECT_PR_METADATA.read_text()
 	for kind in ("pull", "issue_comments", "reviews", "review_comments"):
 		assert f"gh_pr_cached_read {kind} " in collect, kind
-	assert "gh_pr_cached_read pull " in RUN_REVIEWERS.read_text()
+	run_reviewers = RUN_REVIEWERS.read_text()
+	assert "gh_pr_cached_read pull " in run_reviewers
+	# PR_PAYLOAD_FILE may be written from a cached entry, so with the cache on
+	# the pre-flight must not trust its mtime as the payload age.
+	assert 'if [ "${preflight_use_cache}" != "true" ] && [ -s "${PR_PAYLOAD_FILE:-/dev/null}" ]; then' in run_reviewers
+	assert "_gh_pr_cache_enabled; then\n    preflight_use_cache=true" in run_reviewers
 
 
 def test_workflow_wires_cache_env_eviction_and_summary(tmp_path: Path) -> None:
