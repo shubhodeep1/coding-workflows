@@ -1254,6 +1254,14 @@ done"""
 		self.assertEqual(rc, 1, out)
 		self.assertIn("reason=soft_paths_probe_unknown", out)
 
+	def test_probe_repo_slug_with_dotdot_is_rejected(self) -> None:
+		runner_temp = tempfile.mkdtemp(prefix="pr_probe_slug_")
+		for slug, want in (("../foo", 1), ("a/b..c", 1), ("acme/consumer", 0)):
+			res = _run('_pr_probe_repo_init; echo "rc=$?"', env={"_PR_PROBE_REPO_SLUG": slug, "RUNNER_TEMP": runner_temp})
+			self.assertIn(f"rc={want}", res.stdout, (slug, res.stderr))
+			self.assertEqual("PR_MERGE_TREE_PROBE_REPO outcome=unavailable reason=invalid_repository" in res.stderr, want == 1, slug)
+		self.assertEqual(list(Path(runner_temp).glob("pr-merge-tree-probe.*")), [])
+
 	def _rename_repo(self, pr_renames: bool) -> tuple[Path, str, str]:
 		"""One side renames README.md to scripts/x.sh; the other edits README.md
 		line 10. merge-ort follows the rename and merges cleanly."""
