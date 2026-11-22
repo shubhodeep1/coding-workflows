@@ -73,6 +73,10 @@
 #                                          queue-age note (_mt_release_stall_alert)
 #   MERGE_TRAIN_STALL_ALERT_HOUR_UTC       default 1 (09:00 SGT); first UTC hour of the
 #                                          3-hour slot in which the note may be sent
+#   FORWARD_MERGE_FALLBACK_AUTO_MERGE      default true; only literal true lets the
+#                                          final-CI resume enable merge-commit
+#                                          auto-merge on an auto/forward-merge-stable-*
+#                                          head (_mt_final_ci_merge_resume)
 #   MERGE_TRAIN_TG_HELPERS                 path of scripts/tg_helpers.sh from the trusted
 #                                          support checkout; unset = no queue-age note
 #   TG_BOT_SECRET, TG_ADMIN_CHAT_ID, ALERT_MSG_LEVEL   scripts/tg_helpers.sh
@@ -1679,10 +1683,21 @@ _mt_merge_lease_tick()
 # green now (_pr_wait_for_required_checks with a 0-minute budget: one read,
 # no final-CI dispatch, no new marker), and the base is fresh and the merge
 # lease allows it (_pr_base_fresh_for_merge), this enables head-bound
-# auto-merge (squash), marks the status success, labels the linked issues
+# auto-merge, marks the status success, labels the linked issues
 # ai:ready-to-merge and removes the PR label. A head without the marker (the
-# branch moved), a fork or draft, an integration or forward-merge head, or a
-# failed required check removes the label: the normal review path owns it.
+# branch moved), a fork or draft, an integration head, or a failed required
+# check removes the label: the normal review path owns it.
+#
+# Merge method: squash, except for forward-merge fallback heads
+# (auto/forward-merge-stable-*), which get a merge commit (--merge, the same
+# method as review_enable_auto_merge.sh). A squash or rebase would strip
+# stable's commits from main's ancestry and promote-main-to-stable.yml's
+# ancestry pre-flight would refuse. The review path does not own these heads
+# once its required-checks wait timed out, so this tick is their only
+# automatic merge (incident: #9891 sat green until a human merged it). They
+# pass every gate below and are gated by FORWARD_MERGE_FALLBACK_AUTO_MERGE
+# (default true; any other value drops them with
+# reason=forward_merge_auto_merge_disabled before any read).
 #
 # Input: as _mt_merge_lease_tick.
 # API calls per labelled PR: 1 statuses read, the checks read(s) of
@@ -1691,7 +1706,8 @@ _mt_merge_lease_tick()
 # and 1 label DELETE. Plus one cached `GET user`.
 # Fail-open: never merges on an unreadable state; logs and leaves the label.
 # Log: FINAL_CI_MERGE_RESUME pr=<n> head=<sha> outcome=auto_merge_enabled|
-# waiting|deferred|dropped|failed reason=<token>
+# waiting|deferred|dropped|failed reason=<token>; the auto_merge_enabled line
+# and the auto_merge_refused warning end with method=squash|merge.
 _mt_final_ci_merge_resume()
 {
 	local resume_prs_json="$1" resume_base_filter="$2"
@@ -1700,7 +1716,7 @@ _mt_final_ci_merge_resume()
 	local resume_line resume_num resume_head_ref resume_sha resume_head_repo resume_base resume_draft resume_statuses
 	local resume_marker resume_gate resume_issue resume_issues resume_block_candidate
 	local resume_owner="${MT_REPO%%/*}" resume_name="${MT_REPO#*/}"
-	local resume_auto_merge_on="true" resume_labels resume_block_label
+	local resume_auto_merge_on="true" resume_labels resume_block_label resume_merge_method
 	[ "${MT_PR_CHECKS_LIB_LOADED}" = "true" ] || return 0
 	case "$(printf '%s' "${FINAL_CI_MERGE_RESUME_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
 		true|1|yes|on) ;;
@@ -1726,11 +1742,16 @@ _mt_final_ci_merge_resume()
 			return 0
 		fi
 		if [ "${resume_head_repo}" != "${MT_REPO}" ] || [ "${resume_draft}" = "true" ] || ! [[ "${resume_sha}" =~ ^[0-9a-f]{40}$ ]] \
-			|| [[ "${resume_head_ref}" =~ ^auto/forward-merge-stable- ]] \
 			|| printf '%s\n' "${resume_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}"; then
 			_mt_final_ci_pending_unlabel "${resume_num}" "${resume_label}"
 			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha:-?} outcome=dropped reason=not_eligible"
 			continue
+		fi
+		# Forward-merge fallback heads must keep stable's ancestry: merge
+		# commit only (never squash or rebase). One place decides the flag.
+		resume_merge_method="squash"
+		if [[ "${resume_head_ref}" =~ ^auto/forward-merge-stable- ]]; then
+			resume_merge_method="merge"
 		fi
 		# A hold placed after the head was marked wins: drop the label and
 		# leave the PR to the review path (auto-merge off, a human hold, a
@@ -1746,6 +1767,13 @@ _mt_final_ci_merge_resume()
 		if [ "${resume_auto_merge_on}" != "true" ] || [ -n "${resume_block_label}" ]; then
 			_mt_final_ci_pending_unlabel "${resume_num}" "${resume_label}"
 			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=dropped reason=$([ "${resume_auto_merge_on}" != "true" ] && echo auto_merge_disabled || echo "blocked_by_${resume_block_label}")"
+			continue
+		fi
+		# The forward-merge fallback's own kill switch (same exact `true`
+		# comparison as review_autofix.yml); checked before any read.
+		if [ "${resume_merge_method}" = "merge" ] && [ "${FORWARD_MERGE_FALLBACK_AUTO_MERGE:-true}" != "true" ]; then
+			_mt_final_ci_pending_unlabel "${resume_num}" "${resume_label}"
+			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=dropped reason=forward_merge_auto_merge_disabled"
 			continue
 		fi
 		if ! resume_statuses="$(gh_retry _safe_gh_jq "repos/${MT_REPO}/commits/${resume_sha}/statuses?per_page=100" 2>/dev/null)" \
@@ -1785,8 +1813,8 @@ _mt_final_ci_merge_resume()
 			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=deferred reason=${PR_BASE_FRESHNESS_OUTCOME:-unknown}"
 			continue
 		fi
-		if ! gh_retry gh pr merge "${resume_num}" --repo "${MT_REPO}" --squash --auto --match-head-commit "${resume_sha}" >/dev/null 2>&1; then
-			_mt_warn "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=failed reason=auto_merge_refused"
+		if ! gh_retry gh pr merge "${resume_num}" --repo "${MT_REPO}" "--${resume_merge_method}" --auto --match-head-commit "${resume_sha}" >/dev/null 2>&1; then
+			_mt_warn "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=failed reason=auto_merge_refused method=${resume_merge_method}"
 			continue
 		fi
 		gh_retry _safe_gh_jq -X POST "repos/${MT_REPO}/statuses/${resume_sha}" -f state=success -f "context=${resume_context}" \
@@ -1799,7 +1827,7 @@ _mt_final_ci_merge_resume()
 			GH_RETRY_IDEMPOTENT=true gh_retry _safe_gh_jq -X POST "repos/${MT_REPO}/issues/${resume_issue}/labels" -f "labels[]=ai:ready-to-merge" >/dev/null 2>&1 \
 				|| _mt_warn "FINAL_CI_MERGE_RESUME pr=${resume_num} issue=${resume_issue} outcome=label_failed"
 		done <<< "${resume_issues}"
-		_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=auto_merge_enabled reason=final_ci_green"
+		_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=auto_merge_enabled reason=final_ci_green method=${resume_merge_method}"
 	done < <(printf '%s\n' "${resume_prs_json}" | jq -c --arg l "${resume_label}" 'select(type == "object" and ((.labels // []) | index($l)) != null)' 2>/dev/null)
 	return 0
 }
