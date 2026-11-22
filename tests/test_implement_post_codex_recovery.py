@@ -1064,7 +1064,7 @@ def test_resolve_checkout_ref_ignores_prior_pr_baseline_branch_when_present() ->
 				- prior_pr_baseline_branch: {baseline_branch}
 				- files_touched:
 				  - src/app.py
-				"""  # noqa: E101
+				"""
 			),
 			default_checkout_ref="orchestrator/project-829",
 			branch_exists={baseline_branch: True},
@@ -5696,10 +5696,10 @@ def test_validator_offending_bytes_redacts_secrets() -> None:
 
 	Two layered guards (per Copilot review):
 	(a) Path denylist: skip the dump for files whose names match
-		common secret-bearing patterns (.env, *secret*, *.pem, ...).
+	    common secret-bearing patterns (.env, *secret*, *.pem, ...).
 	(b) Per-line redaction: replace lines whose key contains
-		secret-like keywords (token/password/api_key/...) or whose
-		value contains a long opaque token with a redaction marker.
+	    secret-like keywords (token/password/api_key/...) or whose
+	    value contains a long opaque token with a redaction marker.
 	"""
 	with tempfile.TemporaryDirectory(prefix="test_validator_redact_") as td:
 		repo_dir = Path(td)
