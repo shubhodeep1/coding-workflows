@@ -267,11 +267,22 @@ def test_judge_wrapper_fails_closed_without_the_library() -> None:
 	assert 'PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_sync_merge_blocked_guard' in body
 
 
-def test_judge_retry_returns_at_once_after_a_deferral() -> None:
+def test_judge_retry_never_merges_directly_after_a_deferral() -> None:
+	# After a deferral, direct mode returns at once and auto mode retries
+	# only --auto (bounded, transient --auto errors only).
 	text = JUDGE.read_text(encoding="utf-8")
 	start = text.index("rb_judge_merge_retry_transient() {")
 	loop = text.index("for _rb_retry_delay in 10 20 40; do", start)
-	assert '[ "${RB_SYNC_MERGE_DEFERRED:-false}" != "true" ] || return 1' in text[start:loop]
+	end = text.index("\n}\n", loop)
+	head, body = text[start:loop], text[loop:end]
+	assert '[ "${_rb_retry_mode}" = "auto" ] || return 1' in head
+	assert '_rb_retry_auto_only="true"' in head
+	assert 'RB_MERGE_ERR_DIRECT_FILE="${RB_MERGE_ERR_AUTO_FILE:-/dev/null}" rb_judge_merge_err_is_transient || return 1' in body
+	auto_retry = body.index("--auto --match-head-commit")
+	skip = body.index('[ "${_rb_retry_auto_only}" != "true" ] || continue')
+	guard = body.index("rb_judge_sync_merge_guard")
+	direct = body.rindex('--match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_DIRECT_FILE}"')
+	assert auto_retry < skip < guard < direct
 
 
 def test_poller_squash_merge_bound_defers_before_the_direct_merge() -> None:

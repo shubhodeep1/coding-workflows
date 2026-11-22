@@ -621,12 +621,15 @@ def test_blocked_guard_defers_the_direct_merge(path: str) -> None:
 	direct = [c for c in calls if c[:2] == ["pr", "merge"] and "--auto" not in c]
 	assert direct == [], calls
 	assert "SYNC_MERGE_BLOCKED_GUARD outcome=deferred pr=42" in stdout
-	assert _error_lines(stdout) == []
 	if path == "sync":
+		assert _error_lines(stdout) == []
 		assert calls == []
 		assert "judge_skip_reason=mergeability_pending" in output.splitlines()
 		assert "judge_skip_reason=sync_merge_failed" not in output.splitlines()
 	else:
+		# The failed --auto request is the reason nothing merges: reported once.
+		lines = _error_lines(stdout)
+		assert len(lines) == 1 and f"path={path} error=auto: " in lines[0], lines
 		assert calls == _expected_calls(path)[:1]
 		assert "RB_MERGE_STATUS=mergeability_pending" in stdout.splitlines()
 
@@ -649,7 +652,9 @@ def test_no_merge_command_discards_stderr() -> None:
 		if "gh pr merge" in line and not line.lstrip().startswith("#"):
 			assert "2>/dev/null" not in line, line
 	reports = re.findall(r"^\s+rb_judge_merge_err_report (\S+)$", text, re.MULTILINE)
-	assert reports == ["merge", "terminal", "sync"]
+	# #9939: the merge and terminal deferral branches report the failed --auto
+	# request too (it was the only merge path left).
+	assert reports == ["merge", "merge", "terminal", "terminal", "sync"]
 
 
 # --- transient GitHub errors on the judge merge are retried ----------------
@@ -666,6 +671,7 @@ def _run_merge_site_scripted(
 	responses: list[dict],
 	*,
 	tmpdir_exists: bool = True,
+	extra_env: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], str, list[list[str]], list[str]]:
 	"""Run one merge site with a gh shim that answers call N with responses[N].
 
@@ -726,6 +732,7 @@ def _run_merge_site_scripted(
 			"REPOSITORY": "o/r",
 			"RB_JUDGED_HEAD_SHA": JUDGED,
 		}
+		env.update(extra_env or {})
 		proc = subprocess.run(["bash", str(harness)], env=env, text=True, capture_output=True, timeout=60)
 		calls: list[list[str]] = []
 		if gh_log.exists():
@@ -786,25 +793,59 @@ def test_retry_guard_deferral_is_mergeability_pending(path: str) -> None:
 	"""#9939: the site's guard passes, the direct merge fails transiently, and
 	the per-attempt PR read inside the retry shows a null mergeable_state
 	(placeholder "none", base "-"). The retry's guard must see "none" (not the
-	shifted base ref) and defer; the site reports a deferral, not a failure."""
+	shifted base ref) and defer; the site reports a deferral, not a failure.
+	In auto mode the deferral only stops direct retries: the remaining
+	bounded --auto retries still run while their error stays transient."""
 	null_state = {"code": 0, "stdout": f"open\tfalse\tfalse\t{JUDGED}\tnone\t-\n"}
 	responses = _first_failure(path) + [null_state]
 	if path != "sync":
-		# The auto-mode retry re-tries --auto first; it fails again.
+		# The auto-mode retry re-tries --auto first; it keeps failing.
 		responses.append(_fail())
 	proc, output, calls, sleeps = _run_merge_site_scripted(path, responses)
 	assert proc.returncode == 0, proc.stderr
-	assert sleeps == ["10"]
 	direct = [c for c in calls if c[:2] == ["pr", "merge"] and "--auto" not in c]
 	assert direct == _expected_calls(path)[-1:], calls
 	assert "SYNC_MERGE_BLOCKED_GUARD outcome=deferred pr=42" in proc.stdout
-	assert _error_lines(proc.stdout) == []
+	if path == "sync":
+		assert sleeps == ["10"]
+		assert _error_lines(proc.stdout) == []
+	else:
+		assert sleeps == ["10", "20", "40"]
+		auto = [c for c in calls if c[:2] == ["pr", "merge"] and "--auto" in c]
+		assert len(auto) == 4, calls
+		lines = _error_lines(proc.stdout)
+		assert len(lines) == 1 and "auto: GraphQL: Something went wrong" in lines[0], lines
 	if path == "sync":
 		assert "judge_skip_reason=mergeability_pending" in output.splitlines()
 		assert "judge_skip_reason=sync_merge_failed" not in output.splitlines()
 		assert "MERGE_CONFIRMED=true" not in proc.stdout.splitlines()
 	else:
 		assert "RB_MERGE_STATUS=mergeability_pending" in proc.stdout.splitlines()
+
+
+@pytest.mark.parametrize("path", ("merge", "terminal"))
+def test_transient_auto_error_is_retried_after_a_site_deferral(path: str) -> None:
+	"""#9939: the site's guard deferred the direct merge, so --auto is the
+	only merge path left. A transient --auto error is retried (--auto only,
+	never a direct merge) and the retried request enables auto-merge."""
+	responses = [_fail(), _pr_state(), _ok()]
+	proc, output, calls, sleeps = _run_merge_site_scripted(path, responses, extra_env={"GUARD_STUB_DEFER": "1"})
+	assert proc.returncode == 0, proc.stderr
+	assert sleeps == ["10"]
+	merges = [c for c in calls if c[:2] == ["pr", "merge"]]
+	assert merges == _expected_calls(path)[:1] * 2, calls
+	_assert_merge_succeeded(path, output, proc.stdout)
+
+
+@pytest.mark.parametrize("path", ("merge", "terminal"))
+def test_non_transient_auto_error_after_a_site_deferral_is_not_retried(path: str) -> None:
+	responses = [_fail(DRAFT_MESSAGE)]
+	proc, _output, calls, sleeps = _run_merge_site_scripted(path, responses, extra_env={"GUARD_STUB_DEFER": "1"})
+	assert proc.returncode == 0, proc.stderr
+	assert sleeps == []
+	assert calls == _expected_calls(path)[:1]
+	assert "RB_MERGE_STATUS=mergeability_pending" in proc.stdout.splitlines()
+	assert len(_error_lines(proc.stdout)) == 1
 
 
 @pytest.mark.parametrize("path", MERGE_SITE_ORDER)

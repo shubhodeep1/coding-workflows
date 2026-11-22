@@ -234,8 +234,10 @@ class Wiring(unittest.TestCase):
 		# Each call to the retry helper follows its site's gate.
 		retry_calls = list(re.finditer(r"\|\| rb_judge_merge_retry_transient (?:auto|direct) (?:merge|terminal|sync); then", case_text))
 		self.assertEqual(len(retry_calls), 3)
+		# 3600: the #9939 blocked-merge guard and its deferral branch sit
+		# between merge_with_followup's gate and its merge call (3404 chars).
 		for call in retry_calls:
-			self.assertIn("_pr_base_fresh_for_merge", case_text[max(0, call.start() - 3000):call.start()])
+			self.assertIn("_pr_base_fresh_for_merge", case_text[max(0, call.start() - 3600):call.start()])
 		# merge_with_followup's synchronous merge is gated too.
 		self.assertIn('_pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}"; then', text)
 
