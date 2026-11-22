@@ -555,6 +555,24 @@ def test_base_deletion_resolver_deleted_path_still_fails():
 	assert "FINGERPRINT_BASE_DELETION_SUPERSEDED_V1" not in err
 
 
+def test_base_deletion_ref_mode_integration_resolver_commit_still_fails():
+	# main keeps the file; a non-merge [ai-merge-resolve] commit on the
+	# integration branch deletes it. Ref mode walks the integration history,
+	# so the resolver-subject exclusion is what must keep the violation.
+	mod = _verifier_module()
+	with _base_deletion_env(), _sandbox_repo() as repo:
+		_clear_caches(mod)
+		_seed_base_deletion_merge(repo, base_deletes=False)
+		_run_git_nocheck(repo, "merge", "--abort")
+		_take_deletion(repo)
+		_run_git(repo, "commit", "--quiet", "-m", "[ai-merge-resolve] resolve merge conflicts", date=_D4_RESOLVE)
+		head = _run_git(repo, "rev-parse", "HEAD").strip()
+		fp_path = _base_deletion_fingerprints(repo)
+		rc, out, err = _run_verifier(mod, ["--ref", head, str(fp_path)], repo)
+	assert rc == 1, f"integration-side resolver deletion must fail in ref mode; rc={rc}, stdout=\n{out}"
+	assert "FINGERPRINT_BASE_DELETION_SUPERSEDED_V1" not in err
+
+
 def test_base_deletion_before_capture_fails_closed():
 	mod = _verifier_module()
 	with _base_deletion_env(), _sandbox_repo() as repo:

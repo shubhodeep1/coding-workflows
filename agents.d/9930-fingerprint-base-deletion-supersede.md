@@ -10,7 +10,7 @@ In `scripts/verify_integration_fingerprints.py`, a `must_contain` whose file is 
 Merge commits show no diff, so a resolver merge that drops a file the base kept never counts.
 
 The history comes from:
-- the verified `--ref` in ref mode;
+- the verified `--ref` in ref mode. That ref is the integration branch, so a non-resolver deletion made on it (a later sub-issue's squash-merge) also counts, as with the post-capture evolution defense; `[ai-merge-resolve]` commits stay excluded;
 - `MERGE_HEAD` in working-tree mode while a merge is in progress;
 - otherwise `refs/remotes/origin/$BASE_BRANCH`, where `BASE_BRANCH` must match a safe branch-name pattern.
 

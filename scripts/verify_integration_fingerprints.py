@@ -961,7 +961,11 @@ def _resolve_base_deletion_history_ref(ref: str | None) -> tuple[str, str] | Non
 
 	1. ref mode (wave-dispatch gate): the verified ref itself — once a
 	resolver merge of the base lands, the base's history is reachable
-	from it;
+	from it. The ref is the integration branch, so a non-resolver,
+	non-merge deletion made on that branch itself (a later sub-issue's
+	squash-merge) also counts. That is the same trust model as the
+	post-capture evolution defense: the gate exists to catch
+	``[ai-merge-resolve]`` commits, which stay excluded;
 	2. working-tree mode with a merge in progress: ``MERGE_HEAD`` (the
 	integration-sync resolver keeps it until its commit; it is the base
 	side being merged in);
