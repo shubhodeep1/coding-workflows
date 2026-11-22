@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/lint_gh_calls_in_loops.py:450 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The per-file handler `except (RuntimeError, OSError, subprocess.TimeoutExpired):` in `lint()` now catches `subprocess.TimeoutExpired`, so a stalled per-file `git show` uses the full 120 s (`GIT_TIMEOUT_SECONDS = 120`, line 48) and the scan moves on instead of returning `git_error`; two stalls (240 s) plus the up-to-90 s `git fetch` deepen (pr-checks.yml:299) go past the step's `timeout-minutes: 5` (.github/workflows/pr-checks.yml:291), and the step is killed before it prints the `GH_LOOP_CALL_LINT warnings=<n> files=<n>` summary line.\n  WHY: With \u22652 changed files whose `git show` hangs, `lint()` does not return within the step budget, so the workflow log has no `GH_LOOP_CALL_LINT` line; the job stays green because of `continue-on-error`. The source severity was NIT, mapped here to low. anthropic_claude-sonnet-5_5 and openai_gpt-6-luna raised the same concern only as a HARDENING_SUGGESTION, not a finding. minimax_minimax-m3 argued it does not rise to a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (HARDENING_RISK_SCORE: 1): file: scripts/lint_gh_calls_in_loops.py\n  location: lint(), the per-file except at line 450, together with GIT_TIMEOUT_SECONDS = 120 at line 48 and the step's `timeout-minutes: 5` at .github/workflows/pr-checks.yml line 291\n  issue: Per-file `git show` timeouts now continue to the next file; the 90 s fetch plus two 120 s timeouts is 330 s, which is more than the 300 s step timeout, so the step is killed before it prints the `GH_LOOP_CALL_LINT` summary line. The job stays green (`continue-on-error`, 10-minute job timeout). The trigger is unlikely, so this is advisory only.\n  suggested minimal fix: Treat subprocess.TimeoutExpired as fatal in the per-file handler and return `[], 0, \"git_error\"`, keeping per-file skip for RuntimeError and OSError only. Alternatively, use a shorter per-file `git show` timeout (for example 30 s). Estimated lines changed: 3-4.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n- HARDENING_SUGGESTION (HARDENING_RISK_SCORE: 1): File: scripts/lint_gh_calls_in_loops.py\n  Location: lint(), lines 447-455\n  Issue: Per-file `git show` timeouts are caught and scanning continues. Each can take up to 120 seconds and the workflow step timeout is 5 minutes, so repeated timeouts can end the step before it prints the lint summary.\n  Suggested minimal fix: Handle `subprocess.TimeoutExpired` separately and return `git_error` immediately. Estimated lines changed: 3-4.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/lint_gh_calls_in_loops.py:line 450 (`except (RuntimeError, OSError, subprocess.TimeoutExpired):` in `lint()`), with `GIT_TIMEOUT_SECONDS = 120` (line 48) and the step's `timeout-minutes: 5` at .github/workflows/pr-checks.yml:291 | SEVERITY: NIT | ISSUE_CONFIDENCE: 3\n  PROBLEM: The per-file handler now catches `subprocess.TimeoutExpired`, so a stalled per-file `git show` uses the full 120 s and the scan continues instead of returning `git_error`. Two stalling files (240 s) plus the up-to-90 s `git fetch` deepen (pr-checks.yml:299) go past the 300 s step timeout, and the step is killed before it prints `GH_LOOP_CALL_LINT warnings=<n> files=<n>`, which agents.d/9929-gh-loop-call-lint.md documents as a stable log prefix.\n  WHY: With \u22652 changed files whose `git show` hangs, `lint()` does not return within the step budget, so the workflow log has no `GH_LOOP_CALL_LINT` line at all. The job stays green because of `continue-on-error`.\n- HARDENING_SUGGESTION (HARDENING_RISK_SCORE: 2): file: scripts/lint_gh_calls_in_loops.py; location: lint(), per-file except at line 450; issue: per-file `subprocess.TimeoutExpired` can add up past the step's 5-minute timeout, so the summary line is lost; suggested minimal fix: keep `RuntimeError` and `OSError` per-file and let `subprocess.TimeoutExpired` fall through to the outer handler (which returns `git_error` and prints `GH_LOOP_CALL_LINT outcome=skipped reason=git_error`), or lower the per-file timeout to ~30 s; estimated lines changed: 2-4.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ef09cb8e7cd9e24ae762fc38975d3bc3551326bd42b65bc382affa9ae5b2c572",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9936,
+    "run_id": "45015376390",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45015376390",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122113658_6fbc474f9e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9936,
+    "run_id": "45015376390"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-22T11:36:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
