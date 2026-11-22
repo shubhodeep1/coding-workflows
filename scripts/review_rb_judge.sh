@@ -822,6 +822,39 @@ resolve_review_state_for_post() {
   printf '%s' "${logical_state}"
 }
 
+# rb_judge_post_issue_comment -f body=<text> — post one judge comment on the PR.
+# The judge's comments are informational: nothing reads them back by author
+# (the retry count comes from commit history, and the judge's own context
+# keeps every comment with its author). So they are posted with the job token
+# (RB_JUDGE_COMMENT_TOKEN, the job's GITHUB_TOKEN), which starts no
+# issue_comment workflows (run-volume plan item 6). When the token is unset,
+# or GitHub refuses it (401/403, e.g. a read-only fork token), the post goes
+# out with GH_TOKEN as before. Any other failure is returned as is: gh_retry
+# sends a POST once, and a timeout or 5xx may already have created the
+# comment, so resending would duplicate it.
+rb_judge_post_issue_comment()
+{
+  local rb_post_err rb_post_rc=0
+  if [ -n "${RB_JUDGE_COMMENT_TOKEN:-}" ]; then
+    # A failed mktemp must not stop the post: errors then go to /dev/null and
+    # count as ambiguous (not resent).
+    rb_post_err="$(mktemp "${TMPDIR:-/tmp}/rb_judge_post_err.XXXXXX" 2>/dev/null)" || rb_post_err=/dev/null
+    GH_TOKEN="${RB_JUDGE_COMMENT_TOKEN}" gh_retry gh api "repos/${REPOSITORY:-}/issues/${PR_NUMBER:-}/comments" "$@" 2>"${rb_post_err}" || rb_post_rc=$?
+    if [ "${rb_post_rc}" -eq 0 ]; then
+      [ "${rb_post_err}" = /dev/null ] || rm -f "${rb_post_err}"
+      return 0
+    fi
+    if ! grep -qiE 'HTTP 40[13]|Resource not accessible by integration|Bad credentials|Requires authentication' "${rb_post_err}"; then
+      cat "${rb_post_err}" >&2
+      [ "${rb_post_err}" = /dev/null ] || rm -f "${rb_post_err}"
+      return "${rb_post_rc}"
+    fi
+    [ "${rb_post_err}" = /dev/null ] || rm -f "${rb_post_err}"
+    echo "RB_JUDGE_COMMENT_TOKEN refused; posting with GH_TOKEN." >&2
+  fi
+  gh_retry gh api "repos/${REPOSITORY:-}/issues/${PR_NUMBER:-}/comments" "$@"
+}
+
 post_review_blocked_assessment() {
   local body_file="$1"
   local review_state="$2"
@@ -841,7 +874,7 @@ post_review_blocked_assessment() {
     echo "::warning::Review-blocked judge failed to post PR review via post_review_comment.sh; falling back to a PR comment." >&2
   fi
 
-  gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+  rb_judge_post_issue_comment \
     -f body="$(cat "${body_file}")" >/dev/null 2>&1 || return 1
   return 0
 }
@@ -2087,7 +2120,7 @@ if [ "${PR_ALREADY_MERGED:-false}" = "true" ] && [ "${RB_ACTION}" != "merge" ] &
 The judge selected **${RB_ACTION}** but PR #${PR_NUMBER} is already merged. \`${RB_ACTION}\` is unsafe for merged PRs (fix would push to a merged branch; close_and_reissue would reissue work that already landed). Only \`merge\` and \`merge_with_followup\` are safe at this point.
 
 Leaving the linked issue in ai:review-blocked for operator review. Rerun the judge with revised context if you want it to choose merge / merge_with_followup."
-  gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+  rb_judge_post_issue_comment \
     -f body="${REFUSAL_COMMENT}" >/dev/null 2>&1 || true
   exit 0
 fi
@@ -2220,12 +2253,12 @@ esac
 # unverified head under the verify job's auto-merge enrollment, and
 # `close_and_reissue` would make the updater skip the release as closed_by_human.
 if [ "${PR_ALREADY_MERGED:-false}" != "true" ] \
-  && [[ "${POST_REVIEW_HEAD_REF:-}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then
+  && [[ "${POST_REVIEW_HEAD_REF:-}" =~ ^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$ ]]; then
   echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${RB_JUDGED_HEAD_SHA:-unknown} action=skip reason=updater_pr_verify_job_owns_merge judge_action=${RB_ACTION}"
   echo "judge_handled=true" >> "$GITHUB_OUTPUT"
   echo "judge_action=updater_verify_hold" >> "$GITHUB_OUTPUT"
   echo "judge_skip_reason=updater_pr_verify_job_owns_merge" >> "$GITHUB_OUTPUT"
-  gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+  rb_judge_post_issue_comment \
     -f body="## Review-Blocked Judge — action held for the updater verify job
 
 The judge chose **${RB_ACTION}**, but this is a consumer-updater pull request. Only the update_workflows.yml verify job may change or merge it, so no action was taken." >/dev/null 2>&1 || true
@@ -2242,7 +2275,7 @@ rb_judge_comments_incomplete_defer_merge()
 {
   local _rbci_action="${1:-unknown}"
   echo "RB_JUDGE_CONTEXT_INCOMPLETE pr=${PR_NUMBER:-unknown} reasons=${RB_JUDGE_COMMENTS_INCOMPLETE_REASONS:-unspecified} action=merge_withheld judge_action=${_rbci_action}"
-  gh_retry gh api "repos/${REPOSITORY:-}/issues/${PR_NUMBER:-}/comments" \
+  rb_judge_post_issue_comment \
     -f body="## Review-Blocked Judge — merge deferred: PR comment context incomplete
 
 The judge chose **${_rbci_action}**, but the PR comments could not be fully read (reasons: ${RB_JUDGE_COMMENTS_INCOMPLETE_REASONS:-unspecified}). No merge, auto-merge, head-gate status or ready-to-merge label was set. The next judge cycle decides again." >/dev/null 2>&1 || true
@@ -2311,7 +2344,7 @@ if [ "${PR_ALREADY_MERGED:-false}" != "true" ] \
   if [ "${RB_ACTION}" = "fix" ]; then
     RB_ORCH_HOLD_FINAL_FIX_NOTE=" Judge fix retries are exhausted, so the final-attempt fix counts as a merge; no fix commit was created."
   fi
-  gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+  rb_judge_post_issue_comment \
     -f body="## Review-Blocked Judge — action held for the orchestrator final merge
 
 The judge chose **${RB_ACTION}**, but this is an orchestrator integration pull request.${RB_ORCH_HOLD_FINAL_FIX_NOTE} The judge does not merge or close it. The orchestrator merges this PR (finalize_integration_merge_if_needed) once the current integration head passes runtime validation." >/dev/null 2>&1 || true
@@ -2324,7 +2357,7 @@ if [ "${RB_MERGE_ACTION}" = "true" ] && [ "${PR_ALREADY_MERGED:-false}" != "true
     RB_SECURITY_FINAL_FIX_NOTE="The final-attempt fix is treated as a merge because judge fix retries are exhausted; no fix commit was created. "
   fi
   echo "Judge chose ${RB_ACTION} for PR #${PR_NUMBER}; ${RB_SECURITY_FINAL_FIX_NOTE}the single-issue security pass holds the merge."
-  gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+  rb_judge_post_issue_comment \
     -f body="## Review-Blocked Judge — merge held for the security pass
 
 The judge chose **${RB_ACTION}**. ${RB_SECURITY_FINAL_FIX_NOTE}This PR's single-issue security audit has not passed for its current head, so the merge waits. The audit result re-runs the review, and the judge decides again then." >/dev/null 2>&1 || true
@@ -2559,11 +2592,14 @@ case "${RB_ACTION}" in
           if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
             echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, merge deferred to the synchronize run."
             RB_MERGE_STATUS="deferred_base_moved"
+          elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+            echo "Review-blocked judge: PR #${PR_NUMBER} waits for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; merge deferred, re-dispatched when the lease is granted."
+            RB_MERGE_STATUS="mergeability_pending"
           else
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
           fi
-        elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+        elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" FINAL_CI_MERGE_RESUME_ENABLED=false _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           echo "::warning::Review-blocked judge: required check-runs on ${RB_JUDGED_HEAD_SHA:0:7} are ${PR_CHECKS_WAIT_OUTCOME:-unknown}; not enabling auto-merge and withholding ai:ready-to-merge."
           RB_MERGE_STATUS="checks_not_ready"
           [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "failed" ] && RB_MERGE_STATUS="checks_failed"
@@ -2574,6 +2610,9 @@ case "${RB_ACTION}" in
           if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
             echo "::warning::Review-blocked judge: base moved under files PR #${PR_NUMBER} touches during the checks wait; branch update requested, merge deferred."
             RB_MERGE_STATUS="deferred_base_moved"
+          elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+            echo "Review-blocked judge: PR #${PR_NUMBER} waits for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; merge deferred, re-dispatched when the lease is granted."
+            RB_MERGE_STATUS="mergeability_pending"
           else
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
@@ -2652,11 +2691,14 @@ case "${RB_ACTION}" in
           if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
             echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, terminal merge deferred to the synchronize run."
             RB_MERGE_STATUS="deferred_base_moved"
+          elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+            echo "Review-blocked judge: PR #${PR_NUMBER} waits for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; merge deferred, re-dispatched when the lease is granted."
+            RB_MERGE_STATUS="mergeability_pending"
           else
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
           fi
-        elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+        elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" FINAL_CI_MERGE_RESUME_ENABLED=false _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           echo "::warning::Review-blocked judge: required check-runs on ${RB_JUDGED_HEAD_SHA:0:7} are ${PR_CHECKS_WAIT_OUTCOME:-unknown}; not enabling the terminal auto-merge and withholding ai:ready-to-merge."
           RB_MERGE_STATUS="checks_not_ready"
           [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "failed" ] && RB_MERGE_STATUS="checks_failed"
@@ -2667,6 +2709,9 @@ case "${RB_ACTION}" in
           if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
             echo "::warning::Review-blocked judge: base moved under files PR #${PR_NUMBER} touches during the checks wait; branch update requested, merge deferred."
             RB_MERGE_STATUS="deferred_base_moved"
+          elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+            echo "Review-blocked judge: PR #${PR_NUMBER} waits for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; merge deferred, re-dispatched when the lease is granted."
+            RB_MERGE_STATUS="mergeability_pending"
           else
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
@@ -3056,7 +3101,7 @@ ${RB_FIX_DESC}"
 The judge selected **merge_with_followup** but did not provide \`followup_issue.title\` and/or \`followup_issue.body\`. Refusing the action — the whole point of \`merge_with_followup\` is to track the deferred gap, and silently downgrading to a plain merge would lose it.
 
 Leaving the PR's linked issues in ai:review-blocked. The workflow's review-blocked fallback will fire and stall recovery / a subsequent judge run can retry."
-      gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+      rb_judge_post_issue_comment \
         -f body="${MWF_REFUSAL_COMMENT}" >/dev/null 2>&1 || true
     else
       # Poll mergeability BEFORE the label swap / follow-up creation so

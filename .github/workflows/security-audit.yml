@@ -1,4 +1,9 @@
 name: Security Audit
+# The PR number in the run title lets the single-issue security pass gate
+# (scripts/review_single_issue_security_pass.sh) find the run behind its
+# pending marker and retry an audit that was cancelled without a result.
+# A called workflow's run-name is ignored; the consumer wrapper sets its own.
+run-name: "${{ inputs.pr_number != '' && format('Security Audit (PR #{0})', inputs.pr_number) || 'Security Audit' }}"
 
 "on":
   schedule:
@@ -20,6 +25,16 @@ name: Security Audit
         required: false
         default: ""
         type: string
+      audit_diff_since:
+        description: "Single-issue security pass delta re-audit (stuck-states P5a): last audited head of the PR. A request only; the audit verifies it against the pipeline's PR markers and otherwise audits in full. Empty = full audit."
+        required: false
+        default: ""
+        type: string
+      prior_findings:
+        description: "Single-issue security pass delta re-audit: id of the pipeline's findings result comment whose stored findings are verified again. A request only, verified like audit_diff_since. Empty = none."
+        required: false
+        default: ""
+        type: string
   # Consumer repos run this workflow through the synced
   # workflow-templates/ai-security-audit.yml wrapper (called @stable).
   workflow_call:
@@ -32,12 +47,23 @@ name: Security Audit
         required: false
         default: ""
         type: string
+      audit_diff_since:
+        required: false
+        default: ""
+        type: string
+      prior_findings:
+        required: false
+        default: ""
+        type: string
     secrets:
       GH_PAT:
         required: false
       OPENROUTER_API_KEY:
         required: true
       TG_BOT_SECRET:
+        required: false
+      # Signed job-token comments (run-volume plan item 15): optional; see scripts/comment_signature.py.
+      AI_COMMENT_SIGNING_SECRET:
         required: false
 
 permissions:
@@ -56,8 +82,17 @@ permissions:
 # concurrency group ... between a top level workflow and 'security-audit'").
 # Keep a distinct group so this repo's own scheduled runs stay serialised
 # without contending with a wrapper's group.
+#
+# One group per PR (single-issue security pass). GitHub keeps one pending
+# run per group and cancels the older pending one, so a repo-wide group made
+# audits for different PRs cancel each other: 39 of 91 dispatched audits
+# from 2026-11-16 ended `cancelled` without a result, and each PR then waited
+# 6 hours on its pending marker. Now only a newer audit of the same PR
+# replaces a waiting one. The gate bounds how many audits run at once
+# (SECURITY_PASS_MAX_CONCURRENT_AUDITS); scheduled and project-branch runs
+# without pr_number share the `default` group as before.
 concurrency:
-  group: security-audit-reusable-${{ github.repository }}
+  group: security-audit-reusable-${{ github.repository }}-${{ inputs.pr_number != '' && format('pr-{0}', inputs.pr_number) || 'default' }}
   cancel-in-progress: false
 
 env:
@@ -66,6 +101,12 @@ env:
   # `core` install profile, which has no orchestrate-poll wrapper to resume
   # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
   CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
+  # Signed job-token comments (run-volume plan item 15, D16; see
+  # scripts/comment_signature.py). The opt-in secret and the job token sit
+  # next to each step's GH_PAT, never here, so a step without the PAT never
+  # sees them. Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false
+  # posts with GH_PAT again while signed comments already posted still verify.
+  AI_COMMENT_SIGNING_POST: ${{ vars.AI_COMMENT_SIGNING_POST || 'true' }}
 
 jobs:
   security-audit:
@@ -78,6 +119,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
         run: |
           # Trusted pre-support copy of scripts/gh_helpers.sh for gh_api_retry
@@ -130,6 +173,8 @@ jobs:
           WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           CALLER_REPOSITORY: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
@@ -216,6 +261,8 @@ jobs:
           AUDIT_EVENT_REPO_PRIVATE: ${{ github.event.repository.private }}
           PROTECTED_MAIN_SHA: ${{ steps.resolve_support.outputs.protected_main_sha }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
@@ -282,6 +329,14 @@ jobs:
           fetch-depth: 0
 
       - name: Verify audit data and resolve scope
+        env:
+          # Delta audit for the single-issue security pass: the trusted
+          # support script names the PR's last clean-audited ancestor head.
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SECURITY_PASS_PR_NUMBER: ${{ inputs.pr_number }}
+          SECURITY_PASS_AUTHOR_LOGIN_FALLBACK: ${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}
+          SECURITY_PASS_DELTA_AUDIT_ENABLED: ${{ vars.SECURITY_PASS_DELTA_AUDIT_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           if [ "$(git -C audit-data rev-parse --show-toplevel 2>/dev/null)" != "${GITHUB_WORKSPACE}/audit-data" ] ||
@@ -303,6 +358,49 @@ jobs:
             echo "SECURITY_AUDIT_DIFF_BASE=${audit_diff_base}"
             echo "SECURITY_AUDIT_DIFF_HEAD=${AUDIT_DATA_SHA}"
           } >> "$GITHUB_ENV"
+          # A later cycle of the single-issue security pass audits only range
+          # files changed since the PR's last clean audit (security_audit.sh
+          # SECURITY_AUDIT_DIFF_SINCE). The helper prints nothing on any
+          # doubt (no clean ancestor, failed read, force-push), which keeps
+          # the full range. SECURITY_PASS_DELTA_AUDIT_ENABLED=false turns it off.
+          audit_since=""
+          if [ -n "${SECURITY_PASS_PR_NUMBER}" ] && [ "${SECURITY_PASS_DELTA_AUDIT_ENABLED}" != "false" ] \
+            && [ -f "${GITHUB_WORKSPACE}/scripts/review_single_issue_security_pass.sh" ]; then
+            audit_since="$(SECURITY_PASS_HEAD_SHA="${AUDIT_DATA_SHA}" SECURITY_PASS_AUDIT_CHECKOUT="${GITHUB_WORKSPACE}/audit-data" \
+              bash "${GITHUB_WORKSPACE}/scripts/review_single_issue_security_pass.sh" since || true)"
+          fi
+          if [[ "${audit_since}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "SECURITY_AUDIT_TARGET: delta since last clean audit ${audit_since}"
+            echo "SECURITY_AUDIT_DIFF_SINCE=${audit_since}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Resolve single-issue security pass delta
+        # Stuck-states P5a: a review gate that already has a completed audit of
+        # an older PR head requests a delta re-audit. The trusted support copy
+        # of the helper verifies the request against the pipeline's PR markers
+        # (ancestry, author, stored-findings sha256) and only then narrows the
+        # scope via GITHUB_ENV; on any doubt it writes nothing and the audit
+        # runs in full. Never runs a script from audit-data.
+        if: inputs.pr_number != '' && inputs.audit_diff_since != '' && env.SECURITY_AUDIT_TARGET_REF != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SECURITY_PASS_PR_NUMBER: ${{ inputs.pr_number }}
+          SECURITY_PASS_DELTA_SINCE_INPUT: ${{ inputs.audit_diff_since || '' }}
+          SECURITY_PASS_PRIOR_FINDINGS_INPUT: ${{ inputs.prior_findings || '' }}
+          SECURITY_PASS_AUTHOR_LOGIN_FALLBACK: ${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}
+          SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}
+        run: |
+          set -uo pipefail
+          SECURITY_PASS_HEAD_SHA="${AUDIT_DATA_SHA}"
+          SECURITY_PASS_AUDIT_CHECKOUT="${GITHUB_WORKSPACE}/audit-data"
+          export SECURITY_PASS_HEAD_SHA SECURITY_PASS_AUDIT_CHECKOUT
+          if [ ! -f "${GITHUB_WORKSPACE}/scripts/review_single_issue_security_pass.sh" ]; then
+            echo "::warning::review_single_issue_security_pass.sh is not in the audit support checkout; auditing in full."
+            exit 0
+          fi
+          bash "${GITHUB_WORKSPACE}/scripts/review_single_issue_security_pass.sh" delta
 
       - name: Install Codex CLI
         uses: ./.github/actions/install-codex
@@ -403,6 +501,11 @@ jobs:
         env:
           SECURITY_AUDIT_SUPPORT_DIR: ${{ github.workspace }}
           GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          # The tracker report comment posts with the job token, so it starts no
+          # issue_comment workflows (run-volume plan item 6).
+          SECURITY_AUDIT_COMMENT_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -413,6 +516,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
           SECURITY_AUDIT_ENABLED: ${{ vars.SECURITY_AUDIT_ENABLED || 'true' }}
           SECURITY_AUDIT_CONFIDENCE_GATE: ${{ vars.SECURITY_AUDIT_CONFIDENCE_GATE || '8' }}
+          SECURITY_AUDIT_SIMILAR_FINDING_LINE_WINDOW: ${{ vars.SECURITY_AUDIT_SIMILAR_FINDING_LINE_WINDOW || '25' }}
           SECURITY_AUDIT_SKIP_IF_UNCHANGED: ${{ vars.SECURITY_AUDIT_SKIP_IF_UNCHANGED || 'true' }}
           SECURITY_AUDIT_INCREMENTAL: ${{ vars.SECURITY_AUDIT_INCREMENTAL || 'true' }}
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
@@ -422,6 +526,15 @@ jobs:
           # first 64 KiB here for diagnosis (Refs #8204). runner.temp is outside
           # both checkouts, so the audited branch cannot pre-create this path.
           SECURITY_AUDIT_CLAUDE_REJECTED_OUT: ${{ runner.temp }}/security-audit-claude-rejected.txt
+          # Single-issue security pass (stuck-states P5a): surviving findings
+          # for the PR report, which stores them for the next delta re-audit.
+          SECURITY_AUDIT_PASS_FINDINGS_OUT: ${{ inputs.pr_number != '' && format('{0}/single-pass-findings.json', runner.temp) || '' }}
+          # Single-issue security pass (stuck-states P5b): a PR audit files one
+          # consolidated follow-up per cycle; the helper re-validates the PR
+          # number and falls back to one issue per finding. 'false' restores
+          # one issue per finding.
+          SECURITY_AUDIT_PASS_PR_NUMBER: ${{ inputs.pr_number || '' }}
+          SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           # The single-issue security pass reads the summary line from this log.
@@ -462,6 +575,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ env.AUDIT_DEFAULT_BRANCH }}
           SECURITY_PASS_PR_NUMBER: ${{ inputs.pr_number }}
@@ -469,6 +584,12 @@ jobs:
           SECURITY_PASS_AUDIT_BRANCH: ${{ env.AUDIT_BRANCH }}
           SECURITY_PASS_AUTHOR_LOGIN_FALLBACK: ${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
+          # Stuck-states P5a delta carry-forward. SECURITY_PASS_DELTA_SINCE and
+          # SECURITY_PASS_PRIOR_FINDINGS_FILE arrive through GITHUB_ENV from
+          # "Resolve single-issue security pass delta".
+          SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}
+          SECURITY_PASS_FINDINGS_FILE: ${{ format('{0}/single-pass-findings.json', runner.temp) }}
+          SECURITY_PASS_MAX_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_MAX_AUDIT_ATTEMPTS || '' }}
         run: |
           set -uo pipefail
           SECURITY_PASS_HEAD_SHA="${AUDIT_DATA_SHA}"
@@ -496,6 +617,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
           SECURITY_AUDIT_UPSTREAM_REPORT_ENABLED: ${{ vars.SECURITY_AUDIT_UPSTREAM_REPORT_ENABLED || 'true' }}
           REPORT_WRAPPER_SHA: ${{ steps.resolve_support.outputs.support_sha }}
@@ -516,6 +639,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
           REPORT_WORKFLOW_NAME: ${{ github.workflow }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}

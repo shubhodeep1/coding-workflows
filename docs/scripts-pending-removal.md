@@ -124,6 +124,7 @@ Copy this block when adding a new entry:
   - `gh api "repos/shubhodeep1/coding-workflows/issues?state=open&labels=ai:orchestrator-tracking,ai:comprehensive-test-pending"` returns `[]` (no proving or verifying run in flight).
   - `git ls-remote origin refs/heads/main 'refs/tags/stable^{}'` shows no code change on `main` since the tag, or a replacement promotion path is live.
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_promote_main_cycle.py tests/test_apply_analysis_on_main.py tests/test_orchestrate_poll_promote_cycle.py` returns exit code 0.
+  - `gh issue list -R shubhodeep1/coding-workflows --label ai:workflow-heal --state open --search 'in:title "Release blocker: cycle_"' --json number,title` returns no issue whose title starts with `Release blocker: cycle_` (no cycle release-blocker report from `promote_main_cycle.sh` is still open).
 - **Owner:** @shubhodeep1
 
 ### `scripts/auto_release_stable.sh` + `.github/workflows/auto-release-stable.yml`
@@ -135,6 +136,7 @@ Copy this block when adding a new entry:
   - `gh workflow view auto-release-stable.yml -R shubhodeep1/coding-workflows` confirms the 6-hourly schedule still exists and still runs `scripts/auto_release_stable.sh`.
   - `git ls-remote origin refs/heads/stable 'refs/tags/stable^{}'` prints the same commit for both refs (nothing on the `stable` branch is waiting for a release).
   - `gh api "repos/shubhodeep1/coding-workflows/actions/workflows/test-and-mark-stable.yml/runs?per_page=1"` shows the latest run was not dispatched by the schedule, i.e. a replacement release path is live.
+  - `gh issue list -R shubhodeep1/coding-workflows --label ai:workflow-heal --state open --search "Release blocker in:title"` returns no issue titled `Release blocker: last_gate_failed on stable`, `Release blocker: release_in_flight on stable` or `Release blocker: stable_release_stale on stable` (no release-blocker report from this script is still being healed).
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_auto_release_stable.py` returns exit code 0.
 - **Owner:** @shubhodeep1
 
@@ -196,6 +198,17 @@ Copy this block when adding a new entry:
   - `PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py` returns `All workflow script references resolve to existing files.`
 - **Owner:** @shubhodeep1
 
+### `scripts/stage_support_for_phase.sh`
+
+- **Introduced in:** ai/issue-8292 (2026-10-29)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `rg -n 'stage_support_for_phase\.sh' .github/workflows` returns no live caller matches.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_support_script_single_source.py` passes after its fixtures are removed with the helper.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py` returns `All workflow script references resolve to existing files.`
+- **Owner:** @shubhodeep1
+
 ### `scripts/review_collect_pr_metadata.sh`
 
 - **Introduced in:** ai/issue-3203 (2026-06-07)
@@ -218,17 +231,6 @@ Copy this block when adding a new entry:
   - `PYTHONDONTWRITEBYTECODE=1 pytest -q tests/test_check_failure_triage_workflow_security.py` confirms trusted prompt staging, credential-free diagnosis, and fine-grained-token issue posting remain separated.
   - `PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py` returns `All workflow script references resolve to existing files.`
   - The feature is on by default, so removal requires confirming no consumer still wants it: for every consumer in `.github/ai/consumer_repos.json`, `gh variable list --repo <consumer>` shows `CHECK_FAILURE_TRIAGE_ENABLED` is explicitly `false` (the repo has opted out) before removing it.
-- **Owner:** @shubhodeep1
-
-### `.github/workflows/check-failure-triage-historical.yml`
-
-- **Introduced in:** #7093 (2026-10-10)
-- **Type:** single-use
-- **Removal trigger:** the `ai:check-triage` issue for PR #6611's CI run 37922279826 (job 113792812346) is closed. The workflow already skips itself on every push once that issue exists; removing it also lets the historical inputs of `check_failure_triage.yml` stay unused until another historical follow-up needs them.
-- **Removal preflight checks:**
-  - `gh issue list --label ai:check-triage --search 37922279826 --state all -R shubhodeep1/coding-workflows` shows a closed issue whose body links run 37922279826.
-  - `gh run list --workflow check-failure-triage-historical.yml --limit 5 -R shubhodeep1/coding-workflows` shows the latest runs ending in the guard job with `HISTORICAL_TRIAGE skip reason=already_filed` (no `repro` or `triage` job ran).
-  - `rg -n 'check-failure-triage-historical' .github/ docs/ agents.md tests/` lists only this workflow, its inventory line, the generated TREE block, its entry in `tests/test_workflow_checkout_integration_ref_audit.py` and `tests/test_check_failure_triage_historical.py` (plus that test's line in `ci.yml`), which are removed together.
 - **Owner:** @shubhodeep1
 
 ### `.github/workflows/workspace-cache-maintenance.yml`
@@ -391,6 +393,17 @@ Copy this block when adding a new entry:
   - `grep -rn heal_port_to_default .github/workflows scripts` returns no callers other than this file (remove the `issue_pr_status.yml` step and its fetch block first).
   - No open issue carries its port marker: `gh issue list -R shubhodeep1/coding-workflows -l ai:workflow-heal -s open --search 'in:body "Ported from heal:"' --json number --jq length` prints `0`.
   - `tests/test_heal_port_to_default.py` (and its `ci.yml` entry) and the `heal-port` subcommand of `scripts/workflow_failure_heal.py` are removed in the same PR.
+- **Owner:** @shubhodeep1
+
+### `scripts/chatgpt_codex_relay.py` + the `chatgpt/` review-panel slot (`run_chatgpt_reviewer` in `scripts/review_run_reviewers.sh`, the `chatgpt` engine of `scripts/review_untrusted_sandbox.sh`, the "ChatGPT pool token" step of `.github/workflows/review_autofix.yml`)
+
+- **Introduced in:** PR for #9044 (2026-11-08), Refs #8969
+- **Type:** long-running
+- **Removal trigger:** when the review panel no longer has a `chatgpt/` slot (the ChatGPT account reviewer trial ends or the slot is retired).
+- **Removal preflight checks:**
+  - `REVIEWER_MODELS` in `.github/workflows/review_autofix.yml` and `.github/ai/chatgpt_pool.json` on `main` and `stable` reference no `chatgpt/` slot, and `gh variable get REVIEWER_CHATGPT_SLOT_ENABLED -R shubhodeep1/coding-workflows` is unset or `false`.
+  - The broker's `GET /v1/chatgpt/status` (`.github/actions/chatgpt-pool-token` with `mode: status`) shows no account read in the last 7 days.
+  - `grep -rn "chatgpt_codex_relay\|run_chatgpt_reviewer\|chatgpt-slot" .github/workflows scripts` returns no callers other than the files removed in the same PR, and `tests/test_review_chatgpt_reviewer_slot.py` (and its `ci.yml` entry) go with them.
 - **Owner:** @shubhodeep1
 
 ### `scripts/cs_bridge_query.sh`

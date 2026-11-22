@@ -226,8 +226,10 @@ class Wiring(unittest.TestCase):
 		case_text = text[text.index("# END rb-judge merge error capture (#7659)") :]
 		sites = case_text.split('"${RB_MERGE_METHOD_FLAG:---squash}" --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}"')[:-1]
 		self.assertEqual(len(sites), 2)
+		# 1600: the merge-lease `lease_wait` branch (2026-11-17) sits between
+		# the post-wait gate and the merge call.
 		for site in sites:
-			self.assertIn("_pr_base_fresh_for_merge", site[-1200:])
+			self.assertIn("_pr_base_fresh_for_merge", site[-1600:])
 		# Each call to the retry helper follows its site's gate.
 		retry_calls = list(re.finditer(r"\|\| rb_judge_merge_retry_transient (?:auto|direct) (?:merge|terminal|sync); then", case_text))
 		self.assertEqual(len(retry_calls), 3)
@@ -534,7 +536,8 @@ class RequiredCiCheckWait(unittest.TestCase):
 		self.assertIn("ci_state=success", out)
 
 	def test_same_named_check_from_another_workflow_does_not_count(self) -> None:
-		"""lint-pr-body-auto-close.yml's job is also named `lint`; only a CI run's `lint` counts."""
+		"""lint-plan-archival.yml's job is also named `lint` (the PR-body lint job's was
+		until it became `pr-body-lint`, now in pr-checks.yml); only a CI run's `lint` counts."""
 		other = json.dumps([{"check_runs": [
 			{"name": "lint", "status": "completed", "conclusion": "success", "details_url": "https://github.com/o/r/actions/runs/555/job/1"},
 		]}])
@@ -575,6 +578,81 @@ class RequiredCiCheckWait(unittest.TestCase):
 
 	def test_wait_workflows_none_matches_by_name_only(self) -> None:
 		rc, out = _wait([GREEN], env={**THIS_REPO, "AUTO_MERGE_WAIT_WORKFLOWS": "none"})
+		self.assertEqual(rc, 0, out)
+		self.assertIn("ci_state=success", out)
+
+
+def _named_ci_runs(*entries: tuple) -> str:
+	"""actions/runs?head_sha= shape with events: run name, event, status, run id[, conclusion]."""
+	return json.dumps({"workflow_runs": [
+		{"name": e[0], "event": e[1], "status": e[2], "id": e[3], "conclusion": e[4] if len(e) > 4 else None} for e in entries
+	]})
+
+
+class FinalCiRunBinding(unittest.TestCase):
+	"""A final CI run is a workflow_dispatch run named `CI [pr:<n>]` (its
+	run name), never `CI`. Its `lint` must still bind, or the wait times out
+	with ci_state=absent on every head whose only CI run is the final one."""
+
+	def test_the_final_runs_lint_binds(self) -> None:
+		for name in ("CI [pr:7]", "CI [pr:7] [sync-quick]", "CI [pr:12345] [docs-only]"):
+			with self.subTest(name=name):
+				runs = _named_ci_runs((name, "workflow_dispatch", "completed", 999, "success"))
+				rc, out = _wait([GREEN], env=THIS_REPO, ci_runs_sequence=[runs])
+				self.assertEqual(rc, 0, out)
+				self.assertIn("ci_check=lint ci_state=success", out)
+
+	def test_the_real_9617_listing_binds_the_final_run(self) -> None:
+		"""PR #9617 (2026-11-17): a `CI quick` pull_request run and the final
+		run were the only runs; the wait timed out with ci_state=absent."""
+		runs = _named_ci_runs(
+			("CI [pr:9617]", "workflow_dispatch", "completed", 999, "success"),
+			("CI quick", "pull_request", "completed", 555, "success"),
+		)
+		rc, out = _wait([GREEN], env=THIS_REPO, ci_runs_sequence=[runs])
+		self.assertEqual(rc, 0, out)
+		self.assertIn("ci_state=success", out)
+
+	def test_names_that_only_look_like_a_final_run_do_not_bind(self) -> None:
+		for name, event in (
+			("CI [pr:7]", "pull_request"),
+			("CI [pr:7]", "push"),
+			("CI quick", "workflow_dispatch"),
+			("CI [pr:7] [sync quick]", "workflow_dispatch"),
+			("CI [pr:07]", "workflow_dispatch"),
+			("Build [pr:7]", "workflow_dispatch"),
+			("CI [pr:7] [a] [b]", "workflow_dispatch"),
+		):
+			with self.subTest(name=name, event=event):
+				runs = _named_ci_runs((name, event, "completed", 999, "success"))
+				rc, out = _wait([GREEN], max_minutes="0", env=THIS_REPO, ci_runs_sequence=[runs])
+				self.assertEqual(rc, 1, out)
+				self.assertIn("ci_state=absent", out)
+
+	def test_a_queued_final_run_is_waited_for(self) -> None:
+		runs = _named_ci_runs(("CI [pr:7]", "workflow_dispatch", "queued", 999))
+		rc, out = _wait([GREEN], max_minutes="0", env=THIS_REPO, ci_runs_sequence=[runs])
+		self.assertEqual(rc, 1, out)
+		self.assertIn("reason=ci_run_pending", out)
+
+	def test_a_cancelled_final_run_with_a_newer_full_run_is_not_unrun(self) -> None:
+		runs = _named_ci_runs(
+			("CI [pr:7] [sync-quick]", "workflow_dispatch", "completed", 998, "cancelled"),
+			("CI [pr:7]", "workflow_dispatch", "completed", 999, "success"),
+		)
+		rc, out = _wait([GREEN], env=THIS_REPO, ci_runs_sequence=[runs])
+		self.assertEqual(rc, 0, out)
+		self.assertNotIn("ci_run_cancelled", out)
+
+	def test_only_cancelled_final_runs_still_refuse(self) -> None:
+		runs = _named_ci_runs(("CI [pr:7]", "workflow_dispatch", "completed", 999, "cancelled"))
+		rc, out = _wait([GREEN], env=THIS_REPO, ci_runs_sequence=[runs])
+		self.assertEqual(rc, 1, out)
+		self.assertIn("reason=ci_run_cancelled", out)
+
+	def test_a_renamed_wait_workflow_binds_its_own_final_runs(self) -> None:
+		runs = _named_ci_runs(("Build [pr:7]", "workflow_dispatch", "completed", 999, "success"))
+		rc, out = _wait([GREEN], env={**THIS_REPO, "AUTO_MERGE_WAIT_WORKFLOWS": "Build"}, ci_runs_sequence=[runs])
 		self.assertEqual(rc, 0, out)
 		self.assertIn("ci_state=success", out)
 
@@ -634,7 +712,10 @@ class RequiredChecksWiring(unittest.TestCase):
 
 	def test_review_rb_judge_waits_before_both_auto_merge_calls(self) -> None:
 		text = RB_JUDGE.read_text(encoding="utf-8")
-		self.assertEqual(text.count('elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then'), 2)
+		# FINAL_CI_MERGE_RESUME_ENABLED=false: the judge posts its head-gate
+		# success only after the wait, so a final-CI pending mark could never
+		# resume (tests/test_merge_lease.py).
+		self.assertEqual(text.count('elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" FINAL_CI_MERGE_RESUME_ENABLED=false _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then'), 2)
 
 	def test_missing_library_fails_the_wait_closed(self) -> None:
 		for path in (ENABLE_AUTO_MERGE, RB_JUDGE, WORKFLOW):

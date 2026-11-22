@@ -44,12 +44,26 @@
 # post-sync test repair" step (scripts/review_autofix_step_prepush_test_gate.sh)
 # with the pre-push gate's prepush_test_gate.v1 result; see
 # _resolver_test_repair_main. Any other argument exits 2.
+# --final-ci (with --test-repair; docs/plans/final-ci-failure-ci-fix-plan.md
+# Phase 2): repair a plain PR head whose final CI failed. The context is the
+# PR's title and body plus the failing check-runs already collected for the
+# run (PR_CHECK_RUNS_CONTEXT_FILE); no orchestrator state and no intent
+# fingerprints (the fingerprint hard gate is skipped only in this mode).
+# Commit subject: `[ai-merge-resolve] repair final CI failures`.
 
 set -euo pipefail
+# Signed job-token comments (run-volume plan item 15): route this script's
+# gh comment calls through the shim even when no earlier step loaded it.
+[ -z "${BASH_SOURCE[0]:-}" ] || AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" >/dev/null 2>&1 || true
 
 RESOLVER_TEST_REPAIR_RESULT_FILE=""
+RESOLVER_TEST_REPAIR_FINAL_CI="false"
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --final-ci)
+      RESOLVER_TEST_REPAIR_FINAL_CI="true"
+      shift
+      ;;
     --test-repair)
       if [ "$#" -lt 2 ] || [ -z "${2:-}" ]; then
         echo "::error::review_conflict_resolve.sh: --test-repair needs a result file" >&2
@@ -64,6 +78,10 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+if [ "${RESOLVER_TEST_REPAIR_FINAL_CI}" = "true" ] && [ -z "${RESOLVER_TEST_REPAIR_RESULT_FILE}" ]; then
+  echo "::error::review_conflict_resolve.sh: --final-ci needs --test-repair" >&2
+  exit 2
+fi
 
 # Stages one accepted resolver path into the real merge index, which the
 # [ai-merge-resolve] commit is written from.  Never call it with
@@ -1697,6 +1715,38 @@ _resolver_test_repair_context()
   return 0
 }
 
+# --final-ci context (docs/plans/final-ci-failure-ci-fix-plan.md Phase 2):
+# the PR's title and body (one GET pulls/<n>; nothing else in this mode reads
+# the PR) and the failing check-runs the "Collect PR check-run failures" step
+# already wrote to PR_CHECK_RUNS_CONTEXT_FILE (no API call). It fills the
+# same _test_repair_* globals, so the template renderer is shared:
+# TRACKING_ISSUE_NUMBER/TITLE/BODY carry the PR's number, title and body and
+# MERGED_SUB_ISSUES_LIST the check-run context. No intent fingerprints: the
+# fingerprints file is `{}`, so the fingerprint hard gate does not run.
+# Returns 2 when the PR cannot be read.
+_resolver_final_ci_repair_context()
+{
+  local pr="$1" pr_json checks="" checks_file="${PR_CHECK_RUNS_CONTEXT_FILE:-}"
+  _test_repair_title="" _test_repair_body="" _test_repair_merged_list="" _test_repair_merged_count="0"
+  if ! pr_json="$(_resolver_test_repair_gh gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}" \
+    --jq '{title: (.title // ""), body: (.body // "")}' 2>/dev/null)" || [ -z "${pr_json}" ]; then
+    return 2
+  fi
+  _test_repair_title="$(printf '%s' "${pr_json}" | jq -r '.title' 2>/dev/null || echo "")"
+  _test_repair_body="$(printf '%s' "${pr_json}" | jq -r '.body' 2>/dev/null || echo "")"
+  if [ "${#_test_repair_body}" -gt 20000 ]; then
+    _test_repair_body="${_test_repair_body:0:20000}
+(pull request body truncated at 20000 characters)"
+  fi
+  if [ -n "${checks_file}" ] && [ -f "${checks_file}" ] && [ ! -L "${checks_file}" ]; then
+    checks="$(head -c 20000 "${checks_file}" 2>/dev/null || true)"
+  fi
+  _test_repair_merged_list="$(_resolver_test_repair_untrusted "FAILING CHECK-RUNS" "${checks:-(no check-run context was collected for this run)}")"
+  INTEGRATION_FINGERPRINTS_FILE="${RUNTIME_DIR}/integration_test_repair_fingerprints.json"
+  printf '%s' "{}" > "${INTEGRATION_FINGERPRINTS_FILE}"
+  return 0
+}
+
 _resolver_test_repair_untrusted()
 {
   local label="$1" text="$2"
@@ -1722,11 +1772,25 @@ _resolver_test_repair_main()
   local resolver_gate_prepare_bounded=true
   local CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:-3000}"
   local _test_repair_title _test_repair_body _test_repair_merged_list _test_repair_merged_count
-  if ! [[ "${branch}" =~ ^orchestrator/project-([1-9][0-9]*)$ ]]; then
+  local tpl_name="integration-sync-test-repair.txt" commit_subject="[ai-merge-resolve] repair post-sync test failures"
+  local context_label="TRACKING ISSUE"
+  if [ "${RESOLVER_TEST_REPAIR_FINAL_CI:-false}" = "true" ]; then
+    # A plain PR head; orchestrator heads keep the integration repair.
+    if [[ "${branch}" =~ ^orchestrator/project- ]] || ! [[ "${branch}" =~ ^[A-Za-z0-9._/-]+$ ]] \
+      || ! [[ "${PR_NUMBER:-}" =~ ^[1-9][0-9]*$ ]]; then
+      _resolver_test_repair_log "outcome=skipped reason=invalid_input detail=branch"
+      return 0
+    fi
+    tracking="${PR_NUMBER}"
+    tpl_name="final-ci-test-repair.txt"
+    commit_subject="[ai-merge-resolve] repair final CI failures"
+    context_label="PULL REQUEST"
+  elif ! [[ "${branch}" =~ ^orchestrator/project-([1-9][0-9]*)$ ]]; then
     _resolver_test_repair_log "outcome=skipped reason=invalid_input detail=branch"
     return 0
+  else
+    tracking="${BASH_REMATCH[1]}"
   fi
-  tracking="${BASH_REMATCH[1]}"
   case "${result}" in
     */../*|../*|*/..) result="" ;;
     "${RUNTIME_DIR%/}"/*) ;;
@@ -1746,8 +1810,8 @@ _resolver_test_repair_main()
     return 0
   fi
   case "${prompts_dir}" in /*) ;; *) prompts_dir="" ;; esac
-  for cand in "${prompts_dir:+${prompts_dir}/integration-sync-test-repair.txt}" \
-    "${GITHUB_WORKSPACE:-/nonexistent}/.codex-workflow-src/prompts/integration-sync-test-repair.txt"; do
+  for cand in "${prompts_dir:+${prompts_dir}/${tpl_name}}" \
+    "${GITHUB_WORKSPACE:-/nonexistent}/.codex-workflow-src/prompts/${tpl_name}"; do
     if [ -n "${cand}" ] && [ -f "${cand}" ] && [ ! -L "${cand}" ]; then
       tpl="${cand}"
       break
@@ -1769,7 +1833,11 @@ _resolver_test_repair_main()
     return 0
   fi
   rc=0
-  _resolver_test_repair_context "${tracking}" || rc=$?
+  if [ "${RESOLVER_TEST_REPAIR_FINAL_CI:-false}" = "true" ]; then
+    _resolver_final_ci_repair_context "${tracking}" || rc=$?
+  else
+    _resolver_test_repair_context "${tracking}" || rc=$?
+  fi
   if [ "${rc}" -eq 1 ]; then
     _resolver_test_repair_log "outcome=skipped reason=identity_unavailable"
     return 0
@@ -1788,8 +1856,8 @@ _resolver_test_repair_main()
   empty_set="${dir}/empty-conflicted-set.txt"
   : > "${empty_set}"
   if ! INTEGRATION_BRANCH="${branch}" TRACKING_ISSUE_NUMBER="${tracking}" \
-    TRACKING_ISSUE_TITLE="$(_resolver_test_repair_untrusted "TRACKING ISSUE TITLE" "${_test_repair_title}")" \
-    TRACKING_ISSUE_BODY="$(_resolver_test_repair_untrusted "TRACKING ISSUE BODY" "${_test_repair_body}")" \
+    TRACKING_ISSUE_TITLE="$(_resolver_test_repair_untrusted "${context_label} TITLE" "${_test_repair_title}")" \
+    TRACKING_ISSUE_BODY="$(_resolver_test_repair_untrusted "${context_label} BODY" "${_test_repair_body}")" \
     MERGED_SUB_ISSUES_LIST="${_test_repair_merged_list}" MERGED_SUB_ISSUE_COUNT="${_test_repair_merged_count}" \
     INTEGRATION_FINGERPRINTS_FILE="${INTEGRATION_FINGERPRINTS_FILE:-}" \
     PROMPT_TPL="${tpl}" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 -c "import os,sys; tpl=open(os.environ['PROMPT_TPL'],encoding='utf-8').read(); keys=['INTEGRATION_BRANCH','TRACKING_ISSUE_NUMBER','TRACKING_ISSUE_TITLE','TRACKING_ISSUE_BODY','MERGED_SUB_ISSUES_LIST','MERGED_SUB_ISSUE_COUNT']; [tpl := tpl.replace('{{'+k+'}}', os.environ.get(k,'')) for k in keys]; p=os.environ.get('INTEGRATION_FINGERPRINTS_FILE',''); fp=(open(p,encoding='utf-8',errors='replace').read() if (p and os.path.isfile(p) and os.access(p, os.R_OK)) else '{}'); fp=(fp[:65536]+'\n(fingerprints truncated at 65536 characters for the prompt; the fingerprint check still reads the full list)') if len(fp)>65536 else fp; tpl=tpl.replace('{{INTENT_FINGERPRINTS_JSON}}', fp); sys.stdout.write(tpl)" \
@@ -1924,7 +1992,7 @@ _resolver_test_repair_main()
     git config user.email "codex-bot@users.noreply.invalid"
   fi
   echo "AI_COMMIT_IDENTITY role=CONFLICT_RESOLVER engine=${engine} name=$(git config user.name)"
-  if ! git commit --no-verify -q -m "[ai-merge-resolve] repair post-sync test failures"; then
+  if ! git commit --no-verify -q -m "${commit_subject}"; then
     git read-tree "${index_tree}" 2>/dev/null || true
     _resolver_test_repair_log "outcome=repair_reverted reason=commit_failed"
     return 0

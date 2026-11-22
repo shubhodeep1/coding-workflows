@@ -56,6 +56,12 @@ for ((i=0; i<${#args[@]}; i++)); do
   if [ "${args[$i]}" = "--jq" ]; then jqf="${args[$((i+1))]}"; fi
 done
 path="${endpoint%%\?*}"
+# Merge lease refs (scripts/pr_checks_lib.sh): none exist unless a fixture
+# provides lease_refs.json, as on a repository that never used the lease.
+if [ "${method}" = "GET" ] && [[ "${path}" == repos/*/git/matching-refs/* ]]; then
+  if [ -f "${FAKE_GH_DIR}/lease_refs.json" ]; then cat "${FAKE_GH_DIR}/lease_refs.json"; else printf '[]'; fi
+  exit 0
+fi
 # actions/runs is served like the REST listing: filtered by the status query
 # parameter and by a URL-encoded created=<=<timestamp> bound (runs without a
 # created_at never match a bound), paged by page/per_page, with total_count
@@ -1891,7 +1897,7 @@ def test_cancel_on_close_wrappers_keep_event_and_add_matching_schedule() -> None
 	for wrapper in wrappers:
 		workflow = wrapper.read_text(encoding="utf-8")
 		assert "pull_request:\n    types: [closed]" in workflow
-		assert 'schedule:\n    - cron: "*/5 * * * *"' in workflow
+		assert 'schedule:\n    - cron: "23 * * * *"' in workflow
 		assert "pull_request_target" not in workflow
 		assert "  actions: write" in workflow
 		assert "  contents: read" in workflow

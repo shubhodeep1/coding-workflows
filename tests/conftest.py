@@ -91,16 +91,28 @@ STAGED_SUPPORT_RUNTIME_ENV_VARS = (
 	"IMPLEMENT_STAGED_SUPPORT_RUN_DIR",
 )
 
+# Signed job-token comments (scripts/comment_signature.py): a workflow job
+# with AI_COMMENT_SIGNING_SECRET set routes `gh` through a shim that rewrites
+# comment calls, so a test that fakes `gh` and sources gh_helpers.sh would
+# see rewritten arguments. The shim dir itself is removed from PATH below.
+COMMENT_SIGNING_ENV_VARS = (
+	"AI_COMMENT_SIGNING_SECRET",
+	"AI_COMMENT_JOB_TOKEN",
+	"AI_COMMENT_SIG_REAL_GH",
+	"AI_COMMENT_SIG_PY",
+	"AI_COMMENT_SIG_SHIM_DIR",
+)
+
 # Every workflow-runtime variable the session fixture strips.
-WORKFLOW_RUNTIME_ENV_VARS = REPO_PINNING_GIT_ENV_VARS + STAGED_SUPPORT_RUNTIME_ENV_VARS
+WORKFLOW_RUNTIME_ENV_VARS = REPO_PINNING_GIT_ENV_VARS + STAGED_SUPPORT_RUNTIME_ENV_VARS + COMMENT_SIGNING_ENV_VARS
 
 
 @pytest.fixture(autouse=True, scope="session")
 def _isolate_repo_pinning_git_environment():
 	"""Strip workflow-runtime variables for the whole test session.
 
-	Covers the repo-pinning git variables and the staged-support ledger
-	paths. Runs once before the first test and restores the original values
+	Covers the repo-pinning git variables, the staged-support ledger
+	paths and the signed-comment shim (variables and its PATH entry). Runs once before the first test and restores the original values
 	after the last one, so a caller that launched pytest with the variables
 	set (the unattended workflows) gets its environment back unchanged.
 	"""
@@ -108,6 +120,11 @@ def _isolate_repo_pinning_git_environment():
 	for variable_name in WORKFLOW_RUNTIME_ENV_VARS:
 		if variable_name in os.environ:
 			saved_values[variable_name] = os.environ.pop(variable_name)
+	path_entries = os.environ.get("PATH", "").split(os.pathsep)
+	kept_entries = [entry for entry in path_entries if "/ai_comment_sig_shim." not in entry]
+	if kept_entries != path_entries:
+		saved_values["PATH"] = os.environ["PATH"]
+		os.environ["PATH"] = os.pathsep.join(kept_entries)
 	try:
 		yield
 	finally:
