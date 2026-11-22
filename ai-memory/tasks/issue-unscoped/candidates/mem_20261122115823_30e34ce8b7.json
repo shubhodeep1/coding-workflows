@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/lint_gh_calls_in_loops.py:443-456 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The break-on-timeout bounds only the per-file `git show` loop, but the `added_lines_by_file()` diff call at line 443 runs under the same 120 s `GIT_TIMEOUT_SECONDS` (line 48) without that bound, so the worst case of 90 s fetch + 120 s diff + 120 s for one stalled `git show` = 330 s goes past the 300 s `timeout-minutes: 5` (.github/workflows/pr-checks.yml lines 291, 299), and the step is killed before `GH_LOOP_CALL_LINT warnings=<n> files=<n>` prints.\n  WHY: This contradicts the comment at lines 451-454 and at `tests/test_pr_checks_workflow.py:190-192` that the summary line \"always prints within the step's 5-minute timeout\"; impact is limited because two sequential stalls are needed, `continue-on-error: true` keeps `pr-body-lint` green, and the per-file `::warning` at line 455 still reaches the log (source severity was NIT, recorded here as low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- HARDENING (not a finding): scripts/lint_gh_calls_in_loops.py | lint() per-file except block, lines ~446-460\n  PROBLEM: `subprocess.TimeoutExpired` is a subclass of `OSError`, so a future reorder of the except clauses would quietly turn TimeoutExpired into a `continue`.\n  WHY: Suggested fix is to keep the TimeoutExpired clause first and add an inline comment that names the inheritance (HARDENING_RISK_SCORE: 2).\n- HARDENING (not a finding): scripts/lint_gh_calls_in_loops.py | lint() TimeoutExpired branch, ~line 451\n  PROBLEM: The `::warning::` text \"timed out reading <path>; remaining files skipped\" is misleading when the timed-out path is the last one in `sorted(added)`.\n  WHY: Suggested fix is to change the suffix to `\"; further files skipped\"` (HARDENING_RISK_SCORE: 1).\n- HARDENING (not a finding): .github/workflows/pr-checks.yml | gh_loop_call_lint step, lines 290-291\n  PROBLEM: If `rev-parse` stalls on both `--base` and `--head` (120 s each), the run could reach 330 s, past the 5-minute step timeout, and be killed before the `GH_LOOP_CALL_LINT` summary line prints.\n  WHY: Suggested fix is to raise `timeout-minutes` to 6 or give the `_commit_exists` rev-parse calls a short timeout of \u226410 s each (HARDENING_RISK_SCORE: 2).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/lint_gh_calls_in_loops.py:lines 443, 450-456 (diff call inside the loop's try; break-on-timeout), line 48 (GIT_TIMEOUT_SECONDS = 120); .github/workflows/pr-checks.yml lines 291, 299 (`timeout-minutes: 5`, `timeout 90 git fetch`) | severity=NIT | confidence=3\n  PROBLEM: The break-on-timeout bounds only the per-file `git show` loop, not the `added_lines_by_file()` diff call at line 443, so in the double-stall case (90 s fetch + 120 s diff + 120 s for one stalled `git show` = 330 s > 300 s) the runner kills the step before `GH_LOOP_CALL_LINT warnings=<n> files=<n>` prints.\n  WHY: It needs two sequential stalls, and `continue-on-error: true` keeps `pr-body-lint` green, but the summary line and the remaining file scans are lost, which contradicts the \"always prints within the step's 5-minute timeout\" claim in the comments at lines 451-454 and at `tests/test_pr_checks_workflow.py:190-192`.\n- HARDENING (not a finding): scripts/lint_gh_calls_in_loops.py | `added_lines_by_file()` call at line 443 / `GIT_TIMEOUT_SECONDS` at line 48\n  PROBLEM: The diff call's 120 s timeout is not counted in the step-timeout budget that the break-on-timeout relies on.\n  WHY: Suggested fix is to correct the comment at lines 451-454 or give the diff call a smaller timeout (HARDENING_RISK_SCORE: 1).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9036f87e62755a1575452b757dbe400374a5825e62c0e636750f0aa993c69c7f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9936,
+    "run_id": "45018465561",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45018465561",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122115823_30e34ce8b7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9936,
+    "run_id": "45018465561"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-22T11:58:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
