@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-11-22T11:13:09Z",
+  "issue_number": 9815,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=prompts/integration-sync-conflict-resolver.txt:1; cited_path=prompts/integration-sync-conflict-resolver.txt; files_touched=changelog.d/9815-one-sided-delete-resolver-guard-test.md, tests/test_conflict_one_sided_delete_workflow_path.py.",
+  "phase": "review_autofix",
+  "pr_number": 9816,
+  "record_id": "lesson_20261122111309_355862ebf6",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "prompts/integration-sync-conflict-resolver.txt",
+    "changelog.d/9815-one-sided-delete-resolver-guard-test.md",
+    "tests/test_conflict_one_sided_delete_workflow_path.py"
+  ]
+}
