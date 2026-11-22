@@ -827,3 +827,16 @@ def test_head_gate_accepts_resend_branch(tmp_path: Path) -> None:
 	assert result.returncode == 0, result.stderr
 	assert not _gate_posts(calls)
 	assert "outcome=skipped reason=not_updater_branch" in result.stdout
+
+
+def test_head_gate_step_constants_match_the_review_helper() -> None:
+	# verify_head_gate copies the branch regex and status contexts of
+	# scripts/review_head_gate.sh; a rename on one side must fail CI rather
+	# than leave updater PRs pending again (#9483).
+	helper = (REPO_ROOT / "scripts" / "review_head_gate.sh").read_text(encoding="utf-8")
+	consts = dict(re.findall(r"^(REVIEW_HEAD_GATE_UPDATER_[A-Z_]+)=['\"]([^'\"]+)['\"]$", helper, re.MULTILINE))
+	run = _verify_step("verify_head_gate")["run"]
+	assert f"--arg re '{consts['REVIEW_HEAD_GATE_UPDATER_BRANCH_RE']}'" in run
+	assert f'--arg i "{consts["REVIEW_HEAD_GATE_UPDATER_INTEGRITY_CONTEXT"]}"' in run
+	assert '--arg v "${VERIFY_STATUS_CONTEXT}"' in run
+	assert _verify_job()["env"]["VERIFY_STATUS_CONTEXT"] == consts["REVIEW_HEAD_GATE_UPDATER_VERIFY_CONTEXT"]
