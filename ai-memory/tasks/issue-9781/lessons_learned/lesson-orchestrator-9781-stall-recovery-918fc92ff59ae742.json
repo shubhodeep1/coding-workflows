@@ -1,0 +1,27 @@
+{
+  "discovered_at": "2026-11-22T18:27:40Z",
+  "issue_number": 9781,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Orchestrator project \"Let non-conflicting approved PRs merge past the merge lease (plan docs/plans/merge-lease-parallel-merges-plan.md, phases 1-5)\" (#9781): issues stalled and needed automated recovery (10 time(s)). Causes: stuck in ai:done for 138m; recovery: retrigger_review (#9821); stuck in ai:done for 217m; recovery: retrigger_review (#9821); stuck in ai:done for 136m; recovery: run_stall_judge (#9821); stuck in ai:done for 124m; recovery: run_stall_judge (#9821); stuck in ai:done for 130m; recovery: run_stall_judge (#9821); stuck in ai:clarification for 69m; recovery: auto_respond_clarify (#9821); stuck in ai:planning for 93m; recovery: retrigger_plan (#9821); stuck in ai:planning for 65m; recovery: retrigger_plan (#9821); stuck in ai:awaiting-approval for 69m; recovery: auto_approve (#9884); stuck in ai:done for 142m; recovery: retrigger_review (#9908). Similar work may need smaller, more explicit issues for these phases.",
+  "phase": "orchestrator_completion",
+  "pr_number": 9804,
+  "record_id": "lesson-orchestrator-9781-stall-recovery-918fc92ff59ae742",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:stall_recovery",
+    "project:9781",
+    "file:scripts/pr_checks_lib.sh",
+    "file:tests/test_pr_base_freshness_gate.py",
+    "file:tests/test_merge_lease.py",
+    "file:.github/workflows/review_autofix.yml",
+    "file:.github/workflows/orchestrate_poll.yml",
+    "file:.github/workflows/cancel_on_pr_close.yml",
+    "file:.github/workflows/review_autofix_sweep.yml",
+    "file:README.md",
+    "file:changelog.d/merge-lease-parallel-p4-soft-paths.md",
+    "file:agents.d/merge-lease-parallel-p4-soft-paths.md",
+    "file:scripts/review_merge_train.sh",
+    "file:tests/test_review_merge_train.py",
+    "file:tests/merge_lease_fake_gh.py"
+  ]
+}
