@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:20571-20605 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The new helper\u2019s multiline `seh_body` definition may trigger shellcheck and incorrectly indent the posted issue comment.\n  WHY: Gemini reports that the indentation causes a shellcheck failure and malformed comment formatting; GLM could not confirm a specific warning, and notes that the gate report is contradicted by green check-runs on the same head SHA.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:20571-20584 | severity=high | confidence=4\n  PROBLEM: The multiline string seh_body contains unintentional leading spaces due to indentation in the script, which results in the posted issue comment being incorrectly formatted with extra spaces on each line.\n  WHY: The posted issue comment will have incorrect indentation, making it difficult to read and unprofessional. The PR cannot be merged due to the CI failure.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:20573-20605 | severity=high | confidence=2\n  PROBLEM: The pre-push test gate report on this head SHA (autofix run comment, 2026-11-21T03:32) classifies a `shellcheck` failure as \"caused by this change\" (1 caused failure).\n  WHY: If the gate's shellcheck finding is real, the pre-push gate fails on every subsequent autofix/implement run for this PR (it is classified caused-by-change, not inherited), and CI's shellcheck job may fail once it runs the same version; the PR cannot clear the gate until the finding is reproduced and fixed.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d49af5c280aea70eb0074dfdab8e82bb9ddc6347963a44e8a31f2438825c73c1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9853,
+    "run_id": "45051480827",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45051480827",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122185714_aec2879c98",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9853,
+    "run_id": "45051480827"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T18:57:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
