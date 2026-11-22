@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. The suggested fix edits `scripts/claude_pool_token.sh` and `tools/claude-pool-broker/src/index.ts`. Neither is inside this issue's fixed scope, so as written the plan cannot be auto-approved and implement would reject the edits. How should this issue go ahead?\nChoices:\nA. Close this heal issue and file a new normal (non-heal) issue covering `scripts/claude_pool_token.sh`, `tools/claude-pool-broker/src/index.ts`, `tests/test_claude_pool_token.py`, `tools/claude-pool-broker/test/broker.test.ts` and `changelog.d/*.md`. That issue goes through the usual clarify, plan and implement steps, with a human `/approved`. (RECOMMENDED)\nB. Treat the failure as transient or environmental, as the fix constraints allow. The plan says \"no code changes\", or adds at most a test or changelog entry inside `tests/**` and `changelog.d/*.md`. The real remedy is the operator check that `BROKER_GITHUB_READ_TOKEN` is set on the `claude-pool-broker` worker.\nC. Keep this issue and let a human override the heal-scope hold at plan and implement time for the two out-of-scope files.\nQ2. Which of the suggested code changes are in scope? This only applies if Q1 is A or C. If Q1 is B, nothing outside `tests/**` and `changelog.d/*.md` can change, so answer A here.\nChoices:\nA. Only the client-side bounded retry in `scripts/claude_pool_token.sh`. It retries on `000`, `429`, `5xx` and a 403 that is exactly `workflow_sha_unverifiable`, adds a new `CLAUDE_POOL_BROKER_RETRY_*` knob with defaults, and comes with tests.\nB. The client retry plus the broker change: `verifyTrustedSha()` still tries `stable` after `main` is `unavailable`, and still never grants trust on uncertainty. Both come with tests. The broker change only takes effect once the Cloudflare Worker is redeployed, and no Actions workflow in this repo deploys it. (RECOMMENDED)\nC. Only the broker change to `verifyTrustedSha()`, with tests in `tools/claude-pool-broker/test/broker.test.ts`.",
+  "fingerprint": "14177801f4145771f431e8c3a8be636f824c9fe1fcbe579be4e30a5784ca8618",
+  "lineage": {
+    "issue_number": 9945,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45009664157",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45009664157",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261122101428_76e56c814b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9945,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45009664157"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9945 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-22T10:14:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
