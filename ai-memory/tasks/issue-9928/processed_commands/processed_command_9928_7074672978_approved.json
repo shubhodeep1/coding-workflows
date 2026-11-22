@@ -5,13 +5,30 @@
   "entry_id": "processed_command_9928_7074672978_approved",
   "issue_number": 9928,
   "metadata": {
+    "branch": "ai/issue-9928",
+    "changed_files": [
+      ".github/workflows/review_autofix.yml",
+      "README.md",
+      "agents.d/9928-review-pr-read-cache.md",
+      "changelog.d/9928-review-pr-read-cache.md",
+      "scripts/gh_helpers.sh",
+      "scripts/pr_checks_lib.sh",
+      "scripts/review_collect_pr_metadata.sh",
+      "scripts/review_run_reviewers.sh",
+      "tests/test_gh_pr_cached_read.py"
+    ],
+    "issue_number": 9928,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9928",
+    "pr_number": 9935,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9935",
+    "run_attempt": "1",
+    "run_id": "44988825277",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/44988825277"
   },
   "run_attempt": 1,
   "run_id": "44988825277",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-22T05:20:56Z",
+  "status": "completed",
+  "timestamp": "2026-11-22T06:20:28Z",
   "workflow": "implement"
 }
