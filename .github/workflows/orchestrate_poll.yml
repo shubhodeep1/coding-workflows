@@ -1454,6 +1454,9 @@ jobs:
           ORCH_STATE_PRUNE_ENABLED: ${{ vars.ORCH_STATE_PRUNE_ENABLED || 'true' }}
           ORCH_STATE_PRUNE_MAX_DELETES: ${{ vars.ORCH_STATE_PRUNE_MAX_DELETES || '50' }}
           ORCH_STATE_SKIP_UNCHANGED: ${{ vars.ORCH_STATE_SKIP_UNCHANGED || 'true' }}
+          # zlib-compress new ORCHESTRATOR_STATE_V2 chains (readers accept both
+          # forms). Off until every consumer pin can read compressed chains.
+          ORCH_STATE_COMPRESS: ${{ vars.ORCH_STATE_COMPRESS || 'false' }}
           ENABLE_CLEAN_WAVE_JUDGE_SKIP: ${{ vars.ENABLE_CLEAN_WAVE_JUDGE_SKIP || 'true' }}
           MAX_REVIEW_BLOCKED_RETRIES: ${{ vars.MAX_REVIEW_BLOCKED_RETRIES || '2' }}
           RB_JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.RB_JUDGE_ISOLATION_MAX_FAILURES || '3' }}
@@ -1675,6 +1678,9 @@ jobs:
           ORCH_STATE_PRUNE_ENABLED: ${{ vars.ORCH_STATE_PRUNE_ENABLED || 'true' }}
           ORCH_STATE_PRUNE_MAX_DELETES: ${{ vars.ORCH_STATE_PRUNE_MAX_DELETES || '50' }}
           ORCH_STATE_SKIP_UNCHANGED: ${{ vars.ORCH_STATE_SKIP_UNCHANGED || 'true' }}
+          # zlib-compress new ORCHESTRATOR_STATE_V2 chains (readers accept both
+          # forms). Off until every consumer pin can read compressed chains.
+          ORCH_STATE_COMPRESS: ${{ vars.ORCH_STATE_COMPRESS || 'false' }}
           ENABLE_CLEAN_WAVE_JUDGE_SKIP: ${{ vars.ENABLE_CLEAN_WAVE_JUDGE_SKIP || 'true' }}
           MAX_REVIEW_BLOCKED_RETRIES: ${{ vars.MAX_REVIEW_BLOCKED_RETRIES || '2' }}
           RB_JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.RB_JUDGE_ISOLATION_MAX_FAILURES || '3' }}

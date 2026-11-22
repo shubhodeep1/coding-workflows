@@ -62,6 +62,24 @@ is sha256(full state bytes BEFORE base64) — every chunk in a single
 write carries the same manifest, so torn writes are trivially detected
 (incomplete chain or hash mismatch -> chain skipped).
 
+Compression (ORCH_STATE_COMPRESS)
+---------------------------------
+When `pack` runs with compression on (`--compress`, or the environment
+variable ORCH_STATE_COMPRESS=true; default off), the bytes that are
+base64-encoded are `COMPRESSED_PAYLOAD_MARKER` + zlib(state bytes) instead
+of the raw state bytes.  JSON text can never start with that marker, so the
+readers (`extract`, `prune-plan`) tell the two payload forms apart after
+base64-decoding and inflate a marked payload, bounded by
+MAX_DECOMPRESSED_STATE_BYTES so a forged chain cannot inflate without limit.
+The opener / closer lines are byte-for-byte the same in both modes and the
+manifest is always sha256 of the RAW state bytes, so every regex that
+matches the framing elsewhere (the poller's jq filters,
+workflow_failure_heal.py) keeps working.  A large state (tracking #8291:
+472 KB, mostly regex lists in merged_issue_fingerprints) packs into 2 parts
+instead of 12.  Readers accept both forms whatever the variable says; the
+variable gates only the writer, so it must stay off until every reader on
+every consumer pin can inflate.
+
 Backward compatibility
 ----------------------
 This helper is ADDITIVE.  The bash caller falls back to the V1 reader if
@@ -77,8 +95,10 @@ import base64
 import binascii
 import hashlib
 import json
+import os
 import re
 import sys
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -106,6 +126,21 @@ DEFAULT_CHUNK_SIZE = GITHUB_COMMENT_BODY_CAP - DEFAULT_FRAMING_HEADROOM
 # realising the chain is incomplete.
 MAX_CHUNKS_PER_MANIFEST = 1024
 
+# Prefix of a compressed payload (before base64).  A JSON document starts
+# with whitespace, `{`, `[`, `"`, a digit, `-`, `t`, `f` or `n`, never with
+# `z` followed by `lib:`, so the marker cannot collide with an uncompressed
+# state.
+COMPRESSED_PAYLOAD_MARKER = b"zlib:"
+
+# Largest state an inflated payload may produce.  Matches the 8 MiB cap the
+# poller applies to an extracted payload (extract_latest_valid_orchestrator_
+# state in scripts/orchestrate_poll_process.sh); a healthy state is well under
+# 1 MiB.  A payload that would inflate past it is rejected like a hash
+# mismatch, which bounds memory against a decompression bomb.
+MAX_DECOMPRESSED_STATE_BYTES = 8 * 1024 * 1024
+
+ORCH_STATE_COMPRESS_ENV = "ORCH_STATE_COMPRESS"
+
 V2_OPENER_RE = re.compile(
 	r"^<!-- ORCHESTRATOR_STATE_V2 part=(\d+)/(\d+) manifest=([0-9a-f]{64}) -->$",
 	re.MULTILINE,
@@ -120,6 +155,34 @@ def _frame(part: int, total: int, manifest: str, payload: bytes) -> bytes:
 	).encode("utf-8")
 	closer = ("\n" + V2_CLOSER).encode("utf-8")
 	return opener + payload + closer
+
+
+def _env_compress_default() -> bool:
+	"""ORCH_STATE_COMPRESS as a bool; unset or unrecognised means off."""
+	value = (os.environ.get(ORCH_STATE_COMPRESS_ENV) or "").strip().lower()
+	return value in ("1", "true", "yes", "on")
+
+
+def _decode_payload(payload: bytes) -> bytes | None:
+	"""Raw state bytes for a base64-decoded chain payload, or None.
+
+	An unmarked payload is the state itself.  A marked payload is inflated
+	with at most MAX_DECOMPRESSED_STATE_BYTES of output; a corrupt, truncated
+	or oversized stream, or trailing bytes after the stream, returns None so
+	the caller drops the chain and keeps walking older ones.
+	"""
+	if not payload.startswith(COMPRESSED_PAYLOAD_MARKER):
+		return payload
+	inflater = zlib.decompressobj()
+	try:
+		raw = inflater.decompress(payload[len(COMPRESSED_PAYLOAD_MARKER):], MAX_DECOMPRESSED_STATE_BYTES)
+	except zlib.error:
+		return None
+	# Output left unconsumed means the state is over the cap; an unfinished
+	# stream is truncated; unused data means bytes were appended after it.
+	if inflater.unconsumed_tail or not inflater.eof or inflater.unused_data:
+		return None
+	return raw
 
 
 def cmd_pack(args: argparse.Namespace) -> int:
@@ -140,7 +203,13 @@ def cmd_pack(args: argparse.Namespace) -> int:
 	# posted comment body — jq -Rs / GitHub will then either reject or
 	# normalise the bytes, breaking the sha256 manifest check on extract.
 	# base64 is single-byte ASCII so any byte boundary is a safe cut.
-	encoded = base64.b64encode(state_bytes)
+	compress = args.compress if args.compress is not None else _env_compress_default()
+	if compress:
+		# The manifest above stays sha256 of the raw bytes in both modes.
+		payload = COMPRESSED_PAYLOAD_MARKER + zlib.compress(state_bytes, 9)
+	else:
+		payload = state_bytes
+	encoded = base64.b64encode(payload)
 	chunk_size = args.chunk_size
 	if chunk_size <= 0 or chunk_size > GITHUB_COMMENT_BODY_CAP:
 		print(
@@ -175,6 +244,7 @@ def cmd_pack(args: argparse.Namespace) -> int:
 		"raw_bytes": len(state_bytes),
 		"encoded_bytes": len(encoded),
 		"chunk_size": chunk_size,
+		"compressed": compress,
 	}))
 	return 0
 
@@ -305,6 +375,12 @@ def cmd_extract(args: argparse.Namespace) -> int:
 				# intact chain.
 				active_chain_by_key.pop(chain_key, None)
 				continue
+			decoded = _decode_payload(decoded)
+			if decoded is None:
+				# Corrupt, truncated or oversized compressed payload: drop
+				# it like a hash mismatch and keep walking older comments.
+				active_chain_by_key.pop(chain_key, None)
+				continue
 			digest = hashlib.sha256(decoded).hexdigest()
 			if digest == manifest and skip_statuses:
 				# --skip-status: keep walking older writes past a state whose
@@ -371,7 +447,8 @@ def _complete_v2_chains(entries: list[tuple[int, str]]) -> list[dict[str, Any]]:
 			decoded = base64.b64decode(compact, validate=True)
 		except (binascii.Error, ValueError):
 			continue
-		if hashlib.sha256(decoded).hexdigest() != manifest:
+		decoded = _decode_payload(decoded)
+		if decoded is None or hashlib.sha256(decoded).hexdigest() != manifest:
 			continue
 		try:
 			state = json.loads(decoded)
@@ -426,6 +503,12 @@ def main() -> int:
 	p_pack.add_argument("--state-file", required=True)
 	p_pack.add_argument("--out-dir", required=True)
 	p_pack.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE)
+	p_pack.add_argument(
+		"--compress",
+		action=argparse.BooleanOptionalAction,
+		default=None,
+		help=f"zlib-compress the payload (default: the {ORCH_STATE_COMPRESS_ENV} environment variable, off when unset)",
+	)
 	p_pack.set_defaults(func=cmd_pack)
 	p_extract = sub.add_parser(
 		"extract",
