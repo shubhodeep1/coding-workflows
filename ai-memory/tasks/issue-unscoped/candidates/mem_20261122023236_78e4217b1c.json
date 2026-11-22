@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_job_split_contract.py:51, 315 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: `OLD_SINGLE_JOB_BUDGET_MINUTES = 45` describes the old single-job budget before the #4707 split as 45 minutes, but agents.md:5249 says that budget had been raised to 60 minutes before the split.\n  WHY: A future timeout exception between 45 and 59 minutes would fail `test_timeout_exceptions_are_pinned` (`exception_minutes < OLD_SINGLE_JOB_BUDGET_MINUTES`) even though it stays below the documented pre-split budget. The source severity was NIT, mapped here to low. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash checked this same pass-1 finding and dropped it as not valid: docs/completed/issue-4707-split-ci-lint-job-plan.md line 9 says the job was \"cancelled at its 45-minute limit\", and the raise to 60 (#4706) was a stopgap.\n- tests/test_ci_poll_test_sharding.py:4664 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The method name `test_source_and_target_timeouts_are_unchanged` no longer matches its body, because the new assertion at line 4668 pins the poll (target) job's timeout to 30, which is a deliberate change from the previous 20.\n  WHY: This is only a readability issue and causes no runtime failure. The source severity was NIT, mapped here to low. z-ai_glm-5_3-flash notes the name was kept because of the rename ban and calls the test semantically coherent.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_ci_poll_test_sharding.py:line 4664 \u2014 `def test_source_and_target_timeouts_are_unchanged(self) -> None:` | severity=NIT | confidence=2\n  PROBLEM: The method name says the source and target timeouts are unchanged, but the new assertion on line 4668 (`self.assertEqual(jobs[POLL_JOB_ID].get(\"timeout-minutes\"), POLL_JOB_TIMEOUT_MINUTES)`) checks that the target (poll) job's timeout is 30, which is a deliberate change from 20. The inline comment at line 4667 documents the change, but someone scanning method names gets a misleading signal.\n  WHY: No runtime failure, because the assertions are correct. This is a readability nit only.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_ci_job_split_contract.py:OLD_SINGLE_JOB_BUDGET_MINUTES = 45 at line 51; test_timeout_exceptions_are_pinned checks exception_minutes < OLD_SINGLE_JOB_BUDGET_MINUTES at line 315 | severity=NIT | confidence=4\n  PROBLEM: The test describes 45 minutes as the old single-job budget before the #4707 split, but agents.md:5249 says that budget had been raised to 60 minutes before the split.\n  WHY: A future timeout exception between 45 and 59 minutes would fail this contract test even though it stays below the documented pre-split budget.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "980cf41c266890d01212259640dadfacafbccc689f1abf96c4572ee2e5373734",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9921,
+    "run_id": "44973540190",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44973540190",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122023236_78e4217b1c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9921,
+    "run_id": "44973540190"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-22T02:32:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
