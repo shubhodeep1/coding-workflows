@@ -1715,6 +1715,11 @@ _mt_merge_lease_tick()
 			# Phase 2 off: no skip entry is honoured or carried forward.
 			MERGE_LEASE_SKIPS=""
 		fi
+		# With MERGE_LEASE_MAX_HOLDERS=1 a record still listing 2+ live holders
+		# (left by an earlier cap above 1) also takes the multi-holder tick: its
+		# per-holder eligibility / CI reads cost extra API calls only while that
+		# record drains; the single-holder block checks only the primary and would
+		# never release the other holders. A fresh N=1 record never gets here.
 		if [ "${tick_p5_lib}" = 1 ] && { [ "${tick_max_holders}" -gt 1 ] || [ "${MERGE_LEASE_HOLDER_COUNT:-0}" -gt 1 ]; }; then
 			_mt_merge_lease_tick_multi "${tick_base}" "${tick_prs_json}" "${tick_max_holders}" "${tick_p2}" "${tick_login}" "${tick_metric_ok}" "${tick_waiters}" || true
 			continue
