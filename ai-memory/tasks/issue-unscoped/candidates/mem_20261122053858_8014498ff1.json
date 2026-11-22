@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:support-ref resolution step (run 44858386735) | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The `review / gate` check fails with exit code 75 because GitHub's primary core-bucket rate limit returned HTTP 403 in the support-ref step of `review_autofix.yml`, a file this PR does not touch.\n  WHY: The failure is external and temporary, so no change in this PR can fix it and a re-run after the limit resets should clear it. The reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: AD-1 Option A says to \"File a separate normal (non-heal) issue for the helper changes and the snapshot regression test.\"\n  expected_change_site: A separate follow-up GitHub issue, referenced from the PR description or changelog fragment `changelog.d/9837-clarify-snapshot-reject-no-retry.md`.\n  confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The PR description, the `ai:partial-delivery` block, the changelog and the PR discussion contain no follow-up issue number or link. Filing an issue is a GitHub action, not a file edit. All three reviewers rated it NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: AD-1 Option A says to \"File a separate normal (non-heal) issue for the helper changes and the snapshot regression test.\"\n  Expected change site: A separate GitHub issue, referenced from the PR description or changelog.\n  Evidence of absence: No follow-up issue number or link appears in the PR description, the changelog, or the PR discussion. Opening an issue is a GitHub action, not a file edit.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: AD-1 Option A says to \"File a separate normal (non-heal) issue for the helper changes and the snapshot regression test.\"\n  Expected change site: A separate follow-up GitHub issue, referenced from the PR description or changelog.\n  Evidence of absence: The PR description and `changelog.d/9837-clarify-snapshot-reject-no-retry.md` defer the helper changes and say they still need their own issue, but provide no follow-up issue number or link. The supplied PR discussion contains no follow-up issue reference.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/review_autofix.yml:support-ref resolution step (run 44858386735) | severity=NIT | confidence=5\n  PROBLEM: The `review / gate` check fails because GitHub's primary core-bucket rate limit hit the support-ref step of `review_autofix.yml`, a file this PR does not touch. No diff hunk causes it.\n  WHY: The gate cannot read protected-main branch metadata while the rate limit persists. It needs a re-run after the window resets.\n\nTASK_GAP:\n- Requirement: AD-1 (Option A) states \"File a separate normal (non-heal) issue for the helper changes and the snapshot regression test,\" so the deferred helper work is tracked.\n  Expected change site: A follow-up GitHub issue, referenced from the PR description or changelog fragment.\n  Evidence of absence: The PR description's `ai:partial-delivery` block and `changelog.d/9837-clarify-snapshot-reject-no-retry.md` list the helper work but contain no follow-up issue number or link. No such issue reference appears in the PR discussion. The code deferral itself is documented by the heal scope marker.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0a3d4f5e0807d0cddb7d5bc3a0227deebcda37fb625a6ad911cb74da2a015225",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9840,
+    "run_id": "44985567202",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44985567202",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122053858_8014498ff1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9840,
+    "run_id": "44985567202"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T05:38:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
