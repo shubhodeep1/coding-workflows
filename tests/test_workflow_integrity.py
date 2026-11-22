@@ -155,7 +155,7 @@ def test_reusable_workflow_wiring() -> None:
 	assert compare["if"] == "steps.verify_manifest.outcome == 'success'"
 
 
-FETCH_BEGIN = "          # BEGIN sync manifest fetch (byte copy in workflow_integrity.yml; tests pin it)\n"
+FETCH_BEGIN = "          # BEGIN sync manifest fetch (byte-identical in update_workflows.yml and workflow_integrity.yml; tests pin it)\n"
 FETCH_END = "          # END sync manifest fetch\n"
 
 

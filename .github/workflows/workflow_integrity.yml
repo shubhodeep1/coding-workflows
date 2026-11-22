@@ -414,6 +414,8 @@ jobs:
           UPSTREAM_ROOT: ${{ steps.fetch.outputs.upstream_root }}
           UPSTREAM_SHA: ${{ steps.trees.outputs.release_sha }}
           SYNC_UPSTREAM_REPO: shubhodeep1/coding-workflows
+          # Caller repo variable; the fetch block clamps it to 0..1500 (#9937).
+          SYNC_MANIFEST_RATE_LIMIT_MAX_WAIT_SECONDS: ${{ vars.SYNC_MANIFEST_RATE_LIMIT_MAX_WAIT_SECONDS || '1200' }}
         run: |
           set -euo pipefail
 
@@ -543,7 +545,7 @@ jobs:
 
           MANIFEST_DIR="${WORK}/sync-manifest"
           mkdir -p "${MANIFEST_DIR}"
-          # BEGIN sync manifest fetch (byte copy in workflow_integrity.yml; tests pin it)
+          # BEGIN sync manifest fetch (byte-identical in update_workflows.yml and workflow_integrity.yml; tests pin it)
           # REST only (the release download subcommand adds a GraphQL query), with a
           # bounded wait when GH_PAT is out of core budget (#9937). Kept inline: no upstream code may
           # run before the manifest is verified. ERR_SYNC_MANIFEST_MISSING means the
@@ -551,7 +553,11 @@ jobs:
           # call failed (detail=rate_limited|http_<status>|unknown).
           MANIFEST_FILE="${MANIFEST_DIR}/sync-manifest.json"
           SMF_MAX_WAIT="${SYNC_MANIFEST_RATE_LIMIT_MAX_WAIT_SECONDS:-1200}"
-          [[ "${SMF_MAX_WAIT}" =~ ^[0-9]+$ ]] || SMF_MAX_WAIT=1200
+          [[ "${SMF_MAX_WAIT}" =~ ^[0-9]{1,6}$ ]] || SMF_MAX_WAIT=1200
+          # Ceiling below the shorter job timeout (update-wrappers, 30 min) so the step
+          # always ends in a classified rejection rather than a job timeout.
+          [ "$(( 10#${SMF_MAX_WAIT} ))" -le 1500 ] || SMF_MAX_WAIT=1500
+          SMF_MAX_WAIT="$(( 10#${SMF_MAX_WAIT} ))"
           SMF_WAITED=0
           SMF_RESULT=""
           smf_redact() {
@@ -563,13 +569,27 @@ jobs:
           smf_http_status() {
             grep -oE '\(HTTP [0-9]{3}\)' "$1" 2>/dev/null | tail -n 1 | tr -dc '0-9' || true
           }
+          # Drops the header block that gh api --include prints before the body
+          # (status line, header lines ending in CR LF, then an empty CR LF line).
+          smf_strip_headers() {
+            local smf_len
+            smf_len="$(LC_ALL=C awk 'NR == 1 && !/^HTTP\// { exit } /^\r$/ { print n + length($0) + 1; exit } { n += length($0) + 1 }' "$1" 2>/dev/null || true)"
+            [[ "${smf_len}" =~ ^[0-9]+$ ]] || return 1
+            tail -c +"$(( smf_len + 1 ))" "$1" >"$2"
+          }
           # Prints the seconds to wait, or nothing when the error is not a rate limit.
+          # $3 holds the --include output, read for a numeric Retry-After header.
           # GET /rate_limit does not debit the core allowance.
           smf_rate_limit_wait() {
-            local smf_text=0 smf_remaining="" smf_reset="" smf_wait
+            local smf_text=0 smf_remaining="" smf_reset="" smf_wait smf_retry_after=""
             if grep -qi 'rate limit' "$1" 2>/dev/null; then
               smf_text=1
             elif [ "$2" != "403" ] && [ "$2" != "429" ]; then
+              return 0
+            fi
+            smf_retry_after="$(LC_ALL=C sed -nE 's/^retry-after:[[:space:]]*([0-9]{1,6})[[:space:]]*$/\1/Ip' "$3" 2>/dev/null | head -n 1 || true)"
+            if [ -n "${smf_retry_after}" ]; then
+              echo $(( 10#${smf_retry_after} + 1 ))
               return 0
             fi
             if gh api rate_limit >"${MANIFEST_DIR}/rate_limit.json" 2>/dev/null; then
@@ -581,13 +601,14 @@ jobs:
               [ "${smf_wait}" -ge 1 ] || smf_wait=1
               echo $(( smf_wait + 5 ))
             elif [ "${smf_text}" = "1" ]; then
-              # Secondary limit (no visible Retry-After): GitHub asks for >= 60 s.
+              # Secondary limit without Retry-After: GitHub asks for >= 60 s.
               echo 60
             fi
           }
           # smf_fetch <release|asset> <outfile> <errfile> <gh api args...>
           # At most 3 attempts; rate-limit waits share SMF_MAX_WAIT; any other error
-          # gets one retry after 10 s. Sets SMF_RESULT on failure.
+          # gets one retry after 10 s. Sets SMF_RESULT on failure. --include keeps the
+          # response headers (Retry-After) in <outfile>.raw; only the body is kept.
           smf_fetch() {
             local smf_call="$1" smf_out="$2" smf_err="$3" smf_attempt=0 smf_retried=0
             local smf_status smf_wait smf_sleep smf_outcome
@@ -595,14 +616,16 @@ jobs:
             SMF_RESULT=""
             while [ "${smf_attempt}" -lt 3 ]; do
               smf_attempt=$(( smf_attempt + 1 ))
-              if gh api "$@" >"${smf_out}.part" 2>"${smf_err}"; then
+              if gh api --include "$@" >"${smf_out}.raw" 2>"${smf_err}" \
+                && smf_strip_headers "${smf_out}.raw" "${smf_out}.part"; then
+                rm -f "${smf_out}.raw"
                 mv -f "${smf_out}.part" "${smf_out}"
                 echo "SYNC_MANIFEST_FETCH attempt=${smf_attempt} call=${smf_call} outcome=ok http=200 wait_s=0"
                 return 0
               fi
-              rm -f "${smf_out}.part"
               smf_status="$(smf_http_status "${smf_err}")"
-              smf_wait="$(smf_rate_limit_wait "${smf_err}" "${smf_status}")"
+              smf_wait="$(smf_rate_limit_wait "${smf_err}" "${smf_status}" "${smf_out}.raw")"
+              rm -f "${smf_out}.part" "${smf_out}.raw"
               smf_sleep=0
               if [ -n "${smf_wait}" ]; then
                 smf_outcome=rate_limited
@@ -640,7 +663,7 @@ jobs:
             fi
             reject ERR_SYNC_MANIFEST_FETCH_FAILED "detail=${SMF_RESULT}"
           fi
-          SMF_ASSET_ID="$(jq -r '[.assets[]? | select(.name == "sync-manifest.json") | .id] | if length == 1 then .[0] else empty end' "${MANIFEST_DIR}/release.json" 2>/dev/null || true)"
+          SMF_ASSET_ID="$(jq -r '[.assets[]? | select(.name == "sync-manifest.json" and .state == "uploaded") | .id] | if length == 1 then .[0] else empty end' "${MANIFEST_DIR}/release.json" 2>/dev/null || true)"
           [[ "${SMF_ASSET_ID}" =~ ^[0-9]+$ ]] || reject ERR_SYNC_MANIFEST_MISSING
           if ! smf_fetch asset "${MANIFEST_FILE}" "${MANIFEST_DIR}/asset.err" \
             -H 'Accept: application/octet-stream' "repos/${SYNC_UPSTREAM_REPO}/releases/assets/${SMF_ASSET_ID}"; then

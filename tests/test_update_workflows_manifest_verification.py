@@ -94,7 +94,7 @@ def test_tg_helpers_come_from_the_verified_checkout():
 	assert "> scripts/.gitignore" not in telegram
 
 
-FETCH_BEGIN = "          # BEGIN sync manifest fetch (byte copy in workflow_integrity.yml; tests pin it)\n"
+FETCH_BEGIN = "          # BEGIN sync manifest fetch (byte-identical in update_workflows.yml and workflow_integrity.yml; tests pin it)\n"
 FETCH_END = "          # END sync manifest fetch\n"
 
 
@@ -127,6 +127,10 @@ def test_update_job_timeout_covers_rate_limit_wait():
 	# Default SYNC_MANIFEST_RATE_LIMIT_MAX_WAIT_SECONDS is 1200 s (20 min).
 	assert 25 <= minutes <= 360
 	assert '"${SYNC_MANIFEST_RATE_LIMIT_MAX_WAIT_SECONDS:-1200}"' in extract_fetch_block(text)
+	# The cap is a caller repo variable with the same default; the block clamps it.
+	verify = step_block(text, "Verify signed sync manifest")
+	assert "SYNC_MANIFEST_RATE_LIMIT_MAX_WAIT_SECONDS: ${{ vars.SYNC_MANIFEST_RATE_LIMIT_MAX_WAIT_SECONDS || '1200' }}" in verify
+	assert '[ "$(( 10#${SMF_MAX_WAIT} ))" -le 1500 ] || SMF_MAX_WAIT=1500' in extract_fetch_block(text)
 
 
 GH_STUB = r"""#!/usr/bin/env python3
@@ -158,6 +162,11 @@ if key == "rate_limit":
 	sys.exit(0)
 responses = scenario[key]
 resp = responses[min(count, len(responses) - 1)]
+if "--include" in args:
+	# --include output: status line, CR LF header lines, empty CR LF line, body.
+	headers = {"Content-Type": "application/json", **resp.get("headers", {})}
+	status = resp.get("http", 200 if resp.get("rc", 0) == 0 else 500)
+	sys.stdout.write(f"HTTP/2.0 {status} X\n" + "".join(f"{k}: {v}\r\n" for k, v in sorted(headers.items())) + "\r\n")
 sys.stdout.write(resp.get("stdout", ""))
 sys.stderr.write(resp.get("stderr", ""))
 sys.exit(resp.get("rc", 0))
@@ -167,10 +176,11 @@ SLEEP_STUB = """#!/usr/bin/env bash
 echo "$1" >> "${SLEEP_LOG}"
 """
 
-RELEASE_OK = {"stdout": json.dumps({"tag_name": "v9.9.9", "assets": [{"name": "notes.txt", "id": 7}, {"name": "sync-manifest.json", "id": 42}]})}
+RELEASE_OK = {"stdout": json.dumps({"tag_name": "v9.9.9", "assets": [{"name": "notes.txt", "id": 7, "state": "uploaded"}, {"name": "sync-manifest.json", "id": 42, "state": "uploaded"}]})}
 MANIFEST_BYTES = '{"schema":"coding-workflows.sync-manifest.v1"}'
 ASSET_OK = {"stdout": MANIFEST_BYTES}
-RATE_LIMITED = {"stderr": "gh: API rate limit exceeded for user ID 1. (HTTP 403)\n", "rc": 1}
+RATE_LIMITED = {"stderr": "gh: API rate limit exceeded for user ID 1. (HTTP 403)\n", "rc": 1, "http": 403}
+SECONDARY_LIMITED = {"stderr": "gh: You have exceeded a secondary rate limit. (HTTP 403)\n", "rc": 1, "http": 403, "headers": {"Retry-After": "120"}}
 TOKEN = "ghp_" + "A1b2C3d4E5" * 3 + "abcdef"
 
 FETCH_CASES = {
@@ -181,6 +191,9 @@ FETCH_CASES = {
 	"ok_first_try": ({"release": [RELEASE_OK], "asset": [ASSET_OK]}, {}),
 	"release_404": ({"release": [{"stderr": "gh: Not Found (HTTP 404)\n", "rc": 1}], "asset": [ASSET_OK]}, {}),
 	"token_redacted": ({"release": [{"stderr": f"gh: boom {TOKEN} Authorization: bearer {TOKEN}x (HTTP 502)\n", "rc": 1}, RELEASE_OK], "asset": [ASSET_OK]}, {}),
+	"retry_after_header": ({"release": [SECONDARY_LIMITED, RELEASE_OK], "asset": [ASSET_OK], "rate_limit": {"remaining": 4000, "reset_in": 2}}, {}),
+	"asset_not_uploaded": ({"release": [{"stdout": json.dumps({"assets": [{"name": "sync-manifest.json", "id": 42, "state": "starter"}]})}], "asset": [ASSET_OK]}, {}),
+	"cap_clamped": ({"release": [RATE_LIMITED, RELEASE_OK], "asset": [ASSET_OK], "rate_limit": {"remaining": 0, "reset_in": 2000}}, {"SYNC_MANIFEST_RATE_LIMIT_MAX_WAIT_SECONDS": "99999"}),
 	"cap_non_numeric": ({"release": [RATE_LIMITED, RELEASE_OK], "asset": [ASSET_OK], "rate_limit": {"remaining": 0, "reset_in": 2}}, {"SYNC_MANIFEST_RATE_LIMIT_MAX_WAIT_SECONDS": "abc"}),
 }
 
@@ -241,12 +254,18 @@ def test_manifest_fetch_block_behaviour(tmp_path, case):
 		assert "call=release outcome=rate_limited http=403" in fetch_lines[0]
 		assert "outcome=ok" in fetch_lines[1]
 		assert manifest.read_text(encoding="utf-8") == MANIFEST_BYTES
-	elif case == "reset_beyond_cap":
+	elif case == "retry_after_header":
+		# Retry-After (120 s) wins over the 60 s secondary-limit fallback.
+		assert result.returncode == 0, out + result.stderr
+		assert sleeps == ["121"], sleeps
+		assert "call=release outcome=rate_limited http=403 wait_s=121" in fetch_lines[0]
+		assert manifest.read_text(encoding="utf-8") == MANIFEST_BYTES
+	elif case in ("reset_beyond_cap", "cap_clamped"):
 		assert result.returncode == 1
 		assert out.strip().splitlines()[-1] == "REJECT ERR_SYNC_MANIFEST_FETCH_FAILED detail=rate_limited"
 		assert sleeps == []
 		assert "wait_s=0" in fetch_lines[0]
-	elif case == "asset_absent":
+	elif case in ("asset_absent", "asset_not_uploaded"):
 		assert result.returncode == 1
 		assert out.strip().splitlines()[-1] == "REJECT ERR_SYNC_MANIFEST_MISSING"
 		assert not manifest.exists()
@@ -255,6 +274,7 @@ def test_manifest_fetch_block_behaviour(tmp_path, case):
 		assert out.strip().splitlines()[-1] == "REJECT ERR_SYNC_MANIFEST_FETCH_FAILED detail=http_500"
 		assert sleeps == ["10"]
 		assert not manifest.exists() and not Path(str(manifest) + ".part").exists()
+		assert not Path(str(manifest) + ".raw").exists()
 	elif case == "ok_first_try":
 		assert result.returncode == 0, out + result.stderr
 		assert out.strip().splitlines()[-1] == "FETCH_DONE"
