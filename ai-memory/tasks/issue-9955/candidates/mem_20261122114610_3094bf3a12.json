@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: REFRAME\nQ2: C\n\nRATIONALE:\nQ1: Options A and B both edit `tools/claude-pool-broker/**`, and this issue's pipeline cannot do that. The heal scope comes from the fixed `ENGINE_FALLBACK_SCOPE_PATHS` list (`scripts/workflow_failure_heal.py:106-121`, \"neither the report nor the diagnosis can widen it\"). `run_heal_plan_scope_gate` (`scripts/files_touched_scope_guard.py:1524-1626`) holds any plan with an out-of-scope path as `heal_scope_plan_out_of_scope`. The implement preflight also refuses an edited issue body, so A or B would only park the issue. The only cause this scope can remove is on the client side. `scripts/claude_pool_token.sh:185-195` treats the broker's own \"could not verify, uncertain\" verdict (`workflow_sha_unverifiable`) as final after a single request. It handles it the same way as the definite refusal `workflow_sha_unverified` (`index.ts:641`, `ShaVerdict` has separate `untrusted` and `unavailable` states). The generation-1 fix (#8481, lines 146-163) covered only the OIDC request, so the broker request is the one part that was never fixed, not a repeat of the old fix. I therefore replace the constraint \"a retry is not an accepted fix\" with a more exact criterion, set out below.\nQ2: Q1 changes only the client, so no broker deploy is needed and no deploy workflow is added. The broker-side improvements stay out of this PR: trying `stable` when `main` is `unavailable` (`index.ts:703-714`), logging the compare HTTP status, the stale \"the job runs codex\" comment in `wrangler.toml`, and confirming `BROKER_GITHUB_READ_TOKEN` is set. The PR body lists them as out-of-scope follow-ups for an operator. The pipeline takes no other action on them.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: reframe\n  inputs:\n    - scripts/claude_pool_token.sh: lines 146-165 (the OIDC bounded-retry loop, `oidc_retry_on`, `oidc_retry_sleeps`) and lines 184-196 (the single broker POST; 403 maps to `broker_refused_<reason>`)\n    - tests/test_claude_pool_token.py: the broker-refusal parametrize at line 236, and the OIDC retry tests at lines 299-356 (the stub and sleep-override pattern to reuse)\n    - tests/test_ai_engine.py:1458: pins `broker_refused_workflow_sha_unverifiable` -> `no_credential`. Leave it unchanged.\n    - tools/claude-pool-broker/src/index.ts:641, 650-690, 703-714: read-only evidence for the \"uncertain verdict\" meaning of `workflow_sha_unverifiable`. Do not edit.\n  steps:\n    - In scripts/claude_pool_token.sh, wrap the broker POST (lines 185-196) in a bounded loop modelled on the OIDC loop. Allow at most 3 attempts when the retry switch is on and 1 when it is off.\n    - For the switch, reuse the existing `oidc_retry_on` / `oidc_retry_sleeps` settings. Do not add a new env var unless it defaults to on and falls back the same way as the OIDC flag. Do not rename existing names (\u00a710).\n    - Retry only on `000`, `429`, `5xx`, or a 403 whose parsed `error` is exactly `workflow_sha_unverifiable`. Every other 403 reason (`workflow_sha_unverified`, `wrong_workflow`, etc.) and every other code fails on the first attempt.\n    - Parse the reason from the response body on every attempt with the existing regex-gated python one-liner. Remove `broker.json` between attempts.\n    - Keep `broker-request-headers` until the loop ends, then remove it. Reuse the same OIDC token: the sleeps are short and stay inside the broker's 10-minute token-age limit.\n    - Log `CLAUDE_POOL broker_retry attempt=<n> code=<code> reason=<token>` before each retry. Never log the token, the headers or the URL.\n    - Keep the final reason strings exactly as they are (`broker_refused_<reason>`, `broker_unavailable_<code>`) and keep the success path unchanged.\n    - Add tests to tests/test_claude_pool_token.py with sleeps set to 0 the way the OIDC tests do:\n      (a) broker stub returns 403 `{\"error\":\"workflow_sha_unverifiable\"}` once, then 200 with a valid accounts body; expect `available=true`. This is the regression test.\n      (b) stub always returns `workflow_sha_unverifiable`; expect the final reason `broker_refused_workflow_sha_unverifiable` after exactly 3 requests.\n      (c) 403 `workflow_sha_unverified` stops after 1 request.\n      (d) 503 once, then 200, recovers.\n      (e) with the retry flag false, `workflow_sha_unverifiable` gets 1 request.\n      Adjust the line-236 parametrize case only if it needs an attempt count or sleep override; do not change what it expects.\n    - Run test (a) against the unmodified script (it must fail) and with the fix (it must pass). Record both runs in the PR body.\n    - Add a changelog.d entry.\n    - In the PR body, list as out-of-scope operator follow-ups: the broker `verifyTrustedSha` change (try `stable` after `main` is unavailable, log the compare status as a number), the stale `wrangler.toml` lines 8-9 comment, and confirming `BROKER_GITHUB_READ_TOKEN`. Use `Refs` and no auto-close keyword for any tracking issue.\n  replaces_acceptance_criterion: \"This failure is deterministic \u2026 A retry, backoff, re-run, or longer timeout is not an accepted fix. The fix must remove the cause.\"\n  equivalence_argument: The criterion's intent is to stop retries that hide a deterministic defect. Here the in-scope defect is itself deterministic and the test reproduces it: the client treats an uncertain verdict as final. The broker already separates `unavailable` from `untrusted`, and the client throws that difference away on its single, unretried request. The retry is limited to the broker's explicit uncertainty signal plus transport errors. It never turns a definite refusal into a grant, and it keeps the fail-closed rule, since only a broker 200 grants. The regression test fails on the reported head 9789e0c4b2a2 and passes with the fix, which meets the \"reproduce the failing condition\" requirement. The broker-side root cause cannot be reached from this heal scope by design, so it is recorded for an operator instead of being silently dropped.\n  reversibility: The change is contained in one script plus tests. Setting the existing retry flag to false brings back exactly one attempt. A later broker fix (try `stable`, authenticated reads) works alongside it and needs no client change.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- BROKER_GITHUB_READ_TOKEN (secret): an operator confirms or sets a read-only GitHub token on the `claude-pool-broker` Worker. This name already exists in `tools/claude-pool-broker/src/index.ts:657`. Until it is set, the broker's compare calls stay unauthenticated, and only the client retry from this issue absorbs short rate-limit refusals.",
+  "fingerprint": "a5ad97c868c0cf9a1a86d4a091435ccb67ea15b1b2483c32fc408a03de22668d",
+  "lineage": {
+    "issue_number": 9955,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45018377646",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45018377646",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9955"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261122114610_3094bf3a12",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9955,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45018377646"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9955",
+  "timestamps": {
+    "created_at": "2026-11-22T11:46:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
