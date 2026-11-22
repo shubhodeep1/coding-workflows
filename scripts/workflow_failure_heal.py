@@ -11110,7 +11110,8 @@ def heal_stale_target(issue: Any) -> dict[str, Any]:
 	``fallback_run`` names the first source-repository run of the
 	``ai:workflow-heal-scope:v1 runs=`` marker for one ``actions/runs/<id>`` read.
 	"""
-	out: dict[str, Any] = {"source_repo": None, "source_kind": None, "workflow": None, "branch": None, "fallback_run": None, "reason": ""}
+	out: dict[str, Any] = {"source_repo": None, "source_kind": None, "source_number": None, "workflow": None, "branch": None,
+		"fallback_run": None, "reason": ""}
 	if not isinstance(issue, dict):
 		out["reason"] = "issue_unavailable"
 		return out
@@ -11123,6 +11124,9 @@ def heal_stale_target(issue: Any) -> dict[str, Any]:
 	out["source_repo"] = repo
 	if kind != "run":
 		out["source_kind"] = "pr" if kind.isdigit() else "unknown"
+		# #9967: the `#<n>` source item, for the unblock judge's recurrence check.
+		if re.fullmatch(r"[1-9][0-9]{0,19}", kind):
+			out["source_number"] = int(kind)
 		out["reason"] = "not_run_sourced"
 		return out
 	out["source_kind"] = "run"
@@ -11196,11 +11200,21 @@ def render_heal_stale_close_comment(*, issue: int, workflow: str, branch: str, g
 def heal_stale_decision(issue: Any, comments: Any, runs: Any, *, pipeline_login: str, plan_comment: str,
 		workflow: str, branch: str, linked_pr: Any = HEAL_STALE_LINKED_PR_UNKNOWN,
 		green_runs: int = HEAL_STALE_DEFAULT_GREEN_RUNS, min_age_hours: int = HEAL_STALE_DEFAULT_MIN_AGE_HOURS,
-		now: datetime | None = None) -> dict[str, Any]:
+		now: datetime | None = None, purpose: str = "counterfactual_hold",
+		source_closed: bool | None = None) -> dict[str, Any]:
 	"""Decide ``close``, ``keep`` or ``skip`` for one held heal issue.
 
 	Every unknown or malformed input keeps the issue open.
+
+	``purpose="unblock_placeholder"`` (#9967, the unblock judge's
+	``placeholder_retired`` hold) skips only the ``ai:awaiting-approval`` and
+	counterfactual hold-marker gates and renders no close comment; every other
+	gate stays. ``source_closed`` (True/False) is the state of a ``#<n>``
+	source item: the workflow, branch and runs checks are skipped, an open
+	source keeps the issue and a closed one closes it once the anchor is old
+	enough. The default purpose ignores ``source_closed``.
 	"""
+	unblock_purpose = purpose == "unblock_placeholder"
 	green_runs = green_runs if isinstance(green_runs, int) and green_runs >= 1 else HEAL_STALE_DEFAULT_GREEN_RUNS
 	min_age_hours = min_age_hours if isinstance(min_age_hours, int) and min_age_hours >= 0 else HEAL_STALE_DEFAULT_MIN_AGE_HOURS
 	now = now or datetime.now(timezone.utc)
@@ -11220,20 +11234,22 @@ def heal_stale_decision(issue: Any, comments: Any, runs: Any, *, pipeline_login:
 	labels = _heal_stale_labels(issue)
 	if str(issue.get("state") or "").lower() != "open" or HEAL_LABEL not in labels:
 		return done("skip", "not_heal_issue")
-	if HEAL_AWAITING_APPROVAL_LABEL not in labels:
+	if not unblock_purpose and HEAL_AWAITING_APPROVAL_LABEL not in labels:
 		return done("skip", "not_awaiting_approval")
 	if HEAL_ORCHESTRATOR_MANAGED_LABEL in labels:
 		return done("skip", "orchestrator_managed")
 	if not _heal_stale_trusted(issue, pipeline_login):
 		return done("keep", "untrusted_issue_author")
-	if not isinstance(workflow, str) or not _HEAL_STALE_WORKFLOW_FILE_RE.fullmatch(workflow) or ".." in workflow:
-		return done("keep", "workflow_unknown")
-	if not is_valid_branch(branch):
-		return done("keep", "workflow_unknown")
+	source_state_known = unblock_purpose and isinstance(source_closed, bool)
+	if not source_state_known:
+		if not isinstance(workflow, str) or not _HEAL_STALE_WORKFLOW_FILE_RE.fullmatch(workflow) or ".." in workflow:
+			return done("keep", "workflow_unknown")
+		if not is_valid_branch(branch):
+			return done("keep", "workflow_unknown")
 	trusted_comments = [c for c in (comments if isinstance(comments, list) else []) if _heal_stale_trusted(c, pipeline_login)]
 	bodies = [c.get("body") if isinstance(c.get("body"), str) else "" for c in trusted_comments]
 	hold_prefix = f"<!-- {HEAL_COUNTERFACTUAL_HOLD_MARKER_TAG} issue={number} plan_comment={plan_comment} "
-	if not re.fullmatch(r"[1-9][0-9]*", plan_comment or "") or not any(hold_prefix in body for body in bodies):
+	if not unblock_purpose and (not re.fullmatch(r"[1-9][0-9]*", plan_comment or "") or not any(hold_prefix in body for body in bodies)):
 		return done("keep", "hold_marker_missing")
 	if linked_pr is HEAL_STALE_LINKED_PR_UNKNOWN or (linked_pr is not None and not isinstance(linked_pr, dict)):
 		return done("keep", "linked_pr_unknown")
@@ -11255,8 +11271,13 @@ def heal_stale_decision(issue: Any, comments: Any, runs: Any, *, pipeline_login:
 		if last_reported is not None and last_reported > anchor:
 			anchor = last_reported
 	result["anchor"] = _heal_stale_iso(anchor)
+	if source_state_known and source_closed is False:
+		return done("keep", "source_open")
 	if now - anchor < timedelta(hours=min_age_hours):
 		return done("keep", "too_young")
+	if source_state_known:
+		# A closed `#<n>` source and no trusted occurrence report since the anchor.
+		return done("close", "source_closed_no_recurrence")
 	if not isinstance(runs, dict) or not isinstance(runs.get("workflow_runs"), list):
 		return done("keep", "runs_unavailable")
 	window: list[tuple[datetime, dict[str, Any]]] = []
@@ -11307,6 +11328,9 @@ def heal_stale_decision(issue: Any, comments: Any, runs: Any, *, pipeline_login:
 	result["newest_green"] = _heal_stale_run_summary(window[-1][1])
 	close_prefix = f"<!-- {HEAL_STALE_CLOSE_MARKER_TAG} issue={number} "
 	result["marker_present"] = any(close_prefix in body for body in bodies)
+	if unblock_purpose:
+		# The counterfactual close text would be wrong here; the judge writes its own.
+		return done("close", "workflow_green")
 	result["comment_body"] = render_heal_stale_close_comment(issue=number, workflow=workflow, branch=branch,
 		green_runs=len(window), anchor=result["anchor"], first_green=result["first_green"], newest_green=result["newest_green"])
 	return done("close", "workflow_green")
@@ -11344,7 +11368,8 @@ def _cmd_heal_stale_decision(args: argparse.Namespace) -> int:
 	_write_json(heal_stale_decision(issue, comments, read_optional(args.runs_json),
 		pipeline_login=args.pipeline_login, plan_comment=args.plan_comment, workflow=args.workflow, branch=args.branch,
 		linked_pr=linked_pr, green_runs=_heal_stale_int(args.green_runs, HEAL_STALE_DEFAULT_GREEN_RUNS, 1),
-		min_age_hours=_heal_stale_int(args.min_age_hours, HEAL_STALE_DEFAULT_MIN_AGE_HOURS, 0), now=now))
+		min_age_hours=_heal_stale_int(args.min_age_hours, HEAL_STALE_DEFAULT_MIN_AGE_HOURS, 0), now=now,
+		purpose=args.purpose, source_closed={"true": True, "false": False}.get(args.source_closed)))
 	return 0
 
 
@@ -12723,6 +12748,9 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--green-runs", default=str(HEAL_STALE_DEFAULT_GREEN_RUNS))
 	p.add_argument("--min-age-hours", default=str(HEAL_STALE_DEFAULT_MIN_AGE_HOURS))
 	p.add_argument("--now", default="")
+	# #9967: the unblock judge's placeholder_retired recurrence check; the defaults keep the poller's behaviour.
+	p.add_argument("--purpose", default="counterfactual_hold", choices=("counterfactual_hold", "unblock_placeholder"))
+	p.add_argument("--source-closed", default="", choices=("", "true", "false"), help="unblock_placeholder: a `#<n>` source item's state")
 	p.set_defaults(func=_cmd_heal_stale_decision)
 
 	p = sub.add_parser("heal-queue", help="Heal intake report queue: print a ticket body (ticket) or decide whether a ticket's run may enter the intake (position)")

@@ -11562,8 +11562,8 @@ def test_heal_stale_closes_a_held_plan_with_no_files() -> None:
 
 def test_heal_stale_target_and_resolve_fallback() -> None:
 	target = heal.heal_stale_target(_stale_issue())
-	assert target == {"source_repo": "owner/repo", "source_kind": "run", "workflow": "ci.yml", "branch": "main",
-		"fallback_run": None, "reason": ""}
+	assert target == {"source_repo": "owner/repo", "source_kind": "run", "source_number": None, "workflow": "ci.yml",
+		"branch": "main", "fallback_run": None, "reason": ""}
 	legacy = heal.heal_stale_target(_stale_issue(body=_stale_body(workflow=None, branch=None,
 		scope_runs="other/repo:7,owner/repo:40990538508")))
 	assert legacy["workflow"] is None and legacy["fallback_run"] == {"repo": "owner/repo", "run_id": "40990538508"}
@@ -11602,6 +11602,82 @@ def test_heal_stale_decision_cli(tmp_path) -> None:
 	assert run("--stage", "decide", "--issue-json", str(tmp_path / "missing.json")).returncode == 2
 	target = run("--stage", "target", "--issue-json", str(tmp_path / "issue.json"))
 	assert target.returncode == 0 and json.loads(target.stdout)["workflow"] == "ci.yml"
+
+
+def test_heal_stale_target_reports_the_pr_source_number() -> None:
+	# #9967: the unblock judge reads a `#<n>` source item's state.
+	target = heal.heal_stale_target(_stale_issue(body=_stale_body(source="owner/consumer#123")))
+	assert target["source_kind"] == "pr" and target["source_number"] == 123
+	assert heal.heal_stale_target(_stale_issue(body=_stale_body(source="owner/consumer#x")))["source_number"] is None
+	assert heal.heal_stale_target(_stale_issue(body=_stale_body(source="owner/consumer#0")))["source_number"] is None
+
+
+def test_heal_stale_default_purpose_still_needs_approval_label_and_hold_marker() -> None:
+	unheld = _stale_issue(labels=["ai:workflow-heal", "ai:blocked"])
+	assert _stale_decide(issue=unheld)["reason"] == "not_awaiting_approval"
+	assert _stale_decide(comments=[])["reason"] == "hold_marker_missing"
+	# source_closed is ignored without the unblock purpose.
+	assert _stale_decide(comments=[], source_closed=True)["reason"] == "hold_marker_missing"
+
+
+def test_heal_stale_unblock_placeholder_purpose_skips_only_the_hold_gates() -> None:
+	unheld = _stale_issue(labels=["ai:workflow-heal", "ai:blocked"])
+	result = _stale_decide(issue=unheld, comments=[], purpose="unblock_placeholder")
+	assert result["decision"] == "close" and result["reason"] == "workflow_green" and result["green_runs"] == 5
+	assert "comment_body" not in result
+	# Every other gate stays.
+	runs = _stale_runs(6)
+	runs["workflow_runs"][2]["conclusion"] = "failure"
+	assert _stale_decide(issue=unheld, comments=[], runs=runs, purpose="unblock_placeholder")["reason"] == "run_not_green"
+	assert _stale_decide(issue=unheld, comments=[], purpose="unblock_placeholder",
+		linked_pr={"state": "OPEN"})["reason"] == "open_pr"
+	assert _stale_decide(issue=unheld, comments=[], purpose="unblock_placeholder",
+		linked_pr=heal.HEAL_STALE_LINKED_PR_UNKNOWN)["reason"] == "linked_pr_unknown"
+	assert _stale_decide(issue=_stale_issue(labels=["ai:workflow-heal", "ai:orchestrator-managed"]), comments=[],
+		purpose="unblock_placeholder")["reason"] == "orchestrator_managed"
+	assert _stale_decide(issue=_stale_issue(labels=["ai:blocked"]), comments=[], purpose="unblock_placeholder")["reason"] == "not_heal_issue"
+	assert _stale_decide(issue=_stale_issue(labels=["ai:workflow-heal"], user={"login": "outsider"}), comments=[],
+		purpose="unblock_placeholder")["reason"] == "untrusted_issue_author"
+	assert _stale_decide(issue=unheld, comments=[], purpose="unblock_placeholder", workflow="")["reason"] == "workflow_unknown"
+	assert _stale_decide(issue=unheld, comments=[], purpose="unblock_placeholder",
+		now=datetime(2026, 1, 1, 12, tzinfo=timezone.utc))["reason"] == "too_young"
+
+
+def test_heal_stale_unblock_placeholder_source_closed_decides_without_runs() -> None:
+	pr_issue = _stale_issue(labels=["ai:workflow-heal", "ai:blocked"], body=_stale_body(source="owner/consumer#123"))
+	params = {"comments": [], "runs": None, "workflow": "", "branch": "", "purpose": "unblock_placeholder"}
+	closed = _stale_decide(issue=pr_issue, source_closed=True, **params)
+	assert closed["decision"] == "close" and closed["reason"] == "source_closed_no_recurrence" and closed["green_runs"] == 0
+	assert _stale_decide(issue=pr_issue, source_closed=False, **params)["reason"] == "source_open"
+	assert _stale_decide(issue=pr_issue, source_closed=True, now=datetime(2026, 1, 1, 12, tzinfo=timezone.utc),
+		**{k: v for k, v in params.items()})["reason"] == "too_young"
+	# A trusted occurrence report moves the anchor, so a recent recurrence keeps it.
+	occurrence = _stale_comment("<!-- workflow-failure-heal:occurrence -->\nSeen again.", created_at="2026-02-28T12:00:00Z")
+	assert _stale_decide(issue=pr_issue, source_closed=True, **{**params, "comments": [occurrence]})["reason"] == "too_young"
+	# Without source_closed the runs path applies (and here, no runs: kept).
+	assert _stale_decide(issue=pr_issue, **params)["reason"] == "workflow_unknown"
+
+
+def test_heal_stale_decision_cli_unblock_placeholder_flags(tmp_path) -> None:
+	def write(name: str, value: object) -> str:
+		path = tmp_path / name
+		path.write_text(json.dumps(value), encoding="utf-8")
+		return str(path)
+
+	def run(*args: str) -> subprocess.CompletedProcess:
+		return subprocess.run([sys.executable, "-I", "-B", str(LIB_PATH), "heal-stale-decision", *args],
+			capture_output=True, text=True, check=False)
+
+	base = ["--stage", "decide", "--issue-json", write("issue.json", _stale_issue(labels=["ai:workflow-heal"])),
+		"--comments-json", write("comments.json", []), "--pipeline-login", _STALE_LOGIN, "--workflow", "ci.yml",
+		"--branch", "main", "--now", "2026-03-01T00:00:00Z", "--runs-json", write("runs.json", _stale_runs(5)),
+		"--linked-pr-json", write("pr.json", None)]
+	assert json.loads(run(*base).stdout)["reason"] == "not_awaiting_approval"
+	assert json.loads(run(*base, "--purpose", "unblock_placeholder").stdout)["decision"] == "close"
+	assert json.loads(run(*base, "--purpose", "unblock_placeholder", "--source-closed", "false").stdout)["reason"] == "source_open"
+	assert json.loads(run(*base, "--purpose", "unblock_placeholder", "--source-closed", "true").stdout)["reason"] == \
+		"source_closed_no_recurrence"
+	assert run(*base, "--purpose", "other").returncode == 2
 
 
 def test_compose_issue_body_adds_workflow_marker_only_for_workflow_run() -> None:
