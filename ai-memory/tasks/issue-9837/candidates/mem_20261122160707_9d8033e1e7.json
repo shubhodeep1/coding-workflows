@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The heal scope (`.github/workflows/clarify.yml`, `.github/workflows/internal-clarify.yml`, `tests/**`, `changelog.d/*.md`) does not include `scripts/clarify_isolated_run.sh` or `.github/workflows/orchestrate_clarify_respond.yml`. So the remaining items in `changelog.d/9837-clarify-snapshot-reject-no-retry.md` (\"Deferred, outside this heal's scope\") can never be delivered from this issue, and C would restart clarification every time it merges. B can't be carried out, because the pipeline only changes files and opens one PR; it cannot close issues. It also skips the one gap the scope can still fill: `tests/test_clarify_isolated_run.py` already checks the oversize skip (lines 186-194), but nothing tests that a symlinked parent directory is still rejected (`scripts/clarify_isolated_run.sh:210-211`). A fills that gap, records the follow-up work, and ends the restart loop.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/clarify_isolated_run.sh: all-text oversize exclusion (around line 219, `exclude(\"oversize\", path)`), symlinked-parent rejection (lines 208-211, `ValueError(\"unsafe source path\")`), fixed rejection message (line 311, `clarify source snapshot rejected`). Read only; do not edit.\n    - tests/test_clarify_isolated_run.py: existing `_checkout` / `_run` fixture pattern (lines 146-226). Reuse the pattern; do not modify this file.\n    - changelog.d/9837-clarify-snapshot-reject-no-retry.md: the list of follow-up items already written.\n  steps:\n    - Add `tests/test_clarify_isolated_run_snapshot.py`. It builds a temporary git repository the same way `tests/test_clarify_isolated_run.py` does and runs the helper's snapshot step against it.\n    - Case 1: a tracked file `tests/big_fixture.txt` of 2,097,153 bytes ('a' repeated), with the default `CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED`. Assert that stderr does not contain `clarify source snapshot rejected`, that it contains `oversize=1`, and that the prompt's exclusions list contains `- tests/big_fixture.txt (oversize)`.\n    - Case 2: a tracked file `src/real/app.py`, then replace `src/real` in the worktree with a symlink to another directory so a tracked path passes through a symlinked parent. Assert a non-zero exit and that stderr contains the line `clarify source snapshot rejected`. Do not assert `reason=unsafe_path`; the helper does not print it yet.\n    - Add `changelog.d/9837-clarify-snapshot-regression-test.md`. Describe the new test, and list the remaining helper items (`CLARIFY_SNAPSHOT_REJECTED reason=<token>`, a distinct exit code, skipping missing paths in the legacy set, and the same stop-on-rejection rule for `orchestrate_clarify_respond.yml`) as untracked follow-up work for a separately filed normal issue.\n    - Do not add a `## Deferred scope` section to the plan or the PR body. The PR closes this issue when it merges.\n    - Make no edits outside `tests/**` and `changelog.d/*.md`.\n  replaces_acceptance_criterion: The issue's suggested fixes 1-4, which need edits to `scripts/clarify_isolated_run.sh`, and the regression assertion `reason=unsafe_path`.\n  equivalence_argument: Fix 2 (skip oversized files) is already in the helper's default all-text mode, and fix 4's retry stop is already in `clarify.yml` through PR #9840 (it matches the fixed line). The new test locks the security rejection the issue says must stay (symlinked parent) and the oversize skip, using only files this scope allows. The work the scope can't cover is recorded for a separate issue rather than left to restart this one.\n  reversibility: The PR only adds one test file and one changelog fragment. If someone later wants the helper work done here, they widen the heal scope and reopen or refile the issue. The test's Case 2 assertion can then be tightened to `reason=unsafe_path` without changing anything else.",
+  "fingerprint": "601d50c8492caee4d4728c0f974c2c8491ca0db3c22b6092935059bea7c75635",
+  "lineage": {
+    "issue_number": 9837,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45040049978",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45040049978",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9837"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261122160707_9d8033e1e7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9837,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45040049978"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9837",
+  "timestamps": {
+    "created_at": "2026-11-22T16:07:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
