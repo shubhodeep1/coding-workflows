@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cThe release-download payload bounds match `ci_cancelled_rerun.py`, with no remaining drift.\u201d\n  expected_change_site: `scripts/check_failure_triage.sh`, `triage_release_download_rerun_gate` jobs-payload validation.\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The jq validation at `scripts/check_failure_triage.sh:616-619` accepts integral floats such as `5.0` for `total_count` and job `id`; `scripts/ci_cancelled_rerun.py:363,368` rejects them using exact integer type checks. The latest diff documents this remaining mismatch instead of eliminating it. (Reviewer severity: NIT. Note: anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash each looked at this gap and did not report it. They say issue item (f) only asks for the `< 100` bound alignment and cross-reference comments, jq has no separate integer type, and GitHub sends JSON integers, so the case cannot happen at runtime.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- Note: Checked the comment-only change at scripts/check_failure_triage.sh lines 608-613 in triage_release_download_rerun_gate and found it accurate. The jq filter at lines 616-619 accepts integral floats (5.0). scripts/ci_cancelled_rerun.py rejects them: list_run_jobs() at line 363 uses `type(count) is not int`, and positive_number() at line 111 uses `type(value) is int`. The bounds match (`.total_count < 100` at line 617 and `len(jobs) >= 100` at line 363). The re-run target comes from the check_run_url capture at line 624, so behaviour does not change.\n- Note: Did not report the pass-1 TASK_GAP about integral floats. Item (f) is scoped to the bound alignment plus cross-reference comments, and both are in place (lines 617/527, comments at 608-613/508-511, and in ci_cancelled_rerun.py above rerun_failed_jobs, list_run_jobs and failure_annotations). Goals (a), (b), (c), (d) and (g) of issue #9812 were verified with code and tests, and (e) was dropped because it is already fixed on main.\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- Note: The five comment lines added to `scripts/check_failure_triage.sh` (lines 610-613) are factually accurate. `positive_number()` (line 110-111: `type(value) is int and value > 0`) and `list_run_jobs()` (line 363: `type(count) is not int`) reject `5.0`, while jq accepts it, and GitHub's API returns JSON integers, so this cannot happen at runtime. The full PR diff delivers goals (a)-(g) of issue #9812.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cThe release-download payload bounds match `ci_cancelled_rerun.py`, with no remaining drift.\u201d\n  Expected change site: `scripts/check_failure_triage.sh`, `triage_release_download_rerun_gate` jobs-payload validation.\n  Evidence of absence: The jq validation at `scripts/check_failure_triage.sh:616-619` accepts integral floats such as `5.0` for `total_count` and job `id`; `scripts/ci_cancelled_rerun.py:363,368` rejects them using exact integer type checks. The latest diff documents this remaining mismatch instead of eliminating it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- Note: The comment-only edit at scripts/check_failure_triage.sh:608-613 inside `triage_release_download_rerun_gate` checks out against the code. Integral floats pass the shell checks at lines 616-620 and are rejected at scripts/ci_cancelled_rerun.py:363 and scripts/ci_cancelled_rerun.py:110-111. The bounds are aligned, and the cross-reference comments are present (ci_cancelled_rerun.py:377-378 and above `rerun_failed_jobs` / `failure_annotations`). The pass-1 TASK_GAP from openai is treated as resolved by the documentation and is not reported again.\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1735ec46400a8e70780398ee4ebb5925722269318406adcac311161db64bc21c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9813,
+    "run_id": "45034839910",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45034839910",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122163147_7ae20a8f24",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9813,
+    "run_id": "45034839910"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-22T16:31:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
