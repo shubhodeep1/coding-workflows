@@ -422,12 +422,15 @@ OLD_WARNINGS = {
 
 # #9939: the merge sites call rb_judge_sync_merge_guard, which wraps
 # _pr_sync_merge_blocked_guard from scripts/pr_checks_lib.sh. The harness
-# stubs that helper: it proceeds unless GUARD_STUB_DEFER=1, and logs each
-# call's first argument to GUARD_STUB_LOG when set.
+# stubs that helper: it proceeds unless GUARD_STUB_DEFER=1 or the PR JSON it
+# gets carries mergeable_state "none" / "blocked" (the real guard's defer
+# arms), and logs each call's first argument to GUARD_STUB_LOG when set.
 GUARD_STUB = (
 	"_pr_sync_merge_blocked_guard() {\n"
 	'  if [ -n "${GUARD_STUB_LOG:-}" ]; then printf \'%s\\n\' "${1:-}" >> "${GUARD_STUB_LOG}"; fi\n'
-	'  if [ "${GUARD_STUB_DEFER:-0}" = "1" ]; then\n'
+	'  local _stub_defer="${GUARD_STUB_DEFER:-0}"\n'
+	'  case "${1:-}" in *\'"mergeable_state":"none"\'*|*\'"mergeable_state":"blocked"\'*) _stub_defer=1 ;; esac\n'
+	'  if [ "${_stub_defer}" = "1" ]; then\n'
 	"    SYNC_MERGE_BLOCKED_GUARD_STATE=blocked\n"
 	'    SYNC_MERGE_BLOCKED_GUARD_BLOCKERS="ci/final (missing)"\n'
 	'    echo "SYNC_MERGE_BLOCKED_GUARD outcome=deferred pr=42 head=stub state=blocked blockers=ci/final (missing)"\n'
@@ -771,11 +774,37 @@ def test_transient_merge_error_is_retried_and_succeeds(path: str) -> None:
 	assert sleeps == ["10"]
 	expected = _expected_calls(path)
 	assert calls[: len(expected)] == expected
-	assert calls[len(expected)] == ["api", "repos/o/r/pulls/42", "--jq", '[.state, (.merged // false), (.auto_merge != null), .head.sha, (.mergeable_state // ""), (.base.ref // "")] | @tsv']
+	assert calls[len(expected)] == ["api", "repos/o/r/pulls/42", "--jq", '[.state, (.merged // false), (.auto_merge != null), .head.sha, (.mergeable_state // "none"), (.base.ref // "-")] | @tsv']
 	assert calls[len(expected) + 1 :] == expected[:1]
 	retry = _retry_lines(proc.stdout)
 	assert retry == [f"RB_JUDGE_MERGE_RETRY pr=42 head={JUDGED} path={path} attempt=1/3 delay_s=10 reason=transient"]
 	_assert_merge_succeeded(path, output, proc.stdout)
+
+
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_retry_guard_deferral_is_mergeability_pending(path: str) -> None:
+	"""#9939: the site's guard passes, the direct merge fails transiently, and
+	the per-attempt PR read inside the retry shows a null mergeable_state
+	(placeholder "none", base "-"). The retry's guard must see "none" (not the
+	shifted base ref) and defer; the site reports a deferral, not a failure."""
+	null_state = {"code": 0, "stdout": f"open\tfalse\tfalse\t{JUDGED}\tnone\t-\n"}
+	responses = _first_failure(path) + [null_state]
+	if path != "sync":
+		# The auto-mode retry re-tries --auto first; it fails again.
+		responses.append(_fail())
+	proc, output, calls, sleeps = _run_merge_site_scripted(path, responses)
+	assert proc.returncode == 0, proc.stderr
+	assert sleeps == ["10"]
+	direct = [c for c in calls if c[:2] == ["pr", "merge"] and "--auto" not in c]
+	assert direct == _expected_calls(path)[-1:], calls
+	assert "SYNC_MERGE_BLOCKED_GUARD outcome=deferred pr=42" in proc.stdout
+	assert _error_lines(proc.stdout) == []
+	if path == "sync":
+		assert "judge_skip_reason=mergeability_pending" in output.splitlines()
+		assert "judge_skip_reason=sync_merge_failed" not in output.splitlines()
+		assert "MERGE_CONFIRMED=true" not in proc.stdout.splitlines()
+	else:
+		assert "RB_MERGE_STATUS=mergeability_pending" in proc.stdout.splitlines()
 
 
 @pytest.mark.parametrize("path", MERGE_SITE_ORDER)

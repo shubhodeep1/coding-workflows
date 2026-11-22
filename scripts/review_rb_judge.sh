@@ -2498,9 +2498,13 @@ rb_judge_merge_retry_transient() {
     _rb_retry_attempt=$((_rb_retry_attempt + 1))
     echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 delay_s=${_rb_retry_delay} reason=transient"
     sleep "${_rb_retry_delay}"
-    _rb_retry_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, (.merged // false), (.auto_merge != null), .head.sha, (.mergeable_state // ""), (.base.ref // "")] | @tsv' 2>/dev/null)" || _rb_retry_pr=""
+    _rb_retry_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, (.merged // false), (.auto_merge != null), .head.sha, (.mergeable_state // "none"), (.base.ref // "-")] | @tsv' 2>/dev/null)" || _rb_retry_pr=""
     _rb_retry_mergeable_state=""; _rb_retry_base_ref=""
+    # Non-empty placeholders ("none", "-"): tab is IFS whitespace, so an
+    # empty field would collapse and shift .base.ref into the mergeable
+    # state (#9939). "none" lands in the guard's defer arm.
     IFS=$'\t' read -r _rb_retry_state _rb_retry_merged _rb_retry_auto _rb_retry_head _rb_retry_mergeable_state _rb_retry_base_ref <<< "${_rb_retry_pr}" || true
+    [ "${_rb_retry_base_ref}" != "-" ] || _rb_retry_base_ref=""
     # gh api prints an HTTP error's response body to stdout (--jq is skipped),
     # so a failed read or a state other than open/closed counts as unreadable.
     case "${_rb_retry_state}" in
@@ -3331,6 +3335,11 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
               rb_judge_merge_err_close
               echo "PR #${PR_NUMBER} merged synchronously."
               MERGE_CONFIRMED="true"
+            elif [ "${RB_SYNC_MERGE_DEFERRED:-false}" = "true" ]; then
+              # The guard inside the transient retry deferred (#9939).
+              rb_judge_merge_err_close
+              echo "::warning::PR #${PR_NUMBER} sync merge deferred: GitHub reports mergeable_state=${SYNC_MERGE_BLOCKED_GUARD_STATE:-unknown} (blockers: ${SYNC_MERGE_BLOCKED_GUARD_BLOCKERS:-unknown}). Leaving linked issues in ai:review-blocked — stall recovery will re-fire the judge."
+              echo "judge_skip_reason=mergeability_pending" >> "$GITHUB_OUTPUT"
             else
               rb_judge_merge_err_report sync
               echo "::warning::PR #${PR_NUMBER} sync merge failed despite passing check-runs (typically: branch protection rules / merge queue / permissions / 422 / concurrent push changing HEAD). Leaving linked issues in ai:review-blocked — stall recovery will re-fire the judge.${RB_MERGE_ERROR_TEXT:+ gh error: ${RB_MERGE_ERROR_TEXT}}"

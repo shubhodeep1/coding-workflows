@@ -32,13 +32,17 @@
 # empty) posts failure. A sync-quick run uses the same mapping: the
 # aggregate already decides whether its skipped jobs count.
 #
-# API calls (§15): exactly one POST repos/<repo>/statuses/<sha> (through
-# gh_retry), none when cancelled or the input is invalid.
+# API calls (§15): one POST repos/<repo>/statuses/<sha> through gh_retry,
+# marked idempotent so transient failures are retried (the newest status for
+# a context wins); none when cancelled or the input is invalid.
 #
 # Always exits 0 (fail-open for the job, fail-closed for merging): a failed
 # post logs `CI_FINAL_STATUS ... outcome=post_failed` and a warning, and the
-# missing status keeps the PR blocked; it is never a false green. The token
-# and the API response are never printed.
+# missing status keeps the PR blocked. Caveat: on a re-run for a SHA that
+# already carries `ci/final=success`, a failed post leaves that older status
+# in place, so a failed `failure` post is an ::error:: line; the red `lint`
+# still sends the PR back through `final-ci-failed`. The token and the API
+# response are never printed.
 #
 # Log lines (stable prefix CI_FINAL_STATUS):
 #   CI_FINAL_STATUS sha=<sha> state=<state> outcome=posted run=<run_id>
@@ -97,7 +101,10 @@ ci_final_status_main()
 		target_url="${server}/${repo}/commit/${sha}"
 	fi
 
-	if gh_retry gh api --method POST "repos/${repo}/statuses/${sha}" \
+	# A status POST for the same context and SHA replaces the earlier one,
+	# so it is safe to retry (GH_RETRY_IDEMPOTENT; the env form keeps the
+	# fallback gh_retry stub above working).
+	if GH_RETRY_IDEMPOTENT=true gh_retry gh api --method POST "repos/${repo}/statuses/${sha}" \
 		-f "state=${state}" \
 		-f "context=${CI_FINAL_STATUS_CONTEXT}" \
 		-f "target_url=${target_url}" \
@@ -105,6 +112,9 @@ ci_final_status_main()
 		echo "CI_FINAL_STATUS sha=${sha} state=${state} outcome=posted run=${run_id}"
 	else
 		echo "CI_FINAL_STATUS sha=${sha} state=${state} outcome=post_failed"
+		if [ "${state}" = "failure" ]; then
+			echo "::error::Could not post ${CI_FINAL_STATUS_CONTEXT}=failure on ${sha}; an earlier ${CI_FINAL_STATUS_CONTEXT}=success on this SHA, if any, still stands."
+		fi
 		echo "::warning::Could not post the ${CI_FINAL_STATUS_CONTEXT} commit status on ${sha}; the PR stays blocked until a re-run of the final CI posts it."
 	fi
 	return 0
