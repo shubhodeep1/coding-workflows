@@ -707,15 +707,41 @@ def test_extension_checkout_mismatch_holds_without_granting_or_merging(tmp_path:
 	assert not any(call[:2] in (["workflow", "run"], ["api", "repos/o/r/issues/42/labels"]) for call in calls)
 
 
+@pytest.mark.parametrize("mode", ["gate", "status"])
+def test_unpushed_commit_on_top_of_the_pr_head_holds_as_head_unpushed(tmp_path: Path, mode: str) -> None:
+	# PR #9283 (run 43161924339): the PR head HEAD was audited clean, then the
+	# conflict resolver committed [ai-merge-resolve] locally (OLD here) with
+	# the push deferred until after the review-blocked judge. The merge must
+	# hold (the new head is unaudited), but as head_unpushed, which the judge
+	# alert treats as self-clearing, not extensions_unverifiable. Only an
+	# extension marker needs the checkout at the PR head (no marker: #9011).
+	comments = [_comment(_marker("clean", HEAD, 6)), _comment(_extension(OLD), comment_id=9)]
+	result, calls, output = _run(tmp_path, mode, comments=comments, env={"FAKE_GIT_HEAD": OLD, "FAKE_GIT_ANCESTORS": HEAD})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "extensions_unverifiable" not in result.stdout
+	assert not any(call[:2] in (["workflow", "run"], ["api", "repos/o/r/issues/42/labels"], ["api", "repos/o/r/issues/42/comments"]) for call in calls)
+	if mode == "gate":
+		assert output == "hold=true\nhold_reason=head_unpushed\n"
+		assert "outcome=hold reason=head_unpushed" in result.stdout and f"checkout={OLD}" in result.stdout
+	else:
+		assert output == "" and "SINGLE_ISSUE_SECURITY_PASS_STATE=unverifiable" in result.stdout
+
+
+def test_head_unpushed_is_a_self_clearing_judge_hold() -> None:
+	assert "security_hold_awaiting_followups|security_hold_head_unpushed)" in REVIEW.read_text(encoding="utf-8")
+
+
 def test_unpushed_local_commit_without_extensions_does_not_hold(tmp_path: Path) -> None:
 	# PRs #9011 / #9134: the review job's deferred [ai-merge-resolve] commit
 	# moved the checkout past the PR head before the judge's merge gate ran.
 	# With no extension marker there is nothing to verify against the checkout.
+	# FAKE_GIT_ANCESTORS: the deferred commit really descends from the PR head,
+	# so a head_unpushed hold placed ahead of the marker check would fail here.
 	comments = [_comment("ok\n" + _marker("clean", HEAD, 1))]
-	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GIT_HEAD": OLD})
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GIT_HEAD": OLD, "FAKE_GIT_ANCESTORS": HEAD})
 	assert output == "hold=false\n" and "outcome=clean" in result.stdout
-	assert "extensions_unverifiable" not in result.stdout
-	result, calls, output = _run(tmp_path, "status", comments=comments, env={"FAKE_GIT_HEAD": OLD})
+	assert "extensions_unverifiable" not in result.stdout and "head_unpushed" not in result.stdout
+	result, calls, output = _run(tmp_path, "status", comments=comments, env={"FAKE_GIT_HEAD": OLD, "FAKE_GIT_ANCESTORS": HEAD})
 	assert "SINGLE_ISSUE_SECURITY_PASS_STATE=unverifiable" not in result.stdout
 
 
