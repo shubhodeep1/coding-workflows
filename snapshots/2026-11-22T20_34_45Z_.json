@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-21T03:48:01Z",
+  "tick_at": "2026-11-22T20:34:45Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,12 +11,12 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 4
+    "tracking_issues": 3
   },
   "tracking_issues": [
     {
       "current_wave": 2,
-      "integration_ahead_by": "46",
+      "integration_ahead_by": "49",
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -56,13 +56,13 @@
       "wave_complete": false
     },
     {
-      "current_wave": 3,
-      "integration_ahead_by": "8",
+      "current_wave": 6,
+      "integration_ahead_by": "14",
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
-        "in_progress": 0,
+        "in_progress": 1,
         "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
@@ -74,27 +74,6 @@
       "status": "in-progress",
       "title": "[Orchestrator] Pipeline human-wait elimination: CI-quick parity, red-main heal dedupe, resolver safeguards, .github/ai plan grants, hold re-evaluation, nothing-to-implement verify, operator-step tick",
       "total_waves": 10,
-      "wave_complete": false
-    },
-    {
-      "current_wave": 3,
-      "integration_ahead_by": "6",
-      "issue_counts": {
-        "closed": 0,
-        "done": 0,
-        "implementation_failed": 0,
-        "in_progress": 1,
-        "merged": 1,
-        "not_created": 0,
-        "ready_to_merge": 0,
-        "review_blocked": 0,
-        "skipped": 0
-      },
-      "number": 9781,
-      "project_complete": false,
-      "status": "in-progress",
-      "title": "[Orchestrator] Let non-conflicting approved PRs merge past the merge lease (plan docs/plans/merge-lease-parallel-merges-plan.md, phases 1-5)",
-      "total_waves": 5,
       "wave_complete": false
     }
   ]
