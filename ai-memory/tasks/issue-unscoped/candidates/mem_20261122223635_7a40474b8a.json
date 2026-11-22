@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Goal 2 of issue #9939: \"No pipeline merge path merges a PR GitHub reports as `mergeable_state: blocked`.\"\n  expected_change_site: .github/workflows/workflow-log-analysis.yml line 2207 (`elif gh pr merge \"${report_pr_number}\" --squash --match-head-commit \"${report_head_sha}\"`) and .github/workflows/update_workflows.yml line 1340 (the direct-merge fallback `if gh pr merge \"${SYNC_PR_NUMBER}\" --repo \"${REPO}\" \"--${MERGE_METHOD}\" --match-head-commit ...` after the --auto attempt at line 1334); each needs a _pr_sync_merge_blocked_guard check (or its workflow-inline equivalent) before it merges\n  confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  EVIDENCE: Neither file is in PR CHANGED FILES, the plan's files_touched grant, or any diff hunk of this PR, and the PR diff adds no guard call at either site; neither workflow file contains `mergeable_state` or `_pr_sync_merge_blocked_guard` (grep verified), yet both run on the pipeline's `GH_PAT` and perform synchronous merges that an admin token turns into a ruleset bypass; earlier editor runs (entry[1]-entry[4]) deferred both sites as outside the files_touched grant and asked for a follow-up issue, which must land before owner step O3 removes the Admin bypass actor; the linked issue's Goal 2 is unconditional (reviewers disagreed on severity: sonnet NIT, glm MAJOR)\n- requirement: CLAUDE.md \u00a719 / unattended \u00a721: a PR body must not use an auto-close keyword (like \"Closes\") to reference an `ai:orchestrator-tracking` issue\n  expected_change_site: PR description body (\"Closes https://github.com/shubhodeep1/coding-workflows/issues/9939\")\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  EVIDENCE: The PR description has contained \"Closes https://github.com/shubhodeep1/coding-workflows/issues/9939\" since creation; no autofix run has replaced it with `Refs #9939` or run the \u00a721 pre-flight lint on it; this is a violation only if #9939 carries the ai:orchestrator-tracking label, in which case merging would end the orchestrator project too early; if #9939 is a plain `ai:orchestrator-managed` sub-issue, auto-close on merge is the intended behaviour (reviewers disagreed on severity: gemini MAJOR, glm NIT)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP:\n  Requirement: Goal 2 of issue #9939: \"No pipeline merge path merges a PR GitHub reports as `mergeable_state: blocked`.\"\n  Expected change site: .github/workflows/workflow-log-analysis.yml line 2207 (`elif gh pr merge \"${report_pr_number}\" --squash --match-head-commit \"${report_head_sha}\"`) and .github/workflows/update_workflows.yml line 1340 (the direct-merge fallback `if gh pr merge \"${SYNC_PR_NUMBER}\" --repo \"${REPO}\" \"--${MERGE_METHOD}\" --match-head-commit ...` after the --auto attempt at line 1334). Each needs a _pr_sync_merge_blocked_guard check before it merges.\n  Evidence of absence: Neither file is in PR CHANGED FILES, and the PR diff adds no guard call at either site, so both still merge synchronously without checking mergeable_state. Both files are outside the plan's files_touched grant, and the issue's Context lists only review_rb_judge.sh and orchestrate_poll_process.sh. That is why earlier editor runs left them for a follow-up issue, which must land before owner step O3 removes the Admin bypass actor.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP:\n  Requirement: The PR description must not use auto-close keywords (like \"Closes\") for orchestrator-tracking issues (\u00a721).\n  Expected change site: PR description body.\n  Evidence of absence: The PR description contains \"Closes https://github.com/shubhodeep1/coding-workflows/issues/9939\". If #9939 carries the ai:orchestrator-tracking label, this violates \u00a721 and will end the orchestrator project's lifecycle too early.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP:\n  Requirement: Goal 2 of issue #9939 \u2014 \"No pipeline merge path merges a PR GitHub reports as `mergeable_state: blocked`.\"\n  Expected change site: the direct sync `gh pr merge` fallbacks in `.github/workflows/workflow-log-analysis.yml:2207` (`elif gh pr merge \"${report_pr_number}\" --squash --match-head-commit ...`) and `.github/workflows/update_workflows.yml:1340` (direct `gh pr merge --match-head-commit` fallback after the `--auto` request at 1334 fails); each needs the `_pr_sync_merge_blocked_guard` call (or its workflow-inline equivalent) before merging.\n  Evidence of absence: neither file is in PR CHANGED FILES, the plan's `files_touched` grant, or any diff hunk; neither workflow file contains `mergeable_state` or `_pr_sync_merge_blocked_guard` (grep verified); both run on `GH_PAT` and merge synchronously, which an admin token turns into a ruleset bypass. Editor summaries entry[1]-entry[4] deferred both sites to a follow-up issue that must land before owner step O3. The linked issue's Goal 2 is unconditional, so the gap is open, mitigated only by the O3 ordering requirement.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP:\n  Requirement: CLAUDE.md \u00a719 / unattended \u00a721 \u2014 a PR body must not reference an `ai:orchestrator-tracking` issue with an auto-close keyword; PR description body is the change site.\n  Expected change site: the PR description body (\"Closes https://github.com/shubhodeep1/coding-workflows/issues/9939\").\n  Evidence of absence: the PR description has used `Closes <#9939>` since creation; no autofix run has replaced it with `Refs #9939` or run the \u00a721 pre-flight lint on it. Conditional: this is a violation only if #9939 also carries `ai:orchestrator-tracking`; if it is a plain `ai:orchestrator-managed` sub-issue, auto-close is intended. The editor can fix it with one body edit after checking the label.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fbad5bf11c65279d7a12ab0866188fc0a29df5ba7cceb256aa0a031fd115f90d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9956,
+    "run_id": "45067680917",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45067680917",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122223635_7a40474b8a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9956,
+    "run_id": "45067680917"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T22:36:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
