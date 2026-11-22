@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:aggregate job lint (run 44903199931) | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The aggregate lint check reports failure because the orchestrate-poll (3) job was cancelled.\n  WHY: The required lint check stays failed until a successful bound CI run supersedes it, which blocks the PR's required checks. The reviewer rated this BLOCKER, mapped here to high. anthropic_claude-sonnet-5_5 and minimax_minimax-m3 judged the same failure an infrastructure cancellation rather than a PR defect, so there is a disagreement over whether it is a defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:aggregate job lint (run 44903199931) | severity=BLOCKER | confidence=5\n  PROBLEM: The aggregate lint check reports failure because the orchestrate-poll (3) job was cancelled.\n  WHY: The required lint check will remain in a failure state until a successful bound CI run supersedes this cancelled/failed run. The current CI state blocks this PR from successfully passing its required checks.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "ec28b6bbfb60e0f4a907ca17b09f261295e84ec28f98c5e525afa9192beb3d61",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9867,
+    "run_id": "44990592814",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44990592814",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122062745_851520c6dd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9867,
+    "run_id": "44990592814"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-22T06:27:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
