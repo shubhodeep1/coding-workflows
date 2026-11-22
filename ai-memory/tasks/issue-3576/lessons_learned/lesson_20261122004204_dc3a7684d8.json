@@ -1,0 +1,20 @@
+{
+  "discovered_at": "2026-11-22T00:42:04Z",
+  "issue_number": 3576,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=.github/workflows/orchestrate_poll.yml:1; cited_path=.github/workflows/orchestrate_poll.yml; files_touched=agents.d/3576-security-audit-tracker-pipeline-exclude.md, changelog.d/3576-security-audit-tracker-pipeline-exclude.md, scripts/orchestrate_poll_process.sh, scripts/unblock_scan.py, tests/test_orchestrate_poll_process.py, tests/test_security_audit_tracker_pipeline_exclude.py, tests/test_unblock_scan.py.",
+  "phase": "review_autofix",
+  "pr_number": 9913,
+  "record_id": "lesson_20261122004204_dc3a7684d8",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/orchestrate_poll.yml",
+    "agents.d/3576-security-audit-tracker-pipeline-exclude.md",
+    "changelog.d/3576-security-audit-tracker-pipeline-exclude.md",
+    "scripts/orchestrate_poll_process.sh",
+    "scripts/unblock_scan.py",
+    "tests/test_orchestrate_poll_process.py",
+    "tests/test_security_audit_tracker_pipeline_exclude.py",
+    "tests/test_unblock_scan.py"
+  ]
+}
