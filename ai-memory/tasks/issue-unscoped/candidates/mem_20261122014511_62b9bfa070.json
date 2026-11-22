@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_audit_consumer_drift.py:~1766 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new pin-age tests added to the file are missing from the main() function.\n  WHY: These tests run only via pytest, so direct execution of this test script in CI (ci.yml line 696) skips them, which leaves a coverage gap if they are relied upon as part of the core audit CI path (source severity: NIT).\n- scripts/review_head_gate.sh:102-104 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The updater-branch regex and context strings (REVIEW_HEAD_GATE_UPDATER_BRANCH_RE, REVIEW_HEAD_GATE_UPDATER_VERIFY_CONTEXT, REVIEW_HEAD_GATE_UPDATER_INTEGRITY_CONTEXT) are duplicated between scripts/review_head_gate.sh (lines 102-104) and .github/workflows/update_workflows.yml (line ~2692).\n  WHY: If the required integrity check context changes (for example, a workflow rename) and only one copy is updated, the head-gate exemption breaks silently and PRs stall again (source severity: NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_audit_consumer_drift.py:main() around line 1766 | severity=NIT | confidence=5\n  PROBLEM: The new pin-age tests added to the file are missing from the main() function.\n  WHY: These tests run only via pytest. Direct execution of this test script in CI (ci.yml line 696) will skip these tests, creating a gap in testing coverage if they are relied upon as part of the core audit CI path.\n- scripts/review_head_gate.sh (lines 102-104) and .github/workflows/update_workflows.yml (line ~2692) | severity=NIT | confidence=4\n  PROBLEM: The updater-branch regex and context strings (REVIEW_HEAD_GATE_UPDATER_BRANCH_RE, REVIEW_HEAD_GATE_UPDATER_VERIFY_CONTEXT, REVIEW_HEAD_GATE_UPDATER_INTEGRITY_CONTEXT) are duplicated between the bash script and the workflow YAML.\n  WHY: If the required integrity check context changes (e.g., due to a workflow rename), updating it in one place but not the other will break the head-gate exemption mechanism silently, causing PRs to stall again.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "20ef8fd252ed47f4bc6292a2f9e9dc4a6174e0ba2c21a3563586c8ca0af8542a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9505,
+    "run_id": "44968648489",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44968648489",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122014511_62b9bfa070",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9505,
+    "run_id": "44968648489"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-22T01:45:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
