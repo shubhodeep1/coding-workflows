@@ -2461,8 +2461,14 @@ Still waiting for an operator; last checked ${now}.
 	# tracking line) behave as before; the label check fails closed. The close
 	# helper returns 0 after a close or a failed write (the next scan retries;
 	# its marker is posted once only) and 1 to judge as usual.
+	# A done wait counts only when the newest trusted "Planning blocked" comment
+	# came after it ended: a wait marked done because its fix-up "did not merge
+	# in time" must not let an older block close the issue.
 	if [ "${ITEM_KIND}" = "issue" ] && [ -z "${tracking}" ] \
-		&& { [ -z "${wait}" ] || [ "${wait_state:-}" = "done" ]; } \
+		&& { [ -z "${wait}" ] || { [ "${wait_state:-}" = "done" ] \
+			&& jq -e --arg login "${UNBLOCK_LOGIN}" --arg after "${wait_updated:-${wait_at:-}}" '[.[] | select((.user.login // "") == $login)
+				| select(((.body // "") | split("\n") | map(rtrimstr("\r")) | map(select(test("\\S"))) | first // "") == "Planning blocked: human input required.")
+				| (.created_at // "")] | (max // "") > $after' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; }; } \
 		&& jq -e 'index("ai:check-triage") == null and index("ai:orchestrator-managed") == null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1 \
 		&& unblock_nothing_to_implement_close "" "" "${tracking}"; then
 		return 0

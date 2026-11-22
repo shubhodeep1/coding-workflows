@@ -5657,7 +5657,7 @@ def test_done_wait_before_nothing_to_implement_block_still_closes(tmp_path: Path
 	assert "fixup=50 op=nothing_to_implement" not in result.stdout
 
 
-@pytest.mark.parametrize("case", ["other_reason", "untrusted_block", "newer_other_block", "newer_plan", "disabled", "project_item", "managed_no_tracking_line", "open_wait"])
+@pytest.mark.parametrize("case", ["other_reason", "untrusted_block", "newer_other_block", "newer_plan", "disabled", "project_item", "managed_no_tracking_line", "open_wait", "done_wait_after_block"])
 def test_no_wait_nothing_to_implement_close_keeps_todays_judging_otherwise(tmp_path: Path, case: str) -> None:
 	item, env, issues = ISSUE, {}, None
 	comments = [_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z")]
@@ -5676,6 +5676,12 @@ def test_no_wait_nothing_to_implement_close_keeps_todays_judging_otherwise(tmp_p
 		env["FAKE_GH_PROJECT_COMMENTS"] = _project_comments_for_item(7)
 	elif case == "managed_no_tracking_line":
 		item = dict(ISSUE, labels=ISSUE["labels"] + [{"name": "ai:orchestrator-managed"}])
+	elif case == "done_wait_after_block":
+		# The fix-up ordered over this block did not merge in time; the older
+		# block must not close the issue.
+		wait = _comment("Fix-up #50 did not merge in time; the unblock judge decides again.\n\n<!-- ai:unblock-wait:v1 item=7 fixup=50 done -->", BOT, "2026-10-04T11:00:00Z")
+		wait["id"] = 123
+		comments.append(wait)
 	else:
 		wait = _comment("Waiting.\n\n<!-- ai:unblock-wait:v1 item=7 fixup=50 -->", BOT, "2026-10-04T11:00:00Z")
 		wait["id"] = 123
