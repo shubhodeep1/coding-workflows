@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (not a finding; no severity/confidence stated; HARDENING_RISK_SCORE: 1)\n  file: scripts/review_collect_pr_metadata.sh\n  location: the `files_touched_scope_guard.py --emit-automation-grant ... >/dev/null 2>&1` call inside the `case \"${GITHUB_AI_PLAN_GRANT_WRITE_ENABLED-}\"` block\n  PROBLEM: The guard's stderr is thrown away, so an exception or import error that leads to the `reason=grant_error` log line leaves the operator nothing to diagnose it with.\n  WHY: Suggested fix is to send stderr to \"${TMP_RUNTIME_DIR}/github_ai_grant_guard.err\". On the grant_error branch, print its first line to stderr, filtered to printable characters and cut to 200 characters. The issue body must not be printed. Estimated lines changed: 3-4.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- HARDENING_SUGGESTION 1 (not a finding; no severity/confidence stated; HARDENING_RISK_SCORE: 2)\n  File: scripts/review_collect_pr_metadata.sh\n  Location: the new grant-record generation block (the `python3 \"${SCRIPT_DIR}/files_touched_scope_guard.py\" --emit-automation-grant ...` call), around line 402-404\n  PROBLEM: stderr is redirected to `/dev/null` (`>/dev/null 2>&1`), so when the guard fails the operator sees only `REVIEW_GITHUB_AI_GRANT phase=collect outcome=none reason=grant_error paths=0` and not the cause.\n  WHY: The metadata step is now the only grant source for pipeline-authored re-issues. A regression in `build_automation_grant`, or a change in the shape of the `--origin-repo` API path, would therefore silently disable every pipeline re-issue grant. Suggested fix is to run the guard with `2> \"${_github_ai_grant_record_file}.log\"` and append `detail=$(head -c 200 ... | tr -cd '[:print:]' | cut -c1-200)` to the grant_error log line. Estimated lines changed: 4-6.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n- HARDENING_SUGGESTION (not a finding; no severity/confidence stated; HARDENING_RISK_SCORE: 1)\n  File: scripts/review_collect_pr_metadata.sh\n  Location: Lines 402-404\n  PROBLEM: The grant-builder invocation discards all stderr, so failures are reduced to the generic `grant_error` log at line 410.\n  WHY: Suggested fix is to capture and report a bounded, sanitized failure category while keeping raw stderr out of workflow logs. Estimated lines changed: 4-6.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING_SUGGESTION 1 (not a finding; no severity/confidence stated; HARDENING_RISK_SCORE: 1)\n  File: scripts/review_collect_pr_metadata.sh\n  Location: line 402-404 (the `timeout 300 python3 ... files_touched_scope_guard.py --emit-automation-grant ...` invocation, which ends with `>/dev/null 2>&1`), and line 410 which logs `REVIEW_GITHUB_AI_GRANT phase=collect outcome=none reason=grant_error paths=0`.\n  PROBLEM: The guard's stderr is discarded, so a failed record build shows only `grant_error` with no cause (exception, missing file, origin fetch failure).\n  WHY: The step's stderr is teed to `collect_metadata_stderr.txt`, so a cause line would land somewhere searchable. Suggested fix is to capture stderr into a temp file under `TMP_RUNTIME_DIR` and, on the grant_error branch, echo a sanitized one-line reason (about 200 chars). Estimated lines changed: 4-6.\n- HARDENING_SUGGESTION 2 (not a finding; no severity/confidence stated; HARDENING_RISK_SCORE: 1)\n  File: scripts/review_collect_pr_metadata.sh (lines 379-417, the `case \"${GITHUB_AI_PLAN_GRANT_WRITE_ENABLED-}\" in ''|[Tt][Rr][Uu][Ee]) ... esac` with no `*)` branch) and scripts/review_untrusted_sandbox.sh (lines 91-94, the helper's first `case ... *) return 0 ;;`, and lines 466-468, the export `case`)\n  PROBLEM: A mistyped switch value (e.g. `TRUE ` or `on`) silently disables the feature in these three readers, and they log no warning.\n  WHY: The README row says \"any other value also turns it off and logs a warning\". `scripts/implement_commit_changes.sh` and `scripts/review_untrusted_workspace.py` emit that warning, but the review-path shell readers do not. Suggested fix is a `*)` branch logging `::warning::GITHUB_AI_PLAN_GRANT_WRITE_ENABLED has an unrecognised value; plan-granted .github/ai grants disabled` without printing the value. Estimated lines changed: 4-6.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2ed84e4eda9b30518096f4f22dd07db5105eed4f8b0e50b71f5199e0cb5a9fe2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9923,
+    "run_id": "44993245312",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44993245312",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122070948_b8591b4fa7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9923,
+    "run_id": "44993245312"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-22T07:09:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
