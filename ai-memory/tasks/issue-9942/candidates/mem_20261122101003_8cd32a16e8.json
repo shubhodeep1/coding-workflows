@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\n\nRATIONALE:\nQ1: Today `single_pass_audit_runs()` (`scripts/review_single_issue_security_pass.sh:408-428`) reads one page of 100 runs created in the last 24 hours. Without a change, the new lost-marker helper could never see PR #9283's cancelled runs from 2026-11-16. Option A leaves the motivating PR stuck. Option B fixes it with the same single API call, and the issue's fail-closed rule covers a failed or incomplete listing. Option C adds an env var whose 7-day default would likely already exclude #9283's runs by the time this merges, so it adds a setting without removing the risk B already handles by failing closed.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1 (option B, with these binding details so the planner does not have to guess):\n  inputs:\n    - `scripts/review_single_issue_security_pass.sh`: `single_pass_audit_runs` (lines 401-428, the 24-hour `since` and `per_page=100` call), `single_pass_pending_audit_state` (lines 430-455, the \"lost\" rule), `single_pass_active_audits` (lines 457-463, the throttle that reads the same cache), and the head-attempt count at line 1099.\n    - Fields in the workflow-runs response: `total_count`, `workflow_runs[].created_at`, `status`, `updated_at`, `display_title`.\n  steps:\n    - Keep one listing call per gate run. Its `created>=` start becomes the earlier of two times: 24 hours ago (as today), or 120 seconds before the oldest `pending` marker on the current head that is above the cap. This only widens the window, so the existing pending-state check and the concurrency throttle still see at least what they see today.\n    - Work out that start before the first fetch in the run. The cache is first filled at line 1024 or line 1156, and every later caller must reuse the same cached listing. Do not make a second request.\n    - Treat the listing as incomplete when `total_count` is greater than the number of `workflow_runs` returned. In that case, a marker counts as lost only if its whole window `[created - 120s, next marker on this head)` starts at or after the oldest returned run's `created_at`. Otherwise the marker counts toward `head_attempts`, the same as for a failed or empty listing.\n    - The throttle count of runs that are not completed stays unchanged. The newest runs are on the first page, and audits time out after 60 minutes.\n    - Update the comment above `single_pass_audit_runs` to describe the wider start and the incomplete-listing rule.\n    - Tests in `tests/test_single_issue_security_pass.py`:\n      - The stubbed `gh api` call gets a `created>=` start earlier than 24 hours ago when a pending head marker is older.\n      - A truncated listing (`total_count` greater than the returned count) whose oldest returned run is newer than a marker's window start counts that marker.\n      - A complete listing that shows two cancelled runs older than 24 hours, with no result marker, dispatches another audit.\n  replaces_acceptance_criterion: none. This adds one criterion: markers older than 24 hours are classified when the run listing fully covers their window.\n  equivalence_argument: Classification still needs positive evidence: runs exist for the PR, all completed at least 10 minutes ago, and there is no result marker. Anything that cannot be proven (a failed listing, a truncated listing, or no runs) counts as an attempt, which matches the issue's fail-closed rule. The new `SECURITY_PASS_LOST_AUDIT_RETRIES` budget still caps how many retries this allows. PR #9283 clears on its next review round only if the security-audit workflow has had no more than 100 runs since 2026-11-16. If it has had more, it stays held as today, and `/re-run` or a new push is still the way out.\n  reversibility: Setting `SECURITY_PASS_LOST_AUDIT_RETRIES=0` restores today's counting no matter how wide the window is. Narrowing the window back to 24 hours is a one-line change to the `since` calculation, with no state or migration to undo.",
+  "fingerprint": "a9850be0cd3d86f94c80cf8f836567f74dd1d46121ed987a14b148e6d55dec4d",
+  "lineage": {
+    "issue_number": 9942,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45009240558",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45009240558",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9942"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261122101003_8cd32a16e8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9942,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45009240558"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9942",
+  "timestamps": {
+    "created_at": "2026-11-22T10:10:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
