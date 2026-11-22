@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_head_gate.sh:174-177 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The check `if [[ \"${ue_post_out}\" != *\"state=success outcome=posted\"* ]]; then` reads the stdout of review_head_gate_post_status, which runs gh api directly and does not echo \"outcome=posted\".\n  WHY: The exemption function would always log \"outcome=skipped reason=post_failed\", even when the status post succeeds, so the gate fails closed when it should not. The source severity was BLOCKER. anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna and z-ai_glm-5_3-flash all disputed this finding: they report that scripts/review_head_gate.sh:36-37 prints `state=${status_state} outcome=posted`.\n- tests/test_review_head_gate.py:481 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: In test_review_tail_calls_the_exemption_before_its_updater_exit, the anchor `text.index('^auto/update-workflows-[0-9a-f]{12}$ ]]; then')` is out of date after the merge from main, and str.index raises ValueError when it cannot find the substring.\n  WHY: The test would raise an unhandled exception, so CI would fail on every head. The source severity was BLOCKER. anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna and z-ai_glm-5_3-flash all disputed this finding: they report that the anchor now sits at line 493 and uses `(-r[2-5])?$`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add a drift alarm that pages when a consumer in .github/ai/consumer_repos.json stays behind the latest @stable tag for more than 24 hours.\"\n  expected_change_site: tests/test_audit_consumer_drift.py main()\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: test_pin_age_23_hours_behind_is_not_stale and test_pin_age_25_hours_behind_is_stale are not listed in the file's main() (line 1766), so CI's direct python3 run skips them (source severity MAJOR). anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash disputed this gap: they report that the tests are registered in main() at lines 1832-1854.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_head_gate.sh:174-177 | severity=BLOCKER | confidence=5\n  PROBLEM: The check `if [[ \"${ue_post_out}\" != *\"state=success outcome=posted\"* ]]; then` reads the stdout of review_head_gate_post_status, which runs gh api directly and does not echo \"outcome=posted\".\n  WHY: The exemption function will always log \"outcome=skipped reason=post_failed\", even when the status post succeeds, so the gate fails closed when it should not.\n- tests/test_review_head_gate.py:481 | severity=BLOCKER | confidence=5\n  PROBLEM: In test_review_tail_calls_the_exemption_before_its_updater_exit, the anchor `text.index('^auto/update-workflows-[0-9a-f]{12}$ ]]; then')` is out of date after the merge from main, and str.index raises ValueError.\n  WHY: CI fails on every head because the test raises an unhandled exception.\n- TASK_GAP\n  Requirement: \"Add a drift alarm that pages when a consumer in .github/ai/consumer_repos.json stays behind the latest @stable tag for more than 24 hours.\"\n  Expected change site: tests/test_audit_consumer_drift.py\n  Evidence of absence: test_pin_age_23_hours_behind_is_not_stale and test_pin_age_25_hours_behind_is_stale are not listed in the file's main() (line 1766), so CI's direct execution skips them.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (HARDENING_RISK_SCORE: 1): tests/test_audit_consumer_drift.py, _DirectRunEnvPatch.undo (around line 1868-1874)\n  PROBLEM: If `os.environ[name] = value` or `os.environ.pop(name, None)` raises inside undo(), the loop stops partway and the remaining entries are not restored. This is theoretical today because each instance restores only one variable.\n  FIX: Wrap each restoration in its own try/except, or use contextlib.suppress(Exception) per entry (+4 lines).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0596790ee70e790770538ab515b6d31e9baeaf9b13c771c3c6ed8771031446c6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9505,
+    "run_id": "45037657217",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45037657217",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122165503_709f454b7b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9505,
+    "run_id": "45037657217"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-22T16:55:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
