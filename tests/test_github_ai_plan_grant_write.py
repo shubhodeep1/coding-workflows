@@ -544,6 +544,36 @@ def test_collect_metadata_publishes_the_grant_record_with_the_origin_chain(tmp_p
 	assert "          REVIEW_GITHUB_AI_GRANT_RECORD: ${{ steps.collect_pr_metadata.outputs.github_ai_grant_record || '' }}\n" in workflow
 
 
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq required")
+def test_collect_metadata_grant_error_logs_a_sanitized_cause(tmp_path: Path) -> None:
+	"""A crashing guard logs its exit code and exception class, never the raw stderr text."""
+	text = COLLECT_SCRIPT.read_text(encoding="utf-8")
+	start = text.index('case "${GITHUB_AI_PLAN_GRANT_WRITE_ENABLED-}" in\n')
+	block = text[start:text.index("\nesac\n", start) + len("\nesac\n")]
+	raw = tmp_path / "linked_issues_raw.json"
+	raw.write_text(json.dumps([_issue(f"files_touched:\n  - {GRANTED}\n")]), encoding="utf-8")
+	(tmp_path / "linked_issues_raw.json.status").write_text("ok\n", encoding="utf-8")
+	scripts = tmp_path / "scripts"
+	scripts.mkdir()
+	(scripts / "files_touched_scope_guard.py").write_text(
+		"raise RuntimeError('SECRET-ISSUE-TEXT')\n", encoding="utf-8")
+	stub_dir = tmp_path / "bin"
+	stub_dir.mkdir()
+	(stub_dir / "gh").write_text("#!/usr/bin/env bash\necho pipeline-pat\n", encoding="utf-8")
+	(stub_dir / "gh").chmod(0o755)
+	output = tmp_path / "github_output"
+	output.write_text("", encoding="utf-8")
+	work = tmp_path / "work"
+	work.mkdir()
+	env = _clean_env(PATH=f"{stub_dir}:{os.environ['PATH']}", GITHUB_OUTPUT=str(output),
+		LINKED_ISSUES_RAW_FILE=str(raw), TMP_RUNTIME_DIR=str(work), SCRIPT_DIR=str(scripts), REPOSITORY="acme/consumer")
+	proc = subprocess.run(["bash", "-c", "set -euo pipefail\n" + block], env=env, capture_output=True, text=True)
+	assert proc.returncode == 0, proc.stderr
+	assert "REVIEW_GITHUB_AI_GRANT phase=collect outcome=none reason=grant_error paths=0 detail=exit_1:RuntimeError" in proc.stderr
+	assert "SECRET-ISSUE-TEXT" not in proc.stderr
+	assert "github_ai_grant_record=" not in output.read_text(encoding="utf-8")
+
+
 def test_review_login_is_resolved_with_the_metadata_token_and_passed_to_prepare() -> None:
 	workflow = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
 	metadata = "      - name: Collect PR metadata\n        id: collect_pr_metadata\n        env:\n          GH_TOKEN: ${{ secrets.GH_PAT }}\n"
