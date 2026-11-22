@@ -329,12 +329,43 @@ def classify(texts: Iterable[str], probe: Callable[[], dict[str, str]]) -> dict[
 # ---------------------------------------------------------------------------
 
 
+_SIGNED_COMMENTS_CHECKED = False
+
+
+def _activate_signed_comments() -> None:
+	"""Put the signed job-token comment shim on PATH, once (run-volume plan item 15).
+
+	With AI_COMMENT_SIGNING_SECRET set, runs `AI_COMMENT_SIG_ACTIVATE_ONLY=1
+	source gh_helpers.sh` from this script's directory, so the `gh` comment
+	calls of this process are signed even when no earlier step of the job
+	loaded the shim. No API call. Fail-open: any error leaves PATH unchanged.
+	"""
+	global _SIGNED_COMMENTS_CHECKED
+	if _SIGNED_COMMENTS_CHECKED:
+		return
+	_SIGNED_COMMENTS_CHECKED = True
+	helpers = Path(__file__).resolve().with_name("gh_helpers.sh")
+	if not os.environ.get("AI_COMMENT_SIGNING_SECRET") or not helpers.is_file():
+		return
+	try:
+		shim_dir = subprocess.run(
+			["bash", "-c", 'AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$1" >/dev/null 2>&1; printf "%s" "${AI_COMMENT_SIG_SHIM_DIR:-}"', "_", str(helpers)],
+			capture_output=True, text=True, check=False, timeout=60,
+		).stdout.strip()
+	except (OSError, subprocess.SubprocessError):
+		return
+	path_entries = os.environ.get("PATH", "").split(os.pathsep)
+	if shim_dir and os.path.isdir(shim_dir) and shim_dir not in path_entries:
+		os.environ["PATH"] = os.pathsep.join([shim_dir, *path_entries])
+
+
 class GitHub:
 	def __init__(self, repository: str):
 		self.repository = repository
 		self._login: str | None = None
 
 	def _run(self, arguments: list[str]) -> subprocess.CompletedProcess[str]:
+		_activate_signed_comments()
 		return subprocess.run(["gh", *arguments], capture_output=True, text=True, check=False)
 
 	def _json(self, arguments: list[str]) -> Any | None:

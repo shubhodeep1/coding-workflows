@@ -106,6 +106,8 @@ REVIEW_AUTOFIX_SKIP_MERGE_JOB_STEP_SCRIPTS: dict[str, str] = {
 TEST_AND_MARK_STABLE_STEP_SCRIPTS: dict[str, str] = {
 	"Phase 4: Wait for review & autofix to complete": "stable_e2e_step_wait_review.sh",
 	"Phase 4b: Verify editor restored canary (pytest + retry)": "stable_e2e_step_verify_bait_removed.sh",
+	"Deep verify: inspect all workflow run steps": "stable_e2e_step_deep_verify.sh",
+	"Phase 7: Close PR and verify cancel_on_pr_close fires": "stable_e2e_step_verify_cancel_on_close.sh",
 }
 
 _WRAPPER_START_RE = re.compile(

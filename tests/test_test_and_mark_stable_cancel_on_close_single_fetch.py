@@ -9,15 +9,20 @@ import re
 import subprocess
 import tempfile
 import textwrap
+import sys
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_test_and_mark_stable_text  # noqa: E402
+
 
 def _read_workflow() -> str:
-	return WORKFLOW.read_text(encoding="utf-8")
+	return expanded_test_and_mark_stable_text()
 
 
 def _slice_between(text: str, start_marker: str, end_marker: str) -> str:
@@ -66,7 +71,7 @@ def test_closed_pr_wait_loop_fetches_existing_run_once_per_iteration() -> None:
 	fetch_fragment = 'gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}"'
 
 	assert loop.count(fetch_fragment) == 1
-	assert 'EXISTING_RUN_JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" 2>/dev/null || echo "")' in loop
+	assert 'EXISTING_RUN_JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" 2>/dev/null) || EXISTING_RUN_JSON=""' in loop
 	assert "--jq '.status // \"\"'" not in loop
 	assert "--jq '.conclusion // \"\"'" not in loop
 
@@ -74,7 +79,7 @@ def test_closed_pr_wait_loop_fetches_existing_run_once_per_iteration() -> None:
 def test_closed_pr_wait_loop_derives_status_and_conclusion_from_shared_payload() -> None:
 	wf = _read_workflow()
 	loop = _existing_run_wait_loop(_closed_pr_existing_run_branch(wf))
-	fetch_stmt = 'EXISTING_RUN_JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" 2>/dev/null || echo "")'
+	fetch_stmt = 'EXISTING_RUN_JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" 2>/dev/null) || EXISTING_RUN_JSON=""'
 	status_stmt = "EXISTING_STATUS=$(printf '%s' \"${EXISTING_RUN_JSON}\" | jq -r '.status // \"\"' 2>/dev/null || echo \"\")"
 	conclusion_stmt = "EXISTING_CONCLUSION=$(printf '%s' \"${EXISTING_RUN_JSON}\" | jq -r '.conclusion // \"\"' 2>/dev/null || echo \"\")"
 
@@ -183,6 +188,14 @@ def test_no_run_diagnostic_makes_no_second_listing() -> None:
 
 
 
+def _deadline_helpers(wf: str) -> str:
+	"""The Phase 7 deadline helpers (#9794) both wait loops call."""
+	return textwrap.dedent(
+		"          "
+		+ _slice_between(wf, "# ── Phase 7 wait deadline helpers", "# ── end Phase 7 wait deadline helpers ──")
+	)
+
+
 def _wait_loop_and_no_run_block(wf: str) -> str:
 	"""The real wait loop plus the no-run diagnostic, dedented to plain bash."""
 	branch = _open_pr_close_branch(wf)
@@ -223,6 +236,8 @@ def _run_phase7_wait(tmp: str, runs_json: str, state_reply: str | None) -> tuple
 			"PR_CLOSED_AT=2026-10-20T00:00:00Z",
 			"PRE_RUN_ID=100",
 			"TEST_REPO=o/r",
+			'PHASE7_RUN_STARTED_AT=""',
+			_deadline_helpers(_read_workflow()),
 			"",
 		]
 	)
@@ -333,6 +348,31 @@ def _collect_cleanup_dispatch_review_cancel_cases() -> None:
 
 
 _collect_cleanup_dispatch_review_cancel_cases()
+
+
+# The dispatch-watch timeout cancel cases (#9532) live in
+# tests/test_test_and_mark_stable_dispatch_watch_timeout_cancel.py and are
+# collected here for the same reason as the #9418 cases above.
+def _collect_dispatch_watch_timeout_cancel_cases() -> None:
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location(
+		"dispatch_watch_timeout_cancel_cases",
+		Path(__file__).resolve().parent / "test_test_and_mark_stable_dispatch_watch_timeout_cancel.py",
+	)
+	assert spec is not None and spec.loader is not None
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	assert collected, "no dispatch-watch timeout cancel cases collected"
+
+
+_collect_dispatch_watch_timeout_cancel_cases()
 
 
 def main() -> int:

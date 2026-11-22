@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -1776,6 +1777,152 @@ def test_commit_helper_rolls_back_post_commit_scope_lock_violation() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Self-repo exact-path .github/ai additions (unblock fix-up for #9111): the
+# untracked add keeps ':!.github/ai', and a separate self-repo-only step stages
+# only the new .github/ai files the issue's files_touched list names exactly.
+# ---------------------------------------------------------------------------
+
+_GITHUB_AI_SELF_REPO = "shubhodeep1/coding-workflows"
+
+
+def _run_github_ai_add_fixture(
+	tmp_path: Path,
+	*,
+	repository: str,
+	extra_env: dict[str, str] | None = None,
+	issue_body: str = "files_touched:\n  - .github/ai/x.json\n  - tests/new_test.py\n",
+) -> tuple[subprocess.CompletedProcess[str], list[str], str]:
+	repo_dir = tmp_path / "repo"
+	_bootstrap_git_repo(repo_dir)
+	(repo_dir / "scripts").mkdir()
+	shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+	shutil.copy2(FILES_TOUCHED_SCOPE_GUARD, repo_dir / "scripts" / "files_touched_scope_guard.py")
+	_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/files_touched_scope_guard.py"], cwd=repo_dir)
+	_git(["git", "commit", "-m", "add commit helpers"], cwd=repo_dir)
+
+	(repo_dir / ".github" / "ai").mkdir(parents=True)
+	(repo_dir / ".github" / "ai" / "x.json").write_text("{}\n", encoding="utf-8")
+	(repo_dir / ".github" / "ai" / "y.json").write_text("{}\n", encoding="utf-8")
+	(repo_dir / "tests").mkdir()
+	(repo_dir / "tests" / "new_test.py").write_text("def test_x():\n\tpass\n", encoding="utf-8")
+
+	runtime_dir = tmp_path / "runtime"
+	runtime_dir.mkdir()
+	github_output = tmp_path / "github_output.txt"
+	github_output.write_text("", encoding="utf-8")
+	issue_body_file = tmp_path / "issue_body.txt"
+	issue_body_file.write_text(issue_body, encoding="utf-8")
+	grant_file = tmp_path / "automation_path_grant.json"
+	grant_file.write_text(json.dumps({
+		"schema_version": "automation_path_grant.v1",
+		"trusted": True,
+		"issue_number": 948,
+		"paths": [".github/ai/x.json"],
+	}), encoding="utf-8")
+	env_values = {
+		"GITHUB_OUTPUT": str(github_output),
+		"GITHUB_REPOSITORY": repository,
+		"ISSUE_NUMBER": "948",
+		"ISSUE_BODY_FILE": str(issue_body_file),
+		"ALLOW_WORKFLOW_EDITS": "true",
+		"AUTOMATION_PATH_GRANT_FILE": str(grant_file),
+		"RUNTIME_DIR": str(runtime_dir),
+		"SERENA_PROJECT_BOOTSTRAP_HASH": "",
+		"SERENA_PROJECT_PREEXISTED": "false",
+		"TMPDIR": str(runtime_dir),
+	}
+	if extra_env:
+		env_values.update(extra_env)
+	env = _isolated_test_env(env_values, cwd=repo_dir)
+	env.pop("IMPLEMENT_STAGED_SUPPORT_RUN_DIR", None)
+	if not extra_env or "IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED" not in extra_env:
+		env.pop("IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED", None)
+	for key in ("STAGED_SUPPORT_LEDGER", "STAGED_SUPPORT_BASE_DIR", "STAGED_SUPPORT_EDITOR_HEAD_LEDGER",
+			"HEAL_ROUTE", "SCOPE_LOCK_LABEL_ENABLED", "ISSUE_SCOPE_LOCK_GLOB", "FETCHED_MANIFEST"):
+		env.pop(key, None)
+
+	proc = subprocess.run(
+		["bash", "scripts/implement_commit_changes.sh"],
+		cwd=str(repo_dir),
+		env=env,
+		text=True,
+		capture_output=True,
+		timeout=60,
+	)
+	git_env = _isolated_test_env(cwd=repo_dir)
+	committed = subprocess.run(
+		["git", "show", "--name-only", "--format=", "HEAD"],
+		cwd=str(repo_dir), env=git_env, check=True, capture_output=True, text=True,
+	).stdout.split()
+	untracked = subprocess.run(
+		["git", "ls-files", "--others", "--exclude-standard"],
+		cwd=str(repo_dir), env=git_env, check=True, capture_output=True, text=True,
+	).stdout
+	return proc, committed, untracked
+
+
+def test_commit_helper_self_repo_stages_allowlisted_github_ai_file() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_github_ai_add_") as td:
+		proc, committed, untracked = _run_github_ai_add_fixture(Path(td), repository=_GITHUB_AI_SELF_REPO)
+		details = f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert proc.returncode == 0, details
+		assert "IMPLEMENT_SELF_REPO_GITHUB_AI_ADD path=.github/ai/x.json" in proc.stdout, details
+		assert "IMPLEMENT_SELF_REPO_GITHUB_AI_ADD path=.github/ai/y.json" not in proc.stdout, details
+		assert ".github/ai/x.json" in committed, details
+		assert "tests/new_test.py" in committed, details
+		assert ".github/ai/y.json" not in committed, details
+		assert ".github/ai/y.json" in untracked.splitlines(), details
+
+
+def test_commit_helper_self_repo_github_ai_add_skips_glob_and_missing_allowlist() -> None:
+	for issue_body in (
+		"files_touched:\n  - .github/ai/**\n  - tests/new_test.py\n",
+		"files_touched:\n  - .github/ai/\n  - tests/new_test.py\n",
+		"No files_touched list here.\n",
+	):
+		with tempfile.TemporaryDirectory(prefix="test_commit_github_ai_glob_") as td:
+			proc, committed, _untracked = _run_github_ai_add_fixture(
+				Path(td), repository=_GITHUB_AI_SELF_REPO, issue_body=issue_body,
+			)
+			details = f"body={issue_body!r}\nstdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+			assert proc.returncode == 0, details
+			assert "IMPLEMENT_SELF_REPO_GITHUB_AI_ADD path=" not in proc.stdout, details
+			assert not any(path.startswith(".github/ai/") for path in committed), details
+
+
+def test_commit_helper_self_repo_github_ai_add_flag_off() -> None:
+	for flag_value in ("false", "FALSE", "bogus"):
+		with tempfile.TemporaryDirectory(prefix="test_commit_github_ai_flag_") as td:
+			proc, committed, untracked = _run_github_ai_add_fixture(
+				Path(td),
+				repository=_GITHUB_AI_SELF_REPO,
+				extra_env={"IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED": flag_value},
+			)
+			details = f"flag={flag_value}\nstdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+			assert proc.returncode == 0, details
+			assert "IMPLEMENT_SELF_REPO_GITHUB_AI_ADD path=" not in proc.stdout, details
+			assert ".github/ai/x.json" not in committed, details
+			assert "tests/new_test.py" in committed, details
+			assert ".github/ai/x.json" in untracked.splitlines(), details
+			warning = "::warning::IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED="
+			if flag_value == "bogus":
+				assert warning in proc.stdout, details
+			else:
+				assert warning not in proc.stdout, details
+
+
+def test_commit_helper_consumer_repo_never_stages_github_ai_file() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_github_ai_consumer_") as td:
+		proc, committed, untracked = _run_github_ai_add_fixture(Path(td), repository="owner/repo")
+		details = f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert proc.returncode == 0, details
+		assert "IMPLEMENT_SELF_REPO_GITHUB_AI_ADD path=" not in proc.stdout, details
+		assert "self-repo .github/ai additions" not in proc.stdout, details
+		assert committed == ["tests/new_test.py"], details
+		assert ".github/ai/x.json" in untracked.splitlines(), details
+
+
+# ---------------------------------------------------------------------------
 # Self-repo staged-support restore (PR #4079 incident): implement.yml installs
 # SCRIPT_REF's helpers over tracked files before Codex runs; the commit helper
 # must not commit those staging-only modifications on a branch that diverged.
@@ -2400,7 +2547,9 @@ def test_stage_workflow_support_step_records_self_repo_staged_support_ledger() -
 	assert 'echo "STAGED_SUPPORT_LEDGER=${STAGED_SUPPORT_LEDGER}"' in stage_block
 	assert 'echo "STAGED_SUPPORT_BASE_DIR=${STAGED_SUPPORT_BASE_DIR}"' in stage_block
 	assert 'echo "IMPLEMENT_STAGED_SUPPORT_RUN_DIR=${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"' in stage_block
-	assert 'install -m 0755 "scripts/${_staged_support_runtime_script}" "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/${_staged_support_runtime_script}"' in stage_block
+	# P2b: the run dir copies from the bundle (or scripts/ under the kill switch).
+	assert 'install -m 0755 "${support_run_src}/${_staged_support_runtime_script}" "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/${_staged_support_runtime_script}"' in stage_block
+	assert 'support_run_src="scripts"' in stage_block
 	assert 'for _staged_support_path in "${_staged_support_installed_paths[@]}"; do' in stage_block
 	assert 'git diff --quiet HEAD -- "${_staged_support_path}"' in stage_block
 	assert "IMPLEMENT_STAGED_SUPPORT_LEDGER ref=${SCRIPT_REF} overwritten_tracked_files=" in stage_block
@@ -2865,9 +3014,9 @@ def test_guard_handler_fails_open_without_gh_helpers() -> None:
 def test_guard_handler_gh_retry_wiring_contract() -> None:
 	stage_block = _step_block_text("Stage workflow support files")
 	handler = _implement_guard_handler_text()
-	assert 'install -m 0644 scripts/gh_helpers.sh "${RUNTIME_DIR}/gh_helpers.sh"' in stage_block
-	assert stage_block.index('install -m 0755 scripts/implement_handle_guard_block.sh "${RUNTIME_DIR}/implement_handle_guard_block.sh"') < stage_block.index(
-		'install -m 0644 scripts/gh_helpers.sh "${RUNTIME_DIR}/gh_helpers.sh"'
+	assert 'install -m 0644 "${support_run_src}/gh_helpers.sh" "${RUNTIME_DIR}/gh_helpers.sh"' in stage_block
+	assert stage_block.index('install -m 0755 "${support_run_src}/implement_handle_guard_block.sh" "${RUNTIME_DIR}/implement_handle_guard_block.sh"') < stage_block.index(
+		'install -m 0644 "${support_run_src}/gh_helpers.sh" "${RUNTIME_DIR}/gh_helpers.sh"'
 	)
 	assert 'GUARD_BLOCK_GH_HELPERS_FILE="$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh"' in handler
 	assert 'source "${GUARD_BLOCK_GH_HELPERS_FILE}" && declare -F gh_retry' in handler
@@ -2887,7 +3036,7 @@ def test_guard_handler_runtime_wiring_and_expression_size_contract() -> None:
 	assert "/tmp/scope_comment.md" not in _implement_guard_handler_text()
 	assert "/tmp/destructive_comment.md" not in _implement_guard_handler_text()
 	assert "implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh" in stage_block
-	assert 'install -m 0755 scripts/implement_handle_guard_block.sh "${RUNTIME_DIR}/implement_handle_guard_block.sh"' in stage_block
+	assert 'install -m 0755 "${support_run_src}/implement_handle_guard_block.sh" "${RUNTIME_DIR}/implement_handle_guard_block.sh"' in stage_block
 	assert workflow.find("- name: Stage workflow support files") < workflow.find("- name: Commit changes") < workflow.find("- name: Destructive-commit guard — label + alert on rejection")
 	assert _extract_run_script("Destructive-commit guard — label + alert on rejection") == (
 		'set -euo pipefail\nbash "${RUNTIME_DIR}/implement_handle_guard_block.sh"\n'
@@ -5865,6 +6014,11 @@ def test_alt_model_override_falls_back_on_malformed_body() -> None:
 
 
 def test_review_pipeline_integration_chain_module_runs_clean() -> None:
+	# The chain runs scripts/review_issue_ledger.sh and
+	# scripts/review_parse_consolidator.sh, which need gawk. Skip explicitly
+	# instead of passing on a module whose own tests all skipped.
+	if shutil.which("gawk") is None:
+		raise unittest.SkipTest("gawk is required by the review ledger/parser scripts")
 	integration_test = REPO_ROOT / "tests" / "test_review_pipeline_integration.py"
 	env = os.environ.copy()
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -6282,6 +6436,7 @@ def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0
 	failed = 0
+	skipped = 0
 	for func in test_funcs:
 		name = func.__name__
 		try:
@@ -6292,10 +6447,13 @@ def main() -> int:
 				func()
 			print(f"  PASS  {name}")
 			passed += 1
+		except unittest.SkipTest as e:
+			print(f"  SKIP  {name}: {e}")
+			skipped += 1
 		except Exception as e:
 			print(f"  FAIL  {name}: {e}")
 			failed += 1
-	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	print(f"\n{passed} passed, {failed} failed, {skipped} skipped, {passed + failed + skipped} total")
 	return 1 if failed > 0 else 0
 
 if __name__ == "__main__":

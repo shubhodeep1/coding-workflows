@@ -477,6 +477,7 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
     local _cap="${2:-100000}"
     local _mode="${3:-head}"
     local _state _used _budget_remaining _effective_cap _size _emit_bytes
+    local _trim_count_file _shown_bytes _trim_py_ok
     if [ -z "${_p}" ] || [ ! -e "${_p}" ]; then printf '(missing)\n'; return 0; fi
     if [ ! -s "${_p}" ]; then printf '(empty)\n'; return 0; fi
 
@@ -508,23 +509,58 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
       cat "${_p}"
       _emit_bytes="${_size}"
     else
-      PYTHONDONTWRITEBYTECODE=1 python3 - "${_p}" "${_effective_cap}" 2>/dev/null <<'PY' || head -c "${_effective_cap}" "${_p}"
+      # Cut at a UTF-8 character boundary (#9261/#9949). python writes the
+      # number of bytes it emitted to a run-local temp file, so the marker and
+      # the prompt budget count the bytes actually shown. Fail open: when
+      # python3 fails, or mktemp cannot create the count file, keep the plain
+      # byte cut and count the cap; when python succeeds but reports no valid
+      # count, count the cap (its bytes are already out, so never re-emit them).
+      _trim_count_file="$(mktemp "${TMPDIR:-/tmp}/_embed_trim_count.XXXXXX" 2>/dev/null || true)"
+      _shown_bytes=""
+      _trim_py_ok=false
+      if [ -n "${_trim_count_file}" ] && PYTHONDONTWRITEBYTECODE=1 python3 - "${_p}" "${_effective_cap}" "${_trim_count_file}" 2>/dev/null <<'PY'
 import sys
 
 cap = int(sys.argv[2])
+count_path = sys.argv[3] if len(sys.argv) > 3 else ""
 read_cap = cap + 1 if cap > 0 else 0
 with open(sys.argv[1], 'rb') as fh:
     data = fh.read(read_cap)
 if cap > 0 and len(data) > cap:
     i = cap
-    while i > 0 and (data[i] & 0xC0) == 0x80:
+    steps = 0
+    # Step back over continuation bytes (0x80..0xBF), at most 3, the same
+    # bound as _embed_utf8_safe_cut in gh_helpers.sh. A longer run is
+    # malformed input: keep the byte cut so the prefix is never emptied.
+    while i > 0 and steps < 3 and (data[i] & 0xC0) == 0x80:
         i -= 1
+        steps += 1
+    if (data[i] & 0xC0) == 0x80:
+        i = cap
     data = data[:i]
+if count_path:
+    with open(count_path, 'w', encoding='ascii') as count_fh:
+        count_fh.write(f"{len(data)}\n")
 sys.stdout.buffer.write(data)
+sys.stdout.buffer.flush()
 PY
+      then
+        _trim_py_ok=true
+        if [ -n "${_trim_count_file}" ]; then
+          _shown_bytes="$(tr -d '[:space:]' < "${_trim_count_file}" 2>/dev/null || true)"
+        fi
+      else
+        head -c "${_effective_cap}" "${_p}"
+      fi
+      if [ -n "${_trim_count_file}" ]; then
+        rm -f "${_trim_count_file}" 2>/dev/null || true
+      fi
+      if [ "${_trim_py_ok}" != "true" ] || ! [[ "${_shown_bytes}" =~ ^[0-9]+$ ]] || [ "${_shown_bytes}" -gt "${_effective_cap}" ]; then
+        _shown_bytes="${_effective_cap}"
+      fi
       printf '\n[... TRUNCATED — file is %s bytes; first %s bytes shown above (mode=%s, per-file cap=%s, budget remaining was %s; fallback embedder) ...]\n' \
-        "${_size}" "${_effective_cap}" "${_mode}" "${_cap}" "${_budget_remaining}"
-      _emit_bytes="${_effective_cap}"
+        "${_size}" "${_shown_bytes}" "${_mode}" "${_cap}" "${_budget_remaining}"
+      _emit_bytes="${_shown_bytes}"
     fi
 
     if [[ "${_emit_bytes:-}" =~ ^[0-9]+$ ]] && [ "${_emit_bytes}" -gt 0 ]; then
@@ -2240,7 +2276,7 @@ esac
 # unverified head under the verify job's auto-merge enrollment, and
 # `close_and_reissue` would make the updater skip the release as closed_by_human.
 if [ "${PR_ALREADY_MERGED:-false}" != "true" ] \
-  && [[ "${POST_REVIEW_HEAD_REF:-}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then
+  && [[ "${POST_REVIEW_HEAD_REF:-}" =~ ^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$ ]]; then
   echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${RB_JUDGED_HEAD_SHA:-unknown} action=skip reason=updater_pr_verify_job_owns_merge judge_action=${RB_ACTION}"
   echo "judge_handled=true" >> "$GITHUB_OUTPUT"
   echo "judge_action=updater_verify_hold" >> "$GITHUB_OUTPUT"
@@ -2579,11 +2615,14 @@ case "${RB_ACTION}" in
           if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
             echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, merge deferred to the synchronize run."
             RB_MERGE_STATUS="deferred_base_moved"
+          elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+            echo "Review-blocked judge: PR #${PR_NUMBER} waits for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; merge deferred, re-dispatched when the lease is granted."
+            RB_MERGE_STATUS="mergeability_pending"
           else
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
           fi
-        elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+        elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" FINAL_CI_MERGE_RESUME_ENABLED=false _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           echo "::warning::Review-blocked judge: required check-runs on ${RB_JUDGED_HEAD_SHA:0:7} are ${PR_CHECKS_WAIT_OUTCOME:-unknown}; not enabling auto-merge and withholding ai:ready-to-merge."
           RB_MERGE_STATUS="checks_not_ready"
           [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "failed" ] && RB_MERGE_STATUS="checks_failed"
@@ -2594,6 +2633,9 @@ case "${RB_ACTION}" in
           if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
             echo "::warning::Review-blocked judge: base moved under files PR #${PR_NUMBER} touches during the checks wait; branch update requested, merge deferred."
             RB_MERGE_STATUS="deferred_base_moved"
+          elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+            echo "Review-blocked judge: PR #${PR_NUMBER} waits for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; merge deferred, re-dispatched when the lease is granted."
+            RB_MERGE_STATUS="mergeability_pending"
           else
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
@@ -2672,11 +2714,14 @@ case "${RB_ACTION}" in
           if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
             echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, terminal merge deferred to the synchronize run."
             RB_MERGE_STATUS="deferred_base_moved"
+          elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+            echo "Review-blocked judge: PR #${PR_NUMBER} waits for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; merge deferred, re-dispatched when the lease is granted."
+            RB_MERGE_STATUS="mergeability_pending"
           else
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
           fi
-        elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+        elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" FINAL_CI_MERGE_RESUME_ENABLED=false _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           echo "::warning::Review-blocked judge: required check-runs on ${RB_JUDGED_HEAD_SHA:0:7} are ${PR_CHECKS_WAIT_OUTCOME:-unknown}; not enabling the terminal auto-merge and withholding ai:ready-to-merge."
           RB_MERGE_STATUS="checks_not_ready"
           [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "failed" ] && RB_MERGE_STATUS="checks_failed"
@@ -2687,6 +2732,9 @@ case "${RB_ACTION}" in
           if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
             echo "::warning::Review-blocked judge: base moved under files PR #${PR_NUMBER} touches during the checks wait; branch update requested, merge deferred."
             RB_MERGE_STATUS="deferred_base_moved"
+          elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+            echo "Review-blocked judge: PR #${PR_NUMBER} waits for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; merge deferred, re-dispatched when the lease is granted."
+            RB_MERGE_STATUS="mergeability_pending"
           else
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
