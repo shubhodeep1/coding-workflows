@@ -116,14 +116,17 @@ _review_github_ai_grant_prepare()
 	# identity implement uses) resolves the login and review_autofix.yml passes
 	# it in as REVIEW_GITHUB_AI_GRANT_PIPELINE_LOGIN (default empty). The
 	# `gh api user` lookup below is only the fallback for a caller that does
-	# not pass it (an older workflow YAML), so no second call is made.
+	# not set the variable at all (an older workflow YAML), so no second call
+	# is made. Set but empty means the metadata step resolved no login.
 	pipeline_login="${REVIEW_GITHUB_AI_GRANT_PIPELINE_LOGIN:-}"
-	if [ -z "${pipeline_login}" ]; then
+	if [ -z "${REVIEW_GITHUB_AI_GRANT_PIPELINE_LOGIN+x}" ]; then
 		pipeline_login="$(timeout 30 gh api user --jq .login 2>/dev/null || true)"
 	fi
 	if ! [[ "${pipeline_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
 		# Name a missing credential apart from a failed lookup.
-		if [ -z "${REVIEW_GITHUB_AI_GRANT_PIPELINE_LOGIN:-}${GH_TOKEN:-}${GITHUB_TOKEN:-}" ]; then
+		if [ -n "${REVIEW_GITHUB_AI_GRANT_PIPELINE_LOGIN+x}" ]; then
+			_review_github_ai_grant_none identity_unavailable
+		elif [ -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}" ]; then
 			_review_github_ai_grant_none no_credentials
 		else
 			_review_github_ai_grant_none identity_unavailable
@@ -144,7 +147,18 @@ _review_github_ai_grant_prepare()
 		_review_github_ai_grant_none meta_error
 		return 0
 	fi
-	if ! python3 "${support}/files_touched_scope_guard.py" --emit-automation-grant "${grant_dir}/grant.json" \
+	# The origin-chain check of a pipeline-authored issue reads source issues
+	# with `gh api`, which this token-less step cannot do, so the "Collect PR
+	# metadata" step builds the same record with GH_PAT and review_autofix.yml
+	# passes it in as REVIEW_GITHUB_AI_GRANT_RECORD (a step output, default
+	# empty). It is used only when it names this linked issue and author;
+	# otherwise the guard runs here as before (fails closed on an origin).
+	if [ -n "${REVIEW_GITHUB_AI_GRANT_RECORD:-}" ] \
+		&& printf '%s' "${REVIEW_GITHUB_AI_GRANT_RECORD}" | jq -e --slurpfile meta "${grant_dir}/issue_meta.json" \
+			'type == "object" and .issue_number == $meta[0].number and .author_login == $meta[0].user.login' >/dev/null 2>&1 \
+		&& printf '%s\n' "${REVIEW_GITHUB_AI_GRANT_RECORD}" > "${grant_dir}/grant.json"; then
+		:
+	elif ! python3 "${support}/files_touched_scope_guard.py" --emit-automation-grant "${grant_dir}/grant.json" \
 		--issue-meta-file "${grant_dir}/issue_meta.json" --pipeline-login "${pipeline_login}" \
 		--origin-repo "${GITHUB_REPOSITORY:-}" >/dev/null 2>&1; then
 		rm -rf -- "${grant_dir}"

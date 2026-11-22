@@ -438,10 +438,22 @@ def test_prepare_helper_fails_open_without_api_call(tmp_path: Path) -> None:
 	assert "outcome=none reason=untrusted_author" in proc.stderr and "OUT=\n" in proc.stdout
 	proc, _ = _run_prepare_helper(tmp_path, _issue(f"files_touched:\n  - {GRANTED}\n"), login="", GH_TOKEN="stub")
 	assert "reason=identity_unavailable" in proc.stderr
-	# No precomputed login and no token: the reason names the missing credential.
-	proc, _ = _run_prepare_helper(tmp_path, _issue(f"files_touched:\n  - {GRANTED}\n"), login="", GH_TOKEN="",
+	# The workflow always sets the login variable; set but empty means the
+	# metadata step resolved none, so the token-less fallback is not called.
+	empty = tmp_path / "empty_login"
+	empty.mkdir()
+	proc, _ = _run_prepare_helper(empty, _issue(f"files_touched:\n  - {GRANTED}\n"), login="", GH_TOKEN="",
 		GITHUB_TOKEN="", REVIEW_GITHUB_AI_GRANT_PIPELINE_LOGIN="")
+	assert "reason=identity_unavailable" in proc.stderr and "OUT=\n" in proc.stdout
+	assert not (empty / "gh_calls.txt").exists()
+	# Unset (an older workflow YAML) and no token: the legacy fallback runs and
+	# the reason names the missing credential.
+	unset = tmp_path / "unset_login"
+	unset.mkdir()
+	proc, _ = _run_prepare_helper(unset, _issue(f"files_touched:\n  - {GRANTED}\n"), login="", GH_TOKEN="",
+		GITHUB_TOKEN="")
 	assert "reason=no_credentials" in proc.stderr and "OUT=\n" in proc.stdout
+	assert (unset / "gh_calls.txt").exists()
 	# An open pipeline grant (no list) grants no .github/ai path.
 	proc, _ = _run_prepare_helper(tmp_path, _issue("mentions .github/ai/x.json only", login="pipeline-bot",
 		association="NONE"))
@@ -456,6 +468,80 @@ def test_prepare_helper_uses_the_precomputed_login_without_gh(tmp_path: Path) ->
 	assert proc.returncode == 0, proc.stderr
 	assert "REVIEW_GITHUB_AI_GRANT phase=prepare outcome=granted reason=granted paths=1" in proc.stderr
 	assert not (tmp_path / "gh_calls.txt").exists()
+
+
+def _reissue(login: str = "pipeline-pat") -> dict:
+	"""A pipeline-authored re-issue: its body names a source issue (Q82)."""
+	return _issue(f"Re-issued from #5\n\nfiles_touched:\n  - {GRANTED}\n", login=login, association="NONE")
+
+
+def _reissue_record(issue_number: int = 42) -> dict:
+	source = {"number": 5, "body": "source", "user": {"login": "maintainer"}, "author_association": "OWNER"}
+	issue = _reissue()
+	meta = {"number": issue_number, "body": issue["body"], "user": {"login": issue["author_login"]},
+		"author_association": issue["author_association"]}
+	return guard.build_automation_grant(meta, "pipeline-pat", lambda number: source if number == 5 else None)
+
+
+def test_prepare_helper_uses_the_metadata_step_record_for_an_origin_chain(tmp_path: Path) -> None:
+	"""A re-issue's origin chain needs the GitHub API; the token-holding metadata step's record is used."""
+	record = _reissue_record()
+	assert record["trusted"] is True and record["paths"] == [GRANTED]
+	proc, _ = _run_prepare_helper(tmp_path, _reissue(), login="", GH_TOKEN="",
+		REVIEW_GITHUB_AI_GRANT_PIPELINE_LOGIN="pipeline-pat", REVIEW_GITHUB_AI_GRANT_RECORD=json.dumps(record))
+	assert proc.returncode == 0, proc.stderr
+	assert "REVIEW_GITHUB_AI_GRANT phase=prepare outcome=granted reason=granted paths=1" in proc.stderr
+	out = re.search(r"^OUT=(.*)$", proc.stdout, re.M).group(1)
+	assert json.loads(Path(out).read_text(encoding="utf-8")) == [GRANTED]
+	assert not (tmp_path / "gh_calls.txt").exists()
+
+
+def test_prepare_helper_ignores_a_record_for_another_issue(tmp_path: Path) -> None:
+	"""A record naming another issue is ignored; the local guard cannot read the origin and fails closed."""
+	proc, _ = _run_prepare_helper(tmp_path, _reissue(), login="", GH_TOKEN="",
+		REVIEW_GITHUB_AI_GRANT_PIPELINE_LOGIN="pipeline-pat",
+		REVIEW_GITHUB_AI_GRANT_RECORD=json.dumps(_reissue_record(issue_number=7)))
+	assert proc.returncode == 0, proc.stderr
+	assert "outcome=none reason=origin_unverified" in proc.stderr and "OUT=\n" in proc.stdout
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq required")
+def test_collect_metadata_publishes_the_grant_record_with_the_origin_chain(tmp_path: Path) -> None:
+	text = COLLECT_SCRIPT.read_text(encoding="utf-8")
+	start = text.index('case "${GITHUB_AI_PLAN_GRANT_WRITE_ENABLED-}" in\n')
+	block = text[start:text.index("\nesac\n", start) + len("\nesac\n")]
+	raw = tmp_path / "linked_issues_raw.json"
+	raw.write_text(json.dumps([_reissue()]), encoding="utf-8")
+	(tmp_path / "linked_issues_raw.json.status").write_text("ok\n", encoding="utf-8")
+	stub_dir = tmp_path / "bin"
+	stub_dir.mkdir()
+	source = {"number": 5, "body": "source", "user": {"login": "maintainer"}, "author_association": "OWNER"}
+	(tmp_path / "source.json").write_text(json.dumps(source), encoding="utf-8")
+	(stub_dir / "gh").write_text(
+		"#!/usr/bin/env bash\n"
+		f"echo \"$*\" >> '{tmp_path}/gh_calls.txt'\n"
+		"case \"$*\" in\n"
+		"  'api user --jq .login') echo pipeline-pat ;;\n"
+		f"  'api repos/acme/consumer/issues/5') cat '{tmp_path}/source.json' ;;\n"
+		"  *) exit 1 ;;\n"
+		"esac\n", encoding="utf-8")
+	(stub_dir / "gh").chmod(0o755)
+	output = tmp_path / "github_output"
+	output.write_text("", encoding="utf-8")
+	work = tmp_path / "work"
+	work.mkdir()
+	env = _clean_env(PATH=f"{stub_dir}:{os.environ['PATH']}", GITHUB_OUTPUT=str(output),
+		LINKED_ISSUES_RAW_FILE=str(raw), TMP_RUNTIME_DIR=str(work), SCRIPT_DIR=str(SCRIPTS), REPOSITORY="acme/consumer")
+	proc = subprocess.run(["bash", "-c", "set -euo pipefail\n" + block], env=env, capture_output=True, text=True)
+	assert proc.returncode == 0, proc.stderr
+	lines = output.read_text(encoding="utf-8").splitlines()
+	assert "github_ai_grant_pipeline_login=pipeline-pat" in lines
+	records = [line.split("=", 1)[1] for line in lines if line.startswith("github_ai_grant_record=")]
+	assert len(records) == 1
+	record = json.loads(records[0])
+	assert record["trusted"] is True and record["paths"] == [GRANTED] and record["origin_issues"] == [5]
+	workflow = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	assert "          REVIEW_GITHUB_AI_GRANT_RECORD: ${{ steps.collect_pr_metadata.outputs.github_ai_grant_record || '' }}\n" in workflow
 
 
 def test_review_login_is_resolved_with_the_metadata_token_and_passed_to_prepare() -> None:

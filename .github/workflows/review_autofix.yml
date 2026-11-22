@@ -3927,6 +3927,8 @@ jobs:
           # Issue #9920: the GH_PAT login for the plan-granted .github/ai/<file> grant,
           # resolved by the metadata step; this step gets no GitHub token.
           REVIEW_GITHUB_AI_GRANT_PIPELINE_LOGIN: ${{ steps.collect_pr_metadata.outputs.github_ai_grant_pipeline_login || '' }}
+          # The grant record (Q82 origin chain included) the metadata step built with GH_PAT.
+          REVIEW_GITHUB_AI_GRANT_RECORD: ${{ steps.collect_pr_metadata.outputs.github_ai_grant_record || '' }}
         run: |
           set -euo pipefail
           # A failed install is best-effort; a failed isolation boundary is not.

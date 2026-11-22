@@ -383,6 +383,34 @@ case "${GITHUB_AI_PLAN_GRANT_WRITE_ENABLED-}" in
 			_github_ai_grant_login="$(timeout 30 gh api user --jq .login 2>/dev/null || true)"
 			if [[ "${_github_ai_grant_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
 				printf 'github_ai_grant_pipeline_login=%s\n' "${_github_ai_grant_login}" >> "${GITHUB_OUTPUT}"
+				# The grant record itself, built here because the guard's Q82
+				# origin-chain check of a pipeline-authored issue (re-issues,
+				# fix-ups, follow-ups) reads its source issues with `gh api` and
+				# the prepare step has no token. Same trusted guard, same issue
+				# metadata shape and --origin-repo as _review_github_ai_grant_prepare;
+				# at most ORIGIN_MAX_ISSUES (8) source reads, only for a
+				# pipeline-authored issue that names a source, the same reads
+				# implement makes. Published compact (one line) as the step output
+				# `github_ai_grant_record`; prepare re-filters its paths. Fail-open:
+				# no output means prepare runs the guard itself (fails closed).
+				_github_ai_grant_meta="${TMP_RUNTIME_DIR}/github_ai_grant_issue_meta.json"
+				_github_ai_grant_record_file="${TMP_RUNTIME_DIR}/github_ai_grant_record.json"
+				_github_ai_grant_record=""
+				if [ -f "${SCRIPT_DIR}/files_touched_scope_guard.py" ] \
+					&& jq '.[0] | {number: .number, body: (.body // ""), user: {login: (.author_login // "")}, author_association: (.author_association // "")}' \
+						"${LINKED_ISSUES_RAW_FILE}" > "${_github_ai_grant_meta}" 2>/dev/null \
+					&& PYTHONDONTWRITEBYTECODE=1 timeout 300 python3 "${SCRIPT_DIR}/files_touched_scope_guard.py" \
+						--emit-automation-grant "${_github_ai_grant_record_file}" --issue-meta-file "${_github_ai_grant_meta}" \
+						--pipeline-login "${_github_ai_grant_login}" --origin-repo "${REPOSITORY}" >/dev/null 2>&1; then
+					_github_ai_grant_record="$(jq -c 'select(type == "object")' "${_github_ai_grant_record_file}" 2>/dev/null || true)"
+				fi
+				if [ -n "${_github_ai_grant_record}" ] && [[ "${_github_ai_grant_record}" != *$'\n'* ]]; then
+					printf 'github_ai_grant_record=%s\n' "${_github_ai_grant_record}" >> "${GITHUB_OUTPUT}"
+				else
+					echo "REVIEW_GITHUB_AI_GRANT phase=collect outcome=none reason=grant_error paths=0" >&2
+				fi
+			else
+				echo "REVIEW_GITHUB_AI_GRANT phase=collect outcome=none reason=identity_unavailable paths=0" >&2
 			fi
 		fi
 		;;
