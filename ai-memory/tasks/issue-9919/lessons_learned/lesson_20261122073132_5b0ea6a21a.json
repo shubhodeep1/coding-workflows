@@ -1,0 +1,23 @@
+{
+  "discovered_at": "2026-11-22T07:31:32Z",
+  "issue_number": 9919,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=.github/workflows/review_autofix.yml:527; cited_path=.github/workflows/review_autofix.yml; files_touched=.github/workflows/cancel_on_pr_close.yml, .github/workflows/orchestrate_poll.yml, README.md, agents.d/9919-forward-merge-final-ci-resume.md, agents.d/merge-lease-final-ci-resume.md, changelog.d/9919-forward-merge-final-ci-resume.md, scripts/promote_main_cycle.sh, scripts/review_merge_train.sh, tests/test_merge_lease.py, tests/test_promote_main_cycle.py.",
+  "phase": "review_autofix",
+  "pr_number": 9922,
+  "record_id": "lesson_20261122073132_5b0ea6a21a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/review_autofix.yml",
+    ".github/workflows/cancel_on_pr_close.yml",
+    ".github/workflows/orchestrate_poll.yml",
+    "README.md",
+    "agents.d/9919-forward-merge-final-ci-resume.md",
+    "agents.d/merge-lease-final-ci-resume.md",
+    "changelog.d/9919-forward-merge-final-ci-resume.md",
+    "scripts/promote_main_cycle.sh",
+    "scripts/review_merge_train.sh",
+    "tests/test_merge_lease.py",
+    "tests/test_promote_main_cycle.py"
+  ]
+}
