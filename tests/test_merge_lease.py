@@ -381,13 +381,15 @@ class ReleaseTick(unittest.TestCase):
 
 	def _resume(self, statuses: list[dict], checks_rc: int = 0, checks_outcome: str = "ok", fresh_rc: int = 0,
 			ci_state: str = "success", extra_labels: list[str] | None = None, env: dict[str, str] | None = None,
-			head_ref: str | None = None, head_repo: str | None = None) -> _Harness:
+			head_ref: str | None = None, head_repo: str | None = None, fail: list[str] | None = None) -> _Harness:
 		pulls = [_pull(7, head_ref=head_ref, sha=HEAD)]
 		if head_repo is not None:
 			pulls[0]["head"]["repo"]["full_name"] = head_repo
 		labels = {"7": ["ai:final-ci-merge-pending"] + (extra_labels or [])}
 		st = {"pulls": pulls, "labels": labels, "user": "pipeline-bot", "statuses": {HEAD: statuses},
 			"graphql": {"data": {"repository": {"pullRequest": {"closingIssuesReferences": {"nodes": [{"number": 70}]}}}}}}
+		if fail:
+			st["fail"] = fail
 		h = _Harness(st)
 		stubs = (f"_pr_wait_for_required_checks() {{ PR_CHECKS_WAIT_OUTCOME={checks_outcome}; PR_CHECKS_LAST_CI_STATE={ci_state}; echo \"WAIT_ARGS=$*\"; return {checks_rc}; }}\n"
 			f"_pr_base_fresh_for_merge() {{ PR_BASE_FRESHNESS_OUTCOME=lease_wait; return {fresh_rc}; }}\n")
@@ -425,6 +427,13 @@ class ReleaseTick(unittest.TestCase):
 		self.assertNotIn("--rebase", merged)
 		self.assertNotIn("ai:final-ci-merge-pending", h.state["labels"]["7"])
 		self.assertEqual(h.state["statuses"][HEAD][0]["state"], "success")
+
+	def test_forward_merge_refused_warning_names_the_method(self) -> None:
+		"""#9919: the auto_merge_refused warning ends with method=, as the log registry says."""
+		h = self._resume([self.MARK, self.GATE], head_ref=self.FORWARD_MERGE_HEAD, fail=["pr merge"])
+		self.assertIn("outcome=failed reason=auto_merge_refused method=merge", h.out)  # type: ignore[attr-defined]
+		self.assertIn("ai:final-ci-merge-pending", h.state["labels"]["7"])
+		self.assertEqual(h.state["statuses"][HEAD][0]["state"], "pending")
 
 	def test_forward_merge_head_dropped_when_fallback_auto_merge_off(self) -> None:
 		for value in ("false", "False", "0"):
