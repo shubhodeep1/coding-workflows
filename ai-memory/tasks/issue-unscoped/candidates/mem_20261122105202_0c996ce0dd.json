@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cThe release-download payload bounds match `ci_cancelled_rerun.py`, with no remaining drift.\u201d\n  expected_change_site: `scripts/check_failure_triage.sh`, `triage_release_download_rerun_gate`.\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The shell validation at lines 614 and 616 accepts integral-valued JSON floats for `total_count` and job `id` (`type == \"number\"` plus equality/floor checks). The Python counterpart at `scripts/ci_cancelled_rerun.py:363,368` requires `total_count` and `id` to be integers. Thus payloads containing values such as `1.0` or `5.0` pass the shell gate but are rejected by the Python implementation; the new fractional-ID test does not cover integral-valued floats. (Reviewer severity: NIT)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cThe release-download payload bounds match `ci_cancelled_rerun.py`, with no remaining drift.\u201d\n  Expected change site: `scripts/check_failure_triage.sh`, `triage_release_download_rerun_gate`.\n  Evidence of absence: The shell validation at lines 614 and 616 accepts integral-valued JSON floats for `total_count` and job `id` (`type == \"number\"` plus equality/floor checks). The Python counterpart at `scripts/ci_cancelled_rerun.py:363,368` requires `total_count` and `id` to be integers. Thus payloads containing values such as `1.0` or `5.0` pass the shell gate but are rejected by the Python implementation; the new fractional-ID test does not cover integral-valued floats.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5e54b9399b033aa346e686f27279e8b3743949ebf4bc2802dc72cb42eaba1e62",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9813,
+    "run_id": "45006900897",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45006900897",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122105202_0c996ce0dd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9813,
+    "run_id": "45006900897"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-22T10:52:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
