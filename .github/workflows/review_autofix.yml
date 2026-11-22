@@ -127,6 +127,9 @@ env:
   CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   # Attempt journal (issue #8428, P1): default off; see scripts/attempt_journal.py.
   PERSIST_JOURNAL_ENABLED: ${{ vars.PERSIST_JOURNAL_ENABLED || 'false' }}
+  # Plan-granted .github/ai/<file> writes (issue #9920, plan Phase 5 / R3): default on;
+  # repo variable GITHUB_AI_PLAN_GRANT_WRITE_ENABLED=false rolls back. Scripts default to true too.
+  GITHUB_AI_PLAN_GRANT_WRITE_ENABLED: ${{ vars.GITHUB_AI_PLAN_GRANT_WRITE_ENABLED || 'true' }}
   # Repair loop (issue #8427, P3): default off; see scripts/review_autofix_step_prepush_test_gate.sh.
   PERSIST_REPAIR_LOOP_ENABLED: ${{ vars.PERSIST_REPAIR_LOOP_ENABLED || 'false' }}
   # Repair loop (issue #8427, P3): repair turns cap, clamped to 1..5.

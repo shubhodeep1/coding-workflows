@@ -456,6 +456,64 @@ if [ "${is_self_repo}" = "true" ]; then
     fi
   fi
 fi
+# Plan-granted .github/ai/<file> additions, every repository (issue #9920,
+# pipeline human-wait elimination plan Phase 5 / R3). add_o_excludes keeps
+# ':!.github/ai', so a new file there was never staged even when the issue's
+# trusted files_touched list named it exactly. Stage each literal direct
+# child of .github/ai/ from the trusted automation-path grant that
+# files_touched_scope_guard.py --emit-automation-grant wrote before the
+# editor ran (an open, pipeline-authored grant has paths: [] and grants
+# nothing here). The deletion guards, the automation-path grant guard and the
+# files_touched guard below still check every staged path. With
+# ALLOW_WORKFLOW_EDITS off nothing is staged: the automation-path guard would
+# otherwise turn today's silent exclusion into a failed run. Switch:
+# GITHUB_AI_PLAN_GRANT_WRITE_ENABLED (unset/empty/true = on; false = off;
+# any other value = off with a warning). The self-repo block above is kept.
+github_ai_grant_flag_raw="${GITHUB_AI_PLAN_GRANT_WRITE_ENABLED-}"
+github_ai_grant_flag="${github_ai_grant_flag_raw,,}"
+github_ai_grant_enabled="false"
+case "${github_ai_grant_flag}" in
+  ''|true) github_ai_grant_enabled="true" ;;
+  false) ;;
+  *)
+    github_ai_grant_flag_safe="$(printf '%s' "${github_ai_grant_flag_raw}" | tr -cd '[:print:]' | sed 's/::/: :/g' | cut -c1-64 || true)"
+    echo "::warning::GITHUB_AI_PLAN_GRANT_WRITE_ENABLED='${github_ai_grant_flag_safe}' is not true/false; plan-granted .github/ai additions disabled."
+    ;;
+esac
+if [ "${github_ai_grant_enabled}" = "true" ]; then
+  github_ai_grant_file="${AUTOMATION_PATH_GRANT_FILE:-${RUNTIME_DIR:-/nonexistent}/automation_path_grant.json}"
+  if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ]; then
+    echo "IMPLEMENT_GITHUB_AI_GRANT outcome=skipped reason=workflow_edits_disabled"
+  elif [ ! -f "${github_ai_grant_file}" ] || [ -L "${github_ai_grant_file}" ]; then
+    echo "IMPLEMENT_GITHUB_AI_GRANT outcome=skipped reason=grant_unavailable"
+  else
+    github_ai_grant_paths="$(jq -r 'select(.trusted == true and ((.open // false) == false)) | .paths[]? | strings | select(test("[\\r\\n]") | not)' "${github_ai_grant_file}" 2>/dev/null || true)"
+    while IFS= read -r github_ai_grant_path; do
+      [ -n "${github_ai_grant_path}" ] || continue
+      case "${github_ai_grant_path}" in
+        .github/ai/*) ;;
+        *) continue ;;
+      esac
+      case "${github_ai_grant_path}" in
+        # Literal direct children only: no glob, traversal, trailing slash,
+        # backslash or control character, and exactly three segments.
+        *'*'*|*'?'*|*'['*|*..*|*/|*'\'*|*$'\r'*|.github/ai/*/*) continue ;;
+      esac
+      [ "${github_ai_grant_path}" != ".github/ai/" ] || continue
+      github_ai_grant_path_safe="$(printf '%s' "${github_ai_grant_path}" | tr -cd '[:print:]' | sed 's/::/: :/g' | cut -c1-200 || true)"
+      if [ -L "${github_ai_grant_path}" ]; then
+        echo "IMPLEMENT_GITHUB_AI_GRANT path=${github_ai_grant_path_safe} outcome=refused"
+      elif [ -f "${github_ai_grant_path}" ]; then
+        git add -- "${github_ai_grant_path}"
+        echo "IMPLEMENT_GITHUB_AI_GRANT path=${github_ai_grant_path_safe} outcome=staged"
+      elif [ -e "${github_ai_grant_path}" ]; then
+        echo "IMPLEMENT_GITHUB_AI_GRANT path=${github_ai_grant_path_safe} outcome=refused"
+      else
+        echo "IMPLEMENT_GITHUB_AI_GRANT path=${github_ai_grant_path_safe} outcome=absent"
+      fi
+    done <<< "${github_ai_grant_paths}"
+  fi
+fi
 if [ "${is_self_repo}" = "false" ] && [ -f scripts/.gitignore ]; then
   while IFS= read -r fetched_script; do
     case "${fetched_script}" in ''|'#'*|'.gitignore') continue ;; esac

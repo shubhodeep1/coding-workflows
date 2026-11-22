@@ -510,7 +510,9 @@ def _pass_harness(tmp_path: Path, tier: str, statuses: dict[str, str], panel: li
 def test_lite_floor_runs_one_seeded_live_reviewer(tmp_path: Path, statuses: dict[str, str]) -> None:
 	result = _pass_harness(tmp_path, "lite", statuses, PANEL)
 	floor = _seeded(1, ["minimax/minimax-m3", "z-ai/glm-5.3-flash", "google/gemini-3.1-flash-lite"])[0]
-	assert result["calls"][:2] == ["pool anthropic/claude-sonnet-5.5", f"chatgpt {SLOT}"]
+	# The pool and chatgpt slots start as parallel background jobs, so their
+	# order in the calls file is not deterministic; the floor runs after both.
+	assert sorted(result["calls"][:2]) == sorted(["pool anthropic/claude-sonnet-5.5", f"chatgpt {SLOT}"])
 	assert result["calls"][2:] == [f"openrouter {floor}"]
 	assert f"REVIEWER_CHATGPT: lite_floor model={floor} reason=account_slots_unsuccessful" in result["stderr"]
 	assert result["successful"] == "1"

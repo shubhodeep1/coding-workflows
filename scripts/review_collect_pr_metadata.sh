@@ -23,7 +23,7 @@
 #   PR_DIFF_SOURCE, PR_DIFF_ATTEMPTED_PATHS, and BASE_BRANCH to GITHUB_ENV.
 #   LINKED_ISSUES_RAW_FILE (optional; default linked_issues_raw.json next to
 #   PR_PAYLOAD_FILE, i.e. in RUNTIME_DIR) receives the linked issues as
-#   [{number,title,body,labels:[name]}] and ${LINKED_ISSUES_RAW_FILE}.status
+#   [{number,title,body,labels:[name],author_login,author_association}] and ${LINKED_ISSUES_RAW_FILE}.status
 #   receives `ok` or `failed`; review_conflict_prepare.sh reads them to find
 #   the PR's files_touched scope for host-only conflicts (issue #6748). The
 #   path is published to GITHUB_ENV.
@@ -101,12 +101,16 @@ _fetch_linked_issue_bodies_graphql()
             number
             title
             body
+            author { login }
+            authorAssociation
             labels(first: 50) { nodes { name } }
           }
           ... on PullRequest {
             number
             title
             body
+            author { login }
+            authorAssociation
             labels(first: 50) { nodes { name } }
           }
         }"
@@ -155,6 +159,8 @@ _fetch_linked_issue_bodies_graphql()
 				number: (.number // 0),
 				title: (.title // ""),
 				body: (.body // ""),
+				author: (.author // null),
+				authorAssociation: (.authorAssociation // ""),
 				labels: [(.labels.nodes // [])[] | .name? // empty | strings]
 			}
 		)
@@ -274,7 +280,7 @@ if [ -n "${PR_NUMBER:-}" ]; then
 		-f owner="${REPOSITORY_OWNER}" \
 		-f name="${REPOSITORY_NAME}" \
 		-F number="${PR_NUMBER}" \
-		-f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body labels(first:50){nodes{name}}}}}}}' \
+		-f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body author{login} authorAssociation labels(first:50){nodes{name}}}}}}}' \
 		--jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []'; then
 		_linked_fetch_ok="true"
 		_linked_raw="$(cat "${_linked_tmp}" 2>/dev/null || echo '[]')"
@@ -348,7 +354,9 @@ if printf '%s' "${_linked_context_raw}" | jq -c '[.[]? | select(type == "object"
 		title: (.title // ""),
 		body: (.body // ""),
 		labels: (if (.labels | type) == "array" then [.labels[] | strings]
-			else [(.labels.nodes // [])[] | .name? // empty | strings] end)
+			else [(.labels.nodes // [])[] | .name? // empty | strings] end),
+		author_login: (if (.author | type) == "object" and (.author.login | type) == "string" then .author.login else "" end),
+		author_association: (if (.authorAssociation | type) == "string" then .authorAssociation else "" end)
 	}]' > "${LINKED_ISSUES_RAW_FILE}" 2>/dev/null; then
 	printf '%s\n' "${_linked_raw_status}" > "${LINKED_ISSUES_RAW_FILE}.status" 2>/dev/null || true
 else

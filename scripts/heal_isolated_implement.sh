@@ -83,6 +83,20 @@ mkdir -m 0755 "${root}/source"
 host_git_dir="${GIT_DIR:-}"
 snapshot_args=()
 [ -z "${host_git_dir}" ] || snapshot_args+=("${host_git_dir}")
+# Issue #9920 (plan Phase 5 / R3): freeze the trusted plan grant's literal
+# .github/ai/<file> paths into the snapshot. review_untrusted_workspace.py
+# writes them to a manifest sidecar that the gate/repro manifest copies below
+# carry, so no transfer needs the flag. Switch
+# GITHUB_AI_PLAN_GRANT_WRITE_ENABLED (default true; the helper re-validates the
+# value and every entry). Any failure here means no grant, as before.
+heal_github_ai_grant_switch="${GITHUB_AI_PLAN_GRANT_WRITE_ENABLED:-true}"
+heal_github_ai_grant_file="${AUTOMATION_PATH_GRANT_FILE:-${RUNTIME_DIR:-/nonexistent}/automation_path_grant.json}"
+if [ "${heal_github_ai_grant_switch,,}" = true ] && [ -f "${heal_github_ai_grant_file}" ] && [ ! -L "${heal_github_ai_grant_file}" ]; then
+	if jq -c '[select(.trusted == true and ((.open // false) == false)) | .paths[]? | strings | select(startswith(".github/ai/"))]' \
+		"${heal_github_ai_grant_file}" > "${root}/github_ai_grants.json" 2>/dev/null; then
+		snapshot_args+=(--granted-paths-file "${root}/github_ai_grants.json")
+	fi
+fi
 PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${WORKSPACE_PATH:-${PWD}}" "${root}/source" "${root}/manifest.json" "${snapshot_args[@]}"
 # Pull the prebuilt sandbox image, or build it locally (scripts/sandbox_image.sh).
 heal_sandbox_context="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/clarify_sandbox"
