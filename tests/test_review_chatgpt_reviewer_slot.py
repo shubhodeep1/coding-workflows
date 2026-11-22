@@ -520,7 +520,9 @@ def test_lite_floor_runs_one_seeded_live_reviewer(tmp_path: Path, statuses: dict
 
 def test_no_floor_when_an_account_slot_succeeded(tmp_path: Path) -> None:
 	result = _pass_harness(tmp_path, "lite", {"anthropic/claude-sonnet-5.5": "skipped_pool", SLOT: "success"}, PANEL)
-	assert [call.split()[0] for call in result["calls"]] == ["pool", "chatgpt"]
+	# The pool and chatgpt slots start as parallel background jobs, so their
+	# order in the calls file is not deterministic; no openrouter floor runs.
+	assert sorted(call.split()[0] for call in result["calls"]) == ["chatgpt", "pool"]
 	assert "lite_floor" not in result["stderr"]
 
 
