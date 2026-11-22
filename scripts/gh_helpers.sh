@@ -2143,13 +2143,24 @@ gh_api_retry()
 # Usage:
 #   gh_retry gh api repos/owner/repo/issues
 #   gh_retry gh issue edit 42 --add-label bug
+#
+# Optional call hook (issue #9927): when GH_RETRY_AFTER_CALL_HOOK names a
+# defined shell function, gh_retry runs it once per call with the command's
+# argv, before the first attempt, with its output discarded and its status
+# ignored. It cannot change gh_retry's result. Default: empty (no hook).
+# GH_RETRY_AFTER_CALL_HOOK_SUPPORTED=1 tells callers this copy runs the hook.
 # ---------------------------------------------------------------
+# shellcheck disable=SC2034  # read by scripts/orchestrate_poll_process.sh
+GH_RETRY_AFTER_CALL_HOOK_SUPPORTED=1
 gh_retry()
 {
 	# Q2=A (issue #6634): a POST create makes one attempt unless a leading
 	# --idempotent or GH_RETRY_IDEMPOTENT=true marks it safe to repeat.
 	local _ghr_idem="${GH_RETRY_IDEMPOTENT:-false}"
 	if [ "${1:-}" = "--idempotent" ]; then _ghr_idem=true; shift; fi
+	if [ -n "${GH_RETRY_AFTER_CALL_HOOK:-}" ] && declare -F "${GH_RETRY_AFTER_CALL_HOOK}" >/dev/null 2>&1; then
+		"${GH_RETRY_AFTER_CALL_HOOK}" "$@" >/dev/null 2>&1 || true
+	fi
 	local max_attempts="${GH_RETRY_MAX_ATTEMPTS:-5}"
 	if [ "${_ghr_idem}" != "true" ] && _gh_cmd_is_unsafe_post "$@"; then
 		max_attempts=1
