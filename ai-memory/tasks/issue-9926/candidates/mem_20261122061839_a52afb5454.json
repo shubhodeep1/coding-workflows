@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9926,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9926\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9933\",\"pr_number\":9933,\"branch\":\"ai/issue-9926\",\"run_id\":\"44987067712\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/44987067712\",\"changed_files\":[\".github/workflows/review_autofix.yml\",\"README.md\",\"agents.d/9926-required-checks-wait-backoff.md\",\"changelog.d/9926-required-checks-wait-backoff.md\",\"scripts/pr_checks_lib.sh\",\"tests/test_pr_base_freshness_gate.py\",\"tests/test_pr_checks_lib_wait_backoff.py\"]}",
+  "fingerprint": "cbe945334e915fd84ab2b84ec589d66716820b37c7ac3c57da2ec2f8e524095d",
+  "lineage": {
+    "issue_number": 9926,
+    "parent_ids": [],
+    "pr_number": 9933,
+    "run_id": "44987067712",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44987067712",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9933"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261122061839_a52afb5454",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9926,
+    "level": "run",
+    "pr_number": 9933,
+    "run_id": "44987067712"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9926: https://github.com/shubhodeep1/coding-workflows/pull/9933",
+  "timestamps": {
+    "created_at": "2026-11-22T06:18:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
