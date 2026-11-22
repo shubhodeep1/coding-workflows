@@ -5876,7 +5876,11 @@ jobs:
                 if [ "${JUDGE_SKIP_REASON}" = "security_hold_exhausted_without_completed_audit" ] && [[ "${AUTOFIX_FAILURE_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
                   RB_SECURITY_HOLD_MARKER="<!-- rb-judge-security-hold:v1 head=${AUTOFIX_FAILURE_HEAD_SHA} reason=exhausted_without_completed_audit -->"
                   RB_SECURITY_HOLD_REPEAT="unchecked"
-                  if type _tg_newest_comments_json >/dev/null 2>&1 && type _tg_tracking_author_login >/dev/null 2>&1; then
+                  # Telegram cannot page (no token/chat id, SILENT): no marker is
+                  # ever posted, so skip the reads that could never find one (§14).
+                  if type tg_alert_configured >/dev/null 2>&1 && ! tg_alert_configured "${JUDGE_ALERT_LEVEL}"; then
+                    echo "rb-judge-security-hold dedupe skipped for PR #${PR_NUMBER}: Telegram cannot send ${JUDGE_ALERT_LEVEL}"
+                  elif type _tg_newest_comments_json >/dev/null 2>&1 && type _tg_tracking_author_login >/dev/null 2>&1; then
                     _tg_tracking_author_login
                     rb_security_hold_login="${_TG_TRACKING_AUTHOR_CURRENT:-github-actions[bot]}"
                     if rb_security_hold_comments="$(_tg_newest_comments_json "${PR_NUMBER}")"; then

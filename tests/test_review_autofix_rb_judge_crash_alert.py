@@ -483,10 +483,14 @@ def _security_hold_marker(head: str) -> str:
 	return f"<!-- rb-judge-security-hold:v1 head={head} reason=exhausted_without_completed_audit -->"
 
 
-def _dedupe_prelude(comments: list[dict] | None) -> str:
+def _dedupe_prelude(comments: list[dict] | None, tg_alert_configured_rc: int = 0) -> str:
 	"""The real trust definitions from tg_helpers.sh, with the newest-page
-	read stubbed (None = the read fails) and the author login cached."""
-	prelude = f"source {str(TG_HELPERS)!r}\n_TG_TRACKING_AUTHOR_LOGIN=bot\n"
+	read stubbed (None = the read fails), the author login cached and
+	Telegram reported as able to send (tg_alert_configured_rc=1: it cannot)."""
+	prelude = (
+		f"source {str(TG_HELPERS)!r}\n_TG_TRACKING_AUTHOR_LOGIN=bot\n"
+		f"tg_alert_configured() {{ return {tg_alert_configured_rc}; }}\n"
+	)
 	if comments is None:
 		return prelude + "_tg_newest_comments_json() { return 1; }\n"
 	payload = json.dumps(comments).replace("'", "'\\''")
@@ -567,6 +571,66 @@ def test_security_hold_marker_post_bypasses_comment_signing():
 	step = _step(_workflow_text(), ALERT_STEP_NAME)
 	post = [line.strip() for line in step.splitlines() if "issues/${PR_NUMBER}/comments" in line and "RB_SECURITY_HOLD_BODY" in line]
 	assert len(post) == 1 and post[0].startswith('AI_COMMENT_SIGNING_SECRET="" gh api '), post
+
+
+def test_security_hold_dedupe_skips_reads_when_telegram_cannot_send():
+	# No marker is ever posted without a confirmed send, so the comment read
+	# is skipped (§14): a matching marker in the stub is never seen.
+	_require_jq()
+	gh_calls: list[str] = []
+	comments = [_trusted_comment("held\n\n" + _security_hold_marker(HEAD_A))]
+	env = dict(SECURITY_HOLD_ENV, TG_FAKE_MSG_ID="")
+	sends, stdout = _judge_alert(env, tg_prelude=_dedupe_prelude(comments, tg_alert_configured_rc=1), gh_calls=gh_calls)
+	assert len(sends) == 1 and sends[0][0] == "CRITICAL"
+	assert "dedupe skipped for PR #7: Telegram cannot send CRITICAL" in stdout
+	assert "repeat=unchecked level=CRITICAL" in stdout
+	assert _posted_security_markers(gh_calls) == []
+
+
+def test_security_hold_marker_post_reaches_real_gh_unsigned_through_active_shim():
+	# Behavioural guard for the line above: with the signing shim active
+	# (gh_helpers.sh, secret set), the workflow's marker POST with an emptied
+	# AI_COMMENT_SIGNING_SECRET must reach the real gh with the body intact,
+	# so the marker stays the last line the dedupe read matches.
+	_require_jq()
+	if shutil.which("python3") is None:
+		raise unittest.SkipTest("python3 not available in test environment")
+	step = _step(_workflow_text(), ALERT_STEP_NAME)
+	post = [line.strip() for line in step.splitlines() if "issues/${PR_NUMBER}/comments" in line and "RB_SECURITY_HOLD_BODY" in line]
+	assert len(post) == 1, post
+	post_line = post[0].rstrip("\\").strip()
+	with tempfile.TemporaryDirectory() as tmp:
+		bindir = Path(tmp) / "bin"
+		bindir.mkdir()
+		(bindir / "gh").write_text(GH_STUB, encoding="utf-8")
+		(bindir / "gh").chmod(0o755)
+		runner_temp = Path(tmp) / "runner"
+		runner_temp.mkdir()
+		gh_log = Path(tmp) / "gh.log"
+		script = (
+			f"source {str(REPO_ROOT / 'scripts' / 'gh_helpers.sh')!r}\n"
+			'case "$(command -v gh)" in */ai_comment_sig_shim.*/gh) ;; *) echo "shim inactive: $(command -v gh)"; exit 3 ;; esac\n'
+			f"RB_SECURITY_HOLD_BODY=$'held\\n\\n{_security_hold_marker(HEAD_A)}'\n"
+			f"{post_line}\n"
+		)
+		run_env = {
+			"PATH": f"{bindir}:/usr/bin:/bin",
+			"HOME": tmp,
+			"RUNNER_TEMP": str(runner_temp),
+			"GH_LOG": str(gh_log),
+			"GITHUB_REPOSITORY": "o/r",
+			"PR_NUMBER": "7",
+			"GH_TOKEN": "pat",
+			"AI_COMMENT_SIGNING_SECRET": "s" * 32,
+			"AI_COMMENT_JOB_TOKEN": "job",
+		}
+		result = subprocess.run(["bash", "-c", script], env=run_env, capture_output=True, text=True, check=False)
+		assert result.returncode == 0, (result.stdout, result.stderr)
+		calls = gh_log.read_text(encoding="utf-8").splitlines() if gh_log.exists() else []
+	posted = _posted_security_markers(calls)
+	assert len(posted) == 1, calls
+	assert posted[0].endswith(_security_hold_marker(HEAD_A)), posted
+	assert "ai-comment-sig:" not in posted[0], posted
 
 
 def test_other_security_hold_reasons_unchanged():
