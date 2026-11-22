@@ -1,0 +1,19 @@
+{
+  "discovered_at": "2026-11-22T17:03:46Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=changelog.d/9502-rb-judge-lease-wait-alert.md:9-17; cited_path=PR description body, \"Limit\" paragraph (PR metadata, not a repository file); files_touched=.github/workflows/review_autofix.yml, agents.d/9502-rb-judge-lease-wait-alert.md, changelog.d/9502-rb-judge-lease-wait-alert.md, scripts/review_autofix_step_post_review_blocked_comment.sh, scripts/review_rb_judge.sh, tests/test_review_autofix_rb_judge_crash_alert.py.",
+  "phase": "review_autofix",
+  "pr_number": 9944,
+  "record_id": "lesson_20261122170346_b76b8914fd",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "PR description body, \"Limit\" paragraph (PR metadata, not a repository file)",
+    "changelog.d/9502-rb-judge-lease-wait-alert.md",
+    ".github/workflows/review_autofix.yml",
+    "agents.d/9502-rb-judge-lease-wait-alert.md",
+    "scripts/review_autofix_step_post_review_blocked_comment.sh",
+    "scripts/review_rb_judge.sh",
+    "tests/test_review_autofix_rb_judge_crash_alert.py"
+  ]
+}
