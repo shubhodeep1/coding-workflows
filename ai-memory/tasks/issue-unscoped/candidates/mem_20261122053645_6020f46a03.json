@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The PR must use `Refs #3576`, not an auto-close keyword.\" (AI Issue Summary; #3576 is the long-lived security-audit tracker, CLAUDE.md \u00a721)\n  expected_change_site: PR description (GitHub metadata, not a repository file); change \"Closes https://github.com/shubhodeep1/coding-workflows/issues/3576\" to \"Refs #3576\" before merge\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: PR description reads \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/3576\", so merging would auto-close the tracker this PR protects; scripts/lint_pr_body_auto_close.py only checks issues labelled ai:orchestrator-tracking and will not catch it; repository files already comply (changelog.d/3576-security-audit-tracker-pipeline-exclude.md uses Refs #3576, the agents fragment has no closing keyword); earlier editor runs deferred it; severity BLOCKER\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"The PR must use `Refs #3576`, not an auto-close keyword.\" (CLAUDE.md \u00a721 forbids auto-close keywords against it)\n  Expected change site: The PR description (GitHub metadata, not a repository file); the PR body step has to edit it.\n  Evidence of absence: PR description reads \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/3576\". scripts/lint_pr_body_auto_close.py only checks issues labelled `ai:orchestrator-tracking`. Repository files already comply (changelog.d/3576-security-audit-tracker-pipeline-exclude.md uses `Refs #3576`; agents fragment has no closing keyword). Several earlier editor runs deferred this.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- All other checklist categories: NONE. Verified the hunk in `_security_audit_tracker_stall_guard` in `scripts/orchestrate_poll_process.sh` (around lines 27573-27582) and the test `test_failed_label_removal_still_skips` in `tests/test_security_audit_tracker_pipeline_exclude.py`; no regression. Deferred, not a gap: no workflow forwards the kill switch from a repository variable. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"The PR must use `Refs #3576`, not an auto-close keyword.\" (CLAUDE.md \u00a721 / System instructions \u00a721)\n  Expected change site: PR description (GitHub metadata)\n  Evidence of absence: The PR description contains \"Closes https://github.com/shubhodeep1/coding-workflows/issues/3576\". Merging the PR will auto-close the long-lived security-audit tracker (#3576), which this PR is designed to protect.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- All other checklist categories: NONE.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"The PR must use `Refs #3576`, not an auto-close keyword.\" (AI Issue Summary; also CLAUDE.md \u00a721 / unattended_system_instructions.md \u00a721)\n  Expected change site: PR description (GitHub metadata, not a repository file).\n  Evidence of absence: The PR description reads \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/3576\". On merge, GitHub will auto-close #3576. Repository files already comply: `changelog.d/3576-security-audit-tracker-pipeline-exclude.md` line 2 uses `Refs #3576`, and `agents.d/3576-security-audit-tracker-pipeline-exclude.md` carries no closing keyword. `scripts/lint_pr_body_auto_close.py` only checks issues labelled `ai:orchestrator-tracking`, not `ai:security-audit`. Deferred for five consecutive runs.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- All other checklist categories: NONE.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"The PR must use `Refs #3576`, not an auto-close keyword.\" The security-audit tracker is long-lived and should remain open.\n  Expected change site: PR description (GitHub metadata)\n  Evidence of absence: The provided PR description says \"Closes https://github.com/shubhodeep1/coding-workflows/issues/3576\". Merging the PR will close the tracker instead of using the requested non-closing reference.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- All other checklist categories: NONE.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: \"The PR must use `Refs #3576`, not an auto-close keyword.\" (AI Issue Summary, entry[0])\n  Expected change site: PR description (GitHub metadata, not a repository file); change \"Closes https://github.com/shubhodeep1/coding-workflows/issues/3576\" to \"Refs #3576\" before merge.\n  Evidence of absence: PR description still reads \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/3576\". Repository files are compliant: changelog.d/3576-security-audit-tracker-pipeline-exclude.md:2 uses `Refs #3576`. scripts/lint_pr_body_auto_close.py only checks issues labelled `ai:orchestrator-tracking`. Four consecutive editor runs deferred it.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- All other checklist categories: NONE. Verified hunk at scripts/orchestrate_poll_process.sh:27575-27579 and tests/test_security_audit_tracker_pipeline_exclude.py:80-81; no new defect. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6c4249ffae183969305546603801cfcc06beb82fc7cb29c4c0674ad9d1845fbe",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9913,
+    "run_id": "44985561873",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44985561873",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122053645_6020f46a03",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9913,
+    "run_id": "44985561873"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T05:36:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
