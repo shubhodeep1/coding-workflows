@@ -285,11 +285,15 @@ jobs:
             exit 1
           fi
           echo "source_repo=$(jq -r '.source_repo // ""' "${WORKFLOW_HEAL_PAYLOAD_FILE}" | tr -cd 'A-Za-z0-9_./-' | head -c 120)" >> "$GITHUB_OUTPUT"
-          # Cache key for the once-per-UTC-day unregistered-repo WARNING
+          # Cache key prefix for the once-per-UTC-day unregistered-repo WARNING
           # (scripts/workflow_failure_heal_intake.sh, unregistered_source_repo).
-          heal_unregistered_repo="$(jq -r '.source_repo // ""' "${WORKFLOW_HEAL_PAYLOAD_FILE}" 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr '/' '_' | tr -cd 'a-z0-9_.-' | head -c 120 || true)"
+          # The UTC day is appended after the queue wait (heal_unregistered_day),
+          # so a report that waits across midnight uses the day it warns on.
+          # The 200-char cap is above the longest GitHub owner/repo (39 + 1 + 100),
+          # so distinct repos never share a key, and well under the 512-char key limit.
+          heal_unregistered_repo="$(jq -r '.source_repo // ""' "${WORKFLOW_HEAL_PAYLOAD_FILE}" 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr '/' '_' | tr -cd 'a-z0-9_.-' | head -c 200 || true)"
           if [ -n "${heal_unregistered_repo}" ]; then
-            echo "heal_unregistered_cache_key=heal-unregistered-${heal_unregistered_repo}-$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+            echo "heal_unregistered_cache_key=heal-unregistered-${heal_unregistered_repo}" >> "$GITHUB_OUTPUT"
           fi
 
       # Waits for this report's turn instead of letting a newer run cancel it.
@@ -354,14 +358,19 @@ jobs:
       # sends DEBUG instead. A failed lookup leaves cache-hit empty and the
       # WARNING goes out (fail open). Runs inside the heal intake queue so the
       # previous report's save step has finished.
+      - name: Compute today's unregistered-repo warning day
+        id: heal_unregistered_day
+        if: steps.payload.outputs.heal_unregistered_cache_key != ''
+        run: echo "day=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+
       - name: Look up today's unregistered-repo warning marker
         id: heal_unregistered_seen
-        if: steps.payload.outputs.heal_unregistered_cache_key != ''
+        if: steps.payload.outputs.heal_unregistered_cache_key != '' && steps.heal_unregistered_day.outputs.day != ''
         continue-on-error: true
         uses: actions/cache/restore@v4
         with:
           path: /tmp/workflow-heal-unregistered-warned
-          key: ${{ steps.payload.outputs.heal_unregistered_cache_key }}
+          key: ${{ steps.payload.outputs.heal_unregistered_cache_key }}-${{ steps.heal_unregistered_day.outputs.day }}
           lookup-only: true
 
       - name: Run workflow failure heal intake
@@ -380,12 +389,12 @@ jobs:
           bash scripts/workflow_failure_heal_intake.sh
 
       - name: Save today's unregistered-repo warning marker
-        if: always() && steps.intake_run.outputs.heal_unregistered_warned == 'true' && steps.payload.outputs.heal_unregistered_cache_key != ''
+        if: always() && steps.intake_run.outputs.heal_unregistered_warned == 'true' && steps.payload.outputs.heal_unregistered_cache_key != '' && steps.heal_unregistered_day.outputs.day != ''
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
           path: /tmp/workflow-heal-unregistered-warned
-          key: ${{ steps.payload.outputs.heal_unregistered_cache_key }}
+          key: ${{ steps.payload.outputs.heal_unregistered_cache_key }}-${{ steps.heal_unregistered_day.outputs.day }}
 
       - name: Leave the heal intake queue
         if: always()

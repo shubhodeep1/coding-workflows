@@ -6877,18 +6877,23 @@ def test_intake_unregistered_warning_workflow_cache_wiring() -> None:
 	lookup = steps[names.index("Look up today's unregistered-repo warning marker")]
 	run = steps[names.index("Run workflow failure heal intake")]
 	save = steps[names.index("Save today's unregistered-repo warning marker")]
-	assert names.index("Wait for the heal intake queue") < names.index(lookup["name"]) < names.index(run["name"]) < names.index(save["name"]) < names.index("Leave the heal intake queue")
+	day = steps[names.index("Compute today's unregistered-repo warning day")]
+	assert names.index("Wait for the heal intake queue") < names.index(day["name"]) < names.index(lookup["name"]) < names.index(run["name"]) < names.index(save["name"]) < names.index("Leave the heal intake queue")
 	assert lookup["uses"] == "actions/cache/restore@v4" and save["uses"] == "actions/cache/save@v4"
 	assert lookup["continue-on-error"] is True and save["continue-on-error"] is True
 	assert lookup["with"]["lookup-only"] is True
 	assert lookup["with"]["path"] == save["with"]["path"] == "/tmp/workflow-heal-unregistered-warned"
 	assert run["env"]["WORKFLOW_HEAL_UNREGISTERED_MARKER"] == "/tmp/workflow-heal-unregistered-warned"
-	assert lookup["with"]["key"] == save["with"]["key"] == "${{ steps.payload.outputs.heal_unregistered_cache_key }}"
+	# The UTC day is taken after the queue wait, so a report that waits across
+	# midnight saves under the day it warned on.
+	assert day["id"] == "heal_unregistered_day" and "date -u +%Y%m%d" in day["run"]
+	assert lookup["with"]["key"] == save["with"]["key"] == "${{ steps.payload.outputs.heal_unregistered_cache_key }}-${{ steps.heal_unregistered_day.outputs.day }}"
 	assert run["id"] == "intake_run"
 	assert "steps.heal_unregistered_seen.outputs.cache-hit == 'true'" in run["env"]["WORKFLOW_HEAL_UNREGISTERED_WARNED_TODAY"]
 	assert "steps.intake_run.outputs.heal_unregistered_warned == 'true'" in save["if"]
 	payload_run = steps[names.index("Materialize the report payload")]["run"]
-	assert "heal_unregistered_cache_key=heal-unregistered-${heal_unregistered_repo}-$(date -u +%Y%m%d)" in payload_run
+	assert "heal_unregistered_cache_key=heal-unregistered-${heal_unregistered_repo}\" >>" in payload_run
+	assert "date -u" not in payload_run
 
 
 def _provenance_alert_filter() -> str:
