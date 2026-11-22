@@ -12760,6 +12760,24 @@ def test_review_blocked_merged_fix_target_rejects_unrelated_followup():
 			assert len(result["prs"]) == 1
 		except AssertionError as exc:
 			failures.append((reason, str(exc)))
+		if reason != "cross_repository":
+			continue
+		# Production default (cache on): the invalidated post-judge re-fetch
+		# still reads live and must block the push to the fork follow-up.
+		cached = _run_poller(
+			state=state, enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:review-blocked"]}, issue_linked_prs={10: 901},
+			pr_api_sequence={901: [dict(open_pr) for _ in range(4)] + [dict(merged_pr)]},
+			prs=[{**merged_pr, "files": ["sandbox_fix.txt"]}],
+			existing_branches=["main", "orchestrator/project-192"],
+			codex_json={"action": "fix", "justification": "apply fixes", "fix_description": "patched"},
+			codex_touch_file="sandbox_fix.txt", mock_git_push_success=True,
+		)
+		try:
+			_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=head_repo_mismatch", cached)
+			assert cached.get("git_push_calls", []) == [] and cached.get("review_blocked_fix_commit_calls", []) == []
+		except AssertionError as exc:
+			failures.append((reason + "/cache_on", str(exc)))
 	assert not failures, failures
 
 
