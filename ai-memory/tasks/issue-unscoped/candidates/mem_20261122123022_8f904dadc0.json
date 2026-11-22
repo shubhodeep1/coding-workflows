@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/9485-dependabot-managed-wrapper-exclusions.md:6 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: Line 6 of the changelog's \"Activation:\" paragraph says every run with `UPDATER_VERIFY_RELEASE_MANIFEST=false` logs `DEPENDABOT_EXCLUDE_SYNC outcome=skipped reason=helper_unattested`, but the `dependabot_sync` step that prints this line is gated by `if: ${{ inputs.allow_workflow_edits != false }}` (`.github/workflows/update_workflows.yml:859`), so a run with `allow_workflow_edits=false` skips the step and prints no such line.\n  WHY: Operators looking for the documented diagnostic on `allow_workflow_edits=false` runs will not find it and may conclude the helper is misconfigured or the step never ran; nothing breaks at runtime; all four reviewers rated it NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/9485-dependabot-managed-wrapper-exclusions.md:Line 6, the \"Activation:\" paragraph; .github/workflows/update_workflows.yml step `dependabot_sync`, `if: ${{ inputs.allow_workflow_edits != false }}` (around line 859) | severity=NIT | confidence=3\n  PROBLEM: The skip line is printed only when the step runs; with `allow_workflow_edits: false` the whole step is skipped and no `DEPENDABOT_EXCLUDE_SYNC` line appears, whether or not verification is turned off (\"changes nothing\" is still correct).\n  WHY: Nothing breaks at runtime, but an operator looking for the documented diagnostic line will not find it in runs with `allow_workflow_edits: false`; suggested fix: add \"(when the step runs, i.e. `allow_workflow_edits` is not false)\" to the sentence.\n- Implicit-execution note (NONE): adding `(\"file\", \"scripts/sync_dependabot_exclusions.py\", False)` to `SURFACE_RULES` (scripts/release_manifest.py line 104) turns on execution for consumers but stays gated: PATHS_FILE hash check (update_workflows.yml line 520), sha256 and symlink checks in the verify job (around lines 2456-2464), and `VERIFIED=true` in `verify_reproduce` (around line 2624).\n- Task completeness (NONE): the earlier MAJOR `SURFACE_RULES` gap is closed (scripts/release_manifest.py line 104, covered in tests/test_release_manifest.py); the `actions/checkout` bump is deferred in the PR body (AD-3), so it is not a gap.\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/9485-dependabot-managed-wrapper-exclusions.md:line 6, \"Activation:\" paragraph | severity=NIT | confidence=4\n  PROBLEM: The changelog claims every run with `UPDATER_VERIFY_RELEASE_MANIFEST=false` logs the `reason=helper_unattested` line, but the `dependabot_sync` step is also gated by `if: ${{ inputs.allow_workflow_edits != false }}` (`.github/workflows/update_workflows.yml:859`), so with `allow_workflow_edits=false` the step is skipped and no `DEPENDABOT_EXCLUDE_SYNC` line is emitted.\n  WHY: Operators will expect the diagnostic in every `UPDATER_VERIFY_RELEASE_MANIFEST=false` run, and a consumer with `allow_workflow_edits=false` will see no log line and may conclude the helper is misconfigured.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/9485-dependabot-managed-wrapper-exclusions.md:Line 6; `.github/workflows/update_workflows.yml`, lines 857-859 | severity=NIT | confidence=5\n  PROBLEM: The changelog says every run with `UPDATER_VERIFY_RELEASE_MANIFEST=false` logs `reason=helper_unattested`.\n  WHY: When `inputs.allow_workflow_edits` is false the Dependabot sync step is skipped and emits no such log, so the changelog promises a diagnostic that operators will not receive on those runs.\n- Task completeness (NONE): the `actions/checkout` pin bump is listed as deferred scope in the PR description.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/9485-dependabot-managed-wrapper-exclusions.md:Line 6 (Activation paragraph, rewritten in the last run) | severity=NIT | confidence=4\n  PROBLEM: The sentence about runs with `UPDATER_VERIFY_RELEASE_MANIFEST=false` logging `DEPENDABOT_EXCLUDE_SYNC outcome=skipped reason=helper_unattested` overstates when the line is emitted: the step is gated by `if: ${{ inputs.allow_workflow_edits != false }}` (.github/workflows/update_workflows.yml:859), so an `allow_workflow_edits=false` run skips `dependabot_sync` entirely; the attestation output is likewise written only on the `verified=true` path (update_workflows.yml:567).\n  WHY: An operator grepping for `reason=helper_unattested` on an `allow_workflow_edits=false` run will find no line and conclude the step never ran or the config was already correct, so the documented diagnostic does not match the workflow's behavior.\n- Task completeness (NONE): the Dependabot exclusion is delivered by `scripts/sync_dependabot_exclusions.py` plus the `dependabot_sync` step (update_workflows.yml:857-905); the action-version bump is deferred in the PR body (AD-3); the prior MAJOR activation gap is closed at `scripts/release_manifest.py:104` (docstring line 32-34), with test coverage in `tests/test_release_manifest.py`.\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ab544cb5b734519cbb2f3a55f28cf103488fee499d5bc27b06e15d0279996282",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9510,
+    "run_id": "45014572067",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45014572067",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122123022_8f904dadc0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9510,
+    "run_id": "45014572067"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T12:30:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
