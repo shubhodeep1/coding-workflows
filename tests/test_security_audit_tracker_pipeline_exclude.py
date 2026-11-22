@@ -87,6 +87,11 @@ def test_ordinary_issue_and_kill_switch_unaffected(tmp_path: Path) -> None:
 	result, calls = _guard(tmp_path / "off", ["ai:security-audit", "ai:blocked"],
 		{"SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED": "false"})
 	assert "GUARD=continue" in result.stdout and calls == []
+	# The guard parses the switch like is_truthy, without needing it defined.
+	for off_value in ("0", "no", "OFF", "FALSE"):
+		result, calls = _guard(tmp_path / f"off-{off_value}", ["ai:security-audit", "ai:blocked"],
+			{"SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED": off_value})
+		assert "GUARD=continue" in result.stdout and calls == [], off_value
 
 
 def _unrouted(tmp_path: Path, env_extra: dict[str, str] | None = None) -> list[int]:
@@ -104,6 +109,10 @@ def _unrouted(tmp_path: Path, env_extra: dict[str, str] | None = None) -> list[i
 def test_unrouted_blocked_filter_excludes_tracker(tmp_path: Path) -> None:
 	assert _unrouted(tmp_path) == [7]
 	assert _unrouted(tmp_path, {"SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED": "false"}) == [7, 3576]
+	# The sweep-only path exits before is_truthy exists; 0/no/off still turn it off.
+	for off_value in ("0", "no", "Off"):
+		assert _unrouted(tmp_path, {"SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED": off_value}) == [7, 3576], off_value
+	assert _unrouted(tmp_path, {"SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED": "TRUE"}) == [7]
 
 
 def test_poller_wires_the_guard_and_the_switch() -> None:
@@ -116,3 +125,7 @@ def test_poller_wires_the_guard_and_the_switch() -> None:
 	assert "export SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED" in POLLER_TEXT
 	scan = _function("run_unblock_scan")
 	assert '. == "ai:security-audit"' in scan
+	# A tracker carrying only ai:blocked is discovered through the existing
+	# label batch, so the guard can strip the label.
+	assert '_fetch_standalone_pipeline_label_issues_graphql "${_sat_discovery_labels}"' in stall
+	assert "_pls_fallback=\"$(jq -r '.[]' <<<\"${_sat_discovery_labels}\")\"" in stall

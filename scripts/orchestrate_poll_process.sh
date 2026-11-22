@@ -304,8 +304,12 @@ _fetch_blocked_issue_routing_graphql() {
 # restores the previous filter. Input: the `gh issue list --json number,labels`
 # array; output: a JSON array of issue numbers. No API calls.
 _unrouted_blocked_candidate_numbers() {
-  local exclude_tracker="true"
-  [ "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}" = "false" ] && exclude_tracker="false"
+  # The sweep-only path exits before is_truthy is defined, so the same
+  # 1|true|yes|on vocabulary is parsed inline here.
+  local exclude_tracker="false"
+  case "$(printf '%s' "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) exclude_tracker="true" ;;
+  esac
   printf '%s' "${1:-[]}" | jq -c --argjson exclude_tracker "${exclude_tracker}" '[.[]? | select(any(.labels[]?; .name == "ai:orchestrator-tracking" or .name == "ai:reclarify-requeue") | not)
     | select(($exclude_tracker and any(.labels[]?; .name == "ai:security-audit")) | not)
     | .number | select(type == "number" and . > 0)] | unique' 2>/dev/null
@@ -26950,7 +26954,7 @@ run_unblock_scan() {
       _scan_pr_dependency_held="$(printf '%s' "${_scan_pr_dependency_held}" | jq -c --argjson n "${_scan_pr_dependency_item}" '. + [$n]')"
     fi
   done < <(jq -r --slurpfile details "${work_dir}/details.json" --slurpfile failed "${work_dir}/failed_projects.json" \
-      --argjson exclude_tracker "$([ "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}" = "false" ] && echo false || echo true)" '
+      --argjson exclude_tracker "$(is_truthy "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}" && echo true || echo false)" '
       .[]? | select(((.pull_request // false) != true) and ((.number | type) == "number"))
       | .number as $n
       | select(any((.labels // [])[]?; . == "ai:orchestrator-tracking") | not)
@@ -27543,7 +27547,12 @@ else:
 _security_audit_tracker_stall_guard() {
   local issue_num="$1" labels_json="${2:-[]}" phase_labels="${3:-[]}"
   local removable removed outcome
-  [ "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}" = "false" ] && return 1
+  # Same 1|true|yes|on vocabulary as is_truthy, parsed inline so the guard
+  # does not depend on the normalisation block having run.
+  case "$(printf '%s' "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) ;;
+    *) return 1 ;;
+  esac
   [[ "${issue_num}" =~ ^[1-9][0-9]*$ ]] || return 1
   printf '%s' "${labels_json}" | jq -e \
     '[.[]? | if type == "object" then (.name // "") else . end] | index("ai:security-audit") != null' \
@@ -27624,19 +27633,28 @@ run_standalone_stall_recovery() {
   local pipeline_labels='["ai:clarification","ai:planning","ai:awaiting-approval","ai:implementing","ai:done","ai:ready-to-merge","ai:review-blocked"]'
   local labeled_issues='[]'
   local lbl
+  # Issue #3576: with the exclusion on, ai:security-audit joins the same
+  # label batch (one more alias, no extra API call) so a tracker that only
+  # carries ai:blocked still reaches _security_audit_tracker_stall_guard,
+  # which strips the label and skips it. pipeline_labels itself is unchanged.
+  local _sat_discovery_labels="${pipeline_labels}"
+  if is_truthy "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}"; then
+    _sat_discovery_labels="$(printf '%s' "${pipeline_labels}" | jq -c 'if index("ai:security-audit") then . else . + ["ai:security-audit"] end' 2>/dev/null)" || _sat_discovery_labels="${pipeline_labels}"
+    [ -n "${_sat_discovery_labels}" ] || _sat_discovery_labels="${pipeline_labels}"
+  fi
   # One aliased GraphQL request lists every pipeline label; the REST
   # listing below runs only for labels the batch could not cover.
   local _pls_resp
   local _pls_fallback
   local _pls_ok="true"
-  _pls_resp="$(_fetch_standalone_pipeline_label_issues_graphql "${pipeline_labels}")" || _pls_resp=""
+  _pls_resp="$(_fetch_standalone_pipeline_label_issues_graphql "${_sat_discovery_labels}")" || _pls_resp=""
   [ -n "${_pls_resp}" ] || _pls_ok="false"
   labeled_issues="$(printf '%s' "${_pls_resp}" | jq -c 'if (.issues | type) == "array" then .issues else [] end' 2>/dev/null || echo '[]')"
   [ -n "${labeled_issues}" ] || labeled_issues='[]'
   _pls_fallback="$(printf '%s' "${_pls_resp}" | jq -r 'if (.fallback_labels | type) == "array" then .fallback_labels[] else error("no fallback list") end' 2>/dev/null)" || _pls_ok="false"
   if [ "${_pls_ok}" != "true" ]; then
     labeled_issues='[]'
-    _pls_fallback="$(jq -r '.[]' <<<"${pipeline_labels}")"
+    _pls_fallback="$(jq -r '.[]' <<<"${_sat_discovery_labels}")"
   fi
   if [ -n "${_pls_fallback}" ]; then
     echo "::notice::Standalone stall recovery: label GraphQL batch fell back to REST for: $(printf '%s' "${_pls_fallback}" | tr '\n' ' ')"

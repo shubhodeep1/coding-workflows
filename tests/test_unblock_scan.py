@@ -179,7 +179,7 @@ def test_cli_accepts_the_raw_api_shapes(tmp_path: Path) -> None:
 	(tmp_path / "runs.json").write_text(json.dumps({"workflow_runs": []}), encoding="utf-8")
 	result = subprocess.run(
 		[sys.executable, str(SCRIPT), "select", "--search-file", str(tmp_path / "search.json"), "--details-file", str(tmp_path / "details.json"),
-		 "--runs-file", str(tmp_path / "runs.json"), "--trusted-login", BOT, "--now", "2026-10-04T12:00:00Z"],
+		"--runs-file", str(tmp_path / "runs.json"), "--trusted-login", BOT, "--now", "2026-10-04T12:00:00Z"],
 		capture_output=True, text=True, check=False,
 	)
 	assert result.returncode == 0, result.stdout
@@ -950,3 +950,10 @@ def test_security_audit_tracker_skip_honours_kill_switch(monkeypatch: pytest.Mon
 	result = _select([_item(3576, ["ai:blocked", "ai:security-audit"])], {"3576": _details("ai:blocked", 10)})
 	assert result["dispatch"] == [{"item": 3576, "kind": "issue"}]
 	assert "security_audit_tracker" not in result["skipped"]
+	for off_value in ("0", "no", "OFF"):
+		monkeypatch.setenv("SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED", off_value)
+		off = _select([_item(3576, ["ai:blocked", "ai:security-audit"])], {"3576": _details("ai:blocked", 10)})
+		assert off["dispatch"] == [{"item": 3576, "kind": "issue"}], off_value
+	monkeypatch.setenv("SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED", "")
+	on = _select([_item(3576, ["ai:blocked", "ai:security-audit"])], {"3576": _details("ai:blocked", 10)})
+	assert on["skipped"]["security_audit_tracker"] == 1

@@ -343,7 +343,8 @@ def select(
 			continue
 		seen.add(number)
 		labels = _label_names(item)
-		if (os.environ.get("SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED", "true").strip().lower() != "false"
+		# Same vocabulary as the poller's is_truthy; unset or empty means on.
+		if ((os.environ.get("SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED") or "true").strip().lower() in ("1", "true", "yes", "on")
 				and SECURITY_AUDIT_LABEL in labels and number not in failed):
 			skip("security_audit_tracker")
 			continue
