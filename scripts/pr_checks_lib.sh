@@ -1943,7 +1943,14 @@ _pr_base_fresh_for_merge()
 				echo "MERGE_BASE_FRESHNESS pr=${pr_number} head_sha=${PR_BASE_FRESHNESS_HEAD_SHA:-${head_sha:-unknown}} base=${base_ref:-unknown} outcome=${PR_BASE_FRESHNESS_OUTCOME} reason=${PR_BASE_FRESHNESS_LAST_REASON} behind_by=${PR_BASE_FRESHNESS_BEHIND_BY:--} action=lease_wait soft_overlap=${PR_BASE_FRESHNESS_SOFT_OVERLAP:--}"
 				PR_BASE_FRESHNESS_OUTCOME="lease_wait"
 				PR_BASE_FRESHNESS_LAST_REASON="merge_lease_${MERGE_LEASE_REASON:-held}"
-				echo "  [merge-lease] PR #${pr_number}: PR #${MERGE_LEASE_BLOCKER:-?} holds the merge lease and changes a file this PR changes; merging now would make its CI run stale. Waiting under ${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}."
+				# Phase 5: a PR that is itself a live holder waits unlabelled on an
+				# earlier holder (_merge_lease_gate_multi); the review sweep retries it.
+				if [ "${MERGE_LEASE_REASON:-}" = "holder_shares_paths" ] && declare -F _merge_lease_holder_row >/dev/null 2>&1 \
+					&& [ -n "$(_merge_lease_holder_row "${pr_number}")" ]; then
+					echo "  [merge-lease] PR #${pr_number}: this PR holds the merge lease but now changes a file that earlier holder PR #${MERGE_LEASE_BLOCKER:-?} changes; merging now would make its CI run stale. No wait label is added; the review sweep retries this PR."
+				else
+					echo "  [merge-lease] PR #${pr_number}: PR #${MERGE_LEASE_BLOCKER:-?} holds the merge lease and changes a file this PR changes; merging now would make its CI run stale. Waiting under ${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}."
+				fi
 				return 1
 			fi
 			echo "MERGE_BASE_FRESHNESS pr=${pr_number} head_sha=${PR_BASE_FRESHNESS_HEAD_SHA:-${head_sha:-unknown}} base=${base_ref:-unknown} outcome=${PR_BASE_FRESHNESS_OUTCOME} reason=${PR_BASE_FRESHNESS_LAST_REASON} behind_by=${PR_BASE_FRESHNESS_BEHIND_BY:--} action=proceed soft_overlap=${PR_BASE_FRESHNESS_SOFT_OVERLAP:--}"
@@ -3388,9 +3395,10 @@ _merge_lease_gate_multi()
 		# holder instead of widening it to `*`.
 		if ! gm_own_paths="$(_merge_lease_pr_paths "${gm_pr}" 2>/dev/null)"; then
 			gm_own_paths="$(_merge_lease_holder_paths "${gm_pr}")"
-			# No holder_path= line of its own with 2+ holders: the helper fell
-			# back to the union of every holder; record `*` (unknown) instead.
-			if [ "${gm_count}" -gt 1 ] && ! printf '%s\n' "${MERGE_LEASE_HOLDER_PATHS:-}" | grep -q "^${gm_pr}"$'\t'; then
+			# No holder_path= line of its own with 2+ holder rows (expired rows
+			# included): the helper fell back to the union of every holder;
+			# record `*` (unknown) instead.
+			if [ "$(printf '%s\n' "${MERGE_LEASE_HOLDER_ALL_ROWS:-}" | grep -c .)" -gt 1 ] && ! printf '%s\n' "${MERGE_LEASE_HOLDER_PATHS:-}" | grep -q "^${gm_pr}"$'\t'; then
 				gm_own_paths="*"
 			fi
 		fi
@@ -3515,6 +3523,9 @@ _merge_lease_gate_multi()
 # self|unavailable|disabled), 1 to wait (MERGE_LEASE_OUTCOME=wait,
 # MERGE_LEASE_REASON, MERGE_LEASE_BLOCKER = the PR waited on). A waiting PR is
 # labelled MERGE_LEASE_WAIT_LABEL; a PR that acquires the lease is unlabelled.
+# Phase 5 exception: a live holder whose files now share a path with an
+# earlier holder waits in merge mode (holder_shares_paths) without the label,
+# because the tick never grants a holder; the review sweep retries it.
 _merge_lease_gate()
 {
 	local lease_pr="$1" lease_base="$2" lease_head="$3" lease_mode="$4"
