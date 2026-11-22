@@ -317,20 +317,29 @@ def test_non_crash_runs_add_no_marker_and_no_read():
 # ---------------------------------------------------------------------------
 
 
-def _judge_alert(env: dict[str, str]) -> tuple[list[tuple[str, str]], str]:
+def _judge_alert(env: dict[str, str], tg_prelude: str = "", gh_calls: list[str] | None = None) -> tuple[list[tuple[str, str]], str]:
 	"""Run the "Telegram review-blocked judge decision" step body; return
-	the (level, message) sends and stdout."""
+	the (level, message) sends and stdout. tg_prelude runs before the
+	tg_send_tracked stub (e.g. the comment helpers); gh calls are appended
+	to gh_calls when given."""
 	step = _step(_workflow_text(), ALERT_STEP_NAME)
 	body = step[step.index("        run: |\n") + len("        run: |\n"):]
 	body = "\n".join(line[10:] for line in body.splitlines())
 	body = re.sub(r"\$\{\{[^}]*\}\}", "x", body)
 	with tempfile.TemporaryDirectory() as tmp:
 		log = Path(tmp) / "tg.log"
+		gh_log = Path(tmp) / "gh.log"
+		bindir = Path(tmp) / "bin"
+		bindir.mkdir()
+		(bindir / "gh").write_text(GH_STUB, encoding="utf-8")
+		(bindir / "gh").chmod(0o755)
 		(Path(tmp) / "tg_helpers.sh").write_text(
-			'tg_send_tracked() { printf \'%s\\t%s\\n\' "$3" "${2//$\'\\n\'/ }" >> "${TG_LOG}"; }\n', encoding="utf-8"
+			tg_prelude + 'tg_send_tracked() { printf \'%s\\t%s\\n\' "$3" "${2//$\'\\n\'/ }" >> "${TG_LOG}"; }\n', encoding="utf-8"
 		)
 		run_env = {
-			"PATH": "/usr/bin:/bin",
+			"PATH": f"{bindir}:/usr/bin:/bin",
+			"GH_LOG": str(gh_log),
+			"GITHUB_REPOSITORY": "o/r",
 			"SUPPORT_SCRIPTS_DIR": tmp,
 			"TG_LOG": str(log),
 			"PR_NUMBER": "7",
@@ -350,6 +359,8 @@ def _judge_alert(env: dict[str, str]) -> tuple[list[tuple[str, str]], str]:
 			for line in log.read_text(encoding="utf-8").splitlines():
 				level, message = line.split("\t", 1)
 				sends.append((level, message))
+		if gh_calls is not None and gh_log.exists():
+			gh_calls.extend(gh_log.read_text(encoding="utf-8").splitlines())
 		return sends, result.stdout
 
 
@@ -446,6 +457,105 @@ def test_crash_condition_parity():
 		alert_match = re.search(r"RB_JUDGE_CRASH_ALERT .* reason=(\S+) repeat=", stdout)
 		alert_reason = alert_match.group(1) if alert_match else None
 		assert comment_reason == alert_reason, (env, comment_reason, alert_reason)
+
+
+# ---------------------------------------------------------------------------
+# (e) Issue #9942: the unaudited exhausted-head security hold pages once per head
+# ---------------------------------------------------------------------------
+
+
+SECURITY_HOLD_ENV = {
+	"JUDGE_HANDLED": "true",
+	"JUDGE_ACTION": "security_hold",
+	"JUDGE_SKIP_REASON": "security_hold_exhausted_without_completed_audit",
+	"RB_JUDGE_STATUS": "ok",
+	"AUTOFIX_ITERATION": "5",
+}
+
+
+def _security_hold_marker(head: str) -> str:
+	return f"<!-- rb-judge-security-hold:v1 head={head} reason=exhausted_without_completed_audit -->"
+
+
+def _dedupe_prelude(comments: list[dict] | None) -> str:
+	"""The real trust definitions from tg_helpers.sh, with the newest-page
+	read stubbed (None = the read fails) and the author login cached."""
+	prelude = f"source {str(TG_HELPERS)!r}\n_TG_TRACKING_AUTHOR_LOGIN=bot\n"
+	if comments is None:
+		return prelude + "_tg_newest_comments_json() { return 1; }\n"
+	payload = json.dumps(comments).replace("'", "'\\''")
+	return prelude + f"_tg_newest_comments_json() {{ printf '%s' '{payload}'; }}\n"
+
+
+def _posted_security_markers(gh_calls: list[str]) -> list[str]:
+	return [call for call in gh_calls if "issues/7/comments" in call and "rb-judge-security-hold:v1" in call]
+
+
+def test_security_hold_exhausted_unaudited_alerts_once_per_head():
+	_require_jq()
+	gh_calls: list[str] = []
+	sends, stdout = _judge_alert(SECURITY_HOLD_ENV, tg_prelude=_dedupe_prelude([]), gh_calls=gh_calls)
+	assert len(sends) == 1 and sends[0][0] == "CRITICAL"
+	assert "(exhausted_without_completed_audit)" in sends[0][1]
+	assert f"RB_JUDGE_SECURITY_HOLD_ALERT pr=7 head={HEAD_A} reason=exhausted_without_completed_audit repeat=false level=CRITICAL" in stdout
+	posted = _posted_security_markers(gh_calls)
+	assert len(posted) == 1 and posted[0].endswith(_security_hold_marker(HEAD_A))
+	# A marker for another head does not silence this one.
+	gh_calls = []
+	sends, stdout = _judge_alert(
+		SECURITY_HOLD_ENV, tg_prelude=_dedupe_prelude([_trusted_comment("held\n\n" + _security_hold_marker(HEAD_B))]), gh_calls=gh_calls
+	)
+	assert len(sends) == 1 and sends[0][0] == "CRITICAL"
+	assert len(_posted_security_markers(gh_calls)) == 1
+
+
+def test_security_hold_exhausted_unaudited_repeat_is_debug():
+	_require_jq()
+	gh_calls: list[str] = []
+	comments = [_trusted_comment("held\n\n" + _security_hold_marker(HEAD_A) + "\n  ")]
+	sends, stdout = _judge_alert(SECURITY_HOLD_ENV, tg_prelude=_dedupe_prelude(comments), gh_calls=gh_calls)
+	assert len(sends) == 1 and sends[0][0] == "DEBUG"
+	assert "repeat=true level=DEBUG" in stdout
+	assert _posted_security_markers(gh_calls) == []
+
+
+def test_security_hold_dedupe_read_failure_pages():
+	_require_jq()
+	gh_calls: list[str] = []
+	sends, stdout = _judge_alert(SECURITY_HOLD_ENV, tg_prelude=_dedupe_prelude(None), gh_calls=gh_calls)
+	assert len(sends) == 1 and sends[0][0] == "CRITICAL"
+	assert "repeat=unchecked level=CRITICAL" in stdout
+	assert len(_posted_security_markers(gh_calls)) == 1
+	# Without the comment helpers (an older support bundle) it still pages.
+	sends, stdout = _judge_alert(SECURITY_HOLD_ENV)
+	assert len(sends) == 1 and sends[0][0] == "CRITICAL"
+	assert "repeat=unchecked level=CRITICAL" in stdout
+
+
+def test_security_hold_untrusted_or_quoted_marker_still_pages():
+	_require_jq()
+	for comment in (
+		_trusted_comment("held\n\n" + _security_hold_marker(HEAD_A), login="mallory"),
+		_trusted_comment("quoting " + _security_hold_marker(HEAD_A) + "\nand more"),
+		_trusted_comment("inline " + _security_hold_marker(HEAD_A)),
+	):
+		sends, stdout = _judge_alert(SECURITY_HOLD_ENV, tg_prelude=_dedupe_prelude([comment]))
+		assert len(sends) == 1 and sends[0][0] == "CRITICAL", comment
+		assert "repeat=false level=CRITICAL" in stdout, comment
+
+
+def test_other_security_hold_reasons_unchanged():
+	_require_jq()
+	for reason in ("cycles_exhausted", "dispatch_failed", "followups_missing"):
+		gh_calls: list[str] = []
+		env = dict(SECURITY_HOLD_ENV, JUDGE_SKIP_REASON=f"security_hold_{reason}")
+		sends, stdout = _judge_alert(env, tg_prelude=_dedupe_prelude([_trusted_comment("x\n" + _security_hold_marker(HEAD_A))]), gh_calls=gh_calls)
+		assert len(sends) == 1 and sends[0][0] == "CRITICAL", reason
+		assert "RB_JUDGE_SECURITY_HOLD_ALERT" not in stdout, reason
+		assert gh_calls == [], reason
+	for reason in ("audit_dispatched", "audit_pending", "audit_throttled", "awaiting_followups"):
+		sends, _ = _judge_alert(dict(SECURITY_HOLD_ENV, JUDGE_SKIP_REASON=f"security_hold_{reason}"))
+		assert sends == [], reason
 
 
 if __name__ == "__main__":
