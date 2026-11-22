@@ -115,7 +115,7 @@ _review_github_ai_grant_prepare()
 	# before sandbox prepare, and review_autofix_step_evaluate_gate.sh keeps its
 	# own `gh api user` lookup local, so this one call (only for a linked issue
 	# whose body names a .github/ai/ path) cannot reuse an earlier result.
-	pipeline_login="$(gh api user --jq .login 2>/dev/null || true)"
+	pipeline_login="$(timeout 30 gh api user --jq .login 2>/dev/null || true)"
 	if ! [[ "${pipeline_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
 		_review_github_ai_grant_none identity_unavailable
 		return 0
@@ -130,17 +130,20 @@ _review_github_ai_grant_prepare()
 	# association check (fail closed). A deleted author has an empty login.
 	if ! jq '.[0] | {number: .number, body: (.body // ""), user: {login: (.author_login // "")}, author_association: (.author_association // "")}' \
 		"${raw_file}" > "${grant_dir}/issue_meta.json" 2>/dev/null; then
+		rm -rf -- "${grant_dir}"
 		_review_github_ai_grant_none meta_error
 		return 0
 	fi
 	if ! python3 "${support}/files_touched_scope_guard.py" --emit-automation-grant "${grant_dir}/grant.json" \
 		--issue-meta-file "${grant_dir}/issue_meta.json" --pipeline-login "${pipeline_login}" \
 		--origin-repo "${GITHUB_REPOSITORY:-}" >/dev/null 2>&1; then
+		rm -rf -- "${grant_dir}"
 		_review_github_ai_grant_none guard_error
 		return 0
 	fi
-	if ! jq -c '[select(.trusted == true and ((.open // false) == false)) | .paths[]? | strings | select(startswith(".github/ai/"))]' \
+	if ! jq -c '[select(.trusted == true and ((.open // false) == false)) | .paths[]? | strings | select(test("^\\.github/ai/[^/]+$"))]' \
 		"${grant_dir}/grant.json" > "${grant_dir}/github_ai_grants.json" 2>/dev/null; then
+		rm -rf -- "${grant_dir}"
 		_review_github_ai_grant_none grant_error
 		return 0
 	fi
@@ -149,6 +152,7 @@ _review_github_ai_grant_prepare()
 	if [ "${grant_count}" -eq 0 ]; then
 		grant_reason="$(jq -r '.reason // "grant_error"' "${grant_dir}/grant.json" 2>/dev/null | tr -cd 'a-z_' | cut -c1-64 || true)"
 		[ "$(jq -r '.trusted' "${grant_dir}/grant.json" 2>/dev/null || true)" != true ] || grant_reason="no_github_ai_grant"
+		rm -rf -- "${grant_dir}"
 		_review_github_ai_grant_none "${grant_reason:-grant_error}"
 		return 0
 	fi

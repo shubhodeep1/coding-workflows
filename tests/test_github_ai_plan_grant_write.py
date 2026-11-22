@@ -414,12 +414,14 @@ def _issue(body: str, *, login: str = "maintainer", association: str = "OWNER") 
 
 
 def test_prepare_helper_grants_trusted_exact_paths(tmp_path: Path) -> None:
-	proc, github_env = _run_prepare_helper(tmp_path, _issue(f"files_touched:\n  - {GRANTED}\n  - scripts/a.sh\n"))
+	proc, github_env = _run_prepare_helper(tmp_path, _issue(f"files_touched:\n  - {GRANTED}\n  - scripts/a.sh\n  - .github/ai/sub/y.json\n"))
 	assert proc.returncode == 0, proc.stderr
 	assert "REVIEW_GITHUB_AI_GRANT phase=prepare outcome=granted reason=granted paths=1" in proc.stderr
 	out = re.search(r"^OUT=(.*)$", proc.stdout, re.M).group(1)
 	assert out.startswith(str(tmp_path / "runner_temp"))
 	assert json.loads(Path(out).read_text(encoding="utf-8")) == [GRANTED]
+	# The snapshot parser accepts the list (a nested entry would reject it all).
+	assert _load_workspace_module().load_granted_paths(Path(out)) == frozenset({GRANTED})
 	# The export waits for a successful prepare (next to REVIEW_SANDBOX_ROOT).
 	assert github_env.read_text(encoding="utf-8") == ""
 
@@ -504,10 +506,13 @@ def test_collect_metadata_projection_is_additive() -> None:
 
 
 def test_workflows_forward_the_switch_with_default() -> None:
-	line = "  GITHUB_AI_PLAN_GRANT_WRITE_ENABLED: ${{ vars.GITHUB_AI_PLAN_GRANT_WRITE_ENABLED || 'true' }}\n"
+	# GitHub forbids configuration variable names starting with GITHUB_ (actionlint
+	# rejects them), so the env key reads the AI_PLAN_GRANT_WRITE_ENABLED variable.
+	line = "  GITHUB_AI_PLAN_GRANT_WRITE_ENABLED: ${{ vars.AI_PLAN_GRANT_WRITE_ENABLED || 'true' }}\n"
 	for name in ("implement.yml", "review_autofix.yml"):
 		text = (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 		assert text.count(line) == 1, name
+		assert "vars.GITHUB_" not in text, name
 		env_start = text.index("\nenv:\n")
 		assert env_start < text.index(line) < text.index("\njobs:\n"), name
 
@@ -523,6 +528,8 @@ def test_heal_jq_filter_drops_open_and_untrusted_grants(tmp_path: Path) -> None:
 	program = re.search(r"jq -c '(\[select\(\.trusted == true[^']*)'", heal).group(1)
 	for grant, expected in (
 		(_grant([GRANTED, "scripts/a.sh"]), [GRANTED]),
+		# A nested entry is dropped, not allowed to reject the whole list.
+		(_grant([GRANTED, ".github/ai/sub/y.json"]), [GRANTED]),
 		(_grant([GRANTED], association="CONTRIBUTOR"), []),
 		(_grant([], author="pipeline-bot", association="NONE"), []),
 	):
