@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The PR must use `Refs #3576`, not an auto-close keyword.\" The tracker must never be closed.\n  expected_change_site: PR description / body (GitHub PR metadata, not a repository file)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: PR description still reads \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/3576\", so merging would auto-close the security-audit tracker; scripts/lint_pr_body_auto_close.py only checks ai:orchestrator-tracking issues so it does not catch this; changelog.d/3576-security-audit-tracker-pipeline-exclude.md correctly uses Refs #3576; prior autofix runs deferred it because they cannot edit the PR body. Severity BLOCKER.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: The AI Issue Summary says \"The PR must use `Refs #3576`, not an auto-close keyword.\" The tracker must never be closed.\nExpected change site: The PR description or body, which is PR metadata and not a repository file.\nEvidence of absence: The PR description still reads \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/3576\". GitHub treats a closing keyword followed by an issue URL as an auto-close reference. Merging would close the security-audit tracker. `scripts/lint_pr_body_auto_close.py` only checks issues labelled `ai:orchestrator-tracking`. The repository diff correctly uses `Refs #3576` in `changelog.d/3576-security-audit-tracker-pipeline-exclude.md`. Two earlier autofix runs deferred this. The description must be changed to `Refs #3576` before merge.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: The PR must use Refs #3576, not an auto-close keyword.\nExpected change site: PR description body\nEvidence of absence: The PR description contains Closes https://github.com/shubhodeep1/coding-workflows/issues/3576. Merging this PR will auto-close the tracker #3576, violating the requirement.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: \"The PR must use `Refs #3576`, not an auto-close keyword.\" Also: \"Never close [the tracker], edit its body, or post `/answer` on it.\"\nExpected change site: PR description / body (GitHub PR metadata, not a repository file)\nEvidence of absence: The PR description reads \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/3576\". Merging would auto-close the issue this PR is meant to defend. `scripts/lint_pr_body_auto_close.py` only matches `ai:orchestrator-tracking` issues. Two prior autofix editor runs (issue comments 7071358548 and 7071777185) flagged this as TASK_GAP_DEFERRED. It must be changed to `Refs #3576` before merge.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"The PR must use `Refs #3576`, not an auto-close keyword.\"\nExpected change site: PR description/body.\nEvidence of absence: The supplied PR description still says \"Closes https://github.com/shubhodeep1/coding-workflows/issues/3576\". Merging therefore closes #3576, the AI Security Audit Tracker this change is intended to protect.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: \"The PR must use `Refs #3576`, not an auto-close keyword.\" / \"Never close it\" (tracker #3576).\nExpected change site: PR description / body (merge metadata, not a repository file).\nEvidence of absence: PR body still reads \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/3576\". Merging auto-closes the tracker. `scripts/lint_pr_body_auto_close.py` only checks `ai:orchestrator-tracking` issues. Prior editor runs deferred this as TASK_GAP_DEFERRED; it must be edited to `Refs #3576` in the PR description.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "47b895ad0142520a1e1cef5830d115002d2fde019ca35994d21907bb988176a1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9913,
+    "run_id": "44968318904",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44968318904",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122013944_f6898648ff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9913,
+    "run_id": "44968318904"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T01:39:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
