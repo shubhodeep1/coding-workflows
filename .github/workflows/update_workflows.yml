@@ -52,7 +52,8 @@ env:
 jobs:
   update-wrappers:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # 5 min of work + up to 20 min manifest-fetch rate-limit wait + headroom (#9937).
+    timeout-minutes: 30
     # allow_workflow_edits (vars.ALLOW_WORKFLOW_EDITS) no longer skips this
     # job: managed wrappers always follow the release (the consumer's
     # ai-workflow-integrity.yml locks them). With it false, only the
@@ -302,11 +303,111 @@ jobs:
           MANIFEST_DIR="${RUNNER_TEMP}/sync-manifest"
           rm -rf "${MANIFEST_DIR}"
           mkdir -p "${MANIFEST_DIR}"
-          gh release download "${SYNC_VERSION}" --repo "${SYNC_UPSTREAM_REPO}" \
-            --pattern sync-manifest.json --dir "${MANIFEST_DIR}" >/dev/null 2>&1 \
-            || reject ERR_SYNC_MANIFEST_MISSING
+          # BEGIN sync manifest fetch (byte copy in workflow_integrity.yml; tests pin it)
+          # REST only (the release download subcommand adds a GraphQL query), with a
+          # bounded wait when GH_PAT is out of core budget (#9937). Kept inline: no upstream code may
+          # run before the manifest is verified. ERR_SYNC_MANIFEST_MISSING means the
+          # release or its asset is absent; ERR_SYNC_MANIFEST_FETCH_FAILED means the API
+          # call failed (detail=rate_limited|http_<status>|unknown).
           MANIFEST_FILE="${MANIFEST_DIR}/sync-manifest.json"
+          SMF_MAX_WAIT="${SYNC_MANIFEST_RATE_LIMIT_MAX_WAIT_SECONDS:-1200}"
+          [[ "${SMF_MAX_WAIT}" =~ ^[0-9]+$ ]] || SMF_MAX_WAIT=1200
+          SMF_WAITED=0
+          SMF_RESULT=""
+          smf_redact() {
+            head -c 300 "$1" 2>/dev/null | tr '\r\n"' "  '" | sed -E \
+              -e 's/(gh[pousr]_|github_pat_)[A-Za-z0-9_]{16,}/[REDACTED]/g' \
+              -e 's/(bearer|basic)[ ]+[^ ]+/\1 [REDACTED]/Ig' \
+              -e 's/(token|authorization)[=: ]+[^ ]+/\1=[REDACTED]/Ig' || true
+          }
+          smf_http_status() {
+            grep -oE '\(HTTP [0-9]{3}\)' "$1" 2>/dev/null | tail -n 1 | tr -dc '0-9' || true
+          }
+          # Prints the seconds to wait, or nothing when the error is not a rate limit.
+          # GET /rate_limit does not debit the core allowance.
+          smf_rate_limit_wait() {
+            local smf_text=0 smf_remaining="" smf_reset="" smf_wait
+            if grep -qi 'rate limit' "$1" 2>/dev/null; then
+              smf_text=1
+            elif [ "$2" != "403" ] && [ "$2" != "429" ]; then
+              return 0
+            fi
+            if gh api rate_limit >"${MANIFEST_DIR}/rate_limit.json" 2>/dev/null; then
+              smf_remaining="$(jq -r '.resources.core.remaining // empty' "${MANIFEST_DIR}/rate_limit.json" 2>/dev/null || true)"
+              smf_reset="$(jq -r '.resources.core.reset // empty' "${MANIFEST_DIR}/rate_limit.json" 2>/dev/null || true)"
+            fi
+            if [ "${smf_remaining}" = "0" ] && [[ "${smf_reset}" =~ ^[0-9]+$ ]]; then
+              smf_wait=$(( smf_reset - $(date +%s) ))
+              [ "${smf_wait}" -ge 1 ] || smf_wait=1
+              echo $(( smf_wait + 5 ))
+            elif [ "${smf_text}" = "1" ]; then
+              # Secondary limit (no visible Retry-After): GitHub asks for >= 60 s.
+              echo 60
+            fi
+          }
+          # smf_fetch <release|asset> <outfile> <errfile> <gh api args...>
+          # At most 3 attempts; rate-limit waits share SMF_MAX_WAIT; any other error
+          # gets one retry after 10 s. Sets SMF_RESULT on failure.
+          smf_fetch() {
+            local smf_call="$1" smf_out="$2" smf_err="$3" smf_attempt=0 smf_retried=0
+            local smf_status smf_wait smf_sleep smf_outcome
+            shift 3
+            SMF_RESULT=""
+            while [ "${smf_attempt}" -lt 3 ]; do
+              smf_attempt=$(( smf_attempt + 1 ))
+              if gh api "$@" >"${smf_out}.part" 2>"${smf_err}"; then
+                mv -f "${smf_out}.part" "${smf_out}"
+                echo "SYNC_MANIFEST_FETCH attempt=${smf_attempt} call=${smf_call} outcome=ok http=200 wait_s=0"
+                return 0
+              fi
+              rm -f "${smf_out}.part"
+              smf_status="$(smf_http_status "${smf_err}")"
+              smf_wait="$(smf_rate_limit_wait "${smf_err}" "${smf_status}")"
+              smf_sleep=0
+              if [ -n "${smf_wait}" ]; then
+                smf_outcome=rate_limited
+                if [ "${smf_attempt}" -lt 3 ] && [ $(( SMF_WAITED + smf_wait )) -le "${SMF_MAX_WAIT}" ]; then
+                  smf_sleep="${smf_wait}"
+                else
+                  SMF_RESULT=rate_limited
+                fi
+              else
+                smf_outcome=error
+                if [ "${smf_call}" = "release" ] && [ "${smf_status}" = "404" ]; then
+                  SMF_RESULT=missing
+                elif [ "${smf_retried}" = "0" ] && [ "${smf_attempt}" -lt 3 ]; then
+                  smf_retried=1
+                  smf_sleep=10
+                else
+                  SMF_RESULT="http_${smf_status:-}"
+                  [ -n "${smf_status}" ] || SMF_RESULT=unknown
+                fi
+              fi
+              echo "SYNC_MANIFEST_FETCH attempt=${smf_attempt} call=${smf_call} outcome=${smf_outcome} http=${smf_status:-none} wait_s=${smf_sleep} stderr=\"$(smf_redact "${smf_err}")\""
+              [ -z "${SMF_RESULT}" ] || return 1
+              sleep "${smf_sleep}"
+              if [ "${smf_outcome}" = "rate_limited" ]; then
+                SMF_WAITED=$(( SMF_WAITED + smf_sleep ))
+              fi
+            done
+            SMF_RESULT="${SMF_RESULT:-unknown}"
+            return 1
+          }
+          if ! smf_fetch release "${MANIFEST_DIR}/release.json" "${MANIFEST_DIR}/release.err" \
+            "repos/${SYNC_UPSTREAM_REPO}/releases/tags/${SYNC_VERSION}"; then
+            if [ "${SMF_RESULT}" = "missing" ]; then
+              reject ERR_SYNC_MANIFEST_MISSING "detail=release_not_found"
+            fi
+            reject ERR_SYNC_MANIFEST_FETCH_FAILED "detail=${SMF_RESULT}"
+          fi
+          SMF_ASSET_ID="$(jq -r '[.assets[]? | select(.name == "sync-manifest.json") | .id] | if length == 1 then .[0] else empty end' "${MANIFEST_DIR}/release.json" 2>/dev/null || true)"
+          [[ "${SMF_ASSET_ID}" =~ ^[0-9]+$ ]] || reject ERR_SYNC_MANIFEST_MISSING
+          if ! smf_fetch asset "${MANIFEST_FILE}" "${MANIFEST_DIR}/asset.err" \
+            -H 'Accept: application/octet-stream' "repos/${SYNC_UPSTREAM_REPO}/releases/assets/${SMF_ASSET_ID}"; then
+            reject ERR_SYNC_MANIFEST_FETCH_FAILED "detail=${SMF_RESULT}"
+          fi
           { [ -f "${MANIFEST_FILE}" ] && [ ! -L "${MANIFEST_FILE}" ]; } || reject ERR_SYNC_MANIFEST_MISSING
+          # END sync manifest fetch
 
           # 3. Its Sigstore attestation. No --source-digest: the signing run's
           # source is the tested commit, which can differ from the release
