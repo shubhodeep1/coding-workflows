@@ -6829,16 +6829,18 @@ def test_intake_rejects_ci_run_that_is_not_a_default_branch_push(tmp_path) -> No
 		assert "issues_created" not in state_after
 
 
-def _run_intake_capturing_tg(payload: dict, state: dict, extra_env: dict[str, str | None] | None = None) -> tuple[subprocess.CompletedProcess[str], list[str], str]:
+def _run_intake_capturing_tg(payload: dict, state: dict, extra_env: dict[str, str | None] | None = None, *, delivered: bool = True) -> tuple[subprocess.CompletedProcess[str], list[str], str]:
 	"""Run the intake with a stubbed ``tg_send_msg``; return the result, every
-	``level|text`` line it recorded, and what the intake wrote to GITHUB_OUTPUT."""
+	``level|text`` line it recorded, and what the intake wrote to GITHUB_OUTPUT.
+	Like the real helper, the stub prints a message id only when ``delivered``."""
 	tg_dir = Path(tempfile.mkdtemp(prefix="heal-tg-"))
 	try:
 		output_file = tg_dir / "github_output.txt"
 		output_file.write_text("", encoding="utf-8")
+		msg_id_echo = " printf '4242';" if delivered else ""
 		def setup(tmp: Path, work: Path) -> None:
 			(work / "scripts" / "tg_helpers.sh").write_text(
-				f'tg_send_msg() {{ printf \'%s|%s\\n\' "${{2:-}}" "$1" >> {str(tg_dir / "calls.txt")!r}; }}\n', encoding="utf-8")
+				f'tg_send_msg() {{ printf \'%s|%s\\n\' "${{2:-}}" "$1" >> {str(tg_dir / "calls.txt")!r};{msg_id_echo} }}\n', encoding="utf-8")
 		result, _state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=setup,
 			extra_env={"GITHUB_OUTPUT": str(output_file), **(extra_env or {})})
 		calls_file = tg_dir / "calls.txt"
@@ -6868,6 +6870,13 @@ def test_intake_unregistered_source_repo_warns_once_per_day() -> None:
 		result, calls, output = _run_intake_capturing_tg(payload, _intake_state(), {"WORKFLOW_HEAL_UNREGISTERED_WARNED_TODAY": warned_today})
 		assert result.returncode == 0, result.stderr + result.stdout
 		assert [line.split("|", 1)[0] for line in calls if "ignored a report" in line] == ["WARNING"], (warned_today, calls)
+	# An undelivered WARNING (no message id) leaves no marker, so the next
+	# report that day retries the WARNING instead of being sent at DEBUG.
+	result, calls, output = _run_intake_capturing_tg(payload, _intake_state(), delivered=False)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert [line.split("|", 1)[0] for line in calls if "ignored a report" in line] == ["WARNING"], calls
+	assert "unregistered_source_repo_alert marker=skipped reason=not_delivered" in result.stdout
+	assert "heal_unregistered_warned" not in output
 
 
 def test_intake_unregistered_warning_workflow_cache_wiring() -> None:

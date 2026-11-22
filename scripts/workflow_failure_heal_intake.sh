@@ -684,11 +684,23 @@ if [ -n "${SKIP_REASON}" ]; then
 			tg_send_msg "${unregistered_alert_text}" "DEBUG" >/dev/null 2>&1 || true
 		else
 			log "unregistered_source_repo_alert level=WARNING source=${SOURCE_REPO}"
-			tg_send_msg "${unregistered_alert_text}" "WARNING" >/dev/null 2>&1 || true
-			# The cache path must be the same in every run (actions/cache versions
-			# entries by path), so it is not under the per-run RUNTIME_DIR.
-			if printf '%s\n' "${SOURCE_REPO}" > "${WORKFLOW_HEAL_UNREGISTERED_MARKER:-${RUNTIME_DIR}/heal_unregistered_warned}" 2>/dev/null; then
-				echo "heal_unregistered_warned=true" >> "${GITHUB_OUTPUT:-/dev/null}" 2>/dev/null || true
+			# tg_send_msg returns 0 even when nothing was delivered (curl failure,
+			# Telegram error, missing credentials, level filtered); the printed
+			# message_id is the only delivery signal. Mark today as warned only
+			# when Telegram accepted the WARNING, so a failed send is retried by
+			# the next report instead of downgrading the rest of the day to DEBUG.
+			unregistered_alert_msg_id="$(tg_send_msg "${unregistered_alert_text}" "WARNING" 2>/dev/null || true)"
+			if [ -n "${unregistered_alert_msg_id}" ]; then
+				# The cache path must be the same in every run (actions/cache versions
+				# entries by path), so it is not under the per-run RUNTIME_DIR.
+				unregistered_marker_path="${WORKFLOW_HEAL_UNREGISTERED_MARKER:-${RUNTIME_DIR}/heal_unregistered_warned}"
+				# Never follow a pre-existing file or symlink at the fixed path.
+				rm -f -- "${unregistered_marker_path}" 2>/dev/null || true
+				if printf '%s\n' "${SOURCE_REPO}" > "${unregistered_marker_path}" 2>/dev/null; then
+					echo "heal_unregistered_warned=true" >> "${GITHUB_OUTPUT:-/dev/null}" 2>/dev/null || true
+				fi
+			else
+				log "unregistered_source_repo_alert marker=skipped reason=not_delivered source=${SOURCE_REPO}"
 			fi
 		fi
 	fi

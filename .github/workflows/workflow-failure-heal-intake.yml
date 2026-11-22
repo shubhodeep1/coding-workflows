@@ -361,6 +361,9 @@ jobs:
       - name: Compute today's unregistered-repo warning day
         id: heal_unregistered_day
         if: steps.payload.outputs.heal_unregistered_cache_key != ''
+        # A failure here leaves day empty: lookup and save are skipped and the
+        # intake still runs and sends the WARNING (fail open).
+        continue-on-error: true
         run: echo "day=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
 
       - name: Look up today's unregistered-repo warning marker
