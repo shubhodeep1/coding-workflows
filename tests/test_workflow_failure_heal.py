@@ -2053,6 +2053,12 @@ if args[:1] == ["api"]:
 		if jobs is None:
 			fail("HTTP 404")
 		out(json.dumps({"jobs": jobs}))
+	if "/actions/runs/" in path and path.split("/")[-2] == "attempts" and path.split("/")[-1].isdigit():
+		# The intake's own run attempt (report age credit); unset is a 404.
+		started_at = state.get("run_attempt_started_at", {}).get(path)
+		if method != "GET" or started_at is None:
+			fail("HTTP 404")
+		out(started_at + "\n" if "--jq" in rest else json.dumps({"run_started_at": started_at}))
 	if "/actions/runs/" in path and path.split("/")[-1].isdigit():
 		if method != "GET":
 			fail("HTTP method must be GET for run details")
@@ -6297,6 +6303,129 @@ def test_intake_verifies_report_identity_and_rejects_a_forged_repository() -> No
 	result, state, _ = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REPORT_IDENTITY_STATE": "malformed"})
 	assert "report_auth=rejected reason=identity_malformed" in result.stdout
 	assert _api_writes(state) == []
+
+
+def _iso_utc(epoch: int) -> str:
+	return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+
+def test_intake_identity_report_reads_its_run_only_after_a_stale_rejection() -> None:
+	"""A report that carries an identity is credited for the runner wait only by
+	the identity_stale retry (PR #9516), never by the up-front attempt credit:
+	a fresh identity reads no run at all (§15), and a report without one never
+	reads it either."""
+	payload = _consumer_payload(reporter_run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/{_ID_RUN_ID}")
+	attempt_path = f"repos/{SELF_REPO}/actions/runs/777/attempts/1"
+	own_run_path = f"repos/{SELF_REPO}/actions/runs/777"
+	now = int(time.time())
+	with tempfile.TemporaryDirectory(prefix="heal-identity-fresh-") as tmp_name:
+		token_file, jwks_file, token = _fresh_identity(Path(tmp_name))
+		state = _intake_state(extra_run_details={own_run_path: {"id": 777, "run_attempt": 1, "run_started_at": _iso_utc(now - 7190)}})
+		state["run_attempt_started_at"] = {attempt_path: _iso_utc(now - 7190)}
+		result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=_identity_env(token_file, jwks_file))
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"WORKFLOW_HEAL report_auth=verified reason=bound source={CONSUMER_REPO}" in result.stdout
+		assert "report_age_credit" not in result.stdout
+		assert "report_identity_age_credit" not in result.stdout
+		assert not any(any(part in (attempt_path, own_run_path) for part in call) for call in state_after.get("calls", []))
+		assert token not in result.stdout + result.stderr
+	# A report without an identity never reads the run.
+	result, state_after, _ = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "report_age_credit" not in result.stdout
+	assert not any(any("/attempts/" in part for part in call) for call in state_after.get("calls", []))
+
+
+def _engine_completed_run(updated_epoch: int) -> dict:
+	return _engine_run(status="completed", conclusion="failure", updated_at=_iso_utc(updated_epoch))
+
+
+def test_intake_credits_runner_wait_against_engine_reporter_run_age(tmp_path: Path) -> None:
+	"""Runs 43439048054, 43496779526, 43498856864: the intake job waited 1h54m to
+	3h25m for a runner (heal queue wait: seconds). An engine_fallback report's
+	reporting-run age check (verify-engine-reporter-run --max-age) now counts
+	the time since this run attempt started as wait."""
+	attempt_path = f"repos/{SELF_REPO}/actions/runs/777/attempts/1"
+	now = int(time.time())
+	# The reporting run finished two hours ago; this attempt started right after.
+	state = _intake_state(run_details={ENGINE_RUN_ID: _engine_completed_run(now - 7200)})
+	state["run_attempt_started_at"] = {attempt_path: _iso_utc(now - 7190)}
+	result, state_after, _ = _run_intake(_engine_scoped_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT,
+		setup_git=_engine_intake_setup(tmp_path / "tg-wait.log"), extra_env={"HEAL_INTAKE_QUEUE_WAITED_SECONDS": "2"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert re.search(r"^WORKFLOW_HEAL report_age_credit outcome=applied attempt_elapsed_seconds=(7[1-9]\d\d) queue_waited_seconds=2 max_age=(1[01]\d\d\d)$", result.stdout, re.MULTILINE), result.stdout
+	assert f"WORKFLOW_HEAL engine_reporter_run outcome=verified run={CONSUMER_REPO}:{ENGINE_RUN_ID} " in result.stdout, result.stdout
+	assert len([call for call in state_after.get("calls", []) if any(part == attempt_path for part in call)]) == 1
+	# A reporting run already two hours old when the report arrived (the
+	# attempt started a minute ago) stays stale: the credit covers waiting.
+	state = _intake_state(run_details={ENGINE_RUN_ID: _engine_completed_run(now - 7200)})
+	state["run_attempt_started_at"] = {attempt_path: _iso_utc(now - 60)}
+	result, _, _ = _run_intake(_engine_scoped_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT,
+		setup_git=_engine_intake_setup(tmp_path / "tg-replay.log"))
+	assert "report_age_credit outcome=applied" in result.stdout
+	assert "WORKFLOW_HEAL engine_reporter_run outcome=rejected reason=run_stale " in result.stdout, result.stdout
+	# An unreadable attempt keeps the queue-only credit (the old behaviour).
+	result, _, _ = _run_intake(_engine_scoped_payload(), _intake_state(run_details={ENGINE_RUN_ID: _engine_completed_run(now - 7200)}),
+		diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_engine_intake_setup(tmp_path / "tg-unread.log"))
+	assert "WORKFLOW_HEAL report_age_credit outcome=unavailable queue_waited_seconds=0 max_age=3600" in result.stdout
+	assert "WORKFLOW_HEAL engine_reporter_run outcome=rejected reason=run_stale " in result.stdout, result.stdout
+
+
+def test_intake_runner_wait_credit_not_needed_when_queue_wait_covers_it(tmp_path: Path) -> None:
+	"""The queue wait already credited is larger than this attempt's elapsed
+	time: max_age is unchanged, so the log must not say outcome=applied."""
+	attempt_path = f"repos/{SELF_REPO}/actions/runs/777/attempts/1"
+	now = int(time.time())
+	state = _intake_state(run_details={ENGINE_RUN_ID: _engine_completed_run(now - 7200)})
+	state["run_attempt_started_at"] = {attempt_path: _iso_utc(now - 60)}
+	result, _, _ = _run_intake(_engine_scoped_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT,
+		setup_git=_engine_intake_setup(tmp_path / "tg.log"), extra_env={"HEAL_INTAKE_QUEUE_WAITED_SECONDS": "600"})
+	assert re.search(r"^WORKFLOW_HEAL report_age_credit outcome=not_needed attempt_elapsed_seconds=\d+ queue_waited_seconds=600 max_age=4200$", result.stdout, re.MULTILINE), result.stdout
+	assert "report_age_credit outcome=applied" not in result.stdout
+	assert "WORKFLOW_HEAL engine_reporter_run outcome=rejected reason=run_stale " in result.stdout, result.stdout
+
+
+def test_intake_does_not_credit_the_runner_wait_twice() -> None:
+	"""The attempt credit and the identity_stale retry measure the same runner
+	wait. A token 3700 s old on arrival after a 600 s wait (limit 3600) must be
+	rejected: the identity path credits the wait once (base + wait), never
+	twice (base + 2 * wait)."""
+	payload = _consumer_payload(reporter_run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/{_ID_RUN_ID}")
+	attempt_path = f"repos/{SELF_REPO}/actions/runs/777/attempts/1"
+	own_run_path = f"repos/{SELF_REPO}/actions/runs/777"
+	now = int(time.time())
+	with tempfile.TemporaryDirectory(prefix="heal-identity-no-double-credit-") as tmp_name:
+		token_file, jwks_file, _ = _fresh_identity(Path(tmp_name), iat=now - 4300, nbf=now - 4300)
+		state = _intake_state(extra_run_details={own_run_path: {"id": 777, "run_attempt": 1, "run_started_at": _iso_utc(now - 600)}})
+		state["run_attempt_started_at"] = {attempt_path: _iso_utc(now - 600)}
+		result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=_identity_env(token_file, jwks_file))
+		assert "report_age_credit" not in result.stdout, result.stdout
+		assert "WORKFLOW_HEAL report_identity_age_credit arrival_waited_seconds=" in result.stdout, result.stdout
+		assert "report_auth=rejected reason=identity_stale" in result.stdout
+		assert _api_writes(state_after) == []
+		# One read of this run, by the retry; the attempt endpoint is not read.
+		assert not any(any(part == attempt_path for part in call) for call in state_after.get("calls", []))
+
+
+def test_intake_engine_fallback_identity_skips_the_identity_stale_retry() -> None:
+	"""An engine_fallback report that also carries an identity gets the up-front
+	attempt credit, so the identity_stale retry must not add the same runner
+	wait again. Token 4300 s old, 600 s wait: base + wait (4200) still rejects
+	it as identity_stale; base + 2 * wait (4800) would pass the age check."""
+	attempt_path = f"repos/{SELF_REPO}/actions/runs/777/attempts/1"
+	own_run_path = f"repos/{SELF_REPO}/actions/runs/777"
+	now = int(time.time())
+	with tempfile.TemporaryDirectory(prefix="heal-engine-identity-no-double-credit-") as tmp_name:
+		token_file, jwks_file, _ = _fresh_identity(Path(tmp_name), iat=now - 4300, nbf=now - 4300)
+		state = _intake_state(extra_run_details={own_run_path: {"id": 777, "run_attempt": 1, "run_started_at": _iso_utc(now - 600)}})
+		state["run_attempt_started_at"] = {attempt_path: _iso_utc(now - 600)}
+		result, state_after, _ = _run_intake(_engine_scoped_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=_identity_env(token_file, jwks_file))
+		assert len(re.findall(r"^WORKFLOW_HEAL report_age_credit outcome=applied ", result.stdout, re.MULTILINE)) == 1, result.stdout
+		assert "report_identity_age_credit" not in result.stdout, result.stdout
+		assert "report_auth=rejected reason=identity_stale" in result.stdout, result.stdout
+		assert _api_writes(state_after) == []
+		calls = state_after.get("calls", [])
+		assert len([call for call in calls if any(part == attempt_path for part in call)]) == 1
+		assert not any(any(part == own_run_path for part in call) for call in calls)
 
 
 def test_intake_credits_runner_queue_wait_against_a_stale_identity() -> None:
