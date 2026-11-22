@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"When `gh_read` is defined (`type gh_read`), the per-tick reads go through `gh_read --same-repo-only api`.\"\n  expected_change_site: `_pr_ensure_final_ci` in `scripts/pr_checks_lib.sh`, which is called from `_pr_wait_for_required_checks`.\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: `_pr_ensure_final_ci` is called inside the loop of `_pr_wait_for_required_checks` and makes API reads (it reads GitHub Actions workflows and may trigger a dispatch), but its API calls do not go through `_pr_checks_wait_read`, so they skip the `gh_read` routing when it is defined; `_pr_wait_for_required_checks` invokes `_pr_ensure_final_ci` at `scripts/pr_checks_lib.sh:1319`, but the helper's PR metadata and PR-files reads at lines 1099 and 1121 still call `gh_retry _safe_gh_jq` directly. Both reviewers rated this SEVERITY: MAJOR. anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash checked this gap and rejected it: they say the helper runs at most once per wait, guarded by `final_ci_checked` (scripts/pr_checks_lib.sh:1316-1320), and that the exclusion is documented (scripts/pr_checks_lib.sh:1202-1203).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- NOTE (not a finding): checked the last run's change, `GH_RETRY_MAX_ATTEMPTS=1 gh_retry gh_read --same-repo-only api \"$@\"` in `_pr_checks_wait_read` (scripts/pr_checks_lib.sh, about line 1223), against `gh_retry` in scripts/gh_helpers.sh, lines 2147-2240, and found it correct. The fallback `gh_retry _safe_gh_jq \"$@\"` (line 1230) keeps the normal retry schedule. The new assertion in tests/test_pr_checks_lib_wait_backoff.py (`test_gh_read_is_used_only_by_the_router`) matches the code.\n- NOTE (not a finding): rejected the pass-1 task gap on `_pr_ensure_final_ci` routing. `final_ci_checked` (declared at line 1273, checked at line 1316, set to 1 at line 1318) allows at most one call per wait, and that call reuses `PR_FINAL_CI_RUNS_JSON`. The exclusion is documented in lines 1199-1204, the agents fragment and the README row. The per-tick reads are routed: runs listing (line 950), check-runs (line 351), statuses (line 501), PR read (line 308).\n- HARDENING (not a finding): scripts/pr_checks_lib.sh `_pr_checks_wait_read`, routed call `GH_RETRY_MAX_ATTEMPTS=1 gh_retry gh_read --same-repo-only api \"$@\"`. When the routed read fails, `gh_retry` still prints `::error::gh command failed after 1 attempts` (scripts/gh_helpers.sh, line 2234). On a rate limit it also sends the Telegram alert and trips the breaker (lines 2212-2213), even when the PAT fallback succeeds. Suggested fix: add `2>/dev/null` to the routed call, or drop `gh_retry` from the routed path and update the contract-test assertion. Estimated lines changed: 1-2. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"When `gh_read` is defined (`type gh_read`), the per-tick reads go through `gh_read --same-repo-only api`.\"\n  Expected change site: `scripts/pr_checks_lib.sh` in `_pr_ensure_final_ci`\n  Evidence of absence: The function `_pr_ensure_final_ci` is called inside the loop of `_pr_wait_for_required_checks` and performs API read operations (it reads GitHub Actions workflows and potentially triggers dispatch), but it does not route its API calls through `_pr_checks_wait_read` to utilize the `gh_read` routing when defined.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- NOTE (not a finding): verified that `gh_retry` at `scripts/gh_helpers.sh:2147` reads `GH_RETRY_MAX_ATTEMPTS` at line 2153, so the last-run change works.\n- NOTE (not a finding): rejected the cross-pollinated task gap on `_pr_ensure_final_ci`. It is called at most once per wait (line 1319), it skips the runs read through `PR_FINAL_CI_RUNS_JSON` (line 1070-1073) and the PR read through `PR_CHECKS_HEAD_REF` (line 1098-1099), and the docs-only files read at line 1121 is its only PAT call. The exclusion is documented in the agents.md fragment. Called it \"a minor optimization, not a missing requirement\".\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"When `gh_read` is defined (`type gh_read`), the per-tick reads go through `gh_read --same-repo-only`.\"\n  Expected change site: `_pr_ensure_final_ci` in `scripts/pr_checks_lib.sh`, which is called from `_pr_wait_for_required_checks`.\n  Evidence of absence: `_pr_wait_for_required_checks` invokes `_pr_ensure_final_ci` at `scripts/pr_checks_lib.sh:1319`, but the helper's PR metadata and PR-files reads at lines 1099 and 1121 still call `gh_retry _safe_gh_jq` directly. They do not use `_pr_checks_wait_read` or route through `gh_read`.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- NOTE (not a finding): rejected the pass-1 task gap. `_pr_ensure_final_ci` is guarded by `final_ci_checked=1` (scripts/pr_checks_lib.sh:1316-1320), so it runs at most once per wait and is not a per-tick read. The exclusion is documented at scripts/pr_checks_lib.sh:1202-1203 and in the agents fragment.\n- NOTE (not a finding): the `GH_RETRY_MAX_ATTEMPTS=1` prefix (scripts/pr_checks_lib.sh:1223) is correct. `gh_retry` reads it at scripts/gh_helpers.sh:2153, and the guards at gh_helpers.sh:2214 and 2223 mean one attempt makes no retry or rate-limit waits. Putting the env prefix before a function call is an existing repo pattern (scripts/heal_port_to_default.sh:152). The test assertion (tests/test_pr_checks_lib_wait_backoff.py:338-339) matches the code.\n- HARDENING (not a finding): scripts/pr_checks_lib.sh `_pr_checks_wait_read`, line 1223. On a job-token rate limit, `gh_retry` fires `_gh_ratelimit_tg_alert` and trips the breaker through `_gh_cmd_bucket` (gh_helpers.sh:2210-2213). `_gh_cmd_bucket` (gh_helpers.sh:1634-1643) has no `gh_read` case and always returns `core`, so the core breaker trips for 60s even when the PAT fallback succeeds. This predates the last run and only matters once #9897 lands. Suggested fix: drop `gh_retry` from the routed path, or add a `gh_read` case to `_gh_cmd_bucket` that maps through `_gh_api_bucket`. Estimated lines changed: 1-2 (plus one contract-test assertion). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "27726371a7d83a592189ff74a1df51f008863d6a127a4c7a6a7a00f90202340c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9933,
+    "run_id": "45005467328",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45005467328",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122104528_8a83d59128",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9933,
+    "run_id": "45005467328"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T10:45:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
