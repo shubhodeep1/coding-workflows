@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The PR must use `Refs #3576`, not an auto-close keyword.\" (AI Issue Summary; \u00a721)\n  expected_change_site: PR description (GitHub metadata, not a repository file)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: PR description reads \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/3576\", so merging auto-closes tracker #3576. `scripts/lint_pr_body_auto_close.py` checks only `ai:orchestrator-tracking` issues and does not catch it. Repository files already comply (changelog.d/3576-security-audit-tracker-pipeline-exclude.md uses `Refs #3576`; the agents fragment has no closing keyword). Severity BLOCKER.\n- requirement: \"A kill switch, `SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED`, defaults to `true`\"; setting it to `false` restores the previous behavior.\n  expected_change_site: `.github/workflows/orchestrate_poll.yml`, environment mappings for the poller invocations\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR has no workflow changes and `.github/workflows/orchestrate_poll.yml` has no mapping for this variable. The script reads it only from its process environment, so consumer repos cannot set it to `false` without changing the workflow. Severity MAJOR. anthropic_claude-sonnet-5_5 explicitly did not raise this: the changelog and agents fragment say the switch is read from the poller's environment only, and the linked issue does not require a repository-variable rollback.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: \"The PR must use `Refs #3576`, not an auto-close keyword.\" (AI Issue Summary; \u00a721)\n  Expected change site: PR description (GitHub metadata)\n  Evidence of absence: PR description reads \"Closes https://github.com/shubhodeep1/coding-workflows/issues/3576\". `scripts/lint_pr_body_auto_close.py` does not catch it. Repository files already comply.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n(Last-run fix in `_security_audit_tracker_stall_guard`, scripts/orchestrate_poll_process.sh:27558-27584, verified correct. No kill-switch gap raised.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: The PR must use Refs #3576, not an auto-close keyword, to prevent auto-closing the security-audit tracker.\n  Expected change site: PR description (GitHub metadata)\n  Evidence of absence: PR description reads \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/3576\".\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"The PR must use `Refs #3576`, not an auto-close keyword.\" (AI Issue Summary, entry 7070665855)\n  Expected change site: PR description body (GitHub metadata)\n  Evidence of absence: PR description still reads \"Closes .../issues/3576\". On merge GitHub auto-closes #3576. `scripts/lint_pr_body_auto_close.py` only checks `ai:orchestrator-tracking` issues. In-tree files comply (`changelog.d/3576-security-audit-tracker-pipeline-exclude.md:2`; agents.d fragment). `scripts/security_audit.sh:875-877` reopens it only after a stale window. Four editor runs deferred it.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n(Last-run fix verified at scripts/orchestrate_poll_process.sh:27575-27579 and tests/test_security_audit_tracker_pipeline_exclude.py:80-81. CI clean.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"The PR must use `Refs #3576`, not an auto-close keyword.\"\n  Expected change site: PR description (GitHub metadata)\n  Evidence of absence: PR description says \"Closes https://github.com/shubhodeep1/coding-workflows/issues/3576\".\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\nTASK_GAP:\n- Requirement: \"A kill switch, `SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED`, defaults to `true`\"; setting it to `false` restores the previous behavior.\n  Expected change site: `.github/workflows/orchestrate_poll.yml`, environment mappings for the poller invocations\n  Evidence of absence: No workflow changes and no mapping for this variable. The script reads it only from its process environment.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\n- Requirement: \"The PR must use `Refs #3576`, not an auto-close keyword.\" (AI Issue Summary)\n  Expected change site: PR description (GitHub metadata)\n  Evidence of absence: PR description still reads \"Closes https://github.com/shubhodeep1/coding-workflows/issues/3576\". `scripts/lint_pr_body_auto_close.py` only checks `ai:orchestrator-tracking` issues. `scripts/security_audit.sh` reopens a closed tracker on the next audit, but continuity breaks in the interim. Five editor runs deferred it.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n(Last-run fix verified at scripts/orchestrate_poll_process.sh:27575-27580 and tests/test_security_audit_tracker_pipeline_exclude.py:78-81.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "aa9e6637e42b81eb68947131b299e6a359adbdf49e3ba34a7c2b30b75ab16dd6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9913,
+    "run_id": "45004672198",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45004672198",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122100851_314d90fb73",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9913,
+    "run_id": "45004672198"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T10:08:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
