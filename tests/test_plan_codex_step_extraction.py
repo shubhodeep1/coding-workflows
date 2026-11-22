@@ -44,13 +44,22 @@ from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 # (tele-funtoken-msg-scoring#4992; 260 -> 269 lines, 17_142 -> 17_830 bytes).
 # Merging #8339 and #8327 keeps both additions (260 -> 261 lines,
 # 17_142 -> 17_308 bytes); with #8335 the prompt is 270 lines, 17_996 bytes.
+# Stuck-states P8a-2 (Refs #8291) added the one-line `WAITING:` sequencing-wait
+# rule beside the BLOCKED rule (270 -> 271 lines, 17_996 -> 18_734 bytes).
 # Consumer tele-funtoken-msg-scoring #5101 reworded rule 10 so the Scope-mode
 # lines stay out of the Files section (270 lines, 17_996 -> 18_031 bytes).
+# Merging both keeps the two changes (271 lines, 18_769 bytes).
+# That pin was PRE_EXTRACTION_PROMPT_SHA256
+# "2cf0762fe4ee095fca0eed68e8135ef5f8fe19ef20003689f57142dbb76c01e2" with
+# PRE_EXTRACTION_PROMPT_BYTES = 18_769.
+# Issues #9519 / #9520 added the `files_touched` sentence to item 1's last
+# line: both plans were held with plan_files_outside_files_touched (270 lines,
+# 18_031 -> 18_402 bytes). With P8a-2 the prompt is 271 lines, 19_140 bytes.
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"a9ce63aafa64bb6cc8ab48e98a3b5b941c417c789228f16836a8bcee70e76ece"
+	"d504e171e37ca7b8da0f2eb11fb3230fa2b2c168ae91d502b51b2d0de73f6b46"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 18_031
-PRE_EXTRACTION_PROMPT_LINES = 270
+PRE_EXTRACTION_PROMPT_BYTES = 19_140
+PRE_EXTRACTION_PROMPT_LINES = 271
 
 
 # Issue #9266: the step runs the runner through a wrapper that prints one
@@ -110,17 +119,23 @@ def test_workflow_stages_and_invokes_extracted_runner() -> None:
 	assert 'TOOL_CALL_BUDGET="${TOOL_CALL_BUDGET:-40}"' in PLAN_RUNNER.read_text(encoding="utf-8")
 	# Heal issues (#6463) collect verified evidence and switch the runner to
 	# the isolated planner before it starts; ordinary issues run it unchanged.
+	# plan.yml runs the support bundle copies (stuck-states plan P2a); the
+	# `:-scripts` default keeps the kill-switch path on the checkout's scripts/.
+	support = "${SUPPORT_SCRIPTS_DIR:-scripts}"
+	# Issue #9266 wraps the runner call in a failure diagnostic; both of its
+	# calls run the support bundle copy.
+	runner_call = f'          bash "{support}/run_plan_codex.sh"\n'
 	assert step.split("        run: |\n", 1)[1] == (
-		'          if ! heal_route="$(python3 scripts/workflow_failure_heal.py heal-route --issue-json "${ISSUE_META_FILE}")"; then\n'
+		f'          if ! heal_route="$(python3 "{support}/workflow_failure_heal.py" heal-route --issue-json "${{ISSUE_META_FILE}}")"; then\n'
 		"            echo '::error::Heal route classification failed' >&2\n"
 		'            exit 1\n'
 		'          fi\n'
 		'          if [ "${heal_route}" = true ]; then\n'
 		"            echo 'HEAL_ROUTE=true' >> \"${GITHUB_ENV}\"\n"
-		'            HEAL_ROUTE=true HEAL_EVIDENCE_FILE="${RUNTIME_DIR}/heal_evidence.md" bash scripts/workflow_failure_heal_evidence.sh\n'
+		f'            HEAL_ROUTE=true HEAL_EVIDENCE_FILE="${{RUNTIME_DIR}}/heal_evidence.md" WORKFLOW_HEAL_PY="{support}/workflow_failure_heal.py" bash "{support}/workflow_failure_heal_evidence.sh"\n'
 		'            export HEAL_ROUTE=true HEAL_EVIDENCE_FILE="${RUNTIME_DIR}/heal_evidence.md"\n'
 		"          fi\n"
-		+ PLAN_RUNNER_FAILURE_DIAGNOSTIC
+		+ PLAN_RUNNER_FAILURE_DIAGNOSTIC.replace("bash scripts/run_plan_codex.sh", runner_call.strip())
 	)
 	# Issue #9266: the failure diagnostic wrapper took the step past 2,000
 	# bytes; the limit only guards against inlining the runner again.
@@ -189,6 +204,31 @@ def test_plan_prompts_keep_prose_and_placeholders_out_of_files_section() -> None
 	assert guard.extract_plan_automation_paths(compliant) == ["scripts/x.sh"]
 
 
+def test_plan_prompts_keep_the_files_section_inside_files_touched() -> None:
+	# Issues #9519 and #9520 (plan runs 43733726102, 43733730435): one plan
+	# named an unnumbered `agents.d/` fragment the issue's files_touched list
+	# missed, the other a test file it changed "only if" needed. The approval
+	# gate held both with plan_files_outside_files_touched.
+	sys.path.insert(0, str(REPO_ROOT / "scripts"))
+	import files_touched_scope_guard as guard  # noqa: E402
+
+	rule = ("When the issue body has a `files_touched:` list, the gate also holds a plan that names a file off "
+		"that list, so name one only when the plan cannot work without it, and never list a file you only might "
+		"change. A new fragment the list does not name goes in `changelog.d/<this issue number>-<slug>.md` or "
+		"`agents.d/<this issue number>-<slug>.md`, which are always in scope.")
+	for prompt in (PLAN_RUNNER, REPO_ROOT / "prompts" / "mode-plan.txt",
+			REPO_ROOT / "prompts" / "_templates" / "mode-plan.txt"):
+		assert prompt.read_text(encoding="utf-8").count(rule) == 1, prompt
+	body = "files_touched:\n  - scripts/x.sh\n  - changelog.d/x-fix.md\n"
+	held = ("## Files likely to change\n- `scripts/x.sh`\n- `changelog.d/x-fix.md` (new)\n"
+		"- `agents.d/x-fix.md` (new)\n- `tests/test_maybe.py` (only if needed)\n\n## Next\n")
+	compliant = ("## Files likely to change\n- `scripts/x.sh`\n- `changelog.d/x-fix.md` (new)\n"
+		"- `agents.d/9519-x-fix.md` (new)\n\n## Next\n")
+	assert guard.plan_files_outside_files_touched(held, body, issue_number="9519") == [
+		"agents.d/x-fix.md", "tests/test_maybe.py"]
+	assert guard.plan_files_outside_files_touched(compliant, body, issue_number="9519") == []
+
+
 def _write_executable(path: Path, content: str) -> None:
 	path.write_text(content, encoding="utf-8")
 	path.chmod(0o755)
@@ -199,6 +239,7 @@ def _run_runner(
 	engine: str = "",
 	claude_scenario: str = "",
 	planning_ref_mismatch: str | None = None,
+	issue_number: str | None = None,
 ) -> tuple[
 	subprocess.CompletedProcess[str], Path, tempfile.TemporaryDirectory[str]
 ]:
@@ -368,6 +409,9 @@ esac
 	environment.pop("PLAN_ISOLATED_BASE_BRANCH", None)
 	environment.pop("PLAN_ISOLATED_BASE_ENABLED", None)
 	environment.pop("CODEX_ISOLATED_GIT_BASE_REF", None)
+	environment.pop("ISSUE_NUMBER", None)
+	if issue_number is not None:
+		environment["ISSUE_NUMBER"] = issue_number
 	if planning_ref_mismatch is not None:
 		environment["PLANNING_REF_MISMATCH"] = planning_ref_mismatch
 	if engine:
@@ -394,7 +438,7 @@ def _read_lines(path: Path) -> list[str]:
 
 
 def test_primary_success_preserves_prompt_order_and_outputs() -> None:
-	result, root, _temporary_directory = _run_runner("success")
+	result, root, _temporary_directory = _run_runner("success", issue_number="9519")
 	runtime_dir = root / "runtime"
 
 	assert result.returncode == 0, result.stderr
@@ -422,10 +466,21 @@ def test_primary_success_preserves_prompt_order_and_outputs() -> None:
 		"=== AI MEMORY CONTEXT ===",
 		"MEMORY CONTEXT",
 		"=== PLANNING CONTEXT ===",
+		# Issues #9519 / #9520: the planner needs the number to name its own
+		# `changelog.d/<N>-<slug>.md` / `agents.d/<N>-<slug>.md` fragments.
+		"Issue number: 9519",
 		"DYNAMIC PLANNING CONTEXT",
 	]
 	positions = [prompt_text.index(section) for section in ordered_sections]
 	assert positions == sorted(positions)
+
+
+def test_prompt_omits_issue_number_line_when_unset_or_malformed() -> None:
+	for issue_number in (None, "", "0", "12a", "1\nInjected"):
+		result, root, _temporary_directory = _run_runner("success", issue_number=issue_number)
+		assert result.returncode == 0, result.stderr
+		prompt_text = (root / "runtime" / "codex_prompt.txt").read_text(encoding="utf-8")
+		assert "Issue number:" not in prompt_text, issue_number
 
 
 def test_retries_backoff_comments_and_final_fallback_are_preserved() -> None:

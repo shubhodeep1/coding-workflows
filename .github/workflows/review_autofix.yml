@@ -164,6 +164,14 @@ env:
   # Sonnet run does not succeed it retries once on this pool model; a
   # pool-wide outage skips the slot (status skipped_pool).
   REVIEWER_POOL_FALLBACK_MODEL: ${{ vars.REVIEWER_POOL_FALLBACK_MODEL || 'claude-haiku-5-5' }}
+  # ChatGPT account reviewer slot (trial plan Phase 2, Refs #8969). Off unless
+  # the trusted .github/ai/chatgpt_pool.json has reviewer_slot_enabled: true
+  # (shipped false). REVIEWER_CHATGPT_SLOT_ENABLED=true|false overrides the
+  # file; empty reads it. REVIEWER_CHATGPT_MODEL / REVIEWER_CHATGPT_REPLACES
+  # override the file's model and the panel slug it replaces.
+  REVIEWER_CHATGPT_SLOT_ENABLED: ${{ vars.REVIEWER_CHATGPT_SLOT_ENABLED || '' }}
+  REVIEWER_CHATGPT_MODEL: ${{ vars.REVIEWER_CHATGPT_MODEL || '' }}
+  REVIEWER_CHATGPT_REPLACES: ${{ vars.REVIEWER_CHATGPT_REPLACES || '' }}
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
   # Capacity-fallback editor (autofix) model. On the final editor attempt
   # scripts/review_apply_fixes.sh switches --model to this slug, which sits in
@@ -735,10 +743,15 @@ jobs:
           # fall-through-to-cron behaviour. Unknown mergeability (GitHub
           # computes it asynchronously) fails open and keeps the skip.
           AUTOFIX_SKIP_DOC_ONLY: ${{ vars.AUTOFIX_SKIP_DOC_ONLY }}
+          # Generated chore PRs (validation self-test status, workflow log
+          # analysis report) skip the reviewers and the security pass; the
+          # script defaults it to true. 'false' reviews them like any PR.
+          AUTOFIX_SKIP_GENERATED_CHORE: ${{ vars.AUTOFIX_SKIP_GENERATED_CHORE }}
           AUTOFIX_SKIP_SUPPRESS_ON_CONFLICT: ${{ vars.AUTOFIX_SKIP_SUPPRESS_ON_CONFLICT }}
           AUTOFIX_SKIP_MAX_ADDITIONS: ${{ vars.AUTOFIX_SKIP_MAX_ADDITIONS }}
           AUTOFIX_SKIP_MAX_DELETIONS: ${{ vars.AUTOFIX_SKIP_MAX_DELETIONS }}
           SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
+          SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}
           # #8333: an eligible docs-only / small-diff / freshness_sync PR keeps
           # the deterministic skip, and deterministic-skip-merge runs the
           # single-issue security pass before it labels or merges. A PR
@@ -762,6 +775,7 @@ jobs:
           # evaluating the cap (failure comments keep their marker).
           REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED || 'true' }}
           REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL: ${{ vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL || '3' }}
+          REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED || '2' }}
           # #6625: markers from other support versions are not counted.
           REVIEW_SUPPORT_SHA: ${{ steps.resolve_support.outputs.review_support_sha }}
         run: |
@@ -1272,9 +1286,11 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
+          SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS || '2' }}
           SECURITY_PASS_PENDING_STALE_HOURS: ${{ vars.SECURITY_PASS_PENDING_STALE_HOURS || '6' }}
+          SECURITY_PASS_BASE_SYNC_CARRY_ENABLED: ${{ vars.SECURITY_PASS_BASE_SYNC_CARRY_ENABLED || 'true' }}
           SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES: ${{ vars.SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES || '20' }}
           SECURITY_PASS_MAX_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_MAX_AUDIT_ATTEMPTS || '' }}
           SECURITY_PASS_MAX_CONCURRENT_AUDITS: ${{ vars.SECURITY_PASS_MAX_CONCURRENT_AUDITS || '3' }}
@@ -1452,7 +1468,7 @@ jobs:
             auto_merge_summary="SUPPRESSED (orchestrator integration PR head ref '${PR_HEAD_REF}'; orchestrator finalizes the merge)"
             echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA:-unknown} action=refuse reason=orchestrator_integration_pr"
             echo "PR #${PR_NUMBER} is an orchestrator integration PR — auto-merge suppressed on the deterministic-skip path. finalize_integration_merge_if_needed owns the final merge after project completion."
-          elif [[ "${PR_HEAD_REF}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then
+          elif [[ "${PR_HEAD_REF}" =~ ^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$ ]]; then
             # Consumer-updater PRs (#7004): only update_workflows.yml's verify job enables auto-merge.
             auto_merge_summary="SUPPRESSED (consumer-updater PR head ref '${PR_HEAD_REF}'; the update_workflows.yml verify job owns the merge)"
             echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA:-unknown} action=refuse reason=updater_pr_verify_job_owns_merge"
@@ -2500,6 +2516,47 @@ jobs:
           fi
           echo "AI_ENGINE_RESOLVED_PANEL_REVIEWER=${panel_engine}" >> "$GITHUB_ENV"
           echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
+          # ChatGPT account reviewer slot: resolved once from the trusted
+          # support copy of chatgpt_pool.json, never the PR checkout. A
+          # missing helper, a failure or any invalid value means off.
+          chatgpt_slot=false
+          chatgpt_model=""
+          chatgpt_replaces=""
+          chatgpt_reasoning=""
+          chatgpt_line=""
+          if [ -f "${SUPPORT_SCRIPTS_DIR}/claude_engine.py" ]; then
+            chatgpt_line="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/claude_engine.py" chatgpt-slot \
+              --config "${GITHUB_WORKSPACE:-${PWD}}/.codex-workflow-src/.github/ai/chatgpt_pool.json" \
+              --override "${REVIEWER_CHATGPT_SLOT_ENABLED:-}" --model "${REVIEWER_CHATGPT_MODEL:-}" \
+              --replaces "${REVIEWER_CHATGPT_REPLACES:-}" 2>/dev/null)" || chatgpt_line=""
+          fi
+          for chatgpt_kv in ${chatgpt_line}; do
+            case "${chatgpt_kv}" in
+              enabled=true) chatgpt_slot=true ;;
+              model=*) chatgpt_model="${chatgpt_kv#model=}" ;;
+              replaces=*) chatgpt_replaces="${chatgpt_kv#replaces=}" ;;
+              reasoning=*) chatgpt_reasoning="${chatgpt_kv#reasoning=}" ;;
+            esac
+          done
+          [ -n "${chatgpt_model}" ] && [ -n "${chatgpt_replaces}" ] || chatgpt_slot=false
+          # No account is fetched for a slot whose replaced slug is not on the panel.
+          if [ "${chatgpt_slot}" = "true" ] && ! printf '%s\n' "${REVIEWER_MODELS:-}" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -Fx -- "${chatgpt_replaces}" >/dev/null; then
+            chatgpt_slot=false
+            chatgpt_line="${chatgpt_line} panel=replaces_not_in_panel"
+          fi
+          # Logged when the slot is on, an operator set the switch, or a configured slot was forced off;
+          # a plain switch-off or a missing file stays silent, so off-path logs stay unchanged.
+          chatgpt_forced_off=false
+          case "${chatgpt_line}" in *panel=replaces_not_in_panel*|*reason=var_invalid*|*reason=config_invalid*) chatgpt_forced_off=true ;; esac
+          if [ "${chatgpt_slot}" = "true" ] || [ -n "${REVIEWER_CHATGPT_SLOT_ENABLED:-}" ] || [ "${chatgpt_forced_off}" = "true" ]; then
+            echo "REVIEWER_CHATGPT: resolve slot=${chatgpt_slot} ${chatgpt_line:-reason=helper_unavailable}"
+          fi
+          {
+            echo "chatgpt_slot=${chatgpt_slot}"
+            echo "chatgpt_model=${chatgpt_model}"
+            echo "chatgpt_replaces=${chatgpt_replaces}"
+            echo "chatgpt_reasoning=${chatgpt_reasoning}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Install Claude Code CLI
         if: env.PR_CLOSED != 'true' && steps.ai_engine.outputs.any_claude == 'true'
@@ -2514,6 +2571,19 @@ jobs:
         continue-on-error: true
         uses: ./.codex-workflow-src/.github/actions/claude-pool-token
         with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      # ChatGPT account reviewer slot (Refs #8969): runs only when the trusted
+      # switch resolved on. The action writes a 0600 auth.json under
+      # $RUNNER_TEMP/chatgpt-pool/ and its post step deletes it; a failure
+      # skips the slot (chatgpt_pool_unavailable), never the review.
+      - name: ChatGPT pool token
+        id: chatgpt_pool
+        if: env.PR_CLOSED != 'true' && steps.ai_engine.outputs.chatgpt_slot == 'true'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/chatgpt-pool-token
+        with:
+          mode: token
           config_path: .codex-workflow-src/.github/ai/claude_engine.json
 
       - name: Record Claude pool capacity
@@ -3574,6 +3644,14 @@ jobs:
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
+          REVIEWER_CHATGPT_SLOT_RESOLVED: ${{ steps.ai_engine.outputs.chatgpt_slot || '' }}
+          REVIEWER_CHATGPT_MODEL_RESOLVED: ${{ steps.ai_engine.outputs.chatgpt_model || '' }}
+          REVIEWER_CHATGPT_REPLACES_RESOLVED: ${{ steps.ai_engine.outputs.chatgpt_replaces || '' }}
+          REVIEWER_CHATGPT_REASONING_RESOLVED: ${{ steps.ai_engine.outputs.chatgpt_reasoning || '' }}
+          CHATGPT_POOL_STEP_AVAILABLE: ${{ steps.chatgpt_pool.outputs.available || '' }}
+          CHATGPT_POOL_STEP_REASON: ${{ steps.chatgpt_pool.outputs.reason || '' }}
+          CHATGPT_POOL_STEP_ACCOUNT: ${{ steps.chatgpt_pool.outputs.account || '' }}
+          CHATGPT_POOL_STEP_CODEX_HOME: ${{ steps.chatgpt_pool.outputs.codex_home || '' }}
         run: |
           set -euo pipefail
           materiality_pid=""
@@ -3589,7 +3667,12 @@ jobs:
           esac
 
           reviewers_rc=0
-          bash "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh" || reviewers_rc=$?
+          # Issue #9533: keep a copy of the step's stderr so a shell crash
+          # (e.g. `render_prompt.sh: line 306: ...: invalid variable name`)
+          # reaches reviewers_failure_evidence.txt, the fingerprint and
+          # AUTOFIX_FAILURE_FIRST_ERROR. The log still streams live.
+          bash "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh" 2> >(tee -a "${RUNTIME_DIR:-/tmp}/reviewers_stage_stderr.txt" >&2) || reviewers_rc=$?
+          wait $! 2>/dev/null || true
 
           if [ -n "${materiality_pid}" ]; then
             materiality_rc=0
@@ -4102,6 +4185,14 @@ jobs:
           AUTOFIX_STEP_REPOSITORY: ${{ github.repository }}
           AUTOFIX_STEP_RUN_ID: ${{ github.run_id }}
           AUTOFIX_CLEAN_MARKER_BASE_SHA: ${{ needs.gate.outputs.base_sha }}
+          # Issue #9533: the gate's identical-failure count for this head, so a
+          # second same-fingerprint reviewers_failed blocks instead of retrying.
+          GATE_FINGERPRINT_CAP_FP: ${{ needs.gate.outputs.fingerprint_cap_fp }}
+          GATE_FINGERPRINT_CAP_REASON: ${{ needs.gate.outputs.fingerprint_cap_reason }}
+          GATE_FINGERPRINT_CAP_COUNT: ${{ needs.gate.outputs.fingerprint_cap_count }}
+          GATE_HEAD_SHA_FOR_FINGERPRINT: ${{ needs.gate.outputs.head_sha }}
+          REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED || 'true' }}
+          REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED || '2' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_post_editor_summary.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_post_editor_summary.sh"
@@ -4110,6 +4201,37 @@ jobs:
             exit 1
           fi
           source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
+
+      # ChatGPT account reviewer trial plan Phase 3 (Refs #8969): per-round
+      # findings record (slot statuses, consolidated issues, editor
+      # dispositions). Fail-open: no secrets, continue-on-error, exit 0.
+      - name: Write review findings record
+        if: always() && env.PREVIOUS_REVIEWS_DIR != '' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'
+        continue-on-error: true
+        env:
+          REVIEWER_CHATGPT_SLOT_RESOLVED: ${{ steps.ai_engine.outputs.chatgpt_slot || '' }}
+          REVIEWER_CHATGPT_MODEL_RESOLVED: ${{ steps.ai_engine.outputs.chatgpt_model || '' }}
+          REVIEWER_CHATGPT_REPLACES_RESOLVED: ${{ steps.ai_engine.outputs.chatgpt_replaces || '' }}
+          AUTOFIX_ITERATION_METRIC: ${{ steps.retrigger_guard.outputs.autofix_iteration || '' }}
+        run: |
+          REVIEW_FINDINGS_RECORD_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_findings_record.py"
+          [ -f "${REVIEW_FINDINGS_RECORD_SCRIPT}" ] || REVIEW_FINDINGS_RECORD_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_findings_record.py"
+          if [ ! -f "${REVIEW_FINDINGS_RECORD_SCRIPT}" ]; then
+            echo "REVIEW_FINDINGS_RECORD: outcome=skipped reason=helper_unavailable"
+            exit 0
+          fi
+          PYTHONDONTWRITEBYTECODE=1 python3 "${REVIEW_FINDINGS_RECORD_SCRIPT}" write --output "${PREVIOUS_REVIEWS_DIR}/review_findings_record.json" \
+            || echo "::warning::REVIEW_FINDINGS_RECORD: outcome=failed reason=helper_exit"
+
+      - name: Upload review findings record
+        if: always() && env.PREVIOUS_REVIEWS_DIR != '' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@v6
+        with:
+          name: reviewer-findings-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.PREVIOUS_REVIEWS_DIR }}/review_findings_record.json
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: Clear Serena after editor
         if: always() && env.SERENA_ENABLED == 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
@@ -4561,9 +4683,11 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
+          SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS || '2' }}
           SECURITY_PASS_PENDING_STALE_HOURS: ${{ vars.SECURITY_PASS_PENDING_STALE_HOURS || '6' }}
+          SECURITY_PASS_BASE_SYNC_CARRY_ENABLED: ${{ vars.SECURITY_PASS_BASE_SYNC_CARRY_ENABLED || 'true' }}
           SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES: ${{ vars.SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES || '20' }}
           SECURITY_PASS_MAX_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_MAX_AUDIT_ATTEMPTS || '' }}
           SECURITY_PASS_MAX_CONCURRENT_AUDITS: ${{ vars.SECURITY_PASS_MAX_CONCURRENT_AUDITS || '3' }}
@@ -4744,9 +4868,11 @@ jobs:
           SECURITY_PASS_EXHAUSTED: ${{ steps.single_issue_security_pass.outputs.exhausted }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
+          SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS || '2' }}
           SECURITY_PASS_PENDING_STALE_HOURS: ${{ vars.SECURITY_PASS_PENDING_STALE_HOURS || '6' }}
+          SECURITY_PASS_BASE_SYNC_CARRY_ENABLED: ${{ vars.SECURITY_PASS_BASE_SYNC_CARRY_ENABLED || 'true' }}
           SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES: ${{ vars.SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES || '20' }}
           SECURITY_PASS_MAX_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_MAX_AUDIT_ATTEMPTS || '' }}
           SECURITY_PASS_MAX_CONCURRENT_AUDITS: ${{ vars.SECURITY_PASS_MAX_CONCURRENT_AUDITS || '3' }}
@@ -5040,7 +5166,7 @@ jobs:
           # Consumer-updater PRs (#7004): only update_workflows.yml writes these
           # branches and only its verify job may merge them. A review push
           # (editor, [ai-merge-resolve]) would land an unverified head.
-          if [[ "${TARGET_BRANCH:-}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then
+          if [[ "${TARGET_BRANCH:-}" =~ ^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$ ]]; then
             echo "AUTOFIX_PUSH_SKIPPED pr=${PR_NUMBER:-unknown} reason=updater_pr_verify_job_owns_branch"
             echo "DID_COMMIT=false" >> "$GITHUB_ENV"
             echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
