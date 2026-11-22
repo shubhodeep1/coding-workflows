@@ -203,7 +203,7 @@ def test_workflow_run_block_extraction_keeps_line_numbers() -> None:
 
 
 def test_untrusted_values_are_escaped() -> None:
-	warning = lint_mod.Warning(path="a,b:c%.sh", line=3, snippet="gh api 100%\nx")
+	warning = lint_mod.LoopCallFinding(path="a,b:c%.sh", line=3, snippet="gh api 100%\nx")
 	line = lint_mod.format_warning(warning)
 	assert line.startswith("::warning file=a%2Cb%3Ac%25.sh,line=3::"), line
 	assert "100%25%0Ax" in line
@@ -234,3 +234,75 @@ def test_internal_error_is_skipped_and_exits_zero(tmp_path: Path, capsys, monkey
 	monkeypatch.setattr(lint_mod, "lint", boom)
 	assert lint_mod.main(["--base", "x", "--repo-root", str(tmp_path)]) == 0
 	assert "GH_LOOP_CALL_LINT outcome=skipped reason=internal_error" in capsys.readouterr().out
+
+
+def test_case_pattern_named_done_does_not_close_the_loop() -> None:
+	text = (
+		"while true; do\n"
+		"  case \"$stage\" in\n"
+		"    fetch|done) ;;\n"
+		"    (done) echo ;;\n"
+		"    *) stage=other ;;\n"
+		"  esac\n"
+		f"  {GH_API} x\n"
+		"done\n"
+		f"{GH_API} y\n"
+	)
+	assert _warned_lines("a.sh", text) == [7]
+
+
+def test_loop_inside_double_quoted_command_substitution_warns() -> None:
+	one_line = f"out=\"$(for n in 1 2; do {GH_API} \"repos/o/r/issues/$n\"; done)\"\n{GH_API} z\n"
+	assert _warned_lines("a.sh", one_line) == [1]
+	multi = (
+		"out=\"$(\n"
+		"  printf '%s\\n' \"x\" | while read -r n; do\n"
+		f"    {GH_API} \"repos/o/r/issues/$n\"\n"
+		"  done\n"
+		")\"\n"
+		f"{GH_API} z\n"
+	)
+	assert _warned_lines("a.sh", multi) == [3]
+
+
+def test_multi_line_curl_to_the_api_host_warns_on_the_curl_line() -> None:
+	text = (
+		"for n in 1; do\n"
+		"  out=\"$(curl -fsS -H \"Accept: application/vnd.github+json\" \\\n"
+		"    \"https://api.github.com/repos/o/r/issues/$n\")\"\n"
+		"  curl -fsS \\\n"
+		"    https://example.com/x\n"
+		"done\n"
+	)
+	assert _warned_lines("a.sh", text) == [2]
+
+
+def test_global_options_before_the_subcommand_still_match() -> None:
+	for call in ("gh -R o/r pr view 1", "gh --repo=o/r issue list", "gh --hostname h.example api x"):
+		assert _warned_lines("a.sh", f"for n in 1; do\n  {call}\ndone\n") == [2], call
+
+
+def test_suppression_needs_a_real_comment_or_a_wrapping_helper() -> None:
+	quoted_annotation = f"while true; do\n  echo '# gh-loop-ok: example'\n  {GH_API} x\ndone\n"
+	assert _warned_lines("a.sh", quoted_annotation) == [3]
+	helper_after = f"for n in 1; do\n  {GH_API} x; gh_read y\ndone\n"
+	assert _warned_lines("a.sh", helper_after) == [2]
+	helper_other_command = f"for n in 1; do\n  out=\"$(gh_read x)\"; {GH_API} y\ndone\n"
+	assert _warned_lines("a.sh", helper_other_command) == [2]
+
+
+def test_one_unreadable_path_keeps_other_findings(tmp_path: Path, monkeypatch) -> None:
+	repo, base = _repo(tmp_path, {})
+	head = _commit(repo, {"a.sh": f"for n in 1; do {GH_API} x; done\n", "b.sh": f"for n in 1; do {GH_API} x; done\n"})
+	real_git = lint_mod._git
+
+	def flaky(root: Path, *args: str) -> str:
+		if args[:1] == ("show",) and args[1].endswith(":a.sh"):
+			raise RuntimeError("unreadable")
+		return real_git(root, *args)
+
+	monkeypatch.setattr(lint_mod, "_git", flaky)
+	warnings, files, skip = lint_mod.lint(repo, base, head)
+	assert skip is None
+	assert [(w.path, w.line) for w in warnings] == [("b.sh", 1)]
+	assert files == 2

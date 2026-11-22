@@ -287,12 +287,16 @@ jobs:
         id: gh_loop_call_lint
         if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         continue-on-error: true
+        # A step timeout is covered by `continue-on-error`; the job's is not.
+        timeout-minutes: 5
         run: |
           set -uo pipefail
           # CLAUDE.md §15: zero API calls. The base is the merge commit's first
           # parent, fetched over git like ci.yml's agents.md direct-edit check.
           head_commit="$(git rev-parse HEAD)"
-          if ! git fetch --no-tags --depth=2 origin "${head_commit}"; then
+          # `continue-on-error` does not cover the job's 10-minute timeout, so
+          # a stalled fetch is cut off here instead of failing pr-body-lint.
+          if ! timeout 90 git fetch --no-tags --depth=2 origin "${head_commit}"; then
             echo "::warning::could not deepen the merge commit; the lint reports outcome=skipped"
           fi
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_gh_calls_in_loops.py \

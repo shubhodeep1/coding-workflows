@@ -50,9 +50,10 @@ MAX_PRINTED_WARNINGS = 200
 SNIPPET_MAX_CHARS = 80
 
 # A GitHub API call. `gh` must not follow a word character or `-`; the helper
-# names must not be a function definition (`gh_retry() {`).
+# names must not be a function definition (`gh_retry() {`). Global options
+# `-R` / `--repo` / `--hostname` may come before the subcommand.
 API_CALL_RE = re.compile(
-	r"(?<![\w-])gh\s+(?:api\b|pr\s+(?:view|list|checks)\b|issue\s+(?:view|list)\b|run\s+(?:list|view)\b)"
+	r"(?<![\w-])gh\s+(?:(?:-R|--repo|--hostname)(?:\s+|=)\S+\s+)*(?:api\b|pr\s+(?:view|list|checks)\b|issue\s+(?:view|list)\b|run\s+(?:list|view)\b)"
 	r"|(?<![\w-])(?:_safe_gh_jq|gh_retry|gh_api_retry)\b(?!\s*\(\))"
 )
 CURL_RE = re.compile(r"(?<![\w-])curl\b")
@@ -98,7 +99,7 @@ class LineScan:
 
 
 @dataclass
-class Warning:  # noqa: A001 - local name, never the builtin category
+class LoopCallFinding:
 	path: str
 	line: int
 	snippet: str
@@ -166,6 +167,12 @@ def loop_depths(lines: list[str]) -> list[LineScan]:
 	in_dquote = False
 	pending_heredocs: list[str] = []
 	active_heredocs: list[str] = []
+	# One open-paren counter per `$(` opened inside double quotes; its `)`
+	# returns to the double-quoted string.
+	subst_stack: list[int] = []
+	# `case` state per open `case`: "header" (before `in`), "pattern" (a case
+	# arm's pattern list, where `done)` is not a keyword) or "body".
+	case_stack: list[str] = []
 	for raw in lines:
 		if active_heredocs:
 			if raw.strip() == active_heredocs[0]:
@@ -193,6 +200,13 @@ def loop_depths(lines: list[str]) -> list[LineScan]:
 			if in_dquote:
 				if char == '"':
 					in_dquote = False
+				elif raw.startswith("$(", index):
+					# `"$( ... )"`: the substitution body is shell code again.
+					subst_stack.append(0)
+					in_dquote = False
+					command_position = True
+					index += 2
+					continue
 				index += 1
 				continue
 			word_start = index == 0 or raw[index - 1] in WORD_BREAKS
@@ -222,6 +236,27 @@ def loop_depths(lines: list[str]) -> list[LineScan]:
 				index += 1
 				continue
 			if char in COMMAND_SEPARATORS:
+				if case_stack and case_stack[-1] == "pattern" and char in "()|":
+					# `a|done)`: `)` ends the case pattern and starts the arm body.
+					if char == ")":
+						case_stack[-1] = "body"
+						command_position = True
+					index += 1
+					continue
+				if char == ";" and case_stack and case_stack[-1] == "body" and raw.startswith((";;", ";&"), index):
+					case_stack[-1] = "pattern"
+					index += 2
+					continue
+				if subst_stack and char == "(":
+					subst_stack[-1] += 1
+				elif subst_stack and char == ")":
+					if subst_stack[-1] == 0:
+						subst_stack.pop()
+						in_dquote = True
+						command_position = False
+						index += 1
+						continue
+					subst_stack[-1] -= 1
 				command_position = True
 				index += 1
 				continue
@@ -234,6 +269,25 @@ def loop_depths(lines: list[str]) -> list[LineScan]:
 			while end < length and raw[end] not in WORD_BREAKS and raw[end] not in "'\"\\":
 				end += 1
 			word = raw[index:end]
+			if case_stack and case_stack[-1] == "pattern":
+				# A case pattern word is never a keyword; `esac` ends the case.
+				if word == "esac":
+					case_stack.pop()
+					command_position = False
+				index = end
+				continue
+			if case_stack and case_stack[-1] == "header":
+				if word == "in":
+					case_stack[-1] = "pattern"
+				index = end
+				continue
+			if command_position and word == "case":
+				case_stack.append("header")
+				command_position = False
+				index = end
+				continue
+			if command_position and word == "esac" and case_stack:
+				case_stack.pop()
 			if command_position and end < length and raw[end] in "'\"\\":
 				# A quoted or escaped word is never a keyword.
 				command_position = False
@@ -290,37 +344,63 @@ def workflow_run_blocks(lines: list[str]) -> list[tuple[int, list[str]]]:
 	return blocks
 
 
-def _api_call_in_loop(scan: LineScan) -> bool:
-	for match in API_CALL_RE.finditer(scan.code):
-		if scan.depth_at(match.start()) >= 1:
-			return True
-	for match in CURL_RE.finditer(scan.code):
-		if GITHUB_API_HOST in scan.code_unmasked[match.end():] and scan.depth_at(match.start()) >= 1:
+def _helper_wraps(code: str, call_start: int) -> bool:
+	"""An allow-listed helper earlier in the same command runs the call."""
+	for helper in ALLOWED_HELPER_RE.finditer(code, 0, call_start):
+		if not any(separator in code[helper.end():call_start] for separator in ";&|"):
 			return True
 	return False
 
 
-def scan_file(path: str, text: str, added: set[int]) -> list[Warning]:
+def _api_call_in_loop(scan: LineScan, continuation: str = "") -> bool:
+	"""`continuation` holds the backslash-continued lines after this one."""
+	for match in API_CALL_RE.finditer(scan.code):
+		if scan.depth_at(match.start()) >= 1 and not _helper_wraps(scan.code, match.start()):
+			return True
+	for match in CURL_RE.finditer(scan.code):
+		target = scan.code_unmasked[match.end():] + continuation
+		if GITHUB_API_HOST in target and scan.depth_at(match.start()) >= 1 and not _helper_wraps(scan.code, match.start()):
+			return True
+	return False
+
+
+def _continuation(scans: list[LineScan], offset: int) -> str:
+	"""The lines a trailing backslash joins to line `offset` (curl URLs)."""
+	parts: list[str] = []
+	index = offset
+	while index + 1 < len(scans) and scans[index].code_unmasked.rstrip().endswith("\\"):
+		index += 1
+		parts.append(scans[index].code_unmasked)
+	return " " + " ".join(parts) if parts else ""
+
+
+def _comment_part(raw: str, scan: LineScan) -> str:
+	"""The real shell comment of a line (never quoted text or heredoc text)."""
+	return "" if scan.in_heredoc else raw[len(scan.code_unmasked):]
+
+
+def scan_file(path: str, text: str, added: set[int]) -> list[LoopCallFinding]:
 	lines = text.split("\n")
 	if path.endswith(SHELL_SUFFIXES):
 		blocks = [(1, lines)]
 	else:
 		blocks = workflow_run_blocks(lines)
-	warnings: list[Warning] = []
+	warnings: list[LoopCallFinding] = []
 	for start, block_lines in blocks:
 		scans = loop_depths(block_lines)
 		for offset, scan in enumerate(scans):
 			file_line = start + offset
 			if file_line not in added or scan.in_heredoc:
 				continue
-			if not _api_call_in_loop(scan):
-				continue
-			if ALLOWED_HELPER_RE.search(scan.code):
+			continuation = _continuation(scans, offset) if CURL_RE.search(scan.code) else ""
+			if not _api_call_in_loop(scan, continuation):
 				continue
 			raw = block_lines[offset]
-			if ANNOTATION_RE.search(raw) or (offset > 0 and ANNOTATION_RE.search(block_lines[offset - 1])):
+			if ANNOTATION_RE.search(_comment_part(raw, scan)) or (
+				offset > 0 and ANNOTATION_RE.search(_comment_part(block_lines[offset - 1], scans[offset - 1]))
+			):
 				continue
-			warnings.append(Warning(path=path, line=file_line, snippet=raw.strip()[:SNIPPET_MAX_CHARS]))
+			warnings.append(LoopCallFinding(path=path, line=file_line, snippet=raw.strip()[:SNIPPET_MAX_CHARS]))
 	return warnings
 
 
@@ -332,7 +412,7 @@ def _escape_property(value: str) -> str:
 	return _escape_data(value).replace(":", "%3A").replace(",", "%2C")
 
 
-def format_warning(warning: Warning) -> str:
+def format_warning(warning: LoopCallFinding) -> str:
 	message = (
 		f"§15: GitHub API call inside a loop ({warning.snippet}). Use a batched or cached helper "
 		"(see CLAUDE.md §15) or annotate the line with '# gh-loop-ok: <reason>'."
@@ -348,7 +428,7 @@ def _commit_exists(repo_root: Path, rev: str) -> bool:
 	return result.returncode == 0
 
 
-def lint(repo_root: Path, base: str, head: str) -> tuple[list[Warning], int, str | None]:
+def lint(repo_root: Path, base: str, head: str) -> tuple[list[LoopCallFinding], int, str | None]:
 	"""(warnings, changed files scanned, skip reason or None)."""
 	try:
 		if not _commit_exists(repo_root, base):
@@ -356,9 +436,15 @@ def lint(repo_root: Path, base: str, head: str) -> tuple[list[Warning], int, str
 		if not _commit_exists(repo_root, head):
 			return [], 0, "no_head"
 		added = added_lines_by_file(repo_root, base, head)
-		warnings: list[Warning] = []
+		warnings: list[LoopCallFinding] = []
 		for path in sorted(added):
-			text = _git(repo_root, "show", f"{head}:{path}")
+			try:
+				text = _git(repo_root, "show", f"{head}:{path}")
+			except RuntimeError:
+				# One unreadable path (e.g. a non-UTF-8 name) must not drop
+				# the findings of every other changed file.
+				print(f"::warning::{LOG_PREFIX} could not read {_escape_data(path)}; skipped", flush=True)
+				continue
 			warnings.extend(scan_file(path, text, added[path]))
 	except (RuntimeError, OSError, subprocess.TimeoutExpired):
 		return [], 0, "git_error"
