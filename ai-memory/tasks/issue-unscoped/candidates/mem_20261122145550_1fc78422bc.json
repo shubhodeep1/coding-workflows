@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:(no line given) | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The aggregate `lint` job failed on head da3cb95a only because `orchestrate-poll` was cancelled (run 44903199931, job 136876305482; shard job 136870741031). The log shows only passing tests and no failing assertion.\n  WHY: This is a cancelled or infrastructure job, not a defect in the changed code, and a CI re-run should clear it. The reviewer rated it NIT, which maps to low here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:(no line given) | severity=low | confidence=2\n  PROBLEM: The aggregate `lint` job failed on head da3cb95a only because `orchestrate-poll` was cancelled (run 44903199931, job 136876305482; shard job 136870741031). The log shows only passing tests and no failing assertion.\n  WHY: This is a cancelled or infrastructure job, not a defect in the changed code, and a CI re-run should clear it. The reviewer rated it NIT, which maps to low here.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "7606e615fe223611d2cb02bee3917d26e3293725eb7bb63f27b68dd9ab9a8475",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9867,
+    "run_id": "45022351734",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45022351734",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122145550_1fc78422bc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9867,
+    "run_id": "45022351734"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-22T14:55:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
