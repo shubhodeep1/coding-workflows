@@ -3458,8 +3458,9 @@ jobs:
   orchestrate-poll:
     # tests/test_orchestrate_poll_process.py was the old job's critical path
     # (about 20 minutes on 4 local shards). Each matrix group runs one
-    # fifth of it on CI_POLL_TEST_SHARDS local shards; 20 minutes leaves
-    # room for a cold runner, whose shards can be slower than a warm one's.
+    # fifth of it on CI_POLL_TEST_SHARDS local shards; the timeout below
+    # leaves room for a cold runner, whose shards can be slower than a warm
+    # one's.
     # The matrix grew from 4 to 5 groups after group 0 took 16m45s of its
     # 20 minutes (run 40165437476, budget-watch issue #8113). Group 4 runs
     # its slice and, since #8118, the unblock judge step; every other
@@ -3488,6 +3489,16 @@ jobs:
     # (moved from tests-hooks-and-orchestrator).
     # Since #9639, group 0 pins the pre-push affected-test gate step (moved
     # from group 3).
+    # On 2026-11-21, after #9641 moved the pre-push gate step out of group
+    # 3, shards still ran 15.0-17.1 minutes on a passing run (#9867, run
+    # 44914391485) and were cancelled at the 20-minute cap in runs
+    # 44915291684 (#9839, shards 0 and 3 at 20.2 min) and 44917124015
+    # (#9854, shard 0). Moving steps (#9639 / #9641) did not leave enough
+    # headroom, so the repository owner chose 30 minutes (#9916). This
+    # deliberately overrides the budget-watch advice not to raise
+    # `timeout-minutes`, for this job only; budget-watch still warns at
+    # 0.75 of the limit (22m30s). tests/test_ci_job_split_contract.py pins
+    # this job as the only exception to the 20-minute cap.
     # Skipped in quick mode (Phase 4): only static-checks runs there.
     if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
     runs-on: ubuntu-latest
@@ -3496,7 +3507,7 @@ jobs:
       fail-fast: false
       matrix:
         poll-group: [0, 1, 2, 3, 4]
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
