@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:118 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The new sentence \"see the `ZOMBIE_RUN_MAX_QUEUED_HOURS` row under the review/autofix variables for the full list of guards and the sweep's jobs check\" names a section that does not exist in README.md.\n  WHY: The referenced row at README.md:2856 sits in the table under \"## Required Variables\" (README.md:2674), and the wording reads as self-reference from inside a row with the same name, so the pointer is stale and misleading (reported as SEVERITY: NIT, mapped to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- README.md:118 | severity=low | confidence=4\n  PROBLEM: The new sentence \"see the `ZOMBIE_RUN_MAX_QUEUED_HOURS` row under the review/autofix variables for the full list of guards and the sweep's jobs check\" names a section (\"review/autofix variables\") that does not exist in README.md.\n  WHY: The referenced row lives in the table under \"## Required Variables\" (README.md:2674; no heading exists between it and line 3030), and the pointer is ambiguous because the sentence sits inside a row already named `ZOMBIE_RUN_MAX_QUEUED_HOURS`. This is a stale doc reference, not a runtime failure.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7dce6ed0b40db9bf79dc483464aa0ec662307489f0d64077e4b33f0a6a7e87c4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9711,
+    "run_id": "45058541440",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45058541440",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122201031_1277148e22",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9711,
+    "run_id": "45058541440"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-22T20:10:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
