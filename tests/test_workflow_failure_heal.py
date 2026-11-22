@@ -6890,6 +6890,8 @@ def test_intake_unregistered_warning_workflow_cache_wiring() -> None:
 	assert names.index("Wait for the heal intake queue") < names.index(day["name"]) < names.index(lookup["name"]) < names.index(run["name"]) < names.index(save["name"]) < names.index("Leave the heal intake queue")
 	assert lookup["uses"] == "actions/cache/restore@v4" and save["uses"] == "actions/cache/save@v4"
 	assert lookup["continue-on-error"] is True and save["continue-on-error"] is True
+	# A failed day step must leave `day` empty and let the intake send the WARNING (fail open).
+	assert day["continue-on-error"] is True
 	assert lookup["with"]["lookup-only"] is True
 	assert lookup["with"]["path"] == save["with"]["path"] == "/tmp/workflow-heal-unregistered-warned"
 	assert run["env"]["WORKFLOW_HEAL_UNREGISTERED_MARKER"] == "/tmp/workflow-heal-unregistered-warned"
