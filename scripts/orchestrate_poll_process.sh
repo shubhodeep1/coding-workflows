@@ -230,8 +230,11 @@ fi
 #     `<owner>__<repo>__<n>.json` file per PR (line 1 `ts <epoch> gen <token>`,
 #     then the JSON) and a `gen` token file. Removed by the EXIT trap.
 #   * Invalidation: every gh_retry call that is not a read runs
-#     _orch_poll_pr_json_cache_after_gh_call, which flushes the whole cache and
-#     changes the gen token. `git push` and unwrapped PR writes call
+#     _orch_poll_pr_json_cache_after_gh_call, which changes the token of the
+#     one PR an issue/PR-numbered write targets (`<owner>__<repo>__<n>.gen`),
+#     or else (merges, update-branch, mutations, unnumbered writes) flushes
+#     the whole cache and changes the global gen token. `git push`, the
+#     gh_retry_to_file PR-body PATCH and unwrapped PR writes call
 #     _invalidate_pr_json_cache explicitly; the RB race-guard and post-judge
 #     reads invalidate their PR immediately before reading, so they stay live.
 #   * An entry is served only when its gen token equals the current one, it
@@ -255,15 +258,30 @@ _orch_poll_pr_json_cache_entry_path()
 	printf '%s/%s__%s__%s.json\n' "${_opjc_dir}" "${_opjc_repo%%/*}" "${_opjc_repo##*/}" "${_opjc_num}"
 }
 
+# _orch_poll_pr_json_cache_gen [<entry>]
 # Prints the current gen token; nothing when it is missing or malformed.
+# With an entry path, the token also carries that PR's own token
+# (`<entry minus .json>.gen`, written by a per-PR _invalidate_pr_json_cache),
+# so invalidating one PR does not discard the other PRs' entries.
 _orch_poll_pr_json_cache_gen()
 {
-	local _opjg_dir="${ORCH_POLL_PR_JSON_CACHE_DIR:-}" _opjg_line=""
+	local _opjg_dir="${ORCH_POLL_PR_JSON_CACHE_DIR:-}" _opjg_line="" _opjg_entry="${1:-}" _opjg_num_file="" _opjg_num_line=""
 	[ -n "${_opjg_dir}" ] && [ -f "${_opjg_dir}/gen" ] && [ ! -L "${_opjg_dir}/gen" ] || return 0
 	IFS= read -r _opjg_line < "${_opjg_dir}/gen" 2>/dev/null || true
-	if [[ "${_opjg_line}" =~ ^[A-Za-z0-9]{1,128}$ ]]; then
-		printf '%s\n' "${_opjg_line}"
+	[[ "${_opjg_line}" =~ ^[A-Za-z0-9]{1,128}$ ]] || return 0
+	if [ -n "${_opjg_entry}" ]; then
+		_opjg_num_file="${_opjg_entry%.json}.gen"
+		if [ -L "${_opjg_num_file}" ]; then
+			return 0
+		fi
+		if [ -f "${_opjg_num_file}" ]; then
+			IFS= read -r _opjg_num_line < "${_opjg_num_file}" 2>/dev/null || true
+			[[ "${_opjg_num_line}" =~ ^[A-Za-z0-9]{1,60}$ ]] || return 0
+			_opjg_line="${_opjg_line}n${_opjg_num_line}"
+			[ "${#_opjg_line}" -le 128 ] || return 0
+		fi
 	fi
+	printf '%s\n' "${_opjg_line}"
 	return 0
 }
 
@@ -295,12 +313,12 @@ _orch_poll_pr_json_cache_store()
 	local _opjs_entry="${1:-}" _opjs_num="${2:-}" _opjs_gen="${3:-}" _opjs_body="${4:-}" _opjs_tmp="" _opjs_now=""
 	[ -n "${_opjs_gen}" ] && [ -n "${_opjs_entry}" ] || return 0
 	printf '%s' "${_opjs_body}" | jq -e --argjson n "${_opjs_num}" 'type == "object" and .number == $n' >/dev/null 2>&1 || return 0
-	[ "$(_orch_poll_pr_json_cache_gen)" = "${_opjs_gen}" ] || return 0
+	[ "$(_orch_poll_pr_json_cache_gen "${_opjs_entry}")" = "${_opjs_gen}" ] || return 0
 	printf -v _opjs_now '%(%s)T' -1 2>/dev/null || return 0
 	[[ "${_opjs_now}" =~ ^[0-9]+$ ]] || return 0
 	_opjs_tmp="$(mktemp "${_opjs_entry%/*}/.entry.XXXXXX" 2>/dev/null)" || return 0
 	if printf 'ts %s gen %s\n%s\n' "${_opjs_now}" "${_opjs_gen}" "${_opjs_body}" > "${_opjs_tmp}" 2>/dev/null \
-		&& [ "$(_orch_poll_pr_json_cache_gen)" = "${_opjs_gen}" ] \
+		&& [ "$(_orch_poll_pr_json_cache_gen "${_opjs_entry}")" = "${_opjs_gen}" ] \
 		&& mv -f "${_opjs_tmp}" "${_opjs_entry}" 2>/dev/null; then
 		return 0
 	fi
@@ -309,15 +327,32 @@ _orch_poll_pr_json_cache_store()
 }
 
 # _invalidate_pr_json_cache <repo> [<number>]
-# Changes the gen token (so no read that began earlier can store), then
-# removes the PR's entry, or every entry when the number is missing or not
-# numeric. Never fails and makes no API call.
+# With a number: changes that PR's own token (`<owner>__<repo>__<n>.gen`) so
+# no read of it that began earlier can store, then removes its entry; other
+# PRs' entries stay. Without a number (or one not safe as a file name), or
+# when the PR token cannot be written: changes the global gen token and
+# removes every entry. Never fails and makes no API call.
 _invalidate_pr_json_cache()
 {
 	local _ipjc_dir="${ORCH_POLL_PR_JSON_CACHE_DIR:-}" _ipjc_repo="${1:-}" _ipjc_num="${2:-}" _ipjc_tok="" _ipjc_rt="${EPOCHREALTIME:-}" _ipjc_tmp=""
+	local _ipjc_base=""
 	[ -n "${_ipjc_dir}" ] && [ -d "${_ipjc_dir}" ] && [ ! -L "${_ipjc_dir}" ] || return 0
 	_ipjc_rt="${_ipjc_rt//[^0-9]/}"
 	_ipjc_tok="g${BASHPID:-$$}x${RANDOM}x${RANDOM}x${_ipjc_rt}"
+	if [[ "${_ipjc_repo}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] && [[ "${_ipjc_num}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+		_ipjc_base="${_ipjc_dir}/${_ipjc_repo%%/*}__${_ipjc_repo##*/}__${_ipjc_num}"
+		if [ ! -L "${_ipjc_base}.gen" ] \
+			&& _ipjc_tmp="$(mktemp "${_ipjc_dir}/.gen.XXXXXX" 2>/dev/null)" \
+			&& printf '%s\n' "${_ipjc_tok}" > "${_ipjc_tmp}" 2>/dev/null \
+			&& mv -f "${_ipjc_tmp}" "${_ipjc_base}.gen" 2>/dev/null; then
+			rm -f "${_ipjc_base}.json" 2>/dev/null || true
+			return 0
+		fi
+		[ -z "${_ipjc_tmp}" ] || rm -f "${_ipjc_tmp}" 2>/dev/null || true
+		_ipjc_tmp=""
+		# The PR token could not be changed: fall through to a full flush.
+		_ipjc_num=""
+	fi
 	if _ipjc_tmp="$(mktemp "${_ipjc_dir}/.gen.XXXXXX" 2>/dev/null)" \
 		&& printf '%s\n' "${_ipjc_tok}" > "${_ipjc_tmp}" 2>/dev/null \
 		&& mv -f "${_ipjc_tmp}" "${_ipjc_dir}/gen" 2>/dev/null; then
@@ -382,12 +417,65 @@ _orch_poll_pr_json_cache_gh_call_is_read()
 	return 0
 }
 
-# gh_retry call hook (GH_RETRY_AFTER_CALL_HOOK): flushes the whole PR JSON
-# cache for every call that is not a read. Makes no API call.
+# Prints the one issue/PR number of GITHUB_REPOSITORY that a gh_retry write
+# can change, and returns 0; returns 1 (the caller flushes everything) for
+# any other write. Only these are narrowed: `gh issue <verb> <n>` and
+# `gh pr <verb> <n>` for the verbs listed below, and `gh api` /
+# `_safe_gh_jq` on `repos/<repo>/issues/<n>[/...]` or
+# `repos/<repo>/pulls/<n>[/...]`. Merges and update-branch move a branch that
+# other PRs may use as their base, so they, graphql mutations and every
+# unnumbered or unknown write still flush the whole cache.
+_orch_poll_pr_json_cache_gh_write_number()
+{
+	local _opjw_a="" _opjw_repo="${GITHUB_REPOSITORY:-}" _opjw_ep=""
+	[[ "${_opjw_repo}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || return 1
+	case "${1:-}" in
+		_safe_gh_jq) shift ;;
+		gh)
+			shift
+			case "${1:-}:${2:-}" in
+				issue:edit|issue:comment|issue:close|issue:reopen|issue:lock|issue:unlock|issue:pin|issue:unpin|pr:edit|pr:comment|pr:ready|pr:review|pr:lock|pr:unlock)
+					[[ "${3:-}" =~ ^[1-9][0-9]{0,9}$ ]] || return 1
+					printf '%s\n' "${3}"
+					return 0
+					;;
+				api:*) shift ;;
+				*) return 1 ;;
+			esac
+			;;
+		*) return 1 ;;
+	esac
+	for _opjw_a in "$@"; do
+		case "${_opjw_a}" in
+			repos/*|/repos/*) _opjw_ep="${_opjw_a#/}"; break ;;
+		esac
+	done
+	_opjw_ep="${_opjw_ep%%\?*}"
+	case "${_opjw_ep}" in
+		"repos/${_opjw_repo}/"*) _opjw_ep="${_opjw_ep#"repos/${_opjw_repo}/"}" ;;
+		*) return 1 ;;
+	esac
+	[[ "${_opjw_ep}" =~ ^(issues|pulls)/([1-9][0-9]{0,9})(/.*)?$ ]] || return 1
+	case "${BASH_REMATCH[1]}${BASH_REMATCH[3]}" in
+		pulls/merge*|pulls/update-branch*) return 1 ;;
+	esac
+	printf '%s\n' "${BASH_REMATCH[2]}"
+	return 0
+}
+
+# gh_retry call hook (GH_RETRY_AFTER_CALL_HOOK): for every call that is not
+# a read, invalidates the one PR the write targets (see
+# _orch_poll_pr_json_cache_gh_write_number) or else flushes the whole PR JSON
+# cache. Makes no API call.
 _orch_poll_pr_json_cache_after_gh_call()
 {
+	local _opjh_num=""
 	[ -n "${ORCH_POLL_PR_JSON_CACHE_DIR:-}" ] || return 0
 	if _orch_poll_pr_json_cache_gh_call_is_read "$@"; then
+		return 0
+	fi
+	if _opjh_num="$(_orch_poll_pr_json_cache_gh_write_number "$@" 2>/dev/null)" && [[ "${_opjh_num}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+		_invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" "${_opjh_num}" || true
 		return 0
 	fi
 	_invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
@@ -421,32 +509,69 @@ fi
 # or fails, runs the site's original live call with the site's fallback
 # (`quiet` keeps its stderr redirect). A memo hit is counted in the cycle
 # summary as cache_hits_default_branch.
+#
+# The memo is only read here, never asked to resolve: while it is unresolved
+# (or the review-run matchers recorded `failed`), the site makes its own one
+# live GET exactly as before, so a transient failure here can neither leave
+# the matchers failing closed for the rest of the poll nor cost a second GET.
+# A successful live read that passes the memo's own branch-name check seeds
+# an unresolved memo, so later sites (and the matchers) reuse it.
 _orch_poll_default_branch_or_live()
 {
 	local _odbl_fallback="${1:-}" _odbl_quiet="${2:-}" _odbl_value="" _odbl_cached="false" _odbl_memo_line=""
 	local _odbl_memo_file="${RUNTIME_DIR:-${TMPDIR:-/tmp}}/review_run_default_branch.${GITHUB_RUN_ID:-0}.$$"
+	local _odbl_memo_state="${_REVIEW_RUN_DEFAULT_BRANCH_STATE:-}" _odbl_live_rc=0 _odbl_memo_tmp=""
 	if declare -F _review_run_default_branch >/dev/null 2>&1; then
-		if [ "${_REVIEW_RUN_DEFAULT_BRANCH_STATE:-}" = "ok" ]; then
+		if [ "${_odbl_memo_state}" = "ok" ]; then
 			_odbl_cached="true"
-		elif [ -f "${_odbl_memo_file}" ] && [ ! -L "${_odbl_memo_file}" ]; then
+		elif [ -L "${_odbl_memo_file}" ]; then
+			_odbl_memo_state="failed"
+		elif [ -f "${_odbl_memo_file}" ]; then
 			IFS= read -r _odbl_memo_line < "${_odbl_memo_file}" 2>/dev/null || true
 			case "${_odbl_memo_line}" in
-				"ok "*) _odbl_cached="true" ;;
+				"ok "*)
+					if [[ "${_odbl_memo_line#ok }" =~ ^[A-Za-z0-9._/-]+$ ]] && [ "${_odbl_memo_line#ok }" != "null" ]; then
+						_odbl_cached="true"
+					else
+						_odbl_memo_state="failed"
+					fi
+					;;
+				*) _odbl_memo_state="failed" ;;
 			esac
 		fi
-		if _odbl_value="$(_review_run_default_branch)" && [ -n "${_odbl_value}" ]; then
+		if [ "${_odbl_cached}" = "true" ] && _odbl_value="$(_review_run_default_branch 2>/dev/null)" && [ -n "${_odbl_value}" ]; then
 			printf '%s\n' "${_odbl_value}"
-			if [ "${_odbl_cached}" = "true" ]; then
-				_orch_poll_cycle_cache_hit default_branch || true
-			fi
+			_orch_poll_cycle_cache_hit default_branch || true
 			return 0
 		fi
-	fi
-	if [ "${_odbl_quiet}" = "quiet" ]; then
-		gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "${_odbl_fallback}"
+		[ "${_odbl_cached}" != "true" ] || _odbl_memo_state="failed"
 	else
-		gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "${_odbl_fallback}"
+		_odbl_memo_state="failed"
 	fi
+	_odbl_value=""
+	if [ "${_odbl_quiet}" = "quiet" ]; then
+		_odbl_value="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null)" || _odbl_live_rc=$?
+	else
+		_odbl_value="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')" || _odbl_live_rc=$?
+	fi
+	if [ "${_odbl_live_rc}" -ne 0 ]; then
+		[ -z "${_odbl_value}" ] || printf '%s\n' "${_odbl_value}"
+		echo "${_odbl_fallback}"
+		return 0
+	fi
+	printf '%s\n' "${_odbl_value}"
+	if [ -z "${_odbl_memo_state}" ] && [ ! -e "${_odbl_memo_file}" ] \
+		&& [[ "${_odbl_value}" =~ ^[A-Za-z0-9._/-]+$ ]] && [ "${_odbl_value}" != "null" ] \
+		&& _odbl_memo_tmp="$(mktemp "${_odbl_memo_file}.XXXXXX" 2>/dev/null)"; then
+		if printf 'ok %s\n' "${_odbl_value}" > "${_odbl_memo_tmp}" 2>/dev/null \
+			&& mv -f "${_odbl_memo_tmp}" "${_odbl_memo_file}" 2>/dev/null; then
+			_REVIEW_RUN_DEFAULT_BRANCH="${_odbl_value}"
+			_REVIEW_RUN_DEFAULT_BRANCH_STATE="ok"
+		else
+			rm -f "${_odbl_memo_tmp}" 2>/dev/null || true
+		fi
+	fi
+	return 0
 }
 # --- ORCH_POLL_PR_JSON_CACHE helpers (issue #9927; end) ---
 
@@ -2836,7 +2961,7 @@ _fetch_pr_json()
 		gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" || echo '{}'
 		return
 	fi
-	_fpj_gen="$(_orch_poll_pr_json_cache_gen 2>/dev/null || true)"
+	_fpj_gen="$(_orch_poll_pr_json_cache_gen "${_fpj_entry}" 2>/dev/null || true)"
 	if [ -n "${_fpj_gen}" ] && _fpj_body="$(_orch_poll_pr_json_cache_lookup "${_fpj_entry}" "${pr_number}" "${_fpj_gen}" 2>/dev/null)"; then
 		printf '%s\n' "${_fpj_body}"
 		_orch_poll_cycle_cache_hit pr_json || true
@@ -11842,6 +11967,8 @@ else:
     rm -f "${body_payload_file}" "${response_file}"
     return 1
   fi
+  # gh_retry_to_file does not run the gh_retry call hook (issue #9927).
+  _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${pr_number}" || true
   rm -f "${body_payload_file}" "${response_file}"
   return 0
 }
@@ -13045,6 +13172,7 @@ _integration_judge_commit_and_push() {
   if git -C "${wt}" -c credential.helper= \
       -c 'credential.helper=!f() { printf "username=x-access-token\npassword=%s\n" "$GH_TOKEN"; }; f' \
       push "https://github.com/${GITHUB_REPOSITORY}" "HEAD:refs/heads/${integration_branch}" >/dev/null 2>&1; then
+    _invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
     echo "  [integration-heal] Pushed the judge resolution to ${integration_branch} for PR #${final_pr}."
     return 0
   fi
@@ -28719,6 +28847,10 @@ PY
         fi
         if [[ "${_std_conflict_pr_num_try}" =~ ^[0-9]+$ ]]; then
           for _std_attempt in 0 1 2 3 4; do
+            # Issue #9927: every attempt must be a live GET (the GET is what
+            # starts GitHub's mergeability recomputation), so never serve the
+            # cached unsettled payload here.
+            _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${_std_conflict_pr_num_try}" || true
             _std_conflict_pr_json_try="$(_fetch_pr_json "${_std_conflict_pr_num_try}")"
             if [ -n "${_std_conflict_pr_json_try}" ] && [ "${_std_conflict_pr_json_try}" != "{}" ]; then
               _STD_ITER_PR_NUM_CACHED="${_std_conflict_pr_num_try}"
@@ -35610,6 +35742,7 @@ ${RB_FIX_DESC}" || true
                   elif git -C "${RB_COMBINED_WORKDIR}" -c credential.helper= \
                       -c 'credential.helper=!f() { printf "username=x-access-token\npassword=%s\n" "$GH_TOKEN"; }; f' \
                       push "https://github.com/${GITHUB_REPOSITORY}" "HEAD:${FOLLOWUP_BRANCH}" 2>/dev/null; then
+                    _invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
                     echo "  Pushed follow-up branch ${FOLLOWUP_BRANCH}."
 
                     if [ "${STATE_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${STATE_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
@@ -35674,6 +35807,7 @@ ${RB_FIX_DESC}
                   if git -C "${RB_COMBINED_WORKDIR}" -c credential.helper= \
                       -c 'credential.helper=!f() { printf "username=x-access-token\npassword=%s\n" "$GH_TOKEN"; }; f' \
                       push "https://github.com/${GITHUB_REPOSITORY}" "HEAD:${HEAD_REF}" 2>/dev/null; then
+                    _invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
                     echo "  Pushed [orchestrator-fix] commit to ${HEAD_REF}."
                     # Remove review-blocked label — the push triggers synchronize
                     # which re-runs review_autofix with a reset autofix counter.
@@ -35889,11 +36023,12 @@ ${RB_FIX_DESC}
                 # window between judge decision and merge.
                 _rb_mwf_match_arg=(--match-head-commit "${_rb_mwf_sha}")
                 if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash "${_rb_mwf_match_arg[@]}" 2>/dev/null; then
-                  _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true
+                  # A merge can change other PRs' mergeability: flush all.
+                  _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" || true
                   echo "  PR #${RB_PR} merged synchronously."
                   MERGE_CONFIRMED="true"
                 else
-                  _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true
+                  _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" || true
                   echo "::warning::PR #${RB_PR} sync merge failed (typically: required checks still pending, branch protection rules, merge queue, permissions, or 422). Leaving issue in ai:review-blocked — next poll cycle will re-fire the judge after merge lands; that run hits the PR_MERGED_NOW=true short path and creates the follow-up."
                 fi
               else

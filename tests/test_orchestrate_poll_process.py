@@ -34861,6 +34861,37 @@ def test_fetch_pr_json_cache_invalidated_by_gh_write():
 		assert _pd_hits(result["summary"])["pr_json"] == "2"
 
 
+def test_fetch_pr_json_cache_numbered_write_keeps_other_prs():
+	with tempfile.TemporaryDirectory() as tmp:
+		body = (
+			"_fetch_pr_json 7 >/dev/null\n"  # live (1)
+			"_fetch_pr_json 8 >/dev/null\n"  # live 8 (1)
+			# Writes that name one other issue/PR keep PR 7's entry.
+			'gh_retry gh issue edit 9 --repo "${GITHUB_REPOSITORY}" --add-label x >/dev/null\n'
+			'gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/9/comments" -f body=hi >/dev/null\n'
+			'gh_retry gh pr comment 9 --body hi >/dev/null\n'
+			'_invalidate_pr_json_cache "${GITHUB_REPOSITORY}" 8\n'
+			"_fetch_pr_json 7 >/dev/null\n"  # hit
+			"_fetch_pr_json 8 >/dev/null\n"  # live 8 (2)
+			# A write naming PR 7 invalidates only 7.
+			'gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/7/labels" -f "labels[]=x" >/dev/null\n'
+			"_fetch_pr_json 7 >/dev/null\n"  # live (2)
+			"_fetch_pr_json 8 >/dev/null\n"  # hit
+			# Merges, update-branch and unnumbered writes flush every PR.
+			'gh_retry gh pr merge 9 --repo "${GITHUB_REPOSITORY}" --squash --match-head-commit abc >/dev/null\n'
+			"_fetch_pr_json 7 >/dev/null\n"  # live (3)
+			'gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/9/update-branch" -X PUT -f expected_head_sha=abc >/dev/null\n'
+			"_fetch_pr_json 7 >/dev/null\n"  # live (4)
+			"gh_retry gh label create y >/dev/null\n"
+			"_fetch_pr_json 7 >/dev/null\n"  # live (5)
+		)
+		result = _pd_harness(body, Path(tmp))
+		assert result["rc"] == 0, result["stderr"]
+		assert len(_pd_pull_calls(result["calls"], 7)) == 5
+		assert len(_pd_pull_calls(result["calls"], 8)) == 2
+		assert _pd_hits(result["summary"])["pr_json"] == "2"
+
+
 def test_fetch_pr_json_cache_hook_classifier():
 	reads = [
 		"_safe_gh_jq repos/acme/widgets/pulls/7",
@@ -34989,7 +35020,10 @@ def test_rb_fresh_read_sites_invalidate_before_fetch():
 
 def test_unwrapped_pr_writes_followed_by_invalidation():
 	lines = POLLER_SCRIPT.read_text(encoding="utf-8").splitlines()
-	write_re = re.compile(r"^\s*(?:if\s+!?\s*|&&\s*)?(?:git push|gh pr merge|gh api [^\n]*update-branch)\b")
+	write_re = re.compile(
+		r"^\s*(?:if\s+!?\s*|&&\s*|elif\s+)?(?:git push|gh pr merge|gh api [^\n]*update-branch)\b"
+		r'|^\s*push "https://'  # `git -C <wt> ... push` continuation lines
+	)
 	sites = []
 	for i, line in enumerate(lines):
 		if line.lstrip().startswith("#") or not write_re.search(line):
@@ -34997,7 +35031,14 @@ def test_unwrapped_pr_writes_followed_by_invalidation():
 		sites.append(i)
 		window = "\n".join(lines[i + 1:i + 6])
 		assert "_invalidate_pr_json_cache" in window, (i + 1, line)
-	assert len(sites) >= 10, sites
+	assert len(sites) >= 13, sites
+	# The PR-body PATCH goes through gh_retry_to_file, which runs no hook.
+	eager = _pd_bash_func("\n".join(lines) + "\n", "update_eager_pr_validation_status_section")
+	assert '_invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${pr_number}" || true' in eager[eager.index("-X PATCH"):]
+	# The standalone-stall mergeability retry loop reads live on every attempt.
+	stall = [i for i, line in enumerate(lines) if line.strip() == '_std_conflict_pr_json_try="$(_fetch_pr_json "${_std_conflict_pr_num_try}")"']
+	assert len(stall) == 1
+	assert lines[stall[0] - 1].strip() == '_invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${_std_conflict_pr_num_try}" || true'
 	# Every gh_retry-wrapped write reaches the hook instead.
 	assert "GH_RETRY_AFTER_CALL_HOOK=\"_orch_poll_pr_json_cache_after_gh_call\"" in "\n".join(lines)
 
@@ -35059,7 +35100,7 @@ def test_default_branch_fetched_once_per_run():
 	# live fallback and the memo itself read repos/<repo>.
 	inline = re.findall(r"""gh_retry _safe_gh_jq "repos/\$\{GITHUB_REPOSITORY\}" --jq '\.default_branch'[^\n]*""", script)
 	assert len(inline) == 3, inline
-	assert sum('|| echo "${_odbl_fallback}"' in line for line in inline) == 2
+	assert sum("|| _odbl_live_rc=$?" in line for line in inline) == 2
 	assert script.count("$(_orch_poll_default_branch_or_live ") >= 17
 
 	def repo_calls(calls):
@@ -35087,6 +35128,10 @@ def test_default_branch_fetched_once_per_run():
 		result = _pd_harness(body, Path(tmp), {"FAKE_GH_FAIL": "repo"})
 		assert result["rc"] == 0, result["stderr"]
 		assert "A=[main]" in result["stdout"] and "B=[]" in result["stdout"]
+		# One live GET per site (no second GET after a failure), and a failed
+		# generic read never records `failed` for the review-run matchers.
+		assert len(repo_calls(result["calls"])) == 2
+		assert list((Path(tmp) / "runtime").glob("review_run_default_branch.*")) == []
 
 
 if __name__ == "__main__":
