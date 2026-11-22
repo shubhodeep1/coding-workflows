@@ -618,7 +618,9 @@ def test_scripts_default_the_switch_on() -> None:
 	assert '"${snapshot_git_dir[@]}" "${review_github_ai_grant_args[@]}"' in sandbox
 	root_export = sandbox.index("printf 'REVIEW_SANDBOX_ROOT=%s\\n' \"${root}\" >> \"${GITHUB_ENV:?}\"")
 	grant_export = sandbox.index("printf 'REVIEW_GITHUB_AI_GRANT_PATHS_FILE=%s\\n' \"${review_github_ai_grant_args[1]:-}\"")
-	assert root_export < grant_export < sandbox.index("trap - EXIT", root_export)
+	# The grant line comes first so REVIEW_SANDBOX_ROOT= stays the last line
+	# prepare appends (tests read "everything after REVIEW_SANDBOX_ROOT=").
+	assert grant_export < root_export < sandbox.index("trap - EXIT", root_export)
 	assert sandbox.count("REVIEW_GITHUB_AI_GRANT_PATHS_FILE=%s") == 1
 	review_commit = REVIEW_COMMIT.read_text(encoding="utf-8")
 	assert review_commit.count('review_github_ai_grant_switch="${GITHUB_AI_PLAN_GRANT_WRITE_ENABLED-}"') == 2

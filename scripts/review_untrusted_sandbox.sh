@@ -462,6 +462,13 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 	# PR build backends may write source files. Never publish their writes as
 	# editor output: restore the exact host snapshot before launching the model.
 	PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" refresh "${workspace}" "${root}/source" "${root}/baseline.json"
+	# Issue #9920: written before REVIEW_SANDBOX_ROOT so the root stays the last
+	# line prepare appends (callers that read "the rest after
+	# REVIEW_SANDBOX_ROOT=" keep getting only the root). Empty without a grant,
+	# so a retried prepare clears a stale path.
+	case "${GITHUB_AI_PLAN_GRANT_WRITE_ENABLED-}" in
+		''|[Tt][Rr][Uu][Ee]) printf 'REVIEW_GITHUB_AI_GRANT_PATHS_FILE=%s\n' "${review_github_ai_grant_args[1]:-}" >> "${GITHUB_ENV:?}" ;;
+	esac
 	printf 'REVIEW_SANDBOX_ROOT=%s\n' "${root}" >> "${GITHUB_ENV:?}"
 	case "${GITHUB_AI_PLAN_GRANT_WRITE_ENABLED-}" in
 		''|[Tt][Rr][Uu][Ee]) printf 'REVIEW_GITHUB_AI_GRANT_PATHS_FILE=%s\n' "${review_github_ai_grant_args[1]:-}" >> "${GITHUB_ENV}" ;;
