@@ -2060,10 +2060,12 @@ _pr_final_ci_refused_base_update()
 # Lifted near-verbatim from scripts/review_merge_train.sh _mt_conflict_probe
 # (issue #6570) under the plan's `_pr_*` names, so the freshness gate and
 # the merge lease can probe without sourcing the merge train. The `_mt_*`
-# thin-wrapper conversion in the train is pending: the train is outside this
-# phase's files_touched scope. Until then the train keeps its own copy (it
-# sources this library first, so its `_mt_*` functions and
-# MERGE_TRAIN_PROBE_REPO logs are unchanged).
+# thin-wrapper conversion in the train (plan D9) is still open: the train must
+# keep a working probe when its staged copy of this library predates these
+# helpers, and the wrappers must keep MERGE_TRAIN_PROBE_REPO on stdout, the
+# merge-train-probe.* directory and MT_REPO, which this copy does not take as
+# parameters yet. Until then the train keeps its own copy (its `_mt_*`
+# functions and logs are unchanged); change both copies together.
 #
 #   _pr_merge_tree_probe <sha_a> <sha_b>
 #       Sets _PR_PROBE_RESULT to none (the two commits merge cleanly),
@@ -3064,13 +3066,20 @@ _merge_lease_order_key()
 # when `.head_repo` is this repository), feeds _merge_lease_order_key's
 # forward-merge priority. A fork head or an unknown repository gives no ref,
 # so no priority; it never blocks a PR.
+# Phase 1 queue snapshot (Refs #9781): also sets MERGE_LEASE_QUEUE_LEN (the
+# rows considered: waiters, plus the candidate, after the skip and exclude
+# filters) and MERGE_LEASE_QUEUE_PRS (their numbers in queue order, comma-
+# separated; empty when none). Callers that read the line through `$(...)`
+# lose them; _merge_lease_queue_order prints the list instead.
 _merge_lease_queue_first()
 {
 	local lease_pulls_json="$1" lease_candidate="${2:-}" lease_label="${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}"
 	local lease_skips="${3:-}" lease_exclude="${4:-}" lease_row_head lease_row_rest lease_row_ref
 	local lease_row_repo
 	lease_row_repo="$(printf '%s' "${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" | tr '[:upper:]' '[:lower:]')"
-	local lease_best="" lease_best_key="" lease_row lease_num lease_labels lease_key
+	local lease_best="" lease_best_key="" lease_row lease_num lease_labels lease_key lease_queue_keys=""
+	MERGE_LEASE_QUEUE_LEN=0
+	MERGE_LEASE_QUEUE_PRS=""
 	while IFS= read -r lease_row; do
 		[ -n "${lease_row}" ] || continue
 		lease_num="${lease_row%%$'\t'*}"
@@ -3090,6 +3099,7 @@ _merge_lease_queue_first()
 			continue
 		fi
 		lease_key="$(_merge_lease_order_key "${lease_num}" "${lease_labels}" "${lease_row_ref}")"
+		lease_queue_keys+="${lease_key} ${lease_num}"$'\n'
 		if [ -z "${lease_best_key}" ] || [[ "${lease_key}" < "${lease_best_key}" ]]; then
 			lease_best_key="${lease_key}"
 			lease_best="${lease_num}"
@@ -3099,7 +3109,24 @@ _merge_lease_queue_first()
 			elif (.head | type) == "object" then (if ((.head.repo.full_name // "") | tostring | ascii_downcase) == $repo then (.head.ref // "") else "" end)
 			elif (.head | type) == "string" then (if ((.head_repo // "") | tostring | ascii_downcase) == $repo then .head else "" end)
 			else "" end) | tostring | gsub("[\t\n\r]"; ""))\t\([ (.labels // [])[] | if type == "object" then .name else . end ] | join(","))" ] | .[]' <<< "${lease_pulls_json}" 2>/dev/null)
+	if [ -n "${lease_queue_keys}" ]; then
+		# The order keys are fixed width (priority digit plus 12 digits), so a
+		# plain sort gives queue order; duplicate numbers collapse.
+		MERGE_LEASE_QUEUE_PRS="$(printf '%s' "${lease_queue_keys}" | sort -u | awk '!seen[$2]++ { print $2 }' | paste -sd, -)"
+		MERGE_LEASE_QUEUE_LEN="$(printf '%s\n' "${MERGE_LEASE_QUEUE_PRS}" | tr ',' '\n' | grep -c .)"
+	fi
 	printf '%s' "${lease_best}"
+}
+
+# _merge_lease_queue_order <pulls> [<skips>] [<exclude_csv>] (Phase 1, Refs
+# #9781): the labelled waiters of a `pulls` listing in queue order, comma-
+# separated (empty when none), with the same skip and exclude filters as
+# _merge_lease_queue_first. No API call; prints only digits and commas.
+_merge_lease_queue_order()
+{
+	_merge_lease_queue_first "${1:-}" "" "${2:-}" "${3:-}" >/dev/null 2>&1 || true
+	[[ "${MERGE_LEASE_QUEUE_PRS:-}" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]] || return 0
+	printf '%s' "${MERGE_LEASE_QUEUE_PRS}"
 }
 
 # _merge_lease_pr_eligible <pr> <head_sha> <title> <draft> [<base>] [<trusted_login>] [<hold_since_epoch>]

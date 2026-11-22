@@ -682,7 +682,17 @@ class TickMetrics(unittest.TestCase):
 		self.assertEqual((granted["pr"], granted["holder"], granted["reason"], granted["waiters"], granted["hold_s"]),
 			("5", "5", "first_in_queue", "2", "0"))
 		self.assertIn("pr=5", h.record())
-		self.assertIn("MERGE_LEASE pr=4 base=main mode=tick outcome=released reason=holder_closed\n", out)
+		# Phase 1 step 1.1: the release line gains held_s= and merged=, the
+		# grant line queue_len= (eligible waiters, the granted PR included).
+		self.assertRegex(out, r"MERGE_LEASE pr=4 base=main mode=tick outcome=released reason=holder_closed held_s=(\d+) merged=false\n")
+		held = int(re.search(r"outcome=released reason=holder_closed held_s=(\d+)", out).group(1))
+		self.assertGreaterEqual(held, 900)
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=granted reason=first_in_queue queue_len=2\n", out)
+		# Step 1.3: one queue line for the ref, after the grant; the holder is
+		# not in the order.
+		queue = [ln for ln in out.splitlines() if ln.startswith("MERGE_LEASE_QUEUE ")]
+		self.assertEqual(len(queue), 1, out)
+		self.assertRegex(queue[0], r"^MERGE_LEASE_QUEUE base=main holder=5 held_s=\d+ waiters=1 order=6$")
 
 	def test_released_metric_reports_whether_the_holder_merged(self) -> None:
 		"""Plan K1 (wasted-hold share): the closed-holder read also returns
@@ -697,7 +707,7 @@ class TickMetrics(unittest.TestCase):
 				self.assertEqual(rows[0]["event"], "released", out)
 				self.assertEqual(rows[0]["merged"], "true" if merged else "false")
 				self.assertNotIn("merged", rows[1], out)
-				self.assertIn("MERGE_LEASE pr=4 base=main mode=tick outcome=released reason=holder_closed\n", out)
+				self.assertIn(f"MERGE_LEASE pr=4 base=main mode=tick outcome=released reason=holder_closed held_s=- merged={'true' if merged else 'false'}\n", out)
 				self.assertEqual(sum("pulls/4" in c for c in h.calls), 1, h.calls)
 		st = {"pulls": [_pull(4)]}
 		_seed_lease(st, _record(4, expires=int(time.time()) - 5))
@@ -774,7 +784,8 @@ class TickMetrics(unittest.TestCase):
 		self.assertEqual(_metrics(out_off), [])
 		self.assertTrue(_metrics(out_on))
 		def strip(o: str) -> list[str]:
-			return [ln for ln in o.splitlines() if not ln.startswith("MERGE_LEASE_METRIC")]
+			# held_s on the MERGE_LEASE_QUEUE line is clock-derived.
+			return [re.sub(r"held_s=\d+", "held_s=N", ln) for ln in o.splitlines() if not ln.startswith("MERGE_LEASE_METRIC")]
 		self.assertEqual(strip(out_on), strip(out_off))
 		self.assertEqual(_stable_calls(on.calls), _stable_calls(off.calls))
 		self.assertEqual(_stable_record(on.record()), _stable_record(off.record()))
@@ -825,7 +836,7 @@ class LeaseRevocation(unittest.TestCase):
 		return st
 
 	def _assert_revoked(self, h: _Harness, out: str, reason: str) -> None:
-		self.assertIn(f"MERGE_LEASE pr=4 base=main mode=tick outcome=released reason={reason}\n", out)
+		self.assertRegex(out, rf"MERGE_LEASE pr=4 base=main mode=tick outcome=released reason={reason} held_s=(\d+|-) merged=false\n")
 		rec = h.record()
 		self.assertIn("state=released", rec)
 		self.assertEqual(_skips(rec), [f"4:{_sha(4)}"])
@@ -1718,7 +1729,8 @@ class MultiHolderTick(unittest.TestCase):
 		_seed_lease(st, _multi_record(rows))
 		_gates_ok(st, 4)
 		h, out = _p2_tick(st, env={MAXH: "2"})
-		self.assertIn("MERGE_LEASE pr=6 base=main mode=tick outcome=released reason=holder_closed\n", out)
+		self.assertRegex(out, r"MERGE_LEASE pr=6 base=main mode=tick outcome=released reason=holder_closed held_s=\d+ merged=false\n")
+		self.assertIn("MERGE_LEASE_QUEUE base=main holder=4 held_s=", out)
 		self.assertIn("MERGE_LEASE pr=4 base=main mode=tick outcome=held reason=holder_open holders=1\n", out)
 		rec = h.record()
 		self.assertEqual(_holders(rec), [])
@@ -1744,7 +1756,9 @@ class MultiHolderTick(unittest.TestCase):
 		_gates_ok(st, 4, 5, 6)
 		h, out = _p2_tick(st, env={MAXH: "2"})
 		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=skipped reason=holder_shares_paths blocker=4\n", out)
-		self.assertIn("MERGE_LEASE pr=6 base=main mode=tick outcome=granted reason=first_in_queue holders=2\n", out)
+		self.assertIn("MERGE_LEASE pr=6 base=main mode=tick outcome=granted reason=first_in_queue queue_len=2 holders=2\n", out)
+		# Waiter 5 overlaps a holder and keeps its label, so it stays queued.
+		self.assertRegex(out, r"MERGE_LEASE_QUEUE base=main holder=4 held_s=\S+ waiters=1 order=5\n")
 		self.assertIn(WAIT, h.state["labels"]["5"])
 		self.assertNotIn(WAIT, h.state["labels"]["6"])
 		rec = h.record()
@@ -1757,7 +1771,7 @@ class MultiHolderTick(unittest.TestCase):
 		_seed_lease(st, _multi_record([_row(4, ["a.py"]), _row(6, ["b.py"])]))
 		_gates_ok(st, 6)
 		h, out = _p2_tick(st, env={MAXH: "2"})
-		self.assertIn("MERGE_LEASE pr=4 base=main mode=tick outcome=released reason=revoked_draft\n", out)
+		self.assertRegex(out, r"MERGE_LEASE pr=4 base=main mode=tick outcome=released reason=revoked_draft held_s=\d+ merged=false\n")
 		self.assertIn("pr=6 base=main mode=tick outcome=held reason=holder_open holders=1", out)
 		rec = h.record()
 		self.assertEqual(_v1_fields(rec)["pr"], "6")
@@ -1768,8 +1782,9 @@ class MultiHolderTick(unittest.TestCase):
 		_seed_lease(st, _record(3, state="released", paths=""))
 		_gates_ok(st, 5, 6)
 		h, out = _p2_tick(st, env={MAXH: "2"})
-		self.assertIn("pr=5 base=main mode=tick outcome=granted reason=first_in_queue holders=1", out)
-		self.assertIn("pr=6 base=main mode=tick outcome=granted reason=first_in_queue holders=2", out)
+		self.assertIn("pr=5 base=main mode=tick outcome=granted reason=first_in_queue queue_len=2 holders=1", out)
+		self.assertIn("pr=6 base=main mode=tick outcome=granted reason=first_in_queue queue_len=1 holders=2", out)
+		self.assertRegex(out, r"MERGE_LEASE_QUEUE base=main holder=5 held_s=\d+ waiters=0 order=-\n")
 		self.assertEqual(_holders(h.record()), ["5", "6"])
 
 	def test_lost_race_on_a_secondary_release_stops_the_base(self) -> None:
@@ -1792,7 +1807,60 @@ class MultiHolderTick(unittest.TestCase):
 		_gates_ok(st, 5)
 		_, out = _p2_tick(st)
 		self.assertNotIn("holders=", out)
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=granted reason=first_in_queue queue_len=1\n", out)
+
+
+class LeaseQueueSnapshot(unittest.TestCase):
+	"""Merge-lease parallel merges Phase 1 steps 1.2-1.3 (Refs #9781): the
+	queue order is exposed and logged once per lease ref, with no API call."""
+
+	def test_queue_first_sets_the_order_and_keeps_its_output(self) -> None:
+		pulls = json.dumps([dict(_pull(n, head_ref=FM if n == 12 else None), labels=[{"name": WAIT}] if n != 7 else [])
+			for n in (5, 7, 9, 12)])
+		body = ('first="$(_merge_lease_queue_first "${PULLS}" "")"; _merge_lease_queue_first "${PULLS}" "" "" 9 >/dev/null; '
+			'echo "first=$first len=$MERGE_LEASE_QUEUE_LEN prs=$MERGE_LEASE_QUEUE_PRS order=$(_merge_lease_queue_order "${PULLS}")"')
+		res = _Harness({}).lib(body, {"PULLS": pulls})
+		self.assertIn("first=12 len=2 prs=12,5 order=12,5,9", res.stdout, res.stderr)
+		empty = _Harness({}).lib('_merge_lease_queue_first "[]" "" >/dev/null; echo "len=$MERGE_LEASE_QUEUE_LEN prs=<$MERGE_LEASE_QUEUE_PRS> order=<$(_merge_lease_queue_order "[]")>"')
+		self.assertIn("len=0 prs=<> order=<>", empty.stdout, empty.stderr)
+
+	def test_held_tick_logs_one_queue_line_without_the_holder(self) -> None:
+		pulls = [_pull(4), _pull(5), _pull(6)]
+		labels = {"4": [WAIT], "5": [WAIT], "6": [WAIT]}
+		st = {"pulls": pulls, "labels": labels}
+		_seed_lease(st, _record(4, acquired=int(time.time()) - 120))
+		_gates_ok(st, 4)
+		h, out = _p2_tick(st)
+		queue = [ln for ln in out.splitlines() if ln.startswith("MERGE_LEASE_QUEUE ")]
+		self.assertEqual(len(queue), 1, out)
+		self.assertRegex(queue[0], r"^MERGE_LEASE_QUEUE base=main holder=4 held_s=\d+ waiters=2 order=5,6$")
+		self.assertFalse(any("-X PATCH" in c or "-X POST" in c for c in h.calls), h.calls)
+
+	def test_free_lease_without_waiters_logs_an_empty_queue(self) -> None:
+		st = {"pulls": [_pull(5)]}
+		_seed_lease(st, _record(3, state="released", paths=""))
+		_, out = _p2_tick(st)
+		self.assertIn("MERGE_LEASE_QUEUE base=main holder=- held_s=- waiters=0 order=-\n", out)
+
+	def test_ineligible_waiter_unlabelled_this_tick_leaves_the_order(self) -> None:
+		st = {"pulls": [dict(_pull(5), title="[skip ai]"), _pull(6), _pull(7)], "labels": {"5": [WAIT], "6": [WAIT], "7": [WAIT]},
+			"files": {"6": ["a"]}}
+		_seed_lease(st, _record(3, state="released", paths=""))
+		_gates_ok(st, 6, 7)
+		_, out = _p2_tick(st)
+		self.assertIn("MERGE_LEASE pr=6 base=main mode=tick outcome=granted reason=first_in_queue queue_len=2\n", out)
+		self.assertRegex(out, r"MERGE_LEASE_QUEUE base=main holder=6 held_s=\d+ waiters=1 order=7\n")
+
+	def test_library_without_the_queue_helper_keeps_the_old_grant_line(self) -> None:
+		st = {"pulls": [_pull(5)], "labels": {"5": [WAIT]}, "files": {"5": ["a"]}, "closed": [4]}
+		_seed_lease(st, _record(4))
+		_gates_ok(st, 5)
+		h = _Harness(st)
+		res = h.train_fn('unset -f _merge_lease_queue_order\n_mt_merge_lease_tick "${PRS_JSONL}" ""',
+			{"PRS_JSONL": _p2_jsonl(st["pulls"], st["labels"])})
+		out = res.stdout + res.stderr
 		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=granted reason=first_in_queue\n", out)
+		self.assertNotIn("MERGE_LEASE_QUEUE", out)
 
 
 class MultiHolderWiring(unittest.TestCase):
