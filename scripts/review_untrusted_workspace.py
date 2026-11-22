@@ -164,7 +164,80 @@ def chatgpt_pool_config_admitted():
 	return False
 
 
-def allowed(name, host=None, commands=None):
+# Phase 5 of the pipeline human-wait elimination plan (R3, issue #9920): a
+# `.github/ai/<file>` path named exactly in the issue's trusted files_touched
+# grant (files_touched_scope_guard.py build_automation_grant) may enter the
+# review and heal sandboxes. The grant is frozen at snapshot in a sidecar next
+# to the manifest, like the admitted command inventory, so transfer and
+# refresh can never see a wider set. Switch: unset, empty or "true" (any
+# case) keeps it on, "false" (any case) turns it off, and any other value
+# also turns it off with a one-time warning. Off restores the old behaviour.
+GITHUB_AI_GRANT_FLAG = "GITHUB_AI_PLAN_GRANT_WRITE_ENABLED"
+_github_ai_grant_flag_warned = False
+
+
+def github_ai_grant_enabled():
+	"""Return whether plan-granted .github/ai/<file> paths may enter the sandbox.
+
+	Read at call time (not import time). The raw value is never printed.
+	"""
+	global _github_ai_grant_flag_warned
+	value = os.environ.get(GITHUB_AI_GRANT_FLAG)
+	if value is None or value == "" or value.lower() == "true":
+		return True
+	if value.lower() == "false":
+		return False
+	if not _github_ai_grant_flag_warned:
+		_github_ai_grant_flag_warned = True
+		print(f"::warning::{GITHUB_AI_GRANT_FLAG} has an unrecognised value; plan-granted .github/ai/ paths stay out of the review sandbox", file=sys.stderr)
+	return False
+
+
+def granted_paths_path(manifest):
+	return manifest.with_name(manifest.name + ".github_ai_grants.json")
+
+
+def _valid_granted_entry(entry):
+	"""A literal direct child of .github/ai/: no glob, traversal or control text."""
+	if not isinstance(entry, str) or not entry.startswith(".github/ai/") or entry.endswith("/"):
+		return False
+	if any(char in entry for char in ("*", "?", "[", "\\", "\r", "\n", "\0")):
+		return False
+	parts = entry.split("/")
+	return len(parts) == 3 and all(part and part not in (".", "..") for part in parts)
+
+
+def _parse_granted_paths(path):
+	"""Return (frozenset, status) where status is granted, none or rejected.
+
+	Any invalid entry rejects the whole list (an empty grant).
+	"""
+	try:
+		data, _ = read_regular(Path(path))
+		entries = json.loads(data.decode("utf-8"))
+	except FileNotFoundError:
+		return frozenset(), "none"
+	except (OSError, ValueError, UnicodeError):
+		return frozenset(), "rejected"
+	if not isinstance(entries, list) or not all(_valid_granted_entry(entry) for entry in entries):
+		return frozenset(), "rejected"
+	granted = frozenset(entries)
+	return granted, ("granted" if granted else "none")
+
+
+def load_granted_paths(path):
+	"""Read a JSON list of literal .github/ai/<file> paths; invalid means empty."""
+	return _parse_granted_paths(path)[0]
+
+
+def frozen_granted_paths(manifest):
+	"""The grant frozen at snapshot; empty when the switch is off or it is missing."""
+	if not github_ai_grant_enabled():
+		return frozenset()
+	return load_granted_paths(granted_paths_path(manifest))
+
+
+def allowed(name, host=None, commands=None, granted=frozenset()):
 	parts = PurePosixPath(name).parts
 	if not parts or name.startswith("/") or ".." in parts or "\\" in name or "\n" in name or "\r" in name:
 		return False
@@ -175,6 +248,9 @@ def allowed(name, host=None, commands=None):
 	# This host-executed safety hook is never review-editor output.
 	if name == ".claude/hooks/pr_merge_status_guard.py":
 		return False
+	# Issue #9920: an exact path from the issue's trusted plan grant.
+	if granted and name in granted and len(parts) == 3 and parts[:2] == (".github", "ai"):
+		return True
 	# PR #9112 / issue #9111: exact-path admission behind the off switch above.
 	if name == CHATGPT_POOL_CONFIG_PATH:
 		return chatgpt_pool_config_admitted()
@@ -359,7 +435,7 @@ def fingerprint(path):
 	return [hashlib.sha256(data).hexdigest(), mode]
 
 
-def enumerate_workspace(root, host=None, commands=None, strict=False):
+def enumerate_workspace(root, host=None, commands=None, strict=False, granted=frozenset()):
 	count = 0
 	total = 0
 	entries = 0
@@ -383,7 +459,7 @@ def enumerate_workspace(root, host=None, commands=None, strict=False):
 			if entries > 10000:
 				raise ValueError("workspace entry limit exceeded")
 			name = (rel / child).as_posix()
-			if not allowed(name, commands=commands):
+			if not allowed(name, commands=commands, granted=granted):
 				if strict and name.startswith((".github/ai/", ".claude/")):
 					raise ValueError("out of heal scope")
 				# Build products and cached dependencies are not editor output.
@@ -398,7 +474,7 @@ def enumerate_workspace(root, host=None, commands=None, strict=False):
 			yield name, data, mode
 
 
-def snapshot(host, workspace, manifest, host_git_dir=None, skip_oversized=False):
+def snapshot(host, workspace, manifest, host_git_dir=None, skip_oversized=False, granted=None):
 	paths = set()
 	env = git_env(manifest)
 	# A per-PR workspace has no .git of its own: list it through the checkout's
@@ -430,8 +506,10 @@ def snapshot(host, workspace, manifest, host_git_dir=None, skip_oversized=False)
 	baseline = {}
 	total = 0
 	oversized = 0
+	# None (switch off) keeps the old behaviour and writes no grant sidecar.
+	effective_granted = frozenset(granted) if granted is not None else frozenset()
 	for name in sorted(paths):
-		if not allowed(name, commands=commands):
+		if not allowed(name, commands=commands, granted=effective_granted):
 			continue
 		if (host / name).is_symlink():
 			continue  # Existing tracked symlinks are not in the editor snapshot.
@@ -459,6 +537,8 @@ def snapshot(host, workspace, manifest, host_git_dir=None, skip_oversized=False)
 		# A count only: paths are PR-controlled and stay out of workflow logs.
 		print(f"REVIEW_ISOLATION_SNAPSHOT oversized_skipped={oversized} max_file_bytes={MAX_FILE}", file=sys.stderr)
 	admitted_commands_path(manifest).write_text(json.dumps(sorted(commands)), encoding="utf-8")
+	if granted is not None:
+		granted_paths_path(manifest).write_text(json.dumps(sorted(effective_granted)), encoding="utf-8")
 	# Count only tracked files still present in the worktree (an unstaged
 	# deletion was not hidden by the snapshot, it was absent).
 	hidden_dirs = hidden_build_output_dirs({name for name in tracked if os.path.lexists(host / name)})
@@ -498,7 +578,8 @@ def transfer(host, workspace, manifest, scope=None):
 	baseline = json.loads(manifest.read_text(encoding="utf-8"))
 	if scope is not None and hashlib.sha256(read_regular(workspace / ".git/config")[0]).hexdigest() != synthetic_git_config_path(manifest).read_text(encoding="ascii"):
 		raise ValueError("out of heal scope")
-	results = {name: (data, mode) for name, data, mode in enumerate_workspace(workspace, None, commands, strict=scope is not None)}
+	granted = frozen_granted_paths(manifest)
+	results = {name: (data, mode) for name, data, mode in enumerate_workspace(workspace, None, commands, strict=scope is not None, granted=granted)}
 	changes = []
 	# Even an untouched result must not conceal a host-side update made since
 	# the snapshot (including a write by another workflow process).
@@ -511,7 +592,7 @@ def transfer(host, workspace, manifest, scope=None):
 		new = results.get(name)
 		if new is not None and old == [hashlib.sha256(new[0]).hexdigest(), new[1]]:
 			continue
-		if not allowed(name, None, commands):
+		if not allowed(name, None, commands, granted=granted):
 			raise _rejection("unsafe result path", "unsafe_result_path")
 		if scope is not None:
 			from files_touched_scope_guard import entry_matches
@@ -519,7 +600,10 @@ def transfer(host, workspace, manifest, scope=None):
 			# Git attribute/module files at any depth can name filters or drivers
 			# the credentialed host commit would honour; never transfer them.
 			git_control = any(part.lower() in (".git", ".gitattributes", ".gitmodules") for part in name.split("/"))
-			if name.startswith((".github/ai/", ".claude/")) or git_control or not any(entry_matches(entry, name) for entry in scope):
+			# A plan-granted .github/ai/<file> (#9920) skips only the
+			# .github/ai/ denial; it must still match the heal scope.
+			github_ai_denied = name.startswith(".github/ai/") and name not in granted
+			if github_ai_denied or name.startswith(".claude/") or git_control or not any(entry_matches(entry, name) for entry in scope):
 				raise ValueError("out of heal scope")
 			if new is not None and old is not None and new[1] != old[1]:
 				raise ValueError("out of heal scope")
@@ -634,7 +718,8 @@ def refresh(host, workspace, manifest):
 	"""Discard PR build-backend source writes before giving the writer access."""
 	commands = load_admitted_commands(manifest)
 	baseline = json.loads(manifest.read_text(encoding="utf-8"))
-	results = {name: (data, mode) for name, data, mode in enumerate_workspace(workspace, None, commands)}
+	granted = frozen_granted_paths(manifest)
+	results = {name: (data, mode) for name, data, mode in enumerate_workspace(workspace, None, commands, granted=granted)}
 	for name, old in baseline.items():
 		host_file = checked_path(host, name)
 		if not host_file.exists() or fingerprint(host_file) != old:
@@ -980,6 +1065,12 @@ def main():
 			print("unsupported path", file=sys.stderr)
 			raise SystemExit(1) from None
 		return
+	# snapshot alone takes an optional trailing "--granted-paths-file <path>"
+	# pair (#9920); strip it first so every older invocation shape still parses.
+	granted_paths_file = None
+	if sys.argv[1:2] == ["snapshot"] and len(sys.argv) >= 7 and sys.argv[-2] == "--granted-paths-file":
+		granted_paths_file = sys.argv[-1]
+		sys.argv = sys.argv[:-2]
 	if sys.argv[1:2] == ["seed"]:
 		if len(sys.argv) != 7:
 			raise SystemExit(2)
@@ -997,8 +1088,17 @@ def main():
 			# stderr reaches the Actions log while transfer stderr is redirected
 			# to a reason file, so a mistyped value still logs its warning.
 			chatgpt_pool_config_admitted()
+			snapshot_granted = None
+			if github_ai_grant_enabled():
+				snapshot_granted = frozenset()
+				if granted_paths_file is not None:
+					snapshot_granted, grant_outcome = _parse_granted_paths(granted_paths_file)
+					# A count only: no paths reach the workflow log here.
+					print(f"REVIEW_GITHUB_AI_GRANT phase=snapshot outcome={grant_outcome} paths={len(snapshot_granted)}", file=sys.stderr)
+			elif granted_paths_file is not None:
+				print("REVIEW_GITHUB_AI_GRANT phase=snapshot outcome=none reason=switch_off paths=0", file=sys.stderr)
 			snapshot(host, workspace, manifest, Path(sys.argv[5]) if len(sys.argv) == 6 else None,
-				skip_oversized=os.environ.get("REVIEW_SNAPSHOT_SKIP_OVERSIZED", "0") == "1")
+				skip_oversized=os.environ.get("REVIEW_SNAPSHOT_SKIP_OVERSIZED", "0") == "1", granted=snapshot_granted)
 		elif sys.argv[1] == "refresh":
 			refresh(host, workspace, manifest)
 		else:

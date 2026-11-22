@@ -2336,6 +2336,23 @@ def test_implement_scope_callers_pass_auto_heal_identity() -> None:
 	assert text.index(check) < text.index(export) < text.index(check) + len(check) + 120
 
 
+def test_automation_grant_github_ai_entries_are_exact_literals() -> None:
+	"""#9920: the plan grant for .github/ai/ writes reads only exact literal paths."""
+	meta = {"number": 42, "user": {"login": "maintainer"}, "author_association": "OWNER",
+		"body": _body(".github/ai/x.json", ".github/ai/*.json", ".github/ai/", ".github/ai/../y.json",
+			".github/ai/[ab].json", ".github/ai/sub/?.json")}
+	grant = guard.build_automation_grant(meta, "pipeline[bot]")
+	assert grant["trusted"] is True and grant["open"] is False
+	assert grant["paths"] == [".github/ai/x.json"]
+	# An open, pipeline-authored grant lists no path at all.
+	open_meta = dict(meta, user={"login": "pipeline[bot]"}, author_association="NONE",
+		body="mentions .github/ai/x.json without a block")
+	open_grant = guard.build_automation_grant(open_meta, "pipeline[bot]")
+	assert open_grant["open"] is True and open_grant["paths"] == []
+	# An untrusted author's list grants nothing.
+	assert guard.build_automation_grant(dict(meta, author_association="NONE"), "pipeline[bot]")["paths"] == []
+
+
 def _run_all() -> int:
 	funcs = [obj for name, obj in sorted(globals().items()) if name.startswith("test_") and callable(obj)]
 	failures = 0

@@ -50,7 +50,7 @@ def test_generated_manifest_staging_excludes_modifications_but_accepts_deletion(
 	preflight_stage = preflight[preflight.index(start):preflight.index('while IFS= read -r -d \'\' untracked_candidate', preflight.index(start))]
 	for stage in (commit_stage, preflight_stage):
 		assert stage.count(f"':!{path}'") == 2
-		assert f'git add -u -- "${{add_u_excludes[@]}}"' in stage
+		assert 'git add -u -- "${add_u_excludes[@]}"' in stage
 		assert f'git rm --cached --quiet -- {path}' in stage
 		assert f'IMPLEMENT_GENERATED_MANIFEST_UNTRACKED path={path}' in stage
 
@@ -1064,7 +1064,7 @@ def test_resolve_checkout_ref_ignores_prior_pr_baseline_branch_when_present() ->
 				- prior_pr_baseline_branch: {baseline_branch}
 				- files_touched:
 				  - src/app.py
-				"""
+				"""  # noqa: E101 - YAML list indent inside the dedented body
 			),
 			default_checkout_ref="orchestrator/project-829",
 			branch_exists={baseline_branch: True},
@@ -1837,6 +1837,10 @@ def _run_github_ai_add_fixture(
 	env.pop("IMPLEMENT_STAGED_SUPPORT_RUN_DIR", None)
 	if not extra_env or "IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED" not in extra_env:
 		env.pop("IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED", None)
+	# These cases isolate the #9111 self-repo block; the #9920 plan-grant block
+	# (default on) is covered by tests/test_github_ai_plan_grant_write.py.
+	if not extra_env or "GITHUB_AI_PLAN_GRANT_WRITE_ENABLED" not in extra_env:
+		env["GITHUB_AI_PLAN_GRANT_WRITE_ENABLED"] = "false"
 	for key in ("STAGED_SUPPORT_LEDGER", "STAGED_SUPPORT_BASE_DIR", "STAGED_SUPPORT_EDITOR_HEAD_LEDGER",
 			"HEAL_ROUTE", "SCOPE_LOCK_LABEL_ENABLED", "ISSUE_SCOPE_LOCK_GLOB", "FETCHED_MANIFEST"):
 		env.pop(key, None)
@@ -1920,6 +1924,19 @@ def test_commit_helper_consumer_repo_never_stages_github_ai_file() -> None:
 		assert "self-repo .github/ai additions" not in proc.stdout, details
 		assert committed == ["tests/new_test.py"], details
 		assert ".github/ai/x.json" in untracked.splitlines(), details
+
+
+def test_commit_helper_consumer_repo_stages_plan_granted_github_ai_file() -> None:
+	"""#9920: with the plan-grant switch on, the exact granted path is staged in a consumer repo."""
+	with tempfile.TemporaryDirectory(prefix="test_commit_github_ai_grant_consumer_") as td:
+		proc, committed, untracked = _run_github_ai_add_fixture(
+			Path(td), repository="owner/repo", extra_env={"GITHUB_AI_PLAN_GRANT_WRITE_ENABLED": "true"},
+		)
+		details = f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert proc.returncode == 0, details
+		assert "IMPLEMENT_GITHUB_AI_GRANT path=.github/ai/x.json outcome=staged" in proc.stdout, details
+		assert sorted(committed) == [".github/ai/x.json", "tests/new_test.py"], details
+		assert ".github/ai/y.json" in untracked.splitlines(), details
 
 
 # ---------------------------------------------------------------------------
@@ -5626,10 +5643,10 @@ def test_validator_offending_bytes_redacts_secrets() -> None:
 
 	Two layered guards (per Copilot review):
 	(a) Path denylist: skip the dump for files whose names match
-	    common secret-bearing patterns (.env, *secret*, *.pem, ...).
+		common secret-bearing patterns (.env, *secret*, *.pem, ...).
 	(b) Per-line redaction: replace lines whose key contains
-	    secret-like keywords (token/password/api_key/...) or whose
-	    value contains a long opaque token with a redaction marker.
+		secret-like keywords (token/password/api_key/...) or whose
+		value contains a long opaque token with a redaction marker.
 	"""
 	with tempfile.TemporaryDirectory(prefix="test_validator_redact_") as td:
 		repo_dir = Path(td)

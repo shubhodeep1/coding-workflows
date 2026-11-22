@@ -23,7 +23,7 @@
 #   PR_DIFF_SOURCE, PR_DIFF_ATTEMPTED_PATHS, and BASE_BRANCH to GITHUB_ENV.
 #   LINKED_ISSUES_RAW_FILE (optional; default linked_issues_raw.json next to
 #   PR_PAYLOAD_FILE, i.e. in RUNTIME_DIR) receives the linked issues as
-#   [{number,title,body,labels:[name]}] and ${LINKED_ISSUES_RAW_FILE}.status
+#   [{number,title,body,labels:[name],author_login,author_association}] and ${LINKED_ISSUES_RAW_FILE}.status
 #   receives `ok` or `failed`; review_conflict_prepare.sh reads them to find
 #   the PR's files_touched scope for host-only conflicts (issue #6748). The
 #   path is published to GITHUB_ENV.
@@ -101,12 +101,16 @@ _fetch_linked_issue_bodies_graphql()
             number
             title
             body
+            author { login }
+            authorAssociation
             labels(first: 50) { nodes { name } }
           }
           ... on PullRequest {
             number
             title
             body
+            author { login }
+            authorAssociation
             labels(first: 50) { nodes { name } }
           }
         }"
@@ -155,6 +159,8 @@ _fetch_linked_issue_bodies_graphql()
 				number: (.number // 0),
 				title: (.title // ""),
 				body: (.body // ""),
+				author: (.author // null),
+				authorAssociation: (.authorAssociation // ""),
 				labels: [(.labels.nodes // [])[] | .name? // empty | strings]
 			}
 		)
@@ -274,7 +280,7 @@ if [ -n "${PR_NUMBER:-}" ]; then
 		-f owner="${REPOSITORY_OWNER}" \
 		-f name="${REPOSITORY_NAME}" \
 		-F number="${PR_NUMBER}" \
-		-f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body labels(first:50){nodes{name}}}}}}}' \
+		-f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body author{login} authorAssociation labels(first:50){nodes{name}}}}}}}' \
 		--jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []'; then
 		_linked_fetch_ok="true"
 		_linked_raw="$(cat "${_linked_tmp}" 2>/dev/null || echo '[]')"
@@ -348,13 +354,77 @@ if printf '%s' "${_linked_context_raw}" | jq -c '[.[]? | select(type == "object"
 		title: (.title // ""),
 		body: (.body // ""),
 		labels: (if (.labels | type) == "array" then [.labels[] | strings]
-			else [(.labels.nodes // [])[] | .name? // empty | strings] end)
+			else [(.labels.nodes // [])[] | .name? // empty | strings] end),
+		author_login: (if (.author | type) == "object" and (.author.login | type) == "string" then .author.login else "" end),
+		author_association: (if (.authorAssociation | type) == "string" then .authorAssociation else "" end)
 	}]' > "${LINKED_ISSUES_RAW_FILE}" 2>/dev/null; then
 	printf '%s\n' "${_linked_raw_status}" > "${LINKED_ISSUES_RAW_FILE}.status" 2>/dev/null || true
 else
 	printf 'failed\n' > "${LINKED_ISSUES_RAW_FILE}.status" 2>/dev/null || true
 fi
 printf 'LINKED_ISSUES_RAW_FILE=%s\n' "${LINKED_ISSUES_RAW_FILE}" >> "${GITHUB_ENV}"
+
+# Issue #9920 (plan Phase 5 / R3): the pipeline login for the plan-granted
+# `.github/ai/<file>` review grant, resolved here because this step holds
+# GH_TOKEN (GH_PAT, the identity implement.yml resolves the same grant with)
+# while the sandbox prepare step that evaluates the grant has no GitHub token.
+# Published as the step output `github_ai_grant_pipeline_login` (never
+# GITHUB_ENV, so no later step can overwrite this trust anchor);
+# review_autofix.yml passes it to review_untrusted_sandbox.sh prepare as
+# REVIEW_GITHUB_AI_GRANT_PIPELINE_LOGIN. API audit (CLAUDE.md §14): no earlier
+# call in this script returns the authenticated login, and the call runs only
+# for exactly one linked issue (status ok) whose body names a .github/ai/
+# path, the same pre-filter as _review_github_ai_grant_prepare, so almost
+# every review makes no extra call. Fail-open: no output means no grant.
+case "${GITHUB_AI_PLAN_GRANT_WRITE_ENABLED-}" in
+	''|[Tt][Rr][Uu][Ee])
+		if [ -n "${GITHUB_OUTPUT:-}" ] && [ "$(head -n 1 -- "${LINKED_ISSUES_RAW_FILE}.status" 2>/dev/null || true)" = ok ] \
+			&& jq -e 'length == 1 and (.[0].body | strings | contains(".github/ai/"))' "${LINKED_ISSUES_RAW_FILE}" >/dev/null 2>&1; then
+			_github_ai_grant_login="$(timeout 30 gh api user --jq .login 2>/dev/null || true)"
+			if [[ "${_github_ai_grant_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+				printf 'github_ai_grant_pipeline_login=%s\n' "${_github_ai_grant_login}" >> "${GITHUB_OUTPUT}"
+				# The grant record itself, built here because the guard's Q82
+				# origin-chain check of a pipeline-authored issue (re-issues,
+				# fix-ups, follow-ups) reads its source issues with `gh api` and
+				# the prepare step has no token. Same trusted guard, same issue
+				# metadata shape and --origin-repo as _review_github_ai_grant_prepare;
+				# at most ORIGIN_MAX_ISSUES (8) source reads, only for a
+				# pipeline-authored issue that names a source, the same reads
+				# implement makes. Published compact (one line) as the step output
+				# `github_ai_grant_record`; prepare re-filters its paths. Fail-open:
+				# no output means prepare runs the guard itself (fails closed).
+				_github_ai_grant_meta="${TMP_RUNTIME_DIR}/github_ai_grant_issue_meta.json"
+				_github_ai_grant_record_file="${TMP_RUNTIME_DIR}/github_ai_grant_record.json"
+				_github_ai_grant_record=""
+				# detail= names the cause with fixed tokens only: the guard's exit code
+				# plus the exception class from its last stderr line. Raw stderr may
+				# carry issue text, so it never reaches the log.
+				_github_ai_grant_detail="not_run"
+				if [ -f "${SCRIPT_DIR}/files_touched_scope_guard.py" ] \
+					&& jq '.[0] | {number: .number, body: (.body // ""), user: {login: (.author_login // "")}, author_association: (.author_association // "")}' \
+						"${LINKED_ISSUES_RAW_FILE}" > "${_github_ai_grant_meta}" 2>/dev/null; then
+					_github_ai_grant_rc=0
+					PYTHONDONTWRITEBYTECODE=1 timeout 300 python3 "${SCRIPT_DIR}/files_touched_scope_guard.py" \
+						--emit-automation-grant "${_github_ai_grant_record_file}" --issue-meta-file "${_github_ai_grant_meta}" \
+						--pipeline-login "${_github_ai_grant_login}" --origin-repo "${REPOSITORY}" >/dev/null 2>"${TMP_RUNTIME_DIR}/github_ai_grant_guard.err" || _github_ai_grant_rc=$?
+					_github_ai_grant_detail="exit_${_github_ai_grant_rc}"
+					_github_ai_grant_exc="$(tail -n 1 -- "${TMP_RUNTIME_DIR}/github_ai_grant_guard.err" 2>/dev/null | grep -oE '^[A-Za-z_][A-Za-z0-9_.]*(Error|Exception|Expired|Exit|Interrupt)' | cut -c1-64 || true)"
+					[ -z "${_github_ai_grant_exc}" ] || _github_ai_grant_detail+=":${_github_ai_grant_exc}"
+					if [ "${_github_ai_grant_rc}" -eq 0 ]; then
+						_github_ai_grant_record="$(jq -c 'select(type == "object")' "${_github_ai_grant_record_file}" 2>/dev/null || true)"
+					fi
+				fi
+				if [ -n "${_github_ai_grant_record}" ] && [[ "${_github_ai_grant_record}" != *$'\n'* ]]; then
+					printf 'github_ai_grant_record=%s\n' "${_github_ai_grant_record}" >> "${GITHUB_OUTPUT}"
+				else
+					echo "REVIEW_GITHUB_AI_GRANT phase=collect outcome=none reason=grant_error paths=0 detail=${_github_ai_grant_detail}" >&2
+				fi
+			else
+				echo "REVIEW_GITHUB_AI_GRANT phase=collect outcome=none reason=identity_unavailable paths=0" >&2
+			fi
+		fi
+		;;
+esac
 
 # Build linked issue context file for reviewer/editor prompts.
 _linked_json_file="$(mktemp)"

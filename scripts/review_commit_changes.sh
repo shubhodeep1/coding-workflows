@@ -267,6 +267,31 @@ if [ -s "${NEW_FILES_BEFORE_COMMIT_FILE}" ]; then
         .ai|.ai/*|.github/ai|.github/ai/*|.github/prompts|.github/prompts/*|.github/scripts|.github/scripts/*|ai-memory|ai-memory/*|.codex-workflow-src|.codex-workflow-src/*|.codex-workflow-src-main|.codex-workflow-src-main/*|node_modules|node_modules/*|*/node_modules|*/node_modules/*|pre_assembled_static.txt|unattended_system_instructions.md|ai_pipeline.md|agents.md)
           removal_reason="pipeline artifact" ;;
       esac
+      # Issue #9920 (plan Phase 5 / R3): a `.github/ai/<file>` the PR's linked
+      # issue grants exactly through its trusted files_touched list
+      # (review_untrusted_sandbox.sh wrote REVIEW_GITHUB_AI_GRANT_PATHS_FILE
+      # under runner temp) is not a pipeline artifact. It still goes through
+      # the pre-editor untracked check below. Switch
+      # GITHUB_AI_PLAN_GRANT_WRITE_ENABLED (unset/empty/true = on).
+      if [ "${removal_reason}" = "pipeline artifact" ]; then
+        case "${created_file}" in
+          .github/ai/*/*) ;;
+          .github/ai/?*)
+            review_github_ai_grant_switch="${GITHUB_AI_PLAN_GRANT_WRITE_ENABLED-}"
+            case "${review_github_ai_grant_switch,,}" in
+              ''|true)
+                if [ -n "${REVIEW_GITHUB_AI_GRANT_PATHS_FILE:-}" ] && [ -f "${REVIEW_GITHUB_AI_GRANT_PATHS_FILE}" ] \
+                  && [ ! -L "${REVIEW_GITHUB_AI_GRANT_PATHS_FILE}" ] \
+                  && [ -f "${created_file}" ] && [ ! -L "${created_file}" ] \
+                  && jq -r '.[]? | strings' "${REVIEW_GITHUB_AI_GRANT_PATHS_FILE}" 2>/dev/null | grep -Fxq -- "${created_file}"; then
+                  echo "REVIEW_GITHUB_AI_GRANT phase=commit outcome=kept path=$(printf '%s' "${created_file}" | tr -cd '[:print:]' | cut -c1-200)"
+                  removal_reason=""
+                fi
+                ;;
+            esac
+            ;;
+        esac
+      fi
       if [ -z "${removal_reason}" ]; then
         if [ "${pre_editor_untracked_available}" = true ]; then
           if grep -zqxF -- "${created_file}" "${PRE_EDITOR_UNTRACKED_FILE}"; then
@@ -488,6 +513,26 @@ else
   fi
   git add -u -- ':!node_modules' "${_ra_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts' ':!.ai/.workspace_source_manifest.txt'
   git ls-files --others --exclude-standard -z -- ':!node_modules' "${_ra_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.serena' ':!.serena/**' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' ':!.ai/.workspace_source_manifest.txt' | xargs -0 -r git add --
+  # Issue #9920: the pass above keeps ':!.github/ai'; stage only the exact
+  # plan-granted `.github/ai/<file>` paths (regular files, no symlinks).
+  review_github_ai_grant_switch="${GITHUB_AI_PLAN_GRANT_WRITE_ENABLED-}"
+  case "${review_github_ai_grant_switch,,}" in
+    ''|true)
+      if [ -n "${REVIEW_GITHUB_AI_GRANT_PATHS_FILE:-}" ] && [ -f "${REVIEW_GITHUB_AI_GRANT_PATHS_FILE}" ] && [ ! -L "${REVIEW_GITHUB_AI_GRANT_PATHS_FILE}" ]; then
+        while IFS= read -r review_github_ai_grant_path; do
+          case "${review_github_ai_grant_path}" in
+            .github/ai/*/*|*'*'*|*'?'*|*'['*|*..*|*/|*'\'*|*$'\r'*) continue ;;
+            .github/ai/?*) ;;
+            *) continue ;;
+          esac
+          [ -f "${review_github_ai_grant_path}" ] && [ ! -L "${review_github_ai_grant_path}" ] || continue
+          [ -n "$(git ls-files --others --exclude-standard -- "${review_github_ai_grant_path}" 2>/dev/null)" ] || continue
+          git add -- "${review_github_ai_grant_path}"
+          echo "REVIEW_GITHUB_AI_GRANT phase=commit outcome=staged path=$(printf '%s' "${review_github_ai_grant_path}" | tr -cd '[:print:]' | cut -c1-200)"
+        done < <(jq -r '.[]? | strings | select(test("[\\r\\n]") | not)' "${REVIEW_GITHUB_AI_GRANT_PATHS_FILE}" 2>/dev/null || true)
+      fi
+      ;;
+  esac
 fi
 
 echo "Staged files before commit:"

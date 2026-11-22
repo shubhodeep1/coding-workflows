@@ -63,6 +63,127 @@ _review_sandbox_build_image()
 	done
 }
 
+# `_review_github_ai_grant_prepare` (issue #9920, pipeline human-wait
+# elimination plan Phase 5 / R3) prints the path of a JSON list of the
+# literal `.github/ai/<file>` paths the PR's linked issue grants through its
+# trusted files_touched list, or nothing. Only `prepare` calls it, never
+# `prepare-ephemeral`. The grant comes from the same build_automation_grant
+# the implement job uses (files_touched_scope_guard.py from the trusted
+# support dir): a trusted author association or the pipeline login, the Q82
+# origin-chain check, exact literal paths only, and `paths: []` for an open
+# pipeline grant. The issue body and author come from linked_issues_raw.json
+# (review_collect_pr_metadata.sh, existing GraphQL calls). The list lives in
+# its own runner-temp directory, never the PR checkout; a successful prepare
+# exports it (empty without a grant, so a retried prepare never keeps a stale
+# path) as REVIEW_GITHUB_AI_GRANT_PATHS_FILE for review_commit_changes.sh,
+# next to REVIEW_SANDBOX_ROOT. Switch:
+# GITHUB_AI_PLAN_GRANT_WRITE_ENABLED (unset/empty/true = on). Fails open:
+# any error means no grant (today's behaviour). Logs
+# REVIEW_GITHUB_AI_GRANT phase=prepare outcome=granted|none reason=<code> paths=<n>.
+_review_github_ai_grant_none()
+{
+	echo "REVIEW_GITHUB_AI_GRANT phase=prepare outcome=none reason=$1 paths=0" >&2
+}
+_review_github_ai_grant_prepare()
+{
+	local switch="${GITHUB_AI_PLAN_GRANT_WRITE_ENABLED-}" raw_file="${LINKED_ISSUES_RAW_FILE:-}"
+	local raw_status linked_count pipeline_login grant_dir grant_reason grant_count
+	case "${switch,,}" in
+		''|true) ;;
+		*) return 0 ;;
+	esac
+	if [ -z "${raw_file}" ] || [ ! -f "${raw_file}" ] || [ -L "${raw_file}" ]; then
+		_review_github_ai_grant_none no_linked_issues
+		return 0
+	fi
+	raw_status="$(head -n 1 -- "${raw_file}.status" 2>/dev/null || true)"
+	if [ "${raw_status}" != ok ]; then
+		_review_github_ai_grant_none linked_issues_incomplete
+		return 0
+	fi
+	linked_count="$(jq 'length' "${raw_file}" 2>/dev/null || echo 0)"
+	if [ "${linked_count}" != 1 ]; then
+		_review_github_ai_grant_none linked_issue_count
+		return 0
+	fi
+	# Cheap pre-filter: almost every review stops here, before any API call.
+	if ! jq -e '(.[0].body | strings | contains(".github/ai/"))' "${raw_file}" >/dev/null 2>&1; then
+		_review_github_ai_grant_none no_github_ai_path
+		return 0
+	fi
+	# API audit (CLAUDE.md §14): the prepare step has no GitHub token, so the
+	# "Collect PR metadata" step (review_collect_pr_metadata.sh, GH_PAT, the
+	# identity implement uses) resolves the login and review_autofix.yml passes
+	# it in as REVIEW_GITHUB_AI_GRANT_PIPELINE_LOGIN (default empty). The
+	# `gh api user` lookup below is only the fallback for a caller that does
+	# not set the variable at all (an older workflow YAML), so no second call
+	# is made. Set but empty means the metadata step resolved no login.
+	pipeline_login="${REVIEW_GITHUB_AI_GRANT_PIPELINE_LOGIN:-}"
+	if [ -z "${REVIEW_GITHUB_AI_GRANT_PIPELINE_LOGIN+x}" ]; then
+		pipeline_login="$(timeout 30 gh api user --jq .login 2>/dev/null || true)"
+	fi
+	if ! [[ "${pipeline_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+		# Name a missing credential apart from a failed lookup.
+		if [ -n "${REVIEW_GITHUB_AI_GRANT_PIPELINE_LOGIN+x}" ]; then
+			_review_github_ai_grant_none identity_unavailable
+		elif [ -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}" ]; then
+			_review_github_ai_grant_none no_credentials
+		else
+			_review_github_ai_grant_none identity_unavailable
+		fi
+		return 0
+	fi
+	grant_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/review-github-ai-grant-XXXXXXXX" 2>/dev/null)" || grant_dir=""
+	if [ -z "${grant_dir}" ] || [[ "${grant_dir}" == *$'\n'* ]]; then
+		_review_github_ai_grant_none grant_dir_error
+		return 0
+	fi
+	# GraphQL reports a bot author without the REST `[bot]` suffix, so a bot
+	# author never matches the pipeline login here and falls back to the
+	# association check (fail closed). A deleted author has an empty login.
+	if ! jq '.[0] | {number: .number, body: (.body // ""), user: {login: (.author_login // "")}, author_association: (.author_association // "")}' \
+		"${raw_file}" > "${grant_dir}/issue_meta.json" 2>/dev/null; then
+		rm -rf -- "${grant_dir}"
+		_review_github_ai_grant_none meta_error
+		return 0
+	fi
+	# The origin-chain check of a pipeline-authored issue reads source issues
+	# with `gh api`, which this token-less step cannot do, so the "Collect PR
+	# metadata" step builds the same record with GH_PAT and review_autofix.yml
+	# passes it in as REVIEW_GITHUB_AI_GRANT_RECORD (a step output, default
+	# empty). It is used only when it names this linked issue and author;
+	# otherwise the guard runs here as before (fails closed on an origin).
+	if [ -n "${REVIEW_GITHUB_AI_GRANT_RECORD:-}" ] \
+		&& printf '%s' "${REVIEW_GITHUB_AI_GRANT_RECORD}" | jq -e --slurpfile meta "${grant_dir}/issue_meta.json" \
+			'type == "object" and .issue_number == $meta[0].number and .author_login == $meta[0].user.login' >/dev/null 2>&1 \
+		&& printf '%s\n' "${REVIEW_GITHUB_AI_GRANT_RECORD}" > "${grant_dir}/grant.json"; then
+		:
+	elif ! python3 "${support}/files_touched_scope_guard.py" --emit-automation-grant "${grant_dir}/grant.json" \
+		--issue-meta-file "${grant_dir}/issue_meta.json" --pipeline-login "${pipeline_login}" \
+		--origin-repo "${GITHUB_REPOSITORY:-}" >/dev/null 2>&1; then
+		rm -rf -- "${grant_dir}"
+		_review_github_ai_grant_none guard_error
+		return 0
+	fi
+	if ! jq -c '[select(.trusted == true and ((.open // false) == false)) | .paths[]? | strings | select(test("^\\.github/ai/[^/]+$"))]' \
+		"${grant_dir}/grant.json" > "${grant_dir}/github_ai_grants.json" 2>/dev/null; then
+		rm -rf -- "${grant_dir}"
+		_review_github_ai_grant_none grant_error
+		return 0
+	fi
+	grant_count="$(jq 'length' "${grant_dir}/github_ai_grants.json" 2>/dev/null || echo 0)"
+	[[ "${grant_count}" =~ ^[0-9]+$ ]] || grant_count=0
+	if [ "${grant_count}" -eq 0 ]; then
+		grant_reason="$(jq -r '.reason // "grant_error"' "${grant_dir}/grant.json" 2>/dev/null | tr -cd 'a-z_' | cut -c1-64 || true)"
+		[ "$(jq -r '.trusted' "${grant_dir}/grant.json" 2>/dev/null || true)" != true ] || grant_reason="no_github_ai_grant"
+		rm -rf -- "${grant_dir}"
+		_review_github_ai_grant_none "${grant_reason:-grant_error}"
+		return 0
+	fi
+	echo "REVIEW_GITHUB_AI_GRANT phase=prepare outcome=granted reason=granted paths=${grant_count}" >&2
+	printf '%s\n' "${grant_dir}/github_ai_grants.json"
+}
+
 # Only the trusted prepare step may select a root; never accept a path from
 # the PR checkout or a model-controlled environment variable.
 if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
@@ -104,7 +225,17 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 	# A tracked file over the per-file limit is left out of the review snapshot
 	# rather than failing the review; the editor cannot recreate it (transfer
 	# refuses a result that conflicts with a host path).
-	REVIEW_SNAPSHOT_SKIP_OVERSIZED=1 PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${workspace}" "${root}/source" "${root}/baseline.json" "${snapshot_git_dir[@]}"
+	# Issue #9920: the trusted plan grant's .github/ai/<file> paths, frozen
+	# into the snapshot's manifest sidecar (prepare only; fail open).
+	review_github_ai_grant_args=()
+	review_github_ai_grant_list=""
+	if [ "${action}" = prepare ]; then
+		review_github_ai_grant_list="$(_review_github_ai_grant_prepare)" || review_github_ai_grant_list=""
+		if [ -n "${review_github_ai_grant_list}" ] && [ -f "${review_github_ai_grant_list}" ]; then
+			review_github_ai_grant_args=(--granted-paths-file "${review_github_ai_grant_list}")
+		fi
+	fi
+	REVIEW_SNAPSHOT_SKIP_OVERSIZED=1 PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${workspace}" "${root}/source" "${root}/baseline.json" "${snapshot_git_dir[@]}" "${review_github_ai_grant_args[@]}"
 	version="${OPENCODE_VERSION:-1.18.23}"
 	[[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid review OpenCode version' >&2; exit 1; }
 	# Pull the prebuilt sandbox image, or build it locally (scripts/sandbox_image.sh);
@@ -331,6 +462,13 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 	# PR build backends may write source files. Never publish their writes as
 	# editor output: restore the exact host snapshot before launching the model.
 	PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" refresh "${workspace}" "${root}/source" "${root}/baseline.json"
+	# Issue #9920: written before REVIEW_SANDBOX_ROOT so the root stays the last
+	# line prepare appends (callers that read "the rest after
+	# REVIEW_SANDBOX_ROOT=" keep getting only the root). Empty without a grant,
+	# so a retried prepare clears a stale path.
+	case "${GITHUB_AI_PLAN_GRANT_WRITE_ENABLED-}" in
+		''|[Tt][Rr][Uu][Ee]) printf 'REVIEW_GITHUB_AI_GRANT_PATHS_FILE=%s\n' "${review_github_ai_grant_args[1]:-}" >> "${GITHUB_ENV:?}" ;;
+	esac
 	printf 'REVIEW_SANDBOX_ROOT=%s\n' "${root}" >> "${GITHUB_ENV:?}"
 	trap - EXIT
 	exit 0
