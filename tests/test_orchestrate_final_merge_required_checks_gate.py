@@ -348,6 +348,7 @@ def test_required_names_uses_built_in_default_when_var_unset(tmp_path):
 	expected_default = ("CI,lint,Integration PR readiness check,"
 		"Lint plan-archival completeness,"
 		"Lint PR body for auto-close keywords against orchestrator-tracking issues,"
+		"pr-body-lint,"
 		"review / gate")
 	assert result.stdout.strip() == expected_default
 
