@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/workflow_integrity.yml:36-37 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The integrity job's 35-minute timeout leaves no headroom when the manifest fetch waits the full 25 minutes allowed by the 1500 s clamp and the other work takes the 10 minutes the comment allows for it.\n  WHY: If the fetch waits the full time and the remaining work (attestation verify, compare, status publish) runs over 10 minutes, GitHub cancels the job at 35 minutes before failure_reason_code reaches the alert and Summary steps; the sibling update-wrappers job keeps 5 minutes of headroom at the same clamp. Both reviewers rated it MAJOR, mapped here to high, with confidence 4 (openai_gpt-6-luna) and 3 (z-ai_glm-5_3-flash). anthropic_claude-sonnet-5_5 and minimax_minimax-m3 checked this issue and chose not to report it: it is not a regression from the base and it needs an operator override of 1500 or more.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/workflow_integrity.yml:Lines 36-37; the fetch block also clamps `SMF_MAX_WAIT` to 1500 seconds. | severity=MAJOR | confidence=4\n  PROBLEM: The 35-minute job timeout leaves no headroom for the maximum 25-minute fetch wait plus the 10 minutes allocated to other work.\n  WHY: If the fetch uses the full wait and the job's remaining work exceeds 10 minutes, GitHub cancels the job at 35 minutes before verification can finish or return its classified failure.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/workflow_integrity.yml:lines 36-37 (with clamp at .github/workflows/update_workflows.yml:318 and comment at update_workflows.yml:317 / workflow_integrity.yml:557) | severity=MAJOR | confidence=3\n  PROBLEM: At the 1500 s clamp ceiling, the integrity job's comment allows 25 min of wait plus 10 min of work, which equals the full 35-min timeout with no headroom. The update-wrappers job keeps 5 min of headroom (update_workflows.yml:55-56), so the two budgets disagree. The last run fixed only the comment, not the allocation.\n  WHY: An operator sets the variable to 1500 or more, the block sleeps about 1500 s and succeeds, and the post-fetch work (attestation verify, compare, status publish) runs over the remaining margin. The run is then cancelled at 35:00 before failure_reason_code reaches the alert and Summary steps. Suggested fix: raise the integrity job's timeout-minutes (e.g. 40) or reword the work estimate.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d18c363ee891c70e247d026c18448a1a6fd6624803526649951046c1e126753f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9947,
+    "run_id": "45035690891",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45035690891",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122164923_cf5db6ba0b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9947,
+    "run_id": "45035690891"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T16:49:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
