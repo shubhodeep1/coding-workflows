@@ -892,6 +892,184 @@ def _is_must_not_contain_post_capture_evolution_false_positive(
 	)
 
 
+# Off switch for the base-deletion supersede defense (issue #9930, unblocking
+# project #9421). Unset, empty or "true" (any case) keeps the defense on;
+# "false" turns it off and restores the strict legacy behaviour; any other
+# value also turns it off and logs one warning. The default lives here (not in
+# a workflow) because the resolver stages this helper from main (§8).
+_BASE_DELETION_SUPERSEDE_ENV = "INTEGRATION_FINGERPRINT_BASE_DELETION_SUPERSEDE_ENABLED"
+
+# Cache for the base-deletion supersede defense, keyed on
+# (history_commit_sha, normalized_path, captured_at). Value is
+# (deleting_commit_sha, history_label) on a confirmed supersede, else None.
+_BASE_DELETION_SUPERSEDE_CACHE: dict[tuple[str, str, str], tuple[str, str] | None] = {}
+
+# Warn-once latch for an invalid _BASE_DELETION_SUPERSEDE_ENV value.
+_BASE_DELETION_FLAG_WARNED = False
+
+# Conservative branch-name shape for BASE_BRANCH before it is placed inside
+# refs/remotes/origin/<name>: no leading '-', no whitespace, no '..'.
+_BASE_DELETION_SAFE_BRANCH_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._/-]*$")
+_BASE_DELETION_COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+
+
+def _base_deletion_supersede_enabled() -> bool:
+	"""Return True when the base-deletion supersede defense is switched on."""
+	global _BASE_DELETION_FLAG_WARNED
+	raw_value = os.environ.get(_BASE_DELETION_SUPERSEDE_ENV)
+	value = (raw_value or "").strip().lower()
+	if value in ("", "true"):
+		return True
+	if value == "false":
+		return False
+	if not _BASE_DELETION_FLAG_WARNED:
+		_BASE_DELETION_FLAG_WARNED = True
+		print(
+			f"::warning::verify_integration_fingerprints: invalid {_BASE_DELETION_SUPERSEDE_ENV}={raw_value!r}; "
+			"base-deletion supersede disabled.",
+			flush=True,
+			file=sys.stderr,
+		)
+	return False
+
+
+def _base_deletion_verify_commit(rev: str) -> str | None:
+	"""Resolve ``rev`` to a commit SHA, or None on any failure (fail closed)."""
+	if not rev or rev.startswith("-"):
+		return None
+	try:
+		git_result = subprocess.run(
+			["git", "rev-parse", "-q", "--verify", f"{rev}^{{commit}}"],
+			capture_output=True,
+			check=False,
+			timeout=GIT_COMMAND_TIMEOUT_SECS,
+		)
+	except Exception:  # noqa: BLE001 — defense must stay fail-closed
+		return None
+	if git_result.returncode != 0:
+		return None
+	sha = git_result.stdout.decode("utf-8", errors="replace").strip()
+	if not _BASE_DELETION_COMMIT_SHA_RE.match(sha):
+		return None
+	return sha
+
+
+def _resolve_base_deletion_history_ref(ref: str | None) -> tuple[str, str] | None:
+	"""Pick the history that carries the base branch's deletions.
+
+	Returns ``(commit_sha, label)`` or None (defense does not apply):
+
+	1. ref mode (wave-dispatch gate): the verified ref itself — once a
+	resolver merge of the base lands, the base's history is reachable
+	from it;
+	2. working-tree mode with a merge in progress: ``MERGE_HEAD`` (the
+	integration-sync resolver keeps it until its commit; it is the base
+	side being merged in);
+	3. working-tree mode without a merge: ``refs/remotes/origin/$BASE_BRANCH``
+	when ``BASE_BRANCH`` (already exported by the resolver) is a safe name.
+	"""
+	effective_ref = _normalize_ref(ref)
+	if effective_ref is not None:
+		sha = _base_deletion_verify_commit(effective_ref)
+		return (sha, effective_ref) if sha else None
+	merge_head_sha = _base_deletion_verify_commit("MERGE_HEAD")
+	if merge_head_sha:
+		return merge_head_sha, "MERGE_HEAD"
+	base_branch = os.environ.get("BASE_BRANCH", "").strip()
+	if not base_branch or ".." in base_branch or not _BASE_DELETION_SAFE_BRANCH_RE.match(base_branch):
+		return None
+	remote_ref = f"refs/remotes/origin/{base_branch}"
+	sha = _base_deletion_verify_commit(remote_ref)
+	return (sha, remote_ref) if sha else None
+
+
+def _base_deletion_superseding_commit(
+	ref: str | None,
+	captured_at: Any,
+	path: str,
+) -> tuple[str, str] | None:
+	"""Detect a must_contain on a missing file that the base branch deleted after capture.
+
+	When the default branch deletes (or moves) a file after a sub-issue's
+	fingerprint was captured, the correct integration-sync resolution is to
+	take that deletion — but the sub-issue's ``must_contain`` on the path
+	then reports "file does not exist" forever and every resolver attempt is
+	rejected (project #9421: main deleted
+	``.github/workflows/lint-pr-body-auto-close.yml`` in #9698 while #9422's
+	fingerprint still required content in it).
+
+	The miss is superseded only when ALL of these hold:
+
+	* the defense is switched on (``_BASE_DELETION_SUPERSEDE_ENV``);
+	* ``captured_at`` parses and the path normalizes inside the repo;
+	* a history commit resolves (see :func:`_resolve_base_deletion_history_ref`);
+	* the path is absent at that history commit (``git ls-tree``);
+	* the newest non-merge commit deleting the path in that history
+	(``git log --no-renames --diff-filter=D``) is dated after
+	``captured_at`` and is not an ``[ai-merge-resolve]`` resolver commit.
+
+	Returns ``(deleting_commit_sha, history_label)`` when confirmed (caller
+	treats the fingerprint as satisfied); None otherwise. Fails CLOSED on
+	every guard and on any git plumbing or decoding error.
+	API call count: zero (local ``git`` only).
+	"""
+	if not _base_deletion_supersede_enabled():
+		return None
+	captured_epoch = _captured_at_to_epoch(captured_at)
+	if captured_epoch is None:
+		return None
+	normalized_path, path_error = _normalize_repo_path(path)
+	if path_error is not None or normalized_path is None:
+		return None
+	history = _resolve_base_deletion_history_ref(ref)
+	if history is None:
+		return None
+	history_sha, history_label = history
+	cache_key = (history_sha, normalized_path, str(captured_at).strip())
+	if cache_key in _BASE_DELETION_SUPERSEDE_CACHE:
+		return _BASE_DELETION_SUPERSEDE_CACHE[cache_key]
+	result: tuple[str, str] | None = None
+	try:
+		tree_probe = subprocess.run(
+			["git", "ls-tree", "--name-only", history_sha, "--", normalized_path],
+			capture_output=True,
+			check=False,
+			timeout=GIT_COMMAND_TIMEOUT_SECS,
+		)
+		if tree_probe.returncode == 0 and not tree_probe.stdout.decode("utf-8", errors="replace").strip():
+			deletion_log = subprocess.run(
+				[
+					"git", "log",
+					"--no-renames",
+					"--diff-filter=D",
+					"--max-count=1",
+					"--format=%H%x00%ct%x00%s",
+					history_sha,
+					"--",
+					normalized_path,
+				],
+				capture_output=True,
+				check=False,
+				timeout=GIT_COMMAND_TIMEOUT_SECS,
+			)
+			if deletion_log.returncode == 0:
+				first_line = deletion_log.stdout.decode("utf-8", errors="replace").split("\n", 1)[0]
+				fields = first_line.split("\x00")
+				if len(fields) == 3:
+					sha, ct_text, subject = (field.strip() for field in fields)
+					if (
+						_BASE_DELETION_COMMIT_SHA_RE.match(sha)
+						and ct_text.isdigit()
+						and int(ct_text) > captured_epoch
+						and not subject.startswith(_AI_MERGE_RESOLVE_SUBJECT_PREFIX)
+					):
+						result = (sha, history_label)
+	except Exception:  # noqa: BLE001 — defense must stay fail-closed
+		result = None
+	_BASE_DELETION_SUPERSEDE_CACHE[cache_key] = result
+	return result
+
+
 def _fp_key(fp: Any) -> tuple[str, str] | None:
 	if not isinstance(fp, dict):
 		return None
@@ -1347,7 +1525,12 @@ def _evaluate_fp_state(
 	exists_cache: dict[str, tuple[bool, str | None]],
 	ref: str | None = None,
 	captured_at: Any = None,
+	deletion_captured_at: Any = None,
 ) -> dict[str, Any] | None:
+	# deletion_captured_at feeds only the base-deletion supersede defense, so
+	# the baseline/compare call sites can enable it without also switching on
+	# the captured_at-gated evolution/union defenses (unchanged behaviour).
+	effective_deletion_captured_at = deletion_captured_at if deletion_captured_at is not None else captured_at
 	if not isinstance(fp, dict):
 		return None
 	path = fp.get("file", "")
@@ -1424,6 +1607,29 @@ def _evaluate_fp_state(
 				),
 			}
 		if content is None:
+			# The base branch may have deleted (or moved) the file after
+			# capture; taking that deletion is the correct resolution, so a
+			# non-resolver base deletion supersedes the stale must_contain.
+			base_deletion = _base_deletion_superseding_commit(ref, effective_deletion_captured_at, path)
+			if base_deletion is not None:
+				deleting_sha, history_label = base_deletion
+				print(
+					f"::warning::FINGERPRINT_BASE_DELETION_SUPERSEDED_V1 "
+					f"issue=#{issue_num} pr=#{pr_num} file={path} "
+					f"commit={deleting_sha[:12]} base_ref={history_label} "
+					f"reason=must_contain_file_deleted_on_base_after_capture_by_non_resolver_commit",
+					flush=True,
+					file=sys.stderr,
+				)
+				return {
+					"kind": kind,
+					"path": path,
+					"regex": regex_src,
+					"fp_key": fp_key,
+					"satisfied": True,
+					"check_error": None,
+					"violation": None,
+				}
 			return {
 				"kind": kind,
 				"path": path,
@@ -1978,7 +2184,10 @@ def compare_against_baseline_with_tier(
 					quarantine_unchanged_keys.add(quarantine_key)
 					_emit_quarantine_marker(issue_key, issue_num, fp_key, quarantine_runtime)
 					continue
-				state = _evaluate_fp_state(fp, kind, issue_num, pr_num, file_cache, exists_cache, ref=ref)
+				state = _evaluate_fp_state(
+					fp, kind, issue_num, pr_num, file_cache, exists_cache,
+					ref=ref, deletion_captured_at=issue_entry.get("captured_at"),
+				)
 				if state is None:
 					continue
 				baseline_satisfied = baseline_index.get((str(issue_key), kind, state["fp_key"]))
@@ -2301,7 +2510,10 @@ def capture_baseline_state(
 				):
 					_emit_quarantine_marker(issue_key, issue_num, fp_key, quarantine_runtime)
 					continue
-				state = _evaluate_fp_state(fp, kind, issue_num, pr_num, file_cache, exists_cache, ref=ref)
+				state = _evaluate_fp_state(
+					fp, kind, issue_num, pr_num, file_cache, exists_cache,
+					ref=ref, deletion_captured_at=entry.get("captured_at"),
+				)
 				if state is None:
 					continue
 				issue_state[kind].append(_baseline_entry_from_state(state))
@@ -2435,7 +2647,10 @@ def compare_against_baseline(
 					quarantine_unchanged_keys.add(quarantine_key)
 					_emit_quarantine_marker(issue_key, issue_num, fp_key, quarantine_runtime)
 					continue
-				state = _evaluate_fp_state(fp, kind, issue_num, pr_num, file_cache, exists_cache, ref=ref)
+				state = _evaluate_fp_state(
+					fp, kind, issue_num, pr_num, file_cache, exists_cache,
+					ref=ref, deletion_captured_at=entry.get("captured_at"),
+				)
 				if state is None:
 					continue
 				baseline_satisfied = baseline_index.get((str(issue_key), kind, state["fp_key"]))

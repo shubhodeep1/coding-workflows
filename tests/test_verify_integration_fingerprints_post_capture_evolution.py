@@ -132,6 +132,12 @@ def _clear_caches(mod) -> None:
 	captured_at) cache keys, so the defense's git-lookup cache must be
 	cleared between tests to keep coverage isolated."""
 	mod._POST_CAPTURE_EVOLUTION_CACHE.clear()
+	# getattr keeps the fail-closed tests runnable against a verifier that
+	# predates the base-deletion defense (red-on-base checks).
+	base_deletion_cache = getattr(mod, "_BASE_DELETION_SUPERSEDE_CACHE", None)
+	if base_deletion_cache is not None:
+		base_deletion_cache.clear()
+		mod._BASE_DELETION_FLAG_WARNED = False
 
 
 @contextlib.contextmanager
@@ -355,6 +361,329 @@ def test_verifier_still_fails_when_captured_at_absent_even_if_evolved():
 		f"{rc}, stdout=\n{out}"
 	)
 	assert "must_contain pattern missing" in out
+
+
+# --------------------------------------------------------------------------
+# Base-deletion supersede defense (issue #9930, unblocking project #9421):
+# the default branch deleted a file after a sub-issue's fingerprint was
+# captured, and the resolver correctly takes that deletion.
+# --------------------------------------------------------------------------
+
+_BASE_DELETION_ENV = "INTEGRATION_FINGERPRINT_BASE_DELETION_SUPERSEDE_ENABLED"
+_DELETED_PATH = ".github/workflows/sample-lint.yml"
+_DELETED_FILE_LINE = "runs-on: ubuntu-26.04"
+_DELETED_MUST_CONTAIN_REGEX = re.escape(_DELETED_FILE_LINE)
+_BEFORE_CAPTURE = "2026-06-01T12:00:00Z"
+_D4_RESOLVE = "2026-06-04T00:00:00Z"
+
+
+@contextlib.contextmanager
+def _base_deletion_env(flag: str | None = None, base_branch: str | None = None) -> Iterator[None]:
+	saved = {name: os.environ.get(name) for name in (_BASE_DELETION_ENV, "BASE_BRANCH")}
+	try:
+		for name, value in ((_BASE_DELETION_ENV, flag), ("BASE_BRANCH", base_branch)):
+			if value is None:
+				os.environ.pop(name, None)
+			else:
+				os.environ[name] = value
+		yield
+	finally:
+		for name, value in saved.items():
+			if value is None:
+				os.environ.pop(name, None)
+			else:
+				os.environ[name] = value
+
+
+def _run_git_nocheck(cwd: Path, *args: str, date: str | None = None) -> int:
+	env = os.environ.copy()
+	env.update({
+		"GIT_AUTHOR_NAME": "Test Bot",
+		"GIT_AUTHOR_EMAIL": "test@example.invalid",
+		"GIT_COMMITTER_NAME": "Test Bot",
+		"GIT_COMMITTER_EMAIL": "test@example.invalid",
+	})
+	if date is not None:
+		env["GIT_AUTHOR_DATE"] = date
+		env["GIT_COMMITTER_DATE"] = date
+	return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, check=False, env=env).returncode
+
+
+def _write_path(repo: Path, rel: str, content: str) -> None:
+	target = repo / rel
+	target.parent.mkdir(parents=True, exist_ok=True)
+	target.write_text(content, encoding="utf-8")
+	_run_git(repo, "add", rel)
+
+
+def _seed_base_deletion_merge(
+	repo: Path,
+	*,
+	delete_subject: str = "Fold the PR-body lint into pr-checks.yml (#9698)",
+	delete_date: str = _D3_LATER,
+	base_deletes: bool = True,
+) -> str | None:
+	"""main adds the file (D1); `integration` adds the sub-issue's line (D1);
+	main then deletes the file (or, with base_deletes=False, edits another
+	file); `integration` merges main without committing and takes the
+	deletion (`git rm`). Leaves MERGE_HEAD in place, like the resolver.
+	Returns main's deleting commit SHA (None when main kept the file)."""
+	_write_path(repo, _DELETED_PATH, "name: sample-lint\njobs: {}\n")
+	_run_git(repo, "commit", "--quiet", "-m", "Add sample lint workflow (#9000)", date=_D1_IMPL)
+	_run_git(repo, "checkout", "--quiet", "-b", "integration")
+	_write_path(repo, _DELETED_PATH, f"name: sample-lint\njobs: {{}}\n{_DELETED_FILE_LINE}\n")
+	_run_git(repo, "commit", "--quiet", "-m", "AI implementation for issue #9422 (#9430)", date=_D1_IMPL)
+	_run_git(repo, "checkout", "--quiet", "main")
+	deleting_sha: str | None = None
+	if base_deletes:
+		_run_git(repo, "rm", "--quiet", _DELETED_PATH)
+		_run_git(repo, "commit", "--quiet", "-m", delete_subject, date=delete_date)
+		deleting_sha = _run_git(repo, "rev-parse", "HEAD").strip()
+	else:
+		_write_path(repo, "README.md", "unrelated\n")
+		_run_git(repo, "commit", "--quiet", "-m", "Unrelated main change (#9500)", date=delete_date)
+	_run_git(repo, "checkout", "--quiet", "integration")
+	_run_git_nocheck(repo, "merge", "--no-commit", "--no-ff", "main", date=_D4_RESOLVE)
+	return deleting_sha
+
+
+def _take_deletion(repo: Path) -> None:
+	_run_git(repo, "rm", "--quiet", "--force", "--ignore-unmatch", _DELETED_PATH)
+	(repo / _DELETED_PATH).unlink(missing_ok=True)
+
+
+def _base_deletion_fingerprints(repo: Path, *, must_contain: bool = True, must_not_contain: bool = False) -> Path:
+	entry: dict = {
+		"issue": 9422,
+		"pr": 9430,
+		"captured_at": _CAPTURED_AT,
+		"must_contain": [{"file": _DELETED_PATH, "regex": _DELETED_MUST_CONTAIN_REGEX}] if must_contain else [],
+		"must_not_contain": [{"file": _DELETED_PATH, "regex": re.escape("ubuntu-latest")}] if must_not_contain else [],
+		"must_not_exist": [],
+	}
+	# Written after the merge, as an untracked file inside the sandbox repo
+	# (removed with it), like the other tests in this file.
+	fp_path = repo / "fingerprints.json"
+	fp_path.write_text(json.dumps({"9422": entry}), encoding="utf-8")
+	return fp_path
+
+
+def test_base_deletion_supersedes_missing_must_contain_in_merge_working_tree():
+	mod = _verifier_module()
+	with _base_deletion_env(), _sandbox_repo() as repo:
+		_clear_caches(mod)
+		deleting_sha = _seed_base_deletion_merge(repo)
+		_take_deletion(repo)
+		fp_path = _base_deletion_fingerprints(repo)
+		rc, out, err = _run_verifier(mod, [str(fp_path)], repo)
+	assert rc == 0, f"base deletion after capture must supersede the must_contain; rc={rc}, stdout=\n{out}\nstderr=\n{err}"
+	assert "FINGERPRINT_BASE_DELETION_SUPERSEDED_V1" in err, err
+	assert "issue=#9422" in err and "pr=#9430" in err and f"file={_DELETED_PATH}" in err
+	assert deleting_sha is not None and f"commit={deleting_sha[:12]}" in err
+	assert "base_ref=MERGE_HEAD" in err
+	assert "Integration fingerprint verification FAILED" not in out
+
+
+def test_base_deletion_must_not_contain_on_deleted_path_is_satisfied():
+	mod = _verifier_module()
+	with _base_deletion_env(), _sandbox_repo() as repo:
+		_clear_caches(mod)
+		_seed_base_deletion_merge(repo)
+		_take_deletion(repo)
+		fp_path = _base_deletion_fingerprints(repo, must_contain=False, must_not_contain=True)
+		rc, out, err = _run_verifier(mod, [str(fp_path)], repo)
+	assert rc == 0, f"must_not_contain on a deleted path must be satisfied; rc={rc}, stdout=\n{out}\nstderr=\n{err}"
+
+
+def test_base_deletion_supersede_in_compare_against_baseline_mode():
+	mod = _verifier_module()
+	with _base_deletion_env(), _sandbox_repo() as repo:
+		_clear_caches(mod)
+		_seed_base_deletion_merge(repo)
+		assert (repo / _DELETED_PATH).exists(), "modify/delete conflict must leave the integration copy"
+		fp_path = _base_deletion_fingerprints(repo)
+		baseline_path = fp_path.parent / "baseline.json"
+		rc, out, err = _run_verifier(mod, ["--baseline-fingerprints-state", str(baseline_path), str(fp_path)], repo)
+		assert rc == 0, f"baseline capture must succeed; stdout=\n{out}\nstderr=\n{err}"
+		_take_deletion(repo)
+		_clear_caches(mod)
+		rc, out, err = _run_verifier(mod, ["--compare-against-baseline", str(baseline_path), str(fp_path)], repo)
+	assert rc == 0, f"compare mode must accept the base deletion; rc={rc}, stdout=\n{out}\nstderr=\n{err}"
+	assert "FINGERPRINT_BASE_DELETION_SUPERSEDED_V1" in err, err
+
+
+def test_base_deletion_supersede_in_ref_mode_after_resolver_merge():
+	mod = _verifier_module()
+	with _base_deletion_env(), _sandbox_repo() as repo:
+		_clear_caches(mod)
+		deleting_sha = _seed_base_deletion_merge(repo)
+		_take_deletion(repo)
+		_run_git(repo, "commit", "--quiet", "-m", "[ai-merge-resolve] resolve merge conflicts", date=_D4_RESOLVE)
+		head = _run_git(repo, "rev-parse", "HEAD").strip()
+		fp_path = _base_deletion_fingerprints(repo)
+		rc, out, err = _run_verifier(mod, ["--ref", head, str(fp_path)], repo)
+	assert rc == 0, f"ref mode must accept the base deletion; rc={rc}, stdout=\n{out}\nstderr=\n{err}"
+	assert deleting_sha is not None and f"commit={deleting_sha[:12]}" in err, err
+
+
+def test_base_deletion_resolver_deleted_path_still_fails():
+	mod = _verifier_module()
+	# (a) main kept the file; the resolver deleted it during the merge.
+	with _base_deletion_env(), _sandbox_repo() as repo:
+		_clear_caches(mod)
+		_seed_base_deletion_merge(repo, base_deletes=False)
+		_take_deletion(repo)
+		fp_path = _base_deletion_fingerprints(repo)
+		rc, out, err = _run_verifier(mod, [str(fp_path)], repo)
+		assert rc == 1, f"resolver-only deletion must fail; rc={rc}, stdout=\n{out}"
+		assert "file does not exist" in out
+		assert "FINGERPRINT_BASE_DELETION_SUPERSEDED_V1" not in err
+		_run_git(repo, "commit", "--quiet", "-m", "[ai-merge-resolve] resolve merge conflicts", date=_D4_RESOLVE)
+		head = _run_git(repo, "rev-parse", "HEAD").strip()
+		_clear_caches(mod)
+		rc, out, err = _run_verifier(mod, ["--ref", head, str(fp_path)], repo)
+		assert rc == 1, f"resolver merge dropping the file must fail in ref mode; rc={rc}, stdout=\n{out}"
+		assert "FINGERPRINT_BASE_DELETION_SUPERSEDED_V1" not in err
+	# (b) the deleting commit is itself an [ai-merge-resolve] commit.
+	with _base_deletion_env(), _sandbox_repo() as repo:
+		_clear_caches(mod)
+		_seed_base_deletion_merge(repo, delete_subject="[ai-merge-resolve] resolve merge conflicts")
+		_take_deletion(repo)
+		fp_path = _base_deletion_fingerprints(repo)
+		rc, out, err = _run_verifier(mod, [str(fp_path)], repo)
+	assert rc == 1, f"resolver-attributed deletion must fail; rc={rc}, stdout=\n{out}"
+	assert "FINGERPRINT_BASE_DELETION_SUPERSEDED_V1" not in err
+
+
+def test_base_deletion_before_capture_fails_closed():
+	mod = _verifier_module()
+	with _base_deletion_env(), _sandbox_repo() as repo:
+		_clear_caches(mod)
+		_seed_base_deletion_merge(repo, delete_date=_BEFORE_CAPTURE)
+		_take_deletion(repo)
+		fp_path = _base_deletion_fingerprints(repo)
+		rc, out, err = _run_verifier(mod, [str(fp_path)], repo)
+	assert rc == 1, f"a deletion before capture must not supersede; rc={rc}, stdout=\n{out}"
+	assert "FINGERPRINT_BASE_DELETION_SUPERSEDED_V1" not in err
+
+
+def test_base_deletion_flag_off_keeps_strict_violation():
+	mod = _verifier_module()
+	for flag in ("false", "FALSE", "maybe"):
+		with _base_deletion_env(flag=flag), _sandbox_repo() as repo:
+			_clear_caches(mod)
+			_seed_base_deletion_merge(repo)
+			_take_deletion(repo)
+			fp_path = _base_deletion_fingerprints(repo)
+			rc, out, err = _run_verifier(mod, [str(fp_path)], repo)
+		assert rc == 1, f"flag={flag!r} must keep the strict violation; rc={rc}, stdout=\n{out}"
+		assert "FINGERPRINT_BASE_DELETION_SUPERSEDED_V1" not in err
+		assert "file does not exist" in out
+
+
+def test_base_deletion_invalid_flag_logs_warning_once():
+	mod = _verifier_module()
+	with _base_deletion_env(flag="false"):
+		_clear_caches(mod)
+		assert mod._base_deletion_supersede_enabled() is False
+	with _base_deletion_env(flag="maybe"):
+		_clear_caches(mod)
+		err_buf = io.StringIO()
+		with contextlib.redirect_stderr(err_buf):
+			assert mod._base_deletion_supersede_enabled() is False
+			assert mod._base_deletion_supersede_enabled() is False
+	err = err_buf.getvalue()
+	assert err.count(f"invalid {_BASE_DELETION_ENV}='maybe'") == 1, err
+
+
+def test_base_deletion_flag_on_values_keep_defense():
+	mod = _verifier_module()
+	for flag in ("true", "TRUE", ""):
+		with _base_deletion_env(flag=flag), _sandbox_repo() as repo:
+			_clear_caches(mod)
+			_seed_base_deletion_merge(repo)
+			_take_deletion(repo)
+			fp_path = _base_deletion_fingerprints(repo)
+			rc, out, err = _run_verifier(mod, [str(fp_path)], repo)
+		assert rc == 0, f"flag={flag!r} must keep the defense on; rc={rc}, stdout=\n{out}\nstderr=\n{err}"
+
+
+def test_base_deletion_uses_origin_base_branch_without_merge_head():
+	mod = _verifier_module()
+	with _sandbox_repo() as repo:
+		_seed_base_deletion_merge(repo)
+		_take_deletion(repo)
+		_run_git(repo, "commit", "--quiet", "-m", "Merge main into integration", date=_D4_RESOLVE)
+		_run_git(repo, "update-ref", "refs/remotes/origin/main", "main")
+		fp_path = _base_deletion_fingerprints(repo)
+		with _base_deletion_env(base_branch="main"):
+			_clear_caches(mod)
+			rc, out, err = _run_verifier(mod, [str(fp_path)], repo)
+		assert rc == 0, f"origin/$BASE_BRANCH must supply the base history; rc={rc}, stdout=\n{out}\nstderr=\n{err}"
+		assert "base_ref=refs/remotes/origin/main" in err, err
+		with _base_deletion_env(base_branch="--output=/tmp/x"):
+			_clear_caches(mod)
+			rc, out, err = _run_verifier(mod, [str(fp_path)], repo)
+		assert rc == 1, f"unsafe BASE_BRANCH must fail closed; rc={rc}, stdout=\n{out}"
+
+
+@contextlib.contextmanager
+def _raise_on_deletion_log(mod) -> Iterator[None]:
+	"""Make the defense's `git log --diff-filter=D` raise (history check error)."""
+	real_run = mod.subprocess.run
+
+	def _raising_run(cmd, *args, **kwargs):
+		if isinstance(cmd, list) and "--diff-filter=D" in cmd:
+			raise subprocess.TimeoutExpired(cmd, 1)
+		return real_run(cmd, *args, **kwargs)
+
+	mod.subprocess.run = _raising_run
+	try:
+		yield
+	finally:
+		mod.subprocess.run = real_run
+
+
+def test_base_deletion_helper_returns_none_on_history_error():
+	mod = _verifier_module()
+	with _base_deletion_env(), _sandbox_repo() as repo:
+		_clear_caches(mod)
+		_seed_base_deletion_merge(repo)
+		_take_deletion(repo)
+		prev_cwd = os.getcwd()
+		try:
+			os.chdir(repo)
+			assert mod._base_deletion_superseding_commit(None, _CAPTURED_AT, _DELETED_PATH) is not None
+			_clear_caches(mod)
+			with _raise_on_deletion_log(mod):
+				helper_result = mod._base_deletion_superseding_commit(None, _CAPTURED_AT, _DELETED_PATH)
+		finally:
+			os.chdir(prev_cwd)
+	assert helper_result is None, f"history error must fail closed; got {helper_result!r}"
+
+
+def test_base_deletion_history_error_fails_closed():
+	mod = _verifier_module()
+	# (a) no MERGE_HEAD and BASE_BRANCH unset: no base history to consult.
+	with _base_deletion_env(), _sandbox_repo() as repo:
+		_clear_caches(mod)
+		_seed_base_deletion_merge(repo)
+		_take_deletion(repo)
+		_run_git(repo, "commit", "--quiet", "-m", "Merge main into integration", date=_D4_RESOLVE)
+		fp_path = _base_deletion_fingerprints(repo)
+		rc, out, err = _run_verifier(mod, [str(fp_path)], repo)
+	assert rc == 1, f"no base history must fail closed; rc={rc}, stdout=\n{out}"
+	assert "FINGERPRINT_BASE_DELETION_SUPERSEDED_V1" not in err
+	# (b) the deletion-history `git log` raises.
+	with _base_deletion_env(), _sandbox_repo() as repo:
+		_clear_caches(mod)
+		_seed_base_deletion_merge(repo)
+		_take_deletion(repo)
+		fp_path = _base_deletion_fingerprints(repo)
+		with _raise_on_deletion_log(mod):
+			rc, out, err = _run_verifier(mod, [str(fp_path)], repo)
+	assert rc == 1, f"history error must keep the violation; rc={rc}, stdout=\n{out}"
+	assert "FINGERPRINT_BASE_DELETION_SUPERSEDED_V1" not in err
 
 
 def main() -> int:
