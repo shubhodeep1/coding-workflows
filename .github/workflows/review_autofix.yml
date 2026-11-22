@@ -5871,6 +5871,8 @@ jobs:
                 # API audit (§14): this step has no comment snapshot, so the
                 # newest page is read through tg_helpers.sh (as #9249), only
                 # for this hold reason. Any read failure pages (unchecked).
+                # Accepted bound: a marker pushed off the newest page of 100
+                # comments pages once more and is then re-posted at the end.
                 if [ "${JUDGE_SKIP_REASON}" = "security_hold_exhausted_without_completed_audit" ] && [[ "${AUTOFIX_FAILURE_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
                   RB_SECURITY_HOLD_MARKER="<!-- rb-judge-security-hold:v1 head=${AUTOFIX_FAILURE_HEAD_SHA} reason=exhausted_without_completed_audit -->"
                   RB_SECURITY_HOLD_REPEAT="unchecked"
@@ -6031,13 +6033,23 @@ jobs:
           MSG+="PR: ${PR_URL}${ISSUE_LINE}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${PR_NUMBER}" "${MSG}" "${JUDGE_ALERT_LEVEL}"
-          # Issue #9942: record the page after it went out, so a failed POST
-          # only means the next round pages again.
+          # Issue #9942: record the page only after Telegram returned a message
+          # id, so a failed send or POST only means the next round pages again.
           if [ -n "${RB_SECURITY_HOLD_MARKER:-}" ] && [ "${RB_SECURITY_HOLD_REPEAT:-}" != "true" ]; then
-            RB_SECURITY_HOLD_BODY="$(printf 'Security-pass hold alerted: no completed audit exists for `%s` and its retry budget is used up. Later review rounds on this head do not page again; a new push or /re-run starts over.\n\n%s' "${AUTOFIX_FAILURE_HEAD_SHA}" "${RB_SECURITY_HOLD_MARKER}")"
-            gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${RB_SECURITY_HOLD_BODY}" >/dev/null 2>&1 \
-              || echo "::warning::Could not post the rb-judge-security-hold marker on PR #${PR_NUMBER}; the next round pages again."
+            rb_security_hold_msg_id="$(tg_send_msg "${MSG}" "${JUDGE_ALERT_LEVEL}")"
+            tg_store_msg_id "${PR_NUMBER}" "${rb_security_hold_msg_id}"
+            if [ -n "${rb_security_hold_msg_id}" ]; then
+              RB_SECURITY_HOLD_BODY="$(printf 'Security-pass hold alerted: no completed audit exists for `%s` and its retry budget is used up. Later review rounds on this head do not page again; a new push starts over (/re-run rechecks this head without paging again).\n\n%s' "${AUTOFIX_FAILURE_HEAD_SHA}" "${RB_SECURITY_HOLD_MARKER}")"
+              # Empty AI_COMMENT_SIGNING_SECRET makes the gh signing shim exec
+              # the real gh, so the marker is an unsigned GH_TOKEN comment, as
+              # the tg_trusted + endswith read above (and tracking) expects.
+              AI_COMMENT_SIGNING_SECRET="" gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${RB_SECURITY_HOLD_BODY}" >/dev/null 2>&1 \
+                || echo "::warning::Could not post the rb-judge-security-hold marker on PR #${PR_NUMBER}; the next round pages again."
+            else
+              echo "::warning::rb-judge-security-hold page not confirmed by Telegram for PR #${PR_NUMBER}; no marker, the next round pages again."
+            fi
+          else
+            tg_send_tracked "${PR_NUMBER}" "${MSG}" "${JUDGE_ALERT_LEVEL}"
           fi
 
       - name: Check PR state before failure alerts

@@ -334,7 +334,13 @@ def _judge_alert(env: dict[str, str], tg_prelude: str = "", gh_calls: list[str] 
 		(bindir / "gh").write_text(GH_STUB, encoding="utf-8")
 		(bindir / "gh").chmod(0o755)
 		(Path(tmp) / "tg_helpers.sh").write_text(
-			tg_prelude + 'tg_send_tracked() { printf \'%s\\t%s\\n\' "$3" "${2//$\'\\n\'/ }" >> "${TG_LOG}"; }\n', encoding="utf-8"
+			tg_prelude
+			+ 'tg_send_tracked() { printf \'%s\\t%s\\n\' "$3" "${2//$\'\\n\'/ }" >> "${TG_LOG}"; }\n'
+			# The first security-hold page sends directly to read the message id;
+			# TG_FAKE_MSG_ID="" simulates a send Telegram did not confirm.
+			+ 'tg_send_msg() { printf \'%s\\t%s\\n\' "$2" "${1//$\'\\n\'/ }" >> "${TG_LOG}"; printf \'%s\' "${TG_FAKE_MSG_ID-42}"; }\n'
+			+ 'tg_store_msg_id() { :; }\n',
+			encoding="utf-8",
 		)
 		run_env = {
 			"PATH": f"{bindir}:/usr/bin:/bin",
@@ -542,6 +548,25 @@ def test_security_hold_untrusted_or_quoted_marker_still_pages():
 		sends, stdout = _judge_alert(SECURITY_HOLD_ENV, tg_prelude=_dedupe_prelude([comment]))
 		assert len(sends) == 1 and sends[0][0] == "CRITICAL", comment
 		assert "repeat=false level=CRITICAL" in stdout, comment
+
+
+def test_security_hold_unconfirmed_page_posts_no_marker():
+	_require_jq()
+	gh_calls: list[str] = []
+	env = dict(SECURITY_HOLD_ENV, TG_FAKE_MSG_ID="")
+	sends, stdout = _judge_alert(env, tg_prelude=_dedupe_prelude([]), gh_calls=gh_calls)
+	assert len(sends) == 1 and sends[0][0] == "CRITICAL"
+	assert "repeat=false level=CRITICAL" in stdout
+	assert _posted_security_markers(gh_calls) == []
+
+
+def test_security_hold_marker_post_bypasses_comment_signing():
+	# The dedupe reads raw comments and trusts only the GH_TOKEN author with
+	# the marker as the last line, so the marker must not be signed (the
+	# signing shim would post it as github-actions[bot] with a sig line).
+	step = _step(_workflow_text(), ALERT_STEP_NAME)
+	post = [line.strip() for line in step.splitlines() if "issues/${PR_NUMBER}/comments" in line and "RB_SECURITY_HOLD_BODY" in line]
+	assert len(post) == 1 and post[0].startswith('AI_COMMENT_SIGNING_SECRET="" gh api '), post
 
 
 def test_other_security_hold_reasons_unchanged():
