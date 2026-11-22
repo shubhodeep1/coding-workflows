@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/collect_workflow_logs.py:115, 2158-2169 | severity=low | confidence=5\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: Adding `test-and-mark-stable.yml` to `PAT_BUDGET_WORKFLOWS` makes the daily PAT-budget report send two more GitHub run-list requests per configured repository, because it lists each workflow over two date windows.\n  WHY: Issue #9887 asks for no added API calls (\"Part A adds zero calls\"). Both reviewers rated this SEVERITY: NIT, which maps to low, and there was no disagreement. z-ai_glm-5_3-flash adds that the calls use the report's own token, not the measured GH_PAT, and run alongside nine workflows the report already lists.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/collect_workflow_logs.py:PAT_BUDGET_WORKFLOWS at line 115; the listing loop at lines 2162-2169. | severity=NIT | confidence=5\n  PROBLEM: Adding test-and-mark-stable.yml makes the PAT-budget report issue two additional run-list queries per configured repository.\n  WHY: When pat_budget_day_utc is set, main() calls list_runs_for_repo once per workflow for each of two date windows. That adds two GitHub API calls per repository per report run, against issue #9887's \"No API calls added\" constraint.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/collect_workflow_logs.py:PAT_BUDGET_WORKFLOWS at line 115 (\"test-and-mark-stable.yml\": \"test-and-mark-stable\"); workflow listing loop in main() around lines 2158-2169 | severity=NIT | confidence=4\n  PROBLEM: Adding `test-and-mark-stable.yml` to `PAT_BUDGET_WORKFLOWS` adds about two run-list requests per repository per daily PAT-budget report run, because the report queries each listed workflow path in two date windows.\n  WHY: It is not a failure but a cost that sits against the issue's \"no new API calls ... Part A adds zero calls\" constraint. Severity is low because the report already lists nine other workflows and these calls fall outside the measured 5,000/hr PAT path.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "dc454ae24a5e756c7755e89f204d33229bf0ef53cbab1319dbd359d6db7cf366",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9899,
+    "run_id": "44964454451",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44964454451",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122001345_48481c3286",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9899,
+    "run_id": "44964454451"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T00:13:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
