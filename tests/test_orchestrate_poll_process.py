@@ -32143,6 +32143,10 @@ _STANDALONE_PIPELINE_LABELS = (
 	"ai:ready-to-merge",
 	"ai:review-blocked",
 )
+# Issue #3576: with SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED on (the
+# default) the same label batch also lists ai:security-audit, so the tracker
+# guard sees a tracker that only carries ai:blocked.
+_STANDALONE_DISCOVERY_LABELS = _STANDALONE_PIPELINE_LABELS + ("ai:security-audit",)
 
 
 def _run_standalone_label_batch_tick(**kwargs) -> dict:
@@ -32203,7 +32207,7 @@ def test_standalone_pipeline_label_batch_failure_falls_back_to_all_rest_calls() 
 	result = _run_standalone_label_batch_tick(mock_pipeline_label_graphql=True, fail_pipeline_label_graphql=True)
 	log = result["stdout"] + result["stderr"]
 	assert result["pipeline_label_graphql_calls"] == 1, log
-	assert sorted(_stall_listing_labels(result)) == sorted(_STANDALONE_PIPELINE_LABELS), log
+	assert sorted(_stall_listing_labels(result)) == sorted(_STANDALONE_DISCOVERY_LABELS), log
 	assert "::notice::Standalone stall recovery: label GraphQL batch fell back to REST for:" in log
 
 
@@ -32213,7 +32217,7 @@ def test_standalone_pipeline_label_batch_unrecognised_answer_keeps_rest_path() -
 	result = _run_standalone_label_batch_tick()
 	log = result["stdout"] + result["stderr"]
 	assert result["pipeline_label_graphql_calls"] == 0, log
-	assert sorted(_stall_listing_labels(result)) == sorted(_STANDALONE_PIPELINE_LABELS), log
+	assert sorted(_stall_listing_labels(result)) == sorted(_STANDALONE_DISCOVERY_LABELS), log
 	assert {501, 502, 503} <= set(result.get("candidate_details_requested", [])), log
 
 

@@ -989,3 +989,31 @@ def test_missing_orchestrate_lib_sibling_keeps_queued_runs_active(tmp_path: Path
 	wedged = {"id": 9, "display_title": "Unblock judge #5", "status": "queued", "created_at": _iso(200)}
 	assert isolated._busy_items([wedged], NOW, dt.timedelta(minutes=60)) == {5}
 	assert isolated._zombie_lib() is None
+
+
+# --- issue #3576: the security-audit tracker is not a work item ---------------
+
+def test_security_audit_tracker_is_skipped_unless_failed() -> None:
+	search = [_item(3576, ["ai:blocked", "ai:security-audit"]), _item(5, ["ai:blocked"])]
+	details = {"3576": _details("ai:blocked", 10), "5": _details("ai:blocked", 5)}
+	result = _select(search, details)
+	assert result["dispatch"] == [{"item": 5, "kind": "issue"}]
+	assert result["skipped"]["security_audit_tracker"] == 1
+	# A failed project that also carries the label is still judged.
+	failed = _select([_item(3576, ["ai:blocked", "ai:security-audit"])], {"3576": _details("ai:blocked", 10)}, failed=[3576])
+	assert failed["dispatch"] == [{"item": 3576, "kind": "project"}]
+	assert "security_audit_tracker" not in failed["skipped"]
+
+
+def test_security_audit_tracker_skip_honours_kill_switch(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setenv("SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED", "false")
+	result = _select([_item(3576, ["ai:blocked", "ai:security-audit"])], {"3576": _details("ai:blocked", 10)})
+	assert result["dispatch"] == [{"item": 3576, "kind": "issue"}]
+	assert "security_audit_tracker" not in result["skipped"]
+	for off_value in ("0", "no", "OFF"):
+		monkeypatch.setenv("SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED", off_value)
+		off = _select([_item(3576, ["ai:blocked", "ai:security-audit"])], {"3576": _details("ai:blocked", 10)})
+		assert off["dispatch"] == [{"item": 3576, "kind": "issue"}], off_value
+	monkeypatch.setenv("SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED", "")
+	on = _select([_item(3576, ["ai:blocked", "ai:security-audit"])], {"3576": _details("ai:blocked", 10)})
+	assert on["skipped"]["security_audit_tracker"] == 1
