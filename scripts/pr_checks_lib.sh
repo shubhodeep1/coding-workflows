@@ -1221,7 +1221,9 @@ _pr_ensure_final_ci()
 # would charge the shared breaker file to the PAT's `core` bucket).
 _pr_checks_wait_read()
 {
-	if [ "${_pr_wait_route_reads:-0}" = "1" ] && type gh_read >/dev/null 2>&1; then
+	# `declare -F`: only the shell function from scripts/gh_helpers.sh turns
+	# routing on, never an alias or a stray executable of that name on PATH.
+	if [ "${_pr_wait_route_reads:-0}" = "1" ] && declare -F gh_read >/dev/null 2>&1; then
 		local wait_read_out="" wait_read_rc=0
 		wait_read_out="$(gh_read --same-repo-only api "$@")" || wait_read_rc=$?
 		if [ "${wait_read_rc}" -eq 0 ]; then
