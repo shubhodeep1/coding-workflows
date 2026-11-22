@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-22T14:57:17Z",
+  "issue_number": 9393,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=.github/workflows/review_autofix.yml:527; cited_path=.github/workflows/review_autofix.yml; files_touched=.github/workflows/orchestrate_poll.yml, changelog.d/9393-operator-step-release-routing.md, scripts/activation_verify.sh, tests/test_activation_verify.py, tests/test_operator_step_issue.py.",
+  "phase": "review_autofix",
+  "pr_number": 9872,
+  "record_id": "lesson_20261122145717_6b981ba0b4",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/review_autofix.yml",
+    ".github/workflows/orchestrate_poll.yml",
+    "changelog.d/9393-operator-step-release-routing.md",
+    "scripts/activation_verify.sh",
+    "tests/test_activation_verify.py",
+    "tests/test_operator_step_issue.py"
+  ]
+}
