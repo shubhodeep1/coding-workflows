@@ -2409,13 +2409,19 @@ jobs:
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+          type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
           found_approval_comment="false"
+          issue_comments_read_ok="false"
+          # gh_api_retry waits for the rate-limit reset GitHub reports (#9858);
+          # this outer loop only covers the approval comment becoming visible.
           for attempt in 1 2 3 4 5; do
-            if ! { gh api --paginate "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?per_page=100" | jq -s 'add // []' > "${ISSUE_COMMENTS_FILE}"; } 2>/dev/null; then
+            if ! { gh_api_retry --paginate "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?per_page=100" | jq -s 'add // []' > "${ISSUE_COMMENTS_FILE}"; }; then
               echo "Attempt ${attempt}: API call failed, retrying..."
               sleep $((attempt * 2))
               continue
             fi
+            issue_comments_read_ok="true"
             if jq -e --arg approval_comment_id "${APPROVAL_COMMENT_ID}" 'any(.[]; (.id | tostring) == $approval_comment_id)' "${ISSUE_COMMENTS_FILE}" >/dev/null; then
               found_approval_comment="true"
               break
@@ -2424,6 +2430,9 @@ jobs:
           done
 
           if [ "${found_approval_comment}" != "true" ]; then
+            if [ "${issue_comments_read_ok}" != "true" ]; then
+              echo "::error::Unable to read issue comments (GitHub API unavailable or rate-limited)."
+            fi
             echo "Unable to fetch triggering approval comment from issue comments."
             exit 1
           fi
@@ -3254,7 +3263,13 @@ jobs:
           - For `npm test`, treat "Missing script" errors as a pass; treat any
             other test failure as a real error.
           - Update the tests and registries listed under Expected files together
-            with the code; a pre-push gate re-runs them.
+            with the code, but only those inside the issue's scope (see the
+            files_touched and heal-scope rule under Restrictions); a pre-push
+            gate re-runs them.
+            When a listed test, or a test your change breaks, falls outside
+            that scope, do not edit it: the commit-time scope guard refuses
+            out-of-scope paths. Leave it unchanged and report the conflict in
+            your final summary (the path and why it needs changing).
 
           Pinned-SHA test discipline: never write a test that asserts a specific
           upstream commit SHA in a file the workflow sync manages, such as a wrapper's
@@ -3269,6 +3284,14 @@ jobs:
           - Do not ask clarification questions (unattended runtime).
           {{WORKFLOW_EDIT_RESTRICTION}}
           - Do not modify ai_pipeline.md, unattended_system_instructions.md, or CLAUDE.md.
+          - If the issue body lists `files_touched:` (machine or prose form),
+            stay inside that set plus this issue's own `changelog.d/` and
+            `agents.d/` fragments. On a workflow heal issue, the
+            `ai:workflow-heal-scope:v1` marker's `paths=` list is the scope
+            instead, plus only this issue's own `agents.d/` fragment. If the
+            issue names files only in its scope or acceptance criteria, stay
+            inside those files. The Expected files list is advisory and is
+            not a scope.
 
           <completeness_contract>
           The deliverable is a worktree change set — modifications written to
