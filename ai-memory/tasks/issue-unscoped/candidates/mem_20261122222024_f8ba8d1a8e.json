@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:118 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The cross-reference at README.md:118 says the second `ZOMBIE_RUN_MAX_QUEUED_HOURS` row (README.md:2856) holds \"the full list of guards\", but that row omits `autofix_inflight_peer`, `worktree_registry_active_runs`, `apply_analysis_orchestrate_in_flight`, `stable_gate_plan_runs` and `concurrency_snapshot`.\n  WHY: This is a documentation inaccuracy with no runtime effect. The full list is only in `agents.d/9473-ignore-wedged-queued-runs.md`. The reviewers rated it NIT, which is mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- README.md:118 | severity=NIT | confidence=3\n  PROBLEM: The cross-reference points to the second `ZOMBIE_RUN_MAX_QUEUED_HOURS` row (line 2856) for the full list of guards. That row is a prose summary that does not name `autofix_inflight_peer`, `worktree_registry_active_runs`, `apply_analysis_orchestrate_in_flight`, `stable_gate_plan_runs` or `concurrency_snapshot`.\n  WHY: This is a documentation inaccuracy, not a runtime failure. The only complete list is in `agents.d/9473-ignore-wedged-queued-runs.md`. Both rows exist, so the cross-reference resolves.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- README.md:118 | severity=NIT | confidence=4\n  PROBLEM: The cross-reference points to a table row that lists only workflows. The full list of guard sites is in agents.d/9473-ignore-wedged-queued-runs.md.\n  WHY: This is a documentation inaccuracy. It may confuse operators looking for the full set of guarded code paths.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- README.md:118 | severity=NIT | confidence=4\n  PROBLEM: The cross-reference promises \"the full list of guards\". The row at README.md:2856 names only the poller, the sweep, the merge train, the release/promote cycles, the CI cancelled-run rerun and the unblock scan. Five live guards are absent: `autofix_inflight_peer` (scripts/gh_helpers.sh:3357 and :3384), `worktree_registry_active_runs` (scripts/worktree_registry.sh:271), `apply_analysis_orchestrate_in_flight` (scripts/apply_analysis_on_main.sh:379), `stable_gate_plan_runs` (scripts/stable_e2e_step_wait_plan.sh:247) and `concurrency_snapshot` (scripts/orchestrate_lib.py:568). `agents.d/9473-ignore-wedged-queued-runs.md:10` lists 21 distinct guard labels.\n  WHY: This is documentation only. The row lists fewer guards than the contract tests (`tests/test_zombie_queued_guard_contract.py::test_shell_guard_sites_use_the_shared_filter` and `test_python_guard_sites_use_the_shared_predicate`) and the agents.d fragment lock in. No dispatch or filter behavior is affected.\n- HARDENING_SUGGESTIONS: README.md line 118. Either drop \"for the full list of guards\", or append the missing five guard labels to the second row's narrative. Estimated lines changed: 1-3. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- README.md:118 (pointing to the Required Variables row at 2856) | severity=NIT | confidence=4\n  PROBLEM: The text says the row at 2856 contains the \"full list of guards\", but that row omits `autofix_inflight_peer` (`scripts/gh_helpers.sh:3357`), `worktree_registry_active_runs` (`scripts/worktree_registry.sh:271`), `apply_analysis_orchestrate_in_flight` (`scripts/apply_analysis_on_main.sh:379`), `stable_gate_plan_runs` (`scripts/stable_e2e_step_wait_plan.sh:247`) and `concurrency_snapshot` (`scripts/orchestrate_lib.py:568`).\n  WHY: Execution is not affected. Operators following the README reference do not get the full guard list the text promises.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3f802001ba57f4f7ff77e896d988fbf02c6cc46c37f0ca4e71c63f3762ac0800",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9711,
+    "run_id": "45066567715",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45066567715",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122222024_f8ba8d1a8e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9711,
+    "run_id": "45066567715"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T22:20:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
