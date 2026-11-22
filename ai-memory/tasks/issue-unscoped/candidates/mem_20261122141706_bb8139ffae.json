@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "When modifying merge leases or merge-train behavior, inspect all relevant workflow entry points rather than changing only one workflow. The repository has tests for lease behavior and merge-train behavior, including fake-GitHub coverage.",
+  "fingerprint": "c8575f720f98f8a4b34776b84a659a3b3f00f80cc3411bad18040fcbb552d629",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45028827916",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45028827916",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9398",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9419",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9908",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9916",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9930",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9402",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9428",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9915",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9921",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9932"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261122141706_bb8139ffae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Merge-lease behavior is cross-cutting across several workflows and shared shell helpers.",
+  "timestamps": {
+    "created_at": "2026-11-22T14:17:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
