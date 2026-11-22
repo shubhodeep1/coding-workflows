@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/workflow-failure-heal-intake.yml:285-297 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The UTC-day cache key is computed in the payload step before the queue wait, so a report that waits across midnight UTC saves its marker under the previous day's key.\n  WHY: A later same-day report misses the cache and sends a redundant WARNING, which breaks the once-per-UTC-day guarantee. All four reviewers rated this NIT.\n- .github/workflows/workflow-failure-heal-intake.yml:55-60,361-365,382-388 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: Actions cache entries are branch-scoped, so a marker saved by a `workflow_dispatch` run on a non-default branch is not visible to default-branch runs.\n  WHY: The next default-branch report for that repo sends another WARNING. All reviewers rated this NIT.\n- .github/workflows/workflow-failure-heal-intake.yml:357-365,382-388 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: Cache restore and save are not an atomic once-per-day claim, and scripts/workflow_failure_heal_queue.sh:150-160, 242-255 cover only the intake run itself.\n  WHY: Two concurrent same-repo reports (for example when queue acquisition fails) can both miss the cache and both send a WARNING. Minimax noted that the PR description already acknowledges this race, and rated it NIT with confidence 3. Gemini rated it NIT with confidence 5.\n- .github/workflows/workflow-failure-heal-intake.yml:290 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The normalized source-repo name is truncated with `head -c 120` in the cache key.\n  WHY: Repos that share the same 120-character prefix share a daily marker, so the second repo's first WARNING is sent at DEBUG. All reviewers rated this NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/workflow-failure-heal-intake.yml:285-297 | severity=NIT | confidence=5\n  PROBLEM: The daily cache key is evaluated before the queue wait.\n  WHY: A report that crosses midnight while queued uses the previous day's key, so a later same-day report misses the cache and sends a redundant WARNING.\n- .github/workflows/workflow-failure-heal-intake.yml:55-60,361-365,382-388 | severity=NIT | confidence=4\n  PROBLEM: The warning marker cache is branch-scoped.\n  WHY: Markers saved by non-default-branch `workflow_dispatch` runs are not visible to default-branch runs, so those runs send a redundant WARNING.\n- .github/workflows/workflow-failure-heal-intake.yml:361-365,382-388; scripts/workflow_failure_heal_queue.sh:150-160,242-255 | severity=NIT | confidence=5\n  PROBLEM: Cache restore and save are not an atomic once-per-day claim.\n  WHY: Concurrent same-repo reports can both restore before either saves, so both miss the cache and both send a WARNING.\n- .github/workflows/workflow-failure-heal-intake.yml:290 | severity=NIT | confidence=4\n  PROBLEM: The source-repo part of the cache key is truncated to 120 characters after normalization.\n  WHY: Repos that share the same prefix share a key, so the second repo's first WARNING is sent at DEBUG.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/workflow-failure-heal-intake.yml:292 | severity=NIT | confidence=4\n  PROBLEM: The UTC date is captured in the payload step before the queue wait, which can last up to 4800 seconds (see scripts/workflow_failure_heal_queue.sh:94).\n  WHY: A report that crosses midnight UTC saves its marker under the previous day's key, so a later same-day report misses the cache and sends a second WARNING.\n- .github/workflows/workflow-failure-heal-intake.yml:55-60,361-365,382-388 | severity=NIT | confidence=4\n  PROBLEM: `actions/cache` versions entries by branch, so a marker saved by a `workflow_dispatch` run on a feature branch is invisible to default-branch runs.\n  WHY: The next default-branch run sends another WARNING.\n- .github/workflows/workflow-failure-heal-intake.yml:357-365,382-388; scripts/workflow_failure_heal_queue.sh:150-160,242-255 | severity=NIT | confidence=3\n  PROBLEM: Restore and save are not a single atomic once-per-day claim. When queue acquisition fails (`unlocked`), concurrent same-repo reports can both miss the cache.\n  WHY: Both reports send a WARNING. The reviewer notes the PR description acknowledges this as the \"Known race\" and reports it only to confirm the implementation matches that limitation.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/workflow-failure-heal-intake.yml:290 | severity=NIT | confidence=4\n  PROBLEM: `head -c 120` truncates the normalized source-repo name used in the cache key.\n  WHY: Repos with the same first 120 normalized characters share a marker, so the second repo's first WARNING is sent at DEBUG.\n- .github/workflows/workflow-failure-heal-intake.yml:292,297 | severity=NIT | confidence=5\n  PROBLEM: The UTC date is added to the cache key before the queue wait.\n  WHY: A report that waits across UTC midnight saves its marker under yesterday's key, so a later report that day misses it and sends another WARNING.\n- .github/workflows/workflow-failure-heal-intake.yml:55-60,357-388 | severity=NIT | confidence=4\n  PROBLEM: Actions cache entries are branch-scoped, but the warning key does not account for that.\n  WHY: A manual dispatch on a non-default branch saves a marker that default-branch runs cannot restore, so the next default-branch report sends another WARNING.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/workflow-failure-heal-intake.yml:292,297-300 | severity=NIT | confidence=5\n  PROBLEM: The UTC-day part of the cache key is computed in the payload step before the queue wait, while the WARNING send and marker save happen after it.\n  WHY: A report whose wait crosses 00:00 UTC saves under the previous day's key, so the next report misses the cache and sends another WARNING. This breaks the once-per-UTC-day guarantee at the day boundary and adds noise, but it fails open rather than missing an alert.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9e8d35bc3ef0de1b2a5a01773104c74a47e05d6a77faeabec8396586bb95b055",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9948,
+    "run_id": "45011599533",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45011599533",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122113953_72af56beeb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9948,
+    "run_id": "45011599533"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T11:39:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
