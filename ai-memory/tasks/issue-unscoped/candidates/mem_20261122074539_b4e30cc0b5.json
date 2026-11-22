@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cMove its slowest steps (see the run's step timings) into the CI job with the most headroom.\u201d\n  expected_change_site: `.github/workflows/ci.yml`, selection and placement of `Pre-push affected-test gate tests`\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The PR implementation and in-workflow documentation use historical job totals because step-level timing data for the failing run was unavailable; `.github/workflows/ci.yml:1529-1532` says the step was selected using test and subprocess counts, not timings; at lines 1567-1580, the target is justified using one historical job total that included the step; it does not compare step timings or establish that this job has the most headroom; The selection is grounded in recorded job totals (15m32s for `tests-hooks-and-orchestrator` with the step, run 43220859648), not the flagged run's step timings; the run's step results carry statuses only. This limitation is explicitly documented at ci.yml:1578-1580, in the changelog fragment, and in the test comments (tests/test_ci_poll_test_sharding.py:4269-4270).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \u201cMove its slowest steps (see the run's step timings) into the CI job with the most headroom.\u201d\n  Expected change site: .github/workflows/ci.yml, the placement rationale in the in-workflow comments.\n  Evidence of absence: The requirement explicitly requested a selection based on run's step timings, but the PR implementation and in-workflow documentation use historical job totals due to the unavailability of step-level timing data for the failing run. This gap is documented but not resolved in the code.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cMove its slowest steps (see the run's step timings) into the CI job with the most headroom.\u201d\n  Expected change site: `.github/workflows/ci.yml`, selection and placement of `Pre-push affected-test gate tests`.\n  Evidence of absence: The rationale at `.github/workflows/ci.yml:1529-1532` says the step was selected using test and subprocess counts, not timings. At lines 1567-1580, the target is justified using one historical job total that included the step; it does not compare step timings or establish that this job has the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom\" (issue #9895).\n  Expected change site: `.github/workflows/ci.yml`, the `Pre-push affected-test gate tests` placement and target-job selection (now ci.yml:1560-1595).\n  Evidence of absence: The selection is grounded in recorded job totals (15m32s for `tests-hooks-and-orchestrator` with the step, run 43220859648), not the flagged run's step timings; the run's step results carry statuses only. This limitation is explicitly documented at ci.yml:1578-1580, in the changelog fragment, and in the test comments (tests/test_ci_poll_test_sharding.py:4269-4270). Three prior editor passes evaluated this and accepted it as residual: no code change can close it because step timings do not exist for the run, and the step move itself \u2014 the core deliverable \u2014 is implemented and locked by `MovedPollGroupZero9895StepsContractTest`. The last-run diff strengthened the rationale (replaced the contradicted \"lighter since\" claim with recorded totals); it did not raise severity or reintroduce a failure path.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cde49a22109c8ea0241371e19704ab8d9bb60ab212525f9df9220a2ef2639a98",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9898,
+    "run_id": "44993258066",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44993258066",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122074539_b4e30cc0b5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9898,
+    "run_id": "44993258066"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T07:45:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
