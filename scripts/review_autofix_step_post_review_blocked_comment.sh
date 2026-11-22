@@ -80,10 +80,12 @@ case "${JUDGE_SKIP_REASON:-}" in
     # review_rb_judge.sh: the merge-base freshness gate could not verify the
     # base (merge lease held by another PR, or the freshness check failed).
     # Not autofix exhaustion; the judge re-fires and merges once it can.
-    RB_LEASE_HOLDER_TEXT=""
-    [[ ! "${JUDGE_MERGE_LEASE_BLOCKER:-}" =~ ^[0-9]+$ ]] || RB_LEASE_HOLDER_TEXT=" The merge lease is held by or queued for PR #${JUDGE_MERGE_LEASE_BLOCKER}."
+    # Lease guidance only when review_rb_judge.sh exported a lease blocker
+    # (merge_lease_* reasons); other reasons (compare_failed, ...) have no lease.
+    RB_LEASE_HOLDER_TEXT=" The judge re-fires and retries the merge; if this persists, check the run log for the freshness reason."
+    [[ ! "${JUDGE_MERGE_LEASE_BLOCKER:-}" =~ ^[0-9]+$ ]] || RB_LEASE_HOLDER_TEXT=" The merge lease is held by or queued for PR #${JUDGE_MERGE_LEASE_BLOCKER}; the merge retries when the lease frees. If this persists, check that PR."
     BODY_HEADING="AI review/autofix — merge deferred: base freshness could not be verified"
-    BODY_DETAIL="The review-blocked judge approved \`merge_with_followup\`, but the merge-base freshness gate could not verify this PR's base (the merge lease is held by another PR, or the freshness check failed), so the merge was deferred and no branch update was requested.${RB_LEASE_HOLDER_TEXT} This is not autofix exhaustion. The merge retries when the lease frees; if this persists, check the lease holder PR. Linked issues remain labelled \`ai:review-blocked\`."
+    BODY_DETAIL="The review-blocked judge approved \`merge_with_followup\`, but the merge-base freshness gate could not verify this PR's base (the merge lease is held by another PR, or the freshness check failed), so the merge was deferred and no branch update was requested. This is not autofix exhaustion.${RB_LEASE_HOLDER_TEXT} Linked issues remain labelled \`ai:review-blocked\`."
     ;;
   followup_issue_create_failed)
     BODY_HEADING="AI review/autofix — merge landed but follow-up issue creation failed"

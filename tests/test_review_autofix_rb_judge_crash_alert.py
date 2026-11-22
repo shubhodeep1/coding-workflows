@@ -468,8 +468,8 @@ def test_alert_freshness_unknown_is_warning_not_exhaustion():
 	assert level == "WARNING"
 	assert message.startswith(
 		"PR review blocked — merge_with_followup approved, but base freshness could not be verified "
-		"(merge lease held or freshness check failed); merge deferred (lease holder: PR #9402) "
-		"The merge retries when the lease frees; if this persists, check the lease holder PR"
+		"(merge lease held or freshness check failed); merge deferred (lease held by or queued for PR #9402) "
+		"The merge retries when the lease frees; if this persists, check that PR"
 	), message
 	assert "autofix exhausted" not in message
 	assert "Needs human intervention" not in message
@@ -480,8 +480,10 @@ def test_alert_freshness_unknown_without_holder_omits_it():
 	for blocker in ("", "?", "9402; rm"):
 		sends, _ = _judge_alert({**FRESHNESS_ENV, "JUDGE_MERGE_LEASE_BLOCKER": blocker})
 		assert len(sends) == 1 and sends[0][0] == "WARNING", blocker
-		assert "merge deferred The merge retries" in sends[0][1], blocker
-		assert "lease holder: PR" not in sends[0][1], blocker
+		# No lease blocker (e.g. compare_failed): no lease guidance.
+		assert "merge deferred The judge re-fires and retries the merge; if this persists, check the run log for the freshness reason" in sends[0][1], blocker
+		assert "queued for PR" not in sends[0][1], blocker
+		assert "lease frees" not in sends[0][1], blocker
 
 
 def test_alert_freshness_repeat_for_same_head_sends_nothing():
@@ -505,7 +507,7 @@ def test_comment_freshness_unknown_has_accurate_text_and_marker():
 	assert len(out["comment_posts"]) == 1
 	post = out["comment_posts"][0]
 	assert "merge deferred: base freshness could not be verified" in post
-	assert "held by or queued for PR #9402" in post
+	assert "held by or queued for PR #9402; the merge retries when the lease frees" in post
 	assert "maximum number of autofix iterations" not in post
 	assert _freshness_marker(HEAD_A) in post
 	assert "rb-judge-crash:v1" not in post
@@ -514,6 +516,8 @@ def test_comment_freshness_unknown_has_accurate_text_and_marker():
 	assert out["label_posts"] == []
 	out = _run_comment_script(FRESHNESS_ENV)
 	assert "held by or queued for PR #" not in out["comment_posts"][0]
+	assert "lease frees" not in out["comment_posts"][0]
+	assert "check the run log for the freshness reason" in out["comment_posts"][0]
 
 
 def test_comment_freshness_unknown_dedupes_per_head():
