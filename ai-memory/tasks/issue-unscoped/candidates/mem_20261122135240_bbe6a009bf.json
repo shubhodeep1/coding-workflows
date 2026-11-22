@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:1067,5690-5703 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The last autofix editor summary says it \"Reverted two of the three unrelated hunks: the `# noqa: E101` suffix at line 1067 and the docstring re-indent in test_validator_offending_bytes_redacts_secrets\", but neither revert landed. `\"\"\"  # noqa: E101` is still at line 1067 and the tab-indented docstring is still in the head working tree and the full PR diff.\n  WHY: Both hunks have no effect at runtime (no ruff config enables E101, W191 or RUF100). They are out-of-scope edits in a PR that should only add logging for #9940, and the editor reported a revert it did not perform, so a later pass may treat the finding as already fixed. Both reviewers rated it NIT, mapped here to low. Confidence was 5 (sonnet) and 4 (glm). Fix: drop the ` # noqa: E101` suffix at line 1067 and restore the 4-space indentation on docstring lines 5699, 5701 and 5702.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_implement_post_codex_recovery.py:line 1067 `\"\"\"  # noqa: E101`, and lines 5699-5702, where the docstring of test_validator_offending_bytes_redacts_secrets was re-indented from spaces to tabs | severity=NIT | confidence=5\n  PROBLEM: The editor summary claims both unrelated hunks were reverted, but they are still in the working tree and the full PR diff against base. The last-run diff only touches the symlink helper and the new sanitize test. Neither hunk relates to issue #9940.\n  WHY: No functional runtime failure, because no ruff config enables RUF100, E101 or W191. The PR carries out-of-scope edits, and the editor reported a revert it did not perform. Fix: drop the ` # noqa: E101` suffix at line 1067 and restore the 4-space indentation at lines 5699, 5701 and 5702.\n- HARDENING: scripts/implement_commit_changes.sh, line 63, implement_log_tracked_symlink_deletes | risk=1\n  PROBLEM: Under the C locale, `[[:space:][:cntrl:]]` does not mask multibyte Unicode whitespace (U+2028, U+00A0), while the Python log_field in scripts/codex_isolated_workspace.py (`[\\s\\x00-\\x1f\\x7f]`) does.\n  WHY: Both sides mask LF and CR, so no log-forgery path is shown; this is a parity gap only. Suggested fix: none required; optionally mask bytes 0x80-0xFF under `LC_ALL=C`, or state in the agents.d fragment that masking is ASCII-only (1-2 lines).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- HARDENING: scripts/implement_commit_changes.sh, function implement_log_tracked_symlink_deletes, line 63 | risk=1\n  PROBLEM: The bash class [[:space:][:cntrl:]] matches only ASCII whitespace and control characters in the C locale. Python's re.sub(r\"[\\s\\x00-\\x1f\\x7f]\", ...) in scripts/codex_isolated_workspace.py covers a different set, possibly including Unicode whitespace.\n  WHY: Log sanitization is inconsistent for non-ASCII paths. Suggested fix: also strip bytes 0x80-0xFF (e.g. [[:space:][:cntrl:]\\x80-\\xFF]) (1 line).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- HARDENING: scripts/implement_commit_changes.sh, implement_log_tracked_symlink_deletes, symlink_safe_path expansion | risk=1\n  PROBLEM: ${symlink_path//[[:space:][:cntrl:]]/?} does not match multibyte Unicode whitespace (U+00A0, U+2028, U+2029, U+202F, U+205F, U+3000) in the C locale, while the Python log_field uses \\s, which does.\n  WHY: Such a path would be masked in the CODEX_ISOLATION log but not in the IMPLEMENT_SYMLINK_DELETE log, which breaks correlation and the documented \"control and whitespace characters\" promise. Suggested fix: also strip high bytes, or byte-mask with LC_ALL=C tr '[:space:][:cntrl:]' '?' (1-2 lines).\n- HARDENING: scripts/implement_commit_changes.sh, implement_log_tracked_symlink_deletes, symlink_safe_path expansion | risk=1\n  PROBLEM: The Python log_field caps output at 200 chars ([:200]), but the bash expansion has no length cap.\n  WHY: A 10KB tracked path would print in full in the implement log but be truncated on the Python side, which breaks correlation. Suggested fix: truncate with ${temp:0:200} (1-2 lines).\n- HARDENING: scripts/implement_commit_changes.sh, implement_log_tracked_symlink_deletes, character class | risk=1\n  PROBLEM: [[:space:][:cntrl:]] depends on the locale, and runners often use LANG=en_US.UTF-8. The Python side uses an explicit, locale-independent ASCII range.\n  WHY: Diagnostics are not deterministic. Suggested fix: set LC_ALL=C before the expansion (1 line).\n- Note: No blocker findings. All four deliverables named in the linked issue are reflected in the PR diff.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_implement_post_codex_recovery.py:line 1067 (`\"\"\"  # noqa: E101`) and the docstring re-indent hunks at ~5690-5703 | severity=NIT | confidence=4\n  PROBLEM: The last autofix summary states it \"Reverted two of the three unrelated hunks: the `# noqa: E101` suffix at line 1067 and the docstring re-indent in `test_validator_offending_bytes_redacts_secrets`\". Neither revert is in head: the working tree, the full PR diff (base fc6bee \u2192 head 11b7fac) and last_run_diff (28ba1ab \u2192 11b7fac) show no revert hunks.\n  WHY: Not a runtime failure, because default ruff enables only E4/E7/E9/F and checks are green. The impact is PR accuracy and reviewability: unrelated test text stays modified in a logging-only PR, and the published fix disposition does not match the delivered diff.\n- HARDENING: scripts/implement_commit_changes.sh, line 63 (`${symlink_path//[[:space:][:cntrl:]]/?}`) | risk=1\n  PROBLEM: In the C locale the bash class does not mask multibyte Unicode whitespace (U+00A0, U+2028), while the Python `log_field` (`[\\s\\x00-\\x1f\\x7f]` on str) does.\n  WHY: The two implementations of the same anti-forgery promise disagree. Suggested fix: none required for correctness; document the masking as ASCII-scoped, or also replace bytes 0x80-0xFF (1-2 lines).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "da2df713bcb4cfa249016b56f1cfacc9d1a59a32504e1751f4db1db88e62a533",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9950,
+    "run_id": "45019181553",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45019181553",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122135240_bbe6a009bf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9950,
+    "run_id": "45019181553"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T13:52:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
