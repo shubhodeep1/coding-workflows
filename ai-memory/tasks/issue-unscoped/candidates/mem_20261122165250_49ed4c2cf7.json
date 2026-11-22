@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/pr_checks_lib.sh:2167-2169 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: No automated regression test covers the new `|| [[ \"${probe_repo}\" == *..* ]]` rejection in `_pr_probe_repo_init`. If a later refactor loosens the regex or drops the `*..*` clause, CI still passes and slugs like `../foo` or `a/b..c` can reach the origin URL `${server%/}/${probe_repo}.git` again.\n  WHY: Both reviewers say nothing fails at runtime today because the guard is correct, and both rated it SEVERITY: NIT, which is mapped to low here. The risk is a silent regression that reopens path traversal in the probe origin URL. anthropic_claude-sonnet-5_5 raised the same missing test but called it a hardening suggestion, not a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (not a finding; HARDENING_RISK_SCORE: 1) tests/test_pr_base_freshness_gate.py, new test method in class SoftPathFreshness next to test_an_unreachable_origin_keeps_overlap\n  PROBLEM: No test pins the `*..*` rejection that _pr_probe_repo_init gained at scripts/pr_checks_lib.sh line 2169.\n  WHY: If a later refactor removed the clause, a slug like `../foo` would pass the owner/repo regex again and end up in the origin URL `${server%/}/${probe_repo}.git` with CI still green. Suggested fix: call `_pr_probe_repo_init` through `_run` with `_PR_PROBE_REPO_SLUG=../foo` and with `a/b..c`, and assert rc 1 plus `PR_MERGE_TREE_PROBE_REPO outcome=unavailable reason=invalid_repository` on stderr (6-8 lines).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/pr_checks_lib.sh:line 2167-2169, inside `_pr_probe_repo_init` | severity=NIT | confidence=4\n  PROBLEM: The new `|| [[ \"${probe_repo}\" == *..* ]]` rejection is correct hardening, because the existing regex `[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$` matches `..`. The fix has no automated test pin.\n  WHY: It does NOT fail at runtime today. A future refactor that loosens the regex or drops the `*..*` clause would pass CI and reopen the path-traversal-in-origin-URL hole.\n- HARDENING_SUGGESTION (HARDENING-RISK-SCORE: 3) tests/test_pr_base_freshness_gate.py or tests/test_review_merge_train.py, next to `test_an_unreachable_origin_keeps_overlap` or `test_conflict_probe_outside_a_checkout_keeps_the_blocker_when_the_fetch_fails`\n  PROBLEM: The `..` slug rejection in `_pr_probe_repo_init` is not pinned by any automated test.\n  WHY: Suggested fix: run `_pr_probe_repo_init` with `_PR_PROBE_REPO_SLUG=../foo` and with `a/b..c`, assert rc=1 plus `outcome=unavailable reason=invalid_repository`, and check that a clean slug (`o/r`) returns 0 (~10 lines).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/pr_checks_lib.sh:line 2169, `_pr_probe_repo_init` (`if ! [[ \"${probe_repo}\" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || [[ \"${probe_repo}\" == *..* ]]; then`) | severity=NIT | confidence=4\n  PROBLEM: The new `..` rejection has no automated regression test. `_PR_PROBE_REPO_SLUG` has no hits in tests/*.py, and the only `invalid_repository` hit, tests/test_review_merge_train.py:2280, pins the wrapper delegation source text, not the rejection branch.\n  WHY: Nothing fails at runtime today because the guard is correct. A future refactor that loosens the regex or drops the `*..*` clause would pass CI and silently reopen path traversal in the probe origin URL `${server%/}/${probe_repo}.git`.\n- HARDENING_SUGGESTION (HARDENING_RISK_SCORE: 2) tests/test_pr_base_freshness_gate.py, near test_an_unreachable_origin_keeps_overlap / the private-repository tests\n  PROBLEM: The `_pr_probe_repo_init` `..` rejection branch (scripts/pr_checks_lib.sh:2169) is not pinned by CI.\n  WHY: Suggested fix: call `_pr_probe_repo_init` with `_PR_PROBE_REPO_SLUG=../foo` and with `a/b..c`, assert rc 1 and `reason=invalid_repository` on stderr, and check that a valid slug (`acme/consumer`) returns 0 (~10 lines).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a57db9a3a3a3349f54dc6b92c5bf306cad9f7be90d3a20a51d1c9bf305f7927a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9804,
+    "run_id": "45036330567",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45036330567",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122165250_49ed4c2cf7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9804,
+    "run_id": "45036330567"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T16:52:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
