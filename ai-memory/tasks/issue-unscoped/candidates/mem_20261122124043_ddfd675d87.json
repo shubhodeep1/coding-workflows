@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: .github/workflows/ci.yml, placement rationale for `Pre-push affected-test gate tests`\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: Run 44909097036 recorded step statuses only, with no durations, so the target job was chosen from older job totals (15m32s in run 43220859648) and estimates rather than step timings, ci.yml comment lines 1578\u20131580 (and 1567\u20131580 rationale), the test-file comment above POLL_GROUP_ZERO_9895_TARGET_JOB_ID, and the changelog fragment acknowledge this; no code change can close it. Severity NIT on all reports; anthropic_claude-sonnet-5_5 confidence 2.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- TASK_GAP: requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, the placement rationale for `Pre-push affected-test gate tests`.\n  Evidence of absence: Run 44909097036 recorded step statuses only, with no durations, so the target job was chosen from recorded job totals (15m32s in run 43220859648) rather than step timings. The ci.yml comment, the test-file comment and the changelog all say this openly. No code change can close it now.\n  SEVERITY: NIT | ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP: requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml, the placement rationale for Pre-push affected-test gate tests.\n  Evidence of absence: The workflow comment at lines 1578\u20131580 says the incident run provided statuses but no step timings. The selection relies on an older job total and estimates, so the specified timing-based identification and headroom comparison are absent.\n  SEVERITY: NIT | ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml, the placement rationale and choice of target job for \"Pre-push affected-test gate tests\"\n  Evidence of absence: Run 44909097036 recorded step statuses only, with no durations. The workflow comment at ci.yml:1578\u20131580, the test-file comment above POLL_GROUP_ZERO_9895_TARGET_JOB_ID, and the changelog fragment acknowledge this and use recorded job totals (15m32s for tests-hooks-and-orchestrator, run 43220859648) as a proxy. The choice among candidates is documented but an estimate. No code change can close the gap.\n  SEVERITY: NIT | ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, placement rationale for `Pre-push affected-test gate tests`.\n  Evidence of absence: The rationale at lines 1567\u20131580 says the incident run had no step durations. The move is based on an older job total and estimates, so the timing-based identification and comparison are not present.\n  SEVERITY: NIT | ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "56f9e3753c5562df63c92bfb8d04081e9c2ba5ba67509b4970bdd3a165a5a64c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9898,
+    "run_id": "45018630173",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45018630173",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122124043_ddfd675d87",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9898,
+    "run_id": "45018630173"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T12:40:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
