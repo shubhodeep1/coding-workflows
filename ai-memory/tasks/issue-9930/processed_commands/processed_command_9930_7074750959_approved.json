@@ -5,13 +5,25 @@
   "entry_id": "processed_command_9930_7074750959_approved",
   "issue_number": 9930,
   "metadata": {
+    "branch": "ai/issue-9930",
+    "changed_files": [
+      "agents.d/9930-fingerprint-base-deletion-supersede.md",
+      "changelog.d/9930-fingerprint-base-deletion-supersede.md",
+      "scripts/verify_integration_fingerprints.py",
+      "tests/test_verify_integration_fingerprints_post_capture_evolution.py"
+    ],
+    "issue_number": 9930,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9930",
+    "pr_number": 9932,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9932",
+    "run_attempt": "1",
+    "run_id": "44989428866",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/44989428866"
   },
   "run_attempt": 1,
   "run_id": "44989428866",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-22T05:38:45Z",
+  "status": "completed",
+  "timestamp": "2026-11-22T05:53:01Z",
   "workflow": "implement"
 }
