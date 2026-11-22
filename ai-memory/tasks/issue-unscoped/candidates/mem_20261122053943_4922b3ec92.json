@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- n/a (orchestrate-poll check-run, runs 44972157383 job 137067570343 and 44978745791 job 137074368533) | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The orchestrate-poll (0) check-run was cancelled and cannot be mapped to any hunk in this PR. The visible log passes every test and is truncated, which fits a timeout or external cancellation.\n  WHY: The PR touches only two test files, so the cancellation does not come from this change. The reviewer flags it only so the red `lint` aggregate is not treated as a code defect (source severity: NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- n/a (orchestrate-poll (0) on runs 44972157383 job 137067570343 and 44978745791 job 137074368533, conclusion cancelled) | severity=low (source: NIT) | confidence=3\n  PROBLEM: The cancelled orchestrate-poll leg cannot be mapped to any hunk in this PR. The visible log passes every test and is truncated, which fits a timeout or external cancellation.\n  WHY: The PR touches only two test files and ci.yml sets fail-fast: false. The linked issue #9907 explicitly scopes this leg out. The reviewer flags it so the editor checks the full log for a timeout instead of treating the red `lint` aggregate as a code defect.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c383e8bc65c74303cf2282e3d36363dd1012ca5d402bb2ce8547eff7bf7f116f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9914,
+    "run_id": "44985559702",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44985559702",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122053943_4922b3ec92",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9914,
+    "run_id": "44985559702"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-22T05:39:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
