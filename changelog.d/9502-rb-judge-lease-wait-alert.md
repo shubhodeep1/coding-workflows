@@ -6,11 +6,11 @@ Before this fix, `judge_skip_reason=base_freshness_unknown` (set by `scripts/rev
 | The numbers that matter | Value |
 | --- | --- |
 | Alert level | CRITICAL to WARNING |
-| Alerts and PR comments per PR head on judge re-fire runs | 1 (was one per re-fire) |
+| Alerts and PR comments per PR head on judge re-fire runs that reached the autofix iteration limit | 1 (was one per re-fire; security-pass-only runs still alert on each re-fire, see below) |
 | New per-head comment marker | `<!-- rb-judge-base-freshness:v1 head=<sha> -->` |
 | New step outputs | `judge_merge_lease_blocker` (rb_judge), `rb_judge_freshness_repeat` (rb_blocked_comment) |
 
-What this means for operators: a PR waiting on the merge lease shows up once as a WARNING with the holder PR, not as a page for a human to fix autofix. If the same head stays deferred, check the lease holder PR; a new push re-arms the alert.
+What this means for operators: a PR waiting on the merge lease shows up as a WARNING with the holder PR, not as a page for a human to fix autofix, and on runs that reached the autofix iteration limit it shows up once per head (runs that reach the judge only through the security pass repeat the WARNING; see the known residual below). If the same head stays deferred, check the lease holder PR; a new push re-arms the alert.
 
 ### For contributors
 
