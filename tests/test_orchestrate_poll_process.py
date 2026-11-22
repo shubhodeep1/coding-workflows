@@ -12699,9 +12699,11 @@ def test_review_blocked_fix_target_rejects_head_move_during_judge():
 		}
 		result = _review_blocked_fix_scope_case(
 			touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
-			# Reconciliation and branch prep consume six pulls/901 reads; the
-			# subsequent re-check must see the changed SHA.
-			pr_api_sequence={901: [dict(open_pr) for _ in range(6)] + [{**open_pr, **changed_pr}]},
+			# Reconciliation and branch prep consume five live pulls/901 reads
+			# (one more is served by the #9927 PR JSON cycle cache); the
+			# re-check is invalidated first, so it reads live and must see the
+			# changed SHA.
+			pr_api_sequence={901: [dict(open_pr) for _ in range(5)] + [{**open_pr, **changed_pr}]},
 		)
 		try:
 			_assert_in_poller_stdout(f"issue=10 pr=901 reason={reason}", result)
@@ -12745,6 +12747,11 @@ def test_review_blocked_merged_fix_target_rejects_unrelated_followup():
 			existing_branches=["main", "orchestrator/project-192"],
 			codex_json={"action": "fix", "justification": "apply fixes", "fix_description": "patched"},
 			codex_touch_file="sandbox_fix.txt", mock_git_push_success=True,
+			# The scenario is a PR that merges between the wave reconcile read
+			# and the review-blocked read in the same cycle. The #9927 PR JSON
+			# cache serves the second read from the first (the accepted
+			# in-cycle staleness), so the scenario only exists with it off.
+			env_overrides={"ORCH_POLL_PR_JSON_CACHE_TTL_SECS": "0"},
 		)
 		try:
 			_assert_in_poller_stdout(f"issue=10 pr=901 reason={reason}", result)
@@ -20985,7 +20992,9 @@ def test_close_merged_issues_sweep_default_branch_unavailable_closes_nothing():
 	# FINAL_DEFAULT_BRANCH falls back to a literal "main" on lookup failure,
 	# so the sweep must not reuse it.
 	assert "${FINAL_DEFAULT_BRANCH" not in body
-	assert "--jq '.default_branch'" in body
+	# Issue #9927: the read goes through the shared default-branch wrapper
+	# with an empty fallback, so a failed lookup still yields "".
+	assert '_sweep_default_branch="$(_orch_poll_default_branch_or_live "" quiet)"' in body
 	assert "|| echo main" not in body
 	assert "CLOSE_MERGED_SWEEP outcome=skip reason=default_branch_unavailable" in body
 	skip_pos = body.index("reason=default_branch_unavailable")
