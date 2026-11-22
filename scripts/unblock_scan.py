@@ -43,6 +43,9 @@ UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED is the off switch: unset, empty or `true`
 (any case) keeps the skip on, `false` turns it off, and any other value also
 turns it off and logs a warning on stderr.
 
+An item labelled `ai:security-audit` (the long-lived security-audit tracker,
+issue #3576) is skipped as `security_audit_tracker` unless it is a failed
+project; SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED=false turns that off.
 An item that carries `ai:needs-human` and whose newest trusted
 `ai:unblock:v1` marker is a `close` verdict is parked in the needs-human
 digest (scripts/operator_step_issue.py) and skipped as `parked`. With
@@ -109,6 +112,10 @@ sys.modules.setdefault("unblock_ledger", unblock_ledger)
 _LEDGER_SPEC.loader.exec_module(unblock_ledger)
 
 TRACKING_LABEL = "ai:orchestrator-tracking"
+# Issue #3576: the long-lived security-audit tracker is not a work item; the
+# scan skips it unless its project failed. SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED=false
+# restores the previous selection.
+SECURITY_AUDIT_LABEL = "ai:security-audit"
 CLOSED_LABEL = "ai:unblock-closed"
 MARKER_PREFIXES = ("<!-- ai:unblock:v1 ", "<!-- ai:unblock-wait:v1 ")
 STATE_PREFIX = "<!-- ORCHESTRATOR_STATE_V"
@@ -384,6 +391,11 @@ def select(
 				skip("e2e_test_item")
 				continue
 		labels = _label_names(item)
+		# Same vocabulary as the poller's is_truthy; unset or empty means on.
+		if ((os.environ.get("SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED") or "true").strip().lower() in ("1", "true", "yes", "on")
+				and SECURITY_AUDIT_LABEL in labels and number not in failed):
+			skip("security_audit_tracker")
+			continue
 		if CLOSED_LABEL in labels and number not in failed:
 			skip("closed_by_judge")
 			continue

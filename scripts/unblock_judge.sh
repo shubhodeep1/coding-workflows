@@ -111,8 +111,8 @@
 # A `heal_report` op (harness routing): one actions/runs listing and one
 # repository_dispatch to shubhodeep1/coding-workflows; a `hold_request` op:
 # one comment on the tracking issue.
-# CONSIST-001: the identity, item, item re-check, item comments and cited-run
-# reads go through gh_retry, so after a transient error (5xx, connection
+# CONSIST-001: the identity, item, item re-check, item comments, cited-run
+# and chain-title (a trusted PR's `ai/issue-<n>` issue) reads go through gh_retry, so after a transient error (5xx, connection
 # reset) one of them may be attempted up to GH_RETRY_MAX_ATTEMPTS times in
 # total, with capped rate-limit waits. Permanent errors and every write still
 # make one attempt.
@@ -127,6 +127,7 @@
 #      UNBLOCK_JUDGE item= kind= stop= fixup= op=fixup_delivered outcome=warn reason=wait_update_failed
 #      UNBLOCK_JUDGE item= op=heal_report issue= label= outcome=sent|failed|skip reason=
 #      UNBLOCK_JUDGE item= op=hold_request issue= outcome=posted|failed|skip reason=
+#      UNBLOCK_JUDGE item= op=chain_title issue= outcome=unavailable reason=read_failed
 #      UNBLOCK_TARGET_REPO_GUARD item= verdict= outcome=consumer|harness|mixed|disabled paths=
 # Project-failed fallback skips: project_state_unverified, project_not_failed,
 # project_state_recheck_unavailable, project_resumed.
@@ -150,7 +151,8 @@ if [ -f "${SUPPORT_DIR}/scripts/label_helpers.sh" ]; then
 fi
 # CONSIST-001: retry transient GitHub errors (5xx, connection reset) on the
 # judge's read-only GETs the same way the poller paths do. gh_retry wraps only
-# the comments, identity, item-metadata, item re-check and cited-run reads;
+# the comments, identity, item-metadata, item re-check, cited-run and
+# chain-title (a trusted PR's `ai/issue-<n>` issue) reads;
 # writes (comment POSTs, label POST/DELETE, PATCH, issue creation, dispatches)
 # stay single-attempt on purpose. gh_helpers.sh has a load guard, so this is a
 # no-op when label_helpers.sh already sourced it. A missing or unsourceable
@@ -215,6 +217,56 @@ unblock_tg()
 			tg_send_msg "${text}" "${level}" >/dev/null 2>&1 || true
 		fi
 	fi
+}
+
+# unblock_needs_human_alert ITEM PARKING TEXT — at most one persisted CRITICAL
+# alert attempt per needs-human parking (stuck-states P6b, Refs #8291).
+# Claim (a trusted ai:unblock-park-alert comment on the item, written before
+# any Telegram call) -> send once -> confirm with the message id. Skips without
+# a claim when Telegram cannot send at CRITICAL, so the attempt is not used up.
+# Never retries a send and never fails the op list. Logs NEEDS_HUMAN_ALERT.
+unblock_needs_human_alert()
+{
+	local item="$1" parking="$2" text="$3" claim_json="" claim_id="" msg_id=""
+	if [ -f "${SUPPORT_DIR}/scripts/tg_helpers.sh" ]; then
+		# shellcheck source=/dev/null
+		source "${SUPPORT_DIR}/scripts/tg_helpers.sh" 2>/dev/null || true
+	fi
+	if ! declare -F tg_alert_configured >/dev/null 2>&1 || ! declare -F tg_send_msg >/dev/null 2>&1; then
+		echo "NEEDS_HUMAN_ALERT item=${item} parking=${parking} outcome=skip reason=helper_missing" >&2
+		return 0
+	fi
+	if ! tg_alert_configured CRITICAL; then
+		echo "NEEDS_HUMAN_ALERT item=${item} parking=${parking} outcome=skip reason=telegram_unconfigured" >&2
+		return 0
+	fi
+	if ! claim_json="$(unblock_py "${SUPPORT_DIR}/scripts/operator_step_issue.py" needs-human alert-claim \
+		--repo "${REPOSITORY}" --item "${item}" --parking "${parking}" --trusted-login "${UNBLOCK_LOGIN}")"; then
+		echo "NEEDS_HUMAN_ALERT item=${item} parking=${parking} outcome=failed reason=claim_failed" >&2
+		return 0
+	fi
+	# Not claimed (already attempted, lost race, unverified, disabled): the
+	# helper logged why; never send.
+	jq -e '.claimed == true' <<< "${claim_json}" >/dev/null 2>&1 || return 0
+	claim_id="$(jq -r '.comment_id // empty' <<< "${claim_json}" 2>/dev/null || true)"
+	if ! [[ "${claim_id}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+		echo "NEEDS_HUMAN_ALERT item=${item} parking=${parking} outcome=failed reason=claim_id_missing" >&2
+		return 0
+	fi
+	# stderr kept: tg_send_msg logs why a send returned no message id (curl stderr stays silenced inside).
+	msg_id="$(tg_send_msg "${text}" CRITICAL || true)"
+	if [[ "${msg_id}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+		if ! unblock_py "${SUPPORT_DIR}/scripts/operator_step_issue.py" needs-human alert-confirm \
+			--repo "${REPOSITORY}" --item "${item}" --parking "${parking}" --comment-id "${claim_id}" \
+			--message-id "${msg_id}" >/dev/null; then
+			echo "NEEDS_HUMAN_ALERT item=${item} parking=${parking} outcome=failed reason=confirm_write_failed" >&2
+		fi
+	else
+		# Explicit failure or ambiguous timeout: the claim stays state=attempted
+		# and is never retried for this parking.
+		echo "NEEDS_HUMAN_ALERT item=${item} parking=${parking} outcome=unconfirmed reason=send_failed_or_ambiguous" >&2
+	fi
+	return 0
 }
 
 # The newest trusted wait marker: `<comment id> <fixup> <done|open> <iso time>`.
@@ -1429,8 +1481,12 @@ PY
 					unblock_project_terminal_recheck needs_human || return 1
 				fi
 				if unblock_py "${SUPPORT_DIR}/scripts/operator_step_issue.py" "${park_args[@]}" > "${RUNTIME_DIR}/needs_human_park.json"; then
-					if jq -e '.newly_parked == true' "${RUNTIME_DIR}/needs_human_park.json" >/dev/null 2>&1; then
-						unblock_tg "CRITICAL" "Unblock judge parked #${issue} ($(jq -r ".ops[${idx}].kind" "${ops_file}"), $(jq -r ".ops[${idx}].stop" "${ops_file}"), $(jq -r ".ops[${idx}].reason" "${ops_file}")) in needs-human digest #$(jq -r '.issue // "?"' "${RUNTIME_DIR}/needs_human_park.json"); a person must decide (${REPOSITORY})."
+					# P6b: every successful park that lists the item may page, but the
+					# persisted claim keeps it to one attempt per parking.
+					local park_alert_parking=""
+					park_alert_parking="$(jq -r '.parking // empty' "${RUNTIME_DIR}/needs_human_park.json" 2>/dev/null || true)"
+					if [ -n "${park_alert_parking}" ]; then
+						unblock_needs_human_alert "${issue}" "${park_alert_parking}" "Unblock judge parked #${issue} ($(jq -r ".ops[${idx}].kind" "${ops_file}"), $(jq -r ".ops[${idx}].stop" "${ops_file}"), $(jq -r ".ops[${idx}].reason" "${ops_file}")) in needs-human digest #$(jq -r '.issue // "?"' "${RUNTIME_DIR}/needs_human_park.json"); a person must decide (${REPOSITORY})."
 					fi
 				else
 					ops_failed="true"
@@ -1917,7 +1973,7 @@ unblock_main()
 
 	# The project an item belongs to, and a PR's linked issue.
 	local tracking="" linked="" finding="" body_text pr_json="" head_sha="" head_ref="" head_repo="" binding_issue=""
-	local pr_trusted="false" pr_author="" pr_assoc="" pr_head_repo="" untrusted_project_pr="false"
+	local pr_trusted="false" pr_author="" pr_assoc="" pr_head_repo="" untrusted_project_pr="false" chain_title=""
 	body_text="$(jq -r '.body // ""' "${RUNTIME_DIR}/item.json")"
 	if [ "${ITEM_KIND}" = "issue" ]; then
 		finding="$(jq -r '(.body // "") | [match("<!-- ai:security-finding:([^>]+) -->").captures[0].string] | first // "" | gsub("^\\s+|\\s+$"; "")' "${RUNTIME_DIR}/item.json")"
@@ -1971,6 +2027,18 @@ unblock_main()
 			fi
 		fi
 		linked="$(printf '%s\n' "${body_text}" | grep -oiE '\b(refs|closes|close|closed|fixes|fix|fixed|resolves|resolve|resolved)[[:space:]]+#[0-9]+' | head -n1 | grep -oE '[0-9]+' || true)"
+		# Chain depth cap (unblock_ledger.py MAX_CHAIN_DEPTH): a PR title carries no chain
+		# prefixes, so the title of the issue it implements is read from its
+		# `ai/issue-<n>` head branch (never from the author-controlled body).
+		# §15: no earlier call returns that issue (item.json is the PR), so
+		# this is one GET per judged trusted PR (through gh_retry, CONSIST-001);
+		# a failed read sends no title, is logged, and the PR's own title is
+		# used as before. The title is cut to 400 codepoints inside jq, so a
+		# multibyte character is never split.
+		if [ "${pr_trusted}" = "true" ] && [[ "${head_ref}" =~ ^ai/issue-([1-9][0-9]*)$ ]]; then
+			chain_title="$(gh_retry gh api "repos/${REPOSITORY}/issues/${BASH_REMATCH[1]}" --jq '(.title // "") | .[0:400]' 2>/dev/null | head -n 1 || true)"
+			[ -n "${chain_title}" ] || unblock_log "item=${ITEM} op=chain_title issue=${BASH_REMATCH[1]} outcome=unavailable reason=read_failed"
+		fi
 	fi
 
 	if ! stop_json="$(unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" stop --labels-json "$(cat "${RUNTIME_DIR}/labels.json")")"; then
@@ -1997,13 +2065,20 @@ unblock_main()
 		"${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; then
 		has_plan="true"
 	fi
+	# #9938: the PR head ref reaches the context only for a trusted PR, whose
+	# head is verified same-repository; unblock_actions.py validates it again.
+	local pr_context_head_ref=""
+	if [ "${pr_trusted}" = "true" ]; then
+		pr_context_head_ref="${head_ref}"
+	fi
 	jq -n --arg repo "${REPOSITORY}" --arg kind "${ITEM_KIND}" --argjson item "${ITEM}" --arg stop "${ITEM_STOP}" \
 		--slurpfile labels "${RUNTIME_DIR}/labels.json" --arg tracking "${tracking}" --arg linked "${linked}" --arg finding "${finding}" \
 		--argjson has_plan "${has_plan}" --arg title "$(jq -r '.title // ""' "${RUNTIME_DIR}/item.json")" \
 		--arg security_body "${body_text}" \
 		--argjson pr_trusted "${pr_trusted}" --arg pr_author "${pr_author}" --arg pr_head_repo "${pr_head_repo}" --arg pr_head_sha "${head_sha}" \
-		--arg needs_human_digest "${NEEDS_HUMAN_DIGEST_ENABLED}" \
-		'{needs_human_digest: (($needs_human_digest | ascii_downcase) != "false"), repo: $repo, kind: $kind, item: $item, stop: $stop, labels: $labels[0], tracking: (if $tracking == "" then null else ($tracking | tonumber) end), linked_issue: (if $linked == "" then null else ($linked | tonumber) end), has_plan: $has_plan, title: $title, security_finding_id: (if $finding == "" then null else $finding end), security_source_body: (if $kind == "issue" and ($labels[0] | index("ai:security")) != null then $security_body else null end), pr_trusted: $pr_trusted, pr_author: $pr_author, pr_head_repo: $pr_head_repo, pr_head_sha: $pr_head_sha}' \
+		--arg pr_head_ref "${pr_context_head_ref}" \
+		--arg needs_human_digest "${NEEDS_HUMAN_DIGEST_ENABLED}" --arg chain_title "${chain_title}" \
+		'{chain_title: (if $chain_title == "" then null else $chain_title end), needs_human_digest: (($needs_human_digest | ascii_downcase) != "false"), repo: $repo, kind: $kind, item: $item, stop: $stop, labels: $labels[0], tracking: (if $tracking == "" then null else ($tracking | tonumber) end), linked_issue: (if $linked == "" then null else ($linked | tonumber) end), has_plan: $has_plan, title: $title, security_finding_id: (if $finding == "" then null else $finding end), security_source_body: (if $kind == "issue" and ($labels[0] | index("ai:security")) != null then $security_body else null end), pr_trusted: $pr_trusted, pr_author: $pr_author, pr_head_repo: $pr_head_repo, pr_head_sha: $pr_head_sha, pr_head_ref: $pr_head_ref}' \
 		> "${RUNTIME_DIR}/context.json"
 
 	# A pending fix-up comes first (Q11): wait for it, or run its follow-up.
@@ -2430,6 +2505,11 @@ Still waiting for an operator; last checked ${now}.
 		--trusted-login "${UNBLOCK_LOGIN}" --now "${now}" --kind "${ITEM_KIND}" --rejection-file "${RUNTIME_DIR}/rejection.json")
 	[ -n "${last_activity}" ] && decide_args+=(--last-activity "${last_activity}")
 	unblock_wait_enabled || decide_args+=(--wait-disabled)
+	# Chain depth cap (unblock_ledger.py MAX_CHAIN_DEPTH): the depth is read
+	# from the title of the issue a trusted PR implements, else the item's own.
+	# One argv element (`--chain-title=<value>`), so a title that starts with
+	# `-` is never parsed by argparse as an option.
+	decide_args+=("--chain-title=$(jq -r '(.chain_title // .title // "") | tostring' "${RUNTIME_DIR}/context.json" 2>/dev/null | head -n 1 || true)")
 	# An ai:security issue never gets accept_with_followup on its menu (#6541);
 	# unblock_actions.py refuses it again if this flag is ever missing.
 	if [ "${ITEM_KIND}" = "issue" ] && jq -e 'index("ai:security") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1; then
