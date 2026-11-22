@@ -1211,16 +1211,19 @@ _pr_ensure_final_ci()
 # stdout only on success, non-zero on failure). A failed routed read falls
 # back once to the caller's token (`gh_retry _safe_gh_jq`), so a token,
 # scope or call-shape problem on the routed path never fails the wait.
-# The routed read makes a single attempt (GH_RETRY_MAX_ATTEMPTS=1: no retry
-# sleeps or rate-limit waits), so a failing routed path costs one call and
-# the fallback alone owns the retry schedule; time spent in reads is not
+# The routed read makes a single attempt and is not wrapped in gh_retry (no
+# retry sleeps or rate-limit waits), so a failing routed path costs one call
+# and the fallback alone owns the retry schedule; time spent in reads is not
 # counted in `waited`, so two full schedules per read could push the wait
-# well past AUTO_MERGE_CHECKS_WAIT_MINUTES.
+# well past AUTO_MERGE_CHECKS_WAIT_MINUTES. Without gh_retry, a recovered
+# job-token failure also emits no `::error::`, no rate-limit Telegram alert
+# and no breaker trip (gh_retry's _gh_cmd_bucket has no gh_read case and
+# would charge the shared breaker file to the PAT's `core` bucket).
 _pr_checks_wait_read()
 {
 	if [ "${_pr_wait_route_reads:-0}" = "1" ] && type gh_read >/dev/null 2>&1; then
 		local wait_read_out="" wait_read_rc=0
-		wait_read_out="$(GH_RETRY_MAX_ATTEMPTS=1 gh_retry gh_read --same-repo-only api "$@")" || wait_read_rc=$?
+		wait_read_out="$(gh_read --same-repo-only api "$@")" || wait_read_rc=$?
 		if [ "${wait_read_rc}" -eq 0 ]; then
 			printf '%s\n' "${wait_read_out}"
 			return 0

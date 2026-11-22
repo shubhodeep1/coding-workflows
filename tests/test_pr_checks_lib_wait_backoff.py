@@ -334,9 +334,12 @@ class ReadRouting(unittest.TestCase):
 		self.assertEqual(len(code), 2, code)
 		self.assertNotIn("gh pr merge", "\n".join(code))
 		router = text.split("_pr_checks_wait_read()\n{", 1)[1].split("\n}\n", 1)[0]
-		self.assertIn("gh_retry gh_read --same-repo-only api \"$@\"", router)
-		# One routed attempt; the caller-token fallback owns the retries.
-		self.assertIn("GH_RETRY_MAX_ATTEMPTS=1 gh_retry gh_read --same-repo-only api", router)
+		self.assertIn("gh_read --same-repo-only api \"$@\"", router)
+		# One routed attempt, not wrapped in gh_retry (no retry schedule, no
+		# ::error::/alert/breaker trip on a recovered failure); the
+		# caller-token fallback owns the retries.
+		self.assertNotIn("gh_retry gh_read", router)
+		self.assertIn('wait_read_out="$(gh_read --same-repo-only api "$@")"', router)
 		self.assertIn('[ "${_pr_wait_route_reads:-0}" = "1" ]', router)
 		# Protection and the identity read never route.
 		self.assertIn('gh_retry _safe_gh_jq "repos/${repo}/branches/${protection_ref:-${base_ref}}/protection"', text)
