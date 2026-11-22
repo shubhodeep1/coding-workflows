@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan for issue #9958: rewrite `tests/e2e_smoke_canary.txt`\n\nPlanning ref: `99dca17df308c5bebc779677851c9e0b9025d190` on branch `main`. The integration branch mismatch line reads \"unknown\", not \"true\", so the plan goes ahead.\n\nThe file currently holds two lines:\n```\nstatus: ok\ndecompose-run: 41445772297\n```\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: test tests/test_e2e_editor_smoke_canary.py\nACCEPTANCE: post-merge none: data-only canary file change with no post-merge workflow dependency\n\n## Functions or modules to implement\nNone. The change replaces the file's contents with exactly these three lines, ending with a newline:\n```\nstatus: ok\nrun_id: alt-45023283995\nupdated-by: ai-pipeline\n```\nThe old `decompose-run: 41445772297` line goes away.\n\n## Data structures affected\nOnly the text of the canary file.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Overwrite the whole file\n- Chosen: Replace the whole file with the three lines the issue specifies, ending with a newline.\n- Alternatives considered: Keep the old `decompose-run` line and add the new lines after it.\n- Why: The issue says the content must be \"exactly\" these three lines.\n\n## Security considerations\nThis touches no trust boundary, endpoint, secret or external input. It is a fixed text change in a test fixture, so there is no abuse case.\n\n## Potential risks or edge cases\n- Several tests mention this file by name, including `tests/test_e2e_editor_smoke_canary.py`. As far as I can tell they check that the editor's changes stay inside this file, not what the file says. The implementer should run that test to confirm.\n- The file needs exactly one trailing newline, with no extra blank lines and no CRLF line endings.\n\n## Testing considerations\n- Run `pytest tests/test_e2e_editor_smoke_canary.py`.\n- Run `git diff --stat` and confirm only this one file changed.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies the change: one file with fixed contents. No helper or pattern applies, and the existing fixture is edited in place.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- AI_ACCEPTANCE_V1 {\"checks\":[],\"errors\":[],\"post_merge\":null,\"post_merge_none\":\"data-only canary file change with no post-merge workflow dependency\",\"schema\":\"acceptance.v1\",\"source\":\"plan\",\"state\":\"valid\",\"tests\":[{\"name\":\"\",\"path\":\"tests/test_e2e_editor_smoke_canary.py\",\"red_on_base\":false}]} -->\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "2b0b7278a600bbcc52846046f5dd6c1c9551686117e446da1545893cbec539c7",
+  "lineage": {
+    "issue_number": 9958,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45026130191",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45026130191",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9958"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261122132159_f39ff8927a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9958,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45026130191"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9958",
+  "timestamps": {
+    "created_at": "2026-11-22T13:21:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
