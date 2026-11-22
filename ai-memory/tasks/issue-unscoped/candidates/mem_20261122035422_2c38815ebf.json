@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_merge_train.sh:1718-1719; `_mt_merge_lease_tick_multi` at 1943 and 1950 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The tick takes the multi-holder path whenever the record has more than one live holder, even when `MERGE_LEASE_MAX_HOLDERS=1`, and that path checks eligibility separately for each holder through `_merge_lease_pr_eligible`, which reads statuses and required-check data.\n  WHY: If the cap is lowered to 1 while a multi-holder record still exists, a tick makes more GitHub API calls than the single-holder path, which checks only the primary holder, and this breaks the task's requirement of no extra calls per tick when N=1. The source severity was NIT, mapped here to low; no other reviewer flagged this.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_merge_train.sh:1718-1719; `_mt_merge_lease_tick_multi` at 1943 and 1950 | severity=NIT | confidence=4\n  PROBLEM: The tick selects the multi-holder path when the record has multiple live holders even if `MERGE_LEASE_MAX_HOLDERS=1`. That path checks eligibility separately for each holder; `_merge_lease_pr_eligible` reads statuses and required-check data.\n  WHY: After lowering the cap to 1 while a multi-holder record remains, a tick makes more GitHub API calls than the single-holder path, which checks only the primary holder. This violates the task's requirement of no extra calls per tick when N=1.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7bfd38827571b9beae7f7b8de2e541131077b8417624e2ad50685312ea90b2f9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9915,
+    "run_id": "44980015937",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44980015937",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122035422_2c38815ebf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9915,
+    "run_id": "44980015937"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-22T03:54:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
