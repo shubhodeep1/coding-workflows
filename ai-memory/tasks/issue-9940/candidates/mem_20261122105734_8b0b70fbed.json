@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9940,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9940\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9950\",\"pr_number\":9950,\"branch\":\"ai/issue-9940\",\"run_id\":\"45010302355\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/45010302355\",\"changed_files\":[\"agents.d/9940-symlink-delete-diagnostics.md\",\"changelog.d/9940-symlink-delete-diagnostics.md\",\"scripts/codex_isolated_workspace.py\",\"scripts/implement_commit_changes.sh\",\"tests/test_codex_isolated_workspace.py\",\"tests/test_implement_post_codex_recovery.py\"]}",
+  "fingerprint": "fb4db7492027d79d82bff74c5e0d40060d43b83f93eb0facd7a1ae867697489a",
+  "lineage": {
+    "issue_number": 9940,
+    "parent_ids": [],
+    "pr_number": 9950,
+    "run_id": "45010302355",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45010302355",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9950"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261122105734_8b0b70fbed",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9940,
+    "level": "run",
+    "pr_number": 9950,
+    "run_id": "45010302355"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9940: https://github.com/shubhodeep1/coding-workflows/pull/9950",
+  "timestamps": {
+    "created_at": "2026-11-22T10:57:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
