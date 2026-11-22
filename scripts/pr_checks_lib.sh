@@ -350,7 +350,7 @@ _pr_checks_completed()
 	# check-runs" and letting the merge proceed.
 	check_runs_json="$(_pr_checks_wait_read --paginate --slurp "repos/${repo}/commits/${head_sha}/check-runs?per_page=100" || echo "{}")"
 	# Snapshot fingerprint for the wait's back-off (issue #9926): one sorted
-	# [id, completed?, conclusion] entry per check-run, local jq only. Set
+	# [id, status, conclusion] entry per check-run, local jq only. Set
 	# only inside a wait; "" when the listing is not usable.
 	if [ "${_pr_wait_memo_active:-0}" = "1" ]; then
 		PR_CHECKS_LAST_CHECK_RUNS_FP="$(printf '%s' "${check_runs_json}" | jq -c '
@@ -358,7 +358,7 @@ _pr_checks_completed()
 				(if (type == "array") then [.[]? | (.check_runs // [])[]]
 				elif (type == "object" and (.check_runs | type == "array")) then .check_runs
 				else null end)
-				| if (. == null) then "" else (map([(.id // 0), ((.status // "") == "completed"), (.conclusion // null)]) | sort) end
+				| if (. == null) then "" else (map([(.id // 0), (.status // ""), (.conclusion // null)]) | sort) end
 			) catch ""
 		' 2>/dev/null | tail -n1)"
 	fi
@@ -486,9 +486,13 @@ _pr_checks_completed()
 				local gate_sup_status_ctx="ai-review/head-gate"
 				# Inside _pr_wait_for_required_checks (issue #9926) a successful
 				# read is reused for the same head SHA for the rest of the wait,
-				# unless any returned status is `pending` (then every poll reads
-				# again). A failed read is never cached (status_read_failed, as
-				# before). Standalone callers read on every call.
+				# unless the newest status of the gate context (the one the
+				# decision below reads) is `pending` or absent (then every poll
+				# reads again). The list holds history, so superseded pending
+				# head-gate entries and unrelated contexts (e.g. the unresolved
+				# ai-review/final-ci-merge-pending mark) must not block the memo.
+				# A failed read is never cached (status_read_failed, as before).
+				# Standalone callers read on every call.
 				local gate_sup_status_read_ok=0
 				if [ "${_pr_wait_memo_active:-0}" = "1" ] && [ -n "${_pr_wait_statuses_json-}" ] \
 					&& [ "${_pr_wait_statuses_sha-}" = "${head_sha}" ]; then
@@ -498,7 +502,11 @@ _pr_checks_completed()
 					gate_sup_status_read_ok=1
 					if [ "${_pr_wait_memo_active:-0}" = "1" ]; then
 						_pr_wait_statuses_last="${gate_sup_statuses_json}"
-						if printf '%s' "${gate_sup_statuses_json}" | jq -e 'type == "array" and all(.[]; (type != "object") or (.state != "pending"))' >/dev/null 2>&1; then
+						if printf '%s' "${gate_sup_statuses_json}" | jq -e --arg ctx "${gate_sup_status_ctx}" '
+							type == "array"
+							and ([.[] | select(type == "object" and .context == $ctx)] as $s
+								| ($s | length) > 0 and (($s | max_by([(.created_at // ""), (.id // 0)])).state != "pending"))
+						' >/dev/null 2>&1; then
 							_pr_wait_statuses_sha="${head_sha}"
 							_pr_wait_statuses_json="${gate_sup_statuses_json}"
 						else
@@ -1172,8 +1180,10 @@ _pr_ensure_final_ci()
 #     next wait reads it fresh, and protection edited mid-wait is seen by
 #     the next wait;
 #   - the head's commit statuses (gate-supersede path only) are read once
-#     per head SHA per wait, unless a returned status is `pending`, in which
-#     case every poll reads them again; a failed read is never cached.
+#     per head SHA per wait, unless the newest `ai-review/head-gate` status
+#     is `pending` or absent, in which case every poll reads them again
+#     (superseded entries and other contexts are ignored); a failed read is
+#     never cached.
 # Back-off: the poll interval starts at AUTO_MERGE_CHECKS_POLL_SECONDS and
 # doubles after each poll whose snapshot (runs + check-runs + statuses +
 # parsed reason/pending/CI state) is unchanged, up to
@@ -1187,7 +1197,8 @@ _pr_ensure_final_ci()
 # Read routing: when the wait has a budget (max_minutes > 0) and `gh_read`
 # (scripts/gh_helpers.sh, #9897) is defined, the per-poll reads (runs
 # listing, check-runs, statuses, the PR read) go through
-# `gh_read --same-repo-only api ...` (the job's GITHUB_TOKEN, PAT fallback
+# `gh_read --same-repo-only api ...` (a failed routed read retries once with
+# `gh_retry _safe_gh_jq`; the job's GITHUB_TOKEN, PAT fallback
 # inside gh_read). Otherwise, and always for protection, `GET user`, the
 # final-CI helper and every write, the call is `gh_retry _safe_gh_jq` as
 # before. A 0-minute wait (merge train, poller) makes exactly today's calls.
@@ -1197,17 +1208,19 @@ _pr_ensure_final_ci()
 # ---------------------------------------------------------------------------
 
 # Per-poll read router (same output contract as `gh_retry _safe_gh_jq`:
-# stdout only on success, non-zero on failure).
+# stdout only on success, non-zero on failure). A failed routed read falls
+# back once to the caller's token (`gh_retry _safe_gh_jq`), so a token,
+# scope or call-shape problem on the routed path never fails the wait.
 _pr_checks_wait_read()
 {
 	if [ "${_pr_wait_route_reads:-0}" = "1" ] && type gh_read >/dev/null 2>&1; then
 		local wait_read_out="" wait_read_rc=0
 		wait_read_out="$(gh_retry gh_read --same-repo-only api "$@")" || wait_read_rc=$?
-		if [ "${wait_read_rc}" -ne 0 ]; then
-			return "${wait_read_rc}"
+		if [ "${wait_read_rc}" -eq 0 ]; then
+			printf '%s\n' "${wait_read_out}"
+			return 0
 		fi
-		printf '%s\n' "${wait_read_out}"
-		return 0
+		echo "  [check-runs] routed read failed (rc=${wait_read_rc}); retrying with the caller token." >&2
 	fi
 	gh_retry _safe_gh_jq "$@"
 }
@@ -1219,7 +1232,7 @@ _pr_wait_backoff_step()
 	local backoff_fp_src="" backoff_fp=""
 	backoff_fp_src="$(
 		printf '%s\n' "${PR_CHECKS_LAST_REASON:-}" "${PR_CHECKS_LAST_PENDING:-}" "${PR_CHECKS_LAST_CI_STATE:-}" "${PR_CHECKS_LAST_CHECK_RUNS_FP:-}"
-		printf '%s' "${PR_CHECKS_RUNS_RAW_JSON:-}" | jq -c 'try ([(.workflow_runs // [])[]? | [(.id // 0), ((.status // "") == "completed"), (.conclusion // null)]] | sort) catch ""' 2>/dev/null | tail -n1
+		printf '%s' "${PR_CHECKS_RUNS_RAW_JSON:-}" | jq -c 'try ([(.workflow_runs // [])[]? | [(.id // 0), (.status // ""), (.conclusion // null)]] | sort) catch ""' 2>/dev/null | tail -n1
 		printf '%s' "${_pr_wait_statuses_last:-}" | jq -c 'try ([.[]? | [(.id // 0), (.state // "")]] | sort) catch ""' 2>/dev/null | tail -n1
 	)"
 	backoff_fp="$(printf '%s' "${backoff_fp_src}" | sha256sum 2>/dev/null | cut -c1-64)"

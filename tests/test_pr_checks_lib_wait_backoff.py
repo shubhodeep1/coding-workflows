@@ -91,6 +91,7 @@ def _wait(*, check_runs: list[str], ci_runs: list[str] | None = None, statuses: 
 		read_stub = """
 gh_read() {
   printf 'READ %s\\n' "$*" >> "${CALL_LOG}"
+  [ "${READ_FAIL:-0}" != "1" ] || return 1
   [ "${1:-}" = "--same-repo-only" ] && shift
   [ "${1:-}" = "api" ] && shift
   _fixture "$@"
@@ -189,11 +190,25 @@ class StatusesMemo(unittest.TestCase):
 		self.assertEqual(_count(calls, "/statuses"), 1, calls)
 		self.assertIn("reason=status_not_success", out)
 
-	def test_a_pending_status_is_re_read_every_tick(self) -> None:
-		statuses = [json.dumps([_status("failure"), _status("pending", sid=2, ctx="other")])]
+	def test_a_pending_head_gate_status_is_re_read_every_tick(self) -> None:
+		statuses = [json.dumps([_status("pending")])]
 		results, calls, out = _wait(check_runs=[GATE_FAILED_RUNNING], statuses=statuses, max_minutes="4", env=self.ENV)
 		self.assertEqual(results, [(1, "timeout")], out)
 		self.assertEqual(_count(calls, "/statuses"), _count(calls, "/check-runs"), calls)
+
+	def test_superseded_and_unrelated_pending_statuses_do_not_block_the_memo(self) -> None:
+		# The statuses list holds history: an older pending head-gate entry and
+		# the never-resolved final-ci-merge-pending mark sit next to the newest
+		# head-gate status, which the decision reads.
+		older = _status("pending", sid=1)
+		older["created_at"] = "2026-11-10T00:01:00Z"
+		statuses = [json.dumps([older, _status("failure", sid=2),
+			_status("pending", sid=3, ctx="ai-review/final-ci-merge-pending")])]
+		results, calls, out = _wait(check_runs=[GATE_FAILED_RUNNING], statuses=statuses, max_minutes="4", env=self.ENV)
+		self.assertEqual(results, [(1, "timeout")], out)
+		self.assertGreaterEqual(_count(calls, "/check-runs"), 3)
+		self.assertEqual(_count(calls, "/statuses"), 1, calls)
+		self.assertIn("reason=status_not_success", out)
 
 	def test_a_failed_read_is_not_cached(self) -> None:
 		statuses = ["FAIL", json.dumps([_status("failure")])]
@@ -237,6 +252,12 @@ class BackOff(unittest.TestCase):
 		self.assertEqual(results, [(1, "timeout")], out)
 		self.assertEqual(_sleeps(calls), [60, 120, 60, 120, 180, 60])
 		self.assertLessEqual(sum(_sleeps(calls)), 600)
+
+	def test_a_queued_to_in_progress_change_resets_to_the_base(self) -> None:
+		queued = _check_runs((1, "CI", "queued", ""), (2, "lint", "completed", "success"))
+		results, calls, out = _wait(check_runs=[queued, RUNNING], max_minutes="10", poll_max="180")
+		self.assertEqual(results, [(1, "timeout")], out)
+		self.assertEqual(_sleeps(calls), [60, 60, 120, 180, 180])
 
 	def test_the_deadline_is_never_exceeded(self) -> None:
 		for minutes in ("1", "2", "7"):
@@ -292,6 +313,13 @@ class ReadRouting(unittest.TestCase):
 		# The stub logs READ then serves the fixture directly: protection and
 		# the identity read stay on the caller's token (_safe_gh_jq).
 		self.assertEqual(sorted({c.split()[1] for c in safes}), ["repos/owner/repo/branches/main/protection", "user"])
+
+	def test_a_failed_routed_read_falls_back_to_safe_gh_jq(self) -> None:
+		results, calls, out = _wait(check_runs=[GREEN], max_minutes="3", gh_read=True, env={"READ_FAIL": "1"})
+		self.assertEqual(results, [(0, "ok")], out)
+		self.assertTrue(any(c.startswith("READ ") and "/check-runs" in c for c in calls), calls)
+		self.assertTrue(any(c.startswith("SAFE ") and "/check-runs" in c for c in calls), calls)
+		self.assertIn("routed read failed", out)
 
 	def test_without_gh_read_every_read_uses_safe_gh_jq(self) -> None:
 		results, calls, out = _wait(check_runs=[RUNNING], ci_runs=[_ci_runs(("CI", "in_progress", 999))],
