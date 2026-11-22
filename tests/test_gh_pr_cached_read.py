@@ -223,6 +223,28 @@ def test_failed_live_fetch_returns_1_with_no_stdout_and_caches_nothing(tmp_path:
 	assert not list(_cache_dir(env).glob("*.json"))
 
 
+def test_cache_write_failure_returns_live_payload_silently(tmp_path: Path) -> None:
+	# Cache setup succeeds; only the store step fails: the temp file, the
+	# entry move, or the metadata move. Each read still prints the live
+	# payload with rc 0 and nothing on stderr, and nothing usable is stored.
+	stubs = (
+		'mktemp() { case "${1:-}" in *.json.tmp.*) return 1 ;; esac; command mktemp "$@"; }',
+		'mv() { case "${!#}" in *.json) return 1 ;; esac; command mv "$@"; }',
+		'mv() { case "${!#}" in *.json.meta) return 1 ;; esac; command mv "$@"; }',
+	)
+	for i, stub in enumerate(stubs):
+		case_dir = tmp_path / str(i)
+		case_dir.mkdir()
+		env = _setup(case_dir)
+		res = _run(env, f"{stub}\ngh_pr_cached_read files o/r 7 {SHA_A}; gh_pr_cached_read files o/r 7 {SHA_A}")
+		assert res.returncode == 0, (stub, res.stderr)
+		assert res.stderr == "", (stub, res.stderr)
+		assert [json.loads(x) for x in res.stdout.splitlines()] == [[{"filename": "a.py"}]] * 2, stub
+		assert _calls(env, "/files") == 2, stub
+		assert not list(_cache_dir(env).glob("*.json.meta")), stub
+		assert not list(_cache_dir(env).glob("*.tmp.*")), stub
+
+
 def test_paginated_kinds_store_one_combined_value(tmp_path: Path) -> None:
 	env = _setup(tmp_path)
 	res = _run(env, f"gh_pr_cached_read issue_comments o/r 7 {SHA_A}; gh_pr_cached_read check_runs o/r 7 {SHA_A}")
@@ -264,6 +286,15 @@ def test_every_retry_wrapper_evicts_after_its_command() -> None:
 	text = GH_HELPERS.read_text()
 	for name in ("gh_retry", "gh_retry_to_file", "gh_api_retry"):
 		assert "_gh_pr_cache_evict_for_cmd" in _function_body(text, name), name
+
+
+def test_bare_marker_post_in_pr_checks_lib_evicts_comments() -> None:
+	# _pr_base_sync_marker_post posts once through bare _safe_gh_jq (no retry
+	# wrapper hook), so it must evict the cached issue comments itself.
+	body = _function_body(PR_CHECKS_LIB.read_text(), "_pr_base_sync_marker_post")
+	post = body.index('_safe_gh_jq -X POST "repos/${repo}/issues/${pr_number}/comments"')
+	evict = body.index('gh_pr_cache_evict "${repo}" "${pr_number}" issue_comments')
+	assert post < evict
 
 
 def test_auto_merge_keeps_one_live_head_read_before_merge() -> None:

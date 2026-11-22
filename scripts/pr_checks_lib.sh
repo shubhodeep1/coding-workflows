@@ -1725,6 +1725,11 @@ _pr_base_sync_marker_post()
 	else
 		echo "::warning::MERGE_BASE_SYNC_MARKER pr=${pr_number} head_sha=${head_sha} sync=${sync_number} outcome=failed (the synchronize run reviews normally)"
 	fi
+	# Issue #9928: this bare POST bypasses the gh_retry eviction hook, so drop
+	# the run-local cached comments (a failed attempt may still have posted).
+	if type gh_pr_cache_evict >/dev/null 2>&1; then
+		gh_pr_cache_evict "${repo}" "${pr_number}" issue_comments >/dev/null 2>&1 || true
+	fi
 	return 0
 }
 
