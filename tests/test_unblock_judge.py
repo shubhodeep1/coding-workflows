@@ -5697,6 +5697,19 @@ def test_no_wait_nothing_to_implement_close_keeps_todays_judging_otherwise(tmp_p
 	assert not _closed_completed(state)
 
 
+def test_wait_created_before_block_but_marked_done_after_it_is_judged(tmp_path: Path) -> None:
+	# The guard compares the block with the wait's updated_at (the time it was
+	# patched `done`), not its created_at: a "did not merge in time" wait opened
+	# before the block and closed after it must not let that block close the issue.
+	wait = _comment("Fix-up #50 did not merge in time; the unblock judge decides again.\n\n<!-- ai:unblock-wait:v1 item=7 fixup=50 done -->", BOT, "2026-10-04T08:00:00Z")
+	wait["id"], wait["updated_at"] = 123, "2026-10-04T11:00:00Z"
+	comments = [wait, _comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z")]
+	result, state = _judge(tmp_path, ISSUE, comments=comments, verdict=RETRY_VERDICT)
+	assert "op=nothing_to_implement" not in result.stdout, result.stdout
+	assert "verdict=retry_budget" in result.stdout, result.stdout + result.stderr
+	assert not _closed_completed(state)
+
+
 def test_no_wait_nothing_to_implement_close_posts_the_marker_once(tmp_path: Path) -> None:
 	comments = [_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z")]
 	result, state = _judge(tmp_path, ISSUE, comments=comments, verdict=RETRY_VERDICT, FAKE_GH_FAIL_CLOSE="1")
