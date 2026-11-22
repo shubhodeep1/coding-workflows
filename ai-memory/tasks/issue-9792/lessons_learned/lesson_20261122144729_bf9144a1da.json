@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-22T14:47:29Z",
+  "issue_number": 9792,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=.github/workflows/ci.yml:1-1; cited_path=.github/workflows/ci.yml; files_touched=changelog.d/9792-unblock-scan-skip-e2e-items.md, scripts/orchestrate_poll_process.sh, scripts/unblock_scan.py, tests/test_unblock_scan.py.",
+  "phase": "review_autofix",
+  "pr_number": 9795,
+  "record_id": "lesson_20261122144729_bf9144a1da",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/ci.yml",
+    "changelog.d/9792-unblock-scan-skip-e2e-items.md",
+    "scripts/orchestrate_poll_process.sh",
+    "scripts/unblock_scan.py",
+    "tests/test_unblock_scan.py"
+  ]
+}
