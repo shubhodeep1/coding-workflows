@@ -10,7 +10,8 @@ workflow dispatch and `gh pr merge`.
 
 State keys (all optional): refs {name: sha}, commits {sha: {message, tree,
 parents}}, pulls [PR objects], files {pr: [paths]}, statuses {sha: [status]},
-compare {..}, closed [PR numbers whose GET pulls/<n> reads closed], user "login",
+compare {..}, closed [PR numbers whose GET pulls/<n> reads closed], closed_merged [those of
+them whose read also carries merged_at], user "login",
 runs {sha: [workflow runs]} (actions/runs?head_sha=), check_runs {sha: [check-runs]}
 (commits/<sha>/check-runs), fail ["substring", ...] (any call whose joined
 argv contains one fails), move_ref_on_patch {ref: sha} (simulates a peer
@@ -231,7 +232,10 @@ def main() -> None:
 		return
 	if parts[3:4] == ["pulls"] and len(parts) == 5:
 		if int(parts[4]) in state.get("closed", []):
-			emit({"number": int(parts[4]), "state": "closed"}, jq_filter)
+			closed_pr = {"number": int(parts[4]), "state": "closed"}
+			if int(parts[4]) in state.get("closed_merged", []):
+				closed_pr["merged_at"] = "2026-11-22T00:00:00Z"
+			emit(closed_pr, jq_filter)
 			return
 		for p in state.get("pulls", []):
 			if str(p["number"]) == parts[4]:

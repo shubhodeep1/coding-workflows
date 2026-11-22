@@ -2327,7 +2327,13 @@ _merge_lease_split_soft()
 	local split_list="$1" split_p split_entries
 	_MERGE_LEASE_HARD_LIST=""
 	_MERGE_LEASE_SOFT_LIST=""
-	split_entries="$(_merge_lease_soft_entries)"
+	split_entries="$(_merge_lease_soft_entries 2>/dev/null)"
+	# Ignored MERGE_LEASE_SOFT_PATHS entries warn once per process, not once
+	# per call (the multi-holder paths call this per holder per candidate).
+	if [ -z "${_MERGE_LEASE_SOFT_WARNED:-}" ]; then
+		_MERGE_LEASE_SOFT_WARNED=1
+		_merge_lease_soft_entries >/dev/null
+	fi
 	while IFS= read -r split_p; do
 		[ -n "${split_p}" ] || continue
 		if [ -n "${split_entries}" ] && _merge_lease_soft_path "${split_p}" "${split_entries}"; then
@@ -2981,7 +2987,12 @@ _merge_lease_paths_intersect()
 	[ "${lease_right}" = "*" ] && return 0
 	[ -n "${lease_left}" ] && [ -n "${lease_right}" ] || return 1
 	if [ "$#" -ge 4 ]; then
-		lease_soft_entries="$(_merge_lease_soft_entries)"
+		lease_soft_entries="$(_merge_lease_soft_entries 2>/dev/null)"
+		# Same once-per-process warning as _merge_lease_split_soft.
+		if [ -z "${_MERGE_LEASE_SOFT_WARNED:-}" ]; then
+			_MERGE_LEASE_SOFT_WARNED=1
+			_merge_lease_soft_entries >/dev/null
+		fi
 	fi
 	if [ -z "${lease_soft_entries}" ]; then
 		grep -Fxq -f <(printf '%s\n' "${lease_left}" | sed '/^$/d') <(printf '%s\n' "${lease_right}" | sed '/^$/d')
@@ -3222,7 +3233,7 @@ _merge_lease_metric_hold_seconds()
 	printf '%s' "$((metric_now - metric_acquired))"
 }
 
-# _merge_lease_metric <event> <base> <pr> <mode> <reason> [<hold_s>] [<waiters>] [<holder>] [<ts>]
+# _merge_lease_metric <event> <base> <pr> <mode> <reason> [<hold_s>] [<waiters>] [<holder>] [<ts>] [<merged>]
 # Prints one MERGE_LEASE_METRIC line (stdout, like _merge_lease_log). Holder
 # defaults to MERGE_LEASE_PR (pass `-` for "no holder"; an empty argument still
 # falls back). ts defaults to now; a caller passes the decision's epoch when
@@ -3235,6 +3246,11 @@ _merge_lease_metric()
 		_merge_lease_metrics_enabled || return 0
 		local metric_event="${1:-}" metric_base="${2:-}" metric_pr="${3:-}" metric_mode="${4:-}" metric_reason="${5:-}"
 		local metric_hold="${6:-}" metric_waiters="${7:-}" metric_holder="${8:-${MERGE_LEASE_PR:-}}" metric_ts="${9:-}"
+		# Optional <merged> (10th; the tick's `released` lines): a trailing
+		# ` merged=true|false` for the wasted-hold share (plan K1). Anything else
+		# prints nothing, so every other line keeps its exact format.
+		local metric_merged_field=""
+		case "${10:-}" in true|false) metric_merged_field=" merged=${10}" ;; esac
 		[[ "${metric_event}" =~ ^[a-z_]+$ ]] || metric_event="-"
 		[[ "${metric_mode}" =~ ^[a-z_]+$ ]] || metric_mode="-"
 		[[ "${metric_reason}" =~ ^[a-z_]+$ ]] || metric_reason="-"
@@ -3245,7 +3261,7 @@ _merge_lease_metric()
 		[[ "${metric_waiters}" =~ ^[0-9]+$ ]] || metric_waiters="-"
 		[[ "${metric_ts}" =~ ^[0-9]+$ ]] || { metric_ts="$(date -u +%s)" || metric_ts=""; }
 		[[ "${metric_ts}" =~ ^[0-9]+$ ]] || metric_ts="-"
-		echo "MERGE_LEASE_METRIC event=${metric_event} base=${metric_base} pr=${metric_pr} mode=${metric_mode} reason=${metric_reason} holder=${metric_holder} hold_s=${metric_hold} waiters=${metric_waiters} ts=${metric_ts}" || true
+		echo "MERGE_LEASE_METRIC event=${metric_event} base=${metric_base} pr=${metric_pr} mode=${metric_mode} reason=${metric_reason} holder=${metric_holder} hold_s=${metric_hold} waiters=${metric_waiters} ts=${metric_ts}${metric_merged_field}" || true
 	} 2>/dev/null
 	return 0
 }

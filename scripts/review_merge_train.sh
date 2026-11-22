@@ -1650,6 +1650,8 @@ _mt_merge_lease_tick()
 	local tick_p2_lib=0 tick_p2=0 tick_login="" tick_login_tried=0 tick_open_heads tick_holder_row tick_holder_head tick_holder_title
 	local tick_holder_draft tick_since tick_idle_s tick_ci_active tick_skip_head tick_excluded tick_skipped_any tick_cand_n tick_skip_pr
 	local tick_first_row tick_skip_why tick_skip_held tick_queue_skips tick_skip_held_prs tick_queue_empty
+	# merged=true|false on the released metric (plan K1, wasted-hold share).
+	local tick_merged="false" tick_holder_state=""
 	local tick_max_candidates=10
 	# Phase 5: tick_p5_lib, the staged library has the multi-holder helpers.
 	local tick_p5_lib=0 tick_max_holders=1
@@ -1726,6 +1728,7 @@ _mt_merge_lease_tick()
 		fi
 		if [ "${MERGE_LEASE_STATE}" = "held" ]; then
 			tick_reason=""
+			tick_merged="false"
 			tick_holder_head=""
 			tick_holder_row=""
 			if [ "${tick_p2}" = 1 ]; then
@@ -1762,8 +1765,11 @@ _mt_merge_lease_tick()
 			elif ! printf '%s\n' "${tick_prs_json}" | jq -e --argjson n "${MERGE_LEASE_PR}" 'select(type == "object" and .number == $n)' >/dev/null 2>&1; then
 				# The open-PR list was read at the start of this pass; confirm
 				# with a live read so a holder opened since is never freed.
-				if [ "$(gh_retry _safe_gh_jq "repos/${MT_REPO}/pulls/${MERGE_LEASE_PR}" --jq '.state // ""' 2>/dev/null | tail -n1)" = "closed" ]; then
+				# The same read returns merged_at (plan step 1.1; no new call).
+				tick_holder_state="$(gh_retry _safe_gh_jq "repos/${MT_REPO}/pulls/${MERGE_LEASE_PR}" --jq '"\(.state // "") \(if (.merged_at // null) != null then "true" else "false" end)"' 2>/dev/null | tail -n1)"
+				if [ "${tick_holder_state%% *}" = "closed" ]; then
 					tick_reason="holder_closed"
+					[ "${tick_holder_state##* }" != "true" ] || tick_merged="true"
 				fi
 			fi
 			if [ -z "${tick_reason}" ]; then
@@ -1786,7 +1792,7 @@ _mt_merge_lease_tick()
 				continue
 			fi
 			_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=released reason=${tick_reason}"
-			[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric released "${tick_base}" "${MERGE_LEASE_PR}" tick "${tick_reason}" "$(_merge_lease_metric_hold_seconds "${MERGE_LEASE_ACQUIRED:-0}" 2>/dev/null)" "${tick_waiters}" || true
+			[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric released "${tick_base}" "${MERGE_LEASE_PR}" tick "${tick_reason}" "$(_merge_lease_metric_hold_seconds "${MERGE_LEASE_ACQUIRED:-0}" 2>/dev/null)" "${tick_waiters}" "" "" "${tick_merged}" || true
 			MERGE_LEASE_STATE="released"
 		fi
 		# The rows keep _mt_list_open_prs's `head` and `head_repo` fields: they
@@ -1920,6 +1926,7 @@ _mt_merge_lease_tick_multi()
 	local tm_base="$1" tm_prs_json="$2" tm_max="$3" tm_p2="$4" tm_login="$5" tm_metric_ok="$6" tm_waiters="$7"
 	local tm_rows="" tm_line tm_h tm_h_head tm_h_exp tm_h_acq tm_h_upd tm_now tm_reason tm_listed_row tm_listed_head tm_title tm_draft
 	local tm_since tm_idle_s tm_ci_active tm_skip_head tm_new_rows tm_rc tm_count=0 tm_outcome tm_base_prs tm_excluded=""
+	local tm_merged="false" tm_holder_state=""
 	local tm_queue_skips tm_skip_pr tm_skip_held=0 tm_skip_held_prs="" tm_skipped_any=0 tm_cand_n=0 tm_granted=0 tm_queue_empty=0
 	local tm_first tm_first_row tm_first_head tm_first_paths tm_blocker tm_skip_why tm_grant_ts tm_new_row
 	local tm_max_candidates=10
@@ -1931,6 +1938,7 @@ _mt_merge_lease_tick_multi()
 		[[ "${tm_h}" =~ ^[1-9][0-9]*$ ]] || continue
 		[ "${tm_h_head}" != "-" ] || tm_h_head=""
 		tm_reason=""
+		tm_merged="false"
 		tm_listed_row=""
 		tm_listed_head=""
 		if [ "${tm_p2}" = 1 ]; then
@@ -1962,8 +1970,10 @@ _mt_merge_lease_tick_multi()
 				fi
 			fi
 		elif ! printf '%s\n' "${tm_prs_json}" | jq -e --argjson n "${tm_h}" 'select(type == "object" and .number == $n)' >/dev/null 2>&1; then
-			if [ "$(gh_retry _safe_gh_jq "repos/${MT_REPO}/pulls/${tm_h}" --jq '.state // ""' 2>/dev/null | tail -n1)" = "closed" ]; then
+			tm_holder_state="$(gh_retry _safe_gh_jq "repos/${MT_REPO}/pulls/${tm_h}" --jq '"\(.state // "") \(if (.merged_at // null) != null then "true" else "false" end)"' 2>/dev/null | tail -n1)"
+			if [ "${tm_holder_state%% *}" = "closed" ]; then
 				tm_reason="holder_closed"
+				[ "${tm_holder_state##* }" != "true" ] || tm_merged="true"
 			fi
 		fi
 		[ -n "${tm_reason}" ] || continue
@@ -1988,7 +1998,7 @@ _mt_merge_lease_tick_multi()
 			return 0
 		fi
 		_mt_log "MERGE_LEASE pr=${tm_h} base=${tm_base} mode=tick outcome=released reason=${tm_reason}"
-		[ "${tm_metric_ok}" = 1 ] && _merge_lease_metric released "${tm_base}" "${tm_h}" tick "${tm_reason}" "$(_merge_lease_metric_hold_seconds "${tm_h_acq:-0}" 2>/dev/null)" "${tm_waiters}" "${tm_h}" || true
+		[ "${tm_metric_ok}" = 1 ] && _merge_lease_metric released "${tm_base}" "${tm_h}" tick "${tm_reason}" "$(_merge_lease_metric_hold_seconds "${tm_h_acq:-0}" 2>/dev/null)" "${tm_waiters}" "${tm_h}" "" "${tm_merged}" || true
 		tm_rows="${tm_new_rows}"
 	done
 	# Every expired row was released above, so the rows left are live.

@@ -684,6 +684,26 @@ class TickMetrics(unittest.TestCase):
 		self.assertIn("pr=5", h.record())
 		self.assertIn("MERGE_LEASE pr=4 base=main mode=tick outcome=released reason=holder_closed\n", out)
 
+	def test_released_metric_reports_whether_the_holder_merged(self) -> None:
+		"""Plan K1 (wasted-hold share): the closed-holder read also returns
+		merged_at, so the released metric ends with merged=true|false; every
+		other metric line and the MERGE_LEASE line are unchanged."""
+		for merged in (True, False):
+			with self.subTest(merged=merged):
+				st = {"pulls": [_pull(5)], "closed": [4], "closed_merged": [4] if merged else []}
+				_seed_lease(st, _record(4))
+				h, out = self._tick(st, [_pull(5)], {})
+				rows = _metrics(out)
+				self.assertEqual(rows[0]["event"], "released", out)
+				self.assertEqual(rows[0]["merged"], "true" if merged else "false")
+				self.assertNotIn("merged", rows[1], out)
+				self.assertIn("MERGE_LEASE pr=4 base=main mode=tick outcome=released reason=holder_closed\n", out)
+				self.assertEqual(sum("pulls/4" in c for c in h.calls), 1, h.calls)
+		st = {"pulls": [_pull(4)]}
+		_seed_lease(st, _record(4, expires=int(time.time()) - 5))
+		_, out = self._tick(st, [_pull(4)], {})
+		self.assertEqual(_metrics(out)[0]["merged"], "false")
+
 	def test_grant_timestamp_is_taken_before_unlabel_and_dispatch(self) -> None:
 		pulls = [_pull(5)]
 		labels = {"5": ["ai:merge-lease-wait"]}
@@ -1283,8 +1303,10 @@ class Wiring(unittest.TestCase):
 		review = REVIEW.read_text()
 		for line in wired:
 			self.assertEqual(review.count(line), 3, line)
-			for wf in (POLL, CLOSE):
-				self.assertIn(line, wf.read_text(), f"{wf.name}: {line}")
+			# The poll release step plus the three freshness-gate steps, which
+			# run the update-mode lease gate (_pr_base_fresh_for_merge).
+			self.assertEqual(POLL.read_text().count(line), 4, f"{POLL.name}: {line}")
+			self.assertIn(line, CLOSE.read_text(), f"{CLOSE.name}: {line}")
 		lib = LIB.read_text()
 		for expansion in ("${MERGE_LEASE_REVOKE_ENABLED:-true}", "${MERGE_LEASE_IDLE_MINUTES:-60}",
 				"${MERGE_LEASE_PRIORITY_HEAD_PREFIXES-auto/forward-merge-stable-}"):
