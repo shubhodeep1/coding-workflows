@@ -180,7 +180,7 @@ def test_cli_accepts_the_raw_api_shapes(tmp_path: Path) -> None:
 	(tmp_path / "runs.json").write_text(json.dumps({"workflow_runs": []}), encoding="utf-8")
 	result = subprocess.run(
 		[sys.executable, str(SCRIPT), "select", "--search-file", str(tmp_path / "search.json"), "--details-file", str(tmp_path / "details.json"),
-		 "--runs-file", str(tmp_path / "runs.json"), "--trusted-login", BOT, "--now", "2026-10-04T12:00:00Z"],
+		"--runs-file", str(tmp_path / "runs.json"), "--trusted-login", BOT, "--now", "2026-10-04T12:00:00Z"],
 		capture_output=True, text=True, check=False,
 	)
 	assert result.returncode == 0, result.stdout
@@ -971,3 +971,7 @@ def test_poller_search_projection_carries_the_title() -> None:
 	text = POLLER.read_text(encoding="utf-8")
 	body = text[text.index("run_unblock_scan() {"):text.index("\n}\n", text.index("run_unblock_scan() {"))]
 	assert "--jq '[.items[]? | {number, title, labels: [.labels[]?.name]," in body
+	# The details fallback (`_item_title`) needs `title` in the batched GraphQL query and its jq step.
+	assert re.search(r"\.\.\. on Issue \{\s*title\s", body), "Issue fragment lacks title"
+	assert re.search(r"\.\.\. on PullRequest \{\s*title\s", body), "PullRequest fragment lacks title"
+	assert "title: (.value.title // null)," in body
