@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9927,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9927\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9934\",\"pr_number\":9934,\"branch\":\"ai/issue-9927\",\"run_id\":\"44987069058\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/44987069058\",\"changed_files\":[\"agents.d/9927-orchestrate-poll-cycle-caches.md\",\"agents.d/wfopt-2026-10-08-poller-cycle-timing.md\",\"changelog.d/9927-orchestrate-poll-cycle-caches.md\",\"scripts/gh_helpers.sh\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_orchestrate_poll_cycle_summary.py\",\"tests/test_orchestrate_poll_process.py\"]}",
+  "fingerprint": "f54d0db29522e37ffa081d66189d7f81d3bc7e08c3b00ffa62d570987348343e",
+  "lineage": {
+    "issue_number": 9927,
+    "parent_ids": [],
+    "pr_number": 9934,
+    "run_id": "44987069058",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44987069058",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9934"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261122061840_077c635ba5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9927,
+    "level": "run",
+    "pr_number": 9934,
+    "run_id": "44987069058"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9927: https://github.com/shubhodeep1/coding-workflows/pull/9934",
+  "timestamps": {
+    "created_at": "2026-11-22T06:18:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
