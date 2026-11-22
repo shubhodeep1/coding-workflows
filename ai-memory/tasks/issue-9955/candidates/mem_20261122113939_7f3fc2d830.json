@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which fix should this issue deliver, given that the scope marker and the \"no retry\" rule conflict?\nChoices:\n- A: Broker logic fix only. Widen the heal scope to `tools/claude-pool-broker/**`. Change `verifyTrustedSha` to try `stable` when `main` is `unavailable`, and log the compare call's HTTP status as a number. Add a `broker.test.ts` regression test: `main` answers 503 and `stable` answers `behind`, so the result is granted. Also fix the stale \"the job runs codex\" comment in `wrangler.toml`. No client retry. Consumers see no change until the broker is redeployed.\n- B: Do A, and also add a bounded client retry in `claude_pool_token.sh`. At most 3 attempts, only on `000`, `429`, `5xx` or 403 `workflow_sha_unverifiable`; every other 403 reason fails on the first attempt. This overrides the \"no retry\" rule for this lineage, because the trigger is a short upstream GitHub API failure and the retry is the only part that works without a broker deploy. Add the matching `tests/test_claude_pool_token.py` cases. (RECOMMENDED)\n- C: Client retry only, inside the current scope (`scripts/claude_pool_token.sh` and `tests/test_claude_pool_token.py`). The broker is not changed. **Note:** this breaks the issue's own \"a retry \u2026 is not an accepted fix\" rule and does not remove the cause.\nQ2: The broker change (Q1:A or Q1:B) only takes effect after a `wrangler deploy` of `claude-pool-broker` (CLAUDE.md \u00a724.C). How should that deploy happen?\nChoices:\n- A: Ship the code and tests only. The PR body tells the operator to deploy with `/deploy-activate` after merge, and to confirm `BROKER_GITHUB_READ_TOKEN` is set on the Worker. (RECOMMENDED)\n- B: Also add an automated broker deploy workflow in this PR. This greatly widens the scope: it needs Cloudflare credentials in Actions, and it conflicts with the \u00a724.C protected-commit deploy rules.\n- C: No broker deploy is needed. Answer this only if you chose Q1:C. **Note:** incompatible with Q1:A and Q1:B.",
+  "fingerprint": "0cc6ab6be6582176ee3dc14f9e9d569a0b6c67f6c5b21bf575bb3e3bc0b0e4b6",
+  "lineage": {
+    "issue_number": 9955,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45017901146",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45017901146",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261122113939_7f3fc2d830",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9955,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45017901146"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9955 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-22T11:39:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
