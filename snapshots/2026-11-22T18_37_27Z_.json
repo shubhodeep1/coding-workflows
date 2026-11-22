@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-21T02:01:57Z",
+  "tick_at": "2026-11-22T18:37:27Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -16,7 +16,7 @@
   "tracking_issues": [
     {
       "current_wave": 2,
-      "integration_ahead_by": "46",
+      "integration_ahead_by": "49",
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -56,13 +56,13 @@
       "wave_complete": false
     },
     {
-      "current_wave": 3,
-      "integration_ahead_by": "8",
+      "current_wave": 6,
+      "integration_ahead_by": "14",
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
-        "in_progress": 0,
+        "in_progress": 1,
         "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
@@ -77,14 +77,13 @@
       "wave_complete": false
     },
     {
-      "current_wave": 3,
-      "integration_ahead_by": "6",
+      "current_wave": 0,
       "issue_counts": {
         "closed": 0,
         "done": 0,
         "implementation_failed": 0,
-        "in_progress": 1,
-        "merged": 1,
+        "in_progress": 0,
+        "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -94,7 +93,7 @@
       "project_complete": false,
       "status": "in-progress",
       "title": "[Orchestrator] Let non-conflicting approved PRs merge past the merge lease (plan docs/plans/merge-lease-parallel-merges-plan.md, phases 1-5)",
-      "total_waves": 5,
+      "total_waves": 0,
       "wave_complete": false
     }
   ]
