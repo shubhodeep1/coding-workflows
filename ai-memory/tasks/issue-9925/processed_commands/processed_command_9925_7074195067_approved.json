@@ -5,13 +5,27 @@
   "entry_id": "processed_command_9925_7074195067_approved",
   "issue_number": 9925,
   "metadata": {
+    "branch": "ai/issue-9925",
+    "changed_files": [
+      ".github/workflows/issue_pr_status.yml",
+      "README.md",
+      "agents.d/9925-exempt-deploy-activation-logs.md",
+      "changelog.d/9925-exempt-deploy-activation-logs.md",
+      "scripts/activation_verify.sh",
+      "tests/test_activation_verify.py"
+    ],
+    "issue_number": 9925,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9925",
+    "pr_number": 9931,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9931",
+    "run_attempt": "1",
+    "run_id": "44985196930",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/44985196930"
   },
   "run_attempt": 1,
   "run_id": "44985196930",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-22T04:29:59Z",
+  "status": "completed",
+  "timestamp": "2026-11-22T05:19:10Z",
   "workflow": "implement"
 }
