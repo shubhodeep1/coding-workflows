@@ -73,6 +73,9 @@
 # UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED (default true; #8470): once a
 # fix-up is done, a standalone issue whose planning stop was "nothing to
 # implement" is closed as completed instead of resumed; `false` resumes it.
+# It also covers a standalone issue with no pending fix-up wait (#9946: no
+# wait at all, or the wait ended before the block); `false` turns both paths
+# off.
 # UNBLOCK_FIXUP_DELIVERED_CLOSE_ENABLED (default true; #8530): once a fix-up
 # merged into the default branch and changed every file a standalone
 # pipeline-authored ai:workflow-heal issue lists under `## Affected files`,
@@ -123,6 +126,7 @@
 #      UNBLOCK_JUDGE item= op=ci_owner outcome= reason=|pr=
 #      UNBLOCK_JUDGE item= op=heal_already_fixed outcome=closed|judge|skip sibling= pr= status=|reason=
 #      UNBLOCK_JUDGE item= kind= stop= fixup= op=nothing_to_implement outcome=closed|skip reason=comment_failed|label_failed|close_failed
+#        (fixup=none on the #9946 no-wait path)
 #      UNBLOCK_JUDGE item= kind= stop= fixup= op=fixup_delivered outcome=closed|resume|skip reason=|pr=
 #      UNBLOCK_JUDGE item= kind= stop= fixup= op=fixup_delivered outcome=warn reason=wait_update_failed
 #      UNBLOCK_JUDGE item= op=heal_report issue= label= outcome=sent|failed|skip reason=
@@ -654,11 +658,20 @@ unblock_nothing_to_implement_blocked()
 # as usual; it sets UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT to `closed` after a
 # close. UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED=false (default true)
 # restores the resume.
+# An empty <fixup> (#9946) is the no-wait call site in unblock_main: the block
+# came after the fix-up wait ended, or there was never a wait (#9215). The
+# comment then names no fix-up, the marker and log carry `fixup=none`, and no
+# wait update follows.
 # API budget: at most three writes (comment, label, close), no reads; the
-# caller then marks the fix-up wait `done` (one more write, not retried).
+# fix-up caller then marks the fix-up wait `done` (one more write, not
+# retried).
 unblock_nothing_to_implement_close()
 {
-	local fixup="$1" done_text="$2" tracking_issue="$3" marker
+	local fixup="$1" done_text="$2" tracking_issue="$3" marker nti_fixup_ref nti_fixup_clause=""
+	nti_fixup_ref="${fixup:-none}"
+	if [ -n "${fixup}" ]; then
+		nti_fixup_clause=", and fix-up #${fixup} ${done_text}"
+	fi
 	UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT=""
 	if [ "$(printf '%s' "${UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "false" ]; then
 		return 1
@@ -668,26 +681,26 @@ unblock_nothing_to_implement_close()
 	# after that block means planning moved on, so the stale block never closes
 	# the issue: it resumes as usual (`/approved`).
 	unblock_nothing_to_implement_blocked || return 1
-	marker="<!-- ai:unblock-nothing-to-implement:v1 item=${ITEM} fixup=${fixup} -->"
+	marker="<!-- ai:unblock-nothing-to-implement:v1 item=${ITEM} fixup=${nti_fixup_ref} -->"
 	if jq -e --arg login "${UNBLOCK_LOGIN}" --arg marker "${marker}" \
 		'any(.[]; (.user.login // "") == $login and ((.body // "") | sub("\\s+$"; "") | endswith($marker)))' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; then
 		:
-	elif ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="Closing as completed: planning found nothing to implement for this issue (\`${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}\`), and fix-up #${fixup} ${done_text}. A resume command would only stop planning again, so the unblock judge closed the issue instead. Reopen it and reply with \`/reclarify\` if work is still missing.
+	elif ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="Closing as completed: planning found nothing to implement for this issue (\`${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}\`)${nti_fixup_clause}. A resume command would only stop planning again, so the unblock judge closed the issue instead. Reopen it and reply with \`/reclarify\` if work is still missing.
 
 ${marker}" >/dev/null 2>&1; then
-		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup} op=nothing_to_implement outcome=skip reason=comment_failed"
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${nti_fixup_ref} op=nothing_to_implement outcome=skip reason=comment_failed"
 		return 0
 	fi
 	if ! gh api -X POST "repos/${REPOSITORY}/issues/${ITEM}/labels" -f "labels[]=ai:closed" >/dev/null 2>&1; then
-		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup} op=nothing_to_implement outcome=skip reason=label_failed"
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${nti_fixup_ref} op=nothing_to_implement outcome=skip reason=label_failed"
 		return 0
 	fi
 	if ! gh api -X PATCH "repos/${REPOSITORY}/issues/${ITEM}" -f state=closed -f state_reason=completed >/dev/null 2>&1; then
-		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup} op=nothing_to_implement outcome=skip reason=close_failed"
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${nti_fixup_ref} op=nothing_to_implement outcome=skip reason=close_failed"
 		return 0
 	fi
 	UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT="closed"
-	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup} op=nothing_to_implement outcome=closed"
+	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${nti_fixup_ref} op=nothing_to_implement outcome=closed"
 	return 0
 }
 
@@ -2439,6 +2452,20 @@ Still waiting for an operator; last checked ${now}.
 			unblock_escalate_fixup "${fixup_origin}"
 			return 0
 		fi
+	fi
+
+	# #9946: a standalone issue blocked with "nothing to implement" after its
+	# fix-up wait ended, or with no wait at all (#9215), is closed as completed
+	# instead of judged into a resume or escalation. Check-triage issues keep the
+	# #9659 gate, and orchestrator-managed issues (even without a parseable
+	# tracking line) behave as before; the label check fails closed. The close
+	# helper returns 0 after a close or a failed write (the next scan retries;
+	# its marker is posted once only) and 1 to judge as usual.
+	if [ "${ITEM_KIND}" = "issue" ] && [ -z "${tracking}" ] \
+		&& { [ -z "${wait}" ] || [ "${wait_state:-}" = "done" ]; } \
+		&& jq -e 'index("ai:check-triage") == null and index("ai:orchestrator-managed") == null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1 \
+		&& unblock_nothing_to_implement_close "" "" "${tracking}"; then
+		return 0
 	fi
 
 	# Evidence and fingerprint.
