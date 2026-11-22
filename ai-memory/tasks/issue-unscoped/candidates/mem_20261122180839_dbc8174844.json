@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_head_gate.sh:lines 102-104 and 106-183 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The updater-branch regex and the integrity status context are duplicated.\n  WHY: This does not fail at runtime, but it is a maintenance risk: if the shared script changes the regex or context, the verify job step that copies these values may fall out of sync and the head-gate exemption could fail silently. The source severity was NIT, mapped to low.\n- tests/test_audit_consumer_drift.py:lines 1766 (main) | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new pin-age tests are not registered in the file's main() method.\n  WHY: The direct python3 run in CI (ci.yml:696) skips them, so these tests run only under pytest. The source severity was NIT, mapped to low.\n- scripts/review_head_gate.sh:lines 106-183 (verify_head_gate) | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The poll window for the workflow-integrity status is limited to 6 reads, 20s apart.\n  WHY: If the status does not turn green within about 120 seconds, the gate stays pending and the step only logs a warning; it does not fail or retry. The source severity was NIT, mapped to low.\n- scripts/review_head_gate.sh:lines 106-183 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The head-gate exemption trusts commit statuses without checking who created them.\n  WHY: This is a residual risk: anyone with push access and `statuses: write` can already post the gate, and fork heads and moved heads fail closed. The source severity was NIT, mapped to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_head_gate.sh:lines 102-104 and 106-183 | severity=NIT | confidence=4\n  PROBLEM: The updater-branch regex and the integrity status context are duplicated.\n  WHY: This does not fail at runtime, but it is a maintenance risk: if the regex or context changes in the shared script, the duplicating verify job step may fall out of sync and the head-gate exemption could fail silently.\n- tests/test_audit_consumer_drift.py:lines 1766 (main) | severity=NIT | confidence=4\n  PROBLEM: The new pin-age tests are not registered in the file's main() method.\n  WHY: The direct python3 run in CI (ci.yml:696) skips them, so these tests run only under pytest.\n- scripts/review_head_gate.sh:lines 106-183 (verify_head_gate) | severity=NIT | confidence=4\n  PROBLEM: The poll window for the workflow-integrity status is limited to 6 reads, 20s apart.\n  WHY: If the status does not turn green within about 120 seconds, the gate stays pending and the step only logs a warning; it does not fail or retry.\n- scripts/review_head_gate.sh:lines 106-183 | severity=NIT | confidence=4\n  PROBLEM: The head-gate exemption trusts commit statuses without checking who created them.\n  WHY: This is a residual risk: anyone with push access and `statuses: write` can already post the gate, and fork heads and moved heads fail closed.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d02b9bdb5e48f637ab6575185e716f947b7c0171b89a922454d99d6e9152b34f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9505,
+    "run_id": "45047143314",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45047143314",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122180839_dbc8174844",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9505,
+    "run_id": "45047143314"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-22T18:08:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
