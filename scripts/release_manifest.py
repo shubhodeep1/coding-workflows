@@ -95,6 +95,10 @@ SURFACE_RULES = (
 	("file", "scripts/lint_pr_body_auto_close.py", True),
 	# "Send Telegram notification" sources this from the release checkout.
 	("file", "scripts/tg_helpers.sh", True),
+	# "Sync Dependabot exclusions for managed wrappers" runs this from the
+	# release checkout only when the manifest attests it (#9485). Optional:
+	# the updater skips the helper when a release does not list it.
+	("file", "scripts/sync_dependabot_exclusions.py", False),
 )
 
 # Directories (and the root file) the output must never be written into, so a
