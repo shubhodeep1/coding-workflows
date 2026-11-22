@@ -319,7 +319,10 @@ _pr_wait_for_required_checks 7 {HEAD} {shlex.quote(base)} {max_minutes}; rc=$?
 printf 'rc=%s outcome=%s\\n' "${{rc}}" "${{PR_CHECKS_WAIT_OUTCOME}}"
 """
 	full_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "PR_CHECKS_REPOSITORY": "owner/repo",
-		"AUTO_MERGE_CHECKS_POLL_SECONDS": poll, "GITHUB_RUN_ID": "4242", "PYTHONDONTWRITEBYTECODE": "1"}
+		"AUTO_MERGE_CHECKS_POLL_SECONDS": poll, "GITHUB_RUN_ID": "4242", "PYTHONDONTWRITEBYTECODE": "1",
+		# Back-off off (cap = base): these fixtures pin per-poll timing;
+		# tests/test_pr_checks_lib_wait_backoff.py covers the back-off (#9926).
+		"AUTO_MERGE_CHECKS_POLL_MAX_SECONDS": poll}
 	full_env.update(env or {})
 	res = subprocess.run(["bash", "-c", preamble], env=full_env, capture_output=True, text=True, timeout=120)
 	assert res.returncode == 0, res.stderr
@@ -689,6 +692,10 @@ class RequiredChecksWiring(unittest.TestCase):
 		self.assertEqual(job.count('elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" "${PR_BASE_REF:-}"; then'), 2)
 		self.assertIn("AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}", job)
 		self.assertIn("AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}", job)
+		# Back-off cap and per-poll read token (#9926).
+		self.assertIn("AUTO_MERGE_CHECKS_POLL_MAX_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_MAX_SECONDS || '180' }}", job)
+		self.assertEqual(job.count("GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}"), 1)
+		self.assertEqual(job.count("GH_READ_TOKEN:"), 1)
 
 	def test_codex_agent_auto_merge_step_passes_the_wait_variables(self) -> None:
 		text = WORKFLOW.read_text(encoding="utf-8")
@@ -696,6 +703,9 @@ class RequiredChecksWiring(unittest.TestCase):
 		self.assertIn("AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}", step)
 		self.assertIn("AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}", step)
 		self.assertIn("AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}", step)
+		self.assertIn("AUTO_MERGE_CHECKS_POLL_MAX_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_MAX_SECONDS || '180' }}", step)
+		self.assertEqual(step.count("GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}"), 1)
+		self.assertEqual(step.count("GH_READ_TOKEN:"), 1)
 
 	def test_freshness_is_rechecked_after_a_wait_on_every_auto_merge_path(self) -> None:
 		job = WORKFLOW.read_text(encoding="utf-8").split("  deterministic-skip-merge:", 1)[1].split("\n  claude-fixer-auto-merge:", 1)[0]
@@ -709,6 +719,10 @@ class RequiredChecksWiring(unittest.TestCase):
 		self.assertIn("AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}", step)
 		self.assertIn("AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}", step)
 		self.assertIn("AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}", step)
+		self.assertIn("AUTO_MERGE_CHECKS_POLL_MAX_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_MAX_SECONDS || '180' }}", step)
+		judge_step = text.split("- name: Review-blocked judge decision", 1)[1].split("\n      - name: ", 1)[0]
+		self.assertEqual(judge_step.count("GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}"), 1)
+		self.assertEqual(judge_step.count("GH_READ_TOKEN:"), 1)
 
 	def test_review_rb_judge_waits_before_both_auto_merge_calls(self) -> None:
 		text = RB_JUDGE.read_text(encoding="utf-8")
