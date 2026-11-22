@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Invalidation. Every PR write in the job evicts the affected kinds: push, label change, comment post, update-branch.\" / \"A test lists every write helper the codex-agent job calls and asserts it evicts.\" / \"codex-agent call sites read through it: ... prepush_test_gate.sh (final-CI marker POST)\"\n  expected_change_site: scripts/review_autofix_step_prepush_test_gate.sh, review_prepush_test_gate_final_ci_marker (final-CI marker comment post at line 1237); eviction-coverage assertion in tests/test_gh_pr_cached_read.py\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The POST at line 1237 (if gh api -X POST \"repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments\" -f body=\"${body}\") is a bare gh api call that does not go through gh_retry, gh_retry_to_file or gh_api_retry, so _gh_pr_cache_evict_for_cmd never runs and the file has no gh_pr_cache_evict call, tests/test_gh_pr_cached_read.py covers only the three retry wrappers (test_every_retry_wrapper_evicts_after_its_command) and the pr_checks_lib marker post (test_bare_marker_post_in_pr_checks_lib_evicts_comments) and does not list this write site, the agents fragment documents this post as an unevicted write, cached issue comments stay stale (_pr_base_sync_count can read comments without the marker for up to 120 s); reviewer severity disagreement: NIT (anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite) vs MAJOR (openai_gpt-6-luna); anthropic_claude-sonnet-5_5 notes the file is outside the plan grant's files_touched list and prior editor runs deferred it (minimax_minimax-m3 and z-ai_glm-5_3-flash skipped it as deferred/out of scope)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"Invalidation. Every PR write in the job evicts the affected kinds: push, label change, comment post, update-branch.\" The issue also says: \"A test lists every write helper the codex-agent job calls and asserts it evicts.\"\n  Expected change site: scripts/review_autofix_step_prepush_test_gate.sh, the final-CI marker comment post at line 1237 (if gh api -X POST \"repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments\" -f body=\"${body}\"). The matching eviction-coverage assertion belongs in tests/test_gh_pr_cached_read.py.\n  Evidence of absence: The POST at line 1237 is a bare gh api call that bypasses gh_retry, gh_retry_to_file and gh_api_retry, so _gh_pr_cache_evict_for_cmd never runs, and the file has no gh_pr_cache_evict call. tests/test_gh_pr_cached_read.py covers only test_every_retry_wrapper_evicts_after_its_command and test_bare_marker_post_in_pr_checks_lib_evicts_comments, not this site. Impact: _pr_base_sync_count can read comments without the marker for up to 120 s. Mitigating: the file is not in the plan grant's files_touched list, prior editor runs deferred it, and the agents.d fragment documents it as known. Suggested fix: `type gh_pr_cache_evict >/dev/null 2>&1 && gh_pr_cache_evict \"${GITHUB_REPOSITORY}\" \"${PR_NUMBER}\" issue_comments || true` after the POST.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"codex-agent call sites read through it: ... prepush_test_gate.sh (final-CI marker POST)\"\n  Expected change site: scripts/review_autofix_step_prepush_test_gate.sh\n  Evidence of absence: The final-CI marker comment post in `scripts/review_autofix_step_prepush_test_gate.sh` is a bare POST that bypasses the `gh_retry` eviction hook and does not manually call `gh_pr_cache_evict`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Every PR write in the job evicts the affected kinds,\" including comment posts.\n  Expected change site: scripts/review_autofix_step_prepush_test_gate.sh, review_prepush_test_gate_final_ci_marker\n  Evidence of absence: The final-CI marker posts a PR comment directly at line 1237, but does not call gh_pr_cache_evict afterward. The agents fragment also identifies this post as an unevicted write. This leaves cached issue comments stale after the marker is posted.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "52ca717b6f48fd04d83d4dfd2b1ffb14d2f41029e2e0f1335d554812df6dc718",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9935,
+    "run_id": "45001311577",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45001311577",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122093126_81c27865ef",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9935,
+    "run_id": "45001311577"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T09:31:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
