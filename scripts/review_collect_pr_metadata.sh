@@ -364,6 +364,30 @@ else
 fi
 printf 'LINKED_ISSUES_RAW_FILE=%s\n' "${LINKED_ISSUES_RAW_FILE}" >> "${GITHUB_ENV}"
 
+# Issue #9920 (plan Phase 5 / R3): the pipeline login for the plan-granted
+# `.github/ai/<file>` review grant, resolved here because this step holds
+# GH_TOKEN (GH_PAT, the identity implement.yml resolves the same grant with)
+# while the sandbox prepare step that evaluates the grant has no GitHub token.
+# Published as the step output `github_ai_grant_pipeline_login` (never
+# GITHUB_ENV, so no later step can overwrite this trust anchor);
+# review_autofix.yml passes it to review_untrusted_sandbox.sh prepare as
+# REVIEW_GITHUB_AI_GRANT_PIPELINE_LOGIN. API audit (CLAUDE.md §14): no earlier
+# call in this script returns the authenticated login, and the call runs only
+# for exactly one linked issue (status ok) whose body names a .github/ai/
+# path, the same pre-filter as _review_github_ai_grant_prepare, so almost
+# every review makes no extra call. Fail-open: no output means no grant.
+case "${GITHUB_AI_PLAN_GRANT_WRITE_ENABLED-}" in
+	''|[Tt][Rr][Uu][Ee])
+		if [ -n "${GITHUB_OUTPUT:-}" ] && [ "$(head -n 1 -- "${LINKED_ISSUES_RAW_FILE}.status" 2>/dev/null || true)" = ok ] \
+			&& jq -e 'length == 1 and (.[0].body | strings | contains(".github/ai/"))' "${LINKED_ISSUES_RAW_FILE}" >/dev/null 2>&1; then
+			_github_ai_grant_login="$(timeout 30 gh api user --jq .login 2>/dev/null || true)"
+			if [[ "${_github_ai_grant_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+				printf 'github_ai_grant_pipeline_login=%s\n' "${_github_ai_grant_login}" >> "${GITHUB_OUTPUT}"
+			fi
+		fi
+		;;
+esac
+
 # Build linked issue context file for reviewer/editor prompts.
 _linked_json_file="$(mktemp)"
 printf '%s' "${_linked_context_raw}" > "${_linked_json_file}"

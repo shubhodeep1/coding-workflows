@@ -436,12 +436,42 @@ def test_prepare_helper_fails_open_without_api_call(tmp_path: Path) -> None:
 	assert "reason=linked_issue_count" in proc.stderr
 	proc, _ = _run_prepare_helper(tmp_path, _issue(f"files_touched:\n  - {GRANTED}\n", association="CONTRIBUTOR"))
 	assert "outcome=none reason=untrusted_author" in proc.stderr and "OUT=\n" in proc.stdout
-	proc, _ = _run_prepare_helper(tmp_path, _issue(f"files_touched:\n  - {GRANTED}\n"), login="")
+	proc, _ = _run_prepare_helper(tmp_path, _issue(f"files_touched:\n  - {GRANTED}\n"), login="", GH_TOKEN="stub")
 	assert "reason=identity_unavailable" in proc.stderr
+	# No precomputed login and no token: the reason names the missing credential.
+	proc, _ = _run_prepare_helper(tmp_path, _issue(f"files_touched:\n  - {GRANTED}\n"), login="", GH_TOKEN="",
+		GITHUB_TOKEN="", REVIEW_GITHUB_AI_GRANT_PIPELINE_LOGIN="")
+	assert "reason=no_credentials" in proc.stderr and "OUT=\n" in proc.stdout
 	# An open pipeline grant (no list) grants no .github/ai path.
 	proc, _ = _run_prepare_helper(tmp_path, _issue("mentions .github/ai/x.json only", login="pipeline-bot",
 		association="NONE"))
 	assert "outcome=none" in proc.stderr and "OUT=\n" in proc.stdout
+
+
+def test_prepare_helper_uses_the_precomputed_login_without_gh(tmp_path: Path) -> None:
+	"""The prepare step has no GitHub token: the metadata step's login is used, and gh is not called."""
+	issue = _issue(f"files_touched:\n  - {GRANTED}\n", login="pipeline-pat", association="NONE")
+	proc, _ = _run_prepare_helper(tmp_path, issue, login="", GH_TOKEN="",
+		REVIEW_GITHUB_AI_GRANT_PIPELINE_LOGIN="pipeline-pat")
+	assert proc.returncode == 0, proc.stderr
+	assert "REVIEW_GITHUB_AI_GRANT phase=prepare outcome=granted reason=granted paths=1" in proc.stderr
+	assert not (tmp_path / "gh_calls.txt").exists()
+
+
+def test_review_login_is_resolved_with_the_metadata_token_and_passed_to_prepare() -> None:
+	workflow = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	metadata = "      - name: Collect PR metadata\n        id: collect_pr_metadata\n        env:\n          GH_TOKEN: ${{ secrets.GH_PAT }}\n"
+	assert workflow.count(metadata) == 1
+	deps_start = workflow.index("        id: deps_prepare\n")
+	deps_run = workflow.index("        run: |\n", deps_start)
+	login_env = "          REVIEW_GITHUB_AI_GRANT_PIPELINE_LOGIN: ${{ steps.collect_pr_metadata.outputs.github_ai_grant_pipeline_login || '' }}\n"
+	assert deps_start < workflow.index(login_env) < deps_run
+	# The PAT is never bound to the step that installs PR dependencies.
+	assert "GH_TOKEN" not in workflow[deps_start:deps_run]
+	collect = COLLECT_SCRIPT.read_text(encoding="utf-8")
+	assert "printf 'github_ai_grant_pipeline_login=%s\\n' \"${_github_ai_grant_login}\" >> \"${GITHUB_OUTPUT}\"" in collect
+	assert "github_ai_grant_pipeline_login=%s\\n' \"${_github_ai_grant_login}\" >> \"${GITHUB_ENV" not in collect
+	assert 'pipeline_login="${REVIEW_GITHUB_AI_GRANT_PIPELINE_LOGIN:-}"' in SANDBOX_SCRIPT.read_text(encoding="utf-8")
 
 
 def test_prepare_helper_switch_off(tmp_path: Path) -> None:

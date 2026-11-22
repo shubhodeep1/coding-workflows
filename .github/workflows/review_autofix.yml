@@ -3066,6 +3066,7 @@ jobs:
           echo "REVIEW_STATIC_CONTEXT_AGENTS mode=${review_static_agents_mode} reason=${review_static_agents_reason} bytes=$(wc -c < ./pre_assembled_static.txt | tr -d '[:space:]')"
 
       - name: Collect PR metadata
+        id: collect_pr_metadata
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
@@ -3923,6 +3924,9 @@ jobs:
           REVIEW_SANDBOX_BUILD_ATTEMPTS: ${{ vars.REVIEW_SANDBOX_BUILD_ATTEMPTS || '3' }}
           REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1: ${{ vars.REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1 || '10' }}
           REVIEW_SANDBOX_BUILD_RETRY_SLEEP_2: ${{ vars.REVIEW_SANDBOX_BUILD_RETRY_SLEEP_2 || '30' }}
+          # Issue #9920: the GH_PAT login for the plan-granted .github/ai/<file> grant,
+          # resolved by the metadata step; this step gets no GitHub token.
+          REVIEW_GITHUB_AI_GRANT_PIPELINE_LOGIN: ${{ steps.collect_pr_metadata.outputs.github_ai_grant_pipeline_login || '' }}
         run: |
           set -euo pipefail
           # A failed install is best-effort; a failed isolation boundary is not.

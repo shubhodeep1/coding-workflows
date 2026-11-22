@@ -111,13 +111,23 @@ _review_github_ai_grant_prepare()
 		_review_github_ai_grant_none no_github_ai_path
 		return 0
 	fi
-	# API audit (CLAUDE.md §15): the review job exports no pipeline login
-	# before sandbox prepare, and review_autofix_step_evaluate_gate.sh keeps its
-	# own `gh api user` lookup local, so this one call (only for a linked issue
-	# whose body names a .github/ai/ path) cannot reuse an earlier result.
-	pipeline_login="$(timeout 30 gh api user --jq .login 2>/dev/null || true)"
+	# API audit (CLAUDE.md §14): the prepare step has no GitHub token, so the
+	# "Collect PR metadata" step (review_collect_pr_metadata.sh, GH_PAT, the
+	# identity implement uses) resolves the login and review_autofix.yml passes
+	# it in as REVIEW_GITHUB_AI_GRANT_PIPELINE_LOGIN (default empty). The
+	# `gh api user` lookup below is only the fallback for a caller that does
+	# not pass it (an older workflow YAML), so no second call is made.
+	pipeline_login="${REVIEW_GITHUB_AI_GRANT_PIPELINE_LOGIN:-}"
+	if [ -z "${pipeline_login}" ]; then
+		pipeline_login="$(timeout 30 gh api user --jq .login 2>/dev/null || true)"
+	fi
 	if ! [[ "${pipeline_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
-		_review_github_ai_grant_none identity_unavailable
+		# Name a missing credential apart from a failed lookup.
+		if [ -z "${REVIEW_GITHUB_AI_GRANT_PIPELINE_LOGIN:-}${GH_TOKEN:-}${GITHUB_TOKEN:-}" ]; then
+			_review_github_ai_grant_none no_credentials
+		else
+			_review_github_ai_grant_none identity_unavailable
+		fi
 		return 0
 	fi
 	grant_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/review-github-ai-grant-XXXXXXXX" 2>/dev/null)" || grant_dir=""
