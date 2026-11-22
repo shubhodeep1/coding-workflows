@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/workflow_integrity.yml:36 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The job-header comment \"# 10 min of work + up to 20 min manifest-fetch rate-limit wait + headroom (#9937).\" above \"timeout-minutes: 35\" is stale, because the shared fetch block clamps SMF_MAX_WAIT to 1500 s (25 min); it also contradicts the updated update_workflows.yml:55 comment and the fetch-block comment \"Ceiling leaves 10 min of both 35-min job timeouts\".\n  WHY: At the clamp, 10 min of work plus 25 min of waiting uses the whole 35-min timeout with no headroom, so a maintainer who trusts the comment and lowers the timeout would cause a run that reaches the cap to be cancelled by the job timeout instead of ending in ERR_SYNC_MANIFEST_FETCH_FAILED. All five reviewers rated it SEVERITY: NIT, recorded here as low. openai_gpt-6-luna gave confidence 4; the other four gave 5.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/workflow_integrity.yml:Line 36, \"# 10 min of work + up to 20 min manifest-fetch rate-limit wait + headroom (#9937).\" It sits directly above line 37, \"timeout-minutes: 35\". | severity=NIT | confidence=5\n  PROBLEM: The integrity job comment still says the wait is 20 min plus headroom. The fetch block clamps at 1500 s (25 min) and says \"Ceiling leaves 10 min of both 35-min job timeouts (update-wrappers, integrity)\". The matching update_workflows.yml:55 comment was updated, but this one was missed.\n  WHY: Nothing breaks today. If a maintainer lowers the timeout based on this comment, a run that reaches the clamp is cancelled by the job timeout instead of ending in ERR_SYNC_MANIFEST_FETCH_FAILED. Suggested fix: \"# 10 min of work + up to 25 min manifest-fetch rate-limit wait (1500 s clamp) (#9937).\" The reviewer also listed this as a HARDENING_SUGGESTION: 1 line to change, HARDENING_RISK_SCORE: 1. The reviewer reported no task gaps: every deliverable in issue #9937 was checked, and the jq -e guard and the update-wrappers timeout of 35 were found sound.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/workflow_integrity.yml:36 | severity=NIT | confidence=5\n  PROBLEM: The job header comment wrongly says the manifest-fetch rate-limit wait is capped at 20 minutes and that there is \"headroom\" within the 35-minute job timeout.\n  WHY: The fetch block actually caps the wait at 25 minutes (1500 s), so 10 + 25 = 35 leaves 0 minutes of headroom. The comment is stale and contradicts update_workflows.yml, which was updated.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/workflow_integrity.yml:line 36, \"# 10 min of work + up to 20 min manifest-fetch rate-limit wait + headroom (#9937).\" above \"timeout-minutes: 35\" (line 37) | severity=NIT | confidence=5\n  PROBLEM: The job-header comment still claims a 20-min wait budget, but the inline fetch block at lines 557-559 caps SMF_MAX_WAIT at 1500 s = 25 min. The sibling update_workflows.yml:55 and the inner clamp comment were updated; this outer comment was missed.\n  WHY: There is no runtime failure today, but the \"+ headroom\" claim is false. If a maintainer lowers the timeout to match \"20 min\", a run that hits the 25-min cap is cancelled instead of failing with ERR_SYNC_MANIFEST_FETCH_FAILED. The reviewer also listed this as a HARDENING_SUGGESTION: change line 36 to \"# 10 min of work + up to 25 min manifest-fetch rate-limit wait (1500 s clamp) (#9937).\" and drop \"+ headroom\". 1 line to change, HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/workflow_integrity.yml:Line 36; the fetch block accepts a 1500-second wait at lines 555-560, and its updated budget comment is at lines 557-559. | severity=NIT | confidence=4\n  PROBLEM: The job comment says the rate-limit wait is capped at 20 minutes with headroom, but the fetch block allows 25 minutes. That leaves only 10 minutes of the 35-minute timeout for all other job work.\n  WHY: If the wait reaches 1500 seconds and the other job work takes more than 10 minutes, GitHub cancels the job before it can finish verification or report a classified fetch failure.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/workflow_integrity.yml:line 36 (\"# 10 min of work + up to 20 min manifest-fetch rate-limit wait + headroom (#9937).\") above \"timeout-minutes: 35\" (line 37), contradicted by the fetch-block clamp at line 559 (\"[ \\\"$(( 10#${SMF_MAX_WAIT} ))\\\" -le 1500 ] || SMF_MAX_WAIT=1500\") and its comment \"Ceiling leaves 10 min of both 35-min job timeouts\". | severity=NIT | confidence=5\n  PROBLEM: The job-header comment claims a 20-min maximum wait with headroom, but SMF_MAX_WAIT is clamped to 1500 s (25 min). The sibling comment at .github/workflows/update_workflows.yml:55 was corrected but this one was not, so the two byte-paired workflows describe the same cap differently.\n  WHY: Nothing fails today. If the timeout is later lowered, a run that hits the 1500 s cap is cancelled by the job timeout instead of ending in a classified ERR_SYNC_MANIFEST_FETCH_FAILED rejection. The stale comment was introduced when the last run reworded the timeout and clamp comments.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8b45990ff8d2246274e7fbf8c5d8f882d190f9d86d3f4c1e46e1cd51822cc991",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9947,
+    "run_id": "45029090733",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45029090733",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122145636_1ffce5b37c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9947,
+    "run_id": "45029090733"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T14:56:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
