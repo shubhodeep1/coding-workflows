@@ -512,13 +512,13 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
       # Cut at a UTF-8 character boundary (#9261/#9949). python writes the
       # number of bytes it emitted to a run-local temp file, so the marker and
       # the prompt budget count the bytes actually shown. Fail open: when
-      # python3 fails, keep the plain byte cut and count the cap; when it
-      # succeeds but reports no valid count, count the cap (its bytes are
-      # already out, so never re-emit them).
+      # python3 fails, or mktemp cannot create the count file, keep the plain
+      # byte cut and count the cap; when python succeeds but reports no valid
+      # count, count the cap (its bytes are already out, so never re-emit them).
       _trim_count_file="$(mktemp "${TMPDIR:-/tmp}/_embed_trim_count.XXXXXX" 2>/dev/null || true)"
       _shown_bytes=""
       _trim_py_ok=false
-      if PYTHONDONTWRITEBYTECODE=1 python3 - "${_p}" "${_effective_cap}" "${_trim_count_file}" 2>/dev/null <<'PY'
+      if [ -n "${_trim_count_file}" ] && PYTHONDONTWRITEBYTECODE=1 python3 - "${_p}" "${_effective_cap}" "${_trim_count_file}" 2>/dev/null <<'PY'
 import sys
 
 cap = int(sys.argv[2])
