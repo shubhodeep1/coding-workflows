@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/workflow-failure-heal-intake.yml:361-400 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The UTC day for the cache key is captured in the `heal_unregistered_day` step before the intake sends the WARNING, so a midnight crossing saves the marker under the previous day's key.\n  WHY: A later report on the new day misses the marker and sends one extra WARNING, never a dropped one. All reviewers rated it NIT. Gemini cited the queue-wait window. The others noted the window is now only the intake's execution time. Sonnet-5.5 confirmed it and kept it at NIT in prose, without a formal finding entry.\n- tests/test_workflow_failure_heal.py:test_intake_unregistered_warning_workflow_cache_wiring (around line 6894) | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The test asserts `continue-on-error` on the lookup and save steps but not on the `heal_unregistered_day` step (hardening suggestion).\n  WHY: Removing the flag from the day step would silently break the fail-open guarantee without failing the test. The suggested fix is `assert day[\"continue-on-error\"] is True`. The reviewers gave a hardening risk score of 1 and no severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Reduce workflow failure heal intake Telegram noise by ensuring reports from an unregistered repository warn once per repository per UTC day.\n  expected_change_site: .github/workflows/workflow-failure-heal-intake.yml\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The UTC day for the cache key is computed before the heal intake queue wait, so the key is unstable across midnight and the once-per-UTC-day intent is not fully met for reports that span the boundary. Severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_workflow_failure_heal.py:test_intake_unregistered_warning_workflow_cache_wiring (hardening suggestion)\n  PROBLEM: The test does not assert `continue-on-error` on the `heal_unregistered_day` step.\n  WHY: Removing the flag later would still pass the test. The suggested fix is `assert day[\"continue-on-error\"] is True`. HARDENING_RISK_SCORE: 1.\n- (Prose note, no formal entry) The midnight skew between the day step and the WARNING send was confirmed and kept at NIT. All other checklist sections were NONE.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/workflow-failure-heal-intake.yml:361-376 | severity=NIT | confidence=4\n  PROBLEM: The UTC day used for the cache key is computed before the intake logic that sends the warning, so a send after midnight saves the marker under the wrong day's key.\n  WHY: A subsequent report that day misses the marker and sends a second warning.\n- TASK_GAP:\n  Requirement: Reduce workflow failure heal intake Telegram noise by ensuring reports from an unregistered repository warn once per repository per UTC day.\n  Expected change site: .github/workflows/workflow-failure-heal-intake.yml\n  Evidence of absence: The UTC day is computed before the heal intake queue wait, so the cache key is unstable across midnight and the once-per-UTC-day intent is not fully met.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/workflow-failure-heal-intake.yml:357-404 (day step, save step at lines 391-404, and the WARNING branch in scripts/workflow_failure_heal_intake.sh ~684-707) | severity=NIT | confidence=4\n  PROBLEM: The UTC day is computed before the intake runs, but the WARNING is sent inside the intake. A report that crosses midnight UTC between the two saves the marker under the previous day.\n  WHY: The next report that day misses the cache and sends another WARNING. The autofix narrowed the earlier queue-wait race to the intake's execution window but did not close it.\n- tests/test_workflow_failure_heal.py:test_intake_unregistered_warning_workflow_cache_wiring (hardening suggestion)\n  PROBLEM: The test pins `continue-on-error` on the lookup and save steps but not on the day step.\n  WHY: Removing the flag would silently break the fail-open guarantee. The suggested fix is `assert day[\"continue-on-error\"] is True`. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/workflow-failure-heal-intake.yml:361-367, 376, 400 (send at scripts/workflow_failure_heal_intake.sh:692) | severity=NIT | confidence=4\n  PROBLEM: The cache key can use a different UTC day from the day the warning is sent.\n  WHY: A day captured before midnight with a send after midnight saves the marker under yesterday's key. A later report that day sends another WARNING.\n- tests/test_workflow_failure_heal.py:test_intake_unregistered_warning_workflow_cache_wiring (hardening suggestion)\n  PROBLEM: The test does not assert `continue-on-error: true` on the day-computation step.\n  WHY: Removing it would make a date or output failure skip the intake instead of failing open. The suggested fix is `assert day[\"continue-on-error\"] is True`. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/workflow-failure-heal-intake.yml:361-367 (vs scripts/workflow_failure_heal_intake.sh:692-700) | severity=NIT | confidence=4\n  PROBLEM: The cache key's UTC day is captured in the `heal_unregistered_day` step, but the WARNING and marker write happen later in the intake step, after setup at scripts/workflow_failure_heal_intake.sh:670.\n  WHY: A midnight crossing saves the marker under the previous day's key and a later report sends a second WARNING. This violates \"at most 1 per source repo per UTC day\" on the boundary. The impact is one extra WARNING.\n- tests/test_workflow_failure_heal.py:test_intake_unregistered_warning_workflow_cache_wiring (around line 6894) (hardening suggestion)\n  PROBLEM: The wiring test does not assert `continue-on-error` on the `heal_unregistered_day` step (workflow line 366).\n  WHY: Removing the flag would silently break the fail-open guarantee. The suggested fix is `assert day[\"continue-on-error\"] is True`. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c38da9f2fbee776004e221ca7d843d43ebf5e7bb9679b55837b3f492ec8ae917",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9948,
+    "run_id": "45027050535",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45027050535",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122145817_d3e9ed1048",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9948,
+    "run_id": "45027050535"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T14:58:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
