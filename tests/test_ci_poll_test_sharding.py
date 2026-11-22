@@ -62,6 +62,9 @@ GROUP_AWK_RE = re.compile(
 	r"""awk -v n="\$\{poll_group\}" -v total="\$\{poll_groups\}" '(?P<expr>[^']+)'"""
 )
 POLL_JOB_ID = "orchestrate-poll"
+# #9916: the repository owner raised the poll job's limit from 20 to 30
+# minutes after shards were cancelled at the 20-minute cap on 2026-11-21.
+POLL_JOB_TIMEOUT_MINUTES = 30
 SINGLE_FILE_MODULES_STEP = "Orchestrate poll single-file module tests"
 SINGLE_FILE_MODULES = (
 	"tests/test_orchestrate_poll_noop_suspicious_recovery.py",
@@ -344,8 +347,9 @@ class PollStepContractTest(unittest.TestCase):
 
 class JobBudgetTest(unittest.TestCase):
 	def test_poll_job_has_headroom_over_the_sharded_runtime(self) -> None:
-		# About 5 minutes per group measured (#4707); 20 covers a cold runner.
-		self.assertEqual(load_poll_job()["timeout-minutes"], 20)
+		# About 5 minutes per group measured (#4707); shards reached 15-20
+		# minutes by 2026-11-21 and were cancelled at 20, so #9916 raised it to 30.
+		self.assertEqual(load_poll_job()["timeout-minutes"], POLL_JOB_TIMEOUT_MINUTES)
 
 	def test_lint_aggregate_job_only_reads_results(self) -> None:
 		self.assertEqual(load_lint_job()["timeout-minutes"], 5)
@@ -4660,7 +4664,8 @@ class MovedRelease9450StepsContractTest(unittest.TestCase):
 	def test_source_and_target_timeouts_are_unchanged(self) -> None:
 		jobs = self.jobs()
 		self.assertEqual(jobs[RELEASE_9450_SOURCE_JOB_ID].get("timeout-minutes"), RELEASE_9450_TIMEOUT_MINUTES)
-		self.assertEqual(jobs[POLL_JOB_ID].get("timeout-minutes"), RELEASE_9450_TIMEOUT_MINUTES)
+		# #9916 deliberately raised the poll job's limit; the source job stays at 20.
+		self.assertEqual(jobs[POLL_JOB_ID].get("timeout-minutes"), POLL_JOB_TIMEOUT_MINUTES)
 
 
 # Issue #9045: tests-heal-plan-and-validation took 17m00s of its 20 minutes
