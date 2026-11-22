@@ -29,6 +29,8 @@ LABEL_EVENT_TYPES = ["labeled", "unlabeled"]
 # its own group, never on a step of the other group.
 LINT_GROUP_STEP_IDS = {"pr_body_file", "pr_commit_messages"}
 READINESS_GROUP_STEP_IDS = {"pr_labels_file"}
+# Issue #9929: CLAUDE.md §15 loop-call lint, warning only.
+GH_LOOP_LINT_GROUP_STEP_IDS = {"gh_loop_call_lint"}
 EXPECTED_STEP_NAMES = [
 	"Checkout repository",
 	"Write PR title and body to file",
@@ -36,9 +38,12 @@ EXPECTED_STEP_NAMES = [
 	"Run auto-close keyword lint",
 	"Write PR labels to file",
 	"Check integration PR readiness and post status",
+	"Lint new GitHub API calls inside loops (CLAUDE.md §15, warning only)",
 ]
 LINT_GROUP_STEP_NAMES = EXPECTED_STEP_NAMES[1:4]
 READINESS_GROUP_STEP_NAMES = EXPECTED_STEP_NAMES[4:6]
+GH_LOOP_LINT_GROUP_STEP_NAMES = EXPECTED_STEP_NAMES[6:7]
+ALL_GROUP_STEP_IDS = LINT_GROUP_STEP_IDS | READINESS_GROUP_STEP_IDS | GH_LOOP_LINT_GROUP_STEP_IDS
 
 
 def _load_workflow(path: Path) -> dict:
@@ -128,14 +133,16 @@ def test_every_step_after_checkout_survives_another_groups_failure() -> None:
 
 def test_step_groups_do_not_depend_on_each_other() -> None:
 	by_name = {step["name"]: step for step in _folded_job()["steps"]}
-	for names, foreign_ids in (
-		(LINT_GROUP_STEP_NAMES, READINESS_GROUP_STEP_IDS),
-		(READINESS_GROUP_STEP_NAMES, LINT_GROUP_STEP_IDS),
+	for names, own_ids in (
+		(LINT_GROUP_STEP_NAMES, LINT_GROUP_STEP_IDS),
+		(READINESS_GROUP_STEP_NAMES, READINESS_GROUP_STEP_IDS),
+		(GH_LOOP_LINT_GROUP_STEP_NAMES, GH_LOOP_LINT_GROUP_STEP_IDS),
 	):
+		foreign_ids = ALL_GROUP_STEP_IDS - own_ids
 		for name in names:
 			referenced = set(re.findall(r"steps\.([A-Za-z0-9_]+)\.", by_name[name]["if"]))
 			assert not (referenced & foreign_ids), (name, referenced)
-			assert referenced <= {"checkout"} | LINT_GROUP_STEP_IDS | READINESS_GROUP_STEP_IDS, (name, referenced)
+			assert referenced <= {"checkout"} | ALL_GROUP_STEP_IDS, (name, referenced)
 	# Within a group a step still waits for the step it reads from.
 	assert "steps.checkout.outcome == 'success'" in by_name["Write PR title and body to file"]["if"]
 	assert "steps.checkout.outcome == 'success'" in by_name["Write PR labels to file"]["if"]
@@ -149,7 +156,7 @@ def test_only_the_lint_can_fail_the_job() -> None:
 	verdict is a commit status; a failed tracking-issue read or status POST
 	(a fork PR's token is read-only) must not turn `pr-body-lint` red."""
 	by_name = {step["name"]: step for step in _folded_job()["steps"]}
-	for name in READINESS_GROUP_STEP_NAMES:
+	for name in [*READINESS_GROUP_STEP_NAMES, *GH_LOOP_LINT_GROUP_STEP_NAMES]:
 		assert by_name[name].get("continue-on-error") is True, name
 	for name in ["Checkout repository", *LINT_GROUP_STEP_NAMES]:
 		assert "continue-on-error" not in by_name[name], name
@@ -168,7 +175,29 @@ def test_readiness_step_matches_the_label_workflow() -> None:
 def test_step_ids_are_unique() -> None:
 	step_ids = [step["id"] for step in _folded_job()["steps"] if "id" in step]
 	assert len(step_ids) == len(set(step_ids)), step_ids
-	assert set(step_ids) == {"checkout"} | LINT_GROUP_STEP_IDS | READINESS_GROUP_STEP_IDS
+	assert set(step_ids) == {"checkout"} | ALL_GROUP_STEP_IDS
+
+
+def test_gh_loop_call_lint_step_is_warning_only_and_makes_no_api_call() -> None:
+	"""Issue #9929: the §15 lint reads the local git diff only. It takes no
+	token, never fails the job and runs on every event of this workflow
+	(including `edited`, whose newer check-run would otherwise drop the
+	warnings)."""
+	(step,) = [s for s in _folded_job()["steps"] if s["name"] in GH_LOOP_LINT_GROUP_STEP_NAMES]
+	assert step["id"] == "gh_loop_call_lint"
+	assert _expression_body(step["if"]) == "!cancelled() && steps.checkout.outcome == 'success'"
+	assert "github.event.action" not in step["if"]
+	assert step.get("continue-on-error") is True
+	assert "env" not in step, "no GH_TOKEN: the lint makes no GitHub API call"
+	run = step["run"]
+	assert "python3 scripts/lint_gh_calls_in_loops.py" in run
+	assert "git fetch --no-tags --depth=2 origin" in run
+	assert '--base "${head_commit}^1" --head "${head_commit}" || true' in run
+	assert "GH_TOKEN" not in run
+	assert not re.search(r"(?<![\w-])gh\s", run), "no gh CLI call in the lint step"
+	assert "curl" not in run
+	checkout = _folded_job()["steps"][0]
+	assert checkout["with"]["fetch-depth"] == 1, "the lint deepens the merge commit itself"
 
 
 def test_run_bodies_carry_no_expressions() -> None:

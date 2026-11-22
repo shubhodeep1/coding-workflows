@@ -78,6 +78,22 @@
 # Configure this status as a required check in repository branch
 # protection settings so the PR cannot be merged while the status is
 # failing.
+#
+# ---------------------------------------------------------------------------
+# Step group "GitHub API calls inside loops" (issue #9929)
+# CLAUDE.md §15 (GitHub API call hygiene) enforcement, warning only.
+#
+# `scripts/lint_gh_calls_in_loops.py` diffs the PR merge commit against its
+# first parent with the local git and emits a `::warning` for each line the
+# PR adds where a GitHub API call (`gh api`, `gh pr view`, `_safe_gh_jq`,
+# `gh_retry`, `curl ... api.github.com`, ...) sits inside a shell
+# `for` / `while` / `until` body, in `*.sh` / `*.bash` files and workflow
+# `run:` blocks. Calls through a batched or cached helper, and lines
+# annotated `# gh-loop-ok: <reason>`, do not warn. It makes no GitHub API
+# call, takes no token, always exits 0 and is `continue-on-error`, so it
+# never fails `pr-body-lint`. It logs `GH_LOOP_CALL_LINT warnings=<n>
+# files=<n>`, or `GH_LOOP_CALL_LINT outcome=skipped reason=<token>` when
+# the base commit cannot be read.
 name: PR checks
 
 "on":
@@ -141,7 +157,8 @@ jobs:
         with:
           # Only the lint and readiness scripts are needed. Neither runs
           # tooling that needs history: the PR's commits are read via the
-          # GH API below (no local git log needed).
+          # GH API below (no local git log needed). The §15 loop-call lint
+          # deepens the merge commit to depth 2 itself, so this stays at 1.
           fetch-depth: 1
 
       # Every step below starts its `if:` with `!cancelled()`, so a failed
@@ -260,3 +277,23 @@ jobs:
             --head-sha "${HEAD_SHA}" \
             --pr-labels-file /tmp/integration-pr-readiness/labels.txt \
             --repo "${REPO}"
+
+      # ---- Step group: GitHub API calls inside loops (CLAUDE.md §15, warning only) ----
+      # See the header. Runs on `edited` too: an `edited` run reports a newer
+      # `pr-body-lint` check-run on the same head, which would otherwise lose
+      # the warning annotations. No `env:` and no token: zero API calls.
+
+      - name: Lint new GitHub API calls inside loops (CLAUDE.md §15, warning only)
+        id: gh_loop_call_lint
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          # CLAUDE.md §15: zero API calls. The base is the merge commit's first
+          # parent, fetched over git like ci.yml's agents.md direct-edit check.
+          head_commit="$(git rev-parse HEAD)"
+          if ! git fetch --no-tags --depth=2 origin "${head_commit}"; then
+            echo "::warning::could not deepen the merge commit; the lint reports outcome=skipped"
+          fi
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_gh_calls_in_loops.py \
+            --base "${head_commit}^1" --head "${head_commit}" || true
