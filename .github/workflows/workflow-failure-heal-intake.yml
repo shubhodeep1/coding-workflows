@@ -285,6 +285,12 @@ jobs:
             exit 1
           fi
           echo "source_repo=$(jq -r '.source_repo // ""' "${WORKFLOW_HEAL_PAYLOAD_FILE}" | tr -cd 'A-Za-z0-9_./-' | head -c 120)" >> "$GITHUB_OUTPUT"
+          # Cache key for the once-per-UTC-day unregistered-repo WARNING
+          # (scripts/workflow_failure_heal_intake.sh, unregistered_source_repo).
+          heal_unregistered_repo="$(jq -r '.source_repo // ""' "${WORKFLOW_HEAL_PAYLOAD_FILE}" 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr '/' '_' | tr -cd 'a-z0-9_.-' | head -c 120 || true)"
+          if [ -n "${heal_unregistered_repo}" ]; then
+            echo "heal_unregistered_cache_key=heal-unregistered-${heal_unregistered_repo}-$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+          fi
 
       # Waits for this report's turn instead of letting a newer run cancel it.
       # Never fails the job: when the queue cannot be used the report proceeds.
@@ -343,8 +349,25 @@ jobs:
         with:
           config_path: .github/ai/claude_engine.json
 
+      # An unregistered source repo gets one Telegram WARNING per UTC day: a
+      # cache hit here means today's WARNING was already sent, so the intake
+      # sends DEBUG instead. A failed lookup leaves cache-hit empty and the
+      # WARNING goes out (fail open). Runs inside the heal intake queue so the
+      # previous report's save step has finished.
+      - name: Look up today's unregistered-repo warning marker
+        id: heal_unregistered_seen
+        if: steps.payload.outputs.heal_unregistered_cache_key != ''
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.RUNTIME_DIR }}/heal_unregistered_warned
+          key: ${{ steps.payload.outputs.heal_unregistered_cache_key }}
+          lookup-only: true
+
       - name: Run workflow failure heal intake
+        id: intake_run
         env:
+          WORKFLOW_HEAL_UNREGISTERED_WARNED_TODAY: ${{ steps.heal_unregistered_seen.outputs.cache-hit == 'true' && 'true' || 'false' }}
           # Codex version baked into the isolated diagnosis agent's image (scripts/codex_isolated_exec.sh).
           CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
@@ -353,6 +376,14 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/workflow_failure_heal_intake.sh
+
+      - name: Save today's unregistered-repo warning marker
+        if: always() && steps.intake_run.outputs.heal_unregistered_warned == 'true' && steps.payload.outputs.heal_unregistered_cache_key != ''
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.RUNTIME_DIR }}/heal_unregistered_warned
+          key: ${{ steps.payload.outputs.heal_unregistered_cache_key }}
 
       - name: Leave the heal intake queue
         if: always()

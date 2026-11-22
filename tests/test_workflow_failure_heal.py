@@ -6829,6 +6829,110 @@ def test_intake_rejects_ci_run_that_is_not_a_default_branch_push(tmp_path) -> No
 		assert "issues_created" not in state_after
 
 
+def _run_intake_capturing_tg(payload: dict, state: dict, extra_env: dict[str, str | None] | None = None) -> tuple[subprocess.CompletedProcess[str], list[str], str]:
+	"""Run the intake with a stubbed ``tg_send_msg``; return the result, every
+	``level|text`` line it recorded, and what the intake wrote to GITHUB_OUTPUT."""
+	tg_dir = Path(tempfile.mkdtemp(prefix="heal-tg-"))
+	try:
+		output_file = tg_dir / "github_output.txt"
+		output_file.write_text("", encoding="utf-8")
+		def setup(tmp: Path, work: Path) -> None:
+			(work / "scripts" / "tg_helpers.sh").write_text(
+				f'tg_send_msg() {{ printf \'%s|%s\\n\' "${{2:-}}" "$1" >> {str(tg_dir / "calls.txt")!r}; }}\n', encoding="utf-8")
+		result, _state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=setup,
+			extra_env={"GITHUB_OUTPUT": str(output_file), **(extra_env or {})})
+		calls_file = tg_dir / "calls.txt"
+		calls = calls_file.read_text(encoding="utf-8").splitlines() if calls_file.exists() else []
+		return result, calls, output_file.read_text(encoding="utf-8")
+	finally:
+		shutil.rmtree(tg_dir, ignore_errors=True)
+
+
+def test_intake_unregistered_source_repo_warns_once_per_day() -> None:
+	# atlas-bridge.gd sent six identical WARNINGs overnight: the workflow's
+	# actions/cache lookup now tells the intake today's WARNING already went out.
+	payload = _consumer_payload(source_repo="shubhodeep1/not-registered")
+	result, calls, output = _run_intake_capturing_tg(payload, _intake_state())
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "skip reason=unregistered_source_repo" in result.stdout
+	assert [line.split("|", 1)[0] for line in calls if "ignored a report" in line] == ["WARNING"], calls
+	assert "unregistered_source_repo_alert level=WARNING source=shubhodeep1/not-registered" in result.stdout
+	assert "heal_unregistered_warned=true" in output.splitlines()
+	result, calls, output = _run_intake_capturing_tg(payload, _intake_state(), {"WORKFLOW_HEAL_UNREGISTERED_WARNED_TODAY": "true"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert [line.split("|", 1)[0] for line in calls if "ignored a report" in line] == ["DEBUG"], calls
+	assert "unregistered_source_repo_alert level=DEBUG reason=already_warned_today" in result.stdout
+	assert "heal_unregistered_warned" not in output
+	# Fail open: anything but "true" (cache miss, failed lookup) sends the WARNING.
+	for warned_today in ("false", "", None):
+		result, calls, output = _run_intake_capturing_tg(payload, _intake_state(), {"WORKFLOW_HEAL_UNREGISTERED_WARNED_TODAY": warned_today})
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert [line.split("|", 1)[0] for line in calls if "ignored a report" in line] == ["WARNING"], (warned_today, calls)
+
+
+def test_intake_unregistered_warning_workflow_cache_wiring() -> None:
+	workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "workflow-failure-heal-intake.yml").read_text(encoding="utf-8"))
+	steps = workflow["jobs"]["intake"]["steps"]
+	names = [step.get("name") for step in steps]
+	lookup = steps[names.index("Look up today's unregistered-repo warning marker")]
+	run = steps[names.index("Run workflow failure heal intake")]
+	save = steps[names.index("Save today's unregistered-repo warning marker")]
+	assert names.index("Wait for the heal intake queue") < names.index(lookup["name"]) < names.index(run["name"]) < names.index(save["name"]) < names.index("Leave the heal intake queue")
+	assert lookup["uses"] == "actions/cache/restore@v4" and save["uses"] == "actions/cache/save@v4"
+	assert lookup["continue-on-error"] is True and save["continue-on-error"] is True
+	assert lookup["with"]["lookup-only"] is True
+	assert lookup["with"]["path"] == save["with"]["path"] == "${{ env.RUNTIME_DIR }}/heal_unregistered_warned"
+	assert lookup["with"]["key"] == save["with"]["key"] == "${{ steps.payload.outputs.heal_unregistered_cache_key }}"
+	assert run["id"] == "intake_run"
+	assert "steps.heal_unregistered_seen.outputs.cache-hit == 'true'" in run["env"]["WORKFLOW_HEAL_UNREGISTERED_WARNED_TODAY"]
+	assert "steps.intake_run.outputs.heal_unregistered_warned == 'true'" in save["if"]
+	payload_run = steps[names.index("Materialize the report payload")]["run"]
+	assert "heal_unregistered_cache_key=heal-unregistered-${heal_unregistered_repo}-$(date -u +%Y%m%d)" in payload_run
+
+
+def _provenance_alert_filter() -> str:
+	text = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	match = re.search(r"PROVENANCE_ALERT_LEVEL=\"WARNING\"\n\t\tif jq -e '(.*?)' \\\n", text, re.S)
+	assert match, "provenance alert-level filter not found"
+	return match.group(1)
+
+
+def test_intake_provenance_alert_level_filter() -> None:
+	jq_filter = _provenance_alert_filter()
+	def is_debug(result: dict) -> bool:
+		return subprocess.run(["jq", "-e", jq_filter], input=json.dumps(result), capture_output=True, text=True).returncode == 0
+	assert is_debug({"reason": "current_run_rejected:ci_not_default_branch_push", "rejections": [{"run_id": "500", "reason": "ci_not_default_branch_push"}]})
+	assert is_debug({"reason": "current_run_rejected:not_failed", "rejections": [{"run_id": "500", "reason": "not_failed"}]})
+	assert is_debug({"reason": "no_verified_runs", "rejections": [{"run_id": "500", "reason": "not_failed"}, {"run_id": "499", "reason": "not_failed"}]})
+	for warning in (
+		{"reason": "no_verified_runs", "rejections": [{"run_id": "500", "reason": "not_failed"}, {"run_id": "499", "reason": "not_linked_to_pr"}]},
+		{"reason": "no_verified_runs", "rejections": []},
+		{"reason": "verifier_error", "rejections": []},
+		{"reason": "current_run_rejected:run_lookup_failed", "rejections": [{"run_id": "500", "reason": "run_lookup_failed"}]},
+		{"reason": "current_run_rejected:unexpected_workflow_path", "rejections": [{"run_id": "500", "reason": "unexpected_workflow_path"}]},
+		{"reason": "identity_unavailable", "rejections": []},
+	):
+		assert not is_debug(warning), warning
+
+
+def test_intake_provenance_rejection_alert_levels() -> None:
+	# A CI run on a PR branch and a cited run that did not fail are expected
+	# rejections: DEBUG. Any other rejection keeps the WARNING.
+	ci_run = _ci_intake_state()["run_details"]["500"]
+	for state, level, detail in (
+		(_ci_intake_state(event="pull_request"), "DEBUG", "current_run_rejected:ci_not_default_branch_push"),
+		(_ci_intake_state(head_branch="feature/x"), "DEBUG", "current_run_rejected:ci_not_default_branch_push"),
+		({**_ci_intake_state(), "run_details": {"500": {**ci_run, "conclusion": "success"}}}, "DEBUG", "current_run_rejected:not_failed"),
+		({**_ci_intake_state(), "run_details": {}}, "WARNING", "current_run_rejected:run_lookup_failed"),
+	):
+		result, calls, _ = _run_intake_capturing_tg(_ci_run_payload(), state, {"WORKFLOW_HEAL_DEFAULT_BRANCH": "main"})
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"skip reason=provenance_rejected source={SELF_REPO} kind=workflow_run issue=none detail={detail}" in result.stdout, result.stdout
+		assert f"provenance_rejected_alert level={level} " in result.stdout
+		provenance_calls = [line for line in calls if "rejected run provenance" in line]
+		assert [line.split("|", 1)[0] for line in provenance_calls] == [level], calls
+
+
 def test_build_phase_failure_payload_validates_and_carries_lineage() -> None:
 	body = f"<!-- {heal.MARKER_PREFIX}fp={FP_HEX} -->\n<!-- {heal.MARKER_PREFIX}gen=1 -->\n<!-- {heal.MARKER_PREFIX}root={FP_HEX} -->\nheal body"
 	payload = heal.validate_payload(_phase_payload(issue=_issue(body=body, labels=["ai:clarification", "ai:workflow-heal"])))
