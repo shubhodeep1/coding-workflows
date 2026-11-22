@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: overwrite the smoke canary file (issue #9959)\n\nPlanning ref: `main` at `99dca17df308c5bebc779677851c9e0b9025d190`. The integration branch mismatch line reads `unknown`, not `true`, so there is no mismatch block.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: test tests/test_smoke_alert_silencing_contract.py\nACCEPTANCE: post-merge none: this changes only a data file for a smoke run, and no workflow needs to run after merge\n\n## Functions or modules to implement\nNone. Replace the whole content of `tests/e2e_smoke_canary.txt` with exactly these bytes:\n`status: ok\\nrun_id: 45023283995\\nupdated-by: ai-pipeline\\n`\nThat is three lines, each ending in LF, with nothing before or after them.\n\nThe file currently contains `status: ok` and `decompose-run: 41445772297`. The `decompose-run` line is removed.\n\n## Data structures affected\nOnly the plain-text canary file.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Overwrite the file instead of editing lines\n- Chosen: write the full file content in one step, the same way as the `printf` in the issue.\n- Alternatives considered: changing individual lines in place.\n- Why: the issue requires the file to match exactly. Writing the whole file guarantees that, including the trailing newline, and leaves no old lines behind.\n\n## Security considerations\nNo trust boundary, endpoint, secret or money handling is involved. The content is a fixed literal that does not come from any input.\n\n## Potential risks or edge cases\n- Ten test files mention the path `tests/e2e_smoke_canary.txt`, including `tests/test_smoke_alert_silencing_contract.py` and `tests/test_review_merge_train.py`. From their names they appear to use it as a smoke fixture path. I did not open them, so I have not confirmed that none of them checks the file's content.\n- The file needs exactly one trailing newline, no CRLF line endings and no BOM.\n\n## Testing considerations\n- Check the result with `printf 'status: ok\\nrun_id: 45023283995\\nupdated-by: ai-pipeline\\n' | cmp - tests/e2e_smoke_canary.txt`.\n- Run `git diff --stat` and confirm only this one file changed.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies one file's exact content and forbids touching any other file. No helper or pattern applies, and there is no scope to widen or shrink.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- AI_ACCEPTANCE_V1 {\"checks\":[],\"errors\":[],\"post_merge\":null,\"post_merge_none\":\"this changes only a data file for a smoke run, and no workflow needs to run after merge\",\"schema\":\"acceptance.v1\",\"source\":\"plan\",\"state\":\"valid\",\"tests\":[{\"name\":\"\",\"path\":\"tests/test_smoke_alert_silencing_contract.py\",\"red_on_base\":false}]} -->\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "1aa80406128ee7e9a4430717313e06c284cd61bb20e84d94a90e713b5060b739",
+  "lineage": {
+    "issue_number": 9959,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45026240255",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45026240255",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9959"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261122132343_bfcffad716",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9959,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45026240255"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9959",
+  "timestamps": {
+    "created_at": "2026-11-22T13:23:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
