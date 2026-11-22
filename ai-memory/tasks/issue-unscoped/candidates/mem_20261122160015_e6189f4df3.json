@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The issue's Goals say \"review_enable_auto_merge.sh:119 (reuse the cache) and :242\". It also requires that exactly one live `pulls/N` read stays before `gh pr merge --auto`.\n  expected_change_site: scripts/review_enable_auto_merge.sh, the head read in `reviewed_head_is_current_for_labels` at line 119.\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR does not change scripts/review_enable_auto_merge.sh, line 119 is still a live `gh_retry gh api \"repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}\" --jq '.head.sha // \"\"'` call, line 242 is also still live so the label path can make two live `pulls/N` reads before the merges at lines 418 and 469, the file is outside the plan grant's files_touched list, and the agents fragment, changelog and author comments (\u00a76, PR comment entry 7) say these reads stay live on purpose for merge/label authorization safety (reported as SEVERITY: NIT; sonnet says it needs a follow-up issue rather than an edit in this PR)\n- requirement: \"Every PR write in the job evicts the affected kinds: push, label change, comment post, update-branch.\"\n  expected_change_site: scripts/review_autofix_step_prepush_test_gate.sh, `review_prepush_test_gate_final_ci_marker`, the final-CI marker post at line 1237.\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  EVIDENCE: Line 1237 still posts the comment with a bare `gh api -X POST \"repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments\"`, which bypasses the `_gh_pr_cache_evict_for_cmd` hook in the retry wrappers, and no `gh_pr_cache_evict` call follows it, the only non-test `gh_pr_cache_evict` callers are scripts/pr_checks_lib.sh:1731 and .github/workflows/review_autofix.yml:5350, the label POSTs at lines 944 and 947 of the same file go through `gh_retry` and do evict, the file is outside the plan grant's files_touched, agents.d/9928-review-pr-read-cache.md names the gap, and the `ai:final-ci-repair:v1` marker matches neither filter in `_pr_base_sync_count`, so no cached reader is affected today (reported as SEVERITY: NIT)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: The issue's Goals say \"review_enable_auto_merge.sh:119 (reuse the cache) and :242\". It also requires that exactly one live `pulls/N` read stays before `gh pr merge --auto`.\n  Expected change site: scripts/review_enable_auto_merge.sh, the head read in `reviewed_head_is_current_for_labels` at line 119.\n  Evidence of absence: The PR does not change this file. Line 119 is still a live `gh_retry gh api \"repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}\" --jq '.head.sha // \"\"'` call. Line 242 is also still live, so the label path can make two live `pulls/N` reads before the merges at lines 418 and 469. The file is outside the plan grant's files_touched, so the gap cannot be fixed inside this PR's scope. The agents fragment and changelog say these reads stay live on purpose. This needs a follow-up issue.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"Every PR write in the job evicts the affected kinds: push, label change, comment post, update-branch.\"\n  Expected change site: scripts/review_autofix_step_prepush_test_gate.sh, the final-CI marker post at line 1237.\n  Evidence of absence: Line 1237 still posts the comment with a bare `gh api -X POST \"repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments\"`, which bypasses the `_gh_pr_cache_evict_for_cmd` hook in the retry wrappers, and no `gh_pr_cache_evict` call follows it. The only non-test `gh_pr_cache_evict` callers are scripts/pr_checks_lib.sh:1731 and .github/workflows/review_autofix.yml:5350. The label POSTs at lines 944 and 947 go through `gh_retry` and do evict. The file is outside files_touched, and agents.d/9928-review-pr-read-cache.md names the gap. The `ai:final-ci-repair:v1` marker matches neither filter in `_pr_base_sync_count`, so no cached reader is affected today.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: The codex-agent call sites in `scripts/review_enable_auto_merge.sh` should read through the cache, while keeping one live `pulls/N` read for merge authorization.\n  Expected change site: `scripts/review_enable_auto_merge.sh`\n  Evidence of absence: The PR does not modify this file. The head read at line 119 remains a live `gh_retry gh api` call. The author's comments say these are critical head-checks that authorize labeling and merging, and the PR keeps them live on purpose for safety (\u00a76, PR comment entry 7).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"Every PR write in the job evicts the affected kinds,\" including comment posts.\n  Expected change site: `scripts/review_autofix_step_prepush_test_gate.sh`, `review_prepush_test_gate_final_ci_marker`\n  Evidence of absence: Line 1237 posts the final-CI marker with a bare `gh api -X POST`, and the function has no cache eviction. The author's comments say the marker matches none of the cached readers, so it has no effect on cache correctness, and it is left out of scope because the file is outside the PR's allowed file list.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bef7a76204e314428ba4630f7ad54cd5426d74b6510a35cb00df983cbc2941a2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9935,
+    "run_id": "45033305244",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45033305244",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122160015_e6189f4df3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9935,
+    "run_id": "45033305244"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T16:00:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
