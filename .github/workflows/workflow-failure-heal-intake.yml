@@ -360,7 +360,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/restore@v4
         with:
-          path: ${{ env.RUNTIME_DIR }}/heal_unregistered_warned
+          path: /tmp/workflow-heal-unregistered-warned
           key: ${{ steps.payload.outputs.heal_unregistered_cache_key }}
           lookup-only: true
 
@@ -368,6 +368,8 @@ jobs:
         id: intake_run
         env:
           WORKFLOW_HEAL_UNREGISTERED_WARNED_TODAY: ${{ steps.heal_unregistered_seen.outputs.cache-hit == 'true' && 'true' || 'false' }}
+          # Fixed path shared by both cache steps (a per-run path never matches).
+          WORKFLOW_HEAL_UNREGISTERED_MARKER: /tmp/workflow-heal-unregistered-warned
           # Codex version baked into the isolated diagnosis agent's image (scripts/codex_isolated_exec.sh).
           CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
@@ -382,7 +384,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
-          path: ${{ env.RUNTIME_DIR }}/heal_unregistered_warned
+          path: /tmp/workflow-heal-unregistered-warned
           key: ${{ steps.payload.outputs.heal_unregistered_cache_key }}
 
       - name: Leave the heal intake queue

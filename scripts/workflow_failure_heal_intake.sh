@@ -685,7 +685,9 @@ if [ -n "${SKIP_REASON}" ]; then
 		else
 			log "unregistered_source_repo_alert level=WARNING source=${SOURCE_REPO}"
 			tg_send_msg "${unregistered_alert_text}" "WARNING" >/dev/null 2>&1 || true
-			if printf '%s\n' "${SOURCE_REPO}" > "${RUNTIME_DIR}/heal_unregistered_warned" 2>/dev/null; then
+			# The cache path must be the same in every run (actions/cache versions
+			# entries by path), so it is not under the per-run RUNTIME_DIR.
+			if printf '%s\n' "${SOURCE_REPO}" > "${WORKFLOW_HEAL_UNREGISTERED_MARKER:-${RUNTIME_DIR}/heal_unregistered_warned}" 2>/dev/null; then
 				echo "heal_unregistered_warned=true" >> "${GITHUB_OUTPUT:-/dev/null}" 2>/dev/null || true
 			fi
 		fi

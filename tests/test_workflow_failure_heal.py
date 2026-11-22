@@ -6881,7 +6881,8 @@ def test_intake_unregistered_warning_workflow_cache_wiring() -> None:
 	assert lookup["uses"] == "actions/cache/restore@v4" and save["uses"] == "actions/cache/save@v4"
 	assert lookup["continue-on-error"] is True and save["continue-on-error"] is True
 	assert lookup["with"]["lookup-only"] is True
-	assert lookup["with"]["path"] == save["with"]["path"] == "${{ env.RUNTIME_DIR }}/heal_unregistered_warned"
+	assert lookup["with"]["path"] == save["with"]["path"] == "/tmp/workflow-heal-unregistered-warned"
+	assert run["env"]["WORKFLOW_HEAL_UNREGISTERED_MARKER"] == "/tmp/workflow-heal-unregistered-warned"
 	assert lookup["with"]["key"] == save["with"]["key"] == "${{ steps.payload.outputs.heal_unregistered_cache_key }}"
 	assert run["id"] == "intake_run"
 	assert "steps.heal_unregistered_seen.outputs.cache-hit == 'true'" in run["env"]["WORKFLOW_HEAL_UNREGISTERED_WARNED_TODAY"]
