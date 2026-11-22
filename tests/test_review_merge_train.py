@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -2244,6 +2245,44 @@ def test_conflict_probe_outside_a_checkout_keeps_the_blocker_when_the_fetch_fail
 	assert "older=4075 overlap=paths conflict=unknown" in result.stdout
 	assert "result=queued blockers=#4075" in result.stdout
 	assert not list(tmp_path.glob("merge-train-probe.*"))
+
+
+@pytest.mark.parametrize("library", ["shared", "older"])
+def test_conflict_probe_wraps_the_shared_probe_and_falls_back(tmp_path: Path, library: str) -> None:
+	"""Plan D9 (merge-lease Phase 4, Refs #9781): with the staged library's shared
+	`_pr_*` probe the train's `_mt_*` functions delegate to it and keep the
+	merge-train-probe.* directory, MT_REPO and MERGE_TRAIN_PROBE_REPO on stdout;
+	an older staged library without it keeps the train's own body."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_work, shas = _git_fixture(tmp_path)
+	plain = tmp_path / "plain"
+	plain.mkdir()
+	support = tmp_path / "support"
+	support.mkdir()
+	for name in ("gh_helpers.sh", "pr_checks_lib.sh"):
+		shutil.copy(REPO_ROOT / "scripts" / name, support / name)
+	if library == "older":
+		with (support / "pr_checks_lib.sh").open("a", encoding="utf-8") as fh:
+			fh.write("\nunset -f _pr_probe_repo_log _pr_merge_tree_probe\n")
+	diff = _overlap_scenario(tmp_path, fixtures, _pr(4075, "ai/issue-4063", head_sha=shas["older"]),
+		_pr(4077, "ai/issue-4064", head_sha=shas["conflict"]))
+	result, _log_text, _env_out = _run("gate", tmp_path, bin_dir, fixtures, log, run_cwd=plain,
+		PR_DIFF_FILE=str(diff), MERGE_TRAIN_PRIORITY_LABELS="none", GITHUB_SERVER_URL=_probe_server(tmp_path),
+		SUPPORT_SCRIPTS_DIR=str(support), **_GATE_4077)
+	assert result.returncode == 0, result.stderr
+	assert f"MERGE_TRAIN_PROBE_REPO outcome=created origin=file://{tmp_path}/srv/acme/consumer.git" in result.stdout
+	assert "older=4075 overlap=paths conflict=conflict" in result.stdout
+	assert "PR_MERGE_TREE_PROBE_REPO" not in result.stdout + result.stderr
+	assert not list(tmp_path.glob("merge-train-probe.*"))
+	assert not list(tmp_path.glob("pr-merge-tree-probe.*"))
+	text = SCRIPT.read_text(encoding="utf-8")
+	for fn, call in (("_mt_git", "_pr_mt_git"), ("_mt_git_fetch", "_pr_mt_git_fetch"),
+			("_mt_probe_repo_cleanup", "_pr_probe_repo_cleanup"), ("_mt_probe_repo_init", "_pr_probe_repo_init"),
+			("_mt_conflict_probe", "_pr_merge_tree_probe")):
+		start = text.index(f"\n{fn}()\n{{")
+		body = text[start:text.index("\n}\n", start)]
+		delegated = body.split("if _mt_probe_via_lib; then", 1)[1].split("\n\tfi\n", 1)[0]
+		assert re.search(rf"\b{call}\b", delegated), fn
 
 
 def test_https_probe_fetch_passes_the_token_through_environment_only() -> None:

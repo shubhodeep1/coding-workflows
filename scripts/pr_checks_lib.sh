@@ -2059,13 +2059,21 @@ _pr_final_ci_refused_base_update()
 #
 # Lifted near-verbatim from scripts/review_merge_train.sh _mt_conflict_probe
 # (issue #6570) under the plan's `_pr_*` names, so the freshness gate and
-# the merge lease can probe without sourcing the merge train. The `_mt_*`
-# thin-wrapper conversion in the train (plan D9) is still open: the train must
-# keep a working probe when its staged copy of this library predates these
-# helpers, and the wrappers must keep MERGE_TRAIN_PROBE_REPO on stdout, the
-# merge-train-probe.* directory and MT_REPO, which this copy does not take as
-# parameters yet. Until then the train keeps its own copy (its `_mt_*`
-# functions and logs are unchanged); change both copies together.
+# the merge lease can probe without sourcing the merge train. The train's
+# `_mt_git`, `_mt_git_fetch`, `_mt_probe_repo_init`, `_mt_probe_repo_cleanup`
+# and `_mt_conflict_probe` are thin wrappers over these (plan D9) whenever the
+# staged library has them (`declare -F`); they keep their own body only as the
+# fallback for an older staged library. The wrappers set these optional
+# overrides as `local` variables, so they apply to that call only (bash
+# dynamic scope) and never leak into the lease or freshness callers:
+#   _PR_PROBE_DIR_PREFIX  probe directory name prefix (default
+#                         pr-merge-tree-probe; the train: merge-train-probe)
+#   _PR_PROBE_REPO_SLUG   owner/repo of the origin (default
+#                         PR_CHECKS_REPOSITORY, then GITHUB_REPOSITORY)
+#   _PR_PROBE_LOG_PREFIX  log prefix (default PR_MERGE_TREE_PROBE_REPO)
+#   _PR_PROBE_LOG_FN      a function that prints the log line (default: echo
+#                         to stderr; the train passes _mt_log, its stdout)
+# One probe repository serves the whole process, whichever caller creates it.
 #
 #   _pr_merge_tree_probe <sha_a> <sha_b>
 #       Sets _PR_PROBE_RESULT to none (the two commits merge cleanly),
@@ -2089,6 +2097,9 @@ _PR_PROBE_RESULT="unknown"
 _PR_PROBE_PATHS=""
 _PR_PROBE_TREE=""
 _PR_PROBE_GIT_DIR=""
+# Prefix of the probe directory this process created (the EXIT-trap cleanup
+# runs outside the creating call, so it cannot read the caller's override).
+_PR_PROBE_DIR_ACTIVE_PREFIX="pr-merge-tree-probe"
 
 # git in the probe repository when one was created, else in the cwd checkout.
 _pr_mt_git()
@@ -2126,8 +2137,19 @@ _pr_mt_git_fetch()
 
 _pr_probe_repo_cleanup()
 {
-	if [ -n "${_PR_PROBE_GIT_DIR}" ] && [[ "${_PR_PROBE_GIT_DIR}" == */pr-merge-tree-probe.* ]]; then
+	if [ -n "${_PR_PROBE_GIT_DIR}" ] && [[ "${_PR_PROBE_GIT_DIR}" == */"${_PR_PROBE_DIR_ACTIVE_PREFIX:-pr-merge-tree-probe}".* ]]; then
 		rm -rf -- "${_PR_PROBE_GIT_DIR}"
+	fi
+}
+
+# `_pr_probe_repo_log <message>`: one probe-repository log line through
+# _PR_PROBE_LOG_FN when it names a function, else on stderr.
+_pr_probe_repo_log()
+{
+	if [ -n "${_PR_PROBE_LOG_FN:-}" ] && declare -F "${_PR_PROBE_LOG_FN}" >/dev/null 2>&1; then
+		"${_PR_PROBE_LOG_FN}" "$1"
+	else
+		echo "$1" >&2
 	fi
 }
 
@@ -2137,19 +2159,25 @@ _pr_probe_repo_cleanup()
 _pr_probe_repo_init()
 {
 	local server="${GITHUB_SERVER_URL:-https://github.com}" probe_dir
-	local probe_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" probe_prev_trap=""
+	local probe_repo="${_PR_PROBE_REPO_SLUG:-${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}}" probe_prev_trap=""
+	local probe_log="${_PR_PROBE_LOG_PREFIX:-PR_MERGE_TREE_PROBE_REPO}" probe_prefix="${_PR_PROBE_DIR_PREFIX:-pr-merge-tree-probe}"
+	# Overrides come from code, never from input: anything but [A-Za-z0-9_-]
+	# falls back to the defaults.
+	[[ "${probe_log}" =~ ^[A-Za-z0-9_]+$ ]] || probe_log="PR_MERGE_TREE_PROBE_REPO"
+	[[ "${probe_prefix}" =~ ^[A-Za-z0-9_-]+$ ]] || probe_prefix="pr-merge-tree-probe"
 	if ! [[ "${probe_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
-		echo "PR_MERGE_TREE_PROBE_REPO outcome=unavailable reason=invalid_repository" >&2
+		_pr_probe_repo_log "${probe_log} outcome=unavailable reason=invalid_repository"
 		return 1
 	fi
-	if ! probe_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/pr-merge-tree-probe.XXXXXX" 2>/dev/null)" \
+	if ! probe_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/${probe_prefix}.XXXXXX" 2>/dev/null)" \
 		|| ! git init -q --bare "${probe_dir}" >/dev/null 2>&1 \
 		|| ! git --git-dir="${probe_dir}" remote add origin "${server%/}/${probe_repo}.git" >/dev/null 2>&1; then
 		[ -n "${probe_dir:-}" ] && rm -rf -- "${probe_dir}"
-		echo "PR_MERGE_TREE_PROBE_REPO outcome=unavailable reason=init_failed" >&2
+		_pr_probe_repo_log "${probe_log} outcome=unavailable reason=init_failed"
 		return 1
 	fi
 	_PR_PROBE_GIT_DIR="${probe_dir}"
+	_PR_PROBE_DIR_ACTIVE_PREFIX="${probe_prefix}"
 	probe_prev_trap="$(trap -p EXIT)"
 	if [ -n "${probe_prev_trap}" ]; then
 		eval "set -- ${probe_prev_trap}"
@@ -2157,7 +2185,7 @@ _pr_probe_repo_init()
 	fi
 	# shellcheck disable=SC2064
 	trap -- "_pr_probe_repo_cleanup${probe_prev_trap:+; ${probe_prev_trap}}" EXIT
-	echo "PR_MERGE_TREE_PROBE_REPO outcome=created origin=${server%/}/${probe_repo}.git" >&2
+	_pr_probe_repo_log "${probe_log} outcome=created origin=${server%/}/${probe_repo}.git"
 	return 0
 }
 

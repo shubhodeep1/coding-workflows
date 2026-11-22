@@ -682,9 +682,30 @@ _MT_PROBE_RESULT="unknown"
 _MT_PROBE_PATHS=""
 _MT_PROBE_GIT_DIR=""
 
+# Plan D9 (merge-lease Phase 4, Refs #9781): the five probe functions below are
+# thin wrappers over the shared `_pr_*` probe in scripts/pr_checks_lib.sh when
+# the staged library has it, including the overrides helper
+# `_pr_probe_repo_log` (`declare -F`, like every other train use of the
+# library). The bodies after each delegation are the fallback for an older
+# staged library only. Through the overrides the wrappers keep the
+# merge-train-probe.* directory, MT_REPO as the origin and the
+# MERGE_TRAIN_PROBE_REPO lines on stdout (_mt_log); `ignored` stays mapped
+# here through MERGE_TRAIN_IGNORE_PATHS. With the shared probe the EXIT
+# cleanup is chained onto the caller's trap instead of replacing it.
+_mt_probe_via_lib()
+{
+	declare -F _pr_merge_tree_probe >/dev/null 2>&1 && declare -F _pr_mt_git >/dev/null 2>&1 \
+		&& declare -F _pr_mt_git_fetch >/dev/null 2>&1 && declare -F _pr_probe_repo_init >/dev/null 2>&1 \
+		&& declare -F _pr_probe_repo_cleanup >/dev/null 2>&1 && declare -F _pr_probe_repo_log >/dev/null 2>&1
+}
+
 # git in the probe repository when one was created, else in the cwd checkout.
 _mt_git()
 {
+	if _mt_probe_via_lib; then
+		_pr_mt_git "$@"
+		return
+	fi
 	if [ -n "${_MT_PROBE_GIT_DIR}" ]; then
 		git --git-dir="${_MT_PROBE_GIT_DIR}" "$@"
 	else
@@ -698,6 +719,10 @@ _mt_git()
 # never reaches argv (ps) or a config file.
 _mt_git_fetch()
 {
+	if _mt_probe_via_lib; then
+		_pr_mt_git_fetch "$@"
+		return
+	fi
 	local fetch_timeout="$1"
 	shift
 	(
@@ -718,6 +743,10 @@ _mt_git_fetch()
 
 _mt_probe_repo_cleanup()
 {
+	if _mt_probe_via_lib; then
+		_pr_probe_repo_cleanup
+		return 0
+	fi
 	if [ -n "${_MT_PROBE_GIT_DIR}" ] && [[ "${_MT_PROBE_GIT_DIR}" == */merge-train-probe.* ]]; then
 		rm -rf -- "${_MT_PROBE_GIT_DIR}"
 	fi
@@ -728,6 +757,14 @@ _mt_probe_repo_cleanup()
 _mt_probe_repo_init()
 {
 	local server="${GITHUB_SERVER_URL:-https://github.com}" probe_dir
+	if _mt_probe_via_lib; then
+		# Call-scoped overrides (see _mt_probe_via_lib). An empty MT_REPO stays
+		# invalid_repository instead of falling back to GITHUB_REPOSITORY.
+		local _PR_PROBE_DIR_PREFIX="merge-train-probe" _PR_PROBE_REPO_SLUG="${MT_REPO:-none}"
+		local _PR_PROBE_LOG_PREFIX="MERGE_TRAIN_PROBE_REPO" _PR_PROBE_LOG_FN="_mt_log"
+		_pr_probe_repo_init
+		return
+	fi
 	if ! [[ "${MT_REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
 		_mt_log "MERGE_TRAIN_PROBE_REPO outcome=unavailable reason=invalid_repository"
 		return 1
@@ -751,6 +788,26 @@ _mt_conflict_probe()
 	_MT_PROBE_RESULT="unknown"
 	_MT_PROBE_PATHS=""
 	if ! [[ "${own_sha}" =~ ^[0-9a-f]{40}$ && "${other_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+		return 0
+	fi
+	if _mt_probe_via_lib; then
+		# Same overrides as _mt_probe_repo_init: the shared probe creates the
+		# private repository itself when there is no checkout.
+		local _PR_PROBE_DIR_PREFIX="merge-train-probe" _PR_PROBE_REPO_SLUG="${MT_REPO:-none}"
+		local _PR_PROBE_LOG_PREFIX="MERGE_TRAIN_PROBE_REPO" _PR_PROBE_LOG_FN="_mt_log"
+		_pr_merge_tree_probe "${own_sha}" "${other_sha}"
+		case "${_PR_PROBE_RESULT:-unknown}" in
+			none) _MT_PROBE_RESULT="none" ;;
+			conflict)
+				_MT_PROBE_RESULT="conflict"
+				_MT_PROBE_PATHS="${_PR_PROBE_PATHS:-}"
+				# As below: conflicts only in MERGE_TRAIN_IGNORE_PATHS do not block.
+				if [ -n "${_MT_PROBE_PATHS}" ] && [ -z "$(_mt_drop_ignored "${_MT_PROBE_PATHS}" | sed '/^$/d')" ]; then
+					_MT_PROBE_RESULT="ignored"
+				fi
+				;;
+			*) _MT_PROBE_RESULT="unknown" ;;
+		esac
 		return 0
 	fi
 	if [ -z "${_MT_GIT_PROBE_OK}" ]; then
@@ -1864,6 +1921,8 @@ _mt_merge_lease_tick()
 		# Phase 3, Refs #9781). Do not trim them from the projection.
 		tick_base_prs="$(printf '%s\n' "${tick_prs_json}" | jq -sc --arg b "${tick_base}" '[ .[] | select(type == "object" and .base == $b) ]' 2>/dev/null || echo '[]')"
 		tick_excluded=""
+		# Per lease ref: waiters this base handed back to the sweep.
+		tick_q_gone=""
 		tick_skipped_any=0
 		tick_cand_n=0
 		tick_skip_held=0
