@@ -607,7 +607,10 @@ triage_release_download_rerun_gate()
 	else
 		# Validated like list_run_jobs() in scripts/ci_cancelled_rerun.py,
 		# including its bound (a page of 100 or more jobs is rejected); a
-		# change to either copy must update both.
+		# change to either copy must update both. Known residual difference:
+		# jq has one number type, so an integral float (`5.0`) for `id` or
+		# `total_count` passes here while Python's `type(...) is int` rejects
+		# it. GitHub sends JSON integers, and fractional values fail both.
 		rd_jobs_json="$(gh_retry gh api -X GET "repos/${REPO}/actions/runs/${rd_run}/attempts/1/jobs" -f per_page=100 2>/dev/null || true)"
 		if [ -z "${rd_jobs_json}" ] || ! rd_ids="$(printf '%s' "${rd_jobs_json}" | jq -r '
 			if type == "object" and (.jobs | type) == "array" and (.total_count | type) == "number"
