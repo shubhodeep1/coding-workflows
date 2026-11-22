@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Alert once per PR head for a base_freshness_unknown deferral; \"On a repeat for the same head\" the alert sends nothing; the PR description says the dedupe applies on \"every judge re-fire\" (changelog: \"sent once per PR head\")\n  expected_change_site: .github/workflows/review_autofix.yml (the `if:` at line 5122 of the \"Post review-blocked comment on PR\" step vs. the alert step `if:` at line 5800), scripts/review_autofix_step_post_review_blocked_comment.sh\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The comment step at review_autofix.yml:5122 runs only when max_iterations_reached == 'true', while the alert step at line 5800 also accepts single_issue_security_pass.outputs.exhausted == 'true'. On security-pass-exhausted runs the comment step is skipped, so RB_BLOCKED_FRESHNESS_REPEAT / rb_judge_freshness_repeat is unset and the WARNING alert (review_autofix.yml:5940-5960) re-sends on every same-head re-fire. Severity disagreement: gemini says MAJOR, minimax and luna say NIT. anthropic and glm treated it as a documented residual (agents.d/9502-rb-judge-lease-wait-alert.md, \"Known residual\") and did not re-raise it as a finding.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nNote: The reviewer verified the security-pass-only dedupe gap (comment step `if:` at line 5122 vs alert step `if:` at line 5800) but did not re-raise it. It cited the PR description limit and the documented residual in agents.d/9502-rb-judge-lease-wait-alert.md. The reviewer found the last autofix run's changes correct.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Alert once per PR head for a base_freshness_unknown deferral\" (changelog row \"Alerts and PR comments per PR head on judge re-fire runs: 1\" and the PR description).\n  Expected change site: .github/workflows/review_autofix.yml (the if: condition of the \"Post review-blocked comment on PR\" step) and scripts/review_autofix_step_post_review_blocked_comment.sh\n  Evidence of absence: The comment step is gated on max_iterations_reached. When base_freshness_unknown occurs and the security pass is exhausted, the step is skipped, so the dedupe never runs, RB_BLOCKED_FRESHNESS_REPEAT is not exported, and the alert step sends the WARNING on every judge re-fire. The PR description wrongly says the dedupe applies on \"every judge re-fire\".\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: The PR description's \"Limit\" note says the per-head dedupe \"only applies on runs where the comment step runs (`max_iterations_reached=true`), which is every judge re-fire\". The PR description and agents.d/9502-rb-judge-lease-wait-alert.md:2 also promise one alert per PR head on every re-fire.\n  Expected change site: Either tighten the alert step's `if:` at review_autofix.yml:5800 to also require max_iterations_reached == 'true', or move the freshness dedupe into the alert step itself so the comment step's `if:` no longer gates it; otherwise correct the PR description's \"every judge re-fire\" claim.\n  Evidence of absence: The alert step at review_autofix.yml:5800 admits single_issue_security_pass.outputs.exhausted == 'true', but the comment step at review_autofix.yml:5122 only runs on max_iterations_reached == 'true'. On a security-pass-exhausted run the comment step is skipped, rb_judge_freshness_repeat is empty, and the alert at review_autofix.yml:5940 sends the WARNING on every same-head re-fire. The last run's diff documents this as a residual, but the PR description still overstates dedupe coverage.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\nNote: The reviewer found no other defects in the last run's diff.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"On a repeat for the same head\" the alert sends nothing; the changelog also describes alerts as \"sent once per PR head.\"\n  Expected change site: .github/workflows/review_autofix.yml, the `rb_blocked_comment` step guard and its connection to the Telegram alert's repeat suppression.\n  Evidence of absence: The comment step at line 5122 runs only when max_iterations_reached == 'true'. The judge and alert steps at lines 4836 and 5800 also run when the single-issue security pass is exhausted. In that mode the comment step is skipped, rb_judge_freshness_repeat is unset, and the base_freshness_unknown alert at lines 5945-5960 sends a WARNING on each re-fire. agents.d/9502-rb-judge-lease-wait-alert.md documents this residual.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\nNote: The reviewer verified the security-pass-only dedupe gap but did not re-raise it. The gap was accepted last round as a documented residual in agents.d/9502-rb-judge-lease-wait-alert.md (\"Known residual\") and disclosed in the PR description. The reviewer found the last run's changes internally consistent.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "630c05e4f213eaabec35ddb094ab9a9d81a1281d4fab19559b6b3d6d1936b4f0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9944,
+    "run_id": "45018271032",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45018271032",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122115949_a5a4c660b1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9944,
+    "run_id": "45018271032"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T11:59:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
