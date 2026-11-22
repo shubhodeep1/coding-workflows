@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_poll_test_sharding.py:4099-4203 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Three legacy test method names (test_each_step_is_owned_only_by_the_poll_job at 4099-4109, test_each_step_runs_in_group_three at 4111-4120, test_step_runs_once_in_its_target_group at 4191-4203) no longer describe what they assert after the step moved to the hooks job.\n  WHY: The gap between name and behavior can mislead readers. The reviewer rated it NIT and notes the names are kept intentionally under \u00a710 naming immutability.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: .github/workflows/ci.yml (rationale comment at lines 1567-1581; step selection and target job placement)\n  confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: Run 44909097036 recorded step statuses only, with no durations, so the target `tests-hooks-and-orchestrator` was chosen from recorded job totals (15m32s, run 43220859648) and not from step timings. ci.yml lines 1527-1532 and 1567-1581 document this. The reviewers rated it NIT. They describe it as a documented data limitation and not a missing implementation.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, the placement rationale comment.\n  Evidence of absence: Run 44909097036 recorded step statuses only, with no durations. The rationale comment (ci.yml, around lines 1567\u20131581), the test-file comment and the changelog all say the target was chosen from recorded job totals. The only recorded total that includes this step is 15m32s for `tests-hooks-and-orchestrator` (run 43220859648). No code change can supply the missing timings. This is a data limit, not an implementation gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_ci_poll_test_sharding.py:4099-4203 | severity=low | confidence=4\n  PROBLEM: MovedHooks9391StepsContractTest.test_each_step_is_owned_only_by_the_poll_job (4099-4109), test_each_step_runs_in_group_three (4111-4120) and MovedPollGroupThree9639StepsContractTest.test_step_runs_once_in_its_target_group (4191-4203) have names that no longer match their assertions.\n  WHY: The names describe poll-job or group-index behavior that the tests no longer check. The reviewer rated it NIT and notes the names are kept intentionally under \u00a710.\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml lines 1567-1581 (rationale comment for the moved step); the step-selection and placement choice itself.\n  Evidence of absence: Run 44909097036 recorded statuses only, with no durations. The choice of `tests-hooks-and-orchestrator` relies on the only recorded total that includes this step (15m32s, run 43220859648). Three places document the limit (the ci.yml comment, the test-file comment above `POLL_GROUP_ZERO_9895_TARGET_JOB_ID`, and the changelog fragment). It is a known data limitation, not a missing implementation.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of the step to move and its target job.\n  Evidence of absence: The workflow rationale at lines 1527-1532 and 1578-1580 says step timings were unavailable. The chosen target at lines 1567-1575 is justified with a historical job total and estimates, and not with timings from the reported run or evidence of the most headroom among eligible jobs.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "75525dc62d811030d87963a3ddae0a195163763b0cc9ec6e6ef32c5f9b06a5b6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9898,
+    "run_id": "45067179130",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45067179130",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122224229_860c82c1e2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9898,
+    "run_id": "45067179130"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T22:42:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
