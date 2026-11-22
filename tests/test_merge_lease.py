@@ -1460,5 +1460,332 @@ _merge_lease_paths_intersect "" "other.py"; echo "d=$?"
 			self.assertIn(expected, out)
 
 
+
+# --- Several holders per base (merge-lease Phase 5, Refs #9781) ------------
+
+MAXH = "MERGE_LEASE_MAX_HOLDERS"
+
+
+def _multi_record(rows: list[tuple[int, str, int, int, int, list[str]]], skips: list[str] | None = None) -> str:
+	"""A Phase 5 record. rows: (pr, head, expires, acquired, updated, paths);
+	the first row is the primary."""
+	primary = rows[0]
+	lines = ["merge-lease v1", "state=held", "base=main", f"pr={primary[0]}", f"head={primary[1]}",
+		f"expires={max(r[2] for r in rows)}", f"acquired={primary[3]}", f"updated={primary[4]}"]
+	lines += [f"skip={s}" for s in skips or []]
+	lines += [f"holder={r[0]} head={r[1]} expires={r[2]} acquired={r[3]} updated={r[4]}" for r in rows]
+	union: list[str] = []
+	for r in rows:
+		lines += [f"holder_path={r[0]} {path}" for path in r[5]]
+		union += [path for path in r[5] if path not in union]
+	return "\n".join(lines + ["paths:"] + union)
+
+
+def _row(pr: int, paths: list[str], *, expires: int | None = None, acquired: int | None = None) -> tuple[int, str, int, int, int, list[str]]:
+	now = int(time.time())
+	return (pr, _sha(pr), now + 3600 if expires is None else expires, now - 60 if acquired is None else acquired, now - 60, paths)
+
+
+def _v1_fields(record: str) -> dict[str, str]:
+	"""Parse a record the way the pre-Phase-5 _merge_lease_read did."""
+	out = {}
+	for key in ("state", "pr", "head", "expires", "acquired", "updated"):
+		m = re.search(rf"^{key}=(.*)$", record, re.M)
+		out[key] = m.group(1) if m else ""
+	out["paths"] = record.split("\npaths:\n", 1)[1] if "\npaths:\n" in record else ""
+	return out
+
+
+def _holders(record: str) -> list[str]:
+	return re.findall(r"^holder=(\d+) ", record, re.M)
+
+
+class MultiHolderLease(unittest.TestCase):
+	def test_max_holders_validation(self) -> None:
+		h = _Harness({})
+		for raw, want, warns in (("abc", "1", True), ("0", "1", False), ("-1", "1", True), ("9", "5", False),
+				("2x", "1", True), ("", "1", False), (" 3 ", "3", False), ("1234", "1", True), ("2;echo x", "1", True)):
+			with self.subTest(raw=raw):
+				res = h.lib("_merge_lease_max_holders", {MAXH: raw})
+				self.assertEqual(res.stdout.strip(), want, res.stderr)
+				self.assertEqual("::warning::MERGE_LEASE_MAX_HOLDERS=" in res.stderr, warns, res.stderr)
+		res = h.lib("_merge_lease_max_holders", {MAXH: "2;echo x"})
+		self.assertIn("MERGE_LEASE_MAX_HOLDERS=2echox is not an integer; using 1", res.stderr)
+		self.assertEqual(h.lib("unset MERGE_LEASE_MAX_HOLDERS; _merge_lease_max_holders").stdout.strip(), "1")
+
+	def test_v1_record_reads_as_one_holder(self) -> None:
+		for skips in ([], [f"5:{_sha(5)}"]):
+			st: dict = {}
+			_seed_lease(st, _record(8, acquired=111, updated=222, paths="a.py\nb.py", skips=skips))
+			res = _Harness(st).lib('_merge_lease_read main; echo "rc=$? pr=$MERGE_LEASE_PR count=$MERGE_LEASE_HOLDER_COUNT"; '
+				'printf "ROWS<%s>\\nPATHS<%s>\\n" "$MERGE_LEASE_HOLDER_ROWS" "$MERGE_LEASE_HOLDER_PATHS"')
+			self.assertIn("rc=0 pr=8 count=1", res.stdout, res.stderr)
+			self.assertRegex(res.stdout, r"ROWS<8 b{40} \d+ 111 222>")
+			self.assertIn("PATHS<8\ta.py\n8\tb.py>", res.stdout)
+
+	def test_n1_and_n2_write_the_same_bytes_for_one_holder(self) -> None:
+		for state, pr in (({"pulls": [_pull(7)], "files": {"7": ["a.py"]}}, 7), (None, 8)):
+			if state is None:
+				state = {"pulls": [_pull(8)], "files": {"8": ["shared.py"]}}
+				_seed_lease(state, _record(8, acquired=int(time.time()) - 60))
+			one = _Harness(json.loads(json.dumps(state)))
+			two = _Harness(json.loads(json.dumps(state)))
+			rc1, out1 = _gate(one, pr, "update")
+			rc2, out2 = _gate(two, pr, "update", {MAXH: "2"})
+			self.assertEqual((rc1, rc2), (0, 0), out1 + out2)
+			self.assertEqual(_stable_record(one.record()), _stable_record(two.record()))
+			self.assertNotIn("holders=", out1 + out2)
+			self.assertEqual(_stable_calls(one.calls), _stable_calls(two.calls))
+
+	def test_two_disjoint_prs_both_hold(self) -> None:
+		st = {"pulls": [_pull(7), _pull(8)], "files": {"7": ["own.py"]}}
+		_seed_lease(st, _record(8, paths="shared.py", acquired=int(time.time()) - 60).replace(f"head={'b' * 40}", f"head={_sha(8)}"))
+		h = _Harness(st)
+		rc, out = _gate(h, 7, "update", {MAXH: "2"})
+		self.assertEqual(rc, 0, out)
+		self.assertIn("outcome=acquired", out)
+		self.assertIn("holders=2", out)
+		rec = h.record()
+		self.assertEqual(_holders(rec), ["8", "7"])
+		self.assertIn("holder_path=8 shared.py\nholder_path=7 own.py\npaths:\nshared.py\nown.py", rec)
+		old = _v1_fields(rec)
+		self.assertEqual((old["state"], old["pr"], old["paths"]), ("held", "8", "shared.py\nown.py"))
+		expires = [int(x) for x in re.findall(r"^holder=\d+ head=\S* expires=(\d+)", rec, re.M)]
+		self.assertEqual(int(old["expires"]), max(expires))
+		self.assertNotIn("ai:merge-lease-wait", h.state.get("labels", {}).get("7", []))
+
+	def test_overlapping_newcomer_waits_on_the_holder_it_shares_with(self) -> None:
+		st = {"pulls": [_pull(7), _pull(8), _pull(9)], "files": {"7": ["b.py"]}}
+		_seed_lease(st, _multi_record([_row(8, ["a.py"]), _row(9, ["b.py"])]))
+		h = _Harness(st)
+		rc, out = _gate(h, 7, "update", {MAXH: "3"})
+		self.assertEqual(rc, 1, out)
+		self.assertIn("outcome=wait reason=holder_shares_paths blocker=9", out)
+		self.assertIn("holder=8 blocker=9 holders=2\n", out)
+		self.assertEqual(_metrics(out)[0]["holder"], "9")
+		self.assertIn("ai:merge-lease-wait", h.state["labels"]["7"])
+		self.assertEqual(h.state["refs"][REF], "c" * 40)
+
+	def test_newcomer_at_the_cap_waits_held_on_the_primary(self) -> None:
+		st = {"pulls": [_pull(7), _pull(8), _pull(9)], "files": {"7": ["c.py"]}}
+		_seed_lease(st, _multi_record([_row(8, ["a.py"]), _row(9, ["b.py"])]))
+		rc, out = _gate(_Harness(st), 7, "update", {MAXH: "2"})
+		self.assertEqual(rc, 1, out)
+		self.assertIn("outcome=wait reason=held blocker=8", out)
+
+	def test_merge_mode_checks_every_holder(self) -> None:
+		def run(pr: int, files: list[str]) -> tuple[int, str]:
+			st = {"pulls": [_pull(7), _pull(8), _pull(9)], "files": {str(pr): files}}
+			_seed_lease(st, _multi_record([_row(8, ["a.py"]), _row(9, ["b.py"])]))
+			return _gate(_Harness(st), pr, "merge")
+		rc, out = run(7, ["c.py"])
+		self.assertEqual(rc, 0, out)
+		self.assertIn("outcome=no_overlap reason=no_shared_paths_with_holder", out)
+		rc, out = run(7, ["b.py"])
+		self.assertEqual(rc, 1, out)
+		self.assertIn("reason=holder_shares_paths blocker=9", out)
+		rc, out = run(9, ["b.py"])
+		self.assertEqual(rc, 0, out)
+		self.assertIn("outcome=self", out)
+
+	def test_holder_that_grew_onto_an_earlier_holder_waits_in_merge_mode(self) -> None:
+		def run(pr: int, files: dict[str, list[str]], fail: list[str] | None = None) -> tuple[int, str, _Harness]:
+			st = {"pulls": [_pull(8), _pull(9)], "files": files}
+			if fail:
+				st["fail"] = fail
+			_seed_lease(st, _multi_record([_row(8, ["a.py"]), _row(9, ["b.py"])]))
+			h = _Harness(st)
+			rc, out = _gate(h, pr, "merge")
+			return rc, out, h
+		rc, out, h = run(9, {"9": ["a.py", "b.py"]})
+		self.assertEqual(rc, 1, out)
+		self.assertIn("outcome=wait reason=holder_shares_paths blocker=8", out)
+		self.assertEqual(_metrics(out)[0]["holder"], "8")
+		# A holder is not labelled: the tick never grants a live holder and the
+		# sweep skips labelled PRs, so the label would strand it.
+		self.assertNotIn("ai:merge-lease-wait", h.state.get("labels", {}).get("9", []))
+		# The earlier holder proceeds without a files read, so they never deadlock.
+		rc, out, h = run(8, {"8": ["a.py", "b.py"]})
+		self.assertEqual(rc, 0, out)
+		self.assertIn("outcome=self", out)
+		self.assertFalse(any("pulls/8/files" in c for c in h.calls), h.calls)
+		# An unreadable files list fails open as before.
+		rc, out, _ = run(9, {}, fail=["pulls/9/files"])
+		self.assertEqual(rc, 0, out)
+		self.assertIn("outcome=self", out)
+
+	def test_renewal_keeps_the_recorded_paths_when_the_files_read_fails(self) -> None:
+		st = {"pulls": [_pull(8), _pull(9)], "fail": ["pulls/9/files"]}
+		_seed_lease(st, _multi_record([_row(8, ["a.py"]), _row(9, ["b.py"])]))
+		h = _Harness(st)
+		rc, out = _gate(h, 9, "update", {MAXH: "2"})
+		self.assertEqual(rc, 0, out)
+		self.assertIn("outcome=renewed", out)
+		rec = h.record()
+		self.assertIn("holder_path=8 a.py\nholder_path=9 b.py\npaths:\na.py\nb.py", rec)
+
+	def test_queue_walk_passes_over_a_waiter_that_overlaps_a_holder(self) -> None:
+		def run(waiter_files: list[str]) -> tuple[int, str]:
+			st = {"pulls": [_pull(5), _pull(7), _pull(8)], "labels": {"5": [WAIT]}, "files": {"5": waiter_files, "7": ["c.py"]}}
+			_seed_lease(st, _record(8, paths="a.py"))
+			return _gate(_Harness(st), 7, "update", {MAXH: "2"})
+		rc, out = run(["a.py"])
+		self.assertEqual(rc, 0, out)
+		self.assertIn("outcome=acquired", out)
+		rc, out = run(["d.py"])
+		self.assertEqual(rc, 1, out)
+		self.assertIn("outcome=wait reason=queued_behind blocker=5", out)
+
+	def test_lost_race_re_decides_on_the_winning_record(self) -> None:
+		st = {"pulls": [_pull(7), _pull(8), _pull(9)], "files": {"7": ["b.py"]}}
+		_seed_lease(st, _record(8, paths="a.py"))
+		winner = "d" * 40
+		st["commits"][winner] = {"message": _multi_record([_row(8, ["a.py"]), _row(9, ["b.py"])]), "tree": "f" * 40, "parents": ["c" * 40]}
+		st["move_ref_on_patch"] = {REF: [winner]}
+		h = _Harness(st)
+		rc, out = _gate(h, 7, "update", {MAXH: "3"})
+		self.assertEqual(rc, 1, out)
+		self.assertEqual([(r["event"], r["reason"]) for r in _metrics(out)], [("retry", "lost_race"), ("wait", "holder_shares_paths")])
+		self.assertIn("blocker=9", out)
+		self.assertEqual(h.state["refs"][REF], winner)
+		self.assertEqual(_holders(h.record()), ["8", "9"])
+
+	def test_n1_with_a_leftover_two_holder_record(self) -> None:
+		rows = [_row(8, ["a.py"]), _row(9, ["b.py"], expires=int(time.time()) + 120)]
+		st = {"pulls": [_pull(7), _pull(8), _pull(9)], "files": {"7": ["c.py"], "9": ["b.py"]}}
+		_seed_lease(st, _multi_record(rows))
+		rc, out = _gate(_Harness(json.loads(json.dumps(st))), 7, "update")
+		self.assertEqual(rc, 1, out)
+		self.assertIn("outcome=wait reason=held blocker=8", out)
+		h = _Harness(st)
+		rc, out = _gate(h, 9, "update")
+		self.assertEqual(rc, 0, out)
+		self.assertIn("outcome=renewed", out)
+		rec = h.record()
+		self.assertIn(f"holder=8 head={_sha(8)} expires={rows[0][2]} acquired={rows[0][3]}", rec)
+		nine = int(re.search(r"^holder=9 head=\S* expires=(\d+)", rec, re.M).group(1))
+		self.assertGreater(nine, int(time.time()) + 3600)
+
+	def test_expired_primary_is_replaced_by_the_oldest_acquired_holder(self) -> None:
+		now = int(time.time())
+		st: dict = {}
+		_seed_lease(st, _multi_record([_row(8, ["a.py"], expires=now - 5), _row(9, ["b.py"], acquired=now - 100),
+			_row(10, ["c.py"], acquired=now - 500)]))
+		res = _Harness(st).lib('_merge_lease_read main; echo "pr=$MERGE_LEASE_PR count=$MERGE_LEASE_HOLDER_COUNT acquired=$MERGE_LEASE_ACQUIRED"; '
+			'_merge_lease_is_held && echo held; _merge_lease_holder_paths 9')
+		self.assertIn(f"pr=10 count=2 acquired={now - 500}\nheld\nb.py", res.stdout, res.stderr)
+
+	def test_malformed_holder_lines_are_dropped(self) -> None:
+		rec = _multi_record([_row(8, ["a.py"]), _row(9, ["b.py"])]).replace("holder=9 head=", "holder=9 hed=")
+		st: dict = {}
+		_seed_lease(st, rec)
+		res = _Harness(st).lib('_merge_lease_read main; echo "count=$MERGE_LEASE_HOLDER_COUNT pr=$MERGE_LEASE_PR"')
+		self.assertIn("count=1 pr=8", res.stdout, res.stderr)
+
+	def test_a_path_that_could_forge_a_line_fails_closed(self) -> None:
+		h = _Harness({})
+		res = h.lib('_merge_lease_paths_record_form $\'a.py\\r\' 200; _merge_lease_paths_record_form "*x" 200; '
+			'_merge_lease_paths_record_form "" 200; _merge_lease_paths_record_form $\'a\\nb\\nc\' 2; _merge_lease_paths_record_form "a.py" 200')
+		self.assertEqual(res.stdout, "*\n*\n*\n*\na.py\n", res.stderr)
+
+
+class MultiHolderTick(unittest.TestCase):
+	def test_closed_secondary_is_released_and_the_primary_keeps_its_own_expiry(self) -> None:
+		rows = [_row(4, ["a.py"], expires=int(time.time()) + 1800), _row(6, ["b.py"])]
+		st = {"pulls": [_pull(4)], "closed": [6]}
+		_seed_lease(st, _multi_record(rows))
+		_gates_ok(st, 4)
+		h, out = _p2_tick(st, env={MAXH: "2"})
+		self.assertIn("MERGE_LEASE pr=6 base=main mode=tick outcome=released reason=holder_closed\n", out)
+		self.assertIn("MERGE_LEASE pr=4 base=main mode=tick outcome=held reason=holder_open holders=1\n", out)
+		rec = h.record()
+		self.assertEqual(_holders(rec), [])
+		old = _v1_fields(rec)
+		self.assertEqual((old["pr"], old["expires"], old["paths"]), ("4", str(rows[0][2]), "a.py"))
+
+	def test_released_primary_promotes_the_oldest_acquired_holder(self) -> None:
+		now = int(time.time())
+		st = {"pulls": [_pull(6), _pull(7)], "closed": [4]}
+		_seed_lease(st, _multi_record([_row(4, ["a.py"]), _row(6, ["b.py"], acquired=now - 100), _row(7, ["c.py"], acquired=now - 500)]))
+		_gates_ok(st, 6, 7)
+		h, out = _p2_tick(st, env={MAXH: "3"})
+		self.assertIn("pr=4 base=main mode=tick outcome=released reason=holder_closed", out)
+		rec = h.record()
+		self.assertEqual(_v1_fields(rec)["pr"], "7")
+		self.assertEqual(_holders(rec), ["7", "6"])
+		self.assertIn("paths:\nc.py\nb.py", rec)
+
+	def test_grants_a_disjoint_waiter_and_skips_an_overlapping_one(self) -> None:
+		st = {"pulls": [_pull(4), _pull(5), _pull(6)], "labels": {"5": [WAIT], "6": [WAIT]},
+			"files": {"5": ["a.py"], "6": ["b.py"]}}
+		_seed_lease(st, _record(4, paths="a.py").replace(f"head={'b' * 40}", f"head={_sha(4)}"))
+		_gates_ok(st, 4, 5, 6)
+		h, out = _p2_tick(st, env={MAXH: "2"})
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=skipped reason=holder_shares_paths blocker=4\n", out)
+		self.assertIn("MERGE_LEASE pr=6 base=main mode=tick outcome=granted reason=first_in_queue holders=2\n", out)
+		self.assertIn(WAIT, h.state["labels"]["5"])
+		self.assertNotIn(WAIT, h.state["labels"]["6"])
+		rec = h.record()
+		self.assertEqual(_holders(rec), ["4", "6"])
+		self.assertTrue(any("pr_number=6" in " ".join(d) for d in h.state.get("dispatched", [])))
+		self.assertIn(("skipped", "5", "holder_shares_paths", "4"), [(r["event"], r["pr"], r["reason"], r["holder"]) for r in _metrics(out)])
+
+	def test_revoking_one_holder_keeps_the_other(self) -> None:
+		st = {"pulls": [dict(_pull(4), draft=True), _pull(6)]}
+		_seed_lease(st, _multi_record([_row(4, ["a.py"]), _row(6, ["b.py"])]))
+		_gates_ok(st, 6)
+		h, out = _p2_tick(st, env={MAXH: "2"})
+		self.assertIn("MERGE_LEASE pr=4 base=main mode=tick outcome=released reason=revoked_draft\n", out)
+		self.assertIn("pr=6 base=main mode=tick outcome=held reason=holder_open holders=1", out)
+		rec = h.record()
+		self.assertEqual(_v1_fields(rec)["pr"], "6")
+		self.assertEqual(_skips(rec), [f"4:{_sha(4)}"])
+
+	def test_free_lease_with_two_slots_grants_two_disjoint_waiters(self) -> None:
+		st = {"pulls": [_pull(5), _pull(6)], "labels": {"5": [WAIT], "6": [WAIT]}, "files": {"5": ["a.py"], "6": ["b.py"]}}
+		_seed_lease(st, _record(3, state="released", paths=""))
+		_gates_ok(st, 5, 6)
+		h, out = _p2_tick(st, env={MAXH: "2"})
+		self.assertIn("pr=5 base=main mode=tick outcome=granted reason=first_in_queue holders=1", out)
+		self.assertIn("pr=6 base=main mode=tick outcome=granted reason=first_in_queue holders=2", out)
+		self.assertEqual(_holders(h.record()), ["5", "6"])
+
+	def test_lost_race_on_a_secondary_release_stops_the_base(self) -> None:
+		st = {"pulls": [_pull(4)], "closed": [6], "labels": {}}
+		_seed_lease(st, _multi_record([_row(4, ["a.py"]), _row(6, ["b.py"])]))
+		_gates_ok(st, 4)
+		winner = "d" * 40
+		st["commits"][winner] = {"message": _record(8), "tree": "f" * 40, "parents": ["c" * 40]}
+		st["move_ref_on_patch"] = {REF: winner}
+		h, out = _p2_tick(st, env={MAXH: "2"})
+		self.assertIn("pr=6 base=main mode=tick outcome=lost_race reason=holder_closed", out)
+		self.assertNotIn("dispatched", h.state)
+		self.assertEqual(h.state["refs"][REF], winner)
+
+	def test_n1_tick_keeps_the_single_holder_path(self) -> None:
+		pulls = [_pull(5)]
+		labels = {"5": [WAIT]}
+		st = {"pulls": pulls, "labels": labels, "files": {"5": ["a"]}, "closed": [4]}
+		_seed_lease(st, _record(4))
+		_gates_ok(st, 5)
+		_, out = _p2_tick(st)
+		self.assertNotIn("holders=", out)
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=granted reason=first_in_queue\n", out)
+
+
+class MultiHolderWiring(unittest.TestCase):
+	def test_max_holders_switch_reaches_every_lease_path(self) -> None:
+		line = "MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}"
+		for wf, expected, before in ((REVIEW, 3, "MERGE_LEASE_SOFT_PATHS: ${{ vars."), (POLL, 4, "MERGE_LEASE_SOFT_PATHS: ${{ vars."),
+				(CLOSE, 1, "MERGE_LEASE_SOFT_PATHS: ${{ vars."), (SWEEP, 1, "MERGE_LEASE_WAIT_LABEL: ${{ vars.")):
+			lines = wf.read_text().splitlines()
+			hits = [i for i, ln in enumerate(lines) if ln.strip() == line]
+			self.assertEqual(len(hits), expected, wf.name)
+			for i in hits:
+				self.assertTrue(lines[i - 1].strip().startswith(before), f"{wf.name}:{i + 1}")
+				self.assertEqual(len(lines[i]) - len(lines[i].lstrip()), len(lines[i - 1]) - len(lines[i - 1].lstrip()))
+		self.assertIn("${MERGE_LEASE_MAX_HOLDERS:-1}", LIB.read_text())
+
+
 if __name__ == "__main__":
 	unittest.main()
