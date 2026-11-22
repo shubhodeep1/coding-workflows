@@ -470,9 +470,6 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 		''|[Tt][Rr][Uu][Ee]) printf 'REVIEW_GITHUB_AI_GRANT_PATHS_FILE=%s\n' "${review_github_ai_grant_args[1]:-}" >> "${GITHUB_ENV:?}" ;;
 	esac
 	printf 'REVIEW_SANDBOX_ROOT=%s\n' "${root}" >> "${GITHUB_ENV:?}"
-	case "${GITHUB_AI_PLAN_GRANT_WRITE_ENABLED-}" in
-		''|[Tt][Rr][Uu][Ee]) printf 'REVIEW_GITHUB_AI_GRANT_PATHS_FILE=%s\n' "${review_github_ai_grant_args[1]:-}" >> "${GITHUB_ENV}" ;;
-	esac
 	trap - EXIT
 	exit 0
 fi
