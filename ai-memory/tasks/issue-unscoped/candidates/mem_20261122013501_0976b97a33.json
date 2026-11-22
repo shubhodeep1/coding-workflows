@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The heal scope explicitly includes .github/workflows/internal-clarify.yml, but the PR fixes only .github/workflows/clarify.yml.\n  expected_change_site: .github/workflows/internal-clarify.yml\n  confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: No diff hunk in internal-clarify.yml. Severity MAJOR. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3) dispute this: the file is a thin wrapper calling clarify.yml@promote-candidate, so the clarify.yml fix covers it. z-ai_glm-5_3-flash claims the file does not exist, which contradicts them.\n- requirement: AD-1 Option A says to file a separate normal (non-heal) issue for the helper changes and the snapshot regression test.\n  expected_change_site: GitHub issue tracker, referenced from the PR description\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  EVIDENCE: No issue reference in the PR description or changelog, which list the helper changes as deferred. Severity NIT.\n- requirement: Add a snapshot regression test (temporary git repository, oversized file skipped, symlinked parent still rejected with reason=unsafe_path).\n  expected_change_site: a new test file under tests/\n  confidence=[2]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: No hunk adds it. The PR description and changelog defer it, because the reason=unsafe_path assertion depends on the out-of-scope helper change (AD-1). Severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: Add a snapshot regression test (temporary git repository, oversized file skipped, symlinked parent still rejected with reason=unsafe_path).\nExpected change site: a new test file under `tests/`.\nEvidence of absence: No hunk adds it. The PR description and changelog defer it, because the `reason=unsafe_path` assertion depends on the helper change that is out of scope (AD-1). A symlinked-parent rejection case could be tested without that token, but that goes beyond the approved scope.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n\nTASK_GAP:\nRequirement: AD-1 Option A says to file a separate normal issue for the helper changes.\nExpected change site: the GitHub issue tracker, referenced from the PR.\nEvidence of absence: No issue reference exists in any artefact. This is a process step that a file edit cannot do, and the deferred items are recorded in the PR body and changelog.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: The heal scope explicitly includes .github/workflows/internal-clarify.yml, but the PR fixes only .github/workflows/clarify.yml.\nExpected change site: .github/workflows/internal-clarify.yml\nEvidence of absence: No diff hunk in internal-clarify.yml; the file is missing from the PR changes despite being part of the heal scope.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: AD-1 Option A says to \"File a separate normal (non-heal) issue for the helper changes and the snapshot regression test.\"\nExpected change site: GitHub issue tracker, with the follow-up issue referenced from the PR description.\nEvidence of absence: The provided PR description and changelog list the helper changes as deferred but give no follow-up issue reference. The supplied PR discussion also contains no follow-up issue number.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "675282342bd97eeb7a45a406fa4132114b3a20e0ffca57dfb2e897386e9c2172",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9840,
+    "run_id": "44968402182",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44968402182",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122013501_0976b97a33",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9840,
+    "run_id": "44968402182"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T01:35:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
