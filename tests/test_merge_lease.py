@@ -1600,7 +1600,10 @@ class MultiHolderLease(unittest.TestCase):
 		rc, out, h = run(9, {"9": ["a.py", "b.py"]})
 		self.assertEqual(rc, 1, out)
 		self.assertIn("outcome=wait reason=holder_shares_paths blocker=8", out)
-		self.assertIn("ai:merge-lease-wait", h.state["labels"]["9"])
+		self.assertEqual(_metrics(out)[0]["holder"], "8")
+		# A holder is not labelled: the tick never grants a live holder and the
+		# sweep skips labelled PRs, so the label would strand it.
+		self.assertNotIn("ai:merge-lease-wait", h.state.get("labels", {}).get("9", []))
 		# The earlier holder proceeds without a files read, so they never deadlock.
 		rc, out, h = run(8, {"8": ["a.py", "b.py"]})
 		self.assertEqual(rc, 0, out)

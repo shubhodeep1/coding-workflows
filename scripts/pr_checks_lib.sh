@@ -3272,7 +3272,7 @@ _merge_lease_gate_multi_wait()
 # _merge_lease_gate_multi <pr> <base> <head> update|merge <max_holders>
 # Phase 5 (Refs #9781): _merge_lease_gate's decision when the record just
 # read has a live holder and MERGE_LEASE_MAX_HOLDERS > 1, or 2+ live holders.
-# 0 proceed, 1 wait (labelled), 3 lost the compare-and-swap (the caller reads
+# 0 proceed, 1 wait (labelled, except a holder's merge-mode wait), 3 lost the compare-and-swap (the caller reads
 # again and decides on the winning record). Outcome and reason words are the
 # single-holder ones; MERGE_LEASE_BLOCKER is one PR: the first holder (record
 # order) sharing a path, the primary at the holder cap, or the first waiter
@@ -3318,7 +3318,15 @@ _merge_lease_gate_multi()
 				if _merge_lease_paths_intersect "$(_merge_lease_holder_paths "${gm_h}")" "${gm_own_paths}" "${gm_head}" "${gm_h_head}"; then
 					MERGE_LEASE_BLOCKER="${gm_h}"
 					MERGE_LEASE_SOFT_SHARED=""
-					_merge_lease_gate_multi_wait "${gm_pr}" "${gm_base}" merge holder_shares_paths "${gm_h}"
+					# No wait label here: this PR is still a holder, and the
+					# tick excludes holders from its grant pass while the sweep
+					# skips labelled PRs, so a label would leave nothing to
+					# re-dispatch it once the earlier holder merges. Unlabelled,
+					# the review sweep retries it as before the lease.
+					MERGE_LEASE_OUTCOME="wait"
+					MERGE_LEASE_REASON="holder_shares_paths"
+					_merge_lease_log "${gm_pr}" "${gm_base}" merge wait holder_shares_paths
+					_merge_lease_metric wait "${gm_base}" "${gm_pr}" merge holder_shares_paths "" "" "${gm_h}" || true
 					return 1
 				fi
 			done
@@ -3380,6 +3388,11 @@ _merge_lease_gate_multi()
 		# holder instead of widening it to `*`.
 		if ! gm_own_paths="$(_merge_lease_pr_paths "${gm_pr}" 2>/dev/null)"; then
 			gm_own_paths="$(_merge_lease_holder_paths "${gm_pr}")"
+			# No holder_path= line of its own with 2+ holders: the helper fell
+			# back to the union of every holder; record `*` (unknown) instead.
+			if [ "${gm_count}" -gt 1 ] && ! printf '%s\n' "${MERGE_LEASE_HOLDER_PATHS:-}" | grep -q "^${gm_pr}"$'\t'; then
+				gm_own_paths="*"
+			fi
 		fi
 		_merge_lease_holder_paths_set "${gm_pr}" "${gm_own_paths:-*}"
 		gm_new_rows="$(printf '%s\n' "${gm_rows}" | awk -v p="${gm_pr}" -v row="${gm_pr} ${gm_row_head} $((gm_now + gm_ttl)) ${gm_keep_acq} ${gm_now}" 'NF { if ($1 == p) print row; else print }')"
