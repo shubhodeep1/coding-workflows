@@ -179,7 +179,7 @@ def test_cli_accepts_the_raw_api_shapes(tmp_path: Path) -> None:
 	(tmp_path / "runs.json").write_text(json.dumps({"workflow_runs": []}), encoding="utf-8")
 	result = subprocess.run(
 		[sys.executable, str(SCRIPT), "select", "--search-file", str(tmp_path / "search.json"), "--details-file", str(tmp_path / "details.json"),
-		 "--runs-file", str(tmp_path / "runs.json"), "--trusted-login", BOT, "--now", "2026-10-04T12:00:00Z"],
+		"--runs-file", str(tmp_path / "runs.json"), "--trusted-login", BOT, "--now", "2026-10-04T12:00:00Z"],
 		capture_output=True, text=True, check=False,
 	)
 	assert result.returncode == 0, result.stdout
@@ -929,3 +929,31 @@ def test_cli_escalated_recheck_flag(tmp_path: Path) -> None:
 	off = subprocess.run(base + ["--escalated-recheck-hours", "0"], capture_output=True, text=True, check=False)
 	assert json.loads(off.stdout)["dispatch"] == [{"item": 77, "kind": "issue"}]
 	assert subprocess.run(base + ["--escalated-recheck-hours", "-1"], capture_output=True, text=True, check=False).returncode == 1
+
+
+# --- issue #3576: the security-audit tracker is not a work item ---------------
+
+def test_security_audit_tracker_is_skipped_unless_failed() -> None:
+	search = [_item(3576, ["ai:blocked", "ai:security-audit"]), _item(5, ["ai:blocked"])]
+	details = {"3576": _details("ai:blocked", 10), "5": _details("ai:blocked", 5)}
+	result = _select(search, details)
+	assert result["dispatch"] == [{"item": 5, "kind": "issue"}]
+	assert result["skipped"]["security_audit_tracker"] == 1
+	# A failed project that also carries the label is still judged.
+	failed = _select([_item(3576, ["ai:blocked", "ai:security-audit"])], {"3576": _details("ai:blocked", 10)}, failed=[3576])
+	assert failed["dispatch"] == [{"item": 3576, "kind": "project"}]
+	assert "security_audit_tracker" not in failed["skipped"]
+
+
+def test_security_audit_tracker_skip_honours_kill_switch(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setenv("SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED", "false")
+	result = _select([_item(3576, ["ai:blocked", "ai:security-audit"])], {"3576": _details("ai:blocked", 10)})
+	assert result["dispatch"] == [{"item": 3576, "kind": "issue"}]
+	assert "security_audit_tracker" not in result["skipped"]
+	for off_value in ("0", "no", "OFF"):
+		monkeypatch.setenv("SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED", off_value)
+		off = _select([_item(3576, ["ai:blocked", "ai:security-audit"])], {"3576": _details("ai:blocked", 10)})
+		assert off["dispatch"] == [{"item": 3576, "kind": "issue"}], off_value
+	monkeypatch.setenv("SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED", "")
+	on = _select([_item(3576, ["ai:blocked", "ai:security-audit"])], {"3576": _details("ai:blocked", 10)})
+	assert on["skipped"]["security_audit_tracker"] == 1
