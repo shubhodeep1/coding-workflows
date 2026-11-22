@@ -1090,6 +1090,35 @@ def test_descope_files_a_standalone_fixup_or_asks_the_poller_for_a_project() -> 
 	assert project_child[0]["body"].startswith("<!-- ai:unblock-fixup-request:v1 item=7 id=unblock-7-r1 -->")
 
 
+@pytest.mark.parametrize("name", ["descope", "operator_step"])
+def test_trusted_pr_fixup_targets_an_ai_issue_head_branch(name: str) -> None:
+	"""#9938: a PR fix-up is planned on the PR head, where its changes live."""
+	ops = actions.plan(_verdict(name, instructions="drop it", placeholder="NIGHTLY_TOKEN_UNSET_OPERATOR_STEP", operator_instructions="set it"), _ctx("pr", pr_head_ref="ai/issue-9261"))
+	created = [op for op in ops if op["op"] == "create_issue"]
+	assert len(created) == 1
+	body = created[0]["body"]
+	assert "\n\n- Integration branch: `ai/issue-9261`\n\n<!-- ai:unblock-provenance:v1 source_pr=7 " in body
+	assert actions.declared_integration_branch(body) == "ai/issue-9261"
+
+
+def test_pr_fixup_keeps_no_integration_branch_outside_ai_issue_heads() -> None:
+	baseline = actions.plan(_verdict("descope", instructions="drop it"), _ctx("pr"))
+	assert "Integration branch" not in baseline[0]["body"]
+	for head in ("feature/x", "ai/issue-12x", "orchestrator/project-9", "claude/ai/issue-3"):
+		assert actions.plan(_verdict("descope", instructions="drop it"), _ctx("pr", pr_head_ref=head)) == baseline
+	for bad in ("ai/issue-1/../x", "ai//issue-1", "-x", "ai/issue-1.lock", 5, None):
+		assert _ctx("pr", pr_head_ref=bad)["pr_head_ref"] is None
+	assert _ctx("pr", pr_head_ref="ai/issue-9261")["pr_head_ref"] == "ai/issue-9261"
+	untrusted = _ctx("pr", pr_trusted=False, pr_head_ref="ai/issue-9261")
+	assert untrusted["pr_head_ref"] is None
+	# An issue item never carries a PR head, even when one is sent.
+	issue_ops = actions.plan(_verdict("descope", instructions="drop it"), _ctx(pr_head_ref="ai/issue-9261"))
+	assert "Integration branch" not in issue_ops[0]["body"]
+	# A project PR's fix-up goes through the poller unchanged.
+	project = actions.plan(_verdict("descope", instructions="drop it"), _ctx("pr", tracking=40, pr_head_ref="ai/issue-12"))
+	assert project[0]["op"] == "comment" and "Integration branch" not in project[0]["body"]
+
+
 def test_operator_step_records_the_step_and_warns() -> None:
 	# A placeholder value only a person can supply is recorded and paged.
 	ops = actions.plan(
@@ -2446,6 +2475,24 @@ def test_untrusted_project_head_never_binds_project(tmp_path: Path, head_repo: s
 	assert state["created"] == []
 	assert not any(comment["endpoint"] == "repos/o/r/issues/40/comments" for comment in state["comments"])
 	assert any(endpoint == "repos/o/r/pulls/7" and fields.get("state") == "closed" for endpoint, fields in state["patched"])
+
+
+@pytest.mark.parametrize(("head_repo", "head_ref", "context_ref", "routed"), [
+	("o/r", "ai/issue-9261", "ai/issue-9261", True),
+	("o/r", "feature/x", "feature/x", False),
+	("evil/r", "ai/issue-9261", "", False),
+])
+def test_pr_fixup_context_carries_the_trusted_head_ref(tmp_path: Path, head_repo: str, head_ref: str, context_ref: str, routed: bool) -> None:
+	"""#9938: the judge passes a trusted PR's head ref; the fix-up routes only ai/issue-<n>."""
+	pr = dict(ISSUE, pull_request={"url": "u"})
+	result, state = _judge(tmp_path, pr, verdict={"verdict": "descope", "reason": "r", "instructions": "drop it"},
+		FAKE_GH_PR_HEAD_REPO=head_repo, FAKE_GH_PR_HEAD_REF=head_ref)
+	assert result.returncode == 0, result.stderr
+	assert json.loads((tmp_path / "rt" / "context.json").read_text(encoding="utf-8"))["pr_head_ref"] == context_ref
+	bodies = [created["body"] for created in state["created"]]
+	assert any(f"- Integration branch: `{head_ref}`" in body for body in bodies) == routed
+	if not routed:
+		assert not any("Integration branch" in body for body in bodies)
 
 
 def test_pr_project_binding_accepts_same_repo_case_insensitively(tmp_path: Path) -> None:

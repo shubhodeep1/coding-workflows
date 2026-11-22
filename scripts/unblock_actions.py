@@ -23,7 +23,11 @@ the network; the shell only executes.
        judge never sends them) carry that issue's security finding marker,
        `Integration branch` and `Depends on` lines onto a PR re-issue; optional
        `pr_base_branch` (same caller) is the Integration branch when the
-       linked issue declares none. Trusted PR-derived issue bodies
+       linked issue declares none. Optional `pr_head_ref` (the trusted
+       PR's same-repository head ref, sent by the unblock judge, #9938): a
+       standalone `descope` / `operator_step` fix-up for a PR whose head is
+       `ai/issue-<n>` carries `- Integration branch: <head>` so it is
+       planned on the PR head. Trusted PR-derived issue bodies
        carry an audit-only `ai:unblock-provenance:v1` marker.
        `accept_with_followup` on an `ai:security` issue is refused here too: it
        yields only a keep-open comment and a WARNING, never a follow-up issue
@@ -196,6 +200,8 @@ SECURITY_FINDING_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
 INTEGRATION_BRANCH_LINE_RE = re.compile(r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$", re.MULTILINE)
 TARGET_BRANCH_LINE_RE = re.compile(r"^\s*(?:-\s*)?(?:\*\*Target branch:\*\*|Target branch:)\s*(?:`\s*([^`\n]+?)\s*`(?:\s.*)?|([^`\s]+))\s*$", re.MULTILINE)
 SECURITY_BRANCH_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
+# A PR head a fix-up issue may be routed to as its Integration branch (#9938).
+PR_FIXUP_HEAD_REF_RE = re.compile(r"^ai/issue-[0-9]+$")
 MAX_COMMAND_TEXT = 300
 PROTECTED_HANDOFF_VERDICTS = ("descope", "operator_step")
 # Chain lineage in titles (see the module docstring); kept equal to
@@ -498,6 +504,16 @@ def _context(raw: object) -> dict:
 		and ".." not in base_branch and "//" not in base_branch and not base_branch.endswith(("/", ".", ".lock"))
 		else None
 	)
+	# Optional trusted-PR head ref (#9938): a standalone fix-up for a PR whose
+	# head is `ai/issue-<n>` is planned and implemented on that head, where the
+	# PR's changes live. Validated like pr_base_branch; invalid is absent.
+	head_ref_raw = raw.get("pr_head_ref")
+	pr_head_ref = (
+		head_ref_raw
+		if pr_trusted and isinstance(head_ref_raw, str) and SECURITY_BRANCH_REF_RE.fullmatch(head_ref_raw)
+		and ".." not in head_ref_raw and "//" not in head_ref_raw and not head_ref_raw.endswith(("/", ".", ".lock"))
+		else None
+	)
 	return {
 		"repo": str(raw.get("repo") or ""),
 		"kind": kind,
@@ -528,6 +544,7 @@ def _context(raw: object) -> dict:
 		"pr_source_metadata_unsafe": pr_source_metadata_unsafe,
 		"pr_base_branch": pr_base_branch,
 		"implementation_pr": _implementation_pr(raw.get("implementation_pr"), kind, item),
+		"pr_head_ref": pr_head_ref,
 	}
 
 
@@ -1064,6 +1081,15 @@ def _fixup_body(ctx: dict, verdict: dict, kind_word: str) -> str:
 			" dispatches, merges) keeps running unchanged.",
 		]
 	lines += ["", f"Why: {verdict['reason']}"]
+	# #9938: a standalone fix-up for a trusted PR targets the PR's head branch,
+	# but only an `ai/issue-<n>` head (the routing resolve_integration_ref.sh
+	# already serves); other heads and project fix-ups keep no line.
+	fixup_head_ref = ctx.get("pr_head_ref")
+	if (
+		ctx["kind"] == "pr" and ctx["pr_trusted"] and not ctx["tracking"]
+		and isinstance(fixup_head_ref, str) and PR_FIXUP_HEAD_REF_RE.fullmatch(fixup_head_ref)
+	):
+		lines += ["", f"- Integration branch: `{fixup_head_ref}`"]
 	if _provenance_line(ctx):
 		lines += ["", _provenance_line(ctx)]
 	return "\n".join(lines)
