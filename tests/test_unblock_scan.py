@@ -939,10 +939,11 @@ def test_security_audit_tracker_is_skipped_unless_failed() -> None:
 	result = _select(search, details)
 	assert result["dispatch"] == [{"item": 5, "kind": "issue"}]
 	assert result["skipped"]["security_audit_tracker"] == 1
-	# A failed project that also carries the label is still judged.
+	# Issue #9730: a failed project that also carries the label is skipped too,
+	# because the judge's project path can give it a close verdict.
 	failed = _select([_item(3576, ["ai:blocked", "ai:security-audit"])], {"3576": _details("ai:blocked", 10)}, failed=[3576])
-	assert failed["dispatch"] == [{"item": 3576, "kind": "project"}]
-	assert "security_audit_tracker" not in failed["skipped"]
+	assert failed["dispatch"] == []
+	assert failed["skipped"]["security_audit_tracker"] == 1
 
 
 def test_security_audit_tracker_skip_honours_kill_switch(monkeypatch: pytest.MonkeyPatch) -> None:

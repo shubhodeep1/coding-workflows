@@ -226,6 +226,36 @@ def test_flag_off_restores_current_behaviour(monkeypatch: pytest.MonkeyPatch, tm
 	assert bogus.stdout.count(f"::warning::{FLAG}=bogus is not true/false; tracker exclusion is off") == 1
 
 
+def _main_flag_block() -> str:
+	lines = POLLER.read_text(encoding="utf-8").splitlines()
+	start = lines.index(f'{FLAG}="${{{FLAG}:-true}}"')
+	end = lines.index(f"export {FLAG}", start)
+	return "\n".join(lines[start : end + 1])
+
+
+@pytest.mark.parametrize(
+	("value", "expected", "warns"),
+	[(None, "true", False), ("", "true", False), ("TRUE", "true", False), ("false", "false", False),
+		("1", "false", True), ("yes", "false", True), ("on", "false", True), ("bogus", "false", True)],
+)
+def test_main_path_normalisation_uses_the_strict_rule(tmp_path: Path, value: str | None, expected: str, warns: bool) -> None:
+	# The main flag block exports one true/false for every later reader and
+	# scripts/unblock_scan.py; it must apply the #9730 rule, not is_truthy.
+	block = tmp_path / "flag_block.sh"
+	block.write_text(_main_flag_block() + "\n", encoding="utf-8")
+	result, _ = _bash(tmp_path, f'source "{block}"\necho "value=${{{FLAG}}}"\nbash -c \'echo "child=${FLAG}"\'\n', flag=value)
+	assert f"value={expected}" in result.stdout and f"child={expected}" in result.stdout, result.stdout + result.stderr
+	assert result.stdout.count("::warning::") == (1 if warns else 0)
+	# The sweep-only detector reads the raw value with the same rule.
+	listing = json.dumps([{"number": 3576, "labels": [{"name": "ai:blocked"}, {"name": "ai:security-audit"}]}])
+	funcs = tmp_path / "unrouted.sh"
+	funcs.write_text(_function_text("_unrouted_blocked_candidate_numbers") + "\n", encoding="utf-8")
+	detector, _ = _bash(tmp_path, f"source \"{funcs}\"\n_unrouted_blocked_candidate_numbers '{listing}'\n", flag=value)
+	assert json.loads(detector.stdout.strip().splitlines()[-1]) == ([] if expected == "true" else [3576]), detector.stdout
+	assert "::warning::" not in detector.stdout
+	assert detector.stderr.count("::warning::") == (1 if warns else 0)
+
+
 # ---------------------------------------------------------------- detect_unrouted_blocked_comments
 
 
@@ -317,7 +347,8 @@ def test_standalone_stall_recovery_skips_tracker_before_any_recovery() -> None:
 	text = _function_text("run_standalone_stall_recovery")
 	managed = text.index('echo "${orchestrator_managed_set}" | grep -qxF "${issue_num}"')
 	helper = text.index('_security_audit_tracker_release_pipeline_labels "${issue_num}"')
-	assert managed < helper < text.index("has_pipeline_label=") < text.index("security_dependency.py")
+	# Anchor on the call: a comment above the loop also names security_dependency.py.
+	assert managed < helper < text.index("has_pipeline_label=") < text.index("python3 scripts/security_dependency.py")
 	block = text[text.index("_security_audit_tracker_exclude_enabled", managed) : helper]
 	assert '"ai:security-audit"' in block and "ai:security-audit-tracker:v1" in block
 	assert "gh api" not in block

@@ -373,12 +373,20 @@ _security_audit_tracker_release_pipeline_labels() {
 # restores the previous filter. Input: the `gh issue list --json number,labels`
 # array; output: a JSON array of issue numbers. No API calls.
 _unrouted_blocked_candidate_numbers() {
-  # The sweep-only path exits before is_truthy is defined, so the same
-  # 1|true|yes|on vocabulary is parsed inline here.
+  # The sweep-only path runs before the main flag block normalises the
+  # switch, so the raw value is read here with the strict #9730 rule (unset,
+  # empty or `true` in any case is on; anything else is off). The helper's
+  # warning for an unknown value goes to stderr: stdout carries the JSON.
   local exclude_tracker="false"
-  case "$(printf '%s' "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
-    1|true|yes|on) exclude_tracker="true" ;;
-  esac
+  if declare -F _security_audit_tracker_exclude_enabled >/dev/null 2>&1; then
+    if _security_audit_tracker_exclude_enabled >&2; then
+      exclude_tracker="true"
+    fi
+  else
+    case "$(printf '%s' "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+      true) exclude_tracker="true" ;;
+    esac
+  fi
   printf '%s' "${1:-[]}" | jq -c --argjson exclude_tracker "${exclude_tracker}" '[.[]? | select(any(.labels[]?; .name == "ai:orchestrator-tracking" or .name == "ai:reclarify-requeue") | not)
     | select(($exclude_tracker and any(.labels[]?; .name == "ai:security-audit")) | not)
     | .number | select(type == "number" and . > 0)] | unique' 2>/dev/null
@@ -3341,8 +3349,12 @@ fi
 # standalone stall recovery, the unblock scan and the unrouted-comment detector.
 # Exported so scripts/unblock_scan.py sees the same value; false restores the
 # previous behaviour.
+# Issue #9730: normalised with the strict rule of
+# _security_audit_tracker_exclude_enabled (unset, empty or `true` in any case is
+# on; `false` is off; any other value is off with one ::warning::), not the
+# wider is_truthy vocabulary, so every later reader sees the same true/false.
 SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED="${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}"
-if is_truthy "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED}"; then
+if _security_audit_tracker_exclude_enabled; then
   SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED="true"
 else
   SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED="false"

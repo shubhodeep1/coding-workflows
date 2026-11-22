@@ -32,8 +32,9 @@ Inputs:
                           `operator_step_issue.py needs-human prune`).
 
 An item labelled `ai:security-audit` (the long-lived security-audit tracker,
-issue #3576) is skipped as `security_audit_tracker` unless it is a failed
-project; SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED=false turns that off.
+issue #3576) is skipped as `security_audit_tracker`, also when it is a failed
+project (issue #9730, see below); SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED=false
+turns that off.
 An item that carries `ai:needs-human` and whose newest trusted
 `ai:unblock:v1` marker is a `close` verdict is parked in the needs-human
 digest (scripts/operator_step_issue.py) and skipped as `parked`. With
@@ -110,14 +111,13 @@ _LEDGER_SPEC.loader.exec_module(unblock_ledger)
 
 TRACKING_LABEL = "ai:orchestrator-tracking"
 # Issue #3576: the long-lived security-audit tracker is not a work item; the
-# scan skips it unless its project failed. SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED=false
-# restores the previous selection.
+# scan skips it, also when its project failed (issue #9730).
+# SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED=false restores the previous selection.
 SECURITY_AUDIT_LABEL = "ai:security-audit"
 CLOSED_LABEL = "ai:unblock-closed"
 MARKER_PREFIXES = ("<!-- ai:unblock:v1 ", "<!-- ai:unblock-wait:v1 ")
 STATE_PREFIX = "<!-- ORCHESTRATOR_STATE_V"
 NEEDS_HUMAN_LABEL = "ai:needs-human"
-SECURITY_AUDIT_LABEL = "ai:security-audit"
 SECURITY_AUDIT_TRACKER_MARKER_RE = re.compile(r"^[ \t]*<!-- ai:security-audit-tracker:v1 -->[ \t]*\r?$", re.M)
 VERDICT_PREFIX = "<!-- ai:unblock:v1 "
 VERDICT_RE = re.compile(r" verdict=([a-z_]+) ")
