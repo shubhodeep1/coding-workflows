@@ -138,6 +138,15 @@ jobs:
     # its module commands in four concurrent lanes in place (see that step).
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Explicit since #9939: ci_pr_quick.yml grants `statuses: write` for
+    # `lint` (the `ci/final` status), and without a block this job, which
+    # runs PR code in quick mode, would inherit it. Its steps only read:
+    # the checkout and fetches, pulls/<n> and actions/runs/<id>
+    # (scripts/ci_final_merge_ref_fresh.sh, the agents.md check).
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
     # The actionlint tarball cache key (#9056) reads these values through the
     # `env` context, so they are set at job level. The `Install actionlint`
     # step keeps its own copy with the same literals, which

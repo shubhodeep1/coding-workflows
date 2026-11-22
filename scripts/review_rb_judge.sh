@@ -2459,6 +2459,7 @@ rb_judge_sync_merge_guard() {
   RB_SYNC_MERGE_DEFERRED="false"
   if ! declare -F _pr_sync_merge_blocked_guard >/dev/null 2>&1; then
     echo "SYNC_MERGE_BLOCKED_GUARD outcome=deferred pr=${PR_NUMBER:-unknown} head=${RB_JUDGED_HEAD_SHA:-unknown} state=unreadable blockers=unknown (pr_checks_lib.sh unavailable)"
+    echo "::warning::scripts/pr_checks_lib.sh is not loaded; the direct merge of PR #${PR_NUMBER:-unknown} is deferred (fail closed)."
     SYNC_MERGE_BLOCKED_GUARD_STATE="unreadable"
     SYNC_MERGE_BLOCKED_GUARD_BLOCKERS="unknown"
     RB_SYNC_MERGE_DEFERRED="true"
@@ -2568,6 +2569,13 @@ rb_judge_merge_retry_transient() {
     fi
     gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_DIRECT_FILE}" && return 0
   done
+  # The last --auto attempt is never re-checked inside the loop: a
+  # non-transient refusal there is non_transient, not exhausted (#9939).
+  if [ "${_rb_retry_auto_only}" = "true" ] \
+    && ! RB_MERGE_ERR_DIRECT_FILE="${RB_MERGE_ERR_AUTO_FILE:-/dev/null}" rb_judge_merge_err_is_transient; then
+    RB_MERGE_RETRY_GIVEUP="non_transient"
+    return 1
+  fi
   RB_MERGE_RETRY_GIVEUP="exhausted"
   return 1
 }

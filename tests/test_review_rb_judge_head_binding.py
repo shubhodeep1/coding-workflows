@@ -873,6 +873,30 @@ def test_non_transient_auto_error_after_a_site_deferral_is_not_retried(path: str
 
 
 @pytest.mark.parametrize("path", ("merge", "terminal"))
+def test_non_transient_auto_error_on_the_last_retry_is_a_failure(path: str) -> None:
+	"""#9939: the guard inside the retry defers on the third attempt, whose
+	--auto request GitHub refused for a non-transient reason. The loop ends
+	there, but the refusal still reports merge_failed, as it does on the
+	first or second attempt, not an exhausted mergeability_pending."""
+	clean = {"code": 0, "stdout": f"open\tfalse\tfalse\t{JUDGED}\tclean\tmain\n"}
+	blocked = {"code": 0, "stdout": f"open\tfalse\tfalse\t{JUDGED}\tblocked\tmain\n"}
+	responses = [_fail(), _fail()]
+	responses += [clean, _fail(), _fail()] * 2
+	responses += [blocked, _fail(DRAFT_MESSAGE)]
+	proc, _output, calls, sleeps = _run_merge_site_scripted(path, responses)
+	assert proc.returncode == 0, proc.stderr
+	assert sleeps == ["10", "20", "40"]
+	assert len(calls) == len(responses), calls
+	assert "SYNC_MERGE_BLOCKED_GUARD outcome=deferred pr=42" in proc.stdout
+	assert "RB_MERGE_STATUS=merge_failed" in proc.stdout.splitlines()
+	assert "RB_MERGE_STATUS=mergeability_pending" not in proc.stdout.splitlines()
+	lines = _error_lines(proc.stdout)
+	assert len(lines) == 1 and DRAFT_MESSAGE in lines[0], lines
+	warnings = [line for line in proc.stdout.splitlines() if line.startswith("::warning::")]
+	assert len(warnings) == 1 and warnings[0].startswith(OLD_WARNINGS[path]), warnings
+
+
+@pytest.mark.parametrize("path", ("merge", "terminal"))
 @pytest.mark.parametrize("pr_read", ["head_moved", "not_open"])
 def test_head_moved_or_closed_after_a_site_deferral_is_a_failure(path: str, pr_read: str) -> None:
 	"""#9939: the retry stopped because the PR can no longer merge at the

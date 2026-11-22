@@ -249,6 +249,13 @@ def test_lint_permissions_are_explicit() -> None:
 	}
 
 
+def test_static_checks_does_not_inherit_statuses_write() -> None:
+	# Quick mode runs only static-checks (PR code); the caller's
+	# `statuses: write` is for `lint`, so static-checks declares read scopes.
+	job = _yaml().safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["static-checks"]
+	assert job["permissions"] == {"contents": "read", "pull-requests": "read", "actions": "read"}
+
+
 def test_quick_caller_grants_statuses_write() -> None:
 	granted = _yaml().safe_load(QUICK_WORKFLOW.read_text(encoding="utf-8"))["permissions"]
 	assert granted.get("statuses") == "write"
