@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9928,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9928\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9935\",\"pr_number\":9935,\"branch\":\"ai/issue-9928\",\"run_id\":\"44988825277\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/44988825277\",\"changed_files\":[\".github/workflows/review_autofix.yml\",\"README.md\",\"agents.d/9928-review-pr-read-cache.md\",\"changelog.d/9928-review-pr-read-cache.md\",\"scripts/gh_helpers.sh\",\"scripts/pr_checks_lib.sh\",\"scripts/review_collect_pr_metadata.sh\",\"scripts/review_run_reviewers.sh\",\"tests/test_gh_pr_cached_read.py\"]}",
+  "fingerprint": "b094f4574ab0ba097d5c4dde008cf11e3590987488a9208e4f325a8e96b1b035",
+  "lineage": {
+    "issue_number": 9928,
+    "parent_ids": [],
+    "pr_number": 9935,
+    "run_id": "44988825277",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44988825277",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9935"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261122061937_17c0552e97",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9928,
+    "level": "run",
+    "pr_number": 9935,
+    "run_id": "44988825277"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9928: https://github.com/shubhodeep1/coding-workflows/pull/9935",
+  "timestamps": {
+    "created_at": "2026-11-22T06:19:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
