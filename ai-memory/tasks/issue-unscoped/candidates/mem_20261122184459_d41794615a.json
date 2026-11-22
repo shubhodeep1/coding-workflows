@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Document `ZOMBIE_RUN_MAX_QUEUED_HOURS` as the threshold for ignoring wedged queued runs across every active-run guard (poller, sweep, merge train, release and promote cycles, CI cancelled-run rerun, unblock scan), including that `0` or an invalid value disables the filter.\n  expected_change_site: README.md, Variables-table row for `ZOMBIE_RUN_MAX_QUEUED_HOURS` (line 118, next to the `ZOMBIE_RUN_REAPER_ENABLED` row at line 117)\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: README.md:118 is not in the diff. It still lists only `review_autofix_sweep` under \"Used By\", describes the value only as the reaper's threshold with a \"positive integer\" rule and the `invalid_max_queued_hours` outcome, and omits the all-guards scope and the `0`/invalid-disables semantics. Only README.md:2856 was updated. This is documentation drift only, and runtime behaviour is unaffected. All five reviewers rated it NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: Ignore wedged queued workflow runs in active-run guards, with `ZOMBIE_RUN_MAX_QUEUED_HOURS` as the age threshold. The PR documents the variable's new meaning for consumers.\n  Expected change site: README.md, the `ZOMBIE_RUN_MAX_QUEUED_HOURS` row of the Variables table (line 118).\n  Evidence of absence: The PR expands the variable's description at README.md:2856. The Variables-table row at README.md:118 is not in the diff. It still lists only `review_autofix_sweep` and describes the value only as the reaper's threshold, with a \"positive integer\" rule and the reaper's `invalid_max_queued_hours` outcome. It omits that the value now drives every active-run guard and that `0` or an invalid value disables the filter. This is documentation drift only; runtime behaviour is unaffected.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n(All other checklist sections: NONE. The change in `scripts/stable_e2e_step_wait_plan.sh` was judged correct, with no regression.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: Update the `ZOMBIE_RUN_MAX_QUEUED_HOURS` entry in the `README.md` Variables table to reflect its usage across all active-run guards, not just the review_autofix_sweep reaper.\n  Expected change site: README.md, Variables table.\n  Evidence of absence: The README entry added at `README.md:2856` describes the usage broadly, but the entry in the Variables table (lines 117-118) appears unchanged and may still list only `review_autofix_sweep` and describe the value only as the reaper's threshold. The reviewer says this should be verified and updated if necessary.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n(All other checklist sections: NONE.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: The PR description says `ZOMBIE_RUN_MAX_QUEUED_HOURS` \"is now ignored by the poller's active-run guards, the review/autofix peer check, the merge-train release, the review sweep (as a floor beneath SWEEP_STALE_QUEUED_MINUTES), the stable release and promote cycles, the analysis apply gate, the worktree registry, the CI cancelled-run rerun, the unblock scan and the stable gate's plan-run check.\" The Variables-table entry should reflect that scope.\n  Expected change site: README.md, the Variables-table row at line 118.\n  Evidence of absence: README.md:118 still reads `Age in hours after which a still-`queued` review run is reaped by `ZOMBIE_RUN_REAPER_ENABLED`. Must be a positive integer; an invalid value cancels nothing and logs `ZOMBIE_RUN_REAPER_END outcome=invalid_max_queued_hours`.` Only `review_autofix_sweep` is listed under \"Used By\". The expanded description lives only in the row added near line 2856.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n(All other checklist sections: NONE.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: Document `ZOMBIE_RUN_MAX_QUEUED_HOURS` as the threshold for filtering wedged queued runs across active-run guards, including that `0` or an invalid value disables the filter.\n  Expected change site: README.md, Variables table entry for `ZOMBIE_RUN_MAX_QUEUED_HOURS`.\n  Evidence of absence: README.md:118 still describes the variable only as the review-run reaper threshold, says it must be positive, and says invalid values only cancel nothing. The new behavior is described separately at README.md:2856, but the Variables table entry remains inconsistent with it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n(All other checklist sections: NONE.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\n- Requirement: The PR's stated intent is that `ZOMBIE_RUN_MAX_QUEUED_HOURS` now drives the wedged-queued ignore rule \"in every active-run guard (the poller, the sweep, the merge train \u2026, the release and promote cycles, the CI cancelled-run rerun and the unblock scan)\" (PR description; README.md:2856 says the same), replacing the sole reaper framing.\n  Expected change site: README.md, the top Variables reference table row for `ZOMBIE_RUN_MAX_QUEUED_HOURS` (README.md:118, alongside the `ZOMBIE_RUN_REAPER_ENABLED` row at README.md:117).\n  Evidence of absence: The PR's README hunks update the repo-var reference rows at README.md:2855-2856 and the agents.md mirror. README.md:118 still lists \"Used By\" as `review_autofix_sweep` only and describes the value solely as \"Age in hours after which a still-`queued` review run is reaped by `ZOMBIE_RUN_REAPER_ENABLED`\". It omits the new ignore-rule use and the \"0 disables the ignore rule\" semantics. No diff hunk touches README.md:117-118.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n(All other checklist sections: NONE. The reviewer verified the change at scripts/stable_e2e_step_wait_plan.sh:201-202 is behaviorally equivalent, with no defect.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "941b3142cea37bf90e8bbdd344da4fa2d60b3a4218da9b9d14bc284d98c50cd0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9711,
+    "run_id": "45049269705",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45049269705",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122184459_d41794615a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9711,
+    "run_id": "45049269705"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T18:44:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
