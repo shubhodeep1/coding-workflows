@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/9846-release-notes-from-fragments.md:4 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The truncation parenthetical says \"a single fragment that alone passes the cap is instead cut to it\", but `_render_release_notes` in scripts/assemble_changelog.py:507-514 head-cuts only under `if not parts:` (the first fragment in render order), so any later oversized fragment is dropped whole and counted in the `...and N more; see CHANGELOG.md.` trailer.\n  WHY: All four reviewers rated this NIT, which maps to low here; no code path changes, but this fragment text goes into CHANGELOG.md and, through `--notes-out`, into the next GitHub release body, so it would describe a rule the code does not follow and contradict the module docstring, the `_render_release_notes` docstring and agents.d/9846-release-notes-from-fragments.md, which all say \"a first fragment\". Suggested fix: change \"a single fragment\" to \"a first fragment\" or \"the first fragment\".\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/9846-release-notes-from-fragments.md:line 4, the parenthetical added by the last autofix run: \"(a single fragment that alone passes the cap is instead cut to it, marked `...(truncated; see CHANGELOG.md)` and counted as written)\" | severity=NIT | confidence=4\n  PROBLEM: The text says any fragment over the cap on its own is cut to the cap, but in scripts/assemble_changelog.py, `_render_release_notes`, lines 507-514, the head-cut runs only under `if not parts:`. Only the first fragment in render order is cut (CATEGORY_ORDER first in Keep a Changelog repos, then filename order). A later oversized fragment goes straight to `break`, is dropped whole and is counted in the `...and N more; see CHANGELOG.md.` trailer. The module docstring (lines 67-68), the `_render_release_notes` docstring (lines 476-478) and agents.d/9846-release-notes-from-fragments.md all correctly say \"a first fragment\".\n  WHY: No code path changes, but this text goes into CHANGELOG.md and, through `--notes-out`, into the next GitHub release body, which would then describe a rule the code does not follow and contradict the other three descriptions.\n- HARDENING: changelog.d/9846-release-notes-from-fragments.md line 4: the wording does not match the `if not parts:` guard in `_render_release_notes` (scripts/assemble_changelog.py:508). Fix: replace \"a single fragment that alone passes the cap\" with \"a first fragment that alone passes the cap\" (1 line). HARDENING_RISK_SCORE: 0\n- TASK COMPLETENESS: NONE. The reviewer found every #9846 deliverable present: `--notes-out` in `build_parser` and `main()`, the `notes_written=<n>` suffix, both release workflows and their extract fallback, the ci.yml \"Stable-only wiring\" removals, the changelog and agents fragments, and the tests. The README row is not a gap because README.md has no flag table. The v1.47.5 and v1.47.6 back-fill and versioned sections are non-goals.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/9846-release-notes-from-fragments.md:line 4, the parenthetical added by the last run: \"(a single fragment that alone passes the cap is instead cut to it, marked `...(truncated; see CHANGELOG.md)` and counted as written)\" | severity=NIT | confidence=4\n  PROBLEM: The text says the rule applies to \"a single fragment that alone passes the cap\", but in scripts/assemble_changelog.py the head-cut branch in _render_release_notes is guarded by `if not parts:` (followed by `break`), so it fires only on the first iteration. A later oversized fragment is dropped whole and counted in the \"...and N more; see CHANGELOG.md.\" trailer. This contradicts the module docstring, the _render_release_notes docstring and agents.d/9846-release-notes-from-fragments.md, which all say \"a first fragment\".\n  WHY: There is no runtime failure, because the code is correct. The documentation is wrong: the fragment is folded into CHANGELOG.md and would mislead operators about the truncation behavior.\n- HARDENING: changelog.d/9846-release-notes-from-fragments.md line 4: the wording \"a single fragment that alone passes the cap\" does not match the `if not parts:` guard or the other three docs. Fix: replace \"a single fragment\" with \"a first fragment\" (1 line). HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/9846-release-notes-from-fragments.md:Line 4, \"a single fragment that alone passes the cap is instead cut to it\" | severity=NIT | confidence=4\n  PROBLEM: The text describes truncation without limiting it to the first fragment. The renderer truncates only when `parts` is empty (`scripts/assemble_changelog.py`, lines 507\u2013514); a later oversized fragment is omitted and counted in the trailer.\n  WHY: The changelog fragment is included in the release notes, where this sentence misstates what happens to an oversized fragment that follows an earlier fragment.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/9846-release-notes-from-fragments.md:line 4, parenthetical \"(a single fragment that alone passes the cap is instead cut to it, marked `...(truncated; see CHANGELOG.md)` and counted as written)\" | severity=NIT | confidence=4\n  PROBLEM: `_render_release_notes` in scripts/assemble_changelog.py:507-514 head-cuts only when `not parts:` (the first fragment in render order) and then breaks, so a later fragment that alone exceeds RELEASE_NOTES_CHAR_LIMIT is dropped whole and counted in the `...and N more` trailer. The module docstring (lines 474-478) and agents.d/9846-release-notes-from-fragments.md say \"a first fragment\"; this fragment says \"a single fragment\".\n  WHY: This fragment's text becomes the next release's GitHub release body (via --notes-out), so the shipped notes would describe a truncation rule the code does not follow. The parenthetical was introduced by the last run's diff. Fix: change \"a single fragment that alone passes the cap\" to \"the first fragment that alone passes the cap\".\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "03e2b9589a1f5adf640dd52aac62dd62203aec3ba52103d233bd943ef1f4b591",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9854,
+    "run_id": "45014963720",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45014963720",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122113624_9eb873eb05",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9854,
+    "run_id": "45014963720"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T11:36:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
