@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"At least a 25% drop in the poller's REST calls per run for the same state, measured with #9887's calls_in_job before and after on comparable cycles.\"\n  expected_change_site: Existing GH_PAT budget instrumentation for `orchestrate_poll.yml` and comparable-cycle measurement referenced by #9887\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The PR adds cache-hit counters and tests individual cache paths, but includes no post-merge validation plan or confirmation that the 25% target was met in comparable cycles, the PR diff and acceptance results contain no before/after calls_in_job comparison or result showing the 25% target was met, the PR description defers noop-sweep comment deduplication but does not defer this measurement\n- requirement: \"Measurable outcome: at least a 25% drop in the poller's REST calls per run for the same state, measured with #9887's `calls_in_job` before and after on comparable cycles.\"\n  expected_change_site: `scripts/orchestrate_poll_process.sh` (or a parallel `calls_in_job` instrumentation site referenced by #9887) and the orchestrator cycle summary now carries the per-cycle hit counters (`cache_hits_pr_json`, `cache_hits_default_branch`, `cache_hits_labels`) needed to compute the drop.\n  confidence=3\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The PR adds the `cache_hits_*` keys and tests each cache path in isolation, but ships no before/after `calls_in_job` figure and no comparable-cycle comparison showing the 25% target was met on real production cycles; the PR description's \"Deferred scope\" block only excludes the noop-sweep comment dedup, so the 25% measurement is not explicitly out of scope\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP | severity=MAJOR | confidence=4\n  Requirement: \"At least a 25% drop in the poller's REST calls per run for the same state, measured with #9887's calls_in_job before and after on comparable cycles.\"\n  Expected change site: Post-merge validation using existing GH_PAT budget instrumentation for `orchestrate_poll.yml` and comparable-cycle measurements referenced by #9887.\n  Evidence of absence: The PR adds cache-hit counters and tests individual cache paths, but includes no post-merge validation plan or confirmation that the 25% target was met in comparable cycles.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP | severity=NIT | confidence=3\n  Requirement: \"Measurable outcome: at least a 25% drop in the poller's REST calls per run for the same state, measured with #9887's `calls_in_job` before and after on comparable cycles.\"\n  Expected change site: `scripts/orchestrate_poll_process.sh` (or a parallel `calls_in_job` instrumentation site referenced by #9887) and the orchestrator cycle summary now carries the per-cycle hit counters (`cache_hits_pr_json`, `cache_hits_default_branch`, `cache_hits_labels`) needed to compute the drop.\n  Evidence of absence: The PR adds the `cache_hits_*` keys and tests each cache path in isolation, but ships no before/after `calls_in_job` figure and no comparable-cycle comparison showing the 25% target was met on real production cycles. The PR description's \"Deferred scope\" block only excludes the noop-sweep comment dedup; the 25% measurement is not listed there, so it is not explicitly out of scope.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP | severity=MAJOR | confidence=4\n  Requirement: \"At least a 25% drop in the poller's REST calls per run for the same state, measured with #9887's calls_in_job before and after on comparable cycles.\"\n  Expected change site: Existing GH_PAT budget instrumentation and comparable-cycle measurement referenced by #9887.\n  Evidence of absence: The PR adds cache-hit counters and tests exercising individual cache paths, but the PR diff and acceptance results contain no before/after calls_in_job comparison or result showing the 25% target was met. The PR description defers noop-sweep comment deduplication, but does not defer this measurement.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6a2c2513b69f543131222a1378085b6b66f8974d773dc95a79405ea06981f1a8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9934,
+    "run_id": "45006904887",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45006904887",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122105954_ac89054a0c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9934,
+    "run_id": "45006904887"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T10:59:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
