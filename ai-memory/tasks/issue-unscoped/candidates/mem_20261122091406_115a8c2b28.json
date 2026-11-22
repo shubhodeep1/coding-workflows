@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"2) In .github/workflows/pr-checks.yml, job pr-body-lint, change runs-on: ubuntu-latest to runs-on: ubuntu-26.04 and change nothing else.\" (issue #9930, deliverable 2; the plan grant's files_touched lists .github/workflows/pr-checks.yml and tests/test_pr_checks_workflow.py)\n  expected_change_site: the runs-on field of the pr-body-lint job in .github/workflows/pr-checks.yml (the issue cites line 123 on main)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: No hunk in the PR diff or the last-run diff touches .github/workflows/pr-checks.yml, pr_changed_files.txt lists only agents.d/, changelog.d/, scripts/ and tests/ paths, and tests/test_pr_checks_workflow.py is also missing from the PR, neither .github/workflows/pr-checks.yml nor tests/test_pr_checks_workflow.py exists on this PR's base (orchestrator/project-9421), on this base the job is still in .github/workflows/lint-pr-body-auto-close.yml and is already pinned (runs-on: ubuntu-26.04 at line 53), the issue does not mark the item as deferred and the PR description's acceptance table has no row for the pin, the only record of the deferral is the autofix editor's comment (its reasoning is described as factually correct), the linked issue says the main-branch job still uses ubuntu-latest so the requirement is unmet; reviewers disagree on severity (NIT from anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash, MAJOR from minimax_minimax-m3 and openai_gpt-6-luna)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"2) In .github/workflows/pr-checks.yml, job pr-body-lint, change runs-on: ubuntu-latest to runs-on: ubuntu-26.04 and change nothing else.\" The plan grant lists .github/workflows/pr-checks.yml and tests/test_pr_checks_workflow.py under files_touched.\n  Expected change site: the runs-on field of the pr-body-lint job in .github/workflows/pr-checks.yml (the issue cites line 123 on main).\n  Evidence of absence: No hunk in the PR diff or the last-run diff touches .github/workflows/pr-checks.yml, and pr_changed_files.txt lists only agents.d/, changelog.d/, scripts/ and tests/ paths. .github/workflows/pr-checks.yml is not in this checkout. Only .github/workflows/lint-pr-body-auto-close.yml exists, and it is already pinned (runs-on: ubuntu-26.04 at line 53), so the change cannot be made on this PR's base. The issue does not explicitly defer the item, the PR body does not mention a deferral, and its Acceptance table has no row for the pin. The only record of the deferral is the autofix editor's comment. The pin must land in a PR against main, or the PR description must state that it is deferred and where it will land.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"In .github/workflows/pr-checks.yml, job pr-body-lint, change runs-on: ubuntu-latest to runs-on: ubuntu-26.04 and change nothing else.\" (Issue #9930 deliverable 2; the plan grant lists `.github/workflows/pr-checks.yml` and `tests/test_pr_checks_workflow.py` in `files_touched`.)\n  Expected change site: `.github/workflows/pr-checks.yml`, the `pr-body-lint` job's `runs-on` field (issue cites line 123 on main).\n  Evidence of absence: No hunk in the PR diff or the last-run diff touches `.github/workflows/pr-checks.yml`. The PR changes 4 files (`agents.d/9930-...`, `changelog.d/9930-...`, `scripts/verify_integration_fingerprints.py`, `tests/test_verify_integration_fingerprints_post_capture_evolution.py`). `tests/test_pr_checks_workflow.py` is also missing. On this base (`orchestrator/project-9421`) the job is still in `.github/workflows/lint-pr-body-auto-close.yml`, so the edit is structurally blocked here. However, no deferral is recorded in the issue, the plan grant or the PR description. The editor's reasoning is technically valid. The gap existed before the last run and is still unaddressed.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"In .github/workflows/pr-checks.yml, job pr-body-lint, change runs-on: ubuntu-latest to runs-on: ubuntu-26.04 and change nothing else.\"\n  Expected change site: The pr-body-lint job's runs-on field in .github/workflows/pr-checks.yml.\n  Evidence of absence: The PR diff does not modify .github/workflows/pr-checks.yml or otherwise implement this runner-pin change. The linked issue states that the main-branch job still uses ubuntu-latest, so the requirement is still unmet.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: \"2) In .github/workflows/pr-checks.yml, job pr-body-lint, change runs-on: ubuntu-latest to runs-on: ubuntu-26.04 and change nothing else.\" (issue #9930, step 2; also listed in the pipeline plan grant files_touched: .github/workflows/pr-checks.yml and tests/test_pr_checks_workflow.py)\n  Expected change site: .github/workflows/pr-checks.yml, job pr-body-lint (issue cites line 123 on main)\n  Evidence of absence: No hunk in the PR diff or the last-run diff touches .github/workflows/pr-checks.yml, and pr_changed_files.txt lists only agents.d/, changelog.d/, scripts/ and tests/ paths. Neither .github/workflows/pr-checks.yml nor tests/test_pr_checks_workflow.py exists on this PR's base (orchestrator/project-9421). On this base the job is in .github/workflows/lint-pr-body-auto-close.yml, which is already pinned (runs-on: ubuntu-26.04 at line 53). The issue scopes the item to the default branch and does not mark it deferred, and the PR acceptance table has no entry for it. The editor's deferral rationale is factually correct. The pin must land on main (or after the resolve).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b8b7eb47164fd3e1dd3b6249b040f5fbc2a953093588b9234ffffb4f5a154e3c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9932,
+    "run_id": "45001805237",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45001805237",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122091406_115a8c2b28",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9932,
+    "run_id": "45001805237"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T09:14:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
