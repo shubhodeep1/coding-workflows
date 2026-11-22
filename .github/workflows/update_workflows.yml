@@ -1378,7 +1378,10 @@ jobs:
           # lookup, 1 compare + 1 user read + 1 branch-activity read (only when the
           # branch already exists), 1 create or edit, 1 stale-PR list, 1 user read
           # (only when stale candidates exist and the login is not yet known),
-          # one close per stale PR, 1 auto-merge enable.
+          # one close per stale PR, 1 auto-merge enable. A rewrite-refused
+          # resend adds 1 close (the refused branch's PR); a refused refresh
+          # whose cached mergeable is UNKNOWN or missing adds 1 PR read.
+          # Otherwise it reuses the head+base lookup and the pusher check's login.
           BASE="${DEFAULT_BRANCH:-}"
           if [ -z "${BASE}" ]; then
             BASE="$(gh api "repos/${GITHUB_REPOSITORY}" --jq .default_branch 2>/dev/null)" || pr_fail default_branch_lookup_failed
@@ -1388,6 +1391,38 @@ jobs:
 
           BRANCH="auto/update-workflows-${UPSTREAM_SHA:0:12}"
           [[ "${BRANCH}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]] || pr_fail invalid_branch_name
+          # Rewrite-refused resend: a consumer ruleset (non_fast_forward on
+          # ~ALL, GH013) or a protected-branch hook can refuse the
+          # lease-checked refresh of an existing sync branch, which leaves a
+          # stale or conflicted sync PR stuck until the next release. The
+          # refresh push below then moves the rebuilt sync to
+          # <branch>-r2 .. -r${UPDATER_RESEND_MAX} (one new branch per run at
+          # most) and closes the old PR. Later runs for the same release pick
+          # up the highest -rN already on the remote. One git-protocol read,
+          # no GitHub API call (§15).
+          # UPDATER_RESEND_MAX must match the -r[2-5] suffix in the branch
+          # regexes here, in the stale sweep, in the review guards
+          # (review_autofix.yml, scripts/review_*.sh) and in
+          # scripts/audit_consumer_drift.py.
+          UPDATER_RELEASE_BRANCH="${BRANCH}"
+          UPDATER_RESEND_MAX=5
+          UPDATER_RESEND_FROM_BRANCH=""
+          UPDATER_RESEND_FROM_PR=""
+          # Prints the highest -r2..-rMAX suffix among ls-remote lines (0: none).
+          # shellcheck disable=SC2016 # awk program text: $2 is awk's field.
+          UPDATER_RESEND_AWK='
+            index($2, prefix) == 1 {
+              suffix = substr($2, length(prefix) + 1)
+              value = suffix + 0
+              if (suffix ~ /^[2-9]$/ && value <= max && value > best) best = value
+            }
+            END { print best + 0 }'
+          UPDATER_RESEND_REFS="$(git ls-remote origin "refs/heads/${UPDATER_RELEASE_BRANCH}-r*")" || pr_fail remote_lookup_failed
+          UPDATER_RESEND_ACTIVE="$(printf '%s\n' "${UPDATER_RESEND_REFS}" | awk -v prefix="refs/heads/${UPDATER_RELEASE_BRANCH}-r" -v max="${UPDATER_RESEND_MAX}" "${UPDATER_RESEND_AWK}")"
+          if [ "${UPDATER_RESEND_ACTIVE}" -ge 2 ]; then
+            BRANCH="${UPDATER_RELEASE_BRANCH}-r${UPDATER_RESEND_ACTIVE}"
+          fi
+          [[ "${BRANCH}" =~ ^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$ ]] || pr_fail invalid_branch_name
 
           # Release trailer: the foreign-commit check below accepts only commits
           # that carry it. The direct path above keeps its message unchanged.
@@ -1490,7 +1525,7 @@ jobs:
 
           # One lookup scoped to head and base. The list API (not search) sees a
           # pull request created seconds earlier.
-          PR_LIST_JSON="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "${BRANCH}" --base "${BASE}" --state all --limit 20 --json number,url,state,isCrossRepository,headRefName,mergedAt,id,autoMergeRequest)" || pr_fail pr_lookup_failed
+          PR_LIST_JSON="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "${BRANCH}" --base "${BASE}" --state all --limit 20 --json number,url,state,isCrossRepository,headRefName,mergedAt,id,autoMergeRequest,author,mergeable)" || pr_fail pr_lookup_failed
           OPEN_PR="$(printf '%s' "${PR_LIST_JSON}" | jq -r --arg b "${BRANCH}" '[.[] | select(.isCrossRepository == false and .headRefName == $b and .state == "OPEN")] | .[0] | if . == null then "" else "\(.number) \(.url)" end')" || pr_fail pr_lookup_failed
           CLOSED_UNMERGED="$(printf '%s' "${PR_LIST_JSON}" | jq -r --arg b "${BRANCH}" '[.[] | select(.isCrossRepository == false and .headRefName == $b and .state == "CLOSED" and .mergedAt == null)] | length')" || pr_fail pr_lookup_failed
           [[ "${CLOSED_UNMERGED}" =~ ^[0-9]+$ ]] || pr_fail pr_lookup_failed
@@ -1584,8 +1619,78 @@ jobs:
             if [ "$(git rev-parse 'FETCH_HEAD^{tree}')" = "$(git rev-parse 'HEAD^{tree}')" ]; then
               PUSHED_SHA="${REMOTE_SHA}"
               PUSH_REASON="branch_up_to_date"
-            else
-              git push --force-with-lease="refs/heads/${BRANCH}:${REMOTE_SHA}" origin "HEAD:refs/heads/${BRANCH}" || pr_fail lease_mismatch_or_push_rejected
+            elif ! UPDATER_REFRESH_PUSH_ERR="$(git push --force-with-lease="refs/heads/${BRANCH}:${REMOTE_SHA}" origin "HEAD:refs/heads/${BRANCH}" 2>&1)"; then
+              printf '%s\n' "${UPDATER_REFRESH_PUSH_ERR}" >&2
+              # Only a refusal to rewrite the branch moves the sync. A lease
+              # mismatch (someone else pushed: client-side "stale info"),
+              # a network or an auth error keeps the fail-closed exit. A bare
+              # GH013 is not matched: GitHub prints it for every ruleset
+              # violation (signatures, status checks, paths); the
+              # non_fast_forward rule adds "Cannot force-push to this branch".
+              if ! printf '%s\n' "${UPDATER_REFRESH_PUSH_ERR}" | grep -Eqi 'cannot force-push|protected branch hook declined|denying non-fast-forward|\[remote rejected\].*non-fast-forward'; then
+                pr_fail lease_mismatch_or_push_rejected
+              fi
+              # Under such a rule every refresh is refused, because the commit
+              # is rebuilt on the current default branch. Move only a PR that
+              # GitHub reports as conflicting (the stuck case); otherwise keep
+              # its head, which carries the same release, and let the verify
+              # job re-check it. Reads the head+base lookup first (§15); an
+              # UNKNOWN or missing value is re-read once below, and only a
+              # value still unknown after that keeps the head (the next run
+              # looks again).
+              updater_resend_mergeable=""
+              if [ -n "${PR_NUMBER}" ]; then
+                updater_resend_mergeable="$(printf '%s' "${PR_LIST_JSON}" | jq -r --arg n "${PR_NUMBER}" '[.[] | select((.number | tostring) == $n)] | .[0].mergeable // ""' 2>/dev/null)" || updater_resend_mergeable=""
+              fi
+              # GitHub computes mergeable lazily, and the head+base lookup above
+              # started that computation. An UNKNOWN or missing value is read
+              # once more (1 PR read, only on this refused path, §15: the
+              # head+base lookup is the only earlier read of it). A failed or
+              # empty re-read keeps the cached value (fail open: kept_head).
+              if [ -n "${PR_NUMBER}" ] && { [ -z "${updater_resend_mergeable}" ] || [ "${updater_resend_mergeable}" = "UNKNOWN" ]; }; then
+                if updater_resend_mergeable_reread="$(gh pr view "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json mergeable --jq '.mergeable // ""' 2>/dev/null)" && [ -n "${updater_resend_mergeable_reread}" ]; then
+                  updater_resend_mergeable="${updater_resend_mergeable_reread}"
+                fi
+              fi
+              if [ -n "${PR_NUMBER}" ] && [ "${updater_resend_mergeable}" != "CONFLICTING" ]; then
+                echo "UPDATER_PR_RESEND outcome=kept_head branch=${BRANCH} pr=${PR_NUMBER} mergeable=${updater_resend_mergeable:-unknown}"
+                PUSHED_SHA="${REMOTE_SHA}"
+                PUSH_REASON="rewrite_refused_kept_head"
+              else
+                UPDATER_RESEND_FROM_BRANCH="${BRANCH}"
+                UPDATER_RESEND_FROM_PR="${PR_NUMBER}"
+                updater_resend_current=1
+                if [ "${BRANCH}" != "${UPDATER_RELEASE_BRANCH}" ]; then
+                  updater_resend_current="${BRANCH##*-r}"
+                fi
+                # Fresh read: the next name above both the current branch and
+                # every -rN already on the remote.
+                UPDATER_RESEND_REFS="$(git ls-remote origin "refs/heads/${UPDATER_RELEASE_BRANCH}-r*")" || pr_fail remote_lookup_failed
+                updater_resend_highest="$(printf '%s\n' "${UPDATER_RESEND_REFS}" | awk -v prefix="refs/heads/${UPDATER_RELEASE_BRANCH}-r" -v max="${UPDATER_RESEND_MAX}" "${UPDATER_RESEND_AWK}")"
+                if [ "${updater_resend_highest}" -gt "${updater_resend_current}" ]; then
+                  updater_resend_current="${updater_resend_highest}"
+                fi
+                updater_resend_target=""
+                if [ $((updater_resend_current + 1)) -le "${UPDATER_RESEND_MAX}" ]; then
+                  updater_resend_target="${UPDATER_RELEASE_BRANCH}-r$((updater_resend_current + 1))"
+                fi
+                if [ -z "${updater_resend_target}" ]; then
+                  echo "::error::UPDATER_PR_RESEND outcome=cap_reached from=${UPDATER_RESEND_FROM_BRANCH} max=-r${UPDATER_RESEND_MAX} old_pr=${UPDATER_RESEND_FROM_PR:-none}"
+                  pr_fail resend_cap_reached
+                fi
+                BRANCH="${updater_resend_target}"
+                # Empty lease value: the push succeeds only if the branch still
+                # does not exist. A failure here ends the run: never a second
+                # new branch in one run.
+                if ! git push --force-with-lease="refs/heads/${BRANCH}:" origin "HEAD:refs/heads/${BRANCH}"; then
+                  echo "::error::UPDATER_PR_RESEND outcome=push_failed from=${UPDATER_RESEND_FROM_BRANCH} branch=${BRANCH} old_pr=${UPDATER_RESEND_FROM_PR:-none}"
+                  pr_fail resend_push_failed
+                fi
+                echo "UPDATER_PR_RESEND outcome=pushed from=${UPDATER_RESEND_FROM_BRANCH} branch=${BRANCH} old_pr=${UPDATER_RESEND_FROM_PR:-none}"
+                PR_NUMBER=""
+                PR_URL=""
+                PUSH_REASON="resent_rewrite_refused"
+              fi
             fi
           fi
 
@@ -1599,11 +1704,35 @@ jobs:
             PR_ACTION="created"
           fi
 
+          # Rewrite-refused resend: close the PR on the refused branch with one
+          # comment linking its replacement. Only a PR the GH_PAT account
+          # opened (PAT_LOGIN is set: the resend runs only after the pusher
+          # check above). The old branch is left alone: rulesets of this shape
+          # also block deletion, and deleting branches is not the updater's call.
+          if [ -n "${UPDATER_RESEND_FROM_BRANCH}" ]; then
+            updater_resend_old_closed="none"
+            if [ -n "${UPDATER_RESEND_FROM_PR}" ]; then
+              updater_resend_old_author="$(printf '%s' "${PR_LIST_JSON}" | jq -r --arg n "${UPDATER_RESEND_FROM_PR}" '[.[] | select((.number | tostring) == $n)] | .[0].author.login // ""' 2>/dev/null)" || updater_resend_old_author=""
+              if [ -n "${PAT_LOGIN:-}" ] && [ "${updater_resend_old_author}" = "${PAT_LOGIN}" ]; then
+                if gh pr close "${UPDATER_RESEND_FROM_PR}" --repo "${GITHUB_REPOSITORY}" --comment "Superseded by ${PR_URL}: this repository refuses rewrites of \`${UPDATER_RESEND_FROM_BRANCH}\`, so the updater rebuilt release ${TAG_TEXT} (${UPSTREAM_SHA}) on the current default branch and pushed it to \`${BRANCH}\`. The old branch is left in place." >/dev/null; then
+                  updater_resend_old_closed="true"
+                else
+                  updater_resend_old_closed="false"
+                  echo "::warning::UPDATER_PR_RESEND could not close #${UPDATER_RESEND_FROM_PR}; close it by hand."
+                fi
+              else
+                updater_resend_old_closed="not_pat_author"
+              fi
+            fi
+            echo "UPDATER_PR_RESEND outcome=opened from=${UPDATER_RESEND_FROM_BRANCH} branch=${BRANCH} pr=${PR_NUMBER} old_pr=${UPDATER_RESEND_FROM_PR:-none} old_pr_closed=${updater_resend_old_closed}"
+          fi
+
           # Best effort: close earlier updater pull requests for older releases.
           # Only same-repository PRs on a strict auto/update-workflows-<sha12>
-          # branch authored by the GH_PAT account are touched.
+          # branch (or its -r2..-r5 resend) authored by the GH_PAT account are
+          # touched; the PR the resend above already handled is skipped.
           if STALE_JSON="$(gh pr list --repo "${GITHUB_REPOSITORY}" --base "${BASE}" --state open --search "head:auto/update-workflows-" --limit 50 --json number,url,headRefName,isCrossRepository,author 2>/dev/null)"; then
-            STALE_CANDIDATES="$(printf '%s' "${STALE_JSON}" | jq -r --arg b "${BRANCH}" '.[] | select(.isCrossRepository == false and (.headRefName | test("^auto/update-workflows-[0-9a-f]{12}$")) and .headRefName != $b) | "\(.number) \(.author.login // "")"' 2>/dev/null)" || STALE_CANDIDATES=""
+            STALE_CANDIDATES="$(printf '%s' "${STALE_JSON}" | jq -r --arg b "${BRANCH}" --arg skip "${UPDATER_RESEND_FROM_PR}" '.[] | select(.isCrossRepository == false and (.headRefName | test("^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$")) and .headRefName != $b and (.number | tostring) != $skip) | "\(.number) \(.author.login // "")"' 2>/dev/null)" || STALE_CANDIDATES=""
             if [ -n "${STALE_CANDIDATES}" ]; then
               if { [ -n "${PAT_LOGIN:-}" ] || PAT_LOGIN="$(gh api user --jq .login 2>/dev/null)"; } && [ -n "${PAT_LOGIN}" ]; then
                 while read -r stale_number stale_author; do

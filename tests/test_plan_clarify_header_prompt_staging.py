@@ -55,8 +55,12 @@ PLAN_RUNNER = REPO_ROOT / "scripts" / "run_plan_codex.sh"
 HEADER_PROMPT = REPO_ROOT / "prompts" / "header.txt"
 
 # The bare-path render invocation that requires prompts/header.txt on disk.
+# clarify.yml runs the support bundle copy, "${SUPPORT_SCRIPTS_DIR:-scripts}/
+# render_prompt.sh" (stuck-states plan P2a); the prompt path stays bare.
 HEADER_RENDER_RE = re.compile(
-	r"\bbash\s+scripts/render_prompt\.sh\s+prompts/header\.txt\b"
+	# run_plan_codex.sh resolves its sibling render_prompt.sh from its own
+	# directory (RUN_PLAN_CODEX_SUPPORT_DIR, stuck-states plan P2a).
+	r"\bbash\s+(?:scripts/|\"\$\{SUPPORT_SCRIPTS_DIR:-scripts\}/|\"\$\{RUN_PLAN_CODEX_SUPPORT_DIR\}/)render_prompt\.sh\"?\s+prompts/header\.txt\b"
 )
 
 
@@ -111,14 +115,14 @@ def test_clarify_respond_isolates_every_model_call() -> None:
 	assert "codex --ask-for-approval" not in respond
 	# Each of the three model calls has a Claude branch (Phase 5a) and the
 	# unchanged codex call it falls back to (exit 75, plan D1).
-	assert respond.count('bash scripts/clarify_isolated_run.sh ') == 6
+	assert respond.count('bash "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_isolated_run.sh" ') == 6
 	for args, rc in (
 		('"${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"', "rc"),
 		('"${RUNTIME_DIR}/critic_prompt.txt" "${RUNTIME_DIR}/critic_output.txt" "${RUNTIME_DIR}/codex_log.txt"', "critic_rc"),
 		('"${CODEX_PROMPT_FILE}.v2" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"', "revise_rc"),
 	):
-		assert f"bash scripts/clarify_isolated_run.sh {args} claude CLARIFY_RESPOND || {rc}=$?" in respond
-		assert f"bash scripts/clarify_isolated_run.sh {args} || {rc}=$?" in respond
+		assert f'bash "${{SUPPORT_SCRIPTS_DIR:-scripts}}/clarify_isolated_run.sh" {args} claude CLARIFY_RESPOND || {rc}=$?' in respond
+		assert f'bash "${{SUPPORT_SCRIPTS_DIR:-scripts}}/clarify_isolated_run.sh" {args} || {rc}=$?' in respond
 		assert f'if [ "${{{rc}}}" -eq 75 ]; then' in respond
 	assert respond.count("CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}") == 2
 

@@ -43,12 +43,20 @@ if [ ! -s "${EDITOR_SUMMARY_FILE}" ] && [ ! -s "${COMMITTED_FILES_FILE:-/dev/nul
     echo "AUTOFIX_REVIEWERS_FAILED=true" >> "$GITHUB_ENV"
     if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ] && [ -n "${RUNTIME_DIR:-}" ]; then
       reviewers_failure_log_args=()
+      # reviewers_stage_stderr.txt (issue #9533) is the reviewer step's own
+      # stderr, teed by the workflow, so a shell crash before any slot log
+      # exists (e.g. `render_prompt.sh: line 306: ...`) is evidence too. It
+      # goes in as --stage-stderr-file, the only source of a plain ERROR line
+      # (slot logs hold raw model-CLI stderr and review prose).
       for reviewers_failure_log in "${PREVIOUS_REVIEWS_DIR:-/nonexistent}"/*.log "${RUNTIME_DIR}"/summariser_*.log; do
         [ -f "${reviewers_failure_log}" ] && reviewers_failure_log_args+=(--log-file "${reviewers_failure_log}")
       done
+      [ -f "${RUNTIME_DIR}/reviewers_stage_stderr.txt" ] && reviewers_failure_log_args+=(--stage-stderr-file "${RUNTIME_DIR}/reviewers_stage_stderr.txt")
       PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" reviewer-failure-evidence "${reviewers_failure_log_args[@]}" \
         > "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null || : > "${RUNTIME_DIR}/reviewers_failure_evidence.txt"
       echo "AUTOFIX_REVIEWERS_FAILED reason=reviewers_failed $(grep -m1 '^dominant_rc=' "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null || echo dominant_rc=unknown)"
+      reviewers_failed_headline="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" failure-headline \
+        --evidence-file "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null | sed -n 's/^first_error=//p' | head -n 1 || true)"
     fi
   elif [ "${SANDBOX_PREPARE_STEP_OUTCOME:-}" = "failure" ]; then
     # The review sandbox could not be prepared (PR #6645: Docker
@@ -99,21 +107,64 @@ if [ ! -s "${EDITOR_SUMMARY_FILE}" ] && [ ! -s "${COMMITTED_FILES_FILE:-/dev/nul
   # "Assemble failure evidence", so every failure comment of one run
   # carries one fingerprint. Empty when the helper is unavailable.
   AUTOFIX_FAILURE_MARKER_SUFFIX=""
+  autofix_failure_marker_line=""
+  autofix_failure_fp=""
   if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
-    autofix_failure_marker_line="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
+    # One helper run yields both marker= and fp= (issue #9533 compares fp=).
+    autofix_failure_fingerprint_out="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
       --failure-reason "${autofix_empty_failure_reason}" \
       --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
       --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
       --evidence-file "${RUNTIME_DIR:-}/sandbox_prepare_failure_evidence.txt" \
       --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
       --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
+      --evidence-file "${RUNTIME_DIR:-}/resolver_stage_stderr.txt" \
       --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
       --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
       --support-sha "${REVIEW_SUPPORT_SHA:-}" \
-      --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null | sed -n 's/^marker=//p' | head -n 1 || true)"
+      --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null || true)"
+    autofix_failure_marker_line="$(printf '%s\n' "${autofix_failure_fingerprint_out}" | sed -n 's/^marker=//p' | head -n 1 || true)"
+    autofix_failure_fp="$(printf '%s\n' "${autofix_failure_fingerprint_out}" | sed -n 's/^fp=//p' | head -n 1 || true)"
     if [ -n "${autofix_failure_marker_line}" ]; then
       AUTOFIX_FAILURE_MARKER_SUFFIX=$'\n\n'"${autofix_failure_marker_line}"
     fi
+  fi
+  # Repeated reviewer failure (issue #9533). The gate already counted the
+  # trusted same-head review-autofix-failure:v1 markers (GATE_FINGERPRINT_CAP_*).
+  # When this run's reviewers_failed fingerprint matches them and this marker
+  # reaches REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED (default
+  # 2), the crash is deterministic: post no "will retry" comment and leave
+  # AUTOFIX_EDITOR_EMPTY_NOOP unset, so the workflow-failure steps label
+  # ai:review-blocked and post one comment naming the fingerprint and the
+  # first error. Any missing or invalid value keeps the retry (fail open).
+  reviewers_failed_repeat_max="${REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED:-2}"
+  case "${reviewers_failed_repeat_max}" in
+    ''|*[!0-9]*|0) reviewers_failed_repeat_max=2 ;;
+  esac
+  reviewers_failed_prior_count="${GATE_FINGERPRINT_CAP_COUNT:-0}"
+  [[ "${reviewers_failed_prior_count}" =~ ^[0-9]{1,6}$ ]] || reviewers_failed_prior_count=0
+  # No fallback to this run's head: an unset gate head fails the same-head
+  # check and keeps the retry.
+  reviewers_failed_gate_head="$(printf '%s' "${GATE_HEAD_SHA_FOR_FINGERPRINT:-}" | tr 'A-F' 'a-f')"
+  reviewers_failed_this_head="$(printf '%s' "${AUTOFIX_FAILURE_HEAD_SHA:-}" | tr 'A-F' 'a-f')"
+  if [ "${autofix_empty_failure_reason}" = "reviewers_failed" ] \
+    && [ "${REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED:-true}" != "false" ] \
+    && [ "${GATE_FINGERPRINT_CAP_REASON:-}" = "reviewers_failed" ] \
+    && [[ "${autofix_failure_fp}" =~ ^[0-9a-f]{64}$ ]] \
+    && [ "${GATE_FINGERPRINT_CAP_FP:-}" = "${autofix_failure_fp}" ] \
+    && [ "${reviewers_failed_prior_count}" -ge 1 ] \
+    && [[ "${reviewers_failed_this_head}" =~ ^[0-9a-f]{40}$ ]] \
+    && [ "${reviewers_failed_gate_head}" = "${reviewers_failed_this_head}" ] \
+    && [ "$((reviewers_failed_prior_count + 1))" -ge "${reviewers_failed_repeat_max}" ]; then
+    reviewers_failed_repeat_pr="${PR_NUMBER:-}"
+    [[ "${reviewers_failed_repeat_pr}" =~ ^[0-9]+$ ]] || reviewers_failed_repeat_pr="unknown"
+    echo "AUTOFIX_REVIEWERS_FAILED_REPEATED pr=${reviewers_failed_repeat_pr} head=${reviewers_failed_this_head} fp=${autofix_failure_fp} count=$((reviewers_failed_prior_count + 1)) max=${reviewers_failed_repeat_max}"
+    {
+      echo "AUTOFIX_REVIEWERS_FAILED_REPEATED=true"
+      echo "AUTOFIX_REVIEWERS_FAILED_REPEATED_COUNT=$((reviewers_failed_prior_count + 1))"
+      echo "AUTOFIX_REVIEWERS_FAILED_REPEATED_FP=${autofix_failure_fp}"
+    } >> "$GITHUB_ENV"
+    exit 1
   fi
   # Issue-less PRs (issue #9487): the standalone stall poller follows only
   # labelled issues, so for a PR whose LINKED_ISSUES_JSON (exported by the
@@ -133,6 +184,9 @@ ${noop_explanation} No \`ai:review-blocked\` label is being applied for this run
 [View workflow run](${RUN_URL}) for details. ${issueless_retry_note}
 EOF
 )"
+  if [ -n "${reviewers_failed_headline:-}" ]; then
+    NOOP_BODY+=$'\n\n'"**First error:** \`${reviewers_failed_headline//\`/\'}\`"
+  fi
   if [ "${autofix_empty_failure_reason}" = "provider_unavailable" ]; then
     NOOP_BODY="${NOOP_BODY/produced no output — will retry/paused — model provider unavailable}"
   fi
@@ -206,6 +260,12 @@ type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 # or a "- commit skipped (...)" marker line when it committed nothing, and one
 # "- <path>" line per committed file otherwise. An unset or missing file is
 # unknown, so no marker is written (fail closed toward not capping).
+# Only a top-level bullet (at most one leading space, no tab) is a declined
+# finding; an indented sub-bullet is the editor's explanation under one. PRs
+# #9453 and #9390 were capped and labelled ai:needs-human because a sub-bullet
+# explaining a sandbox-only test failure ended with "a sandbox-excluded path"
+# while the editor declined no fix for that reason. review_apply_fixes.sh's
+# claimed-changes filter likewise treats indented bullets as nested.
 sandbox_excluded_marker_suffix=""
 sandbox_excluded_nothing_committed=0
 if [ -n "${COMMITTED_FILES_FILE:-}" ] && [ -f "${COMMITTED_FILES_FILE}" ] && [ -r "${COMMITTED_FILES_FILE}" ] \
@@ -232,7 +292,7 @@ if [ "${editor_summary_is_real}" = "1" ] && [ "${sandbox_excluded_nothing_commit
       status = tolower(value)
       next
     }
-    section == "Ignored suggestions (with short reason)" && /^[ \t]*-[ \t]+/ {
+    section == "Ignored suggestions (with short reason)" && /^ ?-[ \t]+/ {
       value = tolower($0)
       sub(trail, "", value)
       if (value ~ /sandbox-excluded path$/) count++
@@ -263,6 +323,108 @@ if [ "${editor_summary_is_real}" = "1" ] && [ "${sandbox_excluded_nothing_commit
     sandbox_excluded_pr="${PR_NUMBER:-}"
     [[ "${sandbox_excluded_pr}" =~ ^[0-9]+$ ]] || sandbox_excluded_pr="unknown"
     echo "AUTOFIX_SANDBOX_EXCLUDED_ESCALATION pr=${sandbox_excluded_pr} head=${sandbox_excluded_head} findings=${sandbox_excluded_findings} outcome=${sandbox_excluded_outcome}${sandbox_excluded_reason}"
+
+    # .gitleaksignore fingerprint suggestion (#9659). The editor never writes
+    # .gitleaksignore (a sandbox-excluded root dotfile), so when a
+    # sandbox-excluded finding names it, the gitleaks "Fingerprint:" lines of
+    # the failed checks' log_tail blocks in PR_CHECK_RUNS_CONTEXT_FILE are
+    # offered as a ready-to-paste block in this step's existing comment (no
+    # extra API call), ahead of the trailing markers. log_tail is untrusted:
+    # a line is used only when it fully matches the gitleaks fingerprint
+    # shape, carries no backtick, angle bracket or control character, and
+    # names a commit that exists and is an ancestor of the validated PR head.
+    # At most 10 lines. Only the count is logged, never the lines. Fail-open:
+    # any error logs outcome=none count=0 and leaves the step's status alone.
+    # Log key: REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=<n|unknown> outcome=suggested|none count=<k> missing=<m>
+    gitleaks_suggest_named="$(tr -d '\r' < "${EDITOR_SUMMARY_FILE}" | awk '
+      BEGIN { section = ""; found = 0; trail = "[] \t.\"\047`)*]+$" }
+      /^(Changes made|Change status|Already satisfied \(suggested but already present\)|Ignored suggestions \(with short reason\)|Reviewer files processed|Review file issue audit|PR comment audit|Regression fingerprint|Runtime failure path):[ \t]*$/ {
+        section = $0
+        sub(/:[ \t]*$/, "", section)
+        next
+      }
+      section == "Ignored suggestions (with short reason)" && /^[ \t]*-[ \t]+/ {
+        value = tolower($0)
+        sub(trail, "", value)
+        if (value ~ /sandbox-excluded path$/ && index(value, ".gitleaksignore") > 0) found = 1
+      }
+      END { print found }
+    ' 2>/dev/null || echo 0)"
+    if [ "${gitleaks_suggest_named}" = "1" ]; then
+      _review_editor_gitleaks_suggestion()
+      {
+        local gitleaks_suggest_head gitleaks_suggest_repo gitleaks_suggest_candidate gitleaks_suggest_sha
+        # Candidates whose commit is absent from the shallow checkout
+        # (fetch-depth 100) are dropped, never fetched; missing=<k> tells that
+        # apart from "no gitleaks output" in the log line.
+        local gitleaks_suggest_missing=0
+        local -a gitleaks_suggest_lines=()
+        gitleaks_suggest_head="$(printf '%s' "${AUTOFIX_FAILURE_HEAD_SHA:-}" | tr 'A-F' 'a-f')"
+        gitleaks_suggest_repo="${GITHUB_WORKSPACE:-$PWD}"
+        if [[ "${gitleaks_suggest_head}" =~ ^[0-9a-f]{40}$ ]] && [ -n "${PR_CHECK_RUNS_CONTEXT_FILE:-}" ] \
+          && [ -f "${PR_CHECK_RUNS_CONTEXT_FILE}" ] && [ ! -L "${PR_CHECK_RUNS_CONTEXT_FILE}" ]; then
+          while IFS= read -r gitleaks_suggest_candidate; do
+            [[ "${gitleaks_suggest_candidate}" =~ ^[0-9a-f]{40}: ]] || continue
+            gitleaks_suggest_sha="${gitleaks_suggest_candidate%%:*}"
+            # The 10-line cap bounds only the suggestion: later candidates are
+            # still counted toward missing= (the extractor emits at most 200).
+            if ! git -C "${gitleaks_suggest_repo}" cat-file -e "${gitleaks_suggest_sha}^{commit}" >/dev/null 2>&1; then
+              gitleaks_suggest_missing=$((gitleaks_suggest_missing + 1))
+            elif [ "${#gitleaks_suggest_lines[@]}" -lt 10 ] && git -C "${gitleaks_suggest_repo}" merge-base --is-ancestor "${gitleaks_suggest_sha}" "${gitleaks_suggest_head}" >/dev/null 2>&1; then
+              gitleaks_suggest_lines+=("${gitleaks_suggest_candidate}")
+            fi
+          done < <(PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c '
+import re, sys
+FP = r"[0-9a-f]{40}:[^:\n]+:[A-Za-z0-9_.-]+:[0-9]+"
+START = re.compile(r"^failed\[[0-9]+\]\.log_tail \([0-9]+ chars\):$")
+HEADER = re.compile(r"^(failed|incomplete)\[[0-9]+\]\.")
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+STAMP = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z[ \t]+")
+LINE = re.compile(r"Fingerprint:[ \t]+(" + FP + r")[ \t]*")
+with open(sys.argv[1], "rb") as fh:
+	text = fh.read(4 * 1024 * 1024).decode("utf-8", errors="replace")
+seen = []
+in_tail = False
+for raw in text.split("\n"):
+	line = raw.replace("\r", "")
+	if START.match(line):
+		in_tail = True
+		continue
+	if HEADER.match(line):
+		in_tail = False
+		continue
+	if not in_tail:
+		continue
+	line = STAMP.sub("", ANSI.sub("", line), count=1)
+	match = LINE.fullmatch(line)
+	if not match:
+		continue
+	fp = match.group(1)
+	if len(fp) > 400 or any(ch in fp for ch in "`<>") or not fp.isprintable():
+		continue
+	if fp not in seen:
+		seen.append(fp)
+	if len(seen) >= 200:
+		break
+for fp in seen:
+	print(fp)
+' "${PR_CHECK_RUNS_CONTEXT_FILE}" 2>/dev/null || true)
+        fi
+        if [ "${#gitleaks_suggest_lines[@]}" -gt 0 ] && {
+          printf '\n%s\n\n' "### Suggested \`.gitleaksignore\` lines (not applied)"
+          printf '%s\n\n' "The editor declined a finding on \`.gitleaksignore\`, a sandbox-excluded path the autofix editor never writes. The failed checks' gitleaks output names the fingerprints below, each for a commit in this pull request's history. Adding them suppresses a gitleaks secret finding, so a human or the main-branch pipeline must decide whether each one is a false positive before pasting it into \`.gitleaksignore\`."
+          printf '%s\n' '```text'
+          printf '%s\n' "${gitleaks_suggest_lines[@]}"
+          printf '%s\n' '```'
+        } >> "${PR_EDITOR_COMMENT_FILE}"; then
+          echo "REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=${sandbox_excluded_pr} outcome=suggested count=${#gitleaks_suggest_lines[@]} missing=${gitleaks_suggest_missing}"
+        else
+          echo "REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=${sandbox_excluded_pr} outcome=none count=0 missing=${gitleaks_suggest_missing}"
+        fi
+        return 0
+      }
+      _review_editor_gitleaks_suggestion || echo "REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=${sandbox_excluded_pr} outcome=none count=0 missing=0"
+    fi
   fi
 fi
 

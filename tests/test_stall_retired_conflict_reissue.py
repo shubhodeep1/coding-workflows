@@ -471,6 +471,29 @@ def test_helper_head_moved_fails_closed(tmp_path: Path) -> None:
 	assert "RC=1" in result.stdout and "reason=head_moved" in result.stdout, result.stdout + result.stderr
 
 
+@pytest.mark.parametrize("awk_impl", ["mawk", "gawk"])
+def test_list_integration_conflict_files_portable_across_awk(tmp_path: Path, awk_impl: str) -> None:
+	# mawk 1.3.4 (Ubuntu's default awk) panics compiling an interval followed
+	# by an optional group (`{40}(...{24})?`) and prints nothing, which made
+	# the conflict list empty and every caller fail open as probe_unavailable.
+	# Pin `awk` to each implementation via a PATH shim so the probe is checked
+	# on both, wherever that implementation is installed.
+	awk_path = shutil.which(awk_impl)
+	if awk_path is None or shutil.which("git") is None:
+		pytest.skip(f"{awk_impl} and git are required")
+	shim_dir = tmp_path / "awk-shim"
+	shim_dir.mkdir()
+	(shim_dir / "awk").symlink_to(awk_path)
+	poller, _head_sha = _scratch(tmp_path, base_deletes=RETIRED)
+	script = _extract_function("_list_integration_conflict_files") + '\n_list_integration_conflict_files ai/issue-7 main\n'
+	env = {**os.environ, **GIT_ENV, "PATH": f"{shim_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+	for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+		env.pop(key, None)
+	result = subprocess.run(["bash", "-c", script], cwd=poller, env=env, capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert result.stdout.splitlines() == [RETIRED], result.stdout + result.stderr
+
+
 @needs_tools
 def test_helper_kill_switch_fails_closed(tmp_path: Path) -> None:
 	poller, head_sha = _scratch(tmp_path, base_deletes=RETIRED)

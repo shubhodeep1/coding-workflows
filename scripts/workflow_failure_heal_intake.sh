@@ -137,6 +137,12 @@
 #                                         workflow_run report's linked runs add their workflow,
 #                                         called workflows and step scripts to the frozen scope
 #                                         (#8360); "false" (any case) turns that off
+#   WORKFLOW_HEAL_OCCURRENCE_THROTTLE_SECS  default 86400: a release_blocker report that
+#                                         duplicates an open heal issue posts no occurrence
+#                                         comment and sends no alert when the pipeline account
+#                                         recorded one on that issue within this many seconds
+#                                         (other kinds are never throttled); a missing, zero or
+#                                         non-numeric value uses the default
 #   WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED   default "false": only "true" adds the `## Evidence pack`
 #                                         (failed-run and linked-run step timelines) to the issue body
 #   WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES evidence pack byte cap (default 12000, clamped 1024-20000)
@@ -185,6 +191,10 @@
 #                                         carries an identity is always verified (issue #6559).
 #   WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS  max age of the identity's iat (default 3600), plus
 #                                         HEAL_INTAKE_QUEUE_WAITED_SECONDS (set by the queue step)
+#                                         or, when larger, the time since this run attempt
+#                                         started (runner wait included; one run read): for an
+#                                         engine_fallback report up front, for an identity only
+#                                         after it first failed as identity_stale
 #   WORKFLOW_HEAL_REPORT_ORIGIN           repository_dispatch | workflow_run | workflow_dispatch |
 #                                         recovery_scan (default GITHUB_EVENT_NAME, else
 #                                         repository_dispatch). recovery_scan is set only by
@@ -319,6 +329,32 @@ case "${REISSUE_DEDUPE_SWITCH,,}" in
 		;;
 esac
 unset REISSUE_DEDUPE_SWITCH
+# Occurrence counter comment: on by default; "false" turns it off (every repeat
+# report is its own comment again) and any other value also turns it off with
+# a warning. See _heal_record_occurrence.
+OCCURRENCE_IN_PLACE_SWITCH="${HEAL_OCCURRENCE_IN_PLACE_ENABLED-}"
+case "${OCCURRENCE_IN_PLACE_SWITCH,,}" in
+	''|true) OCCURRENCE_IN_PLACE_ENABLED="true" ;;
+	false) OCCURRENCE_IN_PLACE_ENABLED="false" ;;
+	*)
+		OCCURRENCE_IN_PLACE_ENABLED="false"
+		echo "::warning::WORKFLOW_HEAL occurrence_update outcome=skip reason=invalid_switch" >&2
+		;;
+esac
+unset OCCURRENCE_IN_PLACE_SWITCH
+# Heal-of-heal dedupe: on by default; "false" turns it off (a heal issue's own
+# failed phase run continues the lineage as before) and any other value also
+# turns it off with a warning. See budget_decision(report_issue=...).
+HEAL_SOURCE_DEDUPE_SWITCH="${HEAL_SOURCE_DEDUPE_ENABLED-}"
+case "${HEAL_SOURCE_DEDUPE_SWITCH,,}" in
+	''|true) HEAL_SOURCE_DEDUPE_ON="true" ;;
+	false) HEAL_SOURCE_DEDUPE_ON="false" ;;
+	*)
+		HEAL_SOURCE_DEDUPE_ON="false"
+		echo "::warning::WORKFLOW_HEAL heal_source_dedupe outcome=skip reason=invalid_switch" >&2
+		;;
+esac
+unset HEAL_SOURCE_DEDUPE_SWITCH
 HEAL_LABEL="ai:workflow-heal"
 ESCALATED_LABEL="ai:workflow-heal-escalated"
 RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${SELF_REPO}/actions/runs/${GITHUB_RUN_ID:-0}"
@@ -381,6 +417,10 @@ CODE_REF_REASON="disabled"
 CODE_REF_PRIOR_TARGET=""
 CODE_REF_PRIOR_SOURCE=""
 REPORT_MAX_AGE="$(_positive_or_default "${WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS:-}" 3600)"
+# Release-blocker occurrence throttle (stuck-states P4): seconds between two
+# recorded occurrences of one open release_blocker heal issue.
+OCCURRENCE_THROTTLE_SECS="$(_positive_or_default "${WORKFLOW_HEAL_OCCURRENCE_THROTTLE_SECS:-}" 86400)"
+[[ "${OCCURRENCE_THROTTLE_SECS}" =~ ^[1-9][0-9]{0,9}$ ]] || OCCURRENCE_THROTTLE_SECS=86400
 # Time this run spent in the heal intake queue (scripts/workflow_failure_heal_queue.sh)
 # does not count against the report: the age limit applies at arrival.
 QUEUE_WAITED_SECONDS="$(_positive_or_default "${HEAL_INTAKE_QUEUE_WAITED_SECONDS:-}" 0)"
@@ -477,6 +517,13 @@ _pf '.failure_evidence // ""' > "${FAILURE_EVIDENCE_FILE}"
 PAYLOAD_BASE_BRANCH="$(_pf '.base_branch // ""')"
 PAYLOAD_SCRIPT_REF="$(_pf '.script_ref // ""')"
 PAYLOAD_CRASH_FILE="$(_pf '.crash_file // ""')"
+# release_blocker fields (validated by validate-payload; empty for other kinds).
+BLOCKER_REASON="$(_pf '.blocker_reason // ""')"
+BLOCKER_AGE_SECS="$(_pf '.blocker_age_secs // ""')"
+BLOCKER_AGE_TEXT="an unknown time"
+if [[ "${BLOCKER_AGE_SECS}" =~ ^[0-9]{1,10}$ ]]; then
+	BLOCKER_AGE_TEXT="$(( 10#${BLOCKER_AGE_SECS} / 3600 ))h"
+fi
 
 # --- Report authentication (issue #6559) -------------------------------------
 #
@@ -497,6 +544,51 @@ _report_auth_reject()
 	tg_send_msg "Workflow failure heal intake rejected a report claiming to come from ${SOURCE_REPO} (reason ${reject_reason}); nothing was filed."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
 	exit 0
 }
+
+# Runner wait. The intake job can wait for a GitHub-hosted runner long after
+# the dispatch arrived: on 2026-11-13 runs 43439048054, 43496779526 and
+# 43498856864 started 1h54m to 3h25m after they were queued. The age limit
+# applies at arrival, so the credit is the time since this run attempt started
+# (GitHub's run_started_at, which covers the runner wait and the heal queue
+# wait) when that exceeds the queue wait already added above. A re-run attempt
+# starts its own clock, so a replayed report gains nothing.
+# Only an engine_fallback report reads it here, for the reporting-run age
+# check (verify-engine-reporter-run --max-age). A report that carries an
+# identity is credited by the identity_stale retry below (PR #9516), which
+# reads the run only when the first verification failed as stale; reading it
+# here as well cost a second GET of the same run (§15) and credited the same
+# wait twice.
+# CLAUDE.md §15 audit: no earlier call in this script or the workflow's earlier
+# steps reads this run, so this is one GET per engine_fallback
+# repository_dispatch report. A failed read or an unparseable time keeps the
+# queue-only credit; the result is clamped to GitHub's 24-hour queue limit.
+RUN_ATTEMPT_ELAPSED_SECONDS=""
+if [ "${REPORT_ORIGIN}" = "repository_dispatch" ] && [ "${SOURCE_KIND}" = "engine_fallback" ] \
+	&& [[ "${GITHUB_RUN_ID:-}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+	run_attempt_number="${GITHUB_RUN_ATTEMPT:-1}"
+	[[ "${run_attempt_number}" =~ ^[1-9][0-9]{0,5}$ ]] || run_attempt_number=1
+	RUN_ATTEMPT_STARTED_AT="$(gh_retry gh api --method GET "repos/${SELF_REPO}/actions/runs/${GITHUB_RUN_ID}/attempts/${run_attempt_number}" --jq '.run_started_at // ""' 2>/dev/null | tr -d '[:space:]' || true)"
+	if [[ "${RUN_ATTEMPT_STARTED_AT}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+		run_attempt_started_epoch="$(date -u -d "${RUN_ATTEMPT_STARTED_AT}" +%s 2>/dev/null || true)"
+		if [[ "${run_attempt_started_epoch}" =~ ^[0-9]+$ ]]; then
+			RUN_ATTEMPT_ELAPSED_SECONDS=$(( $(date -u +%s) - run_attempt_started_epoch ))
+			[ "${RUN_ATTEMPT_ELAPSED_SECONDS}" -ge 0 ] || RUN_ATTEMPT_ELAPSED_SECONDS=0
+			[ "${RUN_ATTEMPT_ELAPSED_SECONDS}" -le 86400 ] || RUN_ATTEMPT_ELAPSED_SECONDS=86400
+		fi
+	fi
+	if [[ "${RUN_ATTEMPT_ELAPSED_SECONDS}" =~ ^[0-9]+$ ]]; then
+		# not_needed: the queue wait already credited covers this attempt's
+		# elapsed time, so max_age is unchanged (the label must not say applied).
+		run_attempt_credit_outcome="not_needed"
+		if [ "${RUN_ATTEMPT_ELAPSED_SECONDS}" -gt "$((10#${QUEUE_WAITED_SECONDS}))" ]; then
+			REPORT_MAX_AGE=$((REPORT_MAX_AGE + RUN_ATTEMPT_ELAPSED_SECONDS - 10#${QUEUE_WAITED_SECONDS}))
+			run_attempt_credit_outcome="applied"
+		fi
+		log "report_age_credit outcome=${run_attempt_credit_outcome} attempt_elapsed_seconds=${RUN_ATTEMPT_ELAPSED_SECONDS} queue_waited_seconds=$((10#${QUEUE_WAITED_SECONDS})) max_age=${REPORT_MAX_AGE}"
+	else
+		log "report_age_credit outcome=unavailable queue_waited_seconds=$((10#${QUEUE_WAITED_SECONDS})) max_age=${REPORT_MAX_AGE}"
+	fi
+fi
 
 REPORT_AUTH=""
 # recovery_scan (#7333): the hourly scan rebuilt this autofix_failure report
@@ -558,7 +650,13 @@ case "${REPORT_ORIGIN}" in
 					# this script or the queue step reads this run, and the read
 					# is made only on this path. Fails closed: when the read fails
 					# the rejection stands.
-					if [ "${IDENTITY_REJECT_REASON}" = "identity_stale" ]; then
+					# Skipped when the report_age_credit block above already
+					# measured this attempt's elapsed time (an engine_fallback
+					# report that also carries an identity): REPORT_MAX_AGE then
+					# carries that wait, and adding the arrival wait again would
+					# credit the same runner wait twice and accept a report that
+					# was already stale on arrival.
+					if [ "${IDENTITY_REJECT_REASON}" = "identity_stale" ] && ! [[ "${RUN_ATTEMPT_ELAPSED_SECONDS}" =~ ^[0-9]+$ ]]; then
 						INTAKE_SELF_RUN_FILE="${RUNTIME_DIR}/intake_self_run.json"
 						INTAKE_ARRIVAL_WAITED_SECONDS=0
 						if [[ "${GITHUB_RUN_ID:-}" =~ ^[1-9][0-9]{0,19}$ ]] \
@@ -568,6 +666,7 @@ case "${REPORT_ORIGIN}" in
 							if [[ "${INTAKE_RUN_STARTED_AT}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]] && [[ "${INTAKE_RUN_STARTED_EPOCH}" =~ ^[0-9]+$ ]]; then
 								INTAKE_ARRIVAL_WAITED_SECONDS=$(( $(date -u +%s) - INTAKE_RUN_STARTED_EPOCH ))
 								[ "${INTAKE_ARRIVAL_WAITED_SECONDS}" -ge 0 ] || INTAKE_ARRIVAL_WAITED_SECONDS=0
+								[ "${INTAKE_ARRIVAL_WAITED_SECONDS}" -le 86400 ] || INTAKE_ARRIVAL_WAITED_SECONDS=86400
 							fi
 						fi
 						log "report_identity_age_credit arrival_waited_seconds=${INTAKE_ARRIVAL_WAITED_SECONDS} queue_waited_seconds=${QUEUE_WAITED_SECONDS} source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none}"
@@ -698,11 +797,13 @@ if [ "${REPORT_AUTH}" != "event" ]; then
 		fi
 	fi
 	BIND_RUN_COUNT=0
-	# Only label-escalation reports bind their runs here; phase, autofix and
-	# workflow_run reports have their runs bound by the provenance gate below,
-	# which keeps the current run first and reads no earlier run it rejects.
+	# Only label-escalation and release_blocker reports bind their runs here;
+	# phase, autofix and workflow_run reports have their runs bound by the
+	# provenance gate below, which keeps the current run first and reads no
+	# earlier run it rejects. A release_blocker's claimed gate runs must belong
+	# to this repository and have failed (bind-report: no_bound_runs otherwise).
 	BIND_RUNS_HERE=false
-	if [ "${SOURCE_KIND}" = "issue" ] || [ "${SOURCE_KIND}" = "pull_request" ]; then
+	if [ "${SOURCE_KIND}" = "issue" ] || [ "${SOURCE_KIND}" = "pull_request" ] || [ "${SOURCE_KIND}" = "release_blocker" ]; then
 		BIND_RUNS_HERE=true
 	fi
 	while [ "${BIND_RUNS_HERE}" = "true" ] && IFS= read -r bind_run_id; do
@@ -767,6 +868,103 @@ _heal_fetch_issue_list()
 		| jq -s --arg repository "${list_repo}" 'map(. + {repository: $repository})' > "${list_out}" 2>/dev/null
 }
 
+# Login of the account this intake posts comments as (the GH_TOKEN account).
+# An earlier /user result of this run is reused (PROVENANCE_LOGIN,
+# PHASE_COMMENT_AUTHOR, HEAL_TRUSTED_AUTHOR); otherwise one /user read, kept
+# for the rest of the run. Sets HEAL_OCCURRENCE_LOGIN (empty when it cannot be
+# read); called directly, not in `$(...)`, so the value is kept.
+HEAL_OCCURRENCE_LOGIN=""
+_heal_occurrence_login()
+{
+	if [ -z "${HEAL_OCCURRENCE_LOGIN}" ]; then
+		HEAL_OCCURRENCE_LOGIN="${PROVENANCE_LOGIN:-${PHASE_COMMENT_AUTHOR:-${HEAL_TRUSTED_AUTHOR:-}}}"
+	fi
+	if [ -z "${HEAL_OCCURRENCE_LOGIN}" ]; then
+		HEAL_OCCURRENCE_LOGIN="$(gh_retry gh api --method GET user --jq '.login // empty' 2>/dev/null || true)"
+	fi
+	return 0
+}
+
+# Record one repeat report on an existing heal issue.
+#   _heal_record_occurrence <repo> <issue> <occurrence file> [<comments json>]
+# With HEAL_OCCURRENCE_IN_PLACE_ENABLED on (default) the issue keeps ONE
+# occurrence comment: the newest counter comment this account wrote is edited
+# to carry the new count and the newest reports (workflow_failure_heal.py
+# merge-occurrence); the first repeat posts that comment. An edit starts no
+# `issue_comment` wrapper run (they trigger on `created`), where every new
+# comment started four (#9200: 271 occurrence comments in two days).
+# The poller's stale auto-close reads only an issue's newest 20 comments, so a
+# counter with HEAL_OCCURRENCE_REPOST_AFTER (15) or more newer comments after
+# it is posted again as a new comment and the old one is deleted; the counter
+# then stays inside that window.
+# §15 audit: the heal issue list carries no comments. A caller that read
+# this issue's comments just before (projection `{id, author, created_at,
+# body}`) may pass that file as the 4th argument; no caller does today: the
+# heal-scope recovery read predates the diagnosis and lacks `created_at`, so
+# merging into it would widen the race below and lose `first=`. So this adds
+# one paginated comments GET per repeat report, then one PATCH (or the one
+# POST there was before, and one DELETE on a re-post). The account login reuses an earlier /user result.
+# Fail open: with the switch off, an unknown login, or a failed list or merge,
+# the report is posted as its own comment exactly as before; a failed edit
+# posts the merged body as a new comment, which the next repeat then edits.
+# Not locked: two intakes that handle the same issue at the same moment both
+# read count N, and the later write replaces the earlier one, so that report's
+# entry and one count are lost. Accepted: the reports are still in each
+# intake run's own log, and a lock would cost every repeat a second write.
+# Returns the POST / PATCH status; logs `occurrence_update outcome=...`.
+HEAL_OCCURRENCE_REPOST_AFTER=15
+_heal_record_occurrence()
+{
+	local occ_repo="$1" occ_issue="$2" occ_file="$3" occ_cached_comments="${4:-}"
+	local occ_comments="${occ_file}.comments.json" occ_merged="${occ_file}.merged.md" occ_meta="" occ_comment_id="" occ_count="" occ_newer="" occ_login=""
+	if [ "${OCCURRENCE_IN_PLACE_ENABLED}" = "true" ] && [[ "${occ_issue}" =~ ^[0-9]+$ ]]; then
+		_heal_occurrence_login
+		occ_login="${HEAL_OCCURRENCE_LOGIN}"
+	fi
+	if [ -z "${occ_login}" ]; then
+		[ "${OCCURRENCE_IN_PLACE_ENABLED}" != "true" ] || log "occurrence_update outcome=fallback reason=login_unavailable issue=${occ_issue} repo=${occ_repo}"
+		gh_retry gh api "repos/${occ_repo}/issues/${occ_issue}/comments" -F body=@"${occ_file}" >/dev/null 2>&1
+		return $?
+	fi
+	if [ -n "${occ_cached_comments}" ] && jq -e 'type == "array"' "${occ_cached_comments}" >/dev/null 2>&1; then
+		occ_comments="${occ_cached_comments}"
+	elif ! gh_retry gh api --method GET --paginate "repos/${occ_repo}/issues/${occ_issue}/comments" -F per_page=100 \
+		--jq '.[] | {id, author: (.user.login // ""), created_at, body: (.body // "")}' 2>/dev/null | jq -s '.' > "${occ_comments}" 2>/dev/null \
+		|| ! jq -e 'type == "array"' "${occ_comments}" >/dev/null 2>&1; then
+		occ_comments=""
+	fi
+	if [ -z "${occ_comments}" ] || ! occ_meta="$(python3 "${HEAL_PY}" merge-occurrence --comments-json "${occ_comments}" --occurrence-file "${occ_file}" \
+		--trusted-login "${occ_login}" --body-out "${occ_merged}" 2>/dev/null)"; then
+		log "occurrence_update outcome=fallback reason=merge_unavailable issue=${occ_issue} repo=${occ_repo}"
+		gh_retry gh api "repos/${occ_repo}/issues/${occ_issue}/comments" -F body=@"${occ_file}" >/dev/null 2>&1
+		return $?
+	fi
+	occ_comment_id="$(jq -r '.comment_id // empty' <<< "${occ_meta}" 2>/dev/null || true)"
+	occ_count="$(jq -r '.count // empty' <<< "${occ_meta}" 2>/dev/null || true)"
+	occ_newer="$(jq -r '.newer_comments // 0' <<< "${occ_meta}" 2>/dev/null || echo 0)"
+	[[ "${occ_newer}" =~ ^[0-9]+$ ]] || occ_newer=0
+	if [[ "${occ_comment_id}" =~ ^[0-9]+$ ]] && [ "${occ_newer}" -lt "${HEAL_OCCURRENCE_REPOST_AFTER}" ]; then
+		if gh_retry gh api --method PATCH "repos/${occ_repo}/issues/comments/${occ_comment_id}" -F body=@"${occ_merged}" >/dev/null 2>&1; then
+			log "occurrence_update outcome=edited issue=${occ_issue} repo=${occ_repo} comment=${occ_comment_id} count=${occ_count:-unknown}"
+			return 0
+		fi
+		log "occurrence_update outcome=fallback reason=edit_failed issue=${occ_issue} repo=${occ_repo} comment=${occ_comment_id}"
+		occ_comment_id=""
+	fi
+	if gh_retry gh api "repos/${occ_repo}/issues/${occ_issue}/comments" -F body=@"${occ_merged}" >/dev/null 2>&1; then
+		if [[ "${occ_comment_id}" =~ ^[0-9]+$ ]]; then
+			# Re-post: the buried counter is replaced by the one just posted.
+			gh_retry gh api --method DELETE "repos/${occ_repo}/issues/comments/${occ_comment_id}" >/dev/null 2>&1 \
+				|| log "warn occurrence_old_counter_delete_failed issue=${occ_issue} repo=${occ_repo} comment=${occ_comment_id}"
+			log "occurrence_update outcome=reposted issue=${occ_issue} repo=${occ_repo} replaced=${occ_comment_id} newer_comments=${occ_newer} count=${occ_count:-unknown}"
+		else
+			log "occurrence_update outcome=created issue=${occ_issue} repo=${occ_repo} count=${occ_count:-unknown}"
+		fi
+		return 0
+	fi
+	return 1
+}
+
 # HEAL_INTAKE_SCOPE_GUARD_ENABLED (#6871): on when unset, empty or "true"
 # (any letter case); any other value is off.
 _heal_intake_scope_guard_is_on()
@@ -805,12 +1003,14 @@ _git_fetch_diagnosis_ref()
 # verified reporter run, so an unverified scope there is a fault: it must not
 # exit the whole intake in the middle of its fingerprint-group loop. The same
 # holds for an engine_fallback report whose reporter_run verified
-# (ENGINE_REPORTER_RUN_REF, set before the scope inputs are frozen).
+# (ENGINE_REPORTER_RUN_REF, set before the scope inputs are frozen), and for a
+# release_blocker report whose reporter_run verified (RELEASE_BLOCKER_REPORTER_RUN_REF).
 _heal_report_claimed_no_runs()
 {
 	[ "${SOURCE_KIND:-}" != "synced_security_finding" ] \
 		&& [ "${SOURCE_KIND:-}" != "synced_check_failure" ] \
 		&& [ -z "${ENGINE_REPORTER_RUN_REF:-}" ] \
+		&& [ -z "${RELEASE_BLOCKER_REPORTER_RUN_REF:-}" ] \
 		&& [ "${HEAL_SCOPE_RECOVERY_ACTIVE:-}" != "true" ] \
 		&& [ "$(jq -r '(.run_refs // []) | if type == "array" then length else -1 end' "${PAYLOAD_FILE}" 2>/dev/null || echo unknown)" = "0" ] \
 		&& [ "$(jq -r '(.run_refs // []) | if type == "array" then length else -1 end' "${PAYLOAD_RAW_FILE}" 2>/dev/null || echo unknown)" = "0" ]
@@ -1013,8 +1213,7 @@ _synced_security_finding_intake()
 				python3 "${HEAL_PY}" compose-synced-security-occurrence --payload-json "${PAYLOAD_FILE}" --group-json "${ss_group}" \
 					--intake-run-url "${RUN_URL}" > "${ss_dir}/occurrence_${ss_index}.md" \
 					|| { log "error occurrence_compose_failed fp=${FP} source=${SOURCE_REPO}"; ss_skipped=$((ss_skipped + 1)); ss_failed=1; continue; }
-				if [[ "${ss_existing}" =~ ^[0-9]+$ ]] && gh_retry gh api "repos/${SELF_REPO}/issues/${ss_existing}/comments" \
-					-F body=@"${ss_dir}/occurrence_${ss_index}.md" >/dev/null 2>&1; then
+				if [[ "${ss_existing}" =~ ^[0-9]+$ ]] && _heal_record_occurrence "${SELF_REPO}" "${ss_existing}" "${ss_dir}/occurrence_${ss_index}.md"; then
 					log "duplicate fp=${FP} existing_issue=${ss_existing} occurrence=recorded source=${SOURCE_REPO}"
 					ss_occurrences=$((ss_occurrences + 1))
 					ss_links="${ss_links}"$'\n'"- occurrence on #${ss_existing}"
@@ -1210,8 +1409,7 @@ _synced_check_failure_intake()
 					log "error occurrence_compose_failed fp=${FP} source=${SOURCE_REPO}"
 					exit 1
 				fi
-				if [[ "${sc_existing}" =~ ^[0-9]+$ ]] && gh_retry gh api "repos/${SELF_REPO}/issues/${sc_existing}/comments" \
-					-F body=@"${sc_dir}/occurrence.md" >/dev/null 2>&1; then
+				if [[ "${sc_existing}" =~ ^[0-9]+$ ]] && _heal_record_occurrence "${SELF_REPO}" "${sc_existing}" "${sc_dir}/occurrence.md"; then
 					log "duplicate fp=${FP} existing_issue=${sc_existing} occurrence=recorded source=${SOURCE_REPO}"
 					sc_outcome="occurrence"
 					sc_link="occurrence on #${sc_existing}"
@@ -2001,6 +2199,17 @@ if [ "${SOURCE_KIND}" = "engine_fallback" ]; then
 	FIRST_WORKFLOW_NAME="ai-engine-fallback"
 	FIRST_FAILING_STEP="${ENGINE_ROLE}"
 	SIGNATURE="${ENGINE_REASON}"
+elif [ "${SOURCE_KIND}" = "release_blocker" ] && [ "${READ_JOB_LOG_COUNT}" -eq 0 ]; then
+	# A release-health blocker without a readable failed gate log (D2 of the
+	# stuck-states P4 plan): key on the producer and the validated reason only.
+	# The evidence is producer text that changes between ticks (ages, run ids),
+	# so it never enters the fingerprint; the same reason on another SHA joins
+	# the same issue. A blocker whose bound gate runs gave readable logs takes
+	# the log-signature branch below and lands on the gate failure's own issue.
+	BLOCKER_REASON="$(_pf '.blocker_reason // ""')"
+	FIRST_WORKFLOW_NAME="${PAYLOAD_WORKFLOW_NAME}"
+	FIRST_FAILING_STEP="blocker:${BLOCKER_REASON}"
+	SIGNATURE="release-blocker:${BLOCKER_REASON}"
 elif [ "${SOURCE_KIND}" = "validation_failure" ]; then
 	# A harness-owned runtime validation failure: one heal issue per stage,
 	# reason and normalised error signature, across consumers (Q14). The
@@ -2199,6 +2408,16 @@ fi
 if { [ "${SOURCE_KIND}" = "autofix_failure" ] || [ "${SOURCE_KIND}" = "phase_failure" ]; } && [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
 	BUDGET_ARGS+=(--source-key "${SOURCE_REPO}#${ISSUE_NUMBER}" --source-head-branch "${HEAD_BRANCH}")
 fi
+# Heal-of-heal dedupe: a heal issue's own failed clarify / plan / implement run
+# is recorded on that heal issue as an occurrence, never filed as a new heal
+# issue for the heal issue. It is not diagnosed and not escalated here: only a
+# run that fails with the issue's own fingerprint (or its own cause, inside the
+# cause-grouping window) is escalated (below), and
+# stall recovery's budgets bound the retries. The budget checks the number
+# against the GitHub heal-issue list, not against the report's labels.
+if [ "${HEAL_SOURCE_DEDUPE_ON}" = "true" ] && [ "${SOURCE_KIND}" = "phase_failure" ] && [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
+	BUDGET_ARGS+=(--report-issue "${SOURCE_REPO}#${ISSUE_NUMBER}")
+fi
 # Cause grouping (P5 / D3): set only with the switch on and an eligible report.
 if [ -n "${CAUSE_KEY}" ]; then
 	BUDGET_ARGS+=(--cause "${CAUSE_KEY}" --cause-window-days "${CAUSE_GROUPING_DAYS}")
@@ -2312,6 +2531,8 @@ _heal_scope_recovery_evaluate()
 	# A cause match (P5 / D3) is another fingerprint's heal issue; this report
 	# never replaces or recovers it.
 	[ "$(jq -r '.match // ""' "${DECISION_FILE}")" != "cause" ] || return 0
+	# A heal issue's own failed run (heal-of-heal dedupe) is recorded, not replaced.
+	[ "$(jq -r '.match // ""' "${DECISION_FILE}")" != "heal_source" ] || return 0
 	local recovery_issue recovery_repo recovery_url recovery_login
 	local recovery_record="${RUNTIME_DIR}/heal_scope_recovery_issue.json"
 	local recovery_comments="${RUNTIME_DIR}/heal_scope_recovery_comments.json"
@@ -2424,6 +2645,13 @@ _heal_scope_recovery_evaluate()
 				recovery_arg_index=$((recovery_arg_index + 2))
 				continue
 				;;
+			# Heal-of-heal dedupe is not a cap either: another open heal issue
+			# whose own run failed must not turn the replacement into a
+			# `match: heal_source` duplicate.
+			--report-issue)
+				recovery_arg_index=$((recovery_arg_index + 2))
+				continue
+				;;
 		esac
 		recovery_budget_args+=("${BUDGET_ARGS[${recovery_arg_index}]}")
 		recovery_arg_index=$((recovery_arg_index + 1))
@@ -2513,13 +2741,59 @@ case "${ACTION}" in
 		EXISTING_REPO="$(jq -r '.existing_repo // ""' "${DECISION_FILE}")"
 		[ -n "${EXISTING_REPO}" ] || EXISTING_REPO="${SELF_REPO}"
 		DUPLICATE_MATCH="$(jq -r '.match // "fingerprint"' "${DECISION_FILE}")"
+		if [ "${SOURCE_KIND}" = "release_blocker" ]; then
+			# Occurrence throttle (stuck-states P4, D3): a blocker re-reports
+			# every producer tick while it persists, so at most one occurrence
+			# comment (and one alert) per OCCURRENCE_THROTTLE_SECS. Only the
+			# pipeline account's occurrence_at markers count. §14 audit: no
+			# earlier call in this run read the duplicate issue's comments (the
+			# issue list carries bodies only); this is one `since`-bounded read
+			# per release_blocker duplicate. A failed read fails open (posts).
+			BLOCKER_THROTTLE_COMMENTS="${RUNTIME_DIR}/occurrence_throttle_comments.json"
+			BLOCKER_THROTTLE_RESULT="${RUNTIME_DIR}/occurrence_throttle.json"
+			BLOCKER_THROTTLE_LOGIN="${PROVENANCE_LOGIN:-}"
+			[ -n "${BLOCKER_THROTTLE_LOGIN}" ] || BLOCKER_THROTTLE_LOGIN="${HEAL_TRUSTED_AUTHOR:-}"
+			if [ -z "${BLOCKER_THROTTLE_LOGIN}" ]; then
+				BLOCKER_THROTTLE_LOGIN="$(gh_retry gh api --method GET user --jq '.login // empty' 2>/dev/null || true)"
+			fi
+			[ -n "${BLOCKER_THROTTLE_LOGIN}" ] || log "warn occurrence_throttle_login_unavailable existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP}"
+			# The duplicate's list entry (already fetched for the budget): a
+			# release_blocker issue the pipeline filed opens the window itself.
+			BLOCKER_THROTTLE_ISSUE="${RUNTIME_DIR}/occurrence_throttle_issue.json"
+			jq --argjson n "${EXISTING:-0}" --arg r "${EXISTING_REPO}" \
+				'[.[] | select(.number == $n and (.repository // "") == $r)] | first // {}' "${ISSUES_FILE}" > "${BLOCKER_THROTTLE_ISSUE}" 2>/dev/null \
+				|| printf '{}\n' > "${BLOCKER_THROTTLE_ISSUE}" || true
+			BLOCKER_THROTTLE_SINCE="$(date -u -d "@$(( $(date -u +%s) - OCCURRENCE_THROTTLE_SECS ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+			if [[ "${EXISTING}" =~ ^[1-9][0-9]*$ ]] && [ -n "${BLOCKER_THROTTLE_SINCE}" ] \
+				&& gh_retry gh api --method GET --paginate "repos/${EXISTING_REPO}/issues/${EXISTING}/comments" -F since="${BLOCKER_THROTTLE_SINCE}" -F per_page=100 \
+					--jq '.[] | {body: (.body // ""), user: (.user // {})}' 2>/dev/null \
+				| jq -s '.' > "${BLOCKER_THROTTLE_COMMENTS}" 2>/dev/null \
+				&& python3 "${HEAL_PY}" occurrence-throttle --comments-json "${BLOCKER_THROTTLE_COMMENTS}" \
+					--throttle-secs "${OCCURRENCE_THROTTLE_SECS}" --trusted-login "${BLOCKER_THROTTLE_LOGIN}" --issue-json "${BLOCKER_THROTTLE_ISSUE}" > "${BLOCKER_THROTTLE_RESULT}" 2>/dev/null \
+				&& jq -e '.throttled | type == "boolean"' "${BLOCKER_THROTTLE_RESULT}" >/dev/null 2>&1; then
+				if [ "$(jq -r '.throttled' "${BLOCKER_THROTTLE_RESULT}")" = "true" ]; then
+					log "duplicate_throttled existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP} age=$(jq -r '.age_secs // ""' "${BLOCKER_THROTTLE_RESULT}" | tr -cd '0-9') throttle=${OCCURRENCE_THROTTLE_SECS} source=${SOURCE_LABEL}"
+					exit 0
+				fi
+			else
+				log "warn occurrence_throttle_unavailable existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP}"
+				# The filed-issue window needs no comment read: check it alone.
+				if printf '[]\n' > "${BLOCKER_THROTTLE_COMMENTS}" 2>/dev/null \
+					&& python3 "${HEAL_PY}" occurrence-throttle --comments-json "${BLOCKER_THROTTLE_COMMENTS}" --throttle-secs "${OCCURRENCE_THROTTLE_SECS}" \
+						--trusted-login "${BLOCKER_THROTTLE_LOGIN}" --issue-json "${BLOCKER_THROTTLE_ISSUE}" > "${BLOCKER_THROTTLE_RESULT}" 2>/dev/null \
+					&& [ "$(jq -r '.throttled' "${BLOCKER_THROTTLE_RESULT}" 2>/dev/null)" = "true" ]; then
+					log "duplicate_throttled existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP} age=$(jq -r '.age_secs // ""' "${BLOCKER_THROTTLE_RESULT}" | tr -cd '0-9') throttle=${OCCURRENCE_THROTTLE_SECS} source=${SOURCE_LABEL}"
+					exit 0
+				fi
+			fi
+		fi
 		OCCURRENCE_FILE="${RUNTIME_DIR}/occurrence.md"
 		CAUSE_OCCURRENCE_ARGS=()
 		if [ "${DUPLICATE_MATCH}" = "cause" ]; then
 			_heal_cause_occurrence_args || CAUSE_OCCURRENCE_ARGS=()
 		fi
 		python3 "${HEAL_PY}" compose-occurrence --payload-json "$(_compose_payload_file)" --intake-run-url "${RUN_URL}" "${CAUSE_OCCURRENCE_ARGS[@]}" > "${OCCURRENCE_FILE}"
-		if gh_retry gh api "repos/${EXISTING_REPO}/issues/${EXISTING}/comments" -F body=@"${OCCURRENCE_FILE}" >/dev/null 2>&1; then
+		if _heal_record_occurrence "${EXISTING_REPO}" "${EXISTING}" "${OCCURRENCE_FILE}"; then
 			DUPLICATE_OCCURRENCE_STATE="posted"
 			if [ "${DUPLICATE_MATCH}" = "cause" ]; then
 				log "duplicate reason=cause_match existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP} cause=${CAUSE_KEY} shape=${CAUSE_SHAPE} source=${SOURCE_LABEL}"
@@ -2583,6 +2857,12 @@ case "${ACTION}" in
 			} > "${RUNTIME_DIR}/validation_route_comment.md"
 			_validation_route_post "${RUNTIME_DIR}/validation_route_comment.md"
 		fi
+		if [ "${SOURCE_KIND}" = "release_blocker" ]; then
+			BLOCKER_OCCURRENCE_NOTE=""
+			[ "${DUPLICATE_OCCURRENCE_STATE}" = "posted" ] || BLOCKER_OCCURRENCE_NOTE=" (occurrence comment failed; not throttled)"
+			tg_send_msg "Release blocker still present after ${BLOCKER_AGE_TEXT}: ${BLOCKER_REASON:-unknown} (${EXISTING_URL:-${EXISTING_REPO}#${EXISTING}})${BLOCKER_OCCURRENCE_NOTE}"$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+			exit 0
+		fi
 		tg_send_msg "Workflow failure heal: ${SOURCE_LABEL} matches open heal issue ${EXISTING_URL:-#${EXISTING}} (recorded as another occurrence)." "DEBUG" >/dev/null 2>&1 || true
 		exit 0
 		;;
@@ -2632,7 +2912,7 @@ if [ "${SOURCE_CHECKOUT,,}" != "false" ] && git rev-parse --is-inside-work-tree 
 	DIAG_REF="${DIAG_SHA}"
 	if [ -z "${DIAG_REF}" ]; then
 		DIAG_REF="${TARGET_BRANCH_DEFAULT}"
-		[ "${SOURCE_KIND}" != "workflow_run" ] || DIAG_REF="${HEAD_BRANCH:-${TARGET_BRANCH_DEFAULT}}"
+		[ "${SOURCE_KIND}" != "workflow_run" ] && [ "${SOURCE_KIND}" != "release_blocker" ] || DIAG_REF="${HEAD_BRANCH:-${TARGET_BRANCH_DEFAULT}}"
 	fi
 	if _git_fetch_diagnosis_ref "${DIAG_REF}" \
 		&& git worktree add --quiet --detach "${HEAL_SOURCE_DIR}" FETCH_HEAD >/dev/null 2>&1; then
@@ -2851,6 +3131,49 @@ fi
 if [ "${SOURCE_KIND}" = "engine_fallback" ] && _heal_intake_scope_guard_is_on && _heal_report_claimed_no_runs; then
 	CLASSIFICATION="none"
 	_heal_skip_scope_unavailable pre_diagnosis
+fi
+
+# Release-blocker reporting run (stuck-states P4, D1): a release_blocker report
+# that claims no failed gate run names its producing run in reporter_run; the
+# intake binds it to GitHub's run object (repository, producer workflow path,
+# display name, attempt, freshness) and uses the producer's fixed paths
+# (RELEASE_BLOCKER_PRODUCER_SCOPE_PATHS) as the heal scope, as for
+# engine_fallback above. §14 audit: no earlier call read this run (the claim
+# binding reads only claimed gate runs' jobs), so this is one GET per
+# release_blocker report, and only on the `open` decision.
+RELEASE_BLOCKER_REPORTER_RUN_REF=""
+RELEASE_BLOCKER_SCOPE_RUNS_JSON='[]'
+RELEASE_BLOCKER_SCOPE_PATHS_JSON='[]'
+if [ "${SOURCE_KIND}" = "release_blocker" ]; then
+	RELEASE_BLOCKER_REPORTER_RUN_ID="$(_pf '.reporter_run.run_id // ""')"
+	if [[ "${RELEASE_BLOCKER_REPORTER_RUN_ID}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+		RELEASE_BLOCKER_REPORTER_RUN_FILE="${RUNTIME_DIR}/release_blocker_reporter_run.json"
+		RELEASE_BLOCKER_REPORTER_RUN_RESULT="${RUNTIME_DIR}/release_blocker_reporter_run_result.json"
+		if ! gh_api_json_to_file "${RELEASE_BLOCKER_REPORTER_RUN_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${RELEASE_BLOCKER_REPORTER_RUN_ID}" 2>/dev/null \
+			|| ! jq -e 'type == "object"' "${RELEASE_BLOCKER_REPORTER_RUN_FILE}" >/dev/null 2>&1; then
+			printf '{}\n' > "${RELEASE_BLOCKER_REPORTER_RUN_FILE}" || true
+		fi
+		if python3 "${HEAL_PY}" verify-release-blocker-reporter-run --payload-json "${PAYLOAD_FILE}" --run-json "${RELEASE_BLOCKER_REPORTER_RUN_FILE}" \
+			--max-age "${REPORT_MAX_AGE}" > "${RELEASE_BLOCKER_REPORTER_RUN_RESULT}" 2>/dev/null \
+			&& jq -e '.ok == true and (.run_ref | type == "string") and (.scope_paths | type == "array")' "${RELEASE_BLOCKER_REPORTER_RUN_RESULT}" >/dev/null 2>&1; then
+			RELEASE_BLOCKER_REPORTER_RUN_REF="$(jq -r '.run_ref' "${RELEASE_BLOCKER_REPORTER_RUN_RESULT}")"
+			RELEASE_BLOCKER_SCOPE_RUNS_JSON="$(jq -c '[.run_ref]' "${RELEASE_BLOCKER_REPORTER_RUN_RESULT}")"
+			RELEASE_BLOCKER_SCOPE_PATHS_JSON="$(jq -c '.scope_paths' "${RELEASE_BLOCKER_REPORTER_RUN_RESULT}")"
+			log "release_blocker_reporter_run outcome=verified run=${RELEASE_BLOCKER_REPORTER_RUN_REF} producer=$(jq -r '.producer // ""' "${RELEASE_BLOCKER_REPORTER_RUN_RESULT}" | tr -cd 'A-Za-z0-9._-') fp=${FP} source=${SOURCE_LABEL}"
+		else
+			RELEASE_BLOCKER_REPORTER_RUN_REJECT="$(jq -r '.reason // ""' "${RELEASE_BLOCKER_REPORTER_RUN_RESULT}" 2>/dev/null | tr -cd 'a-z0-9_' | head -c 40 || true)"
+			log "release_blocker_reporter_run outcome=rejected reason=${RELEASE_BLOCKER_REPORTER_RUN_REJECT:-verifier_error} run_id=${RELEASE_BLOCKER_REPORTER_RUN_ID} fp=${FP} source=${SOURCE_LABEL}"
+		fi
+	else
+		log "release_blocker_reporter_run outcome=absent fp=${FP} source=${SOURCE_LABEL}"
+	fi
+	if _heal_intake_scope_guard_is_on && _heal_report_claimed_no_runs; then
+		# Not silent: a blocker nobody hears about is the stuck state this
+		# report exists to remove. Nothing is filed; the next tick retries.
+		tg_send_msg "Release blocker report for ${BLOCKER_REASON:-unknown} could not be filed: no verifiable reporter run"$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		CLASSIFICATION="none"
+		_heal_skip_scope_unavailable pre_diagnosis
+	fi
 fi
 
 # Freeze the heal-scope inputs before the diagnosis prompt assembles any
@@ -3151,16 +3474,18 @@ jq -n --arg crash "${PAYLOAD_CRASH_FILE}" \
 	--argjson failing_tests "${FAILING_TESTS_JSON}" \
 	--argjson engine_runs "${ENGINE_SCOPE_RUNS_JSON:-[]}" \
 	--argjson engine_paths "${ENGINE_SCOPE_PATHS_JSON:-[]}" \
+	--argjson blocker_runs "${RELEASE_BLOCKER_SCOPE_RUNS_JSON:-[]}" \
+	--argjson blocker_paths "${RELEASE_BLOCKER_SCOPE_PATHS_JSON:-[]}" \
 	--argjson linked_paths "${LINKED_SCOPE_PATHS_JSON:-[]}" \
 	--argjson suspect_files "${SUSPECT_SCOPE_PATHS_JSON:-[]}" \
 	--argjson runs "$(_heal_slurp_verified_runs '[.[] | select(.run_id != null) | "'"${SOURCE_REPO}"'" + ":" + (.run_id | tostring)] | unique')" \
 	--argjson self_workflows "$(_heal_slurp_verified_runs '[.[] | .referenced_paths[]?] | unique')" \
 	--argjson consumer_workflows "$(_heal_slurp_verified_runs '[.[] | .path | select(type == "string" and . != "")] | unique')" \
 	--argjson changed "$(if [ "${CRASH_OWNERSHIP}" = pr ]; then jq '.changed_files // []' "${PAYLOAD_FILE}"; elif [ "${CRASH_OWNERSHIP}" = base ]; then jq -R -s 'split("\n") | map(select(. != ""))' "${BASE_CHANGED_FILES_FILE}"; else echo '[]'; fi)" \
-	'($self_workflows + $engine_paths) as $base
+	'($self_workflows + $engine_paths + $blocker_paths) as $base
 	| ([20 - 8 - ($base | unique | length) - (if $crash != "" and ($base | any(. == $crash) | not) then 1 else 0 end), 0] | max) as $linked_room
 	| (($ARGS.named.suspect_files // [])[:8] as $sf | if ($sf | length) > 0 then {suspect_files: $sf} else {} end)
-	+ {crash_file: $crash, runs: (($runs + $engine_runs) | unique), self_workflows: ($base + (($linked_paths - $base)[:$linked_room])), consumer_workflows: $consumer_workflows, changed_files: $changed, failing_tests: $failing_tests}' > "${SCOPE_INPUTS_FROZEN}" \
+	+ {crash_file: $crash, runs: (($runs + $engine_runs + $blocker_runs) | unique), self_workflows: ($base + (($linked_paths - $base)[:$linked_room])), consumer_workflows: $consumer_workflows, changed_files: $changed, failing_tests: $failing_tests}' > "${SCOPE_INPUTS_FROZEN}" \
 	&& jq -e '(.runs | type == "array") and (.changed_files | type == "array") and (.self_workflows | type == "array") and (.consumer_workflows | type == "array")' "${SCOPE_INPUTS_FROZEN}" >/dev/null 2>&1 \
 	&& chmod 0444 "${SCOPE_INPUTS_FROZEN}" || { rm -f "${SCOPE_INPUTS_FROZEN}"; log "warn scope_inputs_freeze_failed"; }
 
@@ -3996,6 +4321,11 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 		echo "Refused AI engine fallback: role $(_pf '.engine_role') reason $(_pf '.engine_reason') (Claude unavailable for a non-capacity reason; the role failed instead of running codex)"
 		echo "Workflow: ${PAYLOAD_WORKFLOW_NAME}"
 		[ -z "${ENGINE_REPORTER_RUN_REF}" ] || echo "Reporting run (verified): https://github.com/${SOURCE_REPO}/actions/runs/${ENGINE_REPORTER_RUN_ID}"
+	elif [ "${SOURCE_KIND}" = "release_blocker" ]; then
+		echo "Release blocker (no workflow run failed): reason ${BLOCKER_REASON:-unknown} on branch ${HEAD_BRANCH:-unknown}, persisted for ${BLOCKER_AGE_TEXT}"
+		echo "Reporting workflow: ${PAYLOAD_WORKFLOW_NAME}"
+		echo "Blocked tip: ${HEAD_SHA:-unknown}"
+		[ -z "${RELEASE_BLOCKER_REPORTER_RUN_REF}" ] || echo "Reporting run (verified): https://github.com/${SOURCE_REPO}/actions/runs/${RELEASE_BLOCKER_REPORTER_RUN_ID}"
 	elif [ -n "${ISSUE_NUMBER}" ]; then
 		echo "Escalated ${SOURCE_KIND}: #${ISSUE_NUMBER} -- ${ISSUE_TITLE}"
 		echo "URL: ${ISSUE_URL}"
@@ -4025,6 +4355,11 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 	if [ "${SOURCE_KIND}" = "autofix_failure" ] || [ "${SOURCE_KIND}" = "engine_fallback" ]; then
 		echo "--- Failure evidence from the reporting run (UNTRUSTED) ---"
 		cat "${FAILURE_EVIDENCE_FILE}" 2>/dev/null || true
+		echo
+	fi
+	if [ "${SOURCE_KIND}" = "release_blocker" ]; then
+		echo "--- Release blocker evidence (UNTRUSTED) ---"
+		_pf '.blocker_evidence // ""'
 		echo
 	fi
 	echo "=== BRANCH PROGRESS SINCE THE FAILING SHA ==="
@@ -4529,7 +4864,12 @@ case "${CLASSIFICATION}" in
 	workflow-defect|inconclusive)
 		TARGET_BRANCH="${TARGET_BRANCH_DEFAULT}"
 		TARGET_BRANCH_SOURCE="default"
-		if [ "${SOURCE_KIND}" = "workflow_run" ] && [ -n "${HEAD_BRANCH}" ]; then
+		if [ "${SOURCE_KIND}" = "release_blocker" ] && [ -n "${HEAD_BRANCH}" ]; then
+			# The held-back branch (validated: stable or main); the
+			# _branch_exists fallback below still applies.
+			TARGET_BRANCH="${HEAD_BRANCH}"
+			TARGET_BRANCH_SOURCE=release_blocker_branch
+		elif [ "${SOURCE_KIND}" = "workflow_run" ] && [ -n "${HEAD_BRANCH}" ]; then
 			TARGET_BRANCH="${HEAD_BRANCH}"
 			TARGET_BRANCH_SOURCE="failed_run_branch"
 			if [ "${HEAD_BRANCH}" = "${HEAL_PIPELINE_MIRROR_BRANCH}" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ]; then
@@ -4640,7 +4980,11 @@ case "${CLASSIFICATION}" in
 			echo "Workflow failure heal opened ${NEW_ISSUE_URL} in \`${SELF_REPO}\` (classification \`${CLASSIFICATION}\`, generation ${GEN}/${MAX_DEPTH}). The fix will ship through the normal pipeline${HOTFIX_NOTE}."
 		} > "${RUNTIME_DIR}/source_comment.md"
 		_comment_on_source "${RUNTIME_DIR}/source_comment.md"
-		tg_send_msg "Workflow failure heal opened ${NEW_ISSUE_URL} for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}', classification ${CLASSIFICATION}, generation ${GEN}/${MAX_DEPTH}). The pipeline will pick it up." "DEBUG" >/dev/null 2>&1 || true
+		if [ "${SOURCE_KIND}" = "release_blocker" ]; then
+			tg_send_msg "Release blocker filed: ${BLOCKER_REASON:-unknown} on ${HEAD_BRANCH:-unknown} (${NEW_ISSUE_URL})"$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		else
+			tg_send_msg "Workflow failure heal opened ${NEW_ISSUE_URL} for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}', classification ${CLASSIFICATION}, generation ${GEN}/${MAX_DEPTH}). The pipeline will pick it up." "DEBUG" >/dev/null 2>&1 || true
+		fi
 		;;
 	consumer-app-defect)
 		if [ -z "${ISSUE_NUMBER}" ]; then
@@ -4668,7 +5012,11 @@ case "${CLASSIFICATION}" in
 			} > "${RUNTIME_DIR}/source_comment.md"
 			_comment_on_source "${RUNTIME_DIR}/source_comment.md"
 		fi
-		tg_send_msg "Workflow failure heal opened ${NEW_ISSUE_URL} (consumer-side defect) for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}')." "DEBUG" >/dev/null 2>&1 || true
+		if [ "${SOURCE_KIND}" = "release_blocker" ]; then
+			tg_send_msg "Release blocker filed: ${BLOCKER_REASON:-unknown} on ${HEAD_BRANCH:-unknown} (${NEW_ISSUE_URL})"$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		else
+			tg_send_msg "Workflow failure heal opened ${NEW_ISSUE_URL} (consumer-side defect) for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}')." "DEBUG" >/dev/null 2>&1 || true
+		fi
 		;;
 	pr-self-inflicted)
 		# The crash is in a file this PR changed: the fix belongs in the PR
@@ -4721,7 +5069,10 @@ case "${CLASSIFICATION}" in
 		_comment_on_source "${RUNTIME_DIR}/source_comment.md"
 		SUMMARY_LINE="$(sed -n '/^## Summary/,/^## /p' "${DIAG_FILE}" | sed '1d;/^## /d' | tr '\n' ' ' | head -c 400)"
 		log "no_issue classification=${CLASSIFICATION} source=${SOURCE_LABEL} fp=${FP}"
-		if [ "${CLASSIFICATION}" = "consumer-config" ]; then
+		if [ "${SOURCE_KIND}" = "release_blocker" ]; then
+			# A blocker that files no issue still reaches a person (WARNING).
+			tg_send_msg "Release blocker ${BLOCKER_REASON:-unknown} on ${HEAD_BRANCH:-unknown} classified ${CLASSIFICATION}, no issue opened. ${SUMMARY_LINE}"$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		elif [ "${CLASSIFICATION}" = "consumer-config" ]; then
 			tg_send_msg "Workflow failure heal: ${SOURCE_LABEL} needs an operator (repository configuration), no code fix applies. ${SUMMARY_LINE}"$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}"$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
 		else
 			tg_send_msg "Workflow failure heal: ${SOURCE_LABEL} looks transient, no issue opened. ${SUMMARY_LINE}"$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}" "DEBUG" >/dev/null 2>&1 || true
@@ -4747,7 +5098,12 @@ case "${CLASSIFICATION}" in
 		_comment_on_source "${RUNTIME_DIR}/source_comment.md"
 		SUMMARY_LINE="$(sed -n '/^## Summary/,/^## /p' "${DIAG_FILE}" | sed '1d;/^## /d' | tr '\n' ' ' | head -c 400)"
 		log "no_issue classification=${CLASSIFICATION} fixed_by=${ALREADY_FIXED_COMMITS} branch=${PROGRESS_BRANCH} source=${SOURCE_LABEL} fp=${FP}"
-		tg_send_msg "Workflow failure heal: ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}') is already fixed on ${PROGRESS_BRANCH} by ${ALREADY_FIXED_COMMITS}; no issue opened. ${SUMMARY_LINE}"$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}"$'\n'"Run: ${RUN_URL}" "DEBUG" >/dev/null 2>&1 || true
+		if [ "${SOURCE_KIND}" = "release_blocker" ]; then
+			# A blocker that files no issue still reaches a person (WARNING).
+			tg_send_msg "Release blocker ${BLOCKER_REASON:-unknown} on ${HEAD_BRANCH:-unknown} classified already-fixed on ${PROGRESS_BRANCH} by ${ALREADY_FIXED_COMMITS}, no issue opened. ${SUMMARY_LINE}"$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		else
+			tg_send_msg "Workflow failure heal: ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}') is already fixed on ${PROGRESS_BRANCH} by ${ALREADY_FIXED_COMMITS}; no issue opened. ${SUMMARY_LINE}"$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}"$'\n'"Run: ${RUN_URL}" "DEBUG" >/dev/null 2>&1 || true
+		fi
 		;;
 	*)
 		log "error unknown_classification value=${CLASSIFICATION}"
@@ -4764,7 +5120,9 @@ if [ "${HEAL_SCOPE_RECOVERY_ACTIVE}" = "true" ] && [ -z "${NEW_ISSUE_URL}" ]; th
 		# A scan replay is not a new occurrence (#7333).
 		RECOVERY_OCCURRENCE_STATE="skipped_reconstructed"
 	elif python3 "${HEAL_PY}" compose-occurrence --payload-json "$(_compose_payload_file)" --intake-run-url "${RUN_URL}" > "${RECOVERY_OCCURRENCE_FILE}" \
-		&& gh_retry gh api "repos/${HEAL_SCOPE_RECOVERY_REPO}/issues/${HEAL_SCOPE_RECOVERY_ISSUE}/comments" -F body=@"${RECOVERY_OCCURRENCE_FILE}" >/dev/null 2>&1; then
+		&& _heal_record_occurrence "${HEAL_SCOPE_RECOVERY_REPO}" "${HEAL_SCOPE_RECOVERY_ISSUE}" "${RECOVERY_OCCURRENCE_FILE}"; then
+		# No cached comments: the recovery read predates the diagnosis (minutes)
+		# and carries no `created_at`, so the counter merge reads them afresh.
 		RECOVERY_OCCURRENCE_STATE="posted"
 	fi
 	log "heal_scope_recovery outcome=no_replacement reason=classification_$(printf '%s' "${CLASSIFICATION}" | tr -cd 'a-z-' | tr '-' '_') issue=${HEAL_SCOPE_RECOVERY_ISSUE} repo=${HEAL_SCOPE_RECOVERY_REPO} occurrence=${RECOVERY_OCCURRENCE_STATE} fp=${FP}"
