@@ -25,6 +25,7 @@ Rules:
   task depends on, and that content is not in the repository or the issue,
   emit exactly `BLOCKED: <short reason>` instead of `Q<ID>` choices. Public
   3rd-party documentation is NOT a BLOCKED trigger.
+- Sequencing wait: when the only blocker is another pull request that has not merged, an upstream change not yet in the `shubhodeep1/coding-workflows` `@stable` release, or another issue in this repository that must be finished first, emit exactly one line `WAITING: pr=<owner>/<repo>#<N>`, `WAITING: release=shubhodeep1/coding-workflows@stable contains=shubhodeep1/coding-workflows#<N>` or `WAITING: issue=<owner>/<repo>#<N>` instead of `BLOCKED:`. `pr` names this repository or `shubhodeep1/coding-workflows`; `issue` names this repository and never this issue.
 - Web search is available only when this run has a web tool: Codex runs
   do (the `web_search` tool is enabled by the codex config —
   `scripts/write_codex_config.sh` defaults `--web-search live`).
@@ -100,3 +101,6 @@ QUESTIONS:
 
 Or, for blocked handoff:
 BLOCKED: <short reason>
+
+Or, for a sequencing wait:
+WAITING: <target>
