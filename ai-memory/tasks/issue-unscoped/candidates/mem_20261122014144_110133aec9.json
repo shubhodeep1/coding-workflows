@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: If the search payload does not carry the title, read it from details[number]['title'] when present (linked issue #9792). The last run added `title` to the batched GraphQL details query and the jq projection, so a regression guard for that change is expected.\n  expected_change_site: tests/test_unblock_scan.py::test_poller_search_projection_carries_the_title (extend) or a sibling test\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  EVIDENCE: tests/test_unblock_scan.py:970-973 and 971-973 assert only the search jq projection `{number, title, labels...`, and no test covers the `title` selection in the `... on Issue` / `... on PullRequest` GraphQL fragments (scripts/orchestrate_poll_process.sh:25650, 25658) or the `title: (.value.title // null)` jq line (scripts/orchestrate_poll_process.sh:25680). Reverting those lines would fail no test. Severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP (severity=NIT, confidence=4)\n  Requirement: The last run added `title` to the batched GraphQL details query and the jq projection in `run_unblock_scan`. A regression guard for that change is expected alongside it.\n  Expected change site: tests/test_unblock_scan.py, `test_poller_search_projection_carries_the_title` or a sibling test.\n  Evidence of absence: That test only asserts that the search jq projection carries `title`. Nothing asserts the two GraphQL `title` selections or the `title: (.value.title // null)` jq line. Reverting those three lines would fail no test. This is a hardening gap and not a defect.\n- HARDENING_SUGGESTION: in tests/test_unblock_scan.py, `test_poller_search_projection_carries_the_title`, add `assert body.count(\"        title\\n\") >= 2` and `assert \"title: (.value.title // null)\" in body` (about 2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP (severity=NIT, confidence=4)\n  Requirement: \"If the search payload does not carry the title, read it from details[number]['title'] when present; a missing title means do not skip.\"\n  Expected change site: tests/test_unblock_scan.py::test_poller_search_projection_carries_the_title (extend) or a sibling test asserting the GraphQL `title` selection and the jq projection line.\n  Evidence of absence: tests/test_unblock_scan.py:970-973 only asserts `\"--jq '[.items[]? | {number, title, labels: [.labels[]?.name],\" in body`. No assertion covers `title` in the GraphQL fragments or the `title: (.value.title // null)` jq line. Reverting those hunks would fail no test.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP (severity=NIT, confidence=4)\n  Requirement: \"If the search payload does not carry the title, read it from details[number]['title'] when present\" (linked issue #9792).\n  Expected change site: tests/test_unblock_scan.py::test_poller_search_projection_carries_the_title (extend) or a sibling assertion.\n  Evidence of absence: tests/test_unblock_scan.py:971-973 asserts only the `search/issues` jq projection line. No test asserts `title` in the GraphQL fragment lines (scripts/orchestrate_poll_process.sh:25650, 25658) or the jq projection line (scripts/orchestrate_poll_process.sh:25680). Reverting the three added lines would fail no test.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2b39a3372b6b429e8cff20bdd715e06b57fcb127668fa8071e0f8f55ffbffa40",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9795,
+    "run_id": "44968615994",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "44968615994",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122014144_110133aec9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9795,
+    "run_id": "44968615994"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T01:41:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
