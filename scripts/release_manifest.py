@@ -29,6 +29,9 @@ Surface (one rule per updater step, see SURFACE_RULES):
   scripts/lint_pr_body_auto_close.py checks the composed PR body.
 - "Send Telegram notification": scripts/tg_helpers.sh, sourced from the
   release checkout with the Telegram and GitHub credentials in scope.
+- "Sync Dependabot exclusions for managed wrappers" (#9485):
+  scripts/sync_dependabot_exclusions.py (optional; the updater skips the
+  helper when a release does not list it).
 
 Assumption: the authoritative plan
 (docs/plans/safeguarded-consumer-updater-plan.md on branch
