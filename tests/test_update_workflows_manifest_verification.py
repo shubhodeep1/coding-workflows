@@ -194,6 +194,7 @@ FETCH_CASES = {
 	"retry_after_header": ({"release": [SECONDARY_LIMITED, RELEASE_OK], "asset": [ASSET_OK], "rate_limit": {"remaining": 4000, "reset_in": 2}}, {}),
 	"asset_not_uploaded": ({"release": [{"stdout": json.dumps({"assets": [{"name": "sync-manifest.json", "id": 42, "state": "starter"}]})}], "asset": [ASSET_OK]}, {}),
 	"cap_clamped": ({"release": [RATE_LIMITED, RELEASE_OK], "asset": [ASSET_OK], "rate_limit": {"remaining": 0, "reset_in": 2000}}, {"SYNC_MANIFEST_RATE_LIMIT_MAX_WAIT_SECONDS": "99999"}),
+	"release_malformed_json": ({"release": [{"stdout": "not json {"}], "asset": [ASSET_OK]}, {}),
 	"cap_non_numeric": ({"release": [RATE_LIMITED, RELEASE_OK], "asset": [ASSET_OK], "rate_limit": {"remaining": 0, "reset_in": 2}}, {"SYNC_MANIFEST_RATE_LIMIT_MAX_WAIT_SECONDS": "abc"}),
 }
 
@@ -281,6 +282,11 @@ def test_manifest_fetch_block_behaviour(tmp_path, case):
 		assert sleeps == []
 		assert manifest.read_bytes() == MANIFEST_BYTES.encode()
 		assert len(fetch_lines) == 2
+	elif case == "release_malformed_json":
+		# A 200 with a corrupt body is a fetch failure, not a missing asset.
+		assert result.returncode == 1
+		assert out.strip().splitlines()[-1] == "REJECT ERR_SYNC_MANIFEST_FETCH_FAILED detail=unknown"
+		assert not manifest.exists()
 	elif case == "release_404":
 		assert result.returncode == 1
 		assert out.strip().splitlines()[-1] == "REJECT ERR_SYNC_MANIFEST_MISSING detail=release_not_found"

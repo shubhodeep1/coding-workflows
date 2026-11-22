@@ -554,8 +554,8 @@ jobs:
           MANIFEST_FILE="${MANIFEST_DIR}/sync-manifest.json"
           SMF_MAX_WAIT="${SYNC_MANIFEST_RATE_LIMIT_MAX_WAIT_SECONDS:-1200}"
           [[ "${SMF_MAX_WAIT}" =~ ^[0-9]{1,6}$ ]] || SMF_MAX_WAIT=1200
-          # Ceiling below the shorter job timeout (update-wrappers, 30 min) so the step
-          # always ends in a classified rejection rather than a job timeout.
+          # Ceiling leaves 10 min of both 35-min job timeouts (update-wrappers, integrity) for
+          # the rest of the job, so the step ends in a classified rejection, not a job timeout.
           [ "$(( 10#${SMF_MAX_WAIT} ))" -le 1500 ] || SMF_MAX_WAIT=1500
           SMF_MAX_WAIT="$(( 10#${SMF_MAX_WAIT} ))"
           SMF_WAITED=0
@@ -663,6 +663,8 @@ jobs:
             fi
             reject ERR_SYNC_MANIFEST_FETCH_FAILED "detail=${SMF_RESULT}"
           fi
+          # A 200 whose body is not a JSON object is a fetch failure, not a missing asset.
+          jq -e 'type == "object"' "${MANIFEST_DIR}/release.json" >/dev/null 2>&1 || reject ERR_SYNC_MANIFEST_FETCH_FAILED "detail=unknown"
           SMF_ASSET_ID="$(jq -r '[.assets[]? | select(.name == "sync-manifest.json" and .state == "uploaded") | .id] | if length == 1 then .[0] else empty end' "${MANIFEST_DIR}/release.json" 2>/dev/null || true)"
           [[ "${SMF_ASSET_ID}" =~ ^[0-9]+$ ]] || reject ERR_SYNC_MANIFEST_MISSING
           if ! smf_fetch asset "${MANIFEST_FILE}" "${MANIFEST_DIR}/asset.err" \
