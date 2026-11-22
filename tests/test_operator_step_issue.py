@@ -970,6 +970,12 @@ def test_operator_step_title_rules_match_activation_verify() -> None:
 		assert match, name
 		assert match.group(1) == getattr(writer, name).pattern, name
 		assert getattr(writer, name).flags & re.I, name
+	# The camelCase split that feeds HUMAN_OBJECT_TITLE_RE must match too.
+	camel_re = r'HUMAN_OBJECT_TITLE_RE\.search\((re\.sub\(r"[^"]+", "_", title\))\)'
+	writer_source = (ROOT / "scripts" / "operator_step_issue.py").read_text(encoding="utf-8")
+	script_split, writer_split = re.findall(camel_re, script), re.findall(camel_re, writer_source)
+	assert len(script_split) == 1 and len(writer_split) == 1
+	assert script_split == writer_split
 
 
 def test_poller_wires_operator_step_resolve_step() -> None:
