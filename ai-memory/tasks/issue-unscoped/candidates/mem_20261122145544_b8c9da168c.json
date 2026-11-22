@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/activation_verify.sh:202-204 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The camelCase guard only inserts `_` at lowercase-to-uppercase boundaries, so acronym-initial names such as `APIKey` are not matched by HUMAN_OBJECT_TITLE_RE. A gap like \"Promote APIKey to stable\" is rerouted to the release path instead of staying an operator step.\n  WHY: A human-supplied object is silently treated as an automated release step and never reaches the operator tracker. Severity disagreement: gemini and luna said MAJOR, glm said NIT, and the highest is used. glm notes the same rule sits in scripts/operator_step_issue.py:711-714, outside this PR's files_touched, so a fix may need a follow-up. sonnet-5_5 checked this and chose not to report it.\n- .github/workflows/review_autofix.yml:527 | severity=low | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The `review / gate` check failed when the `support_main_json` lookup of `main` returned HTTP 403 and `gh_api_retry` exited 75.\n  WHY: The review gate stops before later checks run. The log attributes this to a GitHub API rate limit, not to this PR (reported as NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/activation_verify.sh:203 | severity=MAJOR | confidence=4\n  PROBLEM: HUMAN_OBJECT_TITLE_RE fails to identify human objects in acronym-to-word names like \"APIKey\", because the `re.sub` only inserts underscores at lowercase-to-uppercase transitions.\n  WHY: Gaps that need a person, such as supplying an `APIKey`, are rerouted to automated `code` gaps and left out of the operator step.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/activation_verify.sh:202-204 | severity=MAJOR | confidence=4\n  PROBLEM: The human-object title guard misses acronym-to-word capitalization such as `APIKey`. \"Promote APIKey to stable\" matches RELEASE_STEP_TITLE_RE but not HUMAN_OBJECT_TITLE_RE.\n  WHY: The gap is rerouted to `code` and omitted from the operator step even though supplying an API key may need a person.\n- .github/workflows/review_autofix.yml:527 | severity=NIT | confidence=5\n  PROBLEM: The `review / gate` check failed when the `support_main_json` lookup of `main` returned HTTP 403 and `gh_api_retry` exited 75.\n  WHY: The review gate stops before later checks run. The log attributes this to a GitHub API rate limit, not to a change in this PR.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/activation_verify.sh:203-204 (same rule in scripts/operator_step_issue.py:711-714) | severity=NIT | confidence=3\n  PROBLEM: The camelCase guard only splits at lowercase-to-uppercase boundaries, so \"APIKey\" is left unchanged and HUMAN_OBJECT_TITLE_RE's `(?<![A-Za-z])keys?` lookbehind cannot match it. A title like \"Promote APIKey to stable\" is rerouted to the release path.\n  WHY: A human step with an acronym-initial object name is classified as an automated release step and never reaches the ai:operator-step tracker, or is auto-ticked by resolve. The writer copy at scripts/operator_step_issue.py:714 behaves the same, and the parity test requires identical patterns, so a fix must change both files. The writer is outside this PR's files_touched, so this may only be fixable as a follow-up.\n- HARDENING: tests/test_operator_step_issue.py:964-974 | risk score 1\n  PROBLEM: The parity test `test_operator_step_title_rules_match_activation_verify` compares only the regex pattern strings. The camelCase `re.sub` expression, duplicated at scripts/activation_verify.sh:204 and scripts/operator_step_issue.py:714, has no parity check.\n  WHY: A future edit to one copy could silently diverge the classifier from the normaliser. Suggested fix: assert both files contain the identical substitution text (about 6 lines).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d1dcf39610301a28270ad3403f010d550d9df73ad6d3039f749ffd81c00354f7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9872,
+    "run_id": "45027495155",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45027495155",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122145544_b8c9da168c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9872,
+    "run_id": "45027495155"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-22T14:55:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
