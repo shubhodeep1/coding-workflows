@@ -2951,6 +2951,9 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_initial_state_v2.py
+          # Stable-only wiring (backport of #9695): main runs this file through its
+          # tests-system-python catch-all, which stable does not have.
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_orchestrate_state_v2_compression.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state_unblock.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_blocker_check.py
