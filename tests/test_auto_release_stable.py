@@ -3,11 +3,11 @@
 
 from __future__ import annotations
 
-import datetime
 import json
 import os
 import subprocess
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
@@ -18,6 +18,7 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "auto-release-stable.yml"
 
 TIP = "1" * 40
 TAG_OBJECT = "2" * 40
+RUN_ID = "4242"
 
 MOCK_GH = r'''#!/usr/bin/env python3
 import json, os, sys
@@ -32,6 +33,12 @@ def respond(payload):
     save()
     sys.stdout.write(json.dumps(payload))
     sys.exit(0)
+if args[:3] == ["api", "-X", "POST"] and args[3].endswith("/dispatches"):
+    if state.get("dispatch_error"):
+        save(); sys.stderr.write("HTTP 403: Resource not accessible by integration\n"); sys.exit(1)
+    body = json.loads(Path(args[args.index("--input") + 1]).read_text())
+    state.setdefault("heal_dispatches", []).append(body)
+    respond({})
 if args[:1] == ["api"]:
     rest = args[1:]
     method = "GET"
@@ -67,18 +74,28 @@ if args[:1] == ["api"]:
         if state.get("queued_error"):
             save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
         respond({"total_count": state.get("queued_runs", 0), "workflow_runs": []})
-    if path.endswith("/git/ref/heads/stable"):
+    if "/git/ref/heads/" in path:
         respond({"object": {"type": "commit", "sha": state["branch_tip"]}})
     if path.endswith("/git/ref/tags/stable"):
         if state.get("tag_missing"):
             save(); sys.stderr.write("404\n"); sys.exit(1)
         if state.get("tag_lookup_error"):
             save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
+        if state.get("tag_lightweight"):
+            respond({"object": {"type": "commit", "sha": state["tag_commit"]}})
         respond({"object": {"type": "tag", "sha": state["tag_object"]}})
     if "/git/tags/" in path:
-        respond({"object": {"type": "commit", "sha": state["tag_commit"]}})
+        tag = {"object": {"type": "commit", "sha": state["tag_commit"]}}
+        if state.get("tagger_date"):
+            tag["tagger"] = {"date": state["tagger_date"]}
+        respond(tag)
     if "/compare/" in path:
-        respond({"status": state.get("compare_status", "ahead"), "ahead_by": 1, "behind_by": 0})
+        compare = {"status": state.get("compare_status", "ahead"), "ahead_by": 1, "behind_by": 0}
+        if state.get("compare_commit_dates"):
+            compare["commits"] = [{"commit": {"committer": {"date": d}}} for d in state["compare_commit_dates"]]
+        if state.get("base_commit_date"):
+            compare["base_commit"] = {"commit": {"committer": {"date": state["base_commit_date"]}}}
+        respond(compare)
     if "/actions/workflows/promote-main-to-stable.yml/runs" in path:
         respond({"workflow_runs": state.get("promote_runs", [])})
     if "/actions/workflows/mark-stable.yml/runs" in path:
@@ -111,9 +128,14 @@ def _run(tmp: Path, state: dict, env: dict[str, str] | None = None) -> tuple[sub
 			"GH_TOKEN": "x",
 			"GITHUB_OUTPUT": str(output_file),
 			"PYTHONDONTWRITEBYTECODE": "1",
+			"GITHUB_RUN_ID": RUN_ID,
+			"GITHUB_RUN_ATTEMPT": "1",
+			"GITHUB_WORKFLOW": "Auto release stable",
+			"GH_RETRY_MAX_ATTEMPTS": "1",
 		}
 	)
-	for key in ("BASH_ENV", "ENV"):
+	# Keep a CI runner's OIDC and Telegram settings out of the script under test.
+	for key in ("BASH_ENV", "ENV", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "TG_BOT_SECRET", "TG_ADMIN_CHAT_ID", "TG_CHAT_ID", "RELEASE_BLOCKER_HEAL_ENABLED", "RELEASE_BLOCKER_GATE_FAILED_MIN_AGE_SECS", "RELEASE_BLOCKER_IN_FLIGHT_MIN_AGE_SECS", "RELEASE_BLOCKER_STABLE_STALE_SECS", "RELEASE_BLOCKER_HEAL_PY", "AUTO_RELEASE_STABLE_BRANCH"):
 		run_env.pop(key, None)
 	if env:
 		run_env.update(env)
@@ -319,9 +341,20 @@ def test_workflow_contract() -> None:
 	assert "workflow_dispatch" in wf["on"]
 	assert wf["concurrency"]["group"] == "promote-main-to-stable", "must share the promote job's group so check-then-dispatch never interleaves with a promotion"
 	assert wf["concurrency"]["cancel-in-progress"] is False
-	assert wf["permissions"] == {"contents": "read", "actions": "write"}
+	assert wf["permissions"] == {"contents": "read", "actions": "write", "id-token": "write"}
 	run_step = next(s for s in wf["jobs"]["release-check"]["steps"] if "run" in s)
 	assert "bash scripts/auto_release_stable.sh" in run_step["run"]
+	assert "${{" not in run_step["run"], "bind expressions through env:, never inside run:"
+	for name, default in (
+		("RELEASE_BLOCKER_HEAL_ENABLED", "true"),
+		("RELEASE_BLOCKER_GATE_FAILED_MIN_AGE_SECS", "86400"),
+		("RELEASE_BLOCKER_IN_FLIGHT_MIN_AGE_SECS", "21600"),
+		("RELEASE_BLOCKER_STABLE_STALE_SECS", "86400"),
+	):
+		assert run_step["env"][name] == "${{ vars." + name + " || '" + default + "' }}", name
+	assert run_step["env"]["TG_BOT_SECRET"] == "${{ secrets.TG_BOT_SECRET }}"
+	assert run_step["env"]["TG_ADMIN_CHAT_ID"] == "${{ vars.TG_ADMIN_CHAT_ID }}"
+	assert run_step["env"]["TG_CHAT_ID"] == "${{ vars.TG_ADMIN_CHAT_ID }}"
 	assert run_step["env"]["AUTO_RELEASE_STABLE_ENABLED"] == "${{ vars.AUTO_RELEASE_STABLE_ENABLED || 'true' }}"
 	assert run_step["env"]["AUTO_RELEASE_STABLE_MAX_ATTEMPTS"] == "${{ vars.AUTO_RELEASE_STABLE_MAX_ATTEMPTS || '3' }}"
 
@@ -342,14 +375,245 @@ def test_compare_identical_counts_as_up_to_date() -> None:
 	assert not state.get("dispatches")
 
 
+# --- Release-blocker reporters (stuck-states P4 / release-blocker Phase 2a) ---
+
+
+def _ago(seconds: int) -> str:
+	return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _reports(state: dict) -> list[dict]:
+	return [body["client_payload"]["report"] for body in state.get("heal_dispatches", [])]
+
+
+def _failed_gate(updated_at: str | None, run_id: int = 777) -> dict:
+	run = {"id": run_id, "status": "completed", "conclusion": "failure", "head_sha": TIP, "head_branch": "stable", "created_at": _ago(3 * 86400)}
+	if updated_at is not None:
+		run["updated_at"] = updated_at
+	return run
+
+
+def test_last_gate_failed_past_threshold_sends_one_report() -> None:
+	runs = [_failed_gate(_ago(2 * 86400))]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs), env={"AUTO_RELEASE_STABLE_MAX_ATTEMPTS": "1"})
+	assert proc.returncode == 0, proc.stderr
+	assert f"AUTO_RELEASE_SKIPPED reason=last_gate_failed sha={TIP} conclusion=failure attempts=1 max=1" in proc.stdout
+	assert "dispatched=false" in state["github_output"]
+	assert not state.get("dispatches")
+	assert len(state["heal_dispatches"]) == 1
+	assert state["heal_dispatches"][0]["event_type"] == "workflow-failure-heal"
+	report = _reports(state)[0]
+	assert report["source_kind"] == "release_blocker"
+	assert report["blocker_reason"] == "last_gate_failed"
+	assert report["head_branch"] == "stable"
+	assert report["head_sha"] == TIP
+	assert report["run_refs"][0]["run_id"] == "777"
+	assert report["reporter_run"]["run_id"] == RUN_ID
+	assert report["workflow_name"] == "Auto release stable"
+	assert report["blocker_evidence"].startswith("reason=last_gate_failed")
+	assert "/actions/runs/777" in report["blocker_evidence"]
+	assert "RELEASE_BLOCKER_REPORTED reason=last_gate_failed age=" in proc.stdout
+	assert "run_ref=777" in proc.stdout
+	# The report comes before the unchanged skip line.
+	assert proc.stdout.index("RELEASE_BLOCKER_REPORTED") < proc.stdout.index("AUTO_RELEASE_SKIPPED")
+
+
+def test_last_gate_failed_recently_does_not_report() -> None:
+	runs = [_failed_gate(_ago(600))]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs), env={"AUTO_RELEASE_STABLE_MAX_ATTEMPTS": "1"})
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTO_RELEASE_SKIPPED reason=last_gate_failed" in proc.stdout
+	assert not state.get("heal_dispatches")
+
+
+def test_last_gate_failed_without_updated_at_is_guard_unavailable() -> None:
+	runs = [_failed_gate(None)]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs), env={"AUTO_RELEASE_STABLE_MAX_ATTEMPTS": "1"})
+	assert proc.returncode == 0, proc.stderr
+	assert "RELEASE_BLOCKER_REPORT_SKIPPED reason=guard_unavailable blocker=last_gate_failed lookup=updated_at" in proc.stdout
+	assert not state.get("heal_dispatches")
+
+
+def test_release_in_flight_past_threshold_reports_from_each_run_list() -> None:
+	active = {"id": 991, "status": "in_progress", "conclusion": None, "head_sha": TIP, "head_branch": "stable", "created_at": _ago(8 * 3600), "run_started_at": _ago(7 * 3600)}
+	for key, workflow in (("runs", "test-and-mark-stable.yml"), ("promote_runs", "promote-main-to-stable.yml"), ("legacy_runs", "mark-stable.yml")):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, **{key: [active]}))
+		assert proc.returncode == 0, (key, proc.stderr)
+		assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout, key
+		assert not state.get("dispatches"), key
+		reports = _reports(state)
+		assert len(reports) == 1, key
+		assert reports[0]["blocker_reason"] == "release_in_flight", key
+		assert reports[0]["run_refs"] == [], key
+		assert f"workflow={workflow}" in reports[0]["blocker_evidence"], key
+		assert "/actions/runs/991" in reports[0]["blocker_evidence"], key
+
+
+def test_release_in_flight_recent_run_does_not_report() -> None:
+	active = {"id": 991, "status": "queued", "conclusion": None, "head_sha": TIP, "head_branch": "stable", "created_at": _ago(3600)}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[active]))
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
+	assert not state.get("heal_dispatches")
+
+
+def test_stable_release_stale_reports_and_still_dispatches_the_gate() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, tagger_date=_ago(3 * 86400), compare_commit_dates=[_ago(2 * 86400), _ago(3600)]))
+	assert proc.returncode == 0, proc.stderr
+	assert f"AUTO_RELEASE_DISPATCHED sha={TIP}" in proc.stdout
+	assert len(state["dispatches"]) == 1
+	reports = _reports(state)
+	assert len(reports) == 1
+	assert reports[0]["blocker_reason"] == "stable_release_stale"
+	assert reports[0]["run_refs"] == []
+	assert reports[0]["blocker_evidence"].startswith("reason=stable_release_stale")
+	assert 2 * 86400 - 120 <= reports[0]["blocker_age_secs"] <= 2 * 86400 + 120
+
+
+def test_stable_release_stale_ignores_a_fresh_patch_on_an_old_tag() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, tagger_date=_ago(30 * 86400), compare_commit_dates=[_ago(3600)]))
+	assert proc.returncode == 0, proc.stderr
+	assert len(state["dispatches"]) == 1
+	assert not state.get("heal_dispatches")
+
+
+def test_stable_release_stale_uses_the_base_commit_date_for_a_lightweight_tag() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, tag_lightweight=True, base_commit_date=_ago(3 * 86400), compare_commit_dates=[_ago(2 * 86400)]))
+	assert proc.returncode == 0, proc.stderr
+	assert len(state["dispatches"]) == 1
+	reports = _reports(state)
+	assert [r["blocker_reason"] for r in reports] == ["stable_release_stale"]
+
+
+def test_stable_release_stale_without_dates_is_guard_unavailable() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40))
+	assert proc.returncode == 0, proc.stderr
+	assert "RELEASE_BLOCKER_REPORT_SKIPPED reason=guard_unavailable blocker=stable_release_stale lookup=tag_time" in proc.stdout
+	assert len(state["dispatches"]) == 1
+	assert not state.get("heal_dispatches")
+
+
+def test_at_most_one_report_per_tick_prefers_release_in_flight() -> None:
+	active = {"id": 991, "status": "in_progress", "conclusion": None, "head_sha": TIP, "head_branch": "stable", "created_at": _ago(7 * 3600)}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[active], tagger_date=_ago(3 * 86400), compare_commit_dates=[_ago(2 * 86400)]))
+	assert proc.returncode == 0, proc.stderr
+	assert [r["blocker_reason"] for r in _reports(state)] == ["release_in_flight"]
+
+
+def test_stale_not_reported_while_a_gate_run_is_active_on_the_tip() -> None:
+	# A gate already started on the tip: the release is progressing, so the
+	# plan's "no gate run started on the tip since" condition does not hold.
+	active = {"id": 991, "status": "in_progress", "conclusion": None, "head_sha": TIP, "head_branch": "stable", "created_at": _ago(600)}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[active], tagger_date=_ago(3 * 86400), compare_commit_dates=[_ago(2 * 86400)]))
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
+	assert not state.get("heal_dispatches")
+
+
+def test_stale_reported_on_in_flight_path_when_no_gate_ran_on_the_tip() -> None:
+	active = {"id": 992, "status": "in_progress", "conclusion": None, "head_sha": "5" * 40, "head_branch": "main", "created_at": _ago(600)}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, promote_runs=[active], tagger_date=_ago(3 * 86400), compare_commit_dates=[_ago(2 * 86400)]))
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
+	assert [r["blocker_reason"] for r in _reports(state)] == ["stable_release_stale"]
+
+
+def test_stale_not_reported_on_the_retry_path() -> None:
+	runs = [_failed_gate(_ago(3600))]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs, tagger_date=_ago(3 * 86400), compare_commit_dates=[_ago(2 * 86400)]))
+	assert proc.returncode == 0, proc.stderr
+	assert len(state["dispatches"]) == 1
+	assert not state.get("heal_dispatches")
+
+
+def test_last_gate_failed_startup_failure_is_not_claimed_in_run_refs() -> None:
+	run = _failed_gate(_ago(2 * 86400), run_id=778)
+	run["conclusion"] = "startup_failure"
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[run]), env={"AUTO_RELEASE_STABLE_MAX_ATTEMPTS": "1"})
+	assert proc.returncode == 0, proc.stderr
+	reports = _reports(state)
+	assert [r["blocker_reason"] for r in reports] == ["last_gate_failed"]
+	assert reports[0]["run_refs"] == []
+	assert "/actions/runs/778" in reports[0]["blocker_evidence"]
+	assert "run_ref=none" in proc.stdout
+
+
+def test_reporter_kill_switch_sends_nothing() -> None:
+	active = {"id": 991, "status": "in_progress", "conclusion": None, "head_sha": TIP, "head_branch": "stable", "created_at": _ago(7 * 3600)}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[active]), env={"RELEASE_BLOCKER_HEAL_ENABLED": "false"})
+	assert proc.returncode == 0, proc.stderr
+	assert "RELEASE_BLOCKER_REPORT_SKIPPED reason=disabled blocker=release_in_flight" in proc.stdout
+	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
+	assert not state.get("heal_dispatches")
+
+
+def test_dispatch_denied_warns_and_keeps_the_tick_outcome() -> None:
+	active = {"id": 991, "status": "in_progress", "conclusion": None, "head_sha": TIP, "head_branch": "stable", "created_at": _ago(7 * 3600)}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[active], dispatch_error=True))
+	assert proc.returncode == 0, proc.stderr
+	assert "RELEASE_BLOCKER_REPORT_SKIPPED reason=dispatch_denied blocker=release_in_flight detail=" in proc.stdout
+	assert "::warning::Release blocker report release_in_flight on stable could not be dispatched" in proc.stdout
+	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
+	assert "dispatched=false" in state["github_output"]
+
+
+def test_invalid_threshold_warns_and_uses_the_default() -> None:
+	active = {"id": 991, "status": "in_progress", "conclusion": None, "head_sha": TIP, "head_branch": "stable", "created_at": _ago(7 * 3600)}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[active]), env={"RELEASE_BLOCKER_IN_FLIGHT_MIN_AGE_SECS": "abc"})
+	assert proc.returncode == 0, proc.stderr
+	assert "::warning::RELEASE_BLOCKER_IN_FLIGHT_MIN_AGE_SECS must be a non-negative integer (got 'abc'); using 21600." in proc.stdout
+	assert [r["blocker_reason"] for r in _reports(state)] == ["release_in_flight"]
+
+
+def test_unsupported_branch_is_payload_invalid_without_failing_the_tick() -> None:
+	active = {"id": 991, "status": "in_progress", "conclusion": None, "head_sha": TIP, "head_branch": "release", "created_at": _ago(7 * 3600)}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[active]), env={"AUTO_RELEASE_STABLE_BRANCH": "release"})
+	assert proc.returncode == 0, proc.stderr
+	assert "RELEASE_BLOCKER_REPORT_SKIPPED reason=payload_invalid blocker=release_in_flight stage=build" in proc.stdout
+	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
+	assert not state.get("heal_dispatches")
+
+
+def test_stale_reported_when_the_tip_only_has_cancelled_gate_runs() -> None:
+	# Cancelled gates spend no attempt and no other reporter owns them, so
+	# they must not suppress stable_release_stale.
+	runs = [{"id": 993, "status": "completed", "conclusion": "cancelled", "head_sha": TIP, "head_branch": "stable", "created_at": _ago(3600)}]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs, tagger_date=_ago(3 * 86400), compare_commit_dates=[_ago(2 * 86400)]))
+	assert proc.returncode == 0, proc.stderr
+	assert len(state["dispatches"]) == 1
+	reports = _reports(state)
+	assert [r["blocker_reason"] for r in reports] == ["stable_release_stale"]
+	assert "/actions/runs/993" in reports[0]["blocker_evidence"]
+	assert "conclusion=cancelled" in reports[0]["blocker_evidence"]
+
+
 # Runner-queue back-off and fixture cleanup before a retry.
 
 GATE_RUN = 43934729786
 
 
-def _failed_gate(run_id: int = GATE_RUN, conclusion: str = "failure", branch: str = "stable", sha: str = TIP, hours_ago: float = 3) -> dict:
-	ended = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours_ago)
-	started = ended - datetime.timedelta(hours=3)
+def _queue_failed_gate(run_id: int = GATE_RUN, conclusion: str = "failure", branch: str = "stable", sha: str = TIP, hours_ago: float = 3) -> dict:
+	ended = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
+	started = ended - timedelta(hours=3)
 	return {
 		"id": run_id,
 		"status": "completed",
@@ -367,7 +631,7 @@ def _api_paths(state: dict) -> list[str]:
 
 def test_retry_waits_while_the_queue_is_deep_after_a_recent_failed_gate() -> None:
 	for conclusion in ("failure", "timed_out"):
-		state = _state(tag_commit="3" * 40, runs=[_failed_gate(conclusion=conclusion)], queued_runs=375)
+		state = _state(tag_commit="3" * 40, runs=[_queue_failed_gate(conclusion=conclusion)], queued_runs=375)
 		with tempfile.TemporaryDirectory() as tmp:
 			proc, final = _run(Path(tmp), state)
 		assert proc.returncode == 0, proc.stderr
@@ -377,7 +641,7 @@ def test_retry_waits_while_the_queue_is_deep_after_a_recent_failed_gate() -> Non
 
 
 def test_retry_goes_ahead_once_the_queue_has_drained() -> None:
-	state = _state(tag_commit="3" * 40, runs=[_failed_gate()], queued_runs=99)
+	state = _state(tag_commit="3" * 40, runs=[_queue_failed_gate()], queued_runs=99)
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final = _run(Path(tmp), state)
 	assert proc.returncode == 0, proc.stderr
@@ -387,7 +651,7 @@ def test_retry_goes_ahead_once_the_queue_has_drained() -> None:
 
 def test_failure_older_than_the_window_gets_one_cycle_whatever_the_queue() -> None:
 	# A deep queue delays a release by at most the window; it never holds it.
-	state = _state(tag_commit="3" * 40, runs=[_failed_gate(hours_ago=25)], queued_runs=375)
+	state = _state(tag_commit="3" * 40, runs=[_queue_failed_gate(hours_ago=25)], queued_runs=375)
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final = _run(Path(tmp), state)
 	assert proc.returncode == 0, proc.stderr
@@ -397,7 +661,7 @@ def test_failure_older_than_the_window_gets_one_cycle_whatever_the_queue() -> No
 
 
 def test_failed_gate_without_a_readable_end_time_does_not_hold_the_release() -> None:
-	run = _failed_gate()
+	run = _queue_failed_gate()
 	del run["updated_at"]
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[run], queued_runs=375))
@@ -407,7 +671,7 @@ def test_failed_gate_without_a_readable_end_time_does_not_hold_the_release() -> 
 
 
 def test_queue_back_off_reads_nothing_when_the_last_gate_did_not_fail() -> None:
-	for runs in ([], [_failed_gate(conclusion="success")], [_failed_gate(conclusion="cancelled")], [_failed_gate(branch="main")]):
+	for runs in ([], [_queue_failed_gate(conclusion="success")], [_queue_failed_gate(conclusion="cancelled")], [_queue_failed_gate(branch="main")]):
 		with tempfile.TemporaryDirectory() as tmp:
 			proc, final = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs, queued_runs=900))
 		assert proc.returncode == 0, proc.stderr
@@ -418,9 +682,9 @@ def test_queue_back_off_reads_nothing_when_the_last_gate_did_not_fail() -> None:
 def test_newest_completed_stable_gate_decides_the_back_off() -> None:
 	# A success after the failure means the queue problem is over; a cancelled
 	# run after it decides nothing, so the failure before it still counts.
-	failed = _failed_gate(hours_ago=10)
+	failed = _queue_failed_gate(hours_ago=10)
 	for later, held in (("success", False), ("cancelled", True)):
-		runs = [failed, _failed_gate(run_id=GATE_RUN + 5, conclusion=later, hours_ago=1)]
+		runs = [failed, _queue_failed_gate(run_id=GATE_RUN + 5, conclusion=later, hours_ago=1)]
 		with tempfile.TemporaryDirectory() as tmp:
 			proc, final = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs, queued_runs=900))
 		assert proc.returncode == 0, proc.stderr
@@ -429,7 +693,7 @@ def test_newest_completed_stable_gate_decides_the_back_off() -> None:
 
 
 def test_queue_back_off_fails_open_and_can_be_disabled() -> None:
-	base = {"tag_commit": "3" * 40, "runs": [_failed_gate()], "queued_runs": 375}
+	base = {"tag_commit": "3" * 40, "runs": [_queue_failed_gate()], "queued_runs": 375}
 	for overrides, env, expected, dispatched in (
 		({"queued_error": True}, None, f"AUTO_RELEASE_QUEUE_CHECK outcome=read_failed lookup=queued_runs last_run={GATE_RUN}", True),
 		({}, {"AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS": "0"}, f"AUTO_RELEASE_DISPATCHED sha={TIP}", True),
@@ -474,7 +738,7 @@ def test_retry_closes_the_previous_cycles_fixtures_before_dispatching() -> None:
 	# search_ignores_qualifiers: the script's own filters must hold even when
 	# the search returns rows its qualifiers should have excluded.
 	for ignores in (False, True):
-		state = _state(tag_commit="3" * 40, runs=[_failed_gate()], fixtures=_fixtures(), search_ignores_qualifiers=ignores)
+		state = _state(tag_commit="3" * 40, runs=[_queue_failed_gate()], fixtures=_fixtures(), search_ignores_qualifiers=ignores)
 		with tempfile.TemporaryDirectory() as tmp:
 			proc, final = _run(Path(tmp), state)
 		assert proc.returncode == 0, proc.stderr
@@ -496,7 +760,7 @@ def test_retry_closes_the_previous_cycles_fixtures_before_dispatching() -> None:
 
 
 def test_fixtures_are_closed_even_when_the_tick_then_waits_for_the_queue() -> None:
-	state = _state(tag_commit="3" * 40, runs=[_failed_gate()], fixtures=_fixtures(), queued_runs=375)
+	state = _state(tag_commit="3" * 40, runs=[_queue_failed_gate()], fixtures=_fixtures(), queued_runs=375)
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final = _run(Path(tmp), state)
 	assert proc.returncode == 0, proc.stderr
@@ -506,7 +770,7 @@ def test_fixtures_are_closed_even_when_the_tick_then_waits_for_the_queue() -> No
 
 
 def test_fixtures_of_gate_runs_on_other_branches_and_of_cancelled_runs_are_closed() -> None:
-	for run in (_failed_gate(branch="main"), _failed_gate(conclusion="cancelled")):
+	for run in (_queue_failed_gate(branch="main"), _queue_failed_gate(conclusion="cancelled")):
 		with tempfile.TemporaryDirectory() as tmp:
 			proc, final = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[run], fixtures=_fixtures()))
 		assert proc.returncode == 0, proc.stderr
@@ -515,7 +779,7 @@ def test_fixtures_of_gate_runs_on_other_branches_and_of_cancelled_runs_are_close
 
 
 def test_fixture_cleanup_is_skipped_when_no_gate_run_failed() -> None:
-	for runs in ([], [_failed_gate(conclusion="success")]):
+	for runs in ([], [_queue_failed_gate(conclusion="success")]):
 		with tempfile.TemporaryDirectory() as tmp:
 			proc, final = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs, fixtures=_fixtures()))
 		assert proc.returncode == 0, proc.stderr
@@ -528,9 +792,9 @@ def test_fixture_cleanup_is_skipped_when_no_gate_run_failed() -> None:
 def test_fixture_cleanup_does_not_run_while_a_gate_is_in_flight() -> None:
 	# A running gate still owns its fixtures: the in-flight skip comes before
 	# the cleanup, so even a failed earlier run's fixtures wait for a later tick.
-	running = {**_failed_gate(run_id=GATE_RUN + 5), "status": "in_progress", "conclusion": None}
+	running = {**_queue_failed_gate(run_id=GATE_RUN + 5), "status": "in_progress", "conclusion": None}
 	with tempfile.TemporaryDirectory() as tmp:
-		proc, final = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[running, _failed_gate()], fixtures=_fixtures()))
+		proc, final = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[running, _queue_failed_gate()], fixtures=_fixtures()))
 	assert proc.returncode == 0, proc.stderr
 	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight" in proc.stdout
 	assert not any("search/issues" in path for path in _api_paths(final))
@@ -539,7 +803,7 @@ def test_fixture_cleanup_does_not_run_while_a_gate_is_in_flight() -> None:
 
 
 def test_fixture_cleanup_never_blocks_the_dispatch() -> None:
-	base = {"tag_commit": "3" * 40, "runs": [_failed_gate(conclusion="cancelled")], "fixtures": _fixtures()}
+	base = {"tag_commit": "3" * 40, "runs": [_queue_failed_gate(conclusion="cancelled")], "fixtures": _fixtures()}
 	for overrides, env, expected, closed in (
 		({"search_error": True}, None, "AUTO_RELEASE_FIXTURE_CLEANUP outcome=read_failed lookup=search kind=issue", 0),
 		({"user_error": True}, None, "AUTO_RELEASE_FIXTURE_CLEANUP outcome=read_failed lookup=user", 0),
