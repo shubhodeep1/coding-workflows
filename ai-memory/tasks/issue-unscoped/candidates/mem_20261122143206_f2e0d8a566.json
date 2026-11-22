@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A standalone `ai:blocked` issue whose newest trusted 'Planning blocked' comment carries this reason, with no pending fix-up wait, is closed as completed by the unblock judge.\"\n  expected_change_site: `scripts/unblock_judge.sh`, the #9946 no-wait guard and its handling of `ai:check-triage` issues.\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The no-wait guard at line 2472 explicitly excludes issues labeled `ai:check-triage`. For an unverified check-triage issue, the earlier #9659 path at line 2331 posts or refreshes a hold note and returns without closing the issue, so the PR does not close this standalone `ai:blocked` case as required (reviewer severity: NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION: tests/test_unblock_judge.py | location: `test_no_wait_nothing_to_implement_close_keeps_todays_judging_otherwise`, case `done_wait_after_block`\n  PROBLEM: The test helper `_comment` (line 37) sets no `updated_at`, so the fixture only tests the `created_at` fallback. No test covers a wait created before the block but marked done after it.\n  WHY: The production comparison uses `updated_at`, the time the wait was patched `done`. Suggested fix: add a variant with `created_at` \"2026-10-04T08:00:00Z\" and `wait[\"updated_at\"] = \"2026-10-04T11:00:00Z\"`, and assert that it goes to the judge (`verdict=retry_budget`) and is not closed (estimated 6 lines; HARDENING_RISK_SCORE: 1).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"A standalone `ai:blocked` issue whose newest trusted 'Planning blocked' comment carries this reason, with no pending fix-up wait, is closed as completed by the unblock judge.\"\n  Expected change site: `scripts/unblock_judge.sh`, the #9946 no-wait guard and its handling of `ai:check-triage` issues.\n  Evidence of absence: The no-wait guard at line 2472 explicitly excludes issues labeled `ai:check-triage`. For an unverified check-triage issue, the earlier #9659 path at line 2331 posts or refreshes a hold note and returns without closing the issue. The PR therefore does not close this standalone `ai:blocked` case as required.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING_SUGGESTION: scripts/unblock_judge.sh | location: line 2470 (new ordering jq) vs line 641 (`unblock_nothing_to_implement_blocked`)\n  PROBLEM: The literal block-header string \"Planning blocked: human input required.\" now appears in two jq filters in the same file, so the two can drift apart.\n  WHY: If a future header change updates one filter and not the other, the ordering check would drift from the close-eligibility check. The drift fails closed to the judge, which silently restores the CRITICAL-loop behavior this PR fixes. Suggested fix: hoist the header into a shell variable (e.g. `UNBLOCK_PLAN_BLOCK_HEADER`, alongside `UNBLOCK_NOTHING_TO_IMPLEMENT_REASON` at line 629) and pass it to both jq filters via `--arg` (estimated 4 lines; HARDENING_RISK_SCORE: 1).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "161f9901e514ff64b38a16dd5e6c14f3f915770ef96b09b0841ffb4356213df3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9951,
+    "run_id": "45020874278",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45020874278",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122143206_f2e0d8a566",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9951,
+    "run_id": "45020874278"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-22T14:32:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
