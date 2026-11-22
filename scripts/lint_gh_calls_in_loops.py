@@ -447,9 +447,10 @@ def lint(repo_root: Path, base: str, head: str) -> tuple[list[LoopCallFinding], 
 		for path in sorted(added):
 			try:
 				text = _git(repo_root, "show", f"{head}:{path}")
-			except RuntimeError:
-				# One unreadable path (e.g. a non-UTF-8 name) must not drop
-				# the findings of every other changed file.
+			except (RuntimeError, OSError, subprocess.TimeoutExpired):
+				# One unreadable path (e.g. a non-UTF-8 name, a timed-out or
+				# failed `git show`) must not drop the findings of every other
+				# changed file.
 				print(f"::warning::{LOG_PREFIX} could not read {_escape_data(path)}; skipped", flush=True)
 				continue
 			warnings.extend(scan_file(path, text, added[path]))
