@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_collect_pr_metadata.sh:410-414 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: When the guard exits 0 but record extraction yields an empty or multi-line result, the log line emits `outcome=none reason=grant_error paths=0 detail=exit_0`, which is not a failure cause and hides the real cause.\n  WHY: The fail-open path still fires, so only the diagnostic token is misleading for log-analysis consumers triaging a grant_error. The source labelled it NIT.\n- scripts/review_collect_pr_metadata.sh:396-421 | severity=high | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The edit touches scripts/review_collect_pr_metadata.sh, which the linked issue's plan grant (\"Implementation is limited to these paths\") does not list, so the PR's surface grows into a security-sensitive grant-publication script without being declared. Cited with agents.d/9920-github-ai-plan-grant-write.md line 12.\n  WHY: There is no direct runtime failure, but behavioural drift in the grant publication path would go unreviewed in an integration-branch PR meant only to raise a CI timeout. The source labelled it MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_collect_pr_metadata.sh:410-414 and 420 | severity=NIT | confidence=3\n  PROBLEM: When the guard exits 0 but record extraction yields an empty or multi-line result, the log line emits `outcome=none reason=grant_error paths=0 detail=exit_0`. `exit_0` is not a failure cause, so the real cause is hidden.\n  WHY: There is no functional failure, because the fail-open path still fires. Only the diagnostic token is misleading for log-analysis consumers.\n- scripts/review_collect_pr_metadata.sh:396-421 (plus agents.d/9920-github-ai-plan-grant-write.md line 12) | severity=MAJOR | confidence=4\n  PROBLEM: The linked issue's plan grant limits implementation to .github/workflows/ci.yml, tests/**, changelog.d/*, agents.d/*. scripts/review_collect_pr_metadata.sh is outside the grant and outside the PR's own change set, so the last autofix run expanded the PR's surface into a security-sensitive script without declaring it. The edit itself is safe.\n  WHY: There is no direct runtime failure, but unreviewed behavioural drift in the grant publication path would ride into a PR whose declared purpose is a CI timeout raise.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6929be945af42793e15c4e63ff6623a529bbf3e8333edc4a0b9f0538a4d2cd10",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9952,
+    "run_id": "45016144342",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45016144342",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261122113927_60bb82e5cb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9952,
+    "run_id": "45016144342"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-22T11:39:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
