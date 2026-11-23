@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:~4936 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: Head da3cb95a has two failed check-runs from CI run 44903199931: the aggregate `lint` job failed only because `orchestrate-poll` was `cancelled`, and the `orchestrate-poll (3)` shard ended `cancelled` with no failing assertion (file not part of this PR).\n  WHY: This is an infrastructure or concurrency cancellation that no code change in this PR can fix; a CI re-run is needed, after which the `_bound_rerun_succeeded` rule drops the older failure (reviewer severity: NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:~4936 (job `lint`, `CI_NEEDS_JSON` check; not part of this PR) | severity=low (NIT) | confidence=2\n  PROBLEM: Head da3cb95a has two failed check-runs from CI run 44903199931: the aggregate `lint` job failed only because `orchestrate-poll` was `cancelled`, and the `orchestrate-poll (3)` shard ended `cancelled` with no failing assertion.\n  WHY: This is an infrastructure or concurrency cancellation that no code change in this PR can fix; a CI re-run is needed, after which the `_bound_rerun_succeeded` rule drops the older failure.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "4d002c901ebea54875ef4ed9a2b0196bf694d43c90b10fa8358ad35b26b5b07a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9867,
+    "run_id": "45121689782",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45121689782",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123070512_ce8c009a5a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9867,
+    "run_id": "45121689782"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-23T07:05:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
