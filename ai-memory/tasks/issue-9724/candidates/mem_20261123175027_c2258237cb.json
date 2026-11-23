@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The remaining scope needs `plan.yml`, which is outside this issue's allowed paths, and there is no evidence yet that a pipeline step deleted the plan. How should this issue proceed?\nChoices:\nA) Widen the scope to `.github/workflows/plan.yml` and add a guard now. The clarification-comment cleanup (`plan.yml:1731-1746`) would skip any comment whose body matches `(?im)^\\s*implementation\\s+plan\\b` or contains `<!-- ai:plan-proposal:v1 -->`. The five `PLAN_PROGRESS_COMMENT_ID` DELETEs would also stay as they are, since they target only their own captured ID. Add a regression test that points the step at a plan-comment fixture and checks no DELETE is sent. (RECOMMENDED)\nB) Widen the scope to `plan.yml` as in A, and also have each `PLAN_PROGRESS_COMMENT_ID` DELETE first read the comment and require the `<!-- ai:plan-progress -->` marker. This adds one GET per deletion.\nC) Change no code. Close this issue as delivered by PR #9729, and let a future failure, now reported with `IMPLEMENT_PLAN_NOT_FOUND`/`IMPLEMENT_PLAN_CANDIDATE` lines, open a new heal issue with real evidence.\nD) Keep the issue open with no code change until a run logs `IMPLEMENT_PLAN_NOT_FOUND reason=no_plan_comment` or `plan_body_mismatch`, then guard whichever deletion path it points to.",
+  "fingerprint": "81b015026946953f7df3ac9e9af54431f1bb2eedb4729a9e761d54547bcc3721",
+  "lineage": {
+    "issue_number": 9724,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45231044368",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45231044368",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261123175027_c2258237cb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9724,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45231044368"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9724 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-23T17:50:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
