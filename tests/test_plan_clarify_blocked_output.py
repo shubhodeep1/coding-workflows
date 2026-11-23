@@ -1186,14 +1186,15 @@ def _plan_step_run(name: str) -> str:
 	return script
 
 
-def _run_blocked_handler(scope_routed: str, scope_marker: str, reason: str = "needed files are outside files_touched") -> tuple[str, str]:
+def _run_blocked_handler(scope_routed: str, scope_marker: str, reason: str = "needed files are outside files_touched", ensure_fails: str = "") -> tuple[str, str]:
 	script = _plan_step_run("Handle blocked planning output")
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
 		(root / "scripts").mkdir()
 		(root / "bin").mkdir()
 		(root / "scripts" / "gh_helpers.sh").write_text('gh_retry() { "$@"; }\n', encoding="utf-8")
-		(root / "scripts" / "label_helpers.sh").write_text('ensure_label_exists() { printf "ensure %s\\n" "$1" >> "${STUB_LOG}"; }\n', encoding="utf-8")
+		(root / "scripts" / "label_helpers.sh").write_text(
+			'ensure_label_exists() { printf "ensure %s\\n" "$1" >> "${STUB_LOG}"; [ "$1" != "${ENSURE_FAILS:-}" ]; }\n', encoding="utf-8")
 		(root / "scripts" / "tg_helpers.sh").write_text("tg_send_tracked() { :; }\n", encoding="utf-8")
 		gh = root / "bin" / "gh"
 		gh.write_text(
@@ -1213,6 +1214,7 @@ def _run_blocked_handler(scope_routed: str, scope_marker: str, reason: str = "ne
 			"BLOCKED_REASON": reason,
 			"SCOPE_ROUTED": scope_routed,
 			"SCOPE_MARKER": scope_marker,
+			"ENSURE_FAILS": ensure_fails,
 		}
 		result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=False)
 		assert result.returncode == 0, result.stdout + result.stderr
@@ -1270,6 +1272,23 @@ def test_routed_blocked_comment_has_header_first_and_marker_last() -> None:
 	header_line = PLANNING_SCOPE_HEADER
 	ledger_text = _read(REPO_ROOT / "scripts" / "unblock_ledger.py")
 	assert f'"{header_line}",' in ledger_text
+
+
+def test_failed_scope_label_create_falls_back_to_the_unrouted_comment() -> None:
+	log, body = _run_blocked_handler("true", PLANNING_SCOPE_MARKER, ensure_fails="ai:scope-blocked")
+	assert PLANNING_SCOPE_HEADER not in body and "ai:guard-rejection" not in body
+	assert "--add-label ai:blocked --remove-label ai:planning" in log
+	assert "--add-label ai:scope-blocked" not in log
+
+
+def test_answer_on_a_routed_block_also_clears_the_scope_label() -> None:
+	wf = _read(PLAN_WF)
+	start = wf.index("is in ai:blocked phase; transitioning to ai:planning for /answer processing.")
+	branch = wf[start:wf.index("          else\n", start)]
+	assert "index(\"ai:scope-blocked\") != null" in branch
+	assert "answer_scope_label_args=(--remove-label 'ai:scope-blocked')" in branch
+	assert "--add-label 'ai:planning' --remove-label 'ai:blocked' \\\n" in branch
+	assert '${answer_scope_label_args[@]+"${answer_scope_label_args[@]}"}' in branch
 
 
 def test_open_pr_wait_reason_is_never_scope_routed() -> None:

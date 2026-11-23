@@ -1167,8 +1167,16 @@ jobs:
             echo "Issue #${ISSUE_NUMBER} is in ai:blocked phase; transitioning to ai:planning for /answer processing."
             source "${SUPPORT_SCRIPTS_DIR:-scripts}/label_helpers.sh"
             ensure_label_exists "ai:planning" "${{ github.repository }}"
+            # Issue #9534: a routed planning scope block also set ai:scope-blocked,
+            # which implement.yml refuses to run past; a person's /answer re-plans,
+            # so drop it in the same edit (no extra API call).
+            answer_scope_label_args=()
+            if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:scope-blocked") != null' >/dev/null; then
+              answer_scope_label_args=(--remove-label 'ai:scope-blocked')
+            fi
             gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
-              --add-label 'ai:planning' --remove-label 'ai:blocked' >/dev/null 2>&1 || true
+              --add-label 'ai:planning' --remove-label 'ai:blocked' \
+              ${answer_scope_label_args[@]+"${answer_scope_label_args[@]}"} >/dev/null 2>&1 || true
           else
             echo "Issue #${ISSUE_NUMBER} has none of ai:planning, ai:clarification, or ai:blocked labels. Skipping planning run."
             echo "Current labels: ${ISSUE_LABELS_JSON}"
@@ -2635,7 +2643,9 @@ jobs:
           # offer override_guard. Never for the open-PR wait reason below. The
           # label rides on the same edit as ai:blocked; ensure_label_exists may make
           # one `gh label create` for it on a routed block (the edit fails on a
-          # missing label).
+          # missing label, so a failed create falls back to the unrouted comment).
+          # The label also starts the workflow-failure-heal report
+          # (internal-workflow-failure-heal.yml), as an implement-time scope block does.
           PLAN_SCOPE_ROUTED=false
           plan_scope_marker_re="^<!-- ai:guard-rejection:v1 item=${ISSUE_NUMBER} guard=scope reason=out-of-scope run=[0-9]+ count=[1-9][0-9]* truncated=false paths=[A-Za-z0-9+/=]+ -->\$"
           plan_scope_wait_re='^work is delivered by open PR #'
@@ -2644,11 +2654,18 @@ jobs:
             PLAN_SCOPE_ROUTED=true
           fi
           plan_scope_label_args=()
+          plan_scope_handle_reason=""
           if [ "${PLAN_SCOPE_ROUTED}" = "true" ]; then
-            ensure_label_exists "ai:scope-blocked" "${{ github.repository }}" || true
-            plan_scope_label_args=(--add-label 'ai:scope-blocked')
+            if ensure_label_exists "ai:scope-blocked" "${{ github.repository }}"; then
+              plan_scope_label_args=(--add-label 'ai:scope-blocked')
+            else
+              # Never let the optional label sink the ai:blocked edit: post the
+              # unrouted comment instead.
+              PLAN_SCOPE_ROUTED=false
+              plan_scope_handle_reason=" reason=label_unavailable"
+            fi
           fi
-          echo "PLAN_SCOPE_BLOCK op=handle issue=${ISSUE_NUMBER} routed=${PLAN_SCOPE_ROUTED}"
+          echo "PLAN_SCOPE_BLOCK op=handle issue=${ISSUE_NUMBER} routed=${PLAN_SCOPE_ROUTED}${plan_scope_handle_reason}"
 
           ensure_label_exists "ai:blocked" "${{ github.repository }}"
           gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \

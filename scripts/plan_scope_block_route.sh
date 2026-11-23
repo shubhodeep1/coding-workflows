@@ -96,6 +96,9 @@ SCOPE_PATH_RE = re.compile(r"^\s*SCOPE_MISSING:\s*(\S+)\s*$")
 # Same closed-fence strip as the parse_plan step, so a line inside a fenced
 # block never counts even when the raw output is passed.
 FENCE_RE = re.compile(r"(^|\n)([ \t]*((?:```|~~~))[^\n]*\n.*?\n[ \t]*\3[ \t]*(?=\n|$))", re.S | re.M)
+# A fence opener left after that strip never closes; parse_plan keeps its
+# content, but a scope line after it may be an example, so refuse to route.
+OPEN_FENCE_RE = re.compile(r"^[ \t]*(?:```|~~~)")
 
 
 def reason(name):
@@ -131,9 +134,15 @@ with open(parse_file, encoding="utf-8", errors="replace") as handle:
 	text = FENCE_RE.sub(r"\1", handle.read())
 raw_paths = []
 malformed = False
+open_fence = False
 for line in text.splitlines():
+	if OPEN_FENCE_RE.match(line):
+		open_fence = True
+		continue
 	if not SCOPE_LINE_RE.match(line):
 		continue
+	if open_fence:
+		reason("unclosed_fence")
 	match = SCOPE_PATH_RE.match(line)
 	if not match:
 		malformed = True

@@ -111,6 +111,15 @@ def test_scope_lines_inside_a_fence_are_ignored(tmp_path: Path) -> None:
 	_assert_not_routed(result, outputs, "no_scope_lines")
 
 
+def test_scope_lines_after_an_unclosed_fence_are_not_routed(tmp_path: Path) -> None:
+	output = "BLOCKED: example only\n```text\nSCOPE_MISSING: tests/test_a.py\n"
+	result, outputs = _run(tmp_path, output)
+	_assert_not_routed(result, outputs, "unclosed_fence")
+	# A scope line before the unclosed fence is outside it and still routes.
+	result, outputs = _run(tmp_path, "BLOCKED: x\nSCOPE_MISSING: tests/test_a.py\n```\nnotes\n")
+	assert outputs["scope_routed"] == "true"
+
+
 @pytest.mark.parametrize("path", ["tests/*.py", "docs/../scripts/x.sh", "/etc/passwd", "tests/", "tests/caf\u00e9.py", "a\\b.py", "tests/{a,b}.py",
 	"`tests/a.py", "tests/'a'.py", '"tests/a.py"', "tests/$x.py", "``tests/a.py``"])
 def test_invalid_paths_are_not_routed(tmp_path: Path, path: str) -> None:
