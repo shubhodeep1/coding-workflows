@@ -680,6 +680,12 @@ What this means for operators: create `AI_COMMENT_SIGNING_SECRET` in coding-work
 - **Check-failure triage re-runs a check that failed on a GitHub release-download 5xx instead of filing an issue.** On 2026-11-08 GitHub's release-download servers returned HTTP 504 for two hours; Foundry setup, Slither and the CodeQL bundle download failed before running any PR code, and one consumer PR got 7 `ai:check-triage` issues and 3 CRITICAL "human input required" pages. The collect stage of `scripts/check_failure_triage.sh` now re-runs the failed jobs of a first-attempt workflow run once (`POST rerun-failed-jobs`) when the annotations of every failed job (at most 3) show a `github.com` release download that returned 502/503/504, and files no issue. A failure that comes back on attempt 2 is triaged as before, and any read or re-run failure falls back to filing. The base-branch gate reuses the gate's run read. Log prefix `RELEASE_DOWNLOAD_RERUN`; repository variable `CHECK_FAILURE_TRIAGE_RELEASE_DOWNLOAD_RERUN_ENABLED` (default `true`, `false` turns it off). Refs #9120.
 - **A blocked `ai:check-triage` issue alerts at WARNING, not CRITICAL.** `plan.yml`'s `Handle blocked planning output` step reads the label from the issue metadata it already has, sends the Telegram alert at `WARNING` with "(CI triage; the unblock judge will re-check)" in its first line, and adds a paragraph to the blocked comment saying the unblock judge closes the issue once the check passes. The comment's first line and `Reason:` line are unchanged, and every other blocked issue keeps CRITICAL. Refs #9120.
 
+- **Workflow-heal issues held by the counterfactual gate now close themselves once the failing workflow is green again.** A run-sourced heal issue at `ai:awaiting-approval` closes as completed when its workflow has passed on each of the newest completed push runs on the target branch since the issue was last reported (one page of `HEAL_STALE_GREEN_RUNS`+10 runs is read, so on a busy branch older runs since that report are not checked). It needs at least `HEAL_STALE_GREEN_RUNS` (default 5) such runs, and the last report must be at least `HEAL_STALE_MIN_AGE_HOURS` (default 24) old. It also needs no open fix PR.
+
+Until now such an issue waited for a human forever, because a counterfactual hold counts no recovery attempt. If the failure comes back, the heal intake files the next generation as before. New run-sourced heal issues record their workflow file in a body marker, so the check costs one cached runs read per workflow per poller tick. Set the `HEAL_STALE_AUTO_CLOSE_ENABLED` repository variable to `false` to turn it off.
+
+Refs #8808.
+
 ### For contributors
 
 The signer is embedded in `scripts/gh_helpers.sh` and written to `RUNNER_TEMP` on activation, so it travels wherever the helpers are staged. `tests/test_comment_signature.py` fails when the embedded copy and `scripts/comment_signature.py` differ. Inside Actions the first activation adds the shim to `GITHUB_PATH`, so later steps and Python scripts run from a step go through it. `tests/conftest.py` strips the signing variables for the test session. Comment calls made with `curl` and steps before the first `gh_helpers.sh` source in a job keep the PAT.
@@ -2167,6 +2173,68 @@ When the `ubuntu-latest` runners moved to Ubuntu 26.04, CI on `main` broke and h
 | Kill switch | `CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED` (default `true`; repository variable, forwarded by `check_failure_triage.yml`) |
 
 What this means for operators: a red `main` produces one heal issue and comments on it, not an issue and a CRITICAL page for every open PR. A planning block that is only waiting for another PR to merge no longer asks you for input. When this shipped on the `stable` line (v1.47.5), heal issues there did not carry the `<!-- workflow-failure-heal:workflow=<path> -->` header yet, so the per-PR skip found no matching heal issue and triage filed as before until #8812 reached `stable` (see the #8812 entry); the planning-block change applied at once.
+
+- **On the `stable` line, check-failure triage now skips a per-PR issue when a heal issue already tracks the same default-branch failure.** The skip shipped in v1.47.5 (#9272) but could not fire, because heal issues did not carry the `<!-- workflow-failure-heal:workflow=<path> -->` header it matches on.
+
+With #8812 backported, `scripts/workflow_failure_heal.py` writes that header on every new run-sourced heal issue. A PR whose failed jobs all also fail on the default branch's newest run of that workflow gets no per-PR triage issue (`CHECK_TRIAGE skip reason=base_failure_tracked`); its heal issue gets one comment naming the PR instead. Heal issues filed before this release have no header, so triage keeps filing per-PR issues for the failures they track.
+
+What this means for operators: a red default branch produces one heal issue and comments on it, not one triage issue per open PR. Set the `CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED` repository variable to `false` to keep filing per-PR issues.
+
+Refs #8812, Refs #9272.
+
+- **Repeat heal reports update one comment instead of adding a new one each time, and a heal issue's own failed run no longer opens another heal issue.** Release-gate fixtures titled `[E2E Orchestrate Smoke ...]` are skipped by the heal intake as well.
+
+Heal issue #9200 collected 271 `<!-- workflow-failure-heal:occurrence -->` comments in two days, and each comment posted with the pipeline account started four `issue_comment` wrapper runs. The Workflow Failure Heal Intake now keeps one occurrence comment per heal issue and edits it: a count, the first and latest report times, and the newest 10 reports. An edit starts no wrapper run. The intake also stops filing heal issues for heal issues (#9200 for #9190, #9192 for #9189, #9238 for #9234): when a heal issue's own clarify, plan or implement run fails, the report is recorded on that issue and no new issue is opened. The same defect still gets a heal issue from any report whose source is not a heal issue. Reports from `[E2E Orchestrate Smoke ...]` and `[E2E Clarify Negative Test ...]` fixtures are skipped like `[E2E Smoke Test ...]` ones (#9236 was filed for the fixture #9210).
+
+| The numbers that matter | Value |
+| --- | --- |
+| Occurrence comments per heal issue | 1, edited in place (was 1 per report) |
+| Reports kept in the comment | newest 10, at most 60,000 characters |
+| Extra API calls per repeat report | 1 paginated comments read, then 1 `PATCH` in place of the `POST` |
+| Counter posted again as a new comment | when 15 or more newer comments follow it |
+| New switches (repository variables, default `true`) | `HEAL_OCCURRENCE_IN_PLACE_ENABLED`, `HEAL_SOURCE_DEDUPE_ENABLED` |
+
+What this means for operators: a heal issue's thread stays short, and the count of repeats is in one place. Set either variable to `false` to return to the earlier behaviour. Heal issues that already hold single-report occurrence comments keep them; the first new repeat starts the counter at their number plus one.
+
+### For contributors
+
+The comment's first line is unchanged, so readers that match it by prefix are unaffected. `_recovery_occurrence_runs` reads the entries one by one, and the stale auto-close anchor (`heal_stale_decision`) also uses the count line's `last=` time, because an edited comment keeps its original `created_at`. The poller reads only an issue's newest 20 comments for the stale auto-close, which is why a counter buried under 15 newer comments is posted again and the old one deleted. Two intakes that handle the same issue at the same moment can lose one report's entry and one count. The heal-of-heal check compares the report's issue number with the GitHub list of `ai:workflow-heal` issues, not with the labels in the report; such a report is recorded without a diagnosis and without escalation, and only a run that fails with the heal issue's own fingerprint (or cause) is escalated, as before.
+
+- **The unblock judge stops splitting an item that is already two re-issues or fix-ups away from the original, and hands it to a person instead.**
+
+`Re-issue of`, `Follow-up to`, `Unblock descope for` and `Unblock operator step for` issues each restart clarify, plan and implement, and such an issue, or its PR, could block and be split again without limit: #9190 led to #9261, its PR #9283, then #9398 and #9670, and 24 issues of these kinds were opened in one week. The judge (`scripts/unblock_judge.sh`, `scripts/unblock_ledger.py`) now counts how many of those prefixes an item's title starts with. At two, the verdicts `reissue`, `accept_with_followup`, `descope` and `operator_step` are no longer offered: the judge can only keep working on the item itself (`retry_budget`, `auto_answer`, `override_guard`, `wait`), and when nothing is left the item gets `ai:needs-human` and an entry in the "Items waiting for a person" digest, as any exhausted item does. For a PR on an `ai/issue-<n>` branch the judge reads the title of issue `<n>`, and an issue filed from that PR carries that title, so the count is not lost when the chain passes through a PR.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Chain depth at which no further issue is opened | 2 (`MAX_CHAIN_DEPTH` in `scripts/unblock_ledger.py`) |
+| Extra API calls | 1 issue read per judged trusted PR on an `ai/issue-<n>` branch |
+| Alert when the item is finally parked | CRITICAL, once (the existing needs-human park, reason `menu_exhausted`) |
+
+What this means for operators: a block that two rounds of re-issues or fix-ups did not clear now reaches you as one `ai:needs-human` item instead of more issues. Consumer repositories get this on their next `@stable` sync. Issues filed from a PR whose issue is itself a re-issue or fix-up get a longer title that keeps the earlier prefixes.
+
+### For contributors
+
+The depth comes from the title only, so it works for issues that already exist and needs no new marker. Titles are editable, which makes the cap a brake on the pipeline's own chains and not a trust boundary. The cap is a Python constant next to the other judge limits, not a repository variable.
+
+- **The release-gate dispatcher closes the previous cycle's fixtures and waits for the runner queue before it retries.** A gate that failed while the Actions queue was deep is no longer re-dispatched into the same queue every 6 hours.
+
+`scripts/auto_release_stable.sh`, run every 6 hours by `.github/workflows/auto-release-stable.yml`, now does two things before it dispatches `test-and-mark-stable.yml`. It closes the open `[E2E ...]` fixture issues and PRs left behind by gate runs that finished without success (`AUTO_RELEASE_FIXTURE_CLEANUP`); orchestrator fixture projects stay with the poller's `SMOKE_FIXTURE_REAP`. Then, if the newest completed gate run on `stable` failed less than 24 hours ago, it reads the repository's queued-run count and skips with `AUTO_RELEASE_SKIPPED reason=runner_queue_deep` while 100 or more runs are queued. The skipped tick spends none of the `AUTO_RELEASE_STABLE_MAX_ATTEMPTS` budget. After 24 hours one cycle is dispatched whatever the queue, so a release is delayed, never held for good. Both steps fail open: an unreadable queue count or search dispatches as before.
+
+| The numbers that matter | Value |
+| --- | --- |
+| `Test & Mark Stable Release` runs, 2026-11-10 to 2026-11-17 | 16 (2 passed, 9 failed, 5 cancelled) |
+| Fixtures filed by those cycles | 79 issues, 29 PRs |
+| `AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS` | `100` (`0` disables the back-off) |
+| `AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS` | `24` |
+| `AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_ENABLED` / `AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX` | `true` / `30` |
+| Gate cycles per day into a deep queue | at most 1 (was up to 4) |
+| Extra API calls per tick | 0 when no gate run in the listing failed; otherwise 1 `user` read and 2 searches for the cleanup, 1 queue count for the back-off |
+
+What this means for operators: while 100 or more runs are queued after a failed gate, the 6-hour tick logs `runner_queue_deep` and releases nothing, for up to 24 hours. To release sooner, dispatch `test-and-mark-stable.yml` by hand or set the repo variable `AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS=0`. Fixtures are closed without a comment; the dispatcher's log names each one.
+
+### For contributors
+
+The daily promote cycle (`scripts/promote_main_cycle.sh`) dispatches its own `gate_only` run and has no back-off. `tests/test_auto_release_stable.py` covers the back-off window, its fail-open paths, the cleanup's selection rules and the workflow's env wiring.
 
 ### For contributors
 
@@ -4701,6 +4769,149 @@ Six triage issues from 2026-11-16 and 11-17 became fix PRs on other PRs' branche
 | Switches (repo variables) | `CHECK_TRIAGE_SKIP_HEAD_ADVANCED_ENABLED`, `CHECK_TRIAGE_SKIP_FINAL_CI_ENABLED` (both default `true`) |
 
 What this means for operators: fewer `ai:check-triage` issues and fix PRs racing a PR's own review loop. A failing PR head that is still current is triaged as before. Turning the final-CI hand-back off (`FINAL_CI_FAILED_REDISPATCH_ENABLED=false`) brings final CI runs back to triage. Consumers get it on the next `@stable` sync.
+
+- **`ai:check-triage` issues now close when their fix PR merges into the failing PR's head branch.** A check-triage fix PR merges into the head branch of the PR whose check failed, not into the default branch, so `issue_pr_status.yml` and `close_merged_issues_sweep` left these issues open (logged as "not a target merge" / `rejected=non_target_base`). Both paths now accept that merge with the new reason `check_triage_pr_branch` when the issue carries `ai:check-triage`, was written by the pipeline (`GH_PAT`) login, has exactly one `<!-- check-failure-triage:pr=<N> -->` marker, and PR `<N>` has a same-repository head whose `head.ref` (read from the API) equals the merged PR's base. The issue is labelled `ai:merged` and closed. The sweep also lists open `ai:check-triage` issues (for example `ai:done`) as a third candidate list with `origin=check_triage`; one with no merged PR yet is a silent pending skip. Other issues keep the existing target-branch rule, and standalone stall recovery is unchanged. Refs #8955.
+
+- **The security audit no longer files a finding again under a new id while its follow-up is still open, and the CI budget watch no longer re-files a job's issue right after the previous one closed.**
+
+The weekly and per-branch security audit (`.github/workflows/security-audit.yml`) deduplicated follow-up issues only by the `finding_id` the model writes, and the model words that id differently on each run. One finding at `scripts/render_prompt.sh:326` on one branch was filed as #9399, #9431 and #9465 within a day, each while the earlier issues were still open. A finding that names the same file and the same category within 25 lines of an open follow-up of the same audit scope now reuses that follow-up's id, so nothing new is filed and the tracker report names the issue it repeats. A finding that comes back under a new id after its issue closed is still filed again; a finding reported under the exact id of any earlier follow-up, open or closed, is skipped as before. Separately, the `budget-watch` job in `ci.yml` opened a new `ai:ci-budget` issue for `orchestrate-poll` three times in one week, each a few hours after the last one closed, for a job sitting just over the warning ratio. It now waits 7 days after an issue for the same job closes, unless the job reaches 90% of its timeout.
+
+| The numbers that matter | Value |
+| --- | --- |
+| `SECURITY_AUDIT_SIMILAR_FINDING_LINE_WINDOW` | `25` lines (`0` turns the check off) |
+| `CI_BUDGET_REFILE_COOLDOWN_DAYS` | `7` days (`0` turns the cooldown off) |
+| `CI_BUDGET_REFILE_URGENT_RATIO` | `0.9` of the limit, filed even inside the cooldown |
+| Extra API calls | security audit: none; budget watch: one closed-issue listing, only when a finding below 90% has no open issue |
+
+What this means for operators: one open security follow-up per defect and branch, in place of a new issue on each audit cycle. Consumer repositories get the security-audit change on their next `@stable` sync. A CI job that hovers around 75% of its timeout produces one issue per week at most, and a job that is really about to time out still gets one at once.
+
+### For contributors
+
+The category key is the OWASP code (`A01` to `A10`) when the category has one, otherwise the category's letters and digits in lower case. Closed follow-ups are left out on purpose: suppressing on them would hide a regression and would leave the single-issue security pass waiting for a follow-up that is never filed. Queue wait was already left out of the job duration by #9559, and one open `ai:ci-budget` issue per job was already enforced by its marker; the cooldown covers the closed-issue case. The tracker report comment stays one comment per run: it is posted with the job token and starts no workflow.
+
+- **`ai:check-triage` issues no longer stay open after their failure is fixed.** In `shubhodeep1/fun-token-multi-chain`, nine triage issues stayed open for 4 to 12 days after their source PR merged and the check went green on `main`, and five of them looped through stall recovery. Four changes in the orchestrator poller and the check-triage gate:
+  - The close sweep now accepts a fix PR merged into the marker PR's `orchestrator/project-<N>` base, once the marker PR merged there and issue `<N>` carries `ai:orchestrator-tracking` (`reason=check_triage_marker_pr_base`).
+  - Each rejected triage rule now logs why (`triage_rule=skip reason=...`), and the head repository compares case-insensitively.
+  - The sweep runs `check_triage_resolution.py gate` on open triage issues in any phase, up to `CHECK_TRIAGE_GATE_SWEEP_MAX_PER_TICK` (default 10) per tick. It closes resolved issues, and closes as "not planned" an issue whose source PR closed without merging, unless an open fix PR exists, a pipeline run for the issue (including a clarify run) is active, or the issue carries `ai:planning` / `ai:implementing`. On ticks with no active orchestrator project, the same pass runs after standalone stall recovery.
+  - When a project reached the default branch without an integration PR, the gate falls back to checking that the default branch is green and holds the PR's content (`CHECK_TRIAGE_INTEGRATION_FALLBACK_ENABLED`, default `true`).
+
+  The stall judge's `escalate_human` also stays in effect when the linked PR closed without merging or merged into a branch that does not count, instead of becoming `attempt_merge`. Consumer repos pick this up on the next `@stable` sync, with no configuration change.
+
+- **A `.gitleaksignore` merge conflict no longer stalls a project.** The conflict resolver now merges `.gitleaksignore` itself, the autofix editor suggests the fingerprint lines it may not write, and the unblock judge stops re-planning check-triage issues whose fix is already on the planning ref.
+
+One gitleaks false positive stalled an orchestrator project three ways (shubhodeep1/binance-blessings #585, #615, #618, #629). The resolver sandbox may not edit root dotfiles, so a `.gitleaksignore` conflict failed closed with `sandbox_path_host_only` even when both sides had added the same fingerprint. Now `scripts/review_conflict_prepare.sh` keeps the base branch's `.gitleaksignore` byte for byte and appends the fingerprint lines the PR side added, on PR conflicts and on `orchestrator/project-*` integration sync. Deletions, malformed lines, symlinks and other unsafe shapes still fail closed. When a review finding needs `.gitleaksignore`, the editor summary comment now carries the validated gitleaks fingerprint lines as a ready-to-paste block for a human to decide on. A standalone `ai:check-triage` issue blocked with "nothing to implement" gets one note and waits for its check to pass instead of a resume that only blocks planning again.
+
+| The numbers that matter | Value |
+| --- | --- |
+| New switches (default `true`) | 2 (`CONFLICT_GITLEAKSIGNORE_UNION_ENABLED`, `UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED`) |
+| New log keys | `CONFLICT_RESOLVER_GITLEAKSIGNORE_UNION`, `REVIEW_EDITOR_GITLEAKS_SUGGESTION`, `UNBLOCK_JUDGE op=triage_superseded` |
+| Extra GitHub API calls | at most 1 note comment per check-triage issue, re-written once per held judge run (at most once per `--marker-hours` window, since the note's last line is a throttle marker); once the note outlives `UNBLOCK_JUDGE_WAIT_MAX_DAYS`, 1 `close` marker comment plus the needs-human park's label and digest calls |
+
+What this means for consumer repos: after the next `@stable` sync, a `.gitleaksignore` conflict resolves without a model run. Set the repository variable `UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED=false` to restore the previous unblock judging; `CONFLICT_GITLEAKSIGNORE_UNION_ENABLED=false` in the review job environment turns the union off.
+
+- **The consumer updater can now refresh a stale sync pull request in repositories that forbid force-pushes.** When a refresh of `auto/update-workflows-<sha12>` is refused, the updater moves the sync to a new `-r2` .. `-r5` branch and closes the old pull request.
+
+Some consumer rulesets put `non_fast_forward` on every branch (`~ALL`). There, the updater's daily refresh of a conflicted or stale sync pull request failed with `GH013 ... Cannot force-push to this branch`, and the pull request stayed stuck until the next release (fun-token-multi-chain #889, run 44234623225). Now, when the refresh push is refused for that reason and the open pull request is conflicting, the "Commit and push updates" step of `.github/workflows/update_workflows.yml` pushes the rebuilt sync to the first free `<branch>-r2` .. `-r5`. It opens the sync pull request from that branch with the same title and body, and the `verify` job handles auto-merge as usual. It then closes the old pull request, if the `GH_PAT` account opened it, with one comment linking the new one. A pull request that still merges cleanly keeps its head, and the `verify` job checks it again, because under such a ruleset every daily refresh is refused. Any other push failure, such as a lease mismatch, a network error or an auth error, still fails the run with `reason=lease_mismatch_or_push_rejected`.
+
+| The numbers that matter | Value |
+| --- | --- |
+| New branches per run | at most 1 |
+| Highest suffix | `-r5` (then `reason=resend_cap_reached`) |
+| Branches deleted | none |
+| Extra GitHub API calls on a refused refresh | at most 2 (`gh pr view` when `mergeable` is `UNKNOWN` or missing, `gh pr close` on a resend) |
+| New log prefix | `UPDATER_PR_RESEND` |
+
+What this means for consumer repos: after the next `@stable` sync, a stuck sync pull request in a repository with a no-force-push ruleset is replaced by a fresh one on the next daily run, with no ruleset change and no human step. Old sync branches stay in place, because these rulesets also block deletion.
+
+### For contributors
+
+Later runs for the same release continue on the highest `-rN` branch on the remote, found with one `git ls-remote`. The review pipeline's updater-branch guards and the drift audit's release check accept the `-r2` .. `-r5` suffix, so a resend pull request is never edited, pushed to or merged by review. Tests: `tests/test_update_workflows_resend_branch.py`.
+
+- **The pre-push test gate no longer blames a change for tests that read tracked dotfiles or `.github/ai/*.json`.** `scripts/prepush_test_gate_run.sh` now builds the PR tree from git, the same way it builds the merge-base tree.
+
+Before, the PR side of the gate (`/source`) was the review sandbox's credential-filtered copy, which leaves out tracked files such as `.gitattributes`, `.gitignore`, `changelog.d/.gitkeep`, most of `.github/ai/`, `.claude/settings.json` and any secret-named path. Tests that read those files failed only on the PR side, so the gate listed them as "caused by this change" even though they passed outside its container. Now `/source` holds every tracked file with its worktree content (staged and unstaged edits and deletions included), and untracked files still enter only when the credential filter admits them. The container keeps `--network none`, `--read-only`, `--cap-drop ALL` and no runner environment, and `.git` is never copied in; `/source` still gets the fresh one-commit Git repository the old copy had, so tests that run git there keep passing.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Files in `/source` on PR #9666 (head `5faaa57`) | 1,523 before, 1,651 after (all tracked files) |
+| Gate-listed tests on that head, run on `/source` | 14 failed before, 0 after (915 passed) |
+| New wrapper failure token | `source_export_failed` |
+
+What this means for operators and consumer repos: after the next `@stable` sync, the implement, review-autofix, conflict-resolver, heal and integration-repair gates stop reporting false "caused by this change" failures for tests that read tracked config files. Gate results are published in the PR body by implement, and in the autofix editor-summary comment ("Pre-push test gate results") by review rounds, which do not refresh the PR body.
+
+### For contributors
+
+The tracked tree is staged through a temporary index and object directory in the wrapper's private run root and written with `git checkout-index`, so the checkout's real index and `.git` are only read, and a PR's `export-ignore` cannot hide a file. The merge-base tree (`/baseline`) is now written the same way instead of with `git archive`, so a file marked `export-ignore` at the merge-base is no longer missing from `/baseline` only, where its failures could never be classified as inherited. Those Git calls leave out global and system config, so a filter driver configured there (git-lfs, for example) is never chosen by a PR's `.gitattributes`. A tracked `node_modules` symlink in the PR tree is no longer used as a mount point.
+
+- **Stall recovery and the standalone conflict sweep no longer re-run AI review on PRs the owner has put on hold.** A PR that is a draft, or whose title contains `[skip ai]`, now stops stall recovery for its `ai:done` issue and is skipped by the merge-conflict sweep: no review dispatch, no update-branch or empty-commit push, no stall-judge call, and no attempt counted.
+
+Before this fix, standalone stall recovery in `scripts/orchestrate_poll_process.sh` dispatched `Internal: AI Review & Autofix` on held drafts about every 150 to 160 minutes per issue. Poller run 44412748957 dispatched five such runs between 22:58 and 23:14 UTC on 2026-11-18, for #9510, #9538, #9637, #9628 and #9737. Managed orchestrator-project recovery did the same: poller run 44436886020 dispatched a review on draft #9744 at 01:36 UTC on 2026-11-19, with standalone recovery switched off. The standalone merge-conflict sweep did it too: poller run 44450042608 dispatched conflict recovery on held drafts #9573, #9502 and #9497 at 03:16 UTC. The review gate could not stop them, because a `workflow_dispatch` of `internal-review.yml` is the documented manual override for `[skip ai]`. That override is unchanged: a review you dispatch by hand still runs. The poller now logs `STALL_SKIP issue=<n> reason=pr_ai_hold pr=<m> detail=draft|skip_ai_title phase=ai:done action=none` and checks the issue again on the next tick, so recovery resumes on its own once the PR is marked ready or the marker is removed from the title.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Extra GitHub API calls per stalled candidate | 0 (`isDraft` and `title` ride on the existing batched linked-PR GraphQL query) |
+| Review runs dispatched on held PRs in run 44412748957 | 5 |
+| Recovery attempts counted while held | 0 |
+
+What this means for operators: the stopgap repository variable `ENABLE_STANDALONE_STALL_RECOVERY=false` can be set back to `true` once this change is promoted to `promote-candidate`, which the `internal-review.yml` and `orchestrate_poll.yml` callers pin.
+
+### For contributors
+
+The check is `_stall_pr_ai_hold_reason <pr_json>`. It runs in six places: in the standalone merge-conflict sweep, for conflicted PRs, before update-branch and the conflict dispatch (logged as `STANDALONE_CONFLICT_STUCK pr=<n> outcome=skip reason=pr_ai_hold`, no attempt marker), in `recover_stalled_issue` for managed orchestrator-project issues in `ai:done` (before the stall judge, from the stalled-issue linked-PR cache or its REST fallback, then the wave's batched linked-PR cache), in `run_standalone_stall_recovery` for every non-`skip` action on an `ai:done` issue (before the stall judge, the conflict dispatch and `retrigger_review`), in the inline standalone `retrigger_review` arm on the resolved implementation-PR payload, in `execute_stall_recovery_action retrigger_review`, which the managed path and the stall judge reach, and in `execute_stall_recovery_action resolve_merge_conflict` before update-branch and the conflict dispatch, with no `retrigger_review` fallback for a held PR. Only an open, unmerged PR can be held. A payload without the fields fails open to the old behaviour. The title match is the review gate's substring match. The description-line marker is not checked.
+
+- **The orchestrate-poll review-blocked tests now show the reason when they fail.** When the review-blocked judge was skipped, the poller still exited 0, so 33 tests failed with empty assert messages. Their stdout assertions now include the tail of the poller's stdout. A new test checks that the poller test sandbox copies `agents.md` through the existing 524,288-byte bound from #9753. That bound keeps the inline judge prompt under codex's 1048576-character stdin cap. Runtime behaviour is unchanged.
+
+Refs #9776.
+
+- **The release gate no longer fails a job when one GitHub API read hits a transient error.** Every `$(gh api … 2>/dev/null || echo <fallback>)` capture in `.github/workflows/test-and-mark-stable.yml` now assigns its fallback outside the substitution.
+
+On an HTTP error, `gh api` prints the error body to stdout and exits non-zero. The old shape appended the fallback to that body, so the captured value held multi-line JSON followed by the fallback. In release gate run 44490333814 a momentary "API rate limit exceeded" on the clarify-run lookup put that value into `$GITHUB_OUTPUT`, and the runner killed the `clarify-rejects-unsolvable-test` job with "Invalid format". The captures now read `V=$(gh api …) || V=<fallback>`, and the run ids written to `$GITHUB_OUTPUT` by the clarify-negative and alt-model `create` and capture steps are also checked to be numeric before they are written.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Captures rewritten in `test-and-mark-stable.yml` | 29 |
+| Run-id outputs with a numeric shape check | 4 |
+| Failing run | 44490333814 (`clarify-rejects-unsolvable-test`, 2026-11-19) |
+
+What this means for operators: a single rate-limited or failed read inside the release gate now falls back to the default its step was designed for, such as run id `0`, instead of failing the job and blocking the `@stable` release.
+
+### For contributors
+
+`tests/test_test_and_mark_stable_gh_api_error_body_capture.py` runs the real `create` steps against a stub `gh` that prints a JSON error body to stdout and exits 1, and fails if any `$(gh api …)` capture in the workflow puts `|| echo` inside the substitution again. The same pattern in `scripts/review_sweep_head_gate.sh`, `scripts/unblock_judge.sh` and `scripts/workflow_retro_fanout.sh` was left as it is: in each of them the leaked body already resolves to the intended fallback.
+
+- **Release gate Phase 7 no longer fails while the cancel-on-close run waits for a runner.** The 10-minute `PHASE7_WAIT_BUDGET_MINUTES` now starts when the run leaves the queue, and a run that never starts gets its own `queued_timeout` verdict.
+
+In release gate run 44490333814, the `e2e-smoke-test` job failed at "Phase 7: Close PR and verify cancel_on_pr_close fires" with `Cancel-PR .. FAILED (timeout; pre-close unconflict=not_needed)`. The cancel_on_pr_close run 44527274737 was still `queued` with no runner when the budget ran out, so runner starvation failed the gate although nothing was broken. Phase 7 now counts the budget from the first poll that sees the run out of `queued`/`pending`/`waiting`/`requested`. A run that stays queued is waited on for at most the new job env `PHASE7_QUEUE_WAIT_CAP_MINUTES`, then reported as `queued_timeout`. Every Phase 7 deadline also stops `E2E_FINALIZATION_RESERVE_MINUTES` before the job timeout.
+
+| The numbers that matter | Value |
+| --- | --- |
+| In-progress budget (`PHASE7_WAIT_BUDGET_MINUTES`) | 10 minutes, unchanged |
+| Longest queued wait (`PHASE7_QUEUE_WAIT_CAP_MINUTES`, new) | 60 minutes |
+| New Phase 7 `status` value | `queued_timeout` |
+| `test-and-mark-stable.yml` size | 429,964 → 405,454 bytes |
+
+What this means for operators: a busy runner pool no longer fails the stable release gate in Phase 7. If the cancel run never gets a runner, the results table says `queued_timeout` instead of `timeout`, which points at runner capacity rather than at the cancel workflow.
+
+### For contributors
+
+The Phase 7 run body moved verbatim into `scripts/stable_e2e_step_verify_cancel_on_close.sh` and is sourced the same way as the Phase 4 and 4b step scripts (sparse checkout pinned to `github.sha`, `STABLE_E2E_STEP_SCRIPTS_VERIFIED`). That frees about 24 KB under the 430,000-byte headroom check in `tests/test_test_and_mark_stable_step_scripts_contract.py`. Tests that read the Phase 7 body use the expanded workflow text, and `tests/test_test_and_mark_stable_phase7_queue_wait.py` runs both wait loops with a fake clock.
+
+- **The release gate's clarify negative test no longer fails when a GitHub API read is rate-limited.** Its run-id step outputs now hold only digits.
+
+Release gate run 44490333814 failed in "Create unsolvable issue" after the issue had been created. A failed `gh api` request prints its JSON error body to stdout, so the step's `|| echo "0"` fallback did not replace it, and the multi-line body was written to `GITHUB_OUTPUT` as `pre_clarify_run_id`. The runner rejected the file as `Invalid format`. Now, in the `clarify-rejects-unsolvable-test` job of `.github/workflows/test-and-mark-stable.yml`:
+
+- "Create unsolvable issue" writes `pre_clarify_run_id=0` with a warning when the read fails or is not a number, adds `pre_clarify_run_id_read_failed=1`, and stops with an `::error::` instead of writing a malformed `issue_number`.
+- "Capture clarify run id (negative test)" treats a non-numeric poll read as no run yet and keeps polling within its 90-second limit. When the baseline read failed, or `PRE` is not a number, it skips the poll with a warning. The soft-error analyser is then skipped instead of analysing an older, unrelated clarify run.
+
+The same guards now cover the `e2e-alt-model-test` job. "Create alt-model smoke issue" leaves `pre_<phase>_run_id` empty when a read fails (including a failure with empty stdout), and stops with an `::error::` when `issue_number` is not a number. "Capture alt-model phase run ids" ignores non-numeric run ids. It skips clarify and plan when their baseline is empty: both are queried with `branch=main`, which does not tell this issue's runs apart from other runs, so only the baseline id can.
+
+The captured text is never echoed. No GitHub API calls are added.
+
+The same run's Phase 7 failure (the cancel-on-close run stayed queued for the whole 10-minute wait while the runner pool was full) is environmental and is not changed here.
+
+### For contributors
+
+Tests: `tests/test_test_and_mark_stable_clarify_negative_outputs.py` runs the step bodies of both jobs against a fake `gh` that returns a rate-limit body.
 
 ### For contributors
 
