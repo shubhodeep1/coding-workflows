@@ -349,6 +349,21 @@ def test_trusted_expired_marker_means_reopened():
 	assert f"::notice::Heal issue #{ISSUE} is open and carries a hold-expired marker" in proc.stdout
 
 
+def test_reopened_and_answered_hold_logs_no_stale_notice():
+	# Once a maintainer answered the reopened issue, the "should reply"
+	# advice is stale: the outcome stays kept/reopened, the notice is skipped.
+	comments = [
+		_hold(30 * DAY),
+		_esc(20 * DAY),
+		_comment(EXPIRED_MARKER, 10 * DAY),
+		_comment("/approved", 1 * DAY, login="maintainer"),
+	]
+	proc, gh, tg, _ = _run(comments)
+	_assert_outcome(proc, "kept", "reopened")
+	assert gh == [] and tg == []
+	assert "carries a hold-expired marker" not in proc.stdout, proc.stdout
+
+
 # --- switch and limit -------------------------------------------------------
 
 
