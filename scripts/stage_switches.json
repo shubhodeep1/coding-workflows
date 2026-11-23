@@ -1,0 +1,846 @@
+{
+	"schema": "stage_switches.v1",
+	"switches": [
+		{
+			"name": "ACTIVATION_VERIFY_ENABLED",
+			"default": "true",
+			"stage": "Activation verification (port P4 of docs/plans/replace-claude-sessions-with-cli-engine-plan.md)."
+		},
+		{
+			"name": "AI_MEMORY_ENABLED",
+			"default": "true",
+			"stage": "Turns on ai memory (issue_pr_status.yml, orchestrate_poll.yml, workflow-log-analysis.yml); false turns that stage off."
+		},
+		{
+			"name": "APPLY_ANALYSIS_ON_MAIN_ENABLED",
+			"default": "true",
+			"stage": "Kill switch for scripts/apply_analysis_on_main.sh, the dispatcher that hands one analysis/workflow-optimization-*.md doc to the orchestrator for the proving and verifying runs."
+		},
+		{
+			"name": "AUTOFIX_CONTINUATION_ENABLED",
+			"default": "true",
+			"stage": "When true (the default), the Re-trigger review via workflow_dispatch step in review_autofix.yml proceeds to dispatch the next autofix iteration via workflow_dispatch after a **productive** [ai-autofix] commit (DID_COM..."
+		},
+		{
+			"name": "AUTOFIX_PUSH_TRANSIENT_RETRY_ENABLED",
+			"default": "true",
+			"stage": "Turns on autofix push transient retry (review_autofix.yml); false turns that stage off."
+		},
+		{
+			"name": "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED",
+			"default": "true",
+			"stage": "Issue #6769. Gates every automatic /approved for a plan that lists automation paths (.github/, .claude/, scripts/, prompts/, workflow-templates/): plan.yml's \"Auto-approve clear plan\" step, the managed and standalone..."
+		},
+		{
+			"name": "AUTO_RELEASE_STABLE_ENABLED",
+			"default": "true",
+			"stage": "Kill switch for .github/workflows/auto-release-stable.yml, which every 6 hours (at 30 past the hour) dispatches test-and-mark-stable.yml on stable when the branch tip is strictly ahead of the stable tag commit (compar..."
+		},
+		{
+			"name": "AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_ENABLED",
+			"default": "true",
+			"stage": "Before the back-off and the dispatch, close the open fixture issues and PRs left behind by completed gate runs that did not succeed (any branch): title starting [E2E and naming the run as (run <id>) or E2E Orchestrate..."
+		},
+		{
+			"name": "CHATGPT_POOL_HEALTH_ALERT_ENABLED",
+			"default": "true",
+			"stage": "Turns on chatgpt pool health alert (orchestrate_poll.yml); false turns that stage off."
+		},
+		{
+			"name": "CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED",
+			"default": "true",
+			"stage": "Turns on check failure triage base gate (check_failure_triage.yml); false turns that stage off."
+		},
+		{
+			"name": "CHECK_FAILURE_TRIAGE_ENABLED",
+			"default": "true",
+			"stage": "Turns on check failure triage (check_failure_triage.yml); false turns that stage off."
+		},
+		{
+			"name": "CHECK_FAILURE_TRIAGE_RELEASE_DOWNLOAD_RERUN_ENABLED",
+			"default": "true",
+			"stage": "Turns on check failure triage release download rerun (check_failure_triage.yml); false turns that stage off."
+		},
+		{
+			"name": "CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED",
+			"default": "true",
+			"stage": "Turns on check failure triage upstream routing (check_failure_triage.yml); false turns that stage off."
+		},
+		{
+			"name": "CHECK_RUNS_AUTOFIX_ENABLED",
+			"default": "true",
+			"stage": "When true (default), the workflow snapshots failed and incomplete GitHub check-runs on the PR head SHA into ${PR_CHECK_RUNS_CONTEXT_FILE} and feeds it to reviewers + editor so CI / lint failures are detected and fixed..."
+		},
+		{
+			"name": "CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED",
+			"default": "true",
+			"stage": "Turns on check triage base tracked skip (check_failure_triage.yml); false turns that stage off."
+		},
+		{
+			"name": "CHECK_TRIAGE_RESOLVED_GATE_ENABLED",
+			"default": "true",
+			"stage": "Turns on check triage resolved gate (clarify.yml, orchestrate_poll.yml, plan.yml, unblock_judge.yml); false turns that stage off."
+		},
+		{
+			"name": "CHECK_TRIAGE_SKIP_FINAL_CI_ENABLED",
+			"default": "true",
+			"stage": "Turns on check triage skip final ci (check_failure_triage.yml); false turns that stage off."
+		},
+		{
+			"name": "CHECK_TRIAGE_SKIP_HEAD_ADVANCED_ENABLED",
+			"default": "true",
+			"stage": "Turns on check triage skip head advanced (check_failure_triage.yml); false turns that stage off."
+		},
+		{
+			"name": "CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED",
+			"default": "true",
+			"stage": "Turns on check triage supersede stale (check_failure_triage.yml); false turns that stage off."
+		},
+		{
+			"name": "CHECK_TRIAGE_TRANSIENT_RERUN_ENABLED",
+			"default": "true",
+			"stage": "Turns on check triage transient rerun (check_failure_triage.yml); false turns that stage off."
+		},
+		{
+			"name": "CI_ABANDONED_JOB_RERUN_ENABLED",
+			"default": "true",
+			"stage": "Off switch for the abandoned-job transient class in the sweep's CI re-run (#9146)."
+		},
+		{
+			"name": "CI_ACTION_RESOLUTION_RERUN_ENABLED",
+			"default": "true",
+			"stage": "Off switch for one extra transient class in the sweep's CI re-run (#8471)."
+		},
+		{
+			"name": "CI_CANCELLED_AUTO_RERUN_ENABLED",
+			"default": "true",
+			"stage": "On the 30-minute sweep, re-run failed jobs once for a current-head ci.yml PR run cancelled or failing at startup (attempt 1 only), when no CI run is active for that head."
+		},
+		{
+			"name": "CI_CHECKOUT_FETCH_RERUN_ENABLED",
+			"default": "true",
+			"stage": "Off switch for the checkout-fetch transient class in the sweep's CI re-run (#8671)."
+		},
+		{
+			"name": "CI_FINAL_MERGE_REF_FRESH_ENABLED",
+			"default": "true",
+			"stage": "scripts/ci_final_merge_ref_fresh.sh compares the merge commit's first parent with the run's pinned base: the tip of the base branch when the run was created (the event payload's repository.pushed_at, else GET actions/..."
+		},
+		{
+			"name": "CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED",
+			"default": "true",
+			"stage": "Turns on ci triage pr branch routing (clarify.yml, implement.yml, orchestrate_clarify_respond.yml, plan.yml, validate.yml); false turns that stage off."
+		},
+		{
+			"name": "CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED",
+			"default": "true",
+			"stage": "Turns on ci triage reissue base branch routing (clarify.yml, implement.yml, orchestrate_clarify_respond.yml, plan.yml, validate.yml); false turns that stage off."
+		},
+		{
+			"name": "CLARIFY_BLOCKED_VERIFY_ENABLED",
+			"default": "true",
+			"stage": "One clarify retry for a BLOCKED: answer that cites a tracked file (stuck-states P9b, Refs #8291)."
+		},
+		{
+			"name": "CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED",
+			"default": "true",
+			"stage": "Read-only source snapshot of scripts/clarify_isolated_run.sh (#8341)."
+		},
+		{
+			"name": "CLAUDE_FIXER_ENABLED",
+			"default": "true",
+			"stage": "Claude-fixer mode (Phase 5c of docs/plans/replace-claude-sessions-with-cli-engine-plan.md): false keeps the review editor, consolidator, conflict resolver and review-blocked judge (REVIEW_EDITOR, REVIEW_CONSOLIDATOR,..."
+		},
+		{
+			"name": "CLAUDE_POOL_CAPACITY_WAIT_ENABLED",
+			"default": "true",
+			"stage": "Capacity wait (issues #7251, #7370). On (unset, empty or true) turns a capacity fallback (all_gated, all_usage_limit) under AI_ENGINE_FALLBACK_POLICY=capacity into a wait: claude_run, claude_run_selected, clarify_isol..."
+		},
+		{
+			"name": "CLAUDE_POOL_DAILY_USAGE_ENABLED",
+			"default": "true",
+			"stage": "Turns on claude pool daily usage (orchestrate_poll.yml); false turns that stage off."
+		},
+		{
+			"name": "CLAUDE_POOL_HEALTH_ALERT_ENABLED",
+			"default": "true",
+			"stage": "Turns on claude pool health alert (orchestrate_poll.yml); false turns that stage off."
+		},
+		{
+			"name": "CODEX_STALL_GUARD_ENABLED",
+			"default": "true",
+			"stage": "Codex stall killing (scripts/codex_stall_guard.sh); defaults on in review_autofix.yml, off in implement.yml and orchestrate_poll.yml."
+		},
+		{
+			"name": "CONFLICT_AI_ASSET_TAKE_BASE_ENABLED",
+			"default": "true",
+			"stage": "When true (default), scripts/review_conflict_prepare.sh resolves a conflict on .ai/validate.yml on an orchestrator/project-* integration-sync head by taking the default branch's version (index stages 1 2 3, 2 3 or 1 3..."
+		},
+		{
+			"name": "CONFLICT_FOLDED_FRAGMENT_KEEP_ENABLED",
+			"default": "true",
+			"stage": "When true (default), scripts/review_conflict_prepare.sh resolves a modify/delete conflict on a top-level changelog.d/*.md or agents.d/*.md fragment that the base branch deleted (the release fold) and the PR changed (i..."
+		},
+		{
+			"name": "CONFLICT_GITLEAKSIGNORE_UNION_ENABLED",
+			"default": "true",
+			"stage": "When true (default), scripts/review_conflict_prepare.sh resolves an unmerged root .gitleaksignore on the trusted runner, on PR conflicts and on orchestrator/project-* integration sync: the base branch's file is kept b..."
+		},
+		{
+			"name": "CONFLICT_GUARD_HOOK_TEMPLATE_MERGE_ENABLED",
+			"default": "true",
+			"stage": "When true (default), scripts/review_conflict_prepare.sh resolves a merge conflict on each paired host-only hook (.claude/hooks/pr_merge_status_guard.py, .claude/hooks/prepush_affected_tests.py, .claude/hooks/gh_api_wr..."
+		},
+		{
+			"name": "CONFLICT_INTEGRATION_V2_STATE_ENABLED",
+			"default": "true",
+			"stage": "When true (default), scripts/review_conflict_prepare.sh reads the orchestrator state for an orchestrator/project-* integration-sync conflict from the newest complete ORCHESTRATOR_STATE_V2 chain posted by the pipeline..."
+		},
+		{
+			"name": "CONFLICT_MANIFEST_UNION_ENABLED",
+			"default": "true",
+			"stage": "When true (default), scripts/review_conflict_prepare.sh resolves a two-sided content conflict on the generated .ai/.workspace_source_manifest.txt with set algebra, (ours ∩ theirs) ∪ (ours − base) ∪ (theirs − base), un..."
+		},
+		{
+			"name": "CONSUMER_DRIFT_REPAIR_ENABLED",
+			"default": "true",
+			"stage": "false keeps the daily consumer drift audit and its Telegram alert but opens no restore pull requests (logs DRIFT_REPAIR outcome=disabled)."
+		},
+		{
+			"name": "CONSUMER_HEALTH_CHECK_ENABLED",
+			"default": "true",
+			"stage": "In this source repository only, once per UTC day the poller runs scripts/consumer_health_check.sh over the repositories in .github/ai/consumer_repos.json."
+		},
+		{
+			"name": "DEPENDENCY_WAIT_RESUME_ENABLED",
+			"default": "true",
+			"stage": "When true, a security follow-up whose predecessor was closed without ai:merged is released: scripts/security_dependency.py returns ready, and the poller posts one /reclarify with <!-- AI_SECURITY_DEPENDENCY_RELEASED_V..."
+		},
+		{
+			"name": "E2E_ALT_MODEL_ENABLED",
+			"default": "true",
+			"stage": "External-dependency opt-out. Set to false to skip the alt-model job when the upstream OpenRouter model (selected via ALT_EDITOR_MODEL) is temporarily unavailable, deprecated, or your API key lacks access."
+		},
+		{
+			"name": "E2E_PHASE4B_QUEUED_GRACE_ENABLED",
+			"default": "true",
+			"stage": "Stuck states P4: while truthy (1, true, yes, on, any letter case), Phase 4b's EDITOR_RETRY_BUDGET_MINUTES (25) counts from the first poll that reads the pinned retry review run as in_progress or completed, not from ad..."
+		},
+		{
+			"name": "FINAL_CI_FAILED_INFRA_RERUN_ENABLED",
+			"default": "true",
+			"stage": "When a final-CI run (CI [pr:<n>], attempt 1) fails only for an infrastructure reason (the runner-shutdown, action-resolution, checkout-fetch or abandoned-job classes of scripts/ci_cancelled_rerun.py, read by its class..."
+		},
+		{
+			"name": "FINAL_CI_FAILED_REDISPATCH_ENABLED",
+			"default": "true",
+			"stage": "When a final-CI dispatch run's lint fails, scripts/review_final_ci_failed.sh posts one <!-- ai:final-ci-failed:v1 pr=<n> head=<sha> --> comment per head and dispatches the PR's review workflow so the autofix sees the..."
+		},
+		{
+			"name": "FINAL_CI_MERGE_RESUME_ENABLED",
+			"default": "true",
+			"stage": "Final-CI merge resume. When a merge path's AUTO_MERGE_CHECKS_WAIT_MINUTES wait times out, the head gets a pending ai-review/final-ci-merge-pending commit status from the pipeline token and the PR gets ai:final-ci-merg..."
+		},
+		{
+			"name": "FINAL_CI_REFUSED_BASE_UPDATE_ENABLED",
+			"default": "true",
+			"stage": "When an approved head's final-CI dispatch is refused because the branch's ci.yml has no workflow_dispatch trigger and the base's copy has it, and the freshness check found the head clean, update the branch from its ba..."
+		},
+		{
+			"name": "FINAL_CI_REPAIR_DELTA_REVIEW_ENABLED",
+			"default": "true",
+			"stage": "A final-CI repair head is reviewed on its own commit instead of the whole PR."
+		},
+		{
+			"name": "FINAL_CI_REPAIR_ENABLED",
+			"default": "true",
+			"stage": "When an approved head's final CI fails for a real reason, the hand-back's review run fixes CI instead of running the reviewer panel."
+		},
+		{
+			"name": "FINAL_CI_SWEEP_BASE_SYNC_ENABLED",
+			"default": "true",
+			"stage": "Base sync after a failed final CI run (scripts/review_final_ci_sweep.sh)."
+		},
+		{
+			"name": "FINAL_MERGE_AUTO_RESUME_ENABLED",
+			"default": "true",
+			"stage": "Retries the final merge of a project parked by final-merge exhaustion (final_merge_failure_kind=final_merge_exhausted) once per final PR head SHA, when the PR is open, not a draft, mergeable with mergeable_state=clean..."
+		},
+		{
+			"name": "FRESHNESS_CI_FAILED_REDISPATCH_ENABLED",
+			"default": "true",
+			"stage": "When deterministic-skip-merge refuses to merge a freshness-update head (det_skip_reason=freshness_sync) because its CI failed, scripts/review_freshness_ci_failed.sh posts a PR comment ending in <!-- ai:freshness-ci-fa..."
+		},
+		{
+			"name": "HARNESS_HEAL_AUTO_REVALIDATE_ENABLED",
+			"default": "true",
+			"stage": "Harness heal auto-revalidate (stuck-states P7b, Refs #8291)."
+		},
+		{
+			"name": "HEAL_COUNTERFACTUAL_GATE_ENABLED",
+			"default": "true",
+			"stage": "Turns on heal counterfactual gate (orchestrate_poll.yml, plan.yml); false turns that stage off."
+		},
+		{
+			"name": "HEAL_INTAKE_QUEUE_ENABLED",
+			"default": "true",
+			"stage": "Turns on heal intake queue (workflow-failure-heal-intake.yml); false turns that stage off."
+		},
+		{
+			"name": "HEAL_INTAKE_SCOPE_GUARD_ENABLED",
+			"default": "true",
+			"stage": "Turns on heal intake scope guard (workflow-failure-heal-intake.yml); false turns that stage off."
+		},
+		{
+			"name": "HEAL_OCCURRENCE_IN_PLACE_ENABLED",
+			"default": "true",
+			"stage": "Turns on heal occurrence in place (workflow-failure-heal-intake.yml); false turns that stage off."
+		},
+		{
+			"name": "HEAL_REISSUE_DEDUPE_ENABLED",
+			"default": "true",
+			"stage": "Turns on heal reissue dedupe (workflow-failure-heal-intake.yml); false turns that stage off."
+		},
+		{
+			"name": "HEAL_SCOPE_RECOVERY_ENABLED",
+			"default": "true",
+			"stage": "Turns on heal scope recovery (workflow-failure-heal-intake.yml); false turns that stage off."
+		},
+		{
+			"name": "HEAL_SOURCE_DEDUPE_ENABLED",
+			"default": "true",
+			"stage": "Turns on heal source dedupe (workflow-failure-heal-intake.yml); false turns that stage off."
+		},
+		{
+			"name": "HEAL_STALE_AUTO_CLOSE_ENABLED",
+			"default": "true",
+			"stage": "Turns on heal stale auto close (orchestrate_poll.yml); false turns that stage off."
+		},
+		{
+			"name": "HEAL_SYNCED_SECURITY_FINDING_ENABLED",
+			"default": "true",
+			"stage": "Turns on heal synced security finding (workflow-failure-heal-intake.yml); false turns that stage off."
+		},
+		{
+			"name": "HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED",
+			"default": "true",
+			"stage": "Turns on heal test only auto approve (orchestrate_poll.yml, plan.yml); false turns that stage off."
+		},
+		{
+			"name": "HOST_ONLY_CONFLICT_TAKE_BASE_ENABLED",
+			"default": "true",
+			"stage": "Turns on host only conflict take base (review_autofix.yml); false turns that stage off."
+		},
+		{
+			"name": "IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED",
+			"default": "true",
+			"stage": "Turns on implement restore tracked symlinks (implement.yml); false turns that stage off."
+		},
+		{
+			"name": "IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED",
+			"default": "true",
+			"stage": "Off switch for the self-repo-only step in scripts/implement_commit_changes.sh that stages a new, untracked regular file under .github/ai/ when the issue's files_touched list (the same input the files_touched scope gua..."
+		},
+		{
+			"name": "INTEGRATION_CONFLICT_PARK_ENABLED",
+			"default": "true",
+			"stage": "When true (default), heal_integration_branch_conflict reads the final PR body's AUTOFIX_RESOLVER_RETRY_STATE_V1 (already fetched each tick) and, when its head_sha is the PR's current head (and, for an escalated state,..."
+		},
+		{
+			"name": "LEDGER_SUBSTATES_ENABLED",
+			"default": "true",
+			"stage": "Poller-side gate for run-substate enrichment in state-snapshot exports."
+		},
+		{
+			"name": "MEMORY_INJECTION_SCAN_ENABLED",
+			"default": "true",
+			"stage": "Turns on memory injection scan (clarify.yml, implement.yml, orchestrate.yml, orchestrate_clarify_respond.yml, plan.yml, review_autofix.yml, validate.yml); false turns that stage off."
+		},
+		{
+			"name": "MEMORY_LEARNINGS_EXTRACT_ENABLED",
+			"default": "true",
+			"stage": "Enables the fail-open merged-run repo_learnings extraction step before compaction."
+		},
+		{
+			"name": "MERGE_BASE_FRESHNESS_ENABLED",
+			"default": "true",
+			"stage": "Merge-base freshness gate (scripts/pr_checks_lib.sh)."
+		},
+		{
+			"name": "MERGE_BASE_SYNC_FAST_PATH_ENABLED",
+			"default": "true",
+			"stage": "When the head is exactly the merge commit a workflow-authored ai:merge-base-sync marker records, with parents [from, base], signed by web-flow and with its base parent contained in the base, the review gate skips the..."
+		},
+		{
+			"name": "MERGE_LEASE_ENABLED",
+			"default": "true",
+			"stage": "Merge lease (scripts/pr_checks_lib.sh \"Merge lease\")."
+		},
+		{
+			"name": "MERGE_LEASE_METRICS_ENABLED",
+			"default": "true",
+			"stage": "Merge-lease Phase 1: one MERGE_LEASE_METRIC event=... base=... pr=... mode=... reason=... holder=... hold_s=... waiters=... ts=... line after each lease gate and tick decision; the tick's released lines end with merge..."
+		},
+		{
+			"name": "MERGE_LEASE_REVOKE_ENABLED",
+			"default": "true",
+			"stage": "Merge-lease Phase 2: the merge-train tick revokes the lease from a holder that can no longer merge (draft, [skip ai] title, pipeline ai-review/head-gate failure, failed final CI, or idle; reasons revoked_*), grants a..."
+		},
+		{
+			"name": "MERGE_TRAIN_CONFLICT_CHECK_ENABLED",
+			"default": "true",
+			"stage": "Merge-train real-conflict check (issue #6570)."
+		},
+		{
+			"name": "MERGE_TRAIN_ENABLED",
+			"default": "true",
+			"stage": "Merge train for ai/issue-* PRs (scripts/review_merge_train.sh)."
+		},
+		{
+			"name": "NEEDS_HUMAN_DIGEST_ENABLED",
+			"default": "true",
+			"stage": "Needs-human digest (plan item 4a, decision D6 of docs/plans/unattended-claude-pipeline-completion-plan.md)."
+		},
+		{
+			"name": "OPERATOR_STEP_AUTO_RESOLVE_ENABLED",
+			"default": "true",
+			"stage": "Stuck-states P10 (Refs #8291). Every poller tick runs scripts/operator_step_issue.py resolve (step \"Resolve released operator steps\", fail-open)."
+		},
+		{
+			"name": "ORCH_IMPLEMENTS_MARKER_ENABLED",
+			"default": "true",
+			"stage": "Turns on orch implements marker (orchestrate_poll.yml); false turns that stage off."
+		},
+		{
+			"name": "ORCH_PR_AUTOFIX_FLOW_ENABLED",
+			"default": "true",
+			"stage": "Master switch for the orchestrator-aware PR autofix flow."
+		},
+		{
+			"name": "ORCH_STATE_PRUNE_ENABLED",
+			"default": "true",
+			"stage": "After each state write the poller deletes its own superseded ORCHESTRATOR_STATE_V2 chains on the tracking issue, keeping the newest one, the one just written and the newest whose status is not failed, so a tracking is..."
+		},
+		{
+			"name": "ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED",
+			"default": "true",
+			"stage": "Stuck-states P12. When true (default), a 409 from the main → orchestrator/project-* sync whose conflicting paths are all db/contracts/*.yml files is first tried as a deterministic merge: sync_contract_list_union_merge..."
+		},
+		{
+			"name": "ORPHAN_FIXUP_CLOSE_ENABLED",
+			"default": "true",
+			"stage": "Closes open unblock fix-up issues whose source issue is closed (scripts/orphan_fixup_close.py, run once per tick from the top of run_unblock_scan, also while UNBLOCK_JUDGE_ENABLED=false)."
+		},
+		{
+			"name": "PARTIAL_DELIVERY_TRACKING_ENABLED",
+			"default": "true",
+			"stage": "Turns on partial delivery tracking (implement.yml, issue_pr_status.yml, orchestrate_poll.yml); false turns that stage off."
+		},
+		{
+			"name": "PLAN_FILES_TOUCHED_GATE_ENABLED",
+			"default": "true",
+			"stage": "Holds an automatic /approved (plan.yml's \"Auto-approve clear plan\" step and the poller's stall-recovery approvals) for a plan whose \"Files ... change\" section lists an exact file outside the issue's files_touched list..."
+		},
+		{
+			"name": "PLAN_ISOLATED_BASE_ENABLED",
+			"default": "true",
+			"stage": "Turns on plan isolated base (plan.yml); false turns that stage off."
+		},
+		{
+			"name": "PLAN_SELF_CHECK_ENABLED",
+			"default": "true",
+			"stage": "Turns on plan self check (plan.yml); false turns that stage off."
+		},
+		{
+			"name": "PLAN_SPLIT_TO_PROJECT_ENABLED",
+			"default": "true",
+			"stage": "Q151. When a pipeline-authored issue's plan lists more than 50 files (the most one files_touched grant covers; gate reason plan_too_large_for_grant), the plan stage starts an orchestrator project on the Claude engine..."
+		},
+		{
+			"name": "PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED",
+			"default": "true",
+			"stage": "Before planning, close a check-failure triage issue (or a pipeline re-issue of one) whose pull request already merged with the failing check passing on its final head: one ai:plan-superseded:v1 comment, ai:closed, clo..."
+		},
+		{
+			"name": "POLL_FOLLOW_UP_ON_PROGRESS_ENABLED",
+			"default": "true",
+			"stage": "After a poll tick that moved a project forward, the poller dispatches its caller workflow once more (step \"Queue a follow-up poll after progress\", through scripts/orchestrate_force_tick.sh), so the next step does not..."
+		},
+		{
+			"name": "PRE_REVIEW_CONFLICT_RESOLVE_ENABLED",
+			"default": "true",
+			"stage": "When true (default), a **content conflict** found by the Pre-review deterministic merge-topology gate (the base branch already conflicts with the PR head) hands off to the existing Detect merge conflicts → Codex resol..."
+		},
+		{
+			"name": "PROMOTE_CYCLE_ENABLED",
+			"default": "true",
+			"stage": "Kill switch for the daily promote cycle in .github/workflows/promote-main-to-stable.yml (schedule 0 0 * * *)."
+		},
+		{
+			"name": "PROMOTE_CYCLE_HOLD_RELEASE_ENABLED",
+			"default": "true",
+			"stage": "Bounded hold for human-latched tracking issues (stuck-states P4)."
+		},
+		{
+			"name": "PROMOTE_CYCLE_PIN_ENABLED",
+			"default": "true",
+			"stage": "Read by scripts/promote_candidate_follow.sh (.github/workflows/promote-candidate-follow.yml). true keeps the promote-candidate branch on the cycle's candidate while the promote-cycle-frozen tag exists (PROMOTE_CANDIDA..."
+		},
+		{
+			"name": "PROMOTE_STABLE_PUSH_TRANSIENT_RETRY_ENABLED",
+			"default": "true",
+			"stage": "Turns on promote stable push transient retry (promote-main-to-stable.yml); false turns that stage off."
+		},
+		{
+			"name": "PROVIDER_OUTAGE_CLASSIFY_ENABLED",
+			"default": "true",
+			"stage": "Turns on provider outage classify (review_autofix.yml); false turns that stage off."
+		},
+		{
+			"name": "PROVIDER_OUTAGE_RESUME_ENABLED",
+			"default": "true",
+			"stage": "Turns on provider outage resume (review_autofix_sweep.yml); false turns that stage off."
+		},
+		{
+			"name": "PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED",
+			"default": "true",
+			"stage": "Blocked-merge guard (#9939). Before every synchronous (non --auto) gh pr merge in the review-blocked judge (scripts/review_rb_judge.sh) and the poller (_orch_squash_merge_bound, the final integration merge and the mer..."
+		},
+		{
+			"name": "RECLARIFY_UNROUTED_DETECT_ENABLED",
+			"default": "true",
+			"stage": "Every poll tick (including idle ones) lists open ai:blocked issues, reads their last 20 comments and label events with one GraphQL call per 25 issues, and posts one advisory comment plus a Telegram WARNING when the ne..."
+		},
+		{
+			"name": "REISSUE_PRESERVE_BASELINE_ENABLED",
+			"default": "true",
+			"stage": "Master switch for the review-blocked judge's reissue_mode: spot-fix path."
+		},
+		{
+			"name": "RELEASE_BLOCKER_HEAL_ENABLED",
+			"default": "true",
+			"stage": "Kill switch for the release-blocker reporters in scripts/auto_release_stable.sh, scripts/promote_main_cycle.sh and scripts/orchestrate_poll_process.sh (stuck-states P4, Refs #8291)."
+		},
+		{
+			"name": "RELEASE_STATIC_PREFLIGHT_ENABLED",
+			"default": "true",
+			"stage": "Turns on release static preflight (test-and-mark-stable.yml); false turns that stage off."
+		},
+		{
+			"name": "RELEASE_TAGGING_ENABLED",
+			"default": "true",
+			"stage": "Kill switch for stable tag writes (#7029, Refs #6548)."
+		},
+		{
+			"name": "RELEASE_TAG_PREFLIGHT_ENABLED",
+			"default": "true",
+			"stage": "Switch for the release tag credential preflight (scripts/release_tag_preflight.sh, step \"Preflight release tag credential\")."
+		},
+		{
+			"name": "RESOLVER_NON_RETRYABLE_ESCALATE_ENABLED",
+			"default": "true",
+			"stage": "When true (default), an integration-sync resolver failure the sandbox will repeat on every run (sandbox_path_host_only, sandbox_path_unsupported, sandbox_support_missing) marks the final PR's AUTOFIX_RESOLVER_RETRY_ST..."
+		},
+		{
+			"name": "RETARGET_MERGED_BASE_ENABLED",
+			"default": "true",
+			"stage": "Retarget after a merged base (port P6 of docs/plans/replace-claude-sessions-with-cli-engine-plan.md). scripts/retarget_merged_base.sh treats an existing branch as finished when a merged PR has it as its head and the t..."
+		},
+		{
+			"name": "RETIRED_LABEL_DRAIN_ENABLED",
+			"default": "true",
+			"stage": "Before the label sync deletes a label listed in retired_labels, it comments on (once, durable marker) and closes the open issues and PRs that still carry it, at most 10 per run, and deletes the label only once a compl..."
+		},
+		{
+			"name": "REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED",
+			"default": "true",
+			"stage": "Enable the consolidator-side companion AGENTS.md materiality finding."
+		},
+		{
+			"name": "REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED",
+			"default": "true",
+			"stage": "Turns on review bounded dependency install (review_autofix.yml); false turns that stage off."
+		},
+		{
+			"name": "REVIEW_DIATAXIS_LENS_ENABLED",
+			"default": "true",
+			"stage": "Documentation-only contract row for the advisory DOCS COVERAGE (DIATAXIS) consolidator lens."
+		},
+		{
+			"name": "REVIEW_EDITOR_PREFLIGHT_ENABLED",
+			"default": "true",
+			"stage": "Turns on review editor preflight (review_autofix.yml); false turns that stage off."
+		},
+		{
+			"name": "REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED",
+			"default": "true",
+			"stage": "Turns on review failure fingerprint cap (review_autofix.yml); false turns that stage off."
+		},
+		{
+			"name": "REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED",
+			"default": "true",
+			"stage": "Turns on review force rb judge host only skip (review_autofix.yml); false turns that stage off."
+		},
+		{
+			"name": "REVIEW_HEAD_GATE_STATUS_ENABLED",
+			"default": "true",
+			"stage": "Publish the fixed commit status ai-review/head-gate for the evaluated SHA; false disables status writes."
+		},
+		{
+			"name": "REVIEW_RESOLVE_THREADS_ENABLED",
+			"default": "true",
+			"stage": "Turns on review resolve threads (review_autofix.yml); false turns that stage off."
+		},
+		{
+			"name": "REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED",
+			"default": "true",
+			"stage": "Withdraw any existing auto-merge enrollment on pull_request.synchronize; a failed withdrawal fails the gate job."
+		},
+		{
+			"name": "REVIEW_TIER_RESOLVER_ENABLED",
+			"default": "true",
+			"stage": "Turns on review tier resolver (review_autofix.yml); false turns that stage off."
+		},
+		{
+			"name": "RUNTIME_BLOCKER_CHECK_ENABLED",
+			"default": "true",
+			"stage": "Enables blocker-aware runtime dispatch gating from dependency_edges before the poller creates or dispatches a managed issue."
+		},
+		{
+			"name": "SECURITY_AUDIT_ENABLED",
+			"default": "true",
+			"stage": "Default-on gate for .github/workflows/security-audit.yml / scripts/security_audit.sh (consumers run it through the synced workflow-templates/ai-security-audit.yml wrapper, which needs OPENROUTER_API_KEY and optionally..."
+		},
+		{
+			"name": "SECURITY_AUDIT_UPSTREAM_REPORT_ENABLED",
+			"default": "true",
+			"stage": "In a consumer repo, the \"Report synced-file security findings upstream\" step (scripts/security_audit_upstream_report.sh, run from the trusted support checkout) sends the audit's high / critical upstream-managed findin..."
+		},
+		{
+			"name": "SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED",
+			"default": "true",
+			"stage": "Turns on security pass audit clean worktree (orchestrate_poll.yml); false turns that stage off."
+		},
+		{
+			"name": "SECURITY_PASS_BASE_SYNC_CARRY_ENABLED",
+			"default": "true",
+			"stage": "Turns on security pass base sync carry (review_autofix.yml); false turns that stage off."
+		},
+		{
+			"name": "SECURITY_PASS_DELTA_AUDIT_ENABLED",
+			"default": "true",
+			"stage": "Delta audits for the single-issue security pass."
+		},
+		{
+			"name": "SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED",
+			"default": "true",
+			"stage": "When MAX_SECURITY_PASS_CYCLES is spent with findings still open, consult the security-pass exhaustion judge (prompts/mode-judge-security-pass-exhaustion.txt) instead of terminalizing."
+		},
+		{
+			"name": "SECURITY_PASS_REBIND_ENABLED",
+			"default": "true",
+			"stage": "Rebind a recorded clean security pass to the new integration head without a model run when every commit since the last audited SHA (excluding the default branch's history) is a merge commit with an empty git show --cc..."
+		},
+		{
+			"name": "SEMBLE_ENABLED",
+			"default": "true",
+			"stage": "Turns on semble (clarify.yml, implement.yml, orchestrate.yml, orchestrate_clarify_respond.yml, orchestrate_poll.yml, plan.yml, review_autofix.yml, workflow-log-analysis.yml); false turns that stage off."
+		},
+		{
+			"name": "SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED",
+			"default": "true",
+			"stage": "One consolidated follow-up per single-issue security pass cycle (stuck-states P5b)."
+		},
+		{
+			"name": "SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED",
+			"default": "true",
+			"stage": "Delta re-audit for the single-issue security pass (stuck-states P5a)."
+		},
+		{
+			"name": "SLOP_SCAN_ENABLED",
+			"default": "true",
+			"stage": "Turns on slop scan (review_autofix.yml); false turns that stage off."
+		},
+		{
+			"name": "STABLE_RELEASE_ENABLED",
+			"default": "true",
+			"stage": "Publishing switch for both stable release paths."
+		},
+		{
+			"name": "STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED",
+			"default": "true",
+			"stage": "In this source repository only, release the ai:needs-human latch that implement.yml marks as a genuine IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT once the engine carries scripts/implement_staged_support_workspace.sh (th..."
+		},
+		{
+			"name": "STAGE_SWITCH_WATCH_ENABLED",
+			"default": "true",
+			"stage": "Daily stage switch watch in workflow-log-analysis.yml (collect-logs): reports switches left off. It cannot report itself when off."
+		},
+		{
+			"name": "STALL_FINGERPRINT_BREAKER_ENABLED",
+			"default": "true",
+			"stage": "Failure-signature breaker and exhaustion escalation (stuck-states P3b)."
+		},
+		{
+			"name": "STALL_RETIRED_CONFLICT_REISSUE_ENABLED",
+			"default": "true",
+			"stage": "Turns on stall retired conflict reissue (orchestrate_poll.yml); false turns that stage off."
+		},
+		{
+			"name": "STANDALONE_AUTO_DECIDE_ENABLED",
+			"default": "true",
+			"stage": "Standalone clarify auto-decide (port P3 of docs/plans/replace-claude-sessions-with-cli-engine-plan.md)."
+		},
+		{
+			"name": "STANDALONE_CLARIFY_RESPOND_ENABLED",
+			"default": "true",
+			"stage": "Standalone issues answered by the clarify-respond worker (issue #6262 follow-up). orchestrate_clarify_respond.yml, which the questions comment already triggers, answers the questions clarify.yml posted on an open issu..."
+		},
+		{
+			"name": "STATE_SNAPSHOT_ARTIFACT_ENABLED",
+			"default": "true",
+			"stage": "Upload the per-tick state-snapshot artifact built by scripts/build_state_snapshot.py."
+		},
+		{
+			"name": "STATE_SNAPSHOT_BRANCH_ENABLED",
+			"default": "true",
+			"stage": "Publish the rolling state-snapshot history to a dedicated branch after writing the artifact."
+		},
+		{
+			"name": "SUPPORT_SCRIPTS_UNIFIED_ENABLED",
+			"default": "true",
+			"stage": "One-source support staging (stuck-states P2a/P2b)."
+		},
+		{
+			"name": "SWEEP_REVIEW_ROUND_CAP_ENABLED",
+			"default": "true",
+			"stage": "Per-PR cap on dispatched review rounds. Each sweep tick reads the window's dispatched internal-review.yml runs once for all PRs (scripts/review_sweep_round_cap.sh, one paginated listing) and dispatches no review for a..."
+		},
+		{
+			"name": "TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED",
+			"default": "true",
+			"stage": "Turns on triage pr head branch metadata (check_failure_triage.yml); false turns that stage off."
+		},
+		{
+			"name": "UNBLOCK_FIXUP_DELIVERED_CLOSE_ENABLED",
+			"default": "true",
+			"stage": "When a fix-up the judge filed merged into the default branch through its ai/issue-<f> pull request, and that pull request changed every file a standalone, pipeline-authored ai:workflow-heal issue lists under ## Affect..."
+		},
+		{
+			"name": "UNBLOCK_HEAL_ALREADY_FIXED_ENABLED",
+			"default": "true",
+			"stage": "Before judging a blocked ai:workflow-heal issue, the judge looks for a sibling with the same source= marker and failure reason (or, for kinds without a reason line, the same fingerprint): another heal issue, or an unb..."
+		},
+		{
+			"name": "UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED",
+			"default": "true",
+			"stage": "Turns on unblock instruction sandbox check (unblock_judge.yml); false turns that stage off."
+		},
+		{
+			"name": "UNBLOCK_JUDGE_ENABLED",
+			"default": "true",
+			"stage": "Unblock judge (Phase 7 of docs/plans/replace-claude-sessions-with-cli-engine-plan.md, see [Unblock judge](#unblock-judge)). false stops the poller's unblock scan, the judge runs, and the poller's fix-up adoption; item..."
+		},
+		{
+			"name": "UNBLOCK_JUDGE_REGRANT_ENABLED",
+			"default": "true",
+			"stage": "Re-check a scope-blocked issue's automation-path rejection with the current grant guard before asking the judge, and resume it without a verdict when every rejected path is now granted (once per rejection run). false..."
+		},
+		{
+			"name": "UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED",
+			"default": "true",
+			"stage": "A harness-owned unblock verdict (target_repo: harness, or instructions that name only harness paths) sends a workflow failure heal report and, for a project, a hold request instead of filing a fix-up. false restores t..."
+		},
+		{
+			"name": "UNBLOCK_JUDGE_WAIT_ENABLED",
+			"default": "true",
+			"stage": "The wait verdict and operator-step holds. The judge can hold a blocked item until a pull request is merged and on a branch, another issue or pull request closes, or an _UNSET_OPERATOR_STEP operator step is done: a rep..."
+		},
+		{
+			"name": "UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED",
+			"default": "true",
+			"stage": "When a fix-up the judge filed is done (merged, or closed as already implemented) and the newest pipeline \"Planning blocked\" comment on a standalone issue gives the reason work is already on the planning ref; nothing t..."
+		},
+		{
+			"name": "UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED",
+			"default": "true",
+			"stage": "When a standalone ai:check-triage issue's newest pipeline \"Planning blocked\" comment gives the reason work is already on the planning ref; nothing to implement, the judge reuses this run's check-triage resolution gate..."
+		},
+		{
+			"name": "UPDATER_PR_DELIVERY_ENABLED",
+			"default": "true",
+			"stage": "When true, unset or empty (case-insensitive; any other value keeps it off, and a value other than false also logs a warning), the consumer updater delivers its changes as a pull request instead of pushing to the defau..."
+		},
+		{
+			"name": "VALIDATE_PREFLIGHT_PYFLAKES_ENABLED",
+			"default": "true",
+			"stage": "When true, the preflight phase of scripts/validate_process.sh runs pyflakes and ruff check --select $VALIDATE_PREFLIGHT_PYFLAKES_RULES against every quoted python3 - <<'PY' ..."
+		},
+		{
+			"name": "VALIDATION_DISCOVERY_ENABLED",
+			"default": "true",
+			"stage": "Turns on validation discovery (validation-refresh.yml); false turns that stage off."
+		},
+		{
+			"name": "VALIDATION_HARNESS_HEAL_ENABLED",
+			"default": "true",
+			"stage": "Turns on validation harness heal (orchestrate_poll.yml, validate.yml); false turns that stage off."
+		},
+		{
+			"name": "VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED",
+			"default": "true",
+			"stage": "Re-dispatch validation once, from the default branch, for a project parked by raw_status=harness_error after an earlier poller ran the integration branch's own validation wrapper (whose validate.yml pin can be stale)."
+		},
+		{
+			"name": "WORKFLOW_HEAL_ENABLED",
+			"default": "true",
+			"stage": "Turns on workflow heal (check_failure_triage.yml, clarify.yml, implement.yml, orchestrate.yml, orchestrate_clarify_respond.yml, orchestrate_poll.yml, plan.yml, review_autofix.yml, review_autofix_sweep.yml, security-audit.yml, unblock_judge.yml, validate.yml, workflow-failure-heal-intake.yml, workflow_failure_heal.yml); false turns that stage off."
+		},
+		{
+			"name": "WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_ENABLED",
+			"default": "true",
+			"stage": "Turns on workflow heal non retryable backfill (review_autofix_sweep.yml); false turns that stage off."
+		},
+		{
+			"name": "WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED",
+			"default": "true",
+			"stage": "Turns on workflow heal non retryable routing (workflow-failure-heal-intake.yml); false turns that stage off."
+		},
+		{
+			"name": "WORKFLOW_HEAL_PR_RECONCILE_ENABLED",
+			"default": "true",
+			"stage": "Turns on workflow heal pr reconcile (internal-cancel-on-pr-close.yml); false turns that stage off."
+		},
+		{
+			"name": "WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED",
+			"default": "true",
+			"stage": "Turns on workflow heal scope linked workflows (workflow-failure-heal-intake.yml); false turns that stage off."
+		},
+		{
+			"name": "WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED",
+			"default": "true",
+			"stage": "Turns on workflow heal self inflicted routing (workflow-failure-heal-intake.yml); false turns that stage off."
+		},
+		{
+			"name": "WORKFLOW_LOG_ANALYSIS_REPORT_CHECK_ENABLED",
+			"default": "true",
+			"stage": "Runs scripts/check_workflow_analysis_report.py on each analysis attempt: the 11 required headings in order, a ### subsection per repository in the Per-Repo Breakdown (failed repositories exempt) and at least 2,000 bytes."
+		},
+		{
+			"name": "WORKFLOW_RETRO_CONSUMER_FANOUT_ENABLED",
+			"default": "true",
+			"stage": "Turns on workflow retro consumer fanout (workflow-log-analysis.yml); false turns that stage off."
+		},
+		{
+			"name": "WORKFLOW_RETRO_ENABLED",
+			"default": "true",
+			"stage": "Turns on workflow retro (workflow-log-analysis.yml); false turns that stage off."
+		},
+		{
+			"name": "WRITE_GUARDS_ENABLED",
+			"default": "true",
+			"stage": "Enable the write-guard policy from .github/ai/write_guards.v1.json at the plan post-Codex workspace boundary, implement commit boundary, review-editor commit boundary, and validate fix/harness boundary."
+		}
+	],
+	"off_on_purpose": []
+}
