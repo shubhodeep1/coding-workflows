@@ -1625,6 +1625,71 @@ on fewer runners. Delivery speed must not suffer.
 
 ---
 
+## §34. Prevent Recurrence (MANDATORY)
+
+This applies in this repo and in every consumer repo that receives this file
+via the `@stable` sync, and it is not superseded by §12.
+
+Fixing one instance of a problem is half the job. Whenever a session solves a
+problem, it MUST check whether the same problem can happen again and, if it
+can, put a lasting fix in place as part of the same work. A problem is solved
+when the session unsticks a PR, issue or run by hand, repairs a failed check,
+works around a pipeline defect, corrects data or configuration, or finds out
+why something stalled.
+
+### A) The check
+
+For every problem solved, answer three questions:
+
+1. **Cause.** What made the problem possible, from evidence (logs, code, run
+   history), not from a guess (§8).
+2. **Recurrence.** Can it happen again without a person noticing? Look for
+   other PRs, issues, runs or repos that are in the same state now (one
+   bounded search, §15) and list them.
+3. **Prevention.** What stops it: a code or workflow fix, a test, a guard or
+   an alert, a safer default, or a correction to a document that misled.
+
+### B) Put the fix in place
+
+- **It cannot recur, or a fix is already merged or tracked:** say so and name
+  the PR or issue. Search before opening anything, so the same cause never
+  gets two issues.
+- **A small fix (§31.A):** implement it in the session, with a test, and run
+  the test locally before committing.
+- **Anything larger:** write the plan (§31.B step 2) and open the issue for
+  the pipeline in the same turn. This rule is the user's standing go for that
+  issue (§23.C, §31.B step 3): show the plan in the reply and open the issue
+  without waiting. One issue per cause. The user can close or change it.
+- **The fix needs an action only the user can take** (a variable, setting,
+  ruleset, secret, billing change or any other ask-first action in this
+  file): ask in the §2 format, name the exact change, and keep the item open
+  until it is done.
+
+### C) What counts as a lasting fix
+
+- Remove the cause where that is possible. Where it is not, detect it and
+  alert. A note in a document is the last resort.
+- A fix that depends on a person remembering something is not a fix (§18).
+- The workaround the session used (a hand merge, a hand dispatch, a pushed
+  test fix, a re-run) is never the fix.
+- A prevention fix follows every other rule in this file (§5, §6, §10, §15,
+  §18, §27, §33). It is not a licence for unrelated refactors.
+
+### D) Reporting
+
+The final reply lists each problem the session solved with its cause, whether
+it can recur, and the fix: a PR, an issue, or the user's pending action. "No
+lasting fix needed" must come with the reason. Under §11 the item stays open
+until its fix is merged, is tracked in an open issue, or the user drops it.
+
+### E) Interactive Sessions Only
+
+The unattended pipelines read `unattended_system_instructions.md` and never
+see this file. Their own recurrence handling (workflow log analysis, the
+workflow-failure heal intake) is unchanged.
+
+---
+
 ## FINAL REMINDER
 
 If uncertainty exists: **ASK (multiple-choice). DO NOT EXECUTE.**
