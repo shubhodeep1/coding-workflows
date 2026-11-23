@@ -1805,6 +1805,10 @@ jobs:
           # Minutes (0-20) to wait for auto-merge to land the report before
           # the step ends; 0 disables the wait. Git polling only.
           WORKFLOW_LOG_ANALYSIS_REPORT_MERGE_WAIT_MINUTES: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_MERGE_WAIT_MINUTES || '10' }}
+          # Issue #9135 (project #9116 P1 step 5): PR mode needs GH_PAT, because
+          # a PR opened with github.token starts no required checks and stays
+          # open. Only a literal true/false reaches the shell, never the secret.
+          WLA_REPORT_PR_PAT_SET: ${{ secrets.GH_PAT != '' && 'true' || 'false' }}
           # Passed through env (not inlined) so the LLM-run analyze output
           # never reaches the shell as code; validated below.
           WLA_ANALYZE_REPORT_FILE: ${{ steps.analyze.outputs.report_file }}
@@ -1943,6 +1947,18 @@ jobs:
             echo "report_branch=" >> "$GITHUB_OUTPUT"
             echo "purged_docs=" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+
+          # Issue #9135: in PR mode, fail closed before any report push,
+          # ls-remote or PR-delivery gh call when GH_PAT is unset (same rule
+          # and reason as deliver-report). The purge guard above
+          # (apply_analysis_on_main.sh) has already made its read-only gh
+          # calls by now. Unset flag keeps the old behaviour; push mode keeps
+          # the github.token fallback.
+          if [ "${report_delivery_mode}" = "pr" ] && [ "${WLA_REPORT_PR_PAT_SET:-true}" != "true" ]; then
+            echo "::error::WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=failed reason=token_missing branch=${REPORT_PR_BRANCH}"
+            echo "GH_PAT is not set, so the report PR was not opened: a PR opened with github.token starts no required checks. The report is kept as artifact workflow-log-analysis-report; set GH_PAT or WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR=false."
+            exit 1
           fi
 
           if [ "${purged_count}" -gt 0 ]; then

@@ -811,6 +811,211 @@ _conflict_prepare_commit_deterministic_merge()
   echo "${det_label}: no other unmerged paths — committed deterministic merge resolution (push deferred); Codex resolver will be skipped."
   exit 0
 }
+# >>> .gitleaksignore union (issue #9659)
+# A one-line .gitleaksignore fingerprint (a gitleaks false positive) landed on
+# the default branch from two PRs with different comment blocks, and the
+# integration-sync resolver then failed closed with sandbox_path_host_only on
+# .gitleaksignore (shubhodeep1/binance-blessings PR #585, run 44069711705):
+# the resolver sandbox excludes root dotfiles, and both sides had added the
+# identical fingerprint line. Resolve it here, on the trusted runner, before
+# the manifest block and the host-only take-base: the base branch's
+# (MERGE_HEAD, index stage 3) file is kept byte for byte, and each
+# fingerprint line the PR / integration side (HEAD, stage 2) added that is not
+# already present is appended, with the run of `#` comment lines it added
+# directly above it. Only the root path .gitleaksignore is touched, and only
+# when every check holds; any other shape leaves it unmerged, so the existing
+# fail-closed path applies:
+#   - index stages exactly "1 2 3" or "2 3" (reason=stage_shape);
+#   - every stage a regular 100644 blob, so no symlink or gitlink
+#     (reason=not_regular);
+#   - stage 3 is MERGE_HEAD's blob (reason=base_mismatch);
+#   - neither side deleted a merge-base line (reason=deletion);
+#   - every added line that is not blank and not a `#` comment fully matches
+#     ^[0-9a-f]{40}:[^:\n]+:[A-Za-z0-9_.-]+:[0-9]+$ (reason=malformed).
+# Blobs are read from the index (git show :<stage>:), never the worktree. The
+# staged blob must start with the stage-3 bytes and carry every fingerprint of
+# stages 2 and 3, and the path must no longer be unmerged; otherwise the step
+# exits 1 before any resolver run. When nothing else is unmerged the merge is
+# committed here, or on orchestrator/project-* after the integration
+# fingerprint check below (where the verified path is exempt from
+# re-expansion); otherwise the path drops out of the resolver allowlist,
+# prompt and snapshot.
+# Switch: CONFLICT_GITLEAKSIGNORE_UNION_ENABLED (default true; unset, empty or
+# true in any case is on, false off, anything else off with a warning).
+# Log key: CONFLICT_RESOLVER_GITLEAKSIGNORE_UNION pr=<n> outcome=merged|skip
+#   reason=<token> stages=<s> added=<count>
+_gl_resolved=false
+_gl_defer_commit=false
+_gl_pr="${PR_NUMBER:-none}"
+_gl_path=".gitleaksignore"
+_gl_switch="$(printf '%s' "${CONFLICT_GITLEAKSIGNORE_UNION_ENABLED-}" | tr '[:upper:]' '[:lower:]')"
+_gl_enabled=false
+_gl_switch_reason="disabled"
+case "${_gl_switch}" in
+  ''|true) _gl_enabled=true ;;
+  false) ;;
+  *)
+    _gl_switch_reason="switch_invalid"
+    echo "::warning::.gitleaksignore union: CONFLICT_GITLEAKSIGNORE_UNION_ENABLED has an unrecognised value; the union is off."
+    ;;
+esac
+_gl_merge_py='
+import os, re, sys
+FP = re.compile(r"[0-9a-f]{40}:[^:\n]+:[A-Za-z0-9_.-]+:[0-9]+")
+mode, d, stages = sys.argv[1], sys.argv[2], sys.argv[3]
+def read(name):
+	with open(os.path.join(d, name), "rb") as fh:
+		return fh.read()
+def lines(data):
+	text = data.decode("utf-8")
+	parts = text.split("\n")
+	if parts and parts[-1] == "":
+		parts.pop()
+	return parts
+try:
+	ours_b, theirs_b = read("2"), read("3")
+	base_b = read("1") if stages == "1 2 3" else b""
+	ours, theirs, base = lines(ours_b), lines(theirs_b), lines(base_b)
+except (OSError, UnicodeDecodeError):
+	print("result=skip reason=malformed")
+	sys.exit(0)
+if mode == "verify":
+	try:
+		staged_b = read("0")
+		staged = set(lines(staged_b))
+	except (OSError, UnicodeDecodeError):
+		print("result=fail")
+		sys.exit(0)
+	need = [l for l in ours + theirs if FP.fullmatch(l)]
+	ok = staged_b.startswith(theirs_b) and all(l in staged for l in need)
+	print("result=ok" if ok else "result=fail")
+	sys.exit(0)
+base_set = set(base)
+ours_set, theirs_set = set(ours), set(theirs)
+if any(l not in ours_set or l not in theirs_set for l in base_set):
+	print("result=skip reason=deletion")
+	sys.exit(0)
+def blank(l):
+	return l.strip(" \t") == ""
+for side in (ours, theirs):
+	for l in side:
+		if l in base_set or blank(l) or l.startswith("#"):
+			continue
+		if not FP.fullmatch(l):
+			print("result=skip reason=malformed")
+			sys.exit(0)
+out = bytearray(theirs_b)
+if out and not out.endswith(b"\n"):
+	out += b"\n"
+present = set(theirs)
+run = []
+added = 0
+for l in ours:
+	if l.startswith("#"):
+		if l not in base_set:
+			run.append(l)
+		continue
+	if FP.fullmatch(l) and l not in base_set and l not in present:
+		for c in run:
+			out += (c + "\n").encode("utf-8")
+		out += (l + "\n").encode("utf-8")
+		present.add(l)
+		added += 1
+	run = []
+with open(os.path.join(d, "merged"), "wb") as fh:
+	fh.write(bytes(out))
+print("result=merged added=%d" % added)
+'
+if [ "${_resolver_allowlist_count}" -gt 0 ] \
+   && grep -Fxq -- "${_gl_path}" "${RESOLVER_ALLOWLIST_FILE}" 2>/dev/null; then
+  _gl_stages="$(git ls-files -u -s -- "${_gl_path}" | awk '{print $3}' | sort -u | tr '\n' ' ')"
+  _gl_stages="${_gl_stages% }"
+  _gl_reason=""
+  _gl_added=0
+  if [ "${_gl_enabled}" != "true" ]; then
+    _gl_reason="${_gl_switch_reason}"
+  elif ! git rev-parse -q --verify 'MERGE_HEAD^{commit}' >/dev/null 2>&1; then
+    _gl_reason="base_mismatch"
+  else
+    case "${_gl_stages}" in
+      '1 2 3'|'2 3') ;;
+      *) _gl_reason="stage_shape" ;;
+    esac
+  fi
+  if [ -z "${_gl_reason}" ] \
+     && [ -n "$(git ls-files -u -s -- "${_gl_path}" | awk '$1 != "100644"')" ]; then
+    _gl_reason="not_regular"
+  fi
+  if [ -z "${_gl_reason}" ]; then
+    _gl_base_oid="$(git rev-parse -q --verify 'MERGE_HEAD:.gitleaksignore' 2>/dev/null || true)"
+    _gl_stage3_oid="$(git rev-parse -q --verify ':3:.gitleaksignore' 2>/dev/null || true)"
+    if [ -z "${_gl_base_oid}" ] || [ "${_gl_base_oid}" != "${_gl_stage3_oid}" ]; then
+      _gl_reason="base_mismatch"
+    fi
+  fi
+  if [ -z "${_gl_reason}" ]; then
+    _gl_dir="$(mktemp -d)"
+    _gl_result=""
+    if { [ "${_gl_stages}" != "1 2 3" ] || git show ":1:${_gl_path}" > "${_gl_dir}/1"; } \
+       && git show ":2:${_gl_path}" > "${_gl_dir}/2" \
+       && git show ":3:${_gl_path}" > "${_gl_dir}/3"; then
+      _gl_result="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c "${_gl_merge_py}" merge "${_gl_dir}" "${_gl_stages}" 2>/dev/null || true)"
+    fi
+    case "${_gl_result}" in
+      'result=merged added='*)
+        _gl_added="${_gl_result##*added=}"
+        [[ "${_gl_added}" =~ ^[0-9]+$ ]] || _gl_added=0
+        _gl_oid="$(git hash-object -w --no-filters --stdin < "${_gl_dir}/merged" 2>/dev/null || true)"
+        if [ -z "${_gl_oid}" ] \
+           || ! git update-index --force-remove -- "${_gl_path}" \
+           || ! git update-index --add --cacheinfo "100644,${_gl_oid},${_gl_path}" \
+           || ! git checkout-index -f -- "${_gl_path}"; then
+          echo "::error::.gitleaksignore union: staging the merged blob failed; refusing to dispatch resolver."
+          rm -rf -- "${_gl_dir}"
+          exit 1
+        fi
+        _gl_verify=""
+        if [ -z "$(git ls-files -u -- "${_gl_path}" 2>/dev/null || echo error)" ] \
+           && git show ":0:${_gl_path}" > "${_gl_dir}/0" 2>/dev/null; then
+          _gl_verify="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c "${_gl_merge_py}" verify "${_gl_dir}" "${_gl_stages}" 2>/dev/null || true)"
+        fi
+        if [ "${_gl_verify}" != "result=ok" ]; then
+          echo "::error::.gitleaksignore union: the staged blob is unmerged or lost a fingerprint or base byte; refusing to dispatch resolver."
+          rm -rf -- "${_gl_dir}"
+          exit 1
+        fi
+        _gl_resolved=true
+        ;;
+      'result=skip reason='*)
+        _gl_reason="${_gl_result##*reason=}"
+        ;;
+      *)
+        _gl_reason="malformed"
+        ;;
+    esac
+    rm -rf -- "${_gl_dir}"
+  fi
+  if [ "${_gl_resolved}" = "true" ]; then
+    echo "CONFLICT_RESOLVER_GITLEAKSIGNORE_UNION pr=${_gl_pr} outcome=merged reason=union stages=${_gl_stages} added=${_gl_added}"
+    git diff --name-only --diff-filter=U | sort -u > "${RESOLVER_ALLOWLIST_FILE}" || true
+    _resolver_allowlist_count="$(wc -l < "${RESOLVER_ALLOWLIST_FILE}" | tr -d '[:space:]')"
+    echo ".gitleaksignore union: ${_resolver_allowlist_count} unmerged path(s) remain."
+    if [ "${_resolver_allowlist_count}" -eq 0 ]; then
+      case "${TARGET_BRANCH:-${HEAD_REF:-}}" in
+        orchestrator/project-*)
+          _gl_defer_commit=true
+          echo ".gitleaksignore union: integration-sync branch; deferring the merge commit until the integration fingerprint check has run on the merged tree."
+          ;;
+        *)
+          _conflict_prepare_commit_deterministic_merge ".gitleaksignore union"
+          ;;
+      esac
+    fi
+  else
+    echo "CONFLICT_RESOLVER_GITLEAKSIGNORE_UNION pr=${_gl_pr} outcome=skip reason=${_gl_reason:-malformed} stages=${_gl_stages:-none} added=0"
+  fi
+fi
+# <<< .gitleaksignore union
 _mu_resolved=false
 _mu_defer_commit=false
 _mu_unhandled_reason=""
@@ -966,7 +1171,12 @@ _det_commit_label="${_det_commit_label:-Manifest union-merge}"
 _det_commit_path="${_det_commit_path:-${MANIFEST_UNION_PATH}}"
 if [ "${_ghm_resolved:-false}" = "true" ] && [ "${_resolver_allowlist_count}" -eq 0 ] \
    && [ "${_mu_resolved}" != "true" ] && [ "${_ff_defer_commit}" != "true" ] \
+   && [ "${_gl_resolved:-false}" != "true" ] \
    && [ "${_ai_resolved:-false}" != "true" ]; then
+  # A .gitleaksignore union (issue #9659) that resolved the last path owns the
+  # commit: it committed already, or on integration sync its deferral below
+  # waits for the fingerprint check (a hook resolved earlier, while
+  # .gitleaksignore was still unmerged, left _ghm_defer_commit false).
   if [ "${_ghm_defer_commit:-false}" = "true" ]; then
     _mu_defer_commit=true
     _det_commit_label="Guard-hook template merge"
@@ -994,6 +1204,17 @@ if [ "${_resolver_allowlist_count}" -eq 0 ] && [ "${_mu_defer_commit}" != "true"
   _det_commit_scope=".ai-asset-only"
   _det_commit_path="$(paste -sd ' ' "${AI_ASSET_TAKE_BASE_PATHS_FILE}" 2>/dev/null || echo .ai/)"
   echo ".ai asset take-base: integration-sync branch; deferring the merge commit until the integration fingerprint check has run on the merged tree."
+fi
+
+# .gitleaksignore union (issue #9659) on an integration-sync branch, when it
+# was the last unmerged path: commit after the fingerprint check below.
+if [ "${_resolver_allowlist_count}" -eq 0 ] && [ "${_mu_defer_commit}" != "true" ] && [ "${_ff_defer_commit}" != "true" ] \
+   && [ "${_gl_defer_commit:-false}" = "true" ]; then
+  _mu_defer_commit=true
+  _det_commit_label=".gitleaksignore union"
+  _det_commit_scope="gitleaksignore-only"
+  _det_commit_path=".gitleaksignore${_ghm_resolved_paths:+ ${_ghm_resolved_paths}}"
+  echo ".gitleaksignore union: deferring the merge commit until the integration fingerprint check has run on the merged tree."
 fi
 
 # Criss-cross clean merge (PR #8170): the detect step set
@@ -1568,6 +1789,18 @@ if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ] \
   if [ -s "${_fp_violated_tmp}" ]; then
     sed -i '/^::/d; /^[[:space:]]*$/d' "${_fp_violated_tmp}" 2>/dev/null || true
   fi
+  # A .gitleaksignore the union above verified (every fingerprint line of both
+  # sides present, the base bytes unchanged) stays out of re-expansion: the
+  # resolver sandbox refuses it as host-only (issue #9659, PR #585). Every
+  # other violated path keeps the verifier's guard.
+  if [ "${_gl_resolved:-false}" = "true" ] && [ -s "${_fp_violated_tmp}" ] \
+     && grep -Fxq -- ".gitleaksignore" "${_fp_violated_tmp}"; then
+    _gl_fp_tmp="$(mktemp)"
+    grep -Fxv -- ".gitleaksignore" "${_fp_violated_tmp}" > "${_gl_fp_tmp}" || true
+    cat "${_gl_fp_tmp}" > "${_fp_violated_tmp}"
+    rm -f -- "${_gl_fp_tmp}"
+    echo "::warning::.gitleaksignore union: waived a merged sub-issue fingerprint violation on .gitleaksignore (exempt from fingerprint re-expansion); the union verified every fingerprint line from both sides and the base bytes."
+  fi
   if [ "${_fp_list_exit}" -eq 0 ] && [ -s "${_fp_violated_tmp}" ]; then
     sort -u -o "${_fp_violated_tmp}" "${_fp_violated_tmp}"
     # Subtract files that were already reported as unmerged by git —
@@ -1634,6 +1867,17 @@ if [ "${_mu_defer_commit}" = "true" ] || [ "${_ff_defer_commit}" = "true" ]; the
      && [ "${_ff_defer_commit}" != "true" ] \
      && [ -n "${FP_VIOLATED_FILES_LIST}" ] && [ "${_mu_remaining_unmerged}" -eq 0 ]; then
     echo "::warning::.ai asset take-base: the merged tree fails merged sub-issue fingerprints; handing the violating path(s) to the resolver instead of committing."
+    _mu_defer_commit=false
+  fi
+  # Same hand-off for a deferred .gitleaksignore union (issue #9659): the
+  # verified .gitleaksignore stays staged and exempt, and the other violating
+  # path(s) go to the resolver, which records retry state. Before the union
+  # the resolver ran on this merge (and escalated), so exiting here would be
+  # a regression that leaves no retry state.
+  if [ "${_det_commit_scope:-}" = "gitleaksignore-only" ] && [ "${_mu_defer_commit}" = "true" ] \
+     && [ "${_ff_defer_commit}" != "true" ] \
+     && [ -n "${FP_VIOLATED_FILES_LIST}" ] && [ "${_mu_remaining_unmerged}" -eq 0 ]; then
+    echo "::warning::.gitleaksignore union: the merged tree fails merged sub-issue fingerprints; handing the violating path(s) to the resolver instead of committing."
     _mu_defer_commit=false
   fi
 fi

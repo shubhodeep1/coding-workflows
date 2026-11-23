@@ -10,6 +10,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -108,13 +109,124 @@ def test_the_never_repeat_rule_spans_the_project() -> None:
 	assert decision["project_rounds"] == 1 and decision["item_rounds"] == 0
 
 
-def test_item_cap_leaves_only_close() -> None:
-	entries = ledger.parse_markers(
-		[_comment(_marker(round_number=1)), _comment(_marker(verdict="descope", fp="ffffffffffff", round_number=2))], BOT
+def _rounds(count: int) -> list[dict]:
+	"""`count` trusted rounds on item 7, each on its own fingerprint and verdict."""
+	verdicts = ("descope", "reissue", "operator_step", "auto_answer", "accept_with_followup")
+	return ledger.parse_markers(
+		[_comment(_marker(verdict=verdicts[n], fp=f"f{n:011x}", round_number=n + 1)) for n in range(count)], BOT
 	)
-	decision = ledger.decide(7, "blocked", FP, entries, None, NOW)
+
+
+@pytest.fixture
+def _no_rounds_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
+	monkeypatch.delenv(ledger.UNBLOCK_MAX_ROUNDS_ENV, raising=False)
+	return monkeypatch
+
+
+def test_item_cap_leaves_only_close(_no_rounds_env: pytest.MonkeyPatch) -> None:
+	assert ledger.MAX_ROUNDS_PER_ITEM == 3
+	two = ledger.decide(7, "blocked", FP, _rounds(2), None, NOW)
+	assert not two["terminal"] and two["max_rounds_per_item"] == 3
+	decision = ledger.decide(7, "blocked", FP, _rounds(3), None, NOW)
 	assert decision["terminal"] and decision["terminal_reason"] == "item_cap"
 	assert decision["allowed"] == ["close"]
+	assert decision["max_rounds_per_item"] == 3
+
+
+@pytest.mark.parametrize("raw,rounds,terminal", [("2", 2, True), ("5", 4, False), ("5", 5, True), (" 2 ", 2, True)])
+def test_item_cap_follows_the_repository_variable(_no_rounds_env: pytest.MonkeyPatch, raw: str, rounds: int, terminal: bool) -> None:
+	_no_rounds_env.setenv(ledger.UNBLOCK_MAX_ROUNDS_ENV, raw)
+	decision = ledger.decide(7, "blocked", FP, _rounds(rounds), None, NOW)
+	assert decision["terminal"] is terminal
+	assert decision["terminal_reason"] == ("item_cap" if terminal else "")
+	assert decision["max_rounds_per_item"] == int(raw)
+
+
+@pytest.mark.parametrize("raw,expected,warned", [
+	("0", 1, "out of range 1-5; using 1"), ("9", 5, "out of range 1-5; using 5"),
+	("abc", 3, "is not an integer; using 3"), ("-1", 3, "is not an integer; using 3"),
+	("2.5", 3, "is not an integer; using 3"), ("\u0663", 3, "is not an integer; using 3"),
+	("", 3, ""), ("3", 3, ""),
+])
+def test_item_cap_variable_is_clamped_or_defaulted(
+	_no_rounds_env: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, raw: str, expected: int, warned: str
+) -> None:
+	_no_rounds_env.setenv(ledger.UNBLOCK_MAX_ROUNDS_ENV, raw)
+	assert ledger.resolve_max_rounds_per_item() == expected
+	captured = capsys.readouterr()
+	assert captured.out == ""
+	if warned:
+		assert captured.err.startswith("::warning::UNBLOCK_MAX_ROUNDS_PER_ITEM=") and warned in captured.err
+		assert captured.err.count("\n") == 1
+	else:
+		assert captured.err == ""
+	assert ledger.decide(7, "blocked", FP, [], None, NOW)["max_rounds_per_item"] == expected
+
+
+def test_item_cap_warning_truncates_and_strips_the_bad_value(_no_rounds_env: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+	assert ledger.resolve_max_rounds_per_item("x\x1b[31m" + "y" * 100) == ledger.MAX_ROUNDS_PER_ITEM
+	err = capsys.readouterr().err
+	# The value is cut to 32 characters ("x", ESC, "[31m" and 26 "y") before the ESC is dropped.
+	assert "\x1b" not in err and "'x[31m" + "y" * 26 + "'" in err
+
+
+def test_item_cap_variable_with_too_many_digits_is_clamped(_no_rounds_env: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+	# Python 3.11+ int() raises ValueError past 4300 digits; decide() must still run.
+	_no_rounds_env.setenv(ledger.UNBLOCK_MAX_ROUNDS_ENV, "9" * 5000)
+	assert ledger.decide(7, "blocked", FP, [], None, NOW)["max_rounds_per_item"] == ledger.MAX_ROUNDS_PER_ITEM_CEILING
+	assert "out of range 1-5; using 5" in capsys.readouterr().err
+	assert ledger.resolve_max_rounds_per_item("0004") == 4
+	assert ledger.resolve_max_rounds_per_item("0" * 5000) == ledger.MAX_ROUNDS_PER_ITEM_FLOOR
+
+
+def test_explicit_item_cap_argument_wins_over_the_variable(_no_rounds_env: pytest.MonkeyPatch) -> None:
+	_no_rounds_env.setenv(ledger.UNBLOCK_MAX_ROUNDS_ENV, "5")
+	decision = ledger.decide(7, "blocked", FP, _rounds(2), None, NOW, max_rounds_per_item=2)
+	assert decision["terminal_reason"] == "item_cap" and decision["max_rounds_per_item"] == 2
+
+
+def test_raised_item_cap_keeps_the_project_cap_and_never_repeat_rule(_no_rounds_env: pytest.MonkeyPatch) -> None:
+	_no_rounds_env.setenv(ledger.UNBLOCK_MAX_ROUNDS_ENV, "5")
+	project = ledger.parse_markers(
+		[_comment(_marker(item=100 + n, fp=f"{n:012x}")) for n in range(ledger.MAX_ROUNDS_PER_PROJECT)], BOT
+	)
+	assert ledger.decide(7, "blocked", FP, [], project, NOW)["terminal_reason"] == "project_cap"
+	entries = ledger.parse_markers([
+		_comment(_marker(verdict="descope", fp="ffffffffffff", round_number=1)),
+		_comment(_marker(verdict="reissue", fp="eeeeeeeeeeee", round_number=2)),
+		_comment(_marker(verdict="retry_budget", round_number=3)),
+	], BOT)
+	decision = ledger.decide(7, "blocked", FP, entries, None, NOW)
+	assert not decision["terminal"] and decision["next_round"] == 4
+	assert "retry_budget" not in decision["allowed"] and decision["used"] == ["retry_budget"]
+
+
+def test_decide_cli_reads_the_item_cap_variable(tmp_path: Path) -> None:
+	comments = tmp_path / "comments.json"
+	comments.write_text(json.dumps([
+		_comment(_marker(verdict="descope", fp="ffffffffffff", round_number=1)),
+		_comment(_marker(verdict="reissue", fp="eeeeeeeeeeee", round_number=2)),
+	]), encoding="utf-8")
+	args = [sys.executable, str(SCRIPT), "decide", "--item", "7", "--stop", "blocked", "--fingerprint", FP,
+		"--comments-file", str(comments), "--trusted-login", BOT, "--now", NOW.isoformat()]
+	base = {key: value for key, value in os.environ.items() if key != ledger.UNBLOCK_MAX_ROUNDS_ENV}
+	for raw, terminal, cap in (("2", True, 2), (None, False, 3), ("bogus", False, 3)):
+		env = dict(base, PYTHONDONTWRITEBYTECODE="1")
+		if raw is not None:
+			env[ledger.UNBLOCK_MAX_ROUNDS_ENV] = raw
+		result = subprocess.run(args, capture_output=True, text=True, env=env, check=False)
+		assert result.returncode == 0, result.stderr
+		decision = json.loads(result.stdout)
+		assert decision["terminal"] is terminal and decision["max_rounds_per_item"] == cap
+		assert ("::warning::" in result.stderr) is (raw == "bogus")
+
+
+def test_workflows_forward_the_item_cap_variable() -> None:
+	line = "UNBLOCK_MAX_ROUNDS_PER_ITEM: ${{ vars.UNBLOCK_MAX_ROUNDS_PER_ITEM || '3' }}"
+	for name, expected in (("orchestrate_poll.yml", 3), ("unblock_judge.yml", 1)):
+		text = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+		assert text.count(line) == expected, name
+		assert text.count("NEEDS_HUMAN_DIGEST_ENABLED: ${{") == expected, name
 
 
 def test_project_cap_leaves_only_close() -> None:
@@ -126,10 +238,8 @@ def test_project_cap_leaves_only_close() -> None:
 
 
 def _terminal_decision() -> dict:
-	entries = ledger.parse_markers(
-		[_comment(_marker(round_number=1)), _comment(_marker(verdict="descope", fp="ffffffffffff", round_number=2))], BOT
-	)
-	return ledger.decide(7, "blocked", FP, entries, None, NOW)
+	return ledger.decide(7, "blocked", FP, _rounds(ledger.MAX_ROUNDS_PER_ITEM), None, NOW,
+		max_rounds_per_item=ledger.MAX_ROUNDS_PER_ITEM)
 
 
 @pytest.mark.parametrize("kind", ["issue", "pr", "project"])
@@ -980,6 +1090,35 @@ def test_descope_files_a_standalone_fixup_or_asks_the_poller_for_a_project() -> 
 	assert project_child[0]["body"].startswith("<!-- ai:unblock-fixup-request:v1 item=7 id=unblock-7-r1 -->")
 
 
+@pytest.mark.parametrize("name", ["descope", "operator_step"])
+def test_trusted_pr_fixup_targets_an_ai_issue_head_branch(name: str) -> None:
+	"""#9938: a PR fix-up is planned on the PR head, where its changes live."""
+	ops = actions.plan(_verdict(name, instructions="drop it", placeholder="NIGHTLY_TOKEN_UNSET_OPERATOR_STEP", operator_instructions="set it"), _ctx("pr", pr_head_ref="ai/issue-9261"))
+	created = [op for op in ops if op["op"] == "create_issue"]
+	assert len(created) == 1
+	body = created[0]["body"]
+	assert "\n\n- Integration branch: `ai/issue-9261`\n\n<!-- ai:unblock-provenance:v1 source_pr=7 " in body
+	assert actions.declared_integration_branch(body) == "ai/issue-9261"
+
+
+def test_pr_fixup_keeps_no_integration_branch_outside_ai_issue_heads() -> None:
+	baseline = actions.plan(_verdict("descope", instructions="drop it"), _ctx("pr"))
+	assert "Integration branch" not in baseline[0]["body"]
+	for head in ("feature/x", "ai/issue-12x", "orchestrator/project-9", "claude/ai/issue-3"):
+		assert actions.plan(_verdict("descope", instructions="drop it"), _ctx("pr", pr_head_ref=head)) == baseline
+	for bad in ("ai/issue-1/../x", "ai//issue-1", "-x", "ai/issue-1.lock", 5, None):
+		assert _ctx("pr", pr_head_ref=bad)["pr_head_ref"] is None
+	assert _ctx("pr", pr_head_ref="ai/issue-9261")["pr_head_ref"] == "ai/issue-9261"
+	untrusted = _ctx("pr", pr_trusted=False, pr_head_ref="ai/issue-9261")
+	assert untrusted["pr_head_ref"] is None
+	# An issue item never carries a PR head, even when one is sent.
+	issue_ops = actions.plan(_verdict("descope", instructions="drop it"), _ctx(pr_head_ref="ai/issue-9261"))
+	assert "Integration branch" not in issue_ops[0]["body"]
+	# A project PR's fix-up goes through the poller unchanged.
+	project = actions.plan(_verdict("descope", instructions="drop it"), _ctx("pr", tracking=40, pr_head_ref="ai/issue-12"))
+	assert project[0]["op"] == "comment" and "Integration branch" not in project[0]["body"]
+
+
 def test_operator_step_records_the_step_and_warns() -> None:
 	# A placeholder value only a person can supply is recorded and paged.
 	ops = actions.plan(
@@ -1275,6 +1414,14 @@ if method == "POST" and endpoint.endswith("/comments"):
 	if os.environ.get("FAKE_GH_FAIL_RESUME") and f.get("body", "").startswith(("/answer", "/approved", "/reclarify", "/judge_resume")):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
+	if "ai:unblock-park-alert:v1" in f.get("body", ""):
+		# P6b claim: the writer needs the new comment id.
+		if os.environ.get("FAKE_GH_FAIL_PARK_ALERT"):
+			json.dump(state, open(state_path, "w"))
+			sys.exit(1)
+		claim_id = 3000 + len([c for c in state["comments"] if c.get("id")])
+		state["comments"].append({"endpoint": endpoint, "body": f.get("body", ""), "id": claim_id})
+		done(json.dumps({"id": claim_id, "created_at": "2026-10-04T12:00:00Z"}))
 	# CONSIST-001: a transient-looking failure on the item's verdict comment.
 	if os.environ.get("FAKE_GH_FAIL_RECORD_502") and endpoint == "repos/o/r/issues/7/comments" and "verdict=" in f.get("body", ""):
 		json.dump(state, open(state_path, "w"))
@@ -1306,6 +1453,13 @@ if method == "PATCH":
 	if os.environ.get("FAKE_GH_FAIL_WAIT_DONE") and "/issues/comments/" in endpoint and " done -->" in f.get("body", ""):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
+	if endpoint.startswith("repos/o/r/issues/comments/") and "ai:unblock-park-alert:v1" in f.get("body", ""):
+		if os.environ.get("FAKE_GH_FAIL_PARK_CONFIRM"):
+			json.dump(state, open(state_path, "w"))
+			sys.exit(1)
+		for c in state["comments"]:
+			if str(c.get("id")) == endpoint.rsplit("/", 1)[1]:
+				c["body"] = f.get("body", "")
 	state["patched"].append([endpoint, f])
 	done("{}")
 if method == "POST" and endpoint.endswith("/issues"):
@@ -1338,6 +1492,12 @@ if endpoint.endswith("/comments?per_page=100"):
 			json.dump(state, open(state_path, "w"))
 			sys.exit(1)
 		done(os.environ["FAKE_GH_FIXUP_COMMENTS"])
+	if endpoint == "repos/o/r/issues/7/comments?per_page=100" and "--slurp" in args:
+		# P6b alert claim reads (--paginate --slurp): one page with the fixture
+		# comments plus the claims posted so far.
+		posted = [{"id": c["id"], "user": {"login": "pipeline-bot"}, "body": c["body"]} for c in state["comments"]
+			if c.get("id") and c["endpoint"] == "repos/o/r/issues/7/comments"]
+		done(json.dumps([state["item_comments"] + posted]))
 	if endpoint == "repos/o/r/issues/7/comments?per_page=100":
 		state["item_comments_reads"] = state.get("item_comments_reads", 0) + 1
 		if state["item_comments_reads"] > 2:
@@ -1438,7 +1598,7 @@ def _judge(tmp_path: Path, item: dict, comments: list | None = None, verdict: di
 	import os
 
 	env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", FAKE_GH_STATE=str(state_file), PYTHONDONTWRITEBYTECODE="1")
-	for name in ("UNBLOCK_JUDGE_ENABLED", "TG_BOT_SECRET", "GH_TOKEN", "NEEDS_HUMAN_DIGEST_ENABLED"):
+	for name in ("UNBLOCK_JUDGE_ENABLED", "TG_BOT_SECRET", "GH_TOKEN", "NEEDS_HUMAN_DIGEST_ENABLED", "UNBLOCK_MAX_ROUNDS_PER_ITEM"):
 		env.pop(name, None)
 	env.update(REPOSITORY="o/r", ITEM="7", SUPPORT_DIR=str(ROOT), RUNTIME_DIR=str(tmp_path / "rt"), MOCK_UNBLOCK_JUDGE_NOW="2026-10-04T12:00:00Z")
 	# CONSIST-001: one gh_retry attempt by default keeps the fake's failure
@@ -1455,10 +1615,11 @@ ISSUE = {"number": 7, "state": "open", "title": "Add cache", "body": "Do it", "l
 
 
 def _terminal_markers(item: int = 7) -> list[dict]:
-	"""Two trusted rounds on the item: the item cap is spent, so the judge closes (#6557)."""
+	"""Three trusted rounds on the item: the default item cap (UNBLOCK_MAX_ROUNDS_PER_ITEM=3) is spent, so the judge closes (#6557)."""
 	return [
 		_comment(ledger.marker(item, "blocked", "0" * 12, "retry_budget", 1), "pipeline-bot", "2026-10-04T08:00:00Z"),
 		_comment(ledger.marker(item, "blocked", "1" * 12, "reissue", 2), "pipeline-bot", "2026-10-04T09:00:00Z"),
+		_comment(ledger.marker(item, "blocked", "2" * 12, "descope", 3), "pipeline-bot", "2026-10-04T10:00:00Z"),
 	]
 
 
@@ -1524,7 +1685,7 @@ def test_comment_post_stays_single_attempt_on_a_transient_error(tmp_path: Path) 
 
 
 def test_only_the_listed_reads_are_wrapped_in_gh_retry() -> None:
-	"""CONSIST-001: the helper source, the pass-through fallback and the five wrapped reads."""
+	"""CONSIST-001: the helper source, the pass-through fallback and the six wrapped reads."""
 	text = JUDGE.read_text(encoding="utf-8")
 	assert 'if [ -f "${SUPPORT_DIR}/scripts/gh_helpers.sh" ]; then' in text
 	assert 'source "${SUPPORT_DIR}/scripts/gh_helpers.sh" >/dev/null 2>&1 || true' in text
@@ -1535,8 +1696,12 @@ def test_only_the_listed_reads_are_wrapped_in_gh_retry() -> None:
 		'gh_retry gh api "repos/${REPOSITORY}/issues/${ITEM}" > "${RUNTIME_DIR}/item.json"',
 		'gh_retry gh api "repos/${REPOSITORY}/issues/${ITEM}" > "${RUNTIME_DIR}/item_recheck.json"',
 		'gh_retry gh api "repos/${REPOSITORY}/actions/runs/${candidate_id}"',
+		'gh_retry gh api "repos/${REPOSITORY}/issues/${BASH_REMATCH[1]}" --jq \'(.title // "") | .[0:400]\'',
 	):
 		assert text.count(read) == 1, read
+	# The list above is exhaustive: a seventh wrapped read must be added to it
+	# and to the CONSIST-001 header comments.
+	assert sum(1 for line in text.splitlines() if "gh_retry gh api" in line) == 6
 	for line in text.splitlines():
 		if "gh_retry" in line:
 			for write in ("-X POST", "-X PATCH", "-X DELETE", "/dispatches", "-f body="):
@@ -1830,7 +1995,7 @@ def test_unlabeled_failed_project_still_closes(tmp_path: Path) -> None:
 	project = dict(ISSUE, labels=[{"name": "ai:orchestrator-tracking"}])
 	result, state = _judge(tmp_path, project, comments=_terminal_markers() + [_project_state_comment("failed")],
 		verdict={"verdict": "close", "reason": "still failed"})
-	assert "verdict=close round=3 outcome=acted" in result.stdout, result.stderr
+	assert "verdict=close round=4 outcome=acted" in result.stdout, result.stderr
 	assert state["item_comments_reads"] == 3
 	assert state["comments"][0]["body"].splitlines()[-1].startswith("<!-- ai:unblock:v1")
 	# Every round is spent: the project is parked (needs-human digest), not closed.
@@ -1839,7 +2004,7 @@ def test_unlabeled_failed_project_still_closes(tmp_path: Path) -> None:
 	# The legacy close (kill switch) still adds the terminal label after the same recheck.
 	result, state = _judge(tmp_path, project, comments=_terminal_markers() + [_project_state_comment("failed")],
 		verdict={"verdict": "close", "reason": "still failed"}, NEEDS_HUMAN_DIGEST_ENABLED="false")
-	assert "verdict=close round=3 outcome=acted" in result.stdout, result.stderr
+	assert "verdict=close round=4 outcome=acted" in result.stdout, result.stderr
 	assert state["item_comments_reads"] == 3
 	assert any(label == "ai:unblock-closed" for _, label in state["labels_added"])
 
@@ -1886,7 +2051,7 @@ def test_labeled_project_is_not_subject_to_failed_state_check(tmp_path: Path) ->
 	project = dict(ISSUE, labels=[{"name": "ai:orchestrator-tracking"}, {"name": "ai:validation-failed"}])
 	result, state = _judge(tmp_path, project, comments=_terminal_markers() + [_project_state_comment("in_progress")],
 		verdict={"verdict": "close", "reason": "stop remains"})
-	assert "verdict=close round=3 outcome=acted" in result.stdout, result.stderr
+	assert "verdict=close round=4 outcome=acted" in result.stdout, result.stderr
 	assert state["item_comments_reads"] == 1
 	assert any(label == "ai:needs-human" for _, label in state["labels_added"])
 
@@ -2087,7 +2252,7 @@ def test_security_close_keeps_issue_open_and_extracts_first_finding_marker(tmp_p
 	item = dict(ISSUE, labels=ISSUE["labels"] + [{"name": "ai:security"}], body="<!-- ai:security-finding:abc-1 -->\n<!-- ai:security-finding:second -->")
 	result, state = _judge(tmp_path, item, comments=_terminal_markers(), verdict={"verdict": "close", "reason": "nothing left"},
 		NEEDS_HUMAN_DIGEST_ENABLED="false")
-	assert "verdict=close round=3 outcome=acted" in result.stdout, result.stderr
+	assert "verdict=close round=4 outcome=acted" in result.stdout, result.stderr
 	assert not any(fields.get("state") == "closed" for _, fields in state["patched"])
 	assert [label for _, label in state["labels_added"]] == ["ai:unblock-closed"]
 	assert any("stays open" in comment["body"] for comment in state["comments"])
@@ -2306,6 +2471,24 @@ def test_untrusted_project_head_never_binds_project(tmp_path: Path, head_repo: s
 	assert state["created"] == []
 	assert not any(comment["endpoint"] == "repos/o/r/issues/40/comments" for comment in state["comments"])
 	assert any(endpoint == "repos/o/r/pulls/7" and fields.get("state") == "closed" for endpoint, fields in state["patched"])
+
+
+@pytest.mark.parametrize(("head_repo", "head_ref", "context_ref", "routed"), [
+	("o/r", "ai/issue-9261", "ai/issue-9261", True),
+	("o/r", "feature/x", "feature/x", False),
+	("evil/r", "ai/issue-9261", "", False),
+])
+def test_pr_fixup_context_carries_the_trusted_head_ref(tmp_path: Path, head_repo: str, head_ref: str, context_ref: str, routed: bool) -> None:
+	"""#9938: the judge passes a trusted PR's head ref; the fix-up routes only ai/issue-<n>."""
+	pr = dict(ISSUE, pull_request={"url": "u"})
+	result, state = _judge(tmp_path, pr, verdict={"verdict": "descope", "reason": "r", "instructions": "drop it"},
+		FAKE_GH_PR_HEAD_REPO=head_repo, FAKE_GH_PR_HEAD_REF=head_ref)
+	assert result.returncode == 0, result.stderr
+	assert json.loads((tmp_path / "rt" / "context.json").read_text(encoding="utf-8"))["pr_head_ref"] == context_ref
+	bodies = [created["body"] for created in state["created"]]
+	assert any(f"- Integration branch: `{head_ref}`" in body for body in bodies) == routed
+	if not routed:
+		assert not any("Integration branch" in body for body in bodies)
 
 
 def test_pr_project_binding_accepts_same_repo_case_insensitively(tmp_path: Path) -> None:
@@ -2669,10 +2852,11 @@ def test_judge_closes_without_the_model_when_the_caps_are_spent(tmp_path: Path) 
 	comments = [
 		_comment(ledger.marker(7, "blocked", "0" * 12, "retry_budget", 1), "pipeline-bot", "2026-10-04T08:00:00Z"),
 		_comment(ledger.marker(7, "blocked", "1" * 12, "reissue", 2), "pipeline-bot", "2026-10-04T09:00:00Z"),
+		_comment(ledger.marker(7, "blocked", "2" * 12, "descope", 3), "pipeline-bot", "2026-10-04T10:00:00Z"),
 	]
 	result, state = _judge(tmp_path, ISSUE, comments=comments, MOCK_UNBLOCK_JUDGE_JSON="must not be read",
 		NEEDS_HUMAN_DIGEST_ENABLED="false")
-	assert "verdict=close round=3 outcome=acted" in result.stdout
+	assert "verdict=close round=4 outcome=acted" in result.stdout
 	assert any(label == "ai:unblock-closed" for _, label in state["labels_added"])
 	assert any(endpoint == "repos/o/r/issues/7" and fields.get("state") == "closed" for endpoint, fields in state["patched"])
 
@@ -2692,7 +2876,11 @@ def _support_with_fake_tg(tmp_path: Path) -> tuple[Path, Path]:
 			(support / "scripts" / source.name).symlink_to(source)
 	(support / "prompts").symlink_to(ROOT / "prompts")
 	(support / "scripts" / "tg_helpers.sh").write_text(
-		'tg_send_msg() { printf "%s|%s\\n" "$2" "$1" >> "$FAKE_TG_ALERTS"; }\n', encoding="utf-8",
+		# P6b: the needs-human alert checks tg_alert_configured before its claim
+		# and confirms the message id tg_send_msg prints.
+		'tg_alert_configured() { [ "${FAKE_TG_UNCONFIGURED:-}" != "true" ]; }\n'
+		'tg_send_msg() { printf "%s|%s\\n" "$2" "$1" >> "$FAKE_TG_ALERTS"; [ "${FAKE_TG_NO_ID:-}" = "true" ] || printf "4242"; }\n',
+		encoding="utf-8",
 	)
 	return support, tmp_path / "alerts.txt"
 
@@ -3009,15 +3197,89 @@ def test_needs_human_exhaustion_parks_in_the_digest_end_to_end(tmp_path: Path) -
 	comments = [
 		_comment(ledger.marker(7, "blocked", "0" * 12, "retry_budget", 1), "pipeline-bot", "2026-10-04T08:00:00Z"),
 		_comment(ledger.marker(7, "blocked", "1" * 12, "reissue", 2), "pipeline-bot", "2026-10-04T09:00:00Z"),
+		_comment(ledger.marker(7, "blocked", "2" * 12, "descope", 3), "pipeline-bot", "2026-10-04T10:00:00Z"),
 	]
 	result, state = _judge(tmp_path, ISSUE, comments=comments, MOCK_UNBLOCK_JUDGE_JSON="must not be read")
-	assert "verdict=close round=3 outcome=acted" in result.stdout, result.stdout + result.stderr
+	assert "verdict=close round=4 outcome=acted" in result.stdout, result.stdout + result.stderr
 	assert "NEEDS_HUMAN item=7 kind=issue reason=item_cap outcome=parked" in result.stderr
 	assert not any(fields.get("state") == "closed" for _, fields in state["patched"])
 	assert [label for _, label in state["labels_added"]] == ["ai:needs-human"]
 	digest = [fields for fields in state["created"] if fields.get("body", "").startswith("<!-- ai:needs-human:v1 -->")]
 	assert len(digest) == 1 and digest[0]["labels[]"] == "ai:operator-step"
 	assert "ai:needs-human-latch" not in digest[0]["body"]
+
+
+# --- At most one persisted CRITICAL alert attempt per parking (stuck-states P6b) ---
+
+
+def _park_alert_judge(tmp_path: Path, prior: list | None = None, **env_extra):
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	support, alerts = _support_with_fake_tg(tmp_path)
+	comments = [
+		_comment(ledger.marker(7, "blocked", "0" * 12, "retry_budget", 1), "pipeline-bot", "2026-10-04T08:00:00Z"),
+		_comment(ledger.marker(7, "blocked", "1" * 12, "reissue", 2), "pipeline-bot", "2026-10-04T09:00:00Z"),
+		_comment(ledger.marker(7, "blocked", "2" * 12, "descope", 3), "pipeline-bot", "2026-10-04T10:00:00Z"),
+	] + (prior or [])
+	result, state = _judge(tmp_path, ISSUE, comments=comments, MOCK_UNBLOCK_JUDGE_JSON="must not be read",
+		SUPPORT_DIR=str(support), FAKE_TG_ALERTS=str(alerts), **env_extra)
+	assert "verdict=close round=4 outcome=acted" in result.stdout, result.stdout + result.stderr
+	assert "op=needs_human issue=7 outcome=failed" not in result.stdout
+	lines = alerts.read_text(encoding="utf-8").splitlines() if alerts.exists() else []
+	pages = [line for line in lines if line.startswith("CRITICAL|Unblock judge parked #7")]
+	claims = [c for c in state["comments"] if "ai:unblock-park-alert:v1" in c["body"]]
+	confirms = [(endpoint, fields) for endpoint, fields in state["patched"] if endpoint.startswith("repos/o/r/issues/comments/")]
+	return result, pages, claims, confirms
+
+
+def test_needs_human_park_alert_claims_sends_once_and_confirms(tmp_path: Path) -> None:
+	result, pages, claims, confirms = _park_alert_judge(tmp_path)
+	assert len(pages) == 1, pages
+	assert len(claims) == 1 and claims[0]["endpoint"] == "repos/o/r/issues/7/comments"
+	# The fake applies the confirm PATCH, so the stored claim now reads confirmed.
+	assert claims[0]["body"].splitlines()[-1].startswith("<!-- ai:unblock-park-alert:v1 item=7 parked=")
+	assert len(confirms) == 1 and confirms[0][0] == f"repos/o/r/issues/comments/{claims[0]['id']}"
+	assert confirms[0][1]["body"].endswith(" state=confirmed message=4242 -->")
+	assert "NEEDS_HUMAN_ALERT item=7" in result.stderr and "outcome=confirmed" in result.stderr
+
+
+def test_needs_human_park_alert_skips_a_parking_already_attempted(tmp_path: Path) -> None:
+	prior = [dict(_comment("Needs-human alert attempt recorded.\n\n<!-- ai:unblock-park-alert:v1 item=7 parked=overflow state=attempted -->",
+		"pipeline-bot", "2026-10-04T11:00:00Z"), id=55)]
+	result, pages, claims, confirms = _park_alert_judge(tmp_path, prior)
+	assert pages == [] and claims == [] and confirms == []
+	assert "reason=already_attempted" in result.stderr
+
+
+def test_needs_human_park_alert_ignores_a_forged_claim(tmp_path: Path) -> None:
+	prior = [dict(_comment("<!-- ai:unblock-park-alert:v1 item=7 parked=overflow state=confirmed message=1 -->",
+		"mallory", "2026-10-04T11:00:00Z"), id=55)]
+	_, pages, claims, _ = _park_alert_judge(tmp_path, prior)
+	assert len(pages) == 1 and len(claims) == 1
+
+
+def test_needs_human_park_alert_claim_failure_never_pages_or_fails_the_op(tmp_path: Path) -> None:
+	result, pages, claims, confirms = _park_alert_judge(tmp_path, FAKE_GH_FAIL_PARK_ALERT="1")
+	assert pages == [] and claims == [] and confirms == []
+	assert "reason=claim_write_failed" in result.stderr
+
+
+def test_needs_human_park_alert_unconfigured_telegram_makes_no_claim(tmp_path: Path) -> None:
+	result, pages, claims, _ = _park_alert_judge(tmp_path, FAKE_TG_UNCONFIGURED="true")
+	assert pages == [] and claims == []
+	assert "outcome=skip reason=telegram_unconfigured" in result.stderr
+
+
+def test_needs_human_park_alert_send_without_id_is_not_confirmed_or_retried(tmp_path: Path) -> None:
+	result, pages, claims, confirms = _park_alert_judge(tmp_path, FAKE_TG_NO_ID="true")
+	assert len(pages) == 1 and len(claims) == 1 and confirms == []
+	assert "outcome=unconfirmed reason=send_failed_or_ambiguous" in result.stderr
+
+
+def test_needs_human_park_alert_confirm_failure_is_logged_without_a_resend(tmp_path: Path) -> None:
+	result, pages, claims, _ = _park_alert_judge(tmp_path, FAKE_GH_FAIL_PARK_CONFIRM="1")
+	assert len(pages) == 1 and len(claims) == 1
+	assert "reason=confirm_write_failed" in result.stderr
 
 
 # --- Protected-path operator handoff (#7060, UNBLOCK_PROTECTED_HANDOFF_ENABLED) ---
@@ -4008,7 +4270,7 @@ def _triage_support(tmp_path: Path) -> tuple[Path, Path]:
 	(support / "scripts" / "check_triage_resolution.py").write_text(
 		"import json, os, sys\n"
 		"open(os.environ['FAKE_TRIAGE_ARGS'], 'w').write(json.dumps(sys.argv[1:]))\n"
-		"print(json.dumps({'status': os.environ.get('FAKE_TRIAGE_STATUS', 'unverified')}))\n"
+		"print(json.dumps({'status': os.environ.get('FAKE_TRIAGE_STATUS', 'unverified'), 'issue': int(sys.argv[sys.argv.index('--issue-number') + 1])}))\n"
 		"sys.exit(int(os.environ.get('FAKE_TRIAGE_RC', '0')))\n",
 		encoding="utf-8",
 	)
@@ -5738,3 +6000,284 @@ def test_pr_check_green_ignores_a_cached_verdict_for_another_item(tmp_path: Path
 	result, _, calls = _green_judge(tmp_path, ISSUE, gate)
 	assert f"hold=pr_check_green ref={GREEN_REF} outcome=holding" in result.stdout, result.stdout
 	assert len(calls) == 1 and "--dry-run" in calls[0]
+
+
+# --- Chain depth cap (re-issue / follow-up / fix-up chains) ---
+
+_CHAIN_HEAL_TITLE = "Workflow heal: Internal: AI Review & Autofix [pr:9180] failed 1x"
+_CHAIN_ONE = f"Re-issue of #9190: {_CHAIN_HEAL_TITLE}"
+_CHAIN_TWO = f"Unblock descope for #9261: {_CHAIN_ONE}"
+_CHAIN_NOW = ledger._parse_time("2026-11-18T00:00:00Z")
+
+
+def test_chain_depth_counts_the_leading_chain_prefixes() -> None:
+	for module in (ledger, actions):
+		assert module.chain_depth("T") == 0 and module.chain_depth(None) == 0 and module.chain_depth("") == 0
+		assert module.chain_depth(_CHAIN_ONE) == 1 and module.chain_depth(_CHAIN_TWO) == 2
+		assert module.chain_depth("Follow-up to #3: Unblock operator step for #2: Unblock fix-up for #1: T") == 3
+		# Only a prefix counts, and only in the exact composed form.
+		assert module.chain_depth("Fix the Re-issue of #5: handling") == 0
+		assert module.chain_depth("Re-issue of #0: T") == 0 and module.chain_depth("re-issue of #5: T") == 0
+	assert actions._CHAIN_TITLE_PREFIX_RE.pattern == ledger.CHAIN_TITLE_PREFIX_PATTERN
+	assert ledger.MAX_CHAIN_DEPTH == 2
+	assert ledger.CHAIN_VERDICTS == ("reissue", "accept_with_followup", "descope", "operator_step")
+
+
+def test_chain_cap_takes_the_splitting_verdicts_off_the_menu() -> None:
+	# #9190 -> #9261 -> #9398: at depth 2 the judge may only continue on the item.
+	free = ledger.decide(7, "blocked", FP, [], None, _CHAIN_NOW, chain_title=_CHAIN_ONE)
+	assert free["chain_depth"] == 1 and free["chain_capped"] is False
+	assert set(ledger.CHAIN_VERDICTS) <= set(free["allowed"])
+	capped = ledger.decide(7, "blocked", FP, [], None, _CHAIN_NOW, chain_title=_CHAIN_TWO)
+	assert capped["chain_depth"] == 2 and capped["chain_capped"] is True and capped["terminal"] is False
+	assert not set(ledger.CHAIN_VERDICTS) & set(capped["allowed"])
+	assert set(capped["allowed"]) == set(free["allowed"]) - set(ledger.CHAIN_VERDICTS) and "retry_budget" in capped["allowed"]
+	# No title (the default) is depth 0: today's menu.
+	assert ledger.decide(7, "blocked", FP, [], None, _CHAIN_NOW)["allowed"] == ledger.decide(7, "blocked", FP, [], None, _CHAIN_NOW, chain_title="T")["allowed"]
+	# A splitting verdict the model returns anyway is refused by validate.
+	with pytest.raises(ledger.UsageError):
+		ledger.validate({"verdict": "reissue", "reason": "r", "instructions": "again"}, capped, "acme/app")
+
+
+def test_chain_capped_item_with_nothing_left_is_terminal_and_parks() -> None:
+	# A pull request has no auto_answer / override_guard: with the wait switch
+	# off only retry_budget is left at the cap, and once that is used the menu
+	# is empty, so the item is terminal and the existing park applies.
+	used = [{"item": 7, "round": 1, "fingerprint": FP, "verdict": "retry_budget", "stop": "blocked", "created_at": "2026-11-17T23:00:00Z"}]
+	capped = ledger.decide(7, "blocked", FP, used, None, _CHAIN_NOW, kind="pr", wait_enabled=False, chain_title=_CHAIN_TWO)
+	assert capped["terminal"] is True and capped["terminal_reason"] == "menu_exhausted" and capped["allowed"] == ["close"]
+	ops = actions.plan(_verdict("close", terminal_reason="menu_exhausted"), _ctx("pr", needs_human_digest=True))
+	assert ops == [{"op": "needs_human", "issue": 7, "kind": "pr", "stop": "blocked", "reason": "menu_exhausted"}]
+	# Below the cap the same history still offers the splitting verdicts.
+	assert ledger.decide(7, "blocked", FP, used, None, _CHAIN_NOW, kind="pr", wait_enabled=False, chain_title=_CHAIN_ONE)["terminal"] is False
+
+
+def test_chain_depth_survives_the_pr_hop_through_the_issue_title() -> None:
+	# PR #9283 ("AI implementation for issue #9261") implements a re-issue:
+	# the PR title has no prefix, the issue title it implements has one.
+	pr = _ctx("pr", title="AI implementation for issue #9261", chain_title=_CHAIN_ONE)
+	assert pr["chain_title"] == _CHAIN_ONE
+	for verdict, prefix in (
+		(_verdict("descope", instructions="drop it"), "Unblock descope for #7: "),
+		(_verdict("reissue", instructions="again"), "Re-issue of #7: "),
+		(_verdict("accept_with_followup", instructions="x"), "Follow-up to #7: "),
+	):
+		created = [op for op in actions.plan(verdict, pr) if op["op"] == "create_issue"]
+		assert len(created) == 1 and created[0]["title"] == prefix + _CHAIN_ONE and ledger.chain_depth(created[0]["title"]) == 2
+	# An ordinary issue title leaves the PR title in place (today's titles).
+	plain = _ctx("pr", title="AI implementation for issue #31", chain_title="Add a cache")
+	assert actions.plan(_verdict("reissue", instructions="x"), plain)[0]["title"] == "Re-issue of #7: AI implementation for issue #31"
+	# chain_title is read for a trusted PR only, and never for an issue.
+	assert _ctx("pr", chain_title=_CHAIN_ONE, pr_trusted=False)["chain_title"] is None
+	assert _ctx(chain_title=_CHAIN_ONE)["chain_title"] is None
+	assert _ctx("pr", chain_title="  ")["chain_title"] is None and _ctx("pr", chain_title=5)["chain_title"] is None
+
+
+def test_judge_sends_the_chain_title_to_the_ledger_and_the_planner() -> None:
+	script = (ROOT / "scripts" / "unblock_judge.sh").read_text(encoding="utf-8")
+	assert '[ "${pr_trusted}" = "true" ] && [[ "${head_ref}" =~ ^ai/issue-([1-9][0-9]*)$ ]]' in script
+	assert "chain_title: (if $chain_title == \"\" then null else $chain_title end)" in script
+	assert 'decide_args+=("--chain-title=$(' in script and '(.chain_title // .title // "")' in script
+	# The source-issue read is retried and truncated by codepoints, not bytes.
+	assert "chain_title=\"$(gh_retry gh api " in script and "--jq '(.title // \"\") | .[0:400]'" in script
+
+
+# #9659: a standalone check-triage issue planning found nothing to implement
+# for is noted once and waits for its check, instead of looping planning.
+TRIAGE_SUPERSEDED_MARKER = "<!-- ai:unblock-triage-superseded:v1 item=7 -->"
+TRIAGE_RETRY_VERDICT = {"verdict": "retry_budget", "reason": "r", "instructions": "i"}
+TRIAGE_WAIT_MARKER = "<!-- ai:unblock-wait:v1 item=7 reason=triage_superseded -->"
+TRIAGE_NOTE_ID = 9659
+
+
+def _triage_note(created_at: str = "2026-10-04T10:00:00Z") -> dict:
+	return dict(_comment("Planning found the fix already on the planning ref.\n\n" + TRIAGE_SUPERSEDED_MARKER + "\n", BOT, created_at), id=TRIAGE_NOTE_ID)
+
+
+def _assert_note_refreshed(state: dict) -> None:
+	# The held run re-writes the note so the scan's recent_verdict throttle
+	# (keyed on updatedAt) restarts instead of re-dispatching every tick.
+	refreshes = [fields for endpoint, fields in state["patched"] if endpoint == f"repos/o/r/issues/comments/{TRIAGE_NOTE_ID}"]
+	assert len(refreshes) == 1, state["patched"]
+	lines = refreshes[0]["body"].rstrip().splitlines()
+	assert lines[-1] == TRIAGE_WAIT_MARKER and lines[-2] == TRIAGE_SUPERSEDED_MARKER, lines
+
+
+def _scan_module():
+	scan_spec = importlib.util.spec_from_file_location("unblock_scan_9659_select", ROOT / "scripts" / "unblock_scan.py")
+	scan = importlib.util.module_from_spec(scan_spec)
+	scan_spec.loader.exec_module(scan)
+	return scan
+
+
+def _judge_triage_superseded(tmp_path: Path, item: dict = TRIAGE_ISSUE, comments: list | None = None, **env):
+	support, target = _triage_support(tmp_path)
+	if comments is None:
+		comments = [_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z")]
+	return _judge(tmp_path, item, comments=comments, verdict=TRIAGE_RETRY_VERDICT,
+		SUPPORT_DIR=str(support), TARGET_DIR=str(target), FAKE_TRIAGE_ARGS=str(tmp_path / "triage_args.json"), **env)
+
+
+@pytest.mark.parametrize("status", ["resolved", "already_resolved"])
+def test_resolved_nothing_to_implement_triage_issue_is_closed_by_the_gate_without_a_note(tmp_path: Path, status: str) -> None:
+	result, state = _judge_triage_superseded(tmp_path, FAKE_TRIAGE_STATUS=status)
+	assert f"op=triage_resolution outcome=closed status={status}" in result.stdout, result.stdout + result.stderr
+	assert "op=triage_superseded" not in result.stdout
+	assert state["comments"] == []
+
+
+def test_unverified_nothing_to_implement_triage_issue_is_noted_once_without_a_resume(tmp_path: Path) -> None:
+	result, state = _judge_triage_superseded(tmp_path, FAKE_TRIAGE_STATUS="unverified")
+	assert "op=triage_superseded outcome=noted reason=posted" in result.stdout, result.stdout + result.stderr
+	assert "outcome=acted" not in result.stdout
+	assert len(state["comments"]) == 1
+	body = state["comments"][0]["body"]
+	lines = body.rstrip().splitlines()
+	assert lines[-2:] == [TRIAGE_SUPERSEDED_MARKER, TRIAGE_WAIT_MARKER], lines
+	assert "already on the planning ref" in body and "/reclarify" in body
+	assert not any(comment["body"].startswith(("/answer", "/approved")) for comment in state["comments"])
+	assert not _closed_completed(state)
+	# The poller throttles the noted item instead of re-dispatching it every tick.
+	selection = _scan_module().select(
+		[{"number": 7, "labels": [{"name": "ai:blocked"}, {"name": "ai:check-triage"}], "updated_at": "2026-10-01T00:00:00Z"}],
+		{"7": {"labeled": [{"label": "ai:blocked", "created_at": "2026-10-01T00:00:00Z"}],
+			"comments": [{"login": BOT, "body": body, "created_at": "2026-10-04T10:00:00Z"}]}},
+		[], [], BOT, dt.datetime(2026, 10, 4, 12, tzinfo=dt.timezone.utc),
+		dt.timedelta(minutes=30), dt.timedelta(hours=6), dt.timedelta(minutes=60), 1)
+	assert selection["dispatch"] == [] and selection["skipped"].get("recent_verdict") == 1, selection
+
+
+def test_triage_superseded_note_is_not_posted_again_on_a_rerun(tmp_path: Path) -> None:
+	comments = [
+		_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z"),
+		_triage_note(),
+	]
+	result, state = _judge_triage_superseded(tmp_path, comments=comments, FAKE_TRIAGE_STATUS="unverified")
+	assert "op=triage_superseded outcome=noted reason=already_noted" in result.stdout, result.stdout + result.stderr
+	assert state["comments"] == []
+	assert "outcome=acted" not in result.stdout
+	_assert_note_refreshed(state)
+
+
+@pytest.mark.parametrize("status", ["not_triage", "disabled"])
+def test_terminal_gate_verdict_judges_as_usual_without_a_note(tmp_path: Path, status: str) -> None:
+	# The gate never closes a not_triage / disabled issue, so a note would hold it forever.
+	result, state = _judge_triage_superseded(tmp_path, FAKE_TRIAGE_STATUS=status)
+	assert "op=triage_superseded outcome=skip reason=gate_terminal" in result.stdout, result.stdout + result.stderr
+	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout
+	assert not any(TRIAGE_SUPERSEDED_MARKER in comment["body"] for comment in state["comments"])
+
+
+def test_expired_superseded_note_parks_the_item_instead_of_resuming(tmp_path: Path) -> None:
+	# #9659: the issue is never resumed with /answer or /approved; once the note
+	# outlives UNBLOCK_JUDGE_WAIT_MAX_DAYS a person decides via the digest.
+	comments = [
+		_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z"),
+		_comment("Planning found the fix already on the planning ref.\n\n" + TRIAGE_SUPERSEDED_MARKER + "\n", BOT, "2026-10-04T10:00:00Z"),
+	]
+	result, state = _judge_triage_superseded(tmp_path, comments=comments, FAKE_TRIAGE_STATUS="unverified",
+		MOCK_UNBLOCK_JUDGE_NOW="2026-10-19T10:00:00Z")
+	assert "op=triage_superseded outcome=parked reason=note_expired" in result.stdout, result.stdout + result.stderr
+	assert "outcome=acted" not in result.stdout
+	assert not any(comment["body"].startswith(("/answer", "/approved")) for comment in state["comments"])
+	assert not any(TRIAGE_SUPERSEDED_MARKER in comment["body"] for comment in state["comments"])
+	assert [label for _, label in state["labels_added"]] == ["ai:needs-human"]
+	assert any(fields.get("body", "").startswith("<!-- ai:needs-human:v1 -->") for fields in state["created"])
+	# The park is visible to scripts/unblock_scan.py: one trusted `close` round
+	# marker, so its parked skip stops the hourly redispatch.
+	assert len(state["comments"]) == 1, state["comments"]
+	last = state["comments"][0]["body"].rstrip().splitlines()[-1]
+	assert re.fullmatch(r"<!-- ai:unblock:v1 item=7 stop=blocked fingerprint=[0-9a-f]{12} verdict=close round=1 -->", last), last
+	scan_spec = importlib.util.spec_from_file_location("unblock_scan_9659", ROOT / "scripts" / "unblock_scan.py")
+	scan = importlib.util.module_from_spec(scan_spec)
+	scan_spec.loader.exec_module(scan)
+	assert scan._latest_verdict([{"login": BOT, "body": state["comments"][0]["body"], "created_at": "2026-10-19T10:00:00Z"}], BOT) == "close"
+
+
+def test_expired_superseded_note_does_not_record_a_second_close_marker(tmp_path: Path) -> None:
+	close = ledger.marker(7, "blocked", FP, "close", 1)
+	comments = [
+		_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z"),
+		_comment("Planning found the fix already on the planning ref.\n\n" + TRIAGE_SUPERSEDED_MARKER + "\n", BOT, "2026-10-04T10:00:00Z"),
+		_comment("## Unblock judge: `close` (round 1)\n\nReason: parked.\n\n" + close, BOT, "2026-10-18T10:00:00Z"),
+	]
+	result, state = _judge_triage_superseded(tmp_path, comments=comments, FAKE_TRIAGE_STATUS="unverified",
+		MOCK_UNBLOCK_JUDGE_NOW="2026-10-19T10:00:00Z")
+	assert "op=triage_superseded outcome=parked reason=note_expired" in result.stdout, result.stdout + result.stderr
+	assert state["comments"] == []
+
+
+def test_expired_superseded_note_holds_when_the_park_is_unavailable(tmp_path: Path) -> None:
+	comments = [
+		_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z"),
+		_triage_note(),
+	]
+	result, state = _judge_triage_superseded(tmp_path, comments=comments, FAKE_TRIAGE_STATUS="unverified",
+		MOCK_UNBLOCK_JUDGE_NOW="2026-10-19T10:00:00Z", NEEDS_HUMAN_DIGEST_ENABLED="false")
+	assert "op=triage_superseded outcome=held reason=park_failed" in result.stdout, result.stdout + result.stderr
+	assert "outcome=acted" not in result.stdout
+	assert state["comments"] == []
+	_assert_note_refreshed(state)
+
+
+def test_an_untrusted_superseded_marker_does_not_suppress_the_note(tmp_path: Path) -> None:
+	comments = [
+		_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z"),
+		_comment("fake\n\n" + TRIAGE_SUPERSEDED_MARKER, "someone-else", "2026-10-04T10:00:00Z"),
+	]
+	result, state = _judge_triage_superseded(tmp_path, comments=comments, FAKE_TRIAGE_STATUS="unverified")
+	assert "op=triage_superseded outcome=noted reason=posted" in result.stdout, result.stdout + result.stderr
+	assert len(state["comments"]) == 1
+
+
+@pytest.mark.parametrize("case", ["disabled", "other_reason", "untrusted_block", "newer_plan", "non_triage"])
+def test_triage_superseded_note_keeps_todays_judging_otherwise(tmp_path: Path, case: str) -> None:
+	item, env = TRIAGE_ISSUE, {"FAKE_TRIAGE_STATUS": "unverified"}
+	comments = [_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z")]
+	if case == "disabled":
+		env["UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED"] = " False "
+	elif case == "other_reason":
+		comments = [_comment(NOTHING_TO_IMPLEMENT_BLOCK.replace("work is already on the planning ref; nothing to implement", "missing API key"), BOT, "2026-10-04T09:00:00Z")]
+	elif case == "untrusted_block":
+		comments = [_comment(NOTHING_TO_IMPLEMENT_BLOCK, "someone-else", "2026-10-04T09:00:00Z")]
+	elif case == "newer_plan":
+		comments.append(_comment("Implementation Plan\n\n1. Do the thing.", BOT, "2026-10-04T10:00:00Z"))
+	else:
+		item = ISSUE
+	result, state = _judge_triage_superseded(tmp_path, item=item, comments=comments, **env)
+	assert "op=triage_superseded" not in result.stdout, result.stdout
+	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout, result.stdout + result.stderr
+	assert not any(TRIAGE_SUPERSEDED_MARKER in comment["body"] for comment in state["comments"])
+
+
+def test_triage_superseded_note_skips_when_the_gate_verdict_is_unavailable(tmp_path: Path) -> None:
+	result, state = _judge_triage_superseded(tmp_path, FAKE_TRIAGE_STATUS="", FAKE_TRIAGE_RC="1")
+	assert "op=triage_superseded outcome=skip reason=gate_unavailable" in result.stdout, result.stdout + result.stderr
+	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout
+	assert not any(TRIAGE_SUPERSEDED_MARKER in comment["body"] for comment in state["comments"])
+
+
+def test_triage_superseded_note_skips_orchestrator_items(tmp_path: Path) -> None:
+	item = dict(TRIAGE_ISSUE, body="- Tracking issue: #40", labels=TRIAGE_ISSUE["labels"] + [{"name": "ai:orchestrator-managed"}])
+	result, state = _judge_triage_superseded(tmp_path, item=item, FAKE_TRIAGE_STATUS="unverified",
+		FAKE_GH_PROJECT_COMMENTS=_project_comments_for_item(7))
+	assert "op=triage_superseded" not in result.stdout, result.stdout + result.stderr
+	assert not any(TRIAGE_SUPERSEDED_MARKER in comment["body"] for comment in state["comments"])
+
+
+def test_triage_superseded_note_skips_managed_items_without_a_tracking_line(tmp_path: Path) -> None:
+	# A managed check-triage issue whose `Tracking issue:` line is missing parses
+	# no tracking reference; it is still not treated as standalone.
+	item = dict(TRIAGE_ISSUE, labels=TRIAGE_ISSUE["labels"] + [{"name": "ai:orchestrator-managed"}])
+	result, state = _judge_triage_superseded(tmp_path, item=item, FAKE_TRIAGE_STATUS="unverified")
+	assert "op=triage_superseded" not in result.stdout, result.stdout + result.stderr
+	assert not any(TRIAGE_SUPERSEDED_MARKER in comment["body"] for comment in state["comments"])
+
+
+def test_unblock_workflow_forwards_triage_nothing_to_implement_gate_switch() -> None:
+	# #9659: the kill switch reaches scripts/unblock_judge.sh from a repository variable.
+	workflow = (ROOT / ".github/workflows/unblock_judge.yml").read_text(encoding="utf-8")
+	step = workflow[workflow.index("      - name: Judge the blocked item\n"):]
+	assert "\n          UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED: ${{ vars.UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED || 'true' }}\n" in step
+	script = (ROOT / "scripts" / "unblock_judge.sh").read_text(encoding="utf-8")
+	assert '"${UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED:-true}"' in script
