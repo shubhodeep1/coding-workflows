@@ -838,7 +838,10 @@ jobs:
                 && printf '%s' "${row}" | jq -e --arg l "${FINAL_CI_MERGE_PENDING_LABEL:-ai:final-ci-merge-pending}" '.head_gate_state == "success" and .auto_merge_enabled == true and ((.labels // []) | index($l) == null)' >/dev/null 2>&1; then
                 approved_final_ci="$(GH_TOKEN="${READ_TOKEN}" review_sweep_final_ci_state "${REPOSITORY}" "${approved_head_sha}" ci.yml)"
               fi
-              verdict_wait="$(review_sweep_verdict_wait_reason "${REPOSITORY}" "${row}" "${approved_final_ci}")"
+              # Not in $(...): the round cap below reads the change reason the
+              # helper leaves in REVIEW_SWEEP_VERDICT_CHANGE.
+              review_sweep_verdict_wait_reason "${REPOSITORY}" "${row}" "${approved_final_ci}" > "${RUNNER_TEMP:-/tmp}/sweep-verdict-wait.txt" || true
+              verdict_wait="$(cat "${RUNNER_TEMP:-/tmp}/sweep-verdict-wait.txt" 2>/dev/null || true)"
             fi
             if [ -n "${verdict_wait}" ]; then
               echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=verdict_waiting wait=${verdict_wait} head_ref=${head_ref} head_sha=${approved_head_sha}"
@@ -866,13 +869,15 @@ jobs:
             # gate success only right before a merge request, so its
             # lease_wait / checks_not_ready heads keep a pending gate, and
             # capping them would label a PR that may merge now (G4, #9515,
-            # #9839). Only an evaluated verdict (switch on, pr_checks_lib.sh
-            # loaded, strict parse) on a head whose check rollup is not
-            # failing is exempt; anything else stays capped.
+            # #9839). Only a verdict evaluated this tick whose change is the
+            # lease granted, or a merge state now clean/has_hooks/unstable,
+            # on a head whose check rollup is not failing is exempt
+            # (review_sweep_verdict_round_cap_exempt); base moves, unknown
+            # base answers, a merge state now dirty/behind/unknown and
+            # anything unevaluated stay capped (fail-open path).
             round_cap_verdict_exempt=false
-            if type review_sweep_verdict_wait_enabled >/dev/null 2>&1 && review_sweep_verdict_wait_enabled \
-              && type _pr_rb_judge_verdict_parse >/dev/null 2>&1 \
-              && _pr_rb_judge_verdict_parse "$(printf '%s' "${row}" | jq -r 'if ((.checks_rollup // "") | test("^(failure|error)$")) then "" else (.rb_judge_verdict // "") end' 2>/dev/null)"; then
+            if type review_sweep_verdict_round_cap_exempt >/dev/null 2>&1 \
+              && review_sweep_verdict_round_cap_exempt "${row}"; then
               round_cap_verdict_exempt=true
             fi
             if [ -n "${round_cap_counts_json}" ] && [ "${round_cap_verdict_exempt}" != "true" ] \

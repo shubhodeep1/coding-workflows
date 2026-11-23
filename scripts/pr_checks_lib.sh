@@ -3958,12 +3958,16 @@ _pr_final_ci_merge_pending_mark()
 # The judge records a deferred merge verdict as the commit status
 # `ai-review/rb-judge-verdict` on the judged head, description
 # `decision=<merge|merge_with_followup> wait=<lease_wait|blocked|checks_not_ready|auto_merge> base=<40 hex> ms=<merge state>`
-# (review_rb_judge_verdict_post_status, scripts/review_head_gate.sh).
+# (review_rb_judge_verdict_post_status, scripts/review_head_gate.sh), plus an
+# optional ` at=<YYYY-MM-DDTHH:MM:SSZ>` suffix that only a base refresh
+# writes: the time of the first verdict on the head, so the merge-wait alert
+# keeps measuring from the verdict, not from the refresh.
 #
 # _pr_rb_judge_verdict_parse <description>
 #   Strict parse. Sets PR_RB_VERDICT_DECISION, PR_RB_VERDICT_WAIT,
-#   PR_RB_VERDICT_BASE and PR_RB_VERDICT_MS and returns 0; a malformed
-#   description sets them empty and returns 1. Nothing is evaluated.
+#   PR_RB_VERDICT_BASE, PR_RB_VERDICT_MS and PR_RB_VERDICT_AT (empty without
+#   the suffix) and returns 0; a malformed description sets them empty and
+#   returns 1. Nothing is evaluated.
 #
 # _pr_rb_judge_verdict_waiting <pr> <head_sha> <base_ref> <cur_base_sha> <cur_merge_state> <labels_json> <auto_merge_enabled> <verdict_description> [<checks_state>]
 #   Returns 0 when nothing relevant changed since the verdict and the head is
@@ -3999,17 +4003,19 @@ _pr_final_ci_merge_pending_mark()
 #   the verdict (or since the last refresh). Needs PR_CHECKS_REPOSITORY or
 #   GITHUB_REPOSITORY for that.
 #
-# _pr_rb_judge_verdict_refresh_base <owner/repo> <head_sha>
+# _pr_rb_judge_verdict_refresh_base <owner/repo> <head_sha> [<verdict_created_at>]
 #   After _pr_rb_judge_verdict_waiting returned 0 with
 #   PR_RB_VERDICT_BASE_REFRESH set, re-posts ai-review/rb-judge-verdict
 #   (state success) on the head with the same decision, wait and merge state
 #   and the new base. One status POST per base move per waiting head, in
 #   place of the compare + PR-files reads on every later tick. A failed write
 #   only means the next evaluation reads the freshness again. The status's
-#   createdAt moves with it; the merge-wait alert therefore takes the
-#   earlier of it and the head-gate status time (scripts/review_sweep_head_gate.sh),
-#   so a refresh does not restart the wait age of a head with a head-gate
-#   status. Log:
+#   createdAt moves with it, so the re-post carries the first verdict time
+#   as ` at=<ts>`: the recorded `at` when the verdict already had one, else
+#   <verdict_created_at> (the createdAt of the status being replaced, UTC
+#   `YYYY-MM-DDTHH:MM:SSZ`). The merge-wait alert
+#   (scripts/review_sweep_head_gate.sh) measures from `at` when present, so
+#   a refresh does not restart the wait age. Log:
 #   RB_JUDGE_VERDICT_STATUS outcome=<base_refreshed|base_refresh_failed>.
 # ---------------------------------------------------------------------------
 _pr_rb_judge_verdict_parse()
@@ -4019,11 +4025,13 @@ _pr_rb_judge_verdict_parse()
 	PR_RB_VERDICT_WAIT=""
 	PR_RB_VERDICT_BASE=""
 	PR_RB_VERDICT_MS=""
-	if [[ "${verdict_desc}" =~ ^decision=(merge|merge_with_followup)\ wait=(lease_wait|blocked|checks_not_ready|auto_merge)\ base=([0-9a-f]{40})\ ms=(behind|blocked|clean|dirty|draft|has_hooks|unknown|unstable)$ ]]; then
+	PR_RB_VERDICT_AT=""
+	if [[ "${verdict_desc}" =~ ^decision=(merge|merge_with_followup)\ wait=(lease_wait|blocked|checks_not_ready|auto_merge)\ base=([0-9a-f]{40})\ ms=(behind|blocked|clean|dirty|draft|has_hooks|unknown|unstable)(\ at=([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z))?$ ]]; then
 		PR_RB_VERDICT_DECISION="${BASH_REMATCH[1]}"
 		PR_RB_VERDICT_WAIT="${BASH_REMATCH[2]}"
 		PR_RB_VERDICT_BASE="${BASH_REMATCH[3]}"
 		PR_RB_VERDICT_MS="${BASH_REMATCH[4]}"
+		PR_RB_VERDICT_AT="${BASH_REMATCH[6]}"
 		return 0
 	fi
 	return 1
@@ -4080,13 +4088,16 @@ _pr_rb_judge_verdict_waiting()
 
 _pr_rb_judge_verdict_refresh_base()
 {
-	local rf_repo="${1:-}" rf_head="${2:-}" rf_base="${PR_RB_VERDICT_BASE_REFRESH:-}"
+	local rf_repo="${1:-}" rf_head="${2:-}" rf_base="${PR_RB_VERDICT_BASE_REFRESH:-}" rf_at="${PR_RB_VERDICT_AT:-}"
 	local rf_fields="pr=${PR_NUMBER:-?} head_sha=${rf_head:-?} wait=${PR_RB_VERDICT_WAIT:-?}"
 	[ -n "${rf_base}" ] || return 0
 	PR_RB_VERDICT_BASE_REFRESH=""
+	# First verdict time: the recorded one, else the replaced status's createdAt.
+	[ -n "${rf_at}" ] || rf_at="${3:-}"
+	[[ "${rf_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || rf_at=""
 	if ! [[ "${rf_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || [[ "${rf_repo}" == *..* ]] \
 		|| ! [[ "${rf_head}" =~ ^[0-9a-f]{40}$ ]] \
-		|| ! _pr_rb_judge_verdict_parse "decision=${PR_RB_VERDICT_DECISION:-} wait=${PR_RB_VERDICT_WAIT:-} base=${rf_base} ms=${PR_RB_VERDICT_MS:-}"; then
+		|| ! _pr_rb_judge_verdict_parse "decision=${PR_RB_VERDICT_DECISION:-} wait=${PR_RB_VERDICT_WAIT:-} base=${rf_base} ms=${PR_RB_VERDICT_MS:-}${rf_at:+ at=${rf_at}}"; then
 		return 0
 	fi
 	local -a rf_api=(gh api)
@@ -4095,7 +4106,7 @@ _pr_rb_judge_verdict_refresh_base()
 	fi
 	if "${rf_api[@]}" -X POST "repos/${rf_repo}/statuses/${rf_head}" -f state=success \
 		-f context=ai-review/rb-judge-verdict \
-		-f "description=decision=${PR_RB_VERDICT_DECISION} wait=${PR_RB_VERDICT_WAIT} base=${PR_RB_VERDICT_BASE} ms=${PR_RB_VERDICT_MS}" >/dev/null 2>&1; then
+		-f "description=decision=${PR_RB_VERDICT_DECISION} wait=${PR_RB_VERDICT_WAIT} base=${PR_RB_VERDICT_BASE} ms=${PR_RB_VERDICT_MS}${PR_RB_VERDICT_AT:+ at=${PR_RB_VERDICT_AT}}" >/dev/null 2>&1; then
 		echo "RB_JUDGE_VERDICT_STATUS outcome=base_refreshed ${rf_fields}"
 	else
 		echo "RB_JUDGE_VERDICT_STATUS outcome=base_refresh_failed ${rf_fields}"

@@ -47,6 +47,10 @@ def _desc(decision: str = "merge", wait: str = "lease_wait", base: str = BASE, m
 	(_desc() + " extra", False),
 	("decision=merge wait=lease_wait base=" + BASE + " ms=blocked; rm -rf /", False),
 	("", False),
+	# The optional first-verdict time a base refresh carries (issue #9991).
+	(_desc() + " at=2026-11-23T09:00:00Z", True),
+	(_desc() + " at=2026-11-23 09:00:00", False),
+	(_desc() + " at=2026-11-23T09:00:00Z extra", False),
 ])
 def test_parse_is_strict(desc: str, ok: bool) -> None:
 	result = _bash(f'source "{PR_CHECKS_LIB}"; if _pr_rb_judge_verdict_parse {json.dumps(desc)}; then echo "OK $PR_RB_VERDICT_WAIT"; else echo "BAD[$PR_RB_VERDICT_WAIT]"; fi')
@@ -247,6 +251,34 @@ echo "---"; cat "$CALLS"
 	assert len(calls.splitlines()) == 1
 	assert f"repos/o/r/statuses/{HEAD}" in calls and "context=ai-review/rb-judge-verdict" in calls
 	assert f"description=decision=merge wait=lease_wait base={new_base} ms=blocked" in calls
+
+
+@pytest.mark.parametrize("desc, created_at, expected_at", [
+	# First refresh: the replaced status's createdAt becomes at=.
+	(_desc(), "2026-11-23T08:00:00Z", "2026-11-23T08:00:00Z"),
+	# Later refresh: the recorded first verdict time wins over createdAt.
+	(_desc() + " at=2026-11-23T07:00:00Z", "2026-11-23T08:00:00Z", "2026-11-23T07:00:00Z"),
+	# An unusable createdAt carries nothing.
+	(_desc(), "yesterday", ""),
+])
+def test_base_refresh_carries_the_first_verdict_time(desc: str, created_at: str, expected_at: str) -> None:
+	new_base = "c" * 40
+	script = f'''
+source "{PR_CHECKS_LIB}"
+CALLS=$(mktemp)
+gh() {{ printf '%s\\n' "$*" >> "$CALLS"; return 0; }}
+_pr_base_freshness() {{ PR_BASE_FRESHNESS_OUTCOME=clean; }}
+_pr_rb_judge_verdict_waiting 77 {HEAD} main {new_base} blocked '["ai:merge-lease-wait"]' false {json.dumps(desc)} pending
+PR_NUMBER=77 _pr_rb_judge_verdict_refresh_base o/r {HEAD} {json.dumps(created_at)}
+cat "$CALLS"
+'''
+	result = _bash(script)
+	assert result.returncode == 0, result.stderr
+	suffix = f" at={expected_at}" if expected_at else ""
+	assert f"description=decision=merge wait=lease_wait base={new_base} ms=blocked{suffix}\n" in result.stdout + "\n", result.stdout
+	# Within GitHub's 140-character status description limit at the longest.
+	longest = _desc(decision="merge_with_followup", wait="checks_not_ready", ms="has_hooks") + " at=2026-11-23T07:00:00Z"
+	assert len(longest) <= 140
 
 
 def test_base_refresh_without_a_pending_refresh_writes_nothing() -> None:

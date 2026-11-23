@@ -411,7 +411,9 @@ def test_moved_base_is_read_once_then_recorded(tmp_path: Path) -> None:
 	assert sum("/compare/" in " ".join(call) for call in _api_calls(tmp_path)) == 1
 	posts = [json.loads(line) for line in _lines(tmp_path, "statuses.log")]
 	assert len(posts) == 1 and "context=ai-review/rb-judge-verdict" in posts[0]
-	assert f"description=decision=merge wait=blocked base={new_base} ms=blocked" in posts[0]
+	desc = next(a for a in posts[0] if a.startswith("description="))
+	# The re-post carries the first verdict time, so the alert age does not restart.
+	assert re.fullmatch(rf"description=decision=merge wait=blocked base={new_base} ms=blocked at=\d{{4}}-\d\d-\d\dT\d\d:\d\d:\d\dZ", desc), desc
 	# Next tick reads the refreshed verdict: no freshness reads, no write.
 	_reset(tmp_path)
 	meta["29"]["verdict"] = _verdict(base=new_base)
@@ -460,11 +462,42 @@ def test_verdict_head_with_a_failing_rollup_stays_capped(tmp_path: Path) -> None
 	assert "AUTOFIX_SWEEP_SKIP pr=#33 reason=review_round_cap" in result.stdout
 
 
-def test_refreshed_verdict_keeps_the_wait_age_of_the_gate_status(tmp_path: Path) -> None:
-	# A base refresh re-posts the verdict (recent createdAt); the pending gate
-	# status from before the verdict keeps the age, so the alert still fires.
+def test_fresh_verdict_does_not_alert_on_an_older_gate_status(tmp_path: Path) -> None:
+	# The pending gate status predates the verdict (posted at push): the age
+	# is the verdict's own, so a fresh verdict raises no alert and keeps the
+	# once-per-head marker for a real stall.
 	meta = {"34": {"gate": "PENDING", "gate_at": _hours_ago(7), "verdict": _verdict(), "ms": "BLOCKED"}}
 	result = _run_sweep(tmp_path, [_pr(34)], meta)
 	assert result.returncode == 0, result.stderr
 	assert "reason=verdict_waiting wait=rb_judge_merge_deferred" in result.stdout
-	assert re.search(r"VERDICT_MERGE_WAIT_ALERT pr=#34 head_sha=\w+ age_hours=7 reason=rb_judge_merge_deferred blocker=\S+ outcome=sent", result.stdout), result.stdout
+	assert "VERDICT_MERGE_WAIT_ALERT" not in result.stdout
+	assert _lines(tmp_path, "statuses.log") == []
+
+
+def test_refreshed_verdict_keeps_its_first_verdict_time(tmp_path: Path) -> None:
+	# A base refresh re-posts the verdict (recent createdAt) with at=<first
+	# verdict time>; the alert measures from that, so it still fires.
+	meta = {"35": {"gate": "PENDING", "gate_at": _hours_ago(9), "verdict": _verdict() + " at=" + _hours_ago(7),
+		"verdict_at": _hours_ago(0.2), "ms": "BLOCKED"}}
+	result = _run_sweep(tmp_path, [_pr(35)], meta)
+	assert result.returncode == 0, result.stderr
+	assert "reason=verdict_waiting wait=rb_judge_merge_deferred" in result.stdout
+	assert re.search(r"VERDICT_MERGE_WAIT_ALERT pr=#35 head_sha=\w+ age_hours=7 reason=rb_judge_merge_deferred blocker=\S+ outcome=sent", result.stdout), result.stdout
+
+
+@pytest.mark.parametrize("change, capped", [
+	# Unknown base answer (freshness off): fail-open dispatch, still capped.
+	({"base": "c" * 40}, True),
+	# Merge state moved somewhere that cannot merge now: still capped.
+	({"ms": "DIRTY"}, True),
+	# Merge state moved to mergeable: like a head-gate success, not capped.
+	({"ms": "CLEAN"}, False),
+])
+def test_changed_verdict_round_cap_follows_the_change_reason(tmp_path: Path, change: dict, capped: bool) -> None:
+	meta = {"36": {"gate": "PENDING", "verdict": _verdict(), "ms": "BLOCKED", **change}}
+	result = _run_sweep(tmp_path, [_pr(36)], meta, rounds=_rounds(**{"36": 40}),
+		env={"MERGE_BASE_FRESHNESS_ENABLED": "false"})
+	assert result.returncode == 0, result.stderr
+	assert "reason=verdict_waiting" not in result.stdout
+	assert ("AUTOFIX_SWEEP_SKIP pr=#36 reason=review_round_cap" in result.stdout) is capped, result.stdout
+	assert (_dispatched(tmp_path) == ["36"]) is (not capped)

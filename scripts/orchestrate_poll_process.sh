@@ -30779,7 +30779,7 @@ _dispatch_integration_test_repair()
 declare -g STALL_RB_VERDICT_WAIT=''
 _stall_rb_judge_verdict_unchanged()
 {
-	local vu_pr="${1:-}" vu_fields vu_state="" vu_head="" vu_base_sha="" vu_base_ref="" vu_ms="" vu_auto="" vu_labels vu_status_json vu_desc vu_combined=""
+	local vu_pr="${1:-}" vu_fields vu_state="" vu_head="" vu_base_sha="" vu_base_ref="" vu_ms="" vu_auto="" vu_labels vu_status_json vu_desc vu_combined="" vu_desc_at=""
 	STALL_RB_VERDICT_WAIT=""
 	[[ "${vu_pr}" =~ ^[1-9][0-9]*$ ]] || return 1
 	case "$(printf '%s' "${VERDICT_WAIT_DISPATCH_SKIP_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
@@ -30808,10 +30808,13 @@ _stall_rb_judge_verdict_unchanged()
 		[(.statuses // [])[] | select(type == "object" and .context == "ai-review/rb-judge-verdict" and .state == "success") | (.description // "")][0] // ""' 2>/dev/null || true)"
 	[ -n "${vu_desc}" ] || return 1
 	vu_combined="$(printf '%s' "${vu_status_json}" | jq -r 'if type == "object" and (.state | type) == "string" then .state else "" end' 2>/dev/null || true)"
+	# The verdict's createdAt: carried as at=<ts> by a base refresh (alert age).
+	vu_desc_at="$(printf '%s' "${vu_status_json}" | jq -r '
+		[(.statuses // [])[] | select(type == "object" and .context == "ai-review/rb-judge-verdict" and .state == "success") | (.created_at // "")][0] // ""' 2>/dev/null || true)"
 	if PR_CHECKS_REPOSITORY="${GITHUB_REPOSITORY}" _pr_rb_judge_verdict_waiting "${vu_pr}" "${vu_head}" "${vu_base_ref}" "${vu_base_sha}" "${vu_ms}" "${vu_labels}" "${vu_auto}" "${vu_desc}" "${vu_combined}"; then
 		STALL_RB_VERDICT_WAIT="${PR_RB_VERDICT_WAIT_REASON}"
 		if [ -n "${PR_RB_VERDICT_BASE_REFRESH:-}" ] && type _pr_rb_judge_verdict_refresh_base >/dev/null 2>&1; then
-			PR_NUMBER="${vu_pr}" _pr_rb_judge_verdict_refresh_base "${GITHUB_REPOSITORY}" "${vu_head}" || true
+			PR_NUMBER="${vu_pr}" _pr_rb_judge_verdict_refresh_base "${GITHUB_REPOSITORY}" "${vu_head}" "${vu_desc_at}" || true
 		fi
 		return 0
 	fi

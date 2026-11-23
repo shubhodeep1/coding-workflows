@@ -221,6 +221,22 @@ review_sweep_final_ci_state()
 #           judge-verdict head whose base moved since the verdict.
 #   Fail-open: a row without the annotation (GraphQL read failed), an
 #           unparseable verdict or a missing library prints nothing.
+#   Globals: REVIEW_SWEEP_VERDICT_CHANGE (PR_RB_VERDICT_CHANGE when a judge
+#           verdict was evaluated and found changed, else empty) and
+#           REVIEW_SWEEP_VERDICT_CHANGE_PR (that row's PR number). A caller
+#           that reads them must not run this in a command substitution.
+#
+# review_sweep_verdict_round_cap_exempt <row json>
+#   Returns 0 when the last review_sweep_verdict_wait_reason call for this
+#   row found the judge merge verdict changed in a way that means the PR may
+#   merge now: `lease` (lease granted), or `checks` with the current merge
+#   state `clean`, `has_hooks` or `unstable`; in both cases only while the
+#   check rollup is not failure/error. The judge posts head-gate success only
+#   right before a merge request, so such a head is treated like a gate
+#   success and not round-capped. Every other answer (base, base_unknown,
+#   parse, disabled, auto_merge, a merge state that moved to dirty, behind,
+#   unknown or empty, no evaluation) returns 1: the round cap applies.
+#   No API call.
 #
 # review_sweep_verdict_merge_wait_alert <owner/repo> <row json> <reason> <dry run>
 #   G3 of #9991. For a skipped head whose verdict is at least
@@ -238,9 +254,10 @@ review_sweep_final_ci_state()
 #   per tick; a send that fails after the marker is not retried. At most
 #   REVIEW_SWEEP_VERDICT_ALERT_MAX_PER_TICK (5) alerts per tick.
 #   Verdict age: head_gate_created_at for a gate-success head, else the
-#   earlier of rb_judge_verdict_at and head_gate_created_at (a base refresh
-#   re-posts the verdict status and moves its createdAt; the pending gate
-#   status of a skipped head does not move). API per alert: the ruleset blocker reads (1 to 3),
+#   verdict's own time: the ` at=<ts>` a base refresh carries forward
+#   (_pr_rb_judge_verdict_refresh_base), or else rb_judge_verdict_at. The
+#   head-gate status time is not used there: it predates the verdict.
+#   API per alert: the ruleset blocker reads (1 to 3),
 #   the lease read (2) when the PR waits for the lease, 1 status POST.
 #   Log: VERDICT_MERGE_WAIT_ALERT pr=#<n> head_sha=<sha> age_hours=<n>
 #        reason=<wait> blocker=<summary|-> outcome=<sent|not_delivered|
@@ -250,6 +267,8 @@ review_sweep_final_ci_state()
 REVIEW_SWEEP_VERDICT_ALERT_MAX_PER_TICK=5
 REVIEW_SWEEP_VERDICT_ALERTS_SENT=0
 REVIEW_SWEEP_VERDICT_SEP=$'\x1f'
+REVIEW_SWEEP_VERDICT_CHANGE=""
+REVIEW_SWEEP_VERDICT_CHANGE_PR=""
 
 review_sweep_verdict_wait_enabled()
 {
@@ -262,7 +281,9 @@ review_sweep_verdict_wait_enabled()
 review_sweep_verdict_wait_reason()
 {
 	local vr_repo="${1:-}" vr_row="${2:-}" vr_final_ci="${3:-}" vr_fields vr_labels
-	local vr_pr="" vr_head="" vr_state="" vr_auto="" vr_base_sha="" vr_base_ref="" vr_ms="" vr_verdict="" vr_rollup=""
+	local vr_pr="" vr_head="" vr_state="" vr_auto="" vr_base_sha="" vr_base_ref="" vr_ms="" vr_verdict="" vr_rollup="" vr_verdict_at=""
+	REVIEW_SWEEP_VERDICT_CHANGE=""
+	REVIEW_SWEEP_VERDICT_CHANGE_PR=""
 	review_sweep_verdict_wait_enabled || return 0
 	if ! [[ "${vr_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || [[ "${vr_repo}" == *..* ]]; then
 		return 0
@@ -271,11 +292,12 @@ review_sweep_verdict_wait_reason()
 		if type == "object" then
 			[((.number // "") | tostring), (.head_sha // ""), (.head_gate_state // ""),
 				(if .auto_merge_enabled == true then "true" else "false" end),
-				(.base_sha // ""), (.base_ref // ""), (.merge_state_status // ""), (.rb_judge_verdict // ""), (.checks_rollup // "")]
+				(.base_sha // ""), (.base_ref // ""), (.merge_state_status // ""), (.rb_judge_verdict // ""), (.checks_rollup // ""),
+				(.rb_judge_verdict_at // "")]
 			| map(tostring | gsub("[[:cntrl:]]"; "")) | join($sep)
 		else empty end' 2>/dev/null)" || return 0
 	[ -n "${vr_fields}" ] || return 0
-	IFS="${REVIEW_SWEEP_VERDICT_SEP}" read -r vr_pr vr_head vr_state vr_auto vr_base_sha vr_base_ref vr_ms vr_verdict vr_rollup <<< "${vr_fields}" || true
+	IFS="${REVIEW_SWEEP_VERDICT_SEP}" read -r vr_pr vr_head vr_state vr_auto vr_base_sha vr_base_ref vr_ms vr_verdict vr_rollup vr_verdict_at <<< "${vr_fields}" || true
 	# No annotation for this row: the GraphQL read failed open.
 	[ -n "${vr_state}" ] || return 0
 	vr_labels="$(printf '%s' "${vr_row}" | jq -c '.labels // [] | if type == "array" then . else [] end' 2>/dev/null || echo '[]')"
@@ -302,17 +324,46 @@ review_sweep_verdict_wait_reason()
 		# reason, so the helper's log line goes to stderr).
 		if [ -n "${PR_RB_VERDICT_BASE_REFRESH:-}" ] && [ "${DRY_RUN:-false}" != "true" ] \
 			&& type _pr_rb_judge_verdict_refresh_base >/dev/null 2>&1; then
-			PR_NUMBER="${vr_pr}" _pr_rb_judge_verdict_refresh_base "${vr_repo}" "${vr_head}" >&2 || true
+			PR_NUMBER="${vr_pr}" _pr_rb_judge_verdict_refresh_base "${vr_repo}" "${vr_head}" "${vr_verdict_at}" >&2 || true
 		fi
 		echo "rb_judge_merge_deferred"
+	else
+		REVIEW_SWEEP_VERDICT_CHANGE="${PR_RB_VERDICT_CHANGE:-}"
+		REVIEW_SWEEP_VERDICT_CHANGE_PR="${vr_pr}"
 	fi
 	return 0
+}
+
+review_sweep_verdict_round_cap_exempt()
+{
+	local ce_fields ce_pr="" ce_ms="" ce_rollup=""
+	review_sweep_verdict_wait_enabled || return 1
+	[ -n "${REVIEW_SWEEP_VERDICT_CHANGE:-}" ] || return 1
+	ce_fields="$(printf '%s' "${1:-}" | jq -r --arg sep "${REVIEW_SWEEP_VERDICT_SEP}" '
+		if type == "object" then
+			[((.number // "") | tostring), (.merge_state_status // ""), (.checks_rollup // "")]
+			| map(tostring | gsub("[[:cntrl:]]"; "") | ascii_downcase) | join($sep)
+		else empty end' 2>/dev/null)" || return 1
+	IFS="${REVIEW_SWEEP_VERDICT_SEP}" read -r ce_pr ce_ms ce_rollup <<< "${ce_fields}" || true
+	[[ "${ce_pr}" =~ ^[1-9][0-9]*$ ]] && [ "${ce_pr}" = "${REVIEW_SWEEP_VERDICT_CHANGE_PR:-}" ] || return 1
+	case "${ce_rollup}" in
+		failure|error) return 1 ;;
+	esac
+	case "${REVIEW_SWEEP_VERDICT_CHANGE}" in
+		lease) return 0 ;;
+		checks)
+			case "${ce_ms}" in
+				clean|has_hooks|unstable) return 0 ;;
+			esac
+			;;
+	esac
+	return 1
 }
 
 review_sweep_verdict_merge_wait_alert()
 {
 	local ma_repo="${1:-}" ma_row="${2:-}" ma_reason="${3:-}" ma_dry="${4:-false}" ma_hours="${VERDICT_MERGE_WAIT_ALERT_HOURS:-6}"
-	local ma_fields ma_pr="" ma_head="" ma_state="" ma_gate_at="" ma_verdict_at="" ma_alerted="" ma_base_ref="" ma_lease=""
+	local ma_fields ma_pr="" ma_head="" ma_state="" ma_gate_at="" ma_verdict_at="" ma_alerted="" ma_base_ref="" ma_lease="" ma_verdict=""
 	local ma_since ma_since_epoch ma_now ma_age_h ma_blocker="" ma_desc ma_outcome="" ma_msg
 	[[ "${ma_hours}" =~ ^[0-9]{1,4}$ ]] || ma_hours=6
 	ma_hours=$((10#${ma_hours}))
@@ -324,22 +375,22 @@ review_sweep_verdict_merge_wait_alert()
 		if type == "object" then
 			[((.number // "") | tostring), (.head_sha // ""), (.head_gate_state // ""), (.head_gate_created_at // ""),
 				(.rb_judge_verdict_at // ""), (if .merge_wait_alerted == true then "true" else "false" end), (.base_ref // ""),
-				(if ((.labels // []) | type == "array" and index($lease) != null) then "true" else "false" end)]
+				(if ((.labels // []) | type == "array" and index($lease) != null) then "true" else "false" end),
+				(.rb_judge_verdict // "")]
 			| map(tostring | gsub("[[:cntrl:]]"; "")) | join($sep)
 		else empty end' 2>/dev/null)" || return 0
-	IFS="${REVIEW_SWEEP_VERDICT_SEP}" read -r ma_pr ma_head ma_state ma_gate_at ma_verdict_at ma_alerted ma_base_ref ma_lease <<< "${ma_fields}" || true
+	IFS="${REVIEW_SWEEP_VERDICT_SEP}" read -r ma_pr ma_head ma_state ma_gate_at ma_verdict_at ma_alerted ma_base_ref ma_lease ma_verdict <<< "${ma_fields}" || true
 	[[ "${ma_pr}" =~ ^[1-9][0-9]*$ ]] && [[ "${ma_head}" =~ ^[0-9a-f]{40}$ ]] || return 0
 	[ "${ma_alerted}" != "true" ] || return 0
 	if [ "${ma_state}" = "success" ]; then
 		ma_since="${ma_gate_at}"
 	else
+		# The verdict's own time. A base refresh re-posts the verdict (its
+		# createdAt moves) and carries the first verdict time as ` at=<ts>`;
+		# the head-gate status predates the verdict, so it is not used here.
 		ma_since="${ma_verdict_at}"
-		# A base refresh re-posts the verdict and moves its createdAt; the
-		# head-gate status (any state) is not re-posted while the head is
-		# skipped, so the earlier of the two keeps the wait age stable.
-		if [ -n "${ma_since}" ] && [[ "${ma_gate_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
-			&& [[ "${ma_gate_at}" < "${ma_since}" ]]; then
-			ma_since="${ma_gate_at}"
+		if [[ "${ma_verdict}" =~ \ at=([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)$ ]]; then
+			ma_since="${BASH_REMATCH[1]}"
 		fi
 	fi
 	[[ "${ma_since}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || return 0
@@ -387,7 +438,9 @@ review_sweep_verdict_merge_wait_alert()
 	fi
 	ma_desc="$(printf 'merge waiting %sh: %s' "${ma_age_h}" "${ma_blocker}" | cut -c1-140)"
 	# Marker first: a failed write sends nothing, so the alert never repeats.
-	if ! gh api -X POST "repos/${ma_repo}/statuses/${ma_head}" -f state=success \
+	local -a ma_api=(gh api)
+	type gh_retry >/dev/null 2>&1 && ma_api=(gh_retry gh api)
+	if ! "${ma_api[@]}" -X POST "repos/${ma_repo}/statuses/${ma_head}" -f state=success \
 		-f context=ai-review/merge-wait-alert -f "description=${ma_desc}" >/dev/null 2>&1; then
 		echo "${ma_log} outcome=marker_write_failed"
 		return 0
