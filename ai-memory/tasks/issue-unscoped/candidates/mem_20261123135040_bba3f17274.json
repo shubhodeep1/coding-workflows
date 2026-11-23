@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Commit statuses are read once per head SHA per invocation, unless a status is still `pending`.\" Re-read them only while a relevant status is pending, or when the head SHA changes.\n  expected_change_site: `scripts/pr_checks_lib.sh`, `_pr_checks_completed` status memo\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: At lines 505-515, the memo is set only when a matching `ai-review/head-gate` status exists and is not pending. When no matching status exists, the code clears the memo, so each poll reads statuses again even though no status is pending. The PR documents this extra absent-status exception, but the linked issue does not specify it (reviewer severity: NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cCommit statuses are read once per head SHA per invocation, unless a status is still `pending`.\u201d Re-read them only while a relevant status is pending, or when the head SHA changes.\n  Expected change site: `scripts/pr_checks_lib.sh`, `_pr_checks_completed` status memo.\n  Evidence of absence: At lines 505-515, the memo is set only when a matching `ai-review/head-gate` status exists and is not pending. When no matching status exists, the code clears the memo, so each poll reads statuses again despite no pending status. The PR documents this additional absent-status exception, but the linked issue does not specify it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "226d2df64d5cce74c5672f4ff917fd22b02b361ddf4591c0e0023ce950aae4ab",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9933,
+    "run_id": "45167794460",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45167794460",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123135040_bba3f17274",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9933,
+    "run_id": "45167794460"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-23T13:50:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
