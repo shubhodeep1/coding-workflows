@@ -29,6 +29,14 @@ WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 # so only `tests/test_*.sh` files can need one.
 UNWIRED_ALLOWLIST: dict[str, str] = {}
 
+# Former allowlist entry, kept as a record (stuck-states P9b, Refs #8291). The
+# catch-all now runs this file directly, so it is no longer in the allowlist;
+# its cases also still run through the file named in the reason:
+#	"tests/test_clarify_blocked_verify.py": (
+#		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
+#		"through tests/test_plan_clarify_blocked_output.py, which collects them"
+#	),
+
 # The catch-all (merge-base sync churn, 2026-11-17). `tests-system-python` in
 # ci.yml collects the whole `tests/` tree with pytest and runs every collected
 # function, so a `tests/test_*.py` file runs in CI without being named in any
