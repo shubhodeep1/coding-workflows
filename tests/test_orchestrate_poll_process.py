@@ -16865,6 +16865,10 @@ def _managed_held_pr_run(phase: str, recovery_count: int, pr_extra: dict, **extr
 		"title": "AI implementation for issue #10",
 	}
 	pr.update(pr_extra)
+	# Switch-off parity: the `skip` close-out (close_linked_pr, then the issue
+	# close) only runs with the fingerprint breaker off; with the default
+	# (`true`) exhaustion escalates to ai:needs-human and never reaches it.
+	extra.setdefault("env_overrides", {"STALL_FINGERPRINT_BREAKER_ENABLED": "false"})
 	return _run_poller(
 		state=state,
 		enable_validation="false",
@@ -16973,6 +16977,9 @@ def _standalone_exhausted_run(pr_extra: dict, **extra) -> dict:
 		"title": "AI implementation for issue #501",
 	}
 	pr.update(pr_extra)
+	# Switch-off parity: the exhausted close-out only runs with the
+	# fingerprint breaker off (the default escalates to ai:needs-human).
+	extra.setdefault("env_overrides", {"STALL_FINGERPRINT_BREAKER_ENABLED": "false"})
 	return _run_poller(
 		state=_base_state(status="complete"),
 		enable_validation="false",
