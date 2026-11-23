@@ -163,8 +163,9 @@ chatgpt_accounts=0 chatgpt_alerts=0"
 	local retry_hours defer_now defer_hour defer_start defer_end
 	retry_hours="${CLAUDE_POOL_DAILY_USAGE_RETRY_HOURS:-2}"
 	# The length bound runs before any arithmetic, so an oversized digit string
-	# cannot wrap to a negative number and skip the fallback.
-	if ! [[ "${retry_hours}" =~ ^[0-9]{1,2}$ ]] || [ "$((10#${retry_hours}))" -gt 23 ]; then
+	# cannot wrap to a negative number and skip the fallback. Leading zeros are
+	# accepted, as in daily_usage_start_hour, so 003 means 3.
+	if ! [[ "${retry_hours}" =~ ^0*[0-9]{1,2}$ ]] || [ "$((10#${retry_hours}))" -gt 23 ]; then
 		echo "::warning::CLAUDE_POOL_DAILY_USAGE op=send reason=retry_hours_invalid; using 2"
 		retry_hours=2
 	fi

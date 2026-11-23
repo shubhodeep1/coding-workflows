@@ -337,6 +337,18 @@ def test_send_invalid_retry_hours_falls_back_to_two(env: dict, retry_hours: str)
 	assert _outputs(env) == {"sent": "true", "deferred": "false"}
 
 
+def test_send_zero_padded_retry_hours_keeps_its_value(env: dict) -> None:
+	# 003 means 3 hours, like a zero-padded CLAUDE_POOL_DAILY_USAGE_HOUR_UTC, not the fallback 2.
+	result = _run(
+		env, "send", [], CLAUDE_POOL_REASON="broker_refused_workflow_sha_unverifiable",
+		CLAUDE_POOL_DAILY_USAGE_HOUR_UTC="0", CLAUDE_POOL_DAILY_USAGE_RETRY_HOURS="003",
+		CLAUDE_POOL_DAILY_USAGE_NOW=_epoch("2026-11-23T02:30"),
+	)
+	assert "retry_hours_invalid" not in result.stdout
+	assert "outcome=deferred" in result.stdout
+	assert _outputs(env) == {"sent": "false", "deferred": "true"}
+
+
 def test_unknown_mode_never_fails(env: dict) -> None:
 	result = _run(env, "bogus")
 	assert result.returncode == 0
