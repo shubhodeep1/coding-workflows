@@ -16,7 +16,9 @@ runs {sha: [workflow runs]} (actions/runs?head_sha=), check_runs {sha: [check-ru
 (commits/<sha>/check-runs), fail ["substring", ...] (any call whose joined
 argv contains one fails), move_ref_on_patch {ref: sha} (simulates a peer
 winning the race: applied before the first PATCH of that ref; a list of SHAs
-is applied one per PATCH), graphql {..}.
+is applied one per PATCH), graphql {..}, active_runs [workflow runs]
+(actions/runs?status=<s> returns those whose status is <s>; issue #9983),
+default_branch "main" (GET repos/<o>/<r>).
 """
 
 from __future__ import annotations
@@ -120,6 +122,9 @@ def main() -> None:
 		return
 	if path == "graphql":
 		emit(state.get("graphql", {"data": {"repository": {"pullRequest": {"closingIssuesReferences": {"nodes": []}}}}}), jq_filter)
+		return
+	if len(parts) == 3 and parts[0] == "repos":
+		emit({"default_branch": state.get("default_branch", "main")}, jq_filter)
 		return
 	# repos/o/r/...
 	rest = "/".join(parts[3:])
@@ -245,6 +250,8 @@ def main() -> None:
 	if parts[3:5] == ["actions", "runs"] or (len(parts) > 4 and parts[3] == "actions"):
 		run_sha = (query.get("head_sha") or [""])[0]
 		runs = state.get("runs", {}).get(run_sha, []) if parts[3:5] == ["actions", "runs"] else []
+		if parts[3:5] == ["actions", "runs"] and "status" in query:
+			runs = [r for r in state.get("active_runs", []) if r.get("status") == query["status"][0]]
 		emit({"total_count": len(runs), "workflow_runs": runs}, jq_filter)
 		return
 	if parts[3:4] == ["check-runs"] or (len(parts) > 5 and parts[5] == "check-runs"):
