@@ -1063,7 +1063,7 @@ def test_resolve_checkout_ref_ignores_prior_pr_baseline_branch_when_present() ->
 				- Type: review-blocked-reissue
 				- prior_pr_baseline_branch: {baseline_branch}
 				- files_touched:
-				  - src/app.py
+				\x20\x20- src/app.py
 				"""
 			),
 			default_checkout_ref="orchestrator/project-829",
@@ -2930,7 +2930,7 @@ def test_destructive_snapshot_upload_wiring() -> None:
 	upload = _step_block_text("Upload destructive-rejection snapshot")
 	assert "id: handle_guard_block" in handler
 	assert "always() && steps.handle_guard_block.outputs.rejection_snapshot == 'true'" in upload
-	assert "uses: actions/upload-artifact@v6" in upload
+	assert "uses: actions/upload-artifact@v7" in upload
 	assert "name: destructive-rejection-issue-${{ env.ISSUE_NUMBER }}" in upload
 	assert "path: ${{ env.RUNTIME_DIR }}/destructive_rejection/destructive_rejection.json" in upload
 	assert "retention-days: 30" in upload and "continue-on-error: true" in upload
@@ -5696,10 +5696,10 @@ def test_validator_offending_bytes_redacts_secrets() -> None:
 
 	Two layered guards (per Copilot review):
 	(a) Path denylist: skip the dump for files whose names match
-	    common secret-bearing patterns (.env, *secret*, *.pem, ...).
+		common secret-bearing patterns (.env, *secret*, *.pem, ...).
 	(b) Per-line redaction: replace lines whose key contains
-	    secret-like keywords (token/password/api_key/...) or whose
-	    value contains a long opaque token with a redaction marker.
+		secret-like keywords (token/password/api_key/...) or whose
+		value contains a long opaque token with a redaction marker.
 	"""
 	with tempfile.TemporaryDirectory(prefix="test_validator_redact_") as td:
 		repo_dir = Path(td)

@@ -342,7 +342,7 @@ def test_analyze_report_artifact_upload_is_always_gated() -> None:
 	step = wf.split("      - name: Upload workflow log analysis report\n", 1)[1].split("\n      - name: ", 1)[0]
 	assert "if: always() && (steps.analyze.outputs.report_file != '' || steps.analyze.outputs.held_report_file != '')" in step
 	assert "continue-on-error: true" in step
-	assert "uses: actions/upload-artifact@v6" in step
+	assert "uses: actions/upload-artifact@v7" in step
 	assert "name: workflow-log-analysis-report" in step
 	assert "path: ${{ steps.analyze.outputs.report_file || steps.analyze.outputs.held_report_file }}" in step
 	assert "if-no-files-found: warn" in step
