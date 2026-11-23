@@ -9,6 +9,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -179,7 +180,7 @@ def test_cli_accepts_the_raw_api_shapes(tmp_path: Path) -> None:
 	(tmp_path / "runs.json").write_text(json.dumps({"workflow_runs": []}), encoding="utf-8")
 	result = subprocess.run(
 		[sys.executable, str(SCRIPT), "select", "--search-file", str(tmp_path / "search.json"), "--details-file", str(tmp_path / "details.json"),
-		 "--runs-file", str(tmp_path / "runs.json"), "--trusted-login", BOT, "--now", "2026-10-04T12:00:00Z"],
+		"--runs-file", str(tmp_path / "runs.json"), "--trusted-login", BOT, "--now", "2026-10-04T12:00:00Z"],
 		capture_output=True, text=True, check=False,
 	)
 	assert result.returncode == 0, result.stdout
@@ -929,3 +930,148 @@ def test_cli_escalated_recheck_flag(tmp_path: Path) -> None:
 	off = subprocess.run(base + ["--escalated-recheck-hours", "0"], capture_output=True, text=True, check=False)
 	assert json.loads(off.stdout)["dispatch"] == [{"item": 77, "kind": "issue"}]
 	assert subprocess.run(base + ["--escalated-recheck-hours", "-1"], capture_output=True, text=True, check=False).returncode == 1
+
+
+def test_wedged_queued_judge_run_no_longer_holds_the_scan(capsys) -> None:
+	"""Issue #9473: a queued judge run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is ignored."""
+	search = [_item(1, ["ai:blocked"]), _item(2, ["ai:blocked"])]
+	details = {str(n): _details("ai:blocked", 30) for n in (1, 2)}
+	wedged = {"id": 43095142301, "display_title": "Unblock judge #1", "status": "queued", "created_at": _iso(25),
+		"path": ".github/workflows/unblock_judge.yml"}
+	assert scan._busy_items([wedged], NOW, dt.timedelta(minutes=60)) == set()
+	result = _select(search, details, [wedged])
+	assert result["dispatch"] == [{"item": 1, "kind": "issue"}]
+	assert "judge_running" not in result["skipped"]
+	err = capsys.readouterr().err
+	assert "ZOMBIE_RUN_IGNORED run=43095142301 workflow=.github/workflows/unblock_judge.yml age_h=25 guard=unblock_scan_busy" in err
+	assert "guard=unblock_scan_active_judge" in err
+
+
+def test_fresh_queued_and_in_progress_judge_runs_still_hold_the_scan() -> None:
+	search = [_item(1, ["ai:blocked"]), _item(2, ["ai:blocked"]), _item(3, ["ai:blocked"])]
+	details = {str(n): _details("ai:blocked", 30) for n in (1, 2, 3)}
+	runs = [
+		{"id": 1, "display_title": "Unblock judge #1", "status": "queued", "created_at": _iso(25)},
+		{"id": 2, "display_title": "Unblock judge #2", "status": "queued", "created_at": _iso(23)},
+		{"id": 3, "display_title": "Unblock judge #3", "status": "in_progress", "created_at": _iso(100)},
+	]
+	assert scan._busy_items(runs, NOW, dt.timedelta(minutes=60)) == {2, 3}
+	result = _select(search, details, runs)
+	assert result["dispatch"] == []
+	assert "judge_running" in result["skipped"]
+
+
+def test_wedged_queued_run_stays_ignored_under_a_long_inflight_window() -> None:
+	"""Issue #9473: an inflight window above 24h must not re-add a wedged queued run."""
+	window = dt.timedelta(minutes=2880)
+	wedged = {"id": 11, "display_title": "Unblock judge #6", "status": "queued", "created_at": _iso(25)}
+	assert scan._busy_items([wedged], NOW, window) == set()
+	finished = {"id": 12, "display_title": "Unblock judge #7", "status": "completed", "conclusion": "success",
+		"created_at": _iso(25)}
+	assert scan._busy_items([finished], NOW, window) == {7}
+
+
+def test_zombie_filter_can_be_disabled(monkeypatch) -> None:
+	# Load first so the lazy load cannot overwrite the patched hours, and so
+	# teardown restores the real loaded value for later tests.
+	scan._zombie_lib()
+	monkeypatch.setitem(scan._ZOMBIE_LIB_STATE, "hours", 0)
+	wedged = {"id": 9, "display_title": "Unblock judge #4", "status": "queued", "created_at": _iso(200)}
+	assert scan._busy_items([wedged], NOW, dt.timedelta(minutes=60)) == {4}
+
+
+def test_missing_orchestrate_lib_sibling_keeps_queued_runs_active(tmp_path: Path) -> None:
+	scripts = Path(SCRIPT).parent
+	for name in ("unblock_scan.py", "unblock_ledger.py"):
+		(tmp_path / name).write_text((scripts / name).read_text(encoding="utf-8"), encoding="utf-8")
+	spec = importlib.util.spec_from_file_location("unblock_scan_no_lib", tmp_path / "unblock_scan.py")
+	isolated = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(isolated)
+	wedged = {"id": 9, "display_title": "Unblock judge #5", "status": "queued", "created_at": _iso(200)}
+	assert isolated._busy_items([wedged], NOW, dt.timedelta(minutes=60)) == {5}
+	assert isolated._zombie_lib() is None
+
+
+# --- E2E fixture issues (#9782: the clarify negative test is blocked by design) ---
+
+def _titled(number: int, title: str) -> dict:
+	return dict(_item(number, ["ai:blocked"]), title=title)
+
+
+def test_e2e_titled_items_are_skipped_and_the_flag_restores_dispatch(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+	monkeypatch.delenv("UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED", raising=False)
+	e2e = [_titled(9782, "[E2E Clarify Negative Test] Make it better")]
+	details = {"9782": _details("ai:blocked", 8), "5": _details("ai:blocked", 8)}
+	result = _select(e2e, details)
+	assert result["dispatch"] == [] and result["skipped"] == {"e2e_test_item": 1}
+	# A normal blocked issue is still dispatched.
+	assert _select([_titled(5, "Add a retry to the merge probe")], details)["dispatch"] == [{"item": 5, "kind": "issue"}]
+	# The title is read from the details entry when the search item has none.
+	from_details = {"9782": dict(_details("ai:blocked", 8), title="[e2e smoke test] fixture")}
+	assert _select([_item(9782, ["ai:blocked"])], from_details)["skipped"] == {"e2e_test_item": 1}
+	# A missing title never skips.
+	assert _select([_item(9782, ["ai:blocked"])], details)["dispatch"] == [{"item": 9782, "kind": "issue"}]
+	# `TRUE` and empty keep the skip on.
+	for value in ("TRUE", ""):
+		monkeypatch.setenv("UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED", value)
+		assert _select(e2e, details)["skipped"] == {"e2e_test_item": 1}, value
+	# `false` turns it off: the E2E issue is dispatched again.
+	monkeypatch.setenv("UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED", "false")
+	assert _select(e2e, details)["dispatch"] == [{"item": 9782, "kind": "issue"}]
+	assert "warning=invalid_flag" not in capsys.readouterr().err
+	# Any other value also turns it off and warns once on stderr.
+	monkeypatch.setenv("UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED", "bogus")
+	assert _select(e2e + [_titled(5, "[E2E Smoke Test] x")], details)["dispatch"] == [{"item": 5, "kind": "issue"}]
+	err = capsys.readouterr().err
+	assert err.count("UNBLOCK_SCAN warning=invalid_flag name=UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED") == 1
+	assert "e2e_skip=off" in err
+
+
+def test_e2e_title_pattern_matches_the_heal_smoke_pattern() -> None:
+	heal = (ROOT / "scripts" / "workflow_failure_heal.py").read_text(encoding="utf-8")
+	found = re.search(r'^_SMOKE_TITLE_RE = re\.compile\(r"(?P<pattern>[^"]+)", re\.IGNORECASE\)$', heal, re.MULTILINE)
+	assert found, "_SMOKE_TITLE_RE not found in scripts/workflow_failure_heal.py"
+	assert scan.E2E_TEST_TITLE_RE.pattern == found.group("pattern")
+	assert scan.E2E_TEST_TITLE_RE.flags & re.IGNORECASE
+	for title in ("[E2E Smoke Test] a", "[E2E Orchestrate Smoke] b", "[e2e clarify negative test] c"):
+		assert scan.E2E_TEST_TITLE_RE.search(title), title
+	assert not scan.E2E_TEST_TITLE_RE.search("[E2E Smoke Tests] a")
+	assert not scan.E2E_TEST_TITLE_RE.search("Fix the E2E smoke test")
+
+
+def test_poller_search_projection_carries_the_title() -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	body = text[text.index("run_unblock_scan() {"):text.index("\n}\n", text.index("run_unblock_scan() {"))]
+	assert "--jq '[.items[]? | {number, title, labels: [.labels[]?.name]," in body
+	# The details fallback (`_item_title`) needs `title` in the batched GraphQL query and its jq step.
+	assert re.search(r"\.\.\. on Issue \{\s*title\s", body), "Issue fragment lacks title"
+	assert re.search(r"\.\.\. on PullRequest \{\s*title\s", body), "PullRequest fragment lacks title"
+	assert "title: (.value.title // null)," in body
+
+
+# --- issue #3576: the security-audit tracker is not a work item ---------------
+
+def test_security_audit_tracker_is_skipped_unless_failed() -> None:
+	search = [_item(3576, ["ai:blocked", "ai:security-audit"]), _item(5, ["ai:blocked"])]
+	details = {"3576": _details("ai:blocked", 10), "5": _details("ai:blocked", 5)}
+	result = _select(search, details)
+	assert result["dispatch"] == [{"item": 5, "kind": "issue"}]
+	assert result["skipped"]["security_audit_tracker"] == 1
+	# A failed project that also carries the label is still judged.
+	failed = _select([_item(3576, ["ai:blocked", "ai:security-audit"])], {"3576": _details("ai:blocked", 10)}, failed=[3576])
+	assert failed["dispatch"] == [{"item": 3576, "kind": "project"}]
+	assert "security_audit_tracker" not in failed["skipped"]
+
+
+def test_security_audit_tracker_skip_honours_kill_switch(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setenv("SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED", "false")
+	result = _select([_item(3576, ["ai:blocked", "ai:security-audit"])], {"3576": _details("ai:blocked", 10)})
+	assert result["dispatch"] == [{"item": 3576, "kind": "issue"}]
+	assert "security_audit_tracker" not in result["skipped"]
+	for off_value in ("0", "no", "OFF"):
+		monkeypatch.setenv("SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED", off_value)
+		off = _select([_item(3576, ["ai:blocked", "ai:security-audit"])], {"3576": _details("ai:blocked", 10)})
+		assert off["dispatch"] == [{"item": 3576, "kind": "issue"}], off_value
+	monkeypatch.setenv("SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED", "")
+	on = _select([_item(3576, ["ai:blocked", "ai:security-audit"])], {"3576": _details("ai:blocked", 10)})
+	assert on["skipped"]["security_audit_tracker"] == 1

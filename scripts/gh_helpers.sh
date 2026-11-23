@@ -3621,11 +3621,22 @@ autofix_retrigger_has_inflight_peer()
 	# running one of the review/autofix workflow files. Match by
 	# workflow file path so renamed jobs in consumer repos still count
 	# as peers. The first matched run in API order is surfaced in logs.
-	local peer_info
-	if ! peer_info=$(printf '%s' "${response}" | jq -r --arg current "${current_run_id}" '
+	local peer_info peer_zq_cutoff peer_zq_def
+	# Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is
+	# wedged (zero jobs, cannot be cancelled) and is not a peer.
+	peer_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+	[[ "${peer_zq_cutoff}" =~ ^[0-9]+$ ]] || peer_zq_cutoff=0
+	peer_zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
+	if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+		# Log only runs this guard would otherwise count: review-family
+		# workflow paths, never the current run.
+		zombie_queued_log_ignored autofix_inflight_peer "${peer_zq_cutoff}" <<< "$(printf '%s' "${response}" | jq -c --arg current "${current_run_id}" '[.workflow_runs[]? | select(type == "object" and ((.id | tostring) != $current) and ((.path // "") | tostring | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$")))]' 2>/dev/null || echo '[]')"
+	fi
+	if ! peer_info=$(printf '%s' "${response}" | jq -r --arg current "${current_run_id}" --argjson zq_cutoff "${peer_zq_cutoff}" "${peer_zq_def}"'
 		[
 			.workflow_runs[]?
 			| select(.status == "queued" or .status == "pending" or .status == "in_progress")
+			| select(is_wedged_queued($zq_cutoff) | not)
 			| select((.id | tostring) != $current)
 			| select(.path | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$"))
 		]
@@ -3646,10 +3657,12 @@ autofix_retrigger_has_inflight_peer()
 		local pr_named_runs pr_named_info
 		declare -F _autofix_review_default_branch_prime >/dev/null && _autofix_review_default_branch_prime
 		if pr_named_runs=$(_autofix_pr_named_review_runs "${pr_number}") \
-			&& pr_named_info=$(printf '%s' "${pr_named_runs}" | jq -r --arg current "${current_run_id}" '
+			&& { ! declare -F zombie_queued_log_ignored >/dev/null 2>&1 || zombie_queued_log_ignored autofix_inflight_peer "${peer_zq_cutoff}" <<< "${pr_named_runs}"; } \
+			&& pr_named_info=$(printf '%s' "${pr_named_runs}" | jq -r --arg current "${current_run_id}" --argjson zq_cutoff "${peer_zq_cutoff}" "${peer_zq_def}"'
 				[
 					.[]
 					| select(.status == "queued" or .status == "in_progress" or .status == "pending" or .status == "waiting" or .status == "requested")
+					| select(is_wedged_queued($zq_cutoff) | not)
 					| select((.id | tostring) != $current)
 				]
 				| {count: length, first_id: (.[0].id // "-"), first_path: (.[0].path // "-")}
@@ -3991,6 +4004,76 @@ _cleanup_prompt_budget()
 	rm -f "${_state}" 2>/dev/null || true
 }
 
+# _embed_utf8_safe_cut <path> <n>
+#
+# Print <n> reduced (by at most 3 bytes) so that `head -c <n> <path>`
+# never ends inside a multi-byte UTF-8 sequence.  A byte cut mid-character
+# leaves invalid UTF-8 in the prompt, which the Codex CLI's strict stdin
+# reader rejects (#9261).  Only the up-to-4 bytes before offset <n> are
+# inspected with `od`; ASCII or a complete sequence returns <n> unchanged.
+# Fails open: any `od` failure or unexpected output returns <n> unchanged
+# (the pre-#9261 behaviour); `sanitize_codex_prompt_file` remains the
+# last line of defence downstream.
+_embed_utf8_safe_cut()
+{
+	local _cut_path="${1:-}"
+	local _cut_n="${2:-0}"
+	if ! [[ "${_cut_n}" =~ ^[0-9]+$ ]] || [ "${_cut_n}" -le 0 ] || [ -z "${_cut_path}" ]; then
+		printf '%s\n' "${_cut_n}"
+		return 0
+	fi
+	local _cut_window=4
+	if [ "${_cut_n}" -lt 4 ]; then
+		_cut_window="${_cut_n}"
+	fi
+	local _cut_raw
+	if ! _cut_raw="$(od -An -tu1 -j "$(( _cut_n - _cut_window ))" -N "${_cut_window}" -- "${_cut_path}" 2>/dev/null)"; then
+		printf '%s\n' "${_cut_n}"
+		return 0
+	fi
+	local -a _cut_bytes=()
+	read -r -a _cut_bytes <<< "$(printf '%s' "${_cut_raw}" | tr '\n' ' ')" || true
+	if [ "${#_cut_bytes[@]}" -ne "${_cut_window}" ]; then
+		printf '%s\n' "${_cut_n}"
+		return 0
+	fi
+	local _cut_byte
+	for _cut_byte in "${_cut_bytes[@]}"; do
+		if ! [[ "${_cut_byte}" =~ ^[0-9]+$ ]]; then
+			printf '%s\n' "${_cut_n}"
+			return 0
+		fi
+	done
+	# Step back over trailing continuation bytes (0x80..0xBF), at most 3.
+	local _cut_idx=$(( ${#_cut_bytes[@]} - 1 ))
+	local _cut_cont=0
+	while [ "${_cut_idx}" -ge 0 ] && [ "${_cut_cont}" -lt 3 ] \
+		&& [ "${_cut_bytes[${_cut_idx}]}" -ge 128 ] && [ "${_cut_bytes[${_cut_idx}]}" -le 191 ]; do
+		_cut_cont=$(( _cut_cont + 1 ))
+		_cut_idx=$(( _cut_idx - 1 ))
+	done
+	if [ "${_cut_idx}" -lt 0 ]; then
+		printf '%s\n' "${_cut_n}"
+		return 0
+	fi
+	local _cut_lead="${_cut_bytes[${_cut_idx}]}"
+	local _cut_seq_len=0
+	if [ "${_cut_lead}" -ge 192 ] && [ "${_cut_lead}" -le 223 ]; then
+		_cut_seq_len=2
+	elif [ "${_cut_lead}" -ge 224 ] && [ "${_cut_lead}" -le 239 ]; then
+		_cut_seq_len=3
+	elif [ "${_cut_lead}" -ge 240 ] && [ "${_cut_lead}" -le 247 ]; then
+		_cut_seq_len=4
+	fi
+	# Lead byte plus its continuation bytes before <n> do not complete the
+	# sequence: cut before the lead byte instead.
+	if [ "${_cut_seq_len}" -gt 0 ] && [ "${_cut_seq_len}" -gt $(( _cut_cont + 1 )) ]; then
+		printf '%s\n' "$(( _cut_n - _cut_cont - 1 ))"
+		return 0
+	fi
+	printf '%s\n' "${_cut_n}"
+}
+
 # _embed_input_file <path> [byte_cap] [truncate_mode]
 #
 #   byte_cap        — defaults to 100000.  Caller can pass a larger
@@ -4051,7 +4134,7 @@ _embed_input_file()
 		# command substitution `$(...)` strips trailing newlines and the
 		# enclosing heredoc places its own \n after the substitution, so
 		# the closing fence always lands on its own line.
-		cat "${_path}"
+		cat -- "${_path}"
 		_emit_bytes="${_size}"
 	else
 		# File would overflow the effective cap.  In `diff` mode, walk
@@ -4067,14 +4150,18 @@ _embed_input_file()
 			# skip offset 0 because truncating before the first hunk would
 			# emit nothing (head mode handles that case correctly).
 			local _boundary
-			_boundary="$(grep -bE '^diff --git ' "${_path}" 2>/dev/null \
+			_boundary="$(grep -bE -- '^diff --git ' "${_path}" 2>/dev/null \
 				| awk -F: -v cap="${_effective_cap}" \
 					'($1+0) > 0 && ($1+0) <= cap { last=$1+0 } END { print last+0 }')"
 			if [ -n "${_boundary}" ] && [ "${_boundary}" -gt 0 ]; then
 				_head_bytes="${_boundary}"
 			fi
 		fi
-		head -c "${_head_bytes}" "${_path}"
+		# Never end the shown head inside a multi-byte UTF-8 character
+		# (#9261).  The marker and budget accounting below use the trimmed
+		# count.  A `diff`-mode boundary is a line start, so it is unchanged.
+		_head_bytes="$(_embed_utf8_safe_cut "${_path}" "${_head_bytes}")"
+		head -c "${_head_bytes}" -- "${_path}"
 		printf '\n[... TRUNCATED — file is %s bytes; first %s bytes shown above (mode=%s, per-file cap=%s, budget remaining was %s) ...]\n' \
 			"${_size}" "${_head_bytes}" "${_mode}" "${_cap}" "${_budget_remaining}"
 		_emit_bytes="${_head_bytes}"
@@ -4205,4 +4292,104 @@ extract_repo_scoped_issue_refs_from_text()
 		| grep -oiE "((^|[^[:alnum:]_])github\\.com/${_repository_escaped}/issues/[0-9]+([^[:alnum:]_#?]|$)|(^|[^[:alnum:]_])${_repository_escaped}/issues/[0-9]+([^[:alnum:]_#?]|$)|(^|[^[:alnum:]_/-])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[[:space:]]*[0-9]+([^[:alnum:]_]|$))" \
 		| sed -nE 's/.*[^0-9]([0-9]+)[^0-9]*$/\1/p' \
 		| sort -un || true
+}
+
+# ---------------------------------------------------------------
+# Wedged queued workflow runs (issue #9473)
+#
+# GitHub can leave a workflow run in status=queued with zero jobs.
+# The API refuses to clear it (run 43095142301: cancel 409,
+# force-cancel 409, DELETE 403), so every "is a run already active?"
+# guard would treat it as active forever. These helpers generalise the
+# sweep's `is_stale_queued` rule (review_autofix_sweep.yml) into one
+# shared age-based filter:
+#
+#   a run is wedged when status == "queued" and
+#   created_at <= now - ZOMBIE_RUN_MAX_QUEUED_HOURS hours.
+#
+# ZOMBIE_RUN_MAX_QUEUED_HOURS: default 24 (the same knob the P11b
+# reaper reads); 0 or any value that is not a whole number disables
+# the filter. Only `queued` ages out: in_progress, pending, waiting
+# and requested never do. A missing or unparseable created_at keeps
+# the run active (fail-safe). Callers filter the JSON they already
+# fetched, so the helpers add no API calls (CLAUDE.md §14).
+#
+# zombie_queued_cutoff_epoch: prints the cutoff epoch, or 0 when the
+#   filter is disabled (invalid value, 0, or unreadable clock).
+# zombie_queued_jq_def: prints jq definitions for embedding at the
+#   front of a caller's program; `is_wedged_queued($cutoff)` takes the
+#   cutoff as a number (pass it with --argjson).
+# zombie_queued_log_ignored <guard> <cutoff>: reads one JSON document
+#   on stdin (an array of runs or {workflow_runs:[...]}) and prints,
+#   on stderr, one line per wedged run:
+#     ZOMBIE_RUN_IGNORED run=<id> workflow=<path> age_h=<n> guard=<guard>
+#   at most once per run per guard per shell process. Always returns 0.
+# ---------------------------------------------------------------
+zombie_queued_cutoff_epoch()
+{
+	local _zq_hours="${ZOMBIE_RUN_MAX_QUEUED_HOURS:-24}" _zq_now=""
+	if ! [[ "${_zq_hours}" =~ ^[0-9]{1,5}$ ]]; then
+		echo "::warning::ZOMBIE_RUN_MAX_QUEUED_HOURS is not a whole number of hours; wedged-queued filter disabled" >&2
+		printf '0'
+		return 0
+	fi
+	_zq_hours=$((10#${_zq_hours}))
+	if [ "${_zq_hours}" -le 0 ]; then
+		printf '0'
+		return 0
+	fi
+	_zq_now="$(date -u +%s 2>/dev/null || true)"
+	if ! [[ "${_zq_now}" =~ ^[0-9]+$ ]] || [ "${_zq_now}" -le $((_zq_hours * 3600)) ]; then
+		printf '0'
+		return 0
+	fi
+	printf '%s' "$((_zq_now - _zq_hours * 3600))"
+}
+
+zombie_queued_jq_def()
+{
+	cat <<'JQ_DEF'
+def zq_created_epoch:
+  ((.created_at // .createdAt) as $zq_ts
+   | if ($zq_ts | type) == "string" and ($zq_ts | length) > 0
+     then (try ($zq_ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch null)
+     else null end);
+def zq_run_id: (.id // .databaseId // "-");
+def zq_workflow: (.path // .workflowName // .name // "-");
+def is_wedged_queued($cutoff):
+  type == "object"
+  and ($cutoff | type) == "number" and $cutoff > 0
+  and ((.status // "") | if type == "string" then ascii_downcase else "" end) == "queued"
+  and (zq_created_epoch as $zq_c | $zq_c != null and $zq_c <= $cutoff);
+JQ_DEF
+}
+
+zombie_queued_log_ignored()
+{
+	local _zq_guard="${1:-unknown}" _zq_cutoff="${2:-0}" _zq_now="" _zq_rows="" _zq_id _zq_wf _zq_age
+	_zq_guard="$(printf '%s' "${_zq_guard}" | tr -c 'A-Za-z0-9_.-' '_')"
+	if ! [[ "${_zq_cutoff}" =~ ^[0-9]+$ ]] || [ "${_zq_cutoff}" -le 0 ]; then
+		cat >/dev/null 2>&1 || true
+		return 0
+	fi
+	_zq_now="$(date -u +%s 2>/dev/null || true)"
+	[[ "${_zq_now}" =~ ^[0-9]+$ ]] || _zq_now=0
+	_zq_rows="$(jq -r --argjson zq_cutoff "${_zq_cutoff}" --argjson zq_now "${_zq_now}" "$(zombie_queued_jq_def)"'
+		(if type == "array" then .[] elif type == "object" then ((.workflow_runs // []) | if type == "array" then .[] else empty end) else empty end)
+		| select(is_wedged_queued($zq_cutoff))
+		| [(zq_run_id | tostring | gsub("[^A-Za-z0-9_.-]"; "_")),
+		   (zq_workflow | tostring | gsub("[^A-Za-z0-9_./@-]"; "_")),
+		   (if $zq_now > 0 then (((($zq_now - zq_created_epoch) / 3600) | floor) | tostring) else "-" end)]
+		| @tsv' 2>/dev/null || true)"
+	[ -n "${_zq_rows}" ] || return 0
+	if ! declare -p _ZOMBIE_RUN_IGNORED_SEEN >/dev/null 2>&1; then
+		declare -gA _ZOMBIE_RUN_IGNORED_SEEN=()
+	fi
+	while IFS=$'\t' read -r _zq_id _zq_wf _zq_age; do
+		[ -n "${_zq_id}" ] || continue
+		[ -z "${_ZOMBIE_RUN_IGNORED_SEEN["${_zq_guard}:${_zq_id}"]+x}" ] || continue
+		_ZOMBIE_RUN_IGNORED_SEEN["${_zq_guard}:${_zq_id}"]=1
+		echo "ZOMBIE_RUN_IGNORED run=${_zq_id} workflow=${_zq_wf} age_h=${_zq_age} guard=${_zq_guard}" >&2
+	done <<< "${_zq_rows}"
+	return 0
 }
