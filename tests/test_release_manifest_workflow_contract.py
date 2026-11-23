@@ -45,6 +45,17 @@ STEP_ORDER = (
 	"Notify consumer repos via repository_dispatch",
 )
 TAG = "v1.2.3"
+# Workflow-level permissions, per release workflow. Jobs without their own
+# `permissions:` block inherit these; the release job declares its own.
+WORKFLOW_PERMISSIONS = {
+	"mark-stable.yml": {"contents": "write"},
+	"test-and-mark-stable.yml": {
+		"contents": "write",
+		"actions": "read",
+		"pull-requests": "read",
+		"issues": "read",
+	},
+}
 
 
 def _load(path: Path) -> dict:
@@ -92,17 +103,11 @@ def test_attestation_subject_is_the_built_manifest(workflow_path: Path) -> None:
 @pytest.mark.parametrize("workflow_path", WORKFLOWS, ids=lambda p: p.name)
 def test_permissions_add_exactly_attestation_scopes(workflow_path: Path) -> None:
 	workflow = _load(workflow_path)
-	expected_workflow_permissions = {"contents": "write"}
-	if workflow_path.name == "test-and-mark-stable.yml":
-		# Read-only job-token scopes for the GH_READ_TOKEN polling reads (#9888).
-		# Exact match: any extra workflow-level scope, write or read, still fails.
-		expected_workflow_permissions = {
-			"contents": "write",
-			"actions": "read",
-			"pull-requests": "read",
-			"issues": "read",
-		}
-	assert workflow["permissions"] == expected_workflow_permissions
+	# test-and-mark-stable.yml also grants the read-only scopes its polling
+	# steps need for reads on the job token (GH_READ_TOKEN, issue #9888).
+	# Only read scopes may be added there; writes stay on GH_PAT.
+	# Exact match: any extra workflow-level scope, write or read, still fails.
+	assert workflow["permissions"] == WORKFLOW_PERMISSIONS[workflow_path.name]
 	for scope, level in workflow["permissions"].items():
 		if scope != "contents":
 			assert level == "read", scope
