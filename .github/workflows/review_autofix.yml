@@ -1181,6 +1181,7 @@ jobs:
     if: ${{ needs.gate.outputs.deterministic_skip == 'true' }}
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
       AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
       AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       REPOSITORY: ${{ github.repository }}
@@ -1213,6 +1214,7 @@ jobs:
       # without branch protection, auto-merge lands the PR immediately.
       AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
       AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
+      AUTO_MERGE_CHECKS_POLL_MAX_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_MAX_SECONDS || '180' }}
       AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
       AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
       MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
@@ -4729,6 +4731,7 @@ jobs:
         if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true' && steps.single_issue_security_pass.outputs.hold != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
@@ -4742,6 +4745,7 @@ jobs:
           MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
           AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
           AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
+          AUTO_MERGE_CHECKS_POLL_MAX_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_MAX_SECONDS || '180' }}
           AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
           AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
           MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
@@ -4852,6 +4856,7 @@ jobs:
         env:
           DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           # Judge comments are informational, so they post with the job token
@@ -4868,6 +4873,7 @@ jobs:
           MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
           AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
           AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
+          AUTO_MERGE_CHECKS_POLL_MAX_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_MAX_SECONDS || '180' }}
           AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
           AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
           MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
