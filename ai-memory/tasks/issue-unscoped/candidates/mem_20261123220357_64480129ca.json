@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md:1636-1677 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The new PR-review-mode carve-out in the \u00a734 intro (CLAUDE.md:1636-1637) is not mirrored in the \u00a734.B \"Anything larger\" multi-PR bullet (CLAUDE.md:1674-1677), so a session landing on that bullet could open a plan PR mid-review, which \u00a712.A forbids.\n  WHY: The intro's ask-first override only works if the reader starts at the section head, and the bullet carries no guard; the reviewer rated it NIT (mapped to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- CLAUDE.md:1636-1637 vs 1674-1677 | severity=low | confidence=3\n  PROBLEM: The last run added a PR-review-mode carve-out (ask in the \u00a72 format, open no plan PR before the answer) to the \u00a734 intro, but the \u00a734.B multi-PR sentence it carves out from was left unqualified. A session that lands directly on that bullet has no in-bullet signal that the intro's ask-first route overrides it.\n  WHY: Following the bullet literally would open a plan PR mid-review, which \u00a712.A forbids (\"never spin off a follow-up PR\") and \u00a712.D replaces with the include-or-drop ask. Suggested fix: append a clause to the \u00a734.B multi-PR sentence saying that in PR review mode the \u00a734 intro's \u00a72 ask gates this case instead.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e24fef857b23ee120ac187afabb36b9e417ae8f989f3cb11c1ea40e0b8384313",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9992,
+    "run_id": "45249252720",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45249252720",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123220357_64480129ca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9992,
+    "run_id": "45249252720"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-23T22:03:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
