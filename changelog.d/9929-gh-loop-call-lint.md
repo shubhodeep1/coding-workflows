@@ -1,0 +1,4 @@
+<!-- changelog: added -->
+- **PR checks warn on new GitHub API calls inside shell loops (CLAUDE.md §15).** The `pr-body-lint` job of `.github/workflows/pr-checks.yml` gains a warning-only step that runs the new `scripts/lint_gh_calls_in_loops.py`. For each line a pull request adds in a `*.sh` / `*.bash` file or a workflow `run:` block, it emits a `::warning` annotation when a GitHub API call (`gh api`, `gh pr view`, `_safe_gh_jq`, `gh_retry`, `curl ... api.github.com`, and similar) sits inside a `for` / `while` / `until` body. Calls through a batched or cached helper and lines annotated `# gh-loop-ok: <reason>` do not warn. The lint reads the local git diff only (no API call), logs `GH_LOOP_CALL_LINT warnings=<n> files=<n>`, and never fails the check. Refs #9929
+
+What this means for consumer repos: nothing. The step runs only in this repository's `pr-checks.yml`.

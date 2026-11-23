@@ -138,6 +138,15 @@ jobs:
     # its module commands in four concurrent lanes in place (see that step).
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Explicit since #9939: ci_pr_quick.yml grants `statuses: write` for
+    # `lint` (the `ci/final` status), and without a block this job, which
+    # runs PR code in quick mode, would inherit it. Its steps only read:
+    # the checkout and fetches, pulls/<n> and actions/runs/<id>
+    # (scripts/ci_final_merge_ref_fresh.sh, the agents.md check).
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
     # The actionlint tarball cache key (#9056) reads these values through the
     # `env` context, so they are set at job level. The `Install actionlint`
     # step keeps its own copy with the same literals, which
@@ -3132,6 +3141,7 @@ jobs:
             tests/test_static_context_agents_index_self_assembled.py
             tests/test_static_context_symlink_guard.py
             tests/test_summarize_unselected_runs.py
+            tests/test_sync_dependabot_exclusions.py
             tests/test_test_and_mark_stable_phase7_unconflict.py
             tests/test_test_and_mark_stable_phase7_timeout_status.py
             tests/test_test_and_mark_stable_live_log_cooldown.py
@@ -5026,6 +5036,17 @@ jobs:
     if: always() && inputs.mode != 'quick'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Explicit since #9939 (the `ci/final` status needs statuses: write). A
+    # job-level block replaces the default token grant, so it lists what every
+    # step uses: contents for the checkouts, pull-requests and actions for
+    # scripts/ci_final_merge_ref_fresh.sh (pulls/<n>, actions/runs/<id>).
+    # ci_pr_quick.yml grants the same scopes (a caller must, even for a
+    # skipped job).
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+      statuses: write
     steps:
       # Docs-only final CI (run-volume plan item 4): the test jobs were skipped
       # on the dispatcher's word, so check the tree this run reports on before
@@ -5061,6 +5082,7 @@ jobs:
         run: bash scripts/ci_docs_only_paths.sh verify
 
       - name: Require every CI job to succeed
+        id: ci_require_all_jobs
         env:
           CI_NEEDS_JSON: ${{ toJSON(needs) }}
           # "true" only in a docs-only run whose check above passed. Then, and
@@ -5102,6 +5124,41 @@ jobs:
             exit 1
           fi
           echo "All ${ci_needs_count} CI jobs succeeded."
+
+      # `ci/final` commit status (#9939). GitHub does not evaluate check-runs
+      # of a workflow_dispatch run for a PR, so the final CI's `lint`
+      # check-run never satisfies a required check and auto-merge waited on
+      # "expected" forever. A commit status on the tested head does count;
+      # the ruleset requires `ci/final` (owner step). Both steps are
+      # continue-on-error and the script always exits 0, so a failed post
+      # never turns a green `lint` red: a missing status keeps the PR
+      # blocked, never falsely green. The script comes from the run's own
+      # head (the same trust as this ci.yml); contract in
+      # scripts/ci_final_status.sh.
+      - name: Checkout the final CI status script
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          path: .ci-final-status
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            scripts/ci_final_status.sh
+            scripts/gh_helpers.sh
+
+      - name: Report the final CI result as a commit status
+        if: always() && !cancelled()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_FINAL_STATUS_SHA: ${{ github.sha }}
+          CI_FINAL_STATUS_AGGREGATE_OUTCOME: ${{ steps.ci_require_all_jobs.outcome }}
+          CI_FINAL_STATUS_DOCS_ONLY_REQUESTED: ${{ inputs.docs_only == 'true' }}
+          CI_FINAL_STATUS_DOCS_ONLY_OUTCOME: ${{ steps.docs_only_verify.outcome }}
+        run: bash .ci-final-status/scripts/ci_final_status.sh
 
   final-ci-failed:
     # Red final CI goes back to review (cut-ci-runner-time Phase 4). Runs only

@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Contract tests for review-pipeline plumbing in review_autofix.yml."""
 
+# The embedded shell fixtures keep tab-then-space indentation on purpose
+# (their content is the shell script under test), so E101 is exempt here.
+# ruff: noqa: E101
+
 from __future__ import annotations
 
 import contextlib
 import hashlib
-import http.client
+import http.client  # noqa: F401 -- broker tests patch http.client.HTTPSConnection
 import importlib.util
 import inspect
 import io
@@ -96,7 +100,18 @@ def test_head_gate_is_verified_and_binds_merge_status_to_evaluated_head() -> Non
 	judge_lines = judge.splitlines()
 	for index, merge_line in enumerate(judge_lines):
 		if 'if gh pr merge "${PR_NUMBER}"' in merge_line and ('--match-head-commit "${RB_JUDGED_HEAD_SHA}"' in merge_line or '"${_match_head_arg[@]}"' in merge_line):
-			assert 'review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success' in judge_lines[index - 1]
+			if merge_line.lstrip().startswith("if "):
+				assert 'review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success' in judge_lines[index - 1]
+				continue
+			# #9939: the merge_with_followup sync site is `elif gh pr merge`,
+			# preceded by the blocked-merge guard's deferral branch. The
+			# success post must still come first, within that short branch,
+			# with no other merge attempt in between.
+			window = judge_lines[max(0, index - 8):index]
+			posts = [i for i, line in enumerate(window) if 'review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success' in line]
+			assert posts, merge_line
+			assert not any("gh pr merge" in line for line in window[posts[-1] + 1:]), merge_line
+			assert any("rb_judge_sync_merge_guard" in line for line in window[posts[-1] + 1:]), merge_line
 	assert judge.index('rb_security_merge_gate; then') < judge.index('review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success')
 	manual_status = 'review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"'
 	assert f'else\n        {manual_status}\n        RB_MERGE_READY_LABEL_ALLOWED="true"' in judge
