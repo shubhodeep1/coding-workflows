@@ -870,8 +870,9 @@ def test_bound_success_rule_is_limited_to_the_ci_check_name() -> None:
 
 
 def test_bound_success_rule_applies_in_star_mode() -> None:
-	# The `*` (allow-all) branch's _is_pending drops a failed CI `lint` that a
-	# newer bound CI run passed, as the required-filter branch does.
+	# The `*` (legacy fail-closed-on-any-failure) branch's _is_pending drops a
+	# failed CI `lint` that a newer bound CI run passed, as the required-filter
+	# branch does. The allow-all sentinel is the empty string, not `*`.
 	star = {**_BOUND, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": "*"}
 	gate, _, state = _ci_side_channel(_page([_FAILED, _PASSED_LATER]), star)
 	assert gate == "0:ok" and state == "success", (gate, state)
