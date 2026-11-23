@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- n/a (check-run signal, not mapped to the diff):check-runs `orchestrate-poll (0)` cancelled and `lint` failure in runs 44972157383 / 44978745791 on head 86e881e | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: lint fails only with `CI jobs that did not succeed: orchestrate-poll`; the orchestrate-poll (0) leg ended `cancelled` with every visible TEST_CASE_EVENT passing and the log cut off.\n  WHY: The reviewer cannot attribute it to the PR's two test-file changes, and linked issue #9907 scopes this leg out. It repeats across runs, so the reviewer suggests one look at the leg's full log. Source severity is NIT, mapped to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- n/a (check-run signal, not mapped to the diff):check-runs `orchestrate-poll (0)` cancelled and `lint` failure in runs 44972157383 / 44978745791 on head 86e881e | severity=low (source: NIT) | confidence=2\n  PROBLEM: lint fails only with `CI jobs that did not succeed: orchestrate-poll`; the orchestrate-poll (0) leg ended `cancelled` with every visible TEST_CASE_EVENT passing and the log cut off.\n  WHY: The reviewer cannot attribute it to the PR's two test-file changes, and linked issue #9907 scopes this leg out. It repeats across runs, so the reviewer suggests one look at the leg's full log.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "30ffcbac59ccad4a3e09305d54f1c871be76118b5ed513c75a421b0ecdf9a0a2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9914,
+    "run_id": "45085692736",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45085692736",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123010516_30c13b44d5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9914,
+    "run_id": "45085692736"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-23T01:05:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
