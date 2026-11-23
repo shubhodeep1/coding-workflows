@@ -5,13 +5,31 @@
   "entry_id": "processed_command_9987_7098730793_approved",
   "issue_number": 9987,
   "metadata": {
+    "branch": "ai/issue-9987",
+    "changed_files": [
+      "README.md",
+      "agents.d/9987-judge-decision-lease-grant.md",
+      "changelog.d/9987-judge-decision-lease-grant.md",
+      "scripts/pr_checks_lib.sh",
+      "scripts/review_merge_train.sh",
+      "scripts/review_rb_judge.sh",
+      "tests/test_merge_lease.py",
+      "tests/test_pr_base_freshness_gate.py",
+      "tests/test_review_merge_train.py",
+      "tests/test_review_rb_judge_head_binding.py"
+    ],
+    "issue_number": 9987,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9987",
+    "pr_number": 9996,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9996",
+    "run_attempt": "1",
+    "run_id": "45160501087",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/45160501087"
   },
   "run_attempt": 1,
   "run_id": "45160501087",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-23T11:02:52Z",
+  "status": "completed",
+  "timestamp": "2026-11-23T12:25:48Z",
   "workflow": "implement"
 }
