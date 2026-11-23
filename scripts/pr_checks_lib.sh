@@ -305,7 +305,7 @@ _pr_checks_completed()
 	# "all check-runs on the head SHA must pass" behaviour.
 	if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ]; then
 		local pr_json
-		pr_json="$(gh_retry _safe_gh_jq "repos/${repo}/pulls/${pr_number}" || echo "")"
+		pr_json="$(_pr_checks_wait_read "repos/${repo}/pulls/${pr_number}" || echo "")"
 		head_sha="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)"
 		if [ "${use_required_filter}" = "true" ] && [ -z "${base_ref}" ]; then
 			base_ref="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .base.ref?) then .base.ref else empty end' 2>/dev/null | tail -n1)"
@@ -320,7 +320,23 @@ _pr_checks_completed()
 	local required_names_csv
 	required_names_csv="*"
 	if [ "${use_required_filter}" = "true" ]; then
-		required_names_csv="$(_pr_required_check_names_for_base "${base_ref}")"
+		# Inside _pr_wait_for_required_checks (issue #9926) the required set
+		# is resolved once per wait and base ref: the wait's locals
+		# (_pr_wait_memo_active, _pr_wait_required_*) are visible here by
+		# dynamic scope. Standalone callers never see them and read
+		# protection on every call, as before. The protection read stays on
+		# the caller's token (it needs Administration read).
+		if [ "${_pr_wait_memo_active:-0}" = "1" ] && [ "${_pr_wait_required_set:-0}" = "1" ] \
+			&& [ "${_pr_wait_required_base-}" = "${base_ref}" ]; then
+			required_names_csv="${_pr_wait_required_csv-}"
+		else
+			required_names_csv="$(_pr_required_check_names_for_base "${base_ref}")"
+			if [ "${_pr_wait_memo_active:-0}" = "1" ]; then
+				_pr_wait_required_set=1
+				_pr_wait_required_base="${base_ref}"
+				_pr_wait_required_csv="${required_names_csv}"
+			fi
+		fi
 	fi
 
 	local check_runs_json
@@ -332,7 +348,20 @@ _pr_checks_completed()
 	# 1 (fail-closed). An empty array '[]' would match the first branch
 	# and produce `incomplete=0`, fail-OPEN — treating an API error as "no
 	# check-runs" and letting the merge proceed.
-	check_runs_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${repo}/commits/${head_sha}/check-runs?per_page=100" || echo "{}")"
+	check_runs_json="$(_pr_checks_wait_read --paginate --slurp "repos/${repo}/commits/${head_sha}/check-runs?per_page=100" || echo "{}")"
+	# Snapshot fingerprint for the wait's back-off (issue #9926): one sorted
+	# [id, status, conclusion] entry per check-run, local jq only. Set
+	# only inside a wait; "" when the listing is not usable.
+	if [ "${_pr_wait_memo_active:-0}" = "1" ]; then
+		PR_CHECKS_LAST_CHECK_RUNS_FP="$(printf '%s' "${check_runs_json}" | jq -c '
+			try (
+				(if (type == "array") then [.[]? | (.check_runs // [])[]]
+				elif (type == "object" and (.check_runs | type == "array")) then .check_runs
+				else null end)
+				| if (. == null) then "" else (map([(.id // 0), (.status // ""), (.conclusion // null)]) | sort) end
+			) catch ""
+		' 2>/dev/null | tail -n1)"
+	fi
 
 	# Side channel for _pr_wait_for_required_checks (issue #6963): the state
 	# of the configured CI check (AUTO_MERGE_REQUIRED_CI_CHECK) on this head,
@@ -455,7 +484,38 @@ _pr_checks_completed()
 				# inherited REVIEW_HEAD_GATE_CONTEXT cannot widen which status relaxes
 				# the required check.
 				local gate_sup_status_ctx="ai-review/head-gate"
-				if gate_sup_statuses_json="$(gh_retry _safe_gh_jq "repos/${repo}/commits/${head_sha}/statuses?per_page=100" 2>/dev/null)"; then
+				# Inside _pr_wait_for_required_checks (issue #9926) a successful
+				# read is reused for the same head SHA for the rest of the wait,
+				# unless the newest status of the gate context (the one the
+				# decision below reads) is `pending` or absent (then every poll
+				# reads again). The list holds history, so superseded pending
+				# head-gate entries and unrelated contexts (e.g. the unresolved
+				# ai-review/final-ci-merge-pending mark) must not block the memo.
+				# A failed read is never cached (status_read_failed, as before).
+				# Standalone callers read on every call.
+				local gate_sup_status_read_ok=0
+				if [ "${_pr_wait_memo_active:-0}" = "1" ] && [ -n "${_pr_wait_statuses_json-}" ] \
+					&& [ "${_pr_wait_statuses_sha-}" = "${head_sha}" ]; then
+					gate_sup_statuses_json="${_pr_wait_statuses_json}"
+					gate_sup_status_read_ok=1
+				elif gate_sup_statuses_json="$(_pr_checks_wait_read "repos/${repo}/commits/${head_sha}/statuses?per_page=100" 2>/dev/null)"; then
+					gate_sup_status_read_ok=1
+					if [ "${_pr_wait_memo_active:-0}" = "1" ]; then
+						_pr_wait_statuses_last="${gate_sup_statuses_json}"
+						if printf '%s' "${gate_sup_statuses_json}" | jq -e --arg ctx "${gate_sup_status_ctx}" '
+							type == "array"
+							and ([.[] | select(type == "object" and .context == $ctx)] as $s
+								| ($s | length) > 0 and (($s | max_by([(.created_at // ""), (.id // 0)])).state != "pending"))
+						' >/dev/null 2>&1; then
+							_pr_wait_statuses_sha="${head_sha}"
+							_pr_wait_statuses_json="${gate_sup_statuses_json}"
+						else
+							_pr_wait_statuses_sha=""
+							_pr_wait_statuses_json=""
+						fi
+					fi
+				fi
+				if [ "${gate_sup_status_read_ok}" = "1" ]; then
 					gate_sup_decision="$(printf '%s' "${gate_sup_statuses_json}" | jq -r \
 						--arg ctx "${gate_sup_status_ctx}" \
 						--arg sha "${head_sha}" --arg failed_at "${gate_sup_failed_at}" '
@@ -875,9 +935,11 @@ _pr_sync_merge_blocked_guard()
 #       waited_s=<n> pending=<n> ci_check=<name> ci_state=<state>`.
 #
 # Env: AUTO_MERGE_CHECKS_WAIT_MINUTES (default 45; 0 = one check, no wait),
-# AUTO_MERGE_CHECKS_POLL_SECONDS (default 60). One check-runs listing (plus
-# the branch-protection read) per poll, and, while a named CI check is
-# required, one `actions/runs?head_sha=` read per poll to bind it to a CI run.
+# AUTO_MERGE_CHECKS_POLL_SECONDS (default 60, the base poll interval),
+# AUTO_MERGE_CHECKS_POLL_MAX_SECONDS (default 180, the back-off cap; issue
+# #9926). One check-runs listing per poll (the branch-protection read once
+# per wait), and, while a named CI check is required, one
+# `actions/runs?head_sha=` read per poll to bind it to a CI run.
 # With REVIEW_FINAL_CI_WORKFLOW set (cut-ci-runner-time Phase 4) and the
 # named CI check absent on the head, or every CI run on it cancelled, the
 # first poll calls `_pr_ensure_final_ci` once with that poll's runs listing
@@ -1003,7 +1065,7 @@ _pr_head_ci_runs_pending()
 	esac
 	[[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 0
 	self_run="${PR_CHECKS_SELF_RUN_ID:-${GITHUB_RUN_ID:-}}"
-	runs_json="$(gh_retry _safe_gh_jq "repos/${repo}/actions/runs?head_sha=${head_sha}&per_page=100" 2>/dev/null || echo "")"
+	runs_json="$(_pr_checks_wait_read "repos/${repo}/actions/runs?head_sha=${head_sha}&per_page=100" 2>/dev/null || echo "")"
 	# Kept for _pr_ensure_final_ci (cut-ci-runner-time Phase 4), so the
 	# final-CI check in _pr_wait_for_required_checks reuses this listing
 	# instead of reading the runs again (§15).
@@ -1223,6 +1285,106 @@ _pr_ensure_final_ci()
 	return 0
 }
 
+# ---------------------------------------------------------------------------
+# Required-checks wait: cached stable reads, back-off and read routing
+# (GH_PAT budget part C, issue #9926).
+#
+# _pr_wait_for_required_checks declares wait-scoped locals that
+# _pr_checks_completed and _pr_head_ci_runs_pending see by bash dynamic
+# scope (standalone callers never see them, so they behave as before):
+#   - branch protection (the required set) is read once per wait and base
+#     ref instead of once per poll (_pr_wait_required_*). A protection read
+#     that fails falls back to the env/default set for the whole wait; the
+#     next wait reads it fresh, and protection edited mid-wait is seen by
+#     the next wait;
+#   - the head's commit statuses (gate-supersede path only) are read once
+#     per head SHA per wait, unless the newest `ai-review/head-gate` status
+#     is `pending` or absent, in which case every poll reads them again
+#     (superseded entries and other contexts are ignored); a failed read is
+#     never cached.
+# Back-off: the poll interval starts at AUTO_MERGE_CHECKS_POLL_SECONDS and
+# doubles after each poll whose snapshot (runs + check-runs + statuses +
+# parsed reason/pending/CI state) is unchanged, up to
+# AUTO_MERGE_CHECKS_POLL_MAX_SECONDS (default 180; a value that is not
+# 1-999999, or is below the base interval, turns back-off off). A changed
+# snapshot resets it to the base. The "no check-runs registered yet" grace
+# and the sleep after a final-CI dispatch always use the base interval, and
+# the grace counts two polls (ticks), not seconds. Every sleep is clamped to
+# the remaining AUTO_MERGE_CHECKS_WAIT_MINUTES budget, so the deadline is
+# never overshot.
+# Read routing: when the wait has a budget (max_minutes > 0) and `gh_read`
+# (scripts/gh_helpers.sh, #9897) is defined, the per-poll reads (runs
+# listing, check-runs, statuses, the PR read) go through
+# `gh_read --same-repo-only api ...` (a failed routed read retries once with
+# `gh_retry _safe_gh_jq`; the job's GITHUB_TOKEN, PAT fallback
+# inside gh_read). Otherwise, and always for protection, `GET user`, the
+# final-CI helper and every write, the call is `gh_retry _safe_gh_jq` as
+# before. A 0-minute wait (merge train, poller) makes exactly today's calls.
+# §14 audit: no new API calls; protection drops from one call per poll to one
+# per wait, statuses to one per head SHA unless pending; the snapshot
+# fingerprint is local jq/sha256sum work over listings already read.
+# ---------------------------------------------------------------------------
+
+# Per-poll read router (same output contract as `gh_retry _safe_gh_jq`:
+# stdout only on success, non-zero on failure). A failed routed read falls
+# back once to the caller's token (`gh_retry _safe_gh_jq`), so a token,
+# scope or call-shape problem on the routed path never fails the wait.
+# The routed read makes a single attempt and is not wrapped in gh_retry (no
+# retry sleeps or rate-limit waits), so a failing routed path costs one call
+# and the fallback alone owns the retry schedule; time spent in reads is not
+# counted in `waited`, so two full schedules per read could push the wait
+# well past AUTO_MERGE_CHECKS_WAIT_MINUTES. Without gh_retry, a recovered
+# job-token failure also emits no `::error::`, no rate-limit Telegram alert
+# and no breaker trip (gh_retry's _gh_cmd_bucket has no gh_read case and
+# would charge the shared breaker file to the PAT's `core` bucket).
+_pr_checks_wait_read()
+{
+	# `declare -F`: only the shell function from scripts/gh_helpers.sh turns
+	# routing on, never an alias or a stray executable of that name on PATH.
+	if [ "${_pr_wait_route_reads:-0}" = "1" ] && declare -F gh_read >/dev/null 2>&1; then
+		local wait_read_out="" wait_read_rc=0
+		wait_read_out="$(gh_read --same-repo-only api "$@")" || wait_read_rc=$?
+		if [ "${wait_read_rc}" -eq 0 ]; then
+			printf '%s\n' "${wait_read_out}"
+			return 0
+		fi
+		echo "  [check-runs] routed read failed (rc=${wait_read_rc}); retrying with the caller token." >&2
+	fi
+	gh_retry _safe_gh_jq "$@"
+}
+
+# Updates the wait's cur_interval/last_fp (dynamic scope) from this poll's
+# snapshot: doubles up to poll_max_seconds when unchanged, else resets.
+_pr_wait_backoff_step()
+{
+	local backoff_fp_src="" backoff_fp=""
+	backoff_fp_src="$(
+		printf '%s\n' "${PR_CHECKS_LAST_REASON:-}" "${PR_CHECKS_LAST_PENDING:-}" "${PR_CHECKS_LAST_CI_STATE:-}" "${PR_CHECKS_LAST_CHECK_RUNS_FP:-}"
+		printf '%s' "${PR_CHECKS_RUNS_RAW_JSON:-}" | jq -c 'try ([(.workflow_runs // [])[]? | [(.id // 0), (.status // ""), (.conclusion // null)]] | sort) catch ""' 2>/dev/null | tail -n1
+		printf '%s' "${_pr_wait_statuses_last:-}" | jq -c 'try ([.[]? | [(.id // 0), (.state // "")]] | sort) catch ""' 2>/dev/null | tail -n1
+	)"
+	backoff_fp="$(printf '%s' "${backoff_fp_src}" | sha256sum 2>/dev/null | cut -c1-64)"
+	backoff_fp="${backoff_fp:-${backoff_fp_src}}"
+	if [ "${wait_ticks:-0}" -gt 0 ] && [ -n "${last_fp}" ] && [ "${backoff_fp}" = "${last_fp}" ]; then
+		cur_interval=$((cur_interval * 2))
+		[ "${cur_interval}" -le "${poll_max_seconds}" ] || cur_interval="${poll_max_seconds}"
+	else
+		cur_interval="${poll_seconds}"
+	fi
+	last_fp="${backoff_fp}"
+}
+
+# Sets the wait's next_sleep to min(<seconds>, remaining budget), floor 1.
+_pr_wait_clamp_sleep()
+{
+	local clamp_remaining=$((max_minutes * 60 - waited))
+	next_sleep="$1"
+	if [ "${clamp_remaining}" -lt "${next_sleep}" ]; then
+		next_sleep="${clamp_remaining}"
+	fi
+	[ "${next_sleep}" -ge 1 ] || next_sleep=1
+}
+
 _pr_wait_for_required_checks()
 {
 	local pr_number="$1"
@@ -1230,12 +1392,23 @@ _pr_wait_for_required_checks()
 	local base_ref="${3:-}"
 	local max_minutes="${4:-${AUTO_MERGE_CHECKS_WAIT_MINUTES:-45}}"
 	local poll_seconds="${AUTO_MERGE_CHECKS_POLL_SECONDS:-60}"
+	local poll_max_seconds="${AUTO_MERGE_CHECKS_POLL_MAX_SECONDS:-180}"
 	local waited=0 rc=0 ci_runs_fresh=0 ci_bind ci_required_name final_ci_checked=0
+	# Wait-scoped memo and back-off state (issue #9926; see the block above).
+	local _pr_wait_memo_active=1 _pr_wait_required_set=0 _pr_wait_required_base="" _pr_wait_required_csv=""
+	local _pr_wait_statuses_sha="" _pr_wait_statuses_json="" _pr_wait_statuses_last="" _pr_wait_route_reads=0
+	local wait_ticks=0 cur_interval=0 last_fp="" next_sleep=0
+	PR_CHECKS_LAST_CHECK_RUNS_FP=""
 	ci_required_name="$(_pr_auto_merge_required_ci_check_name "${base_ref}")"
 	PR_CHECKS_WAIT_OUTCOME="timeout"
 	PR_CHECKS_WAIT_WAITED_S=0
 	[[ "${max_minutes}" =~ ^[0-9]+$ ]] || max_minutes=45
 	[[ "${poll_seconds}" =~ ^[1-9][0-9]*$ ]] || poll_seconds=60
+	if ! [[ "${poll_max_seconds}" =~ ^[1-9][0-9]{0,5}$ ]] || ! [ "${poll_max_seconds}" -ge "${poll_seconds}" ] 2>/dev/null; then
+		poll_max_seconds="${poll_seconds}"
+	fi
+	cur_interval="${poll_seconds}"
+	[ "${max_minutes}" -gt 0 ] && _pr_wait_route_reads=1
 	while :; do
 		rc=0
 		# Bind the named CI check to a run of an AUTO_MERGE_WAIT_WORKFLOWS
@@ -1269,9 +1442,14 @@ _pr_wait_for_required_checks()
 			PR_FINAL_CI_RUNS_JSON="${PR_CHECKS_RUNS_RAW_JSON:-}" _pr_ensure_final_ci "${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" \
 				"${pr_number}" "${head_sha}" "${PR_CHECKS_HEAD_REF:-}" || true
 			if [ "${PR_FINAL_CI_OUTCOME:-}" = "dispatched" ] && [ "${waited}" -lt $((max_minutes * 60)) ]; then
-				echo "  [check-runs] PR #${pr_number}: dispatched the final CI run for ${head_sha:0:7}; waiting ${poll_seconds}s."
-				sleep "${poll_seconds}"
-				waited=$((waited + poll_seconds))
+				# Base interval; the back-off restarts after a dispatch (#9926).
+				cur_interval="${poll_seconds}"
+				last_fp=""
+				_pr_wait_clamp_sleep "${poll_seconds}"
+				echo "  [check-runs] PR #${pr_number}: dispatched the final CI run for ${head_sha:0:7}; waiting ${next_sleep}s."
+				sleep "${next_sleep}"
+				waited=$((waited + next_sleep))
+				wait_ticks=$((wait_ticks + 1))
 				PR_CHECKS_WAIT_WAITED_S="${waited}"
 				continue
 			fi
@@ -1304,9 +1482,12 @@ _pr_wait_for_required_checks()
 				if [ "${PR_CHECKS_LAST_REASON}" = "ok" ]; then
 					[ "${ci_runs_fresh}" = "1" ] || _pr_head_ci_runs_pending "${head_sha}"
 					if [ "${PR_CHECKS_RUNS_PENDING:-0}" -gt 0 ] && [ "${waited}" -lt $((max_minutes * 60)) ]; then
-						echo "  [check-runs] PR #${pr_number}: ${PR_CHECKS_RUNS_PENDING} CI workflow run(s) on ${head_sha:0:7} not completed yet; waiting ${poll_seconds}s."
-						sleep "${poll_seconds}"
-						waited=$((waited + poll_seconds))
+						_pr_wait_backoff_step
+						_pr_wait_clamp_sleep "${cur_interval}"
+						echo "  [check-runs] PR #${pr_number}: ${PR_CHECKS_RUNS_PENDING} CI workflow run(s) on ${head_sha:0:7} not completed yet; waiting ${next_sleep}s."
+						sleep "${next_sleep}"
+						waited=$((waited + next_sleep))
+						wait_ticks=$((wait_ticks + 1))
 						PR_CHECKS_WAIT_WAITED_S="${waited}"
 						continue
 					fi
@@ -1339,9 +1520,12 @@ _pr_wait_for_required_checks()
 								if [ "${max_minutes}" -gt 0 ]; then _pr_final_ci_merge_pending_mark "${pr_number}" "${head_sha}"; fi
 								return 1
 							fi
-							echo "  [check-runs] PR #${pr_number}: required CI check '${PR_CHECKS_LAST_CI_NAME}' is ${PR_CHECKS_LAST_CI_STATE:-unknown} on ${head_sha:0:7}; waiting ${poll_seconds}s (${waited}/$((max_minutes * 60))s)."
-							sleep "${poll_seconds}"
-							waited=$((waited + poll_seconds))
+							_pr_wait_backoff_step
+							_pr_wait_clamp_sleep "${cur_interval}"
+							echo "  [check-runs] PR #${pr_number}: required CI check '${PR_CHECKS_LAST_CI_NAME}' is ${PR_CHECKS_LAST_CI_STATE:-unknown} on ${head_sha:0:7}; waiting ${next_sleep}s (${waited}/$((max_minutes * 60))s)."
+							sleep "${next_sleep}"
+							waited=$((waited + next_sleep))
+							wait_ticks=$((wait_ticks + 1))
 							PR_CHECKS_WAIT_WAITED_S="${waited}"
 							continue
 							;;
@@ -1349,12 +1533,18 @@ _pr_wait_for_required_checks()
 				# No check-run registered yet (fresh push, CI not queued): poll up
 				# to two more intervals before reading "none" as green. A repo
 				# with no CI at all still proceeds once that grace is spent. Only
-				# when no named CI check is required.
+				# when no named CI check is required. The grace counts polls
+				# (ticks) and always sleeps the base interval (#9926), so the
+				# back-off never stretches it.
 				elif [ "${PR_CHECKS_LAST_REASON}" = "ok" ] && [ "${PR_CHECKS_LAST_TOTAL:-1}" = "0" ] \
-					&& [ "${waited}" -lt $((poll_seconds * 2)) ] && [ "${waited}" -lt $((max_minutes * 60)) ]; then
-					echo "  [check-runs] PR #${pr_number}: no check-runs registered on ${head_sha:0:7} yet; waiting ${poll_seconds}s for CI to register."
-					sleep "${poll_seconds}"
-					waited=$((waited + poll_seconds))
+					&& [ "${wait_ticks}" -lt 2 ] && [ "${waited}" -lt $((max_minutes * 60)) ]; then
+					cur_interval="${poll_seconds}"
+					last_fp=""
+					_pr_wait_clamp_sleep "${poll_seconds}"
+					echo "  [check-runs] PR #${pr_number}: no check-runs registered on ${head_sha:0:7} yet; waiting ${next_sleep}s for CI to register."
+					sleep "${next_sleep}"
+					waited=$((waited + next_sleep))
+					wait_ticks=$((wait_ticks + 1))
 					PR_CHECKS_WAIT_WAITED_S="${waited}"
 					continue
 				fi
@@ -1389,9 +1579,12 @@ _pr_wait_for_required_checks()
 			if [ "${max_minutes}" -gt 0 ]; then _pr_final_ci_merge_pending_mark "${pr_number}" "${head_sha}"; fi
 			return 1
 		fi
-		echo "  [check-runs] PR #${pr_number}: ${PR_CHECKS_LAST_PENDING:-0} required/pending check-run(s) still running; waiting ${poll_seconds}s (${waited}/$((max_minutes * 60))s)."
-		sleep "${poll_seconds}"
-		waited=$((waited + poll_seconds))
+		_pr_wait_backoff_step
+		_pr_wait_clamp_sleep "${cur_interval}"
+		echo "  [check-runs] PR #${pr_number}: ${PR_CHECKS_LAST_PENDING:-0} required/pending check-run(s) still running; waiting ${next_sleep}s (${waited}/$((max_minutes * 60))s)."
+		sleep "${next_sleep}"
+		waited=$((waited + next_sleep))
+		wait_ticks=$((wait_ticks + 1))
 		PR_CHECKS_WAIT_WAITED_S="${waited}"
 	done
 }
