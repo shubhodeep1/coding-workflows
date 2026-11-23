@@ -14,14 +14,16 @@ the candidates and hands them to this script, which decides offline:
 Inputs:
   --search-file           `items` of one REST `search/issues` call for open
                           issues and PRs carrying any block label
-                          (`unblock_ledger.py labels`): number, labels,
-                          pull_request, created_at, updated_at.
+                          (`unblock_ledger.py labels`): number, title
+                          (optional), labels, pull_request, created_at,
+                          updated_at.
   --details-file          JSON object keyed by item number (string): each
                           `{"labeled": [{"label", "created_at"}],
                           "comments": [{"login", "body", "created_at"}]}`,
                           from one batched GraphQL query. A missing entry is
                           judged from `updated_at` alone and is never picked
-                          on a fresh-marker guess.
+                          on a fresh-marker guess. An optional `title` is read
+                          when the search item carries none.
   --runs-file             `workflow_runs` of unblock_judge_dispatch.yml (its
                           run name is `Unblock judge #<n>`).
   --failed-projects-file  JSON array of tracking issue numbers whose project
@@ -30,6 +32,16 @@ Inputs:
   --parked-items-file     JSON array of item numbers the needs-human digest
                           lists this tick (`items` of
                           `operator_step_issue.py needs-human prune`).
+
+An item whose title matches the E2E test-title pattern (`[E2E Smoke Test`,
+`[E2E Orchestrate Smoke`, `[E2E Clarify Negative Test`, case-insensitive; the
+same pattern as `_SMOKE_TITLE_RE` in scripts/workflow_failure_heal.py) is a
+pipeline fixture whose block is the expected test result (#9782), so it is
+skipped as `e2e_test_item` before any other check. The title comes from the
+search item, else from its details entry; a missing title never skips.
+UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED is the off switch: unset, empty or `true`
+(any case) keeps the skip on, `false` turns it off, and any other value also
+turns it off and logs a warning on stderr.
 
 An item labelled `ai:security-audit` (the long-lived security-audit tracker,
 issue #3576) is skipped as `security_audit_tracker` unless it is a failed
@@ -117,6 +129,11 @@ VERDICT_MARKER_RE = re.compile(
 	r"verdict=(?P<verdict>[a-z_]+) round=[1-9][0-9]*(?: override=[a-z_]+)? -->$"
 )
 ESCALATED_MARKER_RE = re.compile(r"^<!-- ai:unblock-fixup-escalated:v1 item=(?P<item>[1-9][0-9]*) -->$")
+# Verbatim copy of `_SMOKE_TITLE_RE` in scripts/workflow_failure_heal.py
+# (copied rather than imported: that module is large and this scan runs every
+# tick). tests/test_unblock_scan.py keeps the two copies identical.
+E2E_TEST_TITLE_RE = re.compile(r"\[E2E (?:Smoke Test|Orchestrate Smoke|Clarify Negative Test)\b", re.IGNORECASE)
+E2E_SKIP_FLAG = "UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED"
 # Comments the judge's evidence ignores (unblock_judge.sh `unblock_evidence`).
 LEDGER_BODY_MARKERS = ("ai:unblock", "ORCHESTRATOR_STATE")
 
@@ -160,6 +177,30 @@ def _label_names(item: dict) -> set[str]:
 		if isinstance(name, str):
 			names.add(name)
 	return names
+
+
+def _skip_e2e_test_items_enabled() -> bool:
+	"""The E2E fixture skip's off switch: unset, empty or `true` keep it on; anything else turns it off."""
+	raw = os.environ.get(E2E_SKIP_FLAG)
+	value = (raw or "").strip().lower()
+	if value in ("", "true"):
+		return True
+	if value != "false":
+		# stderr only: the poller parses stdout as the single JSON result line.
+		print(f"UNBLOCK_SCAN warning=invalid_flag name={E2E_SKIP_FLAG} value={repr(raw)[:40]} e2e_skip=off", file=sys.stderr)
+	return False
+
+
+def _item_title(item: dict, info: dict | None) -> str:
+	"""The item's title from the search payload, else from its details entry, else ''."""
+	title = item.get("title")
+	if isinstance(title, str) and title:
+		return title
+	if isinstance(info, dict):
+		title = info.get("title")
+		if isinstance(title, str) and title:
+			return title
+	return ""
 
 
 def _latest_marker(comments: object, trusted_login: str) -> dt.datetime | None:
@@ -326,6 +367,7 @@ def select(
 	candidates: list[tuple[dt.datetime, int, str]] = []
 	unverified: list[tuple[dt.datetime, int]] = []
 	seen: set[int] = set()
+	skip_e2e = _skip_e2e_test_items_enabled()
 
 	def skip(reason: str) -> None:
 		skipped[reason] = skipped.get(reason, 0) + 1
@@ -342,6 +384,12 @@ def select(
 		if number in seen:
 			continue
 		seen.add(number)
+		# E2E fixture issues (e.g. the clarify negative test) are blocked by design.
+		if skip_e2e:
+			e2e_info = details.get(str(number)) if isinstance(details.get(str(number)), dict) else None
+			if E2E_TEST_TITLE_RE.search(_item_title(item, e2e_info)):
+				skip("e2e_test_item")
+				continue
 		labels = _label_names(item)
 		# Same vocabulary as the poller's is_truthy; unset or empty means on.
 		if ((os.environ.get("SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED") or "true").strip().lower() in ("1", "true", "yes", "on")

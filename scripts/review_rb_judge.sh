@@ -477,6 +477,7 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
     local _cap="${2:-100000}"
     local _mode="${3:-head}"
     local _state _used _budget_remaining _effective_cap _size _emit_bytes
+    local _trim_count_file _shown_bytes _trim_py_ok
     if [ -z "${_p}" ] || [ ! -e "${_p}" ]; then printf '(missing)\n'; return 0; fi
     if [ ! -s "${_p}" ]; then printf '(empty)\n'; return 0; fi
 
@@ -508,23 +509,58 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
       cat "${_p}"
       _emit_bytes="${_size}"
     else
-      PYTHONDONTWRITEBYTECODE=1 python3 - "${_p}" "${_effective_cap}" 2>/dev/null <<'PY' || head -c "${_effective_cap}" "${_p}"
+      # Cut at a UTF-8 character boundary (#9261/#9949). python writes the
+      # number of bytes it emitted to a run-local temp file, so the marker and
+      # the prompt budget count the bytes actually shown. Fail open: when
+      # python3 fails, or mktemp cannot create the count file, keep the plain
+      # byte cut and count the cap; when python succeeds but reports no valid
+      # count, count the cap (its bytes are already out, so never re-emit them).
+      _trim_count_file="$(mktemp "${TMPDIR:-/tmp}/_embed_trim_count.XXXXXX" 2>/dev/null || true)"
+      _shown_bytes=""
+      _trim_py_ok=false
+      if [ -n "${_trim_count_file}" ] && PYTHONDONTWRITEBYTECODE=1 python3 - "${_p}" "${_effective_cap}" "${_trim_count_file}" 2>/dev/null <<'PY'
 import sys
 
 cap = int(sys.argv[2])
+count_path = sys.argv[3] if len(sys.argv) > 3 else ""
 read_cap = cap + 1 if cap > 0 else 0
 with open(sys.argv[1], 'rb') as fh:
     data = fh.read(read_cap)
 if cap > 0 and len(data) > cap:
     i = cap
-    while i > 0 and (data[i] & 0xC0) == 0x80:
+    steps = 0
+    # Step back over continuation bytes (0x80..0xBF), at most 3, the same
+    # bound as _embed_utf8_safe_cut in gh_helpers.sh. A longer run is
+    # malformed input: keep the byte cut so the prefix is never emptied.
+    while i > 0 and steps < 3 and (data[i] & 0xC0) == 0x80:
         i -= 1
+        steps += 1
+    if (data[i] & 0xC0) == 0x80:
+        i = cap
     data = data[:i]
+if count_path:
+    with open(count_path, 'w', encoding='ascii') as count_fh:
+        count_fh.write(f"{len(data)}\n")
 sys.stdout.buffer.write(data)
+sys.stdout.buffer.flush()
 PY
+      then
+        _trim_py_ok=true
+        if [ -n "${_trim_count_file}" ]; then
+          _shown_bytes="$(tr -d '[:space:]' < "${_trim_count_file}" 2>/dev/null || true)"
+        fi
+      else
+        head -c "${_effective_cap}" "${_p}"
+      fi
+      if [ -n "${_trim_count_file}" ]; then
+        rm -f "${_trim_count_file}" 2>/dev/null || true
+      fi
+      if [ "${_trim_py_ok}" != "true" ] || ! [[ "${_shown_bytes}" =~ ^[0-9]+$ ]] || [ "${_shown_bytes}" -gt "${_effective_cap}" ]; then
+        _shown_bytes="${_effective_cap}"
+      fi
       printf '\n[... TRUNCATED — file is %s bytes; first %s bytes shown above (mode=%s, per-file cap=%s, budget remaining was %s; fallback embedder) ...]\n' \
-        "${_size}" "${_effective_cap}" "${_mode}" "${_cap}" "${_budget_remaining}"
-      _emit_bytes="${_effective_cap}"
+        "${_size}" "${_shown_bytes}" "${_mode}" "${_cap}" "${_budget_remaining}"
+      _emit_bytes="${_shown_bytes}"
     fi
 
     if [[ "${_emit_bytes:-}" =~ ^[0-9]+$ ]] && [ "${_emit_bytes}" -gt 0 ]; then
