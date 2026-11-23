@@ -5,13 +5,30 @@
   "entry_id": "processed_command_9990_7098598275_approved",
   "issue_number": 9990,
   "metadata": {
+    "branch": "ai/issue-9990",
+    "changed_files": [
+      ".github/workflows/orchestrate_poll.yml",
+      "README.md",
+      "agents.d/9990-broker-durable-sha-cache.md",
+      "changelog.d/9990-broker-durable-sha-cache.md",
+      "scripts/claude_pool_daily_usage.sh",
+      "tests/test_claude_pool_daily_usage.py",
+      "tools/claude-pool-broker/src/index.ts",
+      "tools/claude-pool-broker/test/broker.test.ts",
+      "tools/claude-pool-broker/wrangler.toml"
+    ],
+    "issue_number": 9990,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9990",
+    "pr_number": 9995,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9995",
+    "run_attempt": "1",
+    "run_id": "45159844808",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/45159844808"
   },
   "run_attempt": 1,
   "run_id": "45159844808",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-23T10:58:13Z",
+  "status": "completed",
+  "timestamp": "2026-11-23T11:36:38Z",
   "workflow": "implement"
 }
