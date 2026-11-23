@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml, choice of target job for `Pre-push affected-test gate tests` (currently `tests-hooks-and-orchestrator`)\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: run 44909097036 recorded step statuses only with no durations, so the slowest step and the target job's \"most headroom\" cannot be shown; the ci.yml comment (lines 1527\u20131531 and 1567\u20131578), the changelog fragment and the test-file comment all call the choice a judgment; the 15m32s total (run 43220859648) predates #9420 moving six more steps into the job; no second slow step was identified; severity disagreement: NIT (anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3) vs MAJOR (openai_gpt-6-luna); mechanical constraints (step unchanged, names kept, no timeout raised, no new job) are met\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, the choice of target job for `Pre-push affected-test gate tests`.\n  Evidence of absence: mechanical constraints met; \"most headroom\" cannot be shown because run 44909097036 recorded statuses only, and the 15m32s total (run 43220859648) predates #9420. The next budget-watch run has to confirm the placement.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n(All other checklist sections: NONE. The last autofix change was comment-only; the step appears once at line 1584, within the `tests-hooks-and-orchestrator` job.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml, choice of target job for `Pre-push affected-test gate tests` and identification of the slowest step.\n  Evidence of absence: run 44909097036 gave no step timings, only statuses, so the slowest step and the job with the most headroom cannot be definitively identified; the author documented this in workflow comments and the changelog fragment.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml, target-job choice for `Pre-push affected-test gate tests` (currently `tests-hooks-and-orchestrator`).\n  Evidence of absence: run 44909097036 recorded statuses only; the ci.yml comment (lines ~1567-1583), the test comment above `POLL_GROUP_ZERO_9895_TARGET_JOB_ID` and the changelog fragment admit a judgment call; 15m32s (run 43220859648) predates #9420; 15m35s for `tests-heal-plan-and-validation` (run 43314513853) predates the same six steps leaving it; `orchestrate-poll` headroom is unstated since its cap was raised to 30 minutes in #9916; no second slow step was identified. Mechanical constraints hold.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of the steps to move and the target job for `Pre-push affected-test gate tests`.\n  Evidence of absence: the workflow comment at lines 1527\u20131531 and 1567\u20131578 says step timings were unavailable and no candidate job's total with the step is measured; the target is a judgment based on older totals and test counts.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "52f149d44e1e718a158093aeca25891131b6f8cc354680d43b9188676c3bb041",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9898,
+    "run_id": "45171665393",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45171665393",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123135624_3f2a75ea89",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9898,
+    "run_id": "45171665393"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T13:56:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
