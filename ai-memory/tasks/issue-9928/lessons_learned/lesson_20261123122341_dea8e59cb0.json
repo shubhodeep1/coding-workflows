@@ -1,0 +1,23 @@
+{
+  "discovered_at": "2026-11-23T12:23:41Z",
+  "issue_number": 9928,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=scripts/review_enable_auto_merge.sh:110-131; cited_path=scripts/review_enable_auto_merge.sh; files_touched=.github/workflows/review_autofix.yml, README.md, agents.d/9928-review-pr-read-cache.md, changelog.d/9928-review-pr-read-cache.md, scripts/gh_helpers.sh, scripts/pr_checks_lib.sh, scripts/review_collect_pr_metadata.sh, scripts/review_run_reviewers.sh, tests/test_gh_pr_cached_read.py, tests/test_review_autofix_claude_fixer_mode.py.",
+  "phase": "review_autofix",
+  "pr_number": 9935,
+  "record_id": "lesson_20261123122341_dea8e59cb0",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/review_enable_auto_merge.sh",
+    ".github/workflows/review_autofix.yml",
+    "README.md",
+    "agents.d/9928-review-pr-read-cache.md",
+    "changelog.d/9928-review-pr-read-cache.md",
+    "scripts/gh_helpers.sh",
+    "scripts/pr_checks_lib.sh",
+    "scripts/review_collect_pr_metadata.sh",
+    "scripts/review_run_reviewers.sh",
+    "tests/test_gh_pr_cached_read.py",
+    "tests/test_review_autofix_claude_fixer_mode.py"
+  ]
+}
