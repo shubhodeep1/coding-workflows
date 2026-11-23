@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml, target-job selection and rationale for `Pre-push affected-test gate tests` (comment block at ci.yml:1560-1583; mirrored in tests/test_ci_poll_test_sharding.py:4271-4284 and changelog.d/9895-ci-prepush-step-to-heal-job.md:2)\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: Run 44909097036 recorded step statuses only, with no timings, so nothing proves the chosen job has the most headroom, ci.yml:1567-1578 calls the choice a judgment and not a measured margin, the mechanical constraints hold (step moved unchanged, names kept, no timeout raised, no new job), no code change can close the gap. Severity disagreement: openai_gpt-6-luna rated it MAJOR; the others rated it NIT.\n- requirement: The PR acceptance table requires the red-on-base test, `tests/test_ci_poll_test_sharding.py`, `tests/test_ci_job_split_contract.py`, and the `tests-heal-plan-and-validation` check.\n  expected_change_site: Validation results for the named tests and check\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR description's acceptance table marks the red-on-base test, both test targets and the check as unmet or not run, and the supplied check-run context shows no successful results for them. Severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, target-job choice and rationale for `Pre-push affected-test gate tests`.\n  Evidence of absence: Run 44909097036 recorded step statuses only, so there is no timing data to prove the target has the most headroom. The ci.yml comment, the test-file comment and the changelog fragment all say this and call the choice a judgment. The mechanical constraints are met. No code change can close this gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml \u2014 target-job selection for `Pre-push affected-test gate tests`\n  Evidence of absence: Run 44909097036 recorded statuses only, with no step timings. The PR documents this limit in ci.yml:1567-1583, tests/test_ci_poll_test_sharding.py:4271-4284 and changelog.d/9895-ci-prepush-step-to-heal-job.md:2. The mechanical constraints all hold. It is a known data limit and a residual NIT, not an actionable defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, target-job selection and rationale for `Pre-push affected-test gate tests`.\n  Evidence of absence: The workflow comment at lines 1567\u20131578 says no candidate job's current total with this step is measured and calls the selection a judgment. The PR does not establish from the run's step timings that the chosen job has the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- Requirement: The PR acceptance table requires the red-on-base test, `tests/test_ci_poll_test_sharding.py`, `tests/test_ci_job_split_contract.py`, and the `tests-heal-plan-and-validation` check.\n  Expected change site: Validation results for the named tests and check.\n  Evidence of absence: The PR description's acceptance table marks the red-on-base test, both test targets and the check as unmet or not run. The supplied check-run context shows no successful results for them.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml, target-job selection and rationale for `Pre-push affected-test gate tests` (comment block at ci.yml:1560-1583; mirrored in tests/test_ci_poll_test_sharding.py:4271-4284 and changelog.d/9895-ci-prepush-step-to-heal-job.md:2)\n  Evidence of absence: Run 44909097036 recorded step statuses only, with no durations. ci.yml:1567-1568 says \"No candidate job's current total with this step is measured\" and ci.yml:1577-1578 calls the choice \"a judgment, not a measured margin\". The mechanical constraints all hold. No code change can close this gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "89788aa33ac6a58cc8697fbc35ac919547b78d557918080eef126b33ce748e14",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9898,
+    "run_id": "45146148233",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45146148233",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123093314_618ea0645f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9898,
+    "run_id": "45146148233"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T09:33:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
