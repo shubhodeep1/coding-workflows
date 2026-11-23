@@ -136,6 +136,34 @@ def git_env(manifest):
 		"GIT_TERMINAL_PROMPT": "0", "GIT_LFS_SKIP_SMUDGE": "1"}
 
 
+# PR #9112 (issue #9111) needs .github/ai/chatgpt_pool.json, but every
+# autofix run made no edits because allowed() admitted only claude_engine.json
+# under .github/ai/. This one exact path is admitted behind an off switch:
+# unset, empty or "true" (any case) keeps it on, "false" (any case) turns it
+# off, and any other value also turns it off with a one-time warning. Every
+# other .github/ai/ path stays rejected.
+CHATGPT_POOL_CONFIG_PATH = ".github/ai/chatgpt_pool.json"
+CHATGPT_POOL_CONFIG_FLAG = "REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED"
+_chatgpt_pool_config_flag_warned = False
+
+
+def chatgpt_pool_config_admitted():
+	"""Return whether .github/ai/chatgpt_pool.json may enter the review sandbox.
+
+	Read at call time (not import time). The raw value is never printed.
+	"""
+	global _chatgpt_pool_config_flag_warned
+	value = os.environ.get(CHATGPT_POOL_CONFIG_FLAG)
+	if value is None or value == "" or value.lower() == "true":
+		return True
+	if value.lower() == "false":
+		return False
+	if not _chatgpt_pool_config_flag_warned:
+		_chatgpt_pool_config_flag_warned = True
+		print(f"::warning::{CHATGPT_POOL_CONFIG_FLAG} has an unrecognised value; {CHATGPT_POOL_CONFIG_PATH} stays out of the review sandbox", file=sys.stderr)
+	return False
+
+
 def allowed(name, host=None, commands=None):
 	parts = PurePosixPath(name).parts
 	if not parts or name.startswith("/") or ".." in parts or "\\" in name or "\n" in name or "\r" in name:
@@ -147,6 +175,9 @@ def allowed(name, host=None, commands=None):
 	# This host-executed safety hook is never review-editor output.
 	if name == ".claude/hooks/pr_merge_status_guard.py":
 		return False
+	# PR #9112 / issue #9111: exact-path admission behind the off switch above.
+	if name == CHATGPT_POOL_CONFIG_PATH:
+		return chatgpt_pool_config_admitted()
 	if name in (".github/ai/claude_engine.json", ".claude/hooks/gh_api_write_guard.py", "scripts/claude_settings.json.tmpl"):
 		return True
 	# Command admission must use the inventory frozen by snapshot.
@@ -962,6 +993,10 @@ def main():
 		if sys.argv[1] == "seed":
 			seed(host, workspace, manifest, sys.argv[5], Path(sys.argv[6]))
 		elif sys.argv[1] == "snapshot":
+			# PR #9112 / issue #9111: read the switch once here, because snapshot
+			# stderr reaches the Actions log while transfer stderr is redirected
+			# to a reason file, so a mistyped value still logs its warning.
+			chatgpt_pool_config_admitted()
 			snapshot(host, workspace, manifest, Path(sys.argv[5]) if len(sys.argv) == 6 else None,
 				skip_oversized=os.environ.get("REVIEW_SNAPSHOT_SKIP_OVERSIZED", "0") == "1")
 		elif sys.argv[1] == "refresh":
