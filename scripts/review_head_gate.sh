@@ -128,6 +128,11 @@ review_head_gate_freshness_sync()
 {
 	local fs_repo="${1:-}" fs_pr="${2:-}" fs_head="${3:-}" fs_base="${4:-}" fs_login="${5:-}" fs_comments="${6:-}"
 	local fs_markers fs_marker fs_from fs_sync fs_base_parent fs_commit fs_parent_count fs_first fs_second fs_verified fs_committer fs_status
+	# Issue #9533: on a skip, expose the verified approved head and base
+	# parent to a sourcing caller (the single-issue security pass), so it
+	# needs no second marker parser. Empty on every other outcome.
+	REVIEW_HEAD_GATE_FRESHNESS_FROM=""
+	REVIEW_HEAD_GATE_FRESHNESS_BASE_PARENT=""
 	REVIEW_HEAD_GATE_FRESHNESS_SYNC_FROM=""
 	fs_log()
 	{
@@ -203,6 +208,8 @@ review_head_gate_freshness_sync()
 			return 1
 			;;
 	esac
+	REVIEW_HEAD_GATE_FRESHNESS_FROM="${fs_from}"
+	REVIEW_HEAD_GATE_FRESHNESS_BASE_PARENT="${fs_second}"
 	fs_log skip freshness_sync "from=${fs_from} base_parent=${fs_second} sync=${fs_sync} merge=${fs_head}"
 	REVIEW_HEAD_GATE_FRESHNESS_SYNC_FROM="${fs_from}"
 	return 0

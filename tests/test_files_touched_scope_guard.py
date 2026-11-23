@@ -191,15 +191,29 @@ def test_review_blocked_reissue_new_output_paths_allow_only_declared_files() -> 
 		"tests/fixtures/integration_ref_resolver/undeclared_sibling.json",
 		"scripts/unrelated.sh",
 	]
-	status, allow, oos = guard.evaluate(body, staged)
-	assert status == guard.STATUS_OUT_OF_SCOPE
-	assert "changelog.d/4605-security-issue-base-binding.md" in allow
-	assert oos == [
-		"tests/fixtures/integration_ref_resolver/undeclared_sibling.json",
-		"scripts/unrelated.sh",
-	]
-	status, _allow, oos = guard.evaluate(body, staged[:3])
-	assert status == guard.STATUS_IN_SCOPE, oos
+	# The fixture auto-allow (SCOPE_GUARD_AUTO_ALLOW_PATHS) is switched off so
+	# this keeps checking the declared-file logic.
+	saved = _with_env(SCOPE_GUARD_AUTO_ALLOW_PATHS="none")
+	try:
+		status, allow, oos = guard.evaluate(body, staged)
+		assert status == guard.STATUS_OUT_OF_SCOPE
+		assert "changelog.d/4605-security-issue-base-binding.md" in allow
+		assert oos == [
+			"tests/fixtures/integration_ref_resolver/undeclared_sibling.json",
+			"scripts/unrelated.sh",
+		]
+		status, _allow, oos = guard.evaluate(body, staged[:3])
+		assert status == guard.STATUS_IN_SCOPE, oos
+	finally:
+		_restore_env(saved)
+	# With the default auto-allow, the undeclared fixture sibling is allowed;
+	# the unrelated script still blocks.
+	saved = _with_env()
+	try:
+		status, _allow, oos = guard.evaluate(body, staged)
+		assert status == guard.STATUS_OUT_OF_SCOPE and oos == ["scripts/unrelated.sh"], oos
+	finally:
+		_restore_env(saved)
 
 
 def test_leading_dot_slash_normalized_both_sides() -> None:
@@ -974,7 +988,8 @@ _WIDENED_PLAN = ("## Files likely to change\n- `backend/withdrawal_flow.py`\n- `
 
 
 def _with_env(**values):
-	names = ("ENFORCE_FILES_TOUCHED", "ALLOW_OUT_OF_SCOPE_FILES", "PLAN_FILES_TOUCHED_GATE_ENABLED")
+	names = ("ENFORCE_FILES_TOUCHED", "ALLOW_OUT_OF_SCOPE_FILES", "PLAN_FILES_TOUCHED_GATE_ENABLED",
+		"SCOPE_GUARD_AUTO_ALLOW_PATHS")
 	saved = {name: os.environ.get(name) for name in names}
 	for name in names:
 		os.environ.pop(name, None)
@@ -1097,6 +1112,14 @@ def test_own_issue_fragments_are_allowed_for_issue_body_scopes() -> None:
 	"""Consumer tele-funtoken-msg-scoring#4815 (run 40055496344): an exact
 	files_touched list without changelog.d refused the fragment CLAUDE.md §20
 	requires. The issue's own changelog / agents fragments are always allowed."""
+	saved = _with_env(SCOPE_GUARD_AUTO_ALLOW_PATHS="none")
+	try:
+		_check_own_issue_fragments_with_auto_allow_off()
+	finally:
+		_restore_env(saved)
+
+
+def _check_own_issue_fragments_with_auto_allow_off() -> None:
 	body = _body("backend/withdrawal_flow.py")
 	staged = ["backend/withdrawal_flow.py", "changelog.d/4815-link-retry.md", "agents.d/4815-link-retry.md"]
 	status, _allow, oos = guard.evaluate(body, staged, issue_number="4815")
@@ -1121,6 +1144,14 @@ def test_own_issue_fragments_are_allowed_for_issue_body_scopes() -> None:
 
 
 def test_cli_issue_number_allows_own_fragments() -> None:
+	saved = _with_env(SCOPE_GUARD_AUTO_ALLOW_PATHS="none")
+	try:
+		_check_cli_issue_number_allows_own_fragments()
+	finally:
+		_restore_env(saved)
+
+
+def _check_cli_issue_number_allows_own_fragments() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		tdp = Path(td)
 		body_file = tdp / "body.txt"
@@ -1142,7 +1173,7 @@ def test_cli_issue_number_allows_own_fragments() -> None:
 def test_plan_gate_does_not_hold_for_own_issue_fragments() -> None:
 	"""#7986's hold must not park an auto-heal plan that adds the issue's own
 	changelog fragment (it would wait for a human)."""
-	saved = _with_env()
+	saved = _with_env(SCOPE_GUARD_AUTO_ALLOW_PATHS="none")
 	try:
 		plan = "## Files likely to change\n- `backend/a.py`\n- `changelog.d/42-a-fix.md`\n- `agents.d/42-a-fix.md`\n"
 		code, record = _run_plan_gate_cli(plan, "true", _owner_meta("backend/a.py"))
@@ -1506,7 +1537,11 @@ def test_build_pipeline_plan_grant_body_appends_a_canonical_block() -> None:
 	assert guard.extract_files_touched(body) == ["a/b.py", "tests/**", "changelog.d/*", "agents.d/*"]
 
 
-def _run_grant_cli(plan: str, meta: dict, flag: str = "true", allow_edits: str = "true") -> tuple[int, dict, str | None]:
+def _run_grant_cli(plan: str, meta: dict, flag: str = "true", allow_edits: str = "true",
+	cwd: str | Path | None = None) -> tuple[int, dict, str | None]:
+	# The gate reads extensionless plan paths from its current directory, the
+	# planning checkout (#9387). Without ``cwd`` it runs from the empty temp
+	# dir, so the repository's own files never change these cases.
 	with tempfile.TemporaryDirectory() as td:
 		tdp = Path(td)
 		(tdp / "plan.md").write_text(plan, encoding="utf-8")
@@ -1515,7 +1550,8 @@ def _run_grant_cli(plan: str, meta: dict, flag: str = "true", allow_edits: str =
 		proc = subprocess.run([sys.executable, str(GUARD_SCRIPT), "--plan-auto-approval-gate",
 			"--plan-file", str(tdp / "plan.md"), "--flag-enabled", flag, "--pipeline-login", "pipeline[bot]",
 			"--allow-workflow-edits", allow_edits, "--issue-number", "42", "--issue-meta-file", str(tdp / "meta.json"),
-			"--pipeline-grant-body-out", str(out)], capture_output=True, text=True, check=False)
+			"--pipeline-grant-body-out", str(out)], capture_output=True, text=True, check=False,
+			cwd=str(cwd) if cwd is not None else td)
 		body = out.read_text(encoding="utf-8") if out.exists() and out.stat().st_size else None
 		return proc.returncode, json.loads(proc.stdout), body
 
@@ -1727,6 +1763,138 @@ def test_plan_gate_approve_record_keys_unchanged() -> None:
 	_code, record, _ = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n", _owner_meta("scripts/a.sh"))
 	assert record["decision"] == "approve" and record["reason"] == "granted"
 	assert set(record) == {"decision", "reason", "protected_paths", "denied_paths", "log_paths"}
+
+
+# --- SCOPE_GUARD_AUTO_ALLOW_PATHS (stuck-states P7a, Refs #8291) ------------
+
+def _auto_allow_cli(body: str, staged: list[str], *extra: str, env_value: str | None = None) -> subprocess.CompletedProcess:
+	with tempfile.TemporaryDirectory() as td:
+		tdp = Path(td)
+		body_file = tdp / "body.txt"
+		body_file.write_text(body, encoding="utf-8")
+		staged_file = tdp / "staged.txt"
+		staged_file.write_text("\n".join(staged) + "\n", encoding="utf-8")
+		env = dict(os.environ)
+		env.pop("SCOPE_GUARD_AUTO_ALLOW_PATHS", None)
+		if env_value is not None:
+			env["SCOPE_GUARD_AUTO_ALLOW_PATHS"] = env_value
+		return subprocess.run([sys.executable, str(GUARD_SCRIPT), "--issue-body-file", str(body_file),
+			"--staged-file", str(staged_file), *extra], capture_output=True, text=True, env=env)
+
+
+def test_auto_allow_default_covers_changelog_and_fixtures() -> None:
+	saved = _with_env()
+	try:
+		status, _allow, oos = guard.evaluate(_body("src/app.ts"),
+			["src/app.ts", "changelog.d/x.md", "tests/fixtures/a/b.json"])
+		assert status == guard.STATUS_IN_SCOPE and oos == [], oos
+		refused = ["changelog.d/a/b.md", "changelog.d/x.txt", "tests/fixture.json"]
+		status, _allow, oos = guard.evaluate(_body("src/app.ts"), ["src/app.ts"] + refused)
+		assert status == guard.STATUS_OUT_OF_SCOPE and oos == refused, oos
+		# The explicit (ai:scope:) allowlist gets the allowance too, as it gets lockfiles.
+		status, _allow, oos = guard.evaluate("", ["changelog.d/x.md"], allowlist_entries=["src/**"])
+		assert status == guard.STATUS_IN_SCOPE, oos
+		# The plan-time files_touched hold agrees with implement.
+		plan = "## Files likely to change\n- `src/app.ts`\n- `changelog.d/foo.md`\n- `tests/fixtures/x.json`\n"
+		assert guard.plan_files_outside_files_touched(plan, _body("src/app.ts")) == []
+	finally:
+		_restore_env(saved)
+
+
+def test_auto_allow_strict_mode_unchanged() -> None:
+	saved = _with_env()
+	try:
+		status, _allow, oos = guard.evaluate(_body("src/app.ts"), ["changelog.d/x.md"], allow_lockfiles=False)
+		assert status == guard.STATUS_OUT_OF_SCOPE and oos == ["changelog.d/x.md"]
+		assert not guard.path_in_scope("tests/fixtures/a.json", ["src/**"], allow_lockfiles=False)
+	finally:
+		_restore_env(saved)
+	proc = _auto_allow_cli(_body("src/app.ts"), ["changelog.d/x.md"], "--strict-allowlist")
+	assert proc.returncode == guard.EXIT_OUT_OF_SCOPE and proc.stdout.strip() == "changelog.d/x.md", proc
+
+
+def test_auto_allow_kill_switch_and_empty_default() -> None:
+	for off in ("none", "OFF", "false", "0", "no", " None "):
+		saved = _with_env(SCOPE_GUARD_AUTO_ALLOW_PATHS=off)
+		try:
+			status, _allow, oos = guard.evaluate(_body("src/app.ts"), ["changelog.d/x.md", "tests/fixtures/a.json"])
+			assert status == guard.STATUS_OUT_OF_SCOPE and len(oos) == 2, (off, oos)
+		finally:
+			_restore_env(saved)
+	for default in ({}, {"SCOPE_GUARD_AUTO_ALLOW_PATHS": ""}, {"SCOPE_GUARD_AUTO_ALLOW_PATHS": "  "}):
+		saved = _with_env(**default)
+		try:
+			assert guard.evaluate(_body("src/app.ts"), ["changelog.d/x.md"])[0] == guard.STATUS_IN_SCOPE, default
+		finally:
+			_restore_env(saved)
+	assert guard.parse_scope_guard_auto_allow_paths(None) == (["changelog.d/*.md", "tests/fixtures/**"], [])
+	assert guard.parse_scope_guard_auto_allow_paths("off") == ([], [])
+
+
+def test_auto_allow_entry_validation() -> None:
+	globs, ignored = guard.parse_scope_guard_auto_allow_paths(
+		"scripts/**,.GitHub/**,prompts/*.md,**,*.md,../x,/abs,docs/ok/**,.git/x,Workflow-Templates/a,a//b")
+	assert globs == ["docs/ok/**"], globs
+	assert ignored == [("scripts/**", "automation_prefix"), (".GitHub/**", "automation_prefix"),
+		("prompts/*.md", "automation_prefix"), ("**", "unanchored_glob"), ("*.md", "unanchored_glob"),
+		("../x", "parent_segment"), ("/abs", "absolute"), (".git/x", "automation_prefix"),
+		("Workflow-Templates/a", "automation_prefix"), ("a//b", "empty_segment")], ignored
+	many = ",".join(f"d{i}/**" for i in range(21))
+	globs, ignored = guard.parse_scope_guard_auto_allow_paths(many)
+	assert len(globs) == 20 and ignored == [("d20/**", "too_many")]
+	long_entry = "d/" + "a" * 199
+	assert len(long_entry) == 201
+	assert guard.parse_scope_guard_auto_allow_paths(long_entry) == ([], [(long_entry, "too_long")])
+	ok_entry = "d/" + "a" * 198
+	assert guard.parse_scope_guard_auto_allow_paths(ok_entry) == ([ok_entry], [])
+
+
+def test_auto_allow_path_hard_deny() -> None:
+	saved = _with_env(SCOPE_GUARD_AUTO_ALLOW_PATHS="docs/**,tests/fixtures/**")
+	try:
+		assert guard.scope_guard_auto_allow_match("docs/a.md") == "docs/**"
+		for path in ("Scripts/x.sh", ".claude/x", ".git/config", ".GITHUB/workflows/x.yml", "prompts/a.txt",
+				"tests/fixtures/../../scripts/x.sh"):
+			assert guard.scope_guard_auto_allow_match(path) is None, path
+	finally:
+		_restore_env(saved)
+
+
+def test_auto_allow_cli_logs_decision() -> None:
+	proc = _auto_allow_cli(_body("src/a.py"), ["src/a.py", "changelog.d/x.md"])
+	assert proc.returncode == guard.EXIT_IN_SCOPE and proc.stdout.strip() == "", proc
+	assert "SCOPE_GUARD_AUTO_ALLOWED path=changelog.d/x.md glob=changelog.d/*.md" in proc.stderr, proc.stderr
+	proc = _auto_allow_cli(_body("src/a.py", "changelog.d/x.md"), ["src/a.py", "changelog.d/x.md"])
+	assert proc.returncode == guard.EXIT_IN_SCOPE and "SCOPE_GUARD_AUTO_ALLOWED" not in proc.stderr, proc.stderr
+	proc = _auto_allow_cli(_body("src/a.py"), ["changelog.d/x.md"], env_value="**,changelog.d/*.md")
+	assert proc.returncode == guard.EXIT_IN_SCOPE, proc
+	assert proc.stderr.count("SCOPE_GUARD_AUTO_ALLOW_IGNORED entry=** reason=unanchored_glob") == 1, proc.stderr
+	proc = _auto_allow_cli(_body("src/a.py"), ["docs/x.md"], env_value="bad entry:\n::x/../y")
+	assert "entry=bad_entry___" in proc.stderr and "\n::" not in proc.stderr, proc.stderr
+
+
+def test_auto_allow_never_grants_automation_paths() -> None:
+	saved = _with_env(SCOPE_GUARD_AUTO_ALLOW_PATHS="tests/fixtures/**")
+	try:
+		grant = {"schema_version": guard.AUTOMATION_GRANT_SCHEMA, "issue_number": 7, "trusted": True,
+			"open": False, "reason": "granted", "paths": []}
+		status, denied, reason = guard.check_automation_paths([".github/workflows/x.yml", "tests/fixtures/a.json"],
+			grant, "true", "7")
+		assert status == guard.STATUS_OUT_OF_SCOPE and denied == [".github/workflows/x.yml"], (denied, reason)
+	finally:
+		_restore_env(saved)
+
+
+def test_auto_allow_env_wired_into_workflows() -> None:
+	row = "SCOPE_GUARD_AUTO_ALLOW_PATHS: ${{ vars.SCOPE_GUARD_AUTO_ALLOW_PATHS || 'changelog.d/*.md,tests/fixtures/**' }}"
+	workflows = REPO_ROOT / ".github" / "workflows"
+	for name in ("implement.yml", "plan.yml"):
+		assert row in (workflows / name).read_text(encoding="utf-8"), name
+	poll = (workflows / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert poll.count(row) == poll.count("PLAN_FILES_TOUCHED_GATE_ENABLED: ${{") == 5
+	for path in workflows.glob("*.yml"):
+		assert path.stat().st_size < 480_000, path
+	assert row.split("'")[1] == guard.SCOPE_GUARD_AUTO_ALLOW_DEFAULT
 
 
 # --- Test-only heal plans (issue #8809) -------------------------------------
@@ -2171,6 +2339,157 @@ def test_implement_scope_callers_pass_auto_heal_identity() -> None:
 	assert text.count(export) == 1
 	check = 'if [[ "${pipeline_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\\[bot\\])?$ ]]; then'
 	assert text.index(check) < text.index(export) < text.index(check) + len(check) + 120
+
+
+def test_plan_grant_path_grants_extensionless_checkout_file() -> None:
+	# #9387: an extensionless path is granted only when it is a regular file in
+	# the planning checkout (the current directory); never a directory or a
+	# symlink, and a missing one is reported, not silently dropped.
+	previous = os.getcwd()
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		(root / "bin").mkdir()
+		(root / "bin" / "tool").write_text("#!/bin/sh\n", encoding="utf-8")
+		(root / "VERSION").write_text("1.0\n", encoding="utf-8")
+		(root / ".env").write_text("X=1\n", encoding="utf-8")
+		(root / "docs" / "sub").mkdir(parents=True)
+		os.symlink("tool", root / "bin" / "link")
+		os.symlink("bin", root / "alias")
+		try:
+			os.chdir(td)
+			assert guard._plan_grant_path("bin/tool") == "bin/tool"
+			assert guard._plan_grant_path("VERSION") == "VERSION"
+			# alias/tool reaches bin/tool through a symlinked parent.
+			for bad in ("docs/sub", "docs", "bin/link", "bin/missing", "MISSING", ".env", "bin", "alias/tool"):
+				assert guard._plan_grant_path(bad) == "", bad
+			# Named bare files keep their grant without being in the checkout.
+			assert guard._plan_grant_path("_headers") == "_headers"
+			assert guard._plan_grant_path("public/_redirects") == "public/_redirects"
+			assert guard._plan_grant_checkout_state("bin/tool") == "file"
+			assert guard._plan_grant_checkout_state("bin/link") == "other"
+			assert guard._plan_grant_checkout_state("docs/sub") == "other"
+			assert guard._plan_grant_checkout_state("bin/missing") == "missing"
+			assert guard._plan_grant_checkout_state("alias/tool") == "other"
+			assert guard._plan_grant_missing_path("alias/new") == ""
+			missing: list[str] = []
+			plan = ("## Files likely to change\n- `bin/tool`\n- `docs/sub`\n- `bin/new`\n- `bin/new`\n"
+				"- `owner/repo`\n- `bin/link`\n")
+			assert guard.extract_plan_file_paths(plan, missing_out=missing) == ["bin/tool"]
+			assert missing == ["bin/new"]
+			assert guard.extract_plan_missing_file_paths(plan) == ["bin/new"]
+			# Callers without missing_out see the same paths.
+			assert guard.extract_plan_file_paths(plan) == ["bin/tool"]
+		finally:
+			os.chdir(previous)
+
+
+def test_plan_gate_missing_extensionless_path_hold_is_replannable() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		(root / "scripts" / "subdir").mkdir(parents=True)
+		(root / "lib").mkdir()
+		plan = "## Files likely to change\n- `scripts/a.sh`\n- `scripts/new-tool`\n"
+		code, record, body = _run_grant_cli(plan, _pipeline_meta(), cwd=root)
+		assert code != 0 and record["decision"] == "hold" and record["reason"] == "path_not_granted", record
+		assert record["denied_paths"] == ["scripts/new-tool"] and record.get("replannable") is True, record
+		assert body is None and "pipeline_grant_body" not in record
+		# On the heal route the same hold is not replannable.
+		healed = dict(_pipeline_meta(), labels=[{"name": "ai:workflow-heal"}])
+		code, record, body = _run_grant_cli(plan, healed, cwd=root)
+		assert record["decision"] == "hold" and record["reason"] == "path_not_granted", record
+		assert record["denied_paths"] == ["scripts/new-tool"] and "replannable" not in record and body is None, record
+		# With the file in the checkout the plan gets its pipeline grant.
+		(root / "scripts" / "new-tool").write_text("#!/bin/sh\n", encoding="utf-8")
+		code, record, body = _run_grant_cli(plan, _pipeline_meta(), cwd=root)
+		assert code == 0 and record["reason"] == "pipeline_plan_grant", record
+		assert body is not None and "  - scripts/new-tool\n" in body
+		# A missing non-protected file under an existing directory holds too.
+		code, record, body = _run_grant_cli("## Files likely to change\n- `lib/run`\n", _owner_meta(), cwd=root)
+		assert record["decision"] == "hold" and record["reason"] == "path_not_granted", record
+		assert record["denied_paths"] == ["lib/run"] and record.get("replannable") is True, record
+		# A directory is never granted and is not replannable.
+		code, record, body = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n- `scripts/subdir`\n",
+			_pipeline_meta(), cwd=root)
+		assert record["decision"] == "hold" and "replannable" not in record and body is None, record
+		# A prose token whose first segment is not a checkout directory is ignored.
+		code, record, body = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n- `owner/repo`\n",
+			_pipeline_meta(), cwd=root)
+		assert code == 0 and record["reason"] == "pipeline_plan_grant", record
+
+
+def test_plan_gate_missing_root_extensionless_path_hold_is_replannable() -> None:
+	# #9387: a root-level extensionless file the checkout lacks, listed as a
+	# Files bullet's leading backticked token, holds the plan as replannable.
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		(root / "scripts").mkdir()
+		plan = "## Files likely to change\n- `scripts/a.sh`\n- `VERSION` - bump the version\n"
+		# Not a git checkout: nothing is reported, as before.
+		code, record, body = _run_grant_cli(plan, _pipeline_meta(), cwd=root)
+		assert code == 0 and record["reason"] == "pipeline_plan_grant", record
+		(root / ".git").mkdir()
+		code, record, body = _run_grant_cli(plan, _pipeline_meta(), cwd=root)
+		assert record["decision"] == "hold" and record["reason"] == "path_not_granted", record
+		assert record["denied_paths"] == ["VERSION"] and record.get("replannable") is True, record
+		assert body is None
+		# Prose naming a root token, or a token that is not the bullet's lead, never counts.
+		for prose in ("- Update `VERSION` notes\n", "- `scripts/a.sh` reads `VERSION`\n", "- `VERSION` is read\n"):
+			code, record, body = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n" + prose,
+				_pipeline_meta(), cwd=root)
+			assert code == 0 and record["reason"] == "pipeline_plan_grant", (prose, record)
+		# The unbackticked top-level bullet form holds the same way.
+		for bare in ("- VERSION\n", "- VERSION - bump the version\n", "- VERSION: bump the version\n"):
+			code, record, body = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n" + bare,
+				_pipeline_meta(), cwd=root)
+			assert record["decision"] == "hold" and record["denied_paths"] == ["VERSION"], (bare, record)
+			assert record.get("replannable") is True and body is None, (bare, record)
+		# An unbackticked prose bullet or an indented sub-bullet never counts.
+		for prose in ("- Update VERSION notes\n", "- `scripts/a.sh`\n  - `build_payload`: wraps the call\n",
+				"- `scripts/a.sh`\n  - VERSION\n", "- Tests: add cases for the new tool\n",
+				"- Docs - explain the schema\n", "- Notes (see below)\n", "- None\n", "- NONE\n",
+				"- None - no files need edits\n", "- `None` - no files need edits\n", "1. TODO: decide later\n"):
+			code, record, body = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n" + prose,
+				_pipeline_meta(), cwd=root)
+			assert code == 0 and record["reason"] == "pipeline_plan_grant", (prose, record)
+		# An existing root directory is never missing; an existing file is granted.
+		(root / "bin").mkdir()
+		code, record, body = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n- `bin`\n",
+			_pipeline_meta(), cwd=root)
+		assert record.get("denied_paths") != ["bin"], record
+		(root / "VERSION").write_text("1.0\n", encoding="utf-8")
+		code, record, body = _run_grant_cli(plan, _pipeline_meta(), cwd=root)
+		assert code == 0 and record["reason"] == "pipeline_plan_grant", record
+		assert body is not None and "  - VERSION\n" in body
+
+
+def test_plan_gate_missing_extensionless_hold_without_loaded_metadata_fails_closed() -> None:
+	# #9387: no protected path and the files_touched gate off leave the issue
+	# metadata unread; the heal-route check still runs, and unknown metadata
+	# is never replannable.
+	previous_cwd = os.getcwd()
+	previous_flag = os.environ.get("PLAN_FILES_TOUCHED_GATE_ENABLED")
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		(root / "lib").mkdir()
+		(root / "plan.md").write_text("## Files likely to change\n- `lib/run`\n", encoding="utf-8")
+		healed = dict(_owner_meta(), labels=[{"name": "ai:workflow-heal"}])
+		(root / "heal.json").write_text(json.dumps(healed), encoding="utf-8")
+		(root / "owner.json").write_text(json.dumps(_owner_meta()), encoding="utf-8")
+		try:
+			os.chdir(td)
+			os.environ["PLAN_FILES_TOUCHED_GATE_ENABLED"] = "false"
+			for meta_file, expected in (("heal.json", None), ("owner.json", True), ("", None), ("absent.json", None)):
+				record, _ = guard.run_plan_auto_approval_gate("plan.md", "true", meta_file, "pipeline[bot]",
+					"true", "42")
+				assert record["decision"] == "hold" and record["reason"] == "path_not_granted", (meta_file, record)
+				assert record["denied_paths"] == ["lib/run"], (meta_file, record)
+				assert record.get("replannable") is expected, (meta_file, record)
+		finally:
+			os.chdir(previous_cwd)
+			if previous_flag is None:
+				os.environ.pop("PLAN_FILES_TOUCHED_GATE_ENABLED", None)
+			else:
+				os.environ["PLAN_FILES_TOUCHED_GATE_ENABLED"] = previous_flag
 
 
 def _run_all() -> int:

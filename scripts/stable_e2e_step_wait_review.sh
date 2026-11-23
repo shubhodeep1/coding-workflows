@@ -60,6 +60,12 @@ REVIEW_PHASE_BASE_DEADLINE="${REVIEW_PHASE_DEADLINE}"
 REVIEW_PHASE_DEADLINE_CEILING="${REVIEW_PHASE_DEADLINE}"
 REVIEW_PHASE_HANDOFF_PENDING=0
 REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED=0
+# Runner-wait stretch (#9480): set while the watched run waits for a
+# runner, cleared when it starts, completes or is replaced.
+REVIEW_RUNNER_WAIT_SINCE=""
+REVIEW_RUNNER_WAIT_RUN_ID=""
+# Consecutive polls whose runs lookup came back empty (#9480).
+REVIEW_RUNNER_WAIT_EMPTY_POLLS=0
 if [[ "${E2E_JOB_STARTED_EPOCH:-}" =~ ^[0-9]+$ ]] \
     && [[ "${E2E_JOB_TIMEOUT_MINUTES:-}" =~ ^[0-9]+$ ]] \
     && [[ "${EDITOR_RETRY_BUDGET_MINUTES:-}" =~ ^[0-9]+$ ]] \
@@ -71,6 +77,30 @@ if [[ "${E2E_JOB_STARTED_EPOCH:-}" =~ ^[0-9]+$ ]] \
     REVIEW_PHASE_DEADLINE_CEILING="${REVIEW_PHASE_BASE_DEADLINE}"
   fi
 fi
+# Returns 0 when the watched review run is waiting for a runner (#9480):
+# a queued-like run status, or in_progress with no job in progress and
+# at least one job queued/waiting/pending. JOBS_JSON is reassigned on
+# every in_progress poll that has a known run ID (|| echo "" on a failed
+# read), so under that condition it holds this poll's response or is
+# empty; it is read only then. JOBS_STEP_JSON (fetched whenever JOBS_JSON
+# is empty, including in_progress polls whose jobs read failed) is never
+# read, and no gh call is made here. An
+# empty or unreadable jobs JSON returns 1, so the normal inactivity rules
+# apply (fail closed).
+review_waiting_for_runner() {
+  local rw_run_id="${RUN_ID:-}" rw_status="${RUN_STATUS:-}" rw_jobs="${JOBS_JSON:-}"
+  [[ "$rw_run_id" =~ ^[0-9]+$ ]] || return 1
+  case ",${BAIT_UNCOVERED_RUN_IDS:-}," in
+    *",${rw_run_id},"*) return 1 ;;
+  esac
+  case "$rw_status" in
+    queued|pending|waiting|requested) return 0 ;;
+    in_progress) ;;
+    *) return 1 ;;
+  esac
+  [ -n "$rw_jobs" ] || return 1
+  printf '%s' "$rw_jobs" | jq -e '(.jobs | type == "array") and ([.jobs[] | select(.status == "in_progress")] | length) == 0 and ([.jobs[] | select(.status == "queued" or .status == "waiting" or .status == "pending")] | length) > 0' >/dev/null 2>&1
+}
 # Returns 0 when the loop may keep polling past the base deadline.
 # Reads the state of the run polled last (RUN_ID, RUN_STATUS, IDLE,
 # CURRENT_STEP_STARTED_AT); the inactivity and per-step stall checks
@@ -87,6 +117,12 @@ review_phase_deadline_extension_allowed() {
   [ $((ext_now + ext_margin)) -lt "${REVIEW_PHASE_DEADLINE_CEILING}" ] || return 1
   # One poll to find the successor of a just-dropped run or pin.
   if [ "${REVIEW_PHASE_HANDOFF_PENDING:-0}" = "1" ]; then return 0; fi
+  # An empty runs lookup during an open runner-wait stretch says nothing
+  # about the run (#9480); keep the stretch alive, still bounded by the
+  # ceiling check above and the inactivity rules. At most 2 empty
+  # lookups in a row: a lasting one falls back to status=timeout.
+  if [ -n "${REVIEW_RUNNER_WAIT_RUN_ID:-}" ] && ! [[ "$ext_run_id" =~ ^[0-9]+$ ]] \
+      && [ "${REVIEW_RUNNER_WAIT_EMPTY_POLLS:-0}" -le 2 ]; then return 0; fi
   [[ "$ext_run_id" =~ ^[0-9]+$ ]] || return 1
   case ",${BAIT_UNCOVERED_RUN_IDS:-}," in
     *",${ext_run_id},"*) return 1 ;;
@@ -96,6 +132,8 @@ review_phase_deadline_extension_allowed() {
     in_progress) ;;
     *) return 1 ;;
   esac
+  # An in_progress run whose jobs all still wait for a runner (#9480).
+  if review_waiting_for_runner; then return 0; fi
   if [[ "$ext_idle" =~ ^[0-9]+$ ]] && [[ "$ext_inactivity" =~ ^[0-9]+$ ]] && [ "$ext_idle" -lt "$ext_inactivity" ]; then
     return 0
   fi
@@ -397,6 +435,24 @@ while true; do
         REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED=1
       fi
     else
+      # Keyed on the open stretch, not on re-reading the last poll: a
+      # stretch stays open across a poll that did not answer (empty runs
+      # lookup, failed or unreadable jobs read), and the queue diagnosis
+      # must survive that poll (#9480).
+      # Only when the ceiling itself is reached: other refusals keep the
+      # generic wall-clock error alone, so outcome=ceiling stays true.
+      rw_margin="${POLL_INTERVAL:-0}"
+      [[ "$rw_margin" =~ ^[0-9]+$ ]] || rw_margin=0
+      if [ -n "$REVIEW_RUNNER_WAIT_SINCE" ] && [ -n "${REVIEW_RUNNER_WAIT_RUN_ID}" ] \
+          && [ $((NOW + rw_margin)) -ge "${REVIEW_PHASE_DEADLINE_CEILING}" ]; then
+        rw_waited=$((NOW - REVIEW_RUNNER_WAIT_SINCE))
+        echo "E2E_REVIEW_RUNNER_WAIT run=${REVIEW_RUNNER_WAIT_RUN_ID} outcome=ceiling waited_seconds=${rw_waited}"
+        if review_waiting_for_runner; then
+          echo "::error::Review run ${REVIEW_RUNNER_WAIT_RUN_ID} was still waiting for a runner after $((rw_waited / 60)) minutes (ceiling reached); the hosted-runner queue, not the review, blocked the release"
+        else
+          echo "::error::Review run ${REVIEW_RUNNER_WAIT_RUN_ID} had been waiting for a runner for $((rw_waited / 60)) minutes when the ceiling was reached (the last poll did not answer, so the wait is unconfirmed); the hosted-runner queue, not the review, most likely blocked the release"
+        fi
+      fi
       echo "::error::Review phase exceeded its ${REVIEW_PHASE_WALL_BUDGET_MINUTES}-minute total wall-clock budget$(e2e_watched_run_urls)"
       echo "status=timeout" >> "$GITHUB_OUTPUT"
       exit 1
@@ -556,6 +612,13 @@ while true; do
     if [[ "$RUN_ID" =~ ^[0-9]+$ ]]; then REVIEW_PHASE_HANDOFF_PENDING=0; fi
 
     echo "  Review run #${RUN_ID}: status=${RUN_STATUS}, conclusion=${RUN_CONCLUSION}"
+    # A run that completes straight out of a runner wait (#9480) leaves
+    # the wait here, before the completed-run exits below.
+    if [ "$RUN_STATUS" = "completed" ] && [ -n "${REVIEW_RUNNER_WAIT_RUN_ID}" ] && [ "${REVIEW_RUNNER_WAIT_RUN_ID}" = "${RUN_ID}" ]; then
+      echo "E2E_REVIEW_RUNNER_WAIT run=${RUN_ID} outcome=started waited_seconds=$((NOW - REVIEW_RUNNER_WAIT_SINCE))"
+      REVIEW_RUNNER_WAIT_SINCE=""
+      REVIEW_RUNNER_WAIT_RUN_ID=""
+    fi
 
     if [ "$RUN_STATUS" = "completed" ]; then
       if [ "$RUN_CONCLUSION" = "success" ]; then
@@ -884,6 +947,40 @@ while true; do
     PREV_STATE="$CUR_STATE"
   fi
 
+  # Runner wait (#9480): time the watched review run spends waiting for
+  # a runner is never inactivity. The wall clock stays bounded by the
+  # #8004 deadline ceiling checked at the top of the loop.
+  REVIEW_RUNNER_WAIT_POLL_CONFIRMED=0
+  if [[ "$RUN_ID" =~ ^[0-9]+$ ]]; then
+    REVIEW_RUNNER_WAIT_EMPTY_POLLS=0
+  else
+    REVIEW_RUNNER_WAIT_EMPTY_POLLS=$((REVIEW_RUNNER_WAIT_EMPTY_POLLS + 1))
+  fi
+  if review_waiting_for_runner; then
+    REVIEW_RUNNER_WAIT_POLL_CONFIRMED=1
+    if [ "${REVIEW_RUNNER_WAIT_RUN_ID}" != "${RUN_ID}" ]; then
+      REVIEW_RUNNER_WAIT_SINCE="$NOW"
+      REVIEW_RUNNER_WAIT_RUN_ID="$RUN_ID"
+      echo "E2E_REVIEW_RUNNER_WAIT run=${RUN_ID} status=${RUN_STATUS} outcome=waiting since=${REVIEW_RUNNER_WAIT_SINCE} ceiling=${REVIEW_PHASE_DEADLINE_CEILING}"
+    fi
+    LAST_ACTIVITY=$NOW
+    IDLE=0
+  elif [ -n "${REVIEW_RUNNER_WAIT_RUN_ID}" ] \
+      && [[ "$RUN_ID" =~ ^[0-9]+$ ]] \
+      && { [ "$RUN_STATUS" != "in_progress" ] \
+        || { [ -n "${JOBS_JSON:-}" ] && printf '%s' "${JOBS_JSON}" | jq -e '.jobs | type == "array"' >/dev/null 2>&1; }; }; then
+    # Close the stretch only on a poll that answered: an empty runs
+    # lookup (RUN_ID not numeric) or a failed or unreadable jobs read on
+    # an in_progress run says nothing about the runner, so the stretch is kept (no false
+    # outcome=started). The inactivity rules above still apply to that
+    # poll because LAST_ACTIVITY is not reset here.
+    if [ "${REVIEW_RUNNER_WAIT_RUN_ID}" = "${RUN_ID}" ]; then
+      echo "E2E_REVIEW_RUNNER_WAIT run=${RUN_ID} outcome=started waited_seconds=$((NOW - REVIEW_RUNNER_WAIT_SINCE))"
+    fi
+    REVIEW_RUNNER_WAIT_SINCE=""
+    REVIEW_RUNNER_WAIT_RUN_ID=""
+  fi
+
   # Inactivity timeout. When BAIT_SHA is set and the loop
   # never matched a review run for that SHA, surface a
   # distinct status so verify-bait-removed's failure isn't
@@ -951,7 +1048,14 @@ while true; do
   fi
 
   REMAINING=$(( (INACTIVITY_LIMIT - IDLE + 59) / 60 ))
-  echo "  ... idle ${IDLE}s (timeout in ~${REMAINING}m) — step: ${CURRENT_STEP:-?}, head: ${PR_HEAD_SHA:0:7}, reviews: ${REVIEW_COMMENT_COUNT}, log: ${LOG_SIZE}b"
+  RUNNER_WAIT_SUFFIX=""
+  if [ -n "${REVIEW_RUNNER_WAIT_SINCE}" ] && [ "${REVIEW_RUNNER_WAIT_POLL_CONFIRMED}" = "1" ]; then
+    RUNNER_WAIT_SUFFIX=" (waiting for runner $(( (NOW - REVIEW_RUNNER_WAIT_SINCE) / 60 ))m)"
+  elif [ -n "${REVIEW_RUNNER_WAIT_SINCE}" ]; then
+    # Stretch kept open across a poll that did not answer (#9480).
+    RUNNER_WAIT_SUFFIX=" (runner wait unconfirmed this poll, $(( (NOW - REVIEW_RUNNER_WAIT_SINCE) / 60 ))m)"
+  fi
+  echo "  ... idle ${IDLE}s (timeout in ~${REMAINING}m) — step: ${CURRENT_STEP:-?}, head: ${PR_HEAD_SHA:0:7}, reviews: ${REVIEW_COMMENT_COUNT}, log: ${LOG_SIZE}b${RUNNER_WAIT_SUFFIX}"
   sleep "$POLL_INTERVAL"
   ELAPSED=$((ELAPSED + POLL_INTERVAL))
 done
