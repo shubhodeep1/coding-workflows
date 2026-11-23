@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"review_enable_auto_merge.sh:119 (reuse the cache)\" while \"Exactly one live pulls/N read stays before gh pr merge --auto.\"\n  expected_change_site: scripts/review_enable_auto_merge.sh, reviewed_head_is_current_for_labels()\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: No PR diff hunk touches scripts/review_enable_auto_merge.sh, and the pulls/N read at line 119 is still a live `gh_retry gh api` call. test_auto_merge_keeps_one_live_head_read_before_merge asserts that the script has no `gh_pr_cached_read` call. The file is outside the plan grant's files_touched list. Earlier rounds deferred this on purpose because the read gates labels, and the agents fragment and changelog record that it stays live. Sonnet says a follow-up issue is the right place and it does not block this PR. Luna notes the issue does not explicitly defer this deliverable. All three rate it SEVERITY: NIT.\n- requirement: \"Every PR write in the job evicts the affected kinds: push, label change, comment post, update-branch.\"\n  expected_change_site: scripts/review_autofix_step_prepush_test_gate.sh, review_prepush_test_gate_final_ci_marker() (final-CI marker comment POST around line 1237)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The PR does not change this script. The direct `gh api -X POST` at line 1237 returns at lines 1238-1239 without evicting cached issue comments. The file is outside files_touched, and the gap is recorded in the \"Eviction\" bullet of agents.d/9928-review-pr-read-cache.md. The posted `ai:final-ci-repair:v1` marker matches neither filter in _pr_base_sync_count, so no cached reader goes stale today. Luna notes the issue does not explicitly defer this deliverable. All three rate it SEVERITY: NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"review_enable_auto_merge.sh:119 (reuse the cache)\"\n  Expected change site: scripts/review_enable_auto_merge.sh, reviewed_head_is_current_for_labels()\n  Evidence of absence: No PR diff hunk touches the script, and the pulls/N read at line 119 is still a live gh_retry gh api call. The file is not in files_touched. Earlier rounds deferred it on purpose because the read gates labels and refuses them when the read fails. The agents fragment and changelog record that it stays live. A follow-up issue is the right place for it, and it does not block this PR.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: \"Every PR write in the job evicts the affected kinds: push, label change, comment post, update-branch.\"\n  Expected change site: scripts/review_autofix_step_prepush_test_gate.sh, the final-CI marker comment POST (around line 1237)\n  Evidence of absence: The PR diff does not change the script, so the bare gh api POST does not evict cached comments. The file is outside files_touched. The \"Eviction\" bullet in agents.d/9928-review-pr-read-cache.md records the gap. The ai:final-ci-repair:v1 marker matches neither filter in _pr_base_sync_count, so no cached reader goes stale today.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"review_enable_auto_merge.sh:119 (reuse the cache)\" while \"Exactly one live pulls/N read stays before gh pr merge --auto.\"\n  Expected change site: scripts/review_enable_auto_merge.sh, reviewed_head_is_current_for_labels()\n  Evidence of absence: The PR has no change to the script, and line 119 still does a live gh_retry gh api pulls read. This is a deliberate choice: the file is outside `files_touched`, and keeping merge-authorisation reads live is safer (\u00a76).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"Every PR write in the job evicts the affected kinds.\"\n  Expected change site: scripts/review_autofix_step_prepush_test_gate.sh, review_prepush_test_gate_final_ci_marker()\n  Evidence of absence: The comment POST at line 1237 is a direct gh api call, and on success lines 1238-1239 return without evicting cached issue comments. This is a deliberate deferral: the file is outside `files_touched`, and no reader matches the `ai:final-ci-repair:v1` marker.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"review_enable_auto_merge.sh:119 (reuse the cache)\" while \"Exactly one live pulls/N read stays before gh pr merge --auto.\"\n  Expected change site: scripts/review_enable_auto_merge.sh, reviewed_head_is_current_for_labels().\n  Evidence of absence: No cache read was added, and line 119 still uses a live `gh_retry gh api` call. `test_auto_merge_keeps_one_live_head_read_before_merge` asserts that the script has no `gh_pr_cached_read` call. The file is excluded from `files_touched`, but the issue does not explicitly defer this deliverable.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"Every PR write in the job evicts the affected kinds.\"\n  Expected change site: scripts/review_autofix_step_prepush_test_gate.sh, review_prepush_test_gate_final_ci_marker().\n  Evidence of absence: The function posts the marker directly with `gh api -X POST` at line 1237 and returns at lines 1238-1239 without evicting cached comments. The PR does not change the script. The file is excluded from `files_touched`, but the issue does not explicitly defer this deliverable.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- TASK COMPLETENESS: reported NONE. It says two earlier gaps remain deliberately deferred: (1) cache reuse at `scripts/review_enable_auto_merge.sh:119`/`:242`, which is outside `files_touched`, is recorded in the \"Merge invariant\" bullet, and is covered by `test_auto_merge_keeps_one_live_head_read_before_merge`; (2) the final-CI marker POST in `scripts/review_autofix_step_prepush_test_gate.sh`, which is outside `files_touched`, is recorded in the \"Eviction\" bullet, and whose `ai:final-ci-repair:v1` marker matches neither filter in `_pr_base_sync_count`.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "33075790f15f6bba58a93bc726d93ad1e32a60bc977816abb0f0cc6788948171",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9935,
+    "run_id": "45108781475",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45108781475",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123045821_6617a91ff7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9935,
+    "run_id": "45108781475"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T04:58:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
