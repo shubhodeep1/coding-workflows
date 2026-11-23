@@ -345,6 +345,8 @@ def test_trusted_expired_marker_means_reopened():
 	proc, gh, tg, _ = _run([_hold(30 * DAY), _esc(20 * DAY), _comment(EXPIRED_MARKER, 10 * DAY)])
 	_assert_outcome(proc, "kept", "reopened")
 	assert gh == [] and tg == []
+	# A log-only trace so a kept reopened hold stays visible on later ticks.
+	assert f"::notice::Heal issue #{ISSUE} is open and carries a hold-expired marker" in proc.stdout
 
 
 # --- switch and limit -------------------------------------------------------

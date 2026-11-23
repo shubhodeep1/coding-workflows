@@ -21227,6 +21227,10 @@ _heal_counterfactual_hold_expiry_check()
     fi
     IFS='|' read -r hold_epoch answered esc_epoch expired_present <<< "${scan}"
     if [ "${expired_present}" = "true" ]; then
+      # Log-only trace on every tick (no Telegram: this branch repeats each
+      # tick, and tg_notify_issue has no dedupe). It also covers a lost
+      # response on the expired-comment POST, whose DEBUG alert is filtered.
+      echo "::notice::Heal issue #${issue_num} is open and carries a hold-expired marker, so its hold will not expire on its own; a maintainer should reply /approved or /reclarify, or close it."
       outcome="kept"; reason="reopened"; break
     fi
     # Checked before the marker: an answer newer than every hold leaves no
