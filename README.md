@@ -2981,6 +2981,7 @@ through `clarify → plan → implement → review`.
 | `CHATGPT_POOL_ALERT_STALE_HOURS` | `12` | A ChatGPT account whose last refresh is at least this many hours old (or missing) is reported as stale, at `WARNING`, in the near-cap alert and the daily usage report. |
 | `CLAUDE_POOL_DAILY_USAGE_ENABLED` | `true` | Daily Telegram report from `orchestrate_poll.yml` (coding-workflows only) listing every Claude pool account's 5-hour and 7-day usage in one message. `false` turns it off. See "Daily usage report" under the Claude engine. |
 | `CLAUDE_POOL_DAILY_USAGE_HOUR_UTC` | `0` | First UTC hour (0-23) at which the daily usage report may be sent; `0` is 08:00 Singapore time. The first poll tick at or after this hour sends it, once per UTC day. Invalid values fall back to `0`. |
+| `CLAUDE_POOL_DAILY_USAGE_RETRY_HOURS` | `2` | Hours (0-23) after the daily usage slot opens during which a temporary broker refusal (`broker_refused_workflow_sha_unverifiable` or `broker_unavailable_NNN`) with no probe results defers the send to a later poll tick instead of spending the day's send. The window ends no later than hour 23; after it the report is sent as before. `0` turns deferral off; invalid values fall back to `2` with a warning. |
 | `UNATTENDED_NAG_REMINDER_ENABLED` | `false` | Opt-in wrapper-level `<reminder>` injection after repeated silent reviewer/editor/judge turns. When `false`, the wrappers keep the existing retry behavior unchanged. |
 | `UNATTENDED_NAG_SILENT_ROUNDS` | `3` | Consecutive silent-turn threshold before nag-reminder injection in the review editor, review reviewers, and orchestrate-poll judge paths. Invalid or out-of-range values clamp conservatively to `3`. |
 | `WORKFLOW_LOG_SCENARIO_TRACE_ENABLED` | `false` | Enables the additive local-only `.ai/workflow_traces/<run_id>.scenario.json` renderer in `workflow-log-analysis.yml`; parseable runs emit `WORKFLOW_SCENARIO_TRACE_WRITTEN`, per-run parser drift fail-opens with `WORKFLOW_SCENARIO_TRACE_PARSE_FAIL`. |
@@ -3438,7 +3439,17 @@ source `tools/claude-pool-broker/`). A job that hosts a Claude role runs
    repository is coding-workflows or listed in
    `.github/ai/consumer_repos.json` (fetched from `main`, cached 10 minutes),
    and that `job_workflow_ref` is a coding-workflows workflow, then returns
-   the pool; anything else is `403` with a reason code;
+   the pool; anything else is `403` with a reason code. A SHA-pinned or
+   `promote-candidate` ref is checked against GitHub's compare API; a SHA
+   GitHub reported as an ancestor of `main` or `stable` is cached in memory
+   (6 hours) and in the Worker's `CHATGPT_ACCOUNTS` Durable Object instance
+   `workflow-sha-cache` (7 days, at most 256 entries, positive-only), so it
+   stays trusted across Worker redeploys without another GitHub call
+   (`workflow_sha_check ... source=durable`). Every compare call logs
+   `CLAUDE_POOL broker workflow_sha_compare branch= sha= http=
+   ratelimit_remaining= cause=`, and Worker observability is on, so a
+   `workflow_sha_unverifiable` refusal can be traced to an empty GitHub
+   budget or another cause;
 3. the action masks every token, probes each account with Haiku 4.5, and
    writes the accounts under the `0.95` gate to `$RUNNER_TEMP/claude-pool`,
    the one whose spare 7-day quota expires soonest first (7-day headroom
@@ -3515,6 +3526,13 @@ the tick. `CLAUDE_POOL_DAILY_USAGE_ENABLED=false` turns it off. The steps log
 `CLAUDE_POOL_DAILY_USAGE op=slot in_slot= reason=due|before_hour|disabled|silent|telegram_not_configured`
 and `CLAUDE_POOL_DAILY_USAGE op=send accounts= usable= gated= auth_failed=
 probe_failed= outcome=sent|not_delivered truncated=true|false`, and never fail the job.
+When no probes ran and the pool reason is a temporary broker answer
+(`broker_refused_workflow_sha_unverifiable` or `broker_unavailable_NNN`),
+the send step sends nothing for up to `CLAUDE_POOL_DAILY_USAGE_RETRY_HOURS`
+(default `2`) after the slot opens, capped at hour 23: it prints `sent=false
+deferred=true`, logs `outcome=deferred reason=<pool reason>`, and the next poll
+tick tries again. After that window the report is sent as before, so a day is
+never silently skipped.
 The message ends with a "ChatGPT accounts" section: each account's 5-hour and
 weekly usage, the age of its last refresh and its last outcome. It reads
 `ChatGPT accounts: unavailable (<reason>).` when the ChatGPT pool status could

@@ -2508,6 +2508,8 @@ jobs:
           CHATGPT_POOL_STATUS: ${{ steps.chatgpt_pool_status.outputs.status || '' }}
           CHATGPT_POOL_STATUS_REASON: ${{ steps.chatgpt_pool_status.outputs.reason || 'not_read' }}
           CHATGPT_POOL_ALERT_STALE_HOURS: ${{ vars.CHATGPT_POOL_ALERT_STALE_HOURS || '12' }}
+          CLAUDE_POOL_DAILY_USAGE_HOUR_UTC: ${{ vars.CLAUDE_POOL_DAILY_USAGE_HOUR_UTC || '0' }}
+          CLAUDE_POOL_DAILY_USAGE_RETRY_HOURS: ${{ vars.CLAUDE_POOL_DAILY_USAGE_RETRY_HOURS || '2' }}
         run: bash scripts/claude_pool_daily_usage.sh send
 
       - name: Write today's Claude pool daily usage marker

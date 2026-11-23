@@ -18,11 +18,20 @@
 #         tg_send_report_msg (no level filter, except SILENT). Prints
 #         sent=true|false to $GITHUB_OUTPUT; the job saves the day's marker
 #         only on sent=true, so a failed send is retried on the next tick.
+#         Also prints deferred=true|false: when no probes ran and the pool
+#         reason is a temporary broker answer
+#         (broker_refused_workflow_sha_unverifiable or broker_unavailable_NNN),
+#         and the UTC hour is in [HOUR_UTC, min(HOUR_UTC + RETRY_HOURS, 23)),
+#         nothing is sent (sent=false deferred=true), so the next tick tries
+#         again. After that window the report is sent as before (issue #9990).
 #
 # Env:
 #   CLAUDE_POOL_DAILY_USAGE_ENABLED   `false` disables the report (default true)
 #   CLAUDE_POOL_DAILY_USAGE_HOUR_UTC  first UTC hour of the daily slot, 0-23 (default 0)
 #   CLAUDE_POOL_DAILY_USAGE_NOW       epoch seconds to use as "now" (tests)
+#   CLAUDE_POOL_DAILY_USAGE_RETRY_HOURS  send: hours after the slot opens during which a
+#                                     temporary broker refusal defers the send, 0-23
+#                                     (default 2; 0 disables deferral; invalid -> 2 with a warning)
 #   CLAUDE_POOL_PROBES                send: JSON list from the action's `probes` output
 #   CLAUDE_POOL_REASON                send: the action's `reason` output, shown when no probes ran
 #   CLAUDE_POOL_DAILY_USAGE_GATE      send: override of claude_engine.json gate_utilization (tests)
@@ -38,6 +47,8 @@
 # Log: CLAUDE_POOL_DAILY_USAGE op=slot in_slot=true|false reason=... date=... hour=...
 #      CLAUDE_POOL_DAILY_USAGE op=send accounts=N usable=N gated=N auth_failed=N probe_failed=N
 #          outcome=sent|not_delivered truncated=true|false chatgpt_accounts=N chatgpt_alerts=N
+#      CLAUDE_POOL_DAILY_USAGE op=send accounts=N ... outcome=deferred reason=<pool reason>
+#          truncated=false chatgpt_accounts=N chatgpt_alerts=N
 # Never fails the job.
 set -uo pipefail
 
@@ -50,6 +61,17 @@ daily_usage_output()
 	fi
 }
 
+# First UTC hour of the daily slot: CLAUDE_POOL_DAILY_USAGE_HOUR_UTC, 0-23;
+# anything else is 0.
+daily_usage_start_hour()
+{
+	local start_hour="${CLAUDE_POOL_DAILY_USAGE_HOUR_UTC:-0}"
+	if ! [[ "${start_hour}" =~ ^[0-9]+$ ]] || [ "$((10#${start_hour}))" -gt 23 ]; then
+		start_hour=0
+	fi
+	printf '%s\n' "$((10#${start_hour}))"
+}
+
 daily_usage_slot()
 {
 	local now hour date_utc start_hour in_slot=false reason
@@ -57,11 +79,7 @@ daily_usage_slot()
 	[[ "${now}" =~ ^[0-9]+$ ]] || now="$(date -u +%s)"
 	hour=$((10#$(date -u -d "@${now}" +%H)))
 	date_utc="$(date -u -d "@${now}" +%Y-%m-%d)"
-	start_hour="${CLAUDE_POOL_DAILY_USAGE_HOUR_UTC:-0}"
-	if ! [[ "${start_hour}" =~ ^[0-9]+$ ]] || [ "$((10#${start_hour}))" -gt 23 ]; then
-		start_hour=0
-	fi
-	start_hour=$((10#${start_hour}))
+	start_hour="$(daily_usage_start_hour)"
 	case "$(printf '%s' "${CLAUDE_POOL_DAILY_USAGE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
 		false|0|no|off) reason=disabled ;;
 		*)
@@ -136,6 +154,31 @@ chatgpt_accounts=0 chatgpt_alerts=0"
 	chatgpt_counts="${counts#*$'\n'}"
 	counts="${counts%%$'\n'*}"
 	[ "${chatgpt_counts}" != "${counts}" ] || chatgpt_counts="chatgpt_accounts=0 chatgpt_alerts=0"
+	# Deferral (issue #9990): a temporary broker refusal with no probes must
+	# not spend the day's one send. Only inside [start, min(start + retry, 23))
+	# so a day is never silently skipped; after the window the report goes out.
+	local retry_hours defer_now defer_hour defer_start defer_end
+	retry_hours="${CLAUDE_POOL_DAILY_USAGE_RETRY_HOURS:-2}"
+	if ! [[ "${retry_hours}" =~ ^[0-9]+$ ]] || [ "$((10#${retry_hours}))" -gt 23 ]; then
+		echo "::warning::CLAUDE_POOL_DAILY_USAGE op=send reason=retry_hours_invalid; using 2"
+		retry_hours=2
+	fi
+	retry_hours=$((10#${retry_hours}))
+	defer_now="${CLAUDE_POOL_DAILY_USAGE_NOW:-}"
+	[[ "${defer_now}" =~ ^[0-9]+$ ]] || defer_now="$(date -u +%s)"
+	defer_hour=$((10#$(date -u -d "@${defer_now}" +%H)))
+	defer_start="$(daily_usage_start_hour)"
+	defer_end=$((defer_start + retry_hours))
+	[ "${defer_end}" -le 23 ] || defer_end=23
+	if [ "${retry_hours}" -gt 0 ] && [ "${probes_json}" = "[]" ] \
+		&& [[ "${CLAUDE_POOL_REASON:-}" =~ ^(broker_refused_workflow_sha_unverifiable|broker_unavailable_[0-9]{3})$ ]] \
+		&& [ "${defer_hour}" -ge "${defer_start}" ] && [ "${defer_hour}" -lt "${defer_end}" ]; then
+		daily_usage_output "sent=false"
+		daily_usage_output "deferred=true"
+		echo "CLAUDE_POOL_DAILY_USAGE op=send ${counts} outcome=deferred reason=${CLAUDE_POOL_REASON} truncated=false ${chatgpt_counts}"
+		[ "${err_file}" = /dev/null ] || rm -f "${err_file}"
+		return 0
+	fi
 	if [ "${probes_json}" = "[]" ] && [ -n "${CLAUDE_POOL_REASON:-}" ]; then
 		# The reason belongs to the Claude headline (the first line), not to the
 		# end of the text, which may hold the ChatGPT section.
@@ -171,6 +214,7 @@ Probed by ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID
 		outcome=not_delivered
 		daily_usage_output "sent=false"
 	fi
+	daily_usage_output "deferred=false"
 	echo "CLAUDE_POOL_DAILY_USAGE op=send ${counts} outcome=${outcome} truncated=${truncated} ${chatgpt_counts}"
 }
 

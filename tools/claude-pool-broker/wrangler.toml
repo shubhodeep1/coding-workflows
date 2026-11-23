@@ -6,7 +6,13 @@
 # Optional secret BROKER_GITHUB_READ_TOKEN (read-only, set with
 # `wrangler secret put`): authenticates the GitHub compare calls that verify a
 # SHA-pinned job_workflow_ref. Unset means unauthenticated reads; a rate-limited
-# check is refused (403 workflow_sha_unverifiable) and the job runs codex.
+# check is refused (403 workflow_sha_unverifiable), and under
+# AI_ENGINE_FALLBACK_POLICY=capacity the role is refused with no_credential.
+# A SHA GitHub verified once is also kept for 7 days in the CHATGPT_ACCOUNTS
+# instance "workflow-sha-cache" (storage key verified_shas, positive-only, at
+# most 256 entries), so it survives redeploys without another compare call.
+# Every compare call logs workflow_sha_compare (HTTP status, remaining budget);
+# [observability] below keeps those Worker logs (issue #9990).
 # ChatGPT account store (docs/plans/chatgpt-account-reviewer-trial-plan.md,
 # Phase 1): the CHATGPT_ACCOUNTS Durable Object namespace is written only by
 # shubhodeep1/claude-workers' chatgpt-pool-refresh.yml through
@@ -32,3 +38,6 @@ class_name = "ChatgptAccount"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["ChatgptAccount"]
+
+[observability]
+enabled = true

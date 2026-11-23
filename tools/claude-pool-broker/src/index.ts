@@ -52,6 +52,15 @@
  * Every refusal on these routes is 403 (400 for a malformed writer body, 404
  * for an unknown route or account), broker-side trouble is 503, never 500.
  * Log lines carry reason codes and account names only.
+ *
+ * Durable SHA cache (issue #9990): a SHA the GitHub compare API reported as
+ * behind or identical to main or stable is also kept for
+ * DURABLE_VERIFIED_SHA_TTL_MS in the WORKFLOW_SHA_CACHE_OBJECT instance of
+ * the same Durable Object class (storage key "verified_shas", at most
+ * VERIFIED_SHA_MAX entries), so it survives redeploys and new isolates.
+ * Positive-only: untrusted and unavailable verdicts are never stored, and a
+ * read failure is a miss that falls through to the API. Every compare call
+ * logs `workflow_sha_compare` with its HTTP status and x-ratelimit-remaining.
  */
 
 export interface Env {
@@ -152,6 +161,16 @@ export const VERIFY_TIMEOUT_MS = 5000;
 export const VERIFIED_SHA_TTL_MS = 6 * 60 * 60 * 1000;
 export const VERIFIED_SHA_MAX = 256;
 export const SHA_RE = /^[0-9a-f]{40}$/;
+/**
+ * Durable Object instance (class ChatgptAccount, namespace CHATGPT_ACCOUNTS)
+ * that holds verified workflow SHAs. Lowercase with hyphens, so it never
+ * equals a ChatGPT account name (^[A-Z0-9_]+$).
+ */
+export const WORKFLOW_SHA_CACHE_OBJECT = "workflow-sha-cache";
+export const DURABLE_VERIFIED_SHA_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** Internal Durable Object path of the SHA cache; no public route forwards to it. */
+export const WORKFLOW_SHA_CACHE_PATH = "/verified-shas";
+const RATELIMIT_REMAINING_RE = /^[0-9]{1,6}$/;
 /** Audience of the writer's OIDC token; reads keep AUDIENCE. */
 export const WRITER_AUDIENCE = "coding-workflows-chatgpt-pool-writer";
 export const DEFAULT_CHATGPT_WRITER_REPOSITORY = "shubhodeep1/claude-workers";
@@ -545,11 +564,27 @@ export function stripRefreshToken(authJson: Record<string, unknown>): Record<str
 	return copy;
 }
 
+/** The stored verified-SHA map with only well-formed entries; any other shape is {}. */
+function verifiedShaMap(stored: unknown): Record<string, number>
+{
+	const map: Record<string, number> = {};
+	if (!isPlainObject(stored)) {
+		return map;
+	}
+	for (const [sha, at] of Object.entries(stored)) {
+		if (SHA_RE.test(sha) && isNumber(at)) {
+			map[sha] = at;
+		}
+	}
+	return map;
+}
+
 /**
  * One ChatGPT account (or, as the CHATGPT_REGISTRY_OBJECT instance, the list
  * of account names). A plain class with fetch(), so the vitest suite runs in
  * Node without cloudflare:workers. Reached only through the Worker's own
- * stub calls; its paths are not public routes.
+ * stub calls; its paths are not public routes. The WORKFLOW_SHA_CACHE_OBJECT
+ * instance serves WORKFLOW_SHA_CACHE_PATH (the durable verified-SHA cache).
  */
 export class ChatgptAccount
 {
@@ -560,7 +595,57 @@ export class ChatgptAccount
 
 	async fetch(request: Request): Promise<Response>
 	{
-		const path = new URL(request.url).pathname;
+		const url = new URL(request.url);
+		const path = url.pathname;
+		if (path === WORKFLOW_SHA_CACHE_PATH) {
+			if (request.method === "GET") {
+				const sha = url.searchParams.get("sha");
+				if (typeof sha !== "string" || !SHA_RE.test(sha)) {
+					return json(400, { error: "invalid_body" });
+				}
+				const map = verifiedShaMap(await this.state.storage.get("verified_shas"));
+				return json(200, { verified_at: Object.prototype.hasOwnProperty.call(map, sha) ? map[sha] : null });
+			}
+			if (request.method === "POST") {
+				let sha: unknown;
+				let now: unknown;
+				try {
+					const body = (await request.json()) as { sha?: unknown; now?: unknown };
+					sha = body.sha;
+					now = body.now;
+				} catch {
+					return json(400, { error: "invalid_body" });
+				}
+				if (typeof sha !== "string" || !SHA_RE.test(sha) || !isNumber(now)) {
+					return json(400, { error: "invalid_body" });
+				}
+				const verifiedSha = sha;
+				const verifiedAt = now;
+				return this.state.blockConcurrencyWhile(async () => {
+					const map = verifiedShaMap(await this.state.storage.get("verified_shas"));
+					map[verifiedSha] = verifiedAt;
+					for (const [key, at] of Object.entries(map)) {
+						if (verifiedAt - at >= DURABLE_VERIFIED_SHA_TTL_MS) {
+							delete map[key];
+						}
+					}
+					let keys = Object.keys(map);
+					while (keys.length > VERIFIED_SHA_MAX) {
+						let oldest = keys[0];
+						for (const key of keys) {
+							if (map[key] < map[oldest]) {
+								oldest = key;
+							}
+						}
+						delete map[oldest];
+						keys = Object.keys(map);
+					}
+					await this.state.storage.put("verified_shas", map);
+					return json(200, {});
+				});
+			}
+			return json(405, { error: "method_not_allowed" });
+		}
 		if (path === "/record") {
 			if (request.method === "GET") {
 				const stored = await this.state.storage.get("record");
@@ -658,6 +743,10 @@ export function createHandler(deps: Deps)
 		if (typeof readToken === "string" && readToken.trim() !== "") {
 			headers.authorization = `Bearer ${readToken.trim()}`;
 		}
+		// One line per compare call; never the token, URL or body (issue #9990).
+		const logCompare = (http: string, remaining: string, cause: string): void => {
+			deps.log(`CLAUDE_POOL broker workflow_sha_compare branch=${branch} sha=${sha.slice(0, 12)} http=${http} ratelimit_remaining=${remaining} cause=${cause}`);
+		};
 		let response: Response;
 		try {
 			response = await deps.fetch(`${GITHUB_API}/compare/${branch}...${sha}?per_page=1`, {
@@ -665,33 +754,127 @@ export function createHandler(deps: Deps)
 				signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
 			});
 		} catch {
+			logCompare("000", "unknown", "network");
 			return "unavailable";
 		}
+		const http = String(response.status);
+		let remaining = "unknown";
+		try {
+			const header = response.headers.get("x-ratelimit-remaining");
+			if (typeof header === "string" && RATELIMIT_REMAINING_RE.test(header)) {
+				remaining = header;
+			}
+		} catch {
+			remaining = "unknown";
+		}
 		if (response.status === 404 || response.status === 422) {
+			logCompare(http, remaining, "not_found");
 			return "no";
 		}
 		if (response.status !== 200) {
+			logCompare(http, remaining, "http_error");
 			return "unavailable";
 		}
 		let body: unknown;
 		try {
 			body = await response.json();
 		} catch {
+			logCompare(http, remaining, "bad_json");
 			return "unavailable";
 		}
 		const status = body && typeof body === "object" ? (body as { status?: unknown }).status : undefined;
 		if (status === "behind" || status === "identical") {
+			logCompare(http, remaining, "ok");
 			return "yes";
 		}
 		if (status === "ahead" || status === "diverged") {
+			logCompare(http, remaining, "ok");
 			return "no";
 		}
+		logCompare(http, remaining, "unexpected_status");
 		return "unavailable";
+	}
+
+	function shaCacheStub(env: Env): ChatgptStub | null
+	{
+		const namespace = env.CHATGPT_ACCOUNTS;
+		if (!namespace || typeof namespace.idFromName !== "function" || typeof namespace.get !== "function") {
+			return null;
+		}
+		return namespace.get(namespace.idFromName(WORKFLOW_SHA_CACHE_OBJECT));
+	}
+
+	/**
+	 * When the durable cache last verified `sha`, or null: no binding (silent),
+	 * a missing, stale or future entry (silent), or a read failure (logged).
+	 * Never throws and never grants on its own; the caller treats null as a miss.
+	 */
+	async function durableShaVerifiedAt(env: Env, sha: string, now: number): Promise<number | null>
+	{
+		let verifiedAt: unknown;
+		try {
+			const stub = shaCacheStub(env);
+			if (!stub) {
+				return null;
+			}
+			const response = await stub.fetch(`${CHATGPT_STORE_ORIGIN}${WORKFLOW_SHA_CACHE_PATH}?sha=${sha}`, { method: "GET" });
+			if (response.status !== 200) {
+				throw new Error("status");
+			}
+			const body: unknown = await response.json();
+			if (!isPlainObject(body)) {
+				throw new Error("body");
+			}
+			verifiedAt = body.verified_at;
+			if (verifiedAt !== null && !isNumber(verifiedAt)) {
+				throw new Error("verified_at");
+			}
+		} catch {
+			deps.log(`CLAUDE_POOL broker workflow_sha_cache_read sha=${sha.slice(0, 12)} result=failed`);
+			return null;
+		}
+		if (!isNumber(verifiedAt)) {
+			return null;
+		}
+		const age = now - verifiedAt;
+		if (age < 0 || age >= DURABLE_VERIFIED_SHA_TTL_MS) {
+			return null;
+		}
+		return verifiedAt;
+	}
+
+	/** Store an API-verified SHA in the durable cache; true only on a 200. Never throws. */
+	async function durableShaRecord(env: Env, sha: string, now: number): Promise<boolean>
+	{
+		try {
+			const stub = shaCacheStub(env);
+			if (!stub) {
+				return false;
+			}
+			const response = await stub.fetch(`${CHATGPT_STORE_ORIGIN}${WORKFLOW_SHA_CACHE_PATH}`, {
+				method: "POST",
+				body: JSON.stringify({ sha, now }),
+				headers: { "content-type": "application/json" },
+			});
+			return response.status === 200;
+		} catch {
+			return false;
+		}
 	}
 
 	async function verifyTrustedSha(sha: string, env: Env): Promise<ShaVerdict>
 	{
 		const now = deps.now();
+		const rememberVerifiedSha = (verified: string, at: number): void => {
+			verifiedShas.set(verified, at);
+			while (verifiedShas.size > VERIFIED_SHA_MAX) {
+				const oldest = verifiedShas.keys().next().value;
+				if (oldest === undefined) {
+					break;
+				}
+				verifiedShas.delete(oldest);
+			}
+		};
 		const cachedAt = verifiedShas.get(sha);
 		if (cachedAt !== undefined) {
 			if (now - cachedAt < VERIFIED_SHA_TTL_MS) {
@@ -699,6 +882,13 @@ export function createHandler(deps: Deps)
 				return "trusted";
 			}
 			verifiedShas.delete(sha);
+		}
+		// Durable cache (issue #9990): survives redeploys; a hit makes no GitHub call.
+		const durableAt = await durableShaVerifiedAt(env, sha, now);
+		if (durableAt !== null) {
+			rememberVerifiedSha(sha, now);
+			deps.log(`CLAUDE_POOL broker workflow_sha_check sha=${sha.slice(0, 12)} result=trusted source=durable`);
+			return "trusted";
 		}
 		let verdict: ShaVerdict = "untrusted";
 		for (const branch of ANCESTOR_BRANCHES) {
@@ -713,13 +903,11 @@ export function createHandler(deps: Deps)
 			}
 		}
 		if (verdict === "trusted") {
-			verifiedShas.set(sha, now);
-			while (verifiedShas.size > VERIFIED_SHA_MAX) {
-				const oldest = verifiedShas.keys().next().value;
-				if (oldest === undefined) {
-					break;
-				}
-				verifiedShas.delete(oldest);
+			rememberVerifiedSha(sha, now);
+			// Positive-only: only an API `trusted` verdict is written; a failed
+			// write is logged and never changes the verdict.
+			if (env.CHATGPT_ACCOUNTS && !(await durableShaRecord(env, sha, now))) {
+				deps.log(`CLAUDE_POOL broker workflow_sha_cache_write sha=${sha.slice(0, 12)} result=failed`);
 			}
 		}
 		deps.log(`CLAUDE_POOL broker workflow_sha_check sha=${sha.slice(0, 12)} result=${verdict} source=api`);
