@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:(no line given) | severity=low | confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The `review / gate` failure on head 61a79da6 is GitHub's primary API rate limit (`GH_API_RETRY outcome=gave_up kind=primary bucket=core status=403 attempt=1/5 wait_secs=658`, exit code 75) on the `repos/shubhodeep1/coding-workflows/branches/main` lookup in the support-ref step of `review_autofix.yml`.\n  WHY: The PR does not touch that file or path, so it is not a diff defect, and a re-run after the limit resets should clear it. The reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: `.github/workflows/ci.yml`, selection of steps moved from `tests-release-and-log-analysis` to `orchestrate-poll` (rationale comments at lines 4045-4050 and 4090-4095)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The comments in `.github/workflows/ci.yml` and the changelog fragment `changelog.d/9966-ci-release-job-budget-move.md` say the step timings for run 45035315687 were unreadable and the pick was estimated from test and subprocess counts. Wiring guard part 2 (658 test functions, 155 subprocess call sites, `ci.yml` lines 4318/4320) is larger than part 1 (about 604 test functions, 146 subprocess call sites, line 4106) and stayed in place. The added contract test pins the steps' new location but does not show they are the slowest. The structural requirements are met: the steps moved unchanged, names and `timeout-minutes` are unchanged, and no new job names were added. Severity disagreement: sonnet-5_5 rated NIT with confidence 1 and judged no further change actionable. The other three reviewers rated MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:(no line given) | severity=NIT | confidence=1\n  PROBLEM: The `review / gate` failure on head 61a79da6 is GitHub's primary API rate limit (`GH_API_RETRY outcome=gave_up kind=primary bucket=core status=403 attempt=1/5 wait_secs=658`, exit code 75) on the `repos/shubhodeep1/coding-workflows/branches/main` lookup in the support-ref step of `review_autofix.yml`.\n  WHY: The PR does not touch that file or path, so it is not a diff defect. A re-run after the limit resets should clear it.\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, the choice of steps moved out of `tests-release-and-log-analysis`.\n  Evidence of absence: The structural requirements are met. Two steps moved unchanged to `orchestrate-poll` group 1, which has the 30-minute budget, with names and `timeout-minutes` unchanged and no new job names. Measured timings are missing: the `ci.yml` comments and the changelog fragment say the timings for run 45035315687 were unreadable and the pick is an estimate. Nothing shows the moved steps are the slowest or that the job drops under 20 minutes. The limitation is disclosed, and `budget-watch` reopens the issue if the job stays over budget. Choosing other steps without timing data would be a guess and would reverse earlier passes, so no further code change is actionable.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP: Requirement: Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The comments in .github/workflows/ci.yml and the changelog fragment changelog.d/9966-ci-release-job-budget-move.md state that step timings for run 45035315687 were unreadable, and steps were moved based on test and subprocess counts rather than the mandated step timings.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of which steps to move from `tests-release-and-log-analysis` (the rationale comments above \"Judge Semble prefetch contract test\" and \"Regression tests wired by the CI wiring guard (part 1)\" at the new location in `orchestrate-poll`).\n  Evidence of absence: The comments at `.github/workflows/ci.yml` lines 4047-4050 and 4092-4095 state the step timings for run 45035315687 were not readable and the pick is an estimate from test and subprocess counts. The PR does not establish that the two moved steps are the job's slowest: wiring guard part 2, recorded as 658 test functions and 155 subprocess call sites (`ci.yml` line 4318/4320), is larger than part 1 (about 604 test functions and 146 subprocess call sites, line 4106) and was deliberately left in `tests-release-and-log-analysis`. The \"see the run's step timings\" criterion is unmet as written; only the structural relocation, guard, and changelog/test wiring shipped.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings)\" out of `tests-release-and-log-analysis`.\n  Expected change site: `.github/workflows/ci.yml`, selection of steps moved to `orchestrate-poll`, described at lines 4045-4050 and 4090-4095.\n  Evidence of absence: The workflow comments state that the run's step timings were unreadable and the selection was estimated from test and subprocess counts, not timings. The added contract test pins the steps' new location and group, but does not establish that the moved steps were the slowest.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fd893a9658f2cfd3acb806810694bf1e809df4fc202a985cfebe7a9417bef540",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9968,
+    "run_id": "45275393708",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45275393708",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123230220_4cde9c335a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9968,
+    "run_id": "45275393708"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T23:02:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
