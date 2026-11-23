@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1527-1582 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The only recorded total for `tests-hooks-and-orchestrator` with the moved step \"Pre-push affected-test gate tests\" is 15m32s (run 43220859648). That is above the 15m00s budget-watch warning line (`DEFAULT_JOB_WARN_RATIO = 0.75` of the 20-minute timeout).\n  WHY: It does not fail the build, but budget-watch may flag the job again and open another \"move the slowest step\" issue, repeating the #9391 \u2192 #9639 \u2192 #9895 cycle. The reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: .github/workflows/ci.yml, tests/test_ci_poll_test_sharding.py, changelog.d/9895-*.md\n  confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  EVIDENCE: All three sites are in the diff and the step moved unchanged. No timeout was raised and no job was added. Run 44909097036 recorded step statuses only, so the \"see the run's step timings\" input is unavailable. The target was chosen from recorded job totals, and this is documented in the ci.yml comment, the test-file comment and the changelog. This is a data limit, not missing code.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:1527-1582 | severity=NIT | confidence=2\n  PROBLEM: The only recorded total for `tests-hooks-and-orchestrator` with the step \"Pre-push affected-test gate tests\" is 15m32s (run 43220859648). That is above the 15m00s warning line set by `scripts/ci_budget_watch.py` line 56 (`DEFAULT_JOB_WARN_RATIO = 0.75` of the 20-minute `timeout-minutes`).\n  WHY: It does not fail the build. budget-watch may flag the job again and open another \"move the slowest step\" issue, repeating the #9391 \u2192 #9639 \u2192 #9895 cycle. The run recorded no step timings, so the diff cannot prevent this.\n- TASK_GAP (TASK COMPLETENESS / INTENT GAPS) | severity=NIT | confidence=2\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, `tests/test_ci_poll_test_sharding.py`, `changelog.d/9895-*.md`\n  Evidence of absence: All three sites are in the diff. The step moved unchanged, no timeout was raised and no job was added. Run 44909097036 recorded step statuses only, so the target was chosen from recorded job totals. This is a limit of the data, not missing code.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP (TASK COMPLETENESS / INTENT GAPS) | severity=NIT | confidence=2\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml (the step placement), tests/test_ci_poll_test_sharding.py (the contract tests), changelog.d/9895-*.md\n  Evidence of absence: All three constraints are met in the PR head. The \"(see the run's step timings)\" input is unobtainable because run 44909097036 recorded step statuses only. The ci.yml comment (around lines 1567-1581), the test-file comment above `POLL_GROUP_ZERO_9895_TARGET_JOB_ID` and the changelog fragment document that the pick uses recorded job totals. The chosen job `tests-hooks-and-orchestrator` is the only one with a recorded total that includes the step (15m32s, run 43220859648, #9391). `tests-heal-plan-and-validation` was rejected because it had 3 minutes or less headroom (#9045 + #9363). No code change in this PR can close that data limit.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7daf483070c77175b1f33043b3c8d08e1a599622138f3f60db46ef7cf5ef49ba",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9898,
+    "run_id": "45088909930",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45088909930",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123014917_673b072ea1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9898,
+    "run_id": "45088909930"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T01:49:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
