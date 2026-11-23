@@ -214,9 +214,198 @@ def test_pr_8250_shaped_summary_trips_the_cap_on_the_next_dispatch(tmp_path: Pat
 	assert reset["count"] == "0" and reset["non_retryable"] == "false"
 
 
+# PR #9453 (run 43377281263) and PR #9390 (run 43388708424): the editor
+# declined no fix as "sandbox-excluded path"; an indented sub-bullet explaining
+# a sandbox-only test failure merely ended with those words, and the heal intake
+# then labelled both PRs ai:needs-human.
+PR_9453_IGNORED = (
+	"- TASK_GAP_DEFERRED: the request to move the slowest steps. This is deferred on purpose:\n"
+	"  - The approved plan chose to move no step.\n"
+	"- The pre-push gate's failures in `tests/test_changelog_fragment_contract.py` were not acted on:\n"
+	"  - Both paths are absent here because the sandbox leaves out dot-files (\"sandbox-excluded path\").\n"
+	"  - The PR does not touch either path."
+)
+PR_9390_IGNORED = (
+	"- CONSOLIDATOR_OVERRIDDEN: iss_58723a20442b362c — neither failure comes from this PR:\n"
+	"  - `test_label_contract_and_helper_have_scope_blocked` fails with `FileNotFoundError` on `.github/ai/label_contract.v1.json`, a sandbox-excluded path.\n"
+	"\t- A tab-indented sub-bullet ending the same way, a sandbox-excluded path."
+)
+
+
+@pytest.mark.parametrize("ignored", [PR_9453_IGNORED, PR_9390_IGNORED])
+def test_nested_sub_bullet_mentioning_the_reason_writes_no_marker(tmp_path: Path, ignored: str) -> None:
+	result, body, github_env = _run_step(tmp_path, _summary(ignored=ignored))
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "review-autofix-failure:v1" not in body
+	assert _escalation_lines(result.stdout) == []
+	assert "AUTOFIX_FAILURE_REASON" not in github_env
+
+
+def test_top_level_declined_finding_still_counts_beside_nested_explanations(tmp_path: Path) -> None:
+	ignored = PR_9453_IGNORED + "\n- .claude/docs/s25-x.md needs an edit — sandbox-excluded path\n  - explanation, a sandbox-excluded path"
+	result, body, _ = _run_step(tmp_path, _summary(ignored=ignored))
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert body.rstrip().splitlines()[-1].startswith("<!-- review-autofix-failure:v1 ")
+	assert _escalation_lines(result.stdout) == [f"AUTOFIX_SANDBOX_EXCLUDED_ESCALATION pr=8250 head={HEAD} findings=1 outcome=marker"]
+
+
 def test_prompt_pins_the_reason_string_the_detector_reads() -> None:
 	prompt = (REPO_ROOT / "scripts" / "review_apply_fixes.sh").read_text(encoding="utf-8")
 	assert 'with the reason "sandbox-excluded path"' in prompt
 	assert 'with reason "sandbox-excluded path"' in prompt
 	step = STEP_SCRIPT.read_text(encoding="utf-8")
 	assert "sandbox-excluded path$" in step and "--failure-reason review_editor_sandbox_path_excluded" in step
+
+
+# --- .gitleaksignore fingerprint suggestion (#9659) -------------------------
+
+GITLEAKS_SUMMARY = _summary(ignored="- CI gitleaks generic-api-key on docs/plan.md needs a .gitleaksignore entry — sandbox-excluded path")
+
+
+def _git_env() -> dict[str, str]:
+	env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+	env.update({"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t", "GIT_CONFIG_NOSYSTEM": "1", "HOME": os.environ.get("HOME", "/tmp")})
+	return env
+
+
+def _git(repo: Path, *args: str) -> str:
+	return subprocess.run(["git", *args], cwd=repo, env=_git_env(), check=True, text=True, capture_output=True).stdout.strip()
+
+
+def _gitleaks_repo(tmp_path: Path) -> tuple[Path, str, str, str]:
+	"""Return (repo, leak_commit, head_commit, unrelated_commit)."""
+	repo = tmp_path / "workspace"
+	repo.mkdir()
+	_git(repo, "init", "-q", "-b", "main")
+	(repo / "docs").mkdir()
+	(repo / "docs" / "plan.md").write_text("api_key = example\n", encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-qm", "leak")
+	leak = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "checkout", "-q", "-b", "side")
+	(repo / "side.txt").write_text("x\n", encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-qm", "side")
+	unrelated = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "checkout", "-q", "main")
+	(repo / "more.txt").write_text("y\n", encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-qm", "head")
+	head = _git(repo, "rev-parse", "HEAD")
+	return repo, leak, head, unrelated
+
+
+def _context(tmp_path: Path, log_lines: list[str], *, summary_line: str = "") -> Path:
+	tail = "\n".join(log_lines) + "\n"
+	text = (
+		"PR check-runs context\n\n"
+		"failed[0].name: gitleaks\n"
+		f"failed[0].summary: {summary_line}\n"
+		f"failed[0].log_tail ({len(tail)} chars):\n"
+		f"{tail}\n"
+		"incomplete[0].name: slow\n"
+		"incomplete[0].status: queued\n"
+	)
+	path = tmp_path / "pr_check_runs_context.txt"
+	path.write_text(text, encoding="utf-8")
+	return path
+
+
+def _suggestion_lines(output: str) -> list[str]:
+	return [line for line in output.splitlines() if line.startswith("REVIEW_EDITOR_GITLEAKS_SUGGESTION ")]
+
+
+def _fenced(body: str) -> list[str]:
+	start = body.index("```text\n") + len("```text\n")
+	end = body.index("\n```", start)
+	return body[start:end].splitlines()
+
+
+def test_gitleaks_fingerprints_are_suggested_ahead_of_the_marker(tmp_path: Path) -> None:
+	repo, leak, head, _unrelated = _gitleaks_repo(tmp_path)
+	fp = f"{leak}:docs/plan.md:generic-api-key:1"
+	context = _context(tmp_path, [
+		"2026-11-17T10:00:00.1234567Z Finding:     api_key = example",
+		f"2026-11-17T10:00:00.1234567Z \x1b[1;31mFingerprint:\x1b[0m {fp}",
+		f"Fingerprint: {fp}",
+	])
+	result, body, _ = _run_step(tmp_path, GITLEAKS_SUMMARY, head=head, extra_env={"GITHUB_WORKSPACE": str(repo), "PR_CHECK_RUNS_CONTEXT_FILE": str(context)})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert _suggestion_lines(result.stdout) == ["REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=8250 outcome=suggested count=1 missing=0"]
+	assert _fenced(body) == [fp]
+	assert "the autofix editor never writes" in body and "a human or the main-branch pipeline must decide" in body
+	# The #8321 marker stays the last line, and the fingerprint is never logged.
+	assert body.rstrip().splitlines()[-1].startswith("<!-- review-autofix-failure:v1 ")
+	assert body.index("```text") < body.index("<!-- review-autofix-failure:v1 ")
+	assert fp not in result.stdout and fp not in result.stderr
+
+
+def test_gitleaks_suggestion_is_capped_at_ten(tmp_path: Path) -> None:
+	repo, leak, head, _unrelated = _gitleaks_repo(tmp_path)
+	fps = [f"{leak}:docs/plan.md:generic-api-key:{n}" for n in range(1, 13)]
+	context = _context(tmp_path, [f"Fingerprint: {fp}" for fp in fps])
+	result, body, _ = _run_step(tmp_path, GITLEAKS_SUMMARY, head=head, extra_env={"GITHUB_WORKSPACE": str(repo), "PR_CHECK_RUNS_CONTEXT_FILE": str(context)})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert _suggestion_lines(result.stdout) == ["REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=8250 outcome=suggested count=10 missing=0"]
+	assert _fenced(body) == fps[:10]
+
+
+def test_missing_commits_after_the_cap_are_still_counted(tmp_path: Path) -> None:
+	repo, leak, head, _unrelated = _gitleaks_repo(tmp_path)
+	fps = [f"{leak}:docs/plan.md:generic-api-key:{n}" for n in range(1, 13)]
+	absent = [f"{'f' * 40}:docs/a.md:generic-api-key:1", f"{'e' * 40}:docs/b.md:generic-api-key:2"]
+	context = _context(tmp_path, [f"Fingerprint: {fp}" for fp in fps + absent])
+	result, body, _ = _run_step(tmp_path, GITLEAKS_SUMMARY, head=head, extra_env={"GITHUB_WORKSPACE": str(repo), "PR_CHECK_RUNS_CONTEXT_FILE": str(context)})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert _suggestion_lines(result.stdout) == ["REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=8250 outcome=suggested count=10 missing=2"]
+	assert _fenced(body) == fps[:10]
+
+
+def test_untrusted_and_unreachable_gitleaks_lines_are_dropped(tmp_path: Path) -> None:
+	repo, leak, head, unrelated = _gitleaks_repo(tmp_path)
+	good = f"{leak}:docs/plan.md:generic-api-key:1"
+	context = _context(tmp_path, [
+		f"::error::Fingerprint: {leak}:docs/a.md:generic-api-key:1",
+		f"Fingerprint: ::error::{leak}:docs/a.md:generic-api-key:1",
+		f"Fingerprint: {leak}:docs/`x`.md:generic-api-key:1",
+		f"Fingerprint: {leak}:docs/<x>.md:generic-api-key:1",
+		f"Fingerprint: {leak}:docs/a.md:generic api key:1",
+		f"Fingerprint: {leak.upper()}:docs/a.md:generic-api-key:1",
+		f"Fingerprint: {leak}:docs/a.md:generic-api-key:1 trailing",
+		f"Fingerprint: {unrelated}:side.txt:generic-api-key:1",
+		f"Fingerprint: {'f' * 40}:docs/a.md:generic-api-key:1",
+		f"Fingerprint: {good}",
+	], summary_line=f"Fingerprint: {leak}:docs/summary.md:generic-api-key:1")
+	result, body, _ = _run_step(tmp_path, GITLEAKS_SUMMARY, head=head, extra_env={"GITHUB_WORKSPACE": str(repo), "PR_CHECK_RUNS_CONTEXT_FILE": str(context)})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert _suggestion_lines(result.stdout) == ["REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=8250 outcome=suggested count=1 missing=1"]
+	assert _fenced(body) == [good]
+
+
+def test_no_gitleaks_output_suggests_nothing(tmp_path: Path) -> None:
+	repo, _leak, head, _unrelated = _gitleaks_repo(tmp_path)
+	context = _context(tmp_path, ["5 passed, 1 failed", "Error: process completed with exit code 1."])
+	result, body, _ = _run_step(tmp_path, GITLEAKS_SUMMARY, head=head, extra_env={"GITHUB_WORKSPACE": str(repo), "PR_CHECK_RUNS_CONTEXT_FILE": str(context)})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert _suggestion_lines(result.stdout) == ["REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=8250 outcome=none count=0 missing=0"]
+	assert "```text" not in body
+	# The escalation itself is unchanged.
+	assert _escalation_lines(result.stdout) == [f"AUTOFIX_SANDBOX_EXCLUDED_ESCALATION pr=8250 head={head} findings=1 outcome=marker"]
+	assert body.rstrip().splitlines()[-1].startswith("<!-- review-autofix-failure:v1 ")
+
+
+def test_missing_context_file_or_invalid_head_suggests_nothing(tmp_path: Path) -> None:
+	result, body, _ = _run_step(tmp_path, GITLEAKS_SUMMARY, head="not-a-sha", extra_env={"PR_CHECK_RUNS_CONTEXT_FILE": str(tmp_path / "absent.txt")})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert _suggestion_lines(result.stdout) == ["REVIEW_EDITOR_GITLEAKS_SUGGESTION pr=8250 outcome=none count=0 missing=0"]
+	assert "```text" not in body
+
+
+def test_finding_that_does_not_name_gitleaksignore_logs_nothing(tmp_path: Path) -> None:
+	repo, leak, head, _unrelated = _gitleaks_repo(tmp_path)
+	context = _context(tmp_path, [f"Fingerprint: {leak}:docs/plan.md:generic-api-key:1"])
+	result, body, _ = _run_step(tmp_path, PR_8250_SUMMARY, head=head, extra_env={"GITHUB_WORKSPACE": str(repo), "PR_CHECK_RUNS_CONTEXT_FILE": str(context)})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert _suggestion_lines(result.stdout) == []
+	assert "```text" not in body
+	assert _escalation_lines(result.stdout) == [f"AUTOFIX_SANDBOX_EXCLUDED_ESCALATION pr=8250 head={head} findings=1 outcome=marker"]
