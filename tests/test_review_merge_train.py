@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -256,7 +257,7 @@ def _run(subcommand: str, tmp_path: Path, bin_dir: Path, fixtures: Path, log: Pa
 	# opt in explicitly rather than inherit the live PR's paths or base branch.
 	for inherited_name in ("BASE_BRANCH", "PR_DIFF_FILE", "PR_NUMBER", "TARGET_BRANCH", "IS_SMOKE_TEST",
 			"MERGE_TRAIN_CONFLICT_CHECK_ENABLED", "MERGE_TRAIN_HEAD_MAX_AGE_HOURS", "MERGE_TRAIN_PRIORITY_LABELS",
-			"MERGE_TRAIN_IGNORE_PATHS"):
+			"MERGE_TRAIN_IGNORE_PATHS", "ZOMBIE_RUN_MAX_QUEUED_HOURS"):
 		run_env.pop(inherited_name, None)
 	run_env.update({
 		"PATH": f"{bin_dir}:{os.environ['PATH']}",
@@ -1265,7 +1266,9 @@ def test_release_holds_pr_for_review_run_that_changes_status_mid_listing(tmp_pat
 		(fixtures / "actions_runs_after_switch.json").write_text(
 			json.dumps({"workflow_runs": [dict(run, status=after)]}), encoding="utf-8")
 		(fixtures / "actions_runs_switch_at").write_text(str(switch_at), encoding="utf-8")
-		result, log_text, _env = _run("release", case_dir, bin_dir, fixtures, log)
+		# The fixed-date fixture is far older than 24h, so the wedged-queued
+		# rule (issue #9473) is switched off to observe the status flip alone.
+		result, log_text, _env = _run("release", case_dir, bin_dir, fixtures, log, ZOMBIE_RUN_MAX_QUEUED_HOURS="0")
 		assert result.returncode == 0, (switch_at, result.stderr)
 		assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr, (switch_at, result.stderr)
 		assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout, (switch_at, result.stdout)
@@ -1304,7 +1307,8 @@ def test_release_holds_pr_for_review_run_that_changes_status_twice_mid_listing(t
 			(fixtures / "actions_runs_after_switch2.json").write_text(
 				json.dumps({"workflow_runs": [dict(run, status=third)]}), encoding="utf-8")
 			(fixtures / "actions_runs_switch2_at").write_text(str(switch2_at), encoding="utf-8")
-			result, log_text, _env = _run("release", case_dir, bin_dir, fixtures, log)
+			# See the single-switch test: the wedged-queued rule (issue #9473) is off here.
+			result, log_text, _env = _run("release", case_dir, bin_dir, fixtures, log, ZOMBIE_RUN_MAX_QUEUED_HOURS="0")
 			case = (statuses, switch_at, switch2_at)
 			assert result.returncode == 0, (case, result.stderr)
 			assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr, (case, result.stderr)
@@ -2246,6 +2250,44 @@ def test_conflict_probe_outside_a_checkout_keeps_the_blocker_when_the_fetch_fail
 	assert not list(tmp_path.glob("merge-train-probe.*"))
 
 
+@pytest.mark.parametrize("library", ["shared", "older"])
+def test_conflict_probe_wraps_the_shared_probe_and_falls_back(tmp_path: Path, library: str) -> None:
+	"""Plan D9 (merge-lease Phase 4, Refs #9781): with the staged library's shared
+	`_pr_*` probe the train's `_mt_*` functions delegate to it and keep the
+	merge-train-probe.* directory, MT_REPO and MERGE_TRAIN_PROBE_REPO on stdout;
+	an older staged library without it keeps the train's own body."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_work, shas = _git_fixture(tmp_path)
+	plain = tmp_path / "plain"
+	plain.mkdir()
+	support = tmp_path / "support"
+	support.mkdir()
+	for name in ("gh_helpers.sh", "pr_checks_lib.sh"):
+		shutil.copy(REPO_ROOT / "scripts" / name, support / name)
+	if library == "older":
+		with (support / "pr_checks_lib.sh").open("a", encoding="utf-8") as fh:
+			fh.write("\nunset -f _pr_probe_repo_log _pr_merge_tree_probe\n")
+	diff = _overlap_scenario(tmp_path, fixtures, _pr(4075, "ai/issue-4063", head_sha=shas["older"]),
+		_pr(4077, "ai/issue-4064", head_sha=shas["conflict"]))
+	result, _log_text, _env_out = _run("gate", tmp_path, bin_dir, fixtures, log, run_cwd=plain,
+		PR_DIFF_FILE=str(diff), MERGE_TRAIN_PRIORITY_LABELS="none", GITHUB_SERVER_URL=_probe_server(tmp_path),
+		SUPPORT_SCRIPTS_DIR=str(support), **_GATE_4077)
+	assert result.returncode == 0, result.stderr
+	assert f"MERGE_TRAIN_PROBE_REPO outcome=created origin=file://{tmp_path}/srv/acme/consumer.git" in result.stdout
+	assert "older=4075 overlap=paths conflict=conflict" in result.stdout
+	assert "PR_MERGE_TREE_PROBE_REPO" not in result.stdout + result.stderr
+	assert not list(tmp_path.glob("merge-train-probe.*"))
+	assert not list(tmp_path.glob("pr-merge-tree-probe.*"))
+	text = SCRIPT.read_text(encoding="utf-8")
+	for fn, call in (("_mt_git", "_pr_mt_git"), ("_mt_git_fetch", "_pr_mt_git_fetch"),
+			("_mt_probe_repo_cleanup", "_pr_probe_repo_cleanup"), ("_mt_probe_repo_init", "_pr_probe_repo_init"),
+			("_mt_conflict_probe", "_pr_merge_tree_probe")):
+		start = text.index(f"\n{fn}()\n{{")
+		body = text[start:text.index("\n}\n", start)]
+		delegated = body.split("if _mt_probe_via_lib; then", 1)[1].split("\n\tfi\n", 1)[0]
+		assert re.search(rf"\b{call}\b", delegated), fn
+
+
 def test_https_probe_fetch_passes_the_token_through_environment_only() -> None:
 	text = SCRIPT.read_text(encoding="utf-8")
 	fetch = text[text.index("_mt_git_fetch()\n"):text.index("_mt_probe_repo_cleanup()\n")]
@@ -3058,11 +3100,49 @@ def test_release_stale_untitled_rule_can_be_turned_off(tmp_path: Path) -> None:
 	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
 	_queued_pr_4077(fixtures)
 	_write_runs(fixtures, [_untitled_dispatch_run(6105, "queued", 200)])
+	# Issue #9473: the wedged-queued rule would also drop a 200-hour queued
+	# run, so it is switched off too to observe the stale rule alone.
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
-		MERGE_TRAIN_STALE_UNATTRIBUTED_RUN_HOURS="0")
+		MERGE_TRAIN_STALE_UNATTRIBUTED_RUN_HOURS="0", ZOMBIE_RUN_MAX_QUEUED_HOURS="0")
 	assert result.returncode == 0, result.stderr
 	assert "MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=unattributed_run" in result.stderr
 	assert "MERGE_TRAIN_RELEASED" not in result.stdout
+
+
+def test_release_drops_wedged_queued_review_run_even_with_stale_rule_off(tmp_path: Path) -> None:
+	"""Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS never holds the train."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [_untitled_dispatch_run(6107, "queued", 200)])
+	result, _log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_STALE_UNATTRIBUTED_RUN_HOURS="0")
+	assert result.returncode == 0, result.stderr
+	assert ("ZOMBIE_RUN_IGNORED run=6107 workflow=.github/workflows/internal-review.yml age_h=200 guard=merge_train_release"
+		in result.stderr)
+	assert "outcome=incomplete" not in result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+@pytest.mark.parametrize("hours_ago,status,held", [
+	(25, "queued", False),
+	(23, "queued", True),
+	(100, "in_progress", True),
+])
+def test_release_wedged_rule_only_ages_out_old_queued_runs(tmp_path: Path, hours_ago: int, status: str, held: bool) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	run = {"id": 6200, "status": status, "event": "workflow_dispatch", "head_branch": "main",
+		"display_title": "Internal: AI Review & Autofix [pr:4077]", "path": ".github/workflows/internal-review.yml",
+		"created_at": _iso(hours_ago)}
+	_write_runs(fixtures, [run])
+	result, _log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	if held:
+		assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+		assert "ZOMBIE_RUN_IGNORED" not in result.stderr
+	else:
+		assert "ZOMBIE_RUN_IGNORED run=6200 " in result.stderr
+		assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
 
 
 def test_release_stale_untitled_limit_is_configurable_and_validated(tmp_path: Path) -> None:
@@ -3285,3 +3365,133 @@ def test_poll_release_step_passes_the_trusted_telegram_helper() -> None:
 	# Never the repository's own scripts/ copy.
 	assert "scripts/tg_helpers.sh" not in run.replace(".codex-workflow-src/scripts/tg_helpers.sh", "").replace(
 		".codex-workflow-src-main/scripts/tg_helpers.sh", "")
+
+
+def test_merge_lease_tick_metrics_are_additive_and_guarded():
+	"""Merge-lease Phase 1 metrics (Refs #9781): the tick emits MERGE_LEASE_METRIC
+	only behind a `declare -F` guard, so an older staged pr_checks_lib.sh without
+	the helper still releases and grants, and every existing MERGE_LEASE tick
+	line keeps its fields (Phase 1 step 1.1 only appends held_s=, merged= and
+	queue_len=)."""
+	text = SCRIPT.read_text()
+	start = text.index("_mt_merge_lease_tick()\n{")
+	body = text[start:text.index("\n}\n", start)]
+	assert "declare -F _merge_lease_metric >/dev/null 2>&1 && tick_metric_ok=1" in body
+	calls = [line.strip() for line in body.splitlines() if "_merge_lease_metric " in line and "declare -F" not in line]
+	# 9 Phase 1 calls plus Phase 2's skipped (skip_head_unchanged, ineligible)
+	# and no_waiter reason=no_eligible_waiter.
+	assert len(calls) == 12, calls
+	for call in calls:
+		assert call.startswith('[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric '), call
+		assert call.endswith("|| true"), call
+	for fmt in (
+		'_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=held reason=holder_open"',
+		# Phase 1 step 1.1 appends held_s= and merged= to the release line and
+		# queue_len= to the grant lines; the existing fields are unchanged.
+		'_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=released reason=${tick_reason} held_s=${tick_rel_held:--} merged=${tick_merged}"',
+		'_mt_log "MERGE_LEASE pr=- base=${tick_base} mode=tick outcome=no_waiter reason=lease_free"',
+		'_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=first_in_queue${tick_queue_len_field}"',
+		'_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=dispatch_failed_sweep_retries${tick_queue_len_field}"',
+		'_mt_warn "MERGE_LEASE mode=tick outcome=unavailable reason=refs_list_failed (no lease freed or granted this tick)"',
+		'_mt_warn "MERGE_LEASE base=${tick_base} mode=tick outcome=unavailable reason=read_failed"',
+	):
+		assert fmt in body, fmt
+	# The grant metric's ts is taken right after the lease write, before the
+	# unlabel and the dispatch, so dispatch latency is not counted as wait.
+	# rindex: the grant's unlabel is the last one (Phase 2 also unlabels an
+	# ineligible candidate in the grant loop, before any write).
+	assert body.index('tick_grant_ts="$(date -u +%s') < body.rindex('_merge_lease_unlabel_wait "${tick_first}"')
+	# No new GitHub call: the tick's gh reads are the matching-refs listing and
+	# the live holder-state read, as before the metrics.
+	assert body.count("gh_retry _safe_gh_jq") == 2
+
+
+def test_list_open_prs_emits_the_title_for_the_merge_lease():
+	"""Merge-lease Phase 2 (Refs #9781): _mt_list_open_prs adds `title` (the
+	lease tick's `[skip ai]` check) and keeps every existing field."""
+	text = SCRIPT.read_text()
+	start = text.index("_mt_list_open_prs() {")
+	body = text[start:text.index("\n}\n", start)]
+	program = re.search(r"--jq '([^']*)'", body).group(1)
+	listing = [{"number": 5, "head": {"ref": "ai/issue-5", "sha": "a" * 40, "repo": {"full_name": "o/r"}},
+		"created_at": "2026-11-19T00:00:00Z", "base": {"ref": "main"}, "draft": False,
+		"labels": [{"name": "ai:merge-lease-wait"}], "title": "Fix [skip ai] \"quoted\""},
+		{"number": 6, "head": {"ref": "ai/issue-6", "sha": "b" * 40, "repo": None},
+		"base": {"ref": "main"}, "draft": True, "labels": []}]
+	res = subprocess.run(["jq", "-r", program], input=json.dumps(listing), capture_output=True, text=True, check=True)
+	rows = [json.loads(line) for line in res.stdout.splitlines()]
+	assert len(rows) == 2
+	assert rows[0] == {"number": 5, "head": "ai/issue-5", "head_repo": "o/r", "head_sha": "a" * 40,
+		"created_at": "2026-11-19T00:00:00Z", "base": "main", "draft": False, "labels": ["ai:merge-lease-wait"],
+		"title": 'Fix [skip ai] "quoted"'}
+	assert rows[1]["title"] == ""
+	assert rows[1]["head_repo"] == ""
+
+
+def test_merge_lease_tick_phase_2_is_guarded_by_the_staged_library():
+	"""Phase 2 runs only when the staged pr_checks_lib.sh has its helpers, and
+	the tick adds no direct GitHub call of its own."""
+	text = SCRIPT.read_text()
+	start = text.index("_mt_merge_lease_tick()\n{")
+	body = text[start:text.index("\n}\n", start)]
+	assert "declare -F _merge_lease_pr_eligible >/dev/null 2>&1" in body
+	assert 'if [ "${tick_p2_lib}" = 1 ] && _merge_lease_revoke_enabled; then' in body
+	assert "local tick_max_candidates=10" in body
+	assert '_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=skipped reason=${tick_skip_why}"' in body
+
+
+def test_merge_lease_tick_phase_5_is_guarded_and_keeps_the_single_holder_lines():
+	"""Merge-lease Phase 5 (Refs #9781): the multi-holder tick runs only when the
+	staged library has the Phase 5 helpers and MERGE_LEASE_MAX_HOLDERS > 1 or the
+	record lists 2+ live holders; the single-holder block keeps its pinned lines."""
+	text = SCRIPT.read_text()
+	start = text.index("_mt_merge_lease_tick()\n{")
+	body = text[start:text.index("\n}\n", start)]
+	for helper in ("_merge_lease_max_holders", "_merge_lease_write_holders", "_merge_lease_rows_without"):
+		assert f"declare -F {helper} >/dev/null 2>&1" in body, helper
+	assert '[ "${tick_p5_lib}" = 1 ] && tick_max_holders="$(_merge_lease_max_holders)"' in body
+	assert ('if [ "${tick_p5_lib}" = 1 ] && { [ "${tick_max_holders}" -gt 1 ] || [ "${MERGE_LEASE_HOLDER_COUNT:-0}" -gt 1 ]; }; then'
+		in body)
+	assert body.index("_mt_merge_lease_tick_multi ") < body.index('if [ "${MERGE_LEASE_STATE}" = "held" ]; then')
+	assert '_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=first_in_queue${tick_queue_len_field}"' in body
+	assert " holders=" not in body
+	multi_start = text.index("_mt_merge_lease_tick_multi()\n{")
+	multi = text[multi_start:text.index("\n}\n", multi_start)]
+	assert "outcome=skipped reason=holder_shares_paths blocker=${tm_blocker}" in multi
+	assert "outcome=granted reason=first_in_queue${tm_queue_len_field} holders=${tm_count}" in multi
+	assert multi.count("gh_retry _safe_gh_jq") == 1
+
+
+def _merge_lease_queue_first_from_train_rows(listing: list[dict], extra_env: dict[str, str] | None = None) -> str:
+	"""Run the _mt_list_open_prs --jq program over a REST listing, then the
+	staged library's _merge_lease_queue_first over the slurped rows."""
+	text = SCRIPT.read_text()
+	start = text.index("_mt_list_open_prs() {")
+	body = text[start:text.index("\n}\n", start)]
+	program = re.search(r"--jq '([^']*)'", body).group(1)
+	assert "head: .head.ref" in program
+	assert "head_repo: (.head.repo.full_name" in program
+	res = subprocess.run(["jq", "-r", program], input=json.dumps(listing), capture_output=True, text=True, check=True)
+	rows = "[" + ",".join(res.stdout.splitlines()) + "]"
+	env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "GITHUB_REPOSITORY": "o/r", "ROWS": rows, **(extra_env or {})}
+	lib = REPO_ROOT / "scripts" / "pr_checks_lib.sh"
+	out = subprocess.run(["bash", "-c", f'source {str(lib)!r}; _merge_lease_queue_first "${{ROWS}}" ""'],
+		env=env, capture_output=True, text=True, check=True)
+	return out.stdout
+
+
+def test_merge_lease_queue_ranks_forward_merge_rows_from_the_train_listing():
+	"""Merge-lease Phase 3 (Refs #9781): the tick's rows carry the head ref and
+	head repository, so a same-repository forward-merge waiter orders first."""
+	def pr(num: int, ref: str, repo: str = "o/r") -> dict:
+		return {"number": num, "head": {"ref": ref, "sha": f"{num:040d}", "repo": {"full_name": repo}},
+			"created_at": "2026-11-19T00:00:00Z", "base": {"ref": "main"}, "draft": False,
+			"labels": [{"name": "ai:merge-lease-wait"}], "title": ""}
+	listing = [pr(5, "ai/issue-5"), pr(12, "auto/forward-merge-stable-1-1")]
+	assert _merge_lease_queue_first_from_train_rows(listing) == "12"
+	# Unchanged ordering when no forward-merge PR waits.
+	assert _merge_lease_queue_first_from_train_rows([pr(5, "ai/issue-5"), pr(12, "ai/issue-12")]) == "5"
+	# A fork head with a forward-merge name gets no priority.
+	assert _merge_lease_queue_first_from_train_rows([pr(5, "ai/issue-5"), pr(12, "auto/forward-merge-stable-1-1", "x/r")]) == "5"
+	# The kill switch restores number order.
+	assert _merge_lease_queue_first_from_train_rows(listing, {"MERGE_LEASE_PRIORITY_HEAD_PREFIXES": "none"}) == "5"
