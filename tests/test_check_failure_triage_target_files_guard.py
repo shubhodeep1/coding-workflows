@@ -329,3 +329,16 @@ def test_guard_placement_switch_default_and_no_api_calls() -> None:
 	assert script.count("\ntriage_target_files_guard || true\n") == 1
 	workflow = TRIAGE_WORKFLOW.read_text(encoding="utf-8")
 	assert workflow.count("      CHECK_TRIAGE_TARGET_FILES_GUARD_ENABLED: ${{ vars.CHECK_TRIAGE_TARGET_FILES_GUARD_ENABLED || 'true' }}\n") == 1
+
+
+def test_truncated_failing_file_list_keeps_target(tmp_path: Path) -> None:
+	# The helper caps its list at 20 without a flag: a later failing file may
+	# exist on the head, so a capped list never clears the route.
+	files = [f"tests/test_mod{i}.py" for i in range(25)]
+	context = "".join(f"FAILED {name}::test_x - AssertionError: boom\n" for name in files)
+	target, logs, _calls = _run_guard(
+		tmp_path, refs=DEFAULT_REFS, objects=[f"{HEAD_SHA}^{{commit}}"] + [f"{DEFAULT_TIP}:{name}" for name in files],
+		context=context,
+	)
+	assert target == "feature/widget"
+	assert logs == ["CHECK_TRIAGE routing outcome=keep reason=files_truncated target_branch=feature/widget"]

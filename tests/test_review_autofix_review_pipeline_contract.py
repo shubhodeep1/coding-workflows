@@ -9876,7 +9876,9 @@ def test_review_isolation_transfers_into_active_work_tree() -> None:
 		github_env.write_text("")
 		prepared = subprocess.run(["bash", sandbox, "prepare"], cwd=work_tree, env=env, capture_output=True, text=True, timeout=120)
 		assert prepared.returncode == 0, prepared.stdout + prepared.stderr
-		sandbox_root = github_env.read_text().split("REVIEW_SANDBOX_ROOT=", 1)[1].strip()
+		# Read only the REVIEW_SANDBOX_ROOT line: prepare appends more keys after it
+		# (REVIEW_GITHUB_AI_GRANT_PATHS_FILE since #9920).
+		sandbox_root = next(line.split("=", 1)[1].strip() for line in github_env.read_text().splitlines() if line.startswith("REVIEW_SANDBOX_ROOT="))
 		prompt = root / "prompt.txt"
 		prompt.write_text("fix it\n")
 		config = root / "config.json"
