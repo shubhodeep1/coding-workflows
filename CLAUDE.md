@@ -1633,6 +1633,8 @@ This applies in this repo and in every consumer repo that receives this file
 via the `@stable` sync, and it is not superseded by §12. In PR review mode
 (§12), a prevention fix that fits the PR lands in the PR under review
 (§12.A); one too large for it becomes a §34.B issue, never a follow-up PR.
+One that needs several PRs cannot be a §34.B issue (§31.B step 4): ask in
+the §2 format, as §12.A requires, and open no plan PR before the answer.
 
 Fixing one instance of a problem is half the job. Whenever a session solves a
 problem, it MUST check whether the same problem can happen again and, if it
