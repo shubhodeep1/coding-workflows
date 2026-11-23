@@ -64,6 +64,24 @@
 #   Fail-open: a failed listing (any page), or an unparseable one, prints
 #           nothing and logs `REVIEW_SWEEP_ROUND_CAP outcome=read_failed`; the
 #           tick then dispatches exactly as before this helper existed.
+#   Infra-failed rounds (issue #9917): a review run whose engine was refused
+#           for lack of credentials (or found every pool account gated, or the
+#           pool broker refused it) reviewed nothing, so it does not count.
+#           review_autofix.yml's "Classify infra-failed review round" step
+#           (review_round_infra_failure_reason below) uploads an artifact named
+#           `review-round-infra-failed` from such a dispatched run; one more
+#           paginated listing per tick, `GET actions/artifacts?name=
+#           review-round-infra-failed&per_page=100`, yields their run ids, and
+#           a counted run whose `id` is in that set is dropped (logged
+#           `REVIEW_ROUND_INFRA_EXCLUDED pr=<n> run=<id> reason=infra_failed`
+#           on stderr). Only the dispatched run itself can upload into its own
+#           run id. A failed or unparseable artifacts listing excludes nothing
+#           (`outcome=infra_marker_read_failed`, today's count).
+#           REVIEW_INFRA_FAILURE_EXCLUDED_ENABLED=false (default true) skips
+#           the listing and counts every round, as before.
+#   Raw counts: when REVIEW_SWEEP_ROUND_RAW_COUNTS_FILE (default unset) names a
+#           path, the counts before the infra exclusion are written there as
+#           the same JSON shape (the sweep's dispatch backoff reads them).
 #
 # review_sweep_round_cap_escalate <owner/repo> <pr> <rounds> <max> <window hours> <labels json> <dry run>
 #   Called for a PR at or over the cap, in place of its dispatch. When the PR
@@ -89,14 +107,81 @@
 #   REVIEW_SWEEP_ROUND_CAP outcome=read_failed reason=<invalid_input|head_date_unavailable|cutoff|listing|parse> window_hours=<n>
 #   REVIEW_SWEEP_ROUND_CAP outcome=<escalated|already_escalated|dry_run> pr=#<n> rounds=<n> max=<n> window_hours=<n>
 #   REVIEW_SWEEP_ROUND_CAP outcome=escalate_failed reason=<invalid_input|comment_write|label_write> pr=#<n> ...
+#   REVIEW_SWEEP_ROUND_CAP outcome=infra_marker_read_failed window_hours=<n>
+#   REVIEW_ROUND_INFRA_EXCLUDED pr=<n> run=<id> reason=<infra_failed|no_credential|all_gated|broker_refused_<code>>
+#
+# review_round_infra_failure_reason
+#   Called by review_autofix.yml's "Classify infra-failed review round" step.
+#   Prints one reason ([a-z0-9_], at most 64 characters) when the round is
+#   infra-failed, otherwise nothing; never fails. A round is infra-failed only
+#   when REVIEW_INFRA_FAILURE_EXCLUDED_ENABLED is not false/0/no/off, the
+#   editor produced no usable output (EDITOR_SUMMARY_FILE missing, empty, or
+#   the editor's fallback summary), and one infra signal is present:
+#     - an AI_ENGINE_FALLBACK_RECORDS_FILE v1 record (scripts/ai_engine.sh:
+#       v1, ts, role, reason, class, action, policy) for a REVIEW* role with
+#       action refused or wait and reason no_credential or all_gated;
+#     - an `::error::AI_ENGINE_FALLBACK_REFUSED role=REVIEW* reason=
+#       <no_credential|all_gated>` line in ${RUNTIME_DIR}/editor_stage_stderr.txt
+#       or ${RUNTIME_DIR}/reviewers_stage_stderr.txt (a sandboxed call whose
+#       record never reached the host file);
+#     - CLAUDE_POOL_STEP_AVAILABLE=false with CLAUDE_POOL_STEP_REASON
+#       broker_refused_<code>.
+#   Symlinked or unreadable files count as absent. A round that landed real
+#   editor output keeps counting. No API call.
 
 REVIEW_SWEEP_ROUND_CAP_LABEL="ai:needs-human"
 REVIEW_SWEEP_ROUND_CAP_MARKER="<!-- ai:review-round-cap:v1 -->"
+REVIEW_ROUND_INFRA_ARTIFACT_NAME="review-round-infra-failed"
+
+# True when REVIEW_INFRA_FAILURE_EXCLUDED_ENABLED (default true) is on.
+_review_round_infra_exclusion_enabled()
+{
+	case "$(printf '%s' "${REVIEW_INFRA_FAILURE_EXCLUDED_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		false|0|no|off) return 1 ;;
+	esac
+	return 0
+}
+
+_review_round_infra_readable()
+{
+	[ -n "${1:-}" ] && [ -f "$1" ] && [ ! -L "$1" ] && [ -r "$1" ]
+}
+
+review_round_infra_failure_reason()
+{
+	local rif_summary="${EDITOR_SUMMARY_FILE:-}" rif_records rif_file rif_reason=""
+	_review_round_infra_exclusion_enabled || return 0
+	# A round whose editor wrote a real summary did work: it keeps counting.
+	if _review_round_infra_readable "${rif_summary}" && [ -s "${rif_summary}" ] \
+		&& ! grep -qiE 'editor failed before producing|unavailable \(editor fallback\)' "${rif_summary}" 2>/dev/null; then
+		return 0
+	fi
+	rif_records="${AI_ENGINE_FALLBACK_RECORDS_FILE:-${RUNNER_TEMP:-/tmp}/ai-engine-fallback-records.tsv}"
+	if _review_round_infra_readable "${rif_records}"; then
+		rif_reason="$(awk -F '\t' '$1 == "v1" && $3 ~ /^REVIEW/ && ($6 == "refused" || $6 == "wait") && ($4 == "no_credential" || $4 == "all_gated") { print $4; exit }' "${rif_records}" 2>/dev/null || true)"
+	fi
+	if [ -z "${rif_reason}" ] && [ -n "${RUNTIME_DIR:-}" ]; then
+		for rif_file in "${RUNTIME_DIR}/editor_stage_stderr.txt" "${RUNTIME_DIR}/reviewers_stage_stderr.txt"; do
+			_review_round_infra_readable "${rif_file}" || continue
+			rif_reason="$(grep -oE '::error::AI_ENGINE_FALLBACK_REFUSED role=REVIEW[A-Z0-9_]* reason=(no_credential|all_gated)([^a-z0-9_]|$)' "${rif_file}" 2>/dev/null \
+				| head -n 1 | sed -E 's/.* reason=([a-z_]+).*/\1/' || true)"
+			[ -z "${rif_reason}" ] || break
+		done
+	fi
+	if [ -z "${rif_reason}" ] && [ "${CLAUDE_POOL_STEP_AVAILABLE:-}" = "false" ] \
+		&& [[ "${CLAUDE_POOL_STEP_REASON:-}" =~ ^broker_refused_[a-z0-9_]+$ ]]; then
+		rif_reason="${CLAUDE_POOL_STEP_REASON}"
+	fi
+	[[ "${rif_reason}" =~ ^[a-z0-9_]{1,64}$ ]] || return 0
+	printf '%s\n' "${rif_reason}"
+	return 0
+}
 
 review_sweep_round_counts()
 {
 	local cap_repo="${1:-}" cap_default_branch="${2:-}" cap_window_hours="${3:-}" cap_cutoff cap_raw cap_rc=0 cap_counts cap_summary
 	local cap_snapshot="${4-${prs_json:-}}" cap_since='{}' cap_scoped=false
+	local cap_infra='{}' cap_infra_raw cap_infra_rc=0 cap_infra_parsed cap_raw_file="${REVIEW_SWEEP_ROUND_RAW_COUNTS_FILE:-}"
 	local -a cap_api=(gh api)
 	if ! [[ "${cap_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || [[ "${cap_repo}" == *..* ]] \
 		|| ! [[ "${cap_default_branch}" =~ ^[A-Za-z0-9._/-]+$ ]] \
@@ -142,38 +227,72 @@ review_sweep_round_counts()
 	fi
 	"${cap_api[@]}" --paginate -X GET "repos/${cap_repo}/actions/workflows/internal-review.yml/runs" \
 		-f event=workflow_dispatch -f "created=>=${cap_cutoff}" -f per_page=100 \
-		--jq '{total_count: .total_count, workflow_runs: [.workflow_runs[]? | {event, conclusion, head_branch, path, display_title, created_at}]}' \
+		--jq '{total_count: .total_count, workflow_runs: [.workflow_runs[]? | {id, event, conclusion, head_branch, path, display_title, created_at}]}' \
 		> "${cap_raw}" 2>/dev/null || cap_rc=$?
 	if [ "${cap_rc}" -ne 0 ]; then
 		rm -f -- "${cap_raw}"
 		echo "REVIEW_SWEEP_ROUND_CAP outcome=read_failed reason=listing window_hours=${cap_window_hours} rc=${cap_rc}" >&2
 		return 0
 	fi
-	cap_counts="$(jq -c -s --arg default_branch "${cap_default_branch}" --argjson since "${cap_since}" --argjson scoped "${cap_scoped}" '
+	# Infra-failed rounds (issue #9917): one artifacts listing per tick, read
+	# into its own file so a failed page is not taken for a shorter set.
+	if _review_round_infra_exclusion_enabled; then
+		cap_infra_raw="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/review-round-infra.XXXXXX" 2>/dev/null || true)"
+		cap_infra_parsed=""
+		if [ -n "${cap_infra_raw}" ]; then
+			"${cap_api[@]}" --paginate -X GET "repos/${cap_repo}/actions/artifacts" \
+				-f "name=${REVIEW_ROUND_INFRA_ARTIFACT_NAME}" -f per_page=100 \
+				--jq '[.artifacts[]? | {run: (.workflow_run.id // null), created_at, expired}]' \
+				> "${cap_infra_raw}" 2>/dev/null || cap_infra_rc=$?
+			if [ "${cap_infra_rc}" -eq 0 ]; then
+				cap_infra_parsed="$(jq -c -s --arg cutoff "${cap_cutoff}" '
+					if all(.[]; type == "array") | not then error("bad page") else . end
+					| [.[][] | select(type == "object")
+						| select((.run | type) == "number")
+						| select(((.created_at // "") | type) == "string" and (.created_at // "") >= $cutoff)
+						| {key: (.run | tostring), value: true}] | from_entries' "${cap_infra_raw}" 2>/dev/null || true)"
+			fi
+			rm -f -- "${cap_infra_raw}"
+		fi
+		if [ -n "${cap_infra_parsed}" ] && printf '%s' "${cap_infra_parsed}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+			cap_infra="${cap_infra_parsed}"
+		else
+			echo "REVIEW_SWEEP_ROUND_CAP outcome=infra_marker_read_failed window_hours=${cap_window_hours}" >&2
+		fi
+	fi
+	cap_counts="$(jq -c -s --arg default_branch "${cap_default_branch}" --argjson since "${cap_since}" --argjson scoped "${cap_scoped}" --argjson infra "${cap_infra}" '
 		if length == 0 or (all(.[]; type == "object" and (.workflow_runs | type) == "array") | not) then error("bad page") else . end
 		| (([.[].total_count | select(type == "number")] | max) // 0) as $total
 		| ([.[].workflow_runs[]] | length) as $received
-		| {
-			truncated: ($total > $received),
-			counts: (
-				[ .[].workflow_runs[]
+		| [ .[].workflow_runs[]
 					| select(type == "object")
 					| select((.event // "") == "workflow_dispatch")
 					| select((.conclusion // "") != "cancelled")
 					| select(.head_branch == null or .head_branch == "" or .head_branch == $default_branch)
 					| select((((.path // "") | if type == "string" then . else "" end) | sub("@.*$"; "")) == ".github/workflows/internal-review.yml")
 					| ((.created_at // "") | if type == "string" then . else "" end) as $created
+					| ((.id // "") | tostring) as $run
 					| ((.display_title // "") | if type == "string" then . else "" end
 						| [match("^Internal: AI Review & Autofix \\[pr:([1-9][0-9]*)\\]$").captures[0].string] | first // "")
 					| select(. != "")
-					| select(($scoped | not) or (($since[.] // null) != null and $created >= $since[.])) ]
-				| group_by(.) | map({key: .[0], value: length}) | from_entries)
+					| select(($scoped | not) or (($since[.] // null) != null and $created >= $since[.]))
+					| {pr: ., run: $run} ] as $rows
+		| def tally: group_by(.) | map({key: .[0], value: length}) | from_entries;
+		{
+			truncated: ($total > $received),
+			raw: ([$rows[].pr] | tally),
+			excluded: [$rows[] | select($infra[.run] == true)],
+			counts: ([$rows[] | select($infra[.run] != true) | .pr] | tally)
 		}' "${cap_raw}" 2>/dev/null || true)"
 	rm -f -- "${cap_raw}"
 	# The empty check matters: jq 1.6 `-e` exits 0 on empty input.
 	if [ -z "${cap_counts}" ] || ! printf '%s' "${cap_counts}" | jq -e 'type == "object" and (.counts | type) == "object"' >/dev/null 2>&1; then
 		echo "REVIEW_SWEEP_ROUND_CAP outcome=read_failed reason=parse window_hours=${cap_window_hours}" >&2
 		return 0
+	fi
+	printf '%s' "${cap_counts}" | jq -r '.excluded[]? | "REVIEW_ROUND_INFRA_EXCLUDED pr=\(.pr) run=\(.run) reason=infra_failed"' >&2 2>/dev/null || true
+	if [ -n "${cap_raw_file}" ] && [ ! -L "${cap_raw_file}" ]; then
+		printf '%s' "${cap_counts}" | jq -c '.raw' > "${cap_raw_file}" 2>/dev/null || true
 	fi
 	cap_summary="$(printf '%s' "${cap_counts}" | jq -r '"runs=\([.counts[]] | add // 0) prs=\(.counts | length) truncated=\(.truncated)"')"
 	echo "REVIEW_SWEEP_ROUND_CAP outcome=counted window_hours=${cap_window_hours} ${cap_summary}" >&2

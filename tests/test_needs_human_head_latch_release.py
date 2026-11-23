@@ -116,6 +116,14 @@ FAKE_GH = textwrap.dedent(
 		with open(os.path.join(d, "deleted.log"), "a", encoding="utf-8") as fh:
 			fh.write(m.group(1) + " " + m.group(2) + "\n")
 		out([])
+	m = re.search(r"/actions/runs/(\d+)$", path)
+	if m and method == "GET":
+		if "run" in fail:
+			sys.exit(1)
+		runs = load("runs.json", {})
+		if m.group(1) not in runs:
+			sys.exit(1)
+		out(runs[m.group(1)])
 	if re.search(r"/pulls/(\d+)$", path):
 		if "pull" in fail:
 			sys.exit(1)
@@ -178,6 +186,10 @@ def _run(
 	refreshed_events: list[dict] | None = None,
 	refreshed_pull: dict | None = None,
 	post_delete_comments: list[dict] | None = None,
+	runs: dict | None = None,
+	numbers: tuple[int, ...] = (5,),
+	pull_ref: str = "ai/issue-9",
+	pull_head_repo: str = REPO,
 ) -> dict:
 	fake_dir = tmp_path / "fake"
 	fake_dir.mkdir(parents=True)
@@ -186,10 +198,15 @@ def _run(
 	gh = bin_dir / "gh"
 	gh.write_text(FAKE_GH, encoding="utf-8")
 	gh.chmod(0o755)
-	item = {"number": 5, "labels": [{"name": name} for name in labels]}
-	if is_pr:
-		item["pull_request"] = {"url": "x"}
-	(fake_dir / "list.json").write_text(json.dumps([item]), encoding="utf-8")
+	items = []
+	for number in numbers:
+		item = {"number": number, "labels": [{"name": name} for name in labels]}
+		if is_pr:
+			item["pull_request"] = {"url": "x"}
+		items.append(item)
+	(fake_dir / "list.json").write_text(json.dumps(items), encoding="utf-8")
+	if runs is not None:
+		(fake_dir / "runs.json").write_text(json.dumps(runs), encoding="utf-8")
 	(fake_dir / "comments.json").write_text(json.dumps(comments), encoding="utf-8")
 	(fake_dir / "events.json").write_text(json.dumps(events if events is not None else [_labeled()]), encoding="utf-8")
 	if refreshed_comments is not None:
@@ -199,7 +216,7 @@ def _run(
 	if refreshed_events is not None:
 		(fake_dir / "events.2.json").write_text(json.dumps(refreshed_events), encoding="utf-8")
 	(fake_dir / "pull.json").write_text(
-		json.dumps({"state": pull_state, "head": {"sha": head}, "labels": [{"name": n} for n in (pull_labels if pull_labels is not None else labels)]}),
+		json.dumps({"state": pull_state, "head": {"sha": head, "ref": pull_ref, "repo": {"full_name": pull_head_repo}}, "labels": [{"name": n} for n in (pull_labels if pull_labels is not None else labels)]}),
 		encoding="utf-8",
 	)
 	if refreshed_pull is not None:
@@ -465,3 +482,204 @@ def test_sweep_is_wired_into_both_poller_paths_and_the_workflow() -> None:
 	# The existing staged-support reason keeps its source-only gate.
 	assert 'if [ "${GITHUB_REPOSITORY}" != "shubhodeep1/coding-workflows" ]; then\n    echo "STAGED_SUPPORT_LATCH_RELEASE_SKIPPED reason=repository_out_of_scope' in text
 	assert not re.search(r"release_head_bound_needs_human_latches\(\) \{[^}]*shubhodeep1/coding-workflows", text)
+
+
+# ---------------------------------------------------------------------------
+# Autofix-cap latch (issue #9917): the default "AI review/autofix blocked —
+# needs human intervention" comment from
+# scripts/review_autofix_step_post_review_blocked_comment.sh.
+# ---------------------------------------------------------------------------
+
+AUTOFIX_CAP_HEADING = "**AI review/autofix blocked — needs human intervention**"
+RUN_ID = "44871258266"
+
+
+def _autofix_cap_comment(head: str | None = OLD_HEAD, created_at: str = "2026-11-20T11:15:10Z", run_repo: str = REPO, author_association: str = "OWNER") -> dict:
+	head_marker = f"\n\n<!-- ai:autofix-cap-head:v1 head={head} -->" if head else ""
+	return {
+		"user": {"login": "pipeline"},
+		"author_association": author_association,
+		"created_at": created_at,
+		"body": (
+			f"{AUTOFIX_CAP_HEADING}\n\nThis PR has reached the maximum number of autofix iterations (5) without resolving all review issues.\n\n"
+			"Linked issues have been labeled `ai:review-blocked`.\n\n"
+			f"Run: https://github.com/{run_repo}/actions/runs/{RUN_ID}{head_marker}"
+		),
+	}
+
+
+def _pr_run(event: str = "pull_request", head_sha: str = OLD_HEAD, head_branch: str = "ai/issue-9", head_repo: str = REPO) -> dict:
+	return {RUN_ID: {"event": event, "head_sha": head_sha, "head_branch": head_branch, "head_repository": {"full_name": head_repo}}}
+
+
+def _run_reads(result: dict) -> list[list[str]]:
+	return [call for call in result["calls"] if any("/actions/runs/" in arg for arg in call)]
+
+
+def test_autofix_cap_latch_with_head_marker_is_released_once_the_head_moved(tmp_path: Path) -> None:
+	result = _run(tmp_path, comments=[_autofix_cap_comment()])
+	assert result["rc"] == 0, result["stderr"]
+	assert result["deleted"] == ["5 ai:needs-human"]
+	assert len(result["posted"]) == 1
+	body = result["posted"][0]["body"]
+	assert body.rstrip().endswith(f"<!-- ai:needs-human-auto-release reason=autofix_cap_head_moved pr=5 head={NEW_HEAD} -->")
+	assert OLD_HEAD[:12] in body and NEW_HEAD[:12] in body
+	assert f"outcome=released latch=autofix_cap_head_moved from={OLD_HEAD[:12]} head={NEW_HEAD[:12]}" in result["stdout"]
+	# The head comes from the marker: no run read, the same 10 calls as the other latches.
+	assert _run_reads(result) == []
+	assert len(result["calls"]) == 10
+
+
+def test_legacy_autofix_cap_latch_takes_its_head_from_a_pull_request_run(tmp_path: Path) -> None:
+	result = _run(tmp_path, comments=[_autofix_cap_comment(head=None)], runs=_pr_run())
+	assert result["rc"] == 0, result["stderr"]
+	assert result["deleted"] == ["5 ai:needs-human"]
+	assert "reason=autofix_cap_head_moved pr=5" in result["posted"][0]["body"]
+	assert f"outcome=released latch=autofix_cap_head_moved from={OLD_HEAD[:12]} head={NEW_HEAD[:12]}" in result["stdout"]
+	reads = _run_reads(result)
+	assert len(reads) == 1 and f"repos/{REPO}/actions/runs/{RUN_ID}" in reads[0]
+
+
+def test_legacy_autofix_cap_latch_on_the_same_head_stays(tmp_path: Path) -> None:
+	result = _run(tmp_path, comments=[_autofix_cap_comment(head=None)], runs=_pr_run(head_sha=NEW_HEAD))
+	assert result["deleted"] == [] and result["posted"] == []
+	assert "outcome=skip reason=head_unchanged latch=autofix_cap_head_moved" in result["stdout"]
+
+
+def test_autofix_cap_latch_on_the_same_head_stays(tmp_path: Path) -> None:
+	result = _run(tmp_path, comments=[_autofix_cap_comment()], head=OLD_HEAD)
+	assert result["deleted"] == [] and result["posted"] == []
+	assert "outcome=skip reason=head_unchanged latch=autofix_cap_head_moved" in result["stdout"]
+
+
+def test_legacy_autofix_cap_latch_that_cannot_be_verified_stays(tmp_path: Path) -> None:
+	cases = {
+		# A dispatched run's head_sha is a default-branch commit, not the PR head.
+		"dispatch_run": ({"runs": _pr_run(event="workflow_dispatch", head_branch="main")}, "reason=latch_head_unverifiable"),
+		"other_branch": ({"runs": _pr_run(head_branch="feature/other")}, "reason=latch_head_unverifiable"),
+		"fork_run": ({"runs": _pr_run(head_repo="fork/r")}, "reason=latch_head_unverifiable"),
+		"bad_sha": ({"runs": _pr_run(head_sha="abc")}, "reason=latch_head_unverifiable"),
+		"run_read_failed": ({"runs": _pr_run(), "fail": "run"}, "reason=run_unavailable"),
+	}
+	for name, (kwargs, expected) in cases.items():
+		result = _run(tmp_path / name, comments=[_autofix_cap_comment(head=None)], **kwargs)
+		assert result["rc"] == 0, (name, result["stderr"])
+		assert result["deleted"] == [] and result["posted"] == [], name
+		assert f"outcome=skip {expected} latch=autofix_cap_head_moved" in result["stdout"], (name, result["stdout"])
+	# A run URL naming another repository is never read.
+	foreign = _run(tmp_path / "foreign", comments=[_autofix_cap_comment(head=None, run_repo="evil/r")], runs=_pr_run())
+	assert foreign["deleted"] == [] and _run_reads(foreign) == []
+	assert "outcome=skip reason=latch_head_missing latch=autofix_cap_head_moved" in foreign["stdout"]
+
+
+def test_legacy_run_read_is_cached_per_run_id_per_tick(tmp_path: Path) -> None:
+	result = _run(tmp_path, comments=[_autofix_cap_comment(head=None)], runs=_pr_run(), numbers=(5, 6))
+	assert result["rc"] == 0, result["stderr"]
+	assert len(_run_reads(result)) == 1
+	assert sorted(result["deleted"]) == ["5 ai:needs-human", "6 ai:needs-human"]
+
+
+def test_a_later_comment_reasserting_the_hold_keeps_the_autofix_cap_label(tmp_path: Path) -> None:
+	later_human = {
+		"user": {"login": "maintainer"},
+		"author_association": "OWNER",
+		"created_at": "2026-11-20T13:00:00Z",
+		"body": "Keep `ai:needs-human` here until I look at the migration.",
+	}
+	later_judge = {
+		"user": {"login": "pipeline"},
+		"author_association": "OWNER",
+		"created_at": "2026-11-20T13:00:00Z",
+		"body": "**AI review/autofix — judge approved merge but auto-merge is disabled**\n\nPlease merge this PR manually.",
+	}
+	for name, later in (("human", later_human), ("auto_merge_disabled", later_judge)):
+		result = _run(tmp_path / name, comments=[_autofix_cap_comment(), later])
+		assert result["deleted"] == [] and result["posted"] == [], name
+		assert "outcome=skip reason=later_needs_human_comment latch=autofix_cap_head_moved" in result["stdout"], (name, result["stdout"])
+		during = _run(tmp_path / f"{name}_during", comments=[_autofix_cap_comment()], refreshed_comments=[_autofix_cap_comment(), later])
+		assert during["deleted"] == [] and during["posted"] == [], name
+		assert "outcome=skip reason=latch_changed_during_release" in during["stdout"], (name, during["stdout"])
+
+
+def test_untrusted_autofix_cap_heading_is_not_a_latch(tmp_path: Path) -> None:
+	quoted = _autofix_cap_comment(author_association="NONE")
+	quoted["user"] = {"login": "drive-by"}
+	result = _run(tmp_path, comments=[quoted], events=[_labeled(login="drive-by")])
+	assert result["deleted"] == []
+	assert "outcome=skip reason=no_head_bound_latch" in result["stdout"]
+
+
+# ---------------------------------------------------------------------------
+# The writer: scripts/review_autofix_step_post_review_blocked_comment.sh
+# ---------------------------------------------------------------------------
+
+STEP_SCRIPT = REPO_ROOT / "scripts" / "review_autofix_step_post_review_blocked_comment.sh"
+FAKE_POST_GH = textwrap.dedent(
+	r"""
+	#!/usr/bin/env python3
+	import json, os, sys
+	with open(os.path.join(os.environ["FAKE_GH_DIR"], "gh.log"), "a", encoding="utf-8") as fh:
+		fh.write(json.dumps(sys.argv[1:]) + "\n")
+	print("{}")
+	"""
+).lstrip()
+
+
+def _post_blocked_comment(tmp_path: Path, **env_extra: str) -> str:
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir(parents=True)
+	gh = bin_dir / "gh"
+	gh.write_text(FAKE_POST_GH, encoding="utf-8")
+	gh.chmod(0o755)
+	support = tmp_path / "support"
+	support.mkdir()
+	env = {
+		**os.environ,
+		"PATH": f"{bin_dir}:{os.environ['PATH']}",
+		"FAKE_GH_DIR": str(tmp_path),
+		"SUPPORT_SCRIPTS_DIR": str(support),
+		"AUTOFIX_STEP_REPOSITORY": REPO,
+		"AUTOFIX_STEP_RUN_ID": RUN_ID,
+		"PR_NUMBER": "5",
+		"MAX_AUTOFIX_ITERATIONS": "5",
+		"AUTOFIX_ITERATION": "5",
+		"JUDGE_SKIP_REASON": "",
+		"RB_JUDGE_STATUS": "",
+		"AUTOFIX_FAILURE_HEAD_SHA": OLD_HEAD,
+		"GITHUB_OUTPUT": str(tmp_path / "out.txt"),
+	}
+	env.update(env_extra)
+	proc = subprocess.run(["bash", "-c", f'source "{STEP_SCRIPT}"'], capture_output=True, text=True, env=env, timeout=60, check=False)
+	assert proc.returncode == 0, proc.stderr
+	calls = [json.loads(line) for line in (tmp_path / "gh.log").read_text(encoding="utf-8").splitlines()]
+	post = next(call for call in calls if any(arg.endswith("/issues/5/comments") for arg in call))
+	return next(arg for arg in post if arg.startswith("body="))[len("body="):]
+
+
+def test_blocked_comment_carries_the_autofix_cap_head_marker(tmp_path: Path) -> None:
+	body = _post_blocked_comment(tmp_path)
+	assert AUTOFIX_CAP_HEADING in body
+	assert body.rstrip().endswith(f"<!-- ai:autofix-cap-head:v1 head={OLD_HEAD} -->")
+	assert f"Run: https://github.com/{REPO}/actions/runs/{RUN_ID}" in body
+
+
+def test_blocked_comment_head_marker_goes_before_the_crash_marker(tmp_path: Path) -> None:
+	body = _post_blocked_comment(tmp_path, AUTOFIX_ITERATION="2", RB_JUDGE_STATUS="failed")
+	head_marker = f"<!-- ai:autofix-cap-head:v1 head={OLD_HEAD} -->"
+	crash_marker = f"<!-- rb-judge-crash:v1 head={OLD_HEAD} reason=judge_crashed -->"
+	assert head_marker in body
+	# The crash marker's dedupe needs it last, on its own line.
+	assert body.rstrip().endswith("\n" + crash_marker)
+	assert body.index(head_marker) < body.index(crash_marker)
+
+
+def test_blocked_comment_writes_no_head_marker_for_other_headings_or_a_bad_head(tmp_path: Path) -> None:
+	for name, env_extra in (
+		("auto_merge_disabled", {"JUDGE_SKIP_REASON": "auto_merge_disabled"}),
+		("stale_head", {"JUDGE_SKIP_REASON": "stale_head"}),
+		("bad_head", {"AUTOFIX_FAILURE_HEAD_SHA": "not-a-sha"}),
+		("no_head", {"AUTOFIX_FAILURE_HEAD_SHA": ""}),
+		("env_injected_flag", {"JUDGE_SKIP_REASON": "merge_conflict", "AUTOFIX_CAP_HEAD_LATCH": "true"}),
+	):
+		body = _post_blocked_comment(tmp_path / name, **env_extra)
+		assert "ai:autofix-cap-head:v1" not in body, name

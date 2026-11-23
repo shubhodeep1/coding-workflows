@@ -261,6 +261,10 @@ jobs:
           # in the last SWEEP_REVIEW_ROUND_WINDOW_HOURS gets ai:needs-human and
           # no dispatch. 'false' turns the cap off.
           SWEEP_REVIEW_ROUND_CAP_ENABLED: ${{ vars.SWEEP_REVIEW_ROUND_CAP_ENABLED || 'true' }}
+          # Rounds whose review engine was refused for lack of credentials (or
+          # a broker refusal) do not count toward the cap (issue #9917); 'false'
+          # counts every round again.
+          REVIEW_INFRA_FAILURE_EXCLUDED_ENABLED: ${{ vars.REVIEW_INFRA_FAILURE_EXCLUDED_ENABLED || 'true' }}
           SWEEP_REVIEW_MAX_ROUNDS: ${{ vars.SWEEP_REVIEW_MAX_ROUNDS || '10' }}
           SWEEP_REVIEW_ROUND_WINDOW_HOURS: ${{ vars.SWEEP_REVIEW_ROUND_WINDOW_HOURS || '48' }}
         run: |
@@ -644,6 +648,10 @@ jobs:
           # tick, so the counts would not be read. Fail-open: an empty result
           # (helper missing, cap off, failed listing) applies no cap this tick.
           round_cap_counts_json=""
+          # Counts before the infra-failed exclusion (issue #9917), for the
+          # dispatch backoff below; written by the helper, no extra API call.
+          round_cap_raw_counts_json='{}'
+          round_cap_raw_counts_file="${RUNNER_TEMP:-/tmp}/review-round-raw-counts.json"
           round_cap_max="${SWEEP_REVIEW_MAX_ROUNDS:-10}"
           round_cap_window_hours="${SWEEP_REVIEW_ROUND_WINDOW_HOURS:-48}"
           if ! [[ "${round_cap_max}" =~ ^[1-9][0-9]{0,3}$ ]]; then
@@ -657,7 +665,12 @@ jobs:
           if [ "${SWEEP_REVIEW_ROUND_CAP_ENABLED:-true}" != "false" ] \
             && [ "${active_snapshot_incomplete}" != "true" ] \
             && type review_sweep_round_counts >/dev/null 2>&1; then
-            round_cap_counts_json="$(GH_TOKEN="${READ_TOKEN}" review_sweep_round_counts "${REPOSITORY}" "${sweep_default_branch}" "${round_cap_window_hours}")"
+            rm -f -- "${round_cap_raw_counts_file}"
+            round_cap_counts_json="$(GH_TOKEN="${READ_TOKEN}" REVIEW_SWEEP_ROUND_RAW_COUNTS_FILE="${round_cap_raw_counts_file}" review_sweep_round_counts "${REPOSITORY}" "${sweep_default_branch}" "${round_cap_window_hours}")"
+            if [ -n "${round_cap_counts_json}" ] && [ -f "${round_cap_raw_counts_file}" ] && [ ! -L "${round_cap_raw_counts_file}" ] \
+              && jq -e 'type == "object"' "${round_cap_raw_counts_file}" >/dev/null 2>&1; then
+              round_cap_raw_counts_json="$(jq -c . "${round_cap_raw_counts_file}")"
+            fi
           fi
 
           # Read into an array so counters survive the loop (no subshell pipe).
@@ -824,6 +837,15 @@ jobs:
                   "$(printf '%s' "${row}" | jq -r '.head_sha // ""' 2>/dev/null || true)" || true
                 echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=review_round_cap rounds=${round_cap_rounds} max=${round_cap_max} window_hours=${round_cap_window_hours} head_ref=${head_ref}"
                 skipped_round_cap=$((skipped_round_cap + 1))
+                continue
+              fi
+              # Infra-failed rounds do not count (issue #9917), but a long
+              # broker or credential outage must not dispatch this PR every
+              # tick: at twice the cap in all rounds, skip the dispatch without
+              # a label. Dispatching resumes as old rounds leave the window.
+              round_cap_raw_rounds="$(printf '%s' "${round_cap_raw_counts_json}" | jq -r --arg n "${pr_number}" '(.[$n] // 0) | if type == "number" then . else 0 end' 2>/dev/null || echo 0)"
+              if [[ "${round_cap_raw_rounds}" =~ ^[0-9]+$ ]] && [ "${round_cap_raw_rounds}" -ge $((round_cap_max * 2)) ]; then
+                echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=review_round_infra_backoff rounds=${round_cap_rounds} raw_rounds=${round_cap_raw_rounds} max=${round_cap_max} window_hours=${round_cap_window_hours} head_ref=${head_ref}"
                 continue
               fi
             fi

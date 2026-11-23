@@ -27,6 +27,7 @@ RUN_URL="${AUTOFIX_STEP_SERVER_URL}/${AUTOFIX_STEP_REPOSITORY}/actions/runs/${AU
 # scripts/review_rb_judge.sh so the comment can explain what
 # actually happened. Empty reason = legacy / pre-fix script,
 # falls through to the original body.
+AUTOFIX_CAP_HEAD_LATCH="false"
 case "${JUDGE_SKIP_REASON:-}" in
   isolation_unavailable)
     BODY_HEADING="AI review/autofix — judge deferred: isolation unavailable"
@@ -83,6 +84,7 @@ case "${JUDGE_SKIP_REASON:-}" in
   *)
     BODY_HEADING="AI review/autofix blocked — needs human intervention"
     BODY_DETAIL="This PR has reached the maximum number of autofix iterations (${MAX_AUTOFIX_ITERATIONS}) without resolving all review issues. The remaining problems could not be auto-fixed and require manual attention."
+    AUTOFIX_CAP_HEAD_LATCH="true"
     ;;
 esac
 
@@ -101,6 +103,18 @@ Linked issues have been labeled \`ai:review-blocked\`.
 Run: ${RUN_URL}
 EOF
 )"
+
+# Issue #9917: the default (autofix-cap) comment is a latch bound to the head
+# it fired on. The marker names that head, so the poller's
+# release_head_bound_needs_human_latches (scripts/orchestrate_poll_process.sh)
+# can remove ai:needs-human once the PR moves to another head. The blocked
+# comment only fires when no autofix push happened in this run, so the gate
+# head is the PR's current head. A missing or malformed head writes no marker
+# (the poller then falls back to the run URL above). It goes before the
+# rb-judge-crash marker below, which must stay last for its dedupe.
+if [ "${AUTOFIX_CAP_HEAD_LATCH:-false}" = "true" ] && [[ "${AUTOFIX_FAILURE_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+	BODY+=$'\n\n'"<!-- ai:autofix-cap-head:v1 head=${AUTOFIX_FAILURE_HEAD_SHA} -->"
+fi
 
 # Issue #9249: a judge crash (RB_JUDGE_STATUS=failed) or a failed model
 # call (llm_failed* / json_parse_failed*) before autofix ran out is not

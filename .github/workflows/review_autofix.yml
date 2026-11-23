@@ -318,7 +318,7 @@ env:
     nag_reminder.sh opencode_helpers.sh write_opencode_config.sh
     build_static_context.sh assemble_agents.py
   REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS: >-
-    render_prompt.py
+    render_prompt.py review_sweep_round_cap.sh
   # The workflow-failure-heal reporter pair the failure-path step "Report
   # autofix failure to workflow failure heal" runs. Optional (never
   # preflight-checked): the staging backfill copies them from the main
@@ -4021,6 +4021,52 @@ jobs:
             echo "::endgroup::"
           fi
 
+      # Issue #9917: a round whose review engine was refused for lack of
+      # credentials (no_credential / all_gated) or whose Claude pool broker
+      # refused the run reviewed nothing. It must not spend the autofix
+      # iteration budget (the commit below is skipped, so no [ai-autofix]
+      # commit is counted and no push re-triggers) or the sweep's round cap
+      # (a dispatched run uploads the review-round-infra-failed marker the
+      # sweep reads). Classifier: review_round_infra_failure_reason in
+      # scripts/review_sweep_round_cap.sh; a missing helper means not
+      # infra-failed (today's behaviour). REVIEW_INFRA_FAILURE_EXCLUDED_ENABLED
+      # =false turns it off.
+      - name: Classify infra-failed review round
+        id: infra_round
+        if: always() && env.PR_CLOSED != 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.reviewers.outcome != 'skipped'
+        continue-on-error: true
+        env:
+          CLAUDE_POOL_STEP_AVAILABLE: ${{ steps.claude_pool.outputs.available }}
+          CLAUDE_POOL_STEP_REASON: ${{ steps.claude_pool.outputs.reason }}
+          REVIEW_INFRA_FAILURE_EXCLUDED_ENABLED: ${{ vars.REVIEW_INFRA_FAILURE_EXCLUDED_ENABLED || 'true' }}
+        run: |
+          infra_round_helper="${SUPPORT_SCRIPTS_DIR:-}/review_sweep_round_cap.sh"
+          [ -f "${infra_round_helper}" ] || infra_round_helper="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_sweep_round_cap.sh"
+          infra_round_reason=""
+          if [ -f "${infra_round_helper}" ] && source "${infra_round_helper}" && type review_round_infra_failure_reason >/dev/null 2>&1; then
+            infra_round_reason="$(review_round_infra_failure_reason 2>/dev/null || true)"
+          fi
+          if [[ "${infra_round_reason}" =~ ^[a-z0-9_]{1,64}$ ]]; then
+            echo "REVIEW_ROUND_INFRA_EXCLUDED pr=${PR_NUMBER:-} run=${GITHUB_RUN_ID:-} reason=${infra_round_reason}"
+            printf 'pr=%s run=%s head=%s reason=%s\n' "${PR_NUMBER:-}" "${GITHUB_RUN_ID:-}" "${AUTOFIX_FAILURE_HEAD_SHA:-}" "${infra_round_reason}" > "${RUNNER_TEMP}/review-round-infra-failed.txt"
+            { echo "infra_failed=true"; echo "reason=${infra_round_reason}"; } >> "${GITHUB_OUTPUT}"
+          else
+            { echo "infra_failed=false"; echo "reason="; } >> "${GITHUB_OUTPUT}"
+          fi
+
+      # Only a dispatched run is counted by the sweep's round cap; the artifact
+      # is matched by this run's id (scripts/review_sweep_round_cap.sh).
+      - name: Upload infra-failed review round marker
+        if: always() && steps.infra_round.outputs.infra_failed == 'true' && github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        uses: actions/upload-artifact@v6
+        with:
+          name: review-round-infra-failed
+          path: ${{ runner.temp }}/review-round-infra-failed.txt
+          if-no-files-found: ignore
+          retention-days: 3
+          overwrite: true
+
       - name: Decide partial-finalize validation/push safety
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'
         run: |
@@ -4068,7 +4114,7 @@ jobs:
           source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Commit changes
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true' && steps.infra_round.outputs.infra_failed != 'true'
         id: commit_changes
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
