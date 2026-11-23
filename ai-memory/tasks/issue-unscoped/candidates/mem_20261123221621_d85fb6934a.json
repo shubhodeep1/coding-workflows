@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:19938 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The draft and title fields are fetched for every linked PR candidate, but the jq filter does not explicitly handle a malformed PR JSON structure that returns unexpected values without a jq failure.\n  WHY: If `pulls/<n>` is missing expected fields, the defaults `draft: false` and `title: \"\"` could mark a PR as \"not held\" and allow it to be closed.\n- scripts/orchestrate_poll_process.sh:19958 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The hold check `pr_hold_reason=\"$(_stall_pr_ai_hold_reason \"${pr_meta_json}\")\"` and the logic after it assume `pr_meta_json` is always valid JSON.\n  WHY: If `gh_retry` or `_safe_gh_jq` returns a partial or malformed string that jq parses but that lacks the expected fields, the logic might fail silently or behave incorrectly.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:19938 | severity=low | confidence=2\n  PROBLEM: The draft and title fields are fetched for every linked PR candidate, but the jq filter does not explicitly handle a malformed PR JSON structure that returns unexpected values without a jq failure.\n  WHY: If `pulls/<n>` is missing expected fields, the defaults `draft: false` and `title: \"\"` could mark a PR as \"not held\" and allow it to be closed.\n- scripts/orchestrate_poll_process.sh:19958 | severity=low | confidence=2\n  PROBLEM: The hold check `pr_hold_reason=\"$(_stall_pr_ai_hold_reason \"${pr_meta_json}\")\"` and the logic after it assume `pr_meta_json` is always valid JSON.\n  WHY: If `gh_retry` or `_safe_gh_jq` returns a partial or malformed string that jq parses but that lacks the expected fields, the logic might fail silently or behave incorrectly.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e42a61d0d209370ea32f3d97b8a5bcb7289be4939ea6fcd1dd71234201ccb6c6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9832,
+    "run_id": "45225620413",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "github-actions[bot]",
+    "run_attempt": 1,
+    "run_id": "45225620413",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123221621_d85fb6934a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9832,
+    "run_id": "45225620413"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-23T22:16:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
