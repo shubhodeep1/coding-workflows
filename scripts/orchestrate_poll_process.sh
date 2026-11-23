@@ -21207,6 +21207,7 @@ _heal_counterfactual_hold_expiry_check()
             | select(.body | test("^\\s*/(approved|reclarify|answer)\\b"))
             | select((.body | contains("[auto-answered-by-")) | not)
             | select((.body | contains("_Orchestrator stall recovery")) | not)
+            | select((.body | contains("_Standalone stall recovery")) | not)
             | .ts ] | max // "") as $answer_ts
         | ([ $c[] | select(.trusted) | select(.body | contains($hold)) | .ts ] | sort) as $holds
         | ([ $holds[] | select(. > $answer_ts) ] | first // "") as $hold_ts
@@ -21280,7 +21281,16 @@ _heal_counterfactual_hold_expiry_check()
       "" \
       "<!-- ai:heal-counterfactual-hold-expired:v1 issue=${issue_num} days=${age_days} -->")"
     if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${note_body}" >/dev/null 2>&1; then
-      echo "::warning::Closed heal issue #${issue_num} but could not post the hold-expired comment."
+      # The expired marker is the only reopen guard: without it a person's
+      # reopen would be closed again. Undo the close so the next tick retries
+      # the whole expiry; marker-first would let a failed close block expiry.
+      if gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" -f state=open >/dev/null 2>&1; then
+        echo "::warning::Could not post the hold-expired comment on heal issue #${issue_num}; reopened it so the next tick retries the expiry."
+        reason="expired_marker_post_failed"; break
+      fi
+      echo "::warning::Closed heal issue #${issue_num} but could not post the hold-expired comment, and reopening it failed; a later reopen may be closed again."
+      tg_notify_issue "${issue_num}" "Heal counterfactual hold closed as not planned, but the hold-expired marker could not be posted and the issue could not be reopened." "WARNING" || true
+      outcome="expired"; reason="reopen_failed"; break
     fi
     tg_notify_issue "${issue_num}" "Heal counterfactual hold closed as not planned after ${age_days} days (limit ${max_days} days)." "DEBUG" || true
     outcome="expired"; reason="max_days"; break

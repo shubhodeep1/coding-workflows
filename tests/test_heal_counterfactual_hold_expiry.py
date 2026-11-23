@@ -82,6 +82,9 @@ gh() {
 	if [ "${1:-}" = "api" ] && [ "${2:-}" = "-X" ] && [ "${3:-}" = "PATCH" ] && [ "${GH_PATCH_FAIL:-0}" = "1" ]; then
 		return 1
 	fi
+	if [ "${1:-}" = "api" ] && [ "${2:-}" = "-X" ] && [ "${3:-}" = "PATCH" ] && [ "${6:-}" = "state=open" ] && [ "${GH_REOPEN_FAIL:-0}" = "1" ]; then
+		return 1
+	fi
 	if [ "${1:-}" = "api" ] && [[ "${2:-}" == *"/comments" ]] && [ "${GH_POST_FAIL:-0}" = "1" ]; then
 		return 1
 	fi
@@ -250,11 +253,24 @@ def test_close_failure_posts_nothing_and_retries_next_tick():
 	assert tg == []
 
 
-def test_failed_expired_comment_only_warns():
+def test_failed_expired_comment_reopens_and_retries_next_tick():
+	# The expired marker is the only reopen guard, so a close without it is
+	# undone and the next tick retries the whole expiry.
 	proc, gh, tg, _ = _run([_hold(4 * DAY), _esc(2 * DAY)], env={"GH_POST_FAIL": "1"})
-	_assert_outcome(proc, "expired", "max_days")
+	_assert_outcome(proc, "skipped", "expired_marker_post_failed")
 	assert "::warning::" in proc.stdout
-	assert len(gh) == 2 and len(tg) == 1
+	assert len(gh) == 3, gh
+	assert gh[0][:3] == ["api", "-X", "PATCH"] and "state=closed" in gh[0], gh[0]
+	assert gh[2] == ["api", "-X", "PATCH", f"repos/owner/repo/issues/{ISSUE}", "-f", "state=open"], gh[2]
+	assert tg == []
+
+
+def test_failed_expired_comment_and_reopen_stays_expired_and_warns():
+	proc, gh, tg, _ = _run([_hold(4 * DAY), _esc(2 * DAY)], env={"GH_POST_FAIL": "1", "GH_REOPEN_FAIL": "1"})
+	_assert_outcome(proc, "expired", "reopen_failed")
+	assert "reopening it failed" in proc.stdout
+	assert len(gh) == 3, gh
+	assert len(tg) == 1 and tg[0][2] == "WARNING", tg
 
 
 # --- answers and trust ------------------------------------------------------
@@ -281,6 +297,8 @@ def test_auto_answers_and_stall_recovery_answers_are_not_human_answers():
 		_hold(2 * DAY),
 		_comment("/answer [auto-answered-by-orchestrator]\n\nAuto answer was posted.", 1 * DAY),
 		_comment("/answer\n\n_Orchestrator stall recovery: planning phase stalled._", 1 * HOUR),
+		_comment("/approved\n\n_Standalone stall recovery: plan approval stalled. Auto-approving to proceed._", 30 * 60),
+		_comment("/answer\n\n_Standalone stall recovery: planning stalled. Re-triggering plan generation._", 10 * 60),
 	]
 	proc, gh, tg, _ = _run(comments)
 	_assert_outcome(proc, "escalated", "half_limit")
