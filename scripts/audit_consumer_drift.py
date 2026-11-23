@@ -757,10 +757,12 @@ def _sync_pull_request_is_for_release(ref: str, stable_sha: str) -> bool:
 	Merging a sync pull request for an older release would not install the
 	audited wrappers, so it does not cover the drift. ``ai-sync/stable`` and a
 	suffix that is not 12 hex characters carry no release and count as covering.
+	A ``-r2`` .. ``-r5`` resend branch (the updater's rewrite-refused fallback)
+	names the release of its 12 hex characters.
 	"""
 	if not ref.startswith(SYNC_PR_BRANCH_PREFIX):
 		return True
-	suffix = ref[len(SYNC_PR_BRANCH_PREFIX):].lower()
+	suffix = re.sub(r"-r[2-5]$", "", ref[len(SYNC_PR_BRANCH_PREFIX):].lower())
 	if not re.fullmatch(r"[0-9a-f]{12}", suffix):
 		return True
 	return suffix == str(stable_sha or "").lower()[:12]

@@ -325,6 +325,8 @@ env:
   # verified workflow checkout when the staging helper does not install them.
   REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS: >-
     workflow_failure_heal.py workflow_failure_heal_autofix_report.sh provider_outage.py ai_engine_fallback_report.sh
+  # Wedged-queued run filter (issue #9473); 0 disables it.
+  ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
   # Signed job-token comments (run-volume plan item 15, D16; see
   # scripts/comment_signature.py). The opt-in secret and the job token sit
   # next to each step's GH_PAT, never here, so a step without the PAT never
@@ -743,10 +745,15 @@ jobs:
           # fall-through-to-cron behaviour. Unknown mergeability (GitHub
           # computes it asynchronously) fails open and keeps the skip.
           AUTOFIX_SKIP_DOC_ONLY: ${{ vars.AUTOFIX_SKIP_DOC_ONLY }}
+          # Generated chore PRs (validation self-test status, workflow log
+          # analysis report) skip the reviewers and the security pass; the
+          # script defaults it to true. 'false' reviews them like any PR.
+          AUTOFIX_SKIP_GENERATED_CHORE: ${{ vars.AUTOFIX_SKIP_GENERATED_CHORE }}
           AUTOFIX_SKIP_SUPPRESS_ON_CONFLICT: ${{ vars.AUTOFIX_SKIP_SUPPRESS_ON_CONFLICT }}
           AUTOFIX_SKIP_MAX_ADDITIONS: ${{ vars.AUTOFIX_SKIP_MAX_ADDITIONS }}
           AUTOFIX_SKIP_MAX_DELETIONS: ${{ vars.AUTOFIX_SKIP_MAX_DELETIONS }}
           SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
+          SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}
           # #8333: an eligible docs-only / small-diff / freshness_sync PR keeps
           # the deterministic skip, and deterministic-skip-merge runs the
           # single-issue security pass before it labels or merges. A PR
@@ -770,6 +777,7 @@ jobs:
           # evaluating the cap (failure comments keep their marker).
           REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED || 'true' }}
           REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL: ${{ vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL || '3' }}
+          REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED || '2' }}
           # #6625: markers from other support versions are not counted.
           REVIEW_SUPPORT_SHA: ${{ steps.resolve_support.outputs.review_support_sha }}
         run: |
@@ -1210,6 +1218,11 @@ jobs:
       MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
       MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '240' }}
       MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
+      MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}
+      MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '60' }}
+      MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}
+      MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
+      MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
       FINAL_CI_MERGE_RESUME_ENABLED: ${{ vars.FINAL_CI_MERGE_RESUME_ENABLED || 'true' }}
     steps:
       - name: Checkout merge-base freshness helper
@@ -1280,9 +1293,12 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
+          SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS || '2' }}
+          SECURITY_PASS_LOST_AUDIT_RETRIES: ${{ vars.SECURITY_PASS_LOST_AUDIT_RETRIES || '2' }}
           SECURITY_PASS_PENDING_STALE_HOURS: ${{ vars.SECURITY_PASS_PENDING_STALE_HOURS || '6' }}
+          SECURITY_PASS_BASE_SYNC_CARRY_ENABLED: ${{ vars.SECURITY_PASS_BASE_SYNC_CARRY_ENABLED || 'true' }}
           SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES: ${{ vars.SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES || '20' }}
           SECURITY_PASS_MAX_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_MAX_AUDIT_ATTEMPTS || '' }}
           SECURITY_PASS_MAX_CONCURRENT_AUDITS: ${{ vars.SECURITY_PASS_MAX_CONCURRENT_AUDITS || '3' }}
@@ -1460,7 +1476,7 @@ jobs:
             auto_merge_summary="SUPPRESSED (orchestrator integration PR head ref '${PR_HEAD_REF}'; orchestrator finalizes the merge)"
             echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA:-unknown} action=refuse reason=orchestrator_integration_pr"
             echo "PR #${PR_NUMBER} is an orchestrator integration PR — auto-merge suppressed on the deterministic-skip path. finalize_integration_merge_if_needed owns the final merge after project completion."
-          elif [[ "${PR_HEAD_REF}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then
+          elif [[ "${PR_HEAD_REF}" =~ ^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$ ]]; then
             # Consumer-updater PRs (#7004): only update_workflows.yml's verify job enables auto-merge.
             auto_merge_summary="SUPPRESSED (consumer-updater PR head ref '${PR_HEAD_REF}'; the update_workflows.yml verify job owns the merge)"
             echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA:-unknown} action=refuse reason=updater_pr_verify_job_owns_merge"
@@ -3237,6 +3253,7 @@ jobs:
           echo "CLAUDE_BRANCH_REVIEW_LIGHT_PROFILE mode=no_pr reviewer_reasoning=low reviewer_two_pass=false reviewer_count=${#reviewer_models[@]}"
 
       - name: Checkout PR head branch
+        if: env.PR_CLOSED != 'true'
         env:
           REVIEW_HEAD_CHECKOUT_REPOSITORY: ${{ github.repository }}
         run: |
@@ -3658,7 +3675,12 @@ jobs:
           esac
 
           reviewers_rc=0
-          bash "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh" || reviewers_rc=$?
+          # Issue #9533: keep a copy of the step's stderr so a shell crash
+          # (e.g. `render_prompt.sh: line 306: ...: invalid variable name`)
+          # reaches reviewers_failure_evidence.txt, the fingerprint and
+          # AUTOFIX_FAILURE_FIRST_ERROR. The log still streams live.
+          bash "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh" 2> >(tee -a "${RUNTIME_DIR:-/tmp}/reviewers_stage_stderr.txt" >&2) || reviewers_rc=$?
+          wait $! 2>/dev/null || true
 
           if [ -n "${materiality_pid}" ]; then
             materiality_rc=0
@@ -4171,6 +4193,14 @@ jobs:
           AUTOFIX_STEP_REPOSITORY: ${{ github.repository }}
           AUTOFIX_STEP_RUN_ID: ${{ github.run_id }}
           AUTOFIX_CLEAN_MARKER_BASE_SHA: ${{ needs.gate.outputs.base_sha }}
+          # Issue #9533: the gate's identical-failure count for this head, so a
+          # second same-fingerprint reviewers_failed blocks instead of retrying.
+          GATE_FINGERPRINT_CAP_FP: ${{ needs.gate.outputs.fingerprint_cap_fp }}
+          GATE_FINGERPRINT_CAP_REASON: ${{ needs.gate.outputs.fingerprint_cap_reason }}
+          GATE_FINGERPRINT_CAP_COUNT: ${{ needs.gate.outputs.fingerprint_cap_count }}
+          GATE_HEAD_SHA_FOR_FINGERPRINT: ${{ needs.gate.outputs.head_sha }}
+          REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED || 'true' }}
+          REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED || '2' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_post_editor_summary.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_post_editor_summary.sh"
@@ -4661,9 +4691,12 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
+          SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS || '2' }}
+          SECURITY_PASS_LOST_AUDIT_RETRIES: ${{ vars.SECURITY_PASS_LOST_AUDIT_RETRIES || '2' }}
           SECURITY_PASS_PENDING_STALE_HOURS: ${{ vars.SECURITY_PASS_PENDING_STALE_HOURS || '6' }}
+          SECURITY_PASS_BASE_SYNC_CARRY_ENABLED: ${{ vars.SECURITY_PASS_BASE_SYNC_CARRY_ENABLED || 'true' }}
           SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES: ${{ vars.SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES || '20' }}
           SECURITY_PASS_MAX_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_MAX_AUDIT_ATTEMPTS || '' }}
           SECURITY_PASS_MAX_CONCURRENT_AUDITS: ${{ vars.SECURITY_PASS_MAX_CONCURRENT_AUDITS || '3' }}
@@ -4714,6 +4747,11 @@ jobs:
           MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
           MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '240' }}
           MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
+          MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}
+          MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '60' }}
+          MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}
+          MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
+          MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
           FINAL_CI_MERGE_RESUME_ENABLED: ${{ vars.FINAL_CI_MERGE_RESUME_ENABLED || 'true' }}
         run: |
           bash "${SUPPORT_SCRIPTS_DIR}/review_enable_auto_merge.sh"
@@ -4835,7 +4873,13 @@ jobs:
           MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
           MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '240' }}
           MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
+          MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}
+          MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '60' }}
+          MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}
+          MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
+          MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
           FINAL_CI_MERGE_RESUME_ENABLED: ${{ vars.FINAL_CI_MERGE_RESUME_ENABLED || 'true' }}
+          PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED: ${{ vars.PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED || 'true' }}
           REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
           # Single-issue security pass settings, the same as the
@@ -4844,9 +4888,12 @@ jobs:
           SECURITY_PASS_EXHAUSTED: ${{ steps.single_issue_security_pass.outputs.exhausted }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
+          SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS || '2' }}
+          SECURITY_PASS_LOST_AUDIT_RETRIES: ${{ vars.SECURITY_PASS_LOST_AUDIT_RETRIES || '2' }}
           SECURITY_PASS_PENDING_STALE_HOURS: ${{ vars.SECURITY_PASS_PENDING_STALE_HOURS || '6' }}
+          SECURITY_PASS_BASE_SYNC_CARRY_ENABLED: ${{ vars.SECURITY_PASS_BASE_SYNC_CARRY_ENABLED || 'true' }}
           SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES: ${{ vars.SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES || '20' }}
           SECURITY_PASS_MAX_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_MAX_AUDIT_ATTEMPTS || '' }}
           SECURITY_PASS_MAX_CONCURRENT_AUDITS: ${{ vars.SECURITY_PASS_MAX_CONCURRENT_AUDITS || '3' }}
@@ -5140,7 +5187,7 @@ jobs:
           # Consumer-updater PRs (#7004): only update_workflows.yml writes these
           # branches and only its verify job may merge them. A review push
           # (editor, [ai-merge-resolve]) would land an unverified head.
-          if [[ "${TARGET_BRANCH:-}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then
+          if [[ "${TARGET_BRANCH:-}" =~ ^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$ ]]; then
             echo "AUTOFIX_PUSH_SKIPPED pr=${PR_NUMBER:-unknown} reason=updater_pr_verify_job_owns_branch"
             echo "DID_COMMIT=false" >> "$GITHUB_ENV"
             echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
@@ -5829,14 +5876,57 @@ jobs:
                 # The single-issue security gate held the judge's merge;
                 # judge_skip_reason carries its hold_reason. A dispatched or
                 # pending audit, or open follow-ups, re-run the review and
-                # bring the judge back without a human: no alert.
+                # bring the judge back without a human: no alert. So does
+                # head_unpushed: this run's own deferred commit (the conflict
+                # resolver's) is pushed after the judge, and that push starts
+                # the review that audits the new head (PRs #9338, #9283).
                 case "${JUDGE_SKIP_REASON}" in
-                  security_hold_audit_dispatched|security_hold_audit_pending|security_hold_audit_throttled|security_hold_awaiting_followups)
+                  security_hold_audit_dispatched|security_hold_audit_pending|security_hold_audit_throttled|security_hold_awaiting_followups|security_hold_head_unpushed)
                     echo "Judge merge held while the single-issue security pass runs (${JUDGE_SKIP_REASON}); suppressing alert."
                     exit 0 ;;
                 esac
                 HOLD_REASON="${JUDGE_SKIP_REASON#security_hold_}"
-                MSG="$(printf 'Review-blocked judge approved a merge, but the single-issue security pass holds it and will not clear on its own (%s)\nNeeds a human: check the security-pass comments on the PR, then re-run the audit or decide the merge' "${HOLD_REASON:-unknown}")" ;;
+                MSG="$(printf 'Review-blocked judge approved a merge, but the single-issue security pass holds it and will not clear on its own (%s)\nNeeds a human: check the security-pass comments on the PR, then re-run the audit or decide the merge' "${HOLD_REASON:-unknown}")"
+                # Issue #9942: an unaudited exhausted head pages once per head.
+                # A trusted comment ending with this marker (posted below after
+                # the first page) drops later rounds on the same head to DEBUG.
+                # API audit (§14): this step has no comment snapshot, so the
+                # newest page is read through tg_helpers.sh (as #9249), only
+                # for this hold reason. Any read failure pages (unchecked).
+                # Accepted bound: a marker pushed off the newest page of 100
+                # comments pages once more and is then re-posted at the end.
+                if [ "${JUDGE_SKIP_REASON}" = "security_hold_exhausted_without_completed_audit" ] && [[ "${AUTOFIX_FAILURE_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+                  RB_SECURITY_HOLD_MARKER="<!-- rb-judge-security-hold:v1 head=${AUTOFIX_FAILURE_HEAD_SHA} reason=exhausted_without_completed_audit -->"
+                  RB_SECURITY_HOLD_REPEAT="unchecked"
+                  RB_SECURITY_HOLD_TG_UNAVAILABLE=""
+                  # Telegram cannot page (no token/chat id, SILENT): no marker is
+                  # ever posted, so skip the reads that could never find one (§14).
+                  if type tg_alert_configured >/dev/null 2>&1 && ! tg_alert_configured "${JUDGE_ALERT_LEVEL}"; then
+                    RB_SECURITY_HOLD_TG_UNAVAILABLE="true"
+                    echo "rb-judge-security-hold dedupe skipped for PR #${PR_NUMBER}: Telegram cannot send ${JUDGE_ALERT_LEVEL}"
+                  elif type _tg_newest_comments_json >/dev/null 2>&1 && type _tg_tracking_author_login >/dev/null 2>&1; then
+                    _tg_tracking_author_login
+                    rb_security_hold_login="${_TG_TRACKING_AUTHOR_CURRENT:-github-actions[bot]}"
+                    if rb_security_hold_comments="$(_tg_newest_comments_json "${PR_NUMBER}")"; then
+                      rb_security_hold_count="$(printf '%s' "${rb_security_hold_comments}" | jq -r --arg login "${rb_security_hold_login}" --arg marker "${RB_SECURITY_HOLD_MARKER}" \
+                        "${_TG_TRACKING_JQ_DEFS}"'[.[]? | select(tg_trusted($login) and (.body | sub("\\s+\\z"; "") | endswith("\n" + $marker)))] | length' 2>/dev/null)" || rb_security_hold_count=""
+                      if [[ "${rb_security_hold_count}" =~ ^[0-9]+$ ]]; then
+                        RB_SECURITY_HOLD_REPEAT="false"
+                        if [ "${rb_security_hold_count}" -ge 1 ]; then
+                          RB_SECURITY_HOLD_REPEAT="true"
+                          JUDGE_ALERT_LEVEL="DEBUG"
+                        fi
+                      else
+                        echo "::warning::rb-judge-security-hold dedupe could not parse the comments of PR #${PR_NUMBER}; paging"
+                      fi
+                    else
+                      echo "::warning::rb-judge-security-hold dedupe read failed for PR #${PR_NUMBER}; paging"
+                    fi
+                  else
+                    echo "::warning::rb-judge-security-hold dedupe unavailable (tg_helpers.sh lacks the comment helpers) for PR #${PR_NUMBER}; paging"
+                  fi
+                  echo "RB_JUDGE_SECURITY_HOLD_ALERT pr=${PR_NUMBER} head=${AUTOFIX_FAILURE_HEAD_SHA} reason=exhausted_without_completed_audit repeat=${RB_SECURITY_HOLD_REPEAT} level=${JUDGE_ALERT_LEVEL}"
+                fi ;;
               merge)
                 # judge_merge_status (scripts/review_rb_judge.sh) says whether
                 # the merge went through. Only finished or self-retrying
@@ -5971,7 +6061,27 @@ jobs:
           MSG+="PR: ${PR_URL}${ISSUE_LINE}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${PR_NUMBER}" "${MSG}" "${JUDGE_ALERT_LEVEL}"
+          # Issue #9942: record the page only after Telegram returned a message
+          # id, so a failed send or POST only means the next round pages again.
+          if [ -n "${RB_SECURITY_HOLD_MARKER:-}" ] && [ "${RB_SECURITY_HOLD_REPEAT:-}" != "true" ]; then
+            rb_security_hold_msg_id="$(tg_send_msg "${MSG}" "${JUDGE_ALERT_LEVEL}")"
+            tg_store_msg_id "${PR_NUMBER}" "${rb_security_hold_msg_id}"
+            if [ -n "${rb_security_hold_msg_id}" ]; then
+              RB_SECURITY_HOLD_BODY="$(printf 'Security-pass hold alerted: no completed audit exists for `%s` and its retry budget is used up. Later review rounds on this head do not page again; a new push starts over (/re-run rechecks this head without paging again).\n\n%s' "${AUTOFIX_FAILURE_HEAD_SHA}" "${RB_SECURITY_HOLD_MARKER}")"
+              # Empty AI_COMMENT_SIGNING_SECRET makes the gh signing shim exec
+              # the real gh, so the marker is an unsigned GH_TOKEN comment, as
+              # the tg_trusted + endswith read above (and tracking) expects.
+              AI_COMMENT_SIGNING_SECRET="" gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${RB_SECURITY_HOLD_BODY}" >/dev/null 2>&1 \
+                || echo "::warning::Could not post the rb-judge-security-hold marker on PR #${PR_NUMBER}; the next round pages again."
+            elif [ "${RB_SECURITY_HOLD_TG_UNAVAILABLE:-}" = "true" ]; then
+              # Telegram cannot send at this level: nothing pages, so no warning.
+              echo "rb-judge-security-hold page not sent for PR #${PR_NUMBER}: Telegram cannot send ${JUDGE_ALERT_LEVEL}; no marker."
+            else
+              echo "::warning::rb-judge-security-hold page not confirmed by Telegram for PR #${PR_NUMBER}; no marker, the next round pages again."
+            fi
+          else
+            tg_send_tracked "${PR_NUMBER}" "${MSG}" "${JUDGE_ALERT_LEVEL}"
+          fi
 
       - name: Check PR state before failure alerts
         if: failure() && env.PR_CLOSED != 'true'

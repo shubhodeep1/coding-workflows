@@ -23,11 +23,19 @@ the network; the shell only executes.
        judge never sends them) carry that issue's security finding marker,
        `Integration branch` and `Depends on` lines onto a PR re-issue; optional
        `pr_base_branch` (same caller) is the Integration branch when the
-       linked issue declares none. Trusted PR-derived issue bodies
+       linked issue declares none. Optional `pr_head_ref` (the trusted
+       PR's same-repository head ref, sent by the unblock judge, #9938): a
+       standalone `descope` / `operator_step` fix-up for a PR whose head is
+       `ai/issue-<n>` carries `- Integration branch: <head>` so it is
+       planned on the PR head. Trusted PR-derived issue bodies
        carry an audit-only `ai:unblock-provenance:v1` marker.
        `accept_with_followup` on an `ai:security` issue is refused here too: it
        yields only a keep-open comment and a WARNING, never a follow-up issue
        or a resume command, so the finding stays blocked (#6541).
+       Optional `chain_title` (unblock_judge.sh, a trusted PR only): the title
+       of the issue the PR implements (its `ai/issue-<n>` head branch). It
+       carries the chain prefixes a PR title does not have; see "Chain
+       lineage in titles" below.
        Optional `protected_rejection` (`{"guard": "automation-path", "run",
        "paths", "truncated"}`, issues only; the judge sets it only with
        UNBLOCK_PROTECTED_HANDOFF_ENABLED=true, #7060): the newest trusted
@@ -112,6 +120,15 @@ Output: one JSON line `{"ops": [...]}`. Operations:
       instead of closing it; only when the context's `needs_human_digest` is
       true, which unblock_judge.sh sets from NEEDS_HUMAN_DIGEST_ENABLED)
 
+Chain lineage in titles. `reissue`, `accept_with_followup`, `descope` and
+`operator_step` each open a new issue whose title starts with a chain prefix
+(`Re-issue of #N: `, `Follow-up to #N: `, `Unblock descope for #N: `, `Unblock
+operator step for #N: `). `unblock_ledger.py decide` counts those prefixes and
+takes the four verdicts off the menu at MAX_CHAIN_DEPTH (see its "Chain depth
+cap"). A PR title carries no prefix, so for a trusted PR the new issue's title
+is built from `chain_title` when that has chain prefixes; the count then
+survives the PR hop (#9190 -> #9261 -> PR #9283 -> #9670).
+
 Harness routing (Phase 3 of docs/plans/validation-failure-harness-routing-plan.md,
 switch UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED, default on; `false` restores
 the old behaviour): a `retry_budget`, `descope`, `reissue`,
@@ -165,8 +182,13 @@ SECURITY_FINDING_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
 INTEGRATION_BRANCH_LINE_RE = re.compile(r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$", re.MULTILINE)
 TARGET_BRANCH_LINE_RE = re.compile(r"^\s*(?:-\s*)?(?:\*\*Target branch:\*\*|Target branch:)\s*(?:`\s*([^`\n]+?)\s*`(?:\s.*)?|([^`\s]+))\s*$", re.MULTILINE)
 SECURITY_BRANCH_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
+# A PR head a fix-up issue may be routed to as its Integration branch (#9938).
+PR_FIXUP_HEAD_REF_RE = re.compile(r"^ai/issue-[0-9]+$")
 MAX_COMMAND_TEXT = 300
 PROTECTED_HANDOFF_VERDICTS = ("descope", "operator_step")
+# Chain lineage in titles (see the module docstring); kept equal to
+# unblock_ledger.CHAIN_TITLE_PREFIX_PATTERN by tests/test_unblock_judge.py.
+_CHAIN_TITLE_PREFIX_RE = re.compile(r"(?:Re-issue of|Follow-up to|Unblock (?:descope|operator step|fix-up) for) #[1-9][0-9]*: ")
 PROTECTED_HANDOFF_MAX_PATHS = 100
 PROTECTED_HANDOFF_SHOWN_PATHS = 20
 PROTECTED_HANDOFF_PATH_MAX_LEN = 300
@@ -464,6 +486,16 @@ def _context(raw: object) -> dict:
 		and ".." not in base_branch and "//" not in base_branch and not base_branch.endswith(("/", ".", ".lock"))
 		else None
 	)
+	# Optional trusted-PR head ref (#9938): a standalone fix-up for a PR whose
+	# head is `ai/issue-<n>` is planned and implemented on that head, where the
+	# PR's changes live. Validated like pr_base_branch; invalid is absent.
+	head_ref_raw = raw.get("pr_head_ref")
+	pr_head_ref = (
+		head_ref_raw
+		if pr_trusted and isinstance(head_ref_raw, str) and SECURITY_BRANCH_REF_RE.fullmatch(head_ref_raw)
+		and ".." not in head_ref_raw and "//" not in head_ref_raw and not head_ref_raw.endswith(("/", ".", ".lock"))
+		else None
+	)
 	return {
 		"repo": str(raw.get("repo") or ""),
 		"kind": kind,
@@ -474,6 +506,7 @@ def _context(raw: object) -> dict:
 		"has_plan": raw.get("has_plan") is True,
 		"linked_issue": linked,
 		"title": _one_line(raw.get("title") or ""),
+		"chain_title": _one_line(raw["chain_title"])[:400] if pr_trusted and isinstance(raw.get("chain_title"), str) and raw["chain_title"].strip() else None,
 		"security_finding_id": finding_id,
 		"security_source_body": security_source_body,
 		"security_depends_on": security_depends_on,
@@ -492,7 +525,28 @@ def _context(raw: object) -> dict:
 		"pr_source_target_branch": pr_source_target_branch,
 		"pr_source_metadata_unsafe": pr_source_metadata_unsafe,
 		"pr_base_branch": pr_base_branch,
+		"pr_head_ref": pr_head_ref,
 	}
+
+
+def chain_depth(title: object) -> int:
+	"""How many chain prefixes the title starts with (0 for an ordinary title)."""
+	text = title if isinstance(title, str) else ""
+	depth, position = 0, 0
+	while True:
+		prefix = _CHAIN_TITLE_PREFIX_RE.match(text, position)
+		if prefix is None:
+			return depth
+		depth += 1
+		position = prefix.end()
+
+
+def _lineage_title(ctx: dict) -> str:
+	"""The title a new chain issue carries on: the PR's issue title when that has chain prefixes."""
+	chain_title = ctx.get("chain_title")
+	if isinstance(chain_title, str) and chain_depth(chain_title) > 0:
+		return chain_title
+	return ctx["title"]
 
 
 def _protected_rejection(raw: object) -> dict | None:
@@ -880,6 +934,15 @@ def _fixup_body(ctx: dict, verdict: dict, kind_word: str) -> str:
 			" dispatches, merges) keeps running unchanged.",
 		]
 	lines += ["", f"Why: {verdict['reason']}"]
+	# #9938: a standalone fix-up for a trusted PR targets the PR's head branch,
+	# but only an `ai/issue-<n>` head (the routing resolve_integration_ref.sh
+	# already serves); other heads and project fix-ups keep no line.
+	fixup_head_ref = ctx.get("pr_head_ref")
+	if (
+		ctx["kind"] == "pr" and ctx["pr_trusted"] and not ctx["tracking"]
+		and isinstance(fixup_head_ref, str) and PR_FIXUP_HEAD_REF_RE.fullmatch(fixup_head_ref)
+	):
+		lines += ["", f"- Integration branch: `{fixup_head_ref}`"]
 	if _provenance_line(ctx):
 		lines += ["", _provenance_line(ctx)]
 	return "\n".join(lines)
@@ -887,7 +950,7 @@ def _fixup_body(ctx: dict, verdict: dict, kind_word: str) -> str:
 
 def _fixup_ops(ctx: dict, verdict: dict, kind_word: str) -> list[dict]:
 	body = _fixup_body(ctx, verdict, kind_word)
-	title = f"Unblock {kind_word} for #{ctx['item']}: {ctx['title']}"[:240]
+	title = f"Unblock {kind_word} for #{ctx['item']}: {_lineage_title(ctx)}"[:240]
 	if ctx["tracking"]:
 		# A project's state is the poller's: it files the fix-up into the
 		# current wave (adopt_unblock_fixup_requests) and posts the wait marker.
@@ -1096,7 +1159,7 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 			ops.append({"op": "edit_files_touched", "issue": item, "paths": verdict["paths"]})
 		ops += _approve(item, ctx["labels"], _stop_label(ctx["stop"]) if _stop_label(ctx["stop"]) in ctx["labels"] else "")
 	elif name == "reissue":
-		title = f"Re-issue of #{item}: {ctx['title']}"[:240]
+		title = f"Re-issue of #{item}: {_lineage_title(ctx)}"[:240]
 		body = "\n".join([f"Re-issued by the unblock judge from #{item}.", "", f"Specification: {verdict['instructions']}", "", f"Why: {verdict['reason']}"])
 		security_issue = _is_security_issue(ctx)
 		# A tracked security finding is split through the poller's fix-up
@@ -1202,7 +1265,7 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 		ops.append(
 			{
 				"op": "create_issue",
-				"title": f"Follow-up to #{item}: {ctx['title']}"[:240],
+				"title": f"Follow-up to #{item}: {_lineage_title(ctx)}"[:240],
 				"body": followup_body,
 				"labels": [],
 				"wait_on": None,

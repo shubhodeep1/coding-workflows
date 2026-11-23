@@ -190,7 +190,9 @@ def test_gates_are_wired_with_trusted_isolated_copies():
 	assert 'python3 -I -B "${CLARIFY_HOST_PYTHON_DIR}/pr_dependency.py" pr-dependency' in clarify
 	assert "gate=pr_dependency" in clarify
 	assert '/labels/ai:blocked' in clarify
-	assert 'python3 -I -B scripts/pr_dependency.py pr-dependency' in plan
+	# plan.yml runs the support bundle copy (stuck-states plan P2a); the
+	# `:-scripts` default keeps the kill-switch path on the checkout's scripts/.
+	assert 'python3 -I -B "${SUPPORT_SCRIPTS_DIR:-scripts}/pr_dependency.py" pr-dependency' in plan
 	plan_step = plan[plan.index("- name: Validate planning phase label"):]
 	assert plan_step.index("gate=pr_dependency") < plan_step.index("--add-label 'ai:planning'")
 	implement_calls = [line for line in implement.splitlines() if "pr_dependency.py" in line and "pr-dependency" in line]
