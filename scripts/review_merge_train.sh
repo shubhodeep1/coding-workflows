@@ -1507,9 +1507,11 @@ _mt_dispatch_review() {
 # API: one workflow dispatch per grant. When it fails (e.g. the `core`
 # install profile ships no review_rb_judge_dispatch.yml), the review wrappers
 # that accept force_rb_judge (ai-review.yml, internal-review.yml) are
-# dispatched with force_rb_judge=true, which still runs only the judge; only
-# when none of those can be dispatched, the plain _mt_dispatch_review, so the
-# grant still dispatches a run as before. At most 1 + 2 + the review list.
+# dispatched with force_rb_judge=true and allow_workflow_edits=false, which
+# still runs only the judge; only when none of those can be dispatched, the
+# plain _mt_dispatch_review (a degraded last resort: a review round, as before
+# this change, rather than leaving the granted lease with no run at all). At
+# most 1 + 2 + the review list.
 _mt_dispatch_rb_judge() {
 	local mt_rbj_pr="$1" mt_rbj_head="$2" mt_rbj_wf
 	if ! [[ "${mt_rbj_pr}" =~ ^[1-9][0-9]*$ ]]; then
@@ -1521,10 +1523,12 @@ _mt_dispatch_rb_judge() {
 		_mt_log "MERGE_TRAIN_DISPATCHED pr=${mt_rbj_pr} workflow=review_rb_judge_dispatch.yml ref=default head=${mt_rbj_head}"
 		return 0
 	fi
-	# allow_workflow_edits stays at each wrapper's default, as above.
+	# allow_workflow_edits=false explicitly: internal-review.yml defaults the
+	# input to true, and a judge-only run must not get workflow-edit capability
+	# (review_rb_judge_dispatch.yml keeps it off by default).
 	for mt_rbj_wf in ai-review.yml internal-review.yml; do
 		if gh_retry gh workflow run "${mt_rbj_wf}" --repo "${MT_REPO}" \
-			-f pr_number="${mt_rbj_pr}" -f force_rb_judge=true >/dev/null 2>&1; then
+			-f pr_number="${mt_rbj_pr}" -f force_rb_judge=true -f allow_workflow_edits=false >/dev/null 2>&1; then
 			_mt_log "MERGE_TRAIN_DISPATCHED pr=${mt_rbj_pr} workflow=${mt_rbj_wf} ref=default head=${mt_rbj_head}"
 			return 0
 		fi

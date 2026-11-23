@@ -3505,7 +3505,7 @@ def test_failed_judge_dispatch_falls_back_to_the_review_dispatch(tmp_path: Path)
 	out = res.stdout + res.stderr
 	assert "rc=0" in out, out
 	assert calls[0].startswith("workflow run review_rb_judge_dispatch.yml ")
-	assert calls[1] == "workflow run ai-review.yml --repo o/r -f pr_number=5 -f force_rb_judge=true"
+	assert calls[1] == "workflow run ai-review.yml --repo o/r -f pr_number=5 -f force_rb_judge=true -f allow_workflow_edits=false"
 	assert len(calls) == 2
 	assert "MERGE_TRAIN_DISPATCHED pr=5 workflow=ai-review.yml ref=default head=ai/issue-5" in out
 
@@ -3515,8 +3515,8 @@ def test_no_force_wrapper_falls_back_to_the_plain_review_dispatch(tmp_path: Path
 	out = res.stdout + res.stderr
 	assert "rc=0" in out, out
 	assert calls[0].startswith("workflow run review_rb_judge_dispatch.yml ")
-	assert calls[1] == "workflow run ai-review.yml --repo o/r -f pr_number=5 -f force_rb_judge=true"
-	assert calls[2] == "workflow run internal-review.yml --repo o/r -f pr_number=5 -f force_rb_judge=true"
+	assert calls[1] == "workflow run ai-review.yml --repo o/r -f pr_number=5 -f force_rb_judge=true -f allow_workflow_edits=false"
+	assert calls[2] == "workflow run internal-review.yml --repo o/r -f pr_number=5 -f force_rb_judge=true -f allow_workflow_edits=false"
 	assert calls[3].startswith("workflow run ai-review.yml --repo o/r -f pr_number=5 -f allow_workflow_edits=")
 	assert len(calls) == 4
 	assert "falling back to the review dispatch" in out

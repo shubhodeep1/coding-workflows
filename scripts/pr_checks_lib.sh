@@ -3351,11 +3351,13 @@ _merge_lease_pr_eligible()
 				return 0
 			fi
 			# Waiter (issue #9987): a pipeline judge-decision status on this
-			# head stands in for an absent or pending head-gate only (a
-			# head-gate from another login keeps no_head_gate); a jq failure
-			# counts as no judge status (today's no_head_gate).
+			# head stands in for an absent head-gate or a pending one from
+			# <trusted_login> only (a head-gate in any state from another
+			# login keeps no_head_gate; the pipeline posts its pending
+			# head-gate with the same token); a jq failure counts as no judge
+			# status (today's no_head_gate).
 			case "${elig_gate}" in
-				""|"pending "*) ;;
+				""|"pending ${elig_login}") ;;
 				*)
 					MERGE_LEASE_INELIGIBLE_REASON="no_head_gate"
 					return 1
