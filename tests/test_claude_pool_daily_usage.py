@@ -147,6 +147,8 @@ def test_pool_usage_cli_reads_the_gate_from_the_config(tmp_path: Path) -> None:
 		("2026-10-17T09:30", {"CLAUDE_POOL_DAILY_USAGE_HOUR_UTC": "10"}, "false", "before_hour"),
 		("2026-10-17T00:30", {"CLAUDE_POOL_DAILY_USAGE_HOUR_UTC": "nonsense"}, "true", "due"),
 		("2026-10-17T00:30", {"CLAUDE_POOL_DAILY_USAGE_HOUR_UTC": "24"}, "true", "due"),
+		# An oversized value would wrap to hour 4 in 64-bit arithmetic; it falls back to 0.
+		("2026-10-17T00:30", {"CLAUDE_POOL_DAILY_USAGE_HOUR_UTC": "18446744073709551620"}, "true", "due"),
 	],
 )
 def test_slot(env: dict, now: str, extra: dict, in_slot: str, reason: str) -> None:
