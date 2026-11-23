@@ -13622,6 +13622,11 @@ def test_final_merge_refusal_keeps_github_error_and_mergeable_state():
 		issue_labels={10: ["ai:merged"]},
 		prs=prs,
 		existing_branches=["main", "orchestrator/project-192"],
+		# #9939: the blocked-merge guard defers a blocked PR before any merge
+		# attempt (covered by
+		# test_final_merge_defers_when_blocked_without_named_ruleset_blocker);
+		# switched off here so the refusal-recording path stays covered.
+		env_overrides={"PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED": "false"},
 	)
 	assert result.get("merged_prs", []) == []
 	err = result["state_on_disk"]["final_merge_error"]

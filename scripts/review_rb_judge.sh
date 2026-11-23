@@ -2710,11 +2710,12 @@ case "${RB_ACTION}" in
           fi
         else
           rb_judge_merge_err_open
-          review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
           # Auto-merge first; the direct fallback runs only when GitHub does
           # not report the PR blocked (#9939 blocked-merge guard), so the
-          # admin GH_PAT never bypasses a ruleset rule.
+          # admin GH_PAT never bypasses a ruleset rule. The head-gate status
+          # post stays the line right before the merge (pipeline contract).
           RB_SYNC_MERGE_DEFERRED="false"
+          review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
           if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_AUTO_FILE}" \
             || { rb_judge_sync_merge_guard && gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_DIRECT_FILE}"; } \
             || rb_judge_merge_retry_transient auto merge; then
@@ -2822,11 +2823,12 @@ case "${RB_ACTION}" in
           fi
         else
           rb_judge_merge_err_open
-          review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
           # Auto-merge first; the direct fallback runs only when GitHub does
           # not report the PR blocked (#9939 blocked-merge guard), so the
-          # admin GH_PAT never bypasses a ruleset rule.
+          # admin GH_PAT never bypasses a ruleset rule. The head-gate status
+          # post stays the line right before the merge (pipeline contract).
           RB_SYNC_MERGE_DEFERRED="false"
+          review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
           if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_AUTO_FILE}" \
             || { rb_judge_sync_merge_guard && gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_DIRECT_FILE}"; } \
             || rb_judge_merge_retry_transient auto terminal; then

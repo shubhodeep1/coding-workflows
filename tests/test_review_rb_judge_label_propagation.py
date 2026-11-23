@@ -48,8 +48,6 @@ import tempfile
 import textwrap
 from pathlib import Path
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
 
@@ -2583,23 +2581,25 @@ def test_merge_with_followup_skips_creation_when_auto_merge_disabled() -> None:
 	assert "judge_handled=true" not in state["_github_output"]
 
 
-@pytest.mark.parametrize("mergeable_state", ["blocked", "unknown", None])
-def test_merge_with_followup_defers_sync_merge_when_github_reports_blocked(mergeable_state) -> None:
+def test_merge_with_followup_defers_sync_merge_when_github_reports_blocked() -> None:
 	"""#9939: the judge merges with the owner's admin GH_PAT, so a sync
 	merge of a PR GitHub reports blocked (or not yet computed) would bypass
 	the ruleset. The guard defers it: no merge, no follow-up, the existing
-	mergeability_pending skip reason, and stall recovery re-fires the judge."""
-	state = _run_merge_with_followup(
-		parent_label_set=["ai:orchestrator-managed"],
-		pr_mergeable=True,
-		pr_mergeable_state=mergeable_state,
-	)
-	merges = [call for call in state.get("calls", []) if call[:2] == ["pr", "merge"]]
-	assert merges == [], merges
-	assert state.get("issue_create_args", []) == []
-	assert "judge_skip_reason=mergeability_pending" in state["_github_output"]
-	assert "judge_skip_reason=sync_merge_failed" not in state["_github_output"]
-	assert "judge_handled=true" not in state["_github_output"]
+	mergeability_pending skip reason, and stall recovery re-fires the judge.
+	Loops over the states instead of pytest parametrization: CI runs this
+	file directly and main() calls every test with no arguments."""
+	for mergeable_state in ("blocked", "unknown", None):
+		state = _run_merge_with_followup(
+			parent_label_set=["ai:orchestrator-managed"],
+			pr_mergeable=True,
+			pr_mergeable_state=mergeable_state,
+		)
+		merges = [call for call in state.get("calls", []) if call[:2] == ["pr", "merge"]]
+		assert merges == [], (mergeable_state, merges)
+		assert state.get("issue_create_args", []) == [], mergeable_state
+		assert "judge_skip_reason=mergeability_pending" in state["_github_output"], mergeable_state
+		assert "judge_skip_reason=sync_merge_failed" not in state["_github_output"], mergeable_state
+		assert "judge_handled=true" not in state["_github_output"], mergeable_state
 
 
 def test_merge_with_followup_refuses_when_check_runs_pending() -> None:
