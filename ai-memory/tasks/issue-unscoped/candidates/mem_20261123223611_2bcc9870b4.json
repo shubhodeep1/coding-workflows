@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stage_switch_watch.sh:153-154 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: When several alerts are queued and the `delivered` count goes up, the code saves the day marker even if not all alerts were delivered (`delivered < attempted`).\n  WHY: If the first alert is delivered but later ones fail, `alerted=true` is written to `GITHUB_OUTPUT` and the day marker is saved, so later runs on the same day do not retry the failed alerts. The source severity was MAJOR. z-ai_glm-5_3-flash stated in narration that the marker is only written when `delivered > 0` (scripts/stage_switch_watch.sh:204-213) and raised no finding.\n- scripts/stage_switch_watch.sh:line 199 (`msg_id=\"$(tg_send_msg \"${msg}\" WARNING)\"`) | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: None. The reviewer verified that removing `2>/dev/null` is safe, because `tg_send_msg` (scripts/tg_helpers.sh:129-161) writes only fixed text or Telegram's sanitized `.description` to stderr.\n  WHY: It does not fail. The bot token is only in the curl URL, and curl's own stderr is already discarded (tg_helpers.sh:150). The source severity was NIT.\n- scripts/stage_switch_watch.sh:lines 148-153 (counts-parse warning) | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: None. The new warning text matches the real control flow: when jq fails, `counts=\"\"`, `alert_count=0`, the send loop is skipped and no day marker is written.\n  WHY: It does not fail. Behaviour is unchanged and only the old warning text was misleading. The source severity was NIT.\n- tests/test_stage_switch_registry.py:lines 28-31 (regex patterns with `\\s*`) and lines 60-71 (full-text scan with comment lines stripped) | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: None. The regex changes keep the earlier matches, add multi-line matches, and correctly exclude whole-line `#` comments.\n  WHY: It does not fail. The synthetic test asserts that `MULTI_LINE_STAGE_ENABLED` is detected and that `COMMENTED_ENABLED` and `OPT_IN_ENABLED` are excluded. The source severity was NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"An owner can mark a switch as off on purpose... with an expiry date\"\n  expected_change_site: scripts/stages_switches.json\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The `off_on_purpose` structure and its handling are present, but `tests/test_stage_switch_watch.py` has no explicit test that an expired marker switches back to alerting. Only the marker's validity is tested.\n- requirement: \"The registry test fails when a workflow gains a `vars.<NAME>_ENABLED || 'true'` expression that the registry does not list.\"\n  expected_change_site: `tests/test_stage_switch_registry.py`, `_workflow_true_switches`\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The workflow scan at lines 62-62 uses `workflows_dir.glob(\"*.yml\")`, so `.yaml` workflows are not scanned. An unregistered default-on switch added only to such a workflow would not be detected.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/stage_switch_watch.sh:153-154 | severity=MAJOR | confidence=4\n  PROBLEM: When several alerts are queued and the `delivered` count goes up, the code saves the day marker even if not all alerts were delivered (`delivered < attempted`).\n  WHY: If the first alert is delivered but later ones fail, `alerted=true` is written to `GITHUB_OUTPUT` and the day marker is saved. The cache logic then blocks retries of the failed alerts for the rest of the day.\n- TASK_GAP\n  Requirement: \"An owner can mark a switch as off on purpose... with an expiry date\"\n  Expected change site: scripts/stage_switches.json\n  Evidence of absence: `tests/test_stage_switch_watch.py` has no explicit test that an expired marker switches back to alerting. Only the marker's validity is tested.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/stage_switch_watch.sh:line 199 (`msg_id=\"$(tg_send_msg \"${msg}\" WARNING)\"`) | severity=NIT | confidence=5\n  PROBLEM: None. Removing `2>/dev/null` is safe, because `tg_send_msg` (scripts/tg_helpers.sh:129-161) writes only fixed text or sanitized `.description` to stderr. The token is only in the curl URL, whose stderr is discarded (tg_helpers.sh:150). `|| msg_id=\"\"` still clears msg_id.\n  WHY: It does not fail.\n- scripts/stage_switch_watch.sh:lines 148-153 (counts-parse warning) | severity=NIT | confidence=5\n  PROBLEM: None. The warning text is accurate: when jq fails, `counts=\"\"` and `alert_count=0`, the loop is skipped, `delivered` stays 0, and no day marker is written.\n  WHY: It does not fail. Only the old warning text was misleading.\n- tests/test_stage_switch_registry.py:lines 28-31 (regex patterns with `\\s*`) and lines 60-71 (full-text scan with comment lines stripped) | severity=NIT | confidence=5\n  PROBLEM: None. Earlier matches are kept, multi-line matches are added, the comment filter (`line.strip().startswith(\"#\")`) is correct, and the synthetic test covers `MULTI_LINE_STAGE_ENABLED`, `COMMENTED_ENABLED` and `OPT_IN_ENABLED`.\n  WHY: It does not fail.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"The registry test fails when a workflow gains a `vars.<NAME>_ENABLED || 'true'` expression that the registry does not list.\"\n  Expected change site: `tests/test_stage_switch_registry.py`, `_workflow_true_switches`.\n  Evidence of absence: The workflow scan at lines 62-62 uses `workflows_dir.glob(\"*.yml\")`, so `.yaml` workflows are not scanned.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2899a7d247ba6aa4800b2934490b534890f305bdc0c56bdb94dabd77ddda7d98",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9999,
+    "run_id": "45271839301",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45271839301",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123223611_2bcc9870b4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9999,
+    "run_id": "45271839301"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-23T22:36:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
