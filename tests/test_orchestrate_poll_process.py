@@ -10441,12 +10441,17 @@ def test_security_pass_external_finalize_uses_verified_pr_head_when_integration_
 		+ "\n".join(_fc_lines)
 	)
 
-	assert result["latest_state"]["status"] == "complete", failure_context
-	assert result["latest_state"]["security_pass_status"] == "passed", failure_context
-	assert result["latest_state"]["security_pass_head_sha"] == result["security_audit_capture"]["diff_head"], failure_context
-	assert result["pr_get_calls"]["395"] == 1, failure_context
-	assert result["git_fetch_calls"]["refs/pull/395/head:refs/orchestrator/security-pass/pr-395-head"] == 2, failure_context
-	assert "EXTERNAL_FINALIZE_DELIVERY tracking_issue=192 pr=395 outcome=branch_deleted reason=branch_absent" in result["stdout"] + result["stderr"], failure_context
+	# The asserts read the safe copies so a missing key or None container
+	# fails as an AssertionError carrying failure_context, not a bare
+	# KeyError/TypeError. The explicit key/dict checks keep each assert as
+	# strict as the raw subscripts were (None == None must not pass).
+	assert _fc_state.get("status") == "complete", failure_context
+	assert _fc_state.get("security_pass_status") == "passed", failure_context
+	assert isinstance(_fc_result.get("security_audit_capture"), dict) and "diff_head" in _fc_capture, failure_context
+	assert "security_pass_head_sha" in _fc_state and _fc_state.get("security_pass_head_sha") == _fc_capture.get("diff_head"), failure_context
+	assert (_fc_result.get("pr_get_calls") or {}).get("395") == 1, failure_context
+	assert (_fc_result.get("git_fetch_calls") or {}).get("refs/pull/395/head:refs/orchestrator/security-pass/pr-395-head") == 2, failure_context
+	assert "EXTERNAL_FINALIZE_DELIVERY tracking_issue=192 pr=395 outcome=branch_deleted reason=branch_absent" in (_fc_result.get("stdout") or "") + (_fc_result.get("stderr") or ""), failure_context
 
 
 def _external_finalize_delivery_run(
