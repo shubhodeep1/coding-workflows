@@ -30755,7 +30755,9 @@ _dispatch_integration_test_repair()
 # label still present for a lease wait, same merge state, auto-merge still
 # enabled for an auto-merge wait, and the base either unchanged or moved
 # without touching the PR's files (_pr_rb_judge_verdict_waiting in
-# scripts/pr_checks_lib.sh). Sets STALL_RB_VERDICT_WAIT to the wait token.
+# scripts/pr_checks_lib.sh), and the combined commit status of the head
+# (the same read) is not failure/error, so a status that failed after the
+# verdict re-dispatches. Sets STALL_RB_VERDICT_WAIT to the wait token.
 # Any other answer, and every read or parse failure, returns 1 so the judge
 # is dispatched as before (fail open).
 #
@@ -30766,7 +30768,9 @@ _dispatch_integration_test_repair()
 # label, auto-merge enabled, or mergeable_state=blocked.
 # API (§14): one GET commits/<head>/status per pre-filtered judge candidate,
 # in place of a judge dispatch when it skips; plus _pr_base_freshness's
-# compare + PR-files reads only when the base moved since the verdict.
+# compare + PR-files reads only when the base moved since the verdict, after
+# which one status POST (_pr_rb_judge_verdict_refresh_base) records the new
+# base so those reads do not repeat on every cycle.
 # Audited existing calls: STALL_MANAGED_LINKED_PR_CACHE /
 # _fetch_linked_pr_status_graphql is keyed by the last closing
 # cross-reference, not by the resolved implementation PR, and carries no
@@ -30775,7 +30779,7 @@ _dispatch_integration_test_repair()
 declare -g STALL_RB_VERDICT_WAIT=''
 _stall_rb_judge_verdict_unchanged()
 {
-	local vu_pr="${1:-}" vu_fields vu_state="" vu_head="" vu_base_sha="" vu_base_ref="" vu_ms="" vu_auto="" vu_labels vu_status_json vu_desc
+	local vu_pr="${1:-}" vu_fields vu_state="" vu_head="" vu_base_sha="" vu_base_ref="" vu_ms="" vu_auto="" vu_labels vu_status_json vu_desc vu_combined=""
 	STALL_RB_VERDICT_WAIT=""
 	[[ "${vu_pr}" =~ ^[1-9][0-9]*$ ]] || return 1
 	case "$(printf '%s' "${VERDICT_WAIT_DISPATCH_SKIP_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
@@ -30803,8 +30807,12 @@ _stall_rb_judge_verdict_unchanged()
 	vu_desc="$(printf '%s' "${vu_status_json}" | jq -r '
 		[(.statuses // [])[] | select(type == "object" and .context == "ai-review/rb-judge-verdict" and .state == "success") | (.description // "")][0] // ""' 2>/dev/null || true)"
 	[ -n "${vu_desc}" ] || return 1
-	if PR_CHECKS_REPOSITORY="${GITHUB_REPOSITORY}" _pr_rb_judge_verdict_waiting "${vu_pr}" "${vu_head}" "${vu_base_ref}" "${vu_base_sha}" "${vu_ms}" "${vu_labels}" "${vu_auto}" "${vu_desc}"; then
+	vu_combined="$(printf '%s' "${vu_status_json}" | jq -r 'if type == "object" and (.state | type) == "string" then .state else "" end' 2>/dev/null || true)"
+	if PR_CHECKS_REPOSITORY="${GITHUB_REPOSITORY}" _pr_rb_judge_verdict_waiting "${vu_pr}" "${vu_head}" "${vu_base_ref}" "${vu_base_sha}" "${vu_ms}" "${vu_labels}" "${vu_auto}" "${vu_desc}" "${vu_combined}"; then
 		STALL_RB_VERDICT_WAIT="${PR_RB_VERDICT_WAIT_REASON}"
+		if [ -n "${PR_RB_VERDICT_BASE_REFRESH:-}" ] && type _pr_rb_judge_verdict_refresh_base >/dev/null 2>&1; then
+			PR_NUMBER="${vu_pr}" _pr_rb_judge_verdict_refresh_base "${GITHUB_REPOSITORY}" "${vu_head}" || true
+		fi
 		return 0
 	fi
 	echo "  [rb-judge-dispatch] PR #${vu_pr} verdict changed (${PR_RB_VERDICT_CHANGE:-unknown}); dispatching."

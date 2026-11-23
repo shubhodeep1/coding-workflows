@@ -74,7 +74,7 @@ REVIEW_SWEEP_HEAD_GATE_QUERY='query($owner: String!, $name: String!, $endCursor:
         baseRefName
         mergeStateStatus
         autoMergeRequest { enabledAt }
-        commits(last: 1) { nodes { commit { oid committedDate status {
+        commits(last: 1) { nodes { commit { oid committedDate statusCheckRollup { state } status {
           context(name: "ai-review/head-gate") { state createdAt }
           verdict: context(name: "ai-review/rb-judge-verdict") { state description createdAt }
           mwalert: context(name: "ai-review/merge-wait-alert") { state }
@@ -127,6 +127,7 @@ review_sweep_annotate_head_gate()
 								+ (($c.status.verdict.createdAt // null) | gate_utc_ts | if type == "string" then {rb_judge_verdict_at: .} else {} end)
 							else {} end)
 						+ {merge_wait_alerted: ((($c.status.mwalert.state // "") | ascii_downcase) == "success")}
+						+ (if (($c.statusCheckRollup.state // null) | type) == "string" then {checks_rollup: ($c.statusCheckRollup.state | ascii_downcase)} else {} end)
 						+ (if (($pr.baseRefOid // null) | type) == "string" and ($pr.baseRefOid | test("^[0-9a-f]{40}$")) then {base_sha: $pr.baseRefOid} else {} end)
 						+ (if (($pr.baseRefName // null) | type) == "string" and $pr.baseRefName != "" then {base_ref: $pr.baseRefName} else {} end)
 						+ (if (($pr.mergeStateStatus // null) | type) == "string" then {merge_state_status: ($pr.mergeStateStatus | ascii_downcase)} else {} end)
@@ -192,16 +193,28 @@ review_sweep_final_ci_state()
 #                                        the final CI run succeeded, so a
 #                                        required check other than the final
 #                                        CI holds the merge (#9939);
-#             rb_judge_merge_deferred    no gate success, but the head carries
-#                                        a judge merge verdict
+#             rb_judge_merge_deferred    none of the above, but the head
+#                                        carries a judge merge verdict
 #                                        (ai-review/rb-judge-verdict) and
 #                                        _pr_rb_judge_verdict_waiting
 #                                        (scripts/pr_checks_lib.sh) finds no
-#                                        relevant change since it.
+#                                        relevant change since it (merge
+#                                        state, lease label, auto-merge,
+#                                        base under the PR's files, or a
+#                                        failed/errored statusCheckRollup).
+#                                        The judge posts head-gate success
+#                                        before its merge attempt, so a
+#                                        `wait=blocked` verdict head usually
+#                                        has gate success too. A base that
+#                                        moved without overlap re-posts the
+#                                        verdict with the new base
+#                                        (_pr_rb_judge_verdict_refresh_base,
+#                                        one status POST per base move).
 #           <final ci state> is review_sweep_final_ci_state's word for the head,
 #           read by the caller only for a gate-success head with auto-merge
-#           enabled; `failure`, `none` and `read_failed` print nothing (the
-#           sweep's failed-head skip and the final-CI safety net own those).
+#           enabled; `failure` prints nothing (the sweep's failed-head skip
+#           owns it); `none` and `read_failed` fall through to the judge
+#           verdict check and print nothing without one.
 #   Switch: VERDICT_WAIT_DISPATCH_SKIP_ENABLED (default true; 1/true/yes/on);
 #           anything else prints nothing.
 #   API:    none, except _pr_base_freshness's compare + PR-files reads for a
@@ -218,8 +231,11 @@ review_sweep_final_ci_state()
 #   posts the once-per-head marker status ai-review/merge-wait-alert
 #   (state success, never blocks a merge) and only then sends one Telegram
 #   WARNING (tg_send_msg, after the same _tg_should_send and secrets checks as
-#   the merge train's stall alert). A failed marker write sends nothing, so
-#   the alert never repeats per tick. At most
+#   the merge train's stall alert). The local checks (helpers loaded, secret
+#   and chat set, alert level) run first, before any read or write, so an
+#   unready Telegram writes no marker and the head alerts once Telegram is
+#   ready. A failed marker write sends nothing, so the alert never repeats
+#   per tick; a send that fails after the marker is not retried. At most
 #   REVIEW_SWEEP_VERDICT_ALERT_MAX_PER_TICK (5) alerts per tick.
 #   Verdict age: head_gate_created_at for a gate-success head, else
 #   rb_judge_verdict_at. API per alert: the ruleset blocker reads (1 to 3),
@@ -244,7 +260,7 @@ review_sweep_verdict_wait_enabled()
 review_sweep_verdict_wait_reason()
 {
 	local vr_repo="${1:-}" vr_row="${2:-}" vr_final_ci="${3:-}" vr_fields vr_labels
-	local vr_pr="" vr_head="" vr_state="" vr_auto="" vr_base_sha="" vr_base_ref="" vr_ms="" vr_verdict=""
+	local vr_pr="" vr_head="" vr_state="" vr_auto="" vr_base_sha="" vr_base_ref="" vr_ms="" vr_verdict="" vr_rollup=""
 	review_sweep_verdict_wait_enabled || return 0
 	if ! [[ "${vr_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || [[ "${vr_repo}" == *..* ]]; then
 		return 0
@@ -253,28 +269,39 @@ review_sweep_verdict_wait_reason()
 		if type == "object" then
 			[((.number // "") | tostring), (.head_sha // ""), (.head_gate_state // ""),
 				(if .auto_merge_enabled == true then "true" else "false" end),
-				(.base_sha // ""), (.base_ref // ""), (.merge_state_status // ""), (.rb_judge_verdict // "")]
+				(.base_sha // ""), (.base_ref // ""), (.merge_state_status // ""), (.rb_judge_verdict // ""), (.checks_rollup // "")]
 			| map(tostring | gsub("[[:cntrl:]]"; "")) | join($sep)
 		else empty end' 2>/dev/null)" || return 0
 	[ -n "${vr_fields}" ] || return 0
-	IFS="${REVIEW_SWEEP_VERDICT_SEP}" read -r vr_pr vr_head vr_state vr_auto vr_base_sha vr_base_ref vr_ms vr_verdict <<< "${vr_fields}" || true
+	IFS="${REVIEW_SWEEP_VERDICT_SEP}" read -r vr_pr vr_head vr_state vr_auto vr_base_sha vr_base_ref vr_ms vr_verdict vr_rollup <<< "${vr_fields}" || true
 	# No annotation for this row: the GraphQL read failed open.
 	[ -n "${vr_state}" ] || return 0
 	vr_labels="$(printf '%s' "${vr_row}" | jq -c '.labels // [] | if type == "array" then . else [] end' 2>/dev/null || echo '[]')"
 	if [ "${vr_state}" = "success" ]; then
 		if printf '%s' "${vr_labels}" | jq -e --arg l "${FINAL_CI_MERGE_PENDING_LABEL:-ai:final-ci-merge-pending}" 'index($l) != null' >/dev/null 2>&1; then
 			echo "final_ci_merge_pending"
-		elif [ "${vr_auto}" = "true" ]; then
+			return 0
+		fi
+		if [ "${vr_auto}" = "true" ]; then
 			case "${vr_final_ci}" in
-				in_flight) echo "auto_merge_checks_pending" ;;
-				success) echo "auto_merge_checks_missing" ;;
+				in_flight) echo "auto_merge_checks_pending"; return 0 ;;
+				success) echo "auto_merge_checks_missing"; return 0 ;;
+				failure) return 0 ;;
 			esac
 		fi
-		return 0
+		# No label or auto-merge reason: a gate-success head can still carry
+		# a deferred judge merge verdict (the judge posts head-gate success
+		# before its merge attempt), so fall through to it.
 	fi
 	[ -n "${vr_verdict}" ] || return 0
 	type _pr_rb_judge_verdict_waiting >/dev/null 2>&1 || return 0
-	if PR_CHECKS_REPOSITORY="${vr_repo}" _pr_rb_judge_verdict_waiting "${vr_pr}" "${vr_head}" "${vr_base_ref}" "${vr_base_sha}" "${vr_ms}" "${vr_labels}" "${vr_auto}" "${vr_verdict}"; then
+	if PR_CHECKS_REPOSITORY="${vr_repo}" _pr_rb_judge_verdict_waiting "${vr_pr}" "${vr_head}" "${vr_base_ref}" "${vr_base_sha}" "${vr_ms}" "${vr_labels}" "${vr_auto}" "${vr_verdict}" "${vr_rollup}"; then
+		# Base moved without overlap: record the new base (stdout carries the
+		# reason, so the helper's log line goes to stderr).
+		if [ -n "${PR_RB_VERDICT_BASE_REFRESH:-}" ] && [ "${DRY_RUN:-false}" != "true" ] \
+			&& type _pr_rb_judge_verdict_refresh_base >/dev/null 2>&1; then
+			PR_NUMBER="${vr_pr}" _pr_rb_judge_verdict_refresh_base "${vr_repo}" "${vr_head}" >&2 || true
+		fi
 		echo "rb_judge_merge_deferred"
 	fi
 	return 0
@@ -317,6 +344,19 @@ review_sweep_verdict_merge_wait_alert()
 		echo "${ma_log} blocker=- outcome=tick_limit"
 		return 0
 	fi
+	if [ "${ma_dry}" != "true" ]; then
+		if ! type tg_send_msg >/dev/null 2>&1 || ! type _tg_should_send >/dev/null 2>&1; then
+			ma_outcome="telegram_unavailable"
+		elif [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-${TG_CHAT_ID:-}}" ]; then
+			ma_outcome="telegram_unconfigured"
+		elif ! _tg_should_send WARNING; then
+			ma_outcome="below_alert_level"
+		fi
+		if [ -n "${ma_outcome}" ]; then
+			echo "${ma_log} blocker=- outcome=${ma_outcome}"
+			return 0
+		fi
+	fi
 	if [ "${ma_lease}" = "true" ] && [ -n "${ma_base_ref}" ] && type _merge_lease_read >/dev/null 2>&1 \
 		&& PR_CHECKS_REPOSITORY="${ma_repo}" _merge_lease_read "${ma_base_ref}" >/dev/null 2>&1 \
 		&& [ "${MERGE_LEASE_STATE:-}" = "held" ] && [[ "${MERGE_LEASE_PR:-}" =~ ^[1-9][0-9]*$ ]]; then
@@ -344,19 +384,11 @@ review_sweep_verdict_merge_wait_alert()
 		return 0
 	fi
 	REVIEW_SWEEP_VERDICT_ALERTS_SENT=$((REVIEW_SWEEP_VERDICT_ALERTS_SENT + 1))
-	if ! type tg_send_msg >/dev/null 2>&1 || ! type _tg_should_send >/dev/null 2>&1; then
-		ma_outcome="telegram_unavailable"
-	elif [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-${TG_CHAT_ID:-}}" ]; then
-		ma_outcome="telegram_unconfigured"
-	elif ! _tg_should_send WARNING; then
-		ma_outcome="below_alert_level"
+	ma_msg="PR #${ma_pr} has had a verdict on head ${ma_head:0:12} for ${ma_age_h}h and has not merged (${ma_reason}). Blocker: ${ma_blocker}. The review sweep no longer re-dispatches it."$'\n'"PR: https://github.com/${ma_repo}/pull/${ma_pr}"
+	if tg_send_msg "${ma_msg}" WARNING >/dev/null 2>&1; then
+		ma_outcome="sent"
 	else
-		ma_msg="PR #${ma_pr} has had a verdict on head ${ma_head:0:12} for ${ma_age_h}h and has not merged (${ma_reason}). Blocker: ${ma_blocker}. The review sweep no longer re-dispatches it."$'\n'"PR: https://github.com/${ma_repo}/pull/${ma_pr}"
-		if tg_send_msg "${ma_msg}" WARNING >/dev/null 2>&1; then
-			ma_outcome="sent"
-		else
-			ma_outcome="not_delivered"
-		fi
+		ma_outcome="not_delivered"
 	fi
 	echo "${ma_log} outcome=${ma_outcome}"
 	return 0

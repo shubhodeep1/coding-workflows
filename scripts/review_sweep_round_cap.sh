@@ -48,12 +48,11 @@
 #           answers a push, which is progress, not a repeat. A run that ended
 #           at the gate's cheap same-head skip cannot be told from a full
 #           round in the listing, which is why the caller never caps a PR
-#           whose head is already approved (see the sweep step), nor a head
-#           that carries a review-blocked judge merge verdict
-#           (`ai-review/rb-judge-verdict`, issue #9991): both only wait to
-#           merge. A dispatch the sweep skips because the head's verdict is
-#           still waiting (`reason=verdict_waiting`) creates no run, so it is
-#           never counted here.
+#           whose head is already approved (see the sweep step). A dispatch
+#           the sweep skips because the head's verdict is still waiting
+#           (`reason=verdict_waiting`, issue #9991) creates no run, so it is
+#           never counted here; a head whose judge verdict changed or could
+#           not be evaluated is dispatched and stays capped.
 #   API:    one paginated listing per tick for all PRs, never one per PR (§15):
 #           `GET actions/workflows/internal-review.yml/runs?event=workflow_dispatch
 #           &created=>=<cutoff>&per_page=100`, ceil(runs in window / 100) calls

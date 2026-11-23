@@ -57,14 +57,14 @@ def test_parse_is_strict(desc: str, ok: bool) -> None:
 
 
 def _waiting(desc: str, *, labels: str = '["ai:merge-lease-wait"]', cur_base: str = BASE, ms: str = "BLOCKED",
-		auto: str = "false", freshness: str = "clean", env: str = "") -> str:
+		auto: str = "false", freshness: str = "clean", env: str = "", checks: str = "") -> str:
 	script = f'''
 source "{PR_CHECKS_LIB}"
 FRESH_LOG=$(mktemp)
 _pr_base_freshness() {{ echo "FRESHNESS_CALLED $*" >> "$FRESH_LOG"; PR_BASE_FRESHNESS_OUTCOME="{freshness}"; echo "{freshness}"; }}
 {env}
-if _pr_rb_judge_verdict_waiting 77 {HEAD} main {json.dumps(cur_base)} {json.dumps(ms)} '{labels}' {json.dumps(auto)} {json.dumps(desc)}; then
-	echo "WAIT $PR_RB_VERDICT_WAIT_REASON"
+if _pr_rb_judge_verdict_waiting 77 {HEAD} main {json.dumps(cur_base)} {json.dumps(ms)} '{labels}' {json.dumps(auto)} {json.dumps(desc)} {json.dumps(checks)}; then
+	echo "WAIT $PR_RB_VERDICT_WAIT_REASON${{PR_RB_VERDICT_BASE_REFRESH:+ refresh=$PR_RB_VERDICT_BASE_REFRESH}}"
 else
 	echo "CHANGE $PR_RB_VERDICT_CHANGE"
 fi
@@ -86,8 +86,12 @@ def test_unchanged_lease_wait_is_waiting_without_reads() -> None:
 	({"cur_base": "c" * 40, "freshness": "overlap"}, "CHANGE base|freshness"),
 	({"cur_base": "c" * 40, "freshness": "unknown"}, "CHANGE base_unknown|freshness"),
 	({"cur_base": "c" * 40, "freshness": "disabled"}, "CHANGE base_unknown|freshness"),
-	({"cur_base": "c" * 40, "freshness": "clean"}, "WAIT lease_wait|freshness"),
-	({"cur_base": "c" * 40, "freshness": "fresh"}, "WAIT lease_wait|freshness"),
+	({"cur_base": "c" * 40, "freshness": "clean"}, "WAIT lease_wait refresh=" + "c" * 40 + "|freshness"),
+	({"cur_base": "c" * 40, "freshness": "fresh"}, "WAIT lease_wait refresh=" + "c" * 40 + "|freshness"),
+	({"checks": "FAILURE"}, "CHANGE checks"),
+	({"checks": "error"}, "CHANGE checks"),
+	({"checks": "pending"}, "WAIT lease_wait"),
+	({"checks": "EXPECTED"}, "WAIT lease_wait"),
 	({"cur_base": ""}, "CHANGE base_unknown"),
 	({"env": "VERDICT_WAIT_DISPATCH_SKIP_ENABLED=false"}, "CHANGE disabled"),
 	({"env": "VERDICT_WAIT_DISPATCH_SKIP_ENABLED=ON"}, "WAIT lease_wait"),
@@ -198,3 +202,38 @@ def test_judge_sets_the_wait_token_only_on_benign_deferrals() -> None:
 	# Every merge-class branch records before reporting.
 	assert text.count("rb_judge_record_verdict_wait merge\n") == 2
 	assert text.count("rb_judge_record_verdict_wait merge_with_followup\n") == 1
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_base_refresh_reposts_the_verdict_with_the_new_base(fail: bool) -> None:
+	new_base = "c" * 40
+	script = f'''
+source "{PR_CHECKS_LIB}"
+CALLS=$(mktemp)
+gh() {{ printf '%s\\n' "$*" >> "$CALLS"; {"return 1" if fail else "return 0"}; }}
+_pr_base_freshness() {{ PR_BASE_FRESHNESS_OUTCOME=clean; }}
+_pr_rb_judge_verdict_waiting 77 {HEAD} main {new_base} blocked '["ai:merge-lease-wait"]' false {json.dumps(_desc())} pending
+PR_NUMBER=77 _pr_rb_judge_verdict_refresh_base o/r {HEAD}
+echo "LEFT=[$PR_RB_VERDICT_BASE_REFRESH]"
+echo "---"; cat "$CALLS"
+'''
+	result = _bash(script)
+	assert result.returncode == 0, result.stderr
+	out, _, calls = result.stdout.partition("---\n")
+	expected = "base_refresh_failed" if fail else "base_refreshed"
+	assert f"RB_JUDGE_VERDICT_STATUS outcome={expected} pr=77 head_sha={HEAD} wait=lease_wait" in out
+	assert "LEFT=[]" in out
+	assert len(calls.splitlines()) == 1
+	assert f"repos/o/r/statuses/{HEAD}" in calls and "context=ai-review/rb-judge-verdict" in calls
+	assert f"description=decision=merge wait=lease_wait base={new_base} ms=blocked" in calls
+
+
+def test_base_refresh_without_a_pending_refresh_writes_nothing() -> None:
+	result = _bash(f'''
+source "{PR_CHECKS_LIB}"
+gh() {{ echo "GH_CALLED"; }}
+PR_RB_VERDICT_BASE_REFRESH=""
+_pr_rb_judge_verdict_refresh_base o/r {HEAD}
+''')
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.strip() == ""

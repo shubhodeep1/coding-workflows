@@ -675,12 +675,6 @@ jobs:
             round_cap_counts_json="$(GH_TOKEN="${READ_TOKEN}" review_sweep_round_counts "${REPOSITORY}" "${sweep_default_branch}" "${round_cap_window_hours}")"
           fi
 
-          # Verdict-wait switch for the round-cap exemption below (issue #9991).
-          verdict_wait_switch=false
-          if type review_sweep_verdict_wait_enabled >/dev/null 2>&1 && review_sweep_verdict_wait_enabled; then
-            verdict_wait_switch=true
-          fi
-
           # Read into an array so counters survive the loop (no subshell pipe).
           mapfile -t rows < <(printf '%s' "${prs_json}" | jq -c '.[]')
 
@@ -785,6 +779,11 @@ jobs:
               true|1|yes|on)
                 if [ "${merge_train_skip_active}" = "true" ] && printf '%s' "${row}" | jq -e --arg l "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" '(.labels // []) | index($l) != null' >/dev/null 2>&1; then
                   echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=merge_lease_wait head_ref=${head_ref}"
+                  # G3 of issue #9991: a lease-waiting head with a verdict
+                  # alerts once after VERDICT_MERGE_WAIT_ALERT_HOURS.
+                  if type review_sweep_verdict_merge_wait_alert >/dev/null 2>&1 && review_sweep_verdict_wait_enabled; then
+                    review_sweep_verdict_merge_wait_alert "${REPOSITORY}" "${row}" merge_lease_wait "${DRY_RUN:-false}" || true
+                  fi
                   continue
                 fi
                 ;;
@@ -860,10 +859,11 @@ jobs:
             # full rounds, and labelling it would also stop the merge train's
             # final-CI resume. Without the head-gate annotation nothing is
             # capped. No API call here: the counts were read once before the loop.
-            # A head with a judge merge verdict (ai-review/rb-judge-verdict,
-            # issue #9991) is not capped either: it only waits to merge.
+            # A head whose judge merge verdict still waits (issue #9991) has
+            # already been skipped above and creates no run; one whose
+            # verdict changed or could not be evaluated stays capped.
             if [ -n "${round_cap_counts_json}" ] \
-              && printf '%s' "${row}" | jq -e --arg vw "${verdict_wait_switch}" '(.head_gate_state // "") as $s | $s != "" and $s != "success" and ($vw != "true" or (((.rb_judge_verdict // "") | test("^decision=(merge|merge_with_followup) ")) | not))' >/dev/null 2>&1; then
+              && printf '%s' "${row}" | jq -e '(.head_gate_state // "") as $s | $s != "" and $s != "success"' >/dev/null 2>&1; then
               round_cap_rounds="$(printf '%s' "${round_cap_counts_json}" | jq -r --arg n "${pr_number}" '(.[$n] // 0) | if type == "number" then . else 0 end' 2>/dev/null || echo 0)"
               if [[ "${round_cap_rounds}" =~ ^[0-9]+$ ]] && [ "${round_cap_rounds}" -ge "${round_cap_max}" ]; then
                 review_sweep_round_cap_escalate "${REPOSITORY}" "${pr_number}" "${round_cap_rounds}" "${round_cap_max}" "${round_cap_window_hours}" \

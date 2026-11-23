@@ -3959,7 +3959,7 @@ _pr_final_ci_merge_pending_mark()
 #   PR_RB_VERDICT_BASE and PR_RB_VERDICT_MS and returns 0; a malformed
 #   description sets them empty and returns 1. Nothing is evaluated.
 #
-# _pr_rb_judge_verdict_waiting <pr> <head_sha> <base_ref> <cur_base_sha> <cur_merge_state> <labels_json> <auto_merge_enabled> <verdict_description>
+# _pr_rb_judge_verdict_waiting <pr> <head_sha> <base_ref> <cur_base_sha> <cur_merge_state> <labels_json> <auto_merge_enabled> <verdict_description> [<checks_state>]
 #   Returns 0 when nothing relevant changed since the verdict and the head is
 #   still only waiting to merge; sets PR_RB_VERDICT_WAIT_REASON to the wait
 #   token. Otherwise returns 1 and sets PR_RB_VERDICT_CHANGE to one of
@@ -3970,16 +3970,39 @@ _pr_final_ci_merge_pending_mark()
 #            (MERGE_LEASE_WAIT_LABEL, default ai:merge-lease-wait) is gone,
 #            so the lease was granted or freed;
 #     checks: the recorded merge state differs from the current one
-#            (case-insensitive; an empty current state counts as changed);
+#            (case-insensitive; an empty current state counts as changed),
+#            or <checks_state> (the head's check/status rollup the caller
+#            already holds: the sweep's GraphQL statusCheckRollup.state, the
+#            poller's combined commits/<head>/status state) is failure or
+#            error. `blocked` covers both pending and failed required
+#            checks, so the merge state alone cannot see a check that
+#            failed after the verdict. Empty or any other value: no change;
 #     auto_merge: wait=auto_merge and auto-merge is no longer enabled;
 #     base:  the base SHA moved since the verdict and _pr_base_freshness
 #            reports `overlap` (fresh / clean keep waiting; unknown /
 #            disabled give base_unknown, which dispatches: fail open).
+#            When the base moved without overlap the function still returns
+#            0 and sets PR_RB_VERDICT_BASE_REFRESH to the current base SHA;
+#            the caller then calls _pr_rb_judge_verdict_refresh_base so the
+#            next evaluation compares against that base and makes no
+#            freshness reads until the base moves again.
 #   Switch: VERDICT_WAIT_DISPATCH_SKIP_ENABLED (default true; 1/true/yes/on,
 #   case-insensitive); anything else returns 1 with `disabled`.
 #   API: none, except _pr_base_freshness's one compare call plus one
 #   paginated pulls/<n>/files listing, and only when the base moved since
-#   the verdict. Needs PR_CHECKS_REPOSITORY or GITHUB_REPOSITORY for that.
+#   the verdict (or since the last refresh). Needs PR_CHECKS_REPOSITORY or
+#   GITHUB_REPOSITORY for that.
+#
+# _pr_rb_judge_verdict_refresh_base <owner/repo> <head_sha>
+#   After _pr_rb_judge_verdict_waiting returned 0 with
+#   PR_RB_VERDICT_BASE_REFRESH set, re-posts ai-review/rb-judge-verdict
+#   (state success) on the head with the same decision, wait and merge state
+#   and the new base. One status POST per base move per waiting head, in
+#   place of the compare + PR-files reads on every later tick. A failed write
+#   only means the next evaluation reads the freshness again. The status's
+#   createdAt moves with it, so the merge-wait alert age of a head without a
+#   head-gate success restarts at a base refresh. Log:
+#   RB_JUDGE_VERDICT_STATUS outcome=<base_refreshed|base_refresh_failed>.
 # ---------------------------------------------------------------------------
 _pr_rb_judge_verdict_parse()
 {
@@ -4001,9 +4024,10 @@ _pr_rb_judge_verdict_parse()
 _pr_rb_judge_verdict_waiting()
 {
 	local vw_pr="${1:-}" vw_head="${2:-}" vw_base_ref="${3:-}" vw_cur_base="${4:-}" vw_cur_ms="${5:-}"
-	local vw_labels="${6:-[]}" vw_auto="${7:-false}" vw_desc="${8:-}"
+	local vw_labels="${6:-[]}" vw_auto="${7:-false}" vw_desc="${8:-}" vw_checks="${9:-}"
 	PR_RB_VERDICT_WAIT_REASON=""
 	PR_RB_VERDICT_CHANGE=""
+	PR_RB_VERDICT_BASE_REFRESH=""
 	case "$(printf '%s' "${VERDICT_WAIT_DISPATCH_SKIP_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
 		1|true|yes|on) ;;
 		*) PR_RB_VERDICT_CHANGE="disabled"; return 1 ;;
@@ -4023,6 +4047,9 @@ _pr_rb_judge_verdict_waiting()
 		PR_RB_VERDICT_CHANGE="checks"
 		return 1
 	fi
+	case "$(printf '%s' "${vw_checks}" | tr '[:upper:]' '[:lower:]')" in
+		failure|error) PR_RB_VERDICT_CHANGE="checks"; return 1 ;;
+	esac
 	if [ "${PR_RB_VERDICT_WAIT}" = "auto_merge" ] && [ "${vw_auto}" != "true" ]; then
 		PR_RB_VERDICT_CHANGE="auto_merge"
 		return 1
@@ -4034,11 +4061,36 @@ _pr_rb_judge_verdict_waiting()
 		fi
 		_pr_base_freshness "${vw_pr}" "${vw_head}" "${vw_base_ref}" >/dev/null 2>&1 || true
 		case "${PR_BASE_FRESHNESS_OUTCOME:-}" in
-			fresh|clean) ;;
+			fresh|clean) PR_RB_VERDICT_BASE_REFRESH="${vw_cur_base}" ;;
 			overlap) PR_RB_VERDICT_CHANGE="base"; return 1 ;;
 			*) PR_RB_VERDICT_CHANGE="base_unknown"; return 1 ;;
 		esac
 	fi
 	PR_RB_VERDICT_WAIT_REASON="${PR_RB_VERDICT_WAIT}"
+	return 0
+}
+
+_pr_rb_judge_verdict_refresh_base()
+{
+	local rf_repo="${1:-}" rf_head="${2:-}" rf_base="${PR_RB_VERDICT_BASE_REFRESH:-}"
+	local rf_fields="pr=${PR_NUMBER:-?} head_sha=${rf_head:-?} wait=${PR_RB_VERDICT_WAIT:-?}"
+	[ -n "${rf_base}" ] || return 0
+	PR_RB_VERDICT_BASE_REFRESH=""
+	if ! [[ "${rf_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || [[ "${rf_repo}" == *..* ]] \
+		|| ! [[ "${rf_head}" =~ ^[0-9a-f]{40}$ ]] \
+		|| ! _pr_rb_judge_verdict_parse "decision=${PR_RB_VERDICT_DECISION:-} wait=${PR_RB_VERDICT_WAIT:-} base=${rf_base} ms=${PR_RB_VERDICT_MS:-}"; then
+		return 0
+	fi
+	local -a rf_api=(gh api)
+	if type gh_retry >/dev/null 2>&1; then
+		rf_api=(gh_retry gh api)
+	fi
+	if "${rf_api[@]}" -X POST "repos/${rf_repo}/statuses/${rf_head}" -f state=success \
+		-f context=ai-review/rb-judge-verdict \
+		-f "description=decision=${PR_RB_VERDICT_DECISION} wait=${PR_RB_VERDICT_WAIT} base=${PR_RB_VERDICT_BASE} ms=${PR_RB_VERDICT_MS}" >/dev/null 2>&1; then
+		echo "RB_JUDGE_VERDICT_STATUS outcome=base_refreshed ${rf_fields}"
+	else
+		echo "RB_JUDGE_VERDICT_STATUS outcome=base_refresh_failed ${rf_fields}"
+	fi
 	return 0
 }

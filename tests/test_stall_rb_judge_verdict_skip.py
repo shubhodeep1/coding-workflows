@@ -56,12 +56,12 @@ def _verdict(wait: str = "lease_wait", ms: str = "blocked", base: str = BASE) ->
 
 
 def _run(tmp_path: Path, pr_json: dict | None, statuses: list[dict] | None, *, freshness: str = "clean",
-		env: str = "", status_fails: bool = False, pr_number: int = 77) -> tuple[subprocess.CompletedProcess, list[str]]:
+		env: str = "", status_fails: bool = False, pr_number: int = 77, combined: str = "pending") -> tuple[subprocess.CompletedProcess, list[str]]:
 	calls = tmp_path / "calls.log"
 	calls.write_text("", encoding="utf-8")
 	tracker = tmp_path / "tracker"
 	tracker.write_text("", encoding="utf-8")
-	status_body = json.dumps({"statuses": statuses or []})
+	status_body = json.dumps({"state": combined, "statuses": statuses or []})
 	script = f'''
 set -euo pipefail
 source "{PR_CHECKS_LIB}"
@@ -128,6 +128,14 @@ def test_base_moved_with_overlap_dispatches_and_clean_still_skips(tmp_path: Path
 	result, calls = _run(tmp_path, pr, _status(_verdict()), freshness="clean")
 	assert "RC=4" in result.stdout
 	assert not _dispatched(calls)
+	# The new base is recorded once, so the next cycle makes no freshness reads.
+	posts = [c for c in calls if c.startswith("gh api -X POST")]
+	assert len(posts) == 1 and f"repos/o/r/statuses/{HEAD}" in posts[0]
+	assert "description=decision=merge wait=lease_wait base=" + "d" * 40 + " ms=blocked" in posts[0]
+	assert "outcome=base_refreshed" in result.stdout
+	result, calls = _run(tmp_path, pr, _status(_verdict(base="d" * 40)), freshness="clean")
+	assert "RC=4" in result.stdout
+	assert not any(c.startswith("freshness") or c.startswith("gh api -X POST") for c in calls)
 	result, calls = _run(tmp_path, pr, _status(_verdict()), freshness="unknown")
 	assert "RC=0" in result.stdout and "base_unknown" in result.stdout
 
@@ -181,3 +189,21 @@ def test_callers_treat_rc_4_as_a_benign_skip() -> None:
 def test_orchestrate_poll_passes_the_switch() -> None:
 	wf = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
 	assert wf.count("VERDICT_WAIT_DISPATCH_SKIP_ENABLED: ${{ vars.VERDICT_WAIT_DISPATCH_SKIP_ENABLED || 'true' }}") == 2
+
+
+def test_failed_combined_status_dispatches(tmp_path: Path) -> None:
+	# A required status that failed after the verdict leaves mergeable_state
+	# at `blocked`; the combined state from the same read catches it.
+	result, calls = _run(tmp_path, _pr_json(), _status(_verdict()), combined="failure")
+	assert "RC=0" in result.stdout and "verdict changed (checks)" in result.stdout
+	assert _dispatched(calls)
+
+
+def test_poller_cycle_api_calls_do_not_grow(tmp_path: Path) -> None:
+	# Switch off: one dispatch call. Switch on with an unchanged verdict:
+	# one status read in place of the dispatch.
+	_, off_calls = _run(tmp_path, _pr_json(), _status(_verdict()), env="VERDICT_WAIT_DISPATCH_SKIP_ENABLED=false")
+	_, on_calls = _run(tmp_path, _pr_json(), _status(_verdict()))
+	def api(calls: list[str]) -> int:
+		return sum(c.startswith(("gh ", "safe_gh_jq", "freshness")) for c in calls)
+	assert api(on_calls) <= api(off_calls)

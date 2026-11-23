@@ -38,8 +38,11 @@ pytestmark = pytest.mark.skipif(shutil.which("jq") is None, reason="jq is requir
 
 FAKE_GH = r'''#!/usr/bin/env python3
 import json, os, sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 root = Path(os.environ["FAKE_GH_DIR"])
+# Default status times are recent, so no alert fires unless a test asks.
+RECENT = (datetime.now(timezone.utc) - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
 args = sys.argv[1:]
 with open(root / "calls.log", "a") as log:
 	log.write(json.dumps(args) + "\n")
@@ -62,16 +65,17 @@ if args[1:2] == ["graphql"]:
 	nodes = []
 	for pr in fixture("pulls.json", []):
 		m = meta.get(str(pr["number"]), {})
-		status = {"context": {"state": m.get("gate", "PENDING"), "createdAt": m.get("gate_at", "2026-11-23T09:00:00Z")}}
+		status = {"context": {"state": m.get("gate", "PENDING"), "createdAt": m.get("gate_at", RECENT)}}
 		if m.get("verdict"):
-			status["verdict"] = {"state": "SUCCESS", "description": m["verdict"], "createdAt": m.get("verdict_at", "2026-11-23T09:00:00Z")}
+			status["verdict"] = {"state": "SUCCESS", "description": m["verdict"], "createdAt": m.get("verdict_at", RECENT)}
 		if m.get("alerted"):
 			status["mwalert"] = {"state": "SUCCESS"}
 		nodes.append({"number": pr["number"], "headRefOid": pr["head"]["sha"],
 			"baseRefOid": m.get("base", "b" * 40), "baseRefName": "main",
 			"mergeStateStatus": m.get("ms", "BLOCKED"),
 			"autoMergeRequest": {"enabledAt": "2026-11-23T03:05:00Z"} if m.get("auto") else None,
-			"commits": {"nodes": [{"commit": {"oid": pr["head"]["sha"], "committedDate": "2026-11-01T00:00:00Z", "status": status}}]}})
+			"commits": {"nodes": [{"commit": {"oid": pr["head"]["sha"], "committedDate": "2026-11-01T00:00:00Z",
+				"statusCheckRollup": {"state": m["rollup"]} if m.get("rollup") else None, "status": status}}]}})
 	out({"data": {"repository": {"pullRequests": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": nodes}}}})
 endpoint = next((a for a in args[1:] if a.startswith("repos/")), "")
 if "/statuses/" in endpoint and "POST" in args:
@@ -90,6 +94,8 @@ if "--jq" in args and args[args.index("--jq") + 1] == ".default_branch":
 	out("main\n")
 if endpoint.endswith("/pulls"):
 	out(fixture("pulls.json", []))
+if "/compare/" in endpoint:
+	out({"ahead_by": 0, "commits": [], "files": []})
 if "/rules/branches/" in endpoint:
 	out([{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "ci/final"}]}}])
 if endpoint.split("?")[0].endswith("/status"):
@@ -372,3 +378,62 @@ def test_workflow_passes_the_knobs_with_defaults() -> None:
 	step = _extract_step_script()
 	# The skip sits after the active-run preflight and before the round cap.
 	assert step.find("reason=active_run") < step.find("reason=verdict_waiting") < step.find("reason=review_round_cap")
+
+
+def test_gate_success_head_with_a_blocked_judge_verdict_is_skipped(tmp_path: Path) -> None:
+	# The judge posts head-gate success before its merge attempt, so a
+	# #9939 blocked-merge verdict head has gate success and no auto-merge.
+	meta = {"27": {"gate": "SUCCESS", "verdict": _verdict(), "ms": "BLOCKED"}}
+	result = _run_sweep(tmp_path, [_pr(27)], meta)
+	assert result.returncode == 0, result.stderr
+	assert _dispatched(tmp_path) == []
+	assert "AUTOFIX_SWEEP_SKIP pr=#27 reason=verdict_waiting wait=rb_judge_merge_deferred" in result.stdout
+
+
+def test_failed_check_rollup_is_a_relevant_change(tmp_path: Path) -> None:
+	# `blocked` covers pending and failed required checks alike.
+	meta = {"28": {"gate": "SUCCESS", "verdict": _verdict(), "ms": "BLOCKED", "rollup": "FAILURE"}}
+	result = _run_sweep(tmp_path, [_pr(28)], meta)
+	assert result.returncode == 0, result.stderr
+	assert _dispatched(tmp_path) == ["28"]
+	_reset(tmp_path)
+	meta["28"]["rollup"] = "PENDING"
+	result = _run_sweep(tmp_path, [_pr(28)], meta)
+	assert _dispatched(tmp_path) == []
+
+
+def test_moved_base_is_read_once_then_recorded(tmp_path: Path) -> None:
+	new_base = "c" * 40
+	meta = {"29": {"gate": "SUCCESS", "verdict": _verdict(), "ms": "BLOCKED", "base": new_base}}
+	result = _run_sweep(tmp_path, [_pr(29)], meta)
+	assert result.returncode == 0, result.stderr
+	assert _dispatched(tmp_path) == []
+	assert sum("/compare/" in " ".join(call) for call in _api_calls(tmp_path)) == 1
+	posts = [json.loads(line) for line in _lines(tmp_path, "statuses.log")]
+	assert len(posts) == 1 and "context=ai-review/rb-judge-verdict" in posts[0]
+	assert f"description=decision=merge wait=blocked base={new_base} ms=blocked" in posts[0]
+	# Next tick reads the refreshed verdict: no freshness reads, no write.
+	_reset(tmp_path)
+	meta["29"]["verdict"] = _verdict(base=new_base)
+	result = _run_sweep(tmp_path, [_pr(29)], meta)
+	assert _dispatched(tmp_path) == []
+	assert not any("/compare/" in " ".join(call) for call in _api_calls(tmp_path))
+	assert _lines(tmp_path, "statuses.log") == []
+
+
+def test_lease_waiting_head_alerts_once(tmp_path: Path) -> None:
+	meta = {"30": {"gate": "SUCCESS", "gate_at": _hours_ago(7)}}
+	result = _run_sweep(tmp_path, [_pr(30, ("ai:merge-lease-wait",))], meta)
+	assert result.returncode == 0, result.stderr
+	assert "AUTOFIX_SWEEP_SKIP pr=#30 reason=merge_lease_wait head_ref=feature-30" in result.stdout
+	assert re.search(r"VERDICT_MERGE_WAIT_ALERT pr=#30 head_sha=\w+ age_hours=7 reason=merge_lease_wait blocker=\S+ outcome=sent", result.stdout), result.stdout
+	assert len(_lines(tmp_path, "statuses.log")) == 1
+
+
+def test_unconfigured_telegram_writes_no_marker(tmp_path: Path) -> None:
+	meta = {"31": {"gate": "SUCCESS", "auto": True, "gate_at": _hours_ago(7)}}
+	result = _run_sweep(tmp_path, [_pr(31)], meta, final_ci={_sha(31): [_ci_run(31)]}, env={"TG_BOT_SECRET": ""})
+	assert result.returncode == 0, result.stderr
+	assert "outcome=telegram_unconfigured" in result.stdout
+	assert _lines(tmp_path, "statuses.log") == []
+	assert not any("/rules/branches/" in " ".join(call) for call in _api_calls(tmp_path))

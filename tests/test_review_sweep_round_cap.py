@@ -550,11 +550,12 @@ def test_workflow_passes_the_cap_knobs_with_defaults() -> None:
 	assert "source .ci-rerun-support/scripts/review_sweep_round_cap.sh" in _extract_step_script()
 
 
-@pytest.mark.parametrize("switch, capped", [("true", False), ("false", True)])
-def test_head_with_a_judge_merge_verdict_is_not_capped(tmp_path: Path, switch: str, capped: bool) -> None:
-	# Issue #9991: #9839 was labelled ai:needs-human while its judge `merge`
-	# verdict only waited for the merge lease. Without pr_checks_lib.sh staged
-	# the sweep cannot evaluate the verdict, so it dispatches, but never caps.
+@pytest.mark.parametrize("switch, capped", [("true", True), ("false", True)])
+def test_unevaluated_judge_merge_verdict_head_stays_capped(tmp_path: Path, switch: str, capped: bool) -> None:
+	# Issue #9991: a head whose judge verdict still waits is skipped before
+	# the cap and creates no run. Without pr_checks_lib.sh staged the sweep
+	# cannot evaluate the verdict, so it fails open: it would dispatch, and
+	# the round cap still bounds that path.
 	(tmp_path / "verdicts.json").write_text(json.dumps({"5": "decision=merge wait=lease_wait base=" + "b" * 40 + " ms=blocked"}), encoding="utf-8")
 	result = _run_sweep(tmp_path, prs=[_pr(5)], rounds=_rounds(**{"5": 40}), gate={"5": "PENDING"},
 		env={"VERDICT_WAIT_DISPATCH_SKIP_ENABLED": switch})
