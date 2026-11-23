@@ -160,6 +160,36 @@ def test_reusable_workflow_wiring() -> None:
 	assert compare["if"] == "steps.verify_manifest.outcome == 'success'"
 
 
+FETCH_BEGIN = "          # BEGIN sync manifest fetch (byte-identical in update_workflows.yml and workflow_integrity.yml; tests pin it)\n"
+FETCH_END = "          # END sync manifest fetch\n"
+
+
+def _fetch_block(text: str) -> str:
+	assert text.count(FETCH_BEGIN) == 1 and text.count(FETCH_END) == 1
+	return text.split(FETCH_BEGIN, 1)[1].split(FETCH_END, 1)[0]
+
+
+def test_manifest_fetch_block_is_a_copy_of_the_sync_fetch_block() -> None:
+	# The rate-limit aware manifest fetch (#9937) is the same inline shell in
+	# both workflows; neither may source upstream code before verification.
+	ours = _fetch_block(WORKFLOW.read_text(encoding="utf-8"))
+	sync = _fetch_block(UPDATE_WORKFLOWS.read_text(encoding="utf-8"))
+	assert ours.strip()
+	assert ours == sync
+	assert "ERR_SYNC_MANIFEST_FETCH_FAILED" in ours
+	assert "source " not in ours
+	text = WORKFLOW.read_text(encoding="utf-8")
+	verify = text[text.index("      - name: Verify signed sync manifest"):text.index("      - name: Compare managed wrappers")]
+	assert FETCH_BEGIN in verify
+	assert "gh release download" not in verify
+
+
+def test_integrity_job_timeout_covers_rate_limit_wait() -> None:
+	text = WORKFLOW.read_text(encoding="utf-8")
+	minutes = int(re.search(r"^    timeout-minutes: (\d+)$", text, re.M).group(1))
+	assert 30 <= minutes <= 360
+
+
 def test_push_runs_never_post_the_pull_request_status() -> None:
 	text = WORKFLOW.read_text(encoding="utf-8")
 	publish = text[text.index("      - name: Publish integrity result"):]

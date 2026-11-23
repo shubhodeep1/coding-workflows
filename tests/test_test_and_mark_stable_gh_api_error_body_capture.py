@@ -67,16 +67,17 @@ def _step(job: str, step_id: str) -> str:
 
 def _run_step(body: str, runs_mode: str) -> dict[str, str]:
 	with tempfile.TemporaryDirectory() as tmp:
-		bindir = Path(tmp) / "bin"
-		bindir.mkdir()
-		gh = bindir / "gh"
+		# The fake gh is a shell function that runs the stub through bash, not
+		# an executable on PATH: the pre-push gate container mounts the temp
+		# dir noexec, and bash reading a file is not blocked by noexec.
+		gh = Path(tmp) / "stub_gh.sh"
 		gh.write_text(STUB_GH, encoding="utf-8")
-		gh.chmod(0o755)
+		body = 'gh() { bash "$STUB_GH_SH" "$@"; }\n' + body
 		out = Path(tmp) / "github_output"
 		out.write_text("", encoding="utf-8")
 		env = {
 			**os.environ,
-			"PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
+			"STUB_GH_SH": str(gh),
 			"GITHUB_OUTPUT": str(out),
 			"GITHUB_RUN_ID": "1",
 			"TEST_REPO": "owner/repo",
@@ -107,10 +108,13 @@ def test_clarify_negative_create_keeps_real_run_id():
 	assert outputs["pre_clarify_run_id"] == "4242"
 
 
-def test_alt_model_create_falls_back_to_zero_on_error_body():
+def test_alt_model_create_leaves_baseline_empty_on_error_body():
+	# Stable keeps #9800's (#9797) rule for the alt-model baselines: a failed
+	# read leaves pre_<wf>_run_id empty, never 0, so the capture step skips
+	# instead of matching an older, unrelated run with `id > 0`.
 	outputs = _run_step(_step("e2e-alt-model-test", "create"), "error")
 	for wf in ("clarify", "plan", "implement", "review_autofix"):
-		assert outputs[f"pre_{wf}_run_id"] == "0"
+		assert outputs[f"pre_{wf}_run_id"] == ""
 	assert outputs["issue_number"] == "77"
 
 
