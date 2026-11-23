@@ -696,7 +696,7 @@ review_prepush_test_gate_repair_diag()
 
 # One review editor turn. Sets rpg_repair to ran | skipped (...) | reverted (syntax)
 # | reverted (it removed the whole change for lint findings only)
-# | reverted (it removed the whole change though no test failed); the gate re-runs only for ran.
+# | reverted (it removed the whole change while no failure was caused by it); the gate re-runs only for ran.
 # Logs one outcome=repair_diff line per editor turn.
 review_prepush_test_gate_repair()
 {
@@ -847,7 +847,7 @@ review_prepush_test_gate_repair()
 		if ! rpg_post_repair_changed="$(review_prepush_test_gate_changed_checked)" || [ -z "${rpg_post_repair_changed}" ]; then
 			review_prepush_test_gate_log "outcome=warning reason=passing_change_restore_empty"
 		fi
-		rpg_repair="reverted (it removed the whole change though no test failed)"
+		rpg_repair="reverted (it removed the whole change while no failure was caused by it)"
 		return 0
 	fi
 	rpg_repair="ran"

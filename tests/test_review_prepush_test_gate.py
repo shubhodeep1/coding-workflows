@@ -397,8 +397,8 @@ def test_review_loop_repair_that_erases_a_passing_change_keeps_the_editor_edit(t
 	assert "passing_change_restore_empty" not in proc.stderr
 	assert "lint_only_change_erased" not in proc.stderr
 	assert "PERSIST repair_loop outcome=pass turns=0 stop=reverted acceptance=unmet" in proc.stderr
-	assert "repair=reverted_it_removed_the_whole_change_though_no_test_failed" in proc.stderr
-	assert "Repair turn: reverted (it removed the whole change though no test failed)" in _summary(tmp_path).read_text(encoding="utf-8")
+	assert "repair=reverted_it_removed_the_whole_change_while_no_failure_was_caused_by_it" in proc.stderr
+	assert "Repair turn: reverted (it removed the whole change while no failure was caused by it)" in _summary(tmp_path).read_text(encoding="utf-8")
 	diag = _repair_diag(proc.stderr)
 	assert len(diag) == 1
 	assert diag[0]["phase"] == "review" and diag[0]["editor_rc"] == "0"
