@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:21283-21293 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: In `_heal_counterfactual_hold_expiry_check`, a failed expired-comment POST is treated as proof that GitHub did not create the comment, so the code always PATCHes the issue back to `state=open`; if GitHub did create the comment but the response was lost, the issue is reopened with the trusted `ai:heal-counterfactual-hold-expired:v1` marker already on it.\n  WHY: `gh_retry` makes one attempt for a non-idempotent comment POST (scripts/gh_helpers.sh:2149), so on the next tick `expired_present` is true and the function returns `outcome=kept reason=reopened` (lines 21227-21231), and the unanswered hold stays open forever with only one `::warning::` and log line and no Telegram notification. glm also notes that a comments POST that keeps failing makes every tick flap the issue closed\u2192open. All three flaggers rated it MAJOR. anthropic_claude-sonnet-5_5 confirmed the same mechanics but did not raise it as a defect: the trigger is narrow, the result is today's behaviour, and the alternative fails worse. It listed the issue only as a hardening suggestion.\n- scripts/orchestrate_poll_process.sh:21291-21293 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: When the expired-comment POST and the reopen PATCH both fail, the issue stays closed with no expired marker.\n  WHY: If a person later reopens the issue, no marker identifies it as already expired, and its old hold and escalation markers still pass the expiry checks, so a later tick closes it again, against the requirement that a reopened issue is not closed again (source severity MAJOR).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING: scripts/orchestrate_poll_process.sh | _heal_counterfactual_hold_expiry_check, reopen-success branch after the expired-comment POST fails (`reason=\"expired_marker_post_failed\"` path)\n  PROBLEM: The POST is tried once. If GitHub created the comment but the response was lost, the expired marker is on an issue the check has just reopened, and later ticks log `kept reason=reopened` forever. The only trace is a warning that says \"the next tick retries the expiry\", which is wrong in that case.\n  WHY: Suggested fix: extend the `::warning::` text, and optionally send a Telegram DEBUG, to say the hold is treated as reopened if the marker appears anyway. No new GitHub read; 1-2 lines; HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:lines 21283-21293 (the `if ! gh_retry gh api ... comments ...` branch in `_heal_counterfactual_hold_expiry_check`, the new `reopen`/`reopen_failed` paths added by the last run) | severity=MAJOR | confidence=4\n  PROBLEM: The expired-comment POST is non-idempotent and gets one attempt. If GitHub accepted the comment but the client lost the response, the code still PATCHes the issue to `state=open`. The next tick sees the trusted `ai:heal-counterfactual-hold-expired:v1` marker, returns `outcome=kept reason=reopened`, and never closes the issue again. There is no Telegram notification, and the check cannot tell a system reopen from a maintainer reopen.\n  WHY: After the close PATCH succeeds and the marker POST appears to fail, the reopen PATCH succeeds. On the next tick `expired_present` is true and the function takes the `outcome=kept reason=reopened` branch (lines 21227-21228), which blocks any further close.\n- HARDENING: scripts/orchestrate_poll_process.sh | `_heal_counterfactual_hold_expiry_check`, `expired_marker_post_failed` branch (around line 21288)\n  PROBLEM: The reopen-success path emits a `::warning::` but no Telegram notification, so operators cannot see the lost-response case.\n  WHY: Suggested fix: add a `tg_notify_issue ... \"DEBUG\"` call before `reason=\"expired_marker_post_failed\"; break`. 1-2 lines; HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:21283-89, failed expired-comment POST handling | severity=MAJOR | confidence=4\n  PROBLEM: A nonzero POST result is treated as proof that GitHub did not create the comment, and the issue is reopened.\n  WHY: The non-idempotent comment POST gets one attempt. If GitHub creates the comment but the response is lost, the issue is reopened with the expired marker on it. On the next tick the marker triggers `kept reason=reopened`, so the hold never expires.\n- scripts/orchestrate_poll_process.sh:21291-93, failed expired-comment POST and failed reopen PATCH handling | severity=MAJOR | confidence=5\n  PROBLEM: When both operations fail, the issue stays closed without an expired marker.\n  WHY: If a person later reopens the issue, no marker identifies it as already expired. Its old hold and escalation markers still pass the expiry checks, so a later tick closes it again, against the requirement that a reopened issue is not closed again.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:lines 21283-21289 (expired-comment POST failure branch), interacting with lines 21229-21231 (`kept reason=reopened` guard) | severity=MAJOR | confidence=4\n  PROBLEM: A failed expired-marker comment POST always triggers a reopen. `gh_retry` sends a comment POST exactly once (scripts/gh_helpers.sh:2149, issue #6634), so after a timeout or 5xx where GitHub created the comment, the issue is reopened carrying the trusted `ai:heal-counterfactual-hold-expired:v1` marker. The `expired_present` guard then returns `kept reason=reopened` and the issue is never closed again.\n  WHY: The lost-response case turns a completed expiry into a permanent reopen guard, so the hold stays open indefinitely. A comments POST that keeps failing also makes each tick flap the issue closed\u2192open with the hold never resolved.\n- HARDENING: scripts/orchestrate_poll_process.sh | _heal_counterfactual_hold_expiry_check, reopen-success branch (lines 21287-21289)\n  PROBLEM: The reopen branch logs only a `::warning::`, but a marker may already exist after an ambiguous failure.\n  WHY: Suggested fix: add a `tg_notify_issue \"${issue_num}\" \"... marker may already exist; verify before relying on the reopen guard\" \"WARNING\" || true` line. 1-2 lines; HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9aaed06e682d2f95815dd853d69c1db468ec3b7a4d75fe3c5adb116d0637d12c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9989,
+    "run_id": "45154616440",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45154616440",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123104011_8665f49008",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9989,
+    "run_id": "45154616440"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T10:40:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
