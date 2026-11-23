@@ -533,8 +533,13 @@ if [ "${github_ai_grant_enabled}" = "true" ]; then
       if [ -L "${github_ai_grant_path}" ]; then
         echo "IMPLEMENT_GITHUB_AI_GRANT path=${github_ai_grant_path_safe} outcome=refused"
       elif [ -f "${github_ai_grant_path}" ]; then
-        git add -- "${github_ai_grant_path}"
-        echo "IMPLEMENT_GITHUB_AI_GRANT path=${github_ai_grant_path_safe} outcome=staged"
+        # An ignored path (or any other add failure) is refused rather than
+        # aborting the commit step under set -e with no outcome logged.
+        if git add -- "${github_ai_grant_path}" >/dev/null 2>&1; then
+          echo "IMPLEMENT_GITHUB_AI_GRANT path=${github_ai_grant_path_safe} outcome=staged"
+        else
+          echo "IMPLEMENT_GITHUB_AI_GRANT path=${github_ai_grant_path_safe} outcome=refused reason=add_failed"
+        fi
       elif [ -e "${github_ai_grant_path}" ]; then
         echo "IMPLEMENT_GITHUB_AI_GRANT path=${github_ai_grant_path_safe} outcome=refused"
       else

@@ -777,7 +777,7 @@ triage_target_files_guard()
 	local guard_target="${ROUTING_TARGET_BRANCH:-}" guard_default="${ROUTING_DEFAULT_BRANCH:-}" guard_sha="${HEAD_SHA:-}"
 	local guard_tests="" guard_path="" guard_target_commit="" guard_default_commit="" guard_ref=""
 	local guard_dir="" guard_default_dir="" guard_tree_dir="${CHECK_TRIAGE_DEFAULT_BRANCH_TREE_DIR:-}" guard_head_current=""
-	local guard_on_target=0 guard_on_default=0
+	local guard_on_target=0 guard_on_default=0 guard_files_total=""
 	local -a guard_paths=() guard_dirs=()
 	# Git without system/global config or credentials; never prompts or fetches.
 	local -a guard_git_env=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GH_TOKEN -u GITHUB_TOKEN -u OPENROUTER_API_KEY -u TG_BOT_SECRET
@@ -817,6 +817,14 @@ triage_target_files_guard()
 	done < <(jq -r '.files // [] | .[]? | strings' <<< "${guard_tests}" 2>/dev/null || true)
 	if [ "${#guard_paths[@]}" -eq 0 ]; then
 		log "routing outcome=keep reason=no_failing_files target_branch=${guard_target}"
+		return 0
+	fi
+	# The helper caps .files at 20 (FAILING_TEST_LIMIT) without a truncation
+	# flag, and the loop above stops at 20 too: a list that long may omit a
+	# failing file the head has, so it cannot prove absence (fail open).
+	guard_files_total="$(jq -r '[.files // [] | .[]? | strings] | length' <<< "${guard_tests}" 2>/dev/null || true)"
+	if ! [[ "${guard_files_total}" =~ ^[0-9]+$ ]] || [ "${guard_files_total}" -ge 20 ]; then
+		log "routing outcome=keep reason=files_truncated target_branch=${guard_target}"
 		return 0
 	fi
 	guard_target_commit="$("${guard_git[@]}" rev-parse --verify --quiet "refs/remotes/origin/${guard_target}^{commit}" 2>/dev/null || true)"

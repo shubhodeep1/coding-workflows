@@ -155,6 +155,18 @@ def test_implement_refuses_symlink_and_rejects_glob_entries(tmp_path: Path) -> N
 	assert "did_commit=false" in output
 
 
+def test_implement_refuses_ignored_granted_path_without_aborting(tmp_path: Path) -> None:
+	repo = _init_repo(tmp_path / "repo")
+	(repo / ".gitignore").write_text(".github/ai/x.json\n", encoding="utf-8")
+	(repo / GRANTED).write_text("{}\n", encoding="utf-8")
+	(repo / "notes.txt").write_text("n\n", encoding="utf-8")
+	proc, output = _run_commit(repo, tmp_path, _grant([GRANTED]))
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert f"IMPLEMENT_GITHUB_AI_GRANT path={GRANTED} outcome=refused reason=add_failed" in proc.stdout
+	assert "did_commit=true" in output
+	assert GRANTED not in _committed(repo)
+
+
 @pytest.mark.parametrize("value", ["false", "FALSE", "bogus"])
 def test_implement_switch_off_restores_old_behaviour(tmp_path: Path, value: str) -> None:
 	repo = _init_repo(tmp_path / "repo")
