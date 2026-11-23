@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9983,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9983\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9985\",\"pr_number\":9985,\"branch\":\"ai/issue-9983\",\"run_id\":\"45105221283\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/45105221283\",\"changed_files\":[\"README.md\",\"agents.d/9983-merge-lease-holder-runs-active.md\",\"changelog.d/9983-merge-lease-holder-runs-active.md\",\"scripts/pr_checks_lib.sh\",\"scripts/review_merge_train.sh\",\"tests/merge_lease_fake_gh.py\",\"tests/test_merge_lease.py\"]}",
+  "fingerprint": "ebf96d3c88e6f374146dbb38bf965b2d48968f4f5172db9a33d5bcbd1e913742",
+  "lineage": {
+    "issue_number": 9983,
+    "parent_ids": [],
+    "pr_number": 9985,
+    "run_id": "45105221283",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45105221283",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9985"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261123044746_fc3f457ce8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9983,
+    "level": "run",
+    "pr_number": 9985,
+    "run_id": "45105221283"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9983: https://github.com/shubhodeep1/coding-workflows/pull/9985",
+  "timestamps": {
+    "created_at": "2026-11-23T04:47:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
