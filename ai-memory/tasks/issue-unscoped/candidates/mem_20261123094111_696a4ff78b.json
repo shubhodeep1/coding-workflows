@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_audit_consumer_drift.py:1828-1879 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new pin-age tests are not included in the main() function of tests/test_audit_consumer_drift.py.\n  WHY: CI runs this suite directly with python3 tests/test_audit_consumer_drift.py (ci.yml:696), so tests missing from main() would run only under pytest; the source rated this NIT (mapped to low), and anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash each report it as stale because main() at tests/test_audit_consumer_drift.py:1831-1856 already calls the pin-age tests and runs the env-driven tests through _DirectRunEnvPatch.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Pair all workflow and automation changes with contract tests, including direct CI execution.\n  expected_change_site: tests/test_audit_consumer_drift.py main()\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The new pin-age tests are defined in the file but missing from the list in main(), which CI runs directly, so they are left out of the direct CI test run (source severity NIT; anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash report this gap as stale because main() now lists the pin-age tests).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_audit_consumer_drift.py:main() function (around lines 1828-1879) | severity=NIT | confidence=5\n  PROBLEM: The new pin-age tests are not included in the main() function of tests/test_audit_consumer_drift.py.\n  WHY: CI runs this test suite directly using python3 tests/test_audit_consumer_drift.py (ci.yml:696). Because the new tests are missing from main(), they are never executed in the CI path, only through pytest.\n- TASK_GAP\n  Requirement: Pair all workflow and automation changes with contract tests, including direct CI execution.\n  Expected change site: tests/test_audit_consumer_drift.py main()\n  Evidence of absence: The new pin-age tests are defined in the file but missing from the list in main(), which CI executes directly; this means they are effectively excluded from the direct CI test run.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6e82cb659a42f157d761d68de8eb0c77702e7d7774ae5a4263a5a6da6d781df2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9505,
+    "run_id": "45147079953",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45147079953",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123094111_696a4ff78b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9505,
+    "run_id": "45147079953"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-23T09:41:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
