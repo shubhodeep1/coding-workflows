@@ -1013,7 +1013,8 @@ command whose documented job is to dispatch a workflow (`/implement-plan-ai`,
 `/apply-analysis`, and any successor that says so in its own file), that
 invocation is the approval for the dispatch it describes. Likewise, the
 user's go on a §31 plan approves opening the issues (or the orchestrator
-dispatch) that plan names.
+dispatch) that plan names, and §34.B approves opening a prevention issue in
+the repository the session works in.
 
 ### D) Transport & Tool Precedence
 
@@ -1486,7 +1487,8 @@ not change:
 3. **Show the plan and wait for the user's go.** Open nothing else before
    it: no issue, no `/implement-plan-claude` dispatch, no implementation PR.
    The go is the approval §23.C requires for opening the issues or
-   dispatching the orchestrator.
+   dispatching the orchestrator. The one exception is a §34.B prevention
+   issue in the repository the session works in: §34.B is its go.
 4. **Open the issues** (single-PR path only; the multi-PR path ends at the
    `/implement-plan-claude` dispatch, and the orchestrator opens its own
    tracking and wave issues). One issue per repository that needs a change,
@@ -1628,7 +1630,9 @@ on fewer runners. Delivery speed must not suffer.
 ## §34. Prevent Recurrence (MANDATORY)
 
 This applies in this repo and in every consumer repo that receives this file
-via the `@stable` sync, and it is not superseded by §12.
+via the `@stable` sync, and it is not superseded by §12. In PR review mode
+(§12), a prevention fix that fits the PR lands in the PR under review
+(§12.A); one too large for it becomes a §34.B issue, never a follow-up PR.
 
 Fixing one instance of a problem is half the job. Whenever a session solves a
 problem, it MUST check whether the same problem can happen again and, if it
@@ -1655,11 +1659,17 @@ For every problem solved, answer three questions:
   the PR or issue. Search before opening anything, so the same cause never
   gets two issues.
 - **A small fix (§31.A):** implement it in the session, with a test, and run
-  the test locally before committing.
+  the test locally before committing. This rule is the go for it under §0
+  and §2 only while every §31.A condition holds; any doubt about the cause,
+  the fix or its effect on the user's work makes it a §2 ask.
 - **Anything larger:** write the plan (§31.B step 2) and open the issue for
-  the pipeline in the same turn. This rule is the user's standing go for that
-  issue (§23.C, §31.B step 3): show the plan in the reply and open the issue
-  without waiting. One issue per cause. The user can close or change it.
+  the pipeline in the same turn, following §31.B step 4 (`ai:engine-claude`
+  at creation, `Refs` links, never auto-close keywords, §19). This rule is
+  the user's standing go for that issue (§23.C, §31.B step 3) only in the
+  repository the session works in: show the plan in the reply and open the
+  issue without waiting. An issue in any other repository, consumer repos
+  included, still needs the named §2 ask §23.C requires. One issue per cause
+  per repository. The user can close or change it.
 - **The fix needs an action only the user can take** (a variable, setting,
   ruleset, secret, billing change or any other ask-first action in this
   file): ask in the §2 format, name the exact change, and keep the item open
@@ -1672,15 +1682,17 @@ For every problem solved, answer three questions:
 - A fix that depends on a person remembering something is not a fix (§18).
 - The workaround the session used (a hand merge, a hand dispatch, a pushed
   test fix, a re-run) is never the fix.
-- A prevention fix follows every other rule in this file (§5, §6, §10, §15,
-  §18, §27, §33). It is not a licence for unrelated refactors.
+- A prevention fix follows every other rule in this file (§5, §6, §10, §12,
+  §15, §18, §19, §23, §27, §31, §33). It is not a licence for unrelated
+  refactors.
 
 ### D) Reporting
 
 The final reply lists each problem the session solved with its cause, whether
 it can recur, and the fix: a PR, an issue, or the user's pending action. "No
-lasting fix needed" must come with the reason. Under §11 the item stays open
-until its fix is merged, is tracked in an open issue, or the user drops it.
+lasting fix needed" must come with the reason. Track the items like a §11
+checklist: an item stays open until its fix is merged, is tracked in an open
+issue, or the user drops it.
 
 ### E) Interactive Sessions Only
 
