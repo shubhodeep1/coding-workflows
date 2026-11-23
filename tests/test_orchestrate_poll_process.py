@@ -4079,6 +4079,11 @@ sys.exit(proc.returncode)
 		# Exercise the script default of the automation-path plan gate (#7181)
 		# unless a test sets the flag through env_overrides.
 		env.pop("AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED", None)
+		# An Actions runner's real GITHUB_RUN_ID is never in the mocked
+		# actions-runs fixtures, so the stall self-run check
+		# (_ensure_actions_runs_blob_has_self_run) would force an extra live
+		# fetch only in CI. Tests that need a run id set it via env_overrides.
+		env.pop("GITHUB_RUN_ID", None)
 		# A CI runner's own Actions identity must not turn on the poller's
 		# release-blocker reporter (producer gate, OIDC) unless a test asks.
 		for actions_identity_var in ("GITHUB_WORKFLOW_REF", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "RELEASE_BLOCKER_HEAL_ENABLED", "RELEASE_BLOCKER_HEAL_PY"):
@@ -6343,6 +6348,10 @@ def test_staged_support_latch_release_is_source_only_and_compensates_comment_fai
 		env_overrides={
 			"GITHUB_REPOSITORY": "owner/consumer",
 			"ORCHESTRATE_ENGINE_SHA": engine_sha,
+			# The PR-only head-bound latch release (PR #9839) lists
+			# ai:needs-human in every repository; off here so the listing
+			# check below still proves the staged-support sweep is source-only.
+			"NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED": "false",
 		},
 	)
 	assert "ai:needs-human" in consumer["issues"]["700"]["labels"]
@@ -13622,6 +13631,11 @@ def test_final_merge_refusal_keeps_github_error_and_mergeable_state():
 		issue_labels={10: ["ai:merged"]},
 		prs=prs,
 		existing_branches=["main", "orchestrator/project-192"],
+		# #9939: the blocked-merge guard defers a blocked PR before any merge
+		# attempt (covered by
+		# test_final_merge_defers_when_blocked_without_named_ruleset_blocker);
+		# switched off here so the refusal-recording path stays covered.
+		env_overrides={"PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED": "false"},
 	)
 	assert result.get("merged_prs", []) == []
 	err = result["state_on_disk"]["final_merge_error"]
@@ -13709,9 +13723,57 @@ def test_final_merge_proceeds_when_ruleset_required_status_passes():
 			"ruleset_required_contexts": ["coding-workflows/workflow-integrity"],
 			"commit_statuses": {head: [{"context": "coding-workflows/workflow-integrity", "state": "success"}]},
 		},
+		# #9939: the blocked-merge guard defers any blocked PR; switched off
+		# here so the ruleset helper's legacy path stays covered.
+		env_overrides={"PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED": "false"},
 	)
 	assert 355 in result.get("merged_prs", [])
 	assert "blocked by ruleset-required check(s)" not in result["stdout"]
+	assert "SYNC_MERGE_BLOCKED_GUARD outcome=disabled pr=355" in result["stdout"]
+
+
+def test_final_merge_defers_when_blocked_without_named_ruleset_blocker():
+	# #9939: the ruleset helper matches by name and counted the dispatched
+	# final CI's `lint` check-run, so it named no blocker while GitHub said
+	# blocked, and the admin GH_PAT merge bypassed the rule. Any blocked PR
+	# now defers without spending the final-merge budget.
+	head = "7ca98c4747ea6d5b73c95c46501b8483cd037b89"
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 356,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "blocked",
+			"headSha": head,
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		mock_store_extra={
+			"ruleset_required_contexts": ["coding-workflows/workflow-integrity"],
+			"commit_statuses": {head: [{"context": "coding-workflows/workflow-integrity", "state": "success"}]},
+		},
+	)
+	assert result.get("merged_prs", []) == []
+	assert (
+		f"SYNC_MERGE_BLOCKED_GUARD outcome=deferred pr=356 head={head} state=blocked blockers=none"
+	) in result["stdout"]
+	assert (
+		"[final-merge] PR #356 is blocked (mergeable_state=blocked; blockers: none). Will retry next poll."
+	) in result["stdout"]
+	assert "ORCH_MERGE_HEAD_BOUND pr=356" not in result["stdout"]
+	disk = result["state_on_disk"]
+	assert disk["final_merge_status"] == "pending"
+	assert int(disk.get("final_merge_attempt_count", 0) or 0) == 0
 
 
 def test_final_merge_promotes_eager_draft_pr_when_tracking_issue_ready_to_merge():
@@ -21673,7 +21735,12 @@ def test_stall_judge_keeps_escalation_when_linked_pr_merged_into_non_target_base
 	body = script[start:script.index("\n}\n", start)]
 	normalize = body.index('effective_action="$(normalize_stall_recovery_action')
 	keep = body.index('_stall_judge_linked_pr_keeps_escalation "${issue_num}" "${linked_pr_json}"')
-	assert normalize < keep < body.index("**Decision (effective):** ${effective_action}")
+	# Issue #9520 renders the effective decision through _judge_effective_label
+	# (so a held escalation reads "escalate_human (held: ...)"); the label must
+	# still be computed from effective_action after the keep-escalation override.
+	label = body.index('local _judge_effective_label="${effective_action}"')
+	decision = body.index("**Decision (effective):** ${_judge_effective_label}")
+	assert normalize < keep < label < decision
 	assert '[ "${judge_action}" = "escalate_human" ] && [ "${effective_action}" = "attempt_merge" ]' in body
 	assert '"${_keep_escalation_managed}" "${_keep_escalation_declared}"; then' in body
 	assert "extract-integration-branch" in body[normalize:keep]
@@ -32143,6 +32210,10 @@ _STANDALONE_PIPELINE_LABELS = (
 	"ai:ready-to-merge",
 	"ai:review-blocked",
 )
+# Issue #3576: with SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED on (the
+# default) the same label batch also lists ai:security-audit, so the tracker
+# guard sees a tracker that only carries ai:blocked.
+_STANDALONE_DISCOVERY_LABELS = _STANDALONE_PIPELINE_LABELS + ("ai:security-audit",)
 
 
 def _run_standalone_label_batch_tick(**kwargs) -> dict:
@@ -32203,7 +32274,7 @@ def test_standalone_pipeline_label_batch_failure_falls_back_to_all_rest_calls() 
 	result = _run_standalone_label_batch_tick(mock_pipeline_label_graphql=True, fail_pipeline_label_graphql=True)
 	log = result["stdout"] + result["stderr"]
 	assert result["pipeline_label_graphql_calls"] == 1, log
-	assert sorted(_stall_listing_labels(result)) == sorted(_STANDALONE_PIPELINE_LABELS), log
+	assert sorted(_stall_listing_labels(result)) == sorted(_STANDALONE_DISCOVERY_LABELS), log
 	assert "::notice::Standalone stall recovery: label GraphQL batch fell back to REST for:" in log
 
 
@@ -32213,7 +32284,7 @@ def test_standalone_pipeline_label_batch_unrecognised_answer_keeps_rest_path() -
 	result = _run_standalone_label_batch_tick()
 	log = result["stdout"] + result["stderr"]
 	assert result["pipeline_label_graphql_calls"] == 0, log
-	assert sorted(_stall_listing_labels(result)) == sorted(_STANDALONE_PIPELINE_LABELS), log
+	assert sorted(_stall_listing_labels(result)) == sorted(_STANDALONE_DISCOVERY_LABELS), log
 	assert {501, 502, 503} <= set(result.get("candidate_details_requested", [])), log
 
 
