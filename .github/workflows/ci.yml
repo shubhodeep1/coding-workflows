@@ -3233,7 +3233,7 @@ jobs:
       # first and the vitest step keeps its working directory. Names and
       # bodies unchanged.
       - name: Set up Node 22 for the claude-pool-broker Worker tests
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
 
@@ -4596,7 +4596,7 @@ jobs:
           fi
 
       - name: Set up Node 22 for system-Python tests
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
 
