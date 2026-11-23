@@ -4045,8 +4045,9 @@ jobs:
       # Moved on from tests-release-and-log-analysis, which took 19m01s of its
       # 20 minutes on main (run 45035315687, budget-watch issue #9966), to
       # group 1. The run's step timings were not readable, so the pick is an
-      # estimate from test and subprocess counts (wiring guard part 1 is the
-      # release job's heaviest step). Both steps were already in that job when
+      # estimate from test and subprocess counts, not timings (wiring guard
+      # part 2, which stays in that job, is recorded as larger: 658 test
+      # functions against part 1's about 604). Both steps were already in that job when
       # it measured 15m19s (run 43352637124, #9450, later than #9363's run), so
       # what raised it to 19m01s is not identified. This job has the only
       # 30-minute budget. Group choice: the
@@ -4089,8 +4090,9 @@ jobs:
       # Moved on from tests-release-and-log-analysis with the step above
       # (budget-watch issue #9966, run 45035315687, 19m01s of 20 minutes) to
       # group 1. The run's step timings were not readable; the pick is an
-      # estimate from test and subprocess counts (this is the release job's
-      # heaviest step). The 4 local shards run after the poll shard step, so
+      # estimate from test and subprocess counts, not timings (one of the
+      # release job's heavier steps; part 2 is recorded as larger and stays
+      # there). The 4 local shards run after the poll shard step, so
       # they do not compete with it. Name and body unchanged; only the group
       # guard is new. In the older text below, "this job" means the job named
       # at each move.
