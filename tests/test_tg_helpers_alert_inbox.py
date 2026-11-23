@@ -484,7 +484,7 @@ def test_callers_checkout_config_is_never_read(tmp_path: Path) -> None:
 
 def _expected_telegram_argv(text: str) -> list[str]:
 	return [
-		"-s", "-X", "POST", f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+		"-s", "--max-time", "30", "-X", "POST", f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
 		"-d", "chat_id=-1001",
 		"-d", "disable_web_page_preview=true",
 		"--data-urlencode", f"text={text}",
