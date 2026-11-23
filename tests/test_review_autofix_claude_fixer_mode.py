@@ -559,7 +559,7 @@ def test_sandbox_prepare_follows_both_roles_with_an_opencode_fallback():
 
 def test_engine_files_ride_the_optional_bootstrap():
 	text = (REPO_ROOT / "scripts" / "stage_workflow_support.sh").read_text(encoding="utf-8")
-	line = next(l for l in text.splitlines() if l.startswith("OPTIONAL_BOOTSTRAP_SCRIPTS="))
+	line = next(src_line for src_line in text.splitlines() if src_line.startswith("OPTIONAL_BOOTSTRAP_SCRIPTS="))
 	for name in ("ai_engine.sh", "claude_engine.py", "claude_anthropic_relay.py", "claude_settings.json.tmpl"):
 		assert name in line.split("=", 1)[1].strip("\"").split(), name
 
@@ -1206,3 +1206,76 @@ def test_heal_editor_codex_transfer_leaves_the_fallback_marker(tmp_path):
 	result = subprocess.run(["bash", "-c", func + "\nheal_mark_claude_unavailable\n"],
 		env=run_env, capture_output=True, text=True)
 	assert result.returncode != 0
+
+
+# ---- #10018: writer exit 76 (fallback refused) ends the resolver loop ----
+
+def _resolver_writer_failure_block() -> str:
+	text = (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
+	start = text.index('  if [ "${_codex_exit}" -ne 0 ]; then\n    rm -f "${tmp_output}"')
+	return text[start:text.index("  # Empty stdout is no longer treated", start)]
+
+
+def _run_resolver_writer_failure_loop(tmp: Path, rc: int):
+	script = (
+		"set -euo pipefail\n"
+		'trap \'echo "exit_class=${RESOLVER_TERMINAL_EXIT_CLASS:-}"\' EXIT\n'
+		'emit_conflict_resolver_substate() { printf "%s\\n" "$1" >> "${RUNTIME_DIR}/substates"; }\n'
+		'opencode_emit_failure_alert() { printf "%s\\n" "$*" >> "${RUNTIME_DIR}/alerts"; }\n'
+		"_resolver_terminal_attempt_end() { :; }\n"
+		"sleep() { :; }\n"
+		"INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS=3\nCONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=5\n"
+		'MODEL_EDITOR=openai/gpt-6-sol\ntmp_output="${RUNTIME_DIR}/output.txt"\nattempt=1\n'
+		'while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do\n'
+		'  echo "${attempt}" >> "${RUNTIME_DIR}/attempts"\n'
+		f"  _codex_exit={rc}\n  _stall_state=\"\"\n  _attempt_elapsed=1\n"
+		+ _resolver_writer_failure_block()
+		+ "  break\ndone\n"
+	)
+	env = dict(os.environ, RUNTIME_DIR=str(tmp))
+	for inherited in ("BASH_ENV", "ENV"):
+		env.pop(inherited, None)
+	proc = subprocess.run(["bash", "-c", script], cwd=tmp, env=env, capture_output=True, text=True)
+
+	def lines(name: str) -> list[str]:
+		path = tmp / name
+		return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+
+	return proc, lines("attempts"), lines("substates"), lines("alerts")
+
+
+def test_resolver_refused_fallback_rc76_stops_after_one_attempt(tmp_path):
+	work = tmp_path / "76"
+	work.mkdir()
+	proc, attempts, substates, alerts = _run_resolver_writer_failure_loop(work, 76)
+	assert proc.returncode == 1, proc.stderr
+	assert attempts == ["1"]
+	assert proc.stdout.count("CONFLICT_RESOLVER_FALLBACK_REFUSED") == 1
+	assert "CONFLICT_RESOLVER_FALLBACK_REFUSED rc=76 attempt=1\n" in proc.stdout
+	assert substates == ["Failed"]
+	assert len(alerts) == 1 and alerts[0].endswith("76 invocation_failed")
+	assert "exit_class=other" in proc.stdout
+	for rc in (75, 1):
+		work = tmp_path / str(rc)
+		work.mkdir()
+		proc, attempts, substates, alerts = _run_resolver_writer_failure_loop(work, rc)
+		assert proc.returncode == 1, (rc, proc.stderr)
+		assert attempts == ["1", "2", "3"], rc
+		assert "CONFLICT_RESOLVER_FALLBACK_REFUSED" not in proc.stdout, rc
+		assert substates == ["Failed"] * 3, rc
+		assert len(alerts) == 1 and alerts[0].endswith(f"{rc} invocation_failed"), rc
+
+
+def test_resolver_refused_fallback_rc76_contract():
+	block = _resolver_writer_failure_block()
+	log_line = 'echo "CONFLICT_RESOLVER_FALLBACK_REFUSED rc=76 attempt=${attempt}"'
+	condition = 'if [ "${_codex_exit}" -eq 76 ] || [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then'
+	retry = block.index("attempt=$((attempt + 1))")
+	assert block.count(log_line) == 1 and block.index(log_line) < retry
+	assert block.count(condition) == 1 and block.index(condition) < retry
+	assert block.index(log_line) < block.index(condition)
+	condition_line = next(line for line in block.splitlines() if "-eq 76 ] ||" in line)
+	assert "75" not in condition_line
+	fragment = (REPO_ROOT / "agents.d" / "10018-resolver-refused-fallback-no-retry.md").read_text(encoding="utf-8")
+	assert 'section="Stable log prefixes (contractual)"' in fragment
+	assert "LOG_PREFIX.name=CONFLICT_RESOLVER_FALLBACK_REFUSED" in fragment

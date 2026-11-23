@@ -4221,7 +4221,16 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
         emit_conflict_resolver_substate "Failed" "${attempt}"
         ;;
     esac
-    if [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then
+    # Exit 76 (AI_ENGINE_FALLBACK_REFUSED, e.g. reason=no_credential) is
+    # terminal: a retry cannot succeed without a policy or credential
+    # change, so it leaves through the final-attempt path below with the
+    # same alert, substate, exit class and exit status (issue #10018).
+    # Mirrors the 75|76 handling in scripts/review_run_reviewers.sh.
+    # Exit 75 and every other exit code keep their retry behaviour.
+    if [ "${_codex_exit}" -eq 76 ]; then
+      echo "CONFLICT_RESOLVER_FALLBACK_REFUSED rc=76 attempt=${attempt}"
+    fi
+    if [ "${_codex_exit}" -eq 76 ] || [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then
       opencode_emit_failure_alert review_conflict_resolve writer "${MODEL_EDITOR}" "${_codex_exit}" invocation_failed || true
       if [ "${_prev_attempt_failure_kind}" = "timeout" ]; then
         echo "Conflict resolver failed after retries (final attempt killed by per-attempt timer)."
