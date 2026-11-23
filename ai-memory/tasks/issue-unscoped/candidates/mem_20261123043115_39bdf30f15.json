@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: `.github/workflows/ci.yml` (`Pre-push affected-test gate tests` placement in `tests-hooks-and-orchestrator`) and `tests/test_ci_poll_test_sharding.py`\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  EVIDENCE: Run 44909097036 recorded step statuses only with no durations, so the target job was chosen from recorded job totals and estimated headroom, and the timing-based identification and headroom comparison are not established, ci.yml comment at lines 1578\u20131580 documents this limitation; the plural \"steps\" is covered the same way (severity NIT in both)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\nExpected change site: `.github/workflows/ci.yml` and `tests/test_ci_poll_test_sharding.py`\nEvidence of absence: Nothing is missing from the diff. The step moved unchanged, no job was added or renamed, and no timeout changed. Run 44909097036 recorded step statuses only, with no durations. The target job was therefore picked from recorded job totals, and three places say so. Confirming the placement needs a later run that records step timings. The plural \"steps\" is covered the same way.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\nExpected change site: `.github/workflows/ci.yml` target-selection rationale and placement for `Pre-push affected-test gate tests`.\nEvidence of absence: The workflow comment at lines 1578\u20131580 says the run recorded statuses but no step timings. The step was moved to `tests-hooks-and-orchestrator` based on a historical job total and estimated headroom, so the requested timing-based identification and comparison of available headroom are not established by this change.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "21183c6bd3fecfd7035e7496726f74e41700659b7490ac6edf4733c18070ed0b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9898,
+    "run_id": "45099869414",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45099869414",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123043115_39bdf30f15",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9898,
+    "run_id": "45099869414"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T04:31:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
