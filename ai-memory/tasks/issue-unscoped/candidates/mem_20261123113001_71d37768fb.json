@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_audit_consumer_drift.py:main() at approximately 1816 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new pin-age tests added to the test file are not called in the main() function.\n  WHY: The CI step at ci.yml:696 runs python3 tests/test_audit_consumer_drift.py, so CI skips the unlisted tests and loses coverage; the source severity was NIT, mapped here to low. z-ai_glm-5_3-flash disputes the claim and says the PR diff at tests/test_audit_consumer_drift.py:1828-1847 lists all of the tests.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING: tests/test_update_workflows_template_gate.py:test_head_gate_step_constants_match_the_review_helper, the `consts = dict(re.findall(...))` line\n  PROBLEM: If one of the three helper constants is renamed or re-indented later, `consts[...]` raises a bare KeyError, and the failure does not say which constant is missing.\n  WHY: CI still fails, but the failure is opaque. Suggested fix: add `assert {\"REVIEW_HEAD_GATE_UPDATER_BRANCH_RE\", \"REVIEW_HEAD_GATE_UPDATER_VERIFY_CONTEXT\", \"REVIEW_HEAD_GATE_UPDATER_INTEGRITY_CONTEXT\"} <= consts.keys(), consts`. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_audit_consumer_drift.py:main() at approximately 1816 | severity=NIT | confidence=4\n  PROBLEM: The new pin-age tests added to the test file are not called in the main() function.\n  WHY: The CI step at ci.yml:696 executes python3 tests/test_audit_consumer_drift.py, which skips these new tests because they are not listed in main(), reducing testing coverage in the CI pipeline.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- HARDENING: tests/test_update_workflows_template_gate.py:837\n  PROBLEM: The constant-name class `[A-Z_]+` in regex `r\"^(REVIEW_HEAD_GATE_UPDATER_[A-Z_]+)=['\\\"]([^'\\\"]+)['\\\"]$\"` excludes digits, so a future constant with a digit in its name (e.g. `REVIEW_HEAD_GATE_UPDATER_R2_BRANCH_RE`) would not be captured.\n  WHY: Drift between the helper and the workflow for such a constant would go undetected while the test passes. Suggested fix: widen the class to `[A-Z0-9_]+`. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING: tests/test_update_workflows_template_gate.py:test_head_gate_step_constants_match_the_review_helper, line 837\n  PROBLEM: The constant-name pattern `[A-Z_]+` excludes digits, so a future constant whose name contains a digit (e.g. `REVIEW_HEAD_GATE_UPDATER_R2_BRANCH_RE`) would fall outside the extraction.\n  WHY: Its divergence from the workflow copy would go unchecked without failing CI. Suggested fix: widen the class to `[A-Z0-9_]+`. HARDENING_RISK_SCORE: 1\n- HARDENING: tests/test_update_workflows_template_gate.py:test_head_gate_step_constants_match_the_review_helper, line 837\n  PROBLEM: The `^` anchor under `re.MULTILINE` only matches constants at column 0, so if the definitions are later indented, `consts[...]` raises `KeyError` instead of a precise assertion message.\n  WHY: CI still fails, but the failure is opaque. Suggested fix: drop the leading `^` and keep `$`, e.g. `r\"(REVIEW_HEAD_GATE_UPDATER_[A-Z0-9_]+)=['\\\"]([^'\\\"]+)['\\\"]$\"`. HARDENING_RISK_SCORE: 1\n- NOTE: The reviewer calls the pass-1 gemini claim false (that the pin-age tests in tests/test_audit_consumer_drift.py are missing from `main()`). It says the PR diff at tests/test_audit_consumer_drift.py:1828-1847 lists all of them, including the two monkeypatch tests via the `_DirectRunEnvPatch` loop.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "234f06b93e11e9ee89accc74c87d7bd51b0fdc5c948ca878fef709301f67264e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9505,
+    "run_id": "45159165131",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45159165131",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123113001_71d37768fb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9505,
+    "run_id": "45159165131"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-23T11:30:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
