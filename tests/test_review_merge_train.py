@@ -3368,6 +3368,30 @@ def test_merge_lease_tick_metrics_are_additive_and_guarded():
 	assert body.count("gh_retry _safe_gh_jq") == 2
 
 
+def test_merge_lease_holder_runs_active_wiring_is_in_both_ticks():
+	"""Issue #9983 static contract. The behavioural scenarios run in
+	tests/test_merge_lease.py (HolderRunsActive, SoftSkipEntries, RunsHelpers),
+	whose fake gh models the lease ref. This file's fake does not, so this
+	test only checks the wiring. In both ticks, the cached active-run check
+	runs before revoked_no_head_gate and before revoked_idle. Three-field skip
+	entries and the hard-only pass-over list sit behind the `declare -F` guard.
+	_mt_release scopes the dispatched-PR list to its tick call."""
+	text = SCRIPT.read_text()
+	for fn, holder in (("_mt_merge_lease_tick", '"${MERGE_LEASE_PR}"'), ("_mt_merge_lease_tick_multi", '"${tm_h}"')):
+		start = text.index(f"{fn}()\n{{")
+		body = text[start:text.index("\n}\n", start)]
+		assert body.count(f"_mt_lease_pr_runs_active {holder}") == 2, fn
+		assert "declare -F _merge_lease_skips_hard >/dev/null 2>&1 && declare -F _merge_lease_skips_soft" in body, fn
+		assert "_merge_lease_skips_hard " in body, fn
+		assert "MERGE_LEASE_GATE_CONFIRMED" in body, fn
+	start = text.index("_mt_release() {")
+	body = text[start:text.index("\n}\n", start)]
+	set_at = body.index('_MT_LEASE_DISPATCHED_PRS="${release_released_prs}"')
+	tick_at = body.index('_mt_merge_lease_tick "${prs_json}" "${base_filter}"')
+	clear_at = body.index('_MT_LEASE_DISPATCHED_PRS=""')
+	assert set_at < tick_at < clear_at
+
+
 def test_list_open_prs_emits_the_title_for_the_merge_lease():
 	"""Merge-lease Phase 2 (Refs #9781): _mt_list_open_prs adds `title` (the
 	lease tick's `[skip ai]` check) and keeps every existing field."""
