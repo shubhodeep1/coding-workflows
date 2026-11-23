@@ -1749,7 +1749,9 @@ fi
 # never frees within the separate idle-wait budget.
 idle_wait_deadline=$(( $(date +%s) + PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS ))
 while :; do
-	gate_runs_json="$(gh_retry gh_read --same-repo-only api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?per_page=30" 2>/dev/null || echo "")"
+	# Only the contractual GH_READ_FALLBACK line (issue #9888) survives the
+	# stderr filter; other gh/gh_retry noise stays dropped, as before.
+	gate_runs_json="$(gh_retry gh_read --same-repo-only api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?per_page=30" 2> >(grep -a '^GH_READ_FALLBACK ' >&2 || true) || echo "")"
 	zombie_queued_log_ignored promote_cycle_gate_idle "${zq_cutoff}" <<< "${gate_runs_json}"
 	active_gate_runs="$(printf '%s' "${gate_runs_json}" \
 		| jq -r --argjson zq_cutoff "${zq_cutoff}" "${zq_def}"'[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length' 2>/dev/null || echo "")"

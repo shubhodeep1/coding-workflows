@@ -412,6 +412,9 @@ def test_no_write_verb_goes_through_a_read_helper() -> None:
 def test_polling_call_sites_use_the_read_helpers() -> None:
 	promote = (SCRIPTS / "promote_main_cycle.sh").read_text(encoding="utf-8")
 	assert promote.count("gh_retry gh_read --same-repo-only api") == 2
+	# The GH_READ_FALLBACK line must reach the job log: no gh_read call in the
+	# promote cycle may send its stderr to /dev/null.
+	assert not [line for line in promote.splitlines() if "gh_read --same-repo-only" in line and "2>/dev/null" in line]
 	assert 'gh_retry gh workflow run "${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}"' in promote
 	queue = (SCRIPTS / "workflow_failure_heal_queue.sh").read_text(encoding="utf-8")
 	assert queue.count("gh_retry gh_read --same-repo-only api --method GET") == 2
