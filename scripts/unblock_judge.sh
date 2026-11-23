@@ -112,6 +112,21 @@
 # is reconciled if the item stays blocked; actuation used the item ledger.
 # A hold check reads at most two items (the pull request and its compare
 # against the branch, or the issue) or runs a local `git grep` in TARGET_DIR.
+# Phase 6 (R4a, #9967): a `pr_on_branch` hold whose merged PR is `ahead` of or
+# `diverged` from the branch also makes two git fetches (the branch at depth
+# 300, the merge commit at depth 2) into a scratch bare repository,
+# RUNTIME_DIR/hold-git, with GH_TOKEN in GIT_CONFIG_* env only, then counts as
+# met when `git cherry` shows the squash commit patch-equivalent on the branch
+# (UNBLOCK_HOLD_PATCH_EQUIVALENCE_ENABLED, default true; `false` restores
+# unmet). An unmet `placeholder_retired` hold on a standalone ai:workflow-heal
+# issue reads at most one fallback run, one workflow runs page (or the `#<n>`
+# source item's state) and one open-PR listing, then closes the issue as
+# completed when workflow_failure_heal.py heal-stale-decision --purpose
+# unblock_placeholder says the failure did not come back
+# (UNBLOCK_PLACEHOLDER_RECURRENCE_CHECK_ENABLED, default true; `false`
+# restores unmet; thresholds HEAL_STALE_GREEN_RUNS default 5,
+# HEAL_STALE_MIN_AGE_HOURS default 24). MOCK_UNBLOCK_HOLD_GIT_REMOTE (tests
+# only, default unset) replaces the fetch remote.
 # For an ai:workflow-heal issue (Q148, unblock_heal_already_fixed): the
 # repository's heal issues (paginated), one re-issue search, and at most three
 # closed-PR reads for the fix branches of matching siblings.
@@ -125,6 +140,9 @@
 # make one attempt.
 # Log: UNBLOCK_JUDGE item= kind= stop= fingerprint= verdict= round= outcome= reason=
 #      UNBLOCK_JUDGE item= op=hold hold= ref= outcome=held|holding|met|expired|skip reason=
+#      UNBLOCK_JUDGE item= kind= stop= op=hold hold=pr_on_branch ref= outcome=met reason=patch_equivalent
+#      UNBLOCK_JUDGE item= kind= stop= op=hold hold=placeholder_retired ref= outcome=impossible reason=no_recurrence green_runs=
+#      UNBLOCK_JUDGE item= kind= stop= op=hold hold=placeholder_retired ref= outcome=skip reason=close_failed|outcome=warn reason=comment_failed
 #      UNBLOCK_JUDGE item= op=reissue outcome=superseded pr= head=
 #      UNBLOCK_JUDGE item= kind= stop= fingerprint= op=instruction_sandbox_check outcome=reasked|refused_after_reask reason=
 #      UNBLOCK_JUDGE item= op=ci_owner outcome= reason=|pr=
@@ -455,6 +473,201 @@ print(unquote(sys.argv[1]))
 	esac
 }
 
+# Phase 6 (R4a, #9967) hold switches: on unless the value is `false`
+# (lowercased, whitespace removed); unset or empty keeps the default, on.
+unblock_hold_switch_on()
+{
+	[ "$(printf '%s' "${1:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" != "false" ]
+}
+
+# One git fetch into the scratch hold repository $1 from remote $2. GH_TOKEN
+# goes into the environment only (GIT_CONFIG_*), never onto a command line,
+# as in workflow_failure_heal_intake.sh _git_fetch_diagnosis_ref.
+unblock_hold_git_fetch()
+{
+	local git_dir="$1" remote="$2" auth_header=""
+	shift 2
+	if [ -n "${GH_TOKEN:-}" ]; then
+		auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+		GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=1 \
+			GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL:-https://github.com}/.extraheader" \
+			GIT_CONFIG_VALUE_0="${auth_header}" \
+			timeout 120 git --git-dir="${git_dir}" fetch --quiet --no-tags "$@" -- "${remote}" "${UNBLOCK_HOLD_FETCH_REFSPEC}" >/dev/null 2>&1
+	else
+		GIT_TERMINAL_PROMPT=0 timeout 120 git --git-dir="${git_dir}" fetch --quiet --no-tags "$@" -- "${remote}" "${UNBLOCK_HOLD_FETCH_REFSPEC}" >/dev/null 2>&1
+	fi
+}
+
+# Whether the squash commit $2 already has a patch-equivalent commit on branch
+# $1 (#9242: hotfix #9339 carried #9240's fix to `stable` as another commit).
+# UNBLOCK_HOLD_PATCH_EQUIVALENCE_ENABLED (default true). The history goes into
+# a scratch bare repository, RUNTIME_DIR/hold-git, never into TARGET_DIR (the
+# model's depth-1 read-only tree). `git cherry` is limited to the commit
+# itself (`<sha>^..<sha>`): unlimited, it would list every default-branch
+# commit the branch lacks. A merge commit (two or more parents) is never
+# equivalent. Every failure (fetch, timeout, missing object) returns 1, so the
+# hold stays unmet. Prints nothing; writes RUNTIME_DIR/hold_met_reason.
+unblock_hold_patch_equivalent()
+{
+	local branch="$1" sha="$2" git_dir remote parents cherry
+	unblock_hold_switch_on "${UNBLOCK_HOLD_PATCH_EQUIVALENCE_ENABLED:-true}" || return 1
+	[[ "${branch}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ ]] && [[ "${branch}" != *..* ]] || return 1
+	[[ "${sha}" =~ ^[0-9a-f]{40}$ ]] || return 1
+	git_dir="${RUNTIME_DIR}/hold-git"
+	[ -d "${git_dir}" ] || git init --bare -q "${git_dir}" >/dev/null 2>&1 || return 1
+	remote="${MOCK_UNBLOCK_HOLD_GIT_REMOTE:-${GITHUB_SERVER_URL:-https://github.com}/${REPOSITORY}.git}"
+	UNBLOCK_HOLD_FETCH_REFSPEC="+refs/heads/${branch}:refs/remotes/origin/${branch}" \
+		unblock_hold_git_fetch "${git_dir}" "${remote}" --depth=300 || return 1
+	UNBLOCK_HOLD_FETCH_REFSPEC="${sha}" unblock_hold_git_fetch "${git_dir}" "${remote}" --depth=2 || return 1
+	parents="$(timeout 60 git --git-dir="${git_dir}" rev-list --parents -n 1 "${sha}" -- 2>/dev/null)" || return 1
+	[ "$(wc -w <<< "${parents}")" -eq 2 ] || return 1
+	cherry="$(timeout 60 git --git-dir="${git_dir}" cherry "refs/remotes/origin/${branch}" "${sha}" "${sha}^" 2>/dev/null)" || return 1
+	[ -n "${cherry}" ] || return 1
+	grep -qv '^- ' <<< "${cherry}" && return 1
+	printf 'patch_equivalent\n' > "${RUNTIME_DIR}/hold_met_reason"
+	return 0
+}
+
+# Phase 6 (R4a, #9967): whether a standalone ai:workflow-heal item held on an
+# operator placeholder has a failure that did not come back (the #9238 /
+# #9244 shapes). UNBLOCK_PLACEHOLDER_RECURRENCE_CHECK_ENABLED (default true).
+# Reuses workflow_failure_heal.py heal-stale-decision --purpose
+# unblock_placeholder, the poller's thresholds (HEAL_STALE_GREEN_RUNS default
+# 5, HEAL_STALE_MIN_AGE_HOURS default 24) and its run listing projection
+# (_heal_stale_close_check in orchestrate_poll_process.sh). Always writes
+# RUNTIME_DIR/hold_recurrence.json {decision, reason, green_runs}; returns 0
+# only for `close`. Every read or parse failure keeps the hold (unmet).
+unblock_placeholder_recurrence_check()
+{
+	local heal_py="${SUPPORT_DIR}/scripts/workflow_failure_heal.py" out="${RUNTIME_DIR}/hold_recurrence.json"
+	local target_json src_repo src_kind src_number workflow_base stale_branch fb_repo fb_run lookup_json runs_json
+	local per_page green_runs min_age source_state owner pulls_json decide_json
+	local -a decide_args=()
+	printf '{"decision":"keep","reason":"not_checked","green_runs":0}\n' > "${out}"
+	unblock_hold_switch_on "${UNBLOCK_PLACEHOLDER_RECURRENCE_CHECK_ENABLED:-true}" || return 1
+	[ "${ITEM_KIND:-}" = "issue" ] || return 1
+	jq -e 'index("ai:workflow-heal") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1 || return 1
+	jq -e '(.body // "") | contains("<!-- workflow-failure-heal:source=")' "${RUNTIME_DIR}/item.json" >/dev/null 2>&1 || return 1
+	[ -f "${heal_py}" ] && [ ! -L "${heal_py}" ] || return 1
+	# The trust rule heal_stale_decision applies (_heal_stale_trusted: the
+	# pipeline login, a [bot] login or OWNER/MEMBER/COLLABORATOR), checked
+	# before the body's markers pick any repository for an authenticated read.
+	jq -e --arg u "${UNBLOCK_LOGIN:-}" '(if (.user | type) == "object" and (.user.login | type) == "string" then .user.login
+		elif (.author_login | type) == "string" then .author_login else "" end) as $l
+		| ($u != "" and $l == $u) or ($l | endswith("[bot]"))
+		or ((.author_association // "") as $a | ["OWNER", "MEMBER", "COLLABORATOR"] | index($a) != null)' \
+		"${RUNTIME_DIR}/item.json" >/dev/null 2>&1 || return 1
+	# Normalized exactly as orchestrate_poll_process.sh does for the same
+	# repository variables (six digits, base 10, green runs 1..90); warnings go
+	# to stderr because the caller captures this function's stdout.
+	green_runs="${HEAL_STALE_GREEN_RUNS:-5}"
+	if ! [[ "${green_runs}" =~ ^[0-9]{1,6}$ ]] || [ "$(( 10#${green_runs} ))" -lt 1 ]; then
+		echo "::warning::HEAL_STALE_GREEN_RUNS must be a positive integer; defaulting to 5" >&2
+		green_runs=5
+	fi
+	green_runs="$(( 10#${green_runs} ))"
+	if [ "${green_runs}" -gt 90 ]; then
+		echo "::warning::HEAL_STALE_GREEN_RUNS above 90 cannot be met; using 90" >&2
+		green_runs=90
+	fi
+	min_age="${HEAL_STALE_MIN_AGE_HOURS:-24}"
+	if ! [[ "${min_age}" =~ ^[0-9]{1,6}$ ]]; then
+		echo "::warning::HEAL_STALE_MIN_AGE_HOURS must be a non-negative integer; defaulting to 24" >&2
+		min_age=24
+	fi
+	min_age="$(( 10#${min_age} ))"
+	target_json="$(unblock_py "${heal_py}" heal-stale-decision --stage target --issue-json "${RUNTIME_DIR}/item.json" 2>/dev/null)" || return 1
+	jq -e 'type == "object"' <<< "${target_json}" >/dev/null 2>&1 || return 1
+	src_repo="$(jq -r '.source_repo // "" | strings' <<< "${target_json}")"
+	src_kind="$(jq -r '.source_kind // "" | strings' <<< "${target_json}")"
+	[[ "${src_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 1
+	decide_args=(heal-stale-decision --stage decide --purpose unblock_placeholder --issue-json "${RUNTIME_DIR}/item.json"
+		--comments-json "${RUNTIME_DIR}/item_comments.json" --pipeline-login "${UNBLOCK_LOGIN}"
+		--green-runs "${green_runs}" --min-age-hours "${min_age}" --now "$(unblock_now)")
+	if [ "${src_kind}" = "run" ]; then
+		workflow_base="$(jq -r '.workflow // "" | strings' <<< "${target_json}")"
+		stale_branch="$(jq -r '.branch // "" | strings' <<< "${target_json}")"
+		if [ -z "${workflow_base}" ] || [ -z "${stale_branch}" ]; then
+			fb_repo="$(jq -r '.fallback_run.repo // "" | strings' <<< "${target_json}")"
+			fb_run="$(jq -r '.fallback_run.run_id // "" | strings' <<< "${target_json}")"
+			[ "${fb_repo}" = "${src_repo}" ] && [[ "${fb_run}" =~ ^[1-9][0-9]{0,19}$ ]] || return 1
+			# API hygiene (CLAUDE.md §14): the hold path has no earlier read that
+			# names the failing workflow; one run read, as the poller does.
+			gh api "repos/${fb_repo}/actions/runs/${fb_run}" > "${RUNTIME_DIR}/hold_fallback_run.json" 2>/dev/null || return 1
+			lookup_json="$(unblock_py "${heal_py}" heal-stale-decision --stage resolve --run-json "${RUNTIME_DIR}/hold_fallback_run.json" 2>/dev/null)" || return 1
+			[ -n "${workflow_base}" ] || workflow_base="$(jq -r '.workflow // "" | strings' <<< "${lookup_json}" 2>/dev/null)"
+			[ -n "${stale_branch}" ] || stale_branch="$(jq -r '.branch // "" | strings' <<< "${lookup_json}" 2>/dev/null)"
+		fi
+		if ! [[ "${workflow_base}" =~ ^[A-Za-z0-9_.-]+\.ya?ml$ ]] || [[ "${workflow_base}" == *..* ]] \
+			|| ! [[ "${stale_branch}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ ]] || [[ "${stale_branch}" == *..* ]]; then
+			return 1
+		fi
+		runs_json="$(printf '%s' "${HEAL_STALE_RUNS_CACHE_JSON:-{\}}" | jq -c --arg k "${src_repo}|${workflow_base}|${stale_branch}" '.[$k] // empty' 2>/dev/null || true)"
+		if [ -z "${runs_json}" ]; then
+			per_page=$(( green_runs + 10 ))
+			[ "${per_page}" -le 100 ] || per_page=100
+			# API hygiene (CLAUDE.md §14): no earlier read in this run lists the
+			# workflow's runs; one page, the poller's projection.
+			runs_json="$(gh api -X GET "repos/${src_repo}/actions/workflows/${workflow_base}/runs" \
+				-f branch="${stale_branch}" -f event=push -f status=completed -F per_page="${per_page}" 2>/dev/null \
+				| jq -c 'select(type == "object" and ((.workflow_runs | type) == "array"))
+					| {total_count: (.total_count // null), workflow_runs: [.workflow_runs[]
+						| {id, html_url, head_sha, head_branch, event, status, conclusion, created_at}]}' 2>/dev/null)" || runs_json=""
+		fi
+		[ -n "${runs_json}" ] && [ "${runs_json}" != "null" ] || return 1
+		printf '%s\n' "${runs_json}" > "${RUNTIME_DIR}/hold_runs.json"
+		decide_args+=(--workflow "${workflow_base}" --branch "${stale_branch}" --runs-json "${RUNTIME_DIR}/hold_runs.json")
+	elif [ "${src_kind}" = "pr" ]; then
+		src_number="$(jq -r '.source_number // "" | tostring' <<< "${target_json}")"
+		[[ "${src_number}" =~ ^[1-9][0-9]{0,19}$ ]] || return 1
+		# API hygiene (CLAUDE.md §14): the source item's state comes from no
+		# earlier read in this run (item.json is the heal issue).
+		source_state="$(gh api "repos/${src_repo}/issues/${src_number}" --jq '.state // ""' 2>/dev/null || true)"
+		case "${source_state}" in
+			closed) decide_args+=(--source-closed true) ;;
+			open) decide_args+=(--source-closed false) ;;
+			*) return 1 ;;
+		esac
+	else
+		return 1
+	fi
+	# Like the other hold-condition reads, these make one attempt (they are not
+	# on CONSIST-001's gh_retry list): a failed read keeps the hold for the next run.
+	# Linked PR: an open implementation PR keeps the item. An unknown answer
+	# omits --linked-pr-json (linked_pr_unknown: keep). When this run's #9809
+	# lookup (unblock_resolve_implementation_pr) ran, its answer decides with
+	# no new call (CLAUDE.md §14): its one GraphQL read covers both the open
+	# ai/issue-<n> head PRs and the open same-repository PRs closing the item.
+	# A found PR or `ambiguous` keeps the item, `none` means no open PR, and
+	# `unreadable`, any other answer or a failed lookup keeps the item. Only a
+	# lookup that never ran (routing off, a stop outside its list) falls back
+	# to the REST ai/issue-<n> head listing, the one read made before #9809.
+	owner="${REPOSITORY%%/*}"
+	if [ -n "${UNBLOCK_IMPL_PR_RESULT_FILE:-}" ]; then
+		if jq -e '(.pr | type) == "number" or .reason == "ambiguous"' "${UNBLOCK_IMPL_PR_RESULT_FILE}" >/dev/null 2>&1; then
+			printf '{"state":"OPEN"}\n' > "${RUNTIME_DIR}/hold_linked_pr.json"
+			decide_args+=(--linked-pr-json "${RUNTIME_DIR}/hold_linked_pr.json")
+		elif jq -e '.pr == null and .reason == "none"' "${UNBLOCK_IMPL_PR_RESULT_FILE}" >/dev/null 2>&1; then
+			printf 'null\n' > "${RUNTIME_DIR}/hold_linked_pr.json"
+			decide_args+=(--linked-pr-json "${RUNTIME_DIR}/hold_linked_pr.json")
+		fi
+	elif [ "${UNBLOCK_IMPL_PR_LOOKUP_FAILED:-}" = "true" ]; then
+		: # The lookup ran and failed: no --linked-pr-json, so the hold is kept.
+	elif pulls_json="$(gh api "repos/${REPOSITORY}/pulls?state=open&head=${owner}:ai/issue-${ITEM}&per_page=1" 2>/dev/null)" \
+		&& jq -e 'type == "array"' <<< "${pulls_json}" >/dev/null 2>&1; then
+		if jq -e 'length == 0' <<< "${pulls_json}" >/dev/null 2>&1; then
+			printf 'null\n' > "${RUNTIME_DIR}/hold_linked_pr.json"
+		else
+			printf '{"state":"OPEN"}\n' > "${RUNTIME_DIR}/hold_linked_pr.json"
+		fi
+		decide_args+=(--linked-pr-json "${RUNTIME_DIR}/hold_linked_pr.json")
+	fi
+	decide_json="$(unblock_py "${heal_py}" "${decide_args[@]}" 2>/dev/null)" || return 1
+	jq -c '{decision: (.decision // "keep"), reason: (.reason // ""), green_runs: (.green_runs // 0)}' <<< "${decide_json}" > "${out}" 2>/dev/null \
+		|| { printf '{"decision":"keep","reason":"decision_unavailable","green_runs":0}\n' > "${out}"; return 1; }
+	[ "$(jq -r '.decision' "${out}" 2>/dev/null)" = "close" ]
+}
+
 # Whether a hold's condition holds now: prints met, unmet, impossible (it can
 # never be met, so the hold ends) or unknown (a read failed; try later).
 unblock_hold_condition()
@@ -494,7 +707,14 @@ unblock_hold_condition()
 			status="$(gh api "repos/${REPOSITORY}/compare/${branch}...${sha}" --jq '.status // ""' 2>/dev/null)" || { echo unknown; return 0; }
 			case "${status}" in
 				identical|behind) echo met ;;
-				ahead|diverged) echo unmet ;;
+				ahead|diverged)
+					# #9967: a patch-equivalent commit on the branch also counts.
+					if unblock_hold_patch_equivalent "${branch}" "${sha}"; then
+						echo met
+					else
+						echo unmet
+					fi
+					;;
 				*) echo unknown ;;
 			esac
 			;;
@@ -518,6 +738,10 @@ unblock_hold_condition()
 			if [ "$(gh api "repos/${REPOSITORY}/actions/variables/${ref}" --jq '.name // ""' 2>/dev/null || true)" = "${ref}" ] \
 				|| [ "$(gh api "repos/${REPOSITORY}/actions/secrets/${ref}" --jq '.name // ""' 2>/dev/null || true)" = "${ref}" ]; then
 				echo met
+			elif unblock_placeholder_recurrence_check; then
+				# #9967: a heal item whose failure did not come back is closed by
+				# the caller (hold_recurrence.json), not resumed.
+				echo impossible
 			else
 				echo unmet
 			fi
@@ -1064,6 +1288,42 @@ unblock_patch_comment()
 {
 	local comment_id="$1" body="$2"
 	gh api -X PATCH "repos/${REPOSITORY}/issues/comments/${comment_id}" -f body="${body}" >/dev/null 2>&1
+}
+
+# Phase 6 (R4a, #9967): close a placeholder_retired-held ai:workflow-heal item
+# whose failure did not come back (hold_recurrence.json says `close`). The
+# close goes first: a failed close keeps the hold open for the next run, and
+# only then is the hold comment marked done. Labels are left alone, as the
+# poller's stale close does. No round and no model call.
+unblock_hold_close_no_recurrence()
+{
+	local hold_id="$1" hold_kind="$2" hold_ref="$3" reason green evidence
+	reason="$(jq -r '.reason // ""' "${RUNTIME_DIR}/hold_recurrence.json" 2>/dev/null | tr -cd 'a-z_' | cut -c1-40)"
+	green="$(jq -r '.green_runs // 0' "${RUNTIME_DIR}/hold_recurrence.json" 2>/dev/null | tr -cd '0-9' | cut -c1-4)"
+	[ -n "${green}" ] || green=0
+	if ! gh api -X PATCH "repos/${REPOSITORY}/issues/${ITEM}" -f state=closed -f state_reason=completed >/dev/null 2>&1; then
+		# Refresh the open hold, as the unmet/unknown branches do, so the scan
+		# (keyed on the marker's updatedAt) waits UNBLOCK_JUDGE_RETRY_HOURS
+		# before retrying the close.
+		unblock_patch_comment "${hold_id}" "Waiting for $(unblock_hold_description "${hold_kind}" "${hold_ref}"). The failure this item tracks has not come back, but closing the item failed, so the unblock judge tries again later. This hold uses no round. Last checked $(unblock_now).
+
+<!-- ai:unblock-wait:v1 item=${ITEM} hold=${hold_kind} ref=${hold_ref} -->" \
+			|| unblock_log "item=${ITEM} op=hold hold=${hold_kind} ref=${hold_ref} outcome=skip reason=hold_refresh_failed"
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=hold hold=${hold_kind} ref=${hold_ref} outcome=skip reason=close_failed"
+		return 0
+	fi
+	if [ "${reason}" = "source_closed_no_recurrence" ]; then
+		evidence="its source item is closed and no new occurrence was reported"
+	else
+		evidence="the failing workflow concluded \`success\` on each of the ${green} newest completed push runs since the newest occurrence"
+	fi
+	unblock_patch_comment "${hold_id}" "Closed as completed: the failure this item tracks has not come back (${evidence}). The operator step behind \`${hold_ref}\` is no longer needed for it. If the failure comes back, the heal intake files the next generation; reopen this item to have it judged again. Set the \`UNBLOCK_PLACEHOLDER_RECURRENCE_CHECK_ENABLED\` repository variable to \`false\` to turn this off.
+
+<!-- ai:unblock-wait:v1 item=${ITEM} hold=${hold_kind} ref=${hold_ref} done -->" \
+		|| unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=hold hold=${hold_kind} ref=${hold_ref} outcome=warn reason=comment_failed"
+	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=hold hold=${hold_kind} ref=${hold_ref} outcome=impossible reason=no_recurrence green_runs=${green}"
+	unblock_tg "DEBUG" "Unblock judge closed heal issue #${ITEM}: its failure has not come back (${REPOSITORY})."
+	return 0
 }
 
 unblock_hours_since()
@@ -1896,6 +2156,13 @@ unblock_resolve_ci_owner()
 	return 0
 }
 
+# Set by unblock_resolve_implementation_pr once this run parsed its answer;
+# reset here so an inherited environment value is never read (#9967).
+UNBLOCK_IMPL_PR_RESULT_FILE=""
+# Set when that lookup ran but its read or parse failed, so the recurrence
+# check keeps the hold instead of trusting a narrower listing (#9967).
+UNBLOCK_IMPL_PR_LOOKUP_FAILED=""
+
 # Existing-PR routing (#9809). Default on: unset, empty or `true`; `false`
 # turns it off; any other value turns it off and says so.
 unblock_existing_pr_routing_enabled()
@@ -1938,13 +2205,17 @@ unblock_resolve_implementation_pr()
 		-f owner="${owner}" -f name="${name}" -f head="ai/issue-${ITEM}" -F number="${ITEM}" \
 		> "${graphql_file}" 2>/dev/null; then
 		unblock_log "item=${ITEM} op=impl_pr outcome=unavailable reason=read_failed"
+		UNBLOCK_IMPL_PR_LOOKUP_FAILED="true"
 		return 0
 	fi
 	if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" impl-pr --graphql-file "${graphql_file}" --item "${ITEM}" \
 		--repo "${REPOSITORY}" --pipeline-login "${UNBLOCK_LOGIN:-}" > "${result_file}" 2>/dev/null; then
 		unblock_log "item=${ITEM} op=impl_pr outcome=unavailable reason=parse_failed"
+		UNBLOCK_IMPL_PR_LOOKUP_FAILED="true"
 		return 0
 	fi
+	# #9967: the placeholder_retired recurrence check reuses this run's answer.
+	UNBLOCK_IMPL_PR_RESULT_FILE="${result_file}"
 	impl_pr="$(jq -r '.pr // empty' "${result_file}" 2>/dev/null || true)"
 	impl_reason="$(jq -r '.reason // "unknown"' "${result_file}" 2>/dev/null | tr -cd 'a-z_' | cut -c1-40 || true)"
 	if ! [[ "${impl_pr}" =~ ^[1-9][0-9]{0,8}$ ]]; then
@@ -2415,7 +2686,7 @@ ${step_escalation_marker}" >/dev/null 2>&1; then
 
 	# A hold from a `wait` verdict or an operator step (Q116, Q126): no round
 	# and no resume until its condition holds; then the stop's resume command.
-	local hold hold_id hold_kind hold_ref hold_state hold_at hold_updated hold_status hold_desc hold_reason
+	local hold hold_id hold_kind hold_ref hold_state hold_at hold_updated hold_status hold_desc hold_reason hold_met_suffix
 	hold=""
 	[ "${untrusted_project_pr}" = "true" ] || hold="$(unblock_latest_hold)"
 	if [ -n "${hold}" ]; then
@@ -2430,6 +2701,8 @@ ${step_escalation_marker}" >/dev/null 2>&1; then
 			if unblock_hold_resumed_since "${hold_at}"; then
 				hold_status="resumed"
 			elif unblock_wait_enabled; then
+				# #9967 handoff files; RUNTIME_DIR may hold a previous run's.
+				rm -f "${RUNTIME_DIR}/hold_met_reason" "${RUNTIME_DIR}/hold_recurrence.json"
 				hold_status="$(unblock_hold_condition "${hold_kind}" "${hold_ref}")"
 			else
 				hold_status="disabled"
@@ -2448,7 +2721,11 @@ ${step_escalation_marker}" >/dev/null 2>&1; then
 
 <!-- ai:unblock-wait:v1 item=${ITEM} hold=${hold_kind} ref=${hold_ref} done -->" \
 						|| unblock_log "item=${ITEM} op=hold hold=${hold_kind} ref=${hold_ref} outcome=skip reason=hold_refresh_failed"
-					unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=hold hold=${hold_kind} ref=${hold_ref} outcome=met"
+					hold_met_suffix=""
+					if [ -s "${RUNTIME_DIR}/hold_met_reason" ]; then
+						hold_met_suffix=" reason=$(head -1 "${RUNTIME_DIR}/hold_met_reason" | tr -cd 'a-z_' | cut -c1-40)"
+					fi
+					unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=hold hold=${hold_kind} ref=${hold_ref} outcome=met${hold_met_suffix}"
 					return 0
 					;;
 				unknown)
@@ -2476,7 +2753,14 @@ ${step_escalation_marker}" >/dev/null 2>&1; then
 					fi
 					hold_reason="max_days"
 					;;
-				impossible) hold_reason="cannot_be_met" ;;
+				impossible)
+					if [ "${hold_kind}" = "placeholder_retired" ] \
+						&& [ "$(jq -r '.decision // ""' "${RUNTIME_DIR}/hold_recurrence.json" 2>/dev/null)" = "close" ]; then
+						unblock_hold_close_no_recurrence "${hold_id}" "${hold_kind}" "${hold_ref}"
+						return 0
+					fi
+					hold_reason="cannot_be_met"
+					;;
 				resumed) hold_reason="resumed" ;;
 				*) hold_reason="waits_disabled" ;;
 			esac

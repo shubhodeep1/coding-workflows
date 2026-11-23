@@ -183,6 +183,14 @@ jobs:
           # a hold is judged again after this many days.
           UNBLOCK_JUDGE_WAIT_ENABLED: ${{ vars.UNBLOCK_JUDGE_WAIT_ENABLED || 'true' }}
           UNBLOCK_JUDGE_WAIT_MAX_DAYS: ${{ vars.UNBLOCK_JUDGE_WAIT_MAX_DAYS || '14' }}
+          # #9967 (hold re-evaluation): a pr_on_branch hold is met by a patch-equivalent
+          # commit on the branch, and a placeholder_retired hold on a heal issue whose
+          # failure did not come back closes it; `false` restores today's holds. The
+          # thresholds match the poller's heal stale close.
+          UNBLOCK_HOLD_PATCH_EQUIVALENCE_ENABLED: ${{ vars.UNBLOCK_HOLD_PATCH_EQUIVALENCE_ENABLED || 'true' }}
+          UNBLOCK_PLACEHOLDER_RECURRENCE_CHECK_ENABLED: ${{ vars.UNBLOCK_PLACEHOLDER_RECURRENCE_CHECK_ENABLED || 'true' }}
+          HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
+          HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
           # #9809: an issue reset (and stall recovery) with an open implementation PR
           # reviews that PR instead of posting /approved; `false` restores /approved.
           UNBLOCK_EXISTING_PR_ROUTING_ENABLED: ${{ vars.UNBLOCK_EXISTING_PR_ROUTING_ENABLED || 'true' }}

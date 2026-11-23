@@ -1310,6 +1310,9 @@ def fields():
 if args[:2] == ["api", "graphql"]:
 	# #9809: the implementation-PR lookup; unset keeps the empty (unreadable) answer.
 	state.setdefault("graphql", []).append(args)
+	if os.environ.get("FAKE_GH_FAIL_GRAPHQL"):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
 	done(os.environ.get("FAKE_GH_GRAPHQL", ""))
 if args[:1] == ["workflow"]:
 	if os.environ.get("FAKE_GH_FAIL_DISPATCH"):
@@ -1338,6 +1341,16 @@ if endpoint == "user":
 if endpoint == "repos/o/r/actions/runs":
 	state["run_listings"] = state.get("run_listings", 0) + 1
 	done(os.environ.get("FAKE_GH_RUN_LISTING", '{"workflow_runs": []}'))
+# #9967: the placeholder_retired recurrence check's workflow runs page and open-PR listing.
+if "/actions/workflows/" in endpoint and endpoint.endswith("/runs"):
+	state.setdefault("workflow_run_reads", []).append(endpoint)
+	if "FAKE_GH_WORKFLOW_RUNS" not in os.environ:
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
+	done(os.environ["FAKE_GH_WORKFLOW_RUNS"])
+if endpoint.startswith("repos/o/r/pulls?state=open&head="):
+	state.setdefault("open_pr_reads", []).append(endpoint)
+	done(os.environ.get("FAKE_GH_OPEN_ISSUE_PRS", "[]"))
 if endpoint.endswith("/dispatches"):
 	if os.environ.get("FAKE_GH_FAIL_HEAL_DISPATCH"):
 		json.dump(state, open(state_path, "w"))
@@ -1602,9 +1615,13 @@ def _judge(tmp_path: Path, item: dict, comments: list | None = None, verdict: di
 	import os
 
 	env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", FAKE_GH_STATE=str(state_file), PYTHONDONTWRITEBYTECODE="1")
-	for name in ("UNBLOCK_JUDGE_ENABLED", "TG_BOT_SECRET", "GH_TOKEN", "NEEDS_HUMAN_DIGEST_ENABLED", "UNBLOCK_MAX_ROUNDS_PER_ITEM"):
+	for name in ("UNBLOCK_JUDGE_ENABLED", "TG_BOT_SECRET", "GH_TOKEN", "NEEDS_HUMAN_DIGEST_ENABLED", "UNBLOCK_MAX_ROUNDS_PER_ITEM",
+			"UNBLOCK_HOLD_PATCH_EQUIVALENCE_ENABLED", "UNBLOCK_PLACEHOLDER_RECURRENCE_CHECK_ENABLED", "HEAL_STALE_GREEN_RUNS",
+			"HEAL_STALE_MIN_AGE_HOURS", "HEAL_STALE_RUNS_CACHE_JSON"):
 		env.pop(name, None)
 	env.update(REPOSITORY="o/r", ITEM="7", SUPPORT_DIR=str(ROOT), RUNTIME_DIR=str(tmp_path / "rt"), MOCK_UNBLOCK_JUDGE_NOW="2026-10-04T12:00:00Z")
+	# #9967: the patch-equivalence fetch never reaches the network in tests.
+	env["MOCK_UNBLOCK_HOLD_GIT_REMOTE"] = (tmp_path / "no-such-remote.git").as_uri()
 	# CONSIST-001: one gh_retry attempt by default keeps the fake's failure
 	# knobs single-shot (call counts, no backoff sleeps); retry tests raise it.
 	env["GH_RETRY_MAX_ATTEMPTS"] = "1"
@@ -4183,6 +4200,254 @@ def test_judge_waits_until_an_operator_placeholder_is_retired(tmp_path: Path) ->
 	(tmp_path / "c").mkdir()
 	result, state = _judge(tmp_path / "c", ISSUE, comments=[hold], TARGET_DIR=str(tmp_path / "missing"))
 	assert "reason=hold_check_unavailable" in result.stdout
+
+
+# --- Hold re-evaluation (#9967, plan pipeline-human-wait-elimination Phase 6) --
+
+def _git(repo: Path, *args: str) -> str:
+	return subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+		check=True, capture_output=True, text=True).stdout.strip()
+
+
+def _patch_equivalence_remote(tmp_path: Path, *, on_stable: bool = True, merge_commit: bool = False) -> tuple[Path, str]:
+	"""An origin whose `main` has the squash commit and whose `stable` has its cherry-pick (a different commit)."""
+	repo = tmp_path / "origin"
+	repo.mkdir(parents=True)
+	subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+	_git(repo, "config", "uploadpack.allowAnySHA1InWant", "true")
+	(repo / "a.txt").write_text("base\n", encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-q", "-m", "base")
+	_git(repo, "branch", "stable")
+	(repo / "fix.txt").write_text("the fix\n", encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-q", "-m", "Fix the thing (#66)")
+	fix = _git(repo, "rev-parse", "HEAD")
+	if merge_commit:
+		_git(repo, "checkout", "-q", "-b", "side", "stable")
+		(repo / "side.txt").write_text("side\n", encoding="utf-8")
+		_git(repo, "add", "-A")
+		_git(repo, "commit", "-q", "-m", "side")
+		_git(repo, "checkout", "-q", "main")
+		_git(repo, "merge", "-q", "--no-ff", "-m", "Merge side", "side")
+		fix = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "checkout", "-q", "stable")
+	(repo / "stable-only.txt").write_text("hotfix context\n", encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-q", "-m", "stable-only change")
+	if on_stable:
+		(repo / "fix.txt").write_text("the fix\n", encoding="utf-8")
+		_git(repo, "add", "-A")
+		_git(repo, "commit", "-q", "-m", "Hotfix: carry the fix to stable")
+	_git(repo, "checkout", "-q", "main")
+	return repo, fix
+
+
+def _pr_on_branch_judge(tmp_path: Path, repo: Path | None, sha: str, **env):
+	pr = {"number": 66, "state": "closed", "merged": True, "merge_commit_sha": sha}
+	if repo is not None:
+		env["MOCK_UNBLOCK_HOLD_GIT_REMOTE"] = repo.as_uri()
+	(tmp_path / "judge").mkdir(parents=True, exist_ok=True)
+	return _judge(tmp_path / "judge", ISSUE, comments=[_hold_comment("pr_on_branch", "66@stable")],
+		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "i"},
+		FAKE_GH_HOLD_PR=json.dumps(pr), FAKE_GH_COMPARE_STATUS="diverged", **env)
+
+
+def test_pr_on_branch_hold_met_by_patch_equivalent_commit(tmp_path: Path) -> None:
+	repo, fix = _patch_equivalence_remote(tmp_path)
+	result, state = _pr_on_branch_judge(tmp_path, repo, fix)
+	assert "hold=pr_on_branch ref=66@stable outcome=met reason=patch_equivalent" in result.stdout, result.stdout + result.stderr
+	assert state["comments"][0]["body"].startswith("/answer waited for pull request #66")
+	assert state["patched"][-1][1]["body"].endswith("<!-- ai:unblock-wait:v1 item=7 hold=pr_on_branch ref=66@stable done -->")
+	assert "verdict=retry_budget" not in result.stdout
+
+
+def test_pr_on_branch_hold_keeps_waiting_without_an_equivalent_commit(tmp_path: Path) -> None:
+	repo, fix = _patch_equivalence_remote(tmp_path / "absent", on_stable=False)
+	result, _ = _pr_on_branch_judge(tmp_path / "absent", repo, fix)
+	assert "hold=pr_on_branch ref=66@stable outcome=holding" in result.stdout, result.stdout
+	# A merge commit (two parents) is never counted, even with the change on the branch.
+	repo, merge = _patch_equivalence_remote(tmp_path / "merge", merge_commit=True)
+	result, _ = _pr_on_branch_judge(tmp_path / "merge", repo, merge)
+	assert "hold=pr_on_branch ref=66@stable outcome=holding" in result.stdout, result.stdout
+	# A fetch failure (the default test remote does not exist) keeps the hold.
+	result, _ = _pr_on_branch_judge(tmp_path / "missing", None, fix)
+	assert "hold=pr_on_branch ref=66@stable outcome=holding" in result.stdout, result.stdout
+
+
+def test_pr_on_branch_patch_equivalence_switch_off_restores_unmet(tmp_path: Path) -> None:
+	repo, fix = _patch_equivalence_remote(tmp_path)
+	result, _ = _pr_on_branch_judge(tmp_path, repo, fix, UNBLOCK_HOLD_PATCH_EQUIVALENCE_ENABLED=" FALSE ")
+	assert "hold=pr_on_branch ref=66@stable outcome=holding" in result.stdout, result.stdout
+	assert not (tmp_path / "judge" / "rt" / "hold-git").exists()
+
+
+def _heal_item(source: str = "o/r#run") -> dict:
+	body = "\n".join([f"<!-- workflow-failure-heal:fp={'a' * 16} -->", f"<!-- workflow-failure-heal:source={source} -->",
+		"<!-- workflow-failure-heal:workflow=.github/workflows/ci.yml -->", "", "- **Target branch:** `main`", "",
+		"## Automated workflow failure heal (generation 1 of max 3)", ""])
+	return {"number": 7, "state": "open", "title": "Heal ci.yml", "body": body,
+		"labels": [{"name": "ai:workflow-heal"}, {"name": "ai:blocked"}], "user": {"login": BOT},
+		"author_association": "NONE", "created_at": "2026-10-01T00:00:00Z"}
+
+
+def _heal_green_runs(count: int = 5, conclusion: str = "success") -> str:
+	return json.dumps({"total_count": count, "workflow_runs": [{"id": 5000 + i,
+		"html_url": f"https://github.com/o/r/actions/runs/{5000 + i}", "head_sha": f"{i + 1:040x}", "head_branch": "main",
+		"event": "push", "status": "completed", "conclusion": conclusion, "created_at": f"2026-10-02T{i:02d}:00:00Z"}
+		for i in range(count)]})
+
+
+PLACEHOLDER = "DOC_SYNC_UNSET_OPERATOR_STEP"
+
+
+# The #9809 lookup's answer when no implementation PR is open (`none`).
+PLACEHOLDER_NO_PR_GRAPHQL = json.dumps({"data": {"repository": {"pullRequests": {"nodes": []},
+	"issue": {"timelineItems": {"nodes": []}}}}})
+
+
+def _placeholder_judge(tmp_path: Path, item: dict | None = None, **env):
+	target = _target_repo(tmp_path / "t", "Nothing pending.\n")
+	env.setdefault("FAKE_GH_GRAPHQL", PLACEHOLDER_NO_PR_GRAPHQL)
+	return _judge(tmp_path, item or _heal_item(), comments=[_hold_comment("placeholder_retired", PLACEHOLDER)],
+		TARGET_DIR=str(target), **env)
+
+
+def _closed_item(state: dict) -> bool:
+	return any(endpoint == "repos/o/r/issues/7" and fields.get("state") == "closed" and fields.get("state_reason") == "completed"
+		for endpoint, fields in state["patched"])
+
+
+def test_placeholder_hold_on_heal_closes_when_failure_did_not_recur(tmp_path: Path) -> None:
+	result, state = _placeholder_judge(tmp_path, FAKE_GH_WORKFLOW_RUNS=_heal_green_runs())
+	assert (f"op=hold hold=placeholder_retired ref={PLACEHOLDER} outcome=impossible reason=no_recurrence green_runs=5"
+		in result.stdout), result.stdout + result.stderr
+	assert _closed_item(state)
+	assert state["workflow_run_reads"] == ["repos/o/r/actions/workflows/ci.yml/runs"]
+	# The #9809 lookup answered `none`: no second (REST) pull-request read.
+	assert "open_pr_reads" not in state and len(state["graphql"]) == 1
+	done = state["patched"][-1]
+	assert done[0] == "repos/o/r/issues/comments/321"
+	assert done[1]["body"].endswith(f"<!-- ai:unblock-wait:v1 item=7 hold=placeholder_retired ref={PLACEHOLDER} done -->")
+	assert "UNBLOCK_PLACEHOLDER_RECURRENCE_CHECK_ENABLED" in done[1]["body"] and "5 newest" in done[1]["body"]
+	# The close went before the done marker; no round, no model call, no comment.
+	assert [p[0] for p in state["patched"]] == ["repos/o/r/issues/7", "repos/o/r/issues/comments/321"]
+	assert state["comments"] == [] and "verdict=" not in result.stdout
+
+
+@pytest.mark.parametrize("env", [
+	{"FAKE_GH_WORKFLOW_RUNS": _heal_green_runs(6, conclusion="failure")},
+	{"FAKE_GH_WORKFLOW_RUNS": _heal_green_runs(), "FAKE_GH_GRAPHQL": json.dumps({"data": {"repository": {"pullRequests": {"nodes": [
+		{"number": 80, "state": "OPEN", "headRefName": "ai/issue-7", "headRepository": {"nameWithOwner": "o/r"}}]},
+		"issue": {"timelineItems": {"nodes": []}}}}})},
+	{"FAKE_GH_WORKFLOW_RUNS": _heal_green_runs(3)},
+	{},
+])
+def test_placeholder_hold_on_heal_keeps_waiting_when_failure_may_recur(tmp_path: Path, env: dict) -> None:
+	result, state = _placeholder_judge(tmp_path, **env)
+	assert f"hold=placeholder_retired ref={PLACEHOLDER} outcome=holding" in result.stdout, result.stdout
+	assert not _closed_item(state)
+
+
+def test_placeholder_hold_on_pr_sourced_heal_follows_the_source_item(tmp_path: Path) -> None:
+	result, state = _placeholder_judge(tmp_path / "closed", _heal_item("o/r#60"), issues={"60": {"state": "closed"}})
+	assert "outcome=impossible reason=no_recurrence green_runs=0" in result.stdout, result.stdout + result.stderr
+	assert _closed_item(state) and "source item is closed" in state["patched"][-1][1]["body"]
+	assert "workflow_run_reads" not in state
+	result, state = _placeholder_judge(tmp_path / "open", _heal_item("o/r#60"), issues={"60": {"state": "open"}})
+	assert f"hold=placeholder_retired ref={PLACEHOLDER} outcome=holding" in result.stdout, result.stdout
+	assert not _closed_item(state)
+
+
+def test_placeholder_hold_close_failure_keeps_the_hold_open(tmp_path: Path) -> None:
+	result, state = _placeholder_judge(tmp_path, FAKE_GH_WORKFLOW_RUNS=_heal_green_runs(), FAKE_GH_FAIL_CLOSE="1")
+	assert f"hold=placeholder_retired ref={PLACEHOLDER} outcome=skip reason=close_failed" in result.stdout, result.stdout
+	# The open hold is refreshed (no `done`), so the scan backs off before the retry.
+	assert [p[0] for p in state["patched"]] == ["repos/o/r/issues/comments/321"] and state["comments"] == []
+	assert state["patched"][0][1]["body"].endswith(f"<!-- ai:unblock-wait:v1 item=7 hold=placeholder_retired ref={PLACEHOLDER} -->")
+	assert not _closed_item(state)
+
+
+def test_placeholder_hold_keeps_waiting_while_a_closing_pr_is_open(tmp_path: Path) -> None:
+	# The #9809 lookup's answer (an open same-repository PR closing the item) is reused: no REST PR read.
+	graphql = {"data": {"repository": {"pullRequests": {"nodes": []}, "issue": {"timelineItems": {"nodes": [{"source": {
+		"number": 81, "state": "OPEN", "body": "Fixes #7", "repository": {"nameWithOwner": "o/r"},
+		"headRepository": {"nameWithOwner": "o/r"}, "author": {"login": BOT}, "authorAssociation": "NONE"}}]}}}}}
+	result, state = _placeholder_judge(tmp_path, FAKE_GH_WORKFLOW_RUNS=_heal_green_runs(), FAKE_GH_GRAPHQL=json.dumps(graphql))
+	assert "op=impl_pr outcome=found pr=81" in result.stdout, result.stdout
+	assert f"hold=placeholder_retired ref={PLACEHOLDER} outcome=holding" in result.stdout, result.stdout
+	assert not _closed_item(state) and "open_pr_reads" not in state
+
+
+@pytest.mark.parametrize("env", [
+	{"FAKE_GH_GRAPHQL": "{}"},
+	{"FAKE_GH_GRAPHQL": ""},
+	{"FAKE_GH_FAIL_GRAPHQL": "1"},
+])
+def test_placeholder_hold_keeps_waiting_when_the_pr_lookup_is_unknown(tmp_path: Path, env: dict) -> None:
+	# An unreadable or failed #9809 lookup is not replaced by the narrower ai/issue-<n> listing.
+	result, state = _placeholder_judge(tmp_path, FAKE_GH_WORKFLOW_RUNS=_heal_green_runs(), **env)
+	assert f"hold=placeholder_retired ref={PLACEHOLDER} outcome=holding" in result.stdout, result.stdout + result.stderr
+	assert not _closed_item(state) and "open_pr_reads" not in state
+
+
+def test_placeholder_hold_uses_the_head_listing_when_the_pr_lookup_did_not_run(tmp_path: Path) -> None:
+	# Routing off: the lookup never runs, so the pre-#9809 ai/issue-<n> head listing decides.
+	result, state = _placeholder_judge(tmp_path / "none", FAKE_GH_WORKFLOW_RUNS=_heal_green_runs(),
+		UNBLOCK_EXISTING_PR_ROUTING_ENABLED="false")
+	assert "graphql" not in state and state["open_pr_reads"] == ["repos/o/r/pulls?state=open&head=o:ai/issue-7&per_page=1"]
+	assert _closed_item(state), result.stdout + result.stderr
+	result, state = _placeholder_judge(tmp_path / "open", FAKE_GH_WORKFLOW_RUNS=_heal_green_runs(),
+		UNBLOCK_EXISTING_PR_ROUTING_ENABLED="false", FAKE_GH_OPEN_ISSUE_PRS=json.dumps([{"number": 80}]))
+	assert f"hold=placeholder_retired ref={PLACEHOLDER} outcome=holding" in result.stdout, result.stdout
+	assert not _closed_item(state)
+
+
+def test_placeholder_recurrence_check_skips_untrusted_authors_before_any_read(tmp_path: Path) -> None:
+	item = _heal_item()
+	item["user"] = {"login": "outsider"}
+	result, state = _placeholder_judge(tmp_path, item, FAKE_GH_WORKFLOW_RUNS=_heal_green_runs())
+	assert f"hold=placeholder_retired ref={PLACEHOLDER} outcome=holding" in result.stdout, result.stdout
+	assert "workflow_run_reads" not in state and "open_pr_reads" not in state and not _closed_item(state)
+
+
+@pytest.mark.parametrize("green,min_age,closed,warning", [
+	("200", "24", False, "HEAL_STALE_GREEN_RUNS above 90"),
+	("five", "24", True, "HEAL_STALE_GREEN_RUNS must be a positive integer"),
+	("005", "24", True, ""),
+	("5", "10000", False, ""),
+	("5", "24h", True, "HEAL_STALE_MIN_AGE_HOURS must be a non-negative integer"),
+])
+def test_placeholder_recurrence_thresholds_match_the_poller(tmp_path: Path, green: str, min_age: str, closed: bool, warning: str) -> None:
+	result, state = _placeholder_judge(tmp_path, FAKE_GH_WORKFLOW_RUNS=_heal_green_runs(),
+		HEAL_STALE_GREEN_RUNS=green, HEAL_STALE_MIN_AGE_HOURS=min_age)
+	assert _closed_item(state) is closed, result.stdout + result.stderr
+	if warning:
+		assert f"::warning::{warning}" in result.stderr
+
+
+def test_placeholder_recurrence_check_switch_off_and_non_heal_items_read_nothing(tmp_path: Path) -> None:
+	result, state = _placeholder_judge(tmp_path / "off", FAKE_GH_WORKFLOW_RUNS=_heal_green_runs(),
+		UNBLOCK_PLACEHOLDER_RECURRENCE_CHECK_ENABLED="false")
+	assert f"hold=placeholder_retired ref={PLACEHOLDER} outcome=holding" in result.stdout, result.stdout
+	assert "workflow_run_reads" not in state and "open_pr_reads" not in state and not _closed_item(state)
+	result, state = _placeholder_judge(tmp_path / "plain", ISSUE, FAKE_GH_WORKFLOW_RUNS=_heal_green_runs())
+	assert f"hold=placeholder_retired ref={PLACEHOLDER} outcome=holding" in result.stdout, result.stdout
+	assert "workflow_run_reads" not in state and "open_pr_reads" not in state
+
+
+def test_unblock_judge_workflow_forwards_the_hold_reevaluation_switches() -> None:
+	text = (ROOT / ".github" / "workflows" / "unblock_judge.yml").read_text(encoding="utf-8")
+	for line in (
+		"UNBLOCK_HOLD_PATCH_EQUIVALENCE_ENABLED: ${{ vars.UNBLOCK_HOLD_PATCH_EQUIVALENCE_ENABLED || 'true' }}",
+		"UNBLOCK_PLACEHOLDER_RECURRENCE_CHECK_ENABLED: ${{ vars.UNBLOCK_PLACEHOLDER_RECURRENCE_CHECK_ENABLED || 'true' }}",
+		"HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}",
+		"HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}",
+	):
+		assert line in text
+	script = JUDGE.read_text(encoding="utf-8")
+	assert '"${UNBLOCK_HOLD_PATCH_EQUIVALENCE_ENABLED:-true}"' in script
+	assert '"${UNBLOCK_PLACEHOLDER_RECURRENCE_CHECK_ENABLED:-true}"' in script
 
 
 def test_a_manual_resume_ends_an_open_hold(tmp_path: Path) -> None:
