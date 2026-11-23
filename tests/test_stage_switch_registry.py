@@ -59,7 +59,8 @@ def _registry_names() -> set[str]:
 def _workflow_true_switches(workflows_dir: Path) -> dict[str, set[str]]:
 	"""Map each switch defaulting to 'true' in some workflow to those files."""
 	found: dict[str, set[str]] = {}
-	for workflow in sorted(workflows_dir.glob("*.yml")):
+	# `.yaml` workflows are scanned too, so a switch cannot hide in one.
+	for workflow in sorted([*workflows_dir.glob("*.yml"), *workflows_dir.glob("*.yaml")]):
 		text = "\n".join(
 			line for line in workflow.read_text(encoding="utf-8").splitlines()
 			if not line.strip().startswith("#")
@@ -261,7 +262,7 @@ def test_watch_steps_are_wired_in_collect_logs():
 
 
 def test_no_workflow_passes_tojson_vars():
-	for workflow in sorted(WORKFLOWS_DIR.glob("*.yml")):
+	for workflow in sorted([*WORKFLOWS_DIR.glob("*.yml"), *WORKFLOWS_DIR.glob("*.yaml")]):
 		assert not re.search(r"toJSON\(\s*vars\s*\)", workflow.read_text(encoding="utf-8"), re.IGNORECASE), workflow.name
 
 
