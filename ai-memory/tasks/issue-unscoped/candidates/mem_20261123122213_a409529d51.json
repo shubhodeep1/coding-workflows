@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The issue\u2019s Tests section names both `tests/test_merge_lease.py` and `tests/test_review_merge_train.py` for coverage of the listed merge-lease scenarios.\n  expected_change_site: `tests/test_review_merge_train.py` merge-lease scenario tests.\n  confidence=2\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The behavioral scenarios are covered in `tests/test_merge_lease.py`; `tests/test_review_merge_train.py` only updates the static metrics contract test at line 3329 and adds no scenario test. The requested scenarios are covered in substance, so this is a test-placement gap (reviewer severity: NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: The issue\u2019s Tests section names both `tests/test_merge_lease.py` and `tests/test_review_merge_train.py` for coverage of the listed merge-lease scenarios.\n  Expected change site: `tests/test_review_merge_train.py` merge-lease scenario tests.\n  Evidence of absence: The behavioral scenarios are covered in `tests/test_merge_lease.py`; `tests/test_review_merge_train.py` only updates the static metrics contract test at line 3329 and adds no scenario test. The requested scenarios are covered in substance, so this is a test-placement gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4f06cecbed49c23448fa9ef41ca4466f0611d2212cb63532105a76ca8b130c4c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9985,
+    "run_id": "45160992471",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45160992471",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123122213_a409529d51",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9985,
+    "run_id": "45160992471"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-23T12:22:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
