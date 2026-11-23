@@ -2565,7 +2565,10 @@ jobs:
             echo "PLAN_SCOPE_BLOCK outcome=not_routed issue=${ISSUE_NUMBER:--} paths=0 reason=helper_absent"
             exit 0
           fi
-          SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}" bash "${route_script}" || echo "scope_routed=false" >> "$GITHUB_OUTPUT"
+          SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}" bash "${route_script}" || {
+            echo "scope_routed=false" >> "$GITHUB_OUTPUT"
+            echo "PLAN_SCOPE_BLOCK outcome=not_routed issue=${ISSUE_NUMBER:--} paths=0 reason=helper_failed"
+          }
 
       - name: Handle blocked planning output
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked == 'true'

@@ -6398,3 +6398,26 @@ def test_destructive_override_without_a_plan_follows_the_guard_stop_reset() -> N
 	with_plan = actions.plan(_verdict("override_guard", paths=["a.md"], override="bulk_delete"),
 		_ctx(stop="destructive-blocked", has_plan=True))
 	assert with_plan == actions._approve(7, ["ai:destructive-blocked"], "ai:destructive-blocked")
+
+
+@pytest.mark.parametrize("has_plan", [True, False])
+def test_routed_planning_scope_block_retry_reclarifies_and_clears_both_labels(has_plan: bool) -> None:
+	# Every resume path goes through reset_ops; on a routed planning block
+	# (ai:blocked beside ai:scope-blocked) an older plan is never approved and
+	# ai:blocked goes too, so the next scan does not resume it as `blocked`.
+	ctx = _ctx(stop="scope-blocked", labels=["ai:blocked", "ai:scope-blocked"], has_plan=has_plan)
+	expected = [
+		{"op": "comment", "issue": 7, "body": "/reclarify"},
+		{"op": "remove_label", "issue": 7, "label": "ai:scope-blocked"},
+		{"op": "remove_label", "issue": 7, "label": "ai:blocked"},
+	]
+	assert actions.reset_ops(ctx, "narrow the fix") == expected
+	ops = actions.plan(_verdict("retry_budget", instructions="narrow the fix"), ctx)
+	assert ops[-3:] == expected and "/approved" not in _bodies(ops)
+	regrant = actions.regrant_ops(ctx, "555", AUTOMATION_PATHS)
+	assert regrant[1:] == expected
+
+
+def test_implement_time_scope_block_retry_still_approves_the_plan() -> None:
+	ctx = _ctx(stop="scope-blocked", labels=["ai:scope-blocked"], has_plan=True)
+	assert actions.reset_ops(ctx, "x") == actions._approve(7, ["ai:scope-blocked"], "ai:scope-blocked")

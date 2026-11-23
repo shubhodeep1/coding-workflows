@@ -872,10 +872,19 @@ def reset_ops(ctx: dict, note: str) -> list[dict]:
 		return ops
 	present = label if label in ctx["labels"] else ""
 	if stop in GUARD_STOPS or stop == "implement-diagnose-failed":
-		if ctx["has_plan"]:
+		# Issue #9534: a routed planning scope block (plan.yml) carries
+		# ai:blocked beside ai:scope-blocked. Every resume path (retry_budget,
+		# accept_with_followup, regrant, hold follow-ups) must re-plan rather
+		# than approve the older plan, and must drop ai:blocked too, or the
+		# next scan resumes the issue a second time as stop `blocked`.
+		reset_routed_planning_scope = stop == "scope-blocked" and "ai:blocked" in ctx["labels"]
+		if ctx["has_plan"] and not reset_routed_planning_scope:
 			return _approve(item, ctx["labels"], present)
 		ops = [{"op": "comment", "issue": item, "body": "/reclarify"}]
-		return ops + ([{"op": "remove_label", "issue": item, "label": present}] if present else [])
+		ops += [{"op": "remove_label", "issue": item, "label": present}] if present else []
+		if reset_routed_planning_scope:
+			ops.append({"op": "remove_label", "issue": item, "label": "ai:blocked"})
+		return ops
 	if stop == "blocked":
 		if ctx["has_plan"]:
 			return _approve(item, ctx["labels"], present)
