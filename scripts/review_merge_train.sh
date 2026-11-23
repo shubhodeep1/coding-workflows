@@ -1707,7 +1707,8 @@ _mt_merge_lease_queue_log()
 # API: one listing pass per tick (about 10 status reads plus the memoized
 # `GET repos/<repo>`), cached in _MT_LEASE_RUNS_STATE / _MT_LEASE_RUNS_JSON,
 # which _mt_merge_lease_tick resets unless _mt_release already seeded them
-# from its own listing pass in this invocation (_MT_LEASE_RUNS_SEEDED=1); none
+# from its own listing pass in this invocation (_MT_LEASE_RUNS_SEEDED=1, set
+# only for an "ok" seed and cleared when that pass dispatched a review); none
 # after the first call of a tick. Runs in the caller's shell (not $(...)) so
 # the cache persists. The listing's MERGE_TRAIN_RUNS_LISTING lines stay on
 # stderr. An incomplete listing (non-zero return) caches "failed" (return 2).
@@ -1858,8 +1859,9 @@ _mt_lease_pr_runs_active()
 # per tick (only after the grace, or for the idle test when no read was made)
 # and at most one listing pass per tick (only for a holder past the grace or
 # the idle time with no live run on its head; none when _mt_release already
-# seeded the cache from its own listing). G5 adds no call: it reuses the
-# candidate's statuses read inside the 10-candidate cap, and grants a soft
+# seeded the cache from its own listing and dispatched no review). G5 adds no
+# call: it reuses the candidate's statuses read inside the 10-candidate cap,
+# and grants a soft
 # entry's waiter only on a confirmed success (MERGE_LEASE_GATE_CONFIRMED).
 _mt_merge_lease_tick()
 {
@@ -2142,7 +2144,10 @@ _mt_merge_lease_tick()
 			fi
 			tick_skip_why="${MERGE_LEASE_INELIGIBLE_REASON:-no_head_gate}"
 			tick_skipped_any=1
-			if [ "${tick_first_soft}" = 1 ]; then
+			# A confirmed head-gate success clears the soft entry (G5): a waiter
+			# still ineligible for another reason (final_ci_failed, ...) takes
+			# the normal ineligible path below with its real reason.
+			if [ "${tick_first_soft}" = 1 ] && [ "${MERGE_LEASE_GATE_CONFIRMED:-false}" != "true" ]; then
 				# Still held back by its soft entry: as a hard skip-held waiter,
 				# it keeps its label (and the D4 lone-waiter rule below applies).
 				tick_skip_held=1
@@ -2420,7 +2425,9 @@ _mt_merge_lease_tick_multi()
 			|| { [ "${tm_first_soft}" = 1 ] && [ "${MERGE_LEASE_GATE_CONFIRMED:-false}" != "true" ]; }; }; then
 			tm_skip_why="${MERGE_LEASE_INELIGIBLE_REASON:-no_head_gate}"
 			tm_skipped_any=1
-			if [ "${tm_first_soft}" = 1 ]; then
+			# A confirmed head-gate success clears the soft entry (G5); a waiter
+			# still ineligible for another reason takes the normal path below.
+			if [ "${tm_first_soft}" = 1 ] && [ "${MERGE_LEASE_GATE_CONFIRMED:-false}" != "true" ]; then
 				# #9983 G5: still held back by its soft entry; keeps its label.
 				tm_skip_held=1
 				tm_skip_held_prs="${tm_skip_held_prs:+${tm_skip_held_prs} }${tm_first}"
@@ -2715,7 +2722,9 @@ _mt_release() {
 				inflight_review_branches="$(cat -- "${release_listing_file}" 2>/dev/null)" || release_listing_rc=1
 				rm -f -- "${release_listing_file}"
 				_mt_lease_runs_seed "${release_listing_rc}"
-				_MT_LEASE_RUNS_SEEDED=1
+				# Only a good seed replaces the tick's own listing pass; a failed
+				# one lets the tick try again.
+				[ "${_MT_LEASE_RUNS_STATE}" != "ok" ] || _MT_LEASE_RUNS_SEEDED=1
 			elif inflight_review_branches="$(_mt_inflight_review_branches)"; then
 				release_listing_rc=0
 			fi
@@ -2807,6 +2816,10 @@ _mt_release() {
 	done < <(printf '%s\n' "${prs_json}")
 	# Lease hand-off first (a closed holder frees its lease), then the
 	# final-CI resume, whose merge-mode lease check then sees the freed lease.
+	# Issue #9983: a review dispatched by this pass is not in the listing taken
+	# before it, so the tick lists again after any dispatch (a holder whose
+	# `[pr:<n>]` review was just dispatched must not be revoked as idle).
+	[ "${released}" -eq 0 ] || _MT_LEASE_RUNS_SEEDED=""
 	_mt_merge_lease_tick "${prs_json}" "${base_filter}" || true
 	_mt_final_ci_merge_resume "${prs_json}" "${base_filter}" || true
 	if [ -n "${release_oldest_created_epoch}" ]; then

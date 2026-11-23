@@ -2022,6 +2022,9 @@ class HolderRunsActive(unittest.TestCase):
 		st = self._holder(updated=OLD, extra={"active_runs": [_dispatch_run(4)]})
 		st["pulls"].append(_pull(5))
 		st["labels"] = {"5": ["ai:merge-queued"]}
+		# PR 5's dispatch fails, so the pass dispatched nothing and its listing
+		# is still current (a dispatch makes the tick list again; see below).
+		st["fail"] = ["workflow run"]
 		h0, _ = _p2_tick(self._holder(updated=OLD, extra={"active_runs": [_dispatch_run(4)]}))
 		one_pass = _calls_with(h0, "actions/runs?status=")
 		h = _Harness(st)
@@ -2029,8 +2032,22 @@ class HolderRunsActive(unittest.TestCase):
 		out = res.stdout + res.stderr
 		# The release pass made the listing (queued PR 5) and the tick reused it.
 		self.assertIn("active_listing_calls=1 ", out)
+		self.assertIn("dispatch_failed=1 ", out)
 		self.assertIn("MERGE_LEASE pr=4 base=main mode=tick outcome=held reason=holder_runs_active\n", out)
 		self.assertEqual(_calls_with(h, "actions/runs?status="), one_pass, h.calls)
+
+	def test_a_review_dispatched_by_the_release_pass_keeps_the_holder(self) -> None:
+		# The holder is also merge-queued: the release pass lists the runs,
+		# then dispatches its review, so the tick must list again (#9983).
+		st = self._holder(updated=OLD, extra={"active_runs": [], "dispatch_adds_run": True})
+		st["labels"] = {"4": ["ai:merge-queued"]}
+		h = _Harness(st)
+		res = h.train_fn("_mt_release", {"MT_REPO": "owner/repo"})
+		out = res.stdout + res.stderr
+		self.assertIn("MERGE_TRAIN_RELEASED pr=4 source=release", out)
+		self.assertIn("MERGE_LEASE pr=4 base=main mode=tick outcome=held reason=holder_runs_active\n", out)
+		self.assertNotIn("reason=revoked_idle", out)
+		self.assertEqual(h.state["refs"][REF], "c" * 40)
 
 	def test_revocation_off_is_unchanged(self) -> None:
 		h, out = _p2_tick(self._holder(gate=None, updated=OLD), env={"MERGE_LEASE_REVOKE_ENABLED": "false"})
@@ -2105,6 +2122,27 @@ class SoftSkipEntries(unittest.TestCase):
 		self.assertIn("pr=6 base=main mode=tick outcome=granted", out)
 		self.assertIn(WAIT, h.state["labels"]["5"])
 		self.assertEqual(_skips(h.record()), [entry])
+
+	def test_soft_entry_with_a_confirmed_gate_and_failed_final_ci_is_unlabelled(self) -> None:
+		# The confirmed head-gate success clears the soft entry (G5); the
+		# waiter's remaining ineligibility takes the normal path.
+		st = self._free([f"5:{_sha(5)}:revoked_no_head_gate"])
+		_head_gate(st, _sha(5))
+		st["check_runs"] = {_sha(5): [{"id": 1, "name": "tests", "status": "completed", "conclusion": "failure"}]}
+		h, out = _p2_tick(st, env={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "tests"})
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=skipped reason=final_ci_failed\n", out)
+		self.assertNotIn("pr=5 base=main mode=tick outcome=skipped reason=skip_head_unchanged", out)
+		self.assertNotIn(WAIT, h.state["labels"]["5"])
+		self.assertIn("pr=6 base=main mode=tick outcome=granted", out)
+
+	def test_multi_tick_soft_entry_with_a_confirmed_gate_and_failed_final_ci_is_unlabelled(self) -> None:
+		st = self._free([f"5:{_sha(5)}:revoked_no_head_gate"])
+		_head_gate(st, _sha(5))
+		st["check_runs"] = {_sha(5): [{"id": 1, "name": "tests", "status": "completed", "conclusion": "failure"}]}
+		h, out = _p2_tick(st, env={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "tests", MAXH: "2"})
+		self.assertIn("pr=5 base=main mode=tick outcome=skipped reason=final_ci_failed", out)
+		self.assertNotIn("pr=5 base=main mode=tick outcome=skipped reason=skip_head_unchanged", out)
+		self.assertNotIn(WAIT, h.state["labels"]["5"])
 
 	def test_three_field_entries_survive_the_prune(self) -> None:
 		st = {"pulls": [_pull(5), _pull(6)], "labels": {"6": [WAIT]}, "files": {"6": ["b"]}}
