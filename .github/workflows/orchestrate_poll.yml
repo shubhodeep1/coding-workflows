@@ -2221,7 +2221,7 @@ jobs:
         # `if-no-files-found: error` is kept so a genuinely missing snapshot,
         # which is a real defect, still surfaces as a failed-step annotation.
         continue-on-error: true
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: state-snapshot
           path: ${{ env.RUNTIME_DIR }}/state-snapshot/state.json

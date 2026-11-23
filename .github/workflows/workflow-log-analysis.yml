@@ -356,7 +356,7 @@ jobs:
 
       - name: Upload daily PAT consumer ranking
         if: ${{ github.event_name == 'schedule' && github.event.schedule == '0 6 * * *' }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: gh-pat-budget-day
           path: ${{ runner.temp }}/gh-pat-budget.md
@@ -364,7 +364,7 @@ jobs:
           retention-days: 30
 
       - name: Upload workflow log report artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: workflow-log-report
           path: workflow_log_report.json
@@ -372,7 +372,7 @@ jobs:
           retention-days: 7
 
       - name: Upload full workflow log directory artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: workflow-log-output
           path: ${{ steps.collect.outputs.log_output_dir }}
@@ -1762,7 +1762,7 @@ jobs:
       - name: Upload workflow log analysis report
         if: always() && (steps.analyze.outputs.report_file != '' || steps.analyze.outputs.held_report_file != '')
         continue-on-error: true
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: workflow-log-analysis-report
           path: ${{ steps.analyze.outputs.report_file || steps.analyze.outputs.held_report_file }}

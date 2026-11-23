@@ -6429,7 +6429,7 @@ jobs:
 
       - name: Upload consolidated soft-error report
         if: always() && steps.consolidate_soft_errors.outputs.report_path != ''
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           # Artifact name preserved for backward compatibility with any
           # operator tooling that fetches `soft-error-report-<run_id>`.

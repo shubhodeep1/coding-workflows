@@ -3695,7 +3695,7 @@ jobs:
       - name: Upload per-reviewer logs (always)
         if: always() && env.PREVIOUS_REVIEWS_DIR != '' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'
         continue-on-error: true
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: reviewer-logs-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -4234,7 +4234,7 @@ jobs:
       - name: Upload review findings record
         if: always() && env.PREVIOUS_REVIEWS_DIR != '' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'
         continue-on-error: true
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: reviewer-findings-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.PREVIOUS_REVIEWS_DIR }}/review_findings_record.json
@@ -6350,7 +6350,7 @@ jobs:
       - name: Upload codex logs (failure or empty-editor)
         if: always() && env.CODEX_REVIEW_AUTOFIX_FAILURE_LOG_DIR != ''
         continue-on-error: true
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: codex-review-autofix-failure-logs-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.CODEX_REVIEW_AUTOFIX_FAILURE_LOG_DIR }}

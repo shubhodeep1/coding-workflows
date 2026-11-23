@@ -1702,7 +1702,7 @@ jobs:
       # the workspace line into the exclude pattern !/validation/.
       - name: Upload validation artifacts
         if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always()) && steps.runtime.outputs.runtime_dir != ''
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ai-validation-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn

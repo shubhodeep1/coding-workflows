@@ -5698,7 +5698,7 @@ jobs:
 
       - name: Upload destructive-rejection snapshot
         if: always() && steps.handle_guard_block.outputs.rejection_snapshot == 'true'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: destructive-rejection-issue-${{ env.ISSUE_NUMBER }}
           path: ${{ env.RUNTIME_DIR }}/destructive_rejection/destructive_rejection.json
@@ -7363,7 +7363,7 @@ jobs:
 
       - name: Upload codex logs (failure only)
         if: (failure() || cancelled()) && env.CODEX_FAILURE_LOG_DIR != ''
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: codex-implement-failure-logs-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.CODEX_FAILURE_LOG_DIR }}

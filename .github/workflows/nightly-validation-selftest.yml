@@ -56,7 +56,7 @@ jobs:
 
       - name: Upload validation self-test artifacts
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: validation-selftest-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn
@@ -69,7 +69,7 @@ jobs:
       # and workspaces never reach the job that holds a write token.
       - name: Upload validation self-test summary for status commit
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: validation-selftest-summary-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn
