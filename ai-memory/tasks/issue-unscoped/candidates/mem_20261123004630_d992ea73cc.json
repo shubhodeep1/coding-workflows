@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:4086 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The Zombie run reaper section says \"Off (the default) keeps the earlier behaviour: `SWEEP_STALE_QUEUED_MINUTES` only stops such a run from blocking dispatch\", which is stale. The new `ZOMBIE_RUN_MAX_QUEUED_HOURS` floor (default 24) also stops an old queued run from blocking dispatch. The related P11b table cell at line 4049 uses the same wording.\n  WHY: The README contradicts its own variable rows at lines 2870-2872. Setting `SWEEP_STALE_QUEUED_MINUTES=0` alone does not restore the earlier behaviour, because the 24h floor still applies. Reviewers rated this NIT, with no runtime break.\n- scripts/orchestrate_lib.py:567 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The concurrency snapshot applies the wedged-queued filter but may not emit the `ZOMBIE_RUN_IGNORED` telemetry if `log_zombie_run_ignored` is not called or fails.\n  WHY: The run would be silently excluded from the concurrency count, which makes it harder to diagnose why runs are not capped. The source gave no severity, so low is an assumption.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- README.md:4086 | severity=NIT | confidence=4\n  PROBLEM: The \"Zombie run reaper\" bullet \"Off (the default) keeps the earlier behaviour: `SWEEP_STALE_QUEUED_MINUTES` only stops such a run from blocking dispatch.\" is stale. The `ZOMBIE_RUN_MAX_QUEUED_HOURS` floor also makes every active-run guard ignore an old queued run. Line 4049 is vague but not wrong.\n  WHY: Nothing breaks at runtime. An operator could conclude that `SWEEP_STALE_QUEUED_MINUTES=0` restores the earlier behaviour, and this contradicts the README rows at lines 2870-2871.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_lib.py:567 | confidence=3\n  PROBLEM: The concurrency snapshot applies the wedged-queued filter at the end of the `if` block, but does not explicitly log the filtered run if `log_zombie_run_ignored` is not successfully called or if it fails.\n  WHY: The helper fails open, so wedged runs are silently ignored in the concurrency count without `ZOMBIE_RUN_IGNORED` telemetry. That makes it hard to diagnose why certain runs are not capped.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- README.md:4086 (compare line 2872) | severity=NIT | confidence=4\n  PROBLEM: The reaper section says `SWEEP_STALE_QUEUED_MINUTES` \"only\" stops a queued run from blocking dispatch. The new `ZOMBIE_RUN_MAX_QUEUED_HOURS` floor also stops old queued runs from blocking dispatch.\n  WHY: Operators may miss that the 24-hour floor stays active when the reaper is off and the minutes cutoff is disabled.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- README.md:4086 (and the same stale wording at 4049, the P11b row cell) | severity=NIT | confidence=4\n  PROBLEM: \"Off (the default) keeps the earlier behaviour: `SWEEP_STALE_QUEUED_MINUTES` only stops such a run from blocking dispatch.\" is stale. `ZOMBIE_RUN_MAX_QUEUED_HOURS` (default 24) also stops a queued run older than 24h from blocking dispatch, as the row at line 2871 documents.\n  WHY: The README gives conflicting operational guidance for the same kill switch. Setting `SWEEP_STALE_QUEUED_MINUTES=0` alone does not restore the pre-#9473 no-cutoff behaviour, because the 24h floor still applies.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fd5eb92e76923c13184205e769dbd065fdf82383d6a8e7e2db4a1620e45d30a9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9711,
+    "run_id": "45080384465",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45080384465",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123004630_d992ea73cc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9711,
+    "run_id": "45080384465"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T00:46:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
