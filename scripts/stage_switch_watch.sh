@@ -18,10 +18,12 @@
 #           unless today's alert was already sent (cache marker) or the switch
 #           is marked off on purpose in the registry's `off_on_purpose` list.
 #           GITHUB_OUTPUT: alerted=true when at least one message was
-#           delivered (a failed send writes no day marker, so a later run
-#           that day retries). The marker covers the whole watch: a switch
-#           that passes its wait time after the day's first alert waits for
-#           the next day's run.
+#           delivered. A run in which no message was delivered writes no day
+#           marker, so a later run that day retries; a partly delivered run
+#           warns and its failed alerts wait for the next day's run (a retry
+#           would resend the delivered ones). The marker covers the whole
+#           watch: a switch that passes its wait time after the day's first
+#           alert waits for the next day's run.
 #
 # Env:
 #   STAGE_SWITCH_WATCH_ENABLED     `true` runs the watch (default true)
@@ -145,6 +147,9 @@ stage_switch_report()
 
 	local counts off_count waiting_count on_purpose_count alert_count
 	counts="$(printf '%s' "${result}" | jq -r '[.counts.off, .counts.waiting, .counts.on_purpose, .counts.alerts] | map(tostring) | join(" ")' 2>/dev/null)" || counts=""
+	if [ -z "${counts}" ]; then
+		echo "::warning::STAGE_SWITCH_WATCH could not parse the evaluation counts; the counts below read 0."
+	fi
 	read -r off_count waiting_count on_purpose_count alert_count <<< "${counts:-0 0 0 0}"
 
 	if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
@@ -195,7 +200,8 @@ stage_switch_report()
 				if [ "${delivered}" -gt 0 ]; then
 					# Marker file the workflow's actions/cache/save step stores
 					# under stage-switch-off-alert-<day>. Only after a delivered
-					# send, so a failed send is retried by a later run that day.
+					# send, so a run where every send failed is retried later
+					# that day; a partly delivered run is not (see the warning).
 					mkdir -p "${stage_switch_alert_marker_dir}" 2>/dev/null \
 						&& date -u +%F > "${stage_switch_alert_marker_dir}/day.txt" 2>/dev/null || true
 					echo "alerted=true" >> "${stage_switch_output}" 2>/dev/null || true
@@ -205,6 +211,9 @@ stage_switch_report()
 						alert_state="sent"
 					else
 						alert_state="not_delivered"
+						if [ "${delivered}" -gt 0 ]; then
+							echo "::warning::STAGE_SWITCH_WATCH delivered ${delivered} of ${attempted} alerts; today's marker is saved, so the undelivered alerts repeat at the next day's run."
+						fi
 					fi
 				fi
 			fi

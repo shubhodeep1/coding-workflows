@@ -1,7 +1,7 @@
 <!-- agents: section="Stable log prefixes (contractual)" -->
 - `STAGE_SWITCH_WATCH` (`scripts/stage_switch_watch.sh`, `workflow-log-analysis.yml` job `collect-logs`, #9994): `outcome=ok off=<n> waiting=<n> on_purpose=<n> alerts=<n> alert=sent|not_delivered|already_sent_today|telegram_unconfigured|none`, or `outcome=disabled`, `outcome=read_failed reason=no_token|workdir|gh_api|parse|no_snapshot|evaluate`, `outcome=registry_invalid`, and `outcome=snapshot_ready` after the read step. Never fails the job.
 LOG_PREFIX.name=STAGE_SWITCH_WATCH
-- `STAGE_SWITCH_OFF` (`scripts/stage_switch_watch.py evaluate`, #9994): one line per registry switch whose value is not `true`: `name=<VAR> value=<true|false|0|1|yes|no|on|off|<non-boolean>|<redacted>> default=true off_since=<ISO|unknown> hours_off=<h|unknown> status=waiting|off_on_purpose|alert marker=none|valid|expired`. Raw values are never logged.
+- `STAGE_SWITCH_OFF` (`scripts/stage_switch_watch.py evaluate`, #9994): one line per registry switch whose value is neither `true` nor one of the entry's `on_values`: `name=<VAR> value=<true|false|0|1|yes|no|on|off|<non-boolean>|<redacted>> default=true off_since=<ISO|unknown> hours_off=<h|unknown> status=waiting|off_on_purpose|alert marker=none|valid|expired`. Raw values are never logged.
 LOG_PREFIX.name=STAGE_SWITCH_OFF
 
 <!-- agents: section="Workflow architecture" -->

@@ -270,6 +270,27 @@ def test_wrapper_failed_send_writes_no_day_marker(tmp_path):
 	assert not (tmp_path / "runner" / "stage-switch-alert-day" / "day.txt").exists()
 
 
+def test_wrapper_partial_delivery_warns_and_keeps_day_marker(tmp_path):
+	gh_two_off = (
+		"printf '%s\\n' '{\"name\":\"ALPHA_ENABLED\",\"value\":\"false\",\"updated_at\":\"2026-11-20T00:00:00Z\"}'"
+		" '{\"name\":\"BETA_ENABLED\",\"value\":\"false\",\"updated_at\":\"2026-11-20T00:00:00Z\"}'"
+	)
+	env = _wrapper_env(tmp_path, gh_two_off)
+	count = tmp_path / "count.txt"
+	# The first send is delivered, the second fails.
+	(tmp_path / "scripts" / "tg_helpers.sh").write_text(
+		"tg_alert_configured() { return 0; }\n"
+		f"tg_send_msg() {{ echo x >> '{count}'; [ \"$(wc -l < '{count}')\" -eq 1 ] && printf '42'; }}\n",
+		encoding="utf-8",
+	)
+	assert _wrapper(tmp_path, "read", env).returncode == 0
+	report = _wrapper(tmp_path, "report", env)
+	assert report.returncode == 0
+	assert "alerts=2 alert=not_delivered" in report.stdout
+	assert "::warning::STAGE_SWITCH_WATCH delivered 1 of 2 alerts" in report.stdout
+	assert "alerted=true" in Path(env["GITHUB_OUTPUT"]).read_text()
+
+
 def test_wrapper_does_not_alert_under_wait_time(tmp_path):
 	env = _wrapper_env(tmp_path, GH_OFF, STAGE_SWITCH_OFF_ALERT_HOURS="200")
 	assert _wrapper(tmp_path, "read", env).returncode == 0
