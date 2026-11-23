@@ -1980,7 +1980,6 @@ class MovedHooksJobStepsContractTest(unittest.TestCase):
 # moved them on to tests-hooks-and-orchestrator, so "HEAL" in the constant names
 # below records where they first went, not where they run now.
 RELEASE_TO_HEAL_SOURCE_JOB_ID = "tests-release-and-log-analysis"
-# moved on to tests-hooks-and-orchestrator in budget-watch issue #9420; constant name kept
 RELEASE_TO_HEAL_TARGET_JOB_ID = "tests-hooks-and-orchestrator"
 RELEASE_TO_HEAL_SETUP_STEP = "Install Python CI dependencies"
 MOVED_RELEASE_TO_HEAL_STEPS = {
