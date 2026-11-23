@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:(gate step, no line given) | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The `review / gate` check-run on head 61a79da6 exited 75 with `GH_API_RETRY outcome=gave_up kind=primary bucket=core status=403 wait_secs=658` on the `gh_api_retry repos/shubhodeep1/coding-workflows/branches/main` lookup (run 45105572894 job 137466263126).\n  WHY: This is a GitHub primary rate limit on the support-ref step, not a hunk in this PR, so a re-run after the limit resets should clear it. The reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: `.github/workflows/ci.yml`, selection of steps moved from `tests-release-and-log-analysis` to `orchestrate-poll` group 1\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: `.github/workflows/ci.yml` lines 4047-4050 and 4090-4098, `changelog.d/9966-ci-release-job-budget-move.md:2`, and the moved steps at lines 4070 and 4139 show the run's step timings (run 45035315687) could not be read and the pick was estimated from test and subprocess counts. No timing-based ranking shows the moved steps were the slowest. Severity disagreement: sonnet rated NIT with confidence 1 and called it a disclosed limitation; minimax and luna rated MAJOR with confidence 5.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, the choice of steps moved out of `tests-release-and-log-analysis`.\n  Evidence of absence: The run's step timings could not be read, so the PR picks the two steps by an estimate from test and subprocess counts. The structural parts are met. Both steps moved unchanged apart from the group guard, job and step names are kept, `timeout-minutes` is unchanged, and no new required job names were added. This is a disclosed limitation, not a code defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n(All other checklist sections: NONE. HARDENING_RISK_SCORE: 0)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of which steps to move from `tests-release-and-log-analysis` into `orchestrate-poll` group 1.\n  Evidence of absence: The rationale comments at `.github/workflows/ci.yml:4047-4050` and 4090-4098, and `changelog.d/9966-ci-release-job-budget-move.md:2`, state that the step timings for run 45035315687 could not be read and the pick is an estimate. No hunk selects the moved steps from measured timings. The other constraints are met, and `MovedRelease9966StepsContractTest` pins the new location.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n(All other checklist sections: NONE)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-release-and-log-analysis` to `orchestrate-poll`.\n  Evidence of absence: `.github/workflows/ci.yml` lines 4047-4050 state the step timings were not readable and the selection was estimated. The moved steps are identified at lines 4070 and 4139, but the diff contains no timing-based ranking showing they were the slowest.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n(All other checklist sections: NONE)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/review_autofix.yml:(gate step, no line given) | severity=low | confidence=5\n  PROBLEM: The `review / gate` check-run on head 61a79da6 exited 75 with `GH_API_RETRY outcome=gave_up kind=primary bucket=core status=403 wait_secs=658` on the `gh_api_retry repos/shubhodeep1/coding-workflows/branches/main` lookup.\n  WHY: This is a GitHub primary rate limit on the support-ref step, not a hunk in this PR, so a re-run should clear it. The reviewer rated it NIT.\n(All other checklist sections: NONE. TASK COMPLETENESS / INTENT GAPS: NONE. The estimate-based selection is disclosed in `.github/workflows/ci.yml` lines 4047-4050 and 4092-4094 and not re-flagged.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a793e48c956bd0934e5bec43b3e744defd7752862b29aa048fa247c8bf66df46",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9968,
+    "run_id": "45180931692",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45180931692",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123150653_34f57b038c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9968,
+    "run_id": "45180931692"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T15:06:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
