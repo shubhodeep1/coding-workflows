@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_merge_lease.py:2025-2026 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The comment in `test_release_pass_listing_seeds_the_lease_tick`, \"# is still current (a dispatch makes the tick list again; see below).\", is out of date. The last run removed `[ \"${released}\" -eq 0 ] || _MT_LEASE_RUNS_SEEDED=\"\"` from `_mt_release`. The tick now reuses the seeded listing and treats a PR dispatched in that pass as active through `_MT_LEASE_DISPATCHED_PRS`. The \"see below\" test, `test_a_review_dispatched_by_the_release_pass_keeps_the_holder`, now asserts exactly one listing pass.\n  WHY: Nothing fails at runtime, but the comment misstates the cache rule for maintainers; the README, the agents fragment and the script header already describe the new rule. All five reviewers rated it SEVERITY: NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_merge_lease.py:line 2026, test_release_pass_listing_seeds_the_lease_tick: \"# is still current (a dispatch makes the tick list again; see below).\" | severity=NIT | confidence=5\n  PROBLEM: The comment is out of date. The last run removed `[ \"${released}\" -eq 0 ] || _MT_LEASE_RUNS_SEEDED=\"\"` from `_mt_release`, which now sets `_MT_LEASE_DISPATCHED_PRS=\"${release_released_prs}\"` (scripts/review_merge_train.sh:2833), and the tick reuses the seeded listing. The \"see below\" test, test_a_review_dispatched_by_the_release_pass_keeps_the_holder, now asserts exactly one listing pass.\n  WHY: Nothing fails at runtime, but the comment misstates the cache rule for maintainers. Suggested fix: reword it to say the forced dispatch failure covers the plain reuse path and the dispatched-holder case is covered by test_a_review_dispatched_by_the_release_pass_keeps_the_holder (about 2 lines). HARDENING_RISK_SCORE: 1.\n  NOTE: The reviewer also checked and confirmed these points in scripts/review_merge_train.sh (no defect):\n  - `release_released_prs` is space-padded (line 2686), and a PR is appended only after `_mt_dispatch_review` succeeds (lines 2798-2804).\n  - The `case` match in `_mt_lease_pr_runs_active` is exact, because the PR number is validated against `^[1-9][0-9]*$` first.\n  - The variable is set and cleared around `_mt_merge_lease_tick`, so it does not leak into later calls.\n  - The check covers all four revocation sites.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_merge_lease.py:2026 | severity=NIT | confidence=5\n  PROBLEM: The comment \"# is still current (a dispatch makes the tick list again; see below).\" is outdated and inaccurate.\n  WHY: It does not affect runtime behavior. It misleads maintainers about the cache reuse logic now that `_mt_release` no longer resets `_MT_LEASE_RUNS_SEEDED` for dispatched reviews and the tick reuses the seeded listing.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_merge_lease.py:line ~2026, the comment in `test_release_pass_listing_seeds_the_lease_tick` reading `# is still current (a dispatch makes the tick list again; see below).` | severity=NIT | confidence=5\n  PROBLEM: The parenthetical is stale. The seed-clear (`[ \"${released}\" -eq 0 ] || _MT_LEASE_RUNS_SEEDED=\"\"`) was removed from `_mt_release` in `scripts/review_merge_train.sh`, so the tick reuses the seeded listing and treats dispatched PRs as active through `_MT_LEASE_DISPATCHED_PRS`. The \"see below\" test (`test_a_review_dispatched_by_the_release_pass_keeps_the_holder`) now asserts the opposite. The README, the agents fragment and the changelog were updated; this comment was not.\n  WHY: Behavior is unchanged. Misleading maintainers about the cache rule is the only risk.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_merge_lease.py:2025-2026, `test_release_pass_listing_seeds_the_lease_tick` | severity=NIT | confidence=5\n  PROBLEM: The comment says a successful dispatch makes the tick list runs again, but the current release path reuses the seeded listing and treats a PR dispatched during that pass as active.\n  WHY: No runtime behavior fails today, but the comment describes a removed cache path and misstates the behavior this test is meant to document.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_merge_lease.py:lines 2025-2026, comment in `test_release_pass_listing_seeds_the_lease_tick` | severity=NIT | confidence=5\n  PROBLEM: The comment says \"a dispatch makes the tick list again; see below\", but the seed reset (`[ \"${released}\" -eq 0 ] || _MT_LEASE_RUNS_SEEDED=\"\"`) was removed from `_mt_release`. scripts/review_merge_train.sh now only sets `_MT_LEASE_RUNS_SEEDED=1` on an ok seed at line 2736 and wraps the tick with `_MT_LEASE_DISPATCHED_PRS`. The tick reuses the seeded listing and counts the dispatched holder as active. The \"see below\" test (`test_a_review_dispatched_by_the_release_pass_keeps_the_holder`) now asserts exactly one listing pass.\n  WHY: No runtime failure, but the comment misleads maintainers about the cache rule; the README, the agents fragment and the script header were updated. Suggested fix: reword the comment to point to `test_a_review_dispatched_by_the_release_pass_keeps_the_holder` for the dispatched-holder case (about 2 lines). HARDENING_RISK_SCORE: 1.\n  NOTE: The reviewer confirmed `release_released_prs` is space-separated (line 2686/2804), which matches the `*\" ${lra_pr} \"*` lookup in `_mt_lease_pr_runs_active`. The dispatch bypass covers only PRs dispatched in this pass, so there is no correctness issue there.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a971dce393ff48c8b03843f5ea2ec2d4f63e4f64ab590d87ed3b9ced1fb1cbc8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9985,
+    "run_id": "45156624260",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45156624260",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123104810_e6234ad07d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9985,
+    "run_id": "45156624260"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T10:48:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
