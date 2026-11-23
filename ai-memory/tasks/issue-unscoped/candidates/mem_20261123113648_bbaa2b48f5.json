@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: `.github/workflows/ci.yml`, destination selection for `Pre-push affected-test gate tests` (job `tests-hooks-and-orchestrator`); `tests/test_ci_poll_test_sharding.py` contract for that selection\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: Run 44909097036 recorded step statuses only with no durations, the cited 15m32s total for `tests-hooks-and-orchestrator` predates #9420 moving six steps into it, no candidate job's total with this step is measured, so the placement is a judgment rather than a measured margin (severity disagreement: NIT from anthropic_claude-sonnet-5_5, MAJOR from minimax_minimax-m3 and openai_gpt-6-luna; highest used is MAJOR); documented in the ci.yml comment at lines 1567-1581, the test-file comment and the changelog fragment\n- requirement: The PR description's acceptance criterion `tests/test_ci_poll_test_sharding.py::MovedPollGroupZero9895StepsContractTest` must pass the red-on-base check.\n  expected_change_site: Validation results for `MovedPollGroupZero9895StepsContractTest`\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR description's acceptance table marks this criterion \"unmet\"; check-run context gives aggregate counts only\n- requirement: The PR description's acceptance criterion `tests/test_ci_poll_test_sharding.py` must be completed.\n  expected_change_site: Validation results for `tests/test_ci_poll_test_sharding.py`\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The acceptance table marks this criterion \"unmet\"; check-run context gives aggregate counts only\n- requirement: The PR description's acceptance criterion `tests/test_ci_job_split_contract.py` must be completed.\n  expected_change_site: Validation results for `tests/test_ci_job_split_contract.py`\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The acceptance table marks this criterion \"unmet\"; check-run context gives aggregate counts only\n- requirement: The PR description's acceptance criterion `tests-heal-plan-and-validation` must run.\n  expected_change_site: CI validation results for the `tests-heal-plan-and-validation` check\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The acceptance table marks this check \"not run\"; check-run context gives aggregate counts only\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, destination selection for `Pre-push affected-test gate tests`\n  Evidence of absence: Mechanical constraints hold, but no candidate job's total with this step is measured, so the destination was chosen by judgment; documented as residual.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n(All other categories: NONE. HARDENING_RISK_SCORE: 0)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml \u2014 destination selection for `Pre-push affected-test gate tests`\n  Evidence of absence: Step moved to `tests-hooks-and-orchestrator` based on a 15m32s total from run 43220859648 that predates #9420; current total unmeasured; run 44909097036 has no durations; the comment fix at .github/workflows/ci.yml:1607-1615 only documents the limitation.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n(All other categories: NONE. HARDENING_RISK_SCORE: 0)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, destination selection for `Pre-push affected-test gate tests`; `tests/test_ci_poll_test_sharding.py` contract\n  Evidence of absence: Workflow comment at lines 1567\u20131578 says no candidate total is measured; 15m32s predates six moved steps; contract test at lines 4308\u20134363 verifies owner and timeout but not most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- Requirement: PR acceptance criterion `tests/test_ci_poll_test_sharding.py::MovedPollGroupZero9895StepsContractTest` must pass red-on-base check.\n  Expected change site: Validation results\n  Evidence of absence: Acceptance table marks it \"unmet\".\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: PR acceptance criterion `tests/test_ci_poll_test_sharding.py` must be completed.\n  Expected change site: Validation results\n  Evidence of absence: Acceptance table marks it \"unmet\".\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: PR acceptance criterion `tests/test_ci_job_split_contract.py` must be completed.\n  Expected change site: Validation results\n  Evidence of absence: Acceptance table marks it \"unmet\".\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: PR acceptance criterion `tests-heal-plan-and-validation` must run.\n  Expected change site: CI validation results\n  Evidence of absence: Acceptance table marks it \"not run\".\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "482f9802427a148890d7cadaa4680d4f79c452e85ef7c208f0185c393aabeb22",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9898,
+    "run_id": "45160276553",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45160276553",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123113648_bbaa2b48f5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9898,
+    "run_id": "45160276553"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T11:36:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
