@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"On 401/403/404 or a `GITHUB_TOKEN` rate limit, fall back to the PAT once and log `GH_READ_FALLBACK reason=<code> caller=<script>`.\"\n  expected_change_site: scripts/review_run_reviewers.sh, line 4656, the reviewer-watchdog `gh_review_pr_state` call\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The call at line 4656 redirects all stderr to /dev/null, which hides the GH_READ_FALLBACK line that gh_review_pr_state logs when it falls back to the PAT; scripts/review_run_reviewers.sh:4656 still wraps the call in `pr_state=\"$({ gh_review_pr_state \"${REPOSITORY}\" \"${PR_NUMBER}\" || echo \"open\"; } 2>/dev/null)\"`, so the documented observability guarantee (\"missing scope logs once per job\") is broken for this path; the PR diff and the last run diff do not change this file or redirect; prior autofix runs deferred it because the file is outside the plan grant's `files_touched` (all three reviewers rated it SEVERITY: NIT; anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash confirmed the redirect exists but chose not to report it, accepting it as a deferred residual)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: On 401/403/404 or a GITHUB_TOKEN rate limit, fall back to the PAT once and log GH_READ_FALLBACK reason=<code> caller=<script>.\n  Expected change site: scripts/review_run_reviewers.sh, reviewer watchdog call to gh_review_pr_state\n  Evidence of absence: The call at line 4656 redirects all stderr to /dev/null. This suppresses the GH_READ_FALLBACK line logged by gh_review_pr_state when it falls back to the PAT, violating the requirement that this line reaches the job log.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"A 401, 403, 404 or rate limit falls back once to the PAT and logs `GH_READ_FALLBACK reason=<401|403|404|rate_limit> caller=<script>`.\" The agents.d fragment (\"Stable log prefixes\") makes the same contract: the line must reach the job log so a missing permissions scope is observable.\n  Expected change site: scripts/review_run_reviewers.sh, line 4656, the reviewer-watchdog `gh_review_pr_state` call.\n  Evidence of absence: scripts/review_run_reviewers.sh:4656 still wraps the call in `pr_state=\"$({ gh_review_pr_state \"${REPOSITORY}\" \"${PR_NUMBER}\" || echo \"open\"; } 2>/dev/null)\"`. The outer `2>/dev/null` swallows the GH_READ_FALLBACK line that `gh_review_pr_state` emits after a job-token 401/403/404/rate-limit fallback. Neither the PR diff nor the last run diff touches this file or the redirect, so the \"missing scope logs once per job\" guarantee is broken for this path. Three prior autofix runs deferred it because the file is outside the plan grant's `files_touched`, which lists `tests/**`, `changelog.d/*`, `agents.d/*` but not scripts/review_run_reviewers.sh. The reviewer calls the gap structural.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"On 401/403/404 or a `GITHUB_TOKEN` rate limit, fall back to the PAT once and log `GH_READ_FALLBACK reason=<code> caller=<script>`.\"\n  Expected change site: `scripts/review_run_reviewers.sh`, reviewer watchdog call to `gh_review_pr_state`.\n  Evidence of absence: At line 4656, the watchdog redirects all stderr from `gh_review_pr_state` to `/dev/null`. The helper's `GH_READ_FALLBACK` message is written to stderr, so this call suppresses the fallback log. The PR diff does not change that redirect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "40dd89eae8a1d201a7138ff84ce540340f1701e2d151b58f8916cfcfd95e2943",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9897,
+    "run_id": "45205441424",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45205441424",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123175552_898dce9e41",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9897,
+    "run_id": "45205441424"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T17:55:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
