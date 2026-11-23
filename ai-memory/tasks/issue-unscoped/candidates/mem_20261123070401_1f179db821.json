@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:(review / gate check-run, run 45105572894, support-ref step) | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The only failed check-run on the PR head is a GitHub primary rate limit (status 403, exit 75) on the `branches/main` lookup in the review autofix gate, not a code fault in this PR.\n  WHY: The PR touches only ci.yml step placement, a changelog fragment and two test files; a re-run after the rate-limit reset should clear it. The reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml, selection of steps to move out of `tests-release-and-log-analysis`\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The timings for run 45035315687 were unreadable, so the two moved steps (Judge Semble prefetch contract test and wiring guard part 1) were picked from test and subprocess counts. Wiring guard part 2 stays in the source job at ci.yml:3048 and is recorded as larger (658 test functions, 155 subprocess call sites, ci.yml:4315-4320, against part 1's about 604 at ci.yml:4106). Severity disagreement: anthropic_claude-sonnet-5_5 and minimax_minimax-m3 rated it NIT, and openai_gpt-6-luna rated it MAJOR. Prior rounds classified it as residual because the timing data is unrecoverable, and the PR documents the limitation openly.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, in the choice of which steps leave `tests-release-and-log-analysis`.\n  Evidence of absence: The step timings for run 45035315687 were unreadable. The PR picks the two steps from test and subprocess counts and documents this. Part 2 stays in the source job. The structural requirements are met.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml, the rationale comments above the moved steps and the actual selection of which steps leave tests-release-and-log-analysis.\n  Evidence of absence: The last diff rewrites only the rationale comments at .github/workflows/ci.yml:4045-4049 and 4089-4094. The two moved steps were picked from test and subprocess counts, not run timings. Wiring guard part 2 (ci.yml:4315-4320, 658 test functions and 155 subprocess call sites against part 1's about 604 at ci.yml:4106) stays in the source job at ci.yml:3048. The changelog fragment changelog.d/9966-ci-release-job-budget-move.md states the same limitation. This is a residual gap already documented by prior rounds and classified as non-actionable.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of steps to move from `tests-release-and-log-analysis`.\n  Evidence of absence: The move rationale at `.github/workflows/ci.yml:4045-4062` and `4090-4098` says the step timings were unreadable and the steps were selected by test and subprocess counts. Wiring guard part 2, which remains in the source job, is recorded as larger by test-function count (`.github/workflows/ci.yml:4048-4050`). The PR does not establish that the moved steps were the slowest by the requested run timings.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/review_autofix.yml:(review / gate check-run, run 45105572894, job 137466263126, support-ref step) | severity=NIT | confidence=5\n  PROBLEM: The only failed check-run on the PR head is a GitHub primary rate limit on the protected-main branch lookup (`gh_api_retry repos/shubhodeep1/coding-workflows/branches/main` returned `GH_API_RETRY outcome=gave_up kind=primary bucket=core status=403 wait_secs=658`, exit 75). It is not a code fault in this PR.\n  WHY: The PR touches only ci.yml step placement, a changelog fragment and two test files, and no hunk maps to `review_autofix.yml`. A re-run after the rate-limit reset should clear it.\n\nVerification note: the comment-only edits at ci.yml 4045-4050 and 4090-4095 are accurate against the repository's records. Part 2 is at line 3048, with 658 test functions and 155 subprocess sites at line 4320. Part 1 is about 604 at line 4108. The three `if: strategy.job-index == 1` guards at lines 4029, 4071 and 4140 are expected.\n\nTASK COMPLETENESS / INTENT GAPS: NONE (the reviewer deliberately did not re-emit the \"slowest steps\" gap, which prior rounds classified as non-actionable because the run 45035315687 timings are unrecoverable and the PR documents the estimate openly).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "23159bb9b068d4195fda6fd950bee1acac8bb319df8978391bb5ecb2e49a9ca2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9968,
+    "run_id": "45124617639",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45124617639",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123070401_1f179db821",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9968,
+    "run_id": "45124617639"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T07:04:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
