@@ -263,6 +263,15 @@ jobs:
           SWEEP_REVIEW_ROUND_CAP_ENABLED: ${{ vars.SWEEP_REVIEW_ROUND_CAP_ENABLED || 'true' }}
           SWEEP_REVIEW_MAX_ROUNDS: ${{ vars.SWEEP_REVIEW_MAX_ROUNDS || '10' }}
           SWEEP_REVIEW_ROUND_WINDOW_HOURS: ${{ vars.SWEEP_REVIEW_ROUND_WINDOW_HOURS || '48' }}
+          # Verdict wait (issue #9991, scripts/review_sweep_head_gate.sh): a head
+          # with a verdict that only waits to merge gets no dispatch, and one
+          # alert after VERDICT_MERGE_WAIT_ALERT_HOURS (0 = no alert). 'false'
+          # restores the dispatches.
+          VERDICT_WAIT_DISPATCH_SKIP_ENABLED: ${{ vars.VERDICT_WAIT_DISPATCH_SKIP_ENABLED || 'true' }}
+          VERDICT_MERGE_WAIT_ALERT_HOURS: ${{ vars.VERDICT_MERGE_WAIT_ALERT_HOURS || '6' }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -euo pipefail
           # Classified retry for the active-run snapshot (issue #6634): the
@@ -304,6 +313,11 @@ jobs:
           if [ -f .ci-rerun-support/scripts/review_sweep_round_cap.sh ]; then
             # shellcheck source=/dev/null
             source .ci-rerun-support/scripts/review_sweep_round_cap.sh
+          fi
+          # Telegram for the verdict-wait alert (issue #9991); optional.
+          if [ -f .ci-rerun-support/scripts/tg_helpers.sh ]; then
+            # shellcheck source=/dev/null
+            source .ci-rerun-support/scripts/tg_helpers.sh || true
           fi
           if [ "${PROVIDER_OUTAGE_PAUSED:-false}" != "true" ] \
             && printf '%s' "${prs_json}" | jq -e 'length > 0' >/dev/null 2>&1 \
@@ -348,6 +362,7 @@ jobs:
           skipped_merge_queued=0
           skipped_approved_final_ci_failed=0
           skipped_round_cap=0
+          skipped_verdict_waiting=0
           failures=0
           # Smoke-PR backstop (issue #8953): release-gate smoke PRs whose
           # Implement run started after the gate gave up stayed open for days
@@ -660,6 +675,12 @@ jobs:
             round_cap_counts_json="$(GH_TOKEN="${READ_TOKEN}" review_sweep_round_counts "${REPOSITORY}" "${sweep_default_branch}" "${round_cap_window_hours}")"
           fi
 
+          # Verdict-wait switch for the round-cap exemption below (issue #9991).
+          verdict_wait_switch=false
+          if type review_sweep_verdict_wait_enabled >/dev/null 2>&1 && review_sweep_verdict_wait_enabled; then
+            verdict_wait_switch=true
+          fi
+
           # Read into an array so counters survive the loop (no subshell pipe).
           mapfile -t rows < <(printf '%s' "${prs_json}" | jq -c '.[]')
 
@@ -803,6 +824,30 @@ jobs:
               continue
             fi
 
+            # Verdict wait (issue #9991, helpers in review_sweep_head_gate.sh):
+            # a head that already has a verdict and only waits to merge (final
+            # CI merge pending, auto-merge with a pending or missing required
+            # check, or a deferred judge merge with nothing changed since) gets
+            # no dispatch and is not a review round. The final-CI state is
+            # read once, only for an approved auto-merge head, and reused by
+            # the failed-head skip below. No annotation dispatches as before.
+            approved_final_ci=""
+            approved_head_sha="$(printf '%s' "${row}" | jq -r '.head_sha // ""')"
+            verdict_wait=""
+            if type review_sweep_verdict_wait_reason >/dev/null 2>&1 && review_sweep_verdict_wait_enabled; then
+              if type review_sweep_final_ci_state >/dev/null 2>&1 \
+                && printf '%s' "${row}" | jq -e --arg l "${FINAL_CI_MERGE_PENDING_LABEL:-ai:final-ci-merge-pending}" '.head_gate_state == "success" and .auto_merge_enabled == true and ((.labels // []) | index($l) == null)' >/dev/null 2>&1; then
+                approved_final_ci="$(GH_TOKEN="${READ_TOKEN}" review_sweep_final_ci_state "${REPOSITORY}" "${approved_head_sha}" ci.yml)"
+              fi
+              verdict_wait="$(review_sweep_verdict_wait_reason "${REPOSITORY}" "${row}" "${approved_final_ci}")"
+            fi
+            if [ -n "${verdict_wait}" ]; then
+              echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=verdict_waiting wait=${verdict_wait} head_ref=${head_ref} head_sha=${approved_head_sha}"
+              review_sweep_verdict_merge_wait_alert "${REPOSITORY}" "${row}" "${verdict_wait}" "${DRY_RUN:-false}" || true
+              skipped_verdict_waiting=$((skipped_verdict_waiting + 1))
+              continue
+            fi
+
             # Review-round cap: a PR that already had round_cap_max dispatched
             # review rounds in the window is not dispatched again; it gets
             # ai:needs-human and one comment the first time (PR #9178: 81
@@ -815,8 +860,10 @@ jobs:
             # full rounds, and labelling it would also stop the merge train's
             # final-CI resume. Without the head-gate annotation nothing is
             # capped. No API call here: the counts were read once before the loop.
+            # A head with a judge merge verdict (ai-review/rb-judge-verdict,
+            # issue #9991) is not capped either: it only waits to merge.
             if [ -n "${round_cap_counts_json}" ] \
-              && printf '%s' "${row}" | jq -e '(.head_gate_state // "") as $s | $s != "" and $s != "success"' >/dev/null 2>&1; then
+              && printf '%s' "${row}" | jq -e --arg vw "${verdict_wait_switch}" '(.head_gate_state // "") as $s | $s != "" and $s != "success" and ($vw != "true" or (((.rb_judge_verdict // "") | test("^decision=(merge|merge_with_followup) ")) | not))' >/dev/null 2>&1; then
               round_cap_rounds="$(printf '%s' "${round_cap_counts_json}" | jq -r --arg n "${pr_number}" '(.[$n] // 0) | if type == "number" then . else 0 end' 2>/dev/null || echo 0)"
               if [[ "${round_cap_rounds}" =~ ^[0-9]+$ ]] && [ "${round_cap_rounds}" -ge "${round_cap_max}" ]; then
                 review_sweep_round_cap_escalate "${REPOSITORY}" "${pr_number}" "${round_cap_rounds}" "${round_cap_max}" "${round_cap_window_hours}" \
@@ -838,8 +885,10 @@ jobs:
             if [ "${SWEEP_SKIP_APPROVED_FINAL_CI_FAILED:-true}" != "false" ] \
               && type review_sweep_final_ci_state >/dev/null 2>&1 \
               && printf '%s' "${row}" | jq -e '.head_gate_state == "success"' >/dev/null 2>&1; then
-              approved_head_sha="$(printf '%s' "${row}" | jq -r '.head_sha // ""')"
-              approved_final_ci="$(GH_TOKEN="${READ_TOKEN}" review_sweep_final_ci_state "${REPOSITORY}" "${approved_head_sha}" ci.yml)"
+              # Reuses the verdict-wait read above when it ran (one read per head).
+              if [ -z "${approved_final_ci}" ]; then
+                approved_final_ci="$(GH_TOKEN="${READ_TOKEN}" review_sweep_final_ci_state "${REPOSITORY}" "${approved_head_sha}" ci.yml)"
+              fi
               if [ "${approved_final_ci}" = "failure" ]; then
                 echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=approved_head_final_ci_failed head_ref=${head_ref} head_sha=${approved_head_sha}"
                 skipped_approved_final_ci_failed=$((skipped_approved_final_ci_failed + 1))
@@ -880,7 +929,7 @@ jobs:
             fi
           done
 
-          echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} skipped_merge_queued=${skipped_merge_queued} failures=${failures} candidates=${total} snapshot_incomplete=${active_snapshot_incomplete} closed_smoke=${closed_smoke} skipped_approved_final_ci_failed=${skipped_approved_final_ci_failed} skipped_round_cap=${skipped_round_cap}"
+          echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} skipped_merge_queued=${skipped_merge_queued} failures=${failures} candidates=${total} snapshot_incomplete=${active_snapshot_incomplete} closed_smoke=${closed_smoke} skipped_approved_final_ci_failed=${skipped_approved_final_ci_failed} skipped_round_cap=${skipped_round_cap} skipped_verdict_waiting=${skipped_verdict_waiting}"
 
       # Non-retryable failure backfill (issue #7291): re-send a review/autofix
       # failure whose trusted current-head marker names a non-retryable reason

@@ -38,6 +38,49 @@ review_head_gate_post_status()
 	return 0
 }
 
+# review_rb_judge_verdict_post_status <repo> <head_sha> <decision> <wait> <base_sha> <merge_state>
+# (issue #9991). Records a review-blocked judge merge verdict whose merge was
+# deferred for a reason a new judge run does not change, as the commit status
+# `ai-review/rb-judge-verdict` (always `success`, so it never blocks a merge)
+# on the judged head. Description: `decision=<d> wait=<w> base=<sha> ms=<state>`.
+# Stall recovery (scripts/orchestrate_poll_process.sh) and the review sweep
+# read it through _pr_rb_judge_verdict_waiting (scripts/pr_checks_lib.sh) and
+# skip a re-dispatch until the head, the lease, the merge state or the base
+# changes. A new head has no such status, so a push always re-dispatches.
+# Every input is allow-listed before the write. One status POST; never fails
+# the caller. Log: RB_JUDGE_VERDICT_STATUS outcome=<posted|post_failed|invalid_input>.
+REVIEW_RB_JUDGE_VERDICT_CONTEXT="ai-review/rb-judge-verdict"
+review_rb_judge_verdict_post_status()
+{
+	local verdict_repo="${1:-}" verdict_sha="${2:-}" verdict_decision="${3:-}" verdict_wait="${4:-}" verdict_base="${5:-}" verdict_ms="${6:-}"
+	verdict_ms="$(printf '%s' "${verdict_ms}" | tr '[:upper:]' '[:lower:]')"
+	local verdict_fields="pr=${PR_NUMBER:-?} head_sha=${verdict_sha:-?} wait=${verdict_wait:-?}"
+	if ! review_head_gate_valid_repo "${verdict_repo}" || ! [[ "${verdict_sha}" =~ ^[0-9a-f]{40}$ ]] \
+		|| ! [[ "${verdict_decision}" =~ ^(merge|merge_with_followup)$ ]] \
+		|| ! [[ "${verdict_wait}" =~ ^(lease_wait|blocked|checks_not_ready|auto_merge)$ ]] \
+		|| ! [[ "${verdict_base}" =~ ^[0-9a-f]{40}$ ]] \
+		|| ! [[ "${verdict_ms}" =~ ^(behind|blocked|clean|dirty|draft|has_hooks|unknown|unstable)$ ]]; then
+		echo "RB_JUDGE_VERDICT_STATUS outcome=invalid_input ${verdict_fields}"
+		return 0
+	fi
+	local -a verdict_args=(-X POST "repos/${verdict_repo}/statuses/${verdict_sha}" -f "state=success"
+		-f "context=${REVIEW_RB_JUDGE_VERDICT_CONTEXT}"
+		-f "description=decision=${verdict_decision} wait=${verdict_wait} base=${verdict_base} ms=${verdict_ms}")
+	if [[ "${RUN_URL:-}" =~ ^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/[0-9]+$ ]]; then
+		verdict_args+=(-f "target_url=${RUN_URL}")
+	fi
+	local -a verdict_api=(gh api)
+	if type gh_retry >/dev/null 2>&1; then
+		verdict_api=(gh_retry gh api)
+	fi
+	if "${verdict_api[@]}" "${verdict_args[@]}" >/dev/null 2>&1; then
+		echo "RB_JUDGE_VERDICT_STATUS outcome=posted ${verdict_fields}"
+	else
+		echo "::warning::RB_JUDGE_VERDICT_STATUS outcome=post_failed ${verdict_fields}"
+	fi
+	return 0
+}
+
 # With an unknown enrollment, verify the live PR and expose its JSON via
 # REVIEW_HEAD_GATE_LIVE_PR_JSON for the judge's head comparison. A known
 # enrollment comes from the gate's existing authenticated PR read.

@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""The review-blocked judge records a deferred merge verdict on the head.
+
+Issue #9991: the judge's decision lived only in a PR review comment, so no
+loop could tell "already judged, waiting to merge" from "needs a judge". The
+judge now posts the commit status `ai-review/rb-judge-verdict` when it
+decided merge but the merge was deferred for a reason a re-run cannot
+change, and scripts/pr_checks_lib.sh decides whether anything relevant
+changed since.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+PR_CHECKS_LIB = REPO_ROOT / "scripts" / "pr_checks_lib.sh"
+HEAD_GATE = REPO_ROOT / "scripts" / "review_head_gate.sh"
+RB_JUDGE = REPO_ROOT / "scripts" / "review_rb_judge.sh"
+HEAD = "a" * 40
+BASE = "b" * 40
+
+pytestmark = pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required")
+
+
+def _bash(script: str) -> subprocess.CompletedProcess:
+	return subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+
+
+def _desc(decision: str = "merge", wait: str = "lease_wait", base: str = BASE, ms: str = "blocked") -> str:
+	return f"decision={decision} wait={wait} base={base} ms={ms}"
+
+
+@pytest.mark.parametrize("desc, ok", [
+	(_desc(), True),
+	(_desc(decision="merge_with_followup", wait="auto_merge", ms="has_hooks"), True),
+	(_desc(decision="fix"), False),
+	(_desc(wait="merge_failed"), False),
+	(_desc(base="B" * 40), False),
+	(_desc(ms="weird"), False),
+	(_desc() + " extra", False),
+	("decision=merge wait=lease_wait base=" + BASE + " ms=blocked; rm -rf /", False),
+	("", False),
+])
+def test_parse_is_strict(desc: str, ok: bool) -> None:
+	result = _bash(f'source "{PR_CHECKS_LIB}"; if _pr_rb_judge_verdict_parse {json.dumps(desc)}; then echo "OK $PR_RB_VERDICT_WAIT"; else echo "BAD[$PR_RB_VERDICT_WAIT]"; fi')
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.startswith("OK") is ok, result.stdout
+	if not ok:
+		assert "BAD[]" in result.stdout
+
+
+def _waiting(desc: str, *, labels: str = '["ai:merge-lease-wait"]', cur_base: str = BASE, ms: str = "BLOCKED",
+		auto: str = "false", freshness: str = "clean", env: str = "") -> str:
+	script = f'''
+source "{PR_CHECKS_LIB}"
+FRESH_LOG=$(mktemp)
+_pr_base_freshness() {{ echo "FRESHNESS_CALLED $*" >> "$FRESH_LOG"; PR_BASE_FRESHNESS_OUTCOME="{freshness}"; echo "{freshness}"; }}
+{env}
+if _pr_rb_judge_verdict_waiting 77 {HEAD} main {json.dumps(cur_base)} {json.dumps(ms)} '{labels}' {json.dumps(auto)} {json.dumps(desc)}; then
+	echo "WAIT $PR_RB_VERDICT_WAIT_REASON"
+else
+	echo "CHANGE $PR_RB_VERDICT_CHANGE"
+fi
+cat "$FRESH_LOG" >&2
+'''
+	result = _bash(script)
+	assert result.returncode == 0, result.stderr
+	return result.stdout.strip() + ("|freshness" if "FRESHNESS_CALLED" in result.stderr else "")
+
+
+def test_unchanged_lease_wait_is_waiting_without_reads() -> None:
+	assert _waiting(_desc()) == "WAIT lease_wait"
+
+
+@pytest.mark.parametrize("kwargs, expected", [
+	({"labels": "[]"}, "CHANGE lease"),
+	({"ms": "CLEAN"}, "CHANGE checks"),
+	({"ms": ""}, "CHANGE checks"),
+	({"cur_base": "c" * 40, "freshness": "overlap"}, "CHANGE base|freshness"),
+	({"cur_base": "c" * 40, "freshness": "unknown"}, "CHANGE base_unknown|freshness"),
+	({"cur_base": "c" * 40, "freshness": "disabled"}, "CHANGE base_unknown|freshness"),
+	({"cur_base": "c" * 40, "freshness": "clean"}, "WAIT lease_wait|freshness"),
+	({"cur_base": "c" * 40, "freshness": "fresh"}, "WAIT lease_wait|freshness"),
+	({"cur_base": ""}, "CHANGE base_unknown"),
+	({"env": "VERDICT_WAIT_DISPATCH_SKIP_ENABLED=false"}, "CHANGE disabled"),
+	({"env": "VERDICT_WAIT_DISPATCH_SKIP_ENABLED=ON"}, "WAIT lease_wait"),
+])
+def test_relevant_changes(kwargs: dict, expected: str) -> None:
+	assert _waiting(_desc(), **kwargs) == expected
+
+
+def test_auto_merge_wait_needs_auto_merge_enabled() -> None:
+	desc = _desc(wait="auto_merge")
+	assert _waiting(desc, labels="[]", auto="true") == "WAIT auto_merge"
+	assert _waiting(desc, labels="[]", auto="false") == "CHANGE auto_merge"
+
+
+def test_malformed_description_is_a_change() -> None:
+	assert _waiting("decision=merge") == "CHANGE parse"
+
+
+def _post(*args: str, fail: bool = False) -> tuple[subprocess.CompletedProcess, list[str]]:
+	script = f'''
+source "{HEAD_GATE}"
+gh() {{ printf '%s\\n' "$*" >> "$CALLS"; {"return 1" if fail else "return 0"}; }}
+CALLS=$(mktemp); PR_NUMBER=77
+review_rb_judge_verdict_post_status {" ".join(json.dumps(a) for a in args)}
+echo "---"; cat "$CALLS"
+'''
+	result = _bash(script)
+	out, _, calls = result.stdout.partition("---\n")
+	return result, [out.strip()] + calls.splitlines()
+
+
+def test_post_helper_writes_one_success_status() -> None:
+	result, lines = _post("o/r", HEAD, "merge", "lease_wait", BASE, "BLOCKED")
+	assert result.returncode == 0, result.stderr
+	assert lines[0] == f"RB_JUDGE_VERDICT_STATUS outcome=posted pr=77 head_sha={HEAD} wait=lease_wait"
+	assert len(lines) == 2
+	call = lines[1]
+	assert f"repos/o/r/statuses/{HEAD}" in call and "state=success" in call
+	assert "context=ai-review/rb-judge-verdict" in call
+	assert f"description=decision=merge wait=lease_wait base={BASE} ms=blocked" in call
+
+
+@pytest.mark.parametrize("args", [
+	("o/r", "short", "merge", "lease_wait", BASE, "blocked"),
+	("o/r", HEAD, "close_and_reissue", "lease_wait", BASE, "blocked"),
+	("o/r", HEAD, "merge", "merge_failed", BASE, "blocked"),
+	("o/r", HEAD, "merge", "lease_wait", "x" * 40, "blocked"),
+	("o/r", HEAD, "merge", "lease_wait", BASE, "nope"),
+	("../r", HEAD, "merge", "lease_wait", BASE, "blocked"),
+])
+def test_post_helper_rejects_invalid_input(args: tuple[str, ...]) -> None:
+	result, lines = _post(*args)
+	assert result.returncode == 0
+	assert lines[0].startswith("RB_JUDGE_VERDICT_STATUS outcome=invalid_input")
+	assert len(lines) == 1
+
+
+def test_post_failure_never_fails_the_caller() -> None:
+	result, lines = _post("o/r", HEAD, "merge", "blocked", BASE, "blocked", fail=True)
+	assert result.returncode == 0
+	assert "outcome=post_failed" in lines[0]
+
+
+def _record_fn() -> str:
+	lines = RB_JUDGE.read_text(encoding="utf-8").splitlines()
+	start = lines.index("rb_judge_record_verdict_wait() {")
+	end = next(i for i in range(start, len(lines)) if lines[i] == "}")
+	return "\n".join(lines[start:end + 1]) + "\n"
+
+
+@pytest.mark.parametrize("token, pr_view, expected", [
+	("lease_wait", f"open\t{BASE}\tblocked", "outcome=posted"),
+	("auto_merge", f"closed\t{BASE}\tunknown", "reason=not_open"),
+	("", f"open\t{BASE}\tblocked", ""),
+])
+def test_judge_records_only_deferred_open_verdicts(token: str, pr_view: str, expected: str) -> None:
+	script = f'''
+set -euo pipefail
+source "{HEAD_GATE}"
+{_record_fn()}
+CALLS=$(mktemp)
+gh_retry() {{ "$@"; }}
+gh() {{ printf '%s\\n' "$*" >> "$CALLS"; case "$*" in *statuses*) return 0 ;; esac; printf {json.dumps(pr_view + chr(10))}; }}
+REPOSITORY=o/r PR_NUMBER=77 RB_JUDGED_HEAD_SHA={HEAD} RB_MERGE_WAIT_TOKEN={json.dumps(token)}
+rb_judge_record_verdict_wait merge
+echo "CALLS=$(wc -l < "$CALLS")"
+'''
+	result = _bash(script)
+	assert result.returncode == 0, result.stderr
+	if expected:
+		assert expected in result.stdout
+	else:
+		assert "RB_JUDGE_VERDICT_STATUS" not in result.stdout and "CALLS=0" in result.stdout
+
+
+def test_judge_sets_the_wait_token_only_on_benign_deferrals() -> None:
+	text = RB_JUDGE.read_text(encoding="utf-8")
+	assert text.count('RB_MERGE_WAIT_TOKEN="lease_wait"') == 4
+	assert text.count('RB_MERGE_WAIT_TOKEN="checks_not_ready"') == 2
+	assert text.count('RB_MERGE_WAIT_TOKEN="auto_merge"') == 2
+	assert text.count('RB_MERGE_WAIT_TOKEN="blocked"') == 4
+	# Never next to a status a re-run should answer.
+	for status in ("merge_failed", "deferred_base_moved", "checks_failed", "merge_conflict"):
+		for match in re.finditer(rf'RB_MERGE_STATUS="{status}"\n(.*)\n', text):
+			# Only the guarded checks_not_ready line may follow (it does not fire for checks_failed).
+			assert not match.group(1).strip().startswith("RB_MERGE_WAIT_TOKEN="), status
+	assert '[ "${RB_MERGE_STATUS}" = "checks_not_ready" ] && RB_MERGE_WAIT_TOKEN="checks_not_ready"' in text
+	# Every merge-class branch records before reporting.
+	assert text.count("rb_judge_record_verdict_wait merge\n") == 2
+	assert text.count("rb_judge_record_verdict_wait merge_with_followup\n") == 1

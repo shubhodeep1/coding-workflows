@@ -3944,3 +3944,101 @@ _pr_final_ci_merge_pending_mark()
 	echo "FINAL_CI_MERGE_PENDING pr=${pending_pr} head=${pending_head} outcome=marked reason=checks_wait_timeout"
 	return 0
 }
+
+# ---------------------------------------------------------------------------
+# Verdict wait (issue #9991): has a head that already has a review-blocked
+# judge merge verdict anything new to show the judge?
+#
+# The judge records a deferred merge verdict as the commit status
+# `ai-review/rb-judge-verdict` on the judged head, description
+# `decision=<merge|merge_with_followup> wait=<lease_wait|blocked|checks_not_ready|auto_merge> base=<40 hex> ms=<merge state>`
+# (review_rb_judge_verdict_post_status, scripts/review_head_gate.sh).
+#
+# _pr_rb_judge_verdict_parse <description>
+#   Strict parse. Sets PR_RB_VERDICT_DECISION, PR_RB_VERDICT_WAIT,
+#   PR_RB_VERDICT_BASE and PR_RB_VERDICT_MS and returns 0; a malformed
+#   description sets them empty and returns 1. Nothing is evaluated.
+#
+# _pr_rb_judge_verdict_waiting <pr> <head_sha> <base_ref> <cur_base_sha> <cur_merge_state> <labels_json> <auto_merge_enabled> <verdict_description>
+#   Returns 0 when nothing relevant changed since the verdict and the head is
+#   still only waiting to merge; sets PR_RB_VERDICT_WAIT_REASON to the wait
+#   token. Otherwise returns 1 and sets PR_RB_VERDICT_CHANGE to one of
+#   parse | lease | checks | auto_merge | base | base_unknown | disabled:
+#     head:  the caller reads the status on the current head, so a new head
+#            has no verdict and is never "waiting";
+#     lease: wait=lease_wait and the lease-wait label
+#            (MERGE_LEASE_WAIT_LABEL, default ai:merge-lease-wait) is gone,
+#            so the lease was granted or freed;
+#     checks: the recorded merge state differs from the current one
+#            (case-insensitive; an empty current state counts as changed);
+#     auto_merge: wait=auto_merge and auto-merge is no longer enabled;
+#     base:  the base SHA moved since the verdict and _pr_base_freshness
+#            reports `overlap` (fresh / clean keep waiting; unknown /
+#            disabled give base_unknown, which dispatches: fail open).
+#   Switch: VERDICT_WAIT_DISPATCH_SKIP_ENABLED (default true; 1/true/yes/on,
+#   case-insensitive); anything else returns 1 with `disabled`.
+#   API: none, except _pr_base_freshness's one compare call plus one
+#   paginated pulls/<n>/files listing, and only when the base moved since
+#   the verdict. Needs PR_CHECKS_REPOSITORY or GITHUB_REPOSITORY for that.
+# ---------------------------------------------------------------------------
+_pr_rb_judge_verdict_parse()
+{
+	local verdict_desc="${1:-}"
+	PR_RB_VERDICT_DECISION=""
+	PR_RB_VERDICT_WAIT=""
+	PR_RB_VERDICT_BASE=""
+	PR_RB_VERDICT_MS=""
+	if [[ "${verdict_desc}" =~ ^decision=(merge|merge_with_followup)\ wait=(lease_wait|blocked|checks_not_ready|auto_merge)\ base=([0-9a-f]{40})\ ms=(behind|blocked|clean|dirty|draft|has_hooks|unknown|unstable)$ ]]; then
+		PR_RB_VERDICT_DECISION="${BASH_REMATCH[1]}"
+		PR_RB_VERDICT_WAIT="${BASH_REMATCH[2]}"
+		PR_RB_VERDICT_BASE="${BASH_REMATCH[3]}"
+		PR_RB_VERDICT_MS="${BASH_REMATCH[4]}"
+		return 0
+	fi
+	return 1
+}
+
+_pr_rb_judge_verdict_waiting()
+{
+	local vw_pr="${1:-}" vw_head="${2:-}" vw_base_ref="${3:-}" vw_cur_base="${4:-}" vw_cur_ms="${5:-}"
+	local vw_labels="${6:-[]}" vw_auto="${7:-false}" vw_desc="${8:-}"
+	PR_RB_VERDICT_WAIT_REASON=""
+	PR_RB_VERDICT_CHANGE=""
+	case "$(printf '%s' "${VERDICT_WAIT_DISPATCH_SKIP_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		1|true|yes|on) ;;
+		*) PR_RB_VERDICT_CHANGE="disabled"; return 1 ;;
+	esac
+	if ! [[ "${vw_pr}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${vw_head}" =~ ^[0-9a-f]{40}$ ]] \
+		|| ! _pr_rb_judge_verdict_parse "${vw_desc}"; then
+		PR_RB_VERDICT_CHANGE="parse"
+		return 1
+	fi
+	if [ "${PR_RB_VERDICT_WAIT}" = "lease_wait" ] \
+		&& ! printf '%s' "${vw_labels}" | jq -e --arg l "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" 'type == "array" and index($l) != null' >/dev/null 2>&1; then
+		PR_RB_VERDICT_CHANGE="lease"
+		return 1
+	fi
+	vw_cur_ms="$(printf '%s' "${vw_cur_ms}" | tr '[:upper:]' '[:lower:]')"
+	if [ -z "${vw_cur_ms}" ] || [ "${vw_cur_ms}" != "${PR_RB_VERDICT_MS}" ]; then
+		PR_RB_VERDICT_CHANGE="checks"
+		return 1
+	fi
+	if [ "${PR_RB_VERDICT_WAIT}" = "auto_merge" ] && [ "${vw_auto}" != "true" ]; then
+		PR_RB_VERDICT_CHANGE="auto_merge"
+		return 1
+	fi
+	if [ "${vw_cur_base}" != "${PR_RB_VERDICT_BASE}" ]; then
+		if ! [[ "${vw_cur_base}" =~ ^[0-9a-f]{40}$ ]] || [ -z "${vw_base_ref}" ]; then
+			PR_RB_VERDICT_CHANGE="base_unknown"
+			return 1
+		fi
+		_pr_base_freshness "${vw_pr}" "${vw_head}" "${vw_base_ref}" >/dev/null 2>&1 || true
+		case "${PR_BASE_FRESHNESS_OUTCOME:-}" in
+			fresh|clean) ;;
+			overlap) PR_RB_VERDICT_CHANGE="base"; return 1 ;;
+			*) PR_RB_VERDICT_CHANGE="base_unknown"; return 1 ;;
+		esac
+	fi
+	PR_RB_VERDICT_WAIT_REASON="${PR_RB_VERDICT_WAIT}"
+	return 0
+}

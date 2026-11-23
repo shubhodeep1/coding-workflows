@@ -2645,6 +2645,47 @@ rb_judge_deferred_merge_pending() {
 }
 # END rb-judge merge error capture (#7659)
 
+# Verdict-wait record (issue #9991). Each merge branch sets
+# RB_MERGE_WAIT_TOKEN only when the merge was deferred for a reason another
+# judge run on the same head cannot change: lease_wait (the merge lease is
+# busy), blocked (#9939 blocked-merge guard), checks_not_ready (required
+# checks still pending), auto_merge (auto-merge enrolled, PR still open). It
+# stays empty for deferred_base_moved, checks_failed, merge_failed, unknown
+# freshness, conflicts and merged PRs: a re-run is the right answer there.
+# rb_judge_record_verdict_wait <decision> then reads the PR once
+# (state, base sha, mergeable_state) and posts the ai-review/rb-judge-verdict
+# status on RB_JUDGED_HEAD_SHA (review_rb_judge_verdict_post_status in
+# scripts/review_head_gate.sh). Stall recovery and the review sweep read it
+# and skip re-dispatching the judge until something relevant changed.
+# VERDICT_WAIT_DISPATCH_SKIP_ENABLED=false posts nothing. Never fails the
+# judge. API: 1 PR read + 1 status POST, only for a deferred merge verdict.
+RB_MERGE_WAIT_TOKEN=""
+rb_judge_record_verdict_wait() {
+  local verdict_decision="${1:-merge}" verdict_view="" verdict_state="" verdict_base="" verdict_ms=""
+  [ -n "${RB_MERGE_WAIT_TOKEN:-}" ] || return 0
+  case "$(printf '%s' "${VERDICT_WAIT_DISPATCH_SKIP_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) ;;
+    *) return 0 ;;
+  esac
+  local verdict_fields="pr=${PR_NUMBER:-?} head_sha=${RB_JUDGED_HEAD_SHA:-?} wait=${RB_MERGE_WAIT_TOKEN}"
+  if ! type review_rb_judge_verdict_post_status >/dev/null 2>&1; then
+    echo "RB_JUDGE_VERDICT_STATUS outcome=skipped reason=helper_unavailable ${verdict_fields}"
+    return 0
+  fi
+  verdict_view="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[(.state // ""), (.base.sha // ""), (.mergeable_state // "")] | @tsv' 2>/dev/null)" || verdict_view=""
+  if [ -z "${verdict_view}" ]; then
+    echo "RB_JUDGE_VERDICT_STATUS outcome=skipped reason=read_failed ${verdict_fields}"
+    return 0
+  fi
+  IFS=$'\t' read -r verdict_state verdict_base verdict_ms <<< "${verdict_view}" || true
+  if [ "${verdict_state}" != "open" ]; then
+    echo "RB_JUDGE_VERDICT_STATUS outcome=skipped reason=not_open ${verdict_fields}"
+    return 0
+  fi
+  review_rb_judge_verdict_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA:-}" "${verdict_decision}" "${RB_MERGE_WAIT_TOKEN}" "${verdict_base}" "${verdict_ms}" || true
+  return 0
+}
+
 case "${RB_ACTION}" in
   merge)
     echo "Judge says merge PR #${PR_NUMBER} as-is."
@@ -2722,6 +2763,7 @@ case "${RB_ACTION}" in
           elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
             echo "Review-blocked judge: PR #${PR_NUMBER} waits for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; merge deferred, re-dispatched when the lease is granted."
             RB_MERGE_STATUS="mergeability_pending"
+            RB_MERGE_WAIT_TOKEN="lease_wait"
           else
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
@@ -2730,6 +2772,7 @@ case "${RB_ACTION}" in
           echo "::warning::Review-blocked judge: required check-runs on ${RB_JUDGED_HEAD_SHA:0:7} are ${PR_CHECKS_WAIT_OUTCOME:-unknown}; not enabling auto-merge and withholding ai:ready-to-merge."
           RB_MERGE_STATUS="checks_not_ready"
           [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "failed" ] && RB_MERGE_STATUS="checks_failed"
+          [ "${RB_MERGE_STATUS}" = "checks_not_ready" ] && RB_MERGE_WAIT_TOKEN="checks_not_ready"
         elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
           && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           # The wait can take minutes and --match-head-commit binds only the
@@ -2740,6 +2783,7 @@ case "${RB_ACTION}" in
           elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
             echo "Review-blocked judge: PR #${PR_NUMBER} waits for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; merge deferred, re-dispatched when the lease is granted."
             RB_MERGE_STATUS="mergeability_pending"
+            RB_MERGE_WAIT_TOKEN="lease_wait"
           else
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
@@ -2758,6 +2802,9 @@ case "${RB_ACTION}" in
             rb_judge_merge_err_close
             RB_MERGE_READY_LABEL_ALLOWED="true"
             RB_MERGE_STATUS="merge_requested"
+            # Auto-merge enrolled, or merged at once (the PR is then closed
+            # and rb_judge_record_verdict_wait posts nothing).
+            RB_MERGE_WAIT_TOKEN="auto_merge"
           elif [ "${RB_SYNC_MERGE_DEFERRED:-false}" = "true" ] && rb_judge_deferred_merge_pending; then
             # The --auto request failed too (#9939): it was the only merge
             # path left, so record why before the stderr files go away.
@@ -2767,6 +2814,7 @@ case "${RB_ACTION}" in
             rb_judge_merge_err_close
             echo "Review-blocked judge: PR #${PR_NUMBER} merge deferred and auto-merge not enabled; GitHub reports mergeable_state=${SYNC_MERGE_BLOCKED_GUARD_STATE:-unknown} (blockers: ${SYNC_MERGE_BLOCKED_GUARD_BLOCKERS:-unknown}). Re-dispatched when it can merge."
             RB_MERGE_STATUS="mergeability_pending"
+            RB_MERGE_WAIT_TOKEN="blocked"
           else
             rb_judge_merge_err_report merge
             echo "::warning::Review-blocked judge merge failed for evaluated head ${RB_JUDGED_HEAD_SHA}; withholding ai:ready-to-merge from linked issues.${RB_MERGE_ERROR_TEXT:+ gh error: ${RB_MERGE_ERROR_TEXT}}"
@@ -2803,6 +2851,7 @@ case "${RB_ACTION}" in
       done <<< "${ISSUE_NUMBERS}"
     fi
 
+    rb_judge_record_verdict_wait merge
     echo "judge_handled=true" >> "$GITHUB_OUTPUT"
     echo "judge_action=merge" >> "$GITHUB_OUTPUT"
     echo "judge_merge_status=${RB_MERGE_STATUS:-unknown}" >> "$GITHUB_OUTPUT"
@@ -2835,6 +2884,7 @@ case "${RB_ACTION}" in
           elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
             echo "Review-blocked judge: PR #${PR_NUMBER} waits for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; merge deferred, re-dispatched when the lease is granted."
             RB_MERGE_STATUS="mergeability_pending"
+            RB_MERGE_WAIT_TOKEN="lease_wait"
           else
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
@@ -2843,6 +2893,7 @@ case "${RB_ACTION}" in
           echo "::warning::Review-blocked judge: required check-runs on ${RB_JUDGED_HEAD_SHA:0:7} are ${PR_CHECKS_WAIT_OUTCOME:-unknown}; not enabling the terminal auto-merge and withholding ai:ready-to-merge."
           RB_MERGE_STATUS="checks_not_ready"
           [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "failed" ] && RB_MERGE_STATUS="checks_failed"
+          [ "${RB_MERGE_STATUS}" = "checks_not_ready" ] && RB_MERGE_WAIT_TOKEN="checks_not_ready"
         elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
           && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           # The wait can take minutes and --match-head-commit binds only the
@@ -2853,6 +2904,7 @@ case "${RB_ACTION}" in
           elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
             echo "Review-blocked judge: PR #${PR_NUMBER} waits for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; merge deferred, re-dispatched when the lease is granted."
             RB_MERGE_STATUS="mergeability_pending"
+            RB_MERGE_WAIT_TOKEN="lease_wait"
           else
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
@@ -2871,6 +2923,9 @@ case "${RB_ACTION}" in
             rb_judge_merge_err_close
             RB_MERGE_READY_LABEL_ALLOWED="true"
             RB_MERGE_STATUS="merge_requested"
+            # Auto-merge enrolled, or merged at once (the PR is then closed
+            # and rb_judge_record_verdict_wait posts nothing).
+            RB_MERGE_WAIT_TOKEN="auto_merge"
           elif [ "${RB_SYNC_MERGE_DEFERRED:-false}" = "true" ] && rb_judge_deferred_merge_pending; then
             # The --auto request failed too (#9939): it was the only merge
             # path left, so record why before the stderr files go away.
@@ -2880,6 +2935,7 @@ case "${RB_ACTION}" in
             rb_judge_merge_err_close
             echo "Review-blocked judge: PR #${PR_NUMBER} merge deferred and auto-merge not enabled; GitHub reports mergeable_state=${SYNC_MERGE_BLOCKED_GUARD_STATE:-unknown} (blockers: ${SYNC_MERGE_BLOCKED_GUARD_BLOCKERS:-unknown}). Re-dispatched when it can merge."
             RB_MERGE_STATUS="mergeability_pending"
+            RB_MERGE_WAIT_TOKEN="blocked"
           else
             rb_judge_merge_err_report terminal
             echo "::warning::Review-blocked judge terminal merge failed for evaluated head ${RB_JUDGED_HEAD_SHA}; withholding ai:ready-to-merge from linked issues.${RB_MERGE_ERROR_TEXT:+ gh error: ${RB_MERGE_ERROR_TEXT}}"
@@ -2905,6 +2961,7 @@ case "${RB_ACTION}" in
         done <<< "${ISSUE_NUMBERS}"
       fi
 
+      rb_judge_record_verdict_wait merge
       echo "judge_handled=true" >> "$GITHUB_OUTPUT"
       echo "judge_action=merge" >> "$GITHUB_OUTPUT"
       echo "judge_merge_status=${RB_MERGE_STATUS:-unknown}" >> "$GITHUB_OUTPUT"
@@ -3441,6 +3498,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
               rb_judge_merge_err_close
               echo "::warning::PR #${PR_NUMBER} sync merge deferred: GitHub reports mergeable_state=${SYNC_MERGE_BLOCKED_GUARD_STATE:-unknown} (blockers: ${SYNC_MERGE_BLOCKED_GUARD_BLOCKERS:-unknown}). Leaving linked issues in ai:review-blocked — stall recovery will re-fire the judge."
               echo "judge_skip_reason=mergeability_pending" >> "$GITHUB_OUTPUT"
+              RB_MERGE_WAIT_TOKEN="blocked"
             elif gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" "${_match_head_arg[@]}" 2>"${RB_MERGE_ERR_DIRECT_FILE}" \
               || rb_judge_merge_retry_transient direct sync; then
               rb_judge_merge_err_close
@@ -3451,6 +3509,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
               rb_judge_merge_err_close
               echo "::warning::PR #${PR_NUMBER} sync merge deferred: GitHub reports mergeable_state=${SYNC_MERGE_BLOCKED_GUARD_STATE:-unknown} (blockers: ${SYNC_MERGE_BLOCKED_GUARD_BLOCKERS:-unknown}). Leaving linked issues in ai:review-blocked — stall recovery will re-fire the judge."
               echo "judge_skip_reason=mergeability_pending" >> "$GITHUB_OUTPUT"
+              RB_MERGE_WAIT_TOKEN="blocked"
             else
               rb_judge_merge_err_report sync
               echo "::warning::PR #${PR_NUMBER} sync merge failed despite passing check-runs (typically: branch protection rules / merge queue / permissions / 422 / concurrent push changing HEAD). Leaving linked issues in ai:review-blocked — stall recovery will re-fire the judge.${RB_MERGE_ERROR_TEXT:+ gh error: ${RB_MERGE_ERROR_TEXT}}"
@@ -3470,6 +3529,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         echo "::warning::PR #${PR_NUMBER} state=${PR_STATE} mergeable=${PR_MERGEABLE:-null} merged=${PR_MERGED:-false}, cannot confirm merge (mergeability still computing or PR not open). Leaving linked issues in ai:review-blocked."
         echo "judge_skip_reason=mergeability_pending" >> "$GITHUB_OUTPUT"
       fi
+      rb_judge_record_verdict_wait merge_with_followup
 
       if [ "${MERGE_CONFIRMED}" = "true" ]; then
         # Build the follow-up body BEFORE attempting issue creation so

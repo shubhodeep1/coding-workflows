@@ -22570,6 +22570,11 @@ REISSUE_EOF
 		  if [ "${_skip_redirect_rc}" -eq 2 ] || [ "${_skip_redirect_rc}" -eq 3 ]; then
 		    return 0
 		  fi
+		  if [ "${_skip_redirect_rc}" -eq 4 ]; then
+		    echo "STALL_SKIP issue=${issue_num} reason=rb_judge_verdict_unchanged pr=${_skip_pr_num} phase=${phase} action=dispatch_rb_judge wait=${STALL_RB_VERDICT_WAIT:-unknown}"
+		    STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_rb_judge_skipped_verdict_unchanged"
+		    return 0
+		  fi
           STALL_RECOVERY_SHOULD_INCREMENT="true"
           return 0
         fi
@@ -22739,6 +22744,13 @@ The judge will evaluate this gap when the wave completes and decide whether to r
 	        # Already dispatched this cycle.  Don't increment recovery
 	        # count — let the next cycle re-check; the judge run is in
 	        # flight or the phase cap deferred a fresh dispatch.
+	        return 0
+	      fi
+	      if [ "${rb_dispatch_rc}" -eq 4 ]; then
+	        # Verdict unchanged on this head (issue #9991): a new judge run
+	        # would reach the same verdict. Benign deferral, no increment.
+	        echo "STALL_SKIP issue=${issue_num} reason=rb_judge_verdict_unchanged pr=${rb_pr_num} phase=${phase} action=dispatch_rb_judge wait=${STALL_RB_VERDICT_WAIT:-unknown}"
+	        STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_rb_judge_skipped_verdict_unchanged"
 	        return 0
 	      fi
       tg_notify "Stall recovery: dispatched review-blocked judge for issue #${issue_num} (PR #${rb_pr_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${rb_pr_num}")" "DEBUG"
@@ -29459,6 +29471,9 @@ This issue and its linked PR stay open with \`ai:needs-human\`; the unblock judg
 	          elif [ "${_std_rb_rc}" -eq 3 ]; then
 	            echo "STALL_SKIP issue=${issue_num} reason=phase_capped pr=${_std_rb_pr_num} phase=${phase} action=dispatch_rb_judge"
 	            STALL_RECOVERY_SHOULD_INCREMENT="false"
+	          elif [ "${_std_rb_rc}" -eq 4 ]; then
+	            echo "STALL_SKIP issue=${issue_num} reason=rb_judge_verdict_unchanged pr=${_std_rb_pr_num} phase=${phase} action=dispatch_rb_judge wait=${STALL_RB_VERDICT_WAIT:-unknown}"
+	            STALL_RECOVERY_SHOULD_INCREMENT="false"
 	          else
 	            echo "::warning::[standalone-stall] dispatch_rb_judge for issue #${issue_num} PR #${_std_rb_pr_num} failed (rc=${_std_rb_rc})."
 	            STALL_RECOVERY_SHOULD_INCREMENT="false"
@@ -30730,6 +30745,72 @@ _dispatch_integration_test_repair()
 	return 0
 }
 
+# _stall_rb_judge_verdict_unchanged <pr_number> (issue #9991)
+#
+# Returns 0 when the PR's current head already carries a review-blocked
+# judge merge verdict (commit status ai-review/rb-judge-verdict, posted by
+# scripts/review_rb_judge.sh when the merge was deferred because the lease
+# was busy, the PR was blocked, required checks were pending, or auto-merge
+# was enrolled) and nothing relevant changed since: same head, lease-wait
+# label still present for a lease wait, same merge state, auto-merge still
+# enabled for an auto-merge wait, and the base either unchanged or moved
+# without touching the PR's files (_pr_rb_judge_verdict_waiting in
+# scripts/pr_checks_lib.sh). Sets STALL_RB_VERDICT_WAIT to the wait token.
+# Any other answer, and every read or parse failure, returns 1 so the judge
+# is dispatched as before (fail open).
+#
+# Data: STALL_IMPL_PR_JSON (the full pulls/<n> payload that
+# _resolve_issue_implementation_pr already fetched), used only when its
+# .number is <pr_number>; otherwise fail open. Pre-filter without a call:
+# the PR is open and has the lease-wait label, the final-CI merge-pending
+# label, auto-merge enabled, or mergeable_state=blocked.
+# API (§14): one GET commits/<head>/status per pre-filtered judge candidate,
+# in place of a judge dispatch when it skips; plus _pr_base_freshness's
+# compare + PR-files reads only when the base moved since the verdict.
+# Audited existing calls: STALL_MANAGED_LINKED_PR_CACHE /
+# _fetch_linked_pr_status_graphql is keyed by the last closing
+# cross-reference, not by the resolved implementation PR, and carries no
+# commit statuses; the standalone loop has no batched cache.
+# Switch: VERDICT_WAIT_DISPATCH_SKIP_ENABLED (default true).
+declare -g STALL_RB_VERDICT_WAIT=''
+_stall_rb_judge_verdict_unchanged()
+{
+	local vu_pr="${1:-}" vu_fields vu_state="" vu_head="" vu_base_sha="" vu_base_ref="" vu_ms="" vu_auto="" vu_labels vu_status_json vu_desc
+	STALL_RB_VERDICT_WAIT=""
+	[[ "${vu_pr}" =~ ^[1-9][0-9]*$ ]] || return 1
+	case "$(printf '%s' "${VERDICT_WAIT_DISPATCH_SKIP_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		1|true|yes|on) ;;
+		*) return 1 ;;
+	esac
+	type _pr_rb_judge_verdict_waiting >/dev/null 2>&1 || return 1
+	[ -n "${STALL_IMPL_PR_JSON:-}" ] || return 1
+	vu_fields="$(printf '%s' "${STALL_IMPL_PR_JSON}" | jq -r --argjson n "${vu_pr}" --arg sep $'\x1f' '
+		if type == "object" and .number == $n then
+			[(.state // ""), (.head.sha // ""), (.base.sha // ""), (.base.ref // ""), (.mergeable_state // ""),
+				(if (.auto_merge | type) == "object" then "true" else "false" end)]
+			| map(tostring | gsub("[[:cntrl:]]"; "")) | join($sep)
+		else empty end' 2>/dev/null)" || return 1
+	[ -n "${vu_fields}" ] || return 1
+	IFS=$'\x1f' read -r vu_state vu_head vu_base_sha vu_base_ref vu_ms vu_auto <<< "${vu_fields}" || true
+	[ "${vu_state}" = "open" ] && [[ "${vu_head}" =~ ^[0-9a-f]{40}$ ]] || return 1
+	vu_labels="$(printf '%s' "${STALL_IMPL_PR_JSON}" | jq -c '[.labels[]?.name // empty]' 2>/dev/null || echo '[]')"
+	if ! printf '%s' "${vu_labels}" | jq -e --arg lw "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" --arg fp "${FINAL_CI_MERGE_PENDING_LABEL:-ai:final-ci-merge-pending}" \
+		'index($lw) != null or index($fp) != null' >/dev/null 2>&1 \
+		&& [ "${vu_auto}" != "true" ] && [ "${vu_ms}" != "blocked" ]; then
+		return 1
+	fi
+	vu_status_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/commits/${vu_head}/status?per_page=100" 2>/dev/null)" || return 1
+	vu_desc="$(printf '%s' "${vu_status_json}" | jq -r '
+		[(.statuses // [])[] | select(type == "object" and .context == "ai-review/rb-judge-verdict" and .state == "success") | (.description // "")][0] // ""' 2>/dev/null || true)"
+	[ -n "${vu_desc}" ] || return 1
+	if PR_CHECKS_REPOSITORY="${GITHUB_REPOSITORY}" _pr_rb_judge_verdict_waiting "${vu_pr}" "${vu_head}" "${vu_base_ref}" "${vu_base_sha}" "${vu_ms}" "${vu_labels}" "${vu_auto}" "${vu_desc}"; then
+		STALL_RB_VERDICT_WAIT="${PR_RB_VERDICT_WAIT_REASON}"
+		return 0
+	fi
+	echo "  [rb-judge-dispatch] PR #${vu_pr} verdict changed (${PR_RB_VERDICT_CHANGE:-unknown}); dispatching."
+	return 1
+}
+
 # _dispatch_rb_judge_for_pr <pr_number> [issue_number]
 #
 # Trigger review_rb_judge_dispatch.yml via workflow_dispatch for the
@@ -30750,6 +30831,10 @@ _dispatch_integration_test_repair()
 #   3 — skipped by the optional ai:review-blocked concurrency cap for
 #       this tick. Callers must treat this as a benign deferral and leave
 #       the recovery count unchanged.
+#   4 — skipped: the current head already has a judge merge verdict whose
+#       merge was deferred, and nothing relevant changed since
+#       (_stall_rb_judge_verdict_unchanged, issue #9991). Callers treat it
+#       like 3 and log STALL_SKIP ... reason=rb_judge_verdict_unchanged.
 #
 # API hygiene: reuses the cycle-local _CONFLICT_DISPATCH_TRACKER to
 # prevent duplicate dispatches within the same poll cycle, same as
@@ -30774,6 +30859,11 @@ _dispatch_rb_judge_for_pr()
 	if grep -qx "rb-judge:${pr_number}" "${_CONFLICT_DISPATCH_TRACKER}" 2>/dev/null; then
 		echo "  ${log_prefix} Already dispatched in this poll cycle. Skipping."
 		return 2
+	fi
+
+	if declare -F _stall_rb_judge_verdict_unchanged >/dev/null 2>&1 && _stall_rb_judge_verdict_unchanged "${pr_number}"; then
+		echo "  ${log_prefix} verdict unchanged (wait=${STALL_RB_VERDICT_WAIT}); not dispatching."
+		return 4
 	fi
 
 	if ! phase_cap_can_dispatch "ai:review-blocked" "dispatch_rb_judge" "${issue_num}"; then

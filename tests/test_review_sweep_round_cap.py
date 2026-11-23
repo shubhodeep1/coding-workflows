@@ -66,6 +66,10 @@ if args[1:2] == ["graphql"]:
 	for pr in fixture("pulls.json", []):
 		state = gate.get(str(pr["number"]), "PENDING")
 		status = None if state == "ABSENT" else {"context": {"state": state}}
+		# Review-blocked judge merge verdict on the head (issue #9991).
+		verdict = fixture("verdicts.json", {}).get(str(pr["number"]))
+		if verdict and status is not None:
+			status["verdict"] = {"state": "SUCCESS", "description": verdict, "createdAt": "2026-11-23T09:00:00Z"}
 		commit = {"oid": pr["head"]["sha"], "status": status}
 		committed = commit_dates.get(str(pr["number"]), "2026-11-01T00:00:00Z")
 		if committed is not None:
@@ -544,3 +548,17 @@ def test_workflow_passes_the_cap_knobs_with_defaults() -> None:
 	assert env["SWEEP_REVIEW_ROUND_WINDOW_HOURS"] == "${{ vars.SWEEP_REVIEW_ROUND_WINDOW_HOURS || '48' }}"
 	# The helper comes from the trusted default-branch checkout, like the head gate.
 	assert "source .ci-rerun-support/scripts/review_sweep_round_cap.sh" in _extract_step_script()
+
+
+@pytest.mark.parametrize("switch, capped", [("true", False), ("false", True)])
+def test_head_with_a_judge_merge_verdict_is_not_capped(tmp_path: Path, switch: str, capped: bool) -> None:
+	# Issue #9991: #9839 was labelled ai:needs-human while its judge `merge`
+	# verdict only waited for the merge lease. Without pr_checks_lib.sh staged
+	# the sweep cannot evaluate the verdict, so it dispatches, but never caps.
+	(tmp_path / "verdicts.json").write_text(json.dumps({"5": "decision=merge wait=lease_wait base=" + "b" * 40 + " ms=blocked"}), encoding="utf-8")
+	result = _run_sweep(tmp_path, prs=[_pr(5)], rounds=_rounds(**{"5": 40}), gate={"5": "PENDING"},
+		env={"VERDICT_WAIT_DISPATCH_SKIP_ENABLED": switch})
+	assert result.returncode == 0, result.stderr
+	assert ("reason=review_round_cap" in result.stdout) is capped, result.stdout
+	assert bool(_lines(tmp_path, "labels.log")) is capped
+	assert (_dispatched(tmp_path) == ["5"]) is (not capped)

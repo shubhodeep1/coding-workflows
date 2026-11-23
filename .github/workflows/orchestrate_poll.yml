@@ -1706,6 +1706,8 @@ jobs:
           CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
           PYTHONDONTWRITEBYTECODE: "1"
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          # Verdict wait (issue #9991): skip re-dispatching the review-blocked judge for a head whose deferred merge verdict is unchanged; false restores the dispatch.
+          VERDICT_WAIT_DISPATCH_SKIP_ENABLED: ${{ vars.VERDICT_WAIT_DISPATCH_SKIP_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           bash scripts/orchestrate_poll_process.sh
@@ -1892,6 +1894,8 @@ jobs:
           CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
           PYTHONDONTWRITEBYTECODE: "1"
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          # Verdict wait (issue #9991): skip re-dispatching the review-blocked judge for a head whose deferred merge verdict is unchanged; false restores the dispatch.
+          VERDICT_WAIT_DISPATCH_SKIP_ENABLED: ${{ vars.VERDICT_WAIT_DISPATCH_SKIP_ENABLED || 'true' }}
           STANDALONE_RECOVERY_SWEEP_ONLY: "true"
         run: |
           set -euo pipefail
