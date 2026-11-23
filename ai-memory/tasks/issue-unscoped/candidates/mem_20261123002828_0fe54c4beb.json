@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_poll_test_sharding.py:1979-1986 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The standalone comment \"# moved on to tests-hooks-and-orchestrator in budget-watch issue #9420; constant name kept\" at line 1983 repeats what the block comment at lines 1979-1981 already says, and it reads as a sentence fragment above `RELEASE_TO_HEAL_TARGET_JOB_ID`.\n  WHY: The issue is in comments only and has no runtime effect, but repeating the same fact could mislead future readers; all three reviewers rated it NIT (mapped to low here), and anthropic_claude-sonnet-5_5 declined to report it as style-only redundancy.\n- .github/workflows/ci.yml:1371 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The comment says \"...moved them on to this job with the three steps above\", but only two of the three steps named in the paragraph before it sit physically above it, and the comment falls between two groups of three steps.\n  WHY: The reviewer says this misleads future maintainers and rated it NIT (mapped to low here); anthropic_claude-sonnet-5_5 called it a misreading and said the comment is accurate (the #9420 steps are above it and the #8208 group is below it).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: `.github/workflows/ci.yml`, selecting steps from `tests-heal-plan-and-validation` and placing them in the target job\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The steps were moved on estimated cost, not measured timings (run 43314513853 timings are not in the workspace and could not be fetched), `.github/workflows/ci.yml:1330-1344` says the run's step timings could not be read and the selection is an estimate, and the diff does not show that these are the slowest steps or that `tests-hooks-and-orchestrator` has the most headroom. Both reviewers rated it MAJOR. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash treat it as an accepted, documented residual that the last run did not change.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:1371 | severity=NIT | confidence=4\n  PROBLEM: The comment says \"...moved them on to this job with the three steps above\", but only two of the three steps named in the paragraph before it sit physically above it, and the comment falls between two groups of three steps.\n  WHY: It misleads future maintainers.\n- tests/test_ci_poll_test_sharding.py:1983 | severity=NIT | confidence=4\n  PROBLEM: The standalone comment \"# moved on to tests-hooks-and-orchestrator in budget-watch issue #9420; constant name kept\" repeats the block comment directly above it (lines 1979-1981).\n  WHY: It adds needless documentation noise.\n- TASK_GAP | severity=MAJOR | confidence=4\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The steps were moved on estimated cost, not measured timings (run 43314513853 timings are not in the workspace or artifact directory, and there is no network access to fetch them). The issue does not defer this, but the PR author defers timing-based selection in comments.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_ci_poll_test_sharding.py:1979-1986 | severity=NIT | confidence=4\n  PROBLEM: The inline comment \"# moved on to tests-hooks-and-orchestrator in budget-watch issue #9420; constant name kept\" directly above `RELEASE_TO_HEAL_TARGET_JOB_ID = \"tests-hooks-and-orchestrator\"` repeats the end of the block comment just above it, and it reads like a sentence fragment.\n  WHY: There is no runtime failure; the redundancy is in comments only and may mildly mislead a reader into thinking the constant name still encodes its original target.\n- HARDENING: tests/test_ci_poll_test_sharding.py line 1983 | HARDENING_RISK_SCORE: 1\n  PROBLEM: The inline comment duplicates the end of the block comment on lines 1979-1981.\n  WHY: Suggested fix: delete the standalone comment line so the block comment stays the single source of truth (-1 line).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP | severity=MAJOR | confidence=4\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, selecting steps from `tests-heal-plan-and-validation` and placing them in the target job.\n  Evidence of absence: The PR moves six steps, but `.github/workflows/ci.yml:1330-1344` says the run's step timings could not be read and the selection is an estimate, not a measurement. The diff therefore does not show that these are the slowest steps or that `tests-hooks-and-orchestrator` has the most headroom.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_ci_poll_test_sharding.py:lines 1979-1981 (new block-comment text added by last run) duplicating line 1983 | severity=NIT | confidence=4\n  PROBLEM: The expanded block comment above `RELEASE_TO_HEAL_SOURCE_JOB_ID` already says \"#9420 moved them on to tests-hooks-and-orchestrator\", and the standalone comment on line 1983 states the same fact again as a lowercase fragment above the constant.\n  WHY: There is no runtime failure; it is in comments only, but stating the same retarget twice in adjacent lines, one as a loose sentence fragment, misleads future readers.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a7f7059c63fee22327f65ca4015ac4bbd75cda2825266807096905310d45f3cc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9702,
+    "run_id": "45078328900",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45078328900",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123002828_0fe54c4beb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9702,
+    "run_id": "45078328900"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T00:28:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
