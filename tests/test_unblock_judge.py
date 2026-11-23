@@ -1310,6 +1310,9 @@ def fields():
 if args[:2] == ["api", "graphql"]:
 	# #9809: the implementation-PR lookup; unset keeps the empty (unreadable) answer.
 	state.setdefault("graphql", []).append(args)
+	if os.environ.get("FAKE_GH_FAIL_GRAPHQL"):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
 	done(os.environ.get("FAKE_GH_GRAPHQL", ""))
 if args[:1] == ["workflow"]:
 	if os.environ.get("FAKE_GH_FAIL_DISPATCH"):
@@ -4298,8 +4301,14 @@ def _heal_green_runs(count: int = 5, conclusion: str = "success") -> str:
 PLACEHOLDER = "DOC_SYNC_UNSET_OPERATOR_STEP"
 
 
+# The #9809 lookup's answer when no implementation PR is open (`none`).
+PLACEHOLDER_NO_PR_GRAPHQL = json.dumps({"data": {"repository": {"pullRequests": {"nodes": []},
+	"issue": {"timelineItems": {"nodes": []}}}}})
+
+
 def _placeholder_judge(tmp_path: Path, item: dict | None = None, **env):
 	target = _target_repo(tmp_path / "t", "Nothing pending.\n")
+	env.setdefault("FAKE_GH_GRAPHQL", PLACEHOLDER_NO_PR_GRAPHQL)
 	return _judge(tmp_path, item or _heal_item(), comments=[_hold_comment("placeholder_retired", PLACEHOLDER)],
 		TARGET_DIR=str(target), **env)
 
@@ -4315,7 +4324,8 @@ def test_placeholder_hold_on_heal_closes_when_failure_did_not_recur(tmp_path: Pa
 		in result.stdout), result.stdout + result.stderr
 	assert _closed_item(state)
 	assert state["workflow_run_reads"] == ["repos/o/r/actions/workflows/ci.yml/runs"]
-	assert state["open_pr_reads"] == ["repos/o/r/pulls?state=open&head=o:ai/issue-7&per_page=1"]
+	# The #9809 lookup answered `none`: no second (REST) pull-request read.
+	assert "open_pr_reads" not in state and len(state["graphql"]) == 1
 	done = state["patched"][-1]
 	assert done[0] == "repos/o/r/issues/comments/321"
 	assert done[1]["body"].endswith(f"<!-- ai:unblock-wait:v1 item=7 hold=placeholder_retired ref={PLACEHOLDER} done -->")
@@ -4327,7 +4337,9 @@ def test_placeholder_hold_on_heal_closes_when_failure_did_not_recur(tmp_path: Pa
 
 @pytest.mark.parametrize("env", [
 	{"FAKE_GH_WORKFLOW_RUNS": _heal_green_runs(6, conclusion="failure")},
-	{"FAKE_GH_WORKFLOW_RUNS": _heal_green_runs(), "FAKE_GH_OPEN_ISSUE_PRS": json.dumps([{"number": 80}])},
+	{"FAKE_GH_WORKFLOW_RUNS": _heal_green_runs(), "FAKE_GH_GRAPHQL": json.dumps({"data": {"repository": {"pullRequests": {"nodes": [
+		{"number": 80, "state": "OPEN", "headRefName": "ai/issue-7", "headRepository": {"nameWithOwner": "o/r"}}]},
+		"issue": {"timelineItems": {"nodes": []}}}}})},
 	{"FAKE_GH_WORKFLOW_RUNS": _heal_green_runs(3)},
 	{},
 ])
@@ -4365,6 +4377,30 @@ def test_placeholder_hold_keeps_waiting_while_a_closing_pr_is_open(tmp_path: Pat
 	assert "op=impl_pr outcome=found pr=81" in result.stdout, result.stdout
 	assert f"hold=placeholder_retired ref={PLACEHOLDER} outcome=holding" in result.stdout, result.stdout
 	assert not _closed_item(state) and "open_pr_reads" not in state
+
+
+@pytest.mark.parametrize("env", [
+	{"FAKE_GH_GRAPHQL": "{}"},
+	{"FAKE_GH_GRAPHQL": ""},
+	{"FAKE_GH_FAIL_GRAPHQL": "1"},
+])
+def test_placeholder_hold_keeps_waiting_when_the_pr_lookup_is_unknown(tmp_path: Path, env: dict) -> None:
+	# An unreadable or failed #9809 lookup is not replaced by the narrower ai/issue-<n> listing.
+	result, state = _placeholder_judge(tmp_path, FAKE_GH_WORKFLOW_RUNS=_heal_green_runs(), **env)
+	assert f"hold=placeholder_retired ref={PLACEHOLDER} outcome=holding" in result.stdout, result.stdout + result.stderr
+	assert not _closed_item(state) and "open_pr_reads" not in state
+
+
+def test_placeholder_hold_uses_the_head_listing_when_the_pr_lookup_did_not_run(tmp_path: Path) -> None:
+	# Routing off: the lookup never runs, so the pre-#9809 ai/issue-<n> head listing decides.
+	result, state = _placeholder_judge(tmp_path / "none", FAKE_GH_WORKFLOW_RUNS=_heal_green_runs(),
+		UNBLOCK_EXISTING_PR_ROUTING_ENABLED="false")
+	assert "graphql" not in state and state["open_pr_reads"] == ["repos/o/r/pulls?state=open&head=o:ai/issue-7&per_page=1"]
+	assert _closed_item(state), result.stdout + result.stderr
+	result, state = _placeholder_judge(tmp_path / "open", FAKE_GH_WORKFLOW_RUNS=_heal_green_runs(),
+		UNBLOCK_EXISTING_PR_ROUTING_ENABLED="false", FAKE_GH_OPEN_ISSUE_PRS=json.dumps([{"number": 80}]))
+	assert f"hold=placeholder_retired ref={PLACEHOLDER} outcome=holding" in result.stdout, result.stdout
+	assert not _closed_item(state)
 
 
 def test_placeholder_recurrence_check_skips_untrusted_authors_before_any_read(tmp_path: Path) -> None:

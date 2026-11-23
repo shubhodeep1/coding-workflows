@@ -633,17 +633,26 @@ unblock_placeholder_recurrence_check()
 	fi
 	# Like the other hold-condition reads, these make one attempt (they are not
 	# on CONSIST-001's gh_retry list): a failed read keeps the hold for the next run.
-	# Linked PR: an open ai/issue-<n> implementation PR keeps the item. API
-	# hygiene (CLAUDE.md §14): no earlier read in this run lists this item's
-	# PRs. An unreadable answer omits --linked-pr-json (linked_pr_unknown: keep).
-	# This run's #9809 lookup (unblock_resolve_implementation_pr, no new call)
-	# also sees an open same-repository PR that closes the item: an open PR
-	# found there, or two of them (ambiguous), keeps the item.
+	# Linked PR: an open implementation PR keeps the item. An unknown answer
+	# omits --linked-pr-json (linked_pr_unknown: keep). When this run's #9809
+	# lookup (unblock_resolve_implementation_pr) ran, its answer decides with
+	# no new call (CLAUDE.md §14): its one GraphQL read covers both the open
+	# ai/issue-<n> head PRs and the open same-repository PRs closing the item.
+	# A found PR or `ambiguous` keeps the item, `none` means no open PR, and
+	# `unreadable`, any other answer or a failed lookup keeps the item. Only a
+	# lookup that never ran (routing off, a stop outside its list) falls back
+	# to the REST ai/issue-<n> head listing, the one read made before #9809.
 	owner="${REPOSITORY%%/*}"
-	if [ -n "${UNBLOCK_IMPL_PR_RESULT_FILE:-}" ] \
-		&& jq -e '(.pr | type) == "number" or .reason == "ambiguous"' "${UNBLOCK_IMPL_PR_RESULT_FILE}" >/dev/null 2>&1; then
-		printf '{"state":"OPEN"}\n' > "${RUNTIME_DIR}/hold_linked_pr.json"
-		decide_args+=(--linked-pr-json "${RUNTIME_DIR}/hold_linked_pr.json")
+	if [ -n "${UNBLOCK_IMPL_PR_RESULT_FILE:-}" ]; then
+		if jq -e '(.pr | type) == "number" or .reason == "ambiguous"' "${UNBLOCK_IMPL_PR_RESULT_FILE}" >/dev/null 2>&1; then
+			printf '{"state":"OPEN"}\n' > "${RUNTIME_DIR}/hold_linked_pr.json"
+			decide_args+=(--linked-pr-json "${RUNTIME_DIR}/hold_linked_pr.json")
+		elif jq -e '.pr == null and .reason == "none"' "${UNBLOCK_IMPL_PR_RESULT_FILE}" >/dev/null 2>&1; then
+			printf 'null\n' > "${RUNTIME_DIR}/hold_linked_pr.json"
+			decide_args+=(--linked-pr-json "${RUNTIME_DIR}/hold_linked_pr.json")
+		fi
+	elif [ "${UNBLOCK_IMPL_PR_LOOKUP_FAILED:-}" = "true" ]; then
+		: # The lookup ran and failed: no --linked-pr-json, so the hold is kept.
 	elif pulls_json="$(gh api "repos/${REPOSITORY}/pulls?state=open&head=${owner}:ai/issue-${ITEM}&per_page=1" 2>/dev/null)" \
 		&& jq -e 'type == "array"' <<< "${pulls_json}" >/dev/null 2>&1; then
 		if jq -e 'length == 0' <<< "${pulls_json}" >/dev/null 2>&1; then
@@ -2150,6 +2159,9 @@ unblock_resolve_ci_owner()
 # Set by unblock_resolve_implementation_pr once this run parsed its answer;
 # reset here so an inherited environment value is never read (#9967).
 UNBLOCK_IMPL_PR_RESULT_FILE=""
+# Set when that lookup ran but its read or parse failed, so the recurrence
+# check keeps the hold instead of trusting a narrower listing (#9967).
+UNBLOCK_IMPL_PR_LOOKUP_FAILED=""
 
 # Existing-PR routing (#9809). Default on: unset, empty or `true`; `false`
 # turns it off; any other value turns it off and says so.
@@ -2193,11 +2205,13 @@ unblock_resolve_implementation_pr()
 		-f owner="${owner}" -f name="${name}" -f head="ai/issue-${ITEM}" -F number="${ITEM}" \
 		> "${graphql_file}" 2>/dev/null; then
 		unblock_log "item=${ITEM} op=impl_pr outcome=unavailable reason=read_failed"
+		UNBLOCK_IMPL_PR_LOOKUP_FAILED="true"
 		return 0
 	fi
 	if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" impl-pr --graphql-file "${graphql_file}" --item "${ITEM}" \
 		--repo "${REPOSITORY}" --pipeline-login "${UNBLOCK_LOGIN:-}" > "${result_file}" 2>/dev/null; then
 		unblock_log "item=${ITEM} op=impl_pr outcome=unavailable reason=parse_failed"
+		UNBLOCK_IMPL_PR_LOOKUP_FAILED="true"
 		return 0
 	fi
 	# #9967: the placeholder_retired recurrence check reuses this run's answer.
