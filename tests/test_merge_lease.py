@@ -339,9 +339,13 @@ class FinalCiPendingMark(unittest.TestCase):
 		start = text.index("_pr_wait_for_required_checks()\n{")
 		body = text[start:text.index("\n}\n", start)]
 		timeouts = re.findall(r'echo "AUTOFIX_AUTO_MERGE_CHECKS ([^\n]*outcome=timeout[^\n]*)\n\t*([^\n]*)', body)
-		# A failed final CI dispatch leaves no run to wait for, so that exit must not mark.
-		marking = [follow for line, follow in timeouts if "reason=final_ci_dispatch_failed" not in line]
-		unmarked = [follow for line, follow in timeouts if "reason=final_ci_dispatch_failed" in line]
+		# A failed final CI dispatch, or a head held back because its CI wiring
+		# is behind the base (issue #9993), leaves no run to wait for, so those
+		# exits must not mark.
+		no_run = ("reason=final_ci_dispatch_failed", "reason=final_ci_wiring_behind")
+		marking = [follow for line, follow in timeouts if not any(r in line for r in no_run)]
+		unmarked = [follow for line, follow in timeouts if any(r in line for r in no_run)]
+		self.assertEqual(len(unmarked), 2)
 		self.assertEqual(len(marking), 3)
 		for follow in unmarked:
 			self.assertNotIn("_pr_final_ci_merge_pending_mark", follow)
