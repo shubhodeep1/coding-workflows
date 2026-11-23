@@ -63,11 +63,13 @@ daily_usage_output()
 
 # First UTC hour of the daily slot: CLAUDE_POOL_DAILY_USAGE_HOUR_UTC, 0-23;
 # anything else is 0. The length bound runs before any arithmetic, so an
-# oversized digit string cannot wrap to a negative or in-range hour.
+# oversized digit string cannot wrap to a negative or in-range hour. Leading
+# zeros cannot overflow, so a zero-padded value such as 023 still means 23,
+# as it did before the bound was added.
 daily_usage_start_hour()
 {
 	local start_hour="${CLAUDE_POOL_DAILY_USAGE_HOUR_UTC:-0}"
-	if ! [[ "${start_hour}" =~ ^[0-9]{1,2}$ ]] || [ "$((10#${start_hour}))" -gt 23 ]; then
+	if ! [[ "${start_hour}" =~ ^0*[0-9]{1,2}$ ]] || [ "$((10#${start_hour}))" -gt 23 ]; then
 		start_hour=0
 	fi
 	printf '%s\n' "$((10#${start_hour}))"
