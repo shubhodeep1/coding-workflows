@@ -2022,8 +2022,9 @@ class HolderRunsActive(unittest.TestCase):
 		st = self._holder(updated=OLD, extra={"active_runs": [_dispatch_run(4)]})
 		st["pulls"].append(_pull(5))
 		st["labels"] = {"5": ["ai:merge-queued"]}
-		# PR 5's dispatch fails, so the pass dispatched nothing and its listing
-		# is still current (a dispatch makes the tick list again; see below).
+		# PR 5's dispatch fails, so this case covers the plain reuse path; a
+		# holder whose review the pass just dispatched is covered in
+		# test_a_review_dispatched_by_the_release_pass_keeps_the_holder.
 		st["fail"] = ["workflow run"]
 		h0, _ = _p2_tick(self._holder(updated=OLD, extra={"active_runs": [_dispatch_run(4)]}))
 		one_pass = _calls_with(h0, "actions/runs?status=")
