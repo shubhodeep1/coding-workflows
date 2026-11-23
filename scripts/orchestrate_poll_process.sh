@@ -298,6 +298,23 @@ _fetch_blocked_issue_routing_graphql() {
 # quiet. Fails open on every path; never exits non-zero. One rate-limit read,
 # one issue listing, then ceil(N/25) GraphQL calls; a comment POST and a
 # Telegram WARNING only for flagged issues.
+# Issue #3576: the long-lived security-audit tracker (label ai:security-audit)
+# is not a work item, so the unrouted-comment detector skips it like
+# ai:orchestrator-tracking. SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED=false
+# restores the previous filter. Input: the `gh issue list --json number,labels`
+# array; output: a JSON array of issue numbers. No API calls.
+_unrouted_blocked_candidate_numbers() {
+  # The sweep-only path exits before is_truthy is defined, so the same
+  # 1|true|yes|on vocabulary is parsed inline here.
+  local exclude_tracker="false"
+  case "$(printf '%s' "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) exclude_tracker="true" ;;
+  esac
+  printf '%s' "${1:-[]}" | jq -c --argjson exclude_tracker "${exclude_tracker}" '[.[]? | select(any(.labels[]?; .name == "ai:orchestrator-tracking" or .name == "ai:reclarify-requeue") | not)
+    | select(($exclude_tracker and any(.labels[]?; .name == "ai:security-audit")) | not)
+    | .number | select(type == "number" and . > 0)] | unique' 2>/dev/null
+}
+
 detect_unrouted_blocked_comments() {
   [ "${RECLARIFY_UNROUTED_DETECT_ENABLED:-true}" = "true" ] || return 0
   local grace="${RECLARIFY_UNROUTED_GRACE_MINUTES:-15}" max_age="${RECLARIFY_UNROUTED_MAX_AGE_HOURS:-168}"
@@ -314,8 +331,7 @@ detect_unrouted_blocked_comments() {
     echo "RECLARIFY_UNROUTED outcome=skip reason=issue_list_unavailable"
     return 0
   }
-  numbers="$(printf '%s' "${blocked}" | jq -c '[.[]? | select(any(.labels[]?; .name == "ai:orchestrator-tracking" or .name == "ai:reclarify-requeue") | not)
-    | .number | select(type == "number" and . > 0)] | unique' 2>/dev/null)" || numbers="[]"
+  numbers="$(_unrouted_blocked_candidate_numbers "${blocked}")" || numbers="[]"
   [ "$(printf '%s' "${numbers}" | jq 'length' 2>/dev/null || echo 0)" -gt 0 ] 2>/dev/null || return 0
   work_dir="$(mktemp -d "${TMPDIR:-/tmp}/reclarify_unrouted_work.XXXXXX")" || return 0
   if ! _fetch_blocked_issue_routing_graphql "${numbers}" "${work_dir}/details.json"; then
@@ -2585,8 +2601,14 @@ _jq_field()
 #     sync:           direct merge only.
 # The noop-suspicious force-merge (auto-merge only) binds inline.
 #   Returns 0 when GitHub accepted the merge or the auto-merge request,
-#   1 when it refused, 2 (no gh call) when the SHA is not 40-hex.
-#   Sets ORCH_MERGE_BOUND_OUTCOME=enabled|merged|failed|refused.
+#   1 when it refused or the blocked-merge guard deferred the direct merge,
+#   2 (no gh call) when the SHA is not 40-hex.
+#   Sets ORCH_MERGE_BOUND_OUTCOME=enabled|merged|failed|refused|deferred.
+# The direct merge runs only when _pr_sync_merge_blocked_guard
+# (scripts/pr_checks_lib.sh, #9939) does not see mergeable_state=blocked or
+# unknown: the poller's admin GH_PAT would otherwise bypass the ruleset.
+# Deferring returns 1, which is what callers already saw when GitHub refused
+# a blocked merge for a token without bypass rights.
 _orch_squash_merge_bound()
 {
 	local pr="$1"
@@ -2606,6 +2628,12 @@ _orch_squash_merge_bound()
 		ORCH_MERGE_BOUND_OUTCOME="enabled"
 		echo "ORCH_MERGE_HEAD_BOUND pr=${pr} head_sha=${head_sha} mode=${mode} outcome=enabled"
 		return 0
+	fi
+	if ! declare -F _pr_sync_merge_blocked_guard >/dev/null 2>&1 \
+		|| ! _pr_sync_merge_blocked_guard "${pr}"; then
+		ORCH_MERGE_BOUND_OUTCOME="deferred"
+		echo "ORCH_MERGE_HEAD_BOUND pr=${pr} head_sha=${head_sha} mode=${mode} outcome=deferred"
+		return 1
 	fi
 	if gh_retry gh pr merge "${pr}" --repo "${GITHUB_REPOSITORY}" --squash --match-head-commit "${head_sha}" >/dev/null; then
 		ORCH_MERGE_BOUND_OUTCOME="merged"
@@ -3251,6 +3279,18 @@ if is_truthy "${ENABLE_STANDALONE_STALL_RECOVERY}"; then
 else
   ENABLE_STANDALONE_STALL_RECOVERY="false"
 fi
+
+# Issue #3576: keep the security-audit tracker (ai:security-audit) out of
+# standalone stall recovery, the unblock scan and the unrouted-comment detector.
+# Exported so scripts/unblock_scan.py sees the same value; false restores the
+# previous behaviour.
+SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED="${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}"
+if is_truthy "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED}"; then
+  SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED="true"
+else
+  SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED="false"
+fi
+export SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED
 
 ENABLE_CLOSE_MERGED_ISSUES="${ENABLE_CLOSE_MERGED_ISSUES:-true}"
 if is_truthy "${ENABLE_CLOSE_MERGED_ISSUES}"; then
@@ -15686,6 +15726,7 @@ Unable to create or locate the final integration PR from \`${integration_branch}
   # so the ineligibility alert (ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS) names
   # it instead of three refused merges parking the project. A failed lookup
   # fails open to the merge attempt, which records GitHub's refusal reason.
+  local final_blockers_hint=""
   if [ "${pr_state}" = "open" ] && [ "$(_jq_field "${pr_json}" '.mergeable_state' '[a-z_]+')" = "blocked" ] \
     && declare -F _pr_ruleset_required_check_blockers >/dev/null 2>&1; then
     local final_ruleset_rc=0
@@ -15696,8 +15737,29 @@ Unable to create or locate the final integration PR from \`${integration_branch}
       return 1
     fi
     if [ "${final_ruleset_rc}" = "2" ]; then
-      echo "::warning::  [final-merge] Could not read ruleset-required checks for PR #${final_pr}; attempting the merge."
+      final_blockers_hint="unknown"
+      case "$(printf '%s' "${PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+        false|0|no|off)
+          echo "::warning::  [final-merge] Could not read ruleset-required checks for PR #${final_pr}; attempting the merge."
+          ;;
+      esac
+    else
+      final_blockers_hint="none"
     fi
+  fi
+
+  # Blocked-merge guard (#9939): never merge while GitHub reports the PR
+  # blocked, even when the ruleset helper names no blocker (it matches by
+  # name, and counted the dispatched final CI's `lint` check-run that GitHub
+  # never evaluates for the PR, so the admin GH_PAT merge bypassed the
+  # rule). Reuses pr_json and the blockers found above: no extra call.
+  # PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED=false keeps the old behaviour.
+  if [ "${pr_state}" = "open" ] \
+    && { ! declare -F _pr_sync_merge_blocked_guard >/dev/null 2>&1 \
+      || ! _pr_sync_merge_blocked_guard "${pr_json}" "${default_branch}" "${final_blockers_hint}"; }; then
+    FINAL_MERGE_BUDGET_ELIGIBLE="0"
+    echo "  [final-merge] PR #${final_pr} is blocked (mergeable_state=${SYNC_MERGE_BLOCKED_GUARD_STATE:-unknown}; blockers: ${SYNC_MERGE_BLOCKED_GUARD_BLOCKERS:-unknown}). Will retry next poll."
+    return 1
   fi
 
   # Promote cycle: a VERIFYING run's ready-to-merge point promotes the pinned
@@ -17201,8 +17263,20 @@ has_active_validation_run() {
   # is acceptable because the poll cycle retries on the next tick
   # and the actual dispatch/mutation calls still go through
   # gh_retry.  (Copilot review on PR #1044.)
-  active_count="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?per_page=5" \
-    --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued")] | length' || echo '0')"
+  # Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is
+  # wedged (zero jobs, cannot be cancelled) and is not active. gh --jq takes
+  # no jq arguments, so the same single response is filtered locally.
+  local va_zq_cutoff va_zq_def va_runs_body
+  va_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+  [[ "${va_zq_cutoff}" =~ ^[0-9]+$ ]] || va_zq_cutoff=0
+  va_zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
+  va_runs_body="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?per_page=5" || echo '')"
+  if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+    zombie_queued_log_ignored poll_validate_active "${va_zq_cutoff}" <<< "${va_runs_body}"
+  fi
+  active_count="$(printf '%s' "${va_runs_body}" \
+    | jq -r --argjson zq_cutoff "${va_zq_cutoff}" "${va_zq_def}"'[.workflow_runs[] | select(.status == "in_progress" or .status == "queued") | select(is_wedged_queued($zq_cutoff) | not)] | length' 2>/dev/null || echo '0')"
+  [[ "${active_count}" =~ ^[0-9]+$ ]] || active_count=0
   if [ "${active_count}" -gt 0 ]; then
     return 0
   fi
@@ -17212,8 +17286,13 @@ has_active_validation_run() {
   # one that actually resolves, so we want it to fire fast without
   # retry backoff on the preceding 404.
   if [ "${wf_name}" != "internal-validate.yml" ]; then
-    active_count="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?per_page=5" \
-      --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued")] | length' || echo '0')"
+    va_runs_body="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?per_page=5" || echo '')"
+    if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+      zombie_queued_log_ignored poll_validate_active "${va_zq_cutoff}" <<< "${va_runs_body}"
+    fi
+    active_count="$(printf '%s' "${va_runs_body}" \
+      | jq -r --argjson zq_cutoff "${va_zq_cutoff}" "${va_zq_def}"'[.workflow_runs[] | select(.status == "in_progress" or .status == "queued") | select(is_wedged_queued($zq_cutoff) | not)] | length' 2>/dev/null || echo '0')"
+    [[ "${active_count}" =~ ^[0-9]+$ ]] || active_count=0
     if [ "${active_count}" -gt 0 ]; then
       return 0
     fi
@@ -19440,8 +19519,17 @@ prime_phase_concurrency_snapshot() {
   if [ -n "${STALL_THRESHOLD_IMPLEMENTING_MINUTES:-}" ]; then
     caps_cmd+=(--implementing-threshold-minutes "${STALL_THRESHOLD_IMPLEMENTING_MINUTES}")
   fi
-  if ! snapshot_json="$("${caps_cmd[@]}" 2>/dev/null <<<"${actions_runs_blob}")"; then
+  # Issue #9473: keep the builder's other stderr out of the log, but forward
+  # its ZOMBIE_RUN_IGNORED lines (guard=concurrency_snapshot) and the
+  # invalid ZOMBIE_RUN_MAX_QUEUED_HOURS warning so they stay searchable.
+  local caps_err_file=""
+  caps_err_file="$(mktemp "${TMPDIR:-/tmp}/phase_caps_snapshot_err.XXXXXX" 2>/dev/null || true)"
+  if ! snapshot_json="$("${caps_cmd[@]}" 2>"${caps_err_file:-/dev/null}" <<<"${actions_runs_blob}")"; then
     snapshot_json='{"enabled":false,"status":"invalid","error":"snapshot_build_failed","global_max_concurrent":null,"max_concurrent_by_state":{},"running_by_state":{},"global_running":0}'
+  fi
+  if [ -n "${caps_err_file}" ]; then
+    grep -E '^(ZOMBIE_RUN_IGNORED |::warning::ZOMBIE_RUN_MAX_QUEUED_HOURS )' "${caps_err_file}" >&2 2>/dev/null || true
+    rm -f "${caps_err_file}" 2>/dev/null || true
   fi
   [ -n "${snapshot_json}" ] || snapshot_json='{"enabled":false,"status":"invalid","error":"empty_snapshot","global_max_concurrent":null,"max_concurrent_by_state":{},"running_by_state":{},"global_running":0}'
   if [ "${actions_runs_fetch_rc}" -ne 0 ] && jq -e '.enabled == true' <<<"${snapshot_json}" >/dev/null 2>&1; then
@@ -19576,13 +19664,24 @@ _direct_inflight_review_run_on_branch()
 		return 0
 	fi
 	_di_runs_total="$(printf '%s' "${_di_runs_json}" | jq -r 'length' 2>/dev/null || echo "invalid")"
-	_di_runs_live="$(printf '%s' "${_di_runs_json}" | jq -r '[.[]? | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")] | length' 2>/dev/null || echo "invalid")"
+	# Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is
+	# wedged (zero jobs, cannot be cancelled) and is not live.
+	local _di_zq_cutoff _di_zq_def
+	_di_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+	[[ "${_di_zq_cutoff}" =~ ^[0-9]+$ ]] || _di_zq_cutoff=0
+	_di_zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
+	if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+		zombie_queued_log_ignored stall_inflight_direct_check "${_di_zq_cutoff}" <<< "${_di_runs_json}"
+	fi
+	_di_runs_live="$(printf '%s' "${_di_runs_json}" | jq -r --argjson zq_cutoff "${_di_zq_cutoff}" "${_di_zq_def}"'[.[]? | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length' 2>/dev/null || echo "invalid")"
 	_di_match="$(printf '%s' "${_di_runs_json}" | jq -r \
 		--argjson now "${_di_now_epoch}" \
-		--argjson threshold "${_di_stall_secs}" '
+		--argjson zq_cutoff "${_di_zq_cutoff}" \
+		--argjson threshold "${_di_stall_secs}" "${_di_zq_def}"'
 		(if type == "array" then . else [] end)
 		| [ .[]?
 			| select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
+			| select(is_wedged_queued($zq_cutoff) | not)
 			| select(
 				((.name // "") == "AI Review" or (.name // "") == "Internal Review" or (.name // "") == "Review Autofix"
 				 or (.name // "") == "Internal: AI Review & Autofix" or (.name // "") == "Codex PR Self-Healing Semantic Agent")
@@ -19604,12 +19703,17 @@ _direct_inflight_review_run_on_branch()
 			printf '%s\n' "listing-incomplete"
 			return 0
 		fi
+		if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+			zombie_queued_log_ignored stall_inflight_direct_check "${_di_zq_cutoff}" <<< "${_di_pr_named_json}"
+		fi
 		_di_match="$(printf '%s' "${_di_pr_named_json}" | jq -r \
 			--argjson now "${_di_now_epoch}" \
-			--argjson threshold "${_di_stall_secs}" '
+			--argjson zq_cutoff "${_di_zq_cutoff}" \
+			--argjson threshold "${_di_stall_secs}" "${_di_zq_def}"'
 			(if type == "array" then . else [] end)
 			| [ .[]?
 				| select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
+				| select(is_wedged_queued($zq_cutoff) | not)
 				| ([.startedAt, .createdAt] | map(select(type == "string" and . != ""))[0] // "") as $ts
 				| (if $ts != ""
 				   then (try ($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch $now)
@@ -19778,8 +19882,17 @@ build_active_issue_set() {
   local runs_json
   runs_json="$(printf '%s' "${actions_runs_blob}" | jq -c '[.workflow_runs[]? | select((.status // "") == "in_progress")] | .[:50]' 2>/dev/null || echo '[]')"
   [ -n "${runs_json}" ] || runs_json='[]'
+  # Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is
+  # wedged (zero jobs, cannot be cancelled). Drop it before the 50-run
+  # window so wedged runs cannot crowd out live queued runs.
+  local bais_zq_cutoff
+  bais_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+  [[ "${bais_zq_cutoff}" =~ ^[0-9]+$ ]] || bais_zq_cutoff=0
+  if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+    zombie_queued_log_ignored build_active_issue_set "${bais_zq_cutoff}" <<< "${actions_runs_blob}"
+  fi
   local queued_json
-  queued_json="$(printf '%s' "${actions_runs_blob}" | jq -c '[.workflow_runs[]? | select((.status // "") == "queued")] | .[:50]' 2>/dev/null || echo '[]')"
+  queued_json="$(printf '%s' "${actions_runs_blob}" | jq -c --argjson zq_cutoff "${bais_zq_cutoff}" "$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"'[.workflow_runs[]? | select((.status // "") == "queued") | select(is_wedged_queued($zq_cutoff) | not)] | .[:50]' 2>/dev/null || echo '[]')"
   [ -n "${queued_json}" ] || queued_json='[]'
 
 
@@ -22086,6 +22199,15 @@ STALL_EOF
           local _rtr_inflight_blob _rtr_inflight_id _rtr_direct_inflight_id _rtr_now_epoch _rtr_stall_secs _rtr_origin_head_sha _rtr_push_succeeded
           _rtr_inflight_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
           _rtr_now_epoch="$(date +%s 2>/dev/null || echo "")"
+          # Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS
+          # is wedged (zero jobs, cannot be cancelled) and is not in flight.
+          local _rtr_zq_cutoff _rtr_zq_def
+          _rtr_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+          _rtr_zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
+          [[ "${_rtr_zq_cutoff}" =~ ^[0-9]+$ ]] || _rtr_zq_cutoff=0
+          if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+            zombie_queued_log_ignored retrigger_review_inflight "${_rtr_zq_cutoff}" <<< "$(printf '%s' "${_rtr_inflight_blob}" | jq -c --arg br "${head_ref}" --arg pr "${pr_num}" '[.workflow_runs[]? | select(type == "object" and ((.path // "") | test("(^|/)(ai-review|internal-review|review_autofix)\\.yml(@.*)?$")) and ((.head_branch // "") == $br or ($pr != "" and ((.display_title // "") | tostring | contains("[pr:" + $pr + "]")))))]' 2>/dev/null || echo '[]')"
+          fi
           # This block selects only review-family runs (name/path filter
           # below), so the freshness window is the review-run budget, not the
           # generic stall threshold — see REVIEW_RUN_MAX_RUNTIME_MINUTES.
@@ -22109,9 +22231,11 @@ STALL_EOF
               --arg db "${_rtr_review_default_branch}" \
               --arg repo "${GITHUB_REPOSITORY:-}" \
               --argjson now "${_rtr_now_epoch}" \
-              --argjson threshold "${_rtr_stall_secs}" "$(_pr_named_review_trust_jq_def)"'
+              --argjson zq_cutoff "${_rtr_zq_cutoff}" \
+              --argjson threshold "${_rtr_stall_secs}" "${_rtr_zq_def}""$(_pr_named_review_trust_jq_def)"'
               [.workflow_runs[]?
                | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
+               | select(is_wedged_queued($zq_cutoff) | not)
                | select(
                    ((.head_branch // "") == $br)
                    or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
@@ -26811,7 +26935,7 @@ run_unblock_scan() {
   if ! search_items="$(gh_retry gh api --method GET "search/issues" \
     -f q="repo:${GITHUB_REPOSITORY} is:open label:${labels_q}" \
     -f sort=updated -f order=asc -f per_page=30 \
-    --jq '[.items[]? | {number, labels: [.labels[]?.name], pull_request: (.pull_request != null), created_at, updated_at}]' 2>/dev/null)"; then
+    --jq '[.items[]? | {number, title, labels: [.labels[]?.name], pull_request: (.pull_request != null), created_at, updated_at}]' 2>/dev/null)"; then
     echo "UNBLOCK_SCAN outcome=skip reason=search_failed"
     return 0
   fi
@@ -26856,6 +26980,7 @@ run_unblock_scan() {
     [[ "${n}" =~ ^[0-9]+$ ]] || continue
     fragment+=$'\n'"    i${n}: issueOrPullRequest(number: ${n}) {
       ... on Issue {
+        title
         body
         author { login }
         authorAssociation
@@ -26863,6 +26988,7 @@ run_unblock_scan() {
         comments(last: 30) { totalCount nodes { body createdAt updatedAt author { login } } }
       }
       ... on PullRequest {
+        title
         timelineItems(last: 30, itemTypes: [LABELED_EVENT]) { nodes { ... on LabeledEvent { createdAt label { name } } } }
         comments(last: 30) { totalCount nodes { body createdAt updatedAt author { login } } }
       }
@@ -26884,6 +27010,7 @@ run_unblock_scan() {
         comments: [.value.comments.nodes[]? | {login: (.author.login // ""), body: (.body // ""), created_at: ((.updatedAt // .createdAt) // "")}],
         comment_count: .value.comments.totalCount,
         body: (.value.body // null),
+        title: (.value.title // null),
         author_login: (.value.author.login // ""),
         author_association: (.value.authorAssociation // ""),
         history_incomplete: ((.value.comments.totalCount | type) != "number" or (.value.comments.nodes | type) != "array" or .value.comments.totalCount > (.value.comments.nodes | length))
@@ -26925,10 +27052,12 @@ run_unblock_scan() {
       echo "UNBLOCK_SCAN item=${_scan_pr_dependency_item} kind=issue outcome=skip reason=pr_dependency_held"
       _scan_pr_dependency_held="$(printf '%s' "${_scan_pr_dependency_held}" | jq -c --argjson n "${_scan_pr_dependency_item}" '. + [$n]')"
     fi
-  done < <(jq -r --slurpfile details "${work_dir}/details.json" --slurpfile failed "${work_dir}/failed_projects.json" '
+  done < <(jq -r --slurpfile details "${work_dir}/details.json" --slurpfile failed "${work_dir}/failed_projects.json" \
+      --argjson exclude_tracker "$(is_truthy "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}" && echo true || echo false)" '
       .[]? | select(((.pull_request // false) != true) and ((.number | type) == "number"))
       | .number as $n
       | select(any((.labels // [])[]?; . == "ai:orchestrator-tracking") | not)
+      | select(($exclude_tracker and any((.labels // [])[]?; . == "ai:security-audit")) | not)
       | select(any(($failed[0] // [])[]?; . == $n) | not)
       | select(($details[0][($n | tostring)].body // "") | test("(^|\n)[ \t]*-?[ \t]*(Depends[ \t]+on[ \t]+PR|Requires[ \t]+on[ \t]+main)[ \t]*:"; "i"))
       | $n' "${work_dir}/search.json" 2>/dev/null || true)
@@ -27506,6 +27635,53 @@ else:
   return 0
 }
 
+# Issue #3576: the security-audit tracker (label ai:security-audit) never
+# enters the AI pipeline. When standalone stall recovery meets it, strip
+# ai:blocked and any pipeline phase label in one edit, log
+# STALL_RECOVERY_SKIP and tell the caller to skip the issue. It never closes
+# the tracker, edits its body or posts a command. Args: issue number, labels
+# JSON (names or {name} objects), pipeline phase labels JSON. Returns 0 when
+# the issue was handled (caller continues), 1 otherwise. A failed label edit
+# warns and still skips; the next tick retries.
+_security_audit_tracker_stall_guard() {
+  local issue_num="$1" labels_json="${2:-[]}" phase_labels="${3:-[]}"
+  local removable removed outcome
+  # Same 1|true|yes|on vocabulary as is_truthy, parsed inline so the guard
+  # does not depend on the normalisation block having run.
+  case "$(printf '%s' "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) ;;
+    *) return 1 ;;
+  esac
+  [[ "${issue_num}" =~ ^[1-9][0-9]*$ ]] || return 1
+  printf '%s' "${labels_json}" | jq -e \
+    '[.[]? | if type == "object" then (.name // "") else . end] | index("ai:security-audit") != null' \
+    >/dev/null 2>&1 || return 1
+  removable="$(printf '%s' "${labels_json}" | jq -r --argjson phase "${phase_labels}" \
+    '[.[]? | if type == "object" then (.name // "") else . end] | unique
+     | map(select(. == "ai:blocked" or (. as $l | $phase | index($l) != null))) | .[]' 2>/dev/null)" || removable=""
+  if [ -z "${removable}" ]; then
+    removed="none"
+    outcome="clean"
+  else
+    local -a remove_args=()
+    local label
+    while IFS= read -r label; do
+      [ -n "${label}" ] && remove_args+=(--remove-label "${label}")
+    done <<< "${removable}"
+    removed="$(printf '%s' "${removable}" | paste -sd, -)"
+    if gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" "${remove_args[@]}" >/dev/null 2>&1; then
+      outcome="cleaned"
+    else
+      outcome="remove_failed"
+      echo "::warning::[standalone-stall] could not remove ${removed} from security-audit tracker #${issue_num}; retrying next tick."
+      # Nothing was removed; the warning above names the attempted labels.
+      removed="none"
+    fi
+  fi
+  echo "STALL_RECOVERY_SKIP issue=${issue_num} reason=security_audit_tracker removed=${removed} outcome=${outcome} action=none"
+  return 0
+}
+
 run_standalone_stall_recovery() {
   if [ "${ENABLE_STANDALONE_STALL_RECOVERY}" != "true" ]; then
     echo "Standalone stall recovery disabled by ENABLE_STANDALONE_STALL_RECOVERY=${ENABLE_STANDALONE_STALL_RECOVERY}."
@@ -27558,19 +27734,28 @@ run_standalone_stall_recovery() {
   local pipeline_labels='["ai:clarification","ai:planning","ai:awaiting-approval","ai:implementing","ai:done","ai:ready-to-merge","ai:review-blocked"]'
   local labeled_issues='[]'
   local lbl
+  # Issue #3576: with the exclusion on, ai:security-audit joins the same
+  # label batch (one more alias, no extra API call) so a tracker that only
+  # carries ai:blocked still reaches _security_audit_tracker_stall_guard,
+  # which strips the label and skips it. pipeline_labels itself is unchanged.
+  local _sat_discovery_labels="${pipeline_labels}"
+  if is_truthy "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}"; then
+    _sat_discovery_labels="$(printf '%s' "${pipeline_labels}" | jq -c 'if index("ai:security-audit") then . else . + ["ai:security-audit"] end' 2>/dev/null)" || _sat_discovery_labels="${pipeline_labels}"
+    [ -n "${_sat_discovery_labels}" ] || _sat_discovery_labels="${pipeline_labels}"
+  fi
   # One aliased GraphQL request lists every pipeline label; the REST
   # listing below runs only for labels the batch could not cover.
   local _pls_resp
   local _pls_fallback
   local _pls_ok="true"
-  _pls_resp="$(_fetch_standalone_pipeline_label_issues_graphql "${pipeline_labels}")" || _pls_resp=""
+  _pls_resp="$(_fetch_standalone_pipeline_label_issues_graphql "${_sat_discovery_labels}")" || _pls_resp=""
   [ -n "${_pls_resp}" ] || _pls_ok="false"
   labeled_issues="$(printf '%s' "${_pls_resp}" | jq -c 'if (.issues | type) == "array" then .issues else [] end' 2>/dev/null || echo '[]')"
   [ -n "${labeled_issues}" ] || labeled_issues='[]'
   _pls_fallback="$(printf '%s' "${_pls_resp}" | jq -r 'if (.fallback_labels | type) == "array" then .fallback_labels[] else error("no fallback list") end' 2>/dev/null)" || _pls_ok="false"
   if [ "${_pls_ok}" != "true" ]; then
     labeled_issues='[]'
-    _pls_fallback="$(jq -r '.[]' <<<"${pipeline_labels}")"
+    _pls_fallback="$(jq -r '.[]' <<<"${_sat_discovery_labels}")"
   fi
   if [ -n "${_pls_fallback}" ]; then
     echo "::notice::Standalone stall recovery: label GraphQL batch fell back to REST for: $(printf '%s' "${_pls_fallback}" | tr '\n' ' ')"
@@ -27683,6 +27868,9 @@ run_standalone_stall_recovery() {
       else
         _standalone_staged_support_cache_available="complete"
       fi
+    fi
+    if _security_audit_tracker_stall_guard "${issue_num}" "${labels_json}" "${pipeline_labels}"; then
+      continue
     fi
     has_pipeline_label="$(echo "${labels_json}" | jq -r --argjson wanted "${pipeline_labels}" '[.[] | select($wanted | index(.))] | length')"
     has_marker="$(echo "${comments_json}" | jq -r '[.[] | select((.body // "") | test("<!-- AI_STANDALONE_STALL_STATE_V1|<!-- ai:clarification-questions -->"))] | length')"
@@ -28774,6 +28962,15 @@ STALL_EOF
 			_std_rtr_inflight_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
 			_std_rtr_now_epoch="$(date +%s 2>/dev/null || echo "")"
 			_std_rtr_stall_secs=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES * 60 ))
+			# Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS
+			# is wedged (zero jobs, cannot be cancelled) and is not in flight.
+			local _std_rtr_zq_cutoff _std_rtr_zq_def
+			_std_rtr_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+			_std_rtr_zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
+			[[ "${_std_rtr_zq_cutoff}" =~ ^[0-9]+$ ]] || _std_rtr_zq_cutoff=0
+			if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+				zombie_queued_log_ignored std_retrigger_review_inflight "${_std_rtr_zq_cutoff}" <<< "$(printf '%s' "${_std_rtr_inflight_blob}" | jq -c --arg br "${head_ref}" --arg pr "${pr_num}" '[.workflow_runs[]? | select(type == "object" and ((.path // "") | test("(^|/)(ai-review|internal-review|review_autofix)\\.yml(@.*)?$")) and ((.head_branch // "") == $br or ($pr != "" and ((.display_title // "") | tostring | contains("[pr:" + $pr + "]")))))]' 2>/dev/null || echo '[]')"
+			fi
 			# Provenance (issue #6629): see _pr_named_review_trust_jq_def. An
 			# empty value trusts no PR-named run; the push is then skipped
 			# below as for an incomplete listing.
@@ -28786,9 +28983,11 @@ STALL_EOF
                 --arg db "${_std_rtr_review_default_branch}" \
                 --arg repo "${GITHUB_REPOSITORY:-}" \
                 --argjson now "${_std_rtr_now_epoch}" \
-                --argjson threshold "${_std_rtr_stall_secs}" "$(_pr_named_review_trust_jq_def)"'
+                --argjson zq_cutoff "${_std_rtr_zq_cutoff}" \
+                --argjson threshold "${_std_rtr_stall_secs}" "${_std_rtr_zq_def}""$(_pr_named_review_trust_jq_def)"'
                 [.workflow_runs[]?
                  | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
+                 | select(is_wedged_queued($zq_cutoff) | not)
                  | select(
                      ((.head_branch // "") == $br)
                      or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
@@ -28912,6 +29111,10 @@ STALL_EOF
         ;;
       attempt_merge)
         local merge_pr
+        # Assigned explicitly: this arm runs once per issue inside the loop,
+        # and a bare re-declaration would keep the previous issue's value.
+        local _std_merge_refusal_reason=""
+        local _std_merge_log_head="invalid"
         # Same implementation-PR discipline as retrigger_review: merging is
         # the most destructive mis-target of all, so never resolve the merge
         # candidate from a bare mention-only cross-reference (issue #3816 /
@@ -28937,11 +29140,28 @@ STALL_EOF
           # block-on-any filter). Reset so a merge-lease wait below is read
           # from this PR's gate, never from an earlier PR's.
           PR_BASE_FRESHNESS_OUTCOME=""
-          if [ "${merge_state}" = "open" ] && [ "${merge_mergeable}" = "true" ] \
-            && [[ "${merge_head_sha}" =~ ^[0-9a-f]{40}$ ]] \
-            && _pr_checks_completed "${merge_pr}" "${merge_head_sha}" \
-            && _pr_base_fresh_for_merge "${merge_pr}" "${merge_head_sha}" "${merge_base_ref}"; then
-            _orch_squash_merge_bound "${merge_pr}" "${merge_head_sha}" auto || true
+          # Record the first gate that refused the merge (#9715, follow-up of
+          # #9520). The gates, their order and their arguments match the
+          # previous single && chain; an empty or failed PR fetch leaves
+          # merge_state empty and maps to state_not_open, and mergeable:null
+          # (GitHub still computing) maps to not_mergeable. `elif !` keeps
+          # each helper's failure safe under set -e.
+          if [ "${merge_state}" != "open" ]; then
+            _std_merge_refusal_reason="state_not_open"
+          elif [ "${merge_mergeable}" != "true" ]; then
+            _std_merge_refusal_reason="not_mergeable"
+          elif ! [[ "${merge_head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            _std_merge_refusal_reason="bad_head_sha"
+          elif ! _pr_checks_completed "${merge_pr}" "${merge_head_sha}"; then
+            _std_merge_refusal_reason="checks_incomplete"
+          elif ! _pr_base_fresh_for_merge "${merge_pr}" "${merge_head_sha}" "${merge_base_ref}"; then
+            _std_merge_refusal_reason="base_not_fresh"
+          elif ! _orch_squash_merge_bound "${merge_pr}" "${merge_head_sha}" auto; then
+            _std_merge_refusal_reason="merge_call_failed"
+          fi
+          # Never echo a malformed head into the log line.
+          if [[ "${merge_head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            _std_merge_log_head="${merge_head_sha}"
           fi
         fi
         if ! [[ "${merge_pr}" =~ ^[0-9]+$ ]]; then
@@ -28960,8 +29180,16 @@ STALL_EOF
           # failed merge: the lease tick re-dispatches the PR when the lease
           # is granted, so the recovery budget is not spent.
           echo "  [standalone-stall] Issue #${issue_num}: PR #${merge_pr} waits for the merge lease (PR #${MERGE_LEASE_BLOCKER:-?}); not counting a recovery attempt."
+          echo "STANDALONE_STALL_MERGE issue=${issue_num} pr=${merge_pr} head=${_std_merge_log_head} outcome=lease_wait reason=merge_lease_wait"
           STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_skipped_merge_lease_wait"
+        elif [ -n "${_std_merge_refusal_reason}" ]; then
+          echo "STANDALONE_STALL_MERGE issue=${issue_num} pr=${merge_pr} head=${_std_merge_log_head} outcome=refused reason=${_std_merge_refusal_reason}"
+          STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_refused_${_std_merge_refusal_reason}"
+          tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted merge retry for ready-to-merge issue (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1))). Merge refused: ${_std_merge_refusal_reason}." "DEBUG"
+          STALL_RECOVERY_SHOULD_INCREMENT="true"
+          took_action="true"
         else
+          echo "STANDALONE_STALL_MERGE issue=${issue_num} pr=${merge_pr} head=${_std_merge_log_head} outcome=merge_requested reason=none merge_outcome=${ORCH_MERGE_BOUND_OUTCOME:-unknown}"
           tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted merge retry for ready-to-merge issue (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "DEBUG"
           STALL_RECOVERY_SHOULD_INCREMENT="true"
           took_action="true"
@@ -29906,16 +30134,29 @@ _has_active_autofix_run()
 	local pr_number="$1"
 	local head_ref="$2"
 	local log_prefix="[conflict-dispatch] PR #${pr_number}"
+	# Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is
+	# wedged (zero jobs, cannot be cancelled) and is not active. The same
+	# listing call now returns createdAt so it can be filtered locally.
+	local aar_zq_cutoff aar_zq_def
+	aar_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+	[[ "${aar_zq_cutoff}" =~ ^[0-9]+$ ]] || aar_zq_cutoff=0
+	aar_zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
 
 	for wf_candidate in ai-review.yml internal-review.yml review_autofix.yml; do
-		local active
-		active="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
+		local active aar_runs_json
+		aar_runs_json="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
 			--workflow "${wf_candidate}" \
 			--branch "${head_ref}" \
 			--limit 5 \
-			--json status \
-			--jq '[.[] | select(.status == "in_progress" or .status == "queued" or .status == "pending")] | length' \
+			--json status,createdAt,databaseId,workflowName \
+			2>/dev/null || echo "[]")"
+		if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+			zombie_queued_log_ignored conflict_dispatch_active_autofix "${aar_zq_cutoff}" <<< "${aar_runs_json}"
+		fi
+		active="$(printf '%s' "${aar_runs_json}" \
+			| jq -r --argjson zq_cutoff "${aar_zq_cutoff}" "${aar_zq_def}"'[.[] | select(.status == "in_progress" or .status == "queued" or .status == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length' \
 			2>/dev/null || echo "0")"
+		[[ "${active}" =~ ^[0-9]+$ ]] || active=0
 		if [ "${active}" -gt 0 ]; then
 			echo "  ${log_prefix} Active autofix run found (workflow=${wf_candidate}, count=${active}). Skipping dispatch."
 			return 0
@@ -29939,8 +30180,11 @@ _has_active_autofix_run()
 			echo "  ${log_prefix} Review dispatch run listing incomplete (PR-named lookup); treating a review run as possibly active. Skipping; the next poll cycle retries."
 			return 0
 		fi
+		if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+			zombie_queued_log_ignored conflict_dispatch_active_autofix "${aar_zq_cutoff}" <<< "${pr_named_json}"
+		fi
 		pr_named_active="$(printf '%s' "${pr_named_json}" \
-			| jq -r '[.[] | select(.status == "in_progress" or .status == "queued" or .status == "pending")] | length' \
+			| jq -r --argjson zq_cutoff "${aar_zq_cutoff}" "${aar_zq_def}"'[.[] | select(.status == "in_progress" or .status == "queued" or .status == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length' \
 			2>/dev/null || echo "0")"
 		if [ "${pr_named_active:-0}" -gt 0 ] 2>/dev/null; then
 			echo "  ${log_prefix} Active autofix run found (workflow_dispatch run named for PR #${pr_number}, count=${pr_named_active}). Skipping dispatch."
@@ -35521,7 +35765,13 @@ ${RB_FIX_DESC}
                 # the merge is always bound — no concurrent-push
                 # window between judge decision and merge.
                 _rb_mwf_match_arg=(--match-head-commit "${_rb_mwf_sha}")
-                if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash "${_rb_mwf_match_arg[@]}" 2>/dev/null; then
+                # #9939: never merge synchronously while GitHub reports
+                # the PR blocked (the admin GH_PAT would bypass the
+                # ruleset). Reuses _rb_mwf_json: no extra call.
+                if ! declare -F _pr_sync_merge_blocked_guard >/dev/null 2>&1 \
+                  || ! _pr_sync_merge_blocked_guard "${_rb_mwf_json}" "${_rb_mwf_base}"; then
+                  echo "::warning::PR #${RB_PR} sync merge deferred: GitHub reports mergeable_state=${SYNC_MERGE_BLOCKED_GUARD_STATE:-unknown} (blockers: ${SYNC_MERGE_BLOCKED_GUARD_BLOCKERS:-unknown}). Leaving issue in ai:review-blocked — next poll cycle will re-fire the judge."
+                elif gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash "${_rb_mwf_match_arg[@]}" 2>/dev/null; then
                   echo "  PR #${RB_PR} merged synchronously."
                   MERGE_CONFIRMED="true"
                 else

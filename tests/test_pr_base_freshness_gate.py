@@ -23,6 +23,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -227,14 +228,17 @@ class Wiring(unittest.TestCase):
 		sites = case_text.split('"${RB_MERGE_METHOD_FLAG:---squash}" --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}"')[:-1]
 		self.assertEqual(len(sites), 2)
 		# 1600: the merge-lease `lease_wait` branch (2026-11-17) sits between
-		# the post-wait gate and the merge call.
+		# the post-wait gate and the merge call. 2000: the #9939 blocked-merge
+		# guard comment and RB_SYNC_MERGE_DEFERRED reset sit there too.
 		for site in sites:
-			self.assertIn("_pr_base_fresh_for_merge", site[-1600:])
+			self.assertIn("_pr_base_fresh_for_merge", site[-2000:])
 		# Each call to the retry helper follows its site's gate.
 		retry_calls = list(re.finditer(r"\|\| rb_judge_merge_retry_transient (?:auto|direct) (?:merge|terminal|sync); then", case_text))
 		self.assertEqual(len(retry_calls), 3)
+		# 3600: the #9939 blocked-merge guard and its deferral branch sit
+		# between merge_with_followup's gate and its merge call (3404 chars).
 		for call in retry_calls:
-			self.assertIn("_pr_base_fresh_for_merge", case_text[max(0, call.start() - 3000):call.start()])
+			self.assertIn("_pr_base_fresh_for_merge", case_text[max(0, call.start() - 3600):call.start()])
 		# merge_with_followup's synchronous merge is gated too.
 		self.assertIn('_pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}"; then', text)
 
@@ -744,10 +748,15 @@ def _poller_function(name: str) -> str:
 	return text[start:end]
 
 
-def _merge_bound(args: str, *, auto_rc: int = 0, sync_rc: int = 0) -> tuple[int, str, list[str]]:
+def _merge_bound(args: str, *, auto_rc: int = 0, sync_rc: int = 0, guard_rc: int | None = 0) -> tuple[int, str, list[str]]:
 	log = Path(os.environ.get("TMPDIR", "/tmp")) / f"orch_merge_bound_{os.getpid()}.log"
 	if log.exists():
 		log.unlink()
+	# #9939 blocked-merge guard (scripts/pr_checks_lib.sh): stubbed with a
+	# fixed return code; guard_rc=None leaves it undefined (library missing).
+	guard_stub = ""
+	if guard_rc is not None:
+		guard_stub = f'_pr_sync_merge_blocked_guard() {{ printf "guard %s\\n" "$*" >> "${{CALL_LOG}}"; return {guard_rc}; }}'
 	script = f"""
 set -uo pipefail
 gh_retry() {{ "$@"; }}
@@ -758,6 +767,7 @@ gh() {{
     *) return "${{SYNC_RC}}" ;;
   esac
 }}
+{guard_stub}
 {_poller_function("_orch_squash_merge_bound")}
 _orch_squash_merge_bound {args}; rc=$?
 printf 'rc=%s outcome=%s\\n' "${{rc}}" "${{ORCH_MERGE_BOUND_OUTCOME}}"
@@ -784,11 +794,29 @@ class HeadBoundPollerMerge(unittest.TestCase):
 		rc, out, calls = _merge_bound(f"7 {HEAD} auto", auto_rc=1, sync_rc=0)
 		self.assertEqual(rc, 0)
 		self.assertIn("outcome=merged", out)
+		calls = [call for call in calls if not call.startswith("guard ")]
 		self.assertEqual(len(calls), 2)
 		for call in calls:
 			self.assertIn(f"--match-head-commit {HEAD}", call)
 		self.assertIn("--auto", calls[0])
 		self.assertNotIn("--auto", calls[1])
+
+	def test_blocked_guard_defers_the_direct_fallback(self) -> None:
+		# #9939: the admin GH_PAT must not merge a PR GitHub reports blocked.
+		for guard_rc in (1, None):
+			with self.subTest(guard_rc=guard_rc):
+				rc, out, calls = _merge_bound(f"7 {HEAD} auto", auto_rc=1, sync_rc=0, guard_rc=guard_rc)
+				self.assertEqual(rc, 1)
+				self.assertIn(f"ORCH_MERGE_HEAD_BOUND pr=7 head_sha={HEAD} mode=auto outcome=deferred", out)
+				self.assertIn("outcome=deferred", out.splitlines()[-1])
+				merges = [call for call in calls if not call.startswith("guard ")]
+				self.assertEqual(len(merges), 1)
+				self.assertIn("--auto", merges[0])
+				if guard_rc is not None:
+					self.assertIn("guard 7", calls)
+		rc, out, calls = _merge_bound(f"7 {HEAD} sync", guard_rc=1)
+		self.assertEqual(rc, 1)
+		self.assertEqual([call for call in calls if not call.startswith("guard ")], [])
 
 	def test_auto_mode_enabled_skips_direct_merge(self) -> None:
 		rc, out, calls = _merge_bound(f"7 {HEAD}")
@@ -798,10 +826,12 @@ class HeadBoundPollerMerge(unittest.TestCase):
 
 	def test_sync_mode_and_total_failure(self) -> None:
 		rc, _, calls = _merge_bound(f"7 {HEAD} sync")
+		calls = [call for call in calls if not call.startswith("guard ")]
 		self.assertEqual(rc, 0)
 		self.assertEqual(len(calls), 1)
 		self.assertNotIn("--auto", calls[0])
 		rc, out, calls = _merge_bound(f"7 {HEAD}", auto_rc=1, sync_rc=1)
+		calls = [call for call in calls if not call.startswith("guard ")]
 		self.assertEqual(rc, 1)
 		self.assertIn("outcome=failed", out)
 		self.assertEqual(len(calls), 2)
@@ -889,7 +919,9 @@ _safe_gh_jq() {{
 }}
 _pr_base_fresh_for_merge 7 {HEAD} main; rc=$?; printf "%s\\n" "rc=${{rc}}"
 '''
-	env = {"MERGE_BASE_SYNC_HEAD_POLL_ATTEMPTS": attempts}
+	# agents.md is in the Phase 4 soft class; pin it off so these tests keep
+	# the plain path rule and never start a merge-tree probe or fetch.
+	env = {"MERGE_BASE_SYNC_HEAD_POLL_ATTEMPTS": attempts, "MERGE_LEASE_SOFT_PATHS": "none"}
 	if max_syncs is not None:
 		env["MERGE_BASE_FRESHNESS_MAX_SYNCS"] = max_syncs
 	commits = compare_commits if compare_commits is not None else ["1" * 40, BASE_TIP]
@@ -1093,6 +1125,247 @@ class FreshnessSyncWiring(unittest.TestCase):
 			self.assertIn(line, branch)
 		# force-review still wins over the fast path.
 		self.assertLess(block.index('if [ "${FORCE_REVIEW}" = "true" ]; then'), block.index("elif gate_freshness_sync_fast_path; then"))
+
+
+# --- Soft path class (merge-lease Phase 4, Refs #9781) -----------------------
+# Paths in MERGE_LEASE_SOFT_PATHS do not force an update-branch on their own:
+# when every shared path is soft, a real `git merge-tree` probe of the head
+# against the compared base tip decides. Any shared hard path keeps
+# reason=shared_paths, and a probe that cannot decide keeps overlap.
+
+def _soft_git(cwd: Path, *args: str) -> str:
+	env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(cwd), "GIT_CONFIG_NOSYSTEM": "1",
+		"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t",
+		"GIT_COMMITTER_EMAIL": "t@example.com"}
+	res = subprocess.run(["git", *args], cwd=cwd, env=env, capture_output=True, text=True, check=True)
+	return res.stdout.strip()
+
+
+def _soft_repo(conflict: bool) -> tuple[Path, str, str]:
+	"""A repo with a base commit, a PR head (README.md line 1) and a newer base
+	tip (README.md line 10, or line 1 again for a conflict). Returns
+	(repo, head_sha, base_tip_sha)."""
+	if shutil.which("git") is None:
+		raise unittest.SkipTest("git binary not available in test environment")
+	root = Path(tempfile.mkdtemp(prefix="pr_soft_paths_"))
+	repo = root / "work"
+	repo.mkdir()
+	_soft_git(repo, "init", "-q", "-b", "main")
+	(repo / "README.md").write_text("".join(f"line {i}\n" for i in range(1, 11)), encoding="utf-8")
+	_soft_git(repo, "add", "README.md")
+	_soft_git(repo, "commit", "-q", "-m", "base")
+	_soft_git(repo, "checkout", "-q", "-b", "pr")
+	lines = (repo / "README.md").read_text(encoding="utf-8").splitlines(keepends=True)
+	lines[0] = "pr line 1\n"
+	(repo / "README.md").write_text("".join(lines), encoding="utf-8")
+	_soft_git(repo, "commit", "-q", "-am", "pr")
+	head = _soft_git(repo, "rev-parse", "HEAD")
+	_soft_git(repo, "checkout", "-q", "main")
+	lines = (repo / "README.md").read_text(encoding="utf-8").splitlines(keepends=True)
+	if conflict:
+		lines[0] = "base line 1\n"
+	else:
+		lines[9] = "base line 10\n"
+	(repo / "README.md").write_text("".join(lines), encoding="utf-8")
+	_soft_git(repo, "commit", "-q", "-am", "base tip")
+	tip = _soft_git(repo, "rev-parse", "HEAD")
+	return repo, head, tip
+
+
+def _soft_gate(repo: Path | None, head: str, compare_json: str, pr_files: list[str],
+		env: dict[str, str] | None = None, prelude: str = "") -> tuple[int, str, list[str]]:
+	cd = f"cd {shlex.quote(str(repo))} || exit 9\n" if repo is not None else ""
+	body = f'{cd}{prelude}_pr_base_fresh_for_merge 7 {head} main; rc=$?; printf "%s\\n" "rc=${{rc}}"'
+	full_env = {"GIT_CONFIG_NOSYSTEM": "1"}
+	full_env.update(env or {})
+	res = _run(body, compare_json=compare_json, pr_files_json=_pr_files(pr_files), env=full_env)
+	assert res.returncode == 0, res.stderr
+	rc = int([line for line in res.stdout.splitlines() if line.startswith("rc=")][-1][3:])
+	return rc, res.stdout + res.stderr, res.calls  # type: ignore[attr-defined]
+
+
+class SoftPathFreshness(unittest.TestCase):
+	def test_soft_only_overlap_that_merges_cleanly_is_clean(self) -> None:
+		repo, head, tip = _soft_repo(conflict=False)
+		rc, out, calls = _soft_gate(repo, head, _compare(1, ["README.md"], [tip]), ["README.md"])
+		self.assertEqual(rc, 0, out)
+		self.assertIn("outcome=clean reason=soft_paths_merge_clean", out)
+		self.assertIn("action=proceed soft_overlap=README.md", out)
+		self.assertFalse(any("/update-branch" in c for c in calls))
+
+	def test_soft_only_overlap_with_a_conflict_updates_the_branch(self) -> None:
+		repo, head, tip = _soft_repo(conflict=True)
+		rc, out, calls = _soft_gate(repo, head, _compare(1, ["README.md"], [tip]), ["README.md"])
+		self.assertEqual(rc, 1, out)
+		self.assertIn("outcome=overlap reason=soft_paths_conflict", out)
+		self.assertIn("overlap=README.md soft_overlap=README.md", out)
+		self.assertEqual(len([c for c in calls if "/update-branch" in c]), 1)
+
+	def test_unknown_base_tip_keeps_overlap(self) -> None:
+		repo, head, tip = _soft_repo(conflict=False)
+		# Two commits gained but only one listed: the base tip is not trusted.
+		rc, out, calls = _soft_gate(repo, head, _compare(2, ["README.md"], [tip]), ["README.md"])
+		self.assertEqual(rc, 1, out)
+		self.assertIn("reason=soft_paths_probe_unknown", out)
+		self.assertEqual(len([c for c in calls if "/update-branch" in c]), 1)
+
+	def test_a_shared_hard_path_keeps_shared_paths_without_a_probe(self) -> None:
+		repo, head, tip = _soft_repo(conflict=False)
+		rc, out, _ = _soft_gate(repo, head, _compare(1, ["README.md", "scripts/x.sh"], [tip]), ["README.md", "scripts/x.sh"],
+			prelude="_pr_merge_tree_probe() { echo PROBE_CALLED >&2; }\n")
+		self.assertEqual(rc, 1, out)
+		self.assertIn("reason=shared_paths", out)
+		self.assertIn("overlap=README.md,scripts/x.sh soft_overlap=-", out)
+		self.assertNotIn("PROBE_CALLED", out)
+
+	def test_class_off_keeps_todays_rule(self) -> None:
+		repo, head, tip = _soft_repo(conflict=False)
+		for value in ("none", "OFF", ""):
+			with self.subTest(value=value):
+				rc, out, _ = _soft_gate(repo, head, _compare(1, ["README.md"], [tip]), ["README.md"],
+					env={"MERGE_LEASE_SOFT_PATHS": value})
+				self.assertEqual(rc, 1, out)
+				self.assertIn("reason=shared_paths", out)
+				self.assertIn("soft_overlap=-", out)
+
+	def test_prefix_entries_match_literally(self) -> None:
+		body = """for p in agents.d/x.md agents.dx agents.d changelog.d/a/b.md README.md docs/README.md AGENTS.md; do
+  if _merge_lease_soft_path "$p"; then echo "soft:$p"; else echo "hard:$p"; fi
+done"""
+		out = _run(body).stdout
+		for p in ("agents.d/x.md", "changelog.d/a/b.md", "README.md", "AGENTS.md"):
+			self.assertIn(f"soft:{p}", out)
+		for p in ("agents.dx", "agents.d", "docs/README.md"):
+			self.assertIn(f"hard:{p}", out)
+
+	def test_glob_absolute_and_dotdot_entries_are_ignored_with_a_warning(self) -> None:
+		res = _run("_merge_lease_soft_entries", env={"MERGE_LEASE_SOFT_PATHS": " docs/*.md , /etc/x, a/../b, README.md ,x?,[a]"})
+		self.assertEqual(res.stdout.split(), ["README.md"])
+		self.assertEqual(res.stderr.count("::warning::MERGE_LEASE_SOFT_PATHS entry"), 5)
+
+	def test_unset_uses_the_documented_default(self) -> None:
+		res = _run("_merge_lease_soft_entries")
+		self.assertEqual(res.stdout.split(), ["README.md", "agents.md", "AGENTS.md", "docs/INVENTORY.md", "CHANGELOG.md", "agents.d/", "changelog.d/"])
+
+	def _origin(self, repo: Path) -> Path:
+		server = repo.parent / "server"
+		bare = server / "owner" / "repo.git"
+		bare.parent.mkdir(parents=True)
+		_soft_git(repo.parent, "clone", "-q", "--bare", str(repo), str(bare))
+		_soft_git(bare, "config", "uploadpack.allowAnySHA1InWant", "true")
+		_soft_git(repo, "push", "-q", str(bare), "pr:refs/heads/pr")
+		return server
+
+	def test_outside_a_checkout_the_private_repository_fetches_and_cleans_up(self) -> None:
+		repo, head, tip = _soft_repo(conflict=False)
+		server = self._origin(repo)
+		outside = repo.parent / "outside"
+		outside.mkdir()
+		runner_temp = repo.parent / "runner_temp"
+		runner_temp.mkdir()
+		env = {"GITHUB_SERVER_URL": f"file://{server}", "RUNNER_TEMP": str(runner_temp),
+			"GIT_CEILING_DIRECTORIES": str(repo.parent)}
+		rc, out, _ = _soft_gate(outside, head, _compare(1, ["README.md"], [tip]), ["README.md"], env=env,
+			prelude="trap 'echo PRIOR_TRAP_RAN' EXIT\n")
+		self.assertEqual(rc, 0, out)
+		self.assertIn("PR_MERGE_TREE_PROBE_REPO outcome=created", out)
+		self.assertIn("reason=soft_paths_merge_clean", out)
+		self.assertIn("PRIOR_TRAP_RAN", out, "the caller's EXIT trap is chained, not replaced")
+		self.assertEqual(list(runner_temp.glob("pr-merge-tree-probe.*")), [])
+
+	def test_an_unreachable_origin_keeps_overlap(self) -> None:
+		repo, head, tip = _soft_repo(conflict=False)
+		outside = repo.parent / "outside"
+		outside.mkdir()
+		env = {"GITHUB_SERVER_URL": f"file://{repo.parent / 'missing'}", "RUNNER_TEMP": str(repo.parent),
+			"GIT_CEILING_DIRECTORIES": str(repo.parent)}
+		rc, out, _ = _soft_gate(outside, head, _compare(1, ["README.md"], [tip]), ["README.md"], env=env)
+		self.assertEqual(rc, 1, out)
+		self.assertIn("reason=soft_paths_probe_unknown", out)
+
+	def test_probe_repo_slug_with_dotdot_is_rejected(self) -> None:
+		runner_temp = tempfile.mkdtemp(prefix="pr_probe_slug_")
+		for slug, want in (("../foo", 1), ("a/b..c", 1), ("acme/consumer", 0)):
+			res = _run('_pr_probe_repo_init; echo "rc=$?"', env={"_PR_PROBE_REPO_SLUG": slug, "RUNNER_TEMP": runner_temp})
+			self.assertIn(f"rc={want}", res.stdout, (slug, res.stderr))
+			self.assertEqual("PR_MERGE_TREE_PROBE_REPO outcome=unavailable reason=invalid_repository" in res.stderr, want == 1, slug)
+		self.assertEqual(list(Path(runner_temp).glob("pr-merge-tree-probe.*")), [])
+
+	def _rename_repo(self, pr_renames: bool) -> tuple[Path, str, str]:
+		"""One side renames README.md to scripts/x.sh; the other edits README.md
+		line 10. merge-ort follows the rename and merges cleanly."""
+		if shutil.which("git") is None:
+			raise unittest.SkipTest("git binary not available in test environment")
+		repo = Path(tempfile.mkdtemp(prefix="pr_soft_rename_")) / "work"
+		repo.mkdir()
+		_soft_git(repo, "init", "-q", "-b", "main")
+		(repo / "README.md").write_text("".join(f"line {i}\n" for i in range(1, 11)), encoding="utf-8")
+		_soft_git(repo, "add", "README.md")
+		_soft_git(repo, "commit", "-q", "-m", "base")
+		shas = {}
+		for branch, renames in (("pr", pr_renames), ("tip", not pr_renames)):
+			_soft_git(repo, "checkout", "-q", "-b", branch, "main")
+			if renames:
+				(repo / "scripts").mkdir()
+				_soft_git(repo, "mv", "README.md", "scripts/x.sh")
+				_soft_git(repo, "commit", "-q", "-m", "rename")
+			else:
+				lines = (repo / "README.md").read_text(encoding="utf-8").splitlines(keepends=True)
+				lines[9] = "edited line 10\n"
+				(repo / "README.md").write_text("".join(lines), encoding="utf-8")
+				_soft_git(repo, "commit", "-q", "-am", "edit")
+			shas[branch] = _soft_git(repo, "rev-parse", "HEAD")
+		_soft_git(repo, "checkout", "-q", "main")
+		return repo, shas["pr"], shas["tip"]
+
+	def test_a_soft_path_renamed_to_a_hard_path_by_the_pr_keeps_overlap(self) -> None:
+		repo, head, tip = self._rename_repo(pr_renames=True)
+		pr_files = json.dumps([[{"filename": "scripts/x.sh", "previous_filename": "README.md"}]])
+		body = f'cd {shlex.quote(str(repo))} || exit 9\n_pr_base_fresh_for_merge 7 {head} main; rc=$?; printf "%s\\n" "rc=${{rc}}"'
+		res = _run(body, compare_json=_compare(1, ["README.md"], [tip]), pr_files_json=pr_files, env={"GIT_CONFIG_NOSYSTEM": "1"})
+		out = res.stdout + res.stderr
+		self.assertIn("rc=1", res.stdout, out)
+		self.assertIn("reason=soft_paths_probe_unknown", out)
+		self.assertNotIn("soft_paths_merge_clean", out)
+
+	def test_a_soft_path_renamed_to_a_hard_path_by_the_base_keeps_overlap(self) -> None:
+		repo, head, tip = self._rename_repo(pr_renames=False)
+		compare = json.dumps({"ahead_by": 1, "behind_by": 3, "commits": [{"sha": tip}],
+			"files": [{"filename": "scripts/x.sh", "previous_filename": "README.md"}]})
+		rc, out, _ = _soft_gate(repo, head, compare, ["README.md"])
+		self.assertEqual(rc, 1, out)
+		self.assertIn("reason=soft_paths_probe_unknown", out)
+		self.assertNotIn("soft_paths_merge_clean", out)
+
+	def test_a_shared_path_holding_a_comma_is_classified_whole(self) -> None:
+		path = "README.md,agents.d/x"
+		rc, out, _ = _soft_gate(None, HEAD, _compare(1, [path], ["c" * 40]), [path],
+			prelude='_pr_merge_tree_probe() { echo PROBE_CALLED >&2; _PR_PROBE_RESULT=none; }\n')
+		self.assertEqual(rc, 1, out)
+		self.assertIn("reason=shared_paths", out)
+		self.assertNotIn("PROBE_CALLED", out)
+
+	def test_a_non_string_file_name_fails_closed(self) -> None:
+		"""A files page holding a non-string name makes the cached PR path list
+		`*` (class on) and keeps a shared non-string name out of the soft split
+		("/unsafe-path" gives shared_paths with no probe). Class off: unchanged."""
+		body = (f'_pr_merge_tree_probe() {{ echo PROBE_CALLED >&2; _PR_PROBE_RESULT=none; }}\n'
+			f'_pr_base_freshness 7 {HEAD} main; printf "reason=%s\\n" "$PR_BASE_FRESHNESS_LAST_REASON"; '
+			'printf "PATHS<%s>\\n" "$PR_BASE_FRESHNESS_PR_PATHS"')
+		pr_files = json.dumps([[{"filename": 5}, {"filename": "README.md"}]])
+		compare = json.dumps({"ahead_by": 1, "behind_by": 3, "commits": [{"sha": "c" * 40}],
+			"files": [{"filename": 5}, {"filename": "README.md"}]})
+		on = _run(body, compare_json=compare, pr_files_json=pr_files)
+		self.assertIn("PATHS<*>", on.stdout, on.stdout + on.stderr)
+		self.assertIn("reason=shared_paths", on.stdout, on.stdout + on.stderr)
+		self.assertNotIn("PROBE_CALLED", on.stdout + on.stderr)
+		off = _run(body, compare_json=compare, pr_files_json=pr_files, env={"MERGE_LEASE_SOFT_PATHS": "none"})
+		self.assertIn("PATHS<5\nREADME.md>", off.stdout, off.stdout + off.stderr)
+
+	def test_non_soft_clean_lines_end_with_an_empty_soft_overlap(self) -> None:
+		rc, out, _ = _gate(compare_json=_compare(2, ["docs/x.md"]), pr_files_json=_pr_files(["scripts/mine.sh"]))
+		self.assertEqual(rc, 0)
+		self.assertIn("reason=no_shared_paths behind_by=2 action=proceed soft_overlap=-", out)
 
 
 if __name__ == "__main__":

@@ -92,6 +92,7 @@ Every failure prints `::error::CODEX_ISOLATION ...` and exits 1.
 import hashlib
 import json
 import os
+import posixpath
 import re
 from pathlib import Path, PurePosixPath
 import shutil
@@ -155,6 +156,26 @@ class Rejected(Exception):
 
 def log(message):
 	print(f"CODEX_ISOLATION {message}", file=sys.stderr)
+
+
+def log_field(value):
+	"""One log value: whitespace/control characters replaced, capped at 200 chars.
+
+	Paths and link targets come from the host checkout, which the agent can
+	extend; this keeps a crafted name from forging or splitting a log line.
+	"""
+	return re.sub(r"[\s\x00-\x1f\x7f]", "?", str(value))[:200]
+
+
+def symlink_target_hidden(name, link):
+	"""True when symlink NAME -> LINK resolves to a top-level HIDDEN_NAMES entry."""
+	if link.startswith("/"):
+		return False
+	resolved = posixpath.normpath(posixpath.join(posixpath.dirname(name), link))
+	parts = PurePosixPath(resolved).parts
+	if not parts or parts[0] in ("..", "."):
+		return False
+	return parts[0] in HIDDEN_NAMES
 
 
 def git_env(home):
@@ -964,6 +985,14 @@ def transfer(host, dest, manifest):
 			rmdirs.append(name)
 		elif old is not None and (new is None or new[0] == "d"):
 			deletes[name] = old
+			if old[0] == "l":
+				# Diagnostics only (#9940, Refs #9937): record which tracked
+				# symlink a transfer deletes, before any later check can
+				# reject the transfer. Behaviour is unchanged.
+				log(
+					f"transfer_symlink_delete path={log_field(name)} target={log_field(old[1])} "
+					f"target_hidden={'true' if symlink_target_hidden(name, old[1]) else 'false'}"
+				)
 		if new is not None and new[0] == "f":
 			writes.append((name, old, new))
 			total += (dest / name).lstat().st_size
