@@ -907,7 +907,7 @@ jobs:
       - name: Restore reusable workspace cache
         if: steps.workspace_meta.outputs.workspace_reuse_enabled == 'true'
         id: workspace_cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ steps.workspace_meta.outputs.workspace_path }}
           key: ${{ steps.workspace_meta.outputs.workspace_cache_key }}
@@ -995,7 +995,7 @@ jobs:
         # repo fingerprint and bypass the "changes invalidate" guarantee.
         # See scripts/validate_process.sh Phase 0.
         id: validate_hints_cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           # The path participates in the cache version. Keep it independent
           # of the per-run workspace while retaining the fingerprint in the
@@ -1102,7 +1102,7 @@ jobs:
       - name: Restore behavioural smoke runtime cache
         if: steps.behavioural_smoke_gate.outputs.enabled == 'true' && steps.behavioural_smoke_pr.outputs.pr_number != ''
         continue-on-error: true
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           # Must be byte-identical to the `Save review-issue ledger*` path
           # list in review_autofix.yml: actions/cache hashes the path list

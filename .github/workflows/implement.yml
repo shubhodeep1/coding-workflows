@@ -2047,7 +2047,7 @@ jobs:
       - name: Restore reusable workspace cache
         if: env.SKIP_IMPLEMENT != 'true' && steps.workspace_meta.outputs.workspace_reuse_enabled == 'true'
         id: workspace_cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ steps.workspace_meta.outputs.workspace_path }}
           key: ${{ steps.workspace_meta.outputs.workspace_cache_key }}

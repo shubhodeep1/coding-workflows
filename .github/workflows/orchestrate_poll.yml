@@ -1456,7 +1456,7 @@ jobs:
         id: pool_daily_seen
         if: steps.pool_daily_slot.outputs.in_slot == 'true'
         continue-on-error: true
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .claude-pool-daily-usage/sent
           key: claude-pool-daily-usage-v1-${{ steps.pool_daily_slot.outputs.date }}
@@ -2042,7 +2042,7 @@ jobs:
         id: consumer_health_day
         if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != ''
         continue-on-error: true
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/consumer-health-day
           key: consumer-health-check-${{ steps.consumer_health_date.outputs.day }}
@@ -2055,7 +2055,7 @@ jobs:
         id: consumer_health_alerted
         if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != '' && steps.consumer_health_day.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/consumer-health-day
           key: consumer-health-alert-${{ steps.consumer_health_date.outputs.day }}
@@ -2098,7 +2098,7 @@ jobs:
       - name: Record today's consumer health check
         if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != '' && steps.consumer_health.outcome == 'success'
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/consumer-health-day
           key: consumer-health-check-${{ steps.consumer_health_date.outputs.day }}
@@ -2106,7 +2106,7 @@ jobs:
       - name: Record today's consumer health failure alert
         if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != '' && steps.consumer_health.outputs.failure_alerted == 'true'
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/consumer-health-day
           key: consumer-health-alert-${{ steps.consumer_health_date.outputs.day }}
@@ -2468,7 +2468,7 @@ jobs:
       - name: Re-check today's Claude pool daily usage marker
         id: pool_daily_recheck
         continue-on-error: true
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .claude-pool-daily-usage/sent
           key: claude-pool-daily-usage-v1-${{ needs.poll.outputs.claude_pool_daily_date }}
@@ -2526,7 +2526,7 @@ jobs:
       - name: Save today's Claude pool daily usage marker
         if: steps.pool_daily_send.outputs.sent == 'true'
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: .claude-pool-daily-usage/sent
           key: claude-pool-daily-usage-v1-${{ needs.poll.outputs.claude_pool_daily_date }}

@@ -2720,7 +2720,7 @@ jobs:
       - name: Restore reusable workspace cache
         if: env.PR_CLOSED != 'true' && steps.workspace_meta.outputs.workspace_reuse_enabled == 'true'
         id: workspace_cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ steps.workspace_meta.outputs.workspace_path }}
           key: ${{ steps.workspace_meta.outputs.workspace_cache_key }}
@@ -3163,7 +3163,7 @@ jobs:
         # set this early in the job.
         if: env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         continue-on-error: true
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           # The path list is hashed into the actions/cache *version*, so it
           # must be byte-identical across runs. The per-run workspace path
@@ -4167,7 +4167,7 @@ jobs:
       - name: Save review-issue ledger
         if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           # The path list is hashed into the actions/cache *version*, so it
           # must be byte-identical across runs. The per-run workspace path
@@ -5487,7 +5487,7 @@ jobs:
       - name: Save review-issue ledger after partial finalize
         if: always() && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           # The path list is hashed into the actions/cache *version*, so it
           # must be byte-identical across runs. The per-run workspace path

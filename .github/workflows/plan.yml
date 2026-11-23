@@ -137,7 +137,7 @@ jobs:
     steps:
       - name: Cache Codex CLI
         id: cache-codex
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ runner.tool_cache }}/codex
           # -v2: previous cache only stored @openai/codex (no platform binary),
