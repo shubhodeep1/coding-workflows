@@ -162,12 +162,21 @@ def _record_fn() -> str:
 	return "\n".join(lines[start:end + 1]) + "\n"
 
 
-@pytest.mark.parametrize("token, pr_view, expected", [
-	("lease_wait", f"open\t{BASE}\tblocked", "outcome=posted"),
-	("auto_merge", f"closed\t{BASE}\tunknown", "reason=not_open"),
-	("", f"open\t{BASE}\tblocked", ""),
+@pytest.mark.parametrize("token, pr_view, env, expected", [
+	("lease_wait", f"open\t{BASE}\tblocked\t{HEAD}\tpending", "", f"base={BASE} ms=blocked"),
+	("auto_merge", f"closed\t{BASE}\tunknown\t{HEAD}\tsuccess", "", "reason=not_open"),
+	("", f"open\t{BASE}\tblocked\t{HEAD}\tpending", "", ""),
+	# A rollup that already fails would read as a change on every tick.
+	("blocked", f"open\t{BASE}\tblocked\t{HEAD}\tfailure", "", "reason=checks_failing"),
+	("blocked", f"open\t{BASE}\tblocked\t{'c' * 40}\tpending", "", "reason=head_moved"),
+	# The base the freshness check evaluated wins over the later read.
+	("checks_not_ready", f"open\t{'c' * 40}\tblocked\t{HEAD}\tpending",
+		f"PR_BASE_FRESHNESS_HEAD_SHA={HEAD} PR_BASE_FRESHNESS_EVAL_BASE_SHA={BASE}", f"base={BASE} ms=blocked"),
+	# An evaluation of another head is not used.
+	("checks_not_ready", f"open\t{'c' * 40}\tblocked\t{HEAD}\tpending",
+		f"PR_BASE_FRESHNESS_HEAD_SHA={'d' * 40} PR_BASE_FRESHNESS_EVAL_BASE_SHA={BASE}", f"base={'c' * 40} ms=blocked"),
 ])
-def test_judge_records_only_deferred_open_verdicts(token: str, pr_view: str, expected: str) -> None:
+def test_judge_records_only_deferred_open_verdicts(token: str, pr_view: str, env: str, expected: str) -> None:
 	script = f'''
 set -euo pipefail
 source "{HEAD_GATE}"
@@ -175,16 +184,25 @@ source "{HEAD_GATE}"
 CALLS=$(mktemp)
 gh_retry() {{ "$@"; }}
 gh() {{ printf '%s\\n' "$*" >> "$CALLS"; case "$*" in *statuses*) return 0 ;; esac; printf {json.dumps(pr_view + chr(10))}; }}
-REPOSITORY=o/r PR_NUMBER=77 RB_JUDGED_HEAD_SHA={HEAD} RB_MERGE_WAIT_TOKEN={json.dumps(token)}
+REPOSITORY=o/r PR_NUMBER=77 RB_JUDGED_HEAD_SHA={HEAD} RB_MERGE_WAIT_TOKEN={json.dumps(token)} {env}
 rb_judge_record_verdict_wait merge
 echo "CALLS=$(wc -l < "$CALLS")"
+echo "---"; cat "$CALLS"
 '''
 	result = _bash(script)
 	assert result.returncode == 0, result.stderr
-	if expected:
-		assert expected in result.stdout
+	out, _, calls = result.stdout.partition("---\n")
+	if not expected:
+		assert "RB_JUDGE_VERDICT_STATUS" not in out and "CALLS=0" in out
+		return
+	posts = [c for c in calls.splitlines() if "statuses/" in c]
+	if expected.startswith("base="):
+		assert "outcome=posted" in out
+		assert len(posts) == 1 and f"description=decision=merge wait={token} {expected}" in posts[0]
 	else:
-		assert "RB_JUDGE_VERDICT_STATUS" not in result.stdout and "CALLS=0" in result.stdout
+		assert expected in out and posts == []
+	# One PR read, never the REST pulls endpoint.
+	assert sum("graphql" in c for c in calls.splitlines()) == 1
 
 
 def test_judge_sets_the_wait_token_only_on_benign_deferrals() -> None:
@@ -198,7 +216,10 @@ def test_judge_sets_the_wait_token_only_on_benign_deferrals() -> None:
 		for match in re.finditer(rf'RB_MERGE_STATUS="{status}"\n(.*)\n', text):
 			# Only the guarded checks_not_ready line may follow (it does not fire for checks_failed).
 			assert not match.group(1).strip().startswith("RB_MERGE_WAIT_TOKEN="), status
-	assert '[ "${RB_MERGE_STATUS}" = "checks_not_ready" ] && RB_MERGE_WAIT_TOKEN="checks_not_ready"' in text
+	# Only a readable, still-pending check state (timeout) records a wait:
+	# query_failed / unavailable / unknown outcomes fail open.
+	guarded = '[ "${RB_MERGE_STATUS}" = "checks_not_ready" ] && [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "timeout" ] && RB_MERGE_WAIT_TOKEN="checks_not_ready"'
+	assert text.count(guarded) == 2
 	# Every merge-class branch records before reporting.
 	assert text.count("rb_judge_record_verdict_wait merge\n") == 2
 	assert text.count("rb_judge_record_verdict_wait merge_with_followup\n") == 1

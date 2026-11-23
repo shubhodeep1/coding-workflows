@@ -1479,6 +1479,9 @@ _pr_base_freshness()
 	PR_BASE_FRESHNESS_OVERLAP=""
 	PR_BASE_FRESHNESS_BASE_REF=""
 	PR_BASE_FRESHNESS_BASE_SHA=""
+	# The base tip this evaluation judged (issue #9991 verdict record): the
+	# listed tip, or the merge base when the head already contains the base.
+	PR_BASE_FRESHNESS_EVAL_BASE_SHA=""
 	PR_BASE_FRESHNESS_SOFT_OVERLAP=""
 	# The PR's own paths (newline-separated) and the PR they belong to, kept
 	# for the merge lease (_merge_lease_gate) so it never re-reads the files.
@@ -1534,7 +1537,10 @@ _pr_base_freshness()
 		if (type == "object" and (.commits | type) == "array" and (.commits | length) > 0 and (.commits | length) == .ahead_by)
 		then (.commits[-1].sha // "") else "" end' 2>/dev/null | tail -n1)"
 	[[ "${PR_BASE_FRESHNESS_BASE_SHA}" =~ ^[0-9a-f]{40}$ ]] || PR_BASE_FRESHNESS_BASE_SHA=""
+	PR_BASE_FRESHNESS_EVAL_BASE_SHA="${PR_BASE_FRESHNESS_BASE_SHA}"
 	if [ "${ahead_by}" -eq 0 ]; then
+		PR_BASE_FRESHNESS_EVAL_BASE_SHA="$(printf '%s' "${compare_json}" | jq -r '.merge_base_commit.sha // ""' 2>/dev/null | tail -n1)"
+		[[ "${PR_BASE_FRESHNESS_EVAL_BASE_SHA}" =~ ^[0-9a-f]{40}$ ]] || PR_BASE_FRESHNESS_EVAL_BASE_SHA=""
 		PR_BASE_FRESHNESS_LAST_REASON="up_to_date"
 		PR_BASE_FRESHNESS_OUTCOME="fresh"
 		echo "fresh"
@@ -4000,8 +4006,10 @@ _pr_final_ci_merge_pending_mark()
 #   and the new base. One status POST per base move per waiting head, in
 #   place of the compare + PR-files reads on every later tick. A failed write
 #   only means the next evaluation reads the freshness again. The status's
-#   createdAt moves with it, so the merge-wait alert age of a head without a
-#   head-gate success restarts at a base refresh. Log:
+#   createdAt moves with it; the merge-wait alert therefore takes the
+#   earlier of it and the head-gate status time (scripts/review_sweep_head_gate.sh),
+#   so a refresh does not restart the wait age of a head with a head-gate
+#   status. Log:
 #   RB_JUDGE_VERDICT_STATUS outcome=<base_refreshed|base_refresh_failed>.
 # ---------------------------------------------------------------------------
 _pr_rb_judge_verdict_parse()

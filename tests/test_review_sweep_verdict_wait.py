@@ -437,3 +437,34 @@ def test_unconfigured_telegram_writes_no_marker(tmp_path: Path) -> None:
 	assert "outcome=telegram_unconfigured" in result.stdout
 	assert _lines(tmp_path, "statuses.log") == []
 	assert not any("/rules/branches/" in " ".join(call) for call in _api_calls(tmp_path))
+
+
+def test_verdict_head_whose_lease_was_granted_is_dispatched_not_capped(tmp_path: Path) -> None:
+	# G4: a lease_wait verdict head keeps a pending gate (the judge posts gate
+	# success only right before a merge request). Once the lease is granted
+	# (label removed) its verdict changed; it is dispatched, never labelled.
+	meta = {"32": {"gate": "PENDING", "verdict": _verdict(wait="lease_wait"), "ms": "BLOCKED"}}
+	result = _run_sweep(tmp_path, [_pr(32)], meta, rounds=_rounds(**{"32": 40}))
+	assert result.returncode == 0, result.stderr
+	assert _dispatched(tmp_path) == ["32"]
+	assert "reason=review_round_cap" not in result.stdout
+	assert _lines(tmp_path, "labels.log") == []
+
+
+def test_verdict_head_with_a_failing_rollup_stays_capped(tmp_path: Path) -> None:
+	# A failing check is a change on every tick; the round cap still bounds it.
+	meta = {"33": {"gate": "PENDING", "verdict": _verdict(), "ms": "BLOCKED", "rollup": "FAILURE"}}
+	result = _run_sweep(tmp_path, [_pr(33)], meta, rounds=_rounds(**{"33": 40}))
+	assert result.returncode == 0, result.stderr
+	assert _dispatched(tmp_path) == []
+	assert "AUTOFIX_SWEEP_SKIP pr=#33 reason=review_round_cap" in result.stdout
+
+
+def test_refreshed_verdict_keeps_the_wait_age_of_the_gate_status(tmp_path: Path) -> None:
+	# A base refresh re-posts the verdict (recent createdAt); the pending gate
+	# status from before the verdict keeps the age, so the alert still fires.
+	meta = {"34": {"gate": "PENDING", "gate_at": _hours_ago(7), "verdict": _verdict(), "ms": "BLOCKED"}}
+	result = _run_sweep(tmp_path, [_pr(34)], meta)
+	assert result.returncode == 0, result.stderr
+	assert "reason=verdict_waiting wait=rb_judge_merge_deferred" in result.stdout
+	assert re.search(r"VERDICT_MERGE_WAIT_ALERT pr=#34 head_sha=\w+ age_hours=7 reason=rb_judge_merge_deferred blocker=\S+ outcome=sent", result.stdout), result.stdout

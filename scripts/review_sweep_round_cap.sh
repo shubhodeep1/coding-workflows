@@ -51,8 +51,10 @@
 #           whose head is already approved (see the sweep step). A dispatch
 #           the sweep skips because the head's verdict is still waiting
 #           (`reason=verdict_waiting`, issue #9991) creates no run, so it is
-#           never counted here; a head whose judge verdict changed or could
-#           not be evaluated is dispatched and stays capped.
+#           never counted here. A head whose evaluated judge merge verdict
+#           changed counts as approved and is not capped (the judge posts
+#           gate success only right before a merge request) unless its
+#           check rollup fails; an unevaluated verdict stays capped.
 #   API:    one paginated listing per tick for all PRs, never one per PR (§15):
 #           `GET actions/workflows/internal-review.yml/runs?event=workflow_dispatch
 #           &created=>=<cutoff>&per_page=100`, ceil(runs in window / 100) calls

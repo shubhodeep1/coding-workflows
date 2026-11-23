@@ -237,8 +237,10 @@ review_sweep_final_ci_state()
 #   ready. A failed marker write sends nothing, so the alert never repeats
 #   per tick; a send that fails after the marker is not retried. At most
 #   REVIEW_SWEEP_VERDICT_ALERT_MAX_PER_TICK (5) alerts per tick.
-#   Verdict age: head_gate_created_at for a gate-success head, else
-#   rb_judge_verdict_at. API per alert: the ruleset blocker reads (1 to 3),
+#   Verdict age: head_gate_created_at for a gate-success head, else the
+#   earlier of rb_judge_verdict_at and head_gate_created_at (a base refresh
+#   re-posts the verdict status and moves its createdAt; the pending gate
+#   status of a skipped head does not move). API per alert: the ruleset blocker reads (1 to 3),
 #   the lease read (2) when the PR waits for the lease, 1 status POST.
 #   Log: VERDICT_MERGE_WAIT_ALERT pr=#<n> head_sha=<sha> age_hours=<n>
 #        reason=<wait> blocker=<summary|-> outcome=<sent|not_delivered|
@@ -332,6 +334,13 @@ review_sweep_verdict_merge_wait_alert()
 		ma_since="${ma_gate_at}"
 	else
 		ma_since="${ma_verdict_at}"
+		# A base refresh re-posts the verdict and moves its createdAt; the
+		# head-gate status (any state) is not re-posted while the head is
+		# skipped, so the earlier of the two keeps the wait age stable.
+		if [ -n "${ma_since}" ] && [[ "${ma_gate_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
+			&& [[ "${ma_gate_at}" < "${ma_since}" ]]; then
+			ma_since="${ma_gate_at}"
+		fi
 	fi
 	[[ "${ma_since}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || return 0
 	ma_since_epoch="$(date -u -d "${ma_since}" +%s 2>/dev/null || echo "")"

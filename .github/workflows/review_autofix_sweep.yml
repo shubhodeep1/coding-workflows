@@ -860,9 +860,22 @@ jobs:
             # final-CI resume. Without the head-gate annotation nothing is
             # capped. No API call here: the counts were read once before the loop.
             # A head whose judge merge verdict still waits (issue #9991) has
-            # already been skipped above and creates no run; one whose
-            # verdict changed or could not be evaluated stays capped.
-            if [ -n "${round_cap_counts_json}" ] \
+            # already been skipped above and creates no run. A judge merge
+            # verdict whose wait changed (lease granted, merge state moved)
+            # counts as approved, like a head-gate success: the judge posts
+            # gate success only right before a merge request, so its
+            # lease_wait / checks_not_ready heads keep a pending gate, and
+            # capping them would label a PR that may merge now (G4, #9515,
+            # #9839). Only an evaluated verdict (switch on, pr_checks_lib.sh
+            # loaded, strict parse) on a head whose check rollup is not
+            # failing is exempt; anything else stays capped.
+            round_cap_verdict_exempt=false
+            if type review_sweep_verdict_wait_enabled >/dev/null 2>&1 && review_sweep_verdict_wait_enabled \
+              && type _pr_rb_judge_verdict_parse >/dev/null 2>&1 \
+              && _pr_rb_judge_verdict_parse "$(printf '%s' "${row}" | jq -r 'if ((.checks_rollup // "") | test("^(failure|error)$")) then "" else (.rb_judge_verdict // "") end' 2>/dev/null)"; then
+              round_cap_verdict_exempt=true
+            fi
+            if [ -n "${round_cap_counts_json}" ] && [ "${round_cap_verdict_exempt}" != "true" ] \
               && printf '%s' "${row}" | jq -e '(.head_gate_state // "") as $s | $s != "" and $s != "success"' >/dev/null 2>&1; then
               round_cap_rounds="$(printf '%s' "${round_cap_counts_json}" | jq -r --arg n "${pr_number}" '(.[$n] // 0) | if type == "number" then . else 0 end' 2>/dev/null || echo 0)"
               if [[ "${round_cap_rounds}" =~ ^[0-9]+$ ]] && [ "${round_cap_rounds}" -ge "${round_cap_max}" ]; then

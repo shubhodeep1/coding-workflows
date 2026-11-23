@@ -2652,13 +2652,20 @@ rb_judge_deferred_merge_pending() {
 # checks still pending), auto_merge (auto-merge enrolled, PR still open). It
 # stays empty for deferred_base_moved, checks_failed, merge_failed, unknown
 # freshness, conflicts and merged PRs: a re-run is the right answer there.
-# rb_judge_record_verdict_wait <decision> then reads the PR once
-# (state, base sha, mergeable_state) and posts the ai-review/rb-judge-verdict
-# status on RB_JUDGED_HEAD_SHA (review_rb_judge_verdict_post_status in
-# scripts/review_head_gate.sh). Stall recovery and the review sweep read it
-# and skip re-dispatching the judge until something relevant changed.
-# VERDICT_WAIT_DISPATCH_SKIP_ENABLED=false posts nothing. Never fails the
-# judge. API: 1 PR read + 1 status POST, only for a deferred merge verdict.
+# rb_judge_record_verdict_wait <decision> then reads the PR once (GraphQL:
+# state, base sha, mergeStateStatus, current head and its statusCheckRollup)
+# and posts the ai-review/rb-judge-verdict status on RB_JUDGED_HEAD_SHA
+# (review_rb_judge_verdict_post_status in scripts/review_head_gate.sh).
+# Stall recovery and the review sweep read it and skip re-dispatching the
+# judge until something relevant changed. Nothing is recorded when the head
+# moved or its check rollup already reads failure/error: the readers treat a
+# failed rollup as a change, so such a verdict would re-dispatch every tick.
+# The recorded base is the one the judge's freshness check evaluated
+# (PR_BASE_FRESHNESS_EVAL_BASE_SHA for the judged head), not a later read, so
+# a base that moved during the checks wait is still seen as a base move.
+# VERDICT_WAIT_DISPATCH_SKIP_ENABLED=false posts nothing (only where the
+# judge's workflow passes the switch). Never fails the judge.
+# API: 1 PR read + 1 status POST, only for a deferred merge verdict.
 RB_MERGE_WAIT_TOKEN=""
 rb_judge_record_verdict_wait() {
   local verdict_decision="${1:-merge}" verdict_view="" verdict_state="" verdict_base="" verdict_ms=""
@@ -2672,15 +2679,34 @@ rb_judge_record_verdict_wait() {
     echo "RB_JUDGE_VERDICT_STATUS outcome=skipped reason=helper_unavailable ${verdict_fields}"
     return 0
   fi
-  verdict_view="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[(.state // ""), (.base.sha // ""), (.mergeable_state // "")] | @tsv' 2>/dev/null)" || verdict_view=""
+  local verdict_head="" verdict_rollup=""
+  verdict_view="$(gh_retry gh api graphql -F number="${PR_NUMBER}" -f owner="${REPOSITORY%%/*}" -f name="${REPOSITORY#*/}" \
+    -f query='query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { state baseRefOid mergeStateStatus commits(last: 1) { nodes { commit { oid statusCheckRollup { state } } } } } } }' \
+    --jq '.data.repository.pullRequest as $p | ((($p.commits.nodes // [])[0].commit) // {}) as $c | [(($p.state // "") | ascii_downcase), ($p.baseRefOid // ""), (($p.mergeStateStatus // "") | ascii_downcase), ($c.oid // ""), ((($c.statusCheckRollup.state) // "") | ascii_downcase)] | @tsv' 2>/dev/null)" || verdict_view=""
   if [ -z "${verdict_view}" ]; then
     echo "RB_JUDGE_VERDICT_STATUS outcome=skipped reason=read_failed ${verdict_fields}"
     return 0
   fi
-  IFS=$'\t' read -r verdict_state verdict_base verdict_ms <<< "${verdict_view}" || true
+  IFS=$'\t' read -r verdict_state verdict_base verdict_ms verdict_head verdict_rollup <<< "${verdict_view}" || true
   if [ "${verdict_state}" != "open" ]; then
     echo "RB_JUDGE_VERDICT_STATUS outcome=skipped reason=not_open ${verdict_fields}"
     return 0
+  fi
+  if [ -n "${verdict_head}" ] && [ "${verdict_head}" != "${RB_JUDGED_HEAD_SHA:-}" ]; then
+    echo "RB_JUDGE_VERDICT_STATUS outcome=skipped reason=head_moved ${verdict_fields}"
+    return 0
+  fi
+  case "${verdict_rollup}" in
+    failure|error)
+      echo "RB_JUDGE_VERDICT_STATUS outcome=skipped reason=checks_failing ${verdict_fields}"
+      return 0
+      ;;
+  esac
+  # The base the freshness check evaluated for this head; the read above is
+  # the fallback (no freshness check on this path, or a truncated compare).
+  if [ "${PR_BASE_FRESHNESS_HEAD_SHA:-}" = "${RB_JUDGED_HEAD_SHA:-}" ] \
+    && [[ "${PR_BASE_FRESHNESS_EVAL_BASE_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+    verdict_base="${PR_BASE_FRESHNESS_EVAL_BASE_SHA}"
   fi
   review_rb_judge_verdict_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA:-}" "${verdict_decision}" "${RB_MERGE_WAIT_TOKEN}" "${verdict_base}" "${verdict_ms}" || true
   return 0
@@ -2772,7 +2798,9 @@ case "${RB_ACTION}" in
           echo "::warning::Review-blocked judge: required check-runs on ${RB_JUDGED_HEAD_SHA:0:7} are ${PR_CHECKS_WAIT_OUTCOME:-unknown}; not enabling auto-merge and withholding ai:ready-to-merge."
           RB_MERGE_STATUS="checks_not_ready"
           [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "failed" ] && RB_MERGE_STATUS="checks_failed"
-          [ "${RB_MERGE_STATUS}" = "checks_not_ready" ] && RB_MERGE_WAIT_TOKEN="checks_not_ready"
+          # Only a readable, still-pending check state (timeout) is a wait;
+          # query_failed / unavailable / unknown outcomes record nothing (fail open).
+          [ "${RB_MERGE_STATUS}" = "checks_not_ready" ] && [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "timeout" ] && RB_MERGE_WAIT_TOKEN="checks_not_ready"
         elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
           && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           # The wait can take minutes and --match-head-commit binds only the
@@ -2893,7 +2921,9 @@ case "${RB_ACTION}" in
           echo "::warning::Review-blocked judge: required check-runs on ${RB_JUDGED_HEAD_SHA:0:7} are ${PR_CHECKS_WAIT_OUTCOME:-unknown}; not enabling the terminal auto-merge and withholding ai:ready-to-merge."
           RB_MERGE_STATUS="checks_not_ready"
           [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "failed" ] && RB_MERGE_STATUS="checks_failed"
-          [ "${RB_MERGE_STATUS}" = "checks_not_ready" ] && RB_MERGE_WAIT_TOKEN="checks_not_ready"
+          # Only a readable, still-pending check state (timeout) is a wait;
+          # query_failed / unavailable / unknown outcomes record nothing (fail open).
+          [ "${RB_MERGE_STATUS}" = "checks_not_ready" ] && [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "timeout" ] && RB_MERGE_WAIT_TOKEN="checks_not_ready"
         elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
           && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           # The wait can take minutes and --match-head-commit binds only the
