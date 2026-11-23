@@ -1674,7 +1674,8 @@ For every problem solved, answer three questions:
   per repository. The user can close or change it. A fix that needs several
   PRs (the multi-PR path of §31.B step 2) is not covered: follow §31.B steps
   2 and 3 (open the plan PR, then wait for the user's go before the
-  `/implement-plan-claude` dispatch, §23.C).
+  `/implement-plan-claude` dispatch, §23.C). In PR review mode, the §2 ask in
+  the §34 intro comes first instead: open no plan PR before the answer.
 - **The fix needs an action only the user can take** (a variable, setting,
   ruleset, secret, billing change or any other ask-first action in this
   file): ask in the §2 format, name the exact change, and keep the item open
