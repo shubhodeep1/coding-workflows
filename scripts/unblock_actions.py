@@ -1166,25 +1166,15 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 	elif name == "override_guard":
 		if ctx["stop"] == "scope-blocked":
 			ops.append({"op": "edit_files_touched", "issue": item, "paths": verdict["paths"]})
-		guard_label = _stop_label(ctx["stop"]) if _stop_label(ctx["stop"]) in ctx["labels"] else ""
-		# Issue #9534: only a routed planning scope block (plan.yml) sets
-		# ai:blocked beside ai:scope-blocked; the implement-time guard
-		# (implement_handle_guard_block.sh) never adds ai:blocked. Planning just
-		# failed for that issue, so an older plan comment must not be approved.
-		planning_scope_block = ctx["stop"] == "scope-blocked" and "ai:blocked" in ctx["labels"]
-		if ctx["has_plan"] and not planning_scope_block:
-			ops += _approve(item, ctx["labels"], guard_label)
+		# Issue #9534: resume through reset_ops, the one source of the guard-stop
+		# rule (an older plan is approved, except on a routed planning scope block,
+		# ai:blocked beside ai:scope-blocked, which re-plans with /reclarify and
+		# drops both labels). The ledger offers override_guard only on an issue's
+		# GUARD_STOPS; anything else keeps the old approve path.
+		if ctx["kind"] == "issue" and ctx["stop"] in GUARD_STOPS:
+			ops += reset_ops(ctx, verdict.get("reason", ""))
 		else:
-			# A guard grant before any plan exists, or on a routed planning scope
-			# block, resumes through the reset_ops GUARD_STOPS rule: /reclarify
-			# and drop the stop label. /reclarify and the planning transition
-			# never clear ai:blocked, which the routed block also set, so drop it
-			# too or the next scan would resume the issue a second time.
-			ops.append({"op": "comment", "issue": item, "body": "/reclarify"})
-			if guard_label:
-				ops.append({"op": "remove_label", "issue": item, "label": guard_label})
-			if ctx["stop"] == "scope-blocked" and "ai:blocked" in ctx["labels"]:
-				ops.append({"op": "remove_label", "issue": item, "label": "ai:blocked"})
+			ops += _approve(item, ctx["labels"], _stop_label(ctx["stop"]) if _stop_label(ctx["stop"]) in ctx["labels"] else "")
 	elif name == "reissue":
 		title = f"Re-issue of #{item}: {_lineage_title(ctx)}"[:240]
 		body = "\n".join([f"Re-issued by the unblock judge from #{item}.", "", f"Specification: {verdict['instructions']}", "", f"Why: {verdict['reason']}"])
