@@ -886,7 +886,9 @@ export function createHandler(deps: Deps)
 		// Durable cache (issue #9990): survives redeploys; a hit makes no GitHub call.
 		const durableAt = await durableShaVerifiedAt(env, sha, now);
 		if (durableAt !== null) {
-			rememberVerifiedSha(sha, now);
+			// The memory entry must expire no later than the durable one, so the
+			// total trust window stays within DURABLE_VERIFIED_SHA_TTL_MS.
+			rememberVerifiedSha(sha, Math.min(now, durableAt + DURABLE_VERIFIED_SHA_TTL_MS - VERIFIED_SHA_TTL_MS));
 			deps.log(`CLAUDE_POOL broker workflow_sha_check sha=${sha.slice(0, 12)} result=trusted source=durable`);
 			return "trusted";
 		}

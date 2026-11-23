@@ -319,7 +319,7 @@ def test_send_does_not_defer(env: dict, hour_utc: str, now: str, probes: list, r
 	assert env["log"].exists()
 
 
-@pytest.mark.parametrize("retry_hours", ["abc", "24"])
+@pytest.mark.parametrize("retry_hours", ["abc", "24", "9223372036854775808"])
 def test_send_invalid_retry_hours_falls_back_to_two(env: dict, retry_hours: str) -> None:
 	common = {"CLAUDE_POOL_REASON": "broker_refused_workflow_sha_unverifiable", "CLAUDE_POOL_DAILY_USAGE_HOUR_UTC": "0", "CLAUDE_POOL_DAILY_USAGE_RETRY_HOURS": retry_hours}
 	inside = _run(env, "send", [], CLAUDE_POOL_DAILY_USAGE_NOW=_epoch("2026-11-23T01:30"), **common)
