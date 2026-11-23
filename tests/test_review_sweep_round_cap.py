@@ -23,7 +23,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SWEEP_WF = REPO_ROOT / ".github" / "workflows" / "review_autofix_sweep.yml"
@@ -528,10 +527,20 @@ def test_counts_use_the_callers_retry_wrapper_and_project_each_page(tmp_path: Pa
 
 
 def test_workflow_passes_the_cap_knobs_with_defaults() -> None:
-	wf = yaml.safe_load(SWEEP_WF.read_text(encoding="utf-8"))
-	step = next(s for s in wf["jobs"]["sweep"]["steps"] if s.get("name") == "Enumerate open PRs and dispatch internal-review.yml")
-	assert step["env"]["SWEEP_REVIEW_ROUND_CAP_ENABLED"] == "${{ vars.SWEEP_REVIEW_ROUND_CAP_ENABLED || 'true' }}"
-	assert step["env"]["SWEEP_REVIEW_MAX_ROUNDS"] == "${{ vars.SWEEP_REVIEW_MAX_ROUNDS || '10' }}"
-	assert step["env"]["SWEEP_REVIEW_ROUND_WINDOW_HOURS"] == "${{ vars.SWEEP_REVIEW_ROUND_WINDOW_HOURS || '48' }}"
+	# Read the step's env block from the workflow text (PyYAML is not
+	# available in every test container, so the module must not need it).
+	text = SWEEP_WF.read_text(encoding="utf-8")
+	start = text.find(STEP_MARKER)
+	assert start != -1, "could not locate the sweep step"
+	run_at = text.find(RUN_HEADER, start)
+	assert run_at != -1
+	env: dict[str, str] = {}
+	for line in text[start:run_at].splitlines():
+		match = re.fullmatch(r" {10}([A-Z][A-Z0-9_]*): (.*)", line)
+		if match:
+			env[match.group(1)] = match.group(2)
+	assert env["SWEEP_REVIEW_ROUND_CAP_ENABLED"] == "${{ vars.SWEEP_REVIEW_ROUND_CAP_ENABLED || 'true' }}"
+	assert env["SWEEP_REVIEW_MAX_ROUNDS"] == "${{ vars.SWEEP_REVIEW_MAX_ROUNDS || '10' }}"
+	assert env["SWEEP_REVIEW_ROUND_WINDOW_HOURS"] == "${{ vars.SWEEP_REVIEW_ROUND_WINDOW_HOURS || '48' }}"
 	# The helper comes from the trusted default-branch checkout, like the head gate.
-	assert "source .ci-rerun-support/scripts/review_sweep_round_cap.sh" in step["run"]
+	assert "source .ci-rerun-support/scripts/review_sweep_round_cap.sh" in _extract_step_script()
