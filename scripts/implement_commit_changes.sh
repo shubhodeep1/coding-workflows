@@ -42,6 +42,31 @@ capture_step_failure() {
   } >> "${CAPTURE_FILE}" || true
 }
 
+# Diagnostics only (#9940, Refs #9937): print one IMPLEMENT_SYMLINK_DELETE
+# line for every symlink tracked in HEAD that no longer exists in the
+# worktree. Called before and after the artifact cleanup below, so the log
+# shows whether the editor result (both stages) or the cleanup (post_cleanup
+# only) removed it. Fails open: never changes behaviour or the exit status.
+implement_log_tracked_symlink_deletes() {
+  local symlink_stage="${1:-unknown}"
+  local symlink_record symlink_meta symlink_path symlink_safe_path
+  while IFS= read -r -d '' symlink_record; do
+    symlink_meta="${symlink_record%%$'\t'*}"
+    if [ "${symlink_meta%% *}" != "120000" ]; then
+      continue
+    fi
+    symlink_path="${symlink_record#*$'\t'}"
+    if [ -z "${symlink_path}" ]; then
+      continue
+    fi
+    if [ ! -L "${symlink_path}" ] && [ ! -e "${symlink_path}" ]; then
+      symlink_safe_path="${symlink_path//[[:space:][:cntrl:]]/?}"
+      echo "IMPLEMENT_SYMLINK_DELETE path=${symlink_safe_path} stage=${symlink_stage}"
+    fi
+  done < <(git ls-tree -r -z --full-tree HEAD 2>/dev/null | grep -z '^120000 ' || true)
+  return 0
+}
+
 FAILED_COMMAND=""
 LAST_COMMAND=""
 trap 'LAST_COMMAND="${BASH_COMMAND}"' DEBUG
@@ -63,6 +88,8 @@ on_step_exit() {
 trap on_step_exit EXIT
 exec 3>&2
 exec 2> >(tee "${STEP_STDERR_FILE}" >&3)
+
+implement_log_tracked_symlink_deletes pre_cleanup || true
 
 # Remove workflow-generated/fetched artifacts BEFORE checking for
 # changes so they don't cause false-positive "file changes" detection.
@@ -297,6 +324,8 @@ if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -n "${SERENA_PROJECT
     fi
   fi
 fi
+
+implement_log_tracked_symlink_deletes post_cleanup || true
 
 porcelain_status="$(git status --porcelain)"
 if [ -z "${porcelain_status}" ]; then
