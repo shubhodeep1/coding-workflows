@@ -106,7 +106,11 @@ def test_permissions_add_exactly_attestation_scopes(workflow_path: Path) -> None
 	# test-and-mark-stable.yml also grants the read-only scopes its polling
 	# steps need for reads on the job token (GH_READ_TOKEN, issue #9888).
 	# Only read scopes may be added there; writes stay on GH_PAT.
+	# Exact match: any extra workflow-level scope, write or read, still fails.
 	assert workflow["permissions"] == WORKFLOW_PERMISSIONS[workflow_path.name]
+	for scope, level in workflow["permissions"].items():
+		if scope != "contents":
+			assert level == "read", scope
 	# The release job keeps its existing CI-gate scopes (checks/actions read,
 	# #6797) and adds exactly the two attestation scopes (#6943).
 	assert workflow["jobs"]["release"]["permissions"] == {
