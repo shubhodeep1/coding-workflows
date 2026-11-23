@@ -625,6 +625,36 @@ def test_an_unlabelled_autofix_cap_comment_does_not_shadow_an_older_bound_latch(
 	assert "outcome=skip reason=label_not_bound_to_latch latch=autofix_cap_head_moved" in other["stdout"]
 
 
+def test_a_hold_between_the_bound_latch_and_the_autofix_cap_comment_is_kept(tmp_path: Path) -> None:
+	older = _round_cap_comment(created_at="2026-11-20T11:15:10Z")
+	newer = _autofix_cap_comment(created_at="2026-11-20T12:30:00Z")
+	# A person re-asserted the hold between the bound latch and the newer
+	# unlabelled autofix-cap comment.
+	keep = {
+		"user": {"login": "maintainer"},
+		"author_association": "OWNER",
+		"created_at": "2026-11-20T12:00:00Z",
+		"body": "Keep `ai:needs-human` here until I look at the migration.",
+	}
+	human = _run(tmp_path / "human", comments=[older, keep, newer], events=[_labeled()])
+	assert human["rc"] == 0, human["stderr"]
+	assert human["deleted"] == [] and human["posted"] == []
+	assert "outcome=skip reason=later_needs_human_comment latch=autofix_cap_head_moved" in human["stdout"]
+	# A latch on the PR's current head between them (its label add was a
+	# no-op, so the label event still binds to the stale latch) keeps the hold.
+	current = _non_retryable_comment(head=NEW_HEAD, created_at="2026-11-20T11:20:00Z")
+	between = _run(tmp_path / "current_head_between", comments=[older, current, newer], events=[_labeled()])
+	assert between["deleted"] == [] and between["posted"] == []
+	assert "outcome=skip reason=later_needs_human_comment latch=autofix_cap_head_moved" in between["stdout"]
+	# The label binds to the newest bound latch: when that one is on the
+	# current head, an even older stale latch does not release it.
+	stale = _round_cap_comment(created_at="2026-11-20T11:00:00Z")
+	current_bound = _non_retryable_comment(head=NEW_HEAD, created_at="2026-11-20T11:10:00Z")
+	newest_bound = _run(tmp_path / "newest_bound_on_current_head", comments=[stale, current_bound, newer], events=[_labeled()])
+	assert newest_bound["deleted"] == [] and newest_bound["posted"] == []
+	assert "outcome=skip reason=label_not_bound_to_latch latch=autofix_cap_head_moved" in newest_bound["stdout"]
+
+
 def test_untrusted_autofix_cap_heading_is_not_a_latch(tmp_path: Path) -> None:
 	quoted = _autofix_cap_comment(author_association="NONE")
 	quoted["user"] = {"login": "drive-by"}

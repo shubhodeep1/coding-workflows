@@ -27503,8 +27503,10 @@ _Orchestrator: released the \`ai:needs-human\` latch that the staged-support res
 # 30 minutes later (the fixed local `hl_bind_minutes`, not an env var), which
 # binds the label to that latch (both writers comment first, then label;
 # an autofix-cap latch, whose writer does not always label, also binds when
-# the label is bound that way to an older trusted latch comment whose own
-# head is not the PR's current head, issue #9917); no
+# the newest older trusted latch comment the label is bound to that way has
+# a head that is not the PR's current head and no trusted comment between it
+# and the autofix-cap comment re-asserts the hold or latches again, issue
+# #9917); no
 # later trusted comment other than a release comment mentions
 # `ai:needs-human` (another path re-asserting the hold; a label re-added by
 # hand after a release fails the label binding above instead); no trusted
@@ -27553,7 +27555,7 @@ release_head_bound_needs_human_latches() {
   local hl_prs hl_count hl_idx hl_pr hl_labels hl_comments hl_latch hl_latch_idx
   local hl_latch_at hl_latch_login hl_latch_head hl_reason hl_events hl_event
   local hl_pull hl_head hl_release_marker hl_body hl_refreshed_comments hl_refreshed_events hl_refreshed_event hl_refreshed_pull
-  local hl_post_delete_comments hl_latch_run hl_latch_legacy hl_run_info hl_run_branch hl_run_repo hl_latch_candidates
+  local hl_post_delete_comments hl_latch_run hl_latch_legacy hl_run_info hl_run_branch hl_run_repo hl_latch_candidates hl_bound_idx
   # Per-tick cache of legacy autofix-cap run reads (issue #9917): run id ->
   # projected run JSON, or "unavailable" when the read failed.
   local -A hl_run_head_cache=()
@@ -27703,18 +27705,35 @@ release_head_bound_needs_human_latches() {
       # label itself (review_autofix_step_post_review_blocked_comment.sh labels
       # only some JUDGE_SKIP_REASON values), so an unlabelled one can be newer
       # than the latch that set the label. It does not shadow that latch: the
-      # label still binds when it is bound to an older trusted latch comment
-      # whose own 40-hex head is not the PR's current head either.
-      if ! { [ "${hl_reason}" = "autofix_cap_head_moved" ] \
-        && printf '%s' "${hl_latch_candidates}" | jq -e --argjson e "${hl_event}" --argjson i "${hl_latch_idx}" --arg cur "${hl_head}" --argjson bind "${hl_bind_minutes}" '
-          ($e | type) == "object" and $e.event == "labeled" and ($e.login // "") != "" and ($e.created_at // "") != ""
-          and any(.[];
-            .idx < $i
-            and ((.head // "") | test("^[0-9a-f]{40}$")) and .head != $cur
-            and (.login // "") == $e.login
-            and (.created_at // "") != "" and $e.created_at >= .created_at
-            and ((($e.created_at | fromdateiso8601) - (.created_at | fromdateiso8601)) <= ($bind * 60)))' >/dev/null 2>&1; }; then
+      # label still binds to the newest older trusted latch comment it is bound
+      # to (same login, at or after it, within hl_bind_minutes), when that
+      # latch's own 40-hex head is not the PR's current head either.
+      hl_bound_idx=""
+      if [ "${hl_reason}" = "autofix_cap_head_moved" ]; then
+        hl_bound_idx="$(printf '%s' "${hl_latch_candidates}" | jq -r --argjson e "${hl_event}" --argjson i "${hl_latch_idx}" --arg cur "${hl_head}" --argjson bind "${hl_bind_minutes}" '
+          if ($e | type) == "object" and $e.event == "labeled" and ($e.login // "") != "" and ($e.created_at // "") != "" then
+            ([.[] | select(.idx < $i
+                and (.login // "") == $e.login
+                and (.created_at // "") != "" and $e.created_at >= .created_at
+                and ((($e.created_at | fromdateiso8601) - (.created_at | fromdateiso8601)) <= ($bind * 60)))] | last // null)
+            | if . != null and ((.head // "") | test("^[0-9a-f]{40}$")) and .head != $cur then .idx else "" end
+          else "" end' 2>/dev/null || true)"
+      fi
+      if ! [[ "${hl_bound_idx}" =~ ^[0-9]+$ ]]; then
         echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=label_not_bound_to_latch latch=${hl_reason}"
+        continue
+      fi
+      # The re-assertion check above starts after the newest latch. With the
+      # label bound to an older latch, any trusted comment between the two that
+      # re-asserts ai:needs-human or is itself a latch (e.g. one on the PR's
+      # current head whose label add was a no-op) keeps the hold.
+      if printf '%s' "${hl_comments}" | jq -e --argjson b "${hl_bound_idx}" --argjson i "${hl_latch_idx}" --arg pr "${hl_pr}" '
+          any(to_entries[];
+            .key > $b and .key < $i
+            and ((((.value.user.login // "") | test("\\[bot\\]$")) or ((.value.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))))
+            and ((.value.body // "") | (contains("ai:needs-human") or contains("<!-- ai:workflow-heal-non-retryable:v1 ") or contains("<!-- ai:review-round-cap:v1 -->") or contains("<!-- ai:autofix-cap-head:v1 ") or contains("**AI review/autofix blocked — needs human intervention**") or contains("**AI review/autofix — judge omitted follow-up issue details**") or contains("**AI review/autofix — judge approved merge but auto-merge is disabled**"))
+              and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved|autofix_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
+        echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=later_needs_human_comment latch=${hl_reason}"
         continue
       fi
     fi
