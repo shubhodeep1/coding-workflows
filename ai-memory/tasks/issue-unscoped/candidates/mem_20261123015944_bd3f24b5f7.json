@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom\" (issue #9684).\n  expected_change_site: `.github/workflows/ci.yml`: the selection of steps moved from `tests-heal-plan-and-validation` and the choice of their target job\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The provenance comment at `.github/workflows/ci.yml:1330-1344` (cited as lines 1332\u20131344 by one reviewer) and the PR description say the step timings for run 43314513853 could not be read, the test-file comment at `tests/test_ci_poll_test_sharding.py:1977-1981` says the same, and both describe the step selection and the choice of `tests-hooks-and-orchestrator` as estimates, so the change does not show that the moved steps were the slowest or that the target job had the most headroom; the limitation is recorded as a documented residual in three places rather than backed by measurements; all three reviewers rated it SEVERITY: MAJOR. Reviewers anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash chose not to re-raise this gap, because earlier rounds accepted it as a documented residual and the last run only deleted a comment line.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- Note: The last autofix run deleted one redundant comment line above RELEASE_TO_HEAL_TARGET_JOB_ID in tests/test_ci_poll_test_sharding.py. The history is still recorded in the block comment at lines 1977-1981 and the class docstring at lines 2001-2005. RELEASE_TO_HEAL_TARGET_JOB_ID is still \"tests-hooks-and-orchestrator\" at line 1983, MovedReleaseToHealStepsContractTest (lines 2000-2052) is unchanged, and no identifier was renamed.\n- Note: The step-timings task gap was not re-raised. Earlier rounds accepted it as known, and ci.yml (lines 1330-1344), the test comment and the changelog fragment all document it. The other requirements are met: six steps moved unchanged, neither timeout-minutes raised (both still 20), no new required job, and a contract test plus a changelog fragment added. CI on head 6c1dc9a0 shows failed_count 0.\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP | severity=MAJOR | confidence=5\n  Requirement: Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The workflow comments at lines 1332\u20131344 and the PR description state that the step timings for run 43314513853 were unavailable and unreadable, meaning the moved steps were selected based on estimates rather than the required step-timing data.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP | severity=MAJOR | confidence=5\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom\" (issue #9684).\n  Expected change site: `.github/workflows/ci.yml` \u2014 the moved-step selection and target-job choice.\n  Evidence of absence: The provenance comment at `.github/workflows/ci.yml:1330-1344` and the test-file comment at `tests/test_ci_poll_test_sharding.py:1977-1981` both state that the run's step timings could not be read, and both describe the step selection and the choice of `tests-hooks-and-orchestrator` as estimates. The diff does not show that the moved steps were the slowest or that the target job had the most headroom. The limitation is recorded as a documented residual in three places rather than backed by measurements.\n- Note: Deleting the redundant comment line at `tests/test_ci_poll_test_sharding.py:1982` is safe because it duplicated the block comment at lines 1979-1981. No assertion, constant or identifier changed, and the `RELEASE_TO_HEAL_TARGET_JOB_ID == \"tests-hooks-and-orchestrator\"` assertion at line ~4536 still holds.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP | severity=MAJOR | confidence=5\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, the selection of steps moved from `tests-heal-plan-and-validation` and their target job.\n  Evidence of absence: `.github/workflows/ci.yml` lines 1330\u20131344 state that the run's step timings could not be read and that both the step selection and the target rationale are estimates. The change therefore does not show that the moved steps were the slowest or that `tests-hooks-and-orchestrator` had the most headroom.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- Note: The last run's only edit deleted one comment line above `RELEASE_TO_HEAL_TARGET_JOB_ID` in tests/test_ci_poll_test_sharding.py. The constant is unchanged at line 1983 (`\"tests-hooks-and-orchestrator\"`), and the history is still recorded in the block comment at lines 1977-1981 and the `MovedReleaseToHealStepsContractTest` docstring at lines 2001-2005. Check-runs show failed_count 0.\n- Note: The step-timings requirement for .github/workflows/ci.yml was not re-flagged. It is a documented residual that earlier rounds accepted (run 43314513853's step timings could not be read). All other deliverables are present: six steps moved unchanged into `tests-hooks-and-orchestrator`, no `timeout-minutes` raised, no new job, `MovedHeal9420StepsContractTest` pins the placement, and the changelog fragment `changelog.d/9420-ci-heal-job-steps-to-hooks-job.md` records the move.\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d8485103100c48a790f83037b72f5be4439f1169d008fcde4c043d86a289aea0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9702,
+    "run_id": "45089508755",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45089508755",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123015944_bd3f24b5f7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9702,
+    "run_id": "45089508755"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T01:59:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
