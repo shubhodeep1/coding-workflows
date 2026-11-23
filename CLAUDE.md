@@ -1669,7 +1669,10 @@ For every problem solved, answer three questions:
   repository the session works in: show the plan in the reply and open the
   issue without waiting. An issue in any other repository, consumer repos
   included, still needs the named §2 ask §23.C requires. One issue per cause
-  per repository. The user can close or change it.
+  per repository. The user can close or change it. A fix that needs several
+  PRs (the multi-PR path of §31.B step 2) is not covered: show the plan and
+  wait for the user's go before the plan PR or the `/implement-plan-claude`
+  dispatch (§31.B step 3, §23.C).
 - **The fix needs an action only the user can take** (a variable, setting,
   ruleset, secret, billing change or any other ask-first action in this
   file): ask in the §2 format, name the exact change, and keep the item open
