@@ -1,0 +1,21 @@
+{
+  "discovered_at": "2026-11-23T17:33:26Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 006 as out-of-scope; anchor=.github/workflows/implement.yml:1; cited_path=agents.md; files_touched=.github/workflows/implement.yml, .github/workflows/nightly-validation-selftest.yml, .github/workflows/orchestrate_poll.yml, .github/workflows/review_autofix.yml, .github/workflows/security-audit.yml, .github/workflows/test-and-mark-stable.yml, .github/workflows/validate.yml, .github/workflows/workflow-log-analysis.yml.",
+  "phase": "review_autofix",
+  "pr_number": 10005,
+  "record_id": "lesson_20261123173326_090edc78b6",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "agents.md",
+    ".github/workflows/implement.yml",
+    ".github/workflows/nightly-validation-selftest.yml",
+    ".github/workflows/orchestrate_poll.yml",
+    ".github/workflows/review_autofix.yml",
+    ".github/workflows/security-audit.yml",
+    ".github/workflows/test-and-mark-stable.yml",
+    ".github/workflows/validate.yml",
+    ".github/workflows/workflow-log-analysis.yml"
+  ]
+}
