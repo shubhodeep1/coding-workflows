@@ -1511,6 +1511,8 @@ jobs:
           ORCH_IMPLEMENTS_MARKER_ENABLED: ${{ vars.ORCH_IMPLEMENTS_MARKER_ENABLED || 'true' }}
           PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}
           NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
+          # PR #9839: release a PR's head-bound ai:needs-human latch once its head moved; false turns it off.
+          NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED || 'true' }}
           UNBLOCK_MAX_ROUNDS_PER_ITEM: ${{ vars.UNBLOCK_MAX_ROUNDS_PER_ITEM || '3' }}
           # Closes open unblock fix-ups whose source issue is closed (scripts/orphan_fixup_close.py); false turns it off.
           ORPHAN_FIXUP_CLOSE_ENABLED: ${{ vars.ORPHAN_FIXUP_CLOSE_ENABLED || 'true' }}
@@ -1768,6 +1770,8 @@ jobs:
           ORCH_IMPLEMENTS_MARKER_ENABLED: ${{ vars.ORCH_IMPLEMENTS_MARKER_ENABLED || 'true' }}
           PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}
           NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
+          # PR #9839: release a PR's head-bound ai:needs-human latch once its head moved; false turns it off.
+          NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED || 'true' }}
           UNBLOCK_MAX_ROUNDS_PER_ITEM: ${{ vars.UNBLOCK_MAX_ROUNDS_PER_ITEM || '3' }}
           # Closes open unblock fix-ups whose source issue is closed (scripts/orphan_fixup_close.py); false turns it off.
           ORPHAN_FIXUP_CLOSE_ENABLED: ${{ vars.ORPHAN_FIXUP_CLOSE_ENABLED || 'true' }}
@@ -1945,6 +1949,8 @@ jobs:
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
           NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
+          # PR #9839: release a PR's head-bound ai:needs-human latch once its head moved; false turns it off.
+          NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED || 'true' }}
           UNBLOCK_MAX_ROUNDS_PER_ITEM: ${{ vars.UNBLOCK_MAX_ROUNDS_PER_ITEM || '3' }}
           # Closes open unblock fix-ups whose source issue is closed (scripts/orphan_fixup_close.py); false turns it off.
           ORPHAN_FIXUP_CLOSE_ENABLED: ${{ vars.ORPHAN_FIXUP_CLOSE_ENABLED || 'true' }}

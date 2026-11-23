@@ -27460,6 +27460,263 @@ _Orchestrator: released the \`ai:needs-human\` latch that the staged-support res
   done
 }
 
+# release_head_bound_needs_human_latches
+#
+# Releases a pull request's ai:needs-human latch once the head it was set
+# for is gone. Two PR latches are bound to one head and say so in their own
+# text, but nothing removed the label when the head moved, so a PR whose new
+# head was green and judged "merge" still waited for a person to remove a
+# label (PR #9839: latched 2026-11-20 11:15 for head 27dd193, judged "merge"
+# five times on head bcd1d378 by 22:14):
+#   non_retryable_head_moved   scripts/workflow_failure_heal_intake.sh
+#     `_non_retryable_route_apply` posts
+#     `<!-- ai:workflow-heal-non-retryable:v1 pr=<n> head=<sha> reason=<r> -->`
+#     and adds the label; its resume is "push a new head, then remove
+#     ai:needs-human". A repeat failure on the new head latches again (its
+#     dedup is keyed on head).
+#   review_round_cap_head_moved   scripts/review_sweep_round_cap.sh
+#     `review_sweep_round_cap_escalate` posts `<!-- ai:review-round-cap:v1 -->`
+#     plus `<!-- ai:review-round-cap-head:v1 head=<sha> -->` and adds the
+#     label. The round count is already scoped to the current head, so a new
+#     head starts at zero; a PR still over the cap is labelled again by the
+#     next sweep tick. A cap comment without the head marker (posted before
+#     it existed) is never released here.
+# A latch is released only when all of these hold: the newest trusted latch
+# comment (a `[bot]` login or OWNER/MEMBER/COLLABORATOR) is one of the two
+# above and names a 40-hex head; the newest ai:needs-human label event is a
+# `labeled` event by the same login, at or after that comment and at most
+# 30 minutes later (the fixed local `hl_bind_minutes`, not an env var), which
+# binds the label to that latch (both writers comment first, then label); no
+# later trusted comment other than a release comment mentions
+# `ai:needs-human` (another path re-asserting the hold; a label re-added by
+# hand after a release fails the label binding above instead); no trusted
+# release marker (a `[bot]` login or OWNER/MEMBER/COLLABORATOR comment) exists
+# for the current head; the PR carries neither ai:destructive-blocked nor
+# ai:scope-blocked; a fresh PR read shows the PR open, still labelled, with a
+# 40-hex head different from the latch head; and a re-read of the comments,
+# label events and `pulls/<n>` right before the write shows no newer trusted
+# latch or needs-human comment, the same newest label event, and the PR still
+# open, labelled, on the same head, without ai:scope-blocked or
+# ai:destructive-blocked (otherwise `latch_changed_during_release`). The
+# release removes ai:needs-human,
+# then posts one comment ending in
+# `<!-- ai:needs-human-auto-release reason=<r> pr=<n> head=<current sha> -->`.
+# The release-once rule is per head, so a latch that comes back on the new
+# head stays parked until the head moves again.
+#
+# Unlike release_staged_support_needs_human_latches (issues only, this source
+# repository only), this runs in every repository: both latches are applied by
+# consumers' own review and heal runs. It runs after the per-project loop and
+# on idle ticks from the unblock-scan sweep step.
+#
+# API calls (§15): one paginated `issues?labels=ai:needs-human` read per tick,
+# filtered to PRs (the staged-support sweep's listing drops PRs and runs only
+# in this repository, so it cannot be reused); per PR with a head-bound latch
+# one paginated comments read and one `pulls/<n>` read (head and labels,
+# fresh), taken before the events read so a PR parked on its latched head
+# costs no events read; per PR whose head moved one paginated events read
+# (the poller's caches carry neither the full marker history nor label-event
+# provenance); per release candidate one comments, one events and one
+# `pulls/<n>` re-read (revalidation), one label removal, one comments read
+# after the removal (a latch that raced the removal gets its label back: one
+# label add, no release comment) and one comment write. PRs without a
+# head-bound latch cost only the comments read. Every read failure skips that PR for the tick
+# (fail open: the label stays). NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED=false
+# skips the sweep.
+release_head_bound_needs_human_latches() {
+  if ! _is_truthy "${NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED:-true}"; then
+    echo "NEEDS_HUMAN_HEAD_LATCH outcome=skip reason=disabled"
+    return 0
+  fi
+  local hl_bind_minutes=30
+  local hl_prs hl_count hl_idx hl_pr hl_labels hl_comments hl_latch hl_latch_idx
+  local hl_latch_at hl_latch_login hl_latch_head hl_reason hl_events hl_event
+  local hl_pull hl_head hl_release_marker hl_body hl_refreshed_comments hl_refreshed_events hl_refreshed_event hl_refreshed_pull
+  local hl_post_delete_comments
+  if ! hl_prs="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues?state=open&labels=ai%3Aneeds-human&per_page=100" \
+    | jq -s 'add // [] | map(select(.pull_request != null))' 2>/dev/null)" \
+    || ! hl_count="$(printf '%s' "${hl_prs}" | jq 'length' 2>/dev/null)" \
+    || ! [[ "${hl_count}" =~ ^[0-9]+$ ]]; then
+    echo "NEEDS_HUMAN_HEAD_LATCH outcome=skip reason=list_unavailable repository=${GITHUB_REPOSITORY}"
+    return 0
+  fi
+  echo "NEEDS_HUMAN_HEAD_LATCH outcome=listed prs=${hl_count} repository=${GITHUB_REPOSITORY}"
+  for ((hl_idx=0; hl_idx<hl_count; hl_idx++)); do
+    hl_pr="$(printf '%s' "${hl_prs}" | jq -r ".[${hl_idx}].number // empty" 2>/dev/null || true)"
+    [[ "${hl_pr}" =~ ^[0-9]+$ ]] || continue
+    hl_labels="$(printf '%s' "${hl_prs}" | jq -c ".[${hl_idx}].labels // [] | map(if type == \"object\" then (.name // \"\") else . end)" 2>/dev/null || echo '[]')"
+    if printf '%s' "${hl_labels}" | jq -e 'index("ai:destructive-blocked") != null or index("ai:scope-blocked") != null' >/dev/null 2>&1; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=other_human_gated_latch_present"
+      continue
+    fi
+    if ! hl_comments="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${hl_pr}/comments?sort=created&direction=asc&per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=comments_unavailable"
+      continue
+    fi
+    # Newest trusted latch comment of either kind, with its head.
+    hl_latch="$(printf '%s' "${hl_comments}" | jq -c '
+      def trusted: ((.user.login // "") | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"));
+      [to_entries[]
+        | .value as $c
+        | select($c | trusted)
+        | ($c.body // "") as $b
+        | if ($b | contains("<!-- ai:workflow-heal-non-retryable:v1 ")) then
+            {idx: .key, created_at: ($c.created_at // ""), login: ($c.user.login // ""), reason: "non_retryable_head_moved",
+             head: (($b | capture("<!-- ai:workflow-heal-non-retryable:v1 [^>]*head=(?<h>[0-9a-f]{40})") // {h: ""}).h)}
+          elif ($b | contains("<!-- ai:review-round-cap:v1 -->")) then
+            {idx: .key, created_at: ($c.created_at // ""), login: ($c.user.login // ""), reason: "review_round_cap_head_moved",
+             head: (($b | capture("<!-- ai:review-round-cap-head:v1 head=(?<h>[0-9a-f]{40}) -->") // {h: ""}).h)}
+          else empty end]
+      | last // null' 2>/dev/null || echo null)"
+    hl_latch_idx="$(printf '%s' "${hl_latch}" | jq -r '.idx // -1' 2>/dev/null || echo -1)"
+    if ! [[ "${hl_latch_idx}" =~ ^[0-9]+$ ]]; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=no_head_bound_latch"
+      continue
+    fi
+    hl_latch_at="$(printf '%s' "${hl_latch}" | jq -r '.created_at')"
+    hl_latch_login="$(printf '%s' "${hl_latch}" | jq -r '.login')"
+    hl_latch_head="$(printf '%s' "${hl_latch}" | jq -r '.head')"
+    hl_reason="$(printf '%s' "${hl_latch}" | jq -r '.reason')"
+    if ! [[ "${hl_latch_head}" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_head_missing latch=${hl_reason}"
+      continue
+    fi
+    # Only a well-formed release comment of this sweep for this PR (the full
+    # marker, ending the body) is exempt; a bare or malformed marker prefix
+    # in a comment that re-asserts ai:needs-human keeps the hold.
+    if printf '%s' "${hl_comments}" | jq -e --argjson i "${hl_latch_idx}" --arg pr "${hl_pr}" '
+        any(to_entries[];
+          .key > $i
+          and ((((.value.user.login // "") | test("\\[bot\\]$")) or ((.value.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))))
+          and ((.value.body // "") | contains("ai:needs-human") and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=later_needs_human_comment latch=${hl_reason}"
+      continue
+    fi
+    if ! hl_pull="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${hl_pr}" --jq '{state, head: (.head.sha // ""), labels: [.labels[]?.name]}' 2>/dev/null)" \
+      || ! hl_head="$(printf '%s' "${hl_pull}" | jq -r '.head' 2>/dev/null)"; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=pull_unavailable"
+      continue
+    fi
+    if ! printf '%s' "${hl_pull}" | jq -e '.state == "open" and (.labels | index("ai:needs-human") != null) and (.labels | index("ai:destructive-blocked") == null) and (.labels | index("ai:scope-blocked") == null)' >/dev/null 2>&1 \
+      || ! [[ "${hl_head}" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=pull_changed latch=${hl_reason}"
+      continue
+    fi
+    if [ "${hl_head}" = "${hl_latch_head}" ]; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=head_unchanged latch=${hl_reason} head=${hl_head:0:12}"
+      continue
+    fi
+    hl_release_marker="<!-- ai:needs-human-auto-release reason=${hl_reason} pr=${hl_pr} head=${hl_head} -->"
+    if printf '%s' "${hl_comments}" | jq -e --arg m "${hl_release_marker}" '
+        any(.[];
+          ((((.user.login // "") | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))))
+          and ((.body // "") | contains($m)))' >/dev/null 2>&1; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=already_released latch=${hl_reason} head=${hl_head:0:12}"
+      continue
+    fi
+    if ! hl_events="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${hl_pr}/events?per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=label_events_unavailable"
+      continue
+    fi
+    hl_event="$(printf '%s' "${hl_events}" | jq -c '
+      [.[]
+        | select((.event == "labeled" or .event == "unlabeled") and (.label.name // "") == "ai:needs-human")
+        | {event, created_at: (.created_at // ""), login: (.actor.login // "")}]
+      | sort_by(.created_at) | last // null' 2>/dev/null || echo null)"
+    if ! printf '%s' "${hl_event}" | jq -e --arg at "${hl_latch_at}" --arg login "${hl_latch_login}" --argjson bind "${hl_bind_minutes}" '
+        .event == "labeled"
+        and .login != "" and .login == $login
+        and .created_at != "" and $at != ""
+        and (.created_at >= $at)
+        and (((.created_at | fromdateiso8601) - ($at | fromdateiso8601)) <= ($bind * 60))' >/dev/null 2>&1; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=label_not_bound_to_latch latch=${hl_reason}"
+      continue
+    fi
+    # Revalidate right before the write, like the staged-support release's
+    # latch_changed_during_release guard: a writer that commented a new latch
+    # (or re-labelled) after the snapshots above keeps its hold. Both writers
+    # comment first, and adding a label the PR already carries records no
+    # event, so the comment re-read is what catches a re-latch.
+    if ! hl_refreshed_comments="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${hl_pr}/comments?sort=created&direction=asc&per_page=100" | jq -s 'add // []' 2>/dev/null)" \
+      || ! hl_refreshed_events="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${hl_pr}/events?per_page=100" | jq -s 'add // []' 2>/dev/null)" \
+      || ! hl_refreshed_event="$(printf '%s' "${hl_refreshed_events}" | jq -c '
+        [.[]
+          | select((.event == "labeled" or .event == "unlabeled") and (.label.name // "") == "ai:needs-human")
+          | {event, created_at: (.created_at // ""), login: (.actor.login // "")}]
+        | sort_by(.created_at) | last // null' 2>/dev/null)"; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_revalidation_unavailable latch=${hl_reason}"
+      continue
+    fi
+    if [ "${hl_refreshed_event}" != "${hl_event}" ] \
+      || printf '%s' "${hl_refreshed_comments}" | jq -e --arg at "${hl_latch_at}" --arg pr "${hl_pr}" '
+        any(.[];
+          (.created_at // "") > $at
+          and ((((.user.login // "") | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))))
+          and ((.body // "") | (contains("ai:needs-human") or contains("<!-- ai:workflow-heal-non-retryable:v1 ") or contains("<!-- ai:review-round-cap:v1 -->"))
+            and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_changed_during_release latch=${hl_reason}"
+      continue
+    fi
+    # The head and labels were checked on the first pulls/<n> read; read them
+    # again so a push back to the latched head (or any other head change) or a
+    # newly added ai:scope-blocked / ai:destructive-blocked keeps the hold.
+    if ! hl_refreshed_pull="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${hl_pr}" --jq '{state, head: (.head.sha // ""), labels: [.labels[]?.name]}' 2>/dev/null)"; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_revalidation_unavailable latch=${hl_reason}"
+      continue
+    fi
+    if ! printf '%s' "${hl_refreshed_pull}" | jq -e --arg h "${hl_head}" '.state == "open" and .head == $h and (.labels | index("ai:needs-human") != null) and (.labels | index("ai:destructive-blocked") == null) and (.labels | index("ai:scope-blocked") == null)' >/dev/null 2>&1; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_changed_during_release latch=${hl_reason}"
+      continue
+    fi
+    if ! gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/${hl_pr}/labels/ai:needs-human" >/dev/null 2>&1; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=label_write_failed latch=${hl_reason}"
+      continue
+    fi
+    # GitHub has no conditional label delete. A writer whose latch comment and
+    # label add both land between the re-reads above and the DELETE added a
+    # label that was already there (no event), so the DELETE removed its hold
+    # and the next tick's listing would never see the PR again. Both writers
+    # comment first, so one comments read after the DELETE sees that latch;
+    # put the label back for it. A read failure keeps the release (fail open):
+    # re-adding the label blind would record a fresh `labeled` event that no
+    # longer binds to any latch, so the PR could never be released again. The
+    # skipped check is logged so the release is not mistaken for a checked one.
+    if ! hl_post_delete_comments="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${hl_pr}/comments?sort=created&direction=asc&per_page=100" | jq -s 'add // []' 2>/dev/null)" \
+      || ! printf '%s' "${hl_post_delete_comments}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+      echo "::warning::Removed ai:needs-human on PR #${hl_pr}, but the comments read after the removal failed, so a latch that raced the removal could not be checked."
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=post_release_check_unavailable latch=${hl_reason} head=${hl_head:0:12}"
+    elif printf '%s' "${hl_post_delete_comments}" | jq -e --arg at "${hl_latch_at}" --arg pr "${hl_pr}" '
+        any(.[];
+          (.created_at // "") > $at
+          and ((((.user.login // "") | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))))
+          and ((.body // "") | (contains("ai:needs-human") or contains("<!-- ai:workflow-heal-non-retryable:v1 ") or contains("<!-- ai:review-round-cap:v1 -->"))
+            and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
+      if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${hl_pr}/labels" -f "labels[]=ai:needs-human" >/dev/null 2>&1; then
+        echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=relatched_after_release latch=${hl_reason} head=${hl_head:0:12}"
+      else
+        echo "::warning::Removed ai:needs-human on PR #${hl_pr}, then found a newer latch and could not add the label back; a person should re-add it."
+        echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=relatch_failed latch=${hl_reason} head=${hl_head:0:12}"
+      fi
+      continue
+    fi
+    if [ "${hl_reason}" = "non_retryable_head_moved" ]; then
+      hl_body="_Orchestrator: removed \`ai:needs-human\`. It was set because a review/autofix run on head \`${hl_latch_head:0:12}\` failed in a way another run on that head could not fix. The PR is now on head \`${hl_head:0:12}\`, so that diagnosis no longer applies and the review runs on the new head as usual. If the same failure happens on this head, the label comes back._"
+    else
+      hl_body="_Orchestrator: removed \`ai:needs-human\`. The review sweep set it when head \`${hl_latch_head:0:12}\` reached the review-round cap. The PR is now on head \`${hl_head:0:12}\` and the round count starts again for it, so the sweep reviews it as usual. If this head reaches the cap too, the sweep labels it again._"
+    fi
+    hl_body="${hl_body}
+
+${hl_release_marker}"
+    if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${hl_pr}/comments" -f body="${hl_body}" >/dev/null 2>&1; then
+      echo "::warning::Released ai:needs-human on PR #${hl_pr}, but the explanation comment could not be posted."
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=released_comment_failed latch=${hl_reason} from=${hl_latch_head:0:12} head=${hl_head:0:12}"
+      continue
+    fi
+    echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=released latch=${hl_reason} from=${hl_latch_head:0:12} head=${hl_head:0:12}"
+  done
+  return 0
+}
+
 # ---------------------------------------------------------------
 # Stuck-states P3b: failure-signature breaker
 # ---------------------------------------------------------------
@@ -31044,6 +31301,8 @@ fi
 # only path that scans blocked standalone items on those ticks. The workflow's
 # complementary has_work gates keep it exclusive with the post-loop scan.
 if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then
+  # Before the scan, so a released PR is not judged as still blocked.
+  release_head_bound_needs_human_latches || echo "NEEDS_HUMAN_HEAD_LATCH outcome=skip reason=error rc=$?"
   run_unblock_scan || echo "UNBLOCK_SCAN outcome=skip reason=error rc=$?"
   # Check after merge (#8427 P5) on idle ticks. This step runs on every idle
   # tick, unlike the standalone-recovery sweep, which
@@ -38191,6 +38450,7 @@ if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then
   run_persist_postmerge_verify || echo "PERSIST postmerge outcome=error reason=rc_$?"
 
   release_staged_support_needs_human_latches
+  release_head_bound_needs_human_latches || echo "NEEDS_HUMAN_HEAD_LATCH outcome=skip reason=error rc=$?"
 
   # Never ends the tick: a failure inside is logged and the sweeps below run.
   run_unblock_scan || echo "UNBLOCK_SCAN outcome=skip reason=error rc=$?"
