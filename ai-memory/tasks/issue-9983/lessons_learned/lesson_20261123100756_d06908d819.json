@@ -1,0 +1,21 @@
+{
+  "discovered_at": "2026-11-23T10:07:56Z",
+  "issue_number": 9983,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=.github/workflows/review_autofix.yml:527-531; cited_path=.github/workflows/review_autofix.yml; files_touched=README.md, agents.d/9983-merge-lease-holder-runs-active.md, changelog.d/9983-merge-lease-holder-runs-active.md, scripts/pr_checks_lib.sh, scripts/review_merge_train.sh, tests/merge_lease_fake_gh.py, tests/test_merge_lease.py, tests/test_review_merge_train.py.",
+  "phase": "review_autofix",
+  "pr_number": 9985,
+  "record_id": "lesson_20261123100756_d06908d819",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/review_autofix.yml",
+    "README.md",
+    "agents.d/9983-merge-lease-holder-runs-active.md",
+    "changelog.d/9983-merge-lease-holder-runs-active.md",
+    "scripts/pr_checks_lib.sh",
+    "scripts/review_merge_train.sh",
+    "tests/merge_lease_fake_gh.py",
+    "tests/test_merge_lease.py",
+    "tests/test_review_merge_train.py"
+  ]
+}
