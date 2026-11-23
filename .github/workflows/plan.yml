@@ -2514,8 +2514,33 @@ jobs:
               > "${RUNTIME_DIR}/acceptance_marker.txt" || rm -f "${RUNTIME_DIR}/acceptance_marker.txt"
           fi
 
-      - name: Handle blocked planning output
+      # Issue #10015 (Phase 8a, Refs #9650): a "nothing to implement" block
+      # whose listed tests pass on the planning ref closes the issue as
+      # completed instead of waiting for a human. The body runs from the
+      # trusted workflow-source checkout; outputs: outcome, note.
+      - name: Verify nothing-to-implement block
+        id: nothing_to_implement_verify
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          BLOCKED_REASON: ${{ steps.parse_plan.outputs.blocked_reason }}
+          PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED: ${{ vars.PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED || 'true' }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          pnti_step_script="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/plan_nothing_to_implement_verify.sh"
+          if [ -f "${pnti_step_script}" ] && [ ! -L "${pnti_step_script}" ]; then
+            bash "${pnti_step_script}" || true
+          elif [ "$(printf '%s' "${BLOCKED_REASON:-}" | tr -d '\r' | sed -e 's/[[:space:]]*$//')" = "work is already on the planning ref; nothing to implement" ]; then
+            echo "PLAN_NOTHING_TO_IMPLEMENT issue=${ISSUE_NUMBER:-0} outcome=skipped reason=helper_absent tests=0"
+          fi
+
+      - name: Handle blocked planning output
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked == 'true' && steps.nothing_to_implement_verify.outputs.outcome != 'closed'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
@@ -2536,6 +2561,8 @@ jobs:
           # The pr_on_branch hold also needs the judge's `wait` verdict, which
           # UNBLOCK_JUDGE_WAIT_ENABLED=false removes (same default as unblock_judge.yml).
           UNBLOCK_JUDGE_WAIT_ENABLED: ${{ vars.UNBLOCK_JUDGE_WAIT_ENABLED || 'true' }}
+          # Issue #10015: one "Verify: ..." line from the nothing-to-implement check.
+          PLAN_NOTHING_TO_IMPLEMENT_VERIFY_NOTE: ${{ steps.nothing_to_implement_verify.outputs.note }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
@@ -2639,6 +2666,10 @@ jobs:
               printf '\n'
               printf '%s\n' "Reason: ${BLOCKED_REASON}"
               printf '\n'
+              if [ -n "${PLAN_NOTHING_TO_IMPLEMENT_VERIFY_NOTE:-}" ]; then
+                printf '%s\n' "${PLAN_NOTHING_TO_IMPLEMENT_VERIFY_NOTE}"
+                printf '\n'
+              fi
               if [ "${BLOCKED_CHECK_TRIAGE}" = "true" ]; then
                 printf '%s\n' "This is a CI-failure triage issue. The unblock judge re-checks the failing check and closes this issue with evidence once it passes on the pull request's newer head or on the default branch; no reply is needed unless the check keeps failing."
                 printf '\n'
