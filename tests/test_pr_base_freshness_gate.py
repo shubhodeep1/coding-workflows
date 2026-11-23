@@ -540,8 +540,8 @@ class RequiredCiCheckWait(unittest.TestCase):
 		self.assertIn("ci_state=success", out)
 
 	def test_same_named_check_from_another_workflow_does_not_count(self) -> None:
-		"""lint-plan-archival.yml's job is also named `lint` (the PR-body lint job's was
-		until it became `pr-body-lint`, now in pr-checks.yml); only a CI run's `lint` counts."""
+		"""Another workflow can have a job named `lint` (the plan-archival and PR-body
+		lints did until they were folded into pr-checks.yml); only a CI run's `lint` counts."""
 		other = json.dumps([{"check_runs": [
 			{"name": "lint", "status": "completed", "conclusion": "success", "details_url": "https://github.com/o/r/actions/runs/555/job/1"},
 		]}])

@@ -1,14 +1,15 @@
 ---
 # One runner job for the small per-PR checks (CLAUDE.md §33.A, fold before
 # you add). Until 2026-11-18 each check below ran in a workflow of its own
-# (`integration-pr-readiness.yml`, `lint-pr-body-auto-close.yml`), and each
+# (`integration-pr-readiness.yml`, `lint-pr-body-auto-close.yml`,
+# `lint-plan-archival.yml`), and each
 # took a runner slot for under a minute of work on every pull request event:
 # 1,192 and 1,015 runs in the eight days 2026-11-10 to 2026-11-17, each
 # waiting 20 to 70 minutes in the queue
 # (docs/plans/fold-per-pr-checks-plan.md).
 #
 # The checks are step groups of one job. Each group runs whether or not
-# the other failed. They share one job because they have the same trigger,
+# another failed. They share one job because they have the same trigger,
 # the same token and the same trust: all run the PR's own copy of the
 # scripts with `github.token` and no secret.
 #
@@ -43,7 +44,43 @@
 # stopped dispatching Waves 2-7 → 7 of 9 sub-issues never shipped code.
 # §19 was added (PR #2776) as a prose reaction to this incident; this
 # step group turns the prose into an enforced check. Its verdict is the job
-# result, and it is the only verdict the job result carries.
+# result, which it shares with the plan-archival step group below.
+#
+# ---------------------------------------------------------------------------
+# Step group "Plan-archival completeness"
+# P6 from docs/postmortems/2026-05-18-project-2734-stall.md.
+#
+# Project #2734's integration PR moved the plan to `docs/completed/` and
+# labelled the tracking issue `ai:merged` while 7 of 9 sub-issue checkboxes
+# in the tracking issue body remained unchecked. The plan file's presence
+# in `docs/completed/` then became a load-bearing-but-misleading signal:
+# "this plan is done" when in fact most of it was unshipped.
+#
+# This step group enforces that PRs adding files under `docs/completed/`
+# either:
+#   - reference a tracking issue whose checkboxes are ALL ticked, OR
+#   - include an explicit `## De-scoped phases` section in the PR body
+#     listing every unshipped item with rationale.
+#
+# Until 2026-11-18 it was the workflow `Lint plan-archival completeness`
+# (`lint-plan-archival.yml`), started by a `paths: docs/completed/**`
+# filter. Its job was named `lint`, the check-run name the `main` ruleset
+# requires and means the full CI's aggregate job by, so its success could
+# stand in for CI's on a PR that changes `docs/completed/**` (the defect
+# PR #9570 showed for the PR-body lint). Folded here, the path filter is a
+# step: the first step lists the files the PR adds, and the lint steps run
+# only when one of them is under `docs/completed/`.
+#
+# Its verdict is the job result, as it was in its own workflow: a violation
+# fails `pr-body-lint`. Before the fold it failed a check-run named `lint`,
+# which the merge gate (ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT) also
+# lists, so the pipeline's merges are blocked as before. The `main` ruleset
+# requires `lint` and not `pr-body-lint`: GitHub's own merge button, which a
+# failed plan-archival `lint` blocked while it was the newest `lint` on the
+# head, no longer waits for this lint unless an operator adds `pr-body-lint`
+# to the ruleset. Because a red
+# `pr-body-lint` otherwise means a §19 violation, the failing step is named
+# after the plan-archival lint and prints an `::error` line that says so.
 #
 # ---------------------------------------------------------------------------
 # Step group "Integration PR readiness"
@@ -104,8 +141,9 @@ name: PR checks
     # transitions to ready-for-review (which is when the merge button
     # becomes available).
     # No `labeled` / `unlabeled` (see the header) and no `paths:` filter:
-    # both verdicts are needed on every PR. The readiness steps skip
-    # `edited`.
+    # the PR-body lint and the readiness status are needed on every PR. The
+    # readiness steps skip `edited`; the plan-archival lint steps run only
+    # for a PR that adds a file under `docs/completed/`.
     types: [opened, edited, synchronize, reopened, ready_for_review]
     branches: [main, stable]
 
@@ -137,7 +175,7 @@ jobs:
   # job-level `if:` (a skipped job reports `skipped`, which reads as passed).
   pr-body-lint:
     runs-on: ubuntu-latest
-    # Two former 5-minute jobs whose real work is under a minute each.
+    # Three former 5-minute jobs whose real work is under a minute each.
     timeout-minutes: 10
     # No `concurrency:` group, like the two workflows this job replaces
     # (CLAUDE.md §33.A asks for one; these are the reasons it is left out):
@@ -155,14 +193,18 @@ jobs:
         id: checkout
         uses: actions/checkout@v5
         with:
-          # Only the lint and readiness scripts are needed. Neither runs
-          # tooling that needs history: the PR's commits are read via the
-          # GH API below (no local git log needed). The §15 loop-call lint
-          # deepens the merge commit to depth 2 itself, so this stays at 1.
-          fetch-depth: 1
+          # Depth 2: the merge commit GitHub builds for the PR and its two
+          # parents (the base tip and the PR head). The plan-archival group
+          # diffs the merge commit against its first parent to list the
+          # files the PR adds; nothing needs older history. The PR-body lint
+          # and the readiness script use no git history at all (the PR's
+          # commits are read via the GH API below), so the extra commit
+          # changes nothing for them. The §15 loop-call lint still deepens
+          # the merge commit to depth 2 itself, which is then a no-op.
+          fetch-depth: 2
 
       # Every step below starts its `if:` with `!cancelled()`, so a failed
-      # step in one group does not skip the other group. Within a group a
+      # step in one group does not skip another group. Within a group a
       # step still waits for the steps it depends on, as it did when the
       # group was a job of its own.
 
@@ -237,6 +279,141 @@ jobs:
             --pr-body-file /tmp/pr-body-lint/body.txt \
             "${commit_args[@]}" \
             --repo "${GITHUB_REPOSITORY}"
+
+      # ---- Step group: Plan-archival completeness ----
+      # Not `continue-on-error`: the verdict is the job result (see the
+      # header). The first step replaces the old workflow's
+      # `paths: docs/completed/**` filter and runs on every event; the two
+      # steps after it run only when the PR adds a file there. A PR that
+      # only edits or deletes files under `docs/completed/` started the old
+      # workflow too, but its lint had nothing to check and passed.
+
+      - name: Enumerate added files in PR
+        id: plan_archival_added_files
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        env:
+          PLAN_ARCHIVAL_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # The checkout is the merge commit of the PR into its base, so its
+          # first parent is the base tip and the diff against it is exactly
+          # what the PR adds: no API call (CLAUDE.md §15) and no history
+          # beyond `fetch-depth: 2`. Fail closed when HEAD is not such a
+          # merge commit, or when its second parent is not the head this
+          # event is about (a merge ref GitHub has not rebuilt yet), because
+          # the list would then be wrong or empty and an archival could pass
+          # unchecked.
+          if ! git rev-parse --verify --quiet 'HEAD^2^{commit}' > /dev/null \
+            || git rev-parse --verify --quiet 'HEAD^3^{commit}' > /dev/null; then
+            echo "::error title=Plan-archival completeness lint (not the PR-body lint)::[lint_plan_archival] outcome=not_a_merge_commit HEAD is not a two-parent merge commit, so the files this PR adds cannot be listed. This is not a CLAUDE.md §19 violation."
+            exit 1
+          fi
+          plan_archival_merged_head="$(git rev-parse --verify 'HEAD^2^{commit}')"
+          if [ "${plan_archival_merged_head}" != "${PLAN_ARCHIVAL_HEAD_SHA}" ]; then
+            echo "::error title=Plan-archival completeness lint (not the PR-body lint)::[lint_plan_archival] outcome=stale_merge_commit The checked-out merge commit merges ${plan_archival_merged_head}, not this event's head ${PLAN_ARCHIVAL_HEAD_SHA}, so the files this PR adds cannot be listed. Push again, or edit the PR title or body, to start a new run: re-running this job checks out the same merge commit. This is not a CLAUDE.md §19 violation."
+            exit 1
+          fi
+          mkdir -p /tmp/plan-archival-lint
+          # NUL-separated name-status with rename detection pinned on, so
+          # the result does not depend on git configuration or on how a
+          # path is printed.
+          if ! git diff -z --name-status --find-renames 'HEAD^1' HEAD > /tmp/plan-archival-lint/diff.bin; then
+            echo "::error title=Plan-archival completeness lint (not the PR-body lint)::[lint_plan_archival] outcome=enumerate_failed The diff of the merge commit against its first parent failed, so the files this PR adds cannot be listed. This is not a CLAUDE.md §19 violation."
+            exit 1
+          fi
+          # Added files are status A, plus a rename whose destination is
+          # under docs/completed/ and whose source is not: a plan moved with
+          # `git mv` into docs/completed/ is an archival (the old workflow's
+          # `--diff-filter=A` dropped it as a rename). A rename inside
+          # docs/completed/ is not an archival, as before. Exit 3: a file
+          # added under docs/completed/ has a line break in its name, or a
+          # name that is not valid UTF-8, and cannot be passed to the lint
+          # script (one UTF-8 path per line). Other added files with such a
+          # name are left out of the list; the lint reads docs/completed/ only.
+          plan_archival_enum_rc=0
+          python3 -I -c '
+          import sys
+          src, dst, github_output = sys.argv[1], sys.argv[2], sys.argv[3]
+          prefix = "docs/completed/"
+          with open(src, "rb") as fh:
+              tokens = fh.read().decode("utf-8", "surrogateescape").split("\0")
+          if tokens and tokens[-1] == "":
+              tokens.pop()
+          added = []
+          index = 0
+          while index < len(tokens):
+              status = tokens[index]
+              if status[:1] in ("R", "C"):
+                  source, path = tokens[index + 1], tokens[index + 2]
+                  index += 3
+                  if path.startswith(prefix) and not source.startswith(prefix):
+                      added.append(path)
+              else:
+                  path = tokens[index + 1]
+                  index += 2
+                  if status[:1] == "A":
+                      added.append(path)
+          archived = [path for path in added if path.startswith(prefix)]
+          def unlistable(path):
+              # The lint script splits added.txt with str.splitlines(), which
+              # also breaks on \x0b, \x0c, \x1c-\x1e, \x85, U+2028 and U+2029.
+              return (
+                  "\n" in path or "\r" in path or path.splitlines() != [path]
+                  or any("\udc80" <= ch <= "\udcff" for ch in path)
+              )
+          if any(unlistable(path) for path in archived):
+              sys.exit(3)
+          listable = [path for path in added if not unlistable(path)]
+          with open(dst, "w", encoding="utf-8") as out:
+              out.write("".join(path + "\n" for path in listable))
+          needed = "true" if archived else "false"
+          with open(github_output, "a", encoding="utf-8") as out:
+              out.write("needed=" + needed + "\n")
+          print("[lint_plan_archival] outcome=enumerated added_files=%d lint_needed=%s" % (len(listable), needed))
+          ' /tmp/plan-archival-lint/diff.bin /tmp/plan-archival-lint/added.txt "${GITHUB_OUTPUT}" \
+            || plan_archival_enum_rc=$?
+          if [ "${plan_archival_enum_rc}" -ne 0 ]; then
+            # Rename advice only for the parser's own exit 3; any other code
+            # (an unhandled error, a missing python3) is not a naming problem.
+            plan_archival_enum_reason="the enumerate script failed: it could not parse the diff or write its output, or python3 did not start"
+            if [ "${plan_archival_enum_rc}" -eq 3 ]; then
+              plan_archival_enum_reason="a file added under docs/completed/ has a line break in its name or a name that is not valid UTF-8; rename it"
+            fi
+            echo "::error title=Plan-archival completeness lint (not the PR-body lint)::[lint_plan_archival] outcome=enumerate_failed exit_code=${plan_archival_enum_rc} The files this PR adds could not be listed (${plan_archival_enum_reason}). This is not a CLAUDE.md §19 violation."
+            exit 1
+          fi
+
+      - name: Write PR body to file
+        id: plan_archival_body_file
+        if: >-
+          ${{ !cancelled() && steps.plan_archival_added_files.outcome == 'success'
+          && steps.plan_archival_added_files.outputs.needed == 'true' }}
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/plan-archival-lint
+          printf '%s' "${PR_BODY:-}" > /tmp/plan-archival-lint/body.txt
+
+      - name: Run plan-archival completeness lint
+        if: ${{ !cancelled() && steps.plan_archival_body_file.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          plan_archival_rc=0
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_plan_archival_completeness.py \
+            --pr-body-file /tmp/plan-archival-lint/body.txt \
+            --added-files-file /tmp/plan-archival-lint/added.txt \
+            --repo "${GITHUB_REPOSITORY}" || plan_archival_rc=$?
+          if [ "${plan_archival_rc}" -ne 0 ]; then
+            # The job result is shared with the PR-body lint, and a red
+            # `pr-body-lint` otherwise means a §19 violation. Say which
+            # check failed.
+            echo "::error title=Plan-archival completeness lint (not the PR-body lint)::[lint_plan_archival] outcome=failed exit_code=${plan_archival_rc} The check-run pr-body-lint failed because of the plan-archival completeness lint: this PR adds files under docs/completed/. See the [lint_plan_archival] lines above. This is not a CLAUDE.md §19 auto-close keyword violation."
+            exit "${plan_archival_rc}"
+          fi
+          echo "[lint_plan_archival] outcome=passed"
 
       # ---- Step group: Integration PR readiness ----
       # `continue-on-error` on both steps: see the header. The verdict is
