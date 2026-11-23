@@ -50,7 +50,7 @@ def _classify(tmp_path: Path, *, records: str | None = None, editor_stderr: str 
 		summary: str | None = None, **env_extra: str) -> str:
 	runtime = tmp_path / "runtime"
 	runtime.mkdir(parents=True, exist_ok=True)
-	env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE_POOL_", "REVIEW_INFRA_", "AI_ENGINE_", "EDITOR_SUMMARY"))}
+	env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE_POOL_", "CLAUDE_CAPACITY_", "REVIEW_INFRA_", "AI_ENGINE_", "EDITOR_SUMMARY"))}
 	env.update({
 		"RUNNER_TEMP": str(tmp_path),
 		"RUNTIME_DIR": str(runtime),
@@ -78,6 +78,20 @@ def _record(role: str = "REVIEW_EDITOR", reason: str = "no_credential", action: 
 REFUSED_LINE = "::error::AI_ENGINE_FALLBACK_REFUSED role=REVIEW_EDITOR reason=no_credential\n"
 
 
+def _apply_fixes_partial_finalize_summary(reason: str) -> str:
+	"""The real fallback summary scripts/review_apply_fixes.sh writes for one partial-finalize reason."""
+	text = (REPO_ROOT / "scripts" / "review_apply_fixes.sh").read_text(encoding="utf-8")
+	anchor = {
+		"soft_deadline": 'if [ "${editor_partial_finalize_reason}" = "soft_deadline" ]; then',
+		"refusal": 'elif [ "${editor_partial_finalize_reason}" = "refusal" ]; then',
+		"recoverable_failure": "  else\n    cat > \"${EDITOR_SUMMARY_FILE}\" <<'__EDITOR_SUMMARY__'",
+	}[reason]
+	start = text.index("<<'__EDITOR_SUMMARY__'\n", text.index(anchor)) + len("<<'__EDITOR_SUMMARY__'\n")
+	body = text[start:text.index("\n__EDITOR_SUMMARY__\n", start)]
+	assert "unavailable (partial finalize" in body, reason
+	return body + "\n"
+
+
 @pytest.mark.parametrize("kwargs, expected", [
 	# The records file the host writes (scripts/ai_engine.sh).
 	({"records": _record()}, "no_credential"),
@@ -101,6 +115,19 @@ REFUSED_LINE = "::error::AI_ENGINE_FALLBACK_REFUSED role=REVIEW_EDITOR reason=no
 	({"records": _record(), "summary": "Changes made:\n- unavailable (editor fallback)\n"}, "no_credential"),
 	({"records": _record(), "summary": "The editor failed before producing a summary."}, "no_credential"),
 	({"records": _record(), "summary": ""}, "no_credential"),
+	# The partial-finalize summaries review_apply_fixes.sh writes after every
+	# editor attempt failed are not usable output either.
+	({"records": _record(), "summary": _apply_fixes_partial_finalize_summary("recoverable_failure")}, "no_credential"),
+	({"editor_stderr": REFUSED_LINE, "summary": _apply_fixes_partial_finalize_summary("refusal")}, "no_credential"),
+	({"records": _record(), "summary": _apply_fixes_partial_finalize_summary("soft_deadline")}, "no_credential"),
+	# ...but a partial-finalize summary with no infra signal still counts.
+	({"summary": _apply_fixes_partial_finalize_summary("recoverable_failure")}, ""),
+	# The all_gated capacity defer fails before the reviewers and the editor run.
+	({"CLAUDE_CAPACITY_WAIT_STEP_OUTCOME": "failure", "CLAUDE_POOL_STEP_REASON": "all_gated", "CLAUDE_POOL_STEP_AVAILABLE": "false"}, "all_gated"),
+	({"CLAUDE_CAPACITY_WAIT_STEP_OUTCOME": "success", "CLAUDE_POOL_STEP_REASON": "all_gated", "CLAUDE_POOL_STEP_AVAILABLE": "false"}, ""),
+	({"CLAUDE_CAPACITY_WAIT_STEP_OUTCOME": "failure", "CLAUDE_POOL_STEP_REASON": "no_accounts"}, ""),
+	# Only the engine's own annotation line counts, not echoed text quoting it.
+	({"reviewers_stderr": "model said: " + REFUSED_LINE}, ""),
 	# A round that landed real editor output keeps counting.
 	({"records": _record(), "summary": "Changes made:\n- fixed the guard in scripts/x.sh\n"}, ""),
 	# No signal at all.
@@ -245,7 +272,10 @@ def test_review_run_classifies_the_round_and_skips_the_commit() -> None:
 	text = REVIEW_WF.read_text(encoding="utf-8")
 	classify = _step_block(text, "Classify infra-failed review round")
 	assert "        id: infra_round\n" in classify
-	assert "        if: always() && env.PR_CLOSED != 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.reviewers.outcome != 'skipped'\n" in classify
+	# The all_gated capacity defer fails before the reviewers run (skipped),
+	# so the classifier also runs when that defer failed.
+	assert "        if: always() && env.PR_CLOSED != 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.reviewers.outcome != 'skipped' || steps.claude_capacity_wait.outcome == 'failure')\n" in classify
+	assert "CLAUDE_CAPACITY_WAIT_STEP_OUTCOME: ${{ steps.claude_capacity_wait.outcome }}" in classify
 	assert "        continue-on-error: true\n" in classify
 	assert "CLAUDE_POOL_STEP_AVAILABLE: ${{ steps.claude_pool.outputs.available }}" in classify
 	assert "CLAUDE_POOL_STEP_REASON: ${{ steps.claude_pool.outputs.reason }}" in classify
@@ -282,7 +312,7 @@ def test_review_run_step_marks_the_round_and_writes_the_marker(tmp_path: Path) -
 	runtime.mkdir()
 	(runtime / "editor_stage_stderr.txt").write_text(REFUSED_LINE, encoding="utf-8")
 	out = tmp_path / "out.txt"
-	base = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE_POOL_", "REVIEW_INFRA_", "AI_ENGINE_"))}
+	base = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE_POOL_", "CLAUDE_CAPACITY_", "REVIEW_INFRA_", "AI_ENGINE_"))}
 	env = {**base, "SUPPORT_SCRIPTS_DIR": str(support), "GITHUB_WORKSPACE": str(tmp_path), "RUNNER_TEMP": str(tmp_path),
 		"RUNTIME_DIR": str(runtime), "EDITOR_SUMMARY_FILE": str(runtime / "editor_summary.txt"), "GITHUB_OUTPUT": str(out),
 		"PR_NUMBER": "9853", "GITHUB_RUN_ID": "44871258266", "AUTOFIX_FAILURE_HEAD_SHA": "a" * 40}

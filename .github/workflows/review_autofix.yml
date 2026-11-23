@@ -4027,16 +4027,19 @@ jobs:
       # iteration budget (the commit below is skipped, so no [ai-autofix]
       # commit is counted and no push re-triggers) or the sweep's round cap
       # (a dispatched run uploads the review-round-infra-failed marker the
-      # sweep reads). Classifier: review_round_infra_failure_reason in
+      # sweep reads). The all_gated capacity defer fails before the reviewers
+      # run, so the step also runs when that defer failed. Classifier:
+      # review_round_infra_failure_reason in
       # scripts/review_sweep_round_cap.sh; a missing helper means not
       # infra-failed (today's behaviour). REVIEW_INFRA_FAILURE_EXCLUDED_ENABLED
       # =false turns it off.
       - name: Classify infra-failed review round
         id: infra_round
-        if: always() && env.PR_CLOSED != 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.reviewers.outcome != 'skipped'
+        if: always() && env.PR_CLOSED != 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.reviewers.outcome != 'skipped' || steps.claude_capacity_wait.outcome == 'failure')
         continue-on-error: true
         env:
           CLAUDE_POOL_STEP_AVAILABLE: ${{ steps.claude_pool.outputs.available }}
+          CLAUDE_CAPACITY_WAIT_STEP_OUTCOME: ${{ steps.claude_capacity_wait.outcome }}
           CLAUDE_POOL_STEP_REASON: ${{ steps.claude_pool.outputs.reason }}
           REVIEW_INFRA_FAILURE_EXCLUDED_ENABLED: ${{ vars.REVIEW_INFRA_FAILURE_EXCLUDED_ENABLED || 'true' }}
         run: |
@@ -4081,7 +4084,7 @@ jobs:
       # Repair loop (issue #8427, P3): the done-check from the linked issue's plan
       # comment, fetched here because the gate step has no token. Fail-open.
       - name: Prepare done-check (repair loop)
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true' && vars.PREPUSH_TEST_GATE_MODE != 'off' && env.PERSIST_REPAIR_LOOP_ENABLED == 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true' && vars.PREPUSH_TEST_GATE_MODE != 'off' && steps.infra_round.outputs.infra_failed != 'true' && env.PERSIST_REPAIR_LOOP_ENABLED == 'true'
         continue-on-error: true
         timeout-minutes: 5
         env:
@@ -4096,7 +4099,9 @@ jobs:
 
       # Pre-push affected-test gate (plan P4): never blocks the commit or push.
       - name: Pre-push affected-test gate
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true' && vars.PREPUSH_TEST_GATE_MODE != 'off'
+        # Issue #9917: an infra-failed round skips the commit, so the gate's
+        # result would be discarded; it is skipped too.
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true' && vars.PREPUSH_TEST_GATE_MODE != 'off' && steps.infra_round.outputs.infra_failed != 'true'
         continue-on-error: true
         timeout-minutes: 60
         env:

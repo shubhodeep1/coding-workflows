@@ -121,11 +121,16 @@
 #       v1, ts, role, reason, class, action, policy) for a REVIEW* role with
 #       action refused or wait and reason no_credential or all_gated;
 #     - an `::error::AI_ENGINE_FALLBACK_REFUSED role=REVIEW* reason=
-#       <no_credential|all_gated>` line in ${RUNTIME_DIR}/editor_stage_stderr.txt
+#       <no_credential|all_gated>` line (at line start) in ${RUNTIME_DIR}/editor_stage_stderr.txt
 #       or ${RUNTIME_DIR}/reviewers_stage_stderr.txt (a sandboxed call whose
 #       record never reached the host file);
 #     - CLAUDE_POOL_STEP_AVAILABLE=false with CLAUDE_POOL_STEP_REASON
-#       broker_refused_<code>.
+#       broker_refused_<code>;
+#     - CLAUDE_CAPACITY_WAIT_STEP_OUTCOME=failure (the all_gated capacity
+#       defer step failed, so neither reviewers nor editor ran) with
+#       CLAUDE_POOL_STEP_REASON all_gated.
+#   The editor's partial-finalize summaries (scripts/review_apply_fixes.sh,
+#   "unavailable (partial finalize ...)") are not usable output.
 #   Symlinked or unreadable files count as absent. A round that landed real
 #   editor output keeps counting. No API call.
 
@@ -152,8 +157,11 @@ review_round_infra_failure_reason()
 	local rif_summary="${EDITOR_SUMMARY_FILE:-}" rif_records rif_file rif_reason=""
 	_review_round_infra_exclusion_enabled || return 0
 	# A round whose editor wrote a real summary did work: it keeps counting.
+	# The partial-finalize summaries scripts/review_apply_fixes.sh writes when
+	# every editor attempt failed (soft_deadline, refusal, recoverable_failure)
+	# all carry "unavailable (partial finalize ...)": they are not usable output.
 	if _review_round_infra_readable "${rif_summary}" && [ -s "${rif_summary}" ] \
-		&& ! grep -qiE 'editor failed before producing|unavailable \(editor fallback\)' "${rif_summary}" 2>/dev/null; then
+		&& ! grep -qiE 'editor failed before producing|unavailable \(editor fallback\)|unavailable \(partial finalize' "${rif_summary}" 2>/dev/null; then
 		return 0
 	fi
 	rif_records="${AI_ENGINE_FALLBACK_RECORDS_FILE:-${RUNNER_TEMP:-/tmp}/ai-engine-fallback-records.tsv}"
@@ -163,7 +171,7 @@ review_round_infra_failure_reason()
 	if [ -z "${rif_reason}" ] && [ -n "${RUNTIME_DIR:-}" ]; then
 		for rif_file in "${RUNTIME_DIR}/editor_stage_stderr.txt" "${RUNTIME_DIR}/reviewers_stage_stderr.txt"; do
 			_review_round_infra_readable "${rif_file}" || continue
-			rif_reason="$(grep -oE '::error::AI_ENGINE_FALLBACK_REFUSED role=REVIEW[A-Z0-9_]* reason=(no_credential|all_gated)([^a-z0-9_]|$)' "${rif_file}" 2>/dev/null \
+			rif_reason="$(grep -oE '^::error::AI_ENGINE_FALLBACK_REFUSED role=REVIEW[A-Z0-9_]* reason=(no_credential|all_gated)([^a-z0-9_]|$)' "${rif_file}" 2>/dev/null \
 				| head -n 1 | sed -E 's/.* reason=([a-z_]+).*/\1/' || true)"
 			[ -z "${rif_reason}" ] || break
 		done
@@ -171,6 +179,13 @@ review_round_infra_failure_reason()
 	if [ -z "${rif_reason}" ] && [ "${CLAUDE_POOL_STEP_AVAILABLE:-}" = "false" ] \
 		&& [[ "${CLAUDE_POOL_STEP_REASON:-}" =~ ^broker_refused_[a-z0-9_]+$ ]]; then
 		rif_reason="${CLAUDE_POOL_STEP_REASON}"
+	fi
+	# The all_gated capacity defer ("Defer review on Claude capacity") fails
+	# before the reviewers and editor run; its `wait` record is only appended
+	# later, by "Record Claude capacity wait", so the step outcome is the signal.
+	if [ -z "${rif_reason}" ] && [ "${CLAUDE_CAPACITY_WAIT_STEP_OUTCOME:-}" = "failure" ] \
+		&& [ "${CLAUDE_POOL_STEP_REASON:-}" = "all_gated" ]; then
+		rif_reason="all_gated"
 	fi
 	[[ "${rif_reason}" =~ ^[a-z0-9_]{1,64}$ ]] || return 0
 	printf '%s\n' "${rif_reason}"

@@ -601,6 +601,30 @@ def test_a_later_comment_reasserting_the_hold_keeps_the_autofix_cap_label(tmp_pa
 		assert "outcome=skip reason=latch_changed_during_release" in during["stdout"], (name, during["stdout"])
 
 
+def test_an_unlabelled_autofix_cap_comment_does_not_shadow_an_older_bound_latch(tmp_path: Path) -> None:
+	# The default blocked comment is not always labelled by its writer (only
+	# some JUDGE_SKIP_REASON values add ai:needs-human), so it can follow the
+	# latch that set the label. Before #9917 that older latch was released.
+	older = _round_cap_comment(created_at="2026-11-20T11:15:10Z")
+	newer = _autofix_cap_comment(created_at="2026-11-20T12:30:00Z")
+	result = _run(tmp_path / "released", comments=[older, newer], events=[_labeled()])
+	assert result["rc"] == 0, result["stderr"]
+	assert result["deleted"] == ["5 ai:needs-human"]
+	assert "reason=autofix_cap_head_moved pr=5" in result["posted"][0]["body"]
+	# The older latch must itself be on a head the PR has left.
+	stay = _run(tmp_path / "older_on_current_head", comments=[_round_cap_comment(head=NEW_HEAD), newer], events=[_labeled()])
+	assert stay["deleted"] == [] and stay["posted"] == []
+	assert "outcome=skip reason=label_not_bound_to_latch latch=autofix_cap_head_moved" in stay["stdout"]
+	# A label bound to no latch comment still stays.
+	unbound = _run(tmp_path / "unbound", comments=[older, newer], events=[_labeled(at="2026-11-20T09:00:00Z")])
+	assert unbound["deleted"] == [] and unbound["posted"] == []
+	assert "outcome=skip reason=label_not_bound_to_latch latch=autofix_cap_head_moved" in unbound["stdout"]
+	# A label by another login does not bind to the older latch either.
+	other = _run(tmp_path / "other_login", comments=[older, newer], events=[_labeled(login="someone")])
+	assert other["deleted"] == []
+	assert "outcome=skip reason=label_not_bound_to_latch latch=autofix_cap_head_moved" in other["stdout"]
+
+
 def test_untrusted_autofix_cap_heading_is_not_a_latch(tmp_path: Path) -> None:
 	quoted = _autofix_cap_comment(author_association="NONE")
 	quoted["user"] = {"login": "drive-by"}

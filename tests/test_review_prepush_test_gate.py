@@ -486,9 +486,10 @@ def test_step_sits_before_commit_changes_with_the_same_condition():
 	assert names[index - 2] == "Decide partial-finalize validation/push safety"
 	assert names[index + 1] == "Commit changes"
 	step, commit = steps[index], steps[index + 1]
-	# Issue #9917: the commit also skips an infra-failed round; the gate does not.
-	assert commit["if"].endswith(" && steps.infra_round.outputs.infra_failed != 'true'")
-	assert step["if"] == commit["if"].removesuffix(" && steps.infra_round.outputs.infra_failed != 'true'") + " && vars.PREPUSH_TEST_GATE_MODE != 'off'"
+	# Issue #9917: the commit and the gate both skip an infra-failed round.
+	infra = " && steps.infra_round.outputs.infra_failed != 'true'"
+	assert commit["if"].endswith(infra)
+	assert step["if"] == commit["if"].removesuffix(infra) + " && vars.PREPUSH_TEST_GATE_MODE != 'off'" + infra
 	assert step["continue-on-error"] is True
 	assert step["timeout-minutes"] == 60
 	assert step["env"] == {
