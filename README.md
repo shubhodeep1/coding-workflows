@@ -1454,8 +1454,9 @@ enforce it:
 
 1. **Integrity check.** [`workflow-templates/ai-workflow-integrity.yml`](workflow-templates/ai-workflow-integrity.yml)
    calls [`.github/workflows/workflow_integrity.yml`](.github/workflows/workflow_integrity.yml)
-   on `pull_request_target` and on every branch `push`. When a pull request or
-   push changes a managed wrapper, every managed wrapper in the head tree
+   on `pull_request_target` and on a branch `push` that changes a file under
+   `.github/workflows/` (the pull request run is not path-filtered). When a
+   pull request or push changes a managed wrapper, every managed wrapper in the head tree
    (the `WORKFLOW_PROFILE` manifest, the integrity wrapper, and the updater
    when present) must be byte-identical to the template rendered at the
    release SHA the head's `ai-workflow-integrity.yml` pins, and that SHA must
@@ -1469,7 +1470,11 @@ enforce it:
    request cannot edit the check that judges it, and the pull request's files
    are only read as git objects. The verdict is the commit status
    `coding-workflows/workflow-integrity` on the pull request head (push runs
-   only fail the job, so they never overwrite a pull request's verdict). Log
+   only fail the job, so they never overwrite a pull request's verdict).
+   GitHub evaluates the push trigger's `paths:` filter on at most the first
+   300 changed files of a push, so a larger push can start no push run even
+   when it changes a wrapper; the unfiltered pull request run still judges
+   it. Log
    prefix: `WORKFLOW_INTEGRITY outcome=pass|skip|fail|error reason=<token>`.
 2. **No opt-out.** `ALLOW_WORKFLOW_EDITS=false` (and `allow_workflow_edits:
    false` in the updater wrapper) no longer stops wrapper updates; the sync
