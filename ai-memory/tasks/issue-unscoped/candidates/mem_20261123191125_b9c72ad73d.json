@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:support-ref step (gh_api_retry repos/shubhodeep1/coding-workflows/branches/main) | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The `review / gate` check-run (run 45105572894, job 137466263126) exited 75 after `GH_API_RETRY outcome=gave_up kind=primary bucket=core status=403 wait_secs=658`.\n  WHY: GitHub's primary API rate limit was exhausted, and review_autofix.yml is not in the PR diff, so a re-run after the limit resets is the remedy. The reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: `.github/workflows/ci.yml`, selection of steps moved out of `tests-release-and-log-analysis`\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The moved steps were chosen from test and subprocess counts, not measured step timings. The ci.yml comments (lines 4045-4062, 4090-4098) and the changelog fragment say the timings were unreadable, and wiring guard part 2 (658 test functions, ci.yml:3048 and 4320) is larger but stays in the release job. Severity disagreement: sonnet and minimax rated it NIT, and luna rated it MAJOR. Names, bodies and `timeout-minutes` are unchanged, and no new job names were added.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- (No defect findings reported. The `review / gate` failure (run 45105572894, exit 75) was noted as a primary rate limit on a file this PR does not touch, and was not raised as a finding.)\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, in the choice of steps that leave `tests-release-and-log-analysis`.\n  Evidence of absence: The moved steps were chosen from test and subprocess counts, not measured step timings. The ci.yml comments (lines 4045-4052 and 4090-4098) and the changelog fragment say the timings were unreadable. Wiring guard part 2 (line 3048) is larger and stays in the release job. The estimate is disclosed, so the reviewer rated it a NIT.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml, selection of which steps leave tests-release-and-log-analysis\n  Evidence of absence: The PR moves \"Judge Semble prefetch contract test\" and \"Regression tests wired by the CI wiring guard (part 1)\" to orchestrate-poll group 1 by estimate, not from measured step timings. ci.yml lines 4045-4062 and 4090-4098, changelog.d/9966-ci-release-job-budget-move.md:2, and the MovedRelease9966StepsContractTest docstring (tests/test_ci_poll_test_sharding.py:2629) acknowledge the timings for run 45035315687 were not readable. ci.yml line 4320 shows part 2 (658 test functions) stays in tests-release-and-log-analysis.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \u201cMove its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\u201d\n  Expected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-release-and-log-analysis`.\n  Evidence of absence: The PR moves two steps selected by test and subprocess counts, not the run\u2019s step timings. The workflow comments state those timings were unreadable. The diff does not establish that the moved steps were the slowest, and it records wiring guard part 2 as larger while leaving it in the source job.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/review_autofix.yml:support-ref step (gh_api_retry repos/shubhodeep1/coding-workflows/branches/main) | severity=low | confidence=5\n  PROBLEM: The check-run on the current head exited 75 after `GH_API_RETRY outcome=gave_up kind=primary bucket=core status=403 wait_secs=658`.\n  WHY: GitHub's primary API rate limit was exhausted, and review_autofix.yml is not in the PR diff. A re-run after the limit resets is the remedy. The reviewer rated it NIT.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "122e79e3c674ed6f12f0928fd2c50e608dec570dab2e8416020c7f5436754edf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9968,
+    "run_id": "45224721710",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45224721710",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123191125_b9c72ad73d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9968,
+    "run_id": "45224721710"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T19:11:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
