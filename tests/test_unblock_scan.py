@@ -932,6 +932,66 @@ def test_cli_escalated_recheck_flag(tmp_path: Path) -> None:
 	assert subprocess.run(base + ["--escalated-recheck-hours", "-1"], capture_output=True, text=True, check=False).returncode == 1
 
 
+def test_wedged_queued_judge_run_no_longer_holds_the_scan(capsys) -> None:
+	"""Issue #9473: a queued judge run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is ignored."""
+	search = [_item(1, ["ai:blocked"]), _item(2, ["ai:blocked"])]
+	details = {str(n): _details("ai:blocked", 30) for n in (1, 2)}
+	wedged = {"id": 43095142301, "display_title": "Unblock judge #1", "status": "queued", "created_at": _iso(25),
+		"path": ".github/workflows/unblock_judge.yml"}
+	assert scan._busy_items([wedged], NOW, dt.timedelta(minutes=60)) == set()
+	result = _select(search, details, [wedged])
+	assert result["dispatch"] == [{"item": 1, "kind": "issue"}]
+	assert "judge_running" not in result["skipped"]
+	err = capsys.readouterr().err
+	assert "ZOMBIE_RUN_IGNORED run=43095142301 workflow=.github/workflows/unblock_judge.yml age_h=25 guard=unblock_scan_busy" in err
+	assert "guard=unblock_scan_active_judge" in err
+
+
+def test_fresh_queued_and_in_progress_judge_runs_still_hold_the_scan() -> None:
+	search = [_item(1, ["ai:blocked"]), _item(2, ["ai:blocked"]), _item(3, ["ai:blocked"])]
+	details = {str(n): _details("ai:blocked", 30) for n in (1, 2, 3)}
+	runs = [
+		{"id": 1, "display_title": "Unblock judge #1", "status": "queued", "created_at": _iso(25)},
+		{"id": 2, "display_title": "Unblock judge #2", "status": "queued", "created_at": _iso(23)},
+		{"id": 3, "display_title": "Unblock judge #3", "status": "in_progress", "created_at": _iso(100)},
+	]
+	assert scan._busy_items(runs, NOW, dt.timedelta(minutes=60)) == {2, 3}
+	result = _select(search, details, runs)
+	assert result["dispatch"] == []
+	assert "judge_running" in result["skipped"]
+
+
+def test_wedged_queued_run_stays_ignored_under_a_long_inflight_window() -> None:
+	"""Issue #9473: an inflight window above 24h must not re-add a wedged queued run."""
+	window = dt.timedelta(minutes=2880)
+	wedged = {"id": 11, "display_title": "Unblock judge #6", "status": "queued", "created_at": _iso(25)}
+	assert scan._busy_items([wedged], NOW, window) == set()
+	finished = {"id": 12, "display_title": "Unblock judge #7", "status": "completed", "conclusion": "success",
+		"created_at": _iso(25)}
+	assert scan._busy_items([finished], NOW, window) == {7}
+
+
+def test_zombie_filter_can_be_disabled(monkeypatch) -> None:
+	# Load first so the lazy load cannot overwrite the patched hours, and so
+	# teardown restores the real loaded value for later tests.
+	scan._zombie_lib()
+	monkeypatch.setitem(scan._ZOMBIE_LIB_STATE, "hours", 0)
+	wedged = {"id": 9, "display_title": "Unblock judge #4", "status": "queued", "created_at": _iso(200)}
+	assert scan._busy_items([wedged], NOW, dt.timedelta(minutes=60)) == {4}
+
+
+def test_missing_orchestrate_lib_sibling_keeps_queued_runs_active(tmp_path: Path) -> None:
+	scripts = Path(SCRIPT).parent
+	for name in ("unblock_scan.py", "unblock_ledger.py"):
+		(tmp_path / name).write_text((scripts / name).read_text(encoding="utf-8"), encoding="utf-8")
+	spec = importlib.util.spec_from_file_location("unblock_scan_no_lib", tmp_path / "unblock_scan.py")
+	isolated = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(isolated)
+	wedged = {"id": 9, "display_title": "Unblock judge #5", "status": "queued", "created_at": _iso(200)}
+	assert isolated._busy_items([wedged], NOW, dt.timedelta(minutes=60)) == {5}
+	assert isolated._zombie_lib() is None
+
+
 # --- E2E fixture issues (#9782: the clarify negative test is blocked by design) ---
 
 def _titled(number: int, title: str) -> dict:
