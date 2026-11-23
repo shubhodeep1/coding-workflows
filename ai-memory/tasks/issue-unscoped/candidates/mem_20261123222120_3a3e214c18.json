@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: If you set `tool-cache:`, rename it to `preinstalled-runtimes:` (the old name still works until v3.0.0 and prints a deprecation warning).\n  expected_change_site: .github/workflows/review_autofix.yml:2213 and EXPECTED_WITH in tests/test_review_autofix_disk_headroom_contract.py (line 35)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: .github/workflows/review_autofix.yml still sets `tool-cache: true` at line 2213, tests/test_review_autofix_disk_headroom_contract.py still expects the `tool-cache` key in EXPECTED_WITH at line 35; the old name keeps working through v2.x so behavior is unchanged today; anthropic_claude-sonnet-5_5 could not confirm `preinstalled-runtimes` is declared at the pinned commit (severity NIT for all reviewers)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: The PR description says workflows that set `tool-cache:` should rename it to `preinstalled-runtimes:`. The old name still works until v3.0.0 and prints a deprecation warning.\nExpected change site: `.github/workflows/review_autofix.yml:2213` and `EXPECTED_WITH` in `tests/test_review_autofix_disk_headroom_contract.py`.\nEvidence of absence: The workflow still sets `tool-cache: true` and the contract test still expects the `tool-cache` key. Per the release notes, the old name keeps working through v2.x, so behavior is unchanged today. Could not confirm that `preinstalled-runtimes` is declared at the pinned commit; an unrecognised input would be silently ignored and the tool cache would no longer be freed. A rename should be a follow-up that checks `action.yml` at the pin first, then changes the workflow and test together.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: The PR description states that workflows setting `tool-cache:` should rename it to `preinstalled-runtimes:`.\nExpected change site: .github/workflows/review_autofix.yml and tests/test_review_autofix_disk_headroom_contract.py\nEvidence of absence: The workflow still sets tool-cache: true at line 2213, and the contract test still expects the tool-cache key at line 35. The requested input rename is absent from the PR diff. The old name remains accepted in v2 but emits a deprecation warning.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: The Dependabot release notes for free-disk-space v2.0.0 state that workflows setting tool-cache: should rename it to preinstalled-runtimes: (\"If you set tool-cache:, rename it to preinstalled-runtimes:. The old name still works until v3.0.0 and prints a warning.\")\nExpected change site: .github/workflows/review_autofix.yml line 2213 (the Free disk space step's with:) and tests/test_review_autofix_disk_headroom_contract.py EXPECTED_WITH (line 35)\nEvidence of absence: The workflow still sets tool-cache: true at line 2213 and the contract test still asserts the tool-cache key in EXPECTED_WITH at line 35. The previous autofix editor deferred this as a follow-up because the new input name was not confirmed in action.yml at the pinned commit ceedf095..., the old name continues to work throughout v2.x with only a deprecation warning, and the migration guide is conditional. The other two breaking changes are non-issues (swap-storage: true set explicitly at line 2219; dotnet: false not set). The primary deliverable (bumping the pin SHA and aligning the two test constants) is complete and consistent across all three files.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"If you set `tool-cache:`, rename it to `preinstalled-runtimes:`.\"\nExpected change site: `.github/workflows/review_autofix.yml` and `tests/test_review_autofix_disk_headroom_contract.py`.\nEvidence of absence: The workflow still sets `tool-cache: true` at line 2213, and the contract test still expects the `tool-cache` key at line 35. The PR updates the action pin but does not make the requested input rename.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "f9153236916d5b59009fac711c80dc7a3b7b23bdcc86f8d3df768c0ea51cbd48",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10004,
+    "run_id": "45272497075",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45272497075",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123222120_3a3e214c18",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10004,
+    "run_id": "45272497075"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T22:21:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
