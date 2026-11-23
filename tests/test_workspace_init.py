@@ -271,7 +271,7 @@ def test_implement_workflow_stages_workspace_helper_and_orders_restore_keys() ->
 	stage_block = _step_run_text(IMPLEMENT_WORKFLOW, "Stage workflow support files")
 	assert "workspace_init.sh" in stage_block
 	cache_step = _step(IMPLEMENT_WORKFLOW, "Restore reusable workspace cache")
-	assert cache_step.get("uses") == "actions/cache@v5"
+	assert cache_step.get("uses") == "actions/cache@v6"
 	with_block = cache_step.get("with")
 	assert isinstance(with_block, dict)
 	assert with_block.get("path") == "${{ steps.workspace_meta.outputs.workspace_path }}"
@@ -286,7 +286,7 @@ def test_validate_workflow_stages_workspace_helper_and_uses_workspace_paths() ->
 	fetch_block = _step_run_text(VALIDATE_WORKFLOW, "Fetch workflow support files")
 	assert "workspace_init.sh" in fetch_block
 	cache_step = _step(VALIDATE_WORKFLOW, "Restore reusable workspace cache")
-	assert cache_step.get("uses") == "actions/cache@v5"
+	assert cache_step.get("uses") == "actions/cache@v6"
 	with_block = cache_step.get("with")
 	assert isinstance(with_block, dict)
 	assert with_block.get("restore-keys") == (
@@ -297,7 +297,7 @@ def test_validate_workflow_stages_workspace_helper_and_uses_workspace_paths() ->
 	assert 'mkdir -p "${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_runtime/"' in _step_run_text(VALIDATE_WORKFLOW, "Prepare behavioural smoke runtime cache path")
 	assert prepare_runtime_step.get("if") == "steps.behavioural_smoke_gate.outputs.enabled == 'true' && steps.behavioural_smoke_pr.outputs.pr_number != ''"
 	behavioural_smoke_restore_step = _step(VALIDATE_WORKFLOW, "Restore behavioural smoke runtime cache")
-	assert behavioural_smoke_restore_step.get("uses") == "actions/cache/restore@v5"
+	assert behavioural_smoke_restore_step.get("uses") == "actions/cache/restore@v6"
 	assert _step(VALIDATE_WORKFLOW, "Restore validate hints cache").get("with", {}).get("path") == (
 		"${{ runner.temp }}/validate-hints-cache/${{ github.repository }}/${{ hashFiles('docker-compose*.yml', 'compose*.yml', '**/Dockerfile', '**/Dockerfile.*', '**/package.json', '**/pyproject.toml', '**/requirements*.txt', '**/go.mod', '**/Cargo.toml') }}/.ai/validate-hints-cache"
 	)
