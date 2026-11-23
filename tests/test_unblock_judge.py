@@ -4350,7 +4350,44 @@ def test_placeholder_hold_on_pr_sourced_heal_follows_the_source_item(tmp_path: P
 def test_placeholder_hold_close_failure_keeps_the_hold_open(tmp_path: Path) -> None:
 	result, state = _placeholder_judge(tmp_path, FAKE_GH_WORKFLOW_RUNS=_heal_green_runs(), FAKE_GH_FAIL_CLOSE="1")
 	assert f"hold=placeholder_retired ref={PLACEHOLDER} outcome=skip reason=close_failed" in result.stdout, result.stdout
-	assert state["patched"] == [] and state["comments"] == []
+	# The open hold is refreshed (no `done`), so the scan backs off before the retry.
+	assert [p[0] for p in state["patched"]] == ["repos/o/r/issues/comments/321"] and state["comments"] == []
+	assert state["patched"][0][1]["body"].endswith(f"<!-- ai:unblock-wait:v1 item=7 hold=placeholder_retired ref={PLACEHOLDER} -->")
+	assert not _closed_item(state)
+
+
+def test_placeholder_hold_keeps_waiting_while_a_closing_pr_is_open(tmp_path: Path) -> None:
+	# The #9809 lookup's answer (an open same-repository PR closing the item) is reused: no REST PR read.
+	graphql = {"data": {"repository": {"pullRequests": {"nodes": []}, "issue": {"timelineItems": {"nodes": [{"source": {
+		"number": 81, "state": "OPEN", "body": "Fixes #7", "repository": {"nameWithOwner": "o/r"},
+		"headRepository": {"nameWithOwner": "o/r"}, "author": {"login": BOT}, "authorAssociation": "NONE"}}]}}}}}
+	result, state = _placeholder_judge(tmp_path, FAKE_GH_WORKFLOW_RUNS=_heal_green_runs(), FAKE_GH_GRAPHQL=json.dumps(graphql))
+	assert "op=impl_pr outcome=found pr=81" in result.stdout, result.stdout
+	assert f"hold=placeholder_retired ref={PLACEHOLDER} outcome=holding" in result.stdout, result.stdout
+	assert not _closed_item(state) and "open_pr_reads" not in state
+
+
+def test_placeholder_recurrence_check_skips_untrusted_authors_before_any_read(tmp_path: Path) -> None:
+	item = _heal_item()
+	item["user"] = {"login": "outsider"}
+	result, state = _placeholder_judge(tmp_path, item, FAKE_GH_WORKFLOW_RUNS=_heal_green_runs())
+	assert f"hold=placeholder_retired ref={PLACEHOLDER} outcome=holding" in result.stdout, result.stdout
+	assert "workflow_run_reads" not in state and "open_pr_reads" not in state and not _closed_item(state)
+
+
+@pytest.mark.parametrize("green,min_age,closed,warning", [
+	("200", "24", False, "HEAL_STALE_GREEN_RUNS above 90"),
+	("five", "24", True, "HEAL_STALE_GREEN_RUNS must be a positive integer"),
+	("005", "24", True, ""),
+	("5", "10000", False, ""),
+	("5", "24h", True, "HEAL_STALE_MIN_AGE_HOURS must be a non-negative integer"),
+])
+def test_placeholder_recurrence_thresholds_match_the_poller(tmp_path: Path, green: str, min_age: str, closed: bool, warning: str) -> None:
+	result, state = _placeholder_judge(tmp_path, FAKE_GH_WORKFLOW_RUNS=_heal_green_runs(),
+		HEAL_STALE_GREEN_RUNS=green, HEAL_STALE_MIN_AGE_HOURS=min_age)
+	assert _closed_item(state) is closed, result.stdout + result.stderr
+	if warning:
+		assert f"::warning::{warning}" in result.stderr
 
 
 def test_placeholder_recurrence_check_switch_off_and_non_heal_items_read_nothing(tmp_path: Path) -> None:

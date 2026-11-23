@@ -490,7 +490,7 @@ unblock_hold_git_fetch()
 	if [ -n "${GH_TOKEN:-}" ]; then
 		auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
 		GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=1 \
-			GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" \
+			GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL:-https://github.com}/.extraheader" \
 			GIT_CONFIG_VALUE_0="${auth_header}" \
 			timeout 120 git --git-dir="${git_dir}" fetch --quiet --no-tags "$@" -- "${remote}" "${UNBLOCK_HOLD_FETCH_REFSPEC}" >/dev/null 2>&1
 	else
@@ -519,9 +519,9 @@ unblock_hold_patch_equivalent()
 	UNBLOCK_HOLD_FETCH_REFSPEC="+refs/heads/${branch}:refs/remotes/origin/${branch}" \
 		unblock_hold_git_fetch "${git_dir}" "${remote}" --depth=300 || return 1
 	UNBLOCK_HOLD_FETCH_REFSPEC="${sha}" unblock_hold_git_fetch "${git_dir}" "${remote}" --depth=2 || return 1
-	parents="$(git --git-dir="${git_dir}" rev-list --parents -n 1 "${sha}" -- 2>/dev/null)" || return 1
+	parents="$(timeout 60 git --git-dir="${git_dir}" rev-list --parents -n 1 "${sha}" -- 2>/dev/null)" || return 1
 	[ "$(wc -w <<< "${parents}")" -eq 2 ] || return 1
-	cherry="$(git --git-dir="${git_dir}" cherry "refs/remotes/origin/${branch}" "${sha}" "${sha}^" 2>/dev/null)" || return 1
+	cherry="$(timeout 60 git --git-dir="${git_dir}" cherry "refs/remotes/origin/${branch}" "${sha}" "${sha}^" 2>/dev/null)" || return 1
 	[ -n "${cherry}" ] || return 1
 	grep -qv '^- ' <<< "${cherry}" && return 1
 	printf 'patch_equivalent\n' > "${RUNTIME_DIR}/hold_met_reason"
@@ -549,10 +549,33 @@ unblock_placeholder_recurrence_check()
 	jq -e 'index("ai:workflow-heal") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1 || return 1
 	jq -e '(.body // "") | contains("<!-- workflow-failure-heal:source=")' "${RUNTIME_DIR}/item.json" >/dev/null 2>&1 || return 1
 	[ -f "${heal_py}" ] && [ ! -L "${heal_py}" ] || return 1
+	# The trust rule heal_stale_decision applies (_heal_stale_trusted: the
+	# pipeline login, a [bot] login or OWNER/MEMBER/COLLABORATOR), checked
+	# before the body's markers pick any repository for an authenticated read.
+	jq -e --arg u "${UNBLOCK_LOGIN:-}" '(if (.user | type) == "object" and (.user.login | type) == "string" then .user.login
+		elif (.author_login | type) == "string" then .author_login else "" end) as $l
+		| ($u != "" and $l == $u) or ($l | endswith("[bot]"))
+		or ((.author_association // "") as $a | ["OWNER", "MEMBER", "COLLABORATOR"] | index($a) != null)' \
+		"${RUNTIME_DIR}/item.json" >/dev/null 2>&1 || return 1
+	# Normalized exactly as orchestrate_poll_process.sh does for the same
+	# repository variables (six digits, base 10, green runs 1..90); warnings go
+	# to stderr because the caller captures this function's stdout.
 	green_runs="${HEAL_STALE_GREEN_RUNS:-5}"
-	[[ "${green_runs}" =~ ^[1-9][0-9]{0,2}$ ]] || green_runs=5
+	if ! [[ "${green_runs}" =~ ^[0-9]{1,6}$ ]] || [ "$(( 10#${green_runs} ))" -lt 1 ]; then
+		echo "::warning::HEAL_STALE_GREEN_RUNS must be a positive integer; defaulting to 5" >&2
+		green_runs=5
+	fi
+	green_runs="$(( 10#${green_runs} ))"
+	if [ "${green_runs}" -gt 90 ]; then
+		echo "::warning::HEAL_STALE_GREEN_RUNS above 90 cannot be met; using 90" >&2
+		green_runs=90
+	fi
 	min_age="${HEAL_STALE_MIN_AGE_HOURS:-24}"
-	[[ "${min_age}" =~ ^[0-9]{1,4}$ ]] || min_age=24
+	if ! [[ "${min_age}" =~ ^[0-9]{1,6}$ ]]; then
+		echo "::warning::HEAL_STALE_MIN_AGE_HOURS must be a non-negative integer; defaulting to 24" >&2
+		min_age=24
+	fi
+	min_age="$(( 10#${min_age} ))"
 	target_json="$(unblock_py "${heal_py}" heal-stale-decision --stage target --issue-json "${RUNTIME_DIR}/item.json" 2>/dev/null)" || return 1
 	jq -e 'type == "object"' <<< "${target_json}" >/dev/null 2>&1 || return 1
 	src_repo="$(jq -r '.source_repo // "" | strings' <<< "${target_json}")"
@@ -613,8 +636,15 @@ unblock_placeholder_recurrence_check()
 	# Linked PR: an open ai/issue-<n> implementation PR keeps the item. API
 	# hygiene (CLAUDE.md §14): no earlier read in this run lists this item's
 	# PRs. An unreadable answer omits --linked-pr-json (linked_pr_unknown: keep).
+	# This run's #9809 lookup (unblock_resolve_implementation_pr, no new call)
+	# also sees an open same-repository PR that closes the item: an open PR
+	# found there, or two of them (ambiguous), keeps the item.
 	owner="${REPOSITORY%%/*}"
-	if pulls_json="$(gh api "repos/${REPOSITORY}/pulls?state=open&head=${owner}:ai/issue-${ITEM}&per_page=1" 2>/dev/null)" \
+	if [ -n "${UNBLOCK_IMPL_PR_RESULT_FILE:-}" ] \
+		&& jq -e '(.pr | type) == "number" or .reason == "ambiguous"' "${UNBLOCK_IMPL_PR_RESULT_FILE}" >/dev/null 2>&1; then
+		printf '{"state":"OPEN"}\n' > "${RUNTIME_DIR}/hold_linked_pr.json"
+		decide_args+=(--linked-pr-json "${RUNTIME_DIR}/hold_linked_pr.json")
+	elif pulls_json="$(gh api "repos/${REPOSITORY}/pulls?state=open&head=${owner}:ai/issue-${ITEM}&per_page=1" 2>/dev/null)" \
 		&& jq -e 'type == "array"' <<< "${pulls_json}" >/dev/null 2>&1; then
 		if jq -e 'length == 0' <<< "${pulls_json}" >/dev/null 2>&1; then
 			printf 'null\n' > "${RUNTIME_DIR}/hold_linked_pr.json"
@@ -1263,6 +1293,13 @@ unblock_hold_close_no_recurrence()
 	green="$(jq -r '.green_runs // 0' "${RUNTIME_DIR}/hold_recurrence.json" 2>/dev/null | tr -cd '0-9' | cut -c1-4)"
 	[ -n "${green}" ] || green=0
 	if ! gh api -X PATCH "repos/${REPOSITORY}/issues/${ITEM}" -f state=closed -f state_reason=completed >/dev/null 2>&1; then
+		# Refresh the open hold, as the unmet/unknown branches do, so the scan
+		# (keyed on the marker's updatedAt) waits UNBLOCK_JUDGE_RETRY_HOURS
+		# before retrying the close.
+		unblock_patch_comment "${hold_id}" "Waiting for $(unblock_hold_description "${hold_kind}" "${hold_ref}"). The failure this item tracks has not come back, but closing the item failed, so the unblock judge tries again later. This hold uses no round. Last checked $(unblock_now).
+
+<!-- ai:unblock-wait:v1 item=${ITEM} hold=${hold_kind} ref=${hold_ref} -->" \
+			|| unblock_log "item=${ITEM} op=hold hold=${hold_kind} ref=${hold_ref} outcome=skip reason=hold_refresh_failed"
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=hold hold=${hold_kind} ref=${hold_ref} outcome=skip reason=close_failed"
 		return 0
 	fi
@@ -1276,6 +1313,7 @@ unblock_hold_close_no_recurrence()
 <!-- ai:unblock-wait:v1 item=${ITEM} hold=${hold_kind} ref=${hold_ref} done -->" \
 		|| unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=hold hold=${hold_kind} ref=${hold_ref} outcome=warn reason=comment_failed"
 	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=hold hold=${hold_kind} ref=${hold_ref} outcome=impossible reason=no_recurrence green_runs=${green}"
+	unblock_tg "DEBUG" "Unblock judge closed heal issue #${ITEM}: its failure has not come back (${REPOSITORY})."
 	return 0
 }
 
@@ -2109,6 +2147,10 @@ unblock_resolve_ci_owner()
 	return 0
 }
 
+# Set by unblock_resolve_implementation_pr once this run parsed its answer;
+# reset here so an inherited environment value is never read (#9967).
+UNBLOCK_IMPL_PR_RESULT_FILE=""
+
 # Existing-PR routing (#9809). Default on: unset, empty or `true`; `false`
 # turns it off; any other value turns it off and says so.
 unblock_existing_pr_routing_enabled()
@@ -2158,6 +2200,8 @@ unblock_resolve_implementation_pr()
 		unblock_log "item=${ITEM} op=impl_pr outcome=unavailable reason=parse_failed"
 		return 0
 	fi
+	# #9967: the placeholder_retired recurrence check reuses this run's answer.
+	UNBLOCK_IMPL_PR_RESULT_FILE="${result_file}"
 	impl_pr="$(jq -r '.pr // empty' "${result_file}" 2>/dev/null || true)"
 	impl_reason="$(jq -r '.reason // "unknown"' "${result_file}" 2>/dev/null | tr -cd 'a-z_' | cut -c1-40 || true)"
 	if ! [[ "${impl_pr}" =~ ^[1-9][0-9]{0,8}$ ]]; then
