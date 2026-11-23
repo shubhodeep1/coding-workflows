@@ -29004,6 +29004,10 @@ STALL_EOF
         ;;
       attempt_merge)
         local merge_pr
+        # Assigned explicitly: this arm runs once per issue inside the loop,
+        # and a bare re-declaration would keep the previous issue's value.
+        local _std_merge_refusal_reason=""
+        local _std_merge_log_head="invalid"
         # Same implementation-PR discipline as retrigger_review: merging is
         # the most destructive mis-target of all, so never resolve the merge
         # candidate from a bare mention-only cross-reference (issue #3816 /
@@ -29029,11 +29033,28 @@ STALL_EOF
           # block-on-any filter). Reset so a merge-lease wait below is read
           # from this PR's gate, never from an earlier PR's.
           PR_BASE_FRESHNESS_OUTCOME=""
-          if [ "${merge_state}" = "open" ] && [ "${merge_mergeable}" = "true" ] \
-            && [[ "${merge_head_sha}" =~ ^[0-9a-f]{40}$ ]] \
-            && _pr_checks_completed "${merge_pr}" "${merge_head_sha}" \
-            && _pr_base_fresh_for_merge "${merge_pr}" "${merge_head_sha}" "${merge_base_ref}"; then
-            _orch_squash_merge_bound "${merge_pr}" "${merge_head_sha}" auto || true
+          # Record the first gate that refused the merge (#9715, follow-up of
+          # #9520). The gates, their order and their arguments match the
+          # previous single && chain; an empty or failed PR fetch leaves
+          # merge_state empty and maps to state_not_open, and mergeable:null
+          # (GitHub still computing) maps to not_mergeable. `elif !` keeps
+          # each helper's failure safe under set -e.
+          if [ "${merge_state}" != "open" ]; then
+            _std_merge_refusal_reason="state_not_open"
+          elif [ "${merge_mergeable}" != "true" ]; then
+            _std_merge_refusal_reason="not_mergeable"
+          elif ! [[ "${merge_head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            _std_merge_refusal_reason="bad_head_sha"
+          elif ! _pr_checks_completed "${merge_pr}" "${merge_head_sha}"; then
+            _std_merge_refusal_reason="checks_incomplete"
+          elif ! _pr_base_fresh_for_merge "${merge_pr}" "${merge_head_sha}" "${merge_base_ref}"; then
+            _std_merge_refusal_reason="base_not_fresh"
+          elif ! _orch_squash_merge_bound "${merge_pr}" "${merge_head_sha}" auto; then
+            _std_merge_refusal_reason="merge_call_failed"
+          fi
+          # Never echo a malformed head into the log line.
+          if [[ "${merge_head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            _std_merge_log_head="${merge_head_sha}"
           fi
         fi
         if ! [[ "${merge_pr}" =~ ^[0-9]+$ ]]; then
@@ -29052,8 +29073,16 @@ STALL_EOF
           # failed merge: the lease tick re-dispatches the PR when the lease
           # is granted, so the recovery budget is not spent.
           echo "  [standalone-stall] Issue #${issue_num}: PR #${merge_pr} waits for the merge lease (PR #${MERGE_LEASE_BLOCKER:-?}); not counting a recovery attempt."
+          echo "STANDALONE_STALL_MERGE issue=${issue_num} pr=${merge_pr} head=${_std_merge_log_head} outcome=lease_wait reason=merge_lease_wait"
           STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_skipped_merge_lease_wait"
+        elif [ -n "${_std_merge_refusal_reason}" ]; then
+          echo "STANDALONE_STALL_MERGE issue=${issue_num} pr=${merge_pr} head=${_std_merge_log_head} outcome=refused reason=${_std_merge_refusal_reason}"
+          STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_refused_${_std_merge_refusal_reason}"
+          tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted merge retry for ready-to-merge issue (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1))). Merge refused: ${_std_merge_refusal_reason}." "DEBUG"
+          STALL_RECOVERY_SHOULD_INCREMENT="true"
+          took_action="true"
         else
+          echo "STANDALONE_STALL_MERGE issue=${issue_num} pr=${merge_pr} head=${_std_merge_log_head} outcome=merge_requested reason=none merge_outcome=${ORCH_MERGE_BOUND_OUTCOME:-unknown}"
           tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted merge retry for ready-to-merge issue (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "DEBUG"
           STALL_RECOVERY_SHOULD_INCREMENT="true"
           took_action="true"
