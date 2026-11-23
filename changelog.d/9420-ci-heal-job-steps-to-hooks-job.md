@@ -1,0 +1,4 @@
+<!-- changelog: changed -->
+- **Six steps of the `tests-heal-plan-and-validation` CI job now run at the end of `tests-hooks-and-orchestrator`.** The heal job took 15m35s of its 20-minute timeout on main (run 43314513853). The moved steps are `Merge probe unit tests`, `Validation shell-quoting and credential-scrub tests`, `Shared PR check-runs merge gate (pr_checks_lib) tests`, `Mark-stable release-tag refspec contract test`, `Release CI gate tests (stubbed gh; both release workflows)` and `Cancelled CI sweep recovery tests`. That run's step timings could not be read, so they were picked by estimated cost. Step names, step bodies and both jobs' `timeout-minutes` are unchanged, and no job was added. A new contract test, `MovedHeal9420StepsContractTest`, pins each step to the hooks job.
+
+Refs #9684, #9420
