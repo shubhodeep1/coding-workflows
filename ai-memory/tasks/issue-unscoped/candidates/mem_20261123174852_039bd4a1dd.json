@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- All checklist sections NONE; TASK COMPLETENESS / INTENT GAPS NONE; HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n- Verified: retry-hours check in scripts/claude_pool_daily_usage.sh (daily_usage_send, `^[0-9]{1,2}$` followed by `-gt 23`) runs the length check before any arithmetic; `10#` parses \"08\" correctly.\n- Verified: clamp in tools/claude-pool-broker/src/index.ts:891 `rememberVerifiedSha(sha, Math.min(now, durableAt + DURABLE_VERIFIED_SHA_TTL_MS - VERIFIED_SHA_TTL_MS))` limits total trust to 7 days; existing vitest durable-hit tests still hold.\n- Did not raise again: the `^[0-9]+$` overflow pattern in daily_usage_start_hour and in the NOW validations (code moved unchanged, already ruled out of scope by the previous editor pass).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n- HARDENING_SUGGESTION: scripts/claude_pool_daily_usage.sh:daily_usage_start_hour() | HARDENING_RISK_SCORE: 1\n  PROBLEM: The validation pattern `^[0-9]+$` for CLAUDE_POOL_DAILY_USAGE_HOUR_UTC is prone to overflow if an extremely long string is provided, similar to the issue fixed for retry_hours.\n  FIX: Update the regex to `^[0-9]{1,2}$` to safely constrain input length before arithmetic. (Estimated lines changed: 1)\n- HARDENING_SUGGESTION: scripts/claude_pool_daily_usage.sh:daily_usage_slot() | HARDENING_RISK_SCORE: 1\n  PROBLEM: The `defer_now` and `now` checks also use `^[0-9]+$` which could theoretically be vulnerable to oversized inputs.\n  FIX: Update validation patterns for `defer_now` and `now` to `^[0-9]{1,10}$`. (Estimated lines changed: 2)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- Output contains only investigation narration and no checklist sections; it notes that the source=cache log is in the code at line 881.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n- All checklist sections NONE; TASK COMPLETENESS / INTENT GAPS NONE; HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- Verified: retry-hours regex bounds length before arithmetic (scripts/claude_pool_daily_usage.sh:164); deferred early-return writes both outputs and cleans err_file (lines 178-182); durable-hit memory clamp in tools/claude-pool-broker/src/index.ts:891 is arithmetically consistent; changelog restructure only changes formatting and leaves the facts unchanged.\n- HARDENING_SUGGESTION: scripts/claude_pool_daily_usage.sh:daily_usage_start_hour() (lines 66-73) | HARDENING_RISK_SCORE: 1\n  PROBLEM: The sibling HOUR_UTC check still uses the overflow-prone `^[0-9]+$` pattern the last run tightened to `^[0-9]{1,2}$` for retry hours; a 20+ digit value can wrap negative and skip the fallback to 0.\n  WHY: Unchanged by this PR (moved only), previously ruled out of scope by the editor; listed for completeness and advisory only.\n  FIX: change the regex to `^[0-9]{1,2}$` (estimated lines changed: 1)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4c6166159df0bdba300bc101e9fcd0970680cb4fb88121c6351b9b5d195aa3d3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9995,
+    "run_id": "45209381938",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45209381938",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123174852_039bd4a1dd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9995,
+    "run_id": "45209381938"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-23T17:48:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
