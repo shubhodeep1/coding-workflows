@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:3436-3475 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The aggregate `lint` check failed on the reviewed head because `orchestrate-poll (3)` was cancelled, and the cause is not shown to be this PR. The two reviewers cite different line ranges (3436-3475 and 4934-4937) in the same file, so they are not merged by line overlap. They are listed together here because both describe the same cancelled-shard failure.\n  WHY: Severity is NIT in both reviews. Confidence is 2 from anthropic_claude-sonnet-5_5 and 5 from openai_gpt-6-luna. The `lint` check stays red and blocks merging, but the logs do not tie the cancellation to the PR, and a CI re-run is expected to clear it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:3436-3475 | severity=low | confidence=2\n  PROBLEM: On head da3cb95a, `lint` failed and `orchestrate-poll (3)` was cancelled. This file is not part of the PR diff. The cancelled shard's log ends on passing tests, with no failing assertion.\n  WHY: No code in this PR causes it. It looks like an infrastructure or concurrency cancellation, and a CI re-run on the same head clears it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:4934-4937 | severity=low | confidence=5\n  PROBLEM: The supplied check-run results show `orchestrate-poll (3)` cancelled and the aggregate `lint` check failed when this code rejected that cancelled dependency.\n  WHY: The required `lint` check remains red and blocks merging on the reviewed head. The provided logs do not establish why the shard was cancelled or that the cancellation was caused by this PR.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "3611ca848a13d67edc33aeff2b288697a83dbe59b36774a100f232272e6474e6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9867,
+    "run_id": "45106421057",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45106421057",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123045312_936d8512ea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9867,
+    "run_id": "45106421057"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T04:53:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
