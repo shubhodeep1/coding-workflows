@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_actionlint_cache.py:218 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The test method `test_cache_step_uses_actions_cache_v5` still carries the `_v5` suffix even though its assertion on line 222 now checks for `actions/cache@v6`.\n  WHY: The stale identifier is misleading and does not surface in a grep for v6. It does not fail at runtime. The reviewer rated it NIT. anthropic_claude-sonnet-5_5 saw the same stale name but chose not to report it, citing the naming-immutability rule.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Bumps actions/cache from 4 to 6.\"\n  expected_change_site: .github/actions/install-claude/action.yml, the \"Cache npm downloads\" step (line 32)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: .github/actions/install-claude/action.yml:32 still uses `actions/cache@v5`, and no hunk in the PR diff touches the composite action. All four reviewers rated it NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Bumps actions/cache from 4 to 6.\"\n  Expected change site: `.github/actions/install-claude/action.yml`, the \"Cache npm downloads\" step at line 32.\n  Evidence of absence: Line 32 still reads `uses: actions/cache@v5`, and no hunk in the PR diff touches the composite action. This leaves mixed cache-action major versions. It is not a runtime failure and can wait for a follow-up bump.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: Bumps actions/cache from 4 to 6.\n  Expected change site: .github/actions/install-claude/action.yml, the Cache npm downloads step\n  Evidence of absence: The PR diff does not update this cache-action reference; .github/actions/install-claude/action.yml:32 still uses actions/cache@v5.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_ci_actionlint_cache.py:218 | severity=low | confidence=4\n  PROBLEM: The test method identifier still carries the old `_v5` suffix even though the assertion on line 222 now checks for `actions/cache@v6`.\n  WHY: It does not fail at runtime, but the stale identifier misleads readers. The reviewer rated it NIT.\n\nTASK_GAP:\n- Requirement: \"Bumps actions/cache from 4 to 6.\" (PR title and description)\n  Expected change site: .github/actions/install-claude/action.yml, the \"Cache npm downloads\" step (line 32)\n  Evidence of absence: .github/actions/install-claude/action.yml:32 still uses `uses: actions/cache@v5`. A grep of `actions/cache@v[1-5]` across `.github/` returns only this line. The composite action is invoked from many workflows.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Bumps actions/cache from 4 to 6.\"\n  Expected change site: `.github/actions/install-claude/action.yml`, the \"Cache npm downloads\" step.\n  Evidence of absence: The PR updates the cache action references in its changed workflows to v6 but does not update `.github/actions/install-claude/action.yml`; its line 32 still uses `actions/cache@v5`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "046dd8e62936aa6a3d1b794f20daa850a0c1e6823e7a782d6a2096fb43a440db",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10002,
+    "run_id": "45230997144",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45230997144",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123195022_e70eff7c1c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10002,
+    "run_id": "45230997144"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T19:50:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
