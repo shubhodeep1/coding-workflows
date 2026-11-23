@@ -13622,6 +13622,11 @@ def test_final_merge_refusal_keeps_github_error_and_mergeable_state():
 		issue_labels={10: ["ai:merged"]},
 		prs=prs,
 		existing_branches=["main", "orchestrator/project-192"],
+		# #9939: the blocked-merge guard defers a blocked PR before any merge
+		# attempt (covered by
+		# test_final_merge_defers_when_blocked_without_named_ruleset_blocker);
+		# switched off here so the refusal-recording path stays covered.
+		env_overrides={"PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED": "false"},
 	)
 	assert result.get("merged_prs", []) == []
 	err = result["state_on_disk"]["final_merge_error"]
@@ -13709,9 +13714,57 @@ def test_final_merge_proceeds_when_ruleset_required_status_passes():
 			"ruleset_required_contexts": ["coding-workflows/workflow-integrity"],
 			"commit_statuses": {head: [{"context": "coding-workflows/workflow-integrity", "state": "success"}]},
 		},
+		# #9939: the blocked-merge guard defers any blocked PR; switched off
+		# here so the ruleset helper's legacy path stays covered.
+		env_overrides={"PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED": "false"},
 	)
 	assert 355 in result.get("merged_prs", [])
 	assert "blocked by ruleset-required check(s)" not in result["stdout"]
+	assert "SYNC_MERGE_BLOCKED_GUARD outcome=disabled pr=355" in result["stdout"]
+
+
+def test_final_merge_defers_when_blocked_without_named_ruleset_blocker():
+	# #9939: the ruleset helper matches by name and counted the dispatched
+	# final CI's `lint` check-run, so it named no blocker while GitHub said
+	# blocked, and the admin GH_PAT merge bypassed the rule. Any blocked PR
+	# now defers without spending the final-merge budget.
+	head = "7ca98c4747ea6d5b73c95c46501b8483cd037b89"
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 356,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "blocked",
+			"headSha": head,
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		mock_store_extra={
+			"ruleset_required_contexts": ["coding-workflows/workflow-integrity"],
+			"commit_statuses": {head: [{"context": "coding-workflows/workflow-integrity", "state": "success"}]},
+		},
+	)
+	assert result.get("merged_prs", []) == []
+	assert (
+		f"SYNC_MERGE_BLOCKED_GUARD outcome=deferred pr=356 head={head} state=blocked blockers=none"
+	) in result["stdout"]
+	assert (
+		"[final-merge] PR #356 is blocked (mergeable_state=blocked; blockers: none). Will retry next poll."
+	) in result["stdout"]
+	assert "ORCH_MERGE_HEAD_BOUND pr=356" not in result["stdout"]
+	disk = result["state_on_disk"]
+	assert disk["final_merge_status"] == "pending"
+	assert int(disk.get("final_merge_attempt_count", 0) or 0) == 0
 
 
 def test_final_merge_promotes_eager_draft_pr_when_tracking_issue_ready_to_merge():

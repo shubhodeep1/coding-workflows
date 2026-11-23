@@ -5,4 +5,8 @@ A queued run whose `created_at` is older than `ZOMBIE_RUN_MAX_QUEUED_HOURS` (def
 
 What this means for consumer repos: after the next `@stable` sync the filter is on with the 24-hour default. Set the repository variable `ZOMBIE_RUN_MAX_QUEUED_HOURS=0` to turn it off.
 
+### For contributors
+
+The release gate's "Phase 2: Wait for plan to complete" step body now lives in `scripts/stable_e2e_step_wait_plan.sh`, sourced the same way as the Phase 4 and Phase 4b bodies. The wedged-queued filter would otherwise have put `.github/workflows/test-and-mark-stable.yml` at 431,166 bytes, over the 430,000-byte headroom test; the file is now about 415,000 bytes. The step keeps its name, `id: wait-plan` and behaviour.
+
 Refs #9473.

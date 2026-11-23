@@ -480,7 +480,9 @@ worktree_registry_gc()
 	fi
 	if [ "${rc}" -eq 0 ]; then
 		entry_count="$(printf '%s' "${registry_json}" | jq -r '(.entries // []) | length' 2>/dev/null || echo '0')"
-		if active_run_ids="$(_worktree_registry_load_active_run_ids 2>/dev/null)"; then
+		# stderr is not discarded: the loader's only stderr is the
+		# ZOMBIE_RUN_IGNORED lines of issue #9473 (its jq calls are quiet).
+		if active_run_ids="$(_worktree_registry_load_active_run_ids)"; then
 			active_runs_available='true'
 		fi
 	fi

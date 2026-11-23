@@ -610,7 +610,8 @@ fi
 runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${AUTO_RELEASE_STABLE_WORKFLOW_FILE}/runs?per_page=30")"
 # Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is wedged
 # (zero jobs, cannot be cancelled) and does not count as in flight.
-zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+# stderr is kept so an invalid ZOMBIE_RUN_MAX_QUEUED_HOURS warning shows.
+zq_cutoff="$(zombie_queued_cutoff_epoch || echo 0)"
 [[ "${zq_cutoff}" =~ ^[0-9]+$ ]] || zq_cutoff=0
 zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
 zombie_queued_log_ignored auto_release_gate "${zq_cutoff}" <<< "${runs_json}"

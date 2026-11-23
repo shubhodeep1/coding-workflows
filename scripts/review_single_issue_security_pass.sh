@@ -56,6 +56,10 @@
 #               hold=true and exhausted=true only if this head has completed
 #               with findings. Otherwise retry a bounded number of audits of
 #               this head, then hold without entering security-exhaustion mode.
+#               A pending head attempt whose audit run is provably lost
+#               (single_pass_marker_audit_lost) does not count, up to
+#               SECURITY_PASS_LOST_AUDIT_RETRIES (default 2; 0 restores the
+#               old counting) per head; lost ones beyond that count again.
 #               The review-blocked judge (scripts/review_rb_judge.sh) can
 #               decide to merge only an exhausted, audited head.
 #             Cycles available = MAX_SECURITY_PASS_CYCLES plus one per
@@ -156,8 +160,9 @@
 # at most 3 GETs for the skip check and one /user identity read (the gate
 # job's /user result is not exported), plus one paginated open ai:security
 # issue listing only for current-head findings in gate mode, plus at most one
-# audit-runs listing (shared by the cancelled-audit check of a pending marker
-# and the concurrency throttle before a dispatch), then one dispatch
+# audit-runs listing (shared by the cancelled-audit check of a pending marker,
+# the lost-attempt classification past a cap, also in status mode, and the
+# concurrency throttle before a dispatch), then one dispatch
 # and up to SECURITY_PASS_PENDING_MARKER_ATTEMPTS pending-marker POSTs (default 3,
 # valid range 1-10; backoff base defaults to 5s, range 0-30s), or one label
 # write. A rejected delta dispatch adds one dispatch (the legacy retry). A head
@@ -401,16 +406,27 @@ single_pass_cycle_accounting()
 		}'
 }
 
-# One Actions read shared by the cancelled-audit check and the concurrency
-# throttle (CLAUDE.md §15): the audit workflow's runs created in the last 24
-# hours (an audit times out after 60 minutes, so no live run is older), one
-# page of 100. Cached in SINGLE_PASS_AUDIT_RUNS for the rest of the gate run.
-# Returns 1 when the listing is unavailable; callers fail open.
+# One Actions read shared by the cancelled-audit check, the lost-attempt
+# classification and the concurrency throttle (CLAUDE.md §15): the audit
+# workflow's runs created in the last 24 hours (an audit times out after 60
+# minutes, so no live run is older), one page of 100. Issue #9942: when the
+# gate is past a cap, SINGLE_PASS_AUDIT_RUNS_FROM holds the created_at of the
+# oldest pending head marker above it, and the listing starts 120 seconds
+# before that marker if that is earlier (still one request; it only widens).
+# SINGLE_PASS_AUDIT_RUNS_SINCE_EPOCH records the start actually used. The
+# listing is incomplete when total_count is missing or exceeds the returned
+# runs; single_pass_marker_audit_lost then classifies only markers whose
+# window starts at or after the oldest returned run. Cached in
+# SINGLE_PASS_AUDIT_RUNS for the rest of the gate run. Returns 1 when the
+# listing is unavailable; callers fail open (the throttle) or count the
+# marker (lost-attempt classification).
 SINGLE_PASS_AUDIT_RUNS=""
 SINGLE_PASS_AUDIT_RUNS_STATE="unfetched"
+SINGLE_PASS_AUDIT_RUNS_FROM=""
+SINGLE_PASS_AUDIT_RUNS_SINCE_EPOCH=""
 single_pass_audit_runs()
 {
-	local workflow since
+	local workflow since since_epoch audit_runs_from_epoch
 	if [ "${SINGLE_PASS_AUDIT_RUNS_STATE}" = "fetched" ]; then
 		return 0
 	fi
@@ -418,7 +434,18 @@ single_pass_audit_runs()
 		return 1
 	fi
 	workflow="$(single_pass_audit_workflow)"
-	since="$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+	since_epoch="$(date -u -d '24 hours ago' +%s 2>/dev/null || true)"
+	if [[ "${since_epoch}" =~ ^[0-9]+$ ]] \
+		&& [[ "${SINGLE_PASS_AUDIT_RUNS_FROM}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]] \
+		&& audit_runs_from_epoch="$(date -u -d "${SINGLE_PASS_AUDIT_RUNS_FROM}" +%s 2>/dev/null)" \
+		&& [[ "${audit_runs_from_epoch}" =~ ^[0-9]+$ ]] \
+		&& [ "$((audit_runs_from_epoch - 120))" -lt "${since_epoch}" ]; then
+		since_epoch=$((audit_runs_from_epoch - 120))
+	fi
+	since=""
+	if [[ "${since_epoch}" =~ ^[0-9]+$ ]]; then
+		since="$(date -u -d "@${since_epoch}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+	fi
 	if [ -z "${since}" ] \
 		|| ! SINGLE_PASS_AUDIT_RUNS="$(gh api -X GET "repos/${REPOSITORY}/actions/workflows/${workflow}/runs" -f per_page=100 -f "created=>=${since}" 2>/dev/null)" \
 		|| ! jq -e '.workflow_runs | type == "array"' <<< "${SINGLE_PASS_AUDIT_RUNS}" >/dev/null 2>&1; then
@@ -426,6 +453,7 @@ single_pass_audit_runs()
 		SINGLE_PASS_AUDIT_RUNS=""
 		return 1
 	fi
+	SINGLE_PASS_AUDIT_RUNS_SINCE_EPOCH="${since_epoch}"
 	SINGLE_PASS_AUDIT_RUNS_STATE="fetched"
 	return 0
 }
@@ -454,6 +482,44 @@ single_pass_pending_audit_state()
 		  elif any(.[]; .status != "completed") then "live"
 		  elif all(.[]; ((.updated_at // "") | ts) <= (now - 600)) then "lost"
 		  else "live" end
+	' <<< "${SINGLE_PASS_AUDIT_RUNS}" 2>/dev/null || echo unknown
+}
+
+# Issue #9942. Prints lost|live|unknown for a post-cap pending head attempt,
+# with the same "lost" rule as single_pass_pending_audit_state but over the
+# window [created - 120s, next_created - 120s) (unbounded without a next
+# marker on this head). The audit is dispatched before its marker is posted,
+# so ending the window 120s before the next marker keeps that attempt's run
+# out of this one. Never fetches: the caller fills the cache in its own shell.
+# unknown (counted as an attempt) when the listing is not fetched, the window
+# starts before the listing, the listing is incomplete (total_count missing or
+# above the returned runs) and the window starts before its oldest run, no run
+# for this PR falls in the window, or jq fails.
+single_pass_marker_audit_lost()
+{
+	local lost_marker_created="$1" lost_marker_next="${2:-}"
+	if [ "${SINGLE_PASS_AUDIT_RUNS_STATE}" != "fetched" ] || ! [[ "${SINGLE_PASS_AUDIT_RUNS_SINCE_EPOCH}" =~ ^[0-9]+$ ]]; then
+		echo unknown
+		return 0
+	fi
+	jq -r --arg created "${lost_marker_created}" --arg next "${lost_marker_next}" --arg pr "${PR_NUMBER}" \
+		--argjson since "${SINGLE_PASS_AUDIT_RUNS_SINCE_EPOCH}" '
+		def ts: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
+		(($created | ts) - 120) as $window_start
+		| (if $next == "" then null else (($next | ts) - 120) end) as $window_end
+		| .workflow_runs as $all
+		| if $window_start < $since then "unknown"
+		  elif ((.total_count | type) != "number" or .total_count > ($all | length))
+			and (($all | length) == 0 or $window_start < ([$all[] | (.created_at // "") | ts] | min)) then "unknown"
+		  else
+			[$all[]
+			| select(((.display_title // "") | endswith(" (PR #" + $pr + ")"))
+				and (((.created_at // "") | ts) as $c | $c >= $window_start and ($window_end == null or $c < $window_end)))]
+			| if length == 0 then "unknown"
+			  elif any(.[]; .status != "completed") then "live"
+			  elif all(.[]; ((.updated_at // "") | ts) <= (now - 600)) then "lost"
+			  else "live" end
+		  end
 	' <<< "${SINGLE_PASS_AUDIT_RUNS}" 2>/dev/null || echo unknown
 }
 
@@ -884,6 +950,10 @@ single_pass_gate()
 	local max_cycles="${MAX_SECURITY_PASS_CYCLES:-5}" stale_hours="${SECURITY_PASS_PENDING_STALE_HOURS:-6}"
 	local followup_stale_hours="${SECURITY_PASS_FOLLOWUP_STALE_HOURS:-24}" followup_count followup_age followup_ids followup_expected
 	local exhausted_head_limit="${SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS:-2}" exhausted_retry="false" head_attempts=0
+	# Issue #9942: lost (cancelled, never reported) head attempts forgiven per
+	# head; 0 restores the old counting.
+	local lost_audit_retries="${SECURITY_PASS_LOST_AUDIT_RETRIES:-2}" lost_window_cap=0 lost_attempts=0 lost_forgiven=0
+	local lost_row_created lost_row_cycle lost_row_result lost_row_next
 	local pattern="${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}"
 	local state base head_ref head_sha head_repo labels linked skip_json markers latest latest_status latest_head latest_created
 	local cycles_used next_cycle age_hours workflow body extensions effective_max completed_findings failed_marker_unrecorded="false"
@@ -904,6 +974,8 @@ single_pass_gate()
 	[[ "${stale_hours}" =~ ^[1-9][0-9]*$ ]] || stale_hours=6
 	[[ "${followup_stale_hours}" =~ ^[1-9][0-9]*$ ]] || followup_stale_hours=24
 	[[ "${exhausted_head_limit}" =~ ^[1-9][0-9]*$ ]] || exhausted_head_limit=2
+	[[ "${lost_audit_retries}" =~ ^[0-9]{1,3}$ ]] || lost_audit_retries=2
+	lost_audit_retries=$((10#${lost_audit_retries}))
 	if [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-false}" = "false" ]; then
 		single_pass_log "mode=gate pr=${PR_NUMBER:-} outcome=skip reason=disabled"
 		single_pass_state skip
@@ -992,6 +1064,16 @@ single_pass_gate()
 	[[ "${attempts_used}" =~ ^[0-9]+$ ]] || attempts_used=0
 	[[ "${cycles_used}" =~ ^[0-9]+$ ]] || cycles_used=0
 	[[ "${cap_cycle}" =~ ^[0-9]+$ ]] || cap_cycle=0
+	# Issue #9942: past a cap, start the one audit-run listing early enough to
+	# cover the oldest pending head attempt above it (set before any fetch, so
+	# every caller shares the same cached listing). Off with 0 retries.
+	if [ "${lost_audit_retries}" -gt 0 ] && { [ "${cycles_used}" -ge "${effective_max}" ] || [ "${attempts_used}" -ge "${effective_attempts}" ]; }; then
+		lost_window_cap="${cap_cycle}"
+		if [ "${lost_window_cap}" -eq 0 ] || [ "${lost_window_cap}" -gt "${effective_attempts}" ]; then
+			lost_window_cap="${effective_attempts}"
+		fi
+		SINGLE_PASS_AUDIT_RUNS_FROM="$(printf '%s\n' "${markers}" | awk -F'\t' -v h="${head_sha}" -v cap="${lost_window_cap}" '$3 == "pending" && $4 == h && $5 + 0 > cap + 0 { print $1; exit }')"
+	fi
 	latest="$(printf '%s\n' "${markers}" | awk -F'\t' -v h="${head_sha}" '$4 == h' | tail -n 1)"
 	latest_created="$(printf '%s' "${latest}" | cut -f1)"
 	latest_status="$(printf '%s' "${latest}" | cut -f3)"
@@ -1118,9 +1200,47 @@ single_pass_gate()
 			cap_cycle="${effective_attempts}"
 		fi
 		if [ -z "${completed_findings}" ]; then
-			head_attempts="$(printf '%s\n' "${markers}" | awk -F'\t' -v h="${head_sha}" -v cap="${cap_cycle}" '($3 == "pending" || $3 == "failed") && $4 == h && $5 + 0 > cap && !seen[$5]++ { n++ } END { print n + 0 }')"
+			if [ "${lost_audit_retries}" -gt 0 ]; then
+				# Issue #9942: one row per post-cap head attempt (distinct cycle
+				# with a pending or failed marker): first created, cycle, 1 when
+				# the cycle has any non-pending marker, and the created_at of
+				# the next later-cycle marker on this head (window end). A cycle
+				# with a result counts; a pending-only one counts unless its
+				# audit run is provably lost. Up to lost_audit_retries lost
+				# attempts are forgiven; any beyond count again.
+				single_pass_audit_runs || true
+				while IFS=$'\t' read -r lost_row_created lost_row_cycle lost_row_result lost_row_next; do
+					[[ "${lost_row_cycle:-}" =~ ^[0-9]+$ ]] || continue
+					if [ "${lost_row_result}" = "0" ] && [ "$(single_pass_marker_audit_lost "${lost_row_created}" "${lost_row_next}")" = "lost" ]; then
+						lost_attempts=$((lost_attempts + 1))
+					else
+						head_attempts=$((head_attempts + 1))
+					fi
+				done <<< "$(printf '%s\n' "${markers}" | awk -F'\t' -v h="${head_sha}" -v cap="${cap_cycle}" '
+					$4 == h { n++; cr[n] = $1; st[n] = $3; cy[n] = $5 + 0 }
+					END {
+						for (i = 1; i <= n; i++) {
+							c = cy[i]
+							if (c <= cap + 0 || (st[i] != "pending" && st[i] != "failed") || (c in done)) continue
+							done[c] = 1
+							res = 0
+							for (j = 1; j <= n; j++) if (cy[j] == c && st[j] != "pending") res = 1
+							nx = ""
+							for (j = i + 1; j <= n; j++) if (cy[j] > c) { nx = cr[j]; break }
+							printf "%s\t%d\t%d\t%s\n", cr[i], c, res, nx
+						}
+					}')"
+				lost_forgiven="${lost_attempts}"
+				[ "${lost_forgiven}" -le "${lost_audit_retries}" ] || lost_forgiven="${lost_audit_retries}"
+				head_attempts=$((head_attempts + lost_attempts - lost_forgiven))
+			else
+				head_attempts="$(printf '%s\n' "${markers}" | awk -F'\t' -v h="${head_sha}" -v cap="${cap_cycle}" '($3 == "pending" || $3 == "failed") && $4 == h && $5 + 0 > cap && !seen[$5]++ { n++ } END { print n + 0 }')"
+			fi
 			if [ "${head_attempts}" -lt "${exhausted_head_limit}" ]; then
 				exhausted_retry="true"
+				if [ "${lost_forgiven}" -gt 0 ]; then
+					single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=retry reason=lost_audit_not_counted head_attempts=${head_attempts} lost_attempts=${lost_attempts}"
+				fi
 			fi
 		fi
 		if [ "${exhausted_retry}" != "true" ]; then
@@ -1158,7 +1278,7 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 				single_pass_output true cycles_exhausted
 				single_pass_exhausted_output
 			else
-				single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=exhausted_without_completed_audit cycle=${cycles_used} head_attempts=${head_attempts}"
+				single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=exhausted_without_completed_audit cycle=${cycles_used} head_attempts=${head_attempts} lost_attempts=${lost_attempts}"
 				single_pass_output true exhausted_without_completed_audit
 			fi
 			return 0
