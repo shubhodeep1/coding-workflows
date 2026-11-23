@@ -45,6 +45,17 @@ STEP_ORDER = (
 	"Notify consumer repos via repository_dispatch",
 )
 TAG = "v1.2.3"
+# Workflow-level permissions, per release workflow. Jobs without their own
+# `permissions:` block inherit these; the release job declares its own.
+WORKFLOW_PERMISSIONS = {
+	"mark-stable.yml": {"contents": "write"},
+	"test-and-mark-stable.yml": {
+		"contents": "write",
+		"actions": "read",
+		"pull-requests": "read",
+		"issues": "read",
+	},
+}
 
 
 def _load(path: Path) -> dict:
@@ -92,7 +103,10 @@ def test_attestation_subject_is_the_built_manifest(workflow_path: Path) -> None:
 @pytest.mark.parametrize("workflow_path", WORKFLOWS, ids=lambda p: p.name)
 def test_permissions_add_exactly_attestation_scopes(workflow_path: Path) -> None:
 	workflow = _load(workflow_path)
-	assert workflow["permissions"] == {"contents": "write"}
+	# test-and-mark-stable.yml also grants the read-only scopes its polling
+	# steps need for reads on the job token (GH_READ_TOKEN, issue #9888).
+	# Only read scopes may be added there; writes stay on GH_PAT.
+	assert workflow["permissions"] == WORKFLOW_PERMISSIONS[workflow_path.name]
 	# The release job keeps its existing CI-gate scopes (checks/actions read,
 	# #6797) and adds exactly the two attestation scopes (#6943).
 	assert workflow["jobs"]["release"]["permissions"] == {
