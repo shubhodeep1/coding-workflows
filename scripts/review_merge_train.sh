@@ -1495,6 +1495,33 @@ _mt_dispatch_review() {
 	return 1
 }
 
+# Judge dispatch for a lease grant that rested on the review-blocked judge's
+# merge decision (issue #9987, MERGE_LEASE_ELIGIBLE_GATE=judge_decision): the
+# judge had decided to merge and deferred only for the lease, so the granted
+# PR goes straight back to the judge's merge path (review_rb_judge_dispatch.yml
+# runs the review workflow with force_rb_judge=true: no reviewer/editor round)
+# instead of a review run that would end ai:review-blocked again. Same call
+# shape as _dispatch_rb_judge_for_pr (scripts/orchestrate_poll_process.sh):
+# default-branch workflow, validated PR number only, allow_workflow_edits left
+# at its default (false).
+# API: one workflow dispatch per grant; only when it fails, the fallback
+# _mt_dispatch_review (consumers whose install profile lacks the judge
+# wrapper), so the grant still dispatches a run as before.
+_mt_dispatch_rb_judge() {
+	local mt_rbj_pr="$1" mt_rbj_head="$2"
+	if ! [[ "${mt_rbj_pr}" =~ ^[1-9][0-9]*$ ]]; then
+		_mt_warn "merge-train release: invalid PR number '${mt_rbj_pr}' for head ${mt_rbj_head}; not dispatching."
+		return 1
+	fi
+	if gh_retry gh workflow run review_rb_judge_dispatch.yml --repo "${MT_REPO}" \
+		-f pr_number="${mt_rbj_pr}" >/dev/null 2>&1; then
+		_mt_log "MERGE_TRAIN_DISPATCHED pr=${mt_rbj_pr} workflow=review_rb_judge_dispatch.yml ref=default head=${mt_rbj_head}"
+		return 0
+	fi
+	_mt_warn "merge-train release: could not dispatch review_rb_judge_dispatch.yml for PR #${mt_rbj_pr}; falling back to the review dispatch."
+	_mt_dispatch_review "${mt_rbj_pr}" "${mt_rbj_head}"
+}
+
 # Queue-age note: one Telegram WARNING a day while the oldest still-queued PR
 # is older than MERGE_TRAIN_STALL_ALERT_HOURS (default 24, 0 = off).
 #
@@ -1756,6 +1783,9 @@ _mt_merge_lease_tick()
 	local tick_p2_lib=0 tick_p2=0 tick_login="" tick_login_tried=0 tick_open_heads tick_holder_row tick_holder_head tick_holder_title
 	local tick_holder_draft tick_since tick_idle_s tick_ci_active tick_skip_head tick_excluded tick_skipped_any tick_cand_n tick_skip_pr
 	local tick_first_row tick_skip_why tick_skip_held tick_queue_skips tick_skip_held_prs tick_queue_empty
+	# Issue #9987: the gate the granted waiter's eligibility rested on
+	# (MERGE_LEASE_ELIGIBLE_GATE); judge_decision routes the grant to the judge.
+	local tick_first_gate="" tick_gate_field="" tick_dispatch_fn=""
 	# merged=true|false on the released metric (plan K1, wasted-hold share).
 	local tick_merged="false" tick_holder_state=""
 	local tick_max_candidates=10
@@ -1952,13 +1982,16 @@ _mt_merge_lease_tick()
 			else
 				tick_first="$(_merge_lease_queue_first "${tick_base_prs}" "")"
 			fi
+			tick_first_gate=""
 			[ -n "${tick_first}" ] && [ "${tick_p2}" = 1 ] || break
-			# Grant-time eligibility (Phase 2): waiters need a pipeline head-gate success.
+			# Grant-time eligibility (Phase 2): waiters need a pipeline head-gate
+			# success, or a pipeline judge-decision status (issue #9987).
 			tick_cand_n=$((tick_cand_n + 1))
 			tick_first_row="$(jq -c --argjson n "${tick_first}" '[ .[] | select(.number == $n) ][0] // {}' <<< "${tick_base_prs}" 2>/dev/null)" || tick_first_row="{}"
 			if _merge_lease_pr_eligible "${tick_first}" "$(jq -r '.head_sha // ""' <<< "${tick_first_row}" 2>/dev/null)" \
 				"$(jq -r '.title // ""' <<< "${tick_first_row}" 2>/dev/null)" "$(jq -r '.draft // false' <<< "${tick_first_row}" 2>/dev/null)" \
 				"${tick_base}" "${tick_login}"; then
+				tick_first_gate="${MERGE_LEASE_ELIGIBLE_GATE:-}"
 				break
 			fi
 			tick_skip_why="${MERGE_LEASE_INELIGIBLE_REASON:-no_head_gate}"
@@ -2014,11 +2047,17 @@ _mt_merge_lease_tick()
 		# Unlabel before the dispatch: if the dispatch fails, the sweep (which
 		# skips labelled waiters) picks the PR up again within 30 minutes.
 		_merge_lease_unlabel_wait "${tick_first}"
-		if _mt_dispatch_review "${tick_first}" "$(jq -r --argjson n "${tick_first}" '[ .[] | select(.number == $n) | .head // "" ][0] // ""' <<< "${tick_base_prs}" 2>/dev/null)"; then
-			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=first_in_queue${tick_queue_len_field}"
+		tick_gate_field=""
+		tick_dispatch_fn="_mt_dispatch_review"
+		if [ "${tick_first_gate}" = "judge_decision" ]; then
+			tick_gate_field=" gate=judge_decision"
+			tick_dispatch_fn="_mt_dispatch_rb_judge"
+		fi
+		if "${tick_dispatch_fn}" "${tick_first}" "$(jq -r --argjson n "${tick_first}" '[ .[] | select(.number == $n) | .head // "" ][0] // ""' <<< "${tick_base_prs}" 2>/dev/null)"; then
+			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=first_in_queue${tick_queue_len_field}${tick_gate_field}"
 			[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric granted "${tick_base}" "${tick_first}" tick first_in_queue 0 "${tick_waiters}" "${tick_first}" "${tick_grant_ts}" || true
 		else
-			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=dispatch_failed_sweep_retries${tick_queue_len_field}"
+			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=dispatch_failed_sweep_retries${tick_queue_len_field}${tick_gate_field}"
 			[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric granted "${tick_base}" "${tick_first}" tick dispatch_failed_sweep_retries 0 "${tick_waiters}" "${tick_first}" "${tick_grant_ts}" || true
 		fi
 		_mt_merge_lease_queue_log "${tick_base}" "${tick_prs_json}" "${tick_first}" "${tick_grant_ts:-0}" "${tick_excluded:+${tick_excluded},}${tick_first}" || true
@@ -2063,6 +2102,8 @@ _mt_merge_lease_tick_multi()
 	local tm_queue_skips tm_skip_pr tm_skip_held=0 tm_skip_held_prs="" tm_skipped_any=0 tm_cand_n=0 tm_granted=0 tm_queue_empty=0
 	local tm_first tm_first_row tm_first_head tm_first_paths tm_blocker tm_skip_why tm_grant_ts tm_new_row
 	local tm_max_candidates=10 tm_queue_len_field="" tm_rel_held=""
+	# Issue #9987: as tick_first_gate in _mt_merge_lease_tick.
+	local tm_first_gate="" tm_gate_field="" tm_dispatch_fn=""
 	local -a tm_row_arr=()
 	[ "${MERGE_LEASE_STATE}" = "held" ] && tm_rows="${MERGE_LEASE_HOLDER_ALL_ROWS:-}"
 	# Phase 1 MERGE_LEASE_QUEUE line (written by the caller from these).
@@ -2175,6 +2216,7 @@ _mt_merge_lease_tick_multi()
 		tm_excluded="${tm_excluded:+${tm_excluded},}${tm_first}"
 		tm_first_row="$(jq -c --argjson n "${tm_first}" '[ .[] | select(.number == $n) ][0] // {}' <<< "${tm_base_prs}" 2>/dev/null)" || tm_first_row="{}"
 		tm_first_head="$(jq -r '.head_sha // ""' <<< "${tm_first_row}" 2>/dev/null)" || tm_first_head=""
+		tm_first_gate=""
 		if [ "${tm_p2}" = 1 ] && ! _merge_lease_pr_eligible "${tm_first}" "${tm_first_head}" \
 			"$(jq -r '.title // ""' <<< "${tm_first_row}" 2>/dev/null)" "$(jq -r '.draft // false' <<< "${tm_first_row}" 2>/dev/null)" \
 			"${tm_base}" "${tm_login}"; then
@@ -2186,6 +2228,7 @@ _mt_merge_lease_tick_multi()
 			[ "${tm_metric_ok}" = 1 ] && _merge_lease_metric skipped "${tm_base}" "${tm_first}" tick "${tm_skip_why}" "" "${tm_waiters}" - || true
 			continue
 		fi
+		if [ "${tm_p2}" = 1 ]; then tm_first_gate="${MERGE_LEASE_ELIGIBLE_GATE:-}"; fi
 		tm_first_paths="$(_merge_lease_pr_paths "${tm_first}" 2>/dev/null)" || tm_first_paths="*"
 		[ -n "${tm_first_paths}" ] || tm_first_paths="*"
 		tm_blocker=""
@@ -2237,11 +2280,17 @@ _mt_merge_lease_tick_multi()
 		tm_count=$((tm_count + 1))
 		tm_granted=$((tm_granted + 1))
 		_merge_lease_unlabel_wait "${tm_first}"
-		if _mt_dispatch_review "${tm_first}" "$(jq -r '.head // ""' <<< "${tm_first_row}" 2>/dev/null)"; then
-			_mt_log "MERGE_LEASE pr=${tm_first} base=${tm_base} mode=tick outcome=granted reason=first_in_queue${tm_queue_len_field} holders=${tm_count}"
+		tm_gate_field=""
+		tm_dispatch_fn="_mt_dispatch_review"
+		if [ "${tm_first_gate}" = "judge_decision" ]; then
+			tm_gate_field=" gate=judge_decision"
+			tm_dispatch_fn="_mt_dispatch_rb_judge"
+		fi
+		if "${tm_dispatch_fn}" "${tm_first}" "$(jq -r '.head // ""' <<< "${tm_first_row}" 2>/dev/null)"; then
+			_mt_log "MERGE_LEASE pr=${tm_first} base=${tm_base} mode=tick outcome=granted reason=first_in_queue${tm_queue_len_field} holders=${tm_count}${tm_gate_field}"
 			[ "${tm_metric_ok}" = 1 ] && _merge_lease_metric granted "${tm_base}" "${tm_first}" tick first_in_queue 0 "${tm_waiters}" "${tm_first}" "${tm_grant_ts}" || true
 		else
-			_mt_log "MERGE_LEASE pr=${tm_first} base=${tm_base} mode=tick outcome=granted reason=dispatch_failed_sweep_retries${tm_queue_len_field} holders=${tm_count}"
+			_mt_log "MERGE_LEASE pr=${tm_first} base=${tm_base} mode=tick outcome=granted reason=dispatch_failed_sweep_retries${tm_queue_len_field} holders=${tm_count}${tm_gate_field}"
 			[ "${tm_metric_ok}" = 1 ] && _merge_lease_metric granted "${tm_base}" "${tm_first}" tick dispatch_failed_sweep_retries 0 "${tm_waiters}" "${tm_first}" "${tm_grant_ts}" || true
 		fi
 	done
