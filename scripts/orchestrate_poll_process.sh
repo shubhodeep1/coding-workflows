@@ -3008,6 +3008,25 @@ HEAL_STALE_RUNS_CACHE_JSON='{}'
 HEAL_STALE_RUN_LOOKUP_CACHE_JSON='{}'
 HEAL_STALE_CLOSE_OUTCOME=""
 
+# Issue #9986 (plan docs/plans/pipeline-human-wait-elimination-plan.md,
+# Phase 7 / D6): a heal counterfactual hold nobody answers is escalated at
+# half of HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS and closed as not planned at the
+# limit (see _heal_counterfactual_hold_expiry_check). On by default; `false`
+# turns it off, any other value is treated as `true` with a warning. The day
+# limit is validated and clamped to 1-30 inside the check.
+HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED="${HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED:-true}"
+HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS="${HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS:-3}"
+HEAL_CF_HOLD_EXPIRY_OUTCOME=""
+# Issue #9986: the stall judge picks the issue's implementation PR before a
+# PR that only cross-references the issue, and skips cross-referencing PRs
+# that change only docs/plans/ files (see _stall_judge_resolve_linked_pr).
+# On by default; only `false` restores the last-cross-reference lookup.
+STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED="${STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED:-true}"
+# Tick-local: PR number -> 1 (every changed file under docs/plans/) or 0.
+declare -gA STALL_PR_DOCS_PLANS_ONLY_CACHE=()
+declare -g STALL_JUDGE_LINKED_PR_JSON=''
+declare -g STALL_JUDGE_LINKED_PR_NUM=''
+
 # Issue #8809: an UNVERIFIED heal plan that lists only exact tests/ and
 # changelog.d/*.md files inside the verified heal scope is auto-approved (see
 # _plan_heal_test_only_check). On by default; `false` turns it off, any other
@@ -21096,6 +21115,185 @@ _heal_counterfactual_hold_notify()
   return 0
 }
 
+# Issue #9986 (plan docs/plans/pipeline-human-wait-elimination-plan.md,
+# Phase 7 / D6): end a heal counterfactual hold nobody answers. Called from
+# the heal_counterfactual_hold branch of _plan_auto_approval_gate after
+# _heal_stale_close_check and before _heal_counterfactual_hold_notify, in the
+# main shell. Reads only the gate's comment snapshot (no new read, §14: the
+# batched details map and STALL_MANAGED_LINKED_PR_CACHE carry no comment
+# data, and the snapshot is what the gate already holds).
+# - The hold age runs from the earliest trusted
+#   `ai:heal-counterfactual-hold:v1 issue=<n> ` marker newer than the latest
+#   human answer (an OWNER/MEMBER/COLLABORATOR, non-[bot] comment starting
+#   with /approved, /reclarify or /answer; auto-answers and stall-recovery
+#   /answer posts are excluded by text because the pipeline login can be the
+#   owner). A marker outside the snapshot means no close (fails safe).
+# - At half of HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS (default 3, clamped 1-30)
+#   it posts one ai:heal-counterfactual-hold-escalated:v1 comment and a
+#   Telegram WARNING (none when the post fails; the next tick retries).
+# - At the limit, once the escalation is at least half the limit old, it
+#   PATCHes state=closed/state_reason=not_planned (labels untouched), then
+#   posts ai:heal-counterfactual-hold-expired:v1 and a Telegram DEBUG.
+#   Closing first makes a trusted expired marker on an open issue mean a
+#   person reopened it: such an issue is kept and never closed again.
+# Markers count only from the gate login, a [bot] login or an
+# OWNER/MEMBER/COLLABORATOR. Sets HEAL_CF_HOLD_EXPIRY_OUTCOME
+# (escalated|expired|kept|skipped), always logs one
+# HEAL_COUNTERFACTUAL_HOLD_EXPIRY line (ints and [a-z_] tokens only) and
+# always returns 0.
+# Args: <issue_num> <comments_json> <login>
+_heal_counterfactual_hold_expiry_check()
+{
+  local issue_num="$1"
+  local comments_json="$2"
+  local login="$3"
+  local flag_norm="" max_days="" max_secs=0 outcome="skipped" reason="" age_days="0" issue_log=""
+  local scan="" hold_epoch="" answered="" esc_epoch="" expired_present="" now="" age=0 esc_age=0
+  local hold_prefix="" esc_marker="" exp_prefix="" note_body=""
+
+  HEAL_CF_HOLD_EXPIRY_OUTCOME="skipped"
+  issue_log="$(printf '%s' "${issue_num}" | tr -cd '0-9' | cut -c1-20)"
+  [ -n "${issue_log}" ] || issue_log="invalid"
+  # One pass; each `break` ends the check with outcome/reason set.
+  while :; do
+    # sed, not xargs: xargs fails on an unmatched quote in the flag value.
+    flag_norm="$(printf '%s' "${HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" || flag_norm="true"
+    case "${flag_norm}" in
+      false) reason="disabled"; break ;;
+      ""|true) ;;
+      *) echo "::warning::HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED has invalid value; treating as true" ;;
+    esac
+    if ! [[ "${issue_num}" =~ ^[0-9]+$ ]]; then
+      reason="invalid_issue"; break
+    fi
+    max_days="${HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS:-3}"
+    if ! [[ "${max_days}" =~ ^[0-9]{1,6}$ ]]; then
+      echo "::warning::HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS must be an integer from 1 to 30; defaulting to 3"
+      max_days="3"
+    fi
+    max_days="$(( 10#${max_days} ))"
+    if [ "${max_days}" -lt 1 ]; then
+      echo "::warning::HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS below 1; using 1"
+      max_days="1"
+    elif [ "${max_days}" -gt 30 ]; then
+      echo "::warning::HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS above 30; using 30"
+      max_days="30"
+    fi
+    max_secs=$(( max_days * 86400 ))
+    if [ "${HEAL_CF_GATE_REASON:-}" = "heal_route_unknown" ]; then
+      reason="heal_route_unknown"; break
+    fi
+    hold_prefix="<!-- ai:heal-counterfactual-hold:v1 issue=${issue_num} "
+    esc_marker="<!-- ai:heal-counterfactual-hold-escalated:v1 issue=${issue_num} -->"
+    exp_prefix="<!-- ai:heal-counterfactual-hold-expired:v1 issue=${issue_num} "
+    # Output: <hold_epoch>|<answered>|<escalated_epoch>|<expired_present>;
+    # an epoch is "" when absent and -1 when unparseable.
+    if ! scan="$(printf '%s' "${comments_json:-[]}" | jq -r --arg login "${login}" --arg hold "${hold_prefix}" \
+      --arg esc "${esc_marker}" --arg exp "${exp_prefix}" '
+        def ep: (try fromdateiso8601 catch -1);
+        if type != "array" then error("not an array") else . end
+        | [ .[]
+            | select(type == "object")
+            | { login: ((.user.login // "") | tostring),
+                assoc: ((.author_association // "") | tostring),
+                body: ((.body // "") | tostring),
+                ts: ((.created_at // "") | tostring),
+                trusted: (((.user.login // "") == $login and $login != "")
+                  or ((.user.login // "") | tostring | test("\\[bot\\]$"))
+                  or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))) } ] as $c
+        | ([ $c[]
+            | select(.assoc | IN("OWNER", "MEMBER", "COLLABORATOR"))
+            | select((.login | test("\\[bot\\]$")) | not)
+            | select(.body | test("^\\s*/(approved|reclarify|answer)\\b"))
+            | select((.body | contains("[auto-answered-by-")) | not)
+            | select((.body | contains("_Orchestrator stall recovery")) | not)
+            | .ts ] | max // "") as $answer_ts
+        | ([ $c[] | select(.trusted) | select(.body | contains($hold)) | .ts ] | sort) as $holds
+        | ([ $holds[] | select(. > $answer_ts) ] | first // "") as $hold_ts
+        | ($answer_ts != "" and ($holds | length) > 0 and $answer_ts > ($holds | last)) as $answered
+        | ([ $c[] | select(.trusted) | select(.body | contains($esc)) | .ts
+            | select($hold_ts != "" and . >= $hold_ts) ] | max // "") as $esc_ts
+        | ([ $c[] | select(.trusted) | select(.body | contains($exp)) ] | length > 0) as $expired
+        | [ (if $hold_ts == "" then "" else ($hold_ts | ep | tostring) end),
+            ($answered | tostring),
+            (if $esc_ts == "" then "" else ($esc_ts | ep | tostring) end),
+            ($expired | tostring) ]
+        | join("|")' 2>/dev/null)" || [ -z "${scan}" ]; then
+      reason="snapshot_unreadable"; break
+    fi
+    if [ -z "${scan}" ]; then
+      reason="snapshot_unreadable"; break
+    fi
+    IFS='|' read -r hold_epoch answered esc_epoch expired_present <<< "${scan}"
+    if [ "${expired_present}" = "true" ]; then
+      outcome="kept"; reason="reopened"; break
+    fi
+    # Checked before the marker: an answer newer than every hold leaves no
+    # hold marker to age from.
+    if [ "${answered}" = "true" ]; then
+      outcome="kept"; reason="answered"; break
+    fi
+    if [ -z "${hold_epoch}" ]; then
+      reason="no_hold_marker"; break
+    fi
+    now="$(date -u +%s 2>/dev/null)" || now=""
+    if ! [[ "${hold_epoch}" =~ ^[0-9]{1,12}$ ]] || ! [[ "${now}" =~ ^[0-9]{1,12}$ ]]; then
+      reason="bad_timestamp"; break
+    fi
+    age=$(( 10#${now} - 10#${hold_epoch} ))
+    [ "${age}" -ge 0 ] || age=0
+    age_days=$(( age / 86400 ))
+    if [ $(( age * 2 )) -lt "${max_secs}" ]; then
+      outcome="kept"; reason="below_half_limit"; break
+    fi
+    if [ -z "${esc_epoch}" ]; then
+      note_body="$(printf '%s\n' \
+        "**Heal counterfactual hold open for ${age_days} days.** The plan's automatic approval is still withheld and no maintainer has answered." \
+        "" \
+        "This issue closes as not planned once the hold has been open for ${max_days} days, and no sooner than half that time after this notice, unless a maintainer replies \`/approved\` (implement the held plan) or \`/reclarify\` (re-plan). Labels are left as they are, and the issue can be reopened." \
+        "" \
+        "${esc_marker}")"
+      if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${note_body}" >/dev/null 2>&1; then
+        reason="escalation_post_failed"; break
+      fi
+      tg_notify_issue "${issue_num}" "Stall recovery: heal counterfactual hold open ${age_days} days; closes as not planned at ${max_days} days unless a maintainer replies /approved or /reclarify." "WARNING" || true
+      outcome="escalated"; reason="half_limit"; break
+    fi
+    if ! [[ "${esc_epoch}" =~ ^[0-9]{1,12}$ ]]; then
+      reason="bad_timestamp"; break
+    fi
+    if [ "${age}" -lt "${max_secs}" ]; then
+      outcome="kept"; reason="escalated_awaiting_expiry"; break
+    fi
+    esc_age=$(( 10#${now} - 10#${esc_epoch} ))
+    if [ $(( esc_age * 2 )) -lt "${max_secs}" ]; then
+      outcome="kept"; reason="escalation_window"; break
+    fi
+    if ! gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" \
+      -f state=closed -f state_reason=not_planned >/dev/null 2>&1; then
+      reason="close_failed"; break
+    fi
+    note_body="$(printf '%s\n' \
+      "**Heal counterfactual hold expired after ${age_days} days: closed as not planned.** No maintainer replied \`/approved\` or \`/reclarify\`." \
+      "" \
+      "To continue, reopen this issue and reply \`/reclarify\` to re-plan it or \`/approved\` to implement the held plan. A reopened issue is not closed again by this check." \
+      "" \
+      "<!-- ai:heal-counterfactual-hold-expired:v1 issue=${issue_num} days=${age_days} -->")"
+    if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${note_body}" >/dev/null 2>&1; then
+      echo "::warning::Closed heal issue #${issue_num} but could not post the hold-expired comment."
+    fi
+    tg_notify_issue "${issue_num}" "Heal counterfactual hold closed as not planned after ${age_days} days (limit ${max_days} days)." "DEBUG" || true
+    outcome="expired"; reason="max_days"; break
+  done
+  reason="$(printf '%s' "${reason}" | tr -cd 'a-z_' | cut -c1-80)"
+  [ -n "${reason}" ] || reason="unknown"
+  age_days="$(printf '%s' "${age_days}" | tr -cd '0-9' | cut -c1-6)"
+  [ -n "${age_days}" ] || age_days="0"
+  HEAL_CF_HOLD_EXPIRY_OUTCOME="${outcome}"
+  echo "HEAL_COUNTERFACTUAL_HOLD_EXPIRY issue=${issue_log} outcome=${outcome} reason=${reason} age_days=${age_days}"
+  return 0
+}
+
 # Issue #8808: close a held run-sourced heal issue whose failing workflow
 # stopped failing. Called from the heal_counterfactual_hold branch of
 # _plan_auto_approval_gate before the hold notice, in the main shell so the
@@ -21483,7 +21681,14 @@ ${HEAL_TEST_ONLY_GATE_MARKER}" >/dev/null 2>&1; then
     HEAL_STALE_CLOSE_OUTCOME=""
     _heal_stale_close_check "${issue_num}" "${details_map_json}" "${comments_json}" "${gate_login}" "${phase}" || true
     if [ "${HEAL_STALE_CLOSE_OUTCOME:-}" != "closed" ]; then
-      _heal_counterfactual_hold_notify "${issue_num}" "${comments_json}" "${gate_login}" || true
+      # Issue #9986: an unanswered hold is escalated at half the limit and
+      # closed as not planned at the limit; a just-expired hold gets no
+      # hold notice.
+      HEAL_CF_HOLD_EXPIRY_OUTCOME=""
+      _heal_counterfactual_hold_expiry_check "${issue_num}" "${comments_json}" "${gate_login}" || true
+      if [ "${HEAL_CF_HOLD_EXPIRY_OUTCOME:-}" != "expired" ]; then
+        _heal_counterfactual_hold_notify "${issue_num}" "${comments_json}" "${gate_login}" || true
+      fi
     fi
     return 1
   fi
@@ -23747,6 +23952,171 @@ persist_orch_redecompose() {
   return 0
 }
 
+# Issue #9986: does the PR change only files under docs/plans/? Input: the
+# PR number and its already-fetched REST `pulls/<n>` JSON. Returns 0 only when
+# every changed file (and every rename source) is under docs/plans/. When
+# .changed_files is missing, 0 or above 100 it returns 1 with no call;
+# otherwise one `pulls/<n>/files?per_page=100` read, cached per tick in
+# STALL_PR_DOCS_PLANS_ONLY_CACHE (audited: STALL_MANAGED_LINKED_PR_CACHE and
+# the batched details map carry no file lists). Fail-open: a read or parse
+# error returns 1 (not docs-only), which keeps the PR a candidate.
+_pr_files_all_under_docs_plans()
+{
+  local pr_num="$1"
+  local pr_json="${2:-}"
+  local changed="" files_json="" verdict=""
+  [[ "${pr_num}" =~ ^[0-9]+$ ]] || return 1
+  declare -p STALL_PR_DOCS_PLANS_ONLY_CACHE >/dev/null 2>&1 || declare -gA STALL_PR_DOCS_PLANS_ONLY_CACHE=()
+  if [ -n "${STALL_PR_DOCS_PLANS_ONLY_CACHE[${pr_num}]+x}" ]; then
+    [ "${STALL_PR_DOCS_PLANS_ONLY_CACHE[${pr_num}]}" = "1" ]
+    return $?
+  fi
+  changed="$(printf '%s' "${pr_json}" | jq -r '.changed_files // "" | tostring' 2>/dev/null)" || changed=""
+  if ! [[ "${changed}" =~ ^[0-9]{1,9}$ ]] || [ "${changed}" -eq 0 ] || [ "${changed}" -gt 100 ]; then
+    return 1
+  fi
+  files_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}/files?per_page=100" 2>/dev/null)" || files_json=""
+  verdict="$(printf '%s' "${files_json}" | jq -r '
+    def under_plans: (type == "string") and startswith("docs/plans/") and (contains("..") | not);
+    if type == "array" and length > 0 then
+      (if all(.[]; type == "object" and (.filename | under_plans)
+          and ((.previous_filename // null) == null or (.previous_filename | under_plans)))
+       then "1" else "0" end)
+    else error("unreadable") end' 2>/dev/null)" || verdict=""
+  case "${verdict}" in
+    1|0) ;;
+    *) verdict="0" ;;
+  esac
+  STALL_PR_DOCS_PLANS_ONLY_CACHE["${pr_num}"]="${verdict}"
+  [ "${verdict}" = "1" ]
+}
+
+# Issue #9986 (plan docs/plans/pipeline-human-wait-elimination-plan.md,
+# Phase 7): pick the PR the stall judge reasons about. The last
+# cross-reference alone picked a later docs-only plan PR over the issue's
+# merged implementation PR (#9212: #9478 over #9262). Runs in the main shell
+# and sets STALL_JUDGE_LINKED_PR_NUM (digits or "") and
+# STALL_JUDGE_LINKED_PR_JSON (the fetched pulls/<n> JSON, or "" when the
+# caller must fetch). STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED=false
+# keeps _issue_cross_ref_pr_number_last (source=legacy). Otherwise, in order:
+#   1. an open `ai/issue-<n>` PR that passes
+#      _pr_json_is_issue_implementation_pr (source=branch; no docs filter,
+#      a plan-writing issue's own PR is legitimately docs-only);
+#   2. the cross-referenced PRs (one timeline read; newest number first, at
+#      most 10): the first that passes the predicate and, unless its head is
+#      `ai/issue-<n>`, does not change only docs/plans/ (source=cross_ref_impl);
+#   3. the last cross-reference unless it changes only docs/plans/
+#      (source=cross_ref_last), else none (source=none).
+# Fetch failures count as rejections. API: 1 `gh pr list --head`, 1 timeline,
+# at most 11 pulls/<n> reads and cached pulls/<n>/files reads; the walk runs
+# only when the branch lookup misses. Logs one STALL_JUDGE_LINKED_PR line.
+# Always returns 0.
+_stall_judge_resolve_linked_pr()
+{
+  local issue_num="$1"
+  local flag_norm="" source="none" chosen="" chosen_json="" cand="" cand_json="" head_ref=""
+  local branch_cands="" timeline_json="" xref_cands="" last_xref="" skipped_docs=0
+  local -A sjr_json_cache=()
+  local -A sjr_docs_counted=()
+
+  STALL_JUDGE_LINKED_PR_NUM=""
+  STALL_JUDGE_LINKED_PR_JSON=""
+  if ! [[ "${issue_num}" =~ ^[0-9]+$ ]]; then
+    echo "STALL_JUDGE_LINKED_PR issue=invalid pr=none source=none skipped_docs_plans=0"
+    return 0
+  fi
+  flag_norm="$(printf '%s' "${STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" || flag_norm="true"
+  if [ "${flag_norm}" = "false" ]; then
+    chosen="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
+    STALL_JUDGE_LINKED_PR_NUM="${chosen}"
+    [[ "${chosen}" =~ ^[0-9]+$ ]] || chosen=""
+    echo "STALL_JUDGE_LINKED_PR issue=${issue_num} pr=${chosen:-none} source=legacy skipped_docs_plans=0"
+    return 0
+  fi
+  case "${flag_norm}" in
+    ""|true) ;;
+    *) echo "::warning::STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED has invalid value; treating as true" ;;
+  esac
+
+  # 1. The issue's own open branch PR, highest number first.
+  branch_cands="$(_linked_prs_by_branch_name "${issue_num}" 2>/dev/null | grep -E '^[0-9]+$' | sort -rn | head -n 3)" || branch_cands=""
+  for cand in ${branch_cands}; do
+    cand_json="$(_fetch_pr_json "${cand}" 2>/dev/null)" || cand_json="{}"
+    [ -n "${cand_json}" ] || cand_json="{}"
+    sjr_json_cache["${cand}"]="${cand_json}"
+    if _pr_json_is_issue_implementation_pr "${issue_num}" "${cand_json}" 2>/dev/null; then
+      chosen="${cand}"; chosen_json="${cand_json}"; source="branch"
+      break
+    fi
+  done
+
+  if [ -z "${chosen}" ]; then
+    timeline_json="$(_issue_timeline_with_cross_refs_json "${issue_num}" 2>/dev/null)" || timeline_json=""
+    xref_cands="$(printf '%s' "${timeline_json}" | jq -r '
+      if type == "array" then
+        [ .[] | select(type == "object" and .event == "cross-referenced" and .source.issue.pull_request != null)
+          | .source.issue.number | select(type == "number" and . >= 1) ]
+        | unique | reverse | .[:10] | .[] | tostring
+      else empty end' 2>/dev/null)" || xref_cands=""
+    last_xref="$(printf '%s' "${timeline_json}" | jq -r '
+      if type == "array" then
+        [ .[] | select(type == "object" and .event == "cross-referenced" and .source.issue.pull_request != null)
+          | .source.issue.number | select(type == "number" and . >= 1) ] | last // empty | tostring
+      else empty end' 2>/dev/null | tail -n1)" || last_xref=""
+    [[ "${last_xref}" =~ ^[0-9]+$ ]] || last_xref=""
+
+    # 2. The first cross-referenced implementation PR that is not docs-only.
+    for cand in ${xref_cands}; do
+      [[ "${cand}" =~ ^[0-9]+$ ]] || continue
+      if [ -n "${sjr_json_cache[${cand}]+x}" ]; then
+        cand_json="${sjr_json_cache[${cand}]}"
+      else
+        cand_json="$(_fetch_pr_json "${cand}" 2>/dev/null)" || cand_json="{}"
+        [ -n "${cand_json}" ] || cand_json="{}"
+        sjr_json_cache["${cand}"]="${cand_json}"
+      fi
+      _pr_json_is_issue_implementation_pr "${issue_num}" "${cand_json}" 2>/dev/null || continue
+      head_ref="$(printf '%s' "${cand_json}" | jq -r '.head.ref // "" | tostring' 2>/dev/null)" || head_ref=""
+      if [ "${head_ref}" != "ai/issue-${issue_num}" ] && _pr_files_all_under_docs_plans "${cand}" "${cand_json}"; then
+        if [ -z "${sjr_docs_counted[${cand}]+x}" ]; then
+          sjr_docs_counted["${cand}"]=1
+          skipped_docs=$(( skipped_docs + 1 ))
+        fi
+        continue
+      fi
+      chosen="${cand}"; chosen_json="${cand_json}"; source="cross_ref_impl"
+      break
+    done
+  fi
+
+  # 3. The last cross-reference (today's choice) unless it is docs-only.
+  if [ -z "${chosen}" ] && [ -n "${last_xref}" ]; then
+    if [ -n "${sjr_json_cache[${last_xref}]+x}" ]; then
+      cand_json="${sjr_json_cache[${last_xref}]}"
+    else
+      cand_json="$(_fetch_pr_json "${last_xref}" 2>/dev/null)" || cand_json="{}"
+      [ -n "${cand_json}" ] || cand_json="{}"
+    fi
+    head_ref="$(printf '%s' "${cand_json}" | jq -r '.head.ref // "" | tostring' 2>/dev/null)" || head_ref=""
+    if [ "${head_ref}" != "ai/issue-${issue_num}" ] && _pr_files_all_under_docs_plans "${last_xref}" "${cand_json}"; then
+      if [ -z "${sjr_docs_counted[${last_xref}]+x}" ]; then
+        sjr_docs_counted["${last_xref}"]=1
+        skipped_docs=$(( skipped_docs + 1 ))
+      fi
+      source="none"
+    else
+      chosen="${last_xref}"; chosen_json="${cand_json}"; source="cross_ref_last"
+    fi
+  fi
+
+  STALL_JUDGE_LINKED_PR_NUM="${chosen}"
+  if [ -n "${chosen}" ] && [ -n "${chosen_json}" ] && [ "${chosen_json}" != "{}" ]; then
+    STALL_JUDGE_LINKED_PR_JSON="${chosen_json}"
+  fi
+  echo "STALL_JUDGE_LINKED_PR issue=${issue_num} pr=${chosen:-none} source=${source} skipped_docs_plans=${skipped_docs}"
+  return 0
+}
+
 invoke_stall_judge() {
   local issue_num="$1"
   local phase="$2"
@@ -23802,7 +24172,13 @@ invoke_stall_judge() {
   ' 2>/dev/null || echo '[]')"
 
   local linked_pr
-  linked_pr="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
+  # Issue #9986: resolved in the main shell so the fetched PR JSON is reused
+  # below; STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED=false keeps the
+  # last-cross-reference lookup.
+  STALL_JUDGE_LINKED_PR_JSON=''
+  STALL_JUDGE_LINKED_PR_NUM=''
+  _stall_judge_resolve_linked_pr "${issue_num}" || true
+  linked_pr="${STALL_JUDGE_LINKED_PR_NUM:-}"
 
   local linked_pr_json='{}'
   local target_pr=""
@@ -23814,7 +24190,11 @@ invoke_stall_judge() {
 
   if [[ "${linked_pr}" =~ ^[0-9]+$ ]]; then
     target_pr="${linked_pr}"
-    linked_pr_json="$(_fetch_pr_json "${linked_pr}")"
+    if [ -n "${STALL_JUDGE_LINKED_PR_JSON:-}" ]; then
+      linked_pr_json="${STALL_JUDGE_LINKED_PR_JSON}"
+    else
+      linked_pr_json="$(_fetch_pr_json "${linked_pr}")"
+    fi
     pr_state="$(_jq_field "${linked_pr_json}" '.state' 'open|closed|merged')"
     pr_mergeable="$(_jq_field "${linked_pr_json}" '.mergeable' 'true|false')"
     head_ref="$(_jq_field "${linked_pr_json}" '.head.ref')"
