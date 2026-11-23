@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:2475 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The failed-attempt GH_READ_FALLBACK replay prints the raw line to stderr without _gh_actions_escape, unlike other stderr excerpts in gh_retry.\n  WHY: No runtime failure today (reason is a fixed enum and _gh_read_caller strips characters outside [A-Za-z0-9_.-]); flagged only for consistency, and the success-path replay at line 2458 has the same shape. Source severity was NIT.\n- scripts/gh_helpers.sh:2475 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: On retryable failures the fallback line is replayed once per failed attempt plus once via the success-path replay at line 2458, so callers can receive duplicate GH_READ_FALLBACK lines.\n  WHY: Every current consumer (workflow_failure_heal_queue.sh:252,290; gh_helpers.sh:1032,1048) only greps for the line's presence, so duplicates are cosmetic. Source severity was NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/gh_helpers.sh:2475 | severity=low | confidence=3\n  PROBLEM: The failed-attempt GH_READ_FALLBACK replay prints the raw line to stderr without _gh_actions_escape, unlike other stderr excerpts in gh_retry.\n  WHY: No runtime failure today; flagged only for consistency with the line 2458 success-path replay (source severity NIT).\n- scripts/gh_helpers.sh:2475 | severity=low | confidence=5\n  PROBLEM: None. The hunk is correct: grep -a, stderr redirection and the `|| true` guard keep it from breaking the retry flow under set -e, and callers filtering on ^GH_READ_FALLBACK now receive the line from failed attempts too, as tests/test_gh_read.py:282-301 locks in. (Source severity NIT.)\n  WHY: It does not fail at runtime.\n- scripts/gh_helpers.sh:2475 | severity=low | confidence=4\n  PROBLEM: On retryable failures the fallback line is replayed once per failed attempt plus once via the success-path replay at line 2458, so duplicates are possible.\n  WHY: Consumers only grep for the line's presence, so duplicates are cosmetic (source severity NIT).\n- TASK COMPLETENESS / INTENT GAPS: NONE. Both deliverables from issue #9907 are present: tests/test_review_autofix_review_pipeline_contract.py:8264 and tests/test_release_manifest_workflow_contract.py:95-111.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fe7e87e95053089ef5fdefb59f66a58b291a935521e3798991251ad2c1f90618",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9914,
+    "run_id": "45126687781",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45126687781",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123071927_f6f8363f98",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9914,
+    "run_id": "45126687781"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-23T07:19:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
