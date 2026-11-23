@@ -621,6 +621,21 @@ jobs:
             [ "${actual_sha256}" = "${expected_sha256}" ] || reject bootstrap verifier_hash_mismatch
           done
 
+          # Issue #9485: "Sync Dependabot exclusions for managed wrappers" runs
+          # scripts/sync_dependabot_exclusions.py only when this release's
+          # attested manifest lists it. The PR-delivery verify job applies the
+          # same rule to the same manifest, so both jobs reproduce the same
+          # consumer change; when listed, its hash is verified below with the
+          # other release paths.
+          DEPENDABOT_HELPER_REL="scripts/sync_dependabot_exclusions.py"
+          dependabot_helper_sha256="$(jq -r --arg p "${DEPENDABOT_HELPER_REL}" \
+            '[(.files // [])[] | select(type == "object" and .path == $p and .mode != "120000")] | if length == 1 then (.[0].sha256 // "") else "" end' \
+            "${MANIFEST}" 2>/dev/null)" || dependabot_helper_sha256=""
+          dependabot_helper_attested=false
+          if [[ "${dependabot_helper_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+            dependabot_helper_attested=true
+          fi
+
           # Every path the later steps read, relative to the release root.
           # Whole directories are enumerated so an injected file is reported
           # as unlisted_path.
@@ -628,6 +643,9 @@ jobs:
           (
             cd "${UPSTREAM_ROOT}"
             shopt -s nullglob
+            if [ "${dependabot_helper_attested}" = "true" ]; then
+              printf '%s\n' "${DEPENDABOT_HELPER_REL}"
+            fi
             for listed in workflow-templates/*.yml workflow-templates/profiles/*.txt; do
               printf '%s\n' "${listed}"
             done
@@ -672,6 +690,7 @@ jobs:
           echo "verified=true" >> "${VERIFY_OUT}"
           echo "reason=ok" >> "${VERIFY_OUT}"
           echo "tag=${TAG}" >> "${VERIFY_OUT}"
+          echo "dependabot_helper_attested=${dependabot_helper_attested}" >> "${VERIFY_OUT}"
 
       - name: Prepare immutable workflow wrappers
         id: render_wrappers
@@ -961,6 +980,57 @@ jobs:
             --repo-root . \
             --changed-paths-file /tmp/changelog_asset_files.txt
 
+      - name: Sync Dependabot exclusions for managed wrappers
+        id: dependabot_sync
+        if: ${{ inputs.allow_workflow_edits != false }}
+        env:
+          UPSTREAM_DIR: ${{ steps.fetch.outputs.upstream_dir }}
+          SELECTED_PROFILE: ${{ vars.WORKFLOW_PROFILE != '' && vars.WORKFLOW_PROFILE || 'full' }}
+          RELEASE_MANIFEST_VERIFIED: ${{ steps.verify_release_manifest.outputs.verified }}
+          DEPENDABOT_HELPER_ATTESTED: ${{ steps.verify_release_manifest.outputs.dependabot_helper_attested }}
+        run: |
+          set -euo pipefail
+
+          # Issue #9485: Dependabot github-actions bump PRs against the managed
+          # wrappers fail coding-workflows/workflow-integrity by design and
+          # pile up. ADDITIVE ONLY, like the changelog assets step above: the
+          # upstream helper adds the managed set (profile entries, the
+          # integrity wrapper, and the updater wrapper when present) to
+          # exclude-paths of the consumer's own root github-actions entries in
+          # .github/dependabot.y(a)ml. It never creates the file or an entry
+          # and leaves every consumer setting and comment as written. It runs
+          # before "Compare and update workflow wrappers" so it sees the same
+          # tree the PR-delivery verify job reproduces on (the PR's parent).
+          # Fails open: a helper failure never fails the wrapper update.
+
+          UPSTREAM_SCRIPTS_DIR="$(dirname "${UPSTREAM_DIR}")/scripts"
+          DEPENDABOT_HELPER="${UPSTREAM_SCRIPTS_DIR}/sync_dependabot_exclusions.py"
+
+          echo "dependabot_has_changes=false" >> "$GITHUB_OUTPUT"
+          rm -f /tmp/dependabot_changed_files.txt
+
+          if [ ! -f "${DEPENDABOT_HELPER}" ]; then
+            echo "Upstream has no scripts/sync_dependabot_exclusions.py at this ref — nothing to sync."
+            exit 0
+          fi
+          # The verify job runs the helper only when the attested release
+          # manifest lists it; mirror that so its reproduction matches. This
+          # includes verified=skipped (UPDATER_VERIFY_RELEASE_MANIFEST=false):
+          # there the attestation output is empty, verify_reproduce does not
+          # run the helper, and an edit staged here would be rejected by
+          # verify-pr-tree as unlisted_path.
+          if [ "${DEPENDABOT_HELPER_ATTESTED:-}" != "true" ]; then
+            echo "DEPENDABOT_EXCLUDE_SYNC outcome=skipped reason=helper_unattested file=none entries=0 managed=0"
+            exit 0
+          fi
+
+          PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${DEPENDABOT_HELPER}" \
+            --repo-root . \
+            --templates-dir "${UPSTREAM_DIR}" \
+            --profile "${SELECTED_PROFILE}" \
+            --changed-paths-file /tmp/dependabot_changed_files.txt \
+            || echo "::warning::DEPENDABOT_EXCLUDE_SYNC helper failed; the Dependabot config is left as it was."
+
       - name: Assemble changelog fragments
         id: changelog_assemble
         if: ${{ inputs.allow_workflow_edits != false }}
@@ -1194,7 +1264,7 @@ jobs:
       # contents: write grant, and asking for more fails the run at startup.
       - name: Commit and push updates
         id: commit_push
-        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.retired_files.outputs.retired_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true' || steps.agents_assemble.outputs.agents_assembled == 'true'
+        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.retired_files.outputs.retired_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.dependabot_sync.outputs.dependabot_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true' || steps.agents_assemble.outputs.agents_assembled == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           UPDATE_VIA_PR: ${{ inputs.update_via_pull_request != false }}
@@ -1261,6 +1331,12 @@ jobs:
               [ -n "$changed_path" ] || continue
               git add -- "$changed_path"
             done < /tmp/changelog_asset_files.txt
+          fi
+          if [ -f /tmp/dependabot_changed_files.txt ] && [ -s /tmp/dependabot_changed_files.txt ]; then
+            while IFS= read -r changed_path; do
+              [ -n "$changed_path" ] || continue
+              git add -- "$changed_path"
+            done < /tmp/dependabot_changed_files.txt
           fi
           # Assembly both rewrites CHANGELOG.md and deletes the folded
           # fragments, so stage with -A to pick up the removals.
@@ -1354,6 +1430,16 @@ jobs:
           fi
           if [ -n "$CHANGELOG_ASSET_LIST" ]; then
             COMMIT_BODY="${COMMIT_BODY}Changelog fragment assets:\n${CHANGELOG_ASSET_LIST}\n"
+          fi
+          DEPENDABOT_CHANGED_LIST=""
+          if [ -f /tmp/dependabot_changed_files.txt ] && [ -s /tmp/dependabot_changed_files.txt ]; then
+            while IFS= read -r changed_path; do
+              [ -n "$changed_path" ] || continue
+              DEPENDABOT_CHANGED_LIST="${DEPENDABOT_CHANGED_LIST}• ${changed_path}\n"
+            done < /tmp/dependabot_changed_files.txt
+          fi
+          if [ -n "$DEPENDABOT_CHANGED_LIST" ]; then
+            COMMIT_BODY="${COMMIT_BODY}Dependabot exclusions:\n${DEPENDABOT_CHANGED_LIST}\n"
           fi
           if [ "${CHANGELOG_ASSEMBLED:-}" = "true" ]; then
             COMMIT_BODY="${COMMIT_BODY}Changelog fragments assembled into CHANGELOG.md (${CHANGELOG_FRAGMENT_COUNT:-} fragment(s), layout ${CHANGELOG_LAYOUT:-}).\n"
@@ -1906,7 +1992,7 @@ jobs:
           fi
 
       - name: Send Telegram notification
-        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.retired_files.outputs.retired_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true' || steps.agents_assemble.outputs.agents_assembled == 'true'
+        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.retired_files.outputs.retired_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.dependabot_sync.outputs.dependabot_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true' || steps.agents_assemble.outputs.agents_assembled == 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -1963,6 +2049,10 @@ jobs:
           if [ -f /tmp/changelog_asset_files.txt ] && [ -s /tmp/changelog_asset_files.txt ]; then
             CHANGELOG_ASSET_LIST=$(cat /tmp/changelog_asset_files.txt)
           fi
+          DEPENDABOT_CHANGED_LIST=""
+          if [ -f /tmp/dependabot_changed_files.txt ] && [ -s /tmp/dependabot_changed_files.txt ]; then
+            DEPENDABOT_CHANGED_LIST=$(cat /tmp/dependabot_changed_files.txt)
+          fi
           CHANGELOG_ASSEMBLED="${{ steps.changelog_assemble.outputs.changelog_assembled }}"
           CHANGELOG_FRAGMENT_COUNT="${{ steps.changelog_assemble.outputs.changelog_fragment_count }}"
           CHANGELOG_LAYOUT="${{ steps.changelog_assemble.outputs.changelog_layout }}"
@@ -2002,6 +2092,11 @@ jobs:
             MSG="${MSG}
           Changelog fragment assets changed:
           ${CHANGELOG_ASSET_LIST}"
+          fi
+          if [ -n "$DEPENDABOT_CHANGED_LIST" ]; then
+            MSG="${MSG}
+          Dependabot exclusions for managed wrappers updated:
+          ${DEPENDABOT_CHANGED_LIST}"
           fi
           if [ "${CHANGELOG_ASSEMBLED}" = "true" ]; then
             MSG="${MSG}
@@ -2477,10 +2572,31 @@ jobs:
             [ "${actual_sha256}" = "${expected_sha256}" ] || reject bootstrap verifier_hash_mismatch
           done
 
+          # Issue #9485: the Dependabot exclusion helper is executed only when
+          # this release's attested manifest lists it (the update job applies
+          # the same rule), and then only after the same hash check.
+          DEPENDABOT_HELPER_REL="scripts/sync_dependabot_exclusions.py"
+          dependabot_helper_sha256="$(jq -r --arg p "${DEPENDABOT_HELPER_REL}" \
+            '[(.files // [])[] | select(type == "object" and .path == $p and .mode != "120000")] | if length == 1 then (.[0].sha256 // "") else "" end' \
+            "${MANIFEST}" 2>/dev/null)" || dependabot_helper_sha256=""
+          dependabot_helper_attested=false
+          if [[ "${dependabot_helper_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+            dependabot_helper_path="${RELEASE_ROOT}/${DEPENDABOT_HELPER_REL}"
+            if [ ! -f "${dependabot_helper_path}" ] || [ -L "${dependabot_helper_path}" ]; then
+              reject bootstrap verifier_hash_mismatch
+            fi
+            dependabot_helper_actual="$(sha256sum -- "${dependabot_helper_path}" | awk '{print $1}')"
+            [ "${dependabot_helper_actual}" = "${dependabot_helper_sha256}" ] || reject bootstrap verifier_hash_mismatch
+            dependabot_helper_attested=true
+          fi
+
           PATHS_FILE="${WORK}/paths.txt"
           (
             cd "${RELEASE_ROOT}"
             shopt -s nullglob
+            if [ "${dependabot_helper_attested}" = "true" ]; then
+              printf '%s\n' "${DEPENDABOT_HELPER_REL}"
+            fi
             for listed in workflow-templates/*.yml workflow-templates/profiles/*.txt; do
               printf '%s\n' "${listed}"
             done
@@ -2524,6 +2640,7 @@ jobs:
             echo "release_root=${RELEASE_ROOT}"
             echo "manifest=${MANIFEST}"
             echo "tag=${TAG}"
+            echo "dependabot_helper_attested=${dependabot_helper_attested}"
           } >> "${VERIFY_OUT}"
 
       - name: Check updater pull request topology
@@ -2586,6 +2703,9 @@ jobs:
           # Mirrors the update job: with allow_workflow_edits false the
           # derived asset steps were skipped, so nothing is reproduced.
           SYNC_NON_WRAPPER_ASSETS: ${{ inputs.allow_workflow_edits != false }}
+          # Same profile expression as the update job (issue #9485).
+          WORKFLOW_PROFILE_SELECTED: ${{ vars.WORKFLOW_PROFILE != '' && vars.WORKFLOW_PROFILE || 'full' }}
+          DEPENDABOT_HELPER_ATTESTED: ${{ steps.verify_release.outputs.dependabot_helper_attested }}
         run: |
           set -euo pipefail
 
@@ -2619,6 +2739,21 @@ jobs:
           GITHUB_OUTPUT=/dev/null python3 -I -B "${RELEASE_ROOT}/scripts/assemble_changelog.py" ensure-assets \
             --repo-root "${BASE_TREE}" \
             --changed-paths-file "${WORK}/changelog_asset_files.txt" >/dev/null || reject reproduce changelog_assets_failed
+          # Same fail-open as the update job's "Sync Dependabot exclusions for
+          # managed wrappers", and run only when verify_release attested and
+          # hash-checked the helper (the update job's rule too). The update job
+          # reads the attestation from its own verification, which is empty
+          # when UPDATER_VERIFY_RELEASE_MANIFEST=false (verified=skipped), while
+          # verify_release always attests; require VERIFIED=true as well so the
+          # two jobs skip the helper in exactly the same cases and
+          # verify-pr-tree never reports derived_missing for the config.
+          if [ "${VERIFIED:-}" = "true" ] && [ "${DEPENDABOT_HELPER_ATTESTED:-}" = "true" ]; then
+            GITHUB_OUTPUT=/dev/null python3 -I -B "${RELEASE_ROOT}/scripts/sync_dependabot_exclusions.py" \
+              --repo-root "${BASE_TREE}" \
+              --templates-dir "${RELEASE_ROOT}/workflow-templates" \
+              --profile "${WORKFLOW_PROFILE_SELECTED}" \
+              --changed-paths-file "${WORK}/dependabot_changed_files.txt" >/dev/null || echo "::warning::UPDATER_PR_VERIFY dependabot exclusion sync failed on the parent tree; the config stays as in the update job."
+          fi
           GITHUB_OUTPUT=/dev/null python3 -I -B "${RELEASE_ROOT}/scripts/assemble_changelog.py" assemble \
             --repo-root "${BASE_TREE}" \
             --date "${COMMIT_DATE}" >/dev/null || reject reproduce changelog_assemble_failed
