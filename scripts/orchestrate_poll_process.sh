@@ -15733,6 +15733,14 @@ Unable to create or locate the final integration PR from \`${integration_branch}
     _pr_ruleset_required_check_blockers "${pr_head_sha}" "${default_branch}" || final_ruleset_rc=$?
     if [ "${final_ruleset_rc}" = "1" ]; then
       FINAL_MERGE_BUDGET_ELIGIBLE="0"
+      # Issue #9993 (G3): a head whose only blocker is a missing final-CI
+      # status may sit on a branch whose workflow copy cannot post it; route
+      # it to the CI-wiring update (it acts only on a succeeded final CI run).
+      # Reuses the blockers read above; the PR still waits for the next poll.
+      if [ "${PR_RULESET_BLOCKERS_SUMMARY:-}" = "${FINAL_CI_WIRING_STATUS_CONTEXT:-ci/final} (missing)" ] \
+        && declare -F _pr_final_ci_wiring_behind_update >/dev/null 2>&1; then
+        _pr_final_ci_wiring_behind_update "${final_pr}" "${pr_head_sha}" "${default_branch}" "${REVIEW_FINAL_CI_WORKFLOW:-ci.yml}" blocked_status || true
+      fi
       echo "  [final-merge] PR #${final_pr} is blocked by ruleset-required check(s): ${PR_RULESET_BLOCKERS_SUMMARY}. Will retry next poll."
       return 1
     fi

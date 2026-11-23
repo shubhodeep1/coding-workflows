@@ -131,7 +131,10 @@ if [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
 	if reviewed_head_is_current_for_labels; then
 		review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success "review and security gate passed"
 		record_auto_merge_ready_labels_allowed "true"
-		review_enable_auto_merge_ensure_final_ci
+		# Issue #9993: this exit never merges, so skip the CI-wiring branch
+		# update (it takes the base's merge lease and pushes a new head);
+		# the final CI is dispatched as before.
+		PR_FINAL_CI_WIRING_SKIP=true review_enable_auto_merge_ensure_final_ci
 	fi
 	echo "Auto-merge disabled (set ENABLE_AUTO_MERGE=true to enable)."
 	exit 0
@@ -178,7 +181,9 @@ if PR_LABELS_RAW="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issue
 		if reviewed_head_is_current_for_labels; then
 			review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success "review and security gate passed"
 			record_auto_merge_ready_labels_allowed "true"
-			review_enable_auto_merge_ensure_final_ci
+			# Issue #9993: never update an e2e PR's branch mid-gate (the race
+			# this opt-out exists to prevent); dispatch the final CI as before.
+			PR_FINAL_CI_WIRING_SKIP=true review_enable_auto_merge_ensure_final_ci
 		fi
 		echo "PR #${PR_NUMBER} carries 'e2e-smoke-test' label — auto-merge suppressed for the e2e gate's lifecycle."
 		exit 0

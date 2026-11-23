@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import subprocess
 import textwrap
 from pathlib import Path
@@ -1107,8 +1108,10 @@ def _wiring_fixtures(base_files: list | None = None, *, comments: list | None = 
 		f"repos/{REPO}/issues/7/comments": {"body": comments or []},
 		f"repos/{REPO}/pulls/7/update-branch": {"rc": update_rc} if update_rc else {"body": {}},
 		f"repos/{REPO}/pulls/7/files": {"body": [{"filename": "scripts/y.sh"}]},
-		f"repos/{REPO}/pulls/7": {"body": {"head": {"sha": WIRING_UPDATE_SHA, "ref": "ai/issue-1", "repo": {"full_name": REPO}},
-			"base": {"ref": "main"}, "mergeable": True}},
+		# A refused update leaves the head where it was, and GitHub reports
+		# the conflict as `mergeable: false`.
+		f"repos/{REPO}/pulls/7": {"body": {"head": {"sha": SHA if update_rc else WIRING_UPDATE_SHA, "ref": "ai/issue-1", "repo": {"full_name": REPO}},
+			"base": {"ref": "main"}, "mergeable": False if update_rc else True}},
 		f"repos/{REPO}/commits/{WIRING_UPDATE_SHA}": {"body": {"parents": [{"sha": SHA}, {"sha": WIRING_BASE_TIP}],
 			"committer": {"login": "web-flow"}, "commit": {"verification": {"verified": True}}}},
 		f"repos/{REPO}/actions/workflows/ci.yml/runs?head_sha={WIRING_UPDATE_SHA}": {"body": {"workflow_runs": []}},
@@ -1208,6 +1211,38 @@ def test_wiring_behind_update_refused_records_reason_and_does_not_dispatch(fake_
 	result, calls = _ensure(fake_gh, _wiring_fixtures(update_rc=1, comments=forged), env=WIRING_ENV)
 	assert "outcome=held reason=update_branch_refused" in result.stdout, result.stdout + result.stderr
 	assert len(_puts_of(calls)) == 1
+
+
+def test_wiring_behind_refusal_without_conflict_or_after_a_move_posts_no_marker(fake_gh) -> None:
+	"""A transient refusal (mergeable) or a head another caller already moved records no hold."""
+	pr_key = f"repos/{REPO}/pulls/7"
+	for head, mergeable, reason in ((SHA, True, "update_branch_failed"), (WIRING_UPDATE_SHA, False, "head_moved")):
+		fixtures = _wiring_fixtures(update_rc=1)
+		fixtures[pr_key] = {"body": {"head": {"sha": head, "ref": "ai/issue-1", "repo": {"full_name": REPO}},
+			"base": {"ref": "main"}, "mergeable": mergeable}}
+		result, calls = _ensure(fake_gh, fixtures, env=WIRING_ENV)
+		out = result.stdout + result.stderr
+		assert f"REVIEW_FINAL_CI_WIRING pr=7 head={SHA} entry=dispatch outcome=held reason={reason}" in out, out
+		assert "outcome=deferred reason=ci_wiring_behind" in out
+		assert len(_puts_of(calls)) == 1 and _posts_of(calls) == [] and _dispatches(calls) == []
+
+
+def test_non_merge_auto_merge_exits_skip_the_wiring_update() -> None:
+	"""The auto-merge-off and e2e-smoke-test exits never merge: no lease, no branch update."""
+	text = (REPO_ROOT / "scripts/review_enable_auto_merge.sh").read_text(encoding="utf-8")
+	calls = re.findall(r"^\s*(.*)review_enable_auto_merge_ensure_final_ci\s*$", text, re.M)
+	assert len(calls) == 2, calls
+	assert all(c.strip() == "PR_FINAL_CI_WIRING_SKIP=true" for c in calls), calls
+
+
+def test_poller_ruleset_blocked_final_merge_routes_missing_ci_final() -> None:
+	"""G3 on the poller's final merge: the rc=1 early return calls the wiring update first."""
+	text = (REPO_ROOT / "scripts/orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	start = text.index('if [ "${final_ruleset_rc}" = "1" ]; then')
+	branch = text[start:text.index("return 1", start)]
+	assert '"${FINAL_CI_WIRING_STATUS_CONTEXT:-ci/final} (missing)"' in branch
+	assert '_pr_final_ci_wiring_behind_update "${final_pr}" "${pr_head_sha}" "${default_branch}"' in branch
+	assert "blocked_status || true" in branch
 
 
 def test_wiring_behind_unreadable_comments_attempt_without_posting(fake_gh) -> None:
